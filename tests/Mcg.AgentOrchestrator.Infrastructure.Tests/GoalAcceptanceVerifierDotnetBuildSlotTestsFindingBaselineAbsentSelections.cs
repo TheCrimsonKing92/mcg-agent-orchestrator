@@ -106,7 +106,7 @@ internal sealed class FindingBaselineProbeFixture : IDisposable
               "checks": [],
               "forbiddenChangedPathGlobs": []
             }
-            """);
+            """.ReplaceLineEndings("\n"));
         File.WriteAllText(Path.Combine(root, "Directory.Build.props"), """
             <Project><PropertyGroup><UseSharedCompilation>false</UseSharedCompilation><RestoreIgnoreFailedSources>true</RestoreIgnoreFailedSources><NuGetAudit>false</NuGetAudit></PropertyGroup></Project>
             """);

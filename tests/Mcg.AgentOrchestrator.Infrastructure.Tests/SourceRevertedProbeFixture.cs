@@ -83,7 +83,7 @@ internal sealed class SourceRevertedProbeFixture : IDisposable
     {
         var target = Path.Combine(Root, path);
         Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-        File.WriteAllText(target, content);
+        File.WriteAllText(target, content.ReplaceLineEndings("\n"));
     }
 
     internal string Git(params string[] arguments)

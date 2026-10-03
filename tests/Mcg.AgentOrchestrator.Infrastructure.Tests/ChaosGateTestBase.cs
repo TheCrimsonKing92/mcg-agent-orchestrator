@@ -169,7 +169,7 @@ public abstract class ChaosGateTestBase
             skills: {skills}
             confidence: {confidence}
             END_WORKER_RESULT
-            """;
+            """.ReplaceLineEndings("\r\n");
     }
 
     /// <summary>
@@ -197,7 +197,7 @@ public abstract class ChaosGateTestBase
             **skills**: {skills}
             **confidence**: {confidence}
             END_WORKER_RESULT
-            """;
+            """.ReplaceLineEndings("\r\n");
     }
 
     protected static void WriteSkill(string workingDirectory, string skillName)

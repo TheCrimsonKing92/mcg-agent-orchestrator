@@ -996,7 +996,7 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
     public void NaturalPlannerCriterionMappingsCompleteWithoutFormattingRetry()
     {
         var root = CreateSeededDispatchRepository();
-        File.Copy(FindRepositoryFile(".gitignore"), Path.Combine(root, ".gitignore"));
+        File.WriteAllText(Path.Combine(root, ".gitignore"), File.ReadAllText(FindRepositoryFile(".gitignore")).ReplaceLineEndings("\r\n"));
         RunGit(root, ["add", ".gitignore"], DateTimeOffset.Parse("2026-08-10T12:00:00Z"));
         RunGit(root, ["commit", "-m", "Track repository ignore rules"], DateTimeOffset.Parse("2026-08-10T12:00:00Z"));
         var clock = new TestClock(DateTimeOffset.Parse("2026-08-10T12:05:00Z"));
@@ -1101,7 +1101,7 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
     public void DeveloperContextReceivesCompleteIngestedPlannerPlanWithoutPaidStart()
     {
         var root = CreateSeededDispatchRepository();
-        File.Copy(FindRepositoryFile(".gitignore"), Path.Combine(root, ".gitignore"));
+        File.WriteAllText(Path.Combine(root, ".gitignore"), File.ReadAllText(FindRepositoryFile(".gitignore")).ReplaceLineEndings("\r\n"));
         RunGit(root, ["add", ".gitignore"], DateTimeOffset.Parse("2026-07-29T11:50:00Z"));
         RunGit(root, ["commit", "-m", "Track repository ignore rules"], DateTimeOffset.Parse("2026-07-29T11:50:00Z"));
         var kernel = new AgentOrchestratorKernel();
@@ -1846,20 +1846,20 @@ protected static string SandboxPrepCompleteEvent()
         """;
 }
 
-protected static void WriteSkill(string workingDirectory, string skillName)
+protected static void WriteSkill(string workingDirectory, string skillName, string? text = null)
 {
     var directory = Path.Combine(workingDirectory, ".agents", "skills", skillName);
     Directory.CreateDirectory(directory);
     File.WriteAllText(
         Path.Combine(directory, "SKILL.md"),
-        $"""
+        (text ?? $"""
         ---
         name: {skillName}
         description: Test skill fixture.
         ---
 
         # {skillName}
-        """);
+        """).ReplaceLineEndings("\r\n"));
 }
 
     protected static void WaitForExitFile(string path)

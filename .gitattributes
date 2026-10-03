@@ -1,3 +1,6 @@
+* text=auto eol=lf
+*.cmd text eol=crlf
+*.bat text eol=crlf
 # Retained worker output is a byte-exact artifact; preserve its committed bytes.
 tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Fixtures/ReviewerFindingsParse/ae54b5eb-e9ea0560-20260905170025.out.txt -text
 tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Fixtures/ReviewerFindingsParse/b2f52d39-0d99c73d-20260905153941.out.txt -text

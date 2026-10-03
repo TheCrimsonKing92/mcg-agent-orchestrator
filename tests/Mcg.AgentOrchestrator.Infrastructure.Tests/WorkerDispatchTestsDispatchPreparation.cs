@@ -363,7 +363,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
                         var guard = false;
                     }
                 }
-                """);
+                """.ReplaceLineEndings("\r\n"));
             RunGit(root, ["add", "-A"], DateTimeOffset.Parse("2026-01-01T00:01:00Z"));
             RunGit(root, ["commit", "-m", "Add example"], DateTimeOffset.Parse("2026-01-01T00:01:00Z"));
             var previous = ReadGit(root, ["rev-parse", "HEAD"]).Trim();
@@ -386,7 +386,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
                         var guard = true;
                     }
                 }
-                """);
+                """.ReplaceLineEndings("\r\n"));
             RunGit(root, ["add", "-A"], DateTimeOffset.Parse("2026-01-01T00:02:00Z"));
             RunGit(root, ["commit", "-m", "Fix B"], DateTimeOffset.Parse("2026-01-01T00:02:00Z"));
             var current = ReadGit(root, ["rev-parse", "HEAD"]).Trim();
@@ -426,7 +426,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
                         var residualGuard = false;
                     }
                 }
-                """);
+                """.ReplaceLineEndings("\r\n"));
             RunGit(root, ["add", "-A"], DateTimeOffset.Parse("2026-01-01T00:01:00Z"));
             RunGit(root, ["commit", "-m", "Add example"], DateTimeOffset.Parse("2026-01-01T00:01:00Z"));
             var previous = ReadGit(root, ["rev-parse", "HEAD"]).Trim();
@@ -442,7 +442,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
                         var residualGuard = true;
                     }
                 }
-                """);
+                """.ReplaceLineEndings("\r\n"));
             RunGit(root, ["add", "-A"], DateTimeOffset.Parse("2026-01-01T00:02:00Z"));
             RunGit(root, ["commit", "-m", "Fix residual guard"], DateTimeOffset.Parse("2026-01-01T00:02:00Z"));
             var current = ReadGit(root, ["rev-parse", "HEAD"]).Trim();
