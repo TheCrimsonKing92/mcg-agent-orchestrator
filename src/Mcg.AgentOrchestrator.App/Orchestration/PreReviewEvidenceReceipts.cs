@@ -21,7 +21,8 @@ internal static class PreReviewEvidenceReceipts
         PreReviewEvidenceDisposition disposition,
         IReadOnlyList<AcceptanceCheckResult> checks,
         IReadOnlyList<string> failingTests,
-        string? evidencePointer)
+        string? evidencePointer,
+        IReadOnlyList<string>? evidenceTimeoutChecks = null)
     {
         var receipt = new PreReviewEvidenceReceipt(
             goal.Id.Value,
@@ -42,7 +43,8 @@ internal static class PreReviewEvidenceReceipts
             context.MappingReason,
             evidencePointer,
             DateTimeOffset.UtcNow,
-            Advisories: FindExtraneousChecks(context, checks));
+            Advisories: FindExtraneousChecks(context, checks),
+            EvidenceTimeoutChecks: evidenceTimeoutChecks);
         record(goal.Id, reviewerTask.Id, receipt);
         return receipt;
     }

@@ -2802,14 +2802,14 @@ internal sealed partial class ConductorDriver
         }
 
         var failingTests = ExtractFailingTestIdentities(evidence.Checks);
+        if (TryHoldPreReviewEvidenceTimeout(goal, reviewerTask, goalPrefix, policy, fromState, context, round, evidence, failingTests, currentReceipt, evidencePointer, out result))
+            return true;
         PreReviewEvidenceReceipts.Record(_recordPreReviewEvidence,
             goal, reviewerTask, context, round, PreReviewEvidenceDisposition.Red,
             evidence.Checks, failingTests, evidencePointer);
-        var buildDiagnostic = failingTests.Count == 0
-            ? FormatPreReviewBuildDiagnostic(evidence.Checks)
-            : null;
+        var buildDiagnostic = failingTests.Count == 0 ? FormatPreReviewBuildDiagnostic(evidence.Checks) : null;
         if (buildDiagnostic is not null &&
-            currentReceipt is { Disposition: PreReviewEvidenceDisposition.Red } previousRed &&
+            currentReceipt is { Disposition: PreReviewEvidenceDisposition.Red, EvidenceTimeoutChecks: null or [] } previousRed &&
             previousRed.FailingTestIdentities.Count == 0 &&
             previousRed.MatchesCurrentCandidate(goal.Id.Value, context.CandidateSha, context.SelectedFocusedTests))
         {
