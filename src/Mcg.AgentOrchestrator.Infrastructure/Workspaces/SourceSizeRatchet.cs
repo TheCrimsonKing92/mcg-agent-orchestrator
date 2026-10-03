@@ -100,7 +100,9 @@ internal static class SourceSizeRatchet
             // guard that defers to VerifyingFindingCurrency.IsCurrent, whose logic lives in the model.
             // Goal 3ca963ea moved attribution exclusion types and formatting to the apparatus-red partial.
             // Goal 98952a12 (backlog c35852c4) moved finding-evidence request construction unchanged to its partial.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 5478),
+            // Goal db18d0d0 (backlog aedc7a0a) moved acceptance-cohort execution unchanged to its partial.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 4848),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.AcceptanceCohortExecution.cs", 641),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FindingEvidenceRequests.cs", 918),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FailedGoalRecovery.cs", 369),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Core/Application/FailedGoalRecoveryPolicy.cs", 775),
@@ -123,9 +125,11 @@ internal static class SourceSizeRatchet
             // Goal fe962d2e extracted hold tracking unchanged to ConductorBatchLoop.HoldTracking.cs,
             // keeping owned-hold suppression, observation, and clearing together in its partial collaborator.
             // Goal 354522f1 extracted tick persistence unchanged; measured at 4716 lines.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 4716),
+            // Goal dcb10a1c extracted dependency completion, set-aside readmission and unscoped reconciliation; measured at 4192 lines.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 4192),
             // Goal 354522f1 tick persistence partial measured at 467 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.TickPersistence.cs", 467),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.DependencyReadmission.cs", 384),
             // Raised for goal 18afe5f2: missing-build-evidence rejection and commit suppression
             // must run where parsed worker results and authoritative changed paths meet. Raised again
             // for goal 0d39b5a3, which adds the narrow Planner sample launch and completion-selection

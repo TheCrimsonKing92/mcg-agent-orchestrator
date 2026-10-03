@@ -596,6 +596,7 @@ public static class ReviewFindingConvergence
 {
     public const string IdentityMovedViolationCode = "ERR_REVIEW_FINDING_IDENTITY_MOVED";
     public const string UntouchedReopenViolationCode = "ERR_REVIEW_FINDING_UNTOUCHED_REOPEN";
+    public const string TouchedAnchorClaimedUnchangedViolationCode = "ERR_REVIEW_FINDING_TOUCHED_ANCHOR_CLAIMED_UNCHANGED";
     public const string RecycledAnchorIdentityViolationCode = "ERR_REVIEW_FINDING_ANCHOR_IDENTITY_RECYCLED";
     public const string NeedsWorkWithoutOpenFindingsViolationCode = "ERR_REVIEW_NEEDS_WORK_WITHOUT_OPEN_FINDINGS";
     public const string NoOpenFindingsForTargetViolationCode = "ERR_REVIEW_NO_OPEN_FINDINGS_FOR_TARGET";
@@ -693,6 +694,35 @@ public static class ReviewFindingConvergence
                 };
             }
             merged.Add(mergedFinding);
+        }
+
+        // Preserve the existing violation precedence across the entire round before checking prose.
+        var submittedById = submittedFindings.ToDictionary(finding => finding.StableId, StringComparer.Ordinal);
+        foreach (var prior in previous)
+        {
+            if (prior.State != ReviewFindingState.Open ||
+                !submittedById.TryGetValue(prior.StableId, out var submitted) ||
+                submitted.State != ReviewFindingState.Open ||
+                !AnchorWasTouched(prior.Location, nextRound.TouchedAnchors) ||
+                !Regex.IsMatch(submitted.Description ?? string.Empty, @"\bunchanged\b",
+                    RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            {
+                continue;
+            }
+
+            var message = BuildTouchedAnchorClaimedUnchangedMessage(prior.StableId, nextRound.TouchProofDiagnostic);
+            throw new ReviewFindingConvergenceException(
+                TouchedAnchorClaimedUnchangedViolationCode,
+                CountOpen(previous),
+                CountOpen(submittedFindings),
+                message,
+                new ReviewFindingContractViolation(
+                    TouchedAnchorClaimedUnchangedViolationCode,
+                    message,
+                    prior.StableId,
+                    prior.StableId,
+                    prior.Location,
+                    submitted.Location));
         }
 
         foreach (var newFinding in nextById.Values)
@@ -1288,6 +1318,12 @@ public static class ReviewFindingConvergence
 
     private static string BuildUntouchedReopenMessage(string stableId, string? touchProofDiagnostic) =>
         $"Resolved finding '{stableId}' was re-opened without system-derived proof that its structural anchor was touched." +
+        FormatTouchProofDiagnostic(touchProofDiagnostic);
+
+    private static string BuildTouchedAnchorClaimedUnchangedMessage(string stableId, string? touchProofDiagnostic) =>
+        $"Finding '{stableId}' claims it is unchanged, but the round diff touched this finding's anchor since the last reviewed candidate. " +
+        "Re-read the location at the current candidate, then either resolve the finding or keep it open with a description " +
+        "of the defect as it exists at the current candidate, citing current lines." +
         FormatTouchProofDiagnostic(touchProofDiagnostic);
 
     private static string FormatTouchProofDiagnostic(string? touchProofDiagnostic) =>

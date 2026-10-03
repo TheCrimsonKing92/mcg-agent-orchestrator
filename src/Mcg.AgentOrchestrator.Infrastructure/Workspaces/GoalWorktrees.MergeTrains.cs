@@ -164,6 +164,8 @@ public static partial class GoalWorktrees
                 materialized.Add(member.WithRebasedHead(ResolveRequiredRef(workspacePath, "HEAD")));
             }
 
+            SourceSizeRatchetRetightener.RetightenAndCommit(workspacePath, main,
+                $"train:{string.Join('+', materialized.Select(member => Prefix(member.GoalId)))}", committerDate);
             AcceptanceWorkspaceIntegrityPreparer.Prepare(workspacePath);
 
             var result = new MergeTrainWorkspace(
