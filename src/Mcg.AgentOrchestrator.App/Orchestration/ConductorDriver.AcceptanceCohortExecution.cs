@@ -403,7 +403,8 @@ internal sealed partial class ConductorDriver
         var executionOptions = new AcceptanceRunExecutionOptions(
             ProgressSink: progress => AppendCohortGateProgressEvents(gateProgressEventWriter, identity, bindings, progress),
             OwnerProtectedCohortMembers: bindings.Select(binding =>
-                new AcceptanceOwnerProtectedCohortMember(binding.GoalId, binding.CandidateRevision)).ToArray());
+                new AcceptanceOwnerProtectedCohortMember(binding.GoalId, binding.CandidateRevision)).ToArray(),
+            GateRunIdentity: CohortGateRunIdentity(bindings.Select(binding => binding.GoalId.Value)));
 
         var gateClock = Stopwatch.StartNew();
         AcceptanceCohortGateClassification? classification = null;
@@ -569,11 +570,7 @@ internal sealed partial class ConductorDriver
     }
 
     private static string CohortGateMemberPairKey(ConductorAcceptanceCohortSelection selection) =>
-        string.Join(
-            ":",
-            selection.Members
-                .Select(member => member.GoalId.Value)
-                .OrderBy(goalId => goalId, StringComparer.Ordinal));
+        CohortGateRunIdentity(selection.Members.Select(member => member.GoalId.Value));
 
     private ConductorAcceptanceCohortRunResult CohortInFlight(
         ConductorAcceptanceCohortSelection selection,

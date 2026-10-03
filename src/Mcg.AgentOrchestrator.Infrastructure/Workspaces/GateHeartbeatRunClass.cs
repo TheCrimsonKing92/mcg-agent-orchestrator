@@ -15,4 +15,13 @@ internal static class GateHeartbeatRunClass
 
     internal static bool CountsAsAcceptanceOccupant(string? runClass) =>
         !string.Equals(runClass, FocusedEvidence, StringComparison.OrdinalIgnoreCase);
+
+    internal static string? ResolveRunId(IAcceptanceRunExecutionContext? context) => context switch
+    {
+        AcceptanceRunExecutionContextView view => ResolveRunId(view.Owner),
+        AcceptanceAttemptExecutionOwner owner => string.IsNullOrWhiteSpace(owner.GateRunIdentity)
+            ? owner.RunId
+            : owner.GateRunIdentity,
+        _ => null
+    };
 }

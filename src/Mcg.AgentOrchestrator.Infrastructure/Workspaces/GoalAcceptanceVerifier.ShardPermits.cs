@@ -57,7 +57,8 @@ public sealed partial class GoalAcceptanceVerifier
                 GateHeartbeatArtifacts.TryWrite(heartbeatContext.HeartbeatPath,
                     new GateHeartbeatSnapshot(heartbeatContext.GoalId, "shard-permit-wait",
                         heartbeatContext.CurrentTarget, heartbeatContext.SlotIndex,
-                        Environment.ProcessId, null, "running", now - elapsed, now, now, 0, 0, 0));
+                        Environment.ProcessId, null, "running", now - elapsed, now, now, 0, 0, 0,
+                        RunId: heartbeatContext.RunId));
                 EmitGateProgress(new AcceptanceGateProgress(
                     heartbeatContext.GoalId, "shard-permit-wait", heartbeatContext.CurrentTarget,
                     heartbeatContext.SlotIndex, Environment.ProcessId, null,
