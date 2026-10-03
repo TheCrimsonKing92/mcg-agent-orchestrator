@@ -1394,7 +1394,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedEvidence : 
                 <NuGetAudit>false</NuGetAudit>
               </PropertyGroup>
             </Project>
-            """);
+            """.ReplaceLineEndings("\n"));
         File.WriteAllText(
             Path.Combine(root, "NuGet.Config"),
             """
@@ -1404,7 +1404,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedEvidence : 
                 <clear />
               </packageSources>
             </configuration>
-            """);
+            """.ReplaceLineEndings("\n"));
         var projectDirectory = Path.Combine(root, "tests", "Mcg.AgentOrchestrator.Core.Tests");
         Directory.CreateDirectory(projectDirectory);
         File.WriteAllText(
@@ -1425,7 +1425,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedEvidence : 
                 <PackageReference Include="xunit.v3.mtp-v2" Version="3.2.2" />
               </ItemGroup>
             </Project>
-            """);
+            """.ReplaceLineEndings("\n"));
         File.WriteAllText(
             Path.Combine(projectDirectory, "DualArmProbeTests.cs"),
             """
@@ -1434,7 +1434,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedEvidence : 
                 [Xunit.Fact]
                 public void CandidateBehaviorIsPresent() => Xunit.Assert.True(Feature.Enabled);
             }
-            """);
+            """.ReplaceLineEndings("\n"));
         var featurePath = Path.Combine(projectDirectory, "Feature.cs");
         File.WriteAllText(featurePath, baselineFeature);
         AssertGitSucceeded(root, "init", "-b", "main");

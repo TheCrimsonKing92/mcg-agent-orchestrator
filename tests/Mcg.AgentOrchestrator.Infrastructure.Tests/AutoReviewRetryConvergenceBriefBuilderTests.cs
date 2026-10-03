@@ -1564,7 +1564,7 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
                 var guard = {{enabled.ToString().ToLowerInvariant()}};
             }
         }
-        """;
+        """.ReplaceLineEndings("\r\n");
 
     private static void CommitAll(string repositoryRoot, string message, string timestamp)
     {

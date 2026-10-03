@@ -716,7 +716,7 @@ public sealed class LandingExecutorTests
                 title: Recovered follow-up
                 ---
                 Recovered publication proposal.
-                """);
+                """.ReplaceLineEndings("\n"));
             RunGit(goalWorktree, "add", ".orchestrator-proposals/backlog-add-recovered.md");
             RunGit(goalWorktree, "commit", "-m", "Add recovered state effect");
             var candidate = ReadGit(goalWorktree, "rev-parse", "HEAD");
@@ -763,7 +763,7 @@ public sealed class LandingExecutorTests
                 title: Proposed follow-up
                 ---
                 Body from a landed proposal.
-                """);
+                """.ReplaceLineEndings("\n"));
             RunGit(repo, "add", ".orchestrator-proposals/backlog-add-proposed-follow-up.md");
             RunGit(repo, "commit", "-m", "Add state-effect proposal");
             RunGit(repo, "checkout", "main");
@@ -1822,7 +1822,7 @@ public sealed class LandingExecutorTests
                 "tags": true
               }
             }
-            """);
+            """.ReplaceLineEndings("\n"));
     }
 
     private static void AssertGitRef(string repository, string reference)

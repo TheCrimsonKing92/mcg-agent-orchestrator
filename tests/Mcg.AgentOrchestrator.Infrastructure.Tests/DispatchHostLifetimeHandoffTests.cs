@@ -748,7 +748,7 @@ public sealed class DispatchHostLifetimeHandoffTests : CliCommandTestBase
         verdict: pass
         END_WORKER_RESULT
         '@
-        """;
+        """.ReplaceLineEndings("\r\n");
 
     private sealed record DispatchFixture(
         string Root,
