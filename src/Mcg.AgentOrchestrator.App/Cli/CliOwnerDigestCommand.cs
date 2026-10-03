@@ -25,10 +25,12 @@ internal static class CliOwnerDigestCommand
                 ? Read(workspace, clock ?? new SystemClock(), out goals, since, until)
                 : Read(workspace, clock ?? new SystemClock(), since, until);
             var writer = output ?? Console.Out;
+            IReadOnlyList<AppliedRetryIntent> intents = rounds
+                ? CliOwnerDigestRetryIntents.Read(workspace, digest.Until) : [];
             if (json)
             {
                 if (rounds)
-                    CliOwnerDigestRounds.WriteJson(writer, digest, goals);
+                    CliOwnerDigestRounds.WriteJson(writer, digest, goals, intents);
                 else
                     WriteJson(writer, digest);
             }
@@ -37,7 +39,7 @@ internal static class CliOwnerDigestCommand
                 WriteDigestText(writer, digest);
                 CliOwnerDigestLessons.WriteText(writer, workspace, digest.Since, digest.Until);
                 if (rounds)
-                    CliOwnerDigestRounds.WriteText(writer, digest, goals);
+                    CliOwnerDigestRounds.WriteText(writer, digest, goals, intents);
             }
             return 0;
         }
