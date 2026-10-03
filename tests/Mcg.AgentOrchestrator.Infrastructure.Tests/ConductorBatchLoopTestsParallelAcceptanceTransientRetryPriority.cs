@@ -16,14 +16,18 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceTransientRetryPrior
     {
         using var fixture = new AdmissionFixture();
         var retry = fixture.SeedTransientRetry();
-        fixture.AddTrainGoals();
+        var members = fixture.AddTrainGoals();
         fixture.SoloGoals.Clear();
 
         var tick = fixture.RunTick();
 
         Assert.Empty(fixture.Trains);
         Assert.Empty(fixture.Cohorts);
-        Assert.Equal([retry.Id], fixture.SoloGoals.ToArray());
+        var soloGoals = fixture.SoloGoals.ToArray();
+        Assert.Equal(1 + members.Length, soloGoals.Length);
+        Assert.Equal(retry.Id, soloGoals[0]);
+        Assert.Equal(members.Select(goal => goal.Id).OrderBy(id => id.Value),
+            soloGoals.Skip(1).OrderBy(id => id.Value));
         var attempts = fixture.ReadAttempts(retry);
         Assert.Equal(2, attempts.Length);
         Assert.Contains(attempts, attempt => attempt.AttemptId != fixture.SeededAttempt!.AttemptId);

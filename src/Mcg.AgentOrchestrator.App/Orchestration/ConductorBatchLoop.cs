@@ -2821,7 +2821,6 @@ internal sealed partial class ConductorBatchLoop
             {
                 continue;
             }
-            if (HoldAfterSingleSlotTransientRetry(goal, transientRetryPriorityGoal, configuredAcceptanceWidth, policy, results)) continue;
             try
             {
             var soloAdmission = EvaluateSoloAcceptanceAdmissibility(
