@@ -247,7 +247,7 @@ internal sealed partial class ConductorDriver
                         policy,
                         new ConductorAdvanceOutcome.Held(
                             GoalLifecycleState.Verified,
-                            $"Acceptance verification remains in background after bounded no-tick wait; attempt={decision.Attempt.AttemptId}."));
+                            $"Acceptance verification remains in background after bounded no-tick wait; attempt={decision.Attempt.AttemptId}.") { Owner = ConductorHoldOwner.BackgroundAttempt });
                 }
 
                 _noTickAcceptancePollDelay(NoTickAcceptancePollInterval);
