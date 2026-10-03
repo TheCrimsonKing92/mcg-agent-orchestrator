@@ -120,7 +120,10 @@ internal static class SourceSizeRatchet
             // the decision, snapshot mapping, and event formatting remain in the dedicated collaborator.
             // Goal fe962d2e extracted hold tracking unchanged to ConductorBatchLoop.HoldTracking.cs,
             // keeping owned-hold suppression, observation, and clearing together in its partial collaborator.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 5197),
+            // Goal 354522f1 extracted tick persistence unchanged; measured at 4716 lines.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 4716),
+            // Goal 354522f1 tick persistence partial measured at 467 lines.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.TickPersistence.cs", 467),
             // Raised for goal 18afe5f2: missing-build-evidence rejection and commit suppression
             // must run where parsed worker results and authoritative changed paths meet. Raised again
             // for goal 0d39b5a3, which adds the narrow Planner sample launch and completion-selection
