@@ -28,7 +28,9 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceTransientRetryPrior
         Assert.Equal(2, attempts.Length);
         Assert.Contains(attempts, attempt => attempt.AttemptId != fixture.SeededAttempt!.AttemptId);
         var line = Assert.Single(PriorityLines(tick));
-        Assert.Equal($"ADMISSION tick=1 result=deferred reason=transient-retry-priority goal={retry.Id.Value[..8]}", line);
+        var timestampIndex = line.IndexOf(" ts=", StringComparison.Ordinal);
+        Assert.Equal($"ADMISSION tick=1 result=deferred reason=transient-retry-priority goal={retry.Id.Value[..8]}",
+            timestampIndex < 0 ? line : line[..timestampIndex]);
     }
 
     [Xunit.Fact]
