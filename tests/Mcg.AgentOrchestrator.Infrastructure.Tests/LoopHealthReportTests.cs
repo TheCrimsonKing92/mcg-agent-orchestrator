@@ -695,8 +695,9 @@ public sealed class LoopHealthReportTests
 
         var report = LoopHealthReport.Build(kernel.Goals, kernel.HumanInputRequests, receipts: receipts);
 
-        // 1 false-block out of 2 terminal receipts
-        Assert.True(Math.Abs(report.FalseBlockRate - 0.5) < 0.01);
+        // 1 rejected-then-landed receipt out of 2 terminal receipts; neither is a labeled false-block.
+        Assert.Equal(0.0, report.FalseBlockRate);
+        Assert.Equal(1, report.RejectedThenLandedCount);
         Assert.Equal(0.0, report.FalsePassRate);
     }
 

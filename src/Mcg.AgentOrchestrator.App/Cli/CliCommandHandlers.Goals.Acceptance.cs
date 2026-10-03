@@ -502,18 +502,6 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
         Console.WriteLine($"Verification artifacts: {verification.ArtifactsPath}");
     }
 
-    // Advisory only (does not gate the merge): ask a local judge whether the diff actually
-    // accomplishes the objective, beyond passing tests. Records a receipt for the eventual
-    // local-vs-subscription comparison and blocking flip. Any failure is swallowed.
-    GoalLandingPostActions.RunAdvisorySemanticAcceptance(
-        goal,
-        context.Workspace,
-        context.Providers,
-        context.WorkerProfiles,
-        worktreePath,
-        verification,
-        Console.WriteLine);
-
     var hostStop = context.StopAcceptanceHosts(new AcceptanceHostStopRequest(
         goal.Id,
         worktreePath,
