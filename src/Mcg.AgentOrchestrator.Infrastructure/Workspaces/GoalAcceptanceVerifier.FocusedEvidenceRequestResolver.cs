@@ -11,7 +11,7 @@ using FocusedEvidencePlannedCheck = Mcg.AgentOrchestrator.Infrastructure.GoalAcc
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-internal static class FocusedEvidenceRequestResolver
+internal static partial class FocusedEvidenceRequestResolver
 {
     internal static bool TryBuildFocusedEvidenceChecks(
         string request,
@@ -193,6 +193,7 @@ internal static class FocusedEvidenceRequestResolver
                 $"{GoalAcceptanceVerifier.ProjectLabel(projectGroup.Key)}={reason}"));
         }
 
+        var budget = MeasureFocusedEvidenceBudget(worktreePath, validated, totalTargets);
         var built = new List<AcceptanceManifestCheck>();
         foreach (var item in planned)
         {
@@ -214,7 +215,8 @@ internal static class FocusedEvidenceRequestResolver
                     .Select(filter => filter.Tokens)
                     .ToArray(),
                 IsFocusedEvidenceSelection = item.Filter is not null,
-                TimeoutMinutes = totalTargets <= GoalAcceptanceVerifier.FocusedEvidenceShortTimeoutTargetLimit ? 10 : null
+                FocusedEvidenceMatchedClasses = budget.For(item.Project, item.SelectionFilters),
+                TimeoutMinutes = budget.TargetCount <= GoalAcceptanceVerifier.FocusedEvidenceShortTimeoutTargetLimit ? 10 : null
             };
             built.Add(check);
         }
@@ -372,17 +374,7 @@ internal static class FocusedEvidenceRequestResolver
         string project,
         string className)
     {
-        var projectPath = Path.Combine(worktreePath, project.Replace('/', Path.DirectorySeparatorChar));
-        var projectDirectory = Path.GetDirectoryName(projectPath);
-        if (string.IsNullOrWhiteSpace(projectDirectory) || !Directory.Exists(projectDirectory))
-        {
-            return [];
-        }
-
-        return Directory.EnumerateFiles(projectDirectory, "*.cs", SearchOption.AllDirectories)
-            .Where(path => !path.Split(Path.DirectorySeparatorChar).Any(segment =>
-                segment.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
-                segment.Equals("obj", StringComparison.OrdinalIgnoreCase)))
+        return EnumerateFocusedEvidenceSourceFiles(worktreePath, project)
             .Where(path => ParseCSharpRoot(path)
                 .DescendantNodes()
                 .OfType<TypeDeclarationSyntax>()
