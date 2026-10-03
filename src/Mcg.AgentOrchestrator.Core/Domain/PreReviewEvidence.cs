@@ -32,7 +32,8 @@ public sealed record PreReviewEvidenceReceipt(
     string MappingReason,
     string? EvidencePointer,
     DateTimeOffset RecordedAt,
-    IReadOnlyList<string>? Advisories = null)
+    IReadOnlyList<string>? Advisories = null,
+    IReadOnlyList<string>? EvidenceTimeoutChecks = null)
 {
     public const string SyntheticReuseAdvisory = "reused-current-candidate";
 
@@ -61,7 +62,8 @@ public sealed record PreReviewEvidenceReceipt(
         string.Equals(MappingReason, other.MappingReason, StringComparison.Ordinal) &&
         string.Equals(EvidencePointer, other.EvidencePointer, StringComparison.OrdinalIgnoreCase) &&
         (IsSyntheticReuse || RecordedAt == other.RecordedAt) &&
-        (Advisories ?? []).SequenceEqual(other.Advisories ?? [], StringComparer.Ordinal);
+        (Advisories ?? []).SequenceEqual(other.Advisories ?? [], StringComparer.Ordinal) &&
+        (EvidenceTimeoutChecks ?? []).SequenceEqual(other.EvidenceTimeoutChecks ?? [], StringComparer.Ordinal);
 
     private static bool CheckContentEquals(
         PreReviewEvidenceCheckReceipt left,
