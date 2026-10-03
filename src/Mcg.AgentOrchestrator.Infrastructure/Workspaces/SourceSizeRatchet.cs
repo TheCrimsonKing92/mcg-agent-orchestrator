@@ -135,7 +135,8 @@ internal static class SourceSizeRatchet
             // Goal 0b944cc5 extracted parallel-acceptance fairness state and helpers; measured at 4049 lines.
             // Goal af61f4a6 (backlog 964a1df7) moved terminal reconciliation and run completion unchanged; measured at 3592 lines.
             // Goal 6e664238 (backlog c7f9845c) moved conduct-event classification and progress formatting unchanged; measured at 3338 lines.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 3338),
+            // Goal 8c677dd2 (backlog 21450794) split RunParallelAcceptanceBatch into named admission phases; measured at 2686 lines.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2686),
             // Goal 354522f1 tick persistence partial measured at 467 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.TickPersistence.cs", 467),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.DependencyReadmission.cs", 384),
@@ -143,6 +144,7 @@ internal static class SourceSizeRatchet
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.ParallelAcceptanceCompletion.cs", 465),
             // Goal 6e664238 conduct-event partial measured at 260 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.ConductEvents.cs", 260),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.ParallelAcceptanceAdmission.cs", 793),
             // Raised for goal 18afe5f2: missing-build-evidence rejection and commit suppression
             // must run where parsed worker results and authoritative changed paths meet. Raised again
             // for goal 0d39b5a3, which adds the narrow Planner sample launch and completion-selection
