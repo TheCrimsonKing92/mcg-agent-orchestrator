@@ -1635,6 +1635,10 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         context.Workspace.OrchestratorDirectory, context.Workspace.LogDirectory)
                 };
                 var unappliedExitWatch = new ConductorUnappliedExitWatch();
+                var hostHealthMonitor = new ConductorHostHealthMonitor(
+                    GateHostHealthLedger.ResolveStorePath(context.Workspace.ExecutionDirectory),
+                    Path.Combine(context.Workspace.OrchestratorDirectory, ConductorHostHealthMonitor.StateFileName),
+                    conductEventLogWriter);
                 var maintenanceCadence = RunEventMaintenanceCadenceRunner.ForWorkspace(context.Workspace);
                 var operatorIntents = OperatorIntentCoordinator.CreateDefault(context.Workspace);
                 var evictedGoalStatuses = new Dictionary<string, GoalStatus>(StringComparer.Ordinal);
@@ -1798,6 +1802,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                             context.Workspace);
                     }
                     maintenanceCadence.OnTick();
+                    hostHealthMonitor.Evaluate();
                     RemoteGitMirror.TryStartBackgroundProcessing(loopKernel, context.Workspace.ExecutionDirectory);
                     return terminalSweep;
                 }

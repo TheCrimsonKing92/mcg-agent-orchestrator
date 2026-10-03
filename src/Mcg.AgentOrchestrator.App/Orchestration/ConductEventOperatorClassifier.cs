@@ -19,6 +19,8 @@ internal static class ConductEventOperatorClassifier
 
         return eventKind switch
         {
+            "host-health" when StartsWithToken("HOST_HEALTH_DEGRADED") => Decision,
+            "host-health" when StartsWithToken("HOST_HEALTH_RECOVERED") => Outcome,
             "sweep-blocker" => HasToken(ReconcileSweepRemediationCoordinator.AcceptanceQueueOwnerField)
                 ? null : Decision,
             "loop-handoff" when StartsWithToken("ACTIVATION_REVERTED")
