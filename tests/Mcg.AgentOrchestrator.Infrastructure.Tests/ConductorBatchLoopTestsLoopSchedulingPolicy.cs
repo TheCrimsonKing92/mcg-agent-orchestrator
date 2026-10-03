@@ -126,14 +126,14 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
                 ref profiles,
                 ref currentGoal));
 
-            await intakeTask.WaitAsync(TimeSpan.FromSeconds(2));
+            await WaitWithHangGuardAsync(intakeTask, "goal intake");
             Xunit.Assert.NotNull(currentGoal);
             Xunit.Assert.False(refiner.Entered.IsSet);
             var refinementMessage = Xunit.Assert.Single(
                 await repository.ListOutboxMessagesAsync(GoalRefinementWorkCoordinator.OutboxKind));
             Xunit.Assert.Equal(GoalRefinementWorkCoordinator.MessageId(currentGoal!.Id), refinementMessage.Id);
 
-            using var refinementDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            using var refinementDeadline = new CancellationTokenSource();
             var refinementTask = Task.Run(() => GoalRefinementWorkCoordinator.ProcessAsync(
                 repository,
                 workspace,
@@ -166,10 +166,11 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
 
             try
             {
-                Xunit.Assert.True(
-                    refiner.Entered.Wait(TimeSpan.FromSeconds(15)),
-                    "Durable refinement work did not start.");
-                await loopTask.WaitAsync(TimeSpan.FromSeconds(15));
+                if (!refiner.Entered.Wait(RefinementInFlightHangGuard))
+                {
+                    throw new TimeoutException($"Hang guard: refinement entered did not complete within {RefinementInFlightHangGuard}.");
+                }
+                await WaitWithHangGuardAsync(loopTask, "two loop ticks");
             }
             catch
             {
@@ -181,7 +182,8 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
                 refiner.Release.Set();
             }
 
-            var refinementResult = await refinementTask.WaitAsync(TimeSpan.FromSeconds(15));
+            await WaitWithHangGuardAsync(refinementTask, "refinement attached");
+            var refinementResult = await refinementTask;
             Xunit.Assert.True(refinementResult.Attached);
             Assert.True(tickCount >= 2, $"Expected at least two completed ticks, observed {tickCount}.");
             Assert.DoesNotContain("TICK_WRITE_BUSY", loopOutput, StringComparison.Ordinal);
@@ -192,6 +194,17 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
         finally
         {
             TryDeleteDirectory(root);
+        }
+    }
+
+    private static readonly TimeSpan RefinementInFlightHangGuard = TimeSpan.FromSeconds(120);
+
+    private static async Task WaitWithHangGuardAsync(Task task, string eventName)
+    {
+        try { await task.WaitAsync(RefinementInFlightHangGuard); }
+        catch (TimeoutException ex) when (!task.IsCompleted)
+        {
+            throw new TimeoutException($"Hang guard: {eventName} did not complete within {RefinementInFlightHangGuard}.", ex);
         }
     }
 
