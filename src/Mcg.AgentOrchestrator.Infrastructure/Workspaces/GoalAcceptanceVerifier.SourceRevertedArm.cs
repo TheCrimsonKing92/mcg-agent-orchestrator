@@ -6,9 +6,6 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed partial class GoalAcceptanceVerifier
 {
-    // Reviewed policy files read as data by tests, never build, run, or acceptance-harness inputs.
-    private static readonly string[] RevertablePolicyFiles = [".gitattributes"];
-
     public Task<FocusedEvidenceRunResult> RunNegativeControlFocusedEvidenceOwnedAsync(
         string worktreePath, GoalId? goalId, string request,
         IAcceptanceFocusedVerificationOwner executionOwner,
@@ -94,7 +91,7 @@ public sealed partial class GoalAcceptanceVerifier
                 return InconclusiveSourceReverted(candidateSha, "candidate HEAD changed after the Candidate arm");
             var diff = GitCli.Run(candidatePath,
                 ["diff", "--name-status", "--no-renames", "-z", mergeBase, candidateSha, "--", "src/",
-                    .. (revertPaths is null ? [] : RevertablePolicyFiles)]);
+                    .. (revertPaths is null ? [] : NegativeControlRevertPolicy.RevertablePolicyFiles)]);
             if (!diff.Succeeded || diff.DrainTimedOut)
                 return InconclusiveSourceReverted(candidateSha, $"source diff failed: {TrimForReceipt(diff.Error)}");
             var fields = diff.Output.Split('\0', StringSplitOptions.RemoveEmptyEntries);
@@ -113,7 +110,7 @@ public sealed partial class GoalAcceptanceVerifier
             {
                 var path = fields[i + 1];
                 if (!path.StartsWith("src/", StringComparison.Ordinal) &&
-                    !(selected is not null && RevertablePolicyFiles.Contains(path, StringComparer.Ordinal)))
+                    !(selected is not null && NegativeControlRevertPolicy.RevertablePolicyFiles.Contains(path, StringComparer.Ordinal)))
                     return InconclusiveSourceReverted(candidateSha, "source diff contained a path outside src/");
                 if (selected is not null && !selected.Contains(path, StringComparer.Ordinal)) continue;
                 switch (fields[i])
@@ -191,7 +188,7 @@ public sealed partial class GoalAcceptanceVerifier
             if (path.StartsWith("tests/", StringComparison.Ordinal)) return FindingEvidenceRevertPathsRejection.UnderTests;
             if (Path.IsPathRooted(path) ||
                 (!path.StartsWith("src/", StringComparison.Ordinal) &&
-                    !(allowPolicyFiles && RevertablePolicyFiles.Contains(path, StringComparer.Ordinal))) ||
+                    !(allowPolicyFiles && NegativeControlRevertPolicy.RevertablePolicyFiles.Contains(path, StringComparer.Ordinal))) ||
                 path.Split('/').Any(part => part is "." or ".." or ""))
                 return FindingEvidenceRevertPathsRejection.OutsideSrc;
             if (!changed.Contains(path)) return FindingEvidenceRevertPathsRejection.NotChangedByGoal;
