@@ -10,7 +10,21 @@ public sealed class SemanticJudgeSuspensionTests : IDisposable
     private const string RecordedJudge = "recursive(fake:judge)";
     private readonly string _root = SharedTestSupport.CreateTempDirectory();
 
-    public void Dispose() => SharedTestSupport.RemoveTempDirectory(_root);
+    public void Dispose()
+    {
+        // Git object files are read-only on Windows; retries alone cannot remove them.
+        var root = new DirectoryInfo(_root);
+        if (root.Exists)
+        {
+            root.Attributes &= ~FileAttributes.ReadOnly;
+            foreach (var entry in root.EnumerateFileSystemInfos("*", SearchOption.AllDirectories))
+            {
+                entry.Attributes &= ~FileAttributes.ReadOnly;
+            }
+        }
+
+        SharedTestSupport.RemoveTempDirectory(_root);
+    }
 
     [Fact]
     public void SuspendedJudgeIsNotInvokedAndRecordsSuspendedEntry()
