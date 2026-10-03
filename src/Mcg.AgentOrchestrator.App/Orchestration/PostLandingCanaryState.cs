@@ -107,7 +107,8 @@ internal enum PostLandingCanaryFailureReason
     EmptyReceipt,
     Timeout,
     InfrastructureError,
-    EvaluatedArtifactFailure
+    EvaluatedArtifactFailure,
+    MainSuspect
 }
 
 internal enum PostLandingCanaryFaultDisposition
