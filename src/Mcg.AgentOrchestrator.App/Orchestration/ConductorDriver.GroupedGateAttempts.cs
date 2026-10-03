@@ -185,8 +185,8 @@ internal sealed partial class ConductorDriver
                     throw new InvalidOperationException(
                         $"Live grouped gate attempts overlap: {overlapping!.AttemptMetadataPath} and {current.MetadataPath}.");
                 var key = current.Kind == "train"
-                    ? $"train:{string.Join('+', memberIds.Order(StringComparer.Ordinal))}"
-                    : string.Join(':', memberIds.Order(StringComparer.Ordinal));
+                    ? TrainGateRunIdentity(memberIds)
+                    : CohortGateRunIdentity(memberIds);
                 var fingerprint = current.Kind == "train"
                     ? $"train:{current.IdentityValue}"
                     : ConductorAcceptanceCohortSelector.PairFingerprint(

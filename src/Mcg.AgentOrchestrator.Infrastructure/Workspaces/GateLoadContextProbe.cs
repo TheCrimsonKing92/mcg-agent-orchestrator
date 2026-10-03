@@ -278,7 +278,8 @@ internal static class GateLoadContextProbe
                 status.SlotIndex,
                 heartbeatAge,
                 status.Path,
-                snapshot.RunClass));
+                snapshot.RunClass,
+                snapshot.RunId));
         }
 
         return occupants;
@@ -372,7 +373,8 @@ internal static class GateLoadContextProbe
         int SlotIndex,
         TimeSpan HeartbeatAge,
         string SourcePath = "",
-        string? RunClass = null)
+        string? RunClass = null,
+        string? RunId = null)
     {
         internal bool CountsAsAcceptanceOccupant => GateHeartbeatRunClass.CountsAsAcceptanceOccupant(RunClass);
         internal string Identity => ProcessId is > 0

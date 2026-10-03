@@ -61,7 +61,7 @@ internal sealed partial class ConductorDriver
         var allEjections = new List<MergeTrainEjection>();
         var selectedGoalIds = selection.Members.Select(member => member.GoalId.Value)
             .ToHashSet(StringComparer.Ordinal);
-        var trainKey = $"train:{string.Join('+', selectedGoalIds.Order(StringComparer.Ordinal))}";
+        var trainKey = TrainGateRunIdentity(selectedGoalIds);
         if (runGateInBackground)
         {
             if (_groupedGateAttempts is null &&
@@ -211,7 +211,7 @@ internal sealed partial class ConductorDriver
                         members[0].GoalId,
                         stableSlotLease.Environment.BuildPermitIndex,
                         cancellationToken,
-                        CreateMergeTrainGateExecutionOptions(identity, members));
+                        CreateMergeTrainGateExecutionOptions(identity, members, trainKey));
                     var verification = AcceptanceExecutionOwnerLifetime.Run(
                         executionOwner,
                         () => _cohortAcceptanceVerifier.RunOwnedAsync(

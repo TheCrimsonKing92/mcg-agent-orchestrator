@@ -3702,7 +3702,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private DotnetBuildEnvironmentLease AcquireCheckPermit(DotnetBuildEnvironment environment, GoalId? goalId, bool wait, CancellationToken ct) =>
         wait ? StructuralCoveragePermitWait.Acquire(environment, goalId, _storageRoot, _testOverrides, EmitGateProgress,
-            _timeProvider, _leaseSleep, _executionContext?.ArtifactCustody, ct) :
+            _timeProvider, _leaseSleep, _executionContext?.ArtifactCustody, ct, GateHeartbeatRunClass.ResolveRunId(_executionContext)) :
         DotnetBuildEnvironmentManager.AcquireLeaseExecutionPermit(environment, ct, _timeProvider, _leaseSleep,
             _executionContext?.ArtifactCustody);
 
@@ -5317,7 +5317,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             heartbeatPath,
             ResolveStableSlotHeartbeatMirrorPath(environment, heartbeatPath, _storageRoot),
             string.Join(' ', arguments.Select(QuoteForDisplay)),
-            environment?.RootPath) { RunClass = GateHeartbeatRunClass.Classify(_executionContext) };
+            environment?.RootPath) { RunClass = GateHeartbeatRunClass.Classify(_executionContext), RunId = GateHeartbeatRunClass.ResolveRunId(_executionContext) };
     }
 
     // An attempt can run several checks after releasing its build permit, and unrelated goals can hash to
@@ -5439,7 +5439,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string stdoutPath,
         string stderrPath,
         string? finalState = null,
-        string? attemptResultsPrefix = null, string? runClass = null)
+        string? attemptResultsPrefix = null, string? runClass = null, string? runId = null)
     {
         var check = new AcceptanceManifestCheck { Name = checkName };
         var heartbeatPath = ResolveGateHeartbeatPathCore(
@@ -5461,7 +5461,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 heartbeatPath,
                 DotnetBuildEnvironmentManager.CaptureStorageRoot()),
             "dotnet test",
-            environment.RootPath) { RunClass = runClass };
+            environment.RootPath) { RunClass = runClass, RunId = runId };
         var runtime = new GateHeartbeatRuntime(
             context,
             processId,
@@ -6668,7 +6668,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 _context.CommandLine,
                 exitCode,
                 _stdoutPath,
-                _stderrPath, RunClass: _context.RunClass);
+                _stderrPath, RunClass: _context.RunClass, RunId: _context.RunId);
         }
 
         private AcceptanceGateProgress ToProgress(GateHeartbeatSnapshot snapshot) =>

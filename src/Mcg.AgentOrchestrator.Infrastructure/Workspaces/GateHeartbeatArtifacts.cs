@@ -43,7 +43,8 @@ public sealed record GateHeartbeatSnapshot(
     string? StderrPath = null,
     string? RetainedStderrPath = null,
     string? RetainedStderrSha256 = null,
-    string? RunClass = null);
+    string? RunClass = null,
+    string? RunId = null);
 
 public sealed record GateHeartbeatStatus(
     int SlotIndex,

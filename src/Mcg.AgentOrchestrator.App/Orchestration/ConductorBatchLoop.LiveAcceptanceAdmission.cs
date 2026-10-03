@@ -67,9 +67,11 @@ internal sealed partial class ConductorBatchLoop
         var occupants = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var claimedProcessIds = new HashSet<int>();
         var claimedGoalIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var claimedRunIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var attemptId in activeAttemptIds.OrderBy(id => id, StringComparer.Ordinal))
         {
+            if (!string.IsNullOrWhiteSpace(attemptId)) claimedRunIds.Add(attemptId.Trim());
             var attempt = activeAttempts.FirstOrDefault(candidate =>
                 string.Equals(candidate.AttemptId, attemptId, StringComparison.Ordinal));
             if (attempt is null)
@@ -91,6 +93,7 @@ internal sealed partial class ConductorBatchLoop
 
         foreach (var root in activeCohorts.ActiveRoots.OrderBy(root => root.Key, StringComparer.Ordinal))
         {
+            if (!string.IsNullOrWhiteSpace(root.Key)) claimedRunIds.Add(root.Key.Trim());
             var memberIds = root.MemberGoalIds.OrderBy(id => id, StringComparer.Ordinal).ToArray();
             occupants.TryAdd(
                 $"cohort:{root.Key}",
@@ -106,7 +109,8 @@ internal sealed partial class ConductorBatchLoop
             }
 
             if ((gate.ProcessId is > 0 && claimedProcessIds.Contains(gate.ProcessId.Value)) ||
-                (!string.IsNullOrWhiteSpace(gate.GoalId) && claimedGoalIds.Contains(gate.GoalId)))
+                (!string.IsNullOrWhiteSpace(gate.GoalId) && claimedGoalIds.Contains(gate.GoalId)) ||
+                (!string.IsNullOrWhiteSpace(gate.RunId) && claimedRunIds.Contains(gate.RunId.Trim())))
             {
                 continue;
             }

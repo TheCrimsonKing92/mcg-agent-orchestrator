@@ -18,7 +18,8 @@ internal static class StructuralCoveragePermitWait
         TimeProvider clock,
         Action<TimeSpan> sleep,
         AcceptanceAttemptArtifactCustodyContext? artifactCustody,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? runId = null)
     {
         var bound = overrides.StructuralCoveragePermitWaitBound ?? DefaultBound;
         var interval = overrides.StructuralCoveragePermitWaitHeartbeatInterval ?? DefaultHeartbeatInterval;
@@ -46,7 +47,7 @@ internal static class StructuralCoveragePermitWait
                         var elapsed = now - started;
                         var snapshot = new GateHeartbeatSnapshot(
                             goalId?.Value, PhaseName, target, slot, Environment.ProcessId, null,
-                            "running", started, now, now, 0, 0, 0);
+                            "running", started, now, now, 0, 0, 0, RunId: runId);
                         GateHeartbeatArtifacts.TryWrite(heartbeatPath, snapshot);
                         var progress = new AcceptanceGateProgress(
                             goalId?.Value, PhaseName, target, slot, Environment.ProcessId, null,

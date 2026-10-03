@@ -64,7 +64,8 @@ public sealed record AcceptanceRunExecutionOptions(
     string? RunId = null,
     string? ResultsPrefix = null,
     string? LivenessCheckHint = null,
-    IReadOnlyList<AcceptanceOwnerProtectedCohortMember>? OwnerProtectedCohortMembers = null);
+    IReadOnlyList<AcceptanceOwnerProtectedCohortMember>? OwnerProtectedCohortMembers = null,
+    string? GateRunIdentity = null);
 
 public sealed record AcceptanceOwnerProtectedCohortMember(GoalId GoalId, string CandidateSha);
 
@@ -111,6 +112,7 @@ internal abstract class AcceptanceRunExecutionOwner : IAcceptanceRunExecutionCon
     }
 
     public string RunId { get; }
+    internal string? GateRunIdentity => _options.GateRunIdentity;
     public string ResultsPrefix { get; }
     public string ApparatusReceiptPath { get; }
     public AcceptanceGateEngineSettings Settings { get; }

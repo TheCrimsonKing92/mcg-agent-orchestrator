@@ -5,6 +5,12 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorDriver
 {
+    internal static string CohortGateRunIdentity(IEnumerable<string> memberGoalIds) =>
+        string.Join(':', memberGoalIds.Order(StringComparer.Ordinal));
+
+    internal static string TrainGateRunIdentity(IEnumerable<string> memberGoalIds) =>
+        $"train:{string.Join('+', memberGoalIds.Order(StringComparer.Ordinal))}";
+
     private static AcceptanceRunExecutionOptions CreateCohortAttributionExecutionOptions(
         ConductEventLogWriter writer,
         AcceptanceCohortIdentity identity,
@@ -16,7 +22,7 @@ internal sealed partial class ConductorDriver
                 $" cohort={identity.Value[..Math.Min(18, identity.Value.Length)]} member={goalId} " +
                 $"members={string.Join(',', identity.Members.Select(binding => binding.GoalId.Value[..8]))} scope=attribution";
             TryAppendGateProgressEvent(writer, goalId, detail);
-        });
+        }, GateRunIdentity: CohortGateRunIdentity(identity.Members.Select(binding => binding.GoalId.Value)));
 
     private static void AppendCohortAttributionStartEvent(
         ConductEventLogWriter writer,
@@ -34,7 +40,8 @@ internal sealed partial class ConductorDriver
 
     private AcceptanceRunExecutionOptions CreateMergeTrainGateExecutionOptions(
         MergeTrainIdentity identity,
-        IReadOnlyList<MergeTrainMemberBinding> members)
+        IReadOnlyList<MergeTrainMemberBinding> members,
+        string trainKey)
     {
         var workspace = _cohortWorkspace ?? throw new InvalidOperationException("Production acceptance cohort workspace is unavailable.");
         var logPath = Path.Combine(
@@ -59,7 +66,7 @@ internal sealed partial class ConductorDriver
             {
                 // Event-log setup is best-effort for the gate attempt.
             }
-        });
+        }, GateRunIdentity: trainKey);
     }
 
     private static void TryAppendGateProgressEvent(
