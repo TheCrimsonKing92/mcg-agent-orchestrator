@@ -847,25 +847,7 @@ internal sealed partial class ConductorDriver
         _normalizeLifecycleState = (goal, reason) => kernel.NormalizeGoalLifecycleState(goal.Id, reason);
         _recordMissingBranchRetirement = RecordMissingBranchRetirement;
 
-        _runAdvisorySemanticAcceptance = (goal, _) =>
-        {
-            var worktreePath = GoalWorktrees.TryResolve(dir, goal.Id);
-            if (worktreePath is null)
-            {
-                return;
-            }
-
-            GoalOperationJournal.Begin(dir, goal, "conductor:semantic-acceptance", "Running advisory semantic acceptance.");
-            GoalLandingPostActions.RunAdvisorySemanticAcceptance(
-                goal,
-                workspace,
-                providers ?? new InMemoryModelProviderRegistry([]),
-                profiles,
-                worktreePath,
-                null,
-                Console.WriteLine);
-            GoalOperationJournal.Completed(dir, goal, "conductor:semantic-acceptance", "Advisory semantic acceptance invoked.");
-        };
+        _runAdvisorySemanticAcceptance = (_, _) => { };
 
         _integrateMainBeforeDeveloperDispatch = goal =>
         {

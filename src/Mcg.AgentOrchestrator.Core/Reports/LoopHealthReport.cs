@@ -43,7 +43,8 @@ public sealed record LoopHealthSnapshot(
     int RetryCauseUnavailableCount = 0,
     int EvidenceAttemptCount = 0,
     long? EvidenceElapsedMilliseconds = null,
-    int EvidenceProviderUsageUnavailableCount = 0);
+    int EvidenceProviderUsageUnavailableCount = 0,
+    int RejectedThenLandedCount = 0);
 
 public static class LoopHealthReport
 {
@@ -113,7 +114,7 @@ public static class LoopHealthReport
 
         var judgeDistributions = BuildJudgeVerdictDistributions(receiptList);
         var agreementRate = ComputeInterJudgeAgreementRate(receiptList);
-        var (falseBlockRate, falsePassRate) = ComputeFalseBlockPassRates(receiptList, goalStatusById);
+        var (falseBlockRate, falsePassRate, rejectedThenLandedCount) = ComputeFalseBlockPassRates(receiptList, goalStatusById);
         var admissions = allTasks.SelectMany(task => task.RetryAdmissionHistory).ToList();
         var landedAdmissions = completedGoals
             .SelectMany(goal => goal.Tasks.SelectMany(task =>
@@ -193,7 +194,8 @@ public static class LoopHealthReport
             legacyCauseUnavailable,
             evidenceAttemptCount,
             evidenceElapsedMilliseconds,
-            evidenceAttemptCount);
+            evidenceAttemptCount,
+            rejectedThenLandedCount);
     }
 
     // Emitted by BackgroundDispatchRunner when a dispatch exits 0 but the file-change guard fires.
@@ -247,14 +249,15 @@ public static class LoopHealthReport
     }
 
     // Denominates over receipts where consensus is non-null AND goal has a terminal status.
-    // FalseBlock: consensus=false (NOT-MET) but goal Completed (would have wrongly blocked a landed goal).
+    // RejectedThenLanded: consensus=false (NOT-MET) and goal Completed; completion is not a labeled outcome.
+    // FalseBlock stays zero until a labeled outcome source exists.
     // FalsePass:  consensus=true  (MET)     but goal Failed/Cancelled/Superseded (passed a failed goal).
-    private static (double FalseBlockRate, double FalsePassRate) ComputeFalseBlockPassRates(
+    private static (double FalseBlockRate, double FalsePassRate, int RejectedThenLandedCount) ComputeFalseBlockPassRates(
         IReadOnlyList<SemanticAcceptanceReceipt> receipts,
         Dictionary<string, GoalStatus> goalStatusById)
     {
         var denominator = 0;
-        var falseBlocks = 0;
+        var rejectedThenLandedCount = 0;
         var falsePasses = 0;
 
         foreach (var receipt in receipts)
@@ -268,13 +271,13 @@ public static class LoopHealthReport
 
             denominator++;
             if (!receipt.Consensus.Value && status == GoalStatus.Completed)
-                falseBlocks++;
+                rejectedThenLandedCount++;
             else if (receipt.Consensus.Value && status is GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded)
                 falsePasses++;
         }
 
-        if (denominator == 0) return (0.0, 0.0);
-        return ((double)falseBlocks / denominator, (double)falsePasses / denominator);
+        if (denominator == 0) return (0.0, 0.0, 0);
+        return (0.0, (double)falsePasses / denominator, rejectedThenLandedCount);
     }
 
     private static List<Goal> ApplyWindow(List<Goal> goals, int? lastN)
