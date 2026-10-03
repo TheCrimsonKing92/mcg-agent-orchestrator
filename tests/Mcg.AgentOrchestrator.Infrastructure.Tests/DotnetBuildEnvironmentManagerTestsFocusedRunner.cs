@@ -508,6 +508,10 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner : DotnetBuil
             var startedPath = Path.Combine(root, "started");
             PrepareFocusedArtifacts(workDirectory, projectFile, projectName, "budget-test", isolatedRoot);
 
+            // Allow testhost startup/discovery, but expire before the fixture's 60-second release wait.
+            const int StartupTolerantBudgetSeconds = 45;
+            // Hang-only headroom for pwsh startup, tree termination and receipt persistence.
+            const int StartupAndCleanupHangBoundSeconds = StartupTolerantBudgetSeconds + 90;
             var startInfo = CreateFocusedStartInfo(
                 scriptPath,
                 workDirectory,
@@ -516,13 +520,14 @@ public sealed class DotnetBuildEnvironmentManagerTestsFocusedRunner : DotnetBuil
                 receiptPath,
                 logPath,
                 "budget-test",
-                budgetSeconds: 15,
+                budgetSeconds: StartupTolerantBudgetSeconds,
                 leaseWaitSeconds: 5,
                 projectFile,
                 "FullyQualifiedName~FocusedProcessFixtureTests");
             startInfo.Environment["FOCUSED_STARTED_MARKER"] = startedPath;
             startInfo.Environment["FOCUSED_RELEASE"] = Path.Combine(root, "never-release");
-            var capture = TestChildProcessCapture.Run(startInfo);
+            var capture = TestChildProcessCapture.Run(
+                startInfo, hangBound: TimeSpan.FromSeconds(StartupAndCleanupHangBoundSeconds));
             var result = (ExitCode: capture.ExitCode, Stdout: capture.Stdout, Stderr: capture.Stderr);
 
             var diagnostics = BuildFocusedRunnerFailureDiagnostics(result, receiptPath, isolatedRoot);

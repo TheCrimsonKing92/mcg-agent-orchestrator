@@ -32,8 +32,9 @@ function Invoke-CapturedProcess {
         [string]$FileName,
         [string[]]$ArgumentList,
         [string]$WorkingDirectory,
+        # Hang guard per child; the outer fixture guard exceeds two of these for Warnings.
         [ValidateRange(1, 300)]
-        [int]$TimeoutSeconds = 30
+        [int]$TimeoutSeconds = 120
     )
 
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
