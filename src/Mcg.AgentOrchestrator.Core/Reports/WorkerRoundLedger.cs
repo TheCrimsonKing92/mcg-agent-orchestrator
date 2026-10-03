@@ -24,23 +24,32 @@ public sealed record WorkerRoundRecord(
     string? DispatchLane,
     long? InputTokens,
     long? CachedInputTokens,
-    long? OutputTokens)
+    long? OutputTokens,
+    ReworkCauseFamily ReworkCause)
 {
     public bool UsageReported => InputTokens.HasValue && CachedInputTokens.HasValue && OutputTokens.HasValue;
 }
 
 public static class WorkerRoundLedger
 {
-    public static IReadOnlyList<WorkerRoundRecord> FromGoals(IEnumerable<Goal> goals)
+    public static IReadOnlyList<WorkerRoundRecord> FromGoals(IEnumerable<Goal> goals) => FromGoals(goals, []);
+
+    public static IReadOnlyList<WorkerRoundRecord> FromGoals(IEnumerable<Goal> goals,
+        IReadOnlyCollection<AppliedRetryIntent> intents)
     {
         ArgumentNullException.ThrowIfNull(goals);
+        ArgumentNullException.ThrowIfNull(intents);
         return goals.OrderBy(goal => goal.Id.Value, StringComparer.Ordinal)
-            .SelectMany(FromGoal).ToArray();
+            .SelectMany(goal => FromGoal(goal, intents)).ToArray();
     }
 
-    public static IReadOnlyList<WorkerRoundRecord> FromGoal(Goal goal)
+    public static IReadOnlyList<WorkerRoundRecord> FromGoal(Goal goal) => FromGoal(goal, []);
+
+    public static IReadOnlyList<WorkerRoundRecord> FromGoal(Goal goal,
+        IReadOnlyCollection<AppliedRetryIntent> intents)
     {
         ArgumentNullException.ThrowIfNull(goal);
+        ArgumentNullException.ThrowIfNull(intents);
         var records = new List<WorkerRoundRecord>();
         foreach (var task in goal.Tasks)
         {
@@ -65,7 +74,10 @@ public static class WorkerRoundLedger
                 records.Add(new WorkerRoundRecord(goal.Id.Value, task.Id.Value, task.RequiredRole,
                     dispatch.WorkerName, index + 1, dispatch.DispatchedAt, ending?.OccurredAt,
                     cause, dispatch.ProviderName, dispatch.ModelName, dispatch.DispatchLane,
-                    Reported(input), Reported(cached), Reported(output)));
+                    Reported(input), Reported(cached), Reported(output),
+                    ReworkCauseClassifier.Classify(goal, task, index + 1,
+                        index == 0 ? dispatch.DispatchedAt : dispatches[index - 1].DispatchedAt,
+                        dispatch.DispatchedAt, intents)));
             }
         }
         return records;
