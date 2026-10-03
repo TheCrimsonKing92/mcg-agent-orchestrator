@@ -28,7 +28,7 @@ internal sealed partial class ConductorDriver
                 var first = FocusedPartitionReceipt(bindings[0], 0, identity, firstFocused, reproducer == 0);
                 var second = FocusedPartitionReceipt(bindings[1], 1, identity, secondFocused, reproducer == 1);
                 var receipt = SaveCohortPartitionAttribution(store, identity, bindings, pairFingerprint,
-                    cohortFailingTests, first, second, AcceptanceCohortAttributionSources.FocusedPass);
+                    cohortFailingTests, first, second, writer, AcceptanceCohortAttributionSources.FocusedPass);
                 AppendFocusedAttributionEvent(writer, identity, "attributed", "single-reproducer");
                 return receipt;
             }
@@ -41,15 +41,43 @@ internal sealed partial class ConductorDriver
         var firstFull = runner.RunFull(bindings[0], 0, identity, writer, cancellationToken);
         var secondFull = runner.RunFull(bindings[1], 1, identity, writer, cancellationToken);
         return SaveCohortPartitionAttribution(store, identity, bindings, pairFingerprint,
-            cohortFailingTests, firstFull, secondFull);
+            cohortFailingTests, firstFull, secondFull, writer);
     }
 
-    private static AcceptanceCohortReceipt SaveCohortPartitionAttribution(CohortAcceptanceStore store,
+    private AcceptanceCohortReceipt SaveCohortPartitionAttribution(CohortAcceptanceStore store,
         AcceptanceCohortIdentity identity, IReadOnlyList<AcceptanceCohortMemberBinding> bindings,
         string pairFingerprint, IReadOnlyList<string> cohortFailingTests,
-        AcceptanceCohortPartitionReceipt first, AcceptanceCohortPartitionReceipt second, string? source = null)
+        AcceptanceCohortPartitionReceipt first, AcceptanceCohortPartitionReceipt second,
+        ConductEventLogWriter writer, string? source = null)
     {
         var classified = ConductorAcceptanceCohortFailingTestAttribution.Classify(cohortFailingTests, first, second);
+        var workspace = _cohortWorkspace
+            ?? throw new InvalidOperationException("Production acceptance cohort workspace is unavailable.");
+        var sharedTests = ConductorAcceptanceCohortMainSuspect.TryDecide(classified, bindings,
+            workspace.ExecutionDirectory,
+            test => AcceptanceTestSourceResolver.ResolveSourcePaths(workspace.ExecutionDirectory, null, test));
+        if (sharedTests is not null)
+        {
+            var sha = identity.ObservedMainRevision;
+            var tests = ConductorAcceptanceCohortMainSuspect.FormatTests(sharedTests);
+            var detail = $"main-suspect cohort={identity.Value} shared-failing-tests={sharedTests.Count} tests={tests}";
+            var now = _utcNow();
+            var events = new PostLandingCanaryEventStore(
+                new SqliteRunEventStore(workspace.RunEventStorePath), workspace.RunEventStorePath);
+            var appended = events.AppendOnceAsync(PostLandingCanaryEventKind.Failed,
+                new PostLandingCanaryEventPayload(PostLandingCanaryEventPayload.CanaryTag,
+                    sha, [], ConductorAcceptanceCohortMainSuspect.FailureToken, sharedTests.Count, detail, null, now),
+                ConductorAcceptanceCohortMainSuspect.EventId(sha, identity.Value), now).GetAwaiter().GetResult().Appended;
+            // Persistence failure must fault the gate before attribution is saved, without a process-local hold.
+            // Record the circuit first: a crash before attribution persistence can safely replay the append.
+            var receipt = store.SaveAttribution(identity.Value, classified.Outcome, [first, second], pairFingerprint,
+                null, [], classified.UnrelatedFailures, ConductorAcceptanceCohortMainSuspect.FailureToken, suppressPair: false);
+            if (appended)
+                TryAppendGateProgressEvent(writer, goalId: null,
+                    $"CANARY_GATE sha={sha} result=failed reason=main-suspect cohort={identity.Value} tests={tests}",
+                    eventKind: "canary-gate");
+            return receipt;
+        }
         var attribution = classified.Outcome;
         var innocentGoalId = attribution switch
         {
