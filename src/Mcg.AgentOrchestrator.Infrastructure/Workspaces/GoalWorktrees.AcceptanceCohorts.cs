@@ -140,6 +140,7 @@ public static partial class GoalWorktrees
                 throw new InvalidOperationException(
                     $"Failed to materialize attribution member {member.GoalId.Value[..8]}: {merge.Error}");
             }
+            SourceSizeRatchetRetightener.RetightenAndCommit(workspacePath, normalizedMain, Prefix(member.GoalId));
             AcceptanceWorkspaceIntegrityPreparer.Prepare(workspacePath);
             var result = new AcceptanceCohortWorkspace(
                 root,
@@ -232,6 +233,8 @@ public static partial class GoalWorktrees
                 }
             }
 
+            SourceSizeRatchetRetightener.RetightenAndCommit(workspacePath, normalizedMain,
+                $"cohort:{string.Join('+', members.Select(member => Prefix(member.GoalId)))}");
             try
             {
                 AcceptanceWorkspaceIntegrityPreparer.Prepare(workspacePath);
