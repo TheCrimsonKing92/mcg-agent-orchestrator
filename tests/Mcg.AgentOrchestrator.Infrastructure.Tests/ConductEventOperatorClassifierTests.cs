@@ -4,6 +4,7 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 public sealed class ConductEventOperatorClassifierTests
 {
     [Theory]
+    [InlineData("sweep-blocker", "SWEEP_BLOCKER goal=g kind=completed-branch-unmerged evidence=\"e\" command=\"acceptance g\" owner=acceptance-queue")]
     [InlineData("canary-gate", "CANARY_GATE sha=s result=queued paths=p")]
     [InlineData("canary-gate", "CANARY_GATE sha=s result=started attempt=1")]
     [InlineData("loop-handoff", "LOOP_HANDOFF tick=1")]
@@ -49,6 +50,12 @@ public sealed class ConductEventOperatorClassifierTests
     [InlineData("goal-escalation", "", "decision")]
     [InlineData("goal-stalled", "", "decision")]
     [InlineData("sweep-blocker", "", "decision")]
+    [InlineData("sweep-blocker", "SWEEP_BLOCKER goal=g kind=completed-branch-unmerged evidence=\"e\" command=\"acceptance g\"", "decision")]
+    [InlineData("sweep-blocker", "SWEEP_BLOCKER goal=g kind=completed-branch-unmerged evidence=\"e\" command=\"acceptance g\" owner=acceptance-queuex", "decision")]
+    [InlineData("sweep-blocker", "xowner=acceptance-queue", "decision")]
+    [InlineData("sweep-blocker", "owner=acceptance-queue-x", "decision")]
+    [InlineData("sweep-blocker", "Owner=acceptance-queue", "decision")]
+    [InlineData("goal-stalled", "owner=acceptance-queue", "decision")]
     public void Classify_WholeToken_ReturnsOperatorClass(string eventKind, string detail, string expected)
     {
         Assert.Equal(expected, ConductEventOperatorClassifier.Classify(eventKind, detail));

@@ -7,7 +7,7 @@ internal static class ConductEventOperatorClassifier
 
     internal static string? Classify(string eventKind, string detail)
     {
-        if (eventKind is "goal-escalation" or "goal-stalled" or "sweep-blocker")
+        if (eventKind is "goal-escalation" or "goal-stalled")
         {
             return Decision;
         }
@@ -19,6 +19,8 @@ internal static class ConductEventOperatorClassifier
 
         return eventKind switch
         {
+            "sweep-blocker" => HasToken(ReconcileSweepRemediationCoordinator.AcceptanceQueueOwnerField)
+                ? null : Decision,
             "loop-handoff" when StartsWithToken("ACTIVATION_REVERTED")
                 || StartsWithToken("ACTIVATION_FAILED_BOTH") => Decision,
             "author" when HasToken("kind=ask-owner") || HasToken("kind=model-failure") => Decision,

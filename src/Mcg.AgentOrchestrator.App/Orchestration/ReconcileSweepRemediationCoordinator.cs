@@ -222,6 +222,11 @@ internal sealed class ReconcileSweepRemediationCoordinator(
         string.Equals(blocker.Kind, "completed-branch-unmerged", StringComparison.Ordinal) &&
         blocker.Remedy is { Verb: TerminalGoalRemedyVerb.Acceptance, GateArtifact: null };
 
+    internal const string AcceptanceQueueOwnerField = "owner=acceptance-queue";
+
+    internal static string RenderOwnerSuffix(TerminalGoalSweepBlocker blocker) =>
+        IsAwaitingConductorAcceptanceGate(blocker) ? " " + AcceptanceQueueOwnerField : string.Empty;
+
     private bool IsAutoRunnable(TerminalGoalSweepBlocker blocker, TerminalGoalRemedy remedy)
     {
         if (!options.AutoRemediationAllowlist.Contains(blocker.Kind) ||
@@ -257,7 +262,7 @@ internal sealed class ReconcileSweepRemediationCoordinator(
     }
 
     private static string RenderBlocker(string goalPrefix, TerminalGoalSweepBlocker blocker) =>
-        $"SWEEP_BLOCKER goal={goalPrefix} kind={blocker.Kind} evidence={JsonSerializer.Serialize(blocker.Evidence)} command={JsonSerializer.Serialize(blocker.Command)}";
+        $"SWEEP_BLOCKER goal={goalPrefix} kind={blocker.Kind} evidence={JsonSerializer.Serialize(blocker.Evidence)} command={JsonSerializer.Serialize(blocker.Command)}{RenderOwnerSuffix(blocker)}";
 
     private static string RenderEscalation(string goalPrefix, TerminalGoalSweepBlocker blocker, string reason) =>
         $"SWEEP_ESCALATION goal={goalPrefix} kind={blocker.Kind} reason={reason} evidence={JsonSerializer.Serialize(blocker.Evidence)} command={JsonSerializer.Serialize(blocker.Command)}";

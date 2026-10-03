@@ -43,7 +43,7 @@ internal static partial class ConsoleViews
                         continue;
                     }
 
-                    Console.WriteLine($"SWEEP_BLOCKER goal={goal.GoalPrefix} kind={blocker.Kind} evidence=\"{blocker.Evidence}\" command=\"{blocker.Command}\"");
+                    Console.WriteLine($"SWEEP_BLOCKER goal={goal.GoalPrefix} kind={blocker.Kind} evidence=\"{blocker.Evidence}\" command=\"{blocker.Command}\"{ReconcileSweepRemediationCoordinator.RenderOwnerSuffix(blocker)}");
                 }
             }
         }

@@ -39,6 +39,20 @@ public sealed class ConductEventLogWriterOperatorFieldTests : IDisposable
         Assert.Equal(detail, document.RootElement.GetProperty("detail").GetString());
     }
 
+    [Fact]
+    public void Append_AcceptanceQueueOwnedSweepBlocker_OmitsOperator()
+    {
+        const string detail = "SWEEP_BLOCKER goal=g kind=completed-branch-unmerged evidence=\"e\" command=\"acceptance g\" owner=acceptance-queue";
+        var writer = CreateWriter();
+
+        writer.Append("sweep-blocker", "g", detail);
+
+        using var document = JsonDocument.Parse(Assert.Single(File.ReadAllLines(writer.CurrentPath)));
+        Assert.False(document.RootElement.TryGetProperty("operator", out _));
+        Assert.Equal("sweep-blocker", document.RootElement.GetProperty("eventKind").GetString());
+        Assert.Equal(detail, document.RootElement.GetProperty("detail").GetString());
+    }
+
     [Theory]
     [InlineData("acceptance", "ACCEPTANCE goal=6610a998 slot=slot-0 result=running attempt=a tick=1", "6610a998")]
     [InlineData("acceptance-cohort", "ACCEPTANCE_COHORT_INFLIGHT tick=1 goal=g members=a,b outcome=inflight", "g")]

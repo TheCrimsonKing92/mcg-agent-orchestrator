@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -67,6 +68,51 @@ public sealed class ReconcileSweepPendingGateEscalationTests : IDisposable
         var escalation = Xunit.Assert.Single(outcome.Events, line => line.StartsWith("SWEEP_ESCALATION", StringComparison.Ordinal));
         Xunit.Assert.Contains("reason=not-auto-runnable", escalation, StringComparison.Ordinal);
         Xunit.Assert.Equal(0, calls);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void BlockerLineHasAcceptanceQueueOwnerOnlyWithoutGateArtifact(bool hasGateArtifact)
+    {
+        var goalId = GoalId.New();
+        var prefix = goalId.Value[..8];
+        var blocker = new TerminalGoalSweepBlocker(
+            "completed-branch-unmerged", "e",
+            TerminalGoalRemedy.Acceptance(goalId, prefix,
+                hasGateArtifact ? new TerminalGoalGateArtifact("gate-1", "candidate-sha", "gate-passed") : null));
+
+        var outcome = NewCoordinator("different-sha", () => { }).Process(Sweep(blocker));
+
+        var line = Xunit.Assert.Single(outcome.Events, line => line.StartsWith("SWEEP_BLOCKER", StringComparison.Ordinal));
+        var expected = $"SWEEP_BLOCKER goal={prefix} kind=completed-branch-unmerged evidence=\"e\" command=\"acceptance {prefix}\"";
+        Xunit.Assert.Equal(expected + (hasGateArtifact ? "" : " owner=acceptance-queue"), line);
+        if (hasGateArtifact)
+        {
+            Xunit.Assert.DoesNotContain("owner=", line, StringComparison.Ordinal);
+        }
+        else
+        {
+            Xunit.Assert.EndsWith(" owner=acceptance-queue", line);
+        }
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void ConsoleBlockerLineHasAcceptanceQueueOwnerOnlyWithoutGateArtifact(bool hasGateArtifact)
+    {
+        var goalId = GoalId.New();
+        var prefix = goalId.Value[..8];
+        var blocker = new TerminalGoalSweepBlocker(
+            "completed-branch-unmerged", "e",
+            TerminalGoalRemedy.Acceptance(goalId, prefix,
+                hasGateArtifact ? new TerminalGoalGateArtifact("gate-1", "candidate-sha", "gate-passed") : null));
+
+        var output = CaptureConsole(() => ConsoleViews.PrintTerminalGoalSweep(Sweep(blocker)));
+
+        var expected = $"SWEEP_BLOCKER goal={prefix} kind=completed-branch-unmerged evidence=\"e\" command=\"acceptance {prefix}\"";
+        Xunit.Assert.Equal(expected + (hasGateArtifact ? "" : " owner=acceptance-queue") + Environment.NewLine, output);
     }
 
     private ReconcileSweepRemediationCoordinator NewCoordinator(string currentSha, Action executed)
