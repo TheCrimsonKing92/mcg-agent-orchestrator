@@ -102,7 +102,9 @@ internal static class SourceSizeRatchet
             // Goal 98952a12 (backlog c35852c4) moved finding-evidence request construction unchanged to its partial.
             // Goal db18d0d0 (backlog aedc7a0a) moved acceptance-cohort execution unchanged to its partial.
             // Goal 4fac1b84 (backlog 28b37515) moved landing completion and acceptance-retry evidence unchanged to its partial.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 4167),
+            // Goal 868fd04a (backlog c758b2c3) moved review-contract and verifying-finding recovery unchanged to its partial.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 3714),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.ReviewRecovery.cs", 461),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.LandingCompletion.cs", 692),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.AcceptanceCohortExecution.cs", 641),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FindingEvidenceRequests.cs", 918),
