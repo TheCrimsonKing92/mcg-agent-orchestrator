@@ -27,6 +27,8 @@ public static partial class GoalWorktrees
         out string evidence,
         out string refusalReason)
     {
+        oldHeadSha = PeelRetightenCommits(executionDirectory, oldHeadSha);
+        newHeadSha = PeelRetightenCommits(executionDirectory, newHeadSha);
         if (TryComputeLinearPatchEquivalence(executionDirectory, oldHeadSha, newHeadSha, out evidence, out refusalReason))
             return true;
         if (!TryComputeSquashEquivalence(executionDirectory, oldHeadSha, newHeadSha, out var squashEvidence))

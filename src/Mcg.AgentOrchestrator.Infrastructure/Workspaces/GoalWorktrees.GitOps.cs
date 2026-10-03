@@ -180,10 +180,9 @@ public static partial class GoalWorktrees
     }
 
     private static GoalWorktreeRebaseResult? TrySquashMergeCommitsOntoBase(
-        string executionDirectory, string worktreePath, string branch, string baseBranch, GoalId goalId)
+        string executionDirectory, string worktreePath, string branch, string baseBranch, GoalId goalId, string mainHead)
     {
-        if (!TryReadGit(executionDirectory, ["rev-parse", "--verify", $"{baseBranch}^{{commit}}"], out var mainHead) ||
-            !TryReadGit(executionDirectory, ["rev-parse", "--verify", $"refs/heads/{branch}"], out var oldHead) ||
+        if (!TryReadGit(executionDirectory, ["rev-parse", "--verify", $"refs/heads/{branch}"], out var oldHead) ||
             !CommitShaPattern.IsMatch(mainHead) || !CommitShaPattern.IsMatch(oldHead) ||
             !HasMergeCommitsOutsideBase(executionDirectory, mainHead, oldHead) ||
             !TryReadCleanMergeTree(executionDirectory, mainHead, oldHead, out var tree))
@@ -273,22 +272,31 @@ public static partial class GoalWorktrees
                 $"acceptance {Prefix(goalId)}");
         }
 
-        var squash = TrySquashMergeCommitsOntoBase(executionDirectory, worktreePath, branch, baseBranch, goalId);
-        if (squash is not null) return squash;
+        var integratedMain = ResolveRequiredRef(executionDirectory, $"{baseBranch}^{{commit}}");
+        var squash = TrySquashMergeCommitsOntoBase(executionDirectory, worktreePath, branch, baseBranch, goalId, integratedMain);
+        if (squash is not null)
+        {
+            if (squash.Status == GoalWorktreeRebaseStatus.Rebased)
+                SourceSizeRatchetRetightener.RetightenAndCommit(worktreePath, integratedMain, Prefix(goalId));
+            return squash;
+        }
 
         // Use the "merge" backend (a real per-commit 3-way merge), NOT "--apply" (the legacy am/patch
         // backend). --apply matches on patch CONTEXT, so it spuriously conflicts when main changed lines
         // NEAR the goal's changes in the same file — even non-overlapping — a base-skew false-conflict
         // that forces an escalation + manual re-dispatch. --merge only conflicts on actually-overlapping
         // hunks. (--no-stat + the RunGitDirect fallback keep the Windows stat-path workaround intact.)
-        var rebase = GitCli.Run(worktreePath, "rebase", "--merge", "--no-stat", baseBranch);
+        var rebase = GitCli.Run(worktreePath, "rebase", "--merge", "--no-stat", integratedMain);
         if (IsRebaseStatPathFailure(rebase))
         {
-            rebase = RunGitDirect(worktreePath, "rebase", "--merge", "--no-stat", baseBranch);
+            rebase = RunGitDirect(worktreePath, "rebase", "--merge", "--no-stat", integratedMain);
         }
         if (rebase.ExitCode == 0)
         {
-            return ValidatePostRebaseMaterialization(worktreePath, branch, baseBranch, goalId);
+            var materialized = ValidatePostRebaseMaterialization(worktreePath, branch, baseBranch, goalId);
+            if (materialized.Status == GoalWorktreeRebaseStatus.Rebased)
+                SourceSizeRatchetRetightener.RetightenAndCommit(worktreePath, integratedMain, Prefix(goalId));
+            return materialized;
         }
 
         var conflictFiles = GetConflictFiles(worktreePath);
