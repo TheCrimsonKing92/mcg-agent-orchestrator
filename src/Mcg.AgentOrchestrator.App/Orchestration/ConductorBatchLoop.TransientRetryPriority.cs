@@ -136,6 +136,26 @@ internal sealed partial class ConductorBatchLoop
         return result is null ? null : new ParallelLandingOutcome(result, null);
     }
 
+    private static bool HoldAfterSingleSlotTransientRetry(
+        Goal goal, Goal? priorityGoal, int configuredWidth, ConductorAutonomyPolicy policy,
+        Dictionary<string, ParallelLandingOutcome> results)
+    {
+        if (configuredWidth != 1 || priorityGoal is null || goal.Id == priorityGoal.Id ||
+            !results.TryGetValue(priorityGoal.Id.Value, out var retryOutcome) ||
+            retryOutcome.SlotIndex is null)
+        {
+            return false;
+        }
+
+        // The priority retry consumes this tick's single admission even if it finishes inline.
+        // Keep this a queue hold; a terminal attempt must not be reported as a live occupant.
+        results[goal.Id.Value] = new ParallelLandingOutcome(
+            ParallelAcceptanceHeld(goal, policy,
+                $"acceptance slot served transient retry {priorityGoal.Id.Value[..8]}; retry on next conduct tick",
+                ConductorHoldOwner.AcceptanceQueue), null);
+        return true;
+    }
+
     private Goal? SelectTransientRetryPriorityGoal(
         AgentOrchestratorKernel kernel, ConductorDriver driver, IReadOnlyList<Goal> eligible,
         ConductorAutonomyPolicy policy, LiveAcceptanceCensus census, int configuredWidth,
