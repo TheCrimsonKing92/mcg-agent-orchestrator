@@ -16,9 +16,9 @@ public sealed class CliOwnerDigestCommandReworkByCauseTests
         using var fixture = await OwnerDigestTestFixture.CreateAsync();
         await AddRoundsAsync(fixture);
         CreateIntents(fixture,
-            ("developer", -0.8, "Human", "Applied", "retry"),
-            ("reviewer", 1.4, "Agent", "Applied", "adjudicate"),
-            ("developer", -0.7, "Agent", "Applied", "retry"), // after the deciding retry
+            ("developer", -0.7, "Human", "Applied", "retry"), // after retry, before dispatch
+            ("reviewer", 1.6, "Agent", "Applied", "adjudicate"), // after retry, before dispatch
+            ("developer", 1.1, "Agent", "Applied", "retry"), // after the deciding dispatch
             ("other", -0.76, "Agent", "Applied", "retry"),
             ("developer", -0.76, "Agent", "Pending", "retry"),
             ("developer", -0.76, "Agent", "Applied", "progress"));

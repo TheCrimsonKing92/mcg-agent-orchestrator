@@ -36,6 +36,7 @@ public static class ReworkCauseClassifier
         ("Acceptance criteria unmet; retrying task with feedback", ReworkCauseFamily.GateRed),
         ("Auto-retry sandbox-preflight dispatch flake", ReworkCauseFamily.FlakeOrApparatus),
         ("Auto-retry verification-inconclusive Tester task", ReworkCauseFamily.FlakeOrApparatus),
+        ("pre-review build repair:", ReworkCauseFamily.FlakeOrApparatus),
         ("Dispatch hit a recoverable subscription usage limit", ReworkCauseFamily.Environment),
         ("Dispatch hit provider connectivity failure", ReworkCauseFamily.Environment),
         ("Dispatch hit ProviderInterruption", ReworkCauseFamily.Environment),
@@ -64,7 +65,7 @@ public static class ReworkCauseClassifier
                 if (retry.Message.StartsWith(prefix, StringComparison.Ordinal)) return family;
 
             var intent = intents.Where(i => i.TaskId == task.Id.Value &&
-                i.AppliedAt > previousDispatchAt && i.AppliedAt <= retry.OccurredAt)
+                i.AppliedAt > previousDispatchAt && i.AppliedAt <= dispatchAt)
                 .OrderBy(i => i.AppliedAt).LastOrDefault();
             if (intent is not null)
                 return intent.ActorKind switch

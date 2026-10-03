@@ -17,6 +17,7 @@ public sealed class WorkerRoundReworkCauseTests
         ("Acceptance criteria unmet; retrying task with feedback", ReworkCauseFamily.GateRed),
         ("Auto-retry sandbox-preflight dispatch flake", ReworkCauseFamily.FlakeOrApparatus),
         ("Auto-retry verification-inconclusive Tester task", ReworkCauseFamily.FlakeOrApparatus),
+        ("pre-review build repair: compiler error", ReworkCauseFamily.FlakeOrApparatus),
         ("Dispatch hit a recoverable subscription usage limit", ReworkCauseFamily.Environment),
         ("Dispatch hit provider connectivity failure", ReworkCauseFamily.Environment),
         ("Dispatch hit ProviderInterruption", ReworkCauseFamily.Environment),
@@ -67,19 +68,35 @@ public sealed class WorkerRoundReworkCauseTests
     public void IntentJoinUsesTaskAndStrictLowerInclusiveUpperOrderingWithNewestMatch()
     {
         var retryAt = Start.AddHours(2);
+        var dispatchAt = Start.AddHours(3);
         var goal = GoalWith([Task("task")], [Event("task", 2, ProgressKind.TaskRetried, "free text")]);
         AppliedRetryIntent[] excluded =
         [
-            new("other", retryAt, OperatorActorKind.Human),
+            new("other", dispatchAt, OperatorActorKind.Human),
             new("task", Start.AddHours(1), OperatorActorKind.Human),
-            new("task", retryAt.AddTicks(1), OperatorActorKind.Human)
+            new("task", dispatchAt.AddTicks(1), OperatorActorKind.Human)
         ];
         Assert.Equal(ReworkCauseFamily.Unclassified, WorkerRoundLedger.FromGoal(goal, excluded)[1].ReworkCause);
         Assert.Equal(ReworkCauseFamily.OperatorRetry, WorkerRoundLedger.FromGoal(goal,
             [.. excluded, new("task", Start.AddHours(1).AddTicks(1), OperatorActorKind.Human)])[1].ReworkCause);
+        Assert.Equal(ReworkCauseFamily.OperatorRetry, WorkerRoundLedger.FromGoal(goal,
+            [.. excluded, new("task", retryAt.AddTicks(1), OperatorActorKind.Human)])[1].ReworkCause);
         Assert.Equal(ReworkCauseFamily.StewardRoute, WorkerRoundLedger.FromGoal(goal,
-            [.. excluded, new("task", retryAt.AddTicks(-1), OperatorActorKind.Human),
-                new("task", retryAt, OperatorActorKind.Agent)])[1].ReworkCause);
+            [.. excluded, new("task", dispatchAt, OperatorActorKind.Agent),
+                new("task", retryAt.AddTicks(1), OperatorActorKind.Human)])[1].ReworkCause);
+    }
+
+    [Theory]
+    [InlineData(OperatorActorKind.Human, ReworkCauseFamily.OperatorRetry)]
+    [InlineData(OperatorActorKind.Agent, ReworkCauseFamily.StewardRoute)]
+    public void LiveRetryThenIntentCompletionThenDispatchUsesAppliedActor(
+        OperatorActorKind actor, ReworkCauseFamily expected)
+    {
+        var goal = GoalWith([Task("task", [Receipt(RetryCause.Unknown)])],
+            [Event("task", 2, ProgressKind.TaskRetried, "free-text retry from live store")]);
+        AppliedRetryIntent[] intents = [new("task", Start.AddHours(2.5), actor)];
+
+        Assert.Equal(expected, WorkerRoundLedger.FromGoal(goal, intents)[1].ReworkCause);
     }
 
     [Fact]
