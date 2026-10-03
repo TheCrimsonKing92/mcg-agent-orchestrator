@@ -713,6 +713,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     {
         using var phaseAccountant = AcceptanceGatePhaseAccountant.Start(
             _timeProvider, goalId?.Value, EmitGateProgress, cancellationToken);
+        phaseAccountant.BindHostHealthLedger(worktreePath,
+            (_executionContext as AcceptanceAttemptExecutionOwner)?.Identity.AttemptId);
         AcceptanceGatePhaseAccountant.RecordCurrentSlotWait(stableSlotLease?.SlotWaitDuration);
         var untrackedSnapshot = CaptureGateWorktreeUntrackedSnapshot(worktreePath, goalId);
         try

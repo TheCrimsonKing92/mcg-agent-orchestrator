@@ -65,7 +65,8 @@ internal sealed class ConductEventLogWriter
         }
     }
 
-    public bool AppendRequired(string eventKind, string? goalId, string detail, DateTimeOffset? timestamp = null)
+    public bool AppendRequired(string eventKind, string? goalId, string detail, DateTimeOffset? timestamp = null,
+        string? eventId = null)
     {
         lock (_lock)
         {
@@ -80,8 +81,10 @@ internal sealed class ConductEventLogWriter
                     Directory.CreateDirectory(pendingDirectory);
                     var pendingPath = Path.Combine(
                         pendingDirectory,
-                        $"{Path.GetFileName(_path)}.pending-{Guid.NewGuid():N}.jsonl");
-                    File.WriteAllText(pendingPath, Serialize(eventKind, goalId, detail, timestamp));
+                        $"{Path.GetFileName(_path)}.pending-{(eventId is null ? Guid.NewGuid().ToString("N") :
+                            Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(eventId))))}.jsonl");
+                    if (!File.Exists(pendingPath) && (eventId is null || !RequiredEventAlreadyRecorded(eventId)))
+                        File.WriteAllText(pendingPath, Serialize(eventKind, goalId, detail, timestamp, eventId));
                     DrainRequiredEventsUnderGate();
                     return !File.Exists(pendingPath);
                 });
@@ -135,14 +138,15 @@ internal sealed class ConductEventLogWriter
         }
     }
 
-    private string Serialize(string eventKind, string? goalId, string detail, DateTimeOffset? timestamp)
+    private string Serialize(string eventKind, string? goalId, string detail, DateTimeOffset? timestamp,
+        string? eventId = null)
     {
         var record = new ConductEventRecord(
             timestamp ?? _utcNow(),
             eventKind,
             string.IsNullOrWhiteSpace(goalId) ? null : goalId,
             detail,
-            ConductEventOperatorClassifier.Classify(eventKind, detail));
+            ConductEventOperatorClassifier.Classify(eventKind, detail), eventId);
         return JsonSerializer.Serialize(record, JsonOptions) + Environment.NewLine;
     }
 
@@ -356,7 +360,8 @@ internal sealed record ConductEventRecord(
     string EventKind,
     string? GoalId,
     string Detail,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Operator = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Operator = null,
+    [property: JsonPropertyName("event_id"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? EventId = null);
 
 internal sealed record ConductEvidenceLifecycleEvent(
     DateTimeOffset Timestamp,

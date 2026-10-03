@@ -134,6 +134,8 @@ internal sealed class AcceptanceGatePhaseAccountant : IDisposable
     private TimeSpan? _structuralCoveragePreparationDuration;
     private TimeSpan? _structuralCoveragePreparationWaitDuration;
     private string _outcome = "faulted";
+    private string? _hostHealthLedgerPath;
+    private string? _gateAttemptId;
     private bool _disposed;
 
     private AcceptanceGatePhaseAccountant(
@@ -288,6 +290,16 @@ internal sealed class AcceptanceGatePhaseAccountant : IDisposable
 
     internal void MarkCompleted(bool passed) => _outcome = passed ? "completed" : "failed";
 
+    internal void BindHostHealthLedger(string worktreePath, string? gateAttemptId)
+    {
+        try
+        {
+            _hostHealthLedgerPath = GateHostHealthLedger.ResolveStorePath(worktreePath);
+            _gateAttemptId = gateAttemptId ?? Guid.NewGuid().ToString("N");
+        }
+        catch { /* Host-health instrumentation cannot replace the gate verdict. */ }
+    }
+
     public void Dispose()
     {
         if (_disposed)
@@ -308,10 +320,21 @@ internal sealed class AcceptanceGatePhaseAccountant : IDisposable
 
             var breakdown = BuildBreakdown(completedTimestamp);
             var observedAt = _timeProvider.GetUtcNow();
+            var hostHealth = GateHostHealthProbe.Capture();
+            if (hostHealth.LaunchMs.IsAvailable && _hostHealthLedgerPath is { } ledgerPath)
+            {
+                try
+                {
+                    GateHostHealthLedger.Append(ledgerPath, new HostHealthLedgerRecord(
+                        observedAt, _gateAttemptId!, hostHealth.LaunchMs.Value!.Value,
+                        hostHealth.PagedPoolMb.Value));
+                }
+                catch { /* Ledger failure must not suppress the breakdown or change the verdict. */ }
+            }
             _emit(new AcceptanceGateProgress(
                 _goalId,
                 "gate-phase-breakdown",
-                FormatCompact(breakdown),
+                FormatCompact(breakdown) + ";" + hostHealth.FormatProgressTokens(),
                 null,
                 Environment.ProcessId,
                 null,
