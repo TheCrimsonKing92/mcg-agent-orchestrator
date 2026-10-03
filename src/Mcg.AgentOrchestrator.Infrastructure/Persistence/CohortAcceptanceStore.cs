@@ -255,7 +255,8 @@ public sealed partial class CohortAcceptanceStore
         GoalId? innocentGoalId,
         IReadOnlyList<AcceptanceCohortAttributedMember>? attributedMembers = null,
         IReadOnlyList<AcceptanceCohortUnrelatedFailure>? unrelatedFailures = null,
-        string? attributionSource = null)
+        string? attributionSource = null,
+        bool suppressPair = true)
     {
         ArgumentNullException.ThrowIfNull(partitions);
         if (partitions.Count != 2 ||
@@ -314,7 +315,8 @@ public sealed partial class CohortAcceptanceStore
             cohortId,
             attribution,
             pairFingerprint,
-            innocentGoalId);
+            innocentGoalId,
+            suppressPair);
         using (var count = connection.CreateCommand())
         {
             count.Transaction = transaction;
@@ -651,7 +653,8 @@ public sealed partial class CohortAcceptanceStore
         string cohortId,
         AcceptanceCohortAttributionOutcome attribution,
         string pairFingerprint,
-        GoalId? innocentGoalId)
+        GoalId? innocentGoalId,
+        bool suppressPair = true)
     {
         var suppressionAlreadyExists = false;
         using (var existingSuppression = connection.CreateCommand())
@@ -673,7 +676,7 @@ public sealed partial class CohortAcceptanceStore
         marker.Parameters.AddWithValue("$fingerprint", pairFingerprint);
         marker.Parameters.AddWithValue("$innocent", (object?)innocentGoalId?.Value ?? DBNull.Value);
         marker.Parameters.AddWithValue("$applied", DateTimeOffset.UtcNow.ToString("O"));
-        if (marker.ExecuteNonQuery() == 0)
+        if (marker.ExecuteNonQuery() == 0 || !suppressPair)
         {
             return;
         }
