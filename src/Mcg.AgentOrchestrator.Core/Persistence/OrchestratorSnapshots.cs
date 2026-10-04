@@ -189,7 +189,8 @@ public sealed record TaskVerificationSnapshot(
     bool? AssignedScopeComplete = null,
     CandidateIdentity? CandidateIdentity = null,
     string? AcceptanceCriteriaVersionHash = null,
-    FailedGoalInconclusiveRoundInputs? InconclusiveRoundInputs = null)
+    FailedGoalInconclusiveRoundInputs? InconclusiveRoundInputs = null,
+    PlannerEvidenceStoreReference? HumanInputStoreReference = null)
 {
     public string StandardOutput { get; init; } = VerificationTextBounds.BoundText(StandardOutput, StandardOutputPath);
 

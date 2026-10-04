@@ -58,12 +58,32 @@ public sealed class PlannerEvidenceStoreReferenceDispatchTests
         var restored = AgentOrchestratorKernel.FromSnapshot(JsonSerializer.Deserialize<OrchestratorSnapshot>(json)!, fixture.Clock);
         Assert.Equal(expected, Assert.Single(restored.GetPendingHumanInput(goal.Id)).StoreReference);
         Assert.Equal(expected, restored.GetGoal(goal.Id).Tasks.Single(task => task.Id == planner.Id).LastVerification!.HumanInputStoreReference);
+        Assert.Equal(expected, Assert.Single(restored.GetGoal(goal.Id).Tasks.Single(task => task.Id == planner.Id).VerificationHistory).HumanInputStoreReference);
+
+        // Both snapshot carriers must survive independently; merging cannot hide a missing mapping.
+        foreach (var carrier in new[] { "LastVerification", "VerificationHistory" })
+        {
+            var isolated = JsonNode.Parse(json)!;
+            isolated["Goals"]![0]!["Tasks"]![0]!.AsObject().Remove(carrier);
+            restored = AgentOrchestratorKernel.FromSnapshot(JsonSerializer.Deserialize<OrchestratorSnapshot>(isolated.ToJsonString())!, fixture.Clock);
+            var restoredTask = restored.GetGoal(goal.Id).Tasks.Single(task => task.Id == planner.Id);
+            Assert.Equal(expected, Assert.Single(restoredTask.VerificationHistory).HumanInputStoreReference);
+            if (carrier == "VerificationHistory")
+                Assert.Equal(expected, restoredTask.LastVerification!.HumanInputStoreReference);
+        }
 
         // Absence on an older persisted request remains an ordinary request, without text inference.
         var legacy = JsonNode.Parse(json)!;
         legacy["HumanInputRequests"]![0]!.AsObject().Remove("StoreReference");
         restored = AgentOrchestratorKernel.FromSnapshot(JsonSerializer.Deserialize<OrchestratorSnapshot>(legacy.ToJsonString())!, fixture.Clock);
         Assert.Null(Assert.Single(restored.GetPendingHumanInput(goal.Id)).StoreReference);
+
+        var legacyTask = legacy["Goals"]![0]!["Tasks"]![0]!;
+        legacyTask["LastVerification"]!.AsObject().Remove("HumanInputStoreReference");
+        legacyTask["VerificationHistory"]![0]!.AsObject().Remove("HumanInputStoreReference");
+        restored = AgentOrchestratorKernel.FromSnapshot(JsonSerializer.Deserialize<OrchestratorSnapshot>(legacy.ToJsonString())!, fixture.Clock);
+        Assert.Null(restored.GetGoal(goal.Id).Tasks.Single(task => task.Id == planner.Id).LastVerification!.HumanInputStoreReference);
+        Assert.Null(Assert.Single(restored.GetGoal(goal.Id).Tasks.Single(task => task.Id == planner.Id).VerificationHistory).HumanInputStoreReference);
 
         var stripped = planner.LastVerification with { HumanInputStoreReference = null };
         Assert.Equal(expected, stripped.MergeSameRoundEnrichment(planner.LastVerification).HumanInputStoreReference);
