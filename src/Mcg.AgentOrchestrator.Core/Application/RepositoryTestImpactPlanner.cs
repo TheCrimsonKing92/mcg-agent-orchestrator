@@ -21,11 +21,24 @@ public enum RepositoryTestProject
     Cli
 }
 
+public enum ReverseDependencyDegradationKind
+{
+    IndexedSourceBound,
+    ChangedSourceFileCount,
+    Unreadable,
+    FrontierSymbolBound,
+    AmbiguousDeclaration,
+    SelectedTestClassBound
+}
+
+public sealed record RepositoryTestImpactDegradation(ReverseDependencyDegradationKind Kind, string Reason);
+
 public sealed record RepositoryTestImpactPlan(
     bool RequiresBuild,
     bool RequiresBroadVerification,
     string Summary,
-    IReadOnlyList<RepositoryTestImpactCheck> Checks);
+    IReadOnlyList<RepositoryTestImpactCheck> Checks,
+    RepositoryTestImpactDegradation? ReverseDependencyDegradation = null);
 
 public static partial class RepositoryTestImpactPlanner
 {
@@ -158,6 +171,7 @@ public static partial class RepositoryTestImpactPlanner
         }
 
         var checks = new List<RepositoryTestImpactCheck>();
+        RepositoryTestImpactDegradation? reverseDependencyDegradation = null;
         var touchesCore = summary.Files.Any(file => StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Core/") ||
             StartsWith(file.Path, "tests/Mcg.AgentOrchestrator.Core.Tests/"));
         const string acceptanceTestsPrefix = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Acceptance/";
@@ -242,6 +256,9 @@ public static partial class RepositoryTestImpactPlanner
         else if (reverseDependencySelection is
             { Outcome: ReverseDependencySelectionOutcome.Unreadable or ReverseDependencySelectionOutcome.Abandoned } degraded)
         {
+            reverseDependencyDegradation = new RepositoryTestImpactDegradation(
+                degraded.DegradationKind ?? throw new InvalidOperationException("Degraded selection has no reason kind."),
+                degraded.Reason ?? throw new InvalidOperationException("Degraded selection has no reason text."));
             checks.Add(new RepositoryTestImpactCheck(
                 "infrastructure tests",
                 InfrastructureTests,
@@ -323,7 +340,8 @@ public static partial class RepositoryTestImpactPlanner
             Summary: distinctChecks.Length == 1
                 ? $"Selected {distinctChecks[0].Name} from changed file scope."
                 : $"Selected {distinctChecks.Length} test commands from changed file scope.",
-            Checks: distinctChecks);
+            Checks: distinctChecks,
+            ReverseDependencyDegradation: reverseDependencyDegradation);
     }
 
     private static string AppendReverseDependencyCacheReceipt(

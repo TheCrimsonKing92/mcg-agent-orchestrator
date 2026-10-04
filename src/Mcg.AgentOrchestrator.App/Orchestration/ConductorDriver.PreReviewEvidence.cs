@@ -6,6 +6,44 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorDriver
 {
+    private readonly object _testImpactDegradedEventLock = new();
+    private readonly HashSet<(string GoalId, string CandidateSha)> _testImpactDegradedCandidates = [];
+    private ConductEventLogWriter? _testImpactDegradedEventWriter;
+
+    internal void OverrideTestImpactDegradedEventWriterForTests(ConductEventLogWriter writer) =>
+        _testImpactDegradedEventWriter = writer;
+
+    private void TryRecordTestImpactDegradedEvent(
+        Goal goal, string goalPrefix, PreReviewEvidenceContext context)
+    {
+        if (context.TestImpactDegradation is not
+            { Kind: ReverseDependencyDegradationKind.IndexedSourceBound or ReverseDependencyDegradationKind.Unreadable } degradation)
+        {
+            return;
+        }
+
+        lock (_testImpactDegradedEventLock)
+        {
+            var key = (goal.Id.Value, context.CandidateSha!);
+            if (_testImpactDegradedCandidates.Contains(key)) return;
+            try
+            {
+                if (_testImpactDegradedEventWriter is null && _cohortWorkspace is not null)
+                    _testImpactDegradedEventWriter = new ConductEventLogWriter(_cohortWorkspace.ConductEventsLogPath);
+                if (_testImpactDegradedEventWriter is null) return;
+
+                _testImpactDegradedEventWriter.Append(
+                    "test-impact-degraded", goal.Id.Value,
+                    $"TEST_IMPACT_DEGRADED goal={goalPrefix} candidate={context.CandidateSha} kind={degradation.Kind} reason={degradation.Reason}");
+                _testImpactDegradedCandidates.Add(key);
+            }
+            catch
+            {
+                // Match other diagnostic events: logging cannot block review; failed writes may retry.
+            }
+        }
+    }
+
     private bool TryRunPreReviewEvidenceStage(
         Goal goal,
         string goalPrefix,
@@ -33,6 +71,8 @@ internal sealed partial class ConductorDriver
                 "PRE_REVIEW_MAPPING_NEEDS_INPUT: current candidate HEAD could not be resolved; Reviewer dispatch is blocked.");
             return true;
         }
+
+        TryRecordTestImpactDegradedEvent(goal, goalPrefix, context);
 
         var round = GetCurrentReviewerRoundNumber(goal, reviewerTask);
         var currentReceipt = reviewerTask.PreReviewEvidenceReceipt;
@@ -563,6 +603,19 @@ internal sealed partial class ConductorDriver
         var plan = string.IsNullOrWhiteSpace(repositoryRoot)
             ? RepositoryTestImpactPlanner.Plan(changeSummary)
             : RepositoryTestImpactPlanner.Plan(changeSummary, repositoryRoot);
+        return BuildPreReviewEvidenceContext(candidateSha, changeSummary, plan);
+    }
+
+    internal static PreReviewEvidenceContext BuildPreReviewEvidenceContext(
+        string? candidateSha, RepositoryChangeSummary changeSummary, RepositoryTestImpactPlan plan) =>
+        BuildMappedPreReviewEvidenceContext(candidateSha, changeSummary, plan) with
+        {
+            TestImpactDegradation = plan.ReverseDependencyDegradation
+        };
+
+    private static PreReviewEvidenceContext BuildMappedPreReviewEvidenceContext(
+        string? candidateSha, RepositoryChangeSummary changeSummary, RepositoryTestImpactPlan plan)
+    {
         if (!plan.RequiresBuild &&
             plan.Checks.Count > 0 &&
             plan.Checks.All(check => check.Command.Count == 0))

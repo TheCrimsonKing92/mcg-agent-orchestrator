@@ -16,7 +16,7 @@ internal static class ReverseDependencyTestImpactReader
     internal const int MaximumSelectedTestClasses = 64;
     // The Infrastructure test closure reached about 2,000 source files on 2026-10-04. Keep room
     // for growth before focused selection is abandoned for the full Infrastructure suite.
-    private const int MaximumIndexedSourceFiles = 4_000;
+    internal const int MaximumIndexedSourceFiles = 4_000;
     private const int MaximumRetainedSnapshots = 4;
     private const string CacheSchema = "reverse-dependency-index-v1";
     private static readonly object CacheLock = new();
@@ -27,11 +27,13 @@ internal static class ReverseDependencyTestImpactReader
     internal static ReverseDependencyTestSelection Read(
         string repositoryRoot,
         IReadOnlyList<string> changedSourcePaths,
-        bool bypassCache = false)
+        bool bypassCache = false,
+        int maximumIndexedSourceFiles = MaximumIndexedSourceFiles)
     {
         if (changedSourcePaths.Count is 0 or > MaximumChangedSourceFiles)
         {
             return ReverseDependencyTestSelection.Abandoned(
+                ReverseDependencyDegradationKind.ChangedSourceFileCount,
                 $"Focused reverse-dependency selection supports 1-{MaximumChangedSourceFiles} changed source files.");
         }
 
@@ -72,10 +74,11 @@ internal static class ReverseDependencyTestImpactReader
                 }
             }
 
-            if (sourceOwnership.Count > MaximumIndexedSourceFiles)
+            if (sourceOwnership.Count > maximumIndexedSourceFiles)
             {
                 return ReverseDependencyTestSelection.Abandoned(
-                    $"Reverse-dependency indexing exceeded the {MaximumIndexedSourceFiles}-source-file bound.");
+                    ReverseDependencyDegradationKind.IndexedSourceBound,
+                    $"Reverse-dependency indexing exceeded the {maximumIndexedSourceFiles}-source-file bound.");
             }
 
             var snapshot = ReadSnapshot(
@@ -219,6 +222,7 @@ internal static class ReverseDependencyTestImpactReader
                 if (frontier.Length > MaximumFrontierSymbols)
                 {
                     return ReverseDependencyTestSelection.Abandoned(
+                        ReverseDependencyDegradationKind.FrontierSymbolBound,
                         $"Reverse-dependency hop {hop} exceeded the {MaximumFrontierSymbols}-symbol frontier bound.",
                         receipt);
                 }
@@ -230,6 +234,7 @@ internal static class ReverseDependencyTestImpactReader
                         declarations.Any(pair => !pair.declaration.IsPartial))
                     {
                         return ReverseDependencyTestSelection.Abandoned(
+                            ReverseDependencyDegradationKind.AmbiguousDeclaration,
                             $"Reverse-dependency symbol '{symbol}' has ambiguous non-partial declarations.",
                             receipt);
                     }
@@ -271,6 +276,7 @@ internal static class ReverseDependencyTestImpactReader
                     if (selectedTestClasses.Count > MaximumSelectedTestClasses)
                     {
                         return ReverseDependencyTestSelection.Abandoned(
+                            ReverseDependencyDegradationKind.SelectedTestClassBound,
                             $"Reverse-dependency selection exceeded the {MaximumSelectedTestClasses}-test-class bound.",
                             receipt);
                     }

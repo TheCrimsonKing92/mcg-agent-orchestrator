@@ -63,7 +63,8 @@ internal sealed record ReverseDependencyTestSelection(
     ReverseDependencySelectionOutcome Outcome,
     IReadOnlyList<string> TestClassNames,
     string? Reason,
-    ReverseDependencyCacheReceipt? CacheReceipt = null)
+    ReverseDependencyCacheReceipt? CacheReceipt = null,
+    ReverseDependencyDegradationKind? DegradationKind = null)
 {
     internal static ReverseDependencyTestSelection Resolved(
         IEnumerable<string> testClassNames,
@@ -77,12 +78,14 @@ internal sealed record ReverseDependencyTestSelection(
     internal static ReverseDependencyTestSelection Unreadable(
         string reason,
         ReverseDependencyCacheReceipt? cacheReceipt = null) =>
-        new(ReverseDependencySelectionOutcome.Unreadable, [], reason, cacheReceipt);
+        new(ReverseDependencySelectionOutcome.Unreadable, [], reason, cacheReceipt,
+            ReverseDependencyDegradationKind.Unreadable);
 
     internal static ReverseDependencyTestSelection Abandoned(
+        ReverseDependencyDegradationKind kind,
         string reason,
         ReverseDependencyCacheReceipt? cacheReceipt = null) =>
-        new(ReverseDependencySelectionOutcome.Abandoned, [], reason, cacheReceipt);
+        new(ReverseDependencySelectionOutcome.Abandoned, [], reason, cacheReceipt, kind);
 
     internal static ReverseDependencyTestSelection Unavailable { get; } =
         new(ReverseDependencySelectionOutcome.Unavailable, [], "Reverse-dependency evidence is unavailable.");
@@ -101,11 +104,17 @@ internal interface ITestClassDeclarationReader
 internal sealed class FileSystemTestClassDeclarationReader : ITestClassDeclarationReader
 {
     private static readonly ConcurrentDictionary<ProjectCacheKey, TestClassDeclarations> ProjectCache = new();
+    // Directory.Build.props declares the additional compile exclusions; the scope tests guard drift.
+    private static readonly string[] ExcludedDirectorySegments = ["bin", "obj", "artifacts", ".scratch"];
     private readonly string _repositoryRoot;
+    private readonly int _maximumIndexedSourceFiles;
 
-    internal FileSystemTestClassDeclarationReader(string repositoryRoot)
+    internal FileSystemTestClassDeclarationReader(
+        string repositoryRoot,
+        int maximumIndexedSourceFiles = ReverseDependencyTestImpactReader.MaximumIndexedSourceFiles)
     {
         _repositoryRoot = Path.GetFullPath(repositoryRoot);
+        _maximumIndexedSourceFiles = maximumIndexedSourceFiles;
     }
 
     internal static ITestClassDeclarationReader CreateForCurrentRepository()
@@ -168,7 +177,8 @@ internal sealed class FileSystemTestClassDeclarationReader : ITestClassDeclarati
 
     public ReverseDependencyTestSelection ReadReverseDependentTestClasses(
         IReadOnlyList<string> changedSourcePaths) =>
-        ReverseDependencyTestImpactReader.Read(_repositoryRoot, changedSourcePaths);
+        ReverseDependencyTestImpactReader.Read(
+            _repositoryRoot, changedSourcePaths, maximumIndexedSourceFiles: _maximumIndexedSourceFiles);
 
     private TestClassDeclarations ReadProjectDeclarations(string[] sourceFiles)
     {
@@ -215,7 +225,7 @@ internal sealed class FileSystemTestClassDeclarationReader : ITestClassDeclarati
 
         return Directory
             .EnumerateFiles(projectDirectory, "*.cs", SearchOption.AllDirectories)
-            .Where(path => !HasGeneratedPathSegment(path))
+            .Where(path => !HasGeneratedPathSegment(Path.GetRelativePath(projectDirectory, path)))
             .Where(path => !nestedProjectDirectories.Any(directory => IsWithinDirectory(path, directory)))
             .Order(StringComparer.OrdinalIgnoreCase)
             .ToArray();
@@ -231,8 +241,7 @@ internal sealed class FileSystemTestClassDeclarationReader : ITestClassDeclarati
 
     private static bool HasGeneratedPathSegment(string path) =>
         path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Any(segment =>
-            segment.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
-            segment.Equals("obj", StringComparison.OrdinalIgnoreCase));
+            ExcludedDirectorySegments.Contains(segment, StringComparer.OrdinalIgnoreCase));
 
     private static bool IsWithinDirectory(string path, string directory)
     {
