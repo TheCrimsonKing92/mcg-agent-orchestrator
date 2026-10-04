@@ -178,6 +178,8 @@ public sealed class StateLogDivergenceCheckRunnerTests
             var fixture = new Fixture();
             try
             {
+                // Arrange the schema before repository writes or the runner's read-only queries.
+                _ = StateDbMigrations.EnsureUpToDate(fixture.Workspace.SqliteStatePath);
                 var kernel = new AgentOrchestratorKernel(new FixtureClock(fixture));
                 kernel.SetEventWriter(fixture.Writer);
                 fixture.CleanGoal = kernel.CreateGoal("Clean fixture");
