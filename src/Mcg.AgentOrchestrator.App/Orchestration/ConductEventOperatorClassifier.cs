@@ -21,6 +21,8 @@ internal static class ConductEventOperatorClassifier
         {
             "host-health" when StartsWithToken("HOST_HEALTH_DEGRADED") => Decision,
             "host-health" when StartsWithToken("HOST_HEALTH_RECOVERED") => Outcome,
+            "state-log-divergence" when StartsWithToken("STATE_LOG_DIVERGENCE") =>
+                ClassifyStateLogDivergence(tokens),
             "test-impact-degraded" when StartsWithToken("TEST_IMPACT_DEGRADED") => Outcome,
             "sweep-blocker" => HasToken(ReconcileSweepRemediationCoordinator.AcceptanceQueueOwnerField)
                 ? null : Decision,
@@ -41,5 +43,19 @@ internal static class ConductEventOperatorClassifier
                 || StartsWithToken("ACCEPTANCE_COHORT_RECONCILED_DEAD") => Outcome,
             _ => null
         };
+    }
+
+    private static string? ClassifyStateLogDivergence(string[] tokens)
+    {
+        int? Count(string name)
+        {
+            var matches = tokens.Where(token => token.StartsWith(name + "=", StringComparison.Ordinal)).ToArray();
+            return matches.Length == 1 && int.TryParse(matches[0].AsSpan(name.Length + 1),
+                System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture,
+                out var count) ? count : null;
+        }
+        var lost = Count("lost");
+        var repeated = Count("repeated");
+        return lost > 0 || repeated > 0 ? Decision : lost == 0 && repeated == 0 ? Outcome : null;
     }
 }
