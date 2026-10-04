@@ -1859,6 +1859,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         blockedRecheckHeartbeatInterval: reconcileSweepOptions.HeartbeatInterval,
                         workspace: context.Workspace).WithSteward(ConductorStewardHost.CreateDefault(context.Workspace))
                         .WithUnintendedExitDiagnostics(conductorDiagnosticPath, conductorOutputLogPath)
+                        .WithJudgePanel(ConductorJudgePanelHost.CreateDefault(context.Workspace))
                         .WithAuthor(ConductorAuthorHost.CreateDefault(context.Workspace)).Run(
                         context.Kernel, loopDriver, loopPolicy, stopFilePath, loopMaxIter,
                         watchInterval: watchInterval, onTick: onTick, wakeSignal: loopWakeSignal, maxDuration: maxDuration,
@@ -1982,6 +1983,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     lifecycleRecorder: new ConductorLifecycleRecorder(
                         new SqliteRunEventStore(context.Workspace.RunEventStorePath)),
                     workspace: context.Workspace).WithSteward(ConductorStewardHost.CreateDefault(context.Workspace))
+                    .WithJudgePanel(ConductorJudgePanelHost.CreateDefault(context.Workspace))
                     .WithAuthor(ConductorAuthorHost.CreateDefault(context.Workspace)).Run(
                     context.Kernel, conductDriver, conductPolicy, watchStopPath,
                     watchInterval: TimeSpan.FromSeconds(watchPollSeconds),
