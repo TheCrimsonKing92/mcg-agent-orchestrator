@@ -10,7 +10,8 @@ internal static partial class CliPersistentStateRunner
 
     private static bool IsGoalScopedLifecycleInvocation(IReadOnlyList<string> args) =>
         GoalScopedLifecycleVerbs.Contains(args[0]) || CliCommandHandlers.IsStopSupersedeAlias(args) ||
-        CliCommandHandlers.IsStopCancelAlias(args);
+        CliCommandHandlers.IsStopCancelAlias(args) || CliCommandHandlers.IsStopParkAlias(args) ||
+        CliCommandHandlers.IsStopAbandonAlias(args);
 
     private static bool ExecuteGoalLifecycleDispositionCommand(
         IReadOnlyList<string> args,
@@ -22,6 +23,18 @@ internal static partial class CliPersistentStateRunner
         ref Goal? currentGoal,
         IOperatorChannel? channel = null)
     {
+        if (CliCommandHandlers.IsStopParkAlias(args))
+        {
+            CliCommandHelp.ThrowIfInvalidFlags(args);
+            return ExecuteGoalParkStopAliasTransition(args, stateRepository, workspace, ref currentGoal);
+        }
+
+        if (CliCommandHandlers.IsStopAbandonAlias(args))
+        {
+            CliCommandHelp.ThrowIfInvalidFlags(args);
+            return ExecuteGoalAbandonStopAliasTransition(args, stateRepository, workspace, ref currentGoal);
+        }
+
         if (args[0].Equals("park-goal", StringComparison.OrdinalIgnoreCase))
         {
             CliCommandHelp.ThrowIfInvalidFlags(args);
