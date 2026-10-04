@@ -17,7 +17,8 @@ internal sealed partial class ConductorJudgePanelPacketBuilder(
 
     internal PanelPacket Build(PanelTrigger trigger, PanelCriteriaSnapshot criteria)
     {
-        var protectedText = $"Criteria (version {criteria.Version})\n" + string.Join("\n", criteria.Criteria) +
+        var protectedText = $"Criteria (version {criteria.Version})\ncriteria_provenance = \"{criteria.Provenance}\"\n" +
+                            string.Join("\n", criteria.Criteria) +
                             "\n\nAuthority boundary\n" + AuthorityBoundary + "\n\n";
         if (protectedText.Length + TruncatedMarker.Length + 2 > MaxPacketCharacters)
             throw new InvalidDataException("Panel protected criteria and authority sections exceed MaxPacketCharacters.");

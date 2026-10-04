@@ -27,6 +27,8 @@ public sealed class ConductorJudgePanelPacketBuilderTests
         Assert.Equal(triggerTime, trigger.RecordedAt);
         var snapshot = ConductorJudgePanelCriteriaAtTrigger.Resolve(f.Sources.ReadGoal(f.GoalId), trigger.RecordedAt);
         Assert.Equal(version, snapshot.Version);
+        Assert.Equal("as-recorded", snapshot.Provenance);
+        Assert.Equal(new[] { f.Criteria }, snapshot.Criteria);
         IReadOnlyList<string>? diffPaths = null;
         var builder = new ConductorJudgePanelPacketBuilder(f.Panel.Root, (basis, candidate, paths) =>
         {
@@ -37,6 +39,7 @@ public sealed class ConductorJudgePanelPacketBuilderTests
         });
         var packet = builder.Build(trigger, snapshot);
         Assert.Contains(f.Criteria, packet.Text);
+        Assert.Contains("criteria_provenance = \"as-recorded\"", packet.Text);
         Assert.Contains(text, packet.Text);
         Assert.Contains("ExampleTests.Dispute", packet.Text);
         Assert.Contains("DECISION_TIME_ASSERTION", packet.Text);
@@ -139,27 +142,44 @@ public sealed class ConductorJudgePanelPacketBuilderTests
     }
 
     [Fact]
-    public async Task In_place_spec_rewrite_must_preserve_historical_criteria()
+    public async Task In_place_rescoped_version_uses_retained_criteria_and_records_provenance()
     {
         using var f = new PanelTriggerTestFixture();
         await f.SaveCriteria();
         f.Timeline(0, "PRE_TESTER_RED_LOOP: historical dispute");
-        var recordedAt = f.Sources.ReadGoal(f.GoalId)!.RefinedSpecVersions![0].RecordedAt;
-        f.Panel.Time.UtcNow += TimeSpan.FromMinutes(1);
-        // This is the production feasibility re-scope path's persistence operation:
-        // SetGoalRefinedSpec replaces criteria without advancing the version's timestamp.
-        f.Panel.Kernel.SetGoalRefinedSpec(f.Panel.Goal.Id,
-            f.Panel.Goal.RefinedSpec! with { AcceptanceCriteria = ["LATER_IN_PLACE_CRITERION"] });
-        await f.SaveState();
         var snapshot = f.Sources.ReadGoal(f.GoalId)!;
-        Assert.Equal(recordedAt, snapshot.RefinedSpecVersions![0].RecordedAt);
+        var version = Assert.Single(snapshot.RefinedSpecVersions!);
+        const string retainedCriterion = "  RETAINED_IN_PLACE_CRITERION  ";
+        var rescoped = version with
+        {
+            Spec = version.Spec with
+            {
+                AcceptanceCriteria = [retainedCriterion],
+                Decisions = [new("Feasibility", "Re-scope",
+                    "Feasibility disposition applied and re-checked (topic: fixture).")]
+            }
+        };
+        // Plain persisted-shape fixture: no call into the re-scope producer or timeline fallback.
+        await new SqliteOrchestratorStateRepository(f.State).SaveGoalSnapshotsAsync(
+        [snapshot with
+        {
+            RefinedSpecVersions = [rescoped],
+            EffectiveAcceptanceCriteriaCorrections =
+            [new(retainedCriterion, "SEPARATE_CORRECTION", "operator", version.RecordedAt,
+                null, ProgressKind.OperatorTaskNote)]
+        }]);
+        var before = f.ProducerHashes();
         var trigger = Assert.Single(f.Sources.Read());
-        var criteria = ConductorJudgePanelCriteriaAtTrigger.Resolve(snapshot, trigger.RecordedAt);
+        var criteria = ConductorJudgePanelCriteriaAtTrigger.Resolve(f.Sources.ReadGoal(f.GoalId), trigger.RecordedAt);
         var packet = f.Packets.Build(trigger, criteria);
-        // These assertions express the unmet historical-source contract; do not weaken them
-        // to bless the overwritten snapshot. Acceptance owns execution of this regression.
-        Assert.Contains(f.Criteria, packet.Text);
-        Assert.DoesNotContain("LATER_IN_PLACE_CRITERION", packet.Text);
+        Assert.Equal(new[] { retainedCriterion }, criteria.Criteria);
+        Assert.Equal("criteria-rescoped-in-place", criteria.Provenance);
+        Assert.Contains("criteria_provenance = \"criteria-rescoped-in-place\"", packet.Text);
+        Assert.Contains(retainedCriterion, packet.Text);
+        Assert.DoesNotContain(f.Criteria, packet.Text);
+        Assert.DoesNotContain("SEPARATE_CORRECTION", packet.Text);
+        Assert.Contains(ConductorJudgePanelPacketBuilder.AuthorityBoundary, packet.Text);
+        Assert.Equal(before.OrderBy(pair => pair.Key), f.ProducerHashes().OrderBy(pair => pair.Key));
     }
 
     [Fact]

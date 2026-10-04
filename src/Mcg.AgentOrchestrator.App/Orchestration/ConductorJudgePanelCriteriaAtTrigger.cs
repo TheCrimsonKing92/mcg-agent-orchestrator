@@ -2,7 +2,8 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-internal sealed record PanelCriteriaSnapshot(string Version, IReadOnlyList<string> Criteria);
+internal sealed record PanelCriteriaSnapshot(string Version, IReadOnlyList<string> Criteria,
+    string Provenance = "as-recorded");
 
 internal static class ConductorJudgePanelCriteriaAtTrigger
 {
@@ -13,12 +14,16 @@ internal static class ConductorJudgePanelCriteriaAtTrigger
             .OrderBy(item => item.RecordedAt).ThenBy(item => item.Version).LastOrDefault();
         if (version is null)
             return new("no-refined-spec", ["No versioned acceptance criteria were recorded at the trigger."]);
-        var spec = new RefinedSpec("", version.Spec.AcceptanceCriteria, VerificationClass.TestVerifiable, [], []);
-        var corrections = (goal!.EffectiveAcceptanceCriteriaCorrections ?? [])
-            .Where(item => item.RecordedAt <= triggerTime)
-            .Select(item => new EffectiveAcceptanceCriteriaCorrection(item.SupersededCriterion,
-                item.Correction, item.Actor, item.RecordedAt, null, item.SourceKind, item.IsWaiver)).ToArray();
-        return new(EffectiveAcceptanceCriteriaVersion.ComputeHash(spec, corrections),
-            EffectiveAcceptanceCriteriaVersion.BuildSnapshot(spec, corrections));
+        // Owner-approved limitation: feasibility re-scopes replace this version in place.
+        // Its retained text is authoritative here; do not reconstruct lost text from events
+        // or apply the goal's separate correction ledger to the recorded criteria.
+        var recorded = goal!.RefinedSpecVersions!.Single(item => item.Version == version.Version);
+        var provenance = recorded.Spec.Decisions.Any(item => item.Rationale.StartsWith(
+            "Feasibility disposition applied and re-checked", StringComparison.Ordinal))
+            ? "criteria-rescoped-in-place" : "as-recorded";
+        // Slice 1 case currency uses the criteria hash, rather than the integer spec version.
+        var spec = new RefinedSpec("", recorded.Spec.AcceptanceCriteria, VerificationClass.TestVerifiable, [], []);
+        return new(EffectiveAcceptanceCriteriaVersion.ComputeHash(spec, []),
+            recorded.Spec.AcceptanceCriteria, provenance);
     }
 }
