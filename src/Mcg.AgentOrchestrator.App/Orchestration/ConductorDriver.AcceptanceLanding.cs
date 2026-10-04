@@ -111,23 +111,29 @@ internal sealed partial class ConductorDriver
     {
         if (!_isConductorTick)
         {
+            var decision = VerifyingStagePolicy.Evaluate(new(
+                GoalLifecycleState.Verifying, _isConductorTick, goal.Status));
             return MakeResult(
                 goal.Id.Value,
                 goalPrefix,
                 policy,
                 new ConductorAdvanceOutcome.Held(
                     GoalLifecycleState.Verifying,
-                    "Acceptance gate is owned by the conduct loop; reconciliation will handle terminal artifact"));
+                    decision.Reason) { Decision = decision.ToRecord() });
         }
 
-        return TryRunFallbackAcceptance(goal, goalPrefix, policy, GoalLifecycleState.Verifying) ??
-            MakeResult(
-                goal.Id.Value,
-                goalPrefix,
-                policy,
-                new ConductorAdvanceOutcome.Held(
-                    GoalLifecycleState.Verifying,
-                    "Acceptance gate running in background; reconciliation will handle terminal artifact"));
+        var fallback = TryRunFallbackAcceptance(goal, goalPrefix, policy, GoalLifecycleState.Verifying, out var facts);
+        if (fallback is not null)
+            return fallback;
+
+        var background = VerifyingStagePolicy.Evaluate(facts);
+        return MakeResult(
+            goal.Id.Value,
+            goalPrefix,
+            policy,
+            new ConductorAdvanceOutcome.Held(
+                GoalLifecycleState.Verifying,
+                background.Reason) { Decision = background.ToRecord() });
     }
 
     private ConductorAdvanceResult? TryRunFallbackAcceptance(
@@ -135,7 +141,26 @@ internal sealed partial class ConductorDriver
         string goalPrefix,
         ConductorAutonomyPolicy policy,
         GoalLifecycleState callerState)
+        => TryRunFallbackAcceptance(goal, goalPrefix, policy, callerState, out _);
+
+    private ConductorAdvanceResult? TryRunFallbackAcceptance(
+        Goal goal,
+        string goalPrefix,
+        ConductorAutonomyPolicy policy,
+        GoalLifecycleState callerState,
+        out VerifyingStageFacts facts)
     {
+        facts = new(callerState, _isConductorTick, goal.Status,
+            ParallelAcceptanceEnabled: _parallelAcceptanceEnabled);
+
+        ConductorAdvanceResult Hold(GoalLifecycleState state, VerifyingStageFacts observed,
+            ConductorHoldOwner owner = ConductorHoldOwner.None)
+        {
+            var hold = VerifyingStagePolicy.Evaluate(observed);
+            return MakeResult(goal.Id.Value, goalPrefix, policy,
+                new ConductorAdvanceOutcome.Held(state, hold.Reason) { Owner = owner, Decision = hold.ToRecord() });
+        }
+
         if (!_parallelAcceptanceEnabled)
         {
             return null;
@@ -143,13 +168,7 @@ internal sealed partial class ConductorDriver
 
         if (goal.Status == GoalStatus.Completed)
         {
-            return MakeResult(
-                goal.Id.Value,
-                goalPrefix,
-                policy,
-                new ConductorAdvanceOutcome.Held(
-                    GoalLifecycleState.Verified,
-                    "Completed goal requires operator acceptance; background acceptance cannot reopen a landed goal."));
+            return Hold(GoalLifecycleState.Verified, facts);
         }
 
         ConductorParallelAcceptanceCandidate? candidate;
@@ -159,9 +178,14 @@ internal sealed partial class ConductorDriver
         }
         catch (EvidenceMutationLeaseUnavailableException)
         {
-            return ReplacementEvidenceMutationHeld(goal, goalPrefix, policy);
+            var result = ReplacementEvidenceMutationHeld(goal, goalPrefix, policy);
+            var held = (ConductorAdvanceOutcome.Held)result.Outcome;
+            facts = facts with { ReplacementLeaseAvailable = false, ReplacementLeaseReason = held.Reason };
+            var hold = VerifyingStagePolicy.Evaluate(facts);
+            return result with { Outcome = held with { Decision = hold.ToRecord() } };
         }
 
+        facts = facts with { ReplacementLeaseAvailable = candidate is null ? null : true, CandidateBuilt = candidate is not null };
         if (candidate is null)
         {
             return null;
@@ -179,10 +203,10 @@ internal sealed partial class ConductorDriver
                 goal.Id.Value,
                 Math.Min(GetAcceptanceSlotCount(goal), policy.AcceptanceWidth),
                 _conductorTick);
+            facts = facts with { AdmissionAdmitted = admission.IsAdmitted, AdmissionReason = admission.Reason };
             if (!admission.IsAdmitted)
             {
-                return MakeResult(goal.Id.Value, goalPrefix, policy,
-                    new ConductorAdvanceOutcome.Held(callerState, admission.Reason));
+                return Hold(callerState, facts);
             }
         }
 
@@ -218,15 +242,16 @@ internal sealed partial class ConductorDriver
         }
         catch (AcceptanceArtifactWriterLeaseBusyException ex)
         {
-            return MakeResult(
-                goal.Id.Value,
-                goalPrefix,
-                policy,
-                new ConductorAdvanceOutcome.Held(
-                    GoalLifecycleState.Verified,
-                    $"Acceptance artifact writer busy; retry on next conduct tick. {ex.Message}"));
+            facts = facts with { ArtifactWriterBusy = true, ArtifactWriterMessage = ex.Message };
+            return Hold(GoalLifecycleState.Verified, facts);
         }
 
+        facts = facts with
+        {
+            ArtifactWriterBusy = false,
+            AttemptDecisionKind = decision.Kind.ToString(),
+            AttemptId = decision.Attempt.AttemptId
+        };
         if (!_isConductorTick &&
             decision.Kind is ConductorParallelAcceptanceAttemptDecisionKind.Started or
                 ConductorParallelAcceptanceAttemptDecisionKind.Running)
@@ -241,13 +266,8 @@ internal sealed partial class ConductorDriver
             {
                 if (_utcNow() >= deadline)
                 {
-                    return MakeResult(
-                        goal.Id.Value,
-                        goalPrefix,
-                        policy,
-                        new ConductorAdvanceOutcome.Held(
-                            GoalLifecycleState.Verified,
-                            $"Acceptance verification remains in background after bounded no-tick wait; attempt={decision.Attempt.AttemptId}.") { Owner = ConductorHoldOwner.BackgroundAttempt });
+                    facts = facts with { NoTickWaitOutcome = "deadline-elapsed" };
+                    return Hold(GoalLifecycleState.Verified, facts, ConductorHoldOwner.BackgroundAttempt);
                 }
 
                 _noTickAcceptancePollDelay(NoTickAcceptancePollInterval);
@@ -256,6 +276,7 @@ internal sealed partial class ConductorDriver
                     decision = _parallelAcceptanceAttemptCoordinator.ObserveExistingAttempt(
                         decision.Attempt,
                         candidate);
+                    facts = facts with { AttemptDecisionKind = decision.Kind.ToString(), AttemptId = decision.Attempt.AttemptId };
                 }
                 catch (InvalidDataException ex) when (
                     ex.Message.Contains(" is unreadable.", StringComparison.Ordinal))
@@ -265,23 +286,13 @@ internal sealed partial class ConductorDriver
                 catch (InvalidDataException ex) when (
                     ex.Message.Contains("after reconciliation", StringComparison.Ordinal))
                 {
-                    return MakeResult(
-                        goal.Id.Value,
-                        goalPrefix,
-                        policy,
-                        new ConductorAdvanceOutcome.Held(
-                            GoalLifecycleState.Verified,
-                            $"Acceptance attempt reconciliation ownership changed; attempt={decision.Attempt.AttemptId}."));
+                    facts = facts with { NoTickWaitOutcome = "reconciliation-ownership-changed" };
+                    return Hold(GoalLifecycleState.Verified, facts);
                 }
                 catch (InvalidDataException)
                 {
-                    return MakeResult(
-                        goal.Id.Value,
-                        goalPrefix,
-                        policy,
-                        new ConductorAdvanceOutcome.Held(
-                            GoalLifecycleState.Verified,
-                            $"Acceptance attempt metadata or ownership changed; attempt={decision.Attempt.AttemptId}."));
+                    facts = facts with { NoTickWaitOutcome = "ownership-changed" };
+                    return Hold(GoalLifecycleState.Verified, facts);
                 }
             }
         }
@@ -299,13 +310,8 @@ internal sealed partial class ConductorDriver
                         _conductorTick);
                 }
 
-                return MakeResult(
-                    goal.Id.Value,
-                    goalPrefix,
-                    policy,
-                    new ConductorAdvanceOutcome.Held(
-                        GoalLifecycleState.Verifying,
-                        $"Acceptance verification running in background; attempt={decision.Attempt.AttemptId}."));
+                facts = facts with { GoalStatus = goal.Status };
+                return Hold(GoalLifecycleState.Verifying, facts);
 
             case ConductorParallelAcceptanceAttemptDecisionKind.Completed:
                 var run = decision.Run ?? ConductorParallelAcceptanceRunResult.Fault(
