@@ -4,7 +4,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-internal sealed class ConductorAuthorHost
+internal sealed partial class ConductorAuthorHost
 {
     internal const string EnabledEnvironmentVariable = "MCG_ORCHESTRATOR_AUTHOR_ENABLED";
     private const int MaxAttempts = 2;
@@ -206,6 +206,11 @@ internal sealed class ConductorAuthorHost
                 _claims.Complete(identity, "owner-question");
                 return;
             }
+            if (result.Kind == "frozen-fact-ruling")
+            {
+                SubmitRuling(kernel, goal, item, result.Ruling!, changed);
+                return;
+            }
             SubmitCheckedAnswer(kernel, goal, item, result, changed);
     }
 
@@ -229,9 +234,15 @@ internal sealed class ConductorAuthorHost
             _claims.Complete(item.Identity, "owner-question");
             return;
         }
-        var references = result.EvidenceReferences!.Append($"author-item={item.Identity}").ToArray();
+        SubmitAnswer(item, result.Text!, result.EvidenceReferences!, result.Precedent, "answer");
+    }
+
+    private void SubmitAnswer(ConductorAuthorItem item, string text, IReadOnlyList<string> evidenceReferences,
+        string? precedent, string kind)
+    {
+        var references = evidenceReferences.Append($"author-item={item.Identity}").ToArray();
         var payload = new AnswerOperatorIntentPayload(item.TargetKind, item.TargetId, item.GoalId,
-            result.Text!, OperatorActorKind.Agent, references, result.Precedent);
+            text, OperatorActorKind.Agent, references, precedent);
         try
         {
             var intent = _intents.EnqueueAsync(new OperatorIntentRecord(Guid.NewGuid().ToString("N"),
@@ -239,7 +250,7 @@ internal sealed class ConductorAuthorHost
                 JsonSerializer.Serialize(payload, Json), [], "author", "conductor-author", "author",
                 _utcNow(), ActorKind: OperatorActorKind.Agent)).GetAwaiter().GetResult();
             _claims.Complete(item.Identity, "answer-submitted", intent.Id);
-            Record(item, "answer", $"intent={intent.Id}");
+            Record(item, kind, $"intent={intent.Id}");
         }
         catch
         {
