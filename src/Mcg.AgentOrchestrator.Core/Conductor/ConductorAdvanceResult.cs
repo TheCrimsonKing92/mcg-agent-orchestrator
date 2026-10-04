@@ -14,7 +14,8 @@ public enum ConductorHoldOwner
     None,
     BackgroundAttempt,
     AcceptanceQueue,
-    DurableOutbox
+    DurableOutbox,
+    WorkerCapacity
 }
 
 public abstract record ConductorAdvanceOutcome

@@ -38,7 +38,7 @@ internal sealed partial class ConductorBatchLoop
             }
 
             if (held.Owner is ConductorHoldOwner.BackgroundAttempt or ConductorHoldOwner.AcceptanceQueue
-                or ConductorHoldOwner.DurableOutbox)
+                or ConductorHoldOwner.DurableOutbox or ConductorHoldOwner.WorkerCapacity)
             {
                 ClearGoalHold(kernel, goal, changedGoalIds);
                 return;

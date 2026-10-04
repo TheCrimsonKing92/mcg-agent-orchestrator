@@ -2209,7 +2209,7 @@ internal sealed partial class ConductorDriver
 
             EmitPhaseTiming("dispatch-prep", goal, TimeSpan.Zero, $"tasks={CountAssignedTasks(goal)} result=held-cap running={running}");
             return MakeResult(goal.Id.Value, goalPrefix, policy,
-                new ConductorAdvanceOutcome.Held(fromState, decision.Reason) { Decision = decision.ToRecord() });
+                new ConductorAdvanceOutcome.Held(fromState, decision.Reason) { Decision = decision.ToRecord(), Owner = ConductorHoldOwner.WorkerCapacity });
         }
 
         if (SliceBatchAdmissionEvaluator?.Evaluate(goal) is { } sliceDecision)

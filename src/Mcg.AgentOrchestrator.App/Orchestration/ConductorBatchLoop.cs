@@ -202,6 +202,7 @@ internal sealed partial class ConductorBatchLoop
         using var activeRunEventLease = leaseAcquisition.RunEventLease!;
         checkpointGoalTick = ResetLandingTickSave(checkpointGoalTick);
         _consecutiveJanitorialFailures.Clear();
+        ResetWorkerCapacityWatch();
         var previousConductEventLogWriter = leaseAcquisition.PreviousConductEventLogWriter;
         var previousRetryDiagnostics = CurrentRetryDiagnostics.Value;
         var previousSuccessfulLandingSink = driver.SuccessfulLandingSink;
@@ -1406,7 +1407,7 @@ internal sealed partial class ConductorBatchLoop
                     goalProjectionCache.Invalidate(goal.Id);
                 }
 
-                TrackGoalOutcome(
+                TrackGoalOutcomeAndCapacity(
                     kernel,
                     driver,
                     goal,
@@ -1443,6 +1444,7 @@ internal sealed partial class ConductorBatchLoop
                 FinishGoalWalk(result.Outcome.GetType().Name);
             }
             goalWalkClock.Stop();
+            ObserveWorkerCapacityTick(kernel, effectiveGoalStallThreshold);
             driver.PhaseTimingSink = previousPhaseTimingSink;
             foreach (var line in perGoalPhaseTimingLines)
             {
