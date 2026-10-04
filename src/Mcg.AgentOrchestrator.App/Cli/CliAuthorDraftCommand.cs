@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
@@ -11,7 +12,8 @@ internal static class CliAuthorDraftCommand
 
     internal static int Run(IReadOnlyList<string> args, OrchestratorWorkspace workspace) =>
         Run(args, workspace, new(WorkerProcessRunner.RunBufferedAsync,
-            new GitAuthorBriefDraftRepository(workspace.ExecutionDirectory)), Console.Out, Console.Error);
+            new GitAuthorBriefDraftRepository(workspace.ExecutionDirectory),
+            ModelFunctionCatalogStore.Load(workspace.ModelFunctionCatalogPath)), Console.Out, Console.Error);
 
     internal static int Run(IReadOnlyList<string> args, OrchestratorWorkspace workspace,
         AuthorBriefDraftSeams seams, TextWriter output, TextWriter error)
@@ -20,6 +22,7 @@ internal static class CliAuthorDraftCommand
         string? backlogItemId = null;
         string? mainHead = null;
         int? exitCode = null;
+        string? model = null;
         var kind = "failed";
         string? staleReason = null;
         IReadOnlyList<string> evidenceReferences = [];
@@ -35,11 +38,13 @@ internal static class CliAuthorDraftCommand
             var stem = $"{item.Id[..8]}-{DateTimeOffset.UtcNow:yyyyMMddTHHmmssfff}-{Guid.NewGuid():N}";
             Directory.CreateDirectory(directory);
             receiptPath = Path.Combine(directory, stem + ".receipt.json");
+            var resolvedModel = ConductorRoundModelResolver.Resolve(seams.Catalog, ModelFunctionPurposes.ConductorAuthor);
+            model = resolvedModel.Alias;
             mainHead = seams.Repository.ResolveMainHead();
             var lessons = new ConductorLessonSelector(workspace.OperatorLessonsStorePath)
                 .Select(ConductorLessonSelector.AuthorTags("brief"));
             var round = AuthorBriefDraftRound.DispatchAsync(AuthorBriefDraftPrompt.Render(item, lessons, mainHead),
-                workspace.ExecutionDirectory, seams.RunProcessAsync).GetAwaiter().GetResult();
+                workspace.ExecutionDirectory, seams.RunProcessAsync, resolvedModel).GetAwaiter().GetResult();
             exitCode = round.ExitCode;
             if (exitCode != 0) throw new InvalidOperationException($"Author model exited {exitCode}: {round.StandardError}");
             var result = AuthorBriefDraftResultParser.Parse(round.StandardOutput);
@@ -77,14 +82,15 @@ internal static class CliAuthorDraftCommand
         }
         catch (Exception ex)
         {
-            if (receiptPath is not null) WriteReceipt($"{ex.GetType().Name}: {ex.Message}");
+            if (receiptPath is not null) WriteReceipt(ex is ConductorModelRoundException { ModelAlias: null }
+                ? ex.Message : $"{ex.GetType().Name}: {ex.Message}");
             error.WriteLine($"Error: {ex.Message}");
             return 1;
         }
 
         void WriteReceipt(string? failure) => File.WriteAllText(receiptPath!, JsonSerializer.Serialize(new
         {
-            backlogItemId, mainHead, exitCode, kind, checks, staleReason, evidenceReferences, failure
+            backlogItemId, mainHead, exitCode, kind, checks, staleReason, evidenceReferences, failure, model
         }, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, WriteIndented = true }));
     }
 

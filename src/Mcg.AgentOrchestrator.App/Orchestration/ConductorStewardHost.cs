@@ -99,7 +99,8 @@ internal sealed partial class ConductorStewardHost
             new ClaudeConductorStewardModelRound(Path.Combine(workspace.OrchestratorDirectory, "steward-rounds"),
                 lessons: new ConductorLessonSelector(workspace.OperatorLessonsStorePath,
                     message => new ConductEventLogWriter(workspace.ConductEventsLogPath)
-                        .Append("steward-lessons", null, message))),
+                        .Append("steward-lessons", null, message)),
+                catalog: ModelFunctionCatalogStore.Load(workspace.ModelFunctionCatalogPath)),
             SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory),
             new AdjudicationEvidenceResolver(workspace.OrchestratorDirectory),
             goalId => SqliteOrchestratorStateRepository.TryLoadGoalStateVersionAsync(
@@ -255,7 +256,7 @@ internal sealed partial class ConductorStewardHost
         if (round.IsFaulted || round.IsCanceled)
         {
             var reason = round.IsCanceled || round.Exception?.GetBaseException() is OperationCanceledException
-                ? "timeout" : "model-failure";
+                ? "timeout" : ConductorRoundModelResolver.ConductReason(round.Exception?.GetBaseException(), "model-failure");
             _triggers.MarkServiced(stored.Key, "model-failure", null);
             Record(trigger, "model-failure", reason, null, versionDetail);
             return;
@@ -265,7 +266,8 @@ internal sealed partial class ConductorStewardHost
         {
             var reason = adjudication.Text == "unparseable-output" ? "unparseable-output" : adjudication.Text;
             _triggers.MarkServiced(stored.Key, "no-action", null);
-            Record(trigger, "no-action", reason, null, versionDetail);
+            Record(trigger, "no-action", string.IsNullOrWhiteSpace(round.Result)
+                ? ConductorRoundModelResolver.WithModel(reason, _model.ModelAlias) : reason, null, versionDetail);
             return;
         }
         if (adjudication.Kind == "ask-owner")
