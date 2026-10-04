@@ -34,6 +34,7 @@ public sealed class ConductEventOperatorClassifierTests
     [InlineData("acceptance-cohort", "ACCEPTANCE_COHORT_RECONCILED_DEAD_EXTRA attempt=a")]
     [InlineData("acceptance-cohort", "prefix ACCEPTANCE_COHORT tick=1 outcome=passed")]
     [InlineData("unknown", "result=failed kind=ask-owner")]
+    [InlineData("judge-panel", "PANEL_CASE_EXTRA result=completed")]
     [InlineData("acceptance", "")]
     public void Classify_NearMiss_ReturnsNone(string eventKind, string detail)
     {
@@ -42,6 +43,8 @@ public sealed class ConductEventOperatorClassifierTests
 
     [Theory]
     [InlineData("acceptance", "result=failed", "decision")]
+    [InlineData("judge-panel", "PANEL_CASE case=c result=completed", "outcome")]
+    [InlineData("judge-panel", "PANEL_CASE case=c result=superseded", "outcome")]
     [InlineData("canary-gate", "\tresult=passed\r\nsha=s", "outcome")]
     [InlineData("author", "item=i\tkind=model-failure\nreason=r", "decision")]
     [InlineData("loop-handoff", "ACTIVATION_REVERTED", "decision")]

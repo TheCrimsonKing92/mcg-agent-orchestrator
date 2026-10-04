@@ -1840,7 +1840,7 @@ public sealed partial class BackgroundDispatchRunner
             HumanInputQuestionFingerprint: humanInputDirective.Directive?.QuestionFingerprint,
             HumanInputBlockerFingerprint: humanInputDirective.Directive?.BlockerFingerprint,
             HumanInputKind: humanInputDirective.Directive?.Kind,
-            HumanInputEvidenceOwner: humanInputDirective.Directive?.EvidenceOwner,
+            HumanInputEvidenceOwner: humanInputDirective.Directive?.EvidenceOwner, HumanInputStoreReference: humanInputDirective.Directive?.StoreReference,
             ObservedRootExitCode: observedExitCode,
             ReconciledToSuccess: wrapperExitReconciled,
             ReconciliationOriginRule: wrapperExitReconciled ? reconciliationOriginRule : null,
@@ -2140,7 +2140,7 @@ public sealed partial class BackgroundDispatchRunner
     {
         try
         {
-            return GoalWorktrees.InspectGitMetadataAccess(workingDirectory).IndexLockPath;
+            return GoalWorktreeGitMetadata.Inspect(workingDirectory).IndexLockPath;
         }
         catch
         {

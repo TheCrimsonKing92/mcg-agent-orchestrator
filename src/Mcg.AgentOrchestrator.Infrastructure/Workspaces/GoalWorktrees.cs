@@ -201,16 +201,6 @@ public sealed record GoalWorktreeCleanupOptions(
     }
 }
 
-public sealed record GoalWorktreeGitMetadataAccess(
-    string WorktreePath,
-    string IndexLockPath,
-    string CurrentIdentity,
-    bool CurrentProcessCanWriteIndexLock,
-    bool WorkerCanWriteIndexLock,
-    string WorkerWriteDisposition,
-    string CommitContract,
-    string? Error);
-
 public interface ISandboxAclHelper
 {
     void ResetSandboxAcl(string worktreePath, int timeoutMilliseconds);
@@ -265,7 +255,7 @@ public sealed class NoOpSandboxAclHelper : ISandboxAclHelper
 
 public static partial class GoalWorktrees
 {
-    public const string DirectoryName = ".orchestrator-worktrees";
+    public const string DirectoryName = GoalWorktreeLayout.DirectoryName;
     private static readonly TimeSpan InitialDeleteRetryDelay = TimeSpan.FromMilliseconds(100);
     private const int DeleteRetryAttempts = 6;
     private static readonly string[] LockHolderCandidates =

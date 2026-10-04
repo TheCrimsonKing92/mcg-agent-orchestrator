@@ -13,6 +13,19 @@ internal static partial class CliCommandHandlers
         return new GoalCancelCommand(parts[1], parts);
     }
 
+    internal static bool IsStopCancelAlias(IReadOnlyList<string> parts) =>
+        parts.Count > 0 &&
+        parts[0].Equals("stop", StringComparison.OrdinalIgnoreCase) &&
+        GetFlagValue(parts, "--as")?.Equals("cancel", StringComparison.OrdinalIgnoreCase) == true;
+
+    internal static GoalCancelCommand PrepareGoalCancelCommandFromStopAlias(IReadOnlyList<string> parts)
+    {
+        CliArgumentParser.RequirePartCount(parts, 3, CliCommandHelp.StopUsage["Usage: ".Length..]);
+        var reason = ResolveTextArgument(parts, 2, CliCommandHelp.StopUsage["Usage: ".Length..], "--text-file");
+        var delegated = BuildStopDelegateParts("cancel-goal", parts[1], reason, parts, "--confirm-goal-stop");
+        return PrepareGoalCancelCommand(delegated);
+    }
+
     internal static GoalLifecycleTransitionOutcome ApplyGoalCancelWithoutRendering(
         GoalCancelCommand command,
         AgentOrchestratorKernel kernel,

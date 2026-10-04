@@ -239,7 +239,7 @@ public sealed class GoalOperatorDispositionSurface
             return false;
         }
 
-        var worktree = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
+        var worktree = GoalWorktreeLayout.TryResolve(executionDirectory, goal.Id);
         if (worktree is null)
         {
             return false;

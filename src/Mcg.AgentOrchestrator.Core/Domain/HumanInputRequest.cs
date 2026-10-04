@@ -28,7 +28,8 @@ public sealed class HumanInputRequest
         HumanInputRequestId? supersededByRequestId = null,
         int suppressionAnswerRevision = 0,
         long suppressionRevision = 0,
-        string? evidenceOwner = null)
+        string? evidenceOwner = null,
+        PlannerEvidenceStoreReference? storeReference = null)
     {
         Id = id;
         GoalId = goalId;
@@ -57,6 +58,7 @@ public sealed class HumanInputRequest
         SuppressionAnswerRevision = Math.Max(0, suppressionAnswerRevision);
         SuppressionRevision = Math.Max(0, suppressionRevision);
         EvidenceOwner = string.IsNullOrWhiteSpace(evidenceOwner) ? null : evidenceOwner.Trim();
+        StoreReference = storeReference;
     }
 
     public HumanInputRequestId Id { get; }
@@ -90,6 +92,8 @@ public sealed class HumanInputRequest
     public string? BlockerFingerprint { get; }
 
     public string? EvidenceOwner { get; }
+
+    public PlannerEvidenceStoreReference? StoreReference { get; }
 
     public string? DerivedBlockerEvidence
     {
@@ -311,7 +315,8 @@ public sealed class HumanInputRequest
             _answerHistory.Count == 0 ? null : _answerHistory.ToArray(),
             SuppressionAnswerRevision,
             SuppressionRevision,
-            EvidenceOwner);
+            EvidenceOwner,
+            StoreReference);
     }
 
     internal static HumanInputRequest FromSnapshot(HumanInputRequestSnapshot snapshot)
@@ -335,7 +340,8 @@ public sealed class HumanInputRequest
             snapshot.SupersededByRequestId is null ? null : new HumanInputRequestId(snapshot.SupersededByRequestId),
             snapshot.SuppressionAnswerRevision,
             snapshot.SuppressionRevision,
-            snapshot.EvidenceOwner);
+            snapshot.EvidenceOwner,
+            snapshot.StoreReference);
 
         if (snapshot.IsCompleted)
         {

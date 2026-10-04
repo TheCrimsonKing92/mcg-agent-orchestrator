@@ -12,7 +12,8 @@ internal sealed record OwnerDigestRoundRow(
 internal sealed record OwnerDigestRoundsResult(
     IReadOnlyList<OwnerDigestRoundRow> ByRole,
     IReadOnlyList<OwnerDigestRoundRow> ByModel,
-    OwnerDigestReworkByCause ReworkByCause);
+    OwnerDigestReworkByCause ReworkByCause,
+    IReadOnlyList<OwnerDigestFitRow> FitByRoleModelTaskClass);
 
 internal sealed record OwnerDigestReworkRow(
     string Role, string Family, int Rounds,
@@ -33,19 +34,21 @@ internal static class CliOwnerDigestRounds
     internal static OwnerDigestRoundsResult Aggregate(OwnerDigestResult digest, IEnumerable<Goal> goals,
         IReadOnlyCollection<AppliedRetryIntent> intents)
     {
-        var rounds = WorkerRoundLedger.FromGoals(goals, intents)
+        var goalList = goals.ToArray();
+        var rounds = WorkerRoundLedger.FromGoals(goalList, intents)
             .Where(round => round.DispatchedAt >= digest.Since && round.DispatchedAt < digest.Until)
             .ToArray();
         return new OwnerDigestRoundsResult(
             Rows(rounds, round => round.Role.ToString()),
             Rows(rounds, round => $"{Part(round.ProviderName)}/{Part(round.ModelName)}"),
-            Rework(rounds));
+            Rework(rounds), CliOwnerDigestFit.Aggregate(digest, goalList, rounds));
     }
 
     internal static void WriteText(TextWriter writer, OwnerDigestResult digest, IEnumerable<Goal> goals,
         IReadOnlyCollection<AppliedRetryIntent> intents)
     {
         var result = Aggregate(digest, goals, intents);
+        CliOwnerDigestFit.WriteText(writer, result.FitByRoleModelTaskClass);
         WriteRows(writer, "Rounds by role", result.ByRole);
         WriteRows(writer, "Rounds by model", result.ByModel);
         writer.WriteLine("Rework rounds by cause | Family | Rounds | Input | Cached input | Output | Usage unreported");

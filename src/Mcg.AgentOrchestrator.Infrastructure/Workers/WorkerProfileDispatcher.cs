@@ -71,7 +71,7 @@ public sealed class WorkerSubscriptionPreflightException : InvalidOperationExcep
 
 public sealed record DispatchModelOverride(string? ProfileName, string? ModelName, string? ReasoningEffort);
 
-public static class WorkerProfileDispatcher
+public static partial class WorkerProfileDispatcher
 {
     internal const string ProviderBudgetExhaustionErrorCode = "provider-budget-exhausted";
     public const string OpenAiSubscriptionProfileName = "codex-cli";
@@ -156,7 +156,7 @@ public static class WorkerProfileDispatcher
         PaidRouteClassification paidRoute = PaidRouteClassification.Unknown,
         // The credential source this dispatch's Claude auth preflight selected and reported. Recorded on
         // the dispatch so the start boundary transports that one decision instead of selecting again.
-        ClaudeCredentialSourceSelection? claudeCredentialSelection = null)
+        ClaudeCredentialSourceSelection? claudeCredentialSelection = null, DispatchShadowRecorder? shadowRecorder = null)
     {
         EnsureTaskNeedsExecution(task, allowPendingRecordedDispatchRefresh);
         EnsureSubscriptionRetryWindowHasPassed(task, dispatchedAt);
@@ -190,15 +190,8 @@ public static class WorkerProfileDispatcher
             ref reviewerMergeTreeTotalConflictPathCount);
 
         WorkerCommandTemplate.WriteHandoffFile(goal.Tasks, task.Id, workingDirectory);
-        var citedPriorEvidence = citedPriorEvidenceResolver?.Resolve(goal, task);
-        var contextDirectory = WorkerContextArtifacts.Write(
-            goal,
-            task,
-            workingDirectory,
-            preflightFindings,
-            citedPriorEvidence,
-            providerName,
-            modelName);
+        var contextDirectory = WriteDispatchContextArtifacts(kernel, goal, task, workingDirectory,
+            preflightFindings, providerName, modelName, citedPriorEvidenceResolver, dispatchedAt);
         var targetContext = TryReadCurrentTargetContext(workingDirectory);
         var currentMainIdentity = ReadCurrentMainIdentityForRetry(workingDirectory);
         var reviewerRoundTouchScope = ReadReviewRoundTouchScope(
@@ -341,12 +334,12 @@ public static class WorkerProfileDispatcher
             RetryContextFingerprint: retryContextFingerprint,
             PaidRoute: paidRoute,
             ClaudeCredentialSourceDirectory: claudeCredentialSelection?.DirectoryPath,
-            ClaudeCredentialSourceIsExplicit: claudeCredentialSelection?.IsExplicitSource ?? false),
+            ClaudeCredentialSourceIsExplicit: claudeCredentialSelection?.IsExplicitSource ?? false,
+            ShadowDecision: shadowRecorder?.Record(task.RequiredRole, goal.Objective, task.Description, reviewerScopeChangedFiles, providerName, modelName, reasoningEffort)),
             allowPendingRecordedDispatchRefresh);
         PrerequisiteEvidenceTrimNote.RecordIfTrimmed(kernel, goal.Id, task.Id, brief);
         return new WorkerProfileDispatchResult(task, preparation.PromptPath);
     }
-
     internal static ReviewerRoundTouchScope ReadReviewRoundTouchScope(
         Goal goal,
         TaskSpec task,
@@ -472,7 +465,7 @@ public static class WorkerProfileDispatcher
                 workingDirectory,
                 dispatchedAt,
                 citedPriorEvidenceResolver: citedPriorEvidenceResolver,
-                sandboxOptions: sandboxOptions));
+                sandboxOptions: sandboxOptions, shadowRecorder: DispatchShadowRecorder.Default));
         }
 
         return results;
@@ -570,7 +563,7 @@ public static class WorkerProfileDispatcher
             sandboxOptions: sandbox,
             plannerSampleCount: plannerSampleCount,
             paidRoute: ClassifyPaidRoute(roleSelection.Model.SubscriptionMode),
-            claudeCredentialSelection: preflight.ClaudeCredentialSelection);
+            claudeCredentialSelection: preflight.ClaudeCredentialSelection, shadowRecorder: DispatchShadowRecorder.Default);
     }
 
     public static WorkerSubscriptionPreflightResult PreflightSubscriptionTask(
@@ -971,7 +964,7 @@ public static class WorkerProfileDispatcher
             return;
         }
 
-        var access = GoalWorktrees.InspectGitMetadataAccess(workingDirectory, sandbox);
+        var access = GoalWorktreeGitMetadata.Inspect(workingDirectory, sandbox);
         var status = access.Error is null ? "ok" : "warn";
         findings.Add(
             $"{status}: git metadata index_lock={access.IndexLockPath}; " +
@@ -1237,7 +1230,7 @@ public static class WorkerProfileDispatcher
                 sandboxOptions: sandbox,
                 plannerSampleCount: plannerSampleCount,
                 paidRoute: ClassifyPaidRoute(roleSelection.Model.SubscriptionMode),
-                claudeCredentialSelection: preflight.ClaudeCredentialSelection));
+                claudeCredentialSelection: preflight.ClaudeCredentialSelection, shadowRecorder: DispatchShadowRecorder.Default));
         }
 
         return new WorkerProfileReadyBatchResult(results, blocked);

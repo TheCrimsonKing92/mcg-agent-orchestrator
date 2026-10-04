@@ -719,6 +719,8 @@ internal sealed partial class ConductorBatchLoop
                 $"goals={kernel.Goals.Count} completed_dependencies={completedGoals.Count} set_aside={setAsideGoals.Count} dependency_metadata_ms={dependencyMetadataTiming.ElapsedMilliseconds} dependency_journals_read={dependencyMetadataTiming.JournalsRead}{FormatSweepCacheDetail(sweepResult)}{FormatSweepPhaseAttribution(_tickPhaseElapsedMs)}"));
 
             _promptRolloutWatch?.EvaluateTick(kernel);
+            RunJanitorialPhase("main-suspect-release", nextTick,
+                () => ServiceMainSuspectRelease(driver, canaryTasks, canaryTasksGate));
             var preWalkClock = Stopwatch.StartNew();
             RunJanitorialPhase("retire-until-goal-lessons", nextTick, () => RetireUntilGoalLessons(kernel));
             var hostedChangedGoalIds = ServiceStewardAndAuthor(kernel, onlyGoalId);

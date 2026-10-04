@@ -45,13 +45,19 @@ public sealed class CitedPriorEvidenceResolver
 
     private readonly ICitedPriorEvidenceReader _reader;
 
-    internal CitedPriorEvidenceResolver(ICitedPriorEvidenceReader reader)
+    public string? OrchestratorDirectory { get; }
+
+    internal CitedPriorEvidenceResolver(ICitedPriorEvidenceReader reader, string? orchestratorDirectory = null)
     {
         _reader = reader;
+        OrchestratorDirectory = orchestratorDirectory;
     }
 
     public static CitedPriorEvidenceResolver ForStateDatabase(string stateDatabasePath) =>
         new(new SqliteCitedPriorEvidenceReader(stateDatabasePath));
+
+    public static CitedPriorEvidenceResolver ForWorkspace(string stateDatabasePath, string orchestratorDirectory) =>
+        new(new SqliteCitedPriorEvidenceReader(stateDatabasePath), orchestratorDirectory);
 
     public string? Resolve(Goal goal, TaskSpec task)
     {

@@ -20,9 +20,16 @@ internal static class AcceptanceTrxOutcomeTaxonomy
     internal static bool HasFatalCounter(Func<string, int?> readCounter) =>
         FatalOutcomes.Any(fatal => (readCounter(fatal.Counter) ?? 0) != 0);
 
-    internal static IReadOnlyList<string> ExtractTrxFailureEvidence(string trxPath)
+    internal static IReadOnlyList<string> ExtractTrxFailureEvidence(string trxPath, bool includeFirstStackFrame = false)
     {
-        var document = XDocument.Load(trxPath, LoadOptions.None);
+        using var stream = File.OpenRead(trxPath);
+        return ExtractTrxFailureEvidence(stream, includeFirstStackFrame);
+    }
+
+    internal static IReadOnlyList<string> ExtractTrxFailureEvidence(Stream stream, bool includeFirstStackFrame = false,
+        string? testNameSubstring = null)
+    {
+        var document = XDocument.Load(stream, LoadOptions.None);
         var definitionsByTestId = document
             .Descendants()
             .Where(element =>
@@ -46,6 +53,7 @@ internal static class AcceptanceTrxOutcomeTaxonomy
                 var testName = AcceptanceTrxTestIdentityResolver.Resolve(result, definition)
                     ?? result.Attribute("testId")?.Value?.Trim()
                     ?? "unknown test";
+                if (testNameSubstring is not null && !testName.Contains(testNameSubstring, StringComparison.Ordinal)) return null;
                 var message = result
                     .Descendants()
                     .FirstOrDefault(element =>
@@ -53,8 +61,13 @@ internal static class AcceptanceTrxOutcomeTaxonomy
                         element.Ancestors().Any(ancestor =>
                             ancestor.Name.LocalName.Equals("ErrorInfo", StringComparison.Ordinal)))
                     ?.Value;
-                return $"[FAIL] {testName}: {GoalAcceptanceVerifier.FirstNonEmptyLine(message) ?? "failure message unavailable"}";
+                var evidence = $"[FAIL] {testName}: {GoalAcceptanceVerifier.FirstNonEmptyLine(message) ?? "failure message unavailable"}";
+                var stack = includeFirstStackFrame ? result.Descendants().FirstOrDefault(element =>
+                    element.Name.LocalName == "StackTrace" && element.Ancestors().Any(ancestor => ancestor.Name.LocalName == "ErrorInfo"))?.Value : null;
+                var firstFrame = GoalAcceptanceVerifier.FirstNonEmptyLine(stack);
+                return firstFrame is null ? evidence : $"{evidence} | {firstFrame}";
             })
+            .OfType<string>()
             .ToArray();
     }
 }

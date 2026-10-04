@@ -15,7 +15,18 @@ public sealed record ProgressEvent(
 public sealed record ConductorTickOutcomePayload(
     string OutcomeKind,
     string LifecycleState,
-    string? EscalationKind);
+    string? EscalationKind,
+    PolicyDecisionRecord? Decision = null);
+
+public sealed record PolicyDecisionFact(string Name, string Value);
+
+public sealed record PolicyDecisionRecord(
+    string Stage,
+    string Action,
+    int Rung,
+    string DiscriminatingEvidence,
+    string Reason,
+    IReadOnlyList<PolicyDecisionFact> Facts);
 
 public sealed record HumanInputSupersededPayload(
     IReadOnlyList<string> ResolvedStableIds);
