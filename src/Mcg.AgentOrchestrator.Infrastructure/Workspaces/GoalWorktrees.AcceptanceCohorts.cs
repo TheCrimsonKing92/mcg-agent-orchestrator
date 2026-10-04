@@ -2,14 +2,6 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-public enum AcceptanceCohortMaterializationFailureKind
-{
-    StaleBinding,
-    MergeConflict,
-    WorkspaceFailure,
-    ManifestUnavailable
-}
-
 public sealed class AcceptanceCohortMaterializationException : InvalidOperationException
 {
     public AcceptanceCohortMaterializationException(
