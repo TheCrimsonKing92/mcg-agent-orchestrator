@@ -9,6 +9,7 @@ internal static class CliReadOnlyCommandRunner
         GoalBoardCommand.IsBoardCommand(args) ||
         TrialCompareCliCommand.RequiresHistoricalState(args) ||
         CliTaskQueryCommand.IsTaskQueryCommand(args) ||
+        CliTimelineQueryCommand.IsTimelineQueryCommand(args) ||
         CliStatusQueryCommand.IsStatusQueryCommand(args) ||
         CliGoalEventsQueryCommand.IsGoalEventsQueryCommand(args) ||
         CliAttentionQueryCommand.IsAttentionQueryCommand(args) ||
@@ -57,6 +58,14 @@ internal static class CliReadOnlyCommandRunner
                 ref agents,
                 ref workerProfiles,
                 ref currentGoal);
+            changed = false;
+            return true;
+        }
+
+        if (CliTimelineQueryCommand.IsTimelineQueryCommand(args))
+        {
+            CliTimelineQueryCommand.Execute(args, stateRepository, workspace, providers, channel,
+                ref agents, ref workerProfiles, ref currentGoal);
             changed = false;
             return true;
         }
