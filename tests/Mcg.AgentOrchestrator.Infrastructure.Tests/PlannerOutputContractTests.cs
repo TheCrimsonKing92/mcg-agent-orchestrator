@@ -64,6 +64,116 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
     }
 
     [Xunit.Fact]
+    public void PlannerContract_WholeFileMoveWithCommaNote_Passes()
+    {
+        var workingDirectory = CreateTempDirectory();
+        var sourcePath = Path.Combine(
+            workingDirectory, "src", "Mcg.AgentOrchestrator.Infrastructure", "Workspaces",
+            "RepositorySourceInventory.cs");
+        Directory.CreateDirectory(Path.GetDirectoryName(sourcePath)!);
+        File.WriteAllText(sourcePath, "// Existing move source.");
+        var targetBody =
+            "- **Whole-file move:** `src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/RepositorySourceInventory.cs` → `src/Mcg.AgentOrchestrator.Infrastructure/Workers/RepositorySourceInventory.cs` (new file, byte-identical).";
+        var plan = ReplaceSectionBody(PlannerContractPlanFixture(), "## Target seams and symbols", targetBody);
+
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
+
+        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+    }
+
+    [Xunit.Fact]
+    public void PlannerContract_NewPolicyClassWithCommaClause_Passes()
+    {
+        var workingDirectory = CreateTempDirectory();
+        var targetBody =
+            "- `src/Mcg.AgentOrchestrator.Core/Application/DispatchAdmissionPolicy.cs` — new policy class, in namespace `Mcg.AgentOrchestrator.Core`. Contents:";
+        var plan = ReplaceSectionBody(PlannerContractPlanFixture(), "## Target seams and symbols", targetBody);
+
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
+
+        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(
+        "- **`src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/SourceSizeRatchet.cs`**: the row at line 136 and a new row placed after the `ConductEvents.cs` row. A rough estimate is about 2690 lines for `ConductorBatchLoop.cs` and about 750 for the new file. The Developer must use the measured values.",
+        "ConductEvents.cs",
+        new string[] { "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/SourceSizeRatchet.cs", "ConductorBatchLoop.cs" })]
+    [Xunit.InlineData(
+        "- **Fact.** `FindFocusedEvidenceClassFiles` (line 370) walks every `*.cs` under the project directory, skipping `bin` and `obj`, and parses each file with Roslyn (`ParseCSharpRoot`, line 401).",
+        "*.cs",
+        new string[] { })]
+    public void PlannerContract_UnmarkedLiveCitations_AreRejected(
+        string targetBody, string offendingCitation, string[] existingPaths)
+    {
+        var workingDirectory = CreateTempDirectory();
+        foreach (var relativePath in existingPaths)
+        {
+            var path = Path.Combine(workingDirectory, relativePath.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, "// Existing cited file.");
+        }
+        var plan = ReplaceSectionBody(PlannerContractPlanFixture(), "## Target seams and symbols", targetBody);
+
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
+
+        Xunit.Assert.False(result.Succeeded);
+        Xunit.Assert.Contains(offendingCitation, result.Diagnostic, StringComparison.Ordinal);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("- Extend `src/Missing.cs` (new filter, see below).", "src/Missing.cs")]
+    [Xunit.InlineData("- Extend `src/Missing.cs` — new test coverage, for the parser.", "src/Missing.cs")]
+    [Xunit.InlineData("- Extend `src/Missing.cs` (new file behavior) for parsing.", "src/Missing.cs")]
+    [Xunit.InlineData(
+        "- Extend `src/MissingUnmarked.cs` and `src/MissingMarked.cs` (new file, empty).",
+        "src/MissingUnmarked.cs")]
+    public void PlannerContract_NearMarkersDoNotExcuseMissingPaths(
+        string targetBody, string offendingCitation)
+    {
+        var workingDirectory = CreateTempDirectory();
+        var plan = ReplaceSectionBody(PlannerContractPlanFixture(), "## Target seams and symbols", targetBody);
+
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
+
+        Xunit.Assert.False(result.Succeeded);
+        Xunit.Assert.Contains(offendingCitation, result.Diagnostic, StringComparison.Ordinal);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("(new file, byte-identical)")]
+    [Xunit.InlineData("(new file; generated from the existing source)")]
+    [Xunit.InlineData("(new file: focused parser coverage)")]
+    public void PlannerContract_ParenthesizedNotesPermitMissingTargets(string marker)
+    {
+        var workingDirectory = CreateTempDirectory();
+        var targetBody = $"- Extend `src/Missing.cs` {marker}.";
+        var plan = ReplaceSectionBody(PlannerContractPlanFixture(), "## Target seams and symbols", targetBody);
+
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
+
+        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("(new file,)")]
+    [Xunit.InlineData("(new file;   )")]
+    [Xunit.InlineData("(new file:\t)")]
+    [Xunit.InlineData("(file, byte-identical)")]
+    [Xunit.InlineData("— policy class, in the existing namespace")]
+    public void PlannerContract_EmptyNotesOrMissingNew_AreRejected(string marker)
+    {
+        var workingDirectory = CreateTempDirectory();
+        var targetBody = $"- Extend `src/Missing.cs` {marker}.";
+        var plan = ReplaceSectionBody(PlannerContractPlanFixture(), "## Target seams and symbols", targetBody);
+
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
+
+        Xunit.Assert.False(result.Succeeded);
+        Xunit.Assert.Contains("src/Missing.cs", result.Diagnostic, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
     public void PlannerContract_NewBehaviorSuffixDoesNotMarkMissingPathAsNewFile()
     {
         var workingDirectory = CreateTempDirectory();
