@@ -56,27 +56,27 @@ internal sealed partial class ConductorDriver
         return held with { MemberResults = memberResults };
     }
 
-    private ConductorAdvanceResult? RouteRecordedCohortAttributionFailure(
+    private ConductorAdvanceResult RouteRecordedCohortAttributionFailure(
         Goal goal,
         string goalPrefix,
-        ConductorAutonomyPolicy policy)
+        ConductorAutonomyPolicy policy,
+        VerifiedAdmissionDecision decision)
     {
-        if (!HasRoutableRecordedCohortAttributionFailure(goal)) return null;
-        var failure = goal.LatestAcceptanceFailure!;
-        var reason = $"Acceptance verification failed; review and fix before landing. " +
-            failure.CheckAttributions![0].Evidence;
+        var reason = decision.Reason;
         if (goal.Status == GoalStatus.AcceptanceFailed)
         {
             return MakeResult(goal.Id.Value, goalPrefix, policy,
                 new ConductorAdvanceOutcome.Escalated(GoalLifecycleState.AcceptanceFailed, reason,
-                    ConductorEscalationKind.AcceptanceVerificationFailed));
+                    ConductorEscalationKind.AcceptanceVerificationFailed) { Decision = decision.ToRecord() });
         }
         if ((_cohortKernel ?? _conductorTickKernel)?.RouteRecordedAcceptanceFailure(goal.Id, reason) != true)
         {
             throw new InvalidOperationException("Recorded cohort acceptance failure could not route its Verified member.");
         }
-        return Escalate(goal, goalPrefix, policy, GoalLifecycleState.AcceptanceFailed, reason,
+        var result = Escalate(goal, goalPrefix, policy, GoalLifecycleState.AcceptanceFailed, reason,
             ConductorEscalationKind.AcceptanceVerificationFailed);
+        return result with
+            { Outcome = ((ConductorAdvanceOutcome.Escalated)result.Outcome) with { Decision = decision.ToRecord() } };
     }
 
     internal bool HasRoutableRecordedCohortAttributionFailure(Goal goal)
