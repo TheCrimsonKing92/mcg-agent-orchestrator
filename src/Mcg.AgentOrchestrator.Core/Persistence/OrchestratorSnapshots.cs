@@ -240,7 +240,9 @@ public sealed record TaskDispatchSnapshot(
     [property: System.Text.Json.Serialization.JsonIgnore(
         Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     DispatchProviderUsage? ProviderUsage = null,
-    FailedGoalInconclusiveRoundInputs? InconclusiveRoundInputs = null);
+    FailedGoalInconclusiveRoundInputs? InconclusiveRoundInputs = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    DispatchShadowDecision? ShadowDecision = null);
 
 public sealed record TaskProcessSnapshot(
     int ProcessId,
