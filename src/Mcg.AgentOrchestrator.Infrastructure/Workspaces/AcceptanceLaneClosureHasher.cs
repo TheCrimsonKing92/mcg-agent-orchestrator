@@ -47,7 +47,7 @@ internal static class AcceptanceLaneClosureHasher
                 }
 
                 foreach (var item in document.Descendants().Where(element =>
-                             element.Name.LocalName is "Content" or "None" or "EmbeddedResource"))
+                             element.Name.LocalName is "Content" or "None" or "EmbeddedResource" or "Compile"))
                 {
                     var include = item.Attribute("Include")?.Value;
                     if (string.IsNullOrWhiteSpace(include))
