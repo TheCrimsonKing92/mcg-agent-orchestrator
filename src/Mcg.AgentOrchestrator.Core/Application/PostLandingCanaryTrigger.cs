@@ -15,13 +15,22 @@ public static class AcceptanceEngineSurfaceRegistry
     // requires extending this registry, which also makes it canary-triggering.
     public static IReadOnlyList<AcceptanceEngineOwnedSurface> Surfaces { get; } =
     [
-        new("acceptance-verifier", ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier"]),
+        new("acceptance-verifier", [
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Processes/TempRootApparatusLossReceipts",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceSharedApparatusInvalidation",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Processes/AcceptanceTempRootNames"
+        ]),
         new("test-impact-planner", ["src/Mcg.AgentOrchestrator.Core/Application/RepositoryTestImpactPlanner"]),
         new("reverse-dependency-index", [
             "src/Mcg.AgentOrchestrator.Core/Application/ReverseDependencyTestImpactReader",
             "src/Mcg.AgentOrchestrator.Core/Application/TestClassDeclarationReader"
         ]),
-        new("build-environment", ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetBuildEnvironmentManager"]),
+        new("build-environment", [
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetBuildEnvironmentManager",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Processes/DotnetBuildStorageRoot",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Processes/DotnetBuildStorageLayout"
+        ]),
         new("change-classifier", ["src/Mcg.AgentOrchestrator.Core/Application/RepositoryChangeClassifier"]),
         new("gate-settings", ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceGateEngineSettings"]),
         new("test-coverage-invariant", ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/TestCoverageInvariant"]),
@@ -49,7 +58,6 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptancePolicyShardPlanner",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptancePolicyShardPlanner.CandidateTree",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceRunExecutionContext",
-            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceSharedApparatusInvalidation",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceStructuralCoverageEvaluator",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceStructuralCoveragePartitionPlan",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceTestInventorySource",
@@ -59,7 +67,6 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceWithinAttemptRerunEvidence",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/CommandLineTooLongException",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DeclaredTestProjectInventory",
-            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetBuildStorageRoot",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateChildReapSeam",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateHeartbeatRunClass",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateLoadContextProbe",

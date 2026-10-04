@@ -42,4 +42,6 @@ public static class ModelFunctionPurposes
     public const string StewardTriage = "steward-triage";
     public const string ConductorAuthor = "conductor-author";
     public const string ConductorSteward = "conductor-steward";
+    public const string PanelJudgeSol = "panel-judge-sol";
+    public const string PanelJudgeSonnet = "panel-judge-sonnet";
 }

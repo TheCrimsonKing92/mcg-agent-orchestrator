@@ -213,7 +213,7 @@ internal sealed class DispatchWorktreeCommitter
         }
 
         var branch = _runGit(workingDirectory, ["branch", "--show-current"]);
-        var expectedBranch = GoalWorktrees.BranchName(goalId);
+        var expectedBranch = GoalWorktreeLayout.BranchName(goalId);
         if (branch.ExitCode != 0)
         {
             return GoalWorktreeInspectionResult.Unavailable(

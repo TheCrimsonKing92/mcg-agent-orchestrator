@@ -1764,7 +1764,8 @@ public sealed partial class AgentOrchestratorKernel
         int? completedRound = null,
         string? workerResultLogReference = null,
         bool recordDuplicateSuppression = true,
-        string? evidenceOwner = null)
+        string? evidenceOwner = null,
+        PlannerEvidenceStoreReference? storeReference = null)
     {
         var goal = GetGoal(goalId);
         if (HumanWaitPolicyDefaults.BlocksActiveWork(kind))
@@ -1870,7 +1871,8 @@ public sealed partial class AgentOrchestratorKernel
                 resumeCommand ?? HumanInputRequest.BuildDefaultResumeCommand(id),
                 effectiveQuestionFingerprint,
                 blockerFingerprint,
-                evidenceOwner: evidenceOwner);
+                evidenceOwner: evidenceOwner,
+                storeReference: storeReference);
             _humanInputRequests.Add(request.Id, request);
 
             HoldTaskForExistingHumanInput(goal, taskId, request.Kind);

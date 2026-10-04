@@ -14,7 +14,9 @@ internal static class ReverseDependencyTestImpactReader
     // The current classifier closure resolves 49 consumer test classes. Keep a bounded focused
     // filter with room for new tests before widening to the full Infrastructure suite.
     internal const int MaximumSelectedTestClasses = 64;
-    private const int MaximumIndexedSourceFiles = 2_000;
+    // The Infrastructure test closure reached about 2,000 source files on 2026-10-04. Keep room
+    // for growth before focused selection is abandoned for the full Infrastructure suite.
+    private const int MaximumIndexedSourceFiles = 4_000;
     private const int MaximumRetainedSnapshots = 4;
     private const string CacheSchema = "reverse-dependency-index-v1";
     private static readonly object CacheLock = new();

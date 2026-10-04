@@ -9,7 +9,9 @@ internal static partial class CliPersistentStateRunner
         new(StringComparer.OrdinalIgnoreCase) { "park-goal", "unpark-goal", "abandon-goal", "cancel-goal", "supersede-goal" };
 
     private static bool IsGoalScopedLifecycleInvocation(IReadOnlyList<string> args) =>
-        GoalScopedLifecycleVerbs.Contains(args[0]) || CliCommandHandlers.IsStopSupersedeAlias(args);
+        GoalScopedLifecycleVerbs.Contains(args[0]) || CliCommandHandlers.IsStopSupersedeAlias(args) ||
+        CliCommandHandlers.IsStopCancelAlias(args) || CliCommandHandlers.IsStopParkAlias(args) ||
+        CliCommandHandlers.IsStopAbandonAlias(args);
 
     private static bool ExecuteGoalLifecycleDispositionCommand(
         IReadOnlyList<string> args,
@@ -21,6 +23,18 @@ internal static partial class CliPersistentStateRunner
         ref Goal? currentGoal,
         IOperatorChannel? channel = null)
     {
+        if (CliCommandHandlers.IsStopParkAlias(args))
+        {
+            CliCommandHelp.ThrowIfInvalidFlags(args);
+            return ExecuteGoalParkStopAliasTransition(args, stateRepository, workspace, ref currentGoal);
+        }
+
+        if (CliCommandHandlers.IsStopAbandonAlias(args))
+        {
+            CliCommandHelp.ThrowIfInvalidFlags(args);
+            return ExecuteGoalAbandonStopAliasTransition(args, stateRepository, workspace, ref currentGoal);
+        }
+
         if (args[0].Equals("park-goal", StringComparison.OrdinalIgnoreCase))
         {
             CliCommandHelp.ThrowIfInvalidFlags(args);
@@ -33,10 +47,14 @@ internal static partial class CliPersistentStateRunner
             return ExecuteGoalAbandonTransition(args, stateRepository, workspace, ref currentGoal);
         }
 
-        if (args[0].Equals("cancel-goal", StringComparison.OrdinalIgnoreCase))
+        if (args[0].Equals("cancel-goal", StringComparison.OrdinalIgnoreCase) ||
+            CliCommandHandlers.IsStopCancelAlias(args))
         {
             CliCommandHelp.ThrowIfInvalidFlags(args);
-            return ExecuteGoalCancelTransition(args, stateRepository, workspace, ref currentGoal);
+            var cancelArgs = CliCommandHandlers.IsStopCancelAlias(args)
+                ? CliCommandHandlers.PrepareGoalCancelCommandFromStopAlias(args).Parts
+                : args;
+            return ExecuteGoalCancelTransition(cancelArgs, stateRepository, workspace, ref currentGoal);
         }
 
         if (args[0].Equals("supersede-goal", StringComparison.OrdinalIgnoreCase) ||

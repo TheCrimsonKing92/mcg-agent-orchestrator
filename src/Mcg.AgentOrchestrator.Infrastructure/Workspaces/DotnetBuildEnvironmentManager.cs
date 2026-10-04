@@ -100,24 +100,24 @@ public sealed class DotnetBuildSlotsBusyException : IOException
 
 public static class DotnetBuildEnvironmentManager
 {
-    public const string RootDirectoryName = "mcg-dotnet-isolated";
+    public const string RootDirectoryName = DotnetBuildStorageLayout.RootDirectoryName;
 
     // Supported escape hatch for tests that need lease-root isolation.
-    public const string IsolatedRootOverrideVariable = "MCG_DOTNET_ISOLATED_ROOT";
+    public const string IsolatedRootOverrideVariable = DotnetBuildStorageLayout.IsolatedRootOverrideVariable;
     public const string ForceCleanStaleLeaseArtifactsVariable = "MCG_DOTNET_FORCE_CLEAN_STALE_LEASE_ARTIFACTS";
     public const int BuildConcurrencySlotCount = 2;
     // Compatibility name for callers migrating from the former artifact-slot grid.
     public const int StableSlotCount = BuildConcurrencySlotCount;
     public static readonly TimeSpan DefaultSlotBusyPollTimeout = TimeSpan.FromSeconds(20);
-    private const string LeaseDirectoryName = "lease";
-    private const string LeaseMetadataFileName = "lease.json";
+    private const string LeaseDirectoryName = DotnetBuildStorageLayout.LeaseDirectoryName;
+    private const string LeaseMetadataFileName = DotnetBuildStorageLayout.LeaseMetadataFileName;
     private const string LeaseLockFileName = "lease.lock";
     private const string GoalLeaseReclaimPendingFileName = "goal-lease-reclaim.pending.json";
     private const string ArtifactsOwnerFileName = ".mcg-artifacts-owner.json";
     private const string LeaseJournalFileName = "lease.journal.jsonl";
     private const long LeaseJournalMaxBytes = 1_048_576;
     private const int StaleLeaseIntegrityProbeAttempts = 3;
-    internal const string LandingTestsRootDirectoryName = "mcg-landing-tests";
+    internal const string LandingTestsRootDirectoryName = DotnetBuildStorageLayout.LandingTestsRootDirectoryName;
     private const string LandingTestFixtureMarkerFileName = ".mcg-landing-fixture.json";
     private static readonly TimeSpan LandingFixtureMarkerStaleAge = TimeSpan.FromHours(2);
     public const string BuildMaxCpuCountVariable = "MCG_BUILD_MAXCPUCOUNT";
@@ -222,17 +222,9 @@ public static class DotnetBuildEnvironmentManager
             BuildPermitIndex: buildPermitIndex);
     }
 
-    public static string GoalRoot(GoalId goalId, DotnetBuildStorageRoot? storageRoot = null)
-    {
-        return Path.Combine((storageRoot ?? CaptureStorageRoot()).RootPath, "goals", Prefix(goalId));
-    }
+    public static string GoalRoot(GoalId goalId, DotnetBuildStorageRoot? storageRoot = null) => DotnetBuildStorageLayout.GoalRoot(goalId, storageRoot);
 
-    public static string GoalArtifactsPath(GoalId goalId, DotnetBuildStorageRoot? storageRoot = null)
-    {
-        storageRoot ??= CaptureStorageRoot();
-        return TryReadArtifactsPath(Path.Combine(LeaseDirectory(goalId, storageRoot), LeaseMetadataFileName)) ??
-            Path.Combine(GoalRoot(goalId, storageRoot), "artifacts");
-    }
+    public static string GoalArtifactsPath(GoalId goalId, DotnetBuildStorageRoot? storageRoot = null) => DotnetBuildStorageLayout.GoalArtifactsPath(goalId, storageRoot);
 
     public static string BaseBuildCacheRoot(DotnetBuildStorageRoot? storageRoot = null)
     {
@@ -1162,10 +1154,7 @@ public static class DotnetBuildEnvironmentManager
         return Math.Max(2, Environment.ProcessorCount / BuildConcurrencySlotCount);
     }
 
-    private static string LeaseDirectory(GoalId goalId, DotnetBuildStorageRoot storageRoot)
-    {
-        return Path.Combine(GoalRoot(goalId, storageRoot), LeaseDirectoryName);
-    }
+    private static string LeaseDirectory(GoalId goalId, DotnetBuildStorageRoot storageRoot) => DotnetBuildStorageLayout.LeaseDirectory(goalId, storageRoot);
 
     private static bool IsEmptyFile(string path)
     {
@@ -1369,45 +1358,9 @@ public static class DotnetBuildEnvironmentManager
         }
     }
 
-    public static DotnetBuildStorageRoot CaptureStorageRoot()
-    {
-        return new DotnetBuildStorageRoot(Path.GetFullPath(ResolveIsolatedRootBase(
-            Environment.GetEnvironmentVariable(IsolatedRootOverrideVariable),
-            Environment.GetEnvironmentVariable("LOCALAPPDATA"),
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            Path.GetTempPath(),
-            OperatingSystem.IsWindows())));
-    }
+    public static DotnetBuildStorageRoot CaptureStorageRoot() => DotnetBuildStorageLayout.CaptureStorageRoot();
 
-    internal static string ResolveIsolatedRootBase(
-        string? overridden,
-        string? localAppDataVariable,
-        string? localAppDataKnownFolder,
-        string tempPath,
-        bool isWindows)
-    {
-        if (!string.IsNullOrWhiteSpace(overridden))
-        {
-            return overridden;
-        }
-
-        if (isWindows)
-        {
-            // Nested hermetic acceptance processes redirect USERPROFILE, so GetFolderPath can resolve
-            // beneath mcg-hvp even though the parent explicitly preserved the real LOCALAPPDATA. Prefer
-            // that inherited value so C# callers share the same machine-user Low-integrity slot grid as
-            // Invoke-IsolatedDotnet.ps1 and Invoke-WorkerBuildCheck.ps1.
-            var localAppData = string.IsNullOrWhiteSpace(localAppDataVariable)
-                ? localAppDataKnownFolder
-                : localAppDataVariable;
-            if (!string.IsNullOrWhiteSpace(localAppData))
-            {
-                return Path.GetFullPath(Path.Combine(localAppData, "..", "LocalLow", RootDirectoryName));
-            }
-        }
-
-        return Path.Combine(tempPath, RootDirectoryName);
-    }
+    internal static string ResolveIsolatedRootBase(string? overridden, string? localAppDataVariable, string? localAppDataKnownFolder, string tempPath, bool isWindows) => DotnetBuildStorageLayout.ResolveIsolatedRootBase(overridden, localAppDataVariable, localAppDataKnownFolder, tempPath, isWindows);
 
     private static string BuildSlotExecutionLockPath(int slotIndex, DotnetBuildStorageRoot storageRoot)
     {
@@ -2829,32 +2782,9 @@ public static class DotnetBuildEnvironmentManager
         }
     }
 
-    private static string? TryReadArtifactsPath(string metadataPath)
-    {
-        if (!File.Exists(metadataPath))
-        {
-            return null;
-        }
+    private static string? TryReadArtifactsPath(string metadataPath) => DotnetBuildStorageLayout.TryReadArtifactsPath(metadataPath);
 
-        try
-        {
-            using var document = JsonDocument.Parse(File.ReadAllText(metadataPath));
-            return document.RootElement.TryGetProperty("artifactsPath", out var artifactsPath) &&
-                artifactsPath.ValueKind == JsonValueKind.String
-                    ? artifactsPath.GetString()
-                    : null;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
-        {
-            return null;
-        }
-    }
-
-    private static string Prefix(GoalId goalId)
-    {
-        var value = goalId.Value;
-        return (value.Length <= 8 ? value : value[..8]).ToLowerInvariant();
-    }
+    private static string Prefix(GoalId goalId) => DotnetBuildStorageLayout.Prefix(goalId);
 
     private static string Sanitize(string value)
     {

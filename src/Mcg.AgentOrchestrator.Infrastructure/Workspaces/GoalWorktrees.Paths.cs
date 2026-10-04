@@ -4,38 +4,13 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public static partial class GoalWorktrees
 {
-    public static string BranchName(GoalId goalId) => $"goal/{Prefix(goalId)}";
+    public static string BranchName(GoalId goalId) => GoalWorktreeLayout.BranchName(goalId);
 
-    public static string WorktreePath(string executionDirectory, GoalId goalId)
-    {
-        return Path.Combine(Path.GetFullPath(executionDirectory), DirectoryName, Prefix(goalId));
-    }
+    public static string WorktreePath(string executionDirectory, GoalId goalId) => GoalWorktreeLayout.WorktreePath(executionDirectory, goalId);
 
-    public static string? TryResolve(string executionDirectory, GoalId goalId)
-    {
-        var path = WorktreePath(executionDirectory, goalId);
-        // A linked worktree has a .git file (not directory) pointing at the main repository.
-        return File.Exists(Path.Combine(path, ".git")) ? path : null;
-    }
+    public static string? TryResolve(string executionDirectory, GoalId goalId) => GoalWorktreeLayout.TryResolve(executionDirectory, goalId);
 
-    internal static bool IsExclusiveGoalWorktree(string path, GoalId goalId)
-    {
-        var normalized = NormalizePath(path);
-        var worktreeDirectory = Directory.GetParent(normalized);
-        var executionDirectory = worktreeDirectory?.Parent;
-        if (worktreeDirectory is null || executionDirectory is null ||
-            !worktreeDirectory.Name.Equals(DirectoryName, StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        var resolved = TryResolve(executionDirectory.FullName, goalId);
-        return resolved is not null &&
-            string.Equals(
-                NormalizePath(resolved),
-                normalized,
-                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
-    }
+    internal static bool IsExclusiveGoalWorktree(string path, GoalId goalId) => GoalWorktreeLayout.IsExclusiveGoalWorktree(path, goalId);
 
     public static IReadOnlyDictionary<GoalId, string> ResolveAll(
         string executionDirectory,
@@ -65,15 +40,8 @@ public static partial class GoalWorktrees
         return resolved;
     }
 
-    private static string Prefix(GoalId goalId)
-    {
-        var value = goalId.Value;
-        return (value.Length <= 8 ? value : value[..8]).ToLowerInvariant();
-    }
+    private static string Prefix(GoalId goalId) => GoalWorktreeLayout.Prefix(goalId);
 
-    private static string NormalizePath(string path)
-    {
-        return Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-    }
+    private static string NormalizePath(string path) => GoalWorktreeLayout.NormalizePath(path);
 
 }

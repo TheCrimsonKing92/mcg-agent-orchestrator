@@ -12,8 +12,8 @@ public sealed record HostScanExclusionInputs(
             string.IsNullOrWhiteSpace(localAppData)
                 ? Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData) : localAppData,
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), repositoryRoot,
-            Environment.GetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable),
-            Environment.GetEnvironmentVariable(GoalAcceptanceVerifier.NuGetPackagesVariable));
+            Environment.GetEnvironmentVariable(DotnetBuildStorageLayout.IsolatedRootOverrideVariable),
+            Environment.GetEnvironmentVariable(AcceptanceTempRootNames.NuGetPackagesVariable));
     }
 }
 
@@ -26,22 +26,22 @@ public static class HostScanExclusionRoots
         {
             inputs.RepositoryRoot,
             OrchestratorTempRoot.GetRoot(inputs.TempPath),
-            DotnetBuildEnvironmentManager.ResolveIsolatedRootBase(null,
+            DotnetBuildStorageLayout.ResolveIsolatedRootBase(null,
                 inputs.LocalApplicationData, null, inputs.TempPath, isWindows: true),
-            DotnetBuildEnvironmentManager.ResolveIsolatedRootBase(null,
+            DotnetBuildStorageLayout.ResolveIsolatedRootBase(null,
                 null, null, inputs.TempPath, isWindows: true),
-            Path.Combine(inputs.TempPath, GoalAcceptanceVerifier.HermeticProfileRootDirectoryName),
-            Path.Combine(inputs.TempPath, GoalAcceptanceVerifier.FocusedEvidenceBaselinesRootDirectoryName),
-            Path.Combine(inputs.TempPath, GoalAcceptanceVerifier.OwnerResultsRootDirectoryName),
-            Path.Combine(inputs.TempPath, DotnetBuildEnvironmentManager.LandingTestsRootDirectoryName),
+            Path.Combine(inputs.TempPath, AcceptanceTempRootNames.HermeticProfileRootDirectoryName),
+            Path.Combine(inputs.TempPath, AcceptanceTempRootNames.FocusedEvidenceBaselinesRootDirectoryName),
+            Path.Combine(inputs.TempPath, AcceptanceTempRootNames.OwnerResultsRootDirectoryName),
+            Path.Combine(inputs.TempPath, DotnetBuildStorageLayout.LandingTestsRootDirectoryName),
             string.IsNullOrWhiteSpace(inputs.NuGetPackagesOverride)
-                ? GoalAcceptanceVerifier.DefaultNuGetGlobalPackagesFolder(inputs.UserProfile)
+                ? AcceptanceTempRootNames.DefaultNuGetGlobalPackagesFolder(inputs.UserProfile)
                 : inputs.NuGetPackagesOverride
         };
         if (!string.IsNullOrWhiteSpace(inputs.LocalApplicationData))
             roots.Add(TempRootJanitor.ResolveLowIntegrityOwnedRootParent(inputs.LocalApplicationData));
         if (!string.IsNullOrWhiteSpace(inputs.IsolatedRootOverride))
-            roots.Add(DotnetBuildEnvironmentManager.ResolveIsolatedRootBase(inputs.IsolatedRootOverride,
+            roots.Add(DotnetBuildStorageLayout.ResolveIsolatedRootBase(inputs.IsolatedRootOverride,
                 inputs.LocalApplicationData, null, inputs.TempPath, isWindows: true));
         return roots.Select(NormalizePath).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }

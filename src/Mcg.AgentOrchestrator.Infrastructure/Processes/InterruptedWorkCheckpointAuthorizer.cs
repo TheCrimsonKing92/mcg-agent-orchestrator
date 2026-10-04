@@ -98,7 +98,7 @@ internal sealed class InterruptedWorkCheckpointAuthorizer
             return Hold("checkpoint-hold-worktree-mismatch");
         }
 
-        if (!GoalWorktrees.IsExclusiveGoalWorktree(request.Process.WorkingDirectory, request.GoalId))
+        if (!GoalWorktreeLayout.IsExclusiveGoalWorktree(request.Process.WorkingDirectory, request.GoalId))
         {
             return Hold("checkpoint-hold-worktree-unowned");
         }
@@ -111,7 +111,7 @@ internal sealed class InterruptedWorkCheckpointAuthorizer
         }
 
         var evidence = inspection.Evidence;
-        if (!string.Equals(evidence.Branch, GoalWorktrees.BranchName(request.GoalId), StringComparison.Ordinal))
+        if (!string.Equals(evidence.Branch, GoalWorktreeLayout.BranchName(request.GoalId), StringComparison.Ordinal))
         {
             return Hold("checkpoint-hold-branch-mismatch");
         }
