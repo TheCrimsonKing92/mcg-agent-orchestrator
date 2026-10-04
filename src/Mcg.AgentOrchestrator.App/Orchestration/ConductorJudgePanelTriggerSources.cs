@@ -13,9 +13,51 @@ internal sealed partial class ConductorJudgePanelTriggerSources(
     internal IReadOnlyList<PanelTrigger> Read()
     {
         var conduct = ReadConduct();
-        var triggers = ReadTimeline().Concat(ReadConductDisputes(conduct))
+        var timeline = ReadTimeline().ToArray();
+        var triggers = timeline.Concat(WithoutApparatusTimelineCopies(timeline, ReadConductDisputes(conduct)))
             .Concat(ReadAuthor(conduct)).Concat(ReadCohort()).ToArray();
         return triggers;
+    }
+
+    private static IEnumerable<PanelTrigger> WithoutApparatusTimelineCopies(
+        IReadOnlyList<PanelTrigger> timeline, IEnumerable<PanelTrigger> conduct)
+    {
+        var paired = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var trigger in conduct)
+        {
+            if (trigger.Kind == PanelTriggerKind.ApparatusRed && ApparatusRegate(trigger.Text) is { } regate)
+            {
+                // The policy decision precedes its held GOAL result and owns the packet.
+                // Pair once by producer evidence kind and ordinal, never treat unknown SHAs as wildcards.
+                var matches = timeline.Where(item => item.Kind == PanelTriggerKind.ApparatusRed &&
+                        !paired.Contains(item.TriggerId) && item.RecordedAt <= trigger.RecordedAt &&
+                        trigger.GoalId.Length >= 8 && item.GoalId.StartsWith(trigger.GoalId, StringComparison.Ordinal) &&
+                        ApparatusRegate(item.Text) is { Ordinal: not null } decision && decision.Kind == regate.Kind &&
+                        (regate.Ordinal is null || decision.Ordinal == regate.Ordinal))
+                    .OrderByDescending(item => item.RecordedAt).ThenBy(item => item.TriggerId, StringComparer.Ordinal)
+                    .ToArray();
+                if (matches.Length > 0 && matches.Select(item => item.GoalId).Distinct(StringComparer.Ordinal).Count() == 1)
+                {
+                    paired.Add(matches[0].TriggerId);
+                    continue;
+                }
+            }
+            yield return trigger;
+        }
+    }
+
+    private static (string Kind, string? Ordinal)? ApparatusRegate(string text)
+    {
+        var normalized = text.Replace('_', ' ');
+        var kind = Regex.Match(normalized, @"Acceptance RED classified as apparatus \(([^)]+)\)",
+            RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+        if (!kind.Success) return null;
+        var ordinal = Regex.Match(normalized,
+            @"(?:restored Verified for re-gate (?<ordinal>\d+/\d+)\.|Re-gating on the next conduct tick \((?<ordinal>\d+/\d+)\))",
+            RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+        // SanitizeReason can truncate the held reason before the ordinal. The nearest
+        // unused decision still owns that copy; do not infer a missing ordinal or SHA.
+        return (kind.Groups[1].Value, ordinal.Success ? ordinal.Groups["ordinal"].Value : null);
     }
 
     internal GoalSnapshot? ReadGoal(string goalId)
