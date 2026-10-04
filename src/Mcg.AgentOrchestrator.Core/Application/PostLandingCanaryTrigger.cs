@@ -19,7 +19,9 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier",
             "src/Mcg.AgentOrchestrator.Infrastructure/Processes/TempRootApparatusLossReceipts",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceSharedApparatusInvalidation",
-            "src/Mcg.AgentOrchestrator.Infrastructure/Processes/AcceptanceTempRootNames"
+            "src/Mcg.AgentOrchestrator.Infrastructure/Processes/AcceptanceTempRootNames",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Verification/AcceptanceTrxOutcomeTaxonomy",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Verification/AcceptanceTrxTestIdentityResolver"
         ]),
         new("test-impact-planner", ["src/Mcg.AgentOrchestrator.Core/Application/RepositoryTestImpactPlanner"]),
         new("reverse-dependency-index", [
@@ -62,8 +64,6 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceStructuralCoveragePartitionPlan",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceTestInventorySource",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceTestSourceResolver",
-            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceTrxOutcomeTaxonomy",
-            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceTrxTestIdentityResolver",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceWithinAttemptRerunEvidence",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/CommandLineTooLongException",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DeclaredTestProjectInventory",
