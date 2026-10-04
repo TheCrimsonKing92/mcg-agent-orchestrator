@@ -174,7 +174,9 @@ public sealed partial class AgentOrchestratorKernel
         IReadOnlyList<ReviewFindingLocation>? reviewerRoundTouchedAnchors = null,
         string? reviewerRoundTouchProofDiagnostic = null,
         ReviewRetryCapReceipt? reviewRetryCap = null,
-        bool measureWithTypedSourceBoundaries = false)
+        bool measureWithTypedSourceBoundaries = false,
+        IReadOnlyList<ChangedExistingTest>? changedExistingTests = null,
+        string? changedExistingTestsDiagnostic = null)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
@@ -543,6 +545,10 @@ public sealed partial class AgentOrchestratorKernel
         var frozenFactRulingLines = FrozenFactRulingBriefSection.Render(HumanInputRequests, goalId, task.RequiredRole);
         if (frozenFactRulingLines.Count > 0)
             segments.Add(TaskBriefSegment.Fixed(frozenFactRulingLines));
+
+        var changedExistingTestLines = ChangedExistingTestsBriefSection.Render(task.RequiredRole, changedExistingTests, changedExistingTestsDiagnostic);
+        if (changedExistingTestLines.Count > 0)
+            segments.Add(TaskBriefSegment.Fixed(changedExistingTestLines));
 
         if (task.LastExecution is not null)
         {
