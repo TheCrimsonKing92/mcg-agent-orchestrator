@@ -36,7 +36,11 @@ public sealed class CliSingleGoalReportReadOnlyRouteTests : CliTaskQueryTestSupp
                 Xunit.Assert.False(changed);
             });
 
-            Xunit.Assert.NotEmpty(output);
+            // Flat reports print only changed paths; this seed has no worktree or recorded files.
+            if (args.Contains("--flat") && !args.Contains("--json"))
+                Xunit.Assert.Equal(string.Empty, output);
+            else
+                Xunit.Assert.NotEmpty(output);
             Xunit.Assert.Equal(target.Id, currentGoal!.Id);
             Xunit.Assert.Equal(1, repository.ListGoalMetadataCount);
             Xunit.Assert.Equal(1, repository.LoadGoalsCount);
@@ -64,7 +68,6 @@ public sealed class CliSingleGoalReportReadOnlyRouteTests : CliTaskQueryTestSupp
     [Xunit.InlineData("goal-changes", "--task", "2")]
     [Xunit.InlineData("subscription-plan", "--help")]
     [Xunit.InlineData("goal-changes", "abc10000", "-h")]
-    [Xunit.InlineData("goal-changes", "help")]
     [Xunit.InlineData("goal-diagnostics", "abc10000")]
     [Xunit.InlineData("failure-triage", "abc10000")]
     [Xunit.InlineData("goal-timing", "abc10000")]
@@ -83,6 +86,16 @@ public sealed class CliSingleGoalReportReadOnlyRouteTests : CliTaskQueryTestSupp
         Xunit.Assert.Equal(0, repository.ListGoalMetadataCount);
         Xunit.Assert.Equal(0, repository.LoadGoalsCount);
         Xunit.Assert.Equal(0, repository.ListOutboxMessagesCount);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("subscription-plan")]
+    [Xunit.InlineData("goal-changes")]
+    public void HelpToken_IsAnExplicitGoalPrefix(string verb)
+    {
+        string[] args = [verb, "help"];
+        Xunit.Assert.False(CliCommandHelp.IsCommandSpecificHelp(args));
+        Xunit.Assert.True(CliReadOnlyCommandRunner.IsReadOnlyCommand(args));
     }
 
     internal static string[][] ExplicitForms(string prefix) =>

@@ -47,7 +47,10 @@ public sealed class CliSingleGoalReportRouteParityTests : CliTaskQueryTestSuppor
                 Xunit.Assert.True(CliReadOnlyCommandRunner.IsReadOnlyCommand(args));
                 var expected = Execute(args, kernel, workspace, skipReadOnlyRoute: true);
                 var actual = Execute(args, kernel, workspace, skipReadOnlyRoute: false);
-                Xunit.Assert.NotEmpty(expected);
+                if (!withWorktree && args.Contains("--flat") && !args.Contains("--json"))
+                    Xunit.Assert.Equal(string.Empty, expected);
+                else
+                    Xunit.Assert.NotEmpty(expected);
                 if (withWorktree && args[0] == "goal-changes" && args[1] == "abc10000")
                 {
                     if (!args.Contains("--working"))
@@ -58,7 +61,7 @@ public sealed class CliSingleGoalReportRouteParityTests : CliTaskQueryTestSuppor
                 Xunit.Assert.Equal(expected, actual);
             }
 
-            foreach (var prefix in new[] { "missing", "abc" })
+            foreach (var prefix in new[] { "missing", "abc", "help" })
             foreach (var args in CliSingleGoalReportReadOnlyRouteTests.ExplicitForms(prefix))
                 AssertErrorParity(args, kernel, workspace);
 
@@ -81,6 +84,9 @@ public sealed class CliSingleGoalReportRouteParityTests : CliTaskQueryTestSuppor
         }
         finally
         {
+            // Git object files are read-only on Windows; preserve other attributes during cleanup.
+            foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+                File.SetAttributes(file, File.GetAttributes(file) & ~FileAttributes.ReadOnly);
             Directory.Delete(root, recursive: true);
         }
     }
@@ -100,7 +106,7 @@ public sealed class CliSingleGoalReportRouteParityTests : CliTaskQueryTestSuppor
             Xunit.Assert.IsType<KeyNotFoundException>(actual);
             Xunit.Assert.Equal($"Goal '{unavailableGoalId}' was not found.", actual.Message);
         }
-        else if (args.Contains("missing"))
+        else if (args.Contains("missing") || args.Contains("help"))
             Xunit.Assert.IsType<KeyNotFoundException>(actual);
         else if (args.Contains("abc"))
             Xunit.Assert.IsType<InvalidOperationException>(actual);
