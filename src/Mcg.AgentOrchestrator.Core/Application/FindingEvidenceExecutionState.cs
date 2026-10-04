@@ -50,6 +50,20 @@ public static class FindingEvidenceExecutionClassifier
             findingIds.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .Contains(findingStableId, StringComparer.Ordinal));
 
+    public static bool TryReadEvidenceDeliveryRetry(
+        ProgressEvent evt, out string candidateSha, out IReadOnlyList<string> findingIds)
+    {
+        candidateSha = string.Empty;
+        findingIds = [];
+        if (evt.Kind != ProgressKind.TaskRetried ||
+            !evt.Message.StartsWith("finding evidence-on-demand:", StringComparison.Ordinal) ||
+            !TryReadMarker(evt.Message, "candidate_sha", out candidateSha) ||
+            !TryReadMarker(evt.Message, "finding_ids", out var ids)) return false;
+
+        findingIds = ids.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return findingIds.Count > 0;
+    }
+
     public static string ToWireValue(FindingEvidenceExecutionState state) => state switch
     {
         FindingEvidenceExecutionState.NoneRequested => "none-requested",

@@ -1248,6 +1248,7 @@ internal sealed partial class ConductorBatchLoop
                     continue;
                 }
 
+                var beforeAdvance = GoalKernelChange.Capture(goal);
                 ConductorAdvanceResult result;
                 ParallelLandingOutcome? parallelLandingOutcome = null;
                 if (parallelLandingResults.TryGetValue(goal.Id.Value, out parallelLandingOutcome))
@@ -1335,6 +1336,7 @@ internal sealed partial class ConductorBatchLoop
                         FinishGoalWalk,
                         out result))
                     {
+                        if (GoalKernelChange.Changed(beforeAdvance, kernel, goal.Id)) changedGoalIds.Add(goal.Id);
                         continue;
                     }
                 }
@@ -1386,6 +1388,7 @@ internal sealed partial class ConductorBatchLoop
                             FinishGoalWalk,
                             out result))
                         {
+                            if (GoalKernelChange.Changed(beforeAdvance, kernel, goal.Id)) changedGoalIds.Add(goal.Id);
                             retryAdvanceFaulted = true;
                             break;
                         }
@@ -1395,6 +1398,7 @@ internal sealed partial class ConductorBatchLoop
                         continue;
                 }
 
+                if (GoalKernelChange.Changed(beforeAdvance, kernel, goal.Id)) changedGoalIds.Add(goal.Id);
                 if (TryReconcileAwaitingVerificationHold(kernel, goal, result, totalTicks, out var reconciledOutcome))
                 {
                     changedGoalIds.Add(goal.Id);
@@ -1423,7 +1427,7 @@ internal sealed partial class ConductorBatchLoop
                     changedGoalLines,
                     ShouldAlwaysEmitDisposition(result.Outcome)))
                 {
-                    // Held goals have no kernel state mutation worth a per-goal CAS write.
+                    // Changed held advances are already included by the before/after comparison.
                     if (!result.IsHeld)
                         changedGoalIds.Add(goal.Id);
                     Console.WriteLine($"[conduct --loop] Tick {totalTicks}: {label} [{policy.Name}] → {FormatOutcome(result.Outcome)}");
