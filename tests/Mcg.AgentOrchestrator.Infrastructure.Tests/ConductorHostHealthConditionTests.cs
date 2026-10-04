@@ -69,10 +69,10 @@ public sealed class ConductorHostHealthConditionTests
     }
 
     [Theory]
-    [InlineData(3000, 3500, 3400, 3900, 4100)] // Net rise alone is insufficient.
-    [InlineData(3000, 3200, 3400, 3600, 4023)] // Just below the rise threshold.
-    [InlineData(3000, null, 3600, 3900, 4100)] // Incomplete evidence.
-    [InlineData(8191, 8191, 8191, 8191, 8191)]
+    [InlineData(3000d, 3500d, 3400d, 3900d, 4100d)] // Net rise alone is insufficient.
+    [InlineData(3000d, 3200d, 3400d, 3600d, 4023d)] // Just below the rise threshold.
+    [InlineData(3000d, null, 3600d, 3900d, 4100d)] // Incomplete evidence.
+    [InlineData(8191d, 8191d, 8191d, 8191d, 8191d)]
     public void PoolBelowBothConditionsPublishesNothing(double a, double? b, double c, double d, double e)
     {
         using var fixture = new Fixture();
