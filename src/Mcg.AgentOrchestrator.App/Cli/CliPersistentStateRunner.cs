@@ -109,7 +109,7 @@ internal static partial class CliPersistentStateRunner
         if (IsModelOutcomesScorecard(args))
         {
             var records = stateRepository.BuildModelOutcomeScorecardAsync().GetAwaiter().GetResult();
-            ConsoleViews.PrintModelOutcomeScorecard(records);
+            ModelOutcomeBoundModels.Print(records, workspace);
             return false;
         }
 

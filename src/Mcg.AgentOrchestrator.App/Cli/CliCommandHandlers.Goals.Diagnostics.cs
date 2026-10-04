@@ -108,7 +108,7 @@ private static void PrintNextFullDetail(CliExecutionContext context, AutonomyPol
         context.WorkerProfiles,
         task => WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(context.Kernel, goal, task, context.Agents),
         providerHoldScope: context.Kernel.Goals));
-    ConsoleViews.PrintModelOutcomeScorecard(context.Kernel.BuildModelOutcomeScorecard());
+    ModelOutcomeBoundModels.Print(context.Kernel.BuildModelOutcomeScorecard(), context.Workspace);
     ConsoleViews.PrintLoopHealthReport(context.Kernel.BuildLoopHealthReport(null));
     ConsoleViews.PrintFailureTriageReport(FailureTriagePlanner.Build(context.Kernel, goal, context.Agents, context.Workspace.ExecutionDirectory, policy));
     ConsoleViews.PrintGoalRecoveryReport(GoalRecoveryPlanner.Build(

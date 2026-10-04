@@ -631,7 +631,7 @@ internal static partial class CliCommandHandlers
                 return false;
 
             case "model-outcomes":
-                ConsoleViews.PrintModelOutcomeScorecard(context.Kernel.BuildModelOutcomeScorecard());
+                ModelOutcomeBoundModels.Print(context.Kernel.BuildModelOutcomeScorecard(), context.Workspace);
                 return false;
 
             case "durations":

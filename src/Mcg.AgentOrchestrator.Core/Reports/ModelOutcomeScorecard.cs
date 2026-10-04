@@ -22,7 +22,10 @@ public sealed record ModelOutcomeRecord(
     int EnvironmentalFailures = 0,
     int ManufacturedFixedFailures = 0,
     int UnknownEraFailures = 0,
-    string? DispatchLane = null)
+    string? DispatchLane = null,
+    int ClassMismatchFailures = 0,
+    string ClassMismatchRules = "",
+    bool IsBound = true)
 {
     public int NonRealFailures => EnvironmentalFailures + ManufacturedFixedFailures + UnknownEraFailures;
 }
@@ -31,6 +34,20 @@ public static class ModelOutcomeScorecard
 {
     public const int DefaultWindowSize = 20;
     public const int MinSamplesForConfidence = 2;
+
+    public static IReadOnlyList<ModelOutcomeRecord> Build(
+        IEnumerable<ModelFitHistoryRow> rows,
+        BoundModelSet boundModels,
+        int windowSize = DefaultWindowSize) =>
+        ApplyBoundModels(Build(rows, windowSize), boundModels);
+
+    public static IReadOnlyList<ModelOutcomeRecord> ApplyBoundModels(
+        IReadOnlyList<ModelOutcomeRecord> records,
+        BoundModelSet? boundModels) =>
+        records.Select(record => record with
+        {
+            IsBound = boundModels is not { IsAvailable: true } || boundModels.Contains(record.ModelName)
+        }).ToList();
 
     public static IReadOnlyList<ModelOutcomeRecord> Build(
         IEnumerable<Goal> goals,
@@ -91,6 +108,13 @@ public static class ModelOutcomeScorecard
         var environmentalFailures = pairs.Count(p => p.row.IsFailed && p.row.OutcomeClass == TaskOutcomeClass.Environmental);
         var manufacturedFailures = pairs.Count(p => p.row.IsFailed && p.row.OutcomeClass == TaskOutcomeClass.ManufacturedFixed);
         var unknownEraFailures = pairs.Count(p => p.row.IsFailed && p.row.OutcomeClass == TaskOutcomeClass.UnknownEra);
+        var classMismatchRows = recentRows.Where(row => row.IsFailed &&
+            row.OutcomeClass is TaskOutcomeClass.Success or TaskOutcomeClass.ReconciledToSuccess).ToList();
+        var classMismatchRules = string.Join(",", classMismatchRows
+            .GroupBy(row => string.IsNullOrWhiteSpace(row.OutcomeRule) ? "none" : row.OutcomeRule.ToLowerInvariant())
+            .OrderByDescending(group => group.Count())
+            .ThenBy(group => group.Key, StringComparer.Ordinal)
+            .Select(group => $"{group.Key}={group.Count()}"));
         var divergence = pairs.Count(p => p.row.SelfRating is ModelFitHistory.Divergence ||
             (p.row.SelfRating == ModelFitHistory.Adequate && p.row.IsFailed && p.row.OutcomeClass == TaskOutcomeClass.RealFailure));
 
@@ -118,7 +142,9 @@ public static class ModelOutcomeScorecard
             environmentalFailures,
             manufacturedFailures,
             unknownEraFailures,
-            dispatchLane);
+            dispatchLane,
+            classMismatchRows.Count,
+            classMismatchRules);
     }
 
     private static (ModelOutcomeRecommendation Recommendation, string Reason) BuildRecommendation(
