@@ -971,7 +971,7 @@ public static class WorkerProfileDispatcher
             return;
         }
 
-        var access = GoalWorktrees.InspectGitMetadataAccess(workingDirectory, sandbox);
+        var access = GoalWorktreeGitMetadata.Inspect(workingDirectory, sandbox);
         var status = access.Error is null ? "ok" : "warn";
         findings.Add(
             $"{status}: git metadata index_lock={access.IndexLockPath}; " +
