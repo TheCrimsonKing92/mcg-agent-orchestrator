@@ -7,13 +7,16 @@ using static ConductorDriverTests;
 public sealed class ConductorDriverTestsLifecycleEntryDecision
 {
     [Xunit.Fact]
-    public void DraftSliceBatchParent_HoldsAtCreated_WithOriginalOwnerAndDecision()
+    public void ActiveSliceBatchParent_HoldsAtWorkspaceReady_WithOriginalOwnerAndDecision()
     {
         var (kernel, workspace, agents, providers) = SliceBatchExecutionTests.CreateContext(SliceBatchExecutionTests.DisjointSliceBatchJson);
         var parent = SliceBatchExecutionTests.CreateBatch(kernel, workspace, agents, providers);
+        kernel.ActivateGoal(parent.Id, agents);
+        Assert.Equal(GoalStatus.Active, parent.Status);
         var creations = new List<GoalId>();
         var dispatches = new List<GoalId>();
         var driver = SliceBatchExecutionTests.CreateDriver(kernel, creations, dispatches);
+        Assert.Equal(GoalLifecycleState.WorkspaceReady, GoalLifecycle.ResolveState(parent, driver.GetFacts(parent)));
         // The parent hold must precede even a missing policy transition entry.
         var policy = ConductorAutonomyPolicy.Conservative with { TransitionMap = new Dictionary<GoalLifecycleState, ConductorTransitionDecision>() };
         driver.BeginTick();
@@ -22,7 +25,7 @@ public sealed class ConductorDriverTestsLifecycleEntryDecision
 
         var reason = $"Slice-batch parent {parent.Id.Value[..8]} owns child goals and does not execute worker tasks.";
         var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
-        Assert.Equal(GoalLifecycleState.Created, held.State);
+        Assert.Equal(GoalLifecycleState.WorkspaceReady, held.State);
         Assert.Equal(reason, held.Reason);
         Assert.Equal(ConductorHoldOwner.None, held.Owner);
         Assert.Null(held.StableIdentity);
@@ -30,12 +33,12 @@ public sealed class ConductorDriverTestsLifecycleEntryDecision
         Assert.Empty(creations);
         Assert.Empty(dispatches);
         var decision = AssertLifecycleDecision(held.Decision, "Hold", 1, "slice-batch-parent-hold", reason,
-            GoalLifecycleState.Created, "Conservative");
+            GoalLifecycleState.WorkspaceReady, "Conservative");
         AssertFact(decision, "slice-batch-parent-hold", reason);
         AssertFact(decision, "awaiting-clarification-reason", "");
         AssertFact(decision, "terminal-escalation-reason", "");
         AssertFact(decision, "transition-decision", "");
-        AssertPayloadDecision(held, decision, "Held", "Created", null);
+        AssertPayloadDecision(held, decision, "Held", "WorkspaceReady", null);
     }
 
     [Xunit.Theory]
