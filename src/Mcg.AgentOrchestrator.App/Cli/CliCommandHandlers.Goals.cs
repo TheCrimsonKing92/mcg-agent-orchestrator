@@ -709,42 +709,13 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             return false;
 
         case "cancel-goal":
+            return ExecuteGoalCancelInMemory(context, PrepareGoalCancelCommand(parts));
+
         case "supersede-goal":
-            CliArgumentParser.RequirePartCount(parts, 3, $"{command} <goal-id-prefix> <reason> [--confirm-goal-stop] | {command} <goal-id-prefix> --text-file <path> [--confirm-goal-stop]");
-            context.CurrentGoal = HandleGoalStopCommand(context, parts, command.Equals("supersede-goal", StringComparison.OrdinalIgnoreCase));
-            ConsoleViews.PrintGoal(context.CurrentGoal);
-            return true;
+            return ExecuteGoalSupersedeInMemory(context, PrepareGoalSupersedeCommand(parts));
 
         case "abandon-goal":
-            CliArgumentParser.RequirePartCount(parts, 3, "abandon-goal <goal-id-prefix> <reason> [--confirm-goal-abandon] | abandon-goal <goal-id-prefix> --text-file <path> [--confirm-goal-abandon]");
-            context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts[1]);
-            var abandonParts = RemoveStandaloneFlag(parts, "--confirm-goal-abandon");
-            var abandonReason = ResolveTextArgument(abandonParts, inlineIndex: 2, "abandon-goal <goal-id-prefix> <reason> [--confirm-goal-abandon] | abandon-goal <goal-id-prefix> --text-file <path> [--confirm-goal-abandon]", "--text-file");
-            if (!HasCliConfirmation(parts, "--confirm-goal-abandon") &&
-                !parts[2].Contains("--confirm-goal-abandon", StringComparison.OrdinalIgnoreCase))
-            {
-                ConsoleViews.PrintGoalAbandonPlan(GoalAbandonPlanner.Build(
-                    context.Kernel,
-                    context.CurrentGoal,
-                    context.Workspace,
-                    abandonReason,
-                    context.CleanupContext.Hooks));
-                return false;
-            }
-
-            var abandonPlan = GoalAbandonPlanner.Apply(
-                context.Kernel,
-                context.CurrentGoal,
-                context.Workspace,
-                abandonReason,
-                context.CleanupContext.Hooks);
-            ConsoleViews.PrintGoalAbandonPlan(abandonPlan);
-            if (!abandonPlan.CanApply)
-            {
-                throw new InvalidOperationException("abandon-goal could not apply because one or more steps are blocked.");
-            }
-
-            return true;
+            return ExecuteGoalAbandonInMemory(context, PrepareGoalAbandonCommand(parts));
 
         case "goal-mark-landed":
         {
@@ -951,16 +922,10 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
         }
 
         case "park-goal":
-            CliArgumentParser.RequirePartCount(parts, 3, "park-goal <goal-id-prefix> <reason> [--confirm-goal-park] | park-goal <goal-id-prefix> --text-file <path> [--confirm-goal-park]");
-            context.CurrentGoal = HandleGoalParkCommand(context, parts);
-            return HasCliConfirmation(parts, "--confirm-goal-park") ||
-                parts[2].Contains("--confirm-goal-park", StringComparison.OrdinalIgnoreCase);
+            return ExecuteGoalParkInMemory(context, PrepareGoalParkCommand(parts));
 
         case "unpark-goal":
-            CliArgumentParser.RequirePartCount(parts, 3, "unpark-goal <goal-id-prefix> <reason> [--confirm-goal-unpark] | unpark-goal <goal-id-prefix> --text-file <path> [--confirm-goal-unpark]");
-            context.CurrentGoal = HandleGoalUnparkCommand(context, parts);
-            return HasCliConfirmation(parts, "--confirm-goal-unpark") ||
-                parts[2].Contains("--confirm-goal-unpark", StringComparison.OrdinalIgnoreCase);
+            return ExecuteGoalUnparkInMemory(context, PrepareGoalUnparkCommand(parts));
 
         case "rollback-goal":
             CliArgumentParser.RequirePartCount(parts, 3, "rollback-goal <goal-id-prefix> <reason> [--confirm-goal-rollback] | rollback-goal <goal-id-prefix> --text-file <path> [--confirm-goal-rollback]");
