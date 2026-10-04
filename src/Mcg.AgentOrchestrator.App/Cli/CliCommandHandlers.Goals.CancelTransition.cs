@@ -56,7 +56,8 @@ internal static partial class CliCommandHandlers
 
     internal static void RenderGoalCancelOutcome(
         GoalLifecycleTransitionOutcome outcome,
-        OrchestratorWorkspace workspace)
+        OrchestratorWorkspace workspace,
+        Action? deliverCommittedLifecycleEvent = null)
     {
         switch (outcome.Disposition)
         {
@@ -69,7 +70,10 @@ internal static partial class CliCommandHandlers
                     WriteLiveDispatches(outcome.LiveDispatches);
                 }
 
-                AppendCommittedLifecycleEvent(outcome, workspace, GoalStatus.Cancelled);
+                if (deliverCommittedLifecycleEvent is null)
+                    AppendCommittedLifecycleEvent(outcome, workspace, GoalStatus.Cancelled);
+                else
+                    deliverCommittedLifecycleEvent();
                 return;
 
             case GoalLifecycleTransitionDisposition.Rejected:

@@ -88,6 +88,7 @@ internal static partial class CliPersistentStateRunner
         using var writeOperationTag = SqliteOrchestratorStateRepository.UseWriteOperationTag(
             $"cli:{(args.Count == 0 ? "repl" : args[0].Trim().ToLowerInvariant())}");
         DrainAcceptanceRetryAuditOutbox(stateRepository, workspace);
+        DrainGoalLifecycleEventOutbox(stateRepository, workspace);
 
         if (IsGoalRefinementWorkCommand(args))
         {

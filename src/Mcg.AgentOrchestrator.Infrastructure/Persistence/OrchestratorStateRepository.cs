@@ -166,6 +166,15 @@ public interface ITransactionalOrchestratorStateRepository : IOrchestratorStateR
         Func<GoalStateSnapshot?, CancellationToken, Task<(bool ShouldSave, GoalStateSnapshot? NewState, T Result)>> transaction,
         CancellationToken cancellationToken = default) =>
         TransactGoalStateAsync(goalId, transaction, cancellationToken);
+
+    /// <summary>Commits a goal-scoped state mutation and its pending deliveries atomically.</summary>
+    Task<T> TransactGoalStateWithOutboxAsync<T>(
+        string operationName,
+        GoalId goalId,
+        Func<GoalStateSnapshot?, CancellationToken, Task<(bool ShouldSave, GoalStateSnapshot? NewState,
+            T Result, IReadOnlyList<OrchestratorStateOutboxMessage> OutboxMessages)>> transaction,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This repository does not support goal-scoped state and outbox transactions.");
 }
 
 public sealed record GoalStateSnapshot(

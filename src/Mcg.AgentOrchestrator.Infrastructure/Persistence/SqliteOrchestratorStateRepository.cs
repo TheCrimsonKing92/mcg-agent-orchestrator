@@ -2568,6 +2568,46 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
         }
     }
 
+    internal Action? BeforeGoalStateOutboxCommit { get; init; }
+
+    public async Task<T> TransactGoalStateWithOutboxAsync<T>(
+        string operationName,
+        GoalId goalId,
+        Func<GoalStateSnapshot?, CancellationToken, Task<(bool ShouldSave, GoalStateSnapshot? NewState,
+            T Result, IReadOnlyList<OrchestratorStateOutboxMessage> OutboxMessages)>> transaction,
+        CancellationToken cancellationToken = default)
+    {
+        var versionMismatchDelay = 50;
+        var resolvedOperation = ResolveOperationTag(
+            $"{nameof(TransactGoalStateWithOutboxAsync)}({ShortGoalId(goalId.Value)})", operationName);
+        for (var attempt = 1; ; attempt++)
+        {
+            var (loadedState, loadedVersion) = await LoadGoalStateAndVersionAsync(goalId, cancellationToken);
+            var (shouldSave, newState, result, messages) = await transaction(loadedState, cancellationToken);
+            if (!shouldSave || newState is null)
+                return result;
+
+            if (!string.Equals(newState.Goal.Id, goalId.Value, StringComparison.Ordinal) ||
+                newState.HumanInputRequests.Any(request =>
+                    !string.Equals(request.GoalId, goalId.Value, StringComparison.Ordinal)))
+            {
+                throw new InvalidOperationException(
+                    $"TransactGoalStateWithOutboxAsync for goal {goalId.Value[..8]} cannot persist state owned by another goal.");
+            }
+
+            if (await TryCasWriteGoalRowAsync(goalId, newState.Goal, newState.HumanInputRequests,
+                    loadedVersion, resolvedOperation, cancellationToken, messages, BeforeGoalStateOutboxCommit))
+                return result;
+
+            if (attempt >= MaxOptimisticConcurrencyRetries)
+                throw new GoalTransactionConflictException(
+                    $"TransactGoalStateWithOutboxAsync: optimistic concurrency retries exhausted for goal {goalId.Value[..8]}");
+
+            await Task.Delay(versionMismatchDelay, cancellationToken);
+            versionMismatchDelay = Math.Min(versionMismatchDelay * 2, 1000);
+        }
+    }
+
     private async Task<(GoalSnapshot? Snapshot, int Version)> LoadGoalSnapshotAndVersionAsync(
         GoalId goalId, CancellationToken cancellationToken)
     {
@@ -2637,7 +2677,9 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
         IReadOnlyList<HumanInputRequestSnapshot>? humanInputRequests,
         int expectedVersion,
         string operationName,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IReadOnlyList<OrchestratorStateOutboxMessage>? outboxMessages = null,
+        Action? beforeCommit = null)
     {
         var write = await BeginWriteAsync(operationName, cancellationToken);
         await using var conn = write.Connection;
@@ -2685,6 +2727,12 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
                 }
             }
 
+            if (outboxMessages is not null)
+            {
+                foreach (var message in outboxMessages)
+                    await InsertOutboxMessageAsync(conn, message, cancellationToken);
+            }
+            beforeCommit?.Invoke();
             await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
             telemetry.Emit("commit");
             return true;
