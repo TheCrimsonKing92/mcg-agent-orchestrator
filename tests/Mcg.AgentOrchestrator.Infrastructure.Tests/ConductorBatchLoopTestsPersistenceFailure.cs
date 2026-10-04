@@ -1405,11 +1405,12 @@ public sealed class ConductorBatchLoopTestsPersistenceFailure : ConductorBatchLo
             maxIterations: 1,
             persistGoalTick: (_, changedGoalIds) => persistedGoalBatches.Add(changedGoalIds.ToArray()));
 
-        // A changed disposition (workspace created); B started a durable hold episode.
-        var persistedGoalIds = persistedGoalBatches.First();
+        // A changed disposition (workspace created); B's capacity owner creates no durable hold.
+        var persistedGoalIds = Assert.Single(persistedGoalBatches);
         Assert.Contains(goalA.Id, persistedGoalIds);
-        Assert.Contains(goalB.Id, persistedGoalIds);
-        Assert.Equal(2, persistedGoalIds.Count);
+        Assert.DoesNotContain(goalB.Id, persistedGoalIds);
+        Assert.Single(persistedGoalIds);
+        Assert.Null(goalB.CurrentHold);
     }
 
     [Xunit.Fact(DisplayName = "ConductorBatchLoop_identity_moved_without_touch_proof_emits_immediate_goal_escalation")]

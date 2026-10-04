@@ -27,7 +27,7 @@ public sealed class ConductorBatchLoopTestsGoalStallExit : ConductorBatchLoopTes
         var (kernel, goal) = SimpleGoal("persist a held goal across loop generations");
         var driver = MakeDriver(
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
-            getRunningCount: () => ConductorAutonomyPolicy.Conservative.MaxConcurrentPaidWorkers);
+            dispatchAndStart: _ => DispatchStartOutcome.EmptyBatch("dispatch readiness blocked"));
 
         new ConductorBatchLoop(conductEventLogWriter: writer, utcNow: () => now).Run(
             kernel,
@@ -157,7 +157,7 @@ public sealed class ConductorBatchLoopTestsGoalStallExit : ConductorBatchLoopTes
         var (kernel, goal) = SimpleGoal("keep conducting when the stall event stream fails");
         var driver = MakeDriver(
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
-            getRunningCount: () => ConductorAutonomyPolicy.Conservative.MaxConcurrentPaidWorkers);
+            dispatchAndStart: _ => DispatchStartOutcome.EmptyBatch("dispatch readiness blocked"));
 
         var summary = new ConductorBatchLoop(
             conductEventLogWriter: writer,
