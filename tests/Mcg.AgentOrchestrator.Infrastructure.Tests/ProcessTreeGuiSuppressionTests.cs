@@ -365,7 +365,7 @@ public sealed class ProcessTreeGuiSuppressionTests
             "src",
             "Mcg.AgentOrchestrator.Infrastructure",
             "Workspaces",
-            "GoalAcceptanceVerifier.cs"));
+            "GoalAcceptanceVerifier.ProcessRunner.cs"));
         Assert.Contains("worker = ProcessTreeGuiSuppression.Start(startInfo);", dispatchHost, StringComparison.Ordinal);
         Assert.Contains(
             "process = StartAcceptanceProcess(startInfo, workingDirectory, registrationIdentityReader);",

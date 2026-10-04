@@ -54,7 +54,8 @@ internal static class SourceSizeRatchet
             // Goal c0cfa8ae extracted 445 lines of test telemetry and TRX receipt inspection.
             // Goal efdff7b2 extracted 268 lines of build-artifact lock waiting and attribution.
             // Goal 78053cf4 extracted 313 lines of capture custody and process start-info construction.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 7014),
+            // Goal 28ea80c3 extracted 540 lines of acceptance process running.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 6164),
             // Goal c0cfa8ae test telemetry collaborator measured at 423 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.TestTelemetry.cs", 423),
             // Goal efdff7b2 build-artifact lock collaborator measured at 334 lines.
@@ -63,6 +64,8 @@ internal static class SourceSizeRatchet
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.CaptureCustody.cs", 378),
             // Goal c60a7cb5 split focused-evidence request resolution into its own type.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.FocusedEvidenceRequestResolver.cs", 740),
+            // Goal 28ea80c3 acceptance process runner measured at 548 lines.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.ProcessRunner.cs", 548),
             // Goal 682f25a1 re-derived this row after integrating goal c2eae988, whose acceptance
             // cancellation seam had already added 74 net lines before the multi-file ratchet landed.
             // Raised for goal a22c7293: slice admission must run where all dispatch paths converge.
