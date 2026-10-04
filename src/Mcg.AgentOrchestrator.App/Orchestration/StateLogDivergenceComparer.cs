@@ -91,7 +91,7 @@ internal static class StateLogDivergenceComparer
             !DateTimeOffset.TryParse(occurredAt.GetString(), CultureInfo.InvariantCulture,
                 DateTimeStyles.None, out var timestamp) ||
             !root.TryGetProperty("message", out var message) || message.ValueKind != JsonValueKind.String ||
-            !root.TryGetProperty("cursor", out var cursor) || !cursor.TryGetInt64(out var position) || position < 1)
+            !root.TryGetProperty("cursor", out var cursor) || !cursor.TryGetInt64(out var position) || position < 0)
             throw new FormatException("Goal timeline event has invalid comparison fields.");
         string? taskId = null;
         if (root.TryGetProperty("taskId", out var task))

@@ -85,6 +85,24 @@ public sealed class StateLogDivergenceComparerTests
     }
 
     [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    public void NonNegativeLogCursorIsPreservedAsDivergenceEvidence(long cursor)
+    {
+        // GoalLifecycleEventWriter.cs::Append starts at CountExistingLines, which
+        // returns zero for a new log; zero is a valid first timeline cursor.
+        var line = Parse(cursor, "TaskRetried", Time, "finding evidence-on-demand", Task);
+        Assert.Equal(cursor, line.Cursor);
+        var report = StateLogDivergenceComparer.Compare([], [line]);
+        Assert.Equal(StateLogDivergenceClass.Lost, Assert.Single(report.Items).Class);
+        Assert.Equal(cursor, report.FirstLogCursor);
+    }
+
+    [Fact]
+    public void NegativeLogCursorCannotBecomeDivergenceEvidence() =>
+        Assert.Throws<FormatException>(() => Parse(-1, "TaskRetried", Time, "finding evidence-on-demand", Task));
+
+    [Theory]
     [InlineData("{\"progressKind\":42}")]
     [InlineData("{\"progressKind\":\"TaskFailed\",\"occurredAt\":\"invalid\"}")]
     [InlineData("[]")]
