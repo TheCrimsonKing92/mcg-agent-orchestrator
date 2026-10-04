@@ -73,7 +73,8 @@ public sealed class ConductorDriverTestsLandingCompletionDecision
 
     [Theory]
     [InlineData("ownership-denylist hold: task touched protected path", 10, "landing-ownership-hold", false, false)]
-    [InlineData("Landing held at mutation boundary: circuit opened inside landing", 9, "landing-mutation-hold-escalation", true, false)]
+    [InlineData("landing mutation blocked: circuit opened inside landing", 9, "landing-mutation-hold-escalation", true, false)]
+    [InlineData("Landing held at mutation boundary: circuit opened inside landing", 11, "landing-escalation", false, true)]
     [InlineData("integration->main conflict", 11, "landing-escalation", false, true)]
     public void LandingResultCarriesDecisionAndPreservesEscalationEffects(string reason, int rung, string evidence, bool isHold, bool recordsEscalation)
     {

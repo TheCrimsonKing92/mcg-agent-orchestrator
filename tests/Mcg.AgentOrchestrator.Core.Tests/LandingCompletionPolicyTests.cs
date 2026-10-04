@@ -12,7 +12,7 @@ public sealed class LandingCompletionPolicyTests
     [InlineData(6, LandingCompletionAction.Proceed, "unmet-criteria-retry", "Acceptance criteria retry is within budget.", null, null)]
     [InlineData(7, LandingCompletionAction.Escalate, "unmet-criteria-retries-exhausted", "Acceptance criteria unmet after 2 retries: criterion A; review/land manually", null, null)]
     [InlineData(8, LandingCompletionAction.Hold, "landing-mutation-boundary-hold", "Landing held at mutation boundary: acceptance engine circuit is Pending", null, null)]
-    [InlineData(9, LandingCompletionAction.Hold, "landing-mutation-hold-escalation", "Landing held at mutation boundary: circuit opened inside landing", null, null)]
+    [InlineData(9, LandingCompletionAction.Hold, "landing-mutation-hold-escalation", "landing mutation blocked: circuit opened inside landing", null, null)]
     [InlineData(10, LandingCompletionAction.Escalate, "landing-ownership-hold", "ownership-denylist hold: task touched protected path", null, null)]
     [InlineData(11, LandingCompletionAction.Escalate, "landing-escalation", "integration->main conflict", null, null)]
     [InlineData(0, LandingCompletionAction.Proceed, "landing-promote", "Landing promoted.", null, null)]
@@ -45,7 +45,7 @@ public sealed class LandingCompletionPolicyTests
             4 => facts with { EvidenceHoldReason = "Criterion evidence is missing for candidate branch.", EvidenceHoldState = GoalLifecycleState.Verified, EvidenceHoldIdentity = "criterion-evidence:branch" },
             5 or 6 or 7 => facts with { RunPassed = false, UnmetCriteriaCount = 1, UnmetCriteria = "criterion A", RetryTaskAvailable = rung != 5, RetryCount = rung == 7 ? 2 : 0, RetryBudget = 2 },
             8 => facts with { MutationBlockReason = "acceptance engine circuit is Pending" },
-            9 => facts with { LandingResultKind = "mutation-hold", LandingReason = "Landing held at mutation boundary: circuit opened inside landing" },
+            9 => facts with { LandingResultKind = "mutation-hold", LandingReason = "landing mutation blocked: circuit opened inside landing" },
             10 => facts with { LandingResultKind = "ownership-hold", LandingReason = "ownership-denylist hold: task touched protected path" },
             11 => facts with { LandingResultKind = "escalate", LandingReason = "integration->main conflict" },
             0 => facts with { LandingResultKind = "promote" },
