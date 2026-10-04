@@ -94,7 +94,8 @@ public sealed record TaskVerificationRecord(
     string? HumanInputEvidenceOwner = null,
     CandidateIdentity? CandidateIdentity = null,
     string? AcceptanceCriteriaVersionHash = null,
-    FailedGoalInconclusiveRoundInputs? InconclusiveRoundInputs = null)
+    FailedGoalInconclusiveRoundInputs? InconclusiveRoundInputs = null,
+    PlannerEvidenceStoreReference? HumanInputStoreReference = null)
 {
     public string? AuthoritativeStandardOutput { get; init; } = FullStandardOutput ??
         (StandardOutputIsAuthoritative && FullStandardOutputUnavailableReason is null ? StandardOutput : null);
@@ -158,6 +159,7 @@ public sealed record TaskVerificationRecord(
             HumanInputBlockerFingerprint = preferred.HumanInputBlockerFingerprint ?? HumanInputBlockerFingerprint,
             HumanInputKind = preferred.HumanInputKind ?? HumanInputKind,
             HumanInputEvidenceOwner = preferred.HumanInputEvidenceOwner ?? HumanInputEvidenceOwner,
+            HumanInputStoreReference = preferred.HumanInputStoreReference ?? HumanInputStoreReference,
             ObservedRootExitCode = preferred.ObservedRootExitCode ?? ObservedRootExitCode,
             ReconciledToSuccess = ReconciledToSuccess || preferred.ReconciledToSuccess,
             ReconciliationOriginRule = preferred.ReconciliationOriginRule ?? ReconciliationOriginRule,

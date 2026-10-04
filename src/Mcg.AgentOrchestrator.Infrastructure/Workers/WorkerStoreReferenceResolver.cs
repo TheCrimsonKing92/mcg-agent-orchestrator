@@ -9,7 +9,7 @@ internal sealed record StoreReferenceOutcome(string Name, string? RelativePath, 
 {
     internal bool Resolved => RelativePath is not null;
 }
-internal sealed record StoreReferenceResolution(string? Content, string? ReasonCode);
+internal sealed record StoreReferenceResolution(string? Content, string? ReasonCode, string? Sha256 = null);
 
 /// <summary>Reads only explicitly named records; source content never supplies instructions or paths.</summary>
 internal static partial class WorkerStoreReferenceResolver
@@ -100,7 +100,7 @@ internal static partial class WorkerStoreReferenceResolver
                 UntrustedBanner,
                 string.Empty
             };
-            return new(string.Join(Environment.NewLine, header.Where(line => line is not null)) + Environment.NewLine + excerpt, null);
+            return new(string.Join(Environment.NewLine, header.Where(line => line is not null)) + Environment.NewLine + excerpt, null, hash);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException
             or NotSupportedException or System.Text.Json.JsonException or System.Xml.XmlException

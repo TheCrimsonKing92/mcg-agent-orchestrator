@@ -175,7 +175,8 @@ public sealed partial class TaskSpec
                     LastVerification.AssignedScopeComplete,
                     LastVerification.CandidateIdentity,
                     LastVerification.AcceptanceCriteriaVersionHash,
-                    LastVerification.InconclusiveRoundInputs),
+                    LastVerification.InconclusiveRoundInputs,
+                    LastVerification.HumanInputStoreReference),
             _verificationHistory
                 .Select(verification => new TaskVerificationSnapshot(
                     verification.Command,
@@ -208,7 +209,8 @@ public sealed partial class TaskSpec
                     verification.AssignedScopeComplete,
                     verification.CandidateIdentity,
                     verification.AcceptanceCriteriaVersionHash,
-                    verification.InconclusiveRoundInputs))
+                    verification.InconclusiveRoundInputs,
+                    verification.HumanInputStoreReference))
                 .ToList(),
             LastDispatch is null
                 ? null
@@ -347,7 +349,8 @@ public sealed partial class TaskSpec
                     AssignedScopeComplete: verification.AssignedScopeComplete,
                     CandidateIdentity: verification.CandidateIdentity,
                     AcceptanceCriteriaVersionHash: verification.AcceptanceCriteriaVersionHash,
-                    InconclusiveRoundInputs: verification.InconclusiveRoundInputs));
+                    InconclusiveRoundInputs: verification.InconclusiveRoundInputs,
+                    HumanInputStoreReference: verification.HumanInputStoreReference));
             }
         }
 
@@ -390,7 +393,8 @@ public sealed partial class TaskSpec
                 AssignedScopeComplete: snapshot.LastVerification.AssignedScopeComplete,
                 CandidateIdentity: snapshot.LastVerification.CandidateIdentity,
                 AcceptanceCriteriaVersionHash: snapshot.LastVerification.AcceptanceCriteriaVersionHash,
-                InconclusiveRoundInputs: snapshot.LastVerification.InconclusiveRoundInputs);
+                InconclusiveRoundInputs: snapshot.LastVerification.InconclusiveRoundInputs,
+                HumanInputStoreReference: snapshot.LastVerification.HumanInputStoreReference);
             var historyIndex = task._verificationHistory.FindLastIndex(
                 verification => verification.HasSameRoundIdentity(latestVerification));
             if (historyIndex < 0)
