@@ -6,18 +6,18 @@ This is the implementation record, not a completion claim. Goal state, dispatche
 
 ## Required outcomes
 
-Status verified against source at `f4b5af424` on 2026-09-24. Every stage's first goal has landed; four stages have
-only their first slice. Details, evidence and open backlog are under [Status — 2026-09-24](#status--2026-09-24).
+Status verified against source at `d31fba87f` on 2026-10-03. Decomposition and persistent-operation slices have
+landed; remaining boundaries are recorded under [Status — 2026-10-03](#status--2026-10-03).
 
-| Stage | Delivered architectural boundary | Status (2026-09-24) |
+| Stage | Delivered architectural boundary | Status (2026-10-03) |
 |---|---|---|
-| Queries | Inspection uses a read capability, no writer/outbox draining, bounded goal reads and compatible CLI behavior | **Partial.** First slice `task`/`tasks` landed at `6497eb1c`. Only `board`, historical `trial-compare` and `task`/`tasks` use the read-only runner; every other inspection verb still takes the writer path, drains the outbox and fully hydrates state. |
+| Queries | Inspection uses a read capability, no writer/outbox draining, bounded goal reads and compatible CLI behavior | **Partial.** `task`/`tasks` first landed (`7c57509f`, `6497eb1c7`); attention, readiness and next now use the read-only route (operator commit `45f739e42`, no recorded goal id). Remaining inspection routes and startup hydration still need migration; see the status section. |
 | Transitions | Typed lifecycle commands, goal-version conflict handling, atomic state/outbox writes, truthful committed outcomes | **Partial.** Unpark (`06b62ff8`, landed `ac09af58`) and the recovery utility (`1426d14b`, landed `0bd22b45`) are migrated. Park, abandon, cancel and supersede still use the untransacted path; effectful park still lacks an atomic state/delivery intent and truthful effect outcome. |
 | Application | UI-free dispatch/advancement/task operations; dashboard and CLI adapt shared typed results | **Done.** `f5db9754` landed as `adb57a8f0` (2026-09-15): application-owned dispatch, advancement and task operations; old `GoalManagementCommandService.Dispatches.cs` deleted; `ApplicationBoundaryConventionTests` forbid forwarding back. |
-| Acceptance | Attempt identity/lifecycle/evidence belongs to an attempt owner; verifier composes separately owned build, invocation, scheduling and adjudication | **Partial.** Attempt ownership done: `6032a3d4` landed `209400a8b` (2026-09-18), plus follow-ons `03aaf13e`, `36b98d7a`, `d3d87e67`. Verifier decomposition not started: `GoalAcceptanceVerifier.cs` is still ~9630 lines and composes build, invocation, scheduling and adjudication itself. |
+| Acceptance | Attempt identity/lifecycle/evidence belongs to an attempt owner; verifier composes separately owned build, invocation, scheduling and adjudication | **Partial.** Attempt ownership landed (`6032a3d4`, `209400a8b`). Verifier slices 1–7 landed, from focused-evidence resolution (`c60a7cb5`, `01c11f26d`) through the process runner (`28ea80c3`, `d6815a6db`); separate build, invocation, scheduling and adjudication ownership remains incomplete. All slices are listed below. |
 | Workflow decisions | Conductor policy produces typed, attributed decisions; effect execution and completion are separately owned | **Partial.** Failed lifecycle is policy-owned (`42115646`, landed `615030e56`, 2026-09-17). Typed decisions since: Verified-stage escalation (`e20dfc1b`), operator-intent timeline payloads (`e389f7df`), atomic `adjudicate` intent on DecisionSpine (`798f1c58`). Created, dispatch, Verifying and Verified/landing are still decided inline with effects mixed in. |
-| Hosts | Independently publishable headless runtime and optional dashboard; explicit composition and compatible entry points | **Done.** `ac61f820` landed `cc9167aec` (2026-09-19). |
-| Persistent operation | Queryable runtime generation/readiness/ownership, safe update/child adoption and offline recovery | **Not started** beyond the pre-existing supervisor, loop handoff, lease and staging. No generation/readiness query surface, no child adoption (restarting with workers in flight is still unsafe), no fenced offline applier. |
+| Hosts | Independently publishable headless runtime and optional dashboard; explicit composition and compatible entry points | **Done.** Host separation landed (`ac61f820`, `cc9167aec`); the browser dashboard was then removed (`6bae4427`, `849f62765`; `12f07e75`, `062ad484b`; `de510074`, `7a7d0a543`), including its acceptance smoke (`bee9a71f`, `655d95c4f`). |
+| Persistent operation | Queryable runtime generation/readiness/ownership, safe update/child adoption and offline recovery | **Partial.** Generation status (`f77f5f6c`, `56afd4c2f`; rotated-log reading `b3a6634f`, `19a6532a6`), successor gate adoption (`f47113b2`, `5e0581b51`), main-health pauses (`01ce50dd`, `4975e8165`), gate host-health signals (`68456acf`, `c258b316b`) and off-tick retention (`6c201067`, `b705ddaca`) landed. Agent-worker adoption and a fenced offline applier remain outstanding. |
 | Evidence/economics | Reconciled transition → execution → acceptance → integration → activation receipts, measured coverage and matched provider trials | **Ongoing.** Hermes identity slice `bbf6fe7c` (landed `a24b9c41`); ACP fit unproven. Source inventory `76443477` (landed `cd90a071`) cut estimated prompt tokens 29.6%. Since then: typed worker context (`29423867`, `f234d1db`), focused-evidence and receipt reuse (`29e8cbeb`, `a04f6e6e`), per-tick scan reductions (`1711c156`, `96211ff6`). No newer matched token-efficiency measurement was found. |
 
 The host boundary is implemented as a plain-SDK `Mcg.AgentOrchestrator.App` headless runtime and a
@@ -35,66 +35,112 @@ remains the sole periodic worktree-cleanup owner.
 - No concurrent ownership of the same migration seam. Sequence against live fixes, integrate current main through the conductor, then perform independent cross-family review and fresh execution validation.
 - For every claimed benefit, retain baseline/candidate identity, exact inputs, observed output, meaningful negative controls and the correct evidence owner. Missing telemetry is not zero usage or proof of absence of a write.
 
-## Status — 2026-09-24
+## Status — 2026-10-03
 
-Read-only verification at `f4b5af424`. Backlog premises were not re-verified individually; the backlog ids name
-the work, not a confirmed current defect.
+Read-only verification at `d31fba87f` (the authoring-time `git rev-parse main`). Landed goal/commit pairs below
+were re-derived from `git log main`. Backlog ids name outstanding work or the supplied finding, not newly
+verified defects; no backlog state was queried. Unchanged stage text is carried forward from 2026-09-24.
 
-**Queries — remaining.** Move the remaining inspection verbs onto the read route and stop full hydration and outbox
-draining for reads.
-- `CliReadOnlyCommandRunner` handles only `board`, historical `trial-compare` and `task`/`tasks`. Every other verb,
-  including the QueryOnly set in `CliCommandCapabilities` (`status`, `next`, `goals`, `goal-events`, `timeline`,
-  `backlog-*`, `monitor-goal`, `config`), enters `CliPersistentStateRunner.ExecuteCommand`, which drains the
-  acceptance-retry audit outbox. `attention`, `readiness` and goal show are not classified QueryOnly.
-- Every CLI invocation still runs a full `stateRepository.LoadAsync()` in `Program.cs`; QueryOnly skips only worker
-  process tracking.
-- Open backlog: `3cdca621` (tick holds the write lock for the whole tick), `74802406` (journal/hydration overhaul),
-  `b9babf50` (verification output stored four times, ~45% of `state.db`), `eddcd123` (parallel read-only wrappers
-  invalidate each other's staged runtime), `37bfecf6` (gate-safe read-only receipt inspection).
+**Queries — partial.** Attention, readiness and next moved to the read-only route at `45f739e42` (2026-09-24,
+operator commit; no goal id is recorded in its subject or body). This corrects the prior claim that every
+inspection verb beyond board, historical trial-compare and task/tasks takes the writer path. Remaining work:
+move the other inspection verbs onto the read route and stop full hydration and outbox draining for reads.
+Previously recorded backlog: `3cdca621`, `74802406`, `b9babf50`, `eddcd123`, `37bfecf6`.
 
-**Transitions — remaining.** Migrate park, abandon, cancel and supersede to the unpark pattern, with an atomic effect
-intent for park.
+**Transitions — remaining.** No stage-advancing landing identified since 2026-09-24 in this refresh; prior text:
+Migrate park, abandon, cancel and supersede to the unpark pattern, with an atomic effect intent for park.
+
 - `ExecuteGoalLifecycleDispositionCommand` routes every lifecycle verb except `unpark-goal` to
   `ExecuteCommandWithoutTransaction`. The operator-intent inbox carries retry, verify-manual, progress,
   criterion-evidence map/record and adjudicate, but no lifecycle transitions.
+
 - Open backlog: `1f320d91` (park loses to the tick's cached goal; the unpark half is fixed), `96eae3fb` (park reports
   cancelled while the worker tree is live), `f15cfda8` (typed transition receipts), `2861b909` (recover decisions
   discarded), `8b067013` (stop-alias parsing). Parked goals `7131a80c` and `f57758c8` are related.
 
-**Application — residual only.** `GoalManagementCommandService` remains as a 393-line adapter across three files.
-Extracting Runtime/Conductor from App (`90309cf6`) is a separate follow-on.
+**Application — residual only.** No additional stage-advancing landing identified since 2026-09-24; prior text:
+`GoalManagementCommandService` remains as a 393-line adapter across three files.
+Extracting Runtime/Conductor from App (`90309cf6`) is a separate follow-on. Dashboard removal is recorded under
+Hosts, whose required-outcomes column owns the independently publishable surface.
 
-**Acceptance — remaining.** Extract the build, invocation, scheduling and adjudication owners from
-`GoalAcceptanceVerifier.cs` (still ~9630 lines, 47 types, essentially the same size as on 2026-09-06). Open
-backlog: `8aae1018` (six-seam decomposition), `201b9b3c`, `1d58c41b`.
+**Acceptance — partial.** Attempt ownership remains delivered (`6032a3d4`, `209400a8b`). Verifier decomposition
+has started, with these seven landed slices:
 
-**Workflow decisions — remaining.** Policy slices for dispatch, Verifying and Verified/landing, following the Failed
-lifecycle pattern. `Core/Application/LandingDecision.cs` exists; its adoption was not measured. Open backlog:
-`0699a50d` and `1c32adf8` (decisions gated by prose), `98685651` (typed decision spine, now partly served by
-DecisionSpine), `877c430d`, `90309cf6`.
+- Focused-evidence resolution: `c60a7cb5`, `01c11f26d`.
 
-**Hosts — residual only.** Dashboard sources still live physically under `src/Mcg.AgentOrchestrator.App/Dashboard`
-and are excluded from the App compile. The publish scripts are distribution-only; the repository launcher stages the
-App or Dashboard build itself. Backlog `834495f5` (published runtime loses dependencies, 2026-09-09) is open and
-was not re-verified.
+- Test-tamper analysis: `6c6778ce`, `911b444bc`.
 
-**Persistent operation — not started.** Needs a queryable runtime generation/readiness/ownership surface, safe update
-with child adoption, and a fenced offline applier. `ConductorContinuitySupervisor` and `ConductorLoopHandoff`
-predate this migration. `5a8a1fc8` (landed 2026-09-23) defers the max-duration stop while acceptance runs, which
-probably resolves backlog `9349d2f8` (still open, unverified). Open backlog: `850ce84b`, `feb30cb9`, `cd649d71`,
-`eab19492`, `df8311e1`, `b9b521f3` (tick runs IO inline).
+- Dotnet/MTP argument construction: `29c53339`, `3f9b33b12`.
 
-**Evidence/economics — ongoing.** Open backlog: `a32001ff` (cost telemetry), `57f6eebe` and `7a015307` (round
-ledger), `396fd25d` (receipt reuse across acceptance and landing), `140e2c3c`. Hermes remains TrialOnly.
+- Slice 4, TRX taxonomy/identity and test telemetry: `c0cfa8ae`, `593bde027`.
 
-**Other open goals from this period.** Parked: `b5271c78`, `2f8d0ef4`, `48677446`, `7131a80c`, `f57758c8`.
-`09740603` has held at Verified since 2026-09-15. Cancelled: `a1088fcb` (gate floor), `93582504` (merge-train
-verification off the tick), `28292ab8`, `9182589a`.
+- Slice 5, build artifact locking: `efdff7b2`, `8ec545750`.
 
-**Relation to the operating-model redesign (ratified 2026-09-23).** The redesign's first slice, the atomic
-`adjudicate` intent (`798f1c58`), builds on the Workflow decisions stage. Moving the remaining lifecycle
-transitions into the operator-intent inbox (Transitions) and typed policy decisions (Workflow decisions) is the
-substrate an event-dispatched Steward needs.
+- Slice 6, output capture/custody and command-line limits: `78053cf4`, `5de6d0b26`.
+
+- Slice 7, process runner: `28ea80c3`, `d6815a6db`, integrated by main merge `d31fba87f`; no longer in flight.
+
+At `d31fba87f`, `src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs` is **6164 lines**
+(`wc -l`, counting newline bytes), down from the premise's 6705 at `295a07d05`. Remaining work: complete separate
+build, invocation, scheduling and adjudication ownership; helper extraction alone does not complete Acceptance.
+Previously recorded backlog: `8aae1018`, `201b9b3c`, `1d58c41b`.
+
+Recorded finding `e9725343` (supplied premise at `295a07d05`, not a landed implementation): partition-verdict
+reuse cannot carry green lanes across a main move because all Infrastructure.Tests lanes share one lane closure
+covering seven source projects plus `docs/`, `scripts/` and `config/`. Enabling reuse requires splitting that test
+project. This refresh does not claim that the finding has been resolved.
+
+**Workflow decisions — remaining.** No additional policy-stage outcome is credited since 2026-09-24; prior text:
+Policy slices for dispatch, Verifying and Verified/landing, following the Failed lifecycle pattern.
+`Core/Application/LandingDecision.cs` exists; its adoption was not measured. Open backlog: `0699a50d` and
+`1c32adf8` (decisions gated by prose), `98685651` (typed decision spine, now partly served by DecisionSpine),
+`877c430d`, `90309cf6`.
+
+Conductor decomposition landed without establishing those policy outcomes:
+
+- `ConductorDriver` slices 1–5: `98952a12` (`2a5f34941`), `db18d0d0` (`cacef6db4`), `4fac1b84` (`000b758b5`),
+  `868fd04a` (`236512f41`), `6f38e132` (`b307f80db`).
+
+- `ConductorBatchLoop` slices 1–6: `ccf8e6a1` (`3d1583dd2`), `b669e004` (`c685c6e10`), `9299e924` (`8f1475dcf`),
+  `af61f4a6` (`cb355dbfb`), `6e664238` (`80da1371c`), `8c677dd2` (`efb225536`).
+
+The remaining measured files at `d31fba87f` (`wc -l`, counting newline bytes):
+
+- `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs`: **3006 lines**.
+
+- `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs`: **2676 lines**.
+
+- `src/Mcg.AgentOrchestrator.App/Cli/CliCommandHandlers.Goals.cs`: **2080 lines**.
+
+**Hosts — delivered surface changed.** Host separation remains landed (`ac61f820`, `cc9167aec`). The browser
+dashboard project, host wiring and publish surface were removed (`6bae4427`, `849f62765`); current documentation
+was updated (`12f07e75`, `062ad484b`); remaining dashboard-only code was removed (`de510074`, `7a7d0a543`);
+its browser acceptance smoke was retired (`bee9a71f`, `655d95c4f`). The headless host remains the surface.
+The paragraph immediately after the table describes the earlier dashboard arrangement and is retained unchanged
+outside this refresh's scope. Previously recorded backlog `834495f5` (published runtime loses dependencies,
+2026-09-09) was not re-verified.
+
+**Persistent operation — partial.** Landed:
+
+- Runtime generation status in `conductor status`: `f77f5f6c`, `56afd4c2f`; reading rotated generation logs:
+  `b3a6634f`, `19a6532a6`.
+
+- Out-of-process cohort and merge-train gate runs, adopted by a successor generation: `f47113b2`, main merge
+  `5e0581b51` (the branch history includes `b6ca2c00c`, naming `goal/f47113b2`). This is gate adoption.
+
+- Main-health detection pauses gating when main is suspected red: `01ce50dd`, `4975e8165`.
+
+- Host-health signal on every acceptance gate: `68456acf`, `c258b316b`.
+
+- Daily storage retention moved off the tick: `6c201067`, `b705ddaca`.
+
+Remaining: complete runtime readiness/ownership reporting, agent-worker adoption for safe updates with workers
+in flight, and a fenced offline applier. Gate adoption does not establish that restarting with agent workers in
+flight is safe. Previously recorded backlog: `850ce84b`, `feb30cb9`, `cd649d71`, `eab19492`, `df8311e1`, `b9b521f3`.
+
+**Evidence/economics — ongoing.** No additional stage outcome or matched efficiency measurement identified in
+this refresh since 2026-09-24; prior text: Open backlog: `a32001ff` (cost telemetry), `57f6eebe` and `7a015307`
+(round ledger), `396fd25d` (receipt reuse across acceptance and landing), `140e2c3c`. Hermes remains TrialOnly.
 
 ## Validation — 2026-09-06 12:47 UTC (historical)
 

@@ -35,6 +35,46 @@ public sealed class AcceptanceLaneClosureHasherTests : GoalAcceptanceVerifierTes
         Assert.Null(AcceptanceLaneClosureHasher.TryCompute(_root, CreateCheck()));
     }
 
+    [Fact]
+    public void CommittedLinkedCompileSource_ChangesHash()
+    {
+        CreateRepository(
+            "src/TestLibrary/TestLibrary.csproj",
+            testProjectItems: "<Compile Include=\"..\\Shared.cs\" Link=\"Shared.cs\" />",
+            extraFiles: new Dictionary<string, string> { ["tests/Shared.cs"] = "internal sealed class Shared { }" });
+        var check = CreateCheck();
+        var before = AcceptanceLaneClosureHasher.TryCompute(_root, check);
+        Assert.NotNull(before);
+
+        File.AppendAllText(Path.Combine(_root, "tests", "Shared.cs"), "// committed change");
+        RunGit("add", ".");
+        RunGit("commit", "-m", "change linked source");
+
+        var after = AcceptanceLaneClosureHasher.TryCompute(_root, check);
+        Assert.NotNull(after);
+        Assert.NotEqual(before, after);
+    }
+
+    [Fact]
+    public void ParentWildcardCompileInclude_RefusesHash()
+    {
+        CreateRepository(
+            "src/TestLibrary/TestLibrary.csproj",
+            testProjectItems: "<Compile Include=\"..\\*.cs\" />");
+
+        Assert.Null(AcceptanceLaneClosureHasher.TryCompute(_root, CreateCheck()));
+    }
+
+    [Fact]
+    public void PropertyCompileInclude_RefusesHash()
+    {
+        CreateRepository(
+            "src/TestLibrary/TestLibrary.csproj",
+            testProjectItems: "<Compile Include=\"$(MSBuildThisFileDirectory)..\\Shared.cs\" />");
+
+        Assert.Null(AcceptanceLaneClosureHasher.TryCompute(_root, CreateCheck()));
+    }
+
     public void Dispose() => DeleteDirectoryWithRetry(_root);
 
     private static GoalAcceptanceVerifier.AcceptanceManifestCheck CreateCheck() => new()
@@ -48,13 +88,24 @@ public sealed class AcceptanceLaneClosureHasherTests : GoalAcceptanceVerifierTes
     private void CreateRepository(
         string referencedProject,
         bool createReferencedProject = true,
-        bool trackRootBuildInput = true)
+        bool trackRootBuildInput = true,
+        string testProjectItems = "",
+        IReadOnlyDictionary<string, string>? extraFiles = null)
     {
         var testProject = Path.Combine(_root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests");
         Directory.CreateDirectory(testProject);
         File.WriteAllText(
             Path.Combine(testProject, "Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"),
-            $"<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup><ProjectReference Include=\"../../{referencedProject}\" /></ItemGroup></Project>");
+            $"<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup><ProjectReference Include=\"../../{referencedProject}\" />{testProjectItems}</ItemGroup></Project>");
+        if (extraFiles is not null)
+        {
+            foreach (var (relativePath, content) in extraFiles)
+            {
+                var filePath = Path.Combine(_root, relativePath.Replace('/', Path.DirectorySeparatorChar));
+                Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
+                File.WriteAllText(filePath, content);
+            }
+        }
         if (createReferencedProject)
         {
             var referencedProjectPath = Path.Combine(_root, referencedProject.Replace('/', Path.DirectorySeparatorChar));

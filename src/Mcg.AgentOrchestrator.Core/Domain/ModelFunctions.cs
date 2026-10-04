@@ -40,4 +40,6 @@ public static class ModelFunctionPurposes
     public const string AcceptanceJudge = "acceptance-judge";
     public const string SpecRefiner = "spec-refiner";
     public const string StewardTriage = "steward-triage";
+    public const string ConductorAuthor = "conductor-author";
+    public const string ConductorSteward = "conductor-steward";
 }

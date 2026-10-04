@@ -52,7 +52,8 @@ internal sealed class ConductorAuthorHost
     internal static ConductorAuthorHost CreateDefault(OrchestratorWorkspace workspace) => new(
         new ConductorAuthorClaimStore(Path.Combine(workspace.OrchestratorDirectory, "author-claims.db")),
         CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory),
-        new ClaudeConductorAuthorModelRound(Path.Combine(workspace.OrchestratorDirectory, "author-rounds")),
+        new ClaudeConductorAuthorModelRound(Path.Combine(workspace.OrchestratorDirectory, "author-rounds"),
+            catalog: ModelFunctionCatalogStore.Load(workspace.ModelFunctionCatalogPath)),
         SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory),
         new SpecRefinerPrecedentStore(workspace.SpecRefinerPrecedentsPath),
         goal => GoalWorktrees.TryResolve(workspace.ExecutionDirectory, goal.Id) ?? workspace.ExecutionDirectory,
@@ -146,8 +147,9 @@ internal sealed class ConductorAuthorHost
             {
                 var attempt = _claims.Attempt(identity);
                 var retry = attempt < MaxAttempts;
-                var reason = running.Round.IsCanceled ? "timeout" :
-                    running.Round.Exception?.GetBaseException().GetType().Name ?? "model-failure";
+                var failure = running.Round.Exception?.GetBaseException();
+                var reason = running.Round.IsCanceled ? "timeout" : ConductorRoundModelResolver.ConductReason(failure,
+                    failure is ConductorModelRoundException ? nameof(InvalidOperationException) : failure?.GetType().Name ?? "model-failure");
                 _claims.Complete(identity, retry ? "retryable" : "model-failure");
                 Record(item, retry ? "retry-scheduled" : "model-failure", $"{reason} attempt={attempt}/{MaxAttempts}");
                 continue;
@@ -194,7 +196,8 @@ internal sealed class ConductorAuthorHost
             if (result is null)
             {
                 _claims.Complete(identity, "unparseable");
-                Record(item, "model-failure", "unparseable-output");
+                Record(item, "model-failure", string.IsNullOrWhiteSpace(output)
+                    ? ConductorRoundModelResolver.WithModel("unparseable-output", _model.ModelAlias) : "unparseable-output");
                 return;
             }
             if (result.Kind == "ask-owner")
