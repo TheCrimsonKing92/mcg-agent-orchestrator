@@ -45,12 +45,12 @@ internal sealed class PanelTriggerTestFixture : IDisposable
     internal string CriteriaVersion => EffectiveAcceptanceCriteriaVersion.ComputeForGoal(Panel.Goal);
 
     internal void Timeline(int cursor, string text, bool decision = false, string? source = null,
-        string eventType = "GoalEscalated")
+        string eventType = "GoalEscalated", string? goalId = null)
     {
         Directory.CreateDirectory(Events);
-        File.AppendAllText(Path.Combine(Events, GoalId + ".jsonl"), JsonSerializer.Serialize(new
+        File.AppendAllText(Path.Combine(Events, (goalId ?? GoalId) + ".jsonl"), JsonSerializer.Serialize(new
         {
-            cursor, timestamp = Panel.Time.UtcNow, goalId = GoalId,
+            cursor, timestamp = Panel.Time.UtcNow, goalId = goalId ?? GoalId,
             eventType = decision ? "GoalLifecycleDecision" : eventType,
             progressKind = decision ? "GoalPolicyDecision" : null,
             reason = decision ? null : text, message = decision ? text : null, source

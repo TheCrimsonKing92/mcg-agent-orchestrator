@@ -101,12 +101,13 @@ internal sealed partial class ConductorJudgePanelTriggerSources(
                 => (PanelTriggerKind.PreReviewEvidence, "PRE_REVIEW_EVIDENCE_TIMEOUT"),
             var s when s.Contains("PRE_TESTER_RED_LOOP:", StringComparison.Ordinal)
                 => (PanelTriggerKind.PreTesterRedLoop, "PRE_TESTER_RED_LOOP"),
-            var s when s.Contains("Acceptance RED classified as apparatus", StringComparison.Ordinal)
+            var s when s.Contains("Acceptance RED classified as apparatus", StringComparison.Ordinal) ||
+                       s.Contains("Acceptance_RED_classified_as_apparatus", StringComparison.Ordinal)
                 => (PanelTriggerKind.ApparatusRed, "apparatus"),
             _ => ((PanelTriggerKind?)null, "")
         };
         return kind is null ? null : new(kind.Value, goal,
-            Revision(text, @"(?:candidate_sha=|branch=|candidate\s+)"),
+            Revision(text, @"(?:candidate_sha=|branch=|candidate[\s_]+)"),
             Revision(text, @"(?:base_sha=|base=|main=)"), id, at, text, [], detail);
     }
 

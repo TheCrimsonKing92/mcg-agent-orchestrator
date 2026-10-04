@@ -37,10 +37,10 @@ internal sealed partial class ConductorJudgePanelHost
         var now = _utcNow();
         _store.Start(now, kernel.Goals.Select(goal => new PanelGoalEnrollment(goal.Id.Value,
             goal.MetadataCreatedAt ?? goal.BriefVersions[0].RecordedAt)));
-        Triggers?.Detect(onlyGoalId);
         _store.ExpireStale(now - ConductorJudgePanelBudgets.ClaimExpiry, _running?.Id);
         Harvest(kernel);
         ReportTerminals();
+        DetectTriggers(onlyGoalId);
         if (_round is not null) return;
         if (_judges.All(judge => judge.BindingError is not null))
         {

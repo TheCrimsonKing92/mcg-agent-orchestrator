@@ -8,10 +8,13 @@ public sealed class ConductorJudgePanelTriggerDetectorTests
         using var f = new PanelTriggerTestFixture();
         await f.SaveCriteria();
         var trx = f.Trx();
-        f.Timeline(0, f.BoundText("Tester stayed verification-inconclusive on unchanged inputs", trx));
-        f.Timeline(1, f.BoundText("PRE_REVIEW_RED_UNCHANGED_CANDIDATE: repeated red", trx));
-        f.Timeline(2, f.BoundText("PRE_TESTER_RED_LOOP: three candidate RED runs", trx), decision: true);
-        f.Conduct("goal", f.BoundText("Acceptance RED classified as apparatus (test-host)", trx), rotated: true);
+        // Match producer text: these records do not invent candidate_sha/base_sha fields.
+        f.Timeline(0, $"Tester task 1234abcd stayed verification-inconclusive on unchanged inputs; operator action required. Candidate: {f.Panel.Candidate}; receipt ids: none; latest current-round receipt: {trx}");
+        f.Timeline(1, $"PRE_REVIEW_RED_UNCHANGED_CANDIDATE: candidate {f.Panel.Candidate} failed again without typed test identities; diagnostic: build failed.");
+        var redRuns = string.Join(" | ", Enumerable.Range(1, 3).Select(index =>
+            $"finding-evidence pre-tester outcome=actionable-red; candidate_sha={f.Panel.Candidate}; receipt_id=red-{index}; selections=ExampleTests; not_run=; result_path={Uri.EscapeDataString(trx)}; failing_tests=ExampleTests.Dispute"));
+        f.Timeline(2, "PRE_TESTER_RED_LOOP: three consecutive candidate RED runs without Tester dispatch; failing_sets=" + redRuns);
+        f.Timeline(3, "Acceptance RED classified as apparatus (test-host); restored Verified for re-gate 1/2.", decision: true);
         var authorId = f.AuthorQuestion();
         f.CohortFailure("both-failed", trx);
         f.PrepareProducerReadArtifacts();
@@ -23,16 +26,17 @@ public sealed class ConductorJudgePanelTriggerDetectorTests
             ["tester-inconclusive-unchanged"] = $"goal-event:{f.GoalId}:0",
             ["pre-review-evidence"] = $"goal-event:{f.GoalId}:1",
             ["pre-tester-red-loop"] = $"goal-event:{f.GoalId}:2",
-            ["apparatus-red"] = $"conduct-event:{f.GoalId}:{f.Panel.Time.UtcNow:O}",
+            ["apparatus-red"] = $"goal-event:{f.GoalId}:3",
             ["author-ask-owner"] = authorId,
             ["cohort-both-failed"] = "cohort-receipt:both-failed"
         };
         Assert.Equal(expected.Keys.Order(), cases.Select(item => item.Key.TriggerKind).Order());
         Assert.All(cases, item =>
         {
-            var unknown = item.Key.TriggerKind == "author-ask-owner";
-            var key = new PanelCaseKey(f.GoalId, unknown ? PanelTrigger.UnrecordedSha : f.Panel.Candidate,
-                unknown ? PanelTrigger.UnrecordedSha : f.BaseSha, f.CriteriaVersion,
+            var candidateRecorded = item.Key.TriggerKind is "pre-review-evidence" or "pre-tester-red-loop" or "cohort-both-failed";
+            var baseRecorded = item.Key.TriggerKind == "cohort-both-failed";
+            var key = new PanelCaseKey(f.GoalId, candidateRecorded ? f.Panel.Candidate : PanelTrigger.UnrecordedSha,
+                baseRecorded ? f.BaseSha : PanelTrigger.UnrecordedSha, f.CriteriaVersion,
                 expected[item.Key.TriggerKind], item.Key.TriggerKind, item.Key.Packet);
             Assert.Equal(key, item.Key);
             Assert.Equal(ConductorJudgePanelCaseStore.CaseId(key), item.Id);
@@ -46,7 +50,7 @@ public sealed class ConductorJudgePanelTriggerDetectorTests
         Assert.Equal(diffCalls, f.DiffCalls);
         Assert.Equal(hashes.OrderBy(pair => pair.Key), f.ProducerHashes().OrderBy(pair => pair.Key));
         // A producer can re-raise with a new cursor; it is still the same candidate dispute.
-        f.Timeline(100, f.BoundText("PRE_REVIEW_RED_UNCHANGED_CANDIDATE: raised again", trx));
+        f.Timeline(100, $"PRE_REVIEW_RED_UNCHANGED_CANDIDATE: candidate {f.Panel.Candidate} failed again without typed test identities; diagnostic: build failed.");
         Assert.Empty(f.Detector(reopened).Detect());
     }
 
@@ -87,13 +91,43 @@ public sealed class ConductorJudgePanelTriggerDetectorTests
     {
         using var f = new PanelTriggerTestFixture();
         await f.SaveCriteria();
-        f.Conduct("goal", f.BoundText("Acceptance RED classified as apparatus (test-host)", f.Trx()),
-            goalId: f.GoalId[..8]);
+        var reason = $"Acceptance RED classified as apparatus (test-host) for candidate branch={f.Panel.Candidate[..12]} main={f.BaseSha[..12]}: every failing test lies outside the candidate's changed paths (ExampleTests.Dispute). Re-gating on the next conduct tick (1/2); no worker was reopened.";
+        f.Conduct("goal", $"GOAL goal={f.GoalId[..8]} result=held state=Verified reason={ConductorBatchLoop.SanitizeReason(reason)}",
+            rotated: true, goalId: f.GoalId[..8]);
         var item = Assert.Single(f.Detector().Detect(f.GoalId));
         Assert.Equal(f.GoalId, item.Key.GoalId);
         Assert.Equal(f.CriteriaVersion, item.Key.CriteriaVersion);
         Assert.Equal("pending", item.Status);
         Assert.Equal("apparatus-red", item.Key.TriggerKind);
+        Assert.Equal(f.Panel.Candidate[..12], item.Key.CandidateSha);
+        Assert.Equal(f.BaseSha[..12], item.Key.BaseSha);
+    }
+
+    [Theory]
+    [InlineData("PRE_REVIEW_RED_UNCHANGED_CANDIDATE")]
+    [InlineData("PRE_REVIEW_EVIDENCE_TIMEOUT")]
+    public async Task Timeline_and_sanitized_conduct_enroll_one_case(string code)
+    {
+        using var f = new PanelTriggerTestFixture();
+        await f.SaveCriteria();
+        var text = code == "PRE_REVIEW_EVIDENCE_TIMEOUT"
+            ? $"{code}: candidate {f.Panel.Candidate} focused evidence hit its time budget on consecutive runs without failing test identities; operator action required."
+            : $"{code}: candidate {f.Panel.Candidate} failed again without typed test identities; diagnostic: build failed.";
+        f.Timeline(0, text);
+        // Conduct writes the same dispute later using an eight-character goal prefix and sanitized reason.
+        f.Panel.Time.UtcNow += TimeSpan.FromSeconds(1);
+        f.Conduct("goal", $"GOAL goal={f.GoalId[..8]} result=escalated state=Active reason={ConductorBatchLoop.SanitizeReason(text)}",
+            goalId: f.GoalId[..8]);
+        Assert.Equal(2, f.Sources.Read().Count);
+        var item = Assert.Single(f.Detector().Detect());
+        Assert.Equal(f.Panel.Candidate, item.Key.CandidateSha);
+        Assert.Equal(PanelTrigger.UnrecordedSha, item.Key.BaseSha);
+        Assert.Equal($"goal-event:{f.GoalId}:0", item.Key.TriggerId);
+        Assert.Equal("pre-review-evidence", item.Key.TriggerKind);
+        Assert.Equal(f.CriteriaVersion, item.Key.CriteriaVersion);
+        var reopened = new ConductorJudgePanelCaseStore(Path.Combine(f.Panel.Root, "panel.db"));
+        Assert.Empty(f.Detector(reopened).Detect());
+        Assert.Single(reopened.Cases());
     }
 
     [Fact]
