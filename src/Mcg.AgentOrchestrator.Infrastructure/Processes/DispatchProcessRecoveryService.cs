@@ -977,35 +977,47 @@ internal sealed class DispatchProcessRecoveryService
     }
 
     private static bool IsStillRunning(int processId)
+        => IsStillRunning(processId, ReadHasExited);
+
+    internal static bool IsStillRunning(int processId, Func<int, bool> readHasExited)
     {
         try
         {
-            using var process = Process.GetProcessById(processId);
-            return !process.HasExited;
+            return !readHasExited(processId);
         }
-        catch (ArgumentException)
+        catch (Exception exception) when (ProcessProbeFailure.IsNotLive(exception))
         {
             return false;
         }
     }
 
+    private static bool ReadHasExited(int processId)
+    {
+        using var process = Process.GetProcessById(processId);
+        return process.HasExited;
+    }
+
     private static bool TryKillProcess(int processId) => WorkerProcessJobs.TryKillOrFallback(processId);
 
     private static long? ReadPeakMemoryBytes(int processId)
+        => ReadPeakMemoryBytes(processId, ReadLivePeakMemoryBytes);
+
+    internal static long? ReadPeakMemoryBytes(int processId, Func<int, long?> readLivePeakMemoryBytes)
     {
         try
         {
-            using var process = Process.GetProcessById(processId);
-            return process.HasExited ? null : Math.Max(process.WorkingSet64, process.PeakWorkingSet64);
+            return readLivePeakMemoryBytes(processId);
         }
-        catch (ArgumentException)
+        catch (Exception exception) when (ProcessProbeFailure.IsNotLive(exception))
         {
             return null;
         }
-        catch (InvalidOperationException)
-        {
-            return null;
-        }
+    }
+
+    private static long? ReadLivePeakMemoryBytes(int processId)
+    {
+        using var process = Process.GetProcessById(processId);
+        return process.HasExited ? null : Math.Max(process.WorkingSet64, process.PeakWorkingSet64);
     }
 
     private static void WriteExitArtifactBestEffort(string path, int exitCode, string reason)
