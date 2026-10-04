@@ -441,7 +441,7 @@ internal sealed partial class GoalDispatchOperations
     }
 
     private static CitedPriorEvidenceResolver CreateCitedPriorEvidenceResolver(OrchestratorWorkspace workspace) =>
-        CitedPriorEvidenceResolver.ForStateDatabase(workspace.SqliteStatePath);
+        CitedPriorEvidenceResolver.ForWorkspace(workspace.SqliteStatePath, workspace.OrchestratorDirectory);
 
     private static int ResolveReviewAutoRetryStopRound(
         OrchestratorWorkspace workspace,

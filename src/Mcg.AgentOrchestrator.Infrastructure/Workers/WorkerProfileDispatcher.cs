@@ -71,7 +71,7 @@ public sealed class WorkerSubscriptionPreflightException : InvalidOperationExcep
 
 public sealed record DispatchModelOverride(string? ProfileName, string? ModelName, string? ReasoningEffort);
 
-public static class WorkerProfileDispatcher
+public static partial class WorkerProfileDispatcher
 {
     internal const string ProviderBudgetExhaustionErrorCode = "provider-budget-exhausted";
     public const string OpenAiSubscriptionProfileName = "codex-cli";
@@ -190,15 +190,8 @@ public static class WorkerProfileDispatcher
             ref reviewerMergeTreeTotalConflictPathCount);
 
         WorkerCommandTemplate.WriteHandoffFile(goal.Tasks, task.Id, workingDirectory);
-        var citedPriorEvidence = citedPriorEvidenceResolver?.Resolve(goal, task);
-        var contextDirectory = WorkerContextArtifacts.Write(
-            goal,
-            task,
-            workingDirectory,
-            preflightFindings,
-            citedPriorEvidence,
-            providerName,
-            modelName);
+        var contextDirectory = WriteDispatchContextArtifacts(kernel, goal, task, workingDirectory,
+            preflightFindings, providerName, modelName, citedPriorEvidenceResolver, dispatchedAt);
         var targetContext = TryReadCurrentTargetContext(workingDirectory);
         var currentMainIdentity = ReadCurrentMainIdentityForRetry(workingDirectory);
         var reviewerRoundTouchScope = ReadReviewRoundTouchScope(

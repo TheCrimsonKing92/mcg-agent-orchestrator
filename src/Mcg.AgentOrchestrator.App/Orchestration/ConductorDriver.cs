@@ -2191,15 +2191,16 @@ internal sealed partial class ConductorDriver
         var running = _getRunningPaidWorkerCount();
         var workerAdmission = GetWorkerAdmissionSnapshot(policy);
         var workerCap = workerAdmission.EffectiveWorkerCap;
+        var facts = new DispatchAdmissionFacts(running, workerAdmission.ConfiguredWorkerCap,
+            workerAdmission.AdmissionCapacity, workerAdmission.ReservedGateSlots, workerCap, policy.MaxConcurrentPaidWorkers);
+        var decision = DispatchAdmissionPolicy.Evaluate(facts);
 
-        if (running >= workerCap)
+        if (decision.Action == DispatchAdmissionAction.Hold)
         {
-            var reservedGateSlot = workerAdmission.ReservedGateSlots > 0 &&
-                                   workerCap < policy.MaxConcurrentPaidWorkers;
             var admissionClamped = workerCap < workerAdmission.ConfiguredWorkerCap;
             if (admissionClamped)
             {
-                var reason = reservedGateSlot ? "reserved-gate-slot" : "worker-admission-capacity";
+                var reason = decision.DiscriminatingEvidence;
                 Console.WriteLine(
                     $"ADMISSION goal={goalPrefix} result=deferred reason={reason} cap={workerCap} running={running} " +
                     $"configuredCap={workerAdmission.ConfiguredWorkerCap} admissionCapacity={workerAdmission.AdmissionCapacity}");
@@ -2207,18 +2208,16 @@ internal sealed partial class ConductorDriver
 
             EmitPhaseTiming("dispatch-prep", goal, TimeSpan.Zero, $"tasks={CountAssignedTasks(goal)} result=held-cap running={running}");
             return MakeResult(goal.Id.Value, goalPrefix, policy,
-                new ConductorAdvanceOutcome.Held(fromState,
-                    reservedGateSlot
-                        ? $"At worker cap ({running}/{workerCap}) with a gate-ready goal reserving a stable slot; will advance when a slot opens"
-                        : admissionClamped
-                            ? $"At worker admission capacity ({running}/{workerCap}); configured cap {workerAdmission.ConfiguredWorkerCap} is clamped; will advance when a slot opens"
-                            : $"At worker cap ({running}/{workerCap}); will advance when a slot opens"));
+                new ConductorAdvanceOutcome.Held(fromState, decision.Reason) { Decision = decision.ToRecord() });
         }
 
-        if (SliceBatchAdmissionEvaluator?.Evaluate(goal) is { IsAllowed: false } sliceDecision)
+        if (SliceBatchAdmissionEvaluator?.Evaluate(goal) is { } sliceDecision)
         {
-            return MakeResult(goal.Id.Value, goalPrefix, policy,
-                new ConductorAdvanceOutcome.Held(fromState, sliceDecision.Reason!));
+            decision = DispatchAdmissionPolicy.Evaluate(facts with
+                { SliceBatchAdmissionAllowed = sliceDecision.IsAllowed, SliceBatchAdmissionReason = sliceDecision.Reason });
+            if (decision.Action == DispatchAdmissionAction.Hold)
+                return MakeResult(goal.Id.Value, goalPrefix, policy,
+                    new ConductorAdvanceOutcome.Held(fromState, decision.Reason) { Decision = decision.ToRecord() });
         }
 
         var exitedUnappliedTaskIds = goal.Tasks

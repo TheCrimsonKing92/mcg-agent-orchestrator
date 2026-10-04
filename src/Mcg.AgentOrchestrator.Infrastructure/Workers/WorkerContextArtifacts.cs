@@ -18,7 +18,10 @@ public static class WorkerContextArtifacts
         IReadOnlyList<string>? preflightFindings = null,
         string? citedPriorEvidence = null,
         string? providerName = null,
-        string? modelName = null)
+        string? modelName = null,
+        string? orchestratorStoreRoot = null,
+        IReadOnlyList<string>? answeredEvidenceTexts = null,
+        IClock? clock = null)
     {
         return new WorkerArtifactWriter().Write(
             goal,
@@ -27,7 +30,10 @@ public static class WorkerContextArtifacts
             preflightFindings,
             citedPriorEvidence,
             providerName,
-            modelName);
+            modelName,
+            orchestratorStoreRoot,
+            answeredEvidenceTexts,
+            clock);
     }
 
     public static IReadOnlyList<WorkerSkillRequirement> SelectSkillRequirements(

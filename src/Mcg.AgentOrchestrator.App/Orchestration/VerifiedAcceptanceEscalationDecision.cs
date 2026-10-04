@@ -12,7 +12,7 @@ internal static class VerifiedAcceptanceEscalationDecision
     internal static ConductorTickOutcomePayload BuildTickOutcomePayload(ConductorAdvanceOutcome outcome) => outcome switch
     {
         ConductorAdvanceOutcome.Executed executed => new("Executed", executed.FromState.ToString(), null),
-        ConductorAdvanceOutcome.Held held => new("Held", held.State.ToString(), null),
+        ConductorAdvanceOutcome.Held held => new("Held", held.State.ToString(), null, held.Decision),
         ConductorAdvanceOutcome.Escalated escalated => new("Escalated", escalated.State.ToString(), EffectiveKind(escalated).ToString()),
         ConductorAdvanceOutcome.Done done => new("Done", done.State.ToString(), null),
         _ => throw new InvalidOperationException($"Unknown conductor outcome type {outcome.GetType().FullName}.")
