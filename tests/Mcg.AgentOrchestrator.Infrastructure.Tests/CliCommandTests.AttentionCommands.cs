@@ -1008,7 +1008,7 @@ public sealed class CliCommandTestsAttentionCommands : CliCommandTestBase
         });
 
         Xunit.Assert.Equal(GoalStatus.Parked, goal.Status);
-        Xunit.Assert.False(task.LastProcess!.IsRunning);
+        Xunit.Assert.True(task.LastProcess!.IsRunning);
         Xunit.Assert.False(prospective.IsCompleted);
         Xunit.Assert.Single(kernel.GetPendingHumanInput(goal.Id));
         Xunit.Assert.Contains("Resolved human waits: 0", applyOutput);

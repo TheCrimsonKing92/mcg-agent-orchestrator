@@ -21,7 +21,7 @@ internal static partial class CliPersistentStateRunner
         }
 
         // Validate parkability on an isolated kernel before any process is terminated.
-        preparation.ParkGoal(goalId, command.Reason);
+        CliCommandHandlers.ValidateGoalParkStopAlias(command, preparation, goalId);
         var receipts = GoalWorkerTermination.Terminate(snapshot, "park");
         CliCommandHandlers.GoalLifecycleTransitionOutcome outcome;
         try
@@ -31,8 +31,7 @@ internal static partial class CliPersistentStateRunner
                 if (state is null) throw new KeyNotFoundException($"Goal '{goalId.Value}' was not found.");
                 var kernel = new AgentOrchestratorKernel();
                 kernel.ReplaceGoalStateWithSnapshot(state.Goal, state.HumanInputRequests);
-                GoalWorkerTermination.Replay(kernel, goalId, receipts);
-                var applied = CliCommandHandlers.ApplyGoalParkWithoutRendering(command, kernel, goalId);
+                var applied = CliCommandHandlers.ApplyGoalParkStopAliasWithoutRendering(command, kernel, goalId, receipts);
                 return Task.FromResult((true, (GoalStateSnapshot?)ExportGoalStateSnapshot(kernel, goalId), applied));
             }).GetAwaiter().GetResult();
         }
@@ -46,12 +45,7 @@ internal static partial class CliPersistentStateRunner
         }
 
         currentGoal = outcome.Goal;
-        var resolved = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory)
-            .ResolveOpenForGoalAsync(goalId.Value, $"Goal parked: {command.Reason}").GetAwaiter().GetResult();
-        Console.WriteLine($"Goal parked {goalId.Value[..8]}.");
-        Console.WriteLine($"Cancelled running dispatches: {receipts.Count}");
-        Console.WriteLine($"Resolved human waits: {outcome.ResolvedHumanWaits}");
-        Console.WriteLine($"Resolved attention items: {resolved}");
+        CliCommandHandlers.RenderGoalParkStopAliasOutcome(command, outcome, receipts.Count, workspace);
         return true;
     }
 }

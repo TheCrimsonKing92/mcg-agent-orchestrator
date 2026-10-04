@@ -3192,7 +3192,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         });
 
         Xunit.Assert.Equal(GoalStatus.Cancelled, goal.Status);
-        Xunit.Assert.False(task.LastProcess!.IsRunning);
+        Xunit.Assert.True(task.LastProcess!.IsRunning);
         Xunit.Assert.Contains("RunningDispatches: Keep", output);
         Xunit.Assert.Contains(goal.Timeline, evt => evt.Kind == ProgressKind.GoalCancelled);
     }

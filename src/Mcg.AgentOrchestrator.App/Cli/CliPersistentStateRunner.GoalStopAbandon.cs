@@ -16,13 +16,11 @@ internal static partial class CliPersistentStateRunner
         var preparation = RestoreGoalExactly(snapshot);
         var goal = preparation.GetGoal(goalId);
         var hooks = WorktreeCleanupContext.Load(attentionStoreDirectory: workspace.OrchestratorDirectory).Hooks;
-        var before = GoalAbandonPlanner.Build(preparation, goal, workspace, command.Reason, hooks);
+        var before = CliCommandHandlers.PlanGoalAbandonStopAlias(command, preparation, goal, workspace, hooks);
         if (!command.Confirmed || !before.CanApply)
         {
             currentGoal = goal;
-            ConsoleViews.PrintGoalAbandonPlan(before);
-            if (command.Confirmed)
-                throw new InvalidOperationException("abandon-goal could not apply because one or more steps are blocked.");
+            CliCommandHandlers.RenderGoalAbandonStopAliasPlan(command, before);
             return false;
         }
 
@@ -32,22 +30,8 @@ internal static partial class CliPersistentStateRunner
         try
         {
             outcome = TransactGoalSnapshotTransition(repository, "cli:abandon-goal", goalId, kernel =>
-            {
-                var updated = kernel.GetGoal(goalId);
-                // A concurrent writer may have made the original plan unsafe. Recheck before
-                // recording state, while keeping termination and cleanup outside retry bodies.
-                if (!GoalAbandonPlanner.Build(kernel, updated, workspace, command.Reason, hooks).CanApply)
-                    throw new InvalidOperationException("abandon-goal could not apply because one or more steps are blocked.");
-                GoalWorkerTermination.Replay(kernel, goalId, receipts);
-                ProgressEvent? committedEvent = null;
-                if (updated.Status is not (GoalStatus.Completed or GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded))
-                {
-                    kernel.CancelGoal(goalId, before.Reason);
-                    committedEvent = updated.Timeline[^1];
-                }
-                return new(CliCommandHandlers.GoalLifecycleTransitionDisposition.Applied,
-                    goalId, updated.Status, updated, committedEvent);
-            }, out committed);
+                CliCommandHandlers.ApplyGoalAbandonStopAliasWithoutRendering(
+                    command, kernel, goalId, workspace, hooks, before, receipts), out committed);
             if (outcome.Disposition == CliCommandHandlers.GoalLifecycleTransitionDisposition.ConflictExhausted)
                 throw CliCommandHandlers.CreateConflictExhaustedException("abandon-goal", goalId);
         }
@@ -57,10 +41,7 @@ internal static partial class CliPersistentStateRunner
         }
 
         currentGoal = outcome.Goal;
-        if (outcome.CommittedTimelineEvent is not null)
-            CliCommandHandlers.AppendCommittedLifecycleEvent(outcome, workspace, GoalStatus.Cancelled);
-        var plan = GoalAbandonPlanner.CompleteAfterCommit(committed!, outcome.Goal!, workspace, before.Reason, hooks);
-        ConsoleViews.PrintGoalAbandonPlan(plan);
+        CliCommandHandlers.RenderGoalAbandonStopAliasOutcome(outcome, committed!, workspace, before.Reason, hooks);
         return true;
     }
 }

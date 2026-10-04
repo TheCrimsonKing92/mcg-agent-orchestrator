@@ -65,32 +65,26 @@ private static bool HandleStopAlias(IReadOnlyList<string> parts, CliExecutionCon
         throw new ArgumentException("stop requires --as cancel|park|abandon|supersede");
     }
 
-    var goalPart = parts[1];
-    var reason = ResolveTextArgument(parts, 2, "stop <goal-id-prefix> <reason> --as cancel|park|abandon|supersede | stop <goal-id-prefix> --text-file <path> --as cancel|park|abandon|supersede", "--text-file");
-
     switch (asMode.ToLowerInvariant())
     {
         case "cancel":
         {
-            var delegateParts = BuildStopDelegateParts("cancel-goal", goalPart, reason, parts, "--confirm-goal-stop");
-            return TryExecuteGoalCommand("cancel-goal", delegateParts, context)!.Value;
+            return ExecuteGoalCancelInMemory(context, PrepareGoalCancelCommandFromStopAlias(parts));
         }
         case "supersede":
         {
-            var delegateParts = BuildStopDelegateParts("supersede-goal", goalPart, reason, parts, "--confirm-goal-stop");
-            return TryExecuteGoalCommand("supersede-goal", delegateParts, context)!.Value;
+            return ExecuteGoalSupersedeInMemory(context, PrepareGoalSupersedeCommandFromStopAlias(parts));
         }
         case "park":
         {
-            var delegateParts = BuildStopDelegateParts("park-goal", goalPart, reason, parts, "--confirm-goal-park");
-            return TryExecuteGoalCommand("park-goal", delegateParts, context)!.Value;
+            return ExecuteGoalParkStopAliasInMemory(context, PrepareGoalParkCommandFromStopAlias(parts));
         }
         case "abandon":
         {
-            var delegateParts = BuildStopDelegateParts("abandon-goal", goalPart, reason, parts, "--confirm-goal-abandon");
-            return TryExecuteGoalCommand("abandon-goal", delegateParts, context)!.Value;
+            return ExecuteGoalAbandonStopAliasInMemory(context, PrepareGoalAbandonCommandFromStopAlias(parts));
         }
         default:
+            _ = ResolveTextArgument(parts, 2, "stop <goal-id-prefix> <reason> --as cancel|park|abandon|supersede | stop <goal-id-prefix> --text-file <path> --as cancel|park|abandon|supersede", "--text-file");
             throw new ArgumentException($"Unknown stop mode '{asMode}'. Use: cancel|park|abandon|supersede");
     }
 }

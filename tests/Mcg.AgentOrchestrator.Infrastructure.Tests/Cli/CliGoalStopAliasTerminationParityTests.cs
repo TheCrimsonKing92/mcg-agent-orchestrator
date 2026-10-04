@@ -23,28 +23,33 @@ public sealed class CliGoalStopAliasTerminationParityTests : CliGoalStopAliasTes
             try
             {
                 var seed = await CreateActiveSeed(Path.Combine(root, "alias"), live);
-                var legacyKernel = await seed.Repository.LoadAsync();
-                var legacyWorkspace = OrchestratorWorkspace.ForDirectory(Path.Combine(root, "legacy"));
-                StateDbMigrations.EnsureUpToDate(legacyWorkspace.SqliteStatePath);
-                var legacySeed = new ParkSeed(legacyWorkspace,
-                    new SqliteOrchestratorStateRepository(legacyWorkspace.SqliteStatePath), seed.GoalId, seed.TaskIds);
+                var inMemoryKernel = await seed.Repository.LoadAsync();
+                var inMemoryWorkspace = OrchestratorWorkspace.ForDirectory(Path.Combine(root, "legacy"));
+                StateDbMigrations.EnsureUpToDate(inMemoryWorkspace.SqliteStatePath);
+                var inMemorySeed = new ParkSeed(inMemoryWorkspace,
+                    new SqliteOrchestratorStateRepository(inMemoryWorkspace.SqliteStatePath), seed.GoalId, seed.TaskIds);
                 await SeedAttention(seed);
-                await SeedAttention(legacySeed);
+                await SeedAttention(inMemorySeed);
                 var reasonFile = textFile ? Path.Combine(root, "reason.txt") : null;
                 if (reasonFile is not null) await File.WriteAllTextAsync(reasonFile, "Operator stop");
                 var args = StopParts(seed, mode, confirmed, reasonFile);
                 var version = await Version(seed);
                 var calls = new List<int>();
-                using var seam = RecordTerminations(calls);
+                var inMemoryCalls = new List<int>();
                 var probe = new GoalTransactionProbeRepository(seed.Repository);
 
-                var result = RunCommand(args, probe, seed.Workspace);
+                CommandResult result;
+                using (RecordTerminations(calls))
+                    result = RunCommand(args, probe, seed.Workspace);
                 // The legacy route sees only nonexistent pids from CreateActiveSeed (900001+).
                 // It exercises the existing handler without ever terminating a real process.
-                var legacy = RunLegacy(args, legacyKernel, legacyWorkspace);
+                string inMemory;
+                using (RecordTerminations(inMemoryCalls))
+                    inMemory = RunInMemory(args, inMemoryKernel, inMemoryWorkspace);
 
                 Xunit.Assert.Null(result.Error);
-                Xunit.Assert.Equal(legacy, result.Output);
+                Xunit.Assert.Equal(inMemory, result.Output);
+                Xunit.Assert.Equal(calls, inMemoryCalls);
                 Xunit.Assert.Equal(confirmed, result.Changed);
                 Xunit.Assert.Equal(confirmed ? Enumerable.Range(900001, live) : [], calls);
                 var stored = (await seed.Repository.LoadGoalAsync(seed.GoalId))!;
@@ -100,7 +105,7 @@ public sealed class CliGoalStopAliasTerminationParityTests : CliGoalStopAliasTes
         finally { Directory.Delete(root, recursive: true); }
     }
 
-    private static string RunLegacy(IReadOnlyList<string> args, AgentOrchestratorKernel kernel, OrchestratorWorkspace workspace)
+    private static string RunInMemory(IReadOnlyList<string> args, AgentOrchestratorKernel kernel, OrchestratorWorkspace workspace)
     {
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var profiles = WorkerProfileCatalog.Default();
