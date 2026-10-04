@@ -37,7 +37,7 @@ public sealed class BoundModelSetTests
         Assert.True(bound.Contains("Anthropic/gpt-6.1-sol"));
         Assert.True(bound.Contains("GPT-6.1-SOL"));
         Assert.True(bound.Contains("Ollama/qwen3:8b"));
-        Assert.False(bound.Contains("gpt-5.5"));
+        Assert.False(bound.Contains("gpt-5.5")); // Deliberate unbound model alias verifies membership rejects names absent from the fixture bound set.
     }
 
     [Fact]

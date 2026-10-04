@@ -17,13 +17,13 @@ public sealed class ModelOutcomeRetiredModelsConsoleTests
         Assert.Contains("Model outcome scorecard (3 model(s)):", output);
         Assert.Contains("  Anthropic/gpt-6.1-sol lane=codex-cli: Prefer", lines);
         Assert.Contains("  Anthropic/claude-opus-5-5 lane=claude-cli: Prefer", lines);
-        Assert.DoesNotContain(lines, line => line.StartsWith("  OpenAI/gpt-5.5 lane=", StringComparison.Ordinal));
+        Assert.DoesNotContain(lines, line => line.StartsWith("  OpenAI/gpt-5.5 lane=", StringComparison.Ordinal)); // Deliberate historical alias verifies an unbound model leaves the main listing.
         var retired = Assert.Single(lines.Where(line => line.StartsWith("  Retired models:", StringComparison.Ordinal)));
-        Assert.Equal("  Retired models: OpenAI/gpt-5.5 lane=codex-cli completed=1 failed=2", retired);
+        Assert.Equal("  Retired models: OpenAI/gpt-5.5 lane=codex-cli completed=1 failed=2", retired); // Deliberate historical alias verifies retired counts.
         Assert.True(Array.IndexOf(lines, retired) > Array.FindLastIndex(lines, line => line.Contains(": Prefer")));
         Assert.DoesNotContain("Bound model set unavailable", output);
         Assert.Equal(2, records.Count(record => record.IsBound));
-        Assert.False(Assert.Single(records.Where(record => record.ModelName == "gpt-5.5")).IsBound);
+        Assert.False(Assert.Single(records.Where(record => record.ModelName == "gpt-5.5")).IsBound); // Deliberate historical alias is absent from the fixture bound set.
     }
 
     [Fact]
@@ -40,7 +40,7 @@ public sealed class ModelOutcomeRetiredModelsConsoleTests
 
         Assert.Contains(lines, line => line.StartsWith("  Anthropic/gpt-6.1-sol lane=", StringComparison.Ordinal));
         Assert.Contains(lines, line => line.StartsWith("  Anthropic/claude-opus-5-5 lane=", StringComparison.Ordinal));
-        Assert.Contains(lines, line => line.StartsWith("  OpenAI/gpt-5.5 lane=", StringComparison.Ordinal));
+        Assert.Contains(lines, line => line.StartsWith("  OpenAI/gpt-5.5 lane=", StringComparison.Ordinal)); // Deliberate historical alias verifies unavailable catalogs restore all rows.
         Assert.Equal($"  Bound model set unavailable ({reason}); all models listed as bound.",
             Assert.Single(lines.Where(line => line.Contains("Bound model set unavailable"))));
         Assert.DoesNotContain("Retired models:", output);
@@ -72,7 +72,7 @@ public sealed class ModelOutcomeRetiredModelsConsoleTests
     [Fact]
     public void FullyBoundModelsKeepReasonAndPrintEmptyMismatchRules()
     {
-        var bound = BoundModelSet.Available(["gpt-6.1-sol", "claude-opus-5-5", "gpt-5.5"]);
+        var bound = BoundModelSet.Available(["gpt-6.1-sol", "claude-opus-5-5", "gpt-5.5"]); // Deliberate historical alias is explicitly bound for this fixture.
         var records = ModelOutcomeScorecard.Build(Rows(), bound);
 
         var output = CaptureConsole(() => ConsoleViews.PrintModelOutcomeScorecard(records, bound));
@@ -93,7 +93,7 @@ public sealed class ModelOutcomeRetiredModelsConsoleTests
 
         Assert.Equal("  Retired models: Anthropic/claude-opus-5-5 lane=claude-cli completed=2 failed=0; " +
             "Anthropic/gpt-6.1-sol lane=codex-cli completed=2 failed=0; " +
-            "OpenAI/gpt-5.5 lane=codex-cli completed=1 failed=2",
+            "OpenAI/gpt-5.5 lane=codex-cli completed=1 failed=2", // Deliberate historical alias verifies retired ordering and counts.
             Assert.Single(Lines(output).Where(line => line.Contains("Retired models:"))));
         Assert.DoesNotContain(Lines(output), line => line.StartsWith("    completed=", StringComparison.Ordinal));
         Assert.DoesNotContain("Bound model set unavailable", output);
@@ -116,9 +116,9 @@ public sealed class ModelOutcomeRetiredModelsConsoleTests
         Row("Anthropic", "gpt-6.1-sol", "codex-cli", 1, WorkTaskStatus.Completed, TaskOutcomeClass.Success),
         Row("Anthropic", "claude-opus-5-5", "claude-cli", 2, WorkTaskStatus.Completed, TaskOutcomeClass.Success),
         Row("Anthropic", "claude-opus-5-5", "claude-cli", 3, WorkTaskStatus.Completed, TaskOutcomeClass.Success),
-        Row("OpenAI", "gpt-5.5", "codex-cli", 4, WorkTaskStatus.Completed, TaskOutcomeClass.Success),
-        Row("OpenAI", "gpt-5.5", "codex-cli", 5, WorkTaskStatus.Failed, TaskOutcomeClass.RealFailure),
-        Row("OpenAI", "gpt-5.5", "codex-cli", 6, WorkTaskStatus.Failed, TaskOutcomeClass.Environmental)
+        Row("OpenAI", "gpt-5.5", "codex-cli", 4, WorkTaskStatus.Completed, TaskOutcomeClass.Success), // Deliberate historical alias supplies the retired completion count.
+        Row("OpenAI", "gpt-5.5", "codex-cli", 5, WorkTaskStatus.Failed, TaskOutcomeClass.RealFailure), // Deliberate historical alias supplies a retired real failure.
+        Row("OpenAI", "gpt-5.5", "codex-cli", 6, WorkTaskStatus.Failed, TaskOutcomeClass.Environmental) // Deliberate historical alias supplies a retired environmental failure.
     ];
 
     private static ModelFitHistoryRow Row(string provider, string model, string lane, int index,
