@@ -9,6 +9,7 @@ internal sealed partial class ConductorBatchLoop
         var changed = new HashSet<GoalId>(ServiceSteward(kernel, onlyGoalId));
         changed.UnionWith(ServiceAuthor(kernel, onlyGoalId));
         changed.UnionWith(ServiceStoreEvidence(kernel, onlyGoalId));
+        ServiceJudgePanel(kernel, onlyGoalId);
         return changed;
     }
 
@@ -16,5 +17,6 @@ internal sealed partial class ConductorBatchLoop
     {
         StopSteward();
         StopAuthor();
+        StopJudgePanel();
     }
 }

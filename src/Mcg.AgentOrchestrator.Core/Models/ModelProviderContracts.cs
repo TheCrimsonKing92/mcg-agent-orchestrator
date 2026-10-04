@@ -314,7 +314,9 @@ public sealed record TaskDispatchRecord(
     GoalId? GoalId = null,
     CandidateIdentity? CandidateIdentity = null,
     DispatchProviderUsage? ProviderUsage = null,
-    FailedGoalInconclusiveRoundInputs? InconclusiveRoundInputs = null)
+    FailedGoalInconclusiveRoundInputs? InconclusiveRoundInputs = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    DispatchShadowDecision? ShadowDecision = null)
 {
     public int BriefVersion { get; internal set; } = BriefVersion;
 

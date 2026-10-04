@@ -2140,7 +2140,7 @@ public sealed partial class BackgroundDispatchRunner
     {
         try
         {
-            return GoalWorktrees.InspectGitMetadataAccess(workingDirectory).IndexLockPath;
+            return GoalWorktreeGitMetadata.Inspect(workingDirectory).IndexLockPath;
         }
         catch
         {
