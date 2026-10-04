@@ -49,6 +49,39 @@ public sealed class StateLogDivergenceCheckRunnerTests
         Assert.Empty(fixture.Events("state-log-divergence"));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task NewerThanCheckpointProducesNoEventButOlderUnmatchedLineDoes(bool repeated)
+    {
+        using var fixture = await Fixture.CreateAsync(cleanOnly: true);
+        var repository = SqliteOrchestratorStateRepository.OpenReadOnly(fixture.Workspace.SqliteStatePath);
+        var summary = Assert.Single(await repository.ListGoalMetadataAsync());
+        var cutoff = DateTimeOffset.Parse(summary.UpdatedAt);
+        var stored = fixture.CleanGoal.Timeline.First();
+        fixture.Writer.AppendTimelineEvent(new(fixture.CleanGoal.Id, stored.TaskId,
+            repeated ? stored.Kind : ProgressKind.TaskFailed,
+            repeated ? stored.Message : "in-flight failure", cutoff.AddTicks(1)));
+        var runner = fixture.Runner();
+        Assert.True(runner.OnTick());
+        var pending = await TestHangGuard.WaitAsync(runner.CurrentRun!, "pending timeline check completion");
+        Assert.Equal(1, pending.CheckedGoals);
+        Assert.Empty(pending.SkippedReasons);
+        Assert.Equal(0, pending.EmittedEvents);
+        Assert.Empty(fixture.Events("state-log-divergence"));
+
+        fixture.Writer.AppendTimelineEvent(new(fixture.CleanGoal.Id, null, ProgressKind.TaskRetried,
+            "older unmatched retry", cutoff.AddTicks(-1)));
+        fixture.Now += StateLogDivergenceCheckRunner.Interval;
+        Assert.True(runner.OnTick());
+        var older = await TestHangGuard.WaitAsync(runner.CurrentRun!, "older timeline check completion");
+        Assert.Equal(1, older.EmittedEvents);
+        var entry = Assert.Single(fixture.Events("state-log-divergence"));
+        Assert.StartsWith($"STATE_LOG_DIVERGENCE goal={fixture.CleanGoal.Id.Value[..8]} lost=1 repeated=0 stored_only=0 kinds=TaskRetried:1 first_log_cursor=",
+            entry.GetProperty("detail").GetString());
+        Assert.Equal("decision", entry.GetProperty("operator").GetString());
+    }
+
     [Fact]
     public async Task TickReturnsWhileBlockedAndCommandExitJoinsUntilSignalReleased()
     {
@@ -108,6 +141,27 @@ public sealed class StateLogDivergenceCheckRunnerTests
         Assert.Single(fixture.Events("state-log-divergence-skipped"));
     }
 
+    [Fact]
+    public async Task UnparseableCheckpointIsSkippedWithoutLoadingOrReportingGoal()
+    {
+        using var fixture = await Fixture.CreateAsync(cleanOnly: true);
+        var queries = new ControlledQueries([new GoalSummary(
+            fixture.CleanGoal.Id.Value, "Active", "fixture", "invalid-checkpoint")]);
+        var runner = fixture.Runner(queries);
+        Assert.True(runner.OnTick());
+        var result = await TestHangGuard.WaitAsync(runner.CurrentRun!, "invalid checkpoint check completion");
+        Assert.Equal(1, queries.MetadataCalls);
+        Assert.Empty(queries.LoadedIds);
+        Assert.Equal(0, result.CheckedGoals);
+        Assert.Equal(0, result.EmittedEvents);
+        var skipped = Assert.Single(result.SkippedReasons);
+        Assert.Equal("updated-at-unparseable", skipped.Key);
+        Assert.Equal(1, skipped.Value);
+        Assert.Empty(fixture.Events("state-log-divergence"));
+        Assert.Contains("skipped=1 reasons=updated-at-unparseable:1",
+            Assert.Single(fixture.Events("state-log-divergence-skipped")).GetProperty("detail").GetString());
+    }
+
     [Theory]
     [InlineData(true, "log-missing")]
     [InlineData(false, "log-malformed")]
@@ -165,7 +219,7 @@ public sealed class StateLogDivergenceCheckRunnerTests
         internal Goal CleanGoal = null!;
         internal Goal LostGoal = null!;
         internal Goal StoredGoal = null!;
-        internal DateTimeOffset Now = DateTimeOffset.Parse("2030-01-01T00:00:00Z");
+        internal DateTimeOffset Now = DateTimeOffset.Parse("2020-01-01T00:00:00Z");
 
         private Fixture()
         {

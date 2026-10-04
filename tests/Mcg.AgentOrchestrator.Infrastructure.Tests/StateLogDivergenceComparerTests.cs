@@ -60,6 +60,35 @@ public sealed class StateLogDivergenceComparerTests
         Assert.False(onlyHeld.HasDivergence);
     }
 
+    [Theory]
+    [InlineData(false, -1, 1, 0)]
+    [InlineData(false, 0, 1, 0)]
+    [InlineData(false, 1, 0, 0)]
+    [InlineData(true, -1, 0, 1)]
+    [InlineData(true, 0, 0, 1)]
+    [InlineData(true, 1, 0, 0)]
+    public void CutoffDefersNewerLostAndRepeatedLinesButIncludesBoundary(
+        bool repeated, int offset, int lost, int repeats)
+    {
+        var stored = Parse(1, "TaskFailed", Time.AddTicks(-2), "failed", Task);
+        var candidate = Parse(2, repeated ? "TaskFailed" : "TaskRetried",
+            Time.AddTicks(offset), repeated ? "failed" : "retry", Task);
+        var report = StateLogDivergenceComparer.Compare([stored.Entry], [stored, candidate], Time.UtcTicks);
+        Assert.Equal(lost, report.Lost);
+        Assert.Equal(repeats, report.Repeated);
+        Assert.Equal(0, report.StoredOnly);
+        Assert.Equal(lost + repeats > 0, report.HasDivergence);
+        Assert.Equal(lost + repeats, report.Items.Count);
+    }
+
+    [Fact]
+    public void NewerExactLogMatchStillPreventsStoredOnlyDivergence()
+    {
+        var stored = Parse(1, "TaskFailed", Time.AddTicks(1), "failed", Task);
+        var report = StateLogDivergenceComparer.Compare([stored.Entry], [stored], Time.UtcTicks);
+        Assert.Empty(report.Items);
+    }
+
     [Fact]
     public void ExactMatchUsesUtcTicksAndMessageButRepeatedRequiresTask()
     {

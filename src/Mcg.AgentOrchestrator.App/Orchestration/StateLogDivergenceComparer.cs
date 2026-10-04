@@ -48,7 +48,8 @@ internal sealed record StateLogDivergenceReport(IReadOnlyList<StateLogDivergence
 internal static class StateLogDivergenceComparer
 {
     internal static StateLogDivergenceReport Compare(
-        IEnumerable<StateLogEntry> storedTimeline, IEnumerable<StateLogLine> goalEvents)
+        IEnumerable<StateLogEntry> storedTimeline, IEnumerable<StateLogLine> goalEvents,
+        long? pendingAfterUtcTicks = null)
     {
         var stored = storedTimeline.ToArray();
         var logged = goalEvents.ToArray();
@@ -59,6 +60,9 @@ internal static class StateLogDivergenceComparer
         foreach (var line in logged)
         {
             if (storedKeys.Contains(line.Entry.ExactKey)) continue;
+            // ConductorBatchLoop.cs checkpoints after its per-goal walk, while timeline
+            // events are logged immediately. Newer-than-checkpoint lines may still be in flight.
+            if (pendingAfterUtcTicks is { } cutoff && line.Entry.OccurredAtUtcTicks > cutoff) continue;
             var kind = IsHeldDispositionTelemetry(line.Entry)
                 ? StateLogDivergenceClass.ByDesign
                 : repeatKeys.Contains(line.Entry.RepeatKey)

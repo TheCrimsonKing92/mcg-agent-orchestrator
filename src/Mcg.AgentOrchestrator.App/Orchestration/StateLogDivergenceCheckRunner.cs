@@ -67,6 +67,9 @@ internal sealed class StateLogDivergenceCheckRunner(
                 .Take(MaxGoalsPerRun);
             foreach (var summary in recent)
             {
+                if (!DateTimeOffset.TryParse(summary.UpdatedAt, CultureInfo.InvariantCulture,
+                    DateTimeStyles.None, out var updatedAt))
+                { Skip("updated-at-unparseable"); continue; }
                 Goal? goal;
                 try
                 {
@@ -97,7 +100,8 @@ internal sealed class StateLogDivergenceCheckRunner(
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 { Skip("log-unreadable"); continue; }
 
-                var report = StateLogDivergenceComparer.Compare(goal.Timeline.Select(StateLogEntry.FromProgressEvent), lines);
+                var report = StateLogDivergenceComparer.Compare(goal.Timeline.Select(StateLogEntry.FromProgressEvent),
+                    lines, updatedAt.UtcTicks);
                 checkedGoals++;
                 if (!report.HasDivergence) { _emitted.Remove(summary.Id); continue; }
                 if (_emitted.TryGetValue(summary.Id, out var signature) && signature == report.Signature) continue;
