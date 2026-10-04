@@ -156,7 +156,7 @@ public static partial class WorkerProfileDispatcher
         PaidRouteClassification paidRoute = PaidRouteClassification.Unknown,
         // The credential source this dispatch's Claude auth preflight selected and reported. Recorded on
         // the dispatch so the start boundary transports that one decision instead of selecting again.
-        ClaudeCredentialSourceSelection? claudeCredentialSelection = null)
+        ClaudeCredentialSourceSelection? claudeCredentialSelection = null, DispatchShadowRecorder? shadowRecorder = null)
     {
         EnsureTaskNeedsExecution(task, allowPendingRecordedDispatchRefresh);
         EnsureSubscriptionRetryWindowHasPassed(task, dispatchedAt);
@@ -334,12 +334,12 @@ public static partial class WorkerProfileDispatcher
             RetryContextFingerprint: retryContextFingerprint,
             PaidRoute: paidRoute,
             ClaudeCredentialSourceDirectory: claudeCredentialSelection?.DirectoryPath,
-            ClaudeCredentialSourceIsExplicit: claudeCredentialSelection?.IsExplicitSource ?? false),
+            ClaudeCredentialSourceIsExplicit: claudeCredentialSelection?.IsExplicitSource ?? false,
+            ShadowDecision: shadowRecorder?.Record(task.RequiredRole, goal.Objective, task.Description, reviewerScopeChangedFiles, providerName, modelName, reasoningEffort)),
             allowPendingRecordedDispatchRefresh);
         PrerequisiteEvidenceTrimNote.RecordIfTrimmed(kernel, goal.Id, task.Id, brief);
         return new WorkerProfileDispatchResult(task, preparation.PromptPath);
     }
-
     internal static ReviewerRoundTouchScope ReadReviewRoundTouchScope(
         Goal goal,
         TaskSpec task,
@@ -465,7 +465,7 @@ public static partial class WorkerProfileDispatcher
                 workingDirectory,
                 dispatchedAt,
                 citedPriorEvidenceResolver: citedPriorEvidenceResolver,
-                sandboxOptions: sandboxOptions));
+                sandboxOptions: sandboxOptions, shadowRecorder: DispatchShadowRecorder.Default));
         }
 
         return results;
@@ -563,7 +563,7 @@ public static partial class WorkerProfileDispatcher
             sandboxOptions: sandbox,
             plannerSampleCount: plannerSampleCount,
             paidRoute: ClassifyPaidRoute(roleSelection.Model.SubscriptionMode),
-            claudeCredentialSelection: preflight.ClaudeCredentialSelection);
+            claudeCredentialSelection: preflight.ClaudeCredentialSelection, shadowRecorder: DispatchShadowRecorder.Default);
     }
 
     public static WorkerSubscriptionPreflightResult PreflightSubscriptionTask(
@@ -1230,7 +1230,7 @@ public static partial class WorkerProfileDispatcher
                 sandboxOptions: sandbox,
                 plannerSampleCount: plannerSampleCount,
                 paidRoute: ClassifyPaidRoute(roleSelection.Model.SubscriptionMode),
-                claudeCredentialSelection: preflight.ClaudeCredentialSelection));
+                claudeCredentialSelection: preflight.ClaudeCredentialSelection, shadowRecorder: DispatchShadowRecorder.Default));
         }
 
         return new WorkerProfileReadyBatchResult(results, blocked);
