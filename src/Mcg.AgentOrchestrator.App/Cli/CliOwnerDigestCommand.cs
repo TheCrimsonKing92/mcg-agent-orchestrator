@@ -35,10 +35,14 @@ internal static class CliOwnerDigestCommand
                     WriteJson(jsonWriter, digest);
                 if (panel is not null)
                 {
-                    var root = JsonNode.Parse(buffer!.ToString())!.AsObject();
+                    var root = new JsonObject();
                     CliOwnerDigestJudgePanel.AddJson(root, panel);
+                    // Append to the serialized object without re-encoding existing property values.
+                    var legacyJson = buffer!.ToString().TrimEnd();
+                    writer.Write(legacyJson.AsSpan(0, legacyJson.Length - 1));
+                    writer.Write(',');
                     writer.WriteLine(root.ToJsonString(new JsonSerializerOptions
-                        { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));
+                        { PropertyNamingPolicy = JsonNamingPolicy.CamelCase })[1..]);
                 }
             }
             else
