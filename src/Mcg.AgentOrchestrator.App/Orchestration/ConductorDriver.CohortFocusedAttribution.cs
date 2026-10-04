@@ -66,7 +66,8 @@ internal sealed partial class ConductorDriver
                 new SqliteRunEventStore(workspace.RunEventStorePath), workspace.RunEventStorePath);
             var appended = events.AppendOnceAsync(PostLandingCanaryEventKind.Failed,
                 new PostLandingCanaryEventPayload(PostLandingCanaryEventPayload.CanaryTag,
-                    sha, [], ConductorAcceptanceCohortMainSuspect.FailureToken, sharedTests.Count, detail, null, now),
+                    sha, [], ConductorAcceptanceCohortMainSuspect.FailureToken, sharedTests.Count, detail, null, now,
+                    SharedFailingTests: sharedTests),
                 ConductorAcceptanceCohortMainSuspect.EventId(sha, identity.Value), now).GetAwaiter().GetResult().Appended;
             // Persistence failure must fault the gate before attribution is saved, without a process-local hold.
             // Record the circuit first: a crash before attribution persistence can safely replay the append.
