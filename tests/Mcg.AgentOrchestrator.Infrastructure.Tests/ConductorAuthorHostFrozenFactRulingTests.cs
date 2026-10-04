@@ -42,8 +42,29 @@ public sealed class ConductorAuthorHostFrozenFactRulingTests
     }
 
     [Theory]
+    [InlineData("Every other assertion and fact stays unmodified in FrozenFixtureTests and OtherFrozenTests.")]
+    [InlineData("Every other assertion and fact stays unmodified in FrozenFixtureTests. OtherFrozenTests.")]
+    public async Task SentenceEndingClassNamesSubmitCompleteRuling(string unmodified)
+    {
+        using var harness = new Harness();
+        var (goal, _) = await harness.Request();
+        var ruling = CompleteRuling() with { Unmodified = unmodified };
+        await harness.Run(Output(ruling));
+
+        var intent = Assert.Single(await harness.Intents.ListForGoalAsync(goal.Id.Value,
+            cancellationToken: TestContext.Current.CancellationToken));
+        var payload = Assert.IsType<AnswerOperatorIntentPayload>(
+            JsonSerializer.Deserialize<AnswerOperatorIntentPayload>(intent.PayloadJson, Json));
+        Assert.Equal(unmodified, Assert.IsType<FrozenFactRuling>(FrozenFactRuling.TryParse(payload.Text)).Unmodified);
+        Assert.Equal("answer-submitted", harness.Outcome());
+        Assert.Null(goal.CurrentHold);
+    }
+
+    [Theory]
     [InlineData("class", "amendedFacts.class")]
     [InlineData("unmodified", "unmodified")]
+    [InlineData("unmodified-qualified", "unmodified")]
+    [InlineData("unmodified-longer", "unmodified")]
     [InlineData("coverage", "evidenceReferences.coverage")]
     [InlineData("missing-file", "amendedFacts.file")]
     [InlineData("diff-check", "diffCheck")]
@@ -131,6 +152,8 @@ public sealed class ConductorAuthorHostFrozenFactRulingTests
         {
             "class" => ruling with { AmendedFacts = [fact with { Fact = "UnfrozenTests.PinsPath" }] },
             "unmodified" => ruling with { Unmodified = "Every other fact in FrozenFixtureTests stays unmodified." },
+            "unmodified-qualified" => ruling with { Unmodified = "FrozenFixtureTests and OtherFrozenTests.PinsPath stay unmodified." },
+            "unmodified-longer" => ruling with { Unmodified = "FrozenFixtureTests and OtherFrozenTestsExtended stay unmodified." },
             "coverage" => ruling with { EvidenceReferences = [ruling.EvidenceReferences[0]] },
             "missing-file" => ruling with { AmendedFacts = [fact with { File = "tests/Absent.cs" }] },
             "diff-check" => ruling with { DiffCheck = "" },

@@ -33,7 +33,7 @@ internal static class ConductorAuthorFrozenFactRulingCheck
                 !fact.File.EndsWith(".cs", StringComparison.Ordinal) || !ExistsUnder(workingDirectory, fact.File))
                 return Incomplete("amendedFacts.file");
         if (ruling.FrozenClasses.Any(name => !Regex.IsMatch(ruling.Unmodified,
-                @"(?<![\w.])" + Regex.Escape(name) + @"(?![\w.])", RegexOptions.CultureInvariant)))
+                @"(?<![\w.])" + Regex.Escape(name) + @"(?!\w|\.\w)", RegexOptions.CultureInvariant)))
             return Incomplete("unmodified");
         if (!ruling.EvidenceReferences.Any(reference => reference.StartsWith("tests/", StringComparison.Ordinal)) ||
             !ruling.EvidenceReferences.Any(reference => reference.StartsWith("src/", StringComparison.Ordinal)))
