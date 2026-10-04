@@ -22,6 +22,7 @@ public sealed class ConductorJudgePanelPacketBuilderTests
         f.Panel.Kernel.RecordGoalRefinement(f.Panel.Goal.Id,
             new("Later spec", ["LATER_REPLACEMENT_CRITERION"], VerificationClass.TestVerifiable, [], []));
         await f.SaveState();
+        f.PrepareProducerReadArtifacts();
         var before = f.ProducerHashes();
         var trigger = Assert.Single(f.Sources.Read());
         Assert.Equal(triggerTime, trigger.RecordedAt);
@@ -168,6 +169,7 @@ public sealed class ConductorJudgePanelPacketBuilderTests
             [new(retainedCriterion, "SEPARATE_CORRECTION", "operator", version.RecordedAt,
                 null, ProgressKind.OperatorTaskNote)]
         }]);
+        f.PrepareProducerReadArtifacts();
         var before = f.ProducerHashes();
         var trigger = Assert.Single(f.Sources.Read());
         var criteria = ConductorJudgePanelCriteriaAtTrigger.Resolve(f.Sources.ReadGoal(f.GoalId), trigger.RecordedAt);

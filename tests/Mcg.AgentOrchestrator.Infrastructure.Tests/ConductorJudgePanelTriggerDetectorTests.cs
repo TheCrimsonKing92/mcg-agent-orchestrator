@@ -14,6 +14,7 @@ public sealed class ConductorJudgePanelTriggerDetectorTests
         f.Conduct("goal", f.BoundText("Acceptance RED classified as apparatus (test-host)", trx), rotated: true);
         var authorId = f.AuthorQuestion();
         f.CohortFailure("both-failed", trx);
+        f.PrepareProducerReadArtifacts();
         var hashes = f.ProducerHashes();
         var cases = f.Detector().Detect();
         Assert.Equal(6, cases.Count);

@@ -125,6 +125,21 @@ internal sealed class PanelTriggerTestFixture : IDisposable
     internal string BoundText(string reason, string trx) =>
         $"{reason}; candidate_sha={Panel.Candidate}; base_sha={BaseSha}; src/Example.cs; pointer=\"{trx}\"";
 
+    internal void PrepareProducerReadArtifacts()
+    {
+        // SQLite read-only WAL access can create coordination files after the last writer closes.
+        // Arrange them before the baseline; keep hashing them so later changes remain observable.
+        foreach (var path in new[] { State, Author, Cohort }.Where(File.Exists))
+        {
+            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+                { DataSource = path, Mode = SqliteOpenMode.ReadOnly, Pooling = false }.ToString());
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "PRAGMA schema_version";
+            _ = command.ExecuteScalar();
+        }
+    }
+
     internal Dictionary<string, string> ProducerHashes() => Directory.EnumerateFiles(Panel.Root, "*", SearchOption.AllDirectories)
         .Where(path => path != Path.Combine(Panel.Root, "panel.db"))
         .ToDictionary(path => path, path => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))));
