@@ -82,6 +82,23 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         }
     }
 
+    [Xunit.Fact(DisplayName = "Post-landing canary classifier covers relocated build storage layout and acceptance temp-root names")]
+    public void ClassifierCoversRelocatedBuildStorageLayoutAndAcceptanceTempRootNames()
+    {
+        var triggering = new[]
+        {
+            "src/Mcg.AgentOrchestrator.Infrastructure/Processes/DotnetBuildStorageLayout.cs",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Processes/AcceptanceTempRootNames.cs"
+        };
+
+        foreach (var path in triggering)
+        {
+            var result = PostLandingCanaryTrigger.Evaluate([path]);
+            Assert.True(result.ShouldRun, path);
+            Assert.Equal(path, Assert.Single(result.TriggeringPaths));
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Canary command uses injected verifier and rejects an accept verdict with an empty receipt")]
     public void CanaryCommandRequiresExecutedReceiptFromInjectedVerifier()
     {

@@ -18,7 +18,8 @@ public static class AcceptanceEngineSurfaceRegistry
         new("acceptance-verifier", [
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier",
             "src/Mcg.AgentOrchestrator.Infrastructure/Processes/TempRootApparatusLossReceipts",
-            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceSharedApparatusInvalidation"
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceSharedApparatusInvalidation",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Processes/AcceptanceTempRootNames"
         ]),
         new("test-impact-planner", ["src/Mcg.AgentOrchestrator.Core/Application/RepositoryTestImpactPlanner"]),
         new("reverse-dependency-index", [
@@ -27,7 +28,8 @@ public static class AcceptanceEngineSurfaceRegistry
         ]),
         new("build-environment", [
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetBuildEnvironmentManager",
-            "src/Mcg.AgentOrchestrator.Infrastructure/Processes/DotnetBuildStorageRoot"
+            "src/Mcg.AgentOrchestrator.Infrastructure/Processes/DotnetBuildStorageRoot",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Processes/DotnetBuildStorageLayout"
         ]),
         new("change-classifier", ["src/Mcg.AgentOrchestrator.Core/Application/RepositoryChangeClassifier"]),
         new("gate-settings", ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceGateEngineSettings"]),

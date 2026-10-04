@@ -23,7 +23,7 @@ internal sealed class WorkerDispatchCompletionClassifier
         _fileExists = fileExists;
         _readArtifactText = readArtifactText;
         _resolveWorkerBuildReceiptPath = resolveWorkerBuildReceiptPath ??
-            (goalId => Path.Combine(DotnetBuildEnvironmentManager.GoalArtifactsPath(goalId), WorkerBuildReceipt.FileName));
+            (goalId => Path.Combine(DotnetBuildStorageLayout.GoalArtifactsPath(goalId), WorkerBuildReceipt.FileName));
     }
 
     internal bool RequiresPostDispatchCommitEvidence(

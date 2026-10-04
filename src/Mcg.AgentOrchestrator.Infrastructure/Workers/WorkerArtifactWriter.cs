@@ -447,7 +447,7 @@ internal sealed partial class WorkerArtifactWriter
             {
                 lines.Add("## Worker Build Check");
                 lines.Add("- Developer/Tester subscription workers must run `.\\scripts\\Invoke-WorkerBuildCheck.ps1 <project.csproj> [project.csproj...]` for every project whose sources they changed before writing WORKER_RESULT.");
-                lines.Add($"- The helper performs build-only verification through isolated artifacts under `{DotnetBuildEnvironmentManager.GoalArtifactsPath(goal.Id)}`; it does not run tests or spawn testhost.");
+                lines.Add($"- The helper performs build-only verification through isolated artifacts under `{DotnetBuildStorageLayout.GoalArtifactsPath(goal.Id)}`; it does not run tests or spawn testhost.");
                 lines.Add("- Compiling every changed project is required through `.\\scripts\\Invoke-WorkerBuildCheck.ps1`; subscription workers must not run raw `dotnet test`, `.\\scripts\\Invoke-IsolatedDotnet.ps1`, or any other worker-side test execution because tests belong to the acceptance gate.");
                 lines.Add("- In WORKER_RESULT, report build evidence such as `tests: pass - build: 0 errors (Invoke-WorkerBuildCheck)` or `tests: fail - <build error>`.");
             }

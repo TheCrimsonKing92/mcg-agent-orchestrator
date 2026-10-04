@@ -1013,8 +1013,8 @@ public static partial class WorkerProfileDispatcher
             return;
         }
 
-        var rootPath = DotnetBuildEnvironmentManager.GoalRoot(goal.Id);
-        var artifactsPath = DotnetBuildEnvironmentManager.GoalArtifactsPath(goal.Id);
+        var rootPath = DotnetBuildStorageLayout.GoalRoot(goal.Id);
+        var artifactsPath = DotnetBuildStorageLayout.GoalArtifactsPath(goal.Id);
         var leaseMetadataPath = Path.Combine(rootPath, "lease", "lease.json");
         var leaseExists = File.Exists(leaseMetadataPath);
         findings.Add(
