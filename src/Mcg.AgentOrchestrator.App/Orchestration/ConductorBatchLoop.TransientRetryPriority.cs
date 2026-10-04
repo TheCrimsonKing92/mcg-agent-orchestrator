@@ -5,13 +5,13 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorBatchLoop
 {
-    private enum SoloAcceptanceAdmissionKind
+    internal enum SoloAcceptanceAdmissionKind
     {
         Admissible, Completed, VerificationGate, EngineCircuit, SlotSettings,
         Capacity, Fairness, CandidateUnavailable, ResourceConflict
     }
 
-    private sealed record SoloAcceptanceAdmission(
+    internal sealed record SoloAcceptanceAdmission(
         SoloAcceptanceAdmissionKind Kind,
         ConductorParallelAcceptanceCandidate? Candidate = null,
         string? Reason = null,
@@ -99,16 +99,24 @@ internal sealed partial class ConductorBatchLoop
                 $"parallel acceptance fairness waiting for oldest verified goal {oldestWaiter!.Id.Value[..8]}; retry on next conduct tick",
                 $"ADMISSION tick={tick} result=deferred reason=parallel-acceptance-fairness goal={goal.Id.Value[..8]} oldest={oldestWaiter.Id.Value[..8]}");
         }
-        if (activeCandidates.Any(existing => existing.Overlaps(candidate)))
+        if (DetectSoloAcceptanceResourceConflict(candidate, activeCandidates) is { } conflict)
         {
-            return new(SoloAcceptanceAdmissionKind.ResourceConflict, candidate,
-                "parallel acceptance resource conflict; retry on next conduct tick");
+            return conflict;
         }
         return new(SoloAcceptanceAdmissionKind.Admissible, candidate,
             StalledOldestBypass: fairnessApplies ? oldestObservation : null);
     }
 
-    private static ParallelLandingOutcome? ApplySoloAcceptanceHold(
+    internal static SoloAcceptanceAdmission? DetectSoloAcceptanceResourceConflict(
+        ConductorParallelAcceptanceCandidate candidate,
+        IReadOnlyList<ConductorParallelAcceptanceCandidate> activeCandidates)
+    {
+        var blocking = activeCandidates.FirstOrDefault(existing => existing.Overlaps(candidate));
+        return blocking is null ? null : new(SoloAcceptanceAdmissionKind.ResourceConflict, candidate,
+            $"parallel acceptance resource conflict with live acceptance goal:{blocking.GoalPrefix}; retry on next conduct tick");
+    }
+
+    internal static ParallelLandingOutcome? ApplySoloAcceptanceHold(
         SoloAcceptanceAdmission admission, ConductorDriver driver, Goal goal,
         ConductorAutonomyPolicy policy, List<string> changedGoalLines)
     {
@@ -121,7 +129,7 @@ internal sealed partial class ConductorBatchLoop
             SoloAcceptanceAdmissionKind.Capacity =>
                 AdmissionDeniedHeld(goal, policy, admission.CapacityDecision!),
             SoloAcceptanceAdmissionKind.Fairness or SoloAcceptanceAdmissionKind.ResourceConflict =>
-                ParallelAcceptanceHeld(admission.Candidate!, policy, admission.Reason!),
+                ParallelAcceptanceHeld(admission.Candidate!, policy, admission.Reason!, ConductorHoldOwner.AcceptanceQueue),
             SoloAcceptanceAdmissionKind.Completed or SoloAcceptanceAdmissionKind.EngineCircuit =>
                 ParallelAcceptanceHeld(goal, policy, admission.Reason!),
             SoloAcceptanceAdmissionKind.CandidateUnavailable when admission.Reason is not null =>
