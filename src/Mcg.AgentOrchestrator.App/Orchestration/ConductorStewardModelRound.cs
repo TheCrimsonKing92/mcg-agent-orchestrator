@@ -1,10 +1,12 @@
 using System.Text.Json;
+using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal interface IConductorStewardModelRound
 {
+    string? ModelAlias => null;
     Task<string> DispatchAsync(ConductorStewardTrigger trigger, string workingDirectory, CancellationToken cancellationToken);
 }
 
@@ -14,7 +16,8 @@ internal sealed class ClaudeConductorStewardModelRound(
     IConductorStewardTrackedFileLister? files = null,
     Func<string, string, bool>? pathExists = null,
     Func<Guid>? newSessionId = null,
-    ConductorLessonSelector? lessons = null) : IConductorStewardModelRound
+    ConductorLessonSelector? lessons = null,
+    ModelFunctionCatalog? catalog = null) : IConductorStewardModelRound
 {
     private readonly Func<WorkerProcessRunRequest, CancellationToken, Task<WorkerProcessRunResult>> _runProcessAsync =
         runProcessAsync ?? WorkerProcessRunner.RunBufferedAsync;
@@ -22,12 +25,20 @@ internal sealed class ClaudeConductorStewardModelRound(
     private readonly Func<string, string, bool> _pathExists = pathExists ?? ConductorStewardEvidenceBundle.PathExists;
     private readonly Func<Guid> _newSessionId = newSessionId ?? Guid.NewGuid;
 
+    public string? ModelAlias => ConductorRoundModelResolver.Resolve(catalog, ModelFunctionPurposes.ConductorSteward).Alias;
+
     public async Task<string> DispatchAsync(
         ConductorStewardTrigger trigger, string workingDirectory, CancellationToken cancellationToken)
     {
+        var model = ConductorRoundModelResolver.Resolve(catalog, ModelFunctionPurposes.ConductorSteward);
+        var sessionId = _newSessionId().ToString("D");
+        if (!model.IsValid)
+        {
+            WriteReceipt(trigger, sessionId, null, null, null, model.InvalidReason, null);
+            throw new ConductorModelRoundException(model.InvalidReason!, null);
+        }
         var selected = lessons?.Select(ConductorLessonSelector.StewardTags(trigger.Kind));
         var bundle = ConductorStewardEvidenceBundle.Build(trigger, workingDirectory, _files, _pathExists, selected);
-        var sessionId = _newSessionId().ToString("D");
         var prompt = $"""
             You are the conductor Steward. This is a read-only adjudication. Return exactly one fenced JSON object.
             Allowed kinds: {(trigger.Kind is ConductorStewardTriggerKind.DeveloperGateReopenNoCommit or ConductorStewardTriggerKind.DeveloperReviewerFindingNoCommit ? "close, ask-owner, no-action" : "route, ask-owner, no-action")}. A route has fields kind, targetTaskId,
@@ -55,22 +66,22 @@ internal sealed class ClaudeConductorStewardModelRound(
         try
         {
             result = await _runProcessAsync(
-                new WorkerProcessRunRequest($"claude --model sonnet --permission-mode plan --tools 'Read,Grep,Glob' --allowed-tools 'Read,Grep,Glob' --session-id {sessionId} -p",
+                new WorkerProcessRunRequest($"claude {model.ModelArguments} --permission-mode plan --tools 'Read,Grep,Glob' --allowed-tools 'Read,Grep,Glob' --session-id {sessionId} -p",
                     workingDirectory, TimeSpan.FromMinutes(4), prompt), cancellationToken);
-            WriteReceipt(trigger, sessionId, result.ExitCode, result.StandardOutput, result.StandardError, null);
+            WriteReceipt(trigger, sessionId, result.ExitCode, result.StandardOutput, result.StandardError, null, model.Alias);
         }
         catch (Exception ex)
         {
-            WriteReceipt(trigger, sessionId, null, null, null, $"{ex.GetType().Name}: {ex.Message}");
+            WriteReceipt(trigger, sessionId, null, null, null, $"{ex.GetType().Name}: {ex.Message}", model.Alias);
             throw;
         }
         if (result.ExitCode != 0)
-            throw new InvalidOperationException($"Steward model exited {result.ExitCode}: {result.StandardError}");
+            throw new ConductorModelRoundException($"Steward model exited {result.ExitCode}: {result.StandardError}", model.Alias);
         return result.StandardOutput;
     }
 
     private void WriteReceipt(ConductorStewardTrigger trigger, string sessionId, int? exitCode,
-        string? stdout, string? stderr, string? failure)
+        string? stdout, string? stderr, string? failure, string? model)
     {
         Directory.CreateDirectory(receiptDirectory);
         var path = Path.Combine(receiptDirectory, $"{DateTimeOffset.UtcNow:yyyyMMddTHHmmssfff}-{Guid.NewGuid():N}.json");
@@ -82,7 +93,8 @@ internal sealed class ClaudeConductorStewardModelRound(
             exitCode,
             stdout,
             stderr,
-            failure
+            failure,
+            model
         }));
     }
 }
