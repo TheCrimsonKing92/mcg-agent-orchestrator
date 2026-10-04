@@ -9,6 +9,12 @@ using Microsoft.Data.Sqlite;
 // All databases and files are isolated per fixture; no shared provider or process state is used.
 internal sealed class PanelTriggerTestFixture : IDisposable
 {
+    internal PanelTriggerTestFixture()
+    {
+        // Bootstrap the isolated fixture store before repository writes or read-only producer scans.
+        _ = StateDbMigrations.EnsureUpToDate(State);
+    }
+
     internal PanelTestHarness Panel { get; } = new();
     internal string Events => Path.Combine(Panel.Root, "goal-events");
     internal string Author => Path.Combine(Panel.Root, "author-claims.db");
