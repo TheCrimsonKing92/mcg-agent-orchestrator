@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -23,21 +22,9 @@ internal sealed partial class ConductorJudgePanelHost
         if (directory is null) return null;
         try
         {
-            var start = new ProcessStartInfo("git")
-            {
-                WorkingDirectory = directory, UseShellExecute = false, CreateNoWindow = true,
-                RedirectStandardOutput = true, RedirectStandardError = true
-            };
-            start.ArgumentList.Add("rev-parse");
-            start.ArgumentList.Add("HEAD");
-            using var process = Process.Start(start);
-            if (process is null) return null;
-            var stdout = process.StandardOutput.ReadToEndAsync();
-            var stderr = process.StandardError.ReadToEndAsync();
-            if (!process.WaitForExit(5000)) { process.Kill(entireProcessTree: true); return null; }
-            var sha = stdout.GetAwaiter().GetResult().Trim();
-            _ = stderr.GetAwaiter().GetResult();
-            return process.ExitCode == 0 && sha.Length == 40 && sha.All(Uri.IsHexDigit) ? sha : null;
+            var result = GitCli.Run(directory, "rev-parse", "HEAD");
+            var sha = result.Output.Trim();
+            return result.Succeeded && sha.Length == 40 && sha.All(Uri.IsHexDigit) ? sha : null;
         }
         catch (Exception exception) when (exception is IOException or InvalidOperationException or System.ComponentModel.Win32Exception)
         { return null; }
