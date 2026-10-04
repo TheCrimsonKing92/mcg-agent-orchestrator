@@ -207,13 +207,10 @@ internal sealed partial class ConductorDriver
                 var status = operationStart.LeaseFact is { } leaseFact
                     ? GoalEvidenceLeaseRecoveryStatuses.Format(leaseFact.RecoveryStatus)
                     : "state-unavailable";
-                result = MakeResult(
-                    goal.Id.Value,
-                    goalPrefix,
-                    policy,
-                    new ConductorAdvanceOutcome.Held(
-                        fromState,
-                        $"Goal evidence mutation is held for {goal.Id.Value}; lease-recovery={status}."));
+                result = DispatchStartResult(goal, goalPrefix, policy, fromState, new DispatchStartFacts(goal.Id.Value)
+                {
+                    ReadOnlyIntegrationHoldReason = $"Goal evidence mutation is held for {goal.Id.Value}; lease-recovery={status}."
+                });
                 return true;
             }
 
@@ -255,13 +252,10 @@ internal sealed partial class ConductorDriver
                 "conductor:developer-branch-integration");
             if (integrationEvidenceMutationLease is null)
             {
-                result = MakeResult(
-                    goal.Id.Value,
-                    goalPrefix,
-                    policy,
-                    new ConductorAdvanceOutcome.Held(
-                        fromState,
-                        $"Goal evidence mutation is blocked by concurrent acceptance or replacement for {goal.Id.Value}."));
+                result = DispatchStartResult(goal, goalPrefix, policy, fromState, new DispatchStartFacts(goal.Id.Value)
+                {
+                    ReadOnlyIntegrationHoldReason = $"Goal evidence mutation is blocked by concurrent acceptance or replacement for {goal.Id.Value}."
+                });
                 return true;
             }
 
@@ -276,4 +270,47 @@ internal sealed partial class ConductorDriver
 
         return false;
     }
+
+    private ConductorAdvanceResult DispatchStartResult(
+        Goal goal, string goalPrefix, ConductorAutonomyPolicy policy,
+        GoalLifecycleState fromState, DispatchStartFacts facts)
+    {
+        var decision = DispatchStartPolicy.Evaluate(facts);
+        if (decision.Action == DispatchStartAction.Hold)
+            return MakeResult(goal.Id.Value, goalPrefix, policy,
+                new ConductorAdvanceOutcome.Held(fromState, decision.Reason) { Decision = decision.ToRecord() });
+        if (decision.Action != DispatchStartAction.Escalate)
+            throw new InvalidOperationException("A dispatch-start refusal must hold or escalate.");
+
+        var result = Escalate(goal, goalPrefix, policy, fromState, decision.Reason);
+        var escalated = result.Outcome as ConductorAdvanceOutcome.Escalated
+            ?? throw new InvalidOperationException("Dispatch-start escalation must produce an escalated outcome.");
+        return result with { Outcome = escalated with { Decision = decision.ToRecord() } };
+    }
+
+    private static DispatchStartFacts WithIntegrationFacts(
+        DispatchStartFacts facts, DeveloperBranchIntegrationResult integration) => facts with
+    {
+        IntegrationCanDispatch = integration.CanDispatch ? "allowed" : "refused",
+        IntegrationMessage = integration.Message
+    };
+
+    private static DispatchStartFacts WithReadinessFacts(
+        DispatchStartFacts facts, DispatchReadinessVerdict readiness) => facts with
+    {
+        ReadinessVerdict = readiness switch
+        {
+            DispatchReadinessReady => "ready",
+            DispatchReadinessDeferred => "deferred",
+            DispatchReadinessBlocked { HasCandidates: true } => "blocked-with-candidates",
+            DispatchReadinessBlocked => "blocked-without-candidates",
+            _ => "other"
+        },
+        ReadinessReason = readiness switch
+        {
+            DispatchReadinessDeferred deferred => deferred.Reason,
+            DispatchReadinessBlocked blocked => blocked.Reason,
+            _ => ""
+        }
+    };
 }

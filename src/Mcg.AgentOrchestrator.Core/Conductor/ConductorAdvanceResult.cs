@@ -27,7 +27,10 @@ public abstract record ConductorAdvanceOutcome
         public ConductorHoldOwner Owner { get; init; } = ConductorHoldOwner.None;
         public PolicyDecisionRecord? Decision { get; init; }
     }
-    public sealed record Escalated(GoalLifecycleState State, string Reason, ConductorEscalationKind? Kind = null) : ConductorAdvanceOutcome;
+    public sealed record Escalated(GoalLifecycleState State, string Reason, ConductorEscalationKind? Kind = null) : ConductorAdvanceOutcome
+    {
+        public PolicyDecisionRecord? Decision { get; init; }
+    }
     public sealed record Done(GoalLifecycleState State) : ConductorAdvanceOutcome;
 }
 

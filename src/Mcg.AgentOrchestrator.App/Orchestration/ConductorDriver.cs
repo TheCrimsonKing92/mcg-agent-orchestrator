@@ -2235,16 +2235,14 @@ internal sealed partial class ConductorDriver
         var unreconciledTask = goal.Tasks.FirstOrDefault(task =>
             task.LastProcess is { } process &&
             DispatchProcessCompletionState.IsExitedWithoutAppliedCompletion(task, process));
+        var startFacts = new DispatchStartFacts(goal.Id.Value);
         if (unreconciledTask is not null)
         {
-            var reason =
-                $"Dispatch start refused for task {unreconciledTask.Id.Value[..8]}: latest process record exited without an applied completion (exited-unapplied-process-record).";
-            _recordTaskNote(goal.Id, unreconciledTask.Id, reason);
-            return MakeResult(
-                goal.Id.Value,
-                goalPrefix,
-                policy,
-                new ConductorAdvanceOutcome.Held(fromState, reason));
+            var startDecision = DispatchStartPolicy.Evaluate(startFacts with
+                { UnreconciledTaskIdPrefix = unreconciledTask.Id.Value[..8] });
+            _recordTaskNote(goal.Id, unreconciledTask.Id, startDecision.Reason);
+            return MakeResult(goal.Id.Value, goalPrefix, policy,
+                new ConductorAdvanceOutcome.Held(fromState, startDecision.Reason) { Decision = startDecision.ToRecord() });
         }
 
         if (fromState == GoalLifecycleState.WorkspaceReady &&
@@ -2258,13 +2256,8 @@ internal sealed partial class ConductorDriver
                     var status = operationStart.LeaseFact is { } leaseFact
                         ? GoalEvidenceLeaseRecoveryStatuses.Format(leaseFact.RecoveryStatus)
                         : "state-unavailable";
-                    return MakeResult(
-                        goal.Id.Value,
-                        goalPrefix,
-                        policy,
-                        new ConductorAdvanceOutcome.Held(
-                            fromState,
-                            $"Goal evidence mutation is held for {goal.Id.Value}; lease-recovery={status}."));
+                    return DispatchStartResult(goal, goalPrefix, policy, fromState,
+                        startFacts with { LeaseRecoveryStatus = status });
                 }
 
                 using (operationStart.Scope)
@@ -2274,6 +2267,7 @@ internal sealed partial class ConductorDriver
                     {
                         integration = _integrateMainBeforeDeveloperDispatch(goal);
                         _recordPreDispatchIntegrationReceipt(goal, integration);
+                        startFacts = WithIntegrationFacts(startFacts, integration);
                     }
                     catch (OperationCanceledException ex)
                     {
@@ -2293,7 +2287,7 @@ internal sealed partial class ConductorDriver
                     else
                     {
                         operationStart.Scope.Fail(integration.Message);
-                        return Escalate(goal, goalPrefix, policy, fromState, integration.Message);
+                        return DispatchStartResult(goal, goalPrefix, policy, fromState, startFacts);
                     }
                 }
             }
@@ -2304,20 +2298,16 @@ internal sealed partial class ConductorDriver
                     "conductor:developer-branch-integration");
                 if (integrationEvidenceMutationLease is null)
                 {
-                    return MakeResult(
-                        goal.Id.Value,
-                        goalPrefix,
-                        policy,
-                        new ConductorAdvanceOutcome.Held(
-                            fromState,
-                            $"Goal evidence mutation is blocked by concurrent acceptance or replacement for {goal.Id.Value}."));
+                    return DispatchStartResult(goal, goalPrefix, policy, fromState,
+                        startFacts with { ConcurrentLeaseRefusal = "refused" });
                 }
 
                 var integration = _integrateMainBeforeDeveloperDispatch(goal);
                 _recordPreDispatchIntegrationReceipt(goal, integration);
+                startFacts = WithIntegrationFacts(startFacts, integration);
                 if (!integration.CanDispatch)
                 {
-                    return Escalate(goal, goalPrefix, policy, fromState, integration.Message);
+                    return DispatchStartResult(goal, goalPrefix, policy, fromState, startFacts);
                 }
             }
         }
@@ -2396,8 +2386,10 @@ internal sealed partial class ConductorDriver
                 new ConductorAdvanceOutcome.Held(fromState, outcome.Reason!) { Owner = outcome.HoldOwner });
         }
 
+        startFacts = startFacts with { StartOutcomeCategory = outcome.Category.ToString(), StartOutcomeReason = outcome.Reason ?? "" };
         if (outcome.Category == DispatchStartOutcomeCategory.Started)
         {
+            _ = DispatchStartPolicy.Evaluate(startFacts);
             SliceBatchAdmissionEvaluator?.RecordAdmitted(goal);
             return MakeResult(goal.Id.Value, goalPrefix, policy,
                 new ConductorAdvanceOutcome.Executed(fromState, "Subscription dispatch started"));
@@ -2409,32 +2401,26 @@ internal sealed partial class ConductorDriver
         if (outcome.Category == DispatchStartOutcomeCategory.EmptyBatch)
         {
             var readiness = _evaluateReadiness(goal);
-            if (readiness is DispatchReadinessDeferred deferred)
+            startFacts = WithReadinessFacts(startFacts, readiness);
+            if (readiness is DispatchReadinessDeferred)
             {
-                return MakeResult(goal.Id.Value, goalPrefix, policy,
-                    new ConductorAdvanceOutcome.Held(fromState,
-                        $"All assigned tasks deferred by provider cooldown; {deferred.Reason}. Will retry next tick."));
+                return DispatchStartResult(goal, goalPrefix, policy, fromState, startFacts);
             }
 
             if (TryDescribeCancelledPredecessorBlocker(goal, out var terminalBlocker))
             {
-                return Escalate(
-                    goal,
-                    goalPrefix,
-                    policy,
-                    fromState,
-                    $"STRUCTURAL_TASK_BLOCKER: {terminalBlocker}. Operator recovery is required; retrying cannot complete a cancelled predecessor.");
+                return DispatchStartResult(goal, goalPrefix, policy, fromState,
+                    startFacts with { CancelledPredecessorBlocker = terminalBlocker });
             }
 
             if (readiness is not DispatchReadinessBlocked { HasCandidates: false })
             {
-                return MakeResult(goal.Id.Value, goalPrefix, policy,
-                    new ConductorAdvanceOutcome.Held(fromState,
-                        FormatAssignedTasksBlockedReason(goal, readiness, outcome.Reason)));
+                return DispatchStartResult(goal, goalPrefix, policy, fromState, startFacts with
+                    { AssignedTasksBlockedReason = FormatAssignedTasksBlockedReason(goal, readiness, outcome.Reason) });
             }
         }
 
-        return Escalate(goal, goalPrefix, policy, fromState, outcome.Reason!);
+        return DispatchStartResult(goal, goalPrefix, policy, fromState, startFacts);
     }
 
     private Goal GetCurrentGoal(Goal goal) =>
