@@ -198,7 +198,7 @@ internal sealed partial class GoalRefinementService
         acceptanceGateOwnedCriteria.RemoveAll(criterion =>
             operatorOwnedCriteria.Contains(criterion, StringComparer.OrdinalIgnoreCase));
         var feasibilityFindings = AcceptanceCriterionFeasibility
-            .Evaluate(acceptanceCriteria, AgentRole.Developer)
+            .Evaluate(acceptanceCriteria, fallbackRole: AgentRole.Developer)
             .Where(finding =>
                 !scenarioBackedCriteria.Contains(finding.Criterion) &&
                 !operatorOwnedCriteria.Contains(finding.Criterion, StringComparer.OrdinalIgnoreCase))
@@ -1098,7 +1098,7 @@ internal sealed partial class GoalRefinementService
             !AcceptanceCriterionFeasibility.TryParseDisposition(answer, out var disposition))
         {
             var unresolvedFinding = AcceptanceCriterionFeasibility
-                .Evaluate([question.Criterion ?? question.Question], AgentRole.Developer)
+                .Evaluate([question.Criterion ?? question.Question], fallbackRole: AgentRole.Developer)
                 .FirstOrDefault();
             if (unresolvedFinding is not null)
             {
@@ -1169,7 +1169,7 @@ internal sealed partial class GoalRefinementService
         CriterionFeasibilityFinding? replacementFinding = null;
         if (replacement is not null)
         {
-            replacementFinding = AcceptanceCriterionFeasibility.Evaluate([replacement], AgentRole.Developer).FirstOrDefault();
+            replacementFinding = AcceptanceCriterionFeasibility.Evaluate([replacement], fallbackRole: AgentRole.Developer).FirstOrDefault();
             if (replacementFinding is not null)
             {
                 var questionText = AcceptanceCriterionFeasibility.BuildQuestion(replacementFinding);

@@ -15,7 +15,7 @@ internal enum WorkerCapability
 
 internal sealed record CriterionFeasibilityFinding(
     string Criterion,
-    AgentRole Role,
+    string Role,
     IReadOnlyList<string> TriggerCategories,
     IReadOnlyList<WorkerCapability> MissingCapabilities)
 {
@@ -37,7 +37,7 @@ internal static class AcceptanceCriterionFeasibility
     internal const string FixedBlastRadius = "high";
 
     private sealed record RoleCapabilityProfile(
-        AgentRole Role,
+        string Role,
         IReadOnlySet<WorkerCapability> UnavailableCapabilities);
 
     private sealed record CapabilityRule(
@@ -45,18 +45,24 @@ internal static class AcceptanceCriterionFeasibility
         WorkerCapability Capability,
         IReadOnlyList<Regex> DemandPatterns);
 
+    private static readonly IReadOnlySet<WorkerCapability> DeveloperAndAcceptanceUnavailableCapabilities =
+        new HashSet<WorkerCapability>
+        {
+            WorkerCapability.MultipleGoalCoordination,
+            WorkerCapability.LiveConductorControl,
+            WorkerCapability.HostPerformanceObservation,
+            WorkerCapability.SandboxForbiddenOperation
+        };
+
     private static readonly IReadOnlyList<RoleCapabilityProfile> RoleProfiles =
     [
-        new(
-            AgentRole.Developer,
-            new HashSet<WorkerCapability>
-            {
-                WorkerCapability.MultipleGoalCoordination,
-                WorkerCapability.LiveConductorControl,
-                WorkerCapability.HostPerformanceObservation,
-                WorkerCapability.SandboxForbiddenOperation
-            })
+        new(nameof(AgentRole.Developer), DeveloperAndAcceptanceUnavailableCapabilities),
+        new("Acceptance", DeveloperAndAcceptanceUnavailableCapabilities)
     ];
+
+    private static readonly Regex ExecutingRolePattern = new(
+        @"\b[A-Za-z]+\s+owns\s*;\s*(?<executor>[A-Za-z]+)\s+executes\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     // The rules are deliberately data: extending the detector is one additive row plus fixtures.
     // Each pattern requires a capability-demand shape, never a bare common repository word.
@@ -66,13 +72,13 @@ internal static class AcceptanceCriterionFeasibility
             "multiple-or-concurrent-goals",
             WorkerCapability.MultipleGoalCoordination,
             Patterns(
-                @"\b(?:run|execute|drive|start|dispatch|coordinate|compare|observe)\b.{0,80}\b(?:two|multiple|several|more\s+than\s+one|concurrent|parallel)\b.{0,30}\bgoals?\b",
-                @"\b(?:two|multiple|several|more\s+than\s+one|concurrent|parallel)\b.{0,30}\bgoals?\b.{0,80}\b(?:run|execute|drive|start|dispatch|coordinate|compare|observe)\b")),
+                @"\b(?:(?<!(?:['’]s|\b(?:the|a|an|each|every|this|its|their))\s+)run(?!\s+(?:identity|identities|id|ids|key|record)\b)|execute|drive|start|dispatch|coordinate|compare|observe)\b.{0,80}\b(?:two|multiple|several|more\s+than\s+one|concurrent|parallel)\b.{0,30}\bgoals?\b",
+                @"\b(?:two|multiple|several|more\s+than\s+one|concurrent|parallel)\b.{0,30}\bgoals?\b.{0,80}\b(?:(?<!(?:['’]s|\b(?:the|a|an|each|every|this|its|their))\s+)run(?!\s+(?:identity|identities|id|ids|key|record)\b)|execute|drive|start|dispatch|coordinate|compare|observe)\b")),
         new(
             "live-conductor-or-multiple-ticks",
             WorkerCapability.LiveConductorControl,
             Patterns(
-                @"\b(?:run|execute|drive|start|restart|observe|control)\b.{0,80}\b(?:real|live|production)?\s*conductor(?:\s+loop)?\b",
+                @"\b(?:(?<!(?:['’]s|\b(?:the|a|an|each|every|this|its|their))\s+)run(?!\s+(?:identity|identities|id|ids|key|record)\b)|execute|drive|start|restart|observe|control)\b.{0,80}\b(?:real|live|production)?\s*conductor(?>(?:\s+loop\b)?)\b(?!['’]s\b)(?!\s+(?:uses|used|writes|wrote|records|recorded|assigns|assigned|stamps|stamped|computes|computed|derives|derived|reads|emits|holds|keeps|stores|sets|returns|owns|is|was|has)\b)",
                 @"\b(?:assert|demonstrate|exercise|observe|test|verify)\b.{0,100}\b(?:cross[-\s]tick|(?:across|over|spanning)\s+(?:two|multiple|several)\s+(?:consecutive\s+)?(?:conductor\s+)?ticks?|(?:two|multiple|several)\s+consecutive\s+(?:conductor\s+)?ticks?|multiple\s+conductor\s+ticks?)\b",
                 @"\b(?:cross[-\s]tick|(?:across|over|spanning)\s+(?:two|multiple|several)\s+(?:consecutive\s+)?(?:conductor\s+)?ticks?|(?:two|multiple|several)\s+consecutive\s+(?:conductor\s+)?ticks?|multiple\s+conductor\s+ticks?)\b.{0,100}\b(?:assert|demonstrate|exercise|observe|test|verify)\b")),
         new(
@@ -93,15 +99,20 @@ internal static class AcceptanceCriterionFeasibility
 
     public static IReadOnlyList<CriterionFeasibilityFinding> Evaluate(
         IReadOnlyList<string> criteria,
-        AgentRole role)
+        AgentRole fallbackRole)
     {
-        var profile = RoleProfiles.SingleOrDefault(candidate => candidate.Role == role);
-        if (profile is null)
-            return [];
-
         var findings = new List<CriterionFeasibilityFinding>();
         foreach (var criterion in criteria.Where(value => !string.IsNullOrWhiteSpace(value)))
         {
+            var ownershipMatches = ExecutingRolePattern.Matches(criterion);
+            var executingRole = ownershipMatches.Count == 0
+                ? fallbackRole.ToString()
+                : ownershipMatches[^1].Groups["executor"].Value;
+            var profile = RoleProfiles.SingleOrDefault(candidate =>
+                string.Equals(candidate.Role, executingRole, StringComparison.OrdinalIgnoreCase));
+            if (profile is null)
+                continue;
+
             var matches = Rules
                 .Where(rule => profile.UnavailableCapabilities.Contains(rule.Capability))
                 .Where(rule => rule.DemandPatterns.Any(pattern => pattern.IsMatch(criterion)))
@@ -111,7 +122,7 @@ internal static class AcceptanceCriterionFeasibility
 
             findings.Add(new CriterionFeasibilityFinding(
                 criterion,
-                role,
+                profile.Role,
                 matches.Select(match => match.Category).Distinct(StringComparer.Ordinal).ToList(),
                 matches.Select(match => match.Capability).Distinct().ToList()));
         }
