@@ -11,9 +11,10 @@ internal static class ReverseDependencyTestImpactReader
     internal const int MaximumChangedSourceFiles = 5;
     private const int MaximumDependencyHops = 2;
     private const int MaximumFrontierSymbols = 64;
-    // The current classifier closure resolves 49 consumer test classes. Keep a bounded focused
-    // filter with room for new tests before widening to the full Infrastructure suite.
-    internal const int MaximumSelectedTestClasses = 64;
+    // The classifier closure resolved 63 consumer test classes on 2026-10-04. Keep a bounded focused
+    // filter with room for new tests before widening to the full Infrastructure suite; at 96 classes
+    // the filter stays well under the 8,191-character cmd.exe command-line limit.
+    internal const int MaximumSelectedTestClasses = 96;
     // The Infrastructure test closure reached about 2,000 source files on 2026-10-04. Keep room
     // for growth before focused selection is abandoned for the full Infrastructure suite.
     internal const int MaximumIndexedSourceFiles = 4_000;
