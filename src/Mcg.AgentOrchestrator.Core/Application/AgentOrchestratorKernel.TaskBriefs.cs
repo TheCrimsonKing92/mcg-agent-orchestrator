@@ -540,6 +540,10 @@ public sealed partial class AgentOrchestratorKernel
             segments.Add(TaskBriefSegment.Fixed(prerequisiteEvidenceSection.Lines));
         }
 
+        var frozenFactRulingLines = FrozenFactRulingBriefSection.Render(HumanInputRequests, goalId, task.RequiredRole);
+        if (frozenFactRulingLines.Count > 0)
+            segments.Add(TaskBriefSegment.Fixed(frozenFactRulingLines));
+
         if (task.LastExecution is not null)
         {
             segments.Add(TaskBriefSegment.Projected(

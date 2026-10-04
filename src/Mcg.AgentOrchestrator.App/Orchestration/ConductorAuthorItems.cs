@@ -31,13 +31,15 @@ internal static class ConductorAuthorItems
         foreach (var request in humanInputRequests)
         {
             if (request.GoalId != goal.Id || request.TaskId is null ||
-                request.Kind != HumanWaitKind.SpecClarification || request.IsCompleted ||
+                !HumanWaitPolicyDefaults.IsSpecClarificationClass(request.Kind) ||
+                request.StoreReference is not null || request.IsCompleted ||
                 !goal.Tasks.Any(task => task.Id == request.TaskId && task.Status == WorkTaskStatus.WaitingForHuman) ||
                 request.AuthoritativeAnswer is not null ||
                 HasQueuedHumanAnswer(intents, OperatorAnswerTargetKind.HumanInput, request.Id.Value))
                 continue;
             result.Add(new ConductorAuthorItem(OperatorAnswerTargetKind.HumanInput, request.Id.Value,
-                goal.Id.Value, request.Question, "worker-spec-clarification"));
+                goal.Id.Value, request.Question, request.Kind == HumanWaitKind.PlannerPrerequisiteEvidence
+                    ? "planner-prerequisite-evidence" : "worker-spec-clarification"));
         }
         return result;
     }
