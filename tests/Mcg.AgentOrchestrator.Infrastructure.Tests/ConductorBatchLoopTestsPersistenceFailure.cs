@@ -1382,7 +1382,7 @@ public sealed class ConductorBatchLoopTestsPersistenceFailure : ConductorBatchLo
     public void PersistGoalTick_FiresOneBatchForGoalsThatChangedDisposition()
     {
         // Two goals: A advances (workspace creation), B is held by concurrent cap.
-        // persistGoalTick must be called once with A and without B.
+        // The tick writes A alone; graceful shutdown separately checkpoints both goals.
         var kernel = new AgentOrchestratorKernel();
         var goalA = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "goal A");
         var goalB = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "goal B");
@@ -1399,18 +1399,25 @@ public sealed class ConductorBatchLoopTestsPersistenceFailure : ConductorBatchLo
             createWorkspace: _ => { createWorkspaceCalls++; return "/tmp/ws"; });
 
         var persistedGoalBatches = new List<IReadOnlyCollection<GoalId>>();
+        IReadOnlyCollection<GoalId>[] persistedTickGoalBatches = [];
 
         new ConductorBatchLoop().Run(
             kernel, driver, ConductorAutonomyPolicy.Conservative, NoStopPath(),
             maxIterations: 1,
+            onTick: _ => persistedTickGoalBatches = persistedGoalBatches.ToArray(),
             persistGoalTick: (_, changedGoalIds) => persistedGoalBatches.Add(changedGoalIds.ToArray()));
 
         // A changed disposition (workspace created); B's capacity owner creates no durable hold.
-        var persistedGoalIds = Assert.Single(persistedGoalBatches);
+        var persistedGoalIds = Assert.Single(persistedTickGoalBatches);
         Assert.Contains(goalA.Id, persistedGoalIds);
         Assert.DoesNotContain(goalB.Id, persistedGoalIds);
         Assert.Single(persistedGoalIds);
         Assert.Null(goalB.CurrentHold);
+
+        Assert.Equal(2, persistedGoalBatches.Count);
+        Assert.Contains(goalA.Id, persistedGoalBatches[1]);
+        Assert.Contains(goalB.Id, persistedGoalBatches[1]);
+        Assert.Equal(2, persistedGoalBatches[1].Count);
     }
 
     [Xunit.Fact(DisplayName = "ConductorBatchLoop_identity_moved_without_touch_proof_emits_immediate_goal_escalation")]
