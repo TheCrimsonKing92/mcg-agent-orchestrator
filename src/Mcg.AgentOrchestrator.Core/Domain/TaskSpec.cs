@@ -1080,7 +1080,7 @@ public sealed partial class TaskSpec
         dispatch.GoalId,
         dispatch.CandidateIdentity,
         dispatch.ProviderUsage,
-        dispatch.InconclusiveRoundInputs);
+        dispatch.InconclusiveRoundInputs, dispatch.ShadowDecision);
 
     private static TaskDispatchRecord FromDispatchSnapshot(TaskDispatchSnapshot dispatch) => new(
         dispatch.WorkerName,
@@ -1122,7 +1122,7 @@ public sealed partial class TaskSpec
         dispatch.GoalId,
         dispatch.CandidateIdentity,
         dispatch.ProviderUsage,
-        dispatch.InconclusiveRoundInputs);
+        dispatch.InconclusiveRoundInputs, dispatch.ShadowDecision);
 
     private static string? NormalizeOptional(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
