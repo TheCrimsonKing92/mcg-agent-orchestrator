@@ -5136,9 +5136,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         DecideTestShardCompletion(result, InspectTrxCompletionEvidence(trxPaths));
 
     internal static string? FirstNonEmptyLine(string? value) =>
-        value?
-            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .FirstOrDefault(line => !string.IsNullOrWhiteSpace(line));
+        AcceptanceTrxOutcomeTaxonomy.FirstNonEmptyLine(value);
 
     private static string SanitizeFileName(string value)
     {

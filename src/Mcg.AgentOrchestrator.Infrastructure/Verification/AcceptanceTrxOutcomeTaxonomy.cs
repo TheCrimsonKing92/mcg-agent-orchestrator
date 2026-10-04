@@ -61,13 +61,18 @@ internal static class AcceptanceTrxOutcomeTaxonomy
                         element.Ancestors().Any(ancestor =>
                             ancestor.Name.LocalName.Equals("ErrorInfo", StringComparison.Ordinal)))
                     ?.Value;
-                var evidence = $"[FAIL] {testName}: {GoalAcceptanceVerifier.FirstNonEmptyLine(message) ?? "failure message unavailable"}";
+                var evidence = $"[FAIL] {testName}: {FirstNonEmptyLine(message) ?? "failure message unavailable"}";
                 var stack = includeFirstStackFrame ? result.Descendants().FirstOrDefault(element =>
                     element.Name.LocalName == "StackTrace" && element.Ancestors().Any(ancestor => ancestor.Name.LocalName == "ErrorInfo"))?.Value : null;
-                var firstFrame = GoalAcceptanceVerifier.FirstNonEmptyLine(stack);
+                var firstFrame = FirstNonEmptyLine(stack);
                 return firstFrame is null ? evidence : $"{evidence} | {firstFrame}";
             })
             .OfType<string>()
             .ToArray();
     }
+
+    internal static string? FirstNonEmptyLine(string? value) =>
+        value?
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .FirstOrDefault(line => !string.IsNullOrWhiteSpace(line));
 }

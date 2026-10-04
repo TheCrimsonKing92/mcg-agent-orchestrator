@@ -99,6 +99,23 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         }
     }
 
+    [Xunit.Fact]
+    public void ClassifierCoversRelocatedTrxOutcomeTaxonomyAndTestIdentityResolver()
+    {
+        var triggering = new[]
+        {
+            "src/Mcg.AgentOrchestrator.Infrastructure/Verification/AcceptanceTrxOutcomeTaxonomy.cs",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Verification/AcceptanceTrxTestIdentityResolver.cs"
+        };
+
+        foreach (var path in triggering)
+        {
+            var result = PostLandingCanaryTrigger.Evaluate([path]);
+            Assert.True(result.ShouldRun, path);
+            Assert.Equal(path, Assert.Single(result.TriggeringPaths));
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Canary command uses injected verifier and rejects an accept verdict with an empty receipt")]
     public void CanaryCommandRequiresExecutedReceiptFromInjectedVerifier()
     {
