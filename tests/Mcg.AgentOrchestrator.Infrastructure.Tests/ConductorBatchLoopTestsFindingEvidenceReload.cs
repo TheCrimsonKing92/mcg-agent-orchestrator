@@ -51,19 +51,22 @@ public sealed class ConductorBatchLoopTestsFindingEvidenceReload : ConductorBatc
         var stored = fixture.StoredProjection();
         var reloads = 0;
         var writtenTicks = new List<int>();
+        var tickOpen = false;
         var loop = new ConductorBatchLoop(
             utcNow: () => ConductorFindingEvidenceLoopFixture.Now,
             sweep: kernel =>
             {
                 kernel.RefreshTrackedGoals(stored);
                 reloads++;
+                tickOpen = true;
             });
 
         var result = loop.Run(fixture.Kernel, fixture.CreateDriver(), ConductorAutonomyPolicy.Permissive,
-            NoStopPath(), maxIterations: 4, sleepFunc: _ => false,
+            NoStopPath(), maxIterations: 4, watchInterval: TimeSpan.FromSeconds(1), sleepFunc: _ => false,
+            onTick: _ => tickOpen = false,
             persistGoalTick: (_, ids) =>
             {
-                if (!ids.Contains(fixture.Goal.Id)) return;
+                if (!tickOpen || !ids.Contains(fixture.Goal.Id)) return;
                 stored = fixture.StoredProjection();
                 writtenTicks.Add(reloads);
             });

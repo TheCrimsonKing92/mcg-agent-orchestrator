@@ -15,9 +15,6 @@ internal sealed partial class ConductorDriver
         var retryCap = ReviewRetryCapReceipt.Create(goal, policy.ReviewAutoRetryStopRound);
         if (retryCap.IsAtCap) return false;
 
-        var candidateSha = _getPreReviewEvidenceContext(goal).CandidateSha?.Trim();
-        if (!ConductorGitRevisionReader.IsValid(candidateSha)) return false;
-
         foreach (var requester in goal.Tasks.Where(HasUnconsumedRetry))
         {
             var predecessors = TasksBefore(goal, requester);
@@ -30,7 +27,7 @@ internal sealed partial class ConductorDriver
             if (delivery is null ||
                 !FindingEvidenceExecutionClassifier.TryReadEvidenceDeliveryRetry(
                     delivery, out var deliveredCandidate, out var deliveredIds) ||
-                !string.Equals(candidateSha, deliveredCandidate, StringComparison.OrdinalIgnoreCase)) continue;
+                !ConductorGitRevisionReader.IsValid(deliveredCandidate)) continue;
 
             var verification = requester.VerificationHistory.LastOrDefault(record =>
                 WorkerResultBlockers.TryFindReviewFindingRound(record, out _, out _));
@@ -45,9 +42,14 @@ internal sealed partial class ConductorDriver
             var executed = blockers.Where(finding =>
                 deliveredIds.Contains(finding.StableId, StringComparer.Ordinal) &&
                 route.WritableBlockerIds.Contains(finding.StableId, StringComparer.Ordinal) &&
-                FindingEvidenceExecutionClassifier.Classify(requester, finding, candidateSha) ==
+                FindingEvidenceExecutionClassifier.Classify(requester, finding, deliveredCandidate) ==
                     FindingEvidenceExecutionState.ExecutedOnCandidate).ToArray();
             if (executed.Length == 0) continue;
+
+            // Candidate discovery can touch git; only an eligible stored delivery needs it.
+            var candidateSha = _getPreReviewEvidenceContext(goal).CandidateSha?.Trim();
+            if (!ConductorGitRevisionReader.IsValid(candidateSha) ||
+                !string.Equals(candidateSha, deliveredCandidate, StringComparison.OrdinalIgnoreCase)) continue;
 
             var receiptIds = requester.VerificationHistory.SelectMany(record => record.FindingEvidenceReceipts ?? [])
                 .Where(receipt => string.Equals(receipt.CandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase))

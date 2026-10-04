@@ -12,10 +12,17 @@ public sealed class ConductorBatchLoopTestsHeldKernelWrite : ConductorBatchLoopT
     {
         var fixture = new ConductorFindingEvidenceLoopFixture();
         var persistedIds = new HashSet<GoalId>();
+        var tickCompleted = false;
         var result = new ConductorBatchLoop(utcNow: () => ConductorFindingEvidenceLoopFixture.Now).Run(
             fixture.Kernel, fixture.CreateDriver(), ConductorAutonomyPolicy.Permissive, NoStopPath(),
-            maxIterations: 1, persistGoalTick: (_, ids) => persistedIds.UnionWith(ids));
+            maxIterations: 1, watchInterval: TimeSpan.FromSeconds(1), sleepFunc: _ => false,
+            onTick: _ => tickCompleted = true,
+            persistGoalTick: (_, ids) =>
+            {
+                if (!tickCompleted) persistedIds.UnionWith(ids);
+            });
 
+        Assert.True(tickCompleted);
         Assert.Equal(1, fixture.FocusedRuns);
         Assert.Equal(1, result.Held);
         Assert.Equal(GoalLifecycleState.WorkspaceReady, Assert.Single(fixture.DispatchStates));
@@ -32,13 +39,20 @@ public sealed class ConductorBatchLoopTestsHeldKernelWrite : ConductorBatchLoopT
     {
         var (kernel, goal) = SimpleGoal();
         var persistedIds = new HashSet<GoalId>();
+        var tickCompleted = false;
         var driver = MakeDriver(
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
             dispatchAndStart: _ => ConductorFindingEvidenceLoopFixture.HeldDispatch());
         var result = new ConductorBatchLoop().Run(
             kernel, driver, ConductorAutonomyPolicy.Permissive, NoStopPath(), maxIterations: 1,
-            persistGoalTick: (_, ids) => persistedIds.UnionWith(ids));
+            watchInterval: TimeSpan.FromSeconds(1), sleepFunc: _ => false,
+            onTick: _ => tickCompleted = true,
+            persistGoalTick: (_, ids) =>
+            {
+                if (!tickCompleted) persistedIds.UnionWith(ids);
+            });
 
+        Assert.True(tickCompleted);
         Assert.Equal(1, result.Held);
         Assert.DoesNotContain(goal.Id, persistedIds);
     }
