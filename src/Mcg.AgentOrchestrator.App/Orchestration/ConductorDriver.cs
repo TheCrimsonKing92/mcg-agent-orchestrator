@@ -1399,8 +1399,10 @@ internal sealed partial class ConductorDriver
         if (state == GoalLifecycleState.CleanedUp)
             return MakeResult(goalId, goalPrefix, policy, new ConductorAdvanceOutcome.Done(state));
 
-        if (TryDecideLifecycleEntry(goal, goalPrefix, policy, state, out var lifecycleEntryResult))
+        if (TryDecideLifecycleEntry(goal, goalPrefix, policy, state, out var lifecycleEntryResult, out var lifecycleEntryDecision))
             return lifecycleEntryResult;
+        if (lifecycleEntryDecision.DiscriminatingEvidence == "failed-recovery")
+            return ExecuteFailedGoalRecovery(goal, goalPrefix, policy, state);
 
         if (TryRunDeferredNoChangeEvidence(goal, goalPrefix, policy, state, out var deferredNoChangeResult) || TryRouteDeliveredFindingEvidenceToDeveloper(goal, goalPrefix, policy, state, out deferredNoChangeResult)) return deferredNoChangeResult;
         return state switch

@@ -7,7 +7,7 @@ internal sealed partial class ConductorDriver
 {
     private bool TryDecideLifecycleEntry(
         Goal goal, string goalPrefix, ConductorAutonomyPolicy policy, GoalLifecycleState state,
-        out ConductorAdvanceResult result)
+        out ConductorAdvanceResult result, out LifecycleEntryDecision decision)
     {
         var facts = new LifecycleEntryFacts(state) { PolicyName = policy.Name, StateIsFailed = state == GoalLifecycleState.Failed };
         if (state is GoalLifecycleState.Created or GoalLifecycleState.WorkspaceReady or GoalLifecycleState.Dispatched)
@@ -25,16 +25,11 @@ internal sealed partial class ConductorDriver
                 facts = facts with { TransitionDecision = policy.GetTransitionDecision(state).ToString() };
         }
 
-        var decision = LifecycleEntryPolicy.Evaluate(facts);
+        decision = LifecycleEntryPolicy.Evaluate(facts);
         if (decision.Action == LifecycleEntryAction.Hold)
         {
             result = MakeResult(goal.Id.Value, goalPrefix, policy,
                 new ConductorAdvanceOutcome.Held(state, decision.Reason) { Decision = decision.ToRecord() });
-            return true;
-        }
-        if (decision.DiscriminatingEvidence == "failed-recovery")
-        {
-            result = ExecuteFailedGoalRecovery(goal, goalPrefix, policy, state);
             return true;
         }
         if (decision.Action == LifecycleEntryAction.Escalate)
