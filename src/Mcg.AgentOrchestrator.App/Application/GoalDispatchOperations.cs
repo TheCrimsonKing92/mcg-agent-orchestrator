@@ -103,7 +103,8 @@ internal sealed partial class GoalDispatchOperations
             citedPriorEvidenceResolver: CreateCitedPriorEvidenceResolver(workspace),
             sandboxOptions: sandboxOptions,
             plannerSampleCount: ResolvePlannerSampleCount(workspace, plannerSampleCount),
-            paidRoute: subscriptionMetadata?.PaidRoute ?? PaidRouteClassification.Unknown);
+            paidRoute: subscriptionMetadata?.PaidRoute ?? PaidRouteClassification.Unknown,
+            shadowRecorder: DispatchShadowRecorder.Default);
     }
 
     public WorkerProfileDispatchResult RefreshPreparedDispatchBeforeStart(
