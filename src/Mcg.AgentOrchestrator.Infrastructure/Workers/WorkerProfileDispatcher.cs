@@ -204,6 +204,7 @@ public static partial class WorkerProfileDispatcher
                 goal,
                 ConductorAutonomyPolicy.Default.ReviewAutoRetryStopRound)
             : null;
+        var changedExistingTests = ReviewerChangedExistingTestScope.Read(kernel, goal, task, workingDirectory, reviewerScopeMergeBase, targetContext?.HeadCommit, reviewerScopeChangedFiles);
         var usesTypedContextPackage = WorkerContextHelpers.UsesTypedContextPackage(
             task.RequiredRole,
             providerName,
@@ -225,7 +226,9 @@ public static partial class WorkerProfileDispatcher
             reviewerRoundTouchScope.TouchedAnchors,
             reviewerRoundTouchScope.Diagnostic,
             effectiveReviewRetryCap,
-            measureWithTypedSourceBoundaries: usesTypedContextPackage);
+            measureWithTypedSourceBoundaries: usesTypedContextPackage,
+            changedExistingTests: changedExistingTests.Entries,
+            changedExistingTestsDiagnostic: changedExistingTests.Diagnostic);
         var brief = usesTypedContextPackage
             ? briefSource.ToTaskBrief(string.Empty)
             : briefSource.ProjectLegacyMarkedTextV1(emitTypedSourceBoundaries: false);
@@ -337,6 +340,7 @@ public static partial class WorkerProfileDispatcher
             ClaudeCredentialSourceIsExplicit: claudeCredentialSelection?.IsExplicitSource ?? false,
             ShadowDecision: shadowRecorder?.Record(task.RequiredRole, goal.Objective, task.Description, reviewerScopeChangedFiles, providerName, modelName, reasoningEffort)),
             allowPendingRecordedDispatchRefresh);
+        ReviewerChangedExistingTestScope.RecordConductEvent(goal, task, changedExistingTests, promptRoot, dispatchedAt, allowPendingRecordedDispatchRefresh);
         PrerequisiteEvidenceTrimNote.RecordIfTrimmed(kernel, goal.Id, task.Id, brief);
         return new WorkerProfileDispatchResult(task, preparation.PromptPath);
     }
