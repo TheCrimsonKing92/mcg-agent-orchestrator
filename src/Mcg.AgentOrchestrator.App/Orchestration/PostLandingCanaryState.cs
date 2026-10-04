@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -212,7 +213,8 @@ internal sealed record PostLandingCanaryEventPayload(
     string? OperatorNote = null,
     int AttemptCount = 0,
     DateTimeOffset? NotBefore = null,
-    string? SlotResolution = null)
+    string? SlotResolution = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string>? SharedFailingTests = null)
 {
     internal const string CanaryTag = "canary";
 }
@@ -751,6 +753,31 @@ internal sealed partial class AcceptanceEngineCircuitBreaker
                 $"repeat-count={repeatCount}\n{receipt.Payload.Detail}\n{receiptReference}",
             correlationKey: OperatorItemCorrelationKey,
             cancellationToken).ConfigureAwait(false);
+    }
+
+    internal async Task AppendAutomaticReleaseAsync(string tip, string note, CancellationToken cancellationToken)
+    {
+        var now = _utcNow();
+        await _events.AppendOnceAsync(PostLandingCanaryEventKind.Cleared,
+            new(PostLandingCanaryEventPayload.CanaryTag, null, [], null, 0,
+                "Acceptance engine circuit released automatically after main moved off a main-suspect revision.",
+                null, now, OperatorNote: note),
+            $"post-landing-canary:clear:auto:{tip}:{Guid.NewGuid():N}", now, cancellationToken).ConfigureAwait(false);
+        // Automatic release must never reset the independent emergency circuit.
+        if (_operatorItems is not null)
+        {
+            try
+            {
+                using var cancellation = new CancellationTokenSource();
+                WaitForOwnedWrite(_operatorItems.TryResolveAsync(OperatorItemCorrelationKey,
+                    $"Acceptance engine circuit cleared: {note}", cancellation.Token), cancellation);
+            }
+            catch (Exception ex)
+            {
+                // The release receipt is already durable; cleanup cannot change its outcome.
+                Console.Error.WriteLine($"CANARY_GATE result=operator-item-error reason=auto-release item-error={ex.GetType().Name}");
+            }
+        }
     }
 
     internal AcceptanceEngineHealthSnapshot Clear(string operatorNote)
