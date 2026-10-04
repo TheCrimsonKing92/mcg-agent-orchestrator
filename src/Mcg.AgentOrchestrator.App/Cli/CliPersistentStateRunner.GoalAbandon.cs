@@ -16,13 +16,15 @@ internal static partial class CliPersistentStateRunner
         var goalId = ResolveSingleGoalCommandGoalId(stateRepository, currentGoal?.Id.Value, command.GoalSelector);
         var hooks = WorktreeCleanupContext.Load(attentionStoreDirectory: workspace.OrchestratorDirectory).Hooks;
         var outcome = ExecuteGoalAbandonApplication(command, goalId, stateRepository, workspace, hooks,
-            out var committedKernel);
+            out var committedKernel, out var pendingMessageId);
         if (outcome.Goal is not null)
         {
             currentGoal = outcome.Goal;
         }
 
-        CliCommandHandlers.RenderGoalAbandonOutcome(command, outcome, committedKernel, workspace, hooks);
+        CliCommandHandlers.RenderGoalAbandonOutcome(command, outcome, committedKernel, workspace, hooks,
+            pendingMessageId is null ? null : () => DeliverCommittedGoalLifecycleEvent(
+                (IOrchestratorStateOutboxRepository)stateRepository, workspace, goalId, GoalStatus.Cancelled, pendingMessageId));
         return outcome.ShouldSave;
     }
 
@@ -32,7 +34,7 @@ internal static partial class CliPersistentStateRunner
         ITransactionalOrchestratorStateRepository stateRepository,
         OrchestratorWorkspace workspace,
         GoalWorktreeCleanupHooks hooks) =>
-        ExecuteGoalAbandonApplication(command, goalId, stateRepository, workspace, hooks, out _);
+        ExecuteGoalAbandonApplication(command, goalId, stateRepository, workspace, hooks, out _, out _);
 
     private static CliCommandHandlers.GoalLifecycleTransitionOutcome ExecuteGoalAbandonApplication(
         CliCommandHandlers.GoalAbandonCommand command,
@@ -40,8 +42,10 @@ internal static partial class CliPersistentStateRunner
         ITransactionalOrchestratorStateRepository stateRepository,
         OrchestratorWorkspace workspace,
         GoalWorktreeCleanupHooks hooks,
-        out AgentOrchestratorKernel? committedKernel)
+        out AgentOrchestratorKernel? committedKernel,
+        out string? pendingMessageId)
     {
+        pendingMessageId = null;
         if (!command.Confirmed)
         {
             var snapshot = stateRepository.LoadGoalAsync(goalId).GetAwaiter().GetResult()
@@ -51,8 +55,8 @@ internal static partial class CliPersistentStateRunner
                 command, committedKernel, goalId, workspace, hooks);
         }
 
-        return TransactGoalSnapshotTransition(stateRepository, "cli:abandon-goal", goalId,
+        return TransactGoalLifecycleTransitionWithOutbox(stateRepository, "cli:abandon-goal", goalId,
             kernel => CliCommandHandlers.ApplyGoalAbandonWithoutRendering(command, kernel, goalId, workspace, hooks),
-            out committedKernel);
+            out committedKernel, out pendingMessageId);
     }
 }
