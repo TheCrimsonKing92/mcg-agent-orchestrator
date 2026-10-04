@@ -2332,27 +2332,26 @@ public static partial class WorkerProcessJobs
     }
 
     private static bool DefaultTryKillPidTree(int processId)
+        => DefaultTryKillPidTree(processId, ReadHasExited, TryTaskkillProcessTree);
+
+    internal static bool DefaultTryKillPidTree(
+        int processId, Func<int, bool> readHasExited, Func<int, bool> tryTaskkillProcessTree)
     {
         try
         {
-            using var process = Process.GetProcessById(processId);
-            if (process.HasExited)
+            if (readHasExited(processId))
             {
                 return true;
             }
         }
-        catch (ArgumentException)
-        {
-            return true;
-        }
-        catch (InvalidOperationException)
+        catch (Exception exception) when (ProcessProbeFailure.IsNotLive(exception))
         {
             return true;
         }
 
         if (OperatingSystem.IsWindows())
         {
-            return TryTaskkillProcessTree(processId);
+            return tryTaskkillProcessTree(processId);
         }
 
         try
@@ -2436,20 +2435,24 @@ public static partial class WorkerProcessJobs
     }
 
     private static bool IsProcessRunning(int processId)
+        => IsProcessRunning(processId, ReadHasExited);
+
+    internal static bool IsProcessRunning(int processId, Func<int, bool> readHasExited)
     {
         try
         {
-            using var process = Process.GetProcessById(processId);
-            return !process.HasExited;
+            return !readHasExited(processId);
         }
-        catch (ArgumentException)
+        catch (Exception exception) when (ProcessProbeFailure.IsNotLive(exception))
         {
             return false;
         }
-        catch (InvalidOperationException)
-        {
-            return false;
-        }
+    }
+
+    private static bool ReadHasExited(int processId)
+    {
+        using var process = Process.GetProcessById(processId);
+        return process.HasExited;
     }
 
     private static bool IsDescendantOf(int processId, int ancestorProcessId)

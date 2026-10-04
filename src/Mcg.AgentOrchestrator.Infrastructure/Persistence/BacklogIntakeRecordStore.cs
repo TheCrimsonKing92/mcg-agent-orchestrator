@@ -304,20 +304,24 @@ public sealed class BacklogIntakeRecordStore
     }
 
     private static bool IsProcessAlive(int pid)
+        => IsProcessAlive(pid, ReadHasExited);
+
+    internal static bool IsProcessAlive(int pid, Func<int, bool> readHasExited)
     {
         try
         {
-            using var process = System.Diagnostics.Process.GetProcessById(pid);
-            return !process.HasExited;
+            return !readHasExited(pid);
         }
-        catch (ArgumentException)
+        catch (Exception exception) when (ProcessProbeFailure.IsNotLive(exception))
         {
             return false;
         }
-        catch (InvalidOperationException)
-        {
-            return false;
-        }
+    }
+
+    private static bool ReadHasExited(int pid)
+    {
+        using var process = System.Diagnostics.Process.GetProcessById(pid);
+        return process.HasExited;
     }
 
     private static void RunNonQuery(SqliteConnection conn, string sql)

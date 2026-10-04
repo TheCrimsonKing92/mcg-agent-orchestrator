@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -174,7 +175,8 @@ internal sealed class SystemConductorSupervisorHandoffSeam : IConductorSuperviso
     {
         Process process;
         try { process = Process.GetProcessById(child.Process.ProcessId); }
-        catch (ArgumentException) when (ConductorContinuityExitArtifact.TryRead(child.ExitArtifactPath) is not null)
+        catch (Exception exception) when (ProcessProbeFailure.IsNotLive(exception) &&
+            ConductorContinuityExitArtifact.TryRead(child.ExitArtifactPath) is not null)
         {
             return new ConductorSupervisorProcessResult(0, child.Process.ProcessId,
                 child.StdoutPath, child.StderrPath);

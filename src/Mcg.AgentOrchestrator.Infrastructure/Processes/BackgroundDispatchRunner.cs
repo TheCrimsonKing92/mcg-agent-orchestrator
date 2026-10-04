@@ -2539,10 +2539,10 @@ public sealed partial class BackgroundDispatchRunner
     {
         try
         {
-            var process = Process.GetProcessById(processId);
+            using var process = Process.GetProcessById(processId);
             return !process.HasExited;
         }
-        catch (ArgumentException)
+        catch (Exception exception) when (ProcessProbeFailure.IsNotLive(exception))
         {
             return false;
         }

@@ -60,6 +60,13 @@ internal interface ITrialProcessInventory
 
 internal sealed class SystemTrialProcessInventory : ITrialProcessInventory
 {
+    private readonly Func<int, bool> _readHasExited;
+
+    internal SystemTrialProcessInventory(Func<int, bool>? readHasExited = null)
+    {
+        _readHasExited = readHasExited ?? ReadHasExited;
+    }
+
     public IReadOnlyList<int> FindSurvivors(IReadOnlyCollection<int> observedProcessIds)
     {
         var survivors = new List<int>();
@@ -67,23 +74,24 @@ internal sealed class SystemTrialProcessInventory : ITrialProcessInventory
         {
             try
             {
-                using var process = Process.GetProcessById(processId);
-                if (!process.HasExited)
+                if (!_readHasExited(processId))
                 {
                     survivors.Add(processId);
                 }
             }
-            catch (ArgumentException)
+            catch (Exception exception) when (ProcessProbeFailure.IsNotLive(exception))
             {
-                // The process no longer exists.
-            }
-            catch (InvalidOperationException)
-            {
-                // The process exited while it was inspected.
+                // An exited or unopenable process is not a survivor.
             }
         }
 
         return survivors;
+    }
+
+    private static bool ReadHasExited(int processId)
+    {
+        using var process = Process.GetProcessById(processId);
+        return process.HasExited;
     }
 }
 

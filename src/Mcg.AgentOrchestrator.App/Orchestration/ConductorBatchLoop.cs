@@ -1171,7 +1171,7 @@ internal sealed partial class ConductorBatchLoop
                     {
                         ClearGoalHold(kernel, goal, changedGoalIds);
                         escalatedGoals.Add(goal.Id.Value);
-                        ReapGoalOnce(kernel, goal, reapedGoals);
+                        ReapGoalOnce(kernel, goal, reapedGoals, totalTicks, tickLines);
                         SetAside(kernel, driver, goal, BatchSetAsideCondition.DependencyEscalated, setAsideGoals, selfClearedSetAsideEntries);
                         tickEscalated++;
                     }
@@ -1239,7 +1239,7 @@ internal sealed partial class ConductorBatchLoop
 
                     escalatedGoals.Add(goal.Id.Value);
                     ClearGoalHold(kernel, goal, changedGoalIds);
-                    ReapGoalOnce(kernel, goal, reapedGoals);
+                    ReapGoalOnce(kernel, goal, reapedGoals, totalTicks, tickLines);
                     SetAside(kernel, driver, goal, BatchSetAsideCondition.LifecycleEscalation, setAsideGoals, selfClearedSetAsideEntries, sweepResult);
                     tickEscalated++;
                     FinishGoalWalk("verified-escalation");
@@ -1431,7 +1431,7 @@ internal sealed partial class ConductorBatchLoop
 
                 if (result.WasExecuted)        { tickAdvanced++; }
                 else if (result.IsHeld)        { tickHeld++; }
-                else if (result.WasEscalated)  { tickEscalated++; escalatedGoals.Add(goal.Id.Value); ReapGoalOnce(kernel, goal, reapedGoals); SetAside(kernel, driver, goal, GetSetAsideCondition(result), setAsideGoals, selfClearedSetAsideEntries, sweepResult); }
+                else if (result.WasEscalated)  { tickEscalated++; escalatedGoals.Add(goal.Id.Value); ReapGoalOnce(kernel, goal, reapedGoals, totalTicks, tickLines); SetAside(kernel, driver, goal, GetSetAsideCondition(result), setAsideGoals, selfClearedSetAsideEntries, sweepResult); }
                 else if (result.IsDone)        { tickDone++;      completedGoals.Add(goal.Id.Value); excludedGoals.Add(goal.Id.Value); }
                 goalProjectionCache.Invalidate(goal.Id);
                 FinishGoalWalk(result.Outcome.GetType().Name);
@@ -1818,7 +1818,7 @@ internal sealed partial class ConductorBatchLoop
             kernel.ClearGoalHold(goal.Id);
             kernel.RecordGoalPolicyDecision(goal.Id, $"Batch loop tick {totalTicks}: {reason}");
             escalatedGoals.Add(goal.Id.Value);
-            ReapGoalOnce(kernel, kernel.GetGoal(goal.Id), reapedGoals);
+            ReapGoalOnce(kernel, kernel.GetGoal(goal.Id), reapedGoals, totalTicks, tickLines);
             SetAside(kernel, driver, kernel.GetGoal(goal.Id), BatchSetAsideCondition.AdvanceFault, setAsideGoals, selfClearedSetAsideEntries);
             tickEscalated++;
             finishGoalWalk($"dispatch-record-{disposition}-limit");
@@ -1835,7 +1835,7 @@ internal sealed partial class ConductorBatchLoop
             Console.WriteLine($"[conduct --loop] Tick {totalTicks}: {label} [{policy.Name}] → escalated (advance threw): {ex.Message}");
             kernel.RecordGoalPolicyDecision(goal.Id, msg);
             escalatedGoals.Add(goal.Id.Value);
-            ReapGoalOnce(kernel, goal, reapedGoals);
+            ReapGoalOnce(kernel, goal, reapedGoals, totalTicks, tickLines);
             SetAside(kernel, driver, goal, BatchSetAsideCondition.AdvanceFault, setAsideGoals, selfClearedSetAsideEntries);
             tickEscalated++;
             finishGoalWalk("advance-fault");
@@ -3023,7 +3023,7 @@ internal sealed partial class ConductorBatchLoop
         AgentOrchestratorKernel kernel,
         string? onlyGoalId,
         HashSet<string> excludedGoals,
-        HashSet<string> reapedGoals)
+        HashSet<string> reapedGoals, int tick, List<string>? tickLines)
     {
         foreach (var goal in kernel.Goals)
         {
@@ -3037,7 +3037,7 @@ internal sealed partial class ConductorBatchLoop
                 continue;
             }
 
-            ReapGoalOnce(kernel, goal, reapedGoals);
+            ReapGoalOnce(kernel, goal, reapedGoals, tick, tickLines);
         }
     }
 
@@ -3061,16 +3061,6 @@ internal sealed partial class ConductorBatchLoop
 
             DetachGoalOnce(kernel, goal, reapedGoals);
         }
-    }
-
-    private void ReapGoalOnce(AgentOrchestratorKernel kernel, Goal goal, HashSet<string> reapedGoals)
-    {
-        if (!reapedGoals.Add(goal.Id.Value))
-        {
-            return;
-        }
-
-        _reapGoalRunningDispatches(kernel, goal);
     }
 
     private void DetachGoalOnce(AgentOrchestratorKernel kernel, Goal goal, HashSet<string> reapedGoals)
