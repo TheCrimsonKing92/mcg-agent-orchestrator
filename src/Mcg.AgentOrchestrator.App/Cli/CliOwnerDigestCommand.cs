@@ -20,19 +20,26 @@ internal static class CliOwnerDigestCommand
         try
         {
             var (since, until, json, rounds) = Parse(args);
-            IReadOnlyList<Goal> goals = [];
-            var digest = rounds
-                ? Read(workspace, clock ?? new SystemClock(), out goals, since, until)
-                : Read(workspace, clock ?? new SystemClock(), since, until);
+            var digest = Read(workspace, clock ?? new SystemClock(), out var goals, since, until);
+            var panel = CliOwnerDigestJudgePanel.Read(workspace, digest, goals);
             var writer = output ?? Console.Out;
             IReadOnlyList<AppliedRetryIntent> intents = rounds
                 ? CliOwnerDigestRetryIntents.Read(workspace, digest.Until) : [];
             if (json)
             {
+                using var buffer = panel is null ? null : new StringWriter(CultureInfo.InvariantCulture);
+                var jsonWriter = buffer ?? writer;
                 if (rounds)
-                    CliOwnerDigestRounds.WriteJson(writer, digest, goals, intents);
+                    CliOwnerDigestRounds.WriteJson(jsonWriter, digest, goals, intents);
                 else
-                    WriteJson(writer, digest);
+                    WriteJson(jsonWriter, digest);
+                if (panel is not null)
+                {
+                    var root = JsonNode.Parse(buffer!.ToString())!.AsObject();
+                    CliOwnerDigestJudgePanel.AddJson(root, panel);
+                    writer.WriteLine(root.ToJsonString(new JsonSerializerOptions
+                        { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));
+                }
             }
             else
             {
@@ -40,6 +47,8 @@ internal static class CliOwnerDigestCommand
                 CliOwnerDigestLessons.WriteText(writer, workspace, digest.Since, digest.Until);
                 if (rounds)
                     CliOwnerDigestRounds.WriteText(writer, digest, goals, intents);
+                if (panel is not null)
+                    CliOwnerDigestJudgePanel.WriteText(writer, panel);
             }
             return 0;
         }
