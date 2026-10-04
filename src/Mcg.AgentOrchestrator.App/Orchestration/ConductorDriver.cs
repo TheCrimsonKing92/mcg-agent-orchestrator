@@ -1441,7 +1441,7 @@ internal sealed partial class ConductorDriver
             }
         }
 
-        if (TryRunDeferredNoChangeEvidence(goal, goalPrefix, policy, state, out var deferredNoChangeResult)) return deferredNoChangeResult;
+        if (TryRunDeferredNoChangeEvidence(goal, goalPrefix, policy, state, out var deferredNoChangeResult) || TryRouteDeliveredFindingEvidenceToDeveloper(goal, goalPrefix, policy, state, out deferredNoChangeResult)) return deferredNoChangeResult;
         return state switch
         {
             GoalLifecycleState.Created => ExecuteCreateWorkspace(goal, goalPrefix, policy),
