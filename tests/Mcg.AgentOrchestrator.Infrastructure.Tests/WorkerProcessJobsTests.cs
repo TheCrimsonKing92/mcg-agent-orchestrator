@@ -3125,7 +3125,7 @@ public sealed class WorkerProcessJobsTests : IDisposable
         {
             [Path.Combine("src", "Mcg.AgentOrchestrator.Infrastructure", "Processes", "BackgroundDispatchRunner.cs")] =
                 "if (!WorkerProcessJobs.TryRegister(",
-            [Path.Combine("src", "Mcg.AgentOrchestrator.Infrastructure", "Processes", "LocalProcessVerifier.cs")] =
+            [Path.Combine("src", "Mcg.AgentOrchestrator.Infrastructure", "Workspaces", "LocalProcessVerifier.cs")] =
                 "WorkerProcessJobs.StartRegisteredOwnedRedirectedOrThrow(",
             [Path.Combine("src", "Mcg.AgentOrchestrator.Infrastructure", "Workspaces", "GoalAcceptanceVerifier.ProcessRunner.cs")] =
                 "WorkerProcessJobs.StartRegisteredOwnedOrThrow(",
