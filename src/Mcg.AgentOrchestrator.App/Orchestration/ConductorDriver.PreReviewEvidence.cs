@@ -6,6 +6,44 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorDriver
 {
+    private readonly object _testImpactDegradedEventLock = new();
+    private readonly HashSet<(string GoalId, string CandidateSha)> _testImpactDegradedCandidates = [];
+    private ConductEventLogWriter? _testImpactDegradedEventWriter;
+
+    internal void OverrideTestImpactDegradedEventWriterForTests(ConductEventLogWriter writer) =>
+        _testImpactDegradedEventWriter = writer;
+
+    private void TryRecordTestImpactDegradedEvent(
+        Goal goal, string goalPrefix, PreReviewEvidenceContext context)
+    {
+        if (context.TestImpactDegradation is not
+            { Kind: ReverseDependencyDegradationKind.IndexedSourceBound or ReverseDependencyDegradationKind.Unreadable } degradation)
+        {
+            return;
+        }
+
+        lock (_testImpactDegradedEventLock)
+        {
+            var key = (goal.Id.Value, context.CandidateSha!);
+            if (_testImpactDegradedCandidates.Contains(key)) return;
+            try
+            {
+                if (_testImpactDegradedEventWriter is null && _cohortWorkspace is not null)
+                    _testImpactDegradedEventWriter = new ConductEventLogWriter(_cohortWorkspace.ConductEventsLogPath);
+                if (_testImpactDegradedEventWriter is null) return;
+
+                _testImpactDegradedEventWriter.Append(
+                    "test-impact-degraded", goal.Id.Value,
+                    $"TEST_IMPACT_DEGRADED goal={goalPrefix} candidate={context.CandidateSha} kind={degradation.Kind} reason={degradation.Reason}");
+                _testImpactDegradedCandidates.Add(key);
+            }
+            catch
+            {
+                // Match other diagnostic events: logging cannot block review; failed writes may retry.
+            }
+        }
+    }
+
     private bool TryRunPreReviewEvidenceStage(
         Goal goal,
         string goalPrefix,
@@ -33,6 +71,8 @@ internal sealed partial class ConductorDriver
                 "PRE_REVIEW_MAPPING_NEEDS_INPUT: current candidate HEAD could not be resolved; Reviewer dispatch is blocked.");
             return true;
         }
+
+        TryRecordTestImpactDegradedEvent(goal, goalPrefix, context);
 
         var round = GetCurrentReviewerRoundNumber(goal, reviewerTask);
         var currentReceipt = reviewerTask.PreReviewEvidenceReceipt;
@@ -563,96 +603,12 @@ internal sealed partial class ConductorDriver
         var plan = string.IsNullOrWhiteSpace(repositoryRoot)
             ? RepositoryTestImpactPlanner.Plan(changeSummary)
             : RepositoryTestImpactPlanner.Plan(changeSummary, repositoryRoot);
-        if (!plan.RequiresBuild &&
-            plan.Checks.Count > 0 &&
-            plan.Checks.All(check => check.Command.Count == 0))
-        {
-            var generatedArtifactsBlock = changeSummary.HasGeneratedArtifacts;
-            return new PreReviewEvidenceContext(
-                candidateSha,
-                [],
-                null,
-                plan.Summary,
-                NoApplicableTests: !generatedArtifactsBlock,
-                MappingNeedsInput: generatedArtifactsBlock,
-                SourceCleanupPaths: changeSummary.Files
-                    .Where(file => file.IsGeneratedArtifact)
-                    .Select(file => file.Path)
-                    .ToArray());
-        }
-
-        var focusedChecks = plan.Checks
-            .Where(check => FindArgument(check.Command, "--filter") >= 0)
-            .ToArray();
-        if (focusedChecks.Length == 0)
-        {
-            return new PreReviewEvidenceContext(
-                candidateSha,
-                [],
-                null,
-                $"{plan.Summary} No filtered test target mapped; project-wide checks are deferred to the acceptance gate.",
-                NoApplicableTests: true,
-                MappingNeedsInput: false);
-        }
-
-        var selected = focusedChecks.Select(check => check.CommandLine).ToArray();
-        var requests = new List<string>();
-        foreach (var check in focusedChecks)
-        {
-            var filterIndex = FindArgument(check.Command, "--filter");
-            var project = check.Command.FirstOrDefault(argument =>
-                argument.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase));
-            if (string.IsNullOrWhiteSpace(project))
-            {
-                return new PreReviewEvidenceContext(
-                    candidateSha,
-                    selected,
-                    null,
-                    plan.Summary,
-                    NoApplicableTests: false,
-                    MappingNeedsInput: true);
-            }
-
-            if (!PreReviewFocusedRequestSplitter.TryResolveBrokerAlias(project, out var alias))
-            {
-                return new PreReviewEvidenceContext(
-                    candidateSha,
-                    selected,
-                    null,
-                    $"Mapped project is not supported by the focused evidence broker: {project}",
-                    NoApplicableTests: false,
-                    MappingNeedsInput: true);
-            }
-            if (filterIndex >= 0 && filterIndex + 1 >= check.Command.Count)
-            {
-                return new PreReviewEvidenceContext(
-                    candidateSha,
-                    selected,
-                    null,
-                    $"Mapped test command has an empty --filter argument: {check.CommandLine}",
-                    NoApplicableTests: false,
-                    MappingNeedsInput: true);
-            }
-
-            if (!PreReviewFocusedRequestSplitter.TrySplitRequestItems(
-                    alias!, check.Command[filterIndex + 1], out var requestItems))
-            {
-                return new PreReviewEvidenceContext(
-                    candidateSha, selected, null,
-                    "Mapped test filter cannot be split into broker-safe positive clauses.",
-                    NoApplicableTests: false, MappingNeedsInput: true);
-            }
-            requests.AddRange(requestItems);
-        }
-
-        return new PreReviewEvidenceContext(
-            candidateSha,
-            requests,
-            string.Join("; ", requests),
-            plan.Summary,
-            NoApplicableTests: false,
-            MappingNeedsInput: requests.Count == 0);
+        return BuildPreReviewEvidenceContext(candidateSha, changeSummary, plan);
     }
+
+    internal static PreReviewEvidenceContext BuildPreReviewEvidenceContext(
+        string? candidateSha, RepositoryChangeSummary changeSummary, RepositoryTestImpactPlan plan) =>
+        PreReviewEvidenceContextBuilder.Build(candidateSha, changeSummary, plan);
 
     private static string BuildAddTesterCommand(string goalPrefix, string candidateSha) =>
         $"add-task --goal {goalPrefix} Tester Resolve pre-review mapping for candidate {candidateSha} --before-role Reviewer";
@@ -667,19 +623,6 @@ internal sealed partial class ConductorDriver
             (evt.TaskId != reviewerTask.Id ||
                 !MechanicalReviewerRetryMessagePrefixes.Any(prefix =>
                     evt.Message.StartsWith(prefix, StringComparison.Ordinal))));
-
-    private static int FindArgument(IReadOnlyList<string> arguments, string value)
-    {
-        for (var index = 0; index < arguments.Count; index++)
-        {
-            if (arguments[index].Equals(value, StringComparison.OrdinalIgnoreCase))
-            {
-                return index;
-            }
-        }
-
-        return -1;
-    }
 
     private static IReadOnlyList<string> ExtractFailingTestIdentities(
         IEnumerable<AcceptanceCheckResult> checks) =>

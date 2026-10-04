@@ -18,7 +18,8 @@ internal sealed record PreReviewEvidenceContext(
     string MappingReason,
     bool NoApplicableTests,
     bool MappingNeedsInput,
-    IReadOnlyList<string>? SourceCleanupPaths = null)
+    IReadOnlyList<string>? SourceCleanupPaths = null,
+    RepositoryTestImpactDegradation? TestImpactDegradation = null)
 {
     public bool RequiresSourceCleanup => SourceCleanupPaths is { Count: > 0 };
 }
