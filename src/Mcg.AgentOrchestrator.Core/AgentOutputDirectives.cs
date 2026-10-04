@@ -7,7 +7,8 @@ public sealed record HumanInputDirective(
     string QuestionFingerprint,
     string? BlockerFingerprint = null,
     HumanWaitKind Kind = HumanWaitKind.SpecClarification,
-    string? EvidenceOwner = null);
+    string? EvidenceOwner = null,
+    PlannerEvidenceStoreReference? StoreReference = null);
 
 public sealed record HumanInputDirectiveParseResult(HumanInputDirective? Directive, string? Diagnostic)
 {
@@ -50,6 +51,7 @@ public static class AgentOutputDirectives
                 "Keep the text after `plan=` a non-empty one-sentence summary on that same line; any detail bullets that follow must not begin with a digit and a period. " +
                 "An undecidable criterion does not block other criteria and requires `blockers: none` when no operator action is needed. " +
                 "For evidence that exists only in an unreadable store, emit exactly one `PLANNER_EVIDENCE_REQUEST:` JSON directive with criterion_index, evidence_key, availability=retrievable, store, needed, and reason. " +
+                "For an orchestrator record, add store_ref as <kind>:<locator>[#<selector>]. " +
                 "For evidence that was never recorded, prefer an undecidable mapping; if operator action is still required, use availability=never-recorded and omit store. " +
                 "Evidence needed to decide or plan now is a blocking prerequisite; evidence that can only be produced after the candidate exists is prospective acceptance evidence. " +
                 "For the latter, use availability=post-implementation with owner and omit store; retain the exact criterion obligation without claiming the check was executed. " +
@@ -198,6 +200,16 @@ public static class AgentOutputDirectives
                     "criterion_index must be positive and evidence_key, availability, needed, and reason must be non-empty");
             }
 
+            PlannerEvidenceStoreReference? storeReference = null;
+            if (root.TryGetProperty("store_ref", out var storeRef))
+            {
+                if (!availability.Equals("retrievable", StringComparison.OrdinalIgnoreCase))
+                    return MalformedEvidenceRequest($"store_ref requires availability=retrievable, not '{availability}'");
+                if (storeRef.ValueKind != JsonValueKind.String ||
+                    !PlannerEvidenceStoreReference.TryParse(evidenceKey, storeRef.GetString()!.Trim(), out storeReference))
+                    return MalformedEvidenceRequest($"store_ref does not parse as <kind>:<locator>[#<selector>]: '{storeRef}'");
+            }
+
             var hasStore = TryGetRequiredString(root, "store", out var store);
             string availabilityText;
             var kind = HumanWaitKind.PlannerPrerequisiteEvidence;
@@ -247,7 +259,7 @@ public static class AgentOutputDirectives
                 $"Availability: {availabilityText}. Reason: {reason}";
             var fingerprint = HumanInputRequest.BuildPlannerEvidenceFingerprint(criterionIndex, evidenceKey);
             return new HumanInputDirectiveParseResult(
-                new HumanInputDirective(question, fingerprint, fingerprint, kind, evidenceOwner),
+                new HumanInputDirective(question, fingerprint, fingerprint, kind, evidenceOwner, storeReference),
                 null);
         }
         catch (JsonException error)

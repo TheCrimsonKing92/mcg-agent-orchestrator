@@ -201,7 +201,8 @@ public sealed partial class AgentOrchestratorKernel
                 workerResultLogReference: verification.StandardOutputPath,
                 recordDuplicateSuppression: verification.WorkerResultPresent,
                 evidenceOwner: verification.HumanInputEvidenceOwner
-                    ?? parsedHumanInput.Directive?.EvidenceOwner);
+                    ?? parsedHumanInput.Directive?.EvidenceOwner,
+                storeReference: verification.HumanInputStoreReference ?? parsedHumanInput.Directive?.StoreReference);
             if (verification.WorkerResultPresent &&
                 requestResult.WasSuppressedByAnswer &&
                 WorkerResultBlockers.TryGetBlockersStatus(verification, out var blockersStatus) &&

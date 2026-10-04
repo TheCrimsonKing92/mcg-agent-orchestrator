@@ -1859,7 +1859,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         blockedRecheckHeartbeatInterval: reconcileSweepOptions.HeartbeatInterval,
                         workspace: context.Workspace).WithSteward(ConductorStewardHost.CreateDefault(context.Workspace))
                         .WithUnintendedExitDiagnostics(conductorDiagnosticPath, conductorOutputLogPath)
-                        .WithAuthor(ConductorAuthorHost.CreateDefault(context.Workspace)).Run(
+                        .WithAuthor(ConductorAuthorHost.CreateDefault(context.Workspace))
+                        .WithStoreEvidence(ConductorStoreEvidenceStep.CreateDefault(context.Workspace)).Run(
                         context.Kernel, loopDriver, loopPolicy, stopFilePath, loopMaxIter,
                         watchInterval: watchInterval, onTick: onTick, wakeSignal: loopWakeSignal, maxDuration: maxDuration,
                         persistTick: context.PersistCheckpoint, keepAliveWhenIdle: loopDaemon,
@@ -1982,7 +1983,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     lifecycleRecorder: new ConductorLifecycleRecorder(
                         new SqliteRunEventStore(context.Workspace.RunEventStorePath)),
                     workspace: context.Workspace).WithSteward(ConductorStewardHost.CreateDefault(context.Workspace))
-                    .WithAuthor(ConductorAuthorHost.CreateDefault(context.Workspace)).Run(
+                    .WithAuthor(ConductorAuthorHost.CreateDefault(context.Workspace))
+                    .WithStoreEvidence(ConductorStoreEvidenceStep.CreateDefault(context.Workspace)).Run(
                     context.Kernel, conductDriver, conductPolicy, watchStopPath,
                     watchInterval: TimeSpan.FromSeconds(watchPollSeconds),
                     onTick: ConductorTickPusher.CreateStoreCallback(context.Workspace.RunEventStorePath),
