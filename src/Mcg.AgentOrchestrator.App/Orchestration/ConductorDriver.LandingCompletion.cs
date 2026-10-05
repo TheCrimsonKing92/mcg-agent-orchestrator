@@ -31,30 +31,7 @@ internal sealed partial class ConductorDriver
         // pre-landing rebase runs inside the hermetic acceptance child, which had no git identity and so
         // could not create the commits a rebase replays. Retrying a deterministic failure cannot help, and it
         // doubled the cost of every genuine one. The identity fix belongs in the environment, not here.
-        if (rebase.UpdatedBranch)
-        {
-            return null;
-        }
-
-        if (rebase.Status == GoalWorktreeRebaseStatus.MissingBranch)
-        {
-            var detail = $"Conductor tick retired missing goal branch before landing because the goal artifact could not be rebased: {rebase.Message}";
-            earlyOutcome = ConductorParallelAcceptanceEarlyOutcome.MissingBranchRetired(GoalLifecycleState.CleanedUp, detail);
-            if (applySideEffects)
-            {
-                _recordMissingBranchRetirement(goal, detail);
-            }
-
-            return MakeResult(goal.Id.Value, goalPrefix, policy, new ConductorAdvanceOutcome.Done(GoalLifecycleState.CleanedUp));
-        }
-
-        var rebaseReason = rebase.Status == GoalWorktreeRebaseStatus.Conflict
-            ? $"{phase} rebase conflict ({string.Join(", ", rebase.ConflictFiles)}); use 'workspace rebase' to resolve"
-            : $"{phase} rebase failed: {rebase.Message}";
-        earlyOutcome = ConductorParallelAcceptanceEarlyOutcome.PreLandingEscalated(GoalLifecycleState.Verified, rebaseReason);
-        return applySideEffects
-            ? Escalate(goal, goalPrefix, policy, GoalLifecycleState.Verified, rebaseReason)
-            : MakeResult(goal.Id.Value, goalPrefix, policy, new ConductorAdvanceOutcome.Escalated(GoalLifecycleState.Verified, rebaseReason));
+        return CreateLandingRebaseOutcome(goal, goalPrefix, policy, phase, applySideEffects, rebase, out earlyOutcome);
     }
 
     private ConductorAdvanceResult CompleteLandingAfterAcceptance(
@@ -87,19 +64,7 @@ internal sealed partial class ConductorDriver
                 mainHeadSha,
                 acceptance.CheckAttributions,
                 acceptance.BaselineAttestation);
-            var reason =
-                $"Acceptance gate apparatus/environmental failure recorded for unchanged candidate " +
-                $"{FormatAcceptanceCandidate(branchHeadSha, mainHeadSha)}. Acceptance will not re-run until " +
-                "the candidate or main HEAD changes, or an operator confirms acceptance-retry; no worker was reopened.";
-            RecordEscalation(goal, GoalLifecycleState.Verified, reason);
-            return MakeResult(
-                goal.Id.Value,
-                goalPrefix,
-                policy,
-                new ConductorAdvanceOutcome.Held(
-                    GoalLifecycleState.Verified,
-                    reason,
-                    StableIdentity: $"acceptance-apparatus:{branchHeadSha ?? "unknown"}:{mainHeadSha ?? "unknown"}"));
+            return CreateApparatusCompletionHold(goal, goalPrefix, policy, acceptance, branchHeadSha, mainHeadSha);
         }
 
         if (!acceptance.Passed && acceptance.RequiredUnmetCriteria.Count == 0)
@@ -117,11 +82,7 @@ internal sealed partial class ConductorDriver
                     acceptance.BaselineAttestation);
             }
 
-            return Escalate(goal, goalPrefix, policy, GoalLifecycleState.Verified,
-                (timedOut
-                    ? "Acceptance verification timed out; rerun acceptance after clearing the blocker."
-                    : "Acceptance verification failed; review and fix before landing.") +
-                FormatFailureTail(acceptance.FailureDetail), timedOut ? null : ConductorEscalationKind.AcceptanceVerificationFailed);
+            return CreateFailedAcceptanceCompletion(goal, goalPrefix, policy, acceptance, timedOut);
         }
 
         if (acceptance.Passed)
@@ -132,7 +93,7 @@ internal sealed partial class ConductorDriver
             var evidenceHold = AcceptanceCriterionEvidence.RecordAndCreateHold(goal, evidenceCandidateSha, _cohortKernel ?? _conductorTickKernel, _executionDirectory);
             if (evidenceHold is not null)
             {
-                return MakeResult(goal.Id.Value, goalPrefix, policy, evidenceHold);
+                return MakeResult(goal.Id.Value, goalPrefix, policy, AttachCriterionEvidenceCompletionDecision(acceptance, evidenceHold));
             }
         }
 
@@ -175,8 +136,7 @@ internal sealed partial class ConductorDriver
             var task = SelectTaskForCriterionRetry(goal);
             if (task is null)
             {
-                return Escalate(goal, goalPrefix, policy, GoalLifecycleState.Verified,
-                    $"Acceptance criteria unmet but no completed task is available to retry: {criteria}; review/land manually");
+                return CreateUnmetCriteriaCompletion(goal, goalPrefix, policy, acceptance, criteria, retryTaskAvailable: false);
             }
 
             if (goal.AutomaticAcceptanceRetryCount < policy.MaxCriterionRetries)
@@ -193,8 +153,7 @@ internal sealed partial class ConductorDriver
                     new ConductorAdvanceOutcome.Executed(GoalLifecycleState.Verified, retryMessage));
             }
 
-            return Escalate(goal, goalPrefix, policy, GoalLifecycleState.Verified,
-                $"Acceptance criteria unmet after {goal.AutomaticAcceptanceRetryCount} retries: {criteria}; review/land manually");
+            return CreateUnmetCriteriaCompletion(goal, goalPrefix, policy, acceptance, criteria, retryTaskAvailable: true);
         }
 
         foreach (var task in goal.Tasks)
@@ -206,34 +165,13 @@ internal sealed partial class ConductorDriver
         var mutationBlockReason = LandingMutationBlocker?.Invoke();
         if (!string.IsNullOrWhiteSpace(mutationBlockReason))
         {
-            return MakeResult(
-                goal.Id.Value,
-                goalPrefix,
-                policy,
-                new ConductorAdvanceOutcome.Held(
-                    GoalLifecycleState.Verified,
-                    $"Landing held at mutation boundary: {mutationBlockReason}"));
+            return CreateLandingMutationCompletionHold(goal, goalPrefix, policy, acceptance, mutationBlockReason);
         }
 
         var landResult = _land(goal, policy);
-        if (landResult.Decision is LandingDecision.Escalate escalate)
+        if (CreateLandingResultCompletionOutcome(goal, goalPrefix, policy, acceptance, landResult) is { } landingOutcome)
         {
-            if (LandingExecutor.IsMutationHoldEscalation(escalate.Reason))
-            {
-                return MakeResult(
-                    goal.Id.Value,
-                    goalPrefix,
-                    policy,
-                    new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, escalate.Reason));
-            }
-
-            if (LandingExecutor.IsOwnershipHoldEscalation(escalate.Reason))
-            {
-                return MakeResult(goal.Id.Value, goalPrefix, policy,
-                    new ConductorAdvanceOutcome.Escalated(GoalLifecycleState.Verified, escalate.Reason));
-            }
-
-            return Escalate(goal, goalPrefix, policy, GoalLifecycleState.Verified, escalate.Reason);
+            return landingOutcome;
         }
 
         RecordAdvisoryAcceptanceNotes(goal, acceptance.AdvisoryUnmetCriteria);

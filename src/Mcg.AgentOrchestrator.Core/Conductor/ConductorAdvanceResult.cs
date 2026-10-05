@@ -31,7 +31,10 @@ public abstract record ConductorAdvanceOutcome
     {
         public PolicyDecisionRecord? Decision { get; init; }
     }
-    public sealed record Done(GoalLifecycleState State) : ConductorAdvanceOutcome;
+    public sealed record Done(GoalLifecycleState State) : ConductorAdvanceOutcome
+    {
+        public PolicyDecisionRecord? Decision { get; init; }
+    }
 }
 
 public sealed record ConductorAdvanceResult(
