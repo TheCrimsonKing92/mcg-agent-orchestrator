@@ -53,6 +53,8 @@ internal static partial class CliCommandHandlers
         Console.WriteLine($"Operator intent queued: id={persisted.Id} verb={persisted.Verb} " +
             $"goal={goal.Id.Value} task={task.Id.Value} status={persisted.Status}; " +
             $"poll with operator-intent-status {persisted.Id} (or add --wait).");
+        Console.WriteLine($"Next step once applied: {OperatorIntentCoordinator.BuildCancelDispatchRecoveryCommand(goal, task)} " +
+            "(close and reopen-regate do not apply to a cancelled task).");
         if (!ConductorLoopLease.IsActive(context.Workspace.OrchestratorDirectory))
             Console.WriteLine(ConductorLoopLease.InactiveWarning);
         return false;
