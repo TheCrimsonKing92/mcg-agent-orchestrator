@@ -61,6 +61,7 @@ public static class SharedTestSupport
         var backoffCap = maximumBackoff ?? TimeSpan.FromMilliseconds(RemoveTempDirectoryMaximumBackoffMilliseconds);
 
         var attempts = 0;
+        var clearedReadOnly = false;
         Exception lastError;
         while (true)
         {
@@ -83,6 +84,11 @@ public static class SharedTestSupport
             catch (Exception error) when (error is IOException or UnauthorizedAccessException)
             {
                 lastError = error;
+                if (error is UnauthorizedAccessException && !clearedReadOnly)
+                {
+                    clearedReadOnly = true;
+                    ClearReadOnlyAttributes(path);
+                }
             }
 
             if (!Directory.Exists(path))
@@ -105,6 +111,44 @@ public static class SharedTestSupport
     }
 
     private static TimeSpan Min(TimeSpan left, TimeSpan right) => left <= right ? left : right;
+
+    private static void ClearReadOnlyAttributes(string path)
+    {
+        // Unix permits unlinking read-only files; clearing directory attributes would restore write permission.
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        try
+        {
+            var root = new DirectoryInfo(path);
+            ClearReadOnlyAttribute(root);
+            foreach (var entry in root.EnumerateFileSystemInfos("*", SearchOption.AllDirectories))
+            {
+                ClearReadOnlyAttribute(entry);
+            }
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            // Best effort; the existing retry loop reports any remaining deletion failure.
+        }
+    }
+
+    private static void ClearReadOnlyAttribute(FileSystemInfo entry)
+    {
+        try
+        {
+            if ((entry.Attributes & FileAttributes.ReadOnly) != 0)
+            {
+                entry.Attributes &= ~FileAttributes.ReadOnly;
+            }
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            // A vanished or inaccessible entry must not prevent clearing the remaining entries.
+        }
+    }
 
     public static object CreateRefinedWorkspaceOpaque(string root)
     {
