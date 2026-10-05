@@ -29,16 +29,18 @@ internal sealed record StateLogDivergenceReport(IReadOnlyList<StateLogDivergence
     internal long FirstLogCursor => Items.Where(item => item.Class is
         StateLogDivergenceClass.Lost or StateLogDivergenceClass.Repeated)
         .Select(item => item.Cursor!.Value).DefaultIfEmpty(0).Min();
-    internal (int Lost, int Repeated, int StoredOnly, long FirstCursor) Signature =>
-        (Lost, Repeated, StoredOnly, FirstLogCursor);
+    internal (int Lost, int Repeated, int StoredOnly, long FirstCursor, string Kinds) Signature =>
+        (Lost, Repeated, StoredOnly, FirstLogCursor, KindsText);
+
+    internal string KindsText => string.Join(",", Items.Where(item => item.Class != StateLogDivergenceClass.ByDesign)
+        .GroupBy(item => item.Entry.Kind).OrderBy(group => group.Key, StringComparer.Ordinal)
+        .Select(group => $"{group.Key}:{group.Count()}"));
 
     private int Count(StateLogDivergenceClass kind) => Items.Count(item => item.Class == kind);
 
     internal string FormatDetail(string goalId)
     {
-        var kinds = string.Join(",", Items.Where(item => item.Class != StateLogDivergenceClass.ByDesign)
-            .GroupBy(item => item.Entry.Kind).OrderBy(group => group.Key, StringComparer.Ordinal)
-            .Select(group => $"{group.Key}:{group.Count()}"));
+        var kinds = KindsText;
         return FormattableString.Invariant($"STATE_LOG_DIVERGENCE goal={goalId[..Math.Min(8, goalId.Length)]} lost={Lost} repeated={Repeated} stored_only={StoredOnly} kinds={kinds} first_log_cursor={FirstLogCursor} by_design={ByDesign}");
     }
 }
