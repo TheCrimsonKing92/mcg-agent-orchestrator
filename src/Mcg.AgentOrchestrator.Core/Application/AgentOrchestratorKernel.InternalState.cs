@@ -4,6 +4,8 @@ public sealed partial class AgentOrchestratorKernel
 {
     private void RefreshGoalStatus(Goal goal, bool allowParkedRefresh = false)
     {
+        ReconcileAssignedPassingVerification(goal);
+
         if (IsTerminalGoalStatus(goal.Status))
         {
             return;
