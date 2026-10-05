@@ -33,7 +33,7 @@ public sealed class ConductorDriverTestsGreenTesterReceiptClosure
         fixture.Report([FirstEvidenceFinding(), AdditionalFinding(FindingCategory.TestCoverage)]);
         fixture.AdvanceToDecision();
         AssertDeliveryRetry(fixture);
-        Assert.Equal(2, fixture.Requester.LastVerification!.MergedReviewFindings!.Count);
+        Assert.Equal(2, fixture.Requester.VerificationHistory.Last().MergedReviewFindings!.Count);
     }
 
     [Fact]
@@ -52,9 +52,10 @@ public sealed class ConductorDriverTestsGreenTesterReceiptClosure
         fixture.Report([FirstEvidenceFinding()]);
         fixture.AdvanceToDecision();
         AssertDeliveryRetry(fixture);
-        var finding = Assert.Single(fixture.Requester.LastVerification!.MergedReviewFindings!);
+        var verification = fixture.Requester.VerificationHistory.Last();
+        var finding = Assert.Single(verification.MergedReviewFindings!);
         Assert.Equal(FindingEvidenceOutcomeReason.VacuousEvidence, finding.EvidenceOutcome!.ResultReason);
-        Assert.True(Assert.Single(fixture.Requester.LastVerification.FindingEvidenceReceipts!).Passed);
+        Assert.True(Assert.Single(verification.FindingEvidenceReceipts!).Passed);
     }
 
     [Fact]
@@ -64,7 +65,7 @@ public sealed class ConductorDriverTestsGreenTesterReceiptClosure
         fixture.Report([FirstEvidenceFinding()], reviewedSha: "def5678abcdef1234abcdef1234abcdef1234abcd12");
         fixture.AdvanceToDecision();
         AssertDeliveryRetry(fixture);
-        Assert.Equal(CandidateSha, Assert.Single(fixture.Requester.LastVerification!.FindingEvidenceReceipts!).CandidateSha);
+        Assert.Equal(CandidateSha, Assert.Single(fixture.Requester.VerificationHistory.Last().FindingEvidenceReceipts!).CandidateSha);
     }
 
     [Fact]
@@ -112,7 +113,8 @@ public sealed class ConductorDriverTestsGreenTesterReceiptClosure
         fixture.Report(TwoEvidenceFindings(), blockers: "exact-blocker - prerequisite not ready");
         fixture.AdvanceToDecision();
         AssertDeliveryRetry(fixture);
-        var receiptIds = fixture.Requester.LastVerification!.FindingEvidenceReceipts!
+        // Retry clears LastVerification; the receipt-bearing round remains in history.
+        var receiptIds = fixture.Requester.VerificationHistory.Last().FindingEvidenceReceipts!
             .Select(receipt => receipt.ReceiptId).Order(StringComparer.Ordinal).ToArray();
 
         fixture.Report(TwoEvidenceFindings());
