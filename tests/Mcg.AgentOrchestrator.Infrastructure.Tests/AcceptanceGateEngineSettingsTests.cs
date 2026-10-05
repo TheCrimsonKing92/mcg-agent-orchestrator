@@ -14,7 +14,7 @@ public sealed class AcceptanceGateEngineSettingsTests
         var settings = AcceptanceGateEngineSettings.Load(repositoryRoot);
         var startupContract = GoalAcceptanceVerifier.ValidateStartupContract(repositoryRoot);
 
-        Xunit.Assert.Equal(4, settings.MaxConcurrentShards);
+        Xunit.Assert.Equal(6, settings.MaxConcurrentShards);
         Xunit.Assert.Equal(5, settings.PartitionVerdictFullRerunEveryN);
         Xunit.Assert.Equal(AcceptanceGateEngineSettings.DefaultOutputCaptureLimitBytes, settings.OutputCaptureLimitBytes);
         Xunit.Assert.Equal(23, settings.InfrastructureTestLanes.Count);

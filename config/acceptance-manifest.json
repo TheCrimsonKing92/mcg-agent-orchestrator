@@ -2,7 +2,7 @@
   "version": 1,
   "engine": {
     "slotCount": 4,
-    "maxConcurrentShards": 4,
+    "maxConcurrentShards": 6,
     "enforceStructuralCoverage": true,
     "partitionVerdictFullRerunEveryN": 5,
     "laneEstimateComment": "estimatedSerialSeconds values are one-decimal process-span means from acceptance receipts dated 2026-08-16 at or after 1f669450 (sample joined attempt 695e3554-0-20260816193157705-fcf6d38ae8bd4ef7b2e70518b04d80df), restricted to completed, exit-code-zero heartbeats joined by attempt id to completed TRX receipts. Full-result-count qualification is unobtainable from the recorded in-window receipts for Dotnet build slots (all 9 report 359 executed of 360 total) and Goal acceptance build slots (all 8 report 157 of 158 or 158 of 159); those two estimates retain the otherwise-qualified process-span means. Mtp managed project rebuild uses the 74.8-second elapsed time from focused receipt focused-20260828T043342070-5feea20d after conversion to managed assembly execution.",

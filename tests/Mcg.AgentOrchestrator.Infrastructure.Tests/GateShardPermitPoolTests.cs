@@ -27,11 +27,11 @@ public sealed class GateShardPermitPoolTests
     }
 
     [Theory]
-    [InlineData(null, 5)]
-    [InlineData("", 5)]
-    [InlineData("bad", 5)]
-    [InlineData("0", 5)]
-    [InlineData("-1", 5)]
+    [InlineData(null, 7)]
+    [InlineData("", 7)]
+    [InlineData("bad", 7)]
+    [InlineData("0", 7)]
+    [InlineData("-1", 7)]
     [InlineData("6", 6)]
     public void BudgetUsesPositiveEnvironmentValueOrCodeDefault(string? raw, int expected) =>
         Assert.Equal(expected, GateShardPermitPool.ResolveBudget(raw));
