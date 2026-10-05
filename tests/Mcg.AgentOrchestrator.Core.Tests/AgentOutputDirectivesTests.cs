@@ -259,7 +259,7 @@ public sealed class AgentOutputDirectivesTests
     [Xunit.Fact(DisplayName = "Developer_requirements_always_require_failure_evidence_before_editing")]
     public void DeveloperRequirementsAlwaysRequireFailureEvidenceBeforeEditing()
     {
-        const string requirement = "Before editing, name the failing test and quote its assertion output.";
+        const string requirement = "Before editing, name the test (existing or new) whose assertion fails without your change; do not run it: list it in tests: deferred, and the acceptance gate's source-reverted run proves it fails against main.";
 
         Assert.Contains(requirement, SdlcRolePromptRequirements.BuildPlainText(AgentRole.Developer), StringComparison.Ordinal);
         Assert.Contains(
