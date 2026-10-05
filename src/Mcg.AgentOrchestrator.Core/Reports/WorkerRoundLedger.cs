@@ -53,7 +53,8 @@ public static class WorkerRoundLedger
         var records = new List<WorkerRoundRecord>();
         foreach (var task in goal.Tasks)
         {
-            var dispatches = task.DispatchHistory.OrderBy(dispatch => dispatch.DispatchedAt).ToArray();
+            var dispatches = task.DispatchHistory.OrderBy(dispatch => dispatch.DispatchedAt)
+                .DistinctBy(dispatch => dispatch.DispatchedAt).ToArray();
             var endings = goal.Timeline
                 .Where(e => e.TaskId == task.Id && StopCause(e.Kind) is not null)
                 .OrderBy(e => e.OccurredAt).ToArray();
