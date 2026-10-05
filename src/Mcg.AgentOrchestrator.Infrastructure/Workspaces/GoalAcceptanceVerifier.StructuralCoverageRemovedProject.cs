@@ -163,7 +163,7 @@ public sealed partial class GoalAcceptanceVerifier
         var mainEnvironment = environment.DeriveArtifactsPath(mainArtifactsPath);
         MainBaselineDiscoveryCacheWrite? cacheWrite = null;
         if (operationName == "acceptance-main-coverage-baseline" &&
-            _testOverrides.MainBaselineDiscoveryCacheForTests is { } cache)
+            ResolvedMainBaselineDiscoveryCache is { } cache)
         {
             string[]? discoveryArguments = null;
             MainBaselineDiscoveryCacheKey? key = null;

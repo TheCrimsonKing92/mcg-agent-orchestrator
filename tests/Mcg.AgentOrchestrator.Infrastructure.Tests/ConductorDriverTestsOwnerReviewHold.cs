@@ -221,7 +221,7 @@ public sealed class ConductorDriverTestsOwnerReviewHold
     {
         using var fixture = new Fixture(OwnerCheck());
         AssertOwnerHold(fixture);
-        Assert.Null(fixture.Driver.TryBuildParallelAcceptanceCandidate(fixture.Goal, ConductorAutonomyPolicy.Conservative, 0));
+        Assert.Null(fixture.Driver.TryBuildParallelAcceptanceCandidate(fixture.Goal, ConductorAutonomyPolicy.Conservative, 0, out _));
         Assert.Equal(GateReadyCandidateExclusionReason.OwnerReviewHold,
             Assert.IsType<GateReadyCandidateProjectionResult.Excluded>(fixture.Driver.ProjectGateReadyCandidate(fixture.Goal, ConductorAutonomyPolicy.Conservative)).Reason);
         Assert.Equal(GateReadyCandidateExclusionReason.OwnerReviewHold,

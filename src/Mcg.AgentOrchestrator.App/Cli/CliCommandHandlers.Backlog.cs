@@ -175,10 +175,11 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
 
         case "backlog-update":
         {
-            CliArgumentParser.RequirePartCount(parts, 2, "backlog-update <id-prefix> [--title <text>] [--description <text>] [--priority <value>] [--tags <csv>] [--status <open|done|superseded>]");
+            if (parts.Count < 2)
+                throw new ArgumentException(CliCommandHelp.BacklogUpdateUsage);
+            var update = ParseBacklogItemUpdate(parts);
             var store = new BacklogStore(context.Workspace.BacklogStorePath);
             var item = ResolveBacklogItemByPrefix(store, parts[1]);
-            var update = ParseBacklogItemUpdate(parts);
             var updated = store.UpdateAsync(item.Id, update).GetAwaiter().GetResult();
             Console.WriteLine($"Updated: [{updated.Id}] {updated.Title}");
             return false;
@@ -496,12 +497,14 @@ private static string RenderBacklogReadinessSuffix(
 
 private static BacklogItemUpdate ParseBacklogItemUpdate(IReadOnlyList<string> parts)
 {
-    var title = GetFlagValue(parts, "--title");
-    var description = GetFlagValue(parts, "--description");
-    var priority = GetFlagValue(parts, "--priority");
-    var tags = GetFlagValue(parts, "--tags");
+    var values = ReadBacklogUpdateValues(parts);
+    var title = values.GetValueOrDefault("--title");
+    var description = values.GetValueOrDefault("--description");
+    var priority = values.GetValueOrDefault("--priority");
+    var tags = values.GetValueOrDefault("--tags");
+    description = ResolveBacklogUpdateDescription(parts, values, description);
     BacklogItemStatus? status = null;
-    if (GetFlagValue(parts, "--status") is { } statusValue)
+    if (values.GetValueOrDefault("--status") is { } statusValue)
     {
         if (!Enum.TryParse<BacklogItemStatus>(statusValue, ignoreCase: true, out var parsed))
             throw new ArgumentException("--status must be one of: open, done, superseded.");
@@ -514,7 +517,7 @@ private static BacklogItemUpdate ParseBacklogItemUpdate(IReadOnlyList<string> pa
         tags is null &&
         status is null)
     {
-        throw new ArgumentException("Usage: backlog-update <id-prefix> [--title <text>] [--description <text>] [--priority <value>] [--tags <csv>] [--status <open|done|superseded>]");
+        throw new ArgumentException(CliCommandHelp.BacklogUpdateUsage);
     }
 
     return new BacklogItemUpdate(title, description, priority, tags, status);

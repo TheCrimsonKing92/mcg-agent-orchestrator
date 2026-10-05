@@ -272,6 +272,83 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
         Xunit.Assert.Contains("sequential numbered list", result.Diagnostic, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact]
+    public void PlannerContract_IntegrationPlaceholderWithinSubstantiveSentence_Passes()
+    {
+        var workingDirectory = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(workingDirectory, "seed.txt"), "seed");
+        var plan = ReplaceSectionBody(
+            PlannerContractPlanFixture(),
+            "## Integration seams",
+            "1. Persist the shared substance predicate so every section routes through it before dispatch conversion runs.\n2. Confirm none newly flags or newly clears a claude-cli profile now that the default carries the placeholder.");
+
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
+
+        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+    }
+
+    [Xunit.Fact]
+    public void PlannerContract_NumberedIntegrationPlaceholderOnlyItems_Fail()
+    {
+        var workingDirectory = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(workingDirectory, "seed.txt"), "seed");
+        var plan = ReplaceSectionBody(
+            PlannerContractPlanFixture(),
+            "## Integration seams",
+            "1. placeholder\n2. placeholder");
+
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
+
+        Xunit.Assert.False(result.Succeeded);
+        Xunit.Assert.Contains("integration seams", result.Diagnostic, StringComparison.Ordinal);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("placeholder")]
+    [Xunit.InlineData("placeholder.")]
+    [Xunit.InlineData("1. Placeholder.")]
+    [Xunit.InlineData("1) PLACEHOLDER:;,!?")]
+    [Xunit.InlineData("- placeholder")]
+    [Xunit.InlineData("* placeholder.")]
+    [Xunit.InlineData("\\u2022 placeholder:")]
+    [Xunit.InlineData(" \t1. placeholder. \t")]
+    public void PlannerContract_IntegrationWholeLinePlaceholderWithSubstantiveCompanion_Fails(string markerLine)
+    {
+        // Expand the bullet during execution so discovery keeps its JSON display name ASCII.
+        markerLine = markerLine.Replace("\\u2022", "\u2022", StringComparison.Ordinal);
+        var workingDirectory = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(workingDirectory, "seed.txt"), "seed");
+        var plan = ReplaceSectionBody(
+            PlannerContractPlanFixture(),
+            "## Integration seams",
+            markerLine + "\n2. Persist the shared substance predicate so every section routes through it before dispatch conversion runs.");
+
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
+
+        Xunit.Assert.False(result.Succeeded);
+        Xunit.Assert.Contains("integration seams", result.Diagnostic, StringComparison.Ordinal);
+        Xunit.Assert.Contains("sequential numbered list", result.Diagnostic, StringComparison.Ordinal);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("TODO")]
+    [Xunit.InlineData("TBD")]
+    public void PlannerContract_IntegrationAcronymWithinSubstantiveProse_Fails(string marker)
+    {
+        var workingDirectory = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(workingDirectory, "seed.txt"), "seed");
+        var plan = ReplaceSectionBody(
+            PlannerContractPlanFixture(),
+            "## Integration seams",
+            $"Persist the shared substance predicate with {marker} before every section routes through dispatch conversion and receipt validation.");
+
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
+
+        Xunit.Assert.False(result.Succeeded);
+        Xunit.Assert.Contains("integration seams", result.Diagnostic, StringComparison.Ordinal);
+        Xunit.Assert.Contains("sequential numbered list", result.Diagnostic, StringComparison.Ordinal);
+    }
+
     [Xunit.Theory]
     [Xunit.InlineData("## Premise validity", "valid valid valid valid valid valid valid valid valid valid")]
     [Xunit.InlineData("## Ownership and lifecycle", "owns owns owns owns owns owns owns owns owns owns")]

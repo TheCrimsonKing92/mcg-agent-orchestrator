@@ -100,7 +100,7 @@ internal static class CliOwnerDigestRounds
                 group.Count(round => round.StopCause == WorkerRoundStopCause.Failed),
                 group.Count(round => round.StopCause == WorkerRoundStopCause.Superseded),
                 group.Count(round => round.StopCause is WorkerRoundStopCause.Cancelled or
-                    WorkerRoundStopCause.Open or WorkerRoundStopCause.Unknown),
+                    WorkerRoundStopCause.Open or WorkerRoundStopCause.Unknown or WorkerRoundStopCause.Clarification),
                 group.Sum(round => round.InputTokens ?? 0),
                 group.Sum(round => round.CachedInputTokens ?? 0),
                 group.Sum(round => round.OutputTokens ?? 0),

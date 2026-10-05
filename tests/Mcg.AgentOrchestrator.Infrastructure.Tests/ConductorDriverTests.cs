@@ -118,9 +118,9 @@ public sealed class ConductorDriverTests
         string? evidenceRequest = null,
         string? stdoutPath = "C:\\tmp\\reviewer.out.log",
         IReadOnlyList<ReviewFinding>? findings = null,
-        string? reviewedCommit = null, FindingCategory implicitFindingCategory = FindingCategory.Unspecified)
+        string? reviewedCommit = null, FindingCategory implicitFindingCategory = FindingCategory.Unspecified, IReadOnlyList<ReviewFindingLocation>? touchedAnchors = null)
     {
-        DispatchTask(kernel, goal, reviewer, "review", baseCommit: reviewedCommit);
+        DispatchTask(kernel, goal, reviewer, "review", baseCommit: reviewedCommit, reviewFindingTouchedAnchors: touchedAnchors);
         var effectiveFindings = (findings ?? blocker
                 .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .Select((finding, index) => new ReviewFinding(

@@ -40,7 +40,8 @@ public sealed record OperatorIntentAppliedPayload(
     string? AuthenticationAssurance,
     OperatorActorKind ActorKind = OperatorActorKind.Human,
     string? DecisionId = null,
-    string? Outcome = null);
+    string? Outcome = null,
+    RetryRoundKind? RetryRoundKind = null);
 
 public sealed record TaskRequeueSkippedPayload(
     string TaskId,

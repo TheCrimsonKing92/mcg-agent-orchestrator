@@ -2,7 +2,7 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-internal static class WorkerSubscriptionModelResolver
+internal static partial class WorkerSubscriptionModelResolver
 {
     private const string IntakeRiskLabelsMarker = "risk labels:";
 
@@ -16,12 +16,14 @@ internal static class WorkerSubscriptionModelResolver
         DispatchModelOverride? modelOverride = null,
         WorkerProfileCatalog? profiles = null,
         Func<string, bool>? commandExists = null,
-        bool allowCheapLane = true)
+        bool allowCheapLane = true,
+        bool cascadeTesterCheapFirst = true,
+        string? cascadeCheapModelAlias = null)
     {
         var fullSelection = ResolveSubscriptionModel(agent, goal, task);
         return modelOverride is not null
             ? fullSelection with { Reason = "override: explicit dispatch profile/model selection" }
-            : ResolveRoleModelSelection(agent, goal, task, fullSelection, providers, sandboxProbe, claudeAuthProbe, profiles, commandExists, allowCheapLane);
+            : ResolveRoleModelSelection(agent, goal, task, fullSelection, providers, sandboxProbe, claudeAuthProbe, profiles, commandExists, allowCheapLane, cascadeTesterCheapFirst, cascadeCheapModelAlias);
     }
 
     private static SubscriptionModelSelection ResolveSubscriptionModel(AgentDefinition agent, Goal goal, TaskSpec task)
@@ -46,16 +48,25 @@ internal static class WorkerSubscriptionModelResolver
         Func<ClaudeCliAuthState> claudeAuthProbe,
         WorkerProfileCatalog? profiles,
         Func<string, bool>? commandExists,
-        bool allowCheapLane)
+        bool allowCheapLane,
+        bool cascadeTesterCheapFirst,
+        string? cascadeCheapModelAlias)
     {
         if (!IsLightReadOnlyRole(task.RequiredRole))
         {
             if (agent.IsProviderRoutingConstrained == true)
             {
-                return fullSelection with
+                var constrainedSelection = fullSelection with
                 {
                     Reason = $"provider-constrained: {task.RequiredRole} remains on {agent.Model.ProviderName}"
                 };
+                return task.RequiredRole == AgentRole.Tester &&
+                    agent.Model.ProviderName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase) &&
+                    WorkerProfileDispatcher.ResolveSubscriptionProfileName(agent, constrainedSelection)
+                        .Equals(WorkerProfileDispatcher.OpenAiSubscriptionProfileName, StringComparison.OrdinalIgnoreCase)
+                    ? RouteTesterCascade(agent, goal, task, constrainedSelection, providers, profiles,
+                        cascadeTesterCheapFirst, cascadeCheapModelAlias)
+                    : constrainedSelection;
             }
 
             if (allowCheapLane &&
@@ -348,9 +359,12 @@ internal static class WorkerSubscriptionModelResolver
     }
 
     private static bool TryFindRoleGuardrailFailure(TaskSpec task, out string reason)
+        => TryFindWorkerResultGuardrailFailure(task.RequiredRole, task.LastVerification, out reason);
+
+    private static bool TryFindWorkerResultGuardrailFailure(AgentRole role, TaskVerificationRecord? verification, out string reason)
     {
         reason = string.Empty;
-        if (task.LastVerification is not { } verification)
+        if (verification is null)
         {
             return false;
         }
@@ -358,32 +372,32 @@ internal static class WorkerSubscriptionModelResolver
         var text = $"{verification.StandardOutput}\n{verification.StandardError}";
         if (!WorkerResultParser.TryParseFields(text, out var fields, out var diagnostic))
         {
-            reason = $"prior {task.RequiredRole} WORKER_RESULT invalid ({diagnostic})";
+            reason = $"prior {role} WORKER_RESULT invalid ({diagnostic})";
             return true;
         }
 
-        var missingFields = WorkerResultRequiredFieldsForLightRole(task.RequiredRole)
+        var missingFields = WorkerResultRequiredFieldsForLightRole(role)
             .Where(field => !fields.ContainsKey(field))
             .ToArray();
         if (missingFields.Length > 0)
         {
-            reason = $"prior {task.RequiredRole} WORKER_RESULT missing field(s): {string.Join(", ", missingFields)}";
+            reason = $"prior {role} WORKER_RESULT missing field(s): {string.Join(", ", missingFields)}";
             return true;
         }
 
-        if (task.RequiredRole == AgentRole.Researcher && !HasSubstantiveField(fields, "citations"))
+        if (role == AgentRole.Researcher && !HasSubstantiveField(fields, "citations"))
         {
             reason = "prior Researcher WORKER_RESULT missing citations";
             return true;
         }
 
-        if (task.RequiredRole == AgentRole.Reviewer && !HasSubstantiveField(fields, "verdict"))
+        if (role == AgentRole.Reviewer && !HasSubstantiveField(fields, "verdict"))
         {
             reason = "prior Reviewer WORKER_RESULT missing verdict";
             return true;
         }
 
-        if (task.RequiredRole == AgentRole.Reviewer && !HasPresentField(fields, "blockers"))
+        if (role == AgentRole.Reviewer && !HasPresentField(fields, "blockers"))
         {
             reason = "prior Reviewer WORKER_RESULT missing blockers";
             return true;

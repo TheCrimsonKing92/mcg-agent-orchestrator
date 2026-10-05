@@ -39,14 +39,18 @@ public sealed record ConductorAutonomyPolicy(
     double EmptyOutputRetryMaxDelaySeconds = 30,
     int ReviewAutoRetryWarningRound = 4,
     int ReviewAutoRetryStopRound = 7,
+    int ReviewAutoRetryLifetimeMultiplier = 3,
     int PlannerSampleCount = 1,
     int AcceptanceWidth = 2,
     int AcceptanceCohortGatherWindowSeconds = 480,
     bool AcceptanceAttemptBelowNormalPriority = true,
     ConductorBoardFillMode BoardFillMode = ConductorBoardFillMode.Shadow,
     int BoardFillTargetActiveGoals = 10,
-    int BoardFillMaxDraftsPerDay = 3)
+    int BoardFillMaxDraftsPerDay = 3,
+    bool CascadeTesterCheapFirst = true,
+    string CascadeCheapModelAlias = ConductorAutonomyPolicy.DefaultCascadeCheapModelAlias)
 {
+    public const string DefaultCascadeCheapModelAlias = "gpt-6-luna";
     public const int DefaultAcceptanceCohortGatherWindowSeconds = 480;
     public const int MinimumAcceptanceWidth = 1;
     public const int MaximumAcceptanceWidth = 4;
@@ -167,6 +171,9 @@ public sealed record ConductorAutonomyPolicy(
         if (ReviewAutoRetryStopRound <= 0)
             errors.Add($"reviewAutoRetryStopRound must be greater than zero (got {ReviewAutoRetryStopRound}).");
 
+        if (ReviewAutoRetryLifetimeMultiplier < 2)
+            errors.Add($"reviewAutoRetryLifetimeMultiplier must be at least two (got {ReviewAutoRetryLifetimeMultiplier}).");
+
         if (ReviewAutoRetryStopRound <= ReviewAutoRetryWarningRound)
             errors.Add($"reviewAutoRetryStopRound ({ReviewAutoRetryStopRound}) must be greater than reviewAutoRetryWarningRound ({ReviewAutoRetryWarningRound}).");
 
@@ -179,6 +186,8 @@ public sealed record ConductorAutonomyPolicy(
         if (AcceptanceCohortGatherWindowSeconds < 0)
             errors.Add($"acceptanceCohortGatherWindowSeconds must be zero or greater (got {AcceptanceCohortGatherWindowSeconds}).");
 
+        if (string.IsNullOrWhiteSpace(CascadeCheapModelAlias))
+            errors.Add("cascadeCheapModelAlias must not be empty.");
         if (!Enum.IsDefined(BoardFillMode))
             errors.Add($"boardFillMode must be Off, Shadow or File (got {BoardFillMode}).");
         if (BoardFillTargetActiveGoals is < 0 or > 30)
@@ -210,6 +219,7 @@ public sealed record ConductorAutonomyPolicy(
         sb.AppendLine($"  \"emptyOutputRetryMaxDelaySeconds\": {EmptyOutputRetryMaxDelaySeconds},");
         sb.AppendLine($"  \"reviewAutoRetryWarningRound\": {ReviewAutoRetryWarningRound},");
         sb.AppendLine($"  \"reviewAutoRetryStopRound\": {ReviewAutoRetryStopRound},");
+        sb.AppendLine($"  \"reviewAutoRetryLifetimeMultiplier\": {ReviewAutoRetryLifetimeMultiplier},");
         sb.AppendLine($"  \"plannerSampleCount\": {PlannerSampleCount},");
         sb.AppendLine($"  \"acceptanceWidth\": {AcceptanceWidth},");
         sb.AppendLine($"  \"acceptanceCohortGatherWindowSeconds\": {AcceptanceCohortGatherWindowSeconds},");
@@ -217,6 +227,8 @@ public sealed record ConductorAutonomyPolicy(
         sb.AppendLine($"  \"boardFillMode\": {JsonStr(BoardFillMode.ToString())},");
         sb.AppendLine($"  \"boardFillTargetActiveGoals\": {BoardFillTargetActiveGoals},");
         sb.AppendLine($"  \"boardFillMaxDraftsPerDay\": {BoardFillMaxDraftsPerDay},");
+        sb.AppendLine($"  \"cascadeTesterCheapFirst\": {CascadeTesterCheapFirst.ToString().ToLowerInvariant()},");
+        sb.AppendLine($"  \"cascadeCheapModelAlias\": {JsonStr(CascadeCheapModelAlias)},");
 
         sb.AppendLine(AutoPromoteRiskThreshold.HasValue
             ? $"  \"autoPromoteRiskThreshold\": {JsonStr(AutoPromoteRiskThreshold.Value.ToString())},"
@@ -284,6 +296,9 @@ public sealed record ConductorAutonomyPolicy(
             var reviewAutoRetryStopRound = root.TryGetProperty("reviewAutoRetryStopRound", out _)
                 ? RequireInt(root, "reviewAutoRetryStopRound", src)
                 : 7;
+            var reviewAutoRetryLifetimeMultiplier = root.TryGetProperty("reviewAutoRetryLifetimeMultiplier", out _)
+                ? RequireInt(root, "reviewAutoRetryLifetimeMultiplier", src)
+                : 3;
             var plannerSampleCount = root.TryGetProperty("plannerSampleCount", out _)
                 ? RequireInt(root, "plannerSampleCount", src)
                 : 1;
@@ -307,6 +322,22 @@ public sealed record ConductorAutonomyPolicy(
                     throw new FormatException(
                         $"conductor-policy.json{src}: acceptanceAttemptBelowNormalPriority must be a boolean.");
                 belowNormalPriority = priorityElement.GetBoolean();
+            }
+            var cascadeTesterCheapFirst = true;
+            if (root.TryGetProperty("cascadeTesterCheapFirst", out var cascadeSwitch) &&
+                cascadeSwitch.ValueKind != JsonValueKind.Null)
+            {
+                if (cascadeSwitch.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                    throw new FormatException($"conductor-policy.json{src}: cascadeTesterCheapFirst must be a boolean.");
+                cascadeTesterCheapFirst = cascadeSwitch.GetBoolean();
+            }
+            var cascadeCheapModelAlias = DefaultCascadeCheapModelAlias;
+            if (root.TryGetProperty("cascadeCheapModelAlias", out var cascadeAlias) &&
+                cascadeAlias.ValueKind != JsonValueKind.Null)
+            {
+                if (cascadeAlias.ValueKind != JsonValueKind.String)
+                    throw new FormatException($"conductor-policy.json{src}: cascadeCheapModelAlias must be a string.");
+                cascadeCheapModelAlias = cascadeAlias.GetString()!;
             }
             var boardFillMode = ConductorBoardFillMode.Shadow;
             if (root.TryGetProperty("boardFillMode", out var boardFillElement) &&
@@ -369,13 +400,16 @@ public sealed record ConductorAutonomyPolicy(
                 emptyOutputRetryMaxDelaySeconds,
                 reviewAutoRetryWarningRound,
                 reviewAutoRetryStopRound,
+                reviewAutoRetryLifetimeMultiplier,
                 plannerSampleCount,
                 acceptanceWidth,
                 gatherWindowSeconds,
                 belowNormalPriority,
                 boardFillMode,
                 boardFillTarget,
-                boardFillCap);
+                boardFillCap,
+                cascadeTesterCheapFirst,
+                cascadeCheapModelAlias);
 
             var errors = policy.Validate();
             if (errors.Count > 0)

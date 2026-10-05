@@ -47,7 +47,7 @@ internal static class CliCommandHelp
     public const string BacklogListUsage = "Usage: backlog-list [--all] [--limit <n>] [--status <value>] [--text <pattern>|--text=<leading-dash-pattern>]";
     public const string BacklogTriageUsage = "Usage: backlog-triage [--limit <n>] [--stale-days <n>]";
     public const string BacklogAddUsage = "Usage: backlog-add <title> [body] [--depends-on <id-prefix>] [--no-similar] | backlog-add --title <title> [--text-file <path>|--body-file <path>] [--depends-on <id-prefix>] [--no-similar] | backlog-add <title> --text-file <path> [--depends-on <id-prefix>] [--no-similar] | backlog-add <title> --body-file <path> [--depends-on <id-prefix>] [--no-similar]";
-    public const string BacklogUpdateUsage = "Usage: backlog-update <id-prefix> [--title <text>] [--description <text>] [--priority <value>] [--tags <csv>] [--status <open|done|superseded>]";
+    public const string BacklogUpdateUsage = "Usage: backlog-update <id-prefix> [--title <text>] [--description <text> | --text-file <path> | --body-file <path>] [--priority <value>] [--tags <csv>] [--status <open|done|superseded>]";
     public const string BacklogShowUsage = "Usage: backlog-show <id-prefix>";
     public const string BacklogAnnotateUsage = "Usage: backlog-annotate <id-prefix> <note> | backlog-annotate <id-prefix> --text-file <path>";
     public const string BacklogCloseUsage = "Usage: backlog-close <id-prefix> [reason] | backlog-close <id-prefix> --reason-file <path> | backlog-close <id-prefix> --text-file <path>";
@@ -384,7 +384,7 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry BacklogUpdate = new(
         BacklogUpdateUsage,
         "Update user-settable backlog item fields by id prefix.",
-        ["--title", "--description", "--priority", "--tags", "--status", "--help", "-h"]);
+        ["--title", "--description", "--text-file", "--body-file", "--priority", "--tags", "--status", "--help", "-h"]);
 
     private static readonly CommandHelpEntry BacklogShow = new(
         BacklogShowUsage,

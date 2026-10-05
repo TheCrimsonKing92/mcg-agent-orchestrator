@@ -119,6 +119,7 @@ private static IReadOnlyList<string> DescribeConductorPolicyDifferences(
     Add(nameof(ConductorAutonomyPolicy.EmptyOutputRetryMaxDelaySeconds), preset.EmptyOutputRetryMaxDelaySeconds, file.EmptyOutputRetryMaxDelaySeconds);
     Add(nameof(ConductorAutonomyPolicy.ReviewAutoRetryWarningRound), preset.ReviewAutoRetryWarningRound, file.ReviewAutoRetryWarningRound);
     Add(nameof(ConductorAutonomyPolicy.ReviewAutoRetryStopRound), preset.ReviewAutoRetryStopRound, file.ReviewAutoRetryStopRound);
+    Add(nameof(ConductorAutonomyPolicy.ReviewAutoRetryLifetimeMultiplier), preset.ReviewAutoRetryLifetimeMultiplier, file.ReviewAutoRetryLifetimeMultiplier);
     Add(nameof(ConductorAutonomyPolicy.PlannerSampleCount), preset.PlannerSampleCount, file.PlannerSampleCount);
     foreach (var state in Enum.GetValues<GoalLifecycleState>())
     {
@@ -590,7 +591,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 goal.RefinedSpec!.AcceptanceCriteria.ToArray(),
                 item => string.Equals(item.Trim(), waiver.SupersededCriterion, StringComparison.Ordinal)) + 1;
             Console.WriteLine(
-                $"Acceptance criterion waived: goal={goal.Id.Value[..8]} criterion={criterionNumber} actor={waiver.Actor} reason={waiver.WaiverReason}");
+                $"Acceptance criterion waived: goal={goal.Id.Value[..8]} criterion={criterionNumber} text={FormatWaivedCriterionText(waiver.SupersededCriterion)} actor={waiver.Actor} reason={waiver.WaiverReason}");
+            Console.WriteLine("note: goal-amend --waive criterion numbers are one-based; Reviewer criterion_index values are zero-based.");
             return true;
         }
 
@@ -1521,8 +1523,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 var loopDaemon = HasCliConfirmation(parts, "--daemon");
                 if (loopDaemon && watchInterval is null)
                 {
-                    watchInterval = TimeSpan.FromSeconds(ConductorBatchLoop.DefaultWatchIntervalSeconds);
-                    Console.WriteLine($"[conduct --loop --daemon] Persistent mode; polling every {ConductorBatchLoop.DefaultWatchIntervalSeconds}s and staying alive on an empty backlog. Stop via {ConductorBatchLoop.StopFileName} or --max-duration.");
+                    var seconds = ResolveConductPollSeconds(parts);
+                    watchInterval = TimeSpan.FromSeconds(seconds);
+                    Console.WriteLine($"[conduct --loop --daemon] Persistent mode; polling every {seconds}s and staying alive on an empty backlog. Stop via {ConductorBatchLoop.StopFileName} or --max-duration.");
                 }
 
                 Action<BatchTickSummary>? onTick = ConductorTickPusher.CreateStoreCallback(context.Workspace.RunEventStorePath);
@@ -2031,6 +2034,13 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
         default:
             return null;
     }
+}
+
+private static string FormatWaivedCriterionText(string text)
+{
+    const int textLimit = 200;
+    var collapsed = string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+    return collapsed.Length > textLimit ? collapsed[..textLimit] + "..." : collapsed;
 }
 
 private static GoalReplacementDisposition ParseGoalReplacementDisposition(string? value) =>

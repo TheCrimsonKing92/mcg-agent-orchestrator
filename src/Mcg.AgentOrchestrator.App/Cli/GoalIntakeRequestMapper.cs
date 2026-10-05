@@ -62,7 +62,7 @@ internal static class GoalIntakeRequestMapper
             mode,
             objective,
             pipeline = simple ? "developer-only" : (GetFlagValue(args, "--pipeline") ?? "auto").ToLowerInvariant(),
-            sourceBacklog = GetFlagValue(args, "--backlog-item") ?? (fromBacklog ? ResolveBacklogFilter(args) : null),
+            sourceBacklog = fromBacklog ? ResolveBacklogSource(args, workspace) : GetFlagValue(args, "--backlog-item"),
             backlogCoverage = GetFlagValue(args, "--backlog-coverage")?.ToLowerInvariant(),
             run = HasFlag(args, "--run"),
             dispatch = HasFlag(args, "--dispatch"),
@@ -96,7 +96,7 @@ internal static class GoalIntakeRequestMapper
 
     private static string ResolveBacklogObjective(IReadOnlyList<string> args, OrchestratorWorkspace workspace)
     {
-        var filters = BacklogFilters(args);
+        var filters = BacklogFilters(args, workspace);
         if (filters.Count > 1)
             throw new ArgumentException("--request-key supports exactly one backlog item per goal intake.");
         var filter = filters.SingleOrDefault();
@@ -107,11 +107,11 @@ internal static class GoalIntakeRequestMapper
         return plan.Items[0].SuggestedObjective;
     }
 
-    private static IReadOnlyList<string> BacklogFilters(IReadOnlyList<string> args)
+    private static IReadOnlyList<string> BacklogFilters(IReadOnlyList<string> args, OrchestratorWorkspace workspace)
     {
         var explicitItem = GetFlagValue(args, "--backlog-item");
         if (!string.IsNullOrWhiteSpace(explicitItem))
-            return [explicitItem];
+            return [BacklogItemIdPrefixResolver.Resolve(workspace.BacklogStorePath, explicitItem, explicitFlag: true)!.Id];
 
         var filters = new List<string>();
         for (var index = 1; index < args.Count; index++)
@@ -127,8 +127,16 @@ internal static class GoalIntakeRequestMapper
         return filters;
     }
 
-    private static string? ResolveBacklogFilter(IReadOnlyList<string> args) =>
-        BacklogFilters(args).SingleOrDefault();
+    private static string? ResolveBacklogSource(IReadOnlyList<string> args, OrchestratorWorkspace workspace)
+    {
+        var explicitItem = GetFlagValue(args, "--backlog-item");
+        if (string.IsNullOrWhiteSpace(explicitItem))
+            return explicitItem ?? BacklogFilters(args, workspace).SingleOrDefault();
+
+        var resolvedId = BacklogFilters(args, workspace).Single();
+        // Preserve existing full-id fingerprints, including their original casing, for replay.
+        return explicitItem.Equals(resolvedId, StringComparison.OrdinalIgnoreCase) ? explicitItem : resolvedId;
+    }
 
     private static bool HasFlag(IReadOnlyList<string> args, string flag) =>
         args.Any(value => value.Equals(flag, StringComparison.OrdinalIgnoreCase));

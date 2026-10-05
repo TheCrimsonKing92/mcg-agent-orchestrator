@@ -84,11 +84,12 @@ internal sealed partial class ConductorBatchLoop
             oldestWaiter is not null && goal.Id != oldestWaiter.Id &&
             !oldestServedThisTick && ShouldDeferForParallelAcceptanceFairness(oldestWaiter.Id.Value);
         var candidate = TryBuildParallelAcceptanceCandidate(driver, goal, policy,
-            SelectAvailableParallelAcceptanceSlot(activeSlots, slotCount), out var buildException);
+            SelectAvailableParallelAcceptanceSlot(activeSlots, slotCount), out var buildException, out var declineReason);
         if (candidate is null)
         {
             return buildException is null
-                ? new(SoloAcceptanceAdmissionKind.CandidateUnavailable)
+                ? new(SoloAcceptanceAdmissionKind.CandidateUnavailable,
+                    ProgressLine: $"ADMISSION tick={tick} result=held reason=parallel-acceptance-candidate-none goal={goal.Id.Value[..8]} detail={declineReason}")
                 : new(SoloAcceptanceAdmissionKind.CandidateUnavailable,
                     Reason: FormatParallelAcceptanceCandidateUnavailable(buildException),
                     ProgressLine: $"ADMISSION tick={tick} result=held reason=parallel-acceptance-candidate goal={goal.Id.Value[..8]} detail={FormatParallelAcceptanceCandidateUnavailableDetail(buildException)}");

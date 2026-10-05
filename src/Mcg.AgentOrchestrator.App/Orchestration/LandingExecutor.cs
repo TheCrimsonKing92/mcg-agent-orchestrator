@@ -367,7 +367,8 @@ internal static partial class LandingExecutor
             throw new InvalidOperationException($"main advanced to {candidateRevision}, but the execution worktree could not synchronize: {FormatGitFailure(synchronizeWorktree)}");
         }
 
-        eventWriter?.AppendGoalLanded(goal.Id, IntegrationBranchName, goalBranch);
+        eventWriter?.AppendGoalLanded(goal.Id, IntegrationBranchName, goalBranch,
+            BuildLandingAdmission(executionDirectory, boundMainRevision!, candidateRevision!, changedFiles));
         OperatorInbox.ClearOwnershipHoldsAfterLanding(workspace, goal, $"land {goalPrefix}");
         StateEffectProposalApplier.ApplyLandedProposals(kernel, goal, workspace, changedFiles, Console.WriteLine);
         return new LandingResult(goal.Id.Value, goalPrefix, new LandingDecision.Promote { Decision = proceedDecision.ToRecord() }, IntegrationBranchName,
@@ -865,6 +866,7 @@ internal static partial class LandingExecutor
         }
 
         var coverage = store.FinalizeLanding(receipt.Identity.Value, receipt.ReceiptId);
+        var landingDenylist = eventWriter is null ? null : LoadLandingDenylist(executionDirectory, liveMain);
         foreach (var goal in goals)
         {
             GoalOperationJournal.Completed(
@@ -875,7 +877,9 @@ internal static partial class LandingExecutor
             eventWriter?.AppendGoalLanded(
                 goal.Id,
                 $"cohort/{receipt.Identity.Value}",
-                GoalWorktrees.BranchName(goal.Id));
+                GoalWorktrees.BranchName(goal.Id), BuildLandingAdmission(landingDenylist!,
+                    receipt.Identity.Members.Single(member => member.GoalId == goal.Id).CandidateRevision,
+                    receipt.Identity.Members.Single(member => member.GoalId == goal.Id).LandingPaths));
             StateEffectProposalApplier.ApplyLandedProposals(kernel, goal, workspace, changedFiles, Console.WriteLine);
         }
         return new AcceptanceCohortLandingResult(

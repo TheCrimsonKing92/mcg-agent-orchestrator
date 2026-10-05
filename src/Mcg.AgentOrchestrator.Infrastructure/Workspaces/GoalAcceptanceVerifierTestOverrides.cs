@@ -33,6 +33,7 @@ internal sealed record GoalAcceptanceVerifierTestOverrides
     internal bool PartitionVerdictWithinAttemptRerunEnabled { get; set; } = true;
     internal DotnetBaseBuildCache? BaseBuildCacheForTests { get; set; }
     internal MainBaselineDiscoveryCache? MainBaselineDiscoveryCacheForTests { get; set; }
+    internal bool MainBaselineDiscoveryCacheEnabled { get; set; } = true;
     internal DotnetBuildStorageRoot? BuildStorageRootForTests { get; set; }
     internal IWorkerIntegrityLabeler? BaselineIntegrityLabelerForTests { get; set; }
     internal TimeSpan? GateChildExitConfirmationBudget { get; set; }
@@ -71,6 +72,7 @@ internal sealed record GoalAcceptanceVerifierTestOverrides
         PartitionVerdictWithinAttemptRerunEnabled = PartitionVerdictWithinAttemptRerunEnabled,
         BaseBuildCacheForTests = BaseBuildCacheForTests,
         MainBaselineDiscoveryCacheForTests = MainBaselineDiscoveryCacheForTests,
+        MainBaselineDiscoveryCacheEnabled = MainBaselineDiscoveryCacheEnabled,
         BuildStorageRootForTests = BuildStorageRootForTests,
         BaselineIntegrityLabelerForTests = BaselineIntegrityLabelerForTests,
         GateChildExitConfirmationBudget = GateChildExitConfirmationBudget,

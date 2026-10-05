@@ -1052,9 +1052,9 @@ public sealed class ConductorDriverTestsContractRepairBounds
         Assert.Contains("stopped at review round 7/7", escalation);
         Assert.Contains("surviving_stable_ids=F-CAP-BOUNDARY", escalation);
         Assert.Contains("candidate_sha=4cc96e28", escalation);
-        Assert.Contains("continue work", escalation);
+        Assert.Contains("retry --goal", escalation);
         Assert.Contains("explicit override", escalation);
-        Assert.Contains("split the goal", escalation);
+        Assert.Contains("goal-amend", escalation);
         Assert.Contains("supersede", escalation);
         Assert.Contains("C:\\tmp\\reviewer-cap.out.log", escalation);
         Assert.False(goal.IsTerminal);

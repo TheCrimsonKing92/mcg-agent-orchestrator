@@ -131,7 +131,7 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
 
     if (command.Equals("backlog-update", StringComparison.OrdinalIgnoreCase))
     {
-        return NormalizeTargetCommandWithValueFlags(args, 1, "--title", "--description", "--priority", "--tags", "--status");
+        return NormalizeBacklogUpdateArgs(args);
     }
 
     if (command.Equals("goal-amend", StringComparison.OrdinalIgnoreCase))

@@ -177,7 +177,7 @@ public static IReadOnlyList<string> SplitCommand(string line)
 
     if (command.Equals("backlog-update", StringComparison.OrdinalIgnoreCase))
     {
-        return SplitTargetCommandWithValueFlags(command, remainder, "--title", "--description", "--priority", "--tags", "--status");
+        return SplitBacklogUpdateCommand(command, line[(firstSpace + 1)..]);
     }
 
     if (command.Equals("goal-amend", StringComparison.OrdinalIgnoreCase))

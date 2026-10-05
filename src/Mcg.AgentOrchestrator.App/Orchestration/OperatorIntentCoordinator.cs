@@ -206,7 +206,9 @@ internal sealed partial class OperatorIntentCoordinator
                     intent.AuthenticationAssurance,
                     $"{marker} verb={intent.Verb} task={intent.TaskId ?? "none"} actor={intent.Actor} channel={intent.Channel} auth={intent.AuthenticationAssurance}",
                     intent.ActorKind,
-                    outcome: "applied");
+                    outcome: "applied",
+                    retryRoundKind: intent.Verb == OperatorIntentVerbs.Retry
+                        ? Deserialize<RetryOperatorIntentPayload>(intent).RetryRoundKind ?? RetryRoundKind.Standard : null);
                 var outcome = (retryClarification == RetryClarificationHandling.Resumed
                     ? "Applied retry continuation to goal "
                     : $"Applied {intent.Verb} to goal ") + goal.Id.Value[..8] +

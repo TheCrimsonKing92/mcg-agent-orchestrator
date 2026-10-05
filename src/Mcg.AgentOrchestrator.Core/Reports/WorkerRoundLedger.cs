@@ -7,7 +7,8 @@ public enum WorkerRoundStopCause
     Cancelled,
     Superseded,
     Open,
-    Unknown
+    Unknown,
+    Clarification
 }
 
 public sealed record WorkerRoundRecord(
@@ -58,11 +59,17 @@ public static class WorkerRoundLedger
             var endings = goal.Timeline
                 .Where(e => e.TaskId == task.Id && StopCause(e.Kind) is not null)
                 .OrderBy(e => e.OccurredAt).ToArray();
+            var starts = goal.Timeline
+                .Where(e => e.TaskId == task.Id && e.Kind == ProgressKind.TaskProcessStarted)
+                .Select(e => e.OccurredAt).ToArray();
             for (var index = 0; index < dispatches.Length; index++)
             {
                 var dispatch = dispatches[index];
                 var nextAt = index + 1 < dispatches.Length
                     ? dispatches[index + 1].DispatchedAt : (DateTimeOffset?)null;
+                if (starts.Length > 0 && !starts.Any(at => at >= dispatch.DispatchedAt &&
+                    (nextAt is null || at < nextAt)))
+                    continue;
                 var ending = endings.FirstOrDefault(e => e.OccurredAt >= dispatch.DispatchedAt &&
                     (nextAt is null || e.OccurredAt < nextAt));
                 var cause = ending is not null ? StopCause(ending.Kind)!.Value
@@ -93,6 +100,7 @@ public static class WorkerRoundLedger
         ProgressKind.TaskFailed => WorkerRoundStopCause.Failed,
         ProgressKind.TaskCancelled => WorkerRoundStopCause.Cancelled,
         ProgressKind.TaskRetried => WorkerRoundStopCause.Superseded,
+        ProgressKind.HumanInputRequested => WorkerRoundStopCause.Clarification,
         _ => null
     };
 }

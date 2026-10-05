@@ -249,7 +249,13 @@ internal sealed class OperatorIntentAdjudication(
             $"OPERATOR_ADJUDICATION decision={decisionId} shape={DeserializeShape(intent)} outcome={outcome}",
             intent.ActorKind,
             decisionId,
-            outcome);
+            outcome,
+            retryRoundKind: outcome == "applied" ? DeserializeShape(intent) switch
+            {
+                "route" => RetryRoundKind.Standard,
+                "reopen-regate" => RetryRoundKind.Mechanical,
+                _ => null
+            } : null);
 
     private string? Validate(
         Goal goal,

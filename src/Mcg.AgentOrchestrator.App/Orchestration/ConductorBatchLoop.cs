@@ -2111,6 +2111,7 @@ internal sealed partial class ConductorBatchLoop
                $"{prefix}EmptyOutputRetryMaxDelaySeconds={policy.EmptyOutputRetryMaxDelaySeconds} " +
                $"{prefix}ReviewAutoRetryWarningRound={policy.ReviewAutoRetryWarningRound} " +
                $"{prefix}ReviewAutoRetryStopRound={policy.ReviewAutoRetryStopRound} " +
+               $"{prefix}ReviewAutoRetryLifetimeMultiplier={policy.ReviewAutoRetryLifetimeMultiplier} " +
                $"{prefix}TransitionMap={transitions}";
     }
 
@@ -2260,7 +2261,7 @@ internal sealed partial class ConductorBatchLoop
         }
 
         var goal = kernel.GetGoal(remedy.GoalId);
-        var candidate = TryBuildParallelAcceptanceCandidate(driver, goal, policy, slotIndex: 0, out var buildException);
+        var candidate = TryBuildParallelAcceptanceCandidate(driver, goal, policy, slotIndex: 0, out var buildException, out _);
         if (candidate is null)
         {
             return new TerminalGoalRemedyExecutionResult(

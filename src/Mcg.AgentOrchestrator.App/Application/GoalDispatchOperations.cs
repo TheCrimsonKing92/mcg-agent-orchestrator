@@ -74,10 +74,16 @@ internal sealed partial class GoalDispatchOperations
         bool allowPendingRecordedDispatchRefresh = false,
         int? reviewAutoRetryStopRound = null,
         WorkerSandboxOptions? sandboxOptions = null,
-        int? plannerSampleCount = null)
+        int? plannerSampleCount = null,
+        ConductorAutonomyPolicy? conductorPolicy = null,
+        bool? cascadeTesterCheapFirst = null,
+        string? cascadeCheapModelAlias = null,
+        WorkerProfileCatalog? subscriptionProfiles = null)
     {
         EnsureRefinedForTask(kernel, workspace, providers, goal, task);
-        var subscriptionMetadata = TryBuildProfileSubscriptionMetadata(goal, task, profile, agents);
+        var subscriptionMetadata = TryBuildProfileSubscriptionMetadata(goal, task, profile, agents,
+            subscriptionProfiles, ResolveCascadeTesterCheapFirst(workspace, cascadeTesterCheapFirst, conductorPolicy),
+            ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy));
         return WorkerProfileDispatcher.PrepareTask(
             kernel,
             goal,
@@ -93,6 +99,8 @@ internal sealed partial class GoalDispatchOperations
             taskComplexity: subscriptionMetadata?.Complexity,
             usesComplexModel: false,
             reasoningEffortReason: subscriptionMetadata?.ReasoningEffortReason,
+            dispatchLane: subscriptionMetadata?.DispatchLane,
+            modelSelectionReason: subscriptionMetadata?.ModelSelectionReason,
             preflightFindings: null,
             allowPendingRecordedDispatchRefresh: allowPendingRecordedDispatchRefresh,
             reviewRetryCap: task.RequiredRole == AgentRole.Reviewer
@@ -118,7 +126,9 @@ internal sealed partial class GoalDispatchOperations
         int? reviewAutoRetryStopRound = null,
         WorkerSandboxOptions? sandboxOptions = null,
         int? plannerSampleCount = null,
-        ConductorAutonomyPolicy? conductorPolicy = null)
+        ConductorAutonomyPolicy? conductorPolicy = null,
+        bool? cascadeTesterCheapFirst = null,
+        string? cascadeCheapModelAlias = null)
     {
         var lastDispatch = task.LastDispatch
             ?? throw new InvalidOperationException($"Task '{task.Id}' has no dispatch to refresh before start.");
@@ -172,7 +182,9 @@ internal sealed partial class GoalDispatchOperations
                     goal,
                     task,
                     resolvedProfiles,
-                    sandboxOptions: sandboxOptions);
+                    sandboxOptions: sandboxOptions,
+                    cascadeTesterCheapFirst: ResolveCascadeTesterCheapFirst(workspace, cascadeTesterCheapFirst, conductorPolicy),
+                    cascadeCheapModelAlias: ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy));
                 profile = resolvedProfiles.GetRequired(profileName);
             }
             catch (Exception ex) when (ex is InvalidOperationException or KeyNotFoundException)
@@ -227,7 +239,9 @@ internal sealed partial class GoalDispatchOperations
             allowPendingRecordedDispatchRefresh: true,
             reviewAutoRetryStopRound: ResolveReviewAutoRetryStopRound(workspace, reviewAutoRetryStopRound, conductorPolicy),
             sandboxOptions: sandboxOptions,
-            plannerSampleCount: ResolvePlannerSampleCount(workspace, plannerSampleCount, conductorPolicy));
+            plannerSampleCount: ResolvePlannerSampleCount(workspace, plannerSampleCount, conductorPolicy),
+            conductorPolicy: conductorPolicy, cascadeTesterCheapFirst: cascadeTesterCheapFirst,
+            cascadeCheapModelAlias: cascadeCheapModelAlias, subscriptionProfiles: resolvedProfiles);
     }
 
     private static DispatchAssignmentHoldException AssignmentHold(
@@ -254,7 +268,10 @@ internal sealed partial class GoalDispatchOperations
         IModelProviderRegistry? providers = null,
         int? reviewAutoRetryStopRound = null,
         WorkerSandboxOptions? sandboxOptions = null,
-        int? plannerSampleCount = null)
+        int? plannerSampleCount = null,
+        ConductorAutonomyPolicy? conductorPolicy = null,
+        bool? cascadeTesterCheapFirst = null,
+        string? cascadeCheapModelAlias = null)
     {
         var plan = kernel.BuildProcessBatchPlan(goal.Id, ProcessBatchActionKind.StartDispatches);
         var resolvedAgents = agents ?? AgentCatalogStore.Load(workspace.AgentCatalogPath).Agents;
@@ -274,7 +291,7 @@ internal sealed partial class GoalDispatchOperations
                 providers,
                 reviewAutoRetryStopRound,
                 sandboxOptions,
-                plannerSampleCount);
+                plannerSampleCount, conductorPolicy, cascadeTesterCheapFirst, cascadeCheapModelAlias);
             refreshed.Add(dispatch);
         }
 
@@ -285,7 +302,8 @@ internal sealed partial class GoalDispatchOperations
         Goal goal,
         TaskSpec task,
         WorkerProfile profile,
-        IReadOnlyList<AgentDefinition>? agents)
+        IReadOnlyList<AgentDefinition>? agents,
+        WorkerProfileCatalog? subscriptionProfiles, bool cascadeTesterCheapFirst, string cascadeCheapModelAlias)
     {
         if (agents is null)
         {
@@ -307,11 +325,12 @@ internal sealed partial class GoalDispatchOperations
             return null;
         }
 
-        var profiles = new WorkerProfileCatalog([profile]);
+        var profiles = subscriptionProfiles ?? new WorkerProfileCatalog([profile]);
         string profileName;
         try
         {
-            profileName = WorkerProfileDispatcher.ResolveSubscriptionProfileName(agent, goal, task, profiles);
+            profileName = WorkerProfileDispatcher.ResolveSubscriptionProfileName(agent, goal, task, profiles,
+                cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias);
         }
         catch (InvalidOperationException)
         {
@@ -323,7 +342,8 @@ internal sealed partial class GoalDispatchOperations
             return null;
         }
 
-        var variables = WorkerProfileDispatcher.BuildSubscriptionTemplateVariables(agent, goal, task, profiles);
+        var variables = WorkerProfileDispatcher.BuildSubscriptionTemplateVariables(agent, goal, task, profiles,
+            cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias);
         var providerName = variables.GetValueOrDefault("providerName");
         var modelName = variables.GetValueOrDefault("subscriptionModelName");
         var reasoningEffort = variables.GetValueOrDefault("subscriptionReasoningEffort");
@@ -344,7 +364,7 @@ internal sealed partial class GoalDispatchOperations
             reasoningEffort,
             reasoningEffortReason,
             complexity,
-            paidRoute);
+            paidRoute, variables.GetValueOrDefault("dispatchLane"), variables.GetValueOrDefault("modelSelectionReason"));
     }
 
     private sealed record ProfileSubscriptionMetadata(
@@ -354,7 +374,7 @@ internal sealed partial class GoalDispatchOperations
         string? ReasoningEffort,
         string? ReasoningEffortReason,
         TaskComplexity? Complexity,
-        PaidRouteClassification PaidRoute);
+        PaidRouteClassification PaidRoute, string? DispatchLane, string? ModelSelectionReason);
 
     public IReadOnlyList<WorkerProfileDispatchResult> SubscriptionDispatchReadyTasks(
         AgentOrchestratorKernel kernel,
@@ -365,7 +385,10 @@ internal sealed partial class GoalDispatchOperations
         IModelProviderRegistry? providers = null,
         int? reviewAutoRetryStopRound = null,
         WorkerSandboxOptions? sandboxOptions = null,
-        int? plannerSampleCount = null)
+        int? plannerSampleCount = null,
+        ConductorAutonomyPolicy? conductorPolicy = null,
+        bool? cascadeTesterCheapFirst = null,
+        string? cascadeCheapModelAlias = null)
     {
         return SubscriptionDispatchReadyBatch(
             kernel,
@@ -376,7 +399,7 @@ internal sealed partial class GoalDispatchOperations
             providers,
             reviewAutoRetryStopRound,
             sandboxOptions,
-            plannerSampleCount).Dispatches;
+            plannerSampleCount, conductorPolicy, cascadeTesterCheapFirst, cascadeCheapModelAlias).Dispatches;
     }
 
     public WorkerProfileReadyBatchResult SubscriptionDispatchReadyBatch(
@@ -388,7 +411,10 @@ internal sealed partial class GoalDispatchOperations
         IModelProviderRegistry? providers = null,
         int? reviewAutoRetryStopRound = null,
         WorkerSandboxOptions? sandboxOptions = null,
-        int? plannerSampleCount = null)
+        int? plannerSampleCount = null,
+        ConductorAutonomyPolicy? conductorPolicy = null,
+        bool? cascadeTesterCheapFirst = null,
+        string? cascadeCheapModelAlias = null)
     {
         ReconcileExitedAssignedProcessRecords(kernel, goal);
         goal = kernel.GetGoal(goal.Id);
@@ -407,7 +433,9 @@ internal sealed partial class GoalDispatchOperations
             reviewAutoRetryStopRound: ResolveReviewAutoRetryStopRound(workspace, reviewAutoRetryStopRound),
             citedPriorEvidenceResolver: CreateCitedPriorEvidenceResolver(workspace),
             sandboxOptions: sandboxOptions,
-            plannerSampleCount: ResolvePlannerSampleCount(workspace, plannerSampleCount));
+            plannerSampleCount: ResolvePlannerSampleCount(workspace, plannerSampleCount),
+            cascadeTesterCheapFirst: ResolveCascadeTesterCheapFirst(workspace, cascadeTesterCheapFirst, conductorPolicy),
+            cascadeCheapModelAlias: ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy));
     }
 
     public WorkerProfileDispatchResult SubscriptionDispatchTask(
@@ -422,7 +450,9 @@ internal sealed partial class GoalDispatchOperations
         IModelProviderRegistry? providers = null,
         int? reviewAutoRetryStopRound = null,
         int? plannerSampleCount = null,
-        ConductorAutonomyPolicy? conductorPolicy = null)
+        ConductorAutonomyPolicy? conductorPolicy = null,
+        bool? cascadeTesterCheapFirst = null,
+        string? cascadeCheapModelAlias = null)
     {
         EnsureRefinedForTask(kernel, workspace, providers, goal, task);
         return WorkerProfileDispatcher.PrepareSubscriptionTask(
@@ -438,7 +468,9 @@ internal sealed partial class GoalDispatchOperations
             allowGitReference,
             reviewAutoRetryStopRound: ResolveReviewAutoRetryStopRound(workspace, reviewAutoRetryStopRound, conductorPolicy),
             citedPriorEvidenceResolver: CreateCitedPriorEvidenceResolver(workspace),
-            plannerSampleCount: ResolvePlannerSampleCount(workspace, plannerSampleCount, conductorPolicy));
+            plannerSampleCount: ResolvePlannerSampleCount(workspace, plannerSampleCount, conductorPolicy),
+            cascadeTesterCheapFirst: ResolveCascadeTesterCheapFirst(workspace, cascadeTesterCheapFirst, conductorPolicy),
+            cascadeCheapModelAlias: ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy));
     }
 
     private static CitedPriorEvidenceResolver CreateCitedPriorEvidenceResolver(OrchestratorWorkspace workspace) =>
@@ -461,6 +493,18 @@ internal sealed partial class GoalDispatchOperations
         conductorPolicy?.PlannerSampleCount ??
         ConductorAutonomyPolicy.LoadFromOrchestratorDirectory(
             new DirectoryInfo(workspace.OrchestratorDirectory)).PlannerSampleCount;
+
+    private static bool ResolveCascadeTesterCheapFirst(OrchestratorWorkspace workspace, bool? explicitValue,
+        ConductorAutonomyPolicy? policy = null) => explicitValue ?? policy?.CascadeTesterCheapFirst ??
+        ConductorAutonomyPolicy.LoadFromOrchestratorDirectory(new DirectoryInfo(workspace.OrchestratorDirectory)).CascadeTesterCheapFirst;
+
+    private static string ResolveCascadeCheapModelAlias(OrchestratorWorkspace workspace, string? explicitValue,
+        ConductorAutonomyPolicy? policy = null)
+    {
+        var alias = explicitValue ?? policy?.CascadeCheapModelAlias ??
+            ConductorAutonomyPolicy.LoadFromOrchestratorDirectory(new DirectoryInfo(workspace.OrchestratorDirectory)).CascadeCheapModelAlias;
+        return !string.IsNullOrWhiteSpace(alias) ? alias : throw new ArgumentException("cascadeCheapModelAlias must not be empty.");
+    }
 
     private static void EnsureRefinedForSelectedTasks(
         AgentOrchestratorKernel kernel,

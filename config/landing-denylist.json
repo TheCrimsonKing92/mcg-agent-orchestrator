@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "id": "process-launch",
+      "reason": "Starts, contains, stops or reaps worker and child processes.",
+      "paths": [
+        "src/*/Processes/WorkerProcessJobs*.cs",
+        "src/*/Processes/OwnedProcessGroup.cs",
+        "src/*/Processes/ProcessSpawnGuard.cs",
+        "src/*/Processes/SpawnRegistry.cs",
+        "src/*/Processes/*Reaper.cs",
+        "src/*/Processes/ProcessTreeGuiSuppression*.cs",
+        "src/*/Processes/DispatchProcessHost.cs",
+        "src/*/Processes/WorkerProcessRunner.cs",
+        "src/*/Processes/ChildConsoleLaunchPolicy.cs",
+        "src/*/Processes/ProtectedProcessIdentity.cs",
+        "src/*/Processes/GracefulDispatchDetacher.cs",
+        "src/*/Processes/WorkerShell.cs"
+      ]
+    },
+    {
+      "id": "provider-login",
+      "reason": "Reads or passes provider sign-in material to workers.",
+      "paths": [
+        "src/Mcg.AgentOrchestrator.Execution/Workers/ClaudeCredentialSource.cs"
+      ]
+    },
+    {
+      "id": "git-mutation",
+      "reason": "Moves main, the integration branch or the remote mirror.",
+      "paths": [
+        "src/Mcg.AgentOrchestrator.App/Orchestration/LandingExecutor*.cs",
+        "src/Mcg.AgentOrchestrator.App/Orchestration/RemoteGitMirror.cs",
+        "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalWorktrees.GitOps.cs"
+      ]
+    },
+    {
+      "id": "worker-sandbox",
+      "reason": "Sets worker sandbox policy and integrity levels.",
+      "paths": [
+        "src/**/*WorkerSandbox*.cs"
+      ]
+    },
+    {
+      "id": "landing-policy",
+      "reason": "Decides what lands, who may approve it, and this denylist itself.",
+      "paths": [
+        "src/Mcg.AgentOrchestrator.Core/Application/LandingPolicy.cs",
+        "src/Mcg.AgentOrchestrator.Core/Application/LandingDecision.cs",
+        "src/Mcg.AgentOrchestrator.Core/Application/LandingDenylist*.cs",
+        "src/Mcg.AgentOrchestrator.Core/Application/RepositoryOwnershipMap.cs",
+        "src/Mcg.AgentOrchestrator.Core/Application/RepositoryChangeClassifier.OwnerProtectedConfiguration.cs",
+        "src/Mcg.AgentOrchestrator.Core/Conductor/ConductorAutonomyPolicy.cs",
+        "src/Mcg.AgentOrchestrator.Core/Collaboration/AcceptancePolicyChangeDecision.cs",
+        "src/Mcg.AgentOrchestrator.App/Orchestration/OperatorIntentPolicyApproval.cs",
+        "config/landing-denylist.json",
+        "config/acceptance-manifest.json",
+        "**/conductor-policy.json"
+      ]
+    }
+  ]
+}

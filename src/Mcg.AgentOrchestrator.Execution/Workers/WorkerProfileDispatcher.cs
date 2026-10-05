@@ -491,7 +491,7 @@ public static partial class WorkerProfileDispatcher
         Func<string, bool>? commandExists = null,
         int? reviewAutoRetryStopRound = null,
         CitedPriorEvidenceResolver? citedPriorEvidenceResolver = null,
-        int plannerSampleCount = 1)
+        int plannerSampleCount = 1, bool cascadeTesterCheapFirst = true, string? cascadeCheapModelAlias = null)
     {
         EnsureTaskNeedsExecution(task);
         var sandbox = sandboxOptions ?? WorkerSandboxOptions.FromEnvironment();
@@ -500,7 +500,7 @@ public static partial class WorkerProfileDispatcher
         // credential source recorded on the dispatch is the source the preflight finding reports.
         claudeAuthProbe ??= ClaudeCliAuthProbe.ForOneDispatchPreflight();
         var agent = ResolveAssignedAgent(kernel, goal, task, agents);
-        var roleSelection = ResolveEffectiveSubscriptionModelSelection(agent, goal, task, modelOverride, profiles, claudeAuthProbe, sandbox, commandExists);
+        var roleSelection = ResolveEffectiveSubscriptionModelSelection(agent, goal, task, modelOverride, profiles, claudeAuthProbe, sandbox, commandExists, cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias);
         roleSelection = ApplyReasoningEffortPolicy(agent, goal, task, roleSelection);
         var profile = modelOverride?.ProfileName is { Length: > 0 } overrideProfile
             ? profiles.GetRequired(overrideProfile)
@@ -532,7 +532,7 @@ public static partial class WorkerProfileDispatcher
             claudeAuthProbe,
             sandbox,
             commandExists,
-            providerHoldScope: kernel.Goals);
+            providerHoldScope: kernel.Goals, cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias);
         ThrowIfPreflightBlocked(preflight);
         return PrepareTask(
             kernel,
@@ -582,7 +582,7 @@ public static partial class WorkerProfileDispatcher
         Func<ClaudeCliAuthState>? claudeAuthProbe = null,
         WorkerSandboxOptions? sandboxOptions = null,
         Func<string, bool>? commandExists = null,
-        IEnumerable<Goal>? providerHoldScope = null)
+        IEnumerable<Goal>? providerHoldScope = null, bool cascadeTesterCheapFirst = true, string? cascadeCheapModelAlias = null)
     {
         var findings = new List<string>();
         ReviewerChangedFileScope? reviewerScope = null;
@@ -599,7 +599,7 @@ public static partial class WorkerProfileDispatcher
             EnsureTaskNeedsExecution(task);
             var sandbox = sandboxOptions ?? WorkerSandboxOptions.FromEnvironment();
             var agent = ResolveAssignedAgent(null, goal, task, agents);
-            var roleSelection = ResolveEffectiveSubscriptionModelSelection(agent, goal, task, modelOverride, profiles, claudeAuthProbe, sandbox, commandExists);
+            var roleSelection = ResolveEffectiveSubscriptionModelSelection(agent, goal, task, modelOverride, profiles, claudeAuthProbe, sandbox, commandExists, cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias);
             roleSelection = ApplyReasoningEffortPolicy(agent, goal, task, roleSelection);
             profileName = modelOverride?.ProfileName is { Length: > 0 } overrideProfile
                 ? overrideProfile
@@ -1104,7 +1104,7 @@ public static partial class WorkerProfileDispatcher
         int? reviewAutoRetryStopRound = null,
         CitedPriorEvidenceResolver? citedPriorEvidenceResolver = null,
         WorkerSandboxOptions? sandboxOptions = null,
-        int plannerSampleCount = 1)
+        int plannerSampleCount = 1, bool cascadeTesterCheapFirst = true, string? cascadeCheapModelAlias = null)
     {
         return PrepareSubscriptionReadyBatch(
             kernel,
@@ -1119,7 +1119,7 @@ public static partial class WorkerProfileDispatcher
             reviewAutoRetryStopRound,
             citedPriorEvidenceResolver,
             sandboxOptions,
-            plannerSampleCount).Dispatches;
+            plannerSampleCount, cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias).Dispatches;
     }
 
     public static WorkerProfileReadyBatchResult PrepareSubscriptionReadyBatch(
@@ -1139,7 +1139,7 @@ public static partial class WorkerProfileDispatcher
         // Shared Claude auth probe, so a test can supply fixture credential sources instead of this
         // batch reading the operator's real credential store. Production leaves it null and each
         // prepared task below gets its own single resolution.
-        Func<ClaudeCliAuthState>? claudeAuthProbe = null)
+        Func<ClaudeCliAuthState>? claudeAuthProbe = null, bool cascadeTesterCheapFirst = true, string? cascadeCheapModelAlias = null)
     {
         var selections = goal.Tasks
             .Where(task => task.Status == WorkTaskStatus.Assigned)
@@ -1173,7 +1173,7 @@ public static partial class WorkerProfileDispatcher
                 profiles: profiles,
                 claudeAuthProbe: taskClaudeAuthProbe,
                 sandboxOptions: sandbox,
-                commandExists: commandExists);
+                commandExists: commandExists, cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias);
             roleSelection = ApplyReasoningEffortPolicy(selection.Agent, goal, selection.Task, roleSelection);
             var profile = ResolveSubscriptionProfile(selection.Agent, roleSelection, profiles);
             var resolvedModelName = ResolveEffectiveSubscriptionModelName(selection.Agent, roleSelection);
@@ -1186,7 +1186,7 @@ public static partial class WorkerProfileDispatcher
                 claudeAuthProbe: taskClaudeAuthProbe,
                 sandboxOptions: sandbox,
                 commandExists: commandExists,
-                providerHoldScope: kernel.Goals);
+                providerHoldScope: kernel.Goals, cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias);
             if (!preflight.Allowed)
             {
                 TryResolveMissingArtifactDependency(kernel, goal, selection.Task, preflight);
@@ -1473,7 +1473,7 @@ public static partial class WorkerProfileDispatcher
         WorkerProfileCatalog profiles,
         bool allowCheapLane = true,
         WorkerSandboxOptions? sandboxOptions = null,
-        Func<string, bool>? commandExists = null)
+        Func<string, bool>? commandExists = null, bool cascadeTesterCheapFirst = true, string? cascadeCheapModelAlias = null)
     {
         return ResolveSubscriptionProfileName(
             agent,
@@ -1484,7 +1484,7 @@ public static partial class WorkerProfileDispatcher
                 profiles: profiles,
                 sandboxOptions: sandboxOptions,
                 commandExists: commandExists,
-                allowCheapLane: allowCheapLane));
+                allowCheapLane: allowCheapLane, cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias));
     }
 
     internal static string ResolveSubscriptionProfileName(AgentDefinition agent, SubscriptionModelSelection selection)
@@ -1549,7 +1549,7 @@ public static partial class WorkerProfileDispatcher
         WorkerProfileCatalog profiles,
         bool allowCheapLane = true,
         WorkerSandboxOptions? sandboxOptions = null,
-        Func<string, bool>? commandExists = null)
+        Func<string, bool>? commandExists = null, bool cascadeTesterCheapFirst = true, string? cascadeCheapModelAlias = null)
     {
         var selection = ResolveEffectiveSubscriptionModelSelection(
             agent,
@@ -1558,7 +1558,7 @@ public static partial class WorkerProfileDispatcher
             profiles: profiles,
             sandboxOptions: sandboxOptions,
             commandExists: commandExists,
-            allowCheapLane: allowCheapLane);
+            allowCheapLane: allowCheapLane, cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias);
         return BuildSubscriptionTemplateVariables(agent, ApplyReasoningEffortPolicy(agent, goal, task, selection));
     }
 
@@ -1744,7 +1744,7 @@ public static partial class WorkerProfileDispatcher
         Func<ClaudeCliAuthState>? claudeAuthProbe = null,
         WorkerSandboxOptions? sandboxOptions = null,
         Func<string, bool>? commandExists = null,
-        bool allowCheapLane = true)
+        bool allowCheapLane = true, bool cascadeTesterCheapFirst = true, string? cascadeCheapModelAlias = null)
     {
         return WorkerSubscriptionModelResolver.ResolveEffectiveSubscriptionModelSelection(
             agent,
@@ -1756,7 +1756,7 @@ public static partial class WorkerProfileDispatcher
             modelOverride,
             profiles,
             commandExists,
-            allowCheapLane);
+            allowCheapLane, cascadeTesterCheapFirst, cascadeCheapModelAlias);
     }
 
     private sealed record EffectiveReasoningEffortSelection(string? Effort, string Reason);
