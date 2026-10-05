@@ -25,7 +25,7 @@ public sealed class GoalRefinementGoalEventsTests
                 new ModelProfile("mirror-refiner", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey))
         ]));
         var kernel = new AgentOrchestratorKernel();
-        var goal = kernel.CreateGoal("Research and plan a focused implementation with tests.", []);
+        var goal = kernel.CreateGoal("Research and plan a focused implementation with tests.");
         kernel.RecordGoalPolicyDecision(goal.Id, "Historical stored-only decision must not be backfilled.");
         var writer = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, kernel: kernel);
         kernel.SetEventWriter(writer);
