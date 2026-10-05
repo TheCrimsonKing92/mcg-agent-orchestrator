@@ -1283,7 +1283,7 @@ internal sealed partial class WorkerArtifactWriter
             AgentRole.Planner => "Clarify approach, sequencing, risks, and handoff decisions; do not modify repository files.",
             AgentRole.Researcher => "Inspect source and report evidence-backed findings; do not modify repository files.",
             AgentRole.Developer => "Implement scoped source changes and verify them with repository-local commands.",
-            AgentRole.Tester => "Strengthen or run focused verification and report exact failures or coverage gaps.",
+            AgentRole.Tester => "Strengthen verification and report exact failures or coverage gaps; name test classes for the conductor to run through evidence_request.",
             AgentRole.Reviewer => "Prioritize bugs, regressions, risk, and missing tests before summaries.",
             _ => "Complete the assigned task and report evidence."
         };
