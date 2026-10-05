@@ -256,7 +256,9 @@ public sealed partial class CohortAcceptanceStore
         IReadOnlyList<AcceptanceCohortAttributedMember>? attributedMembers = null,
         IReadOnlyList<AcceptanceCohortUnrelatedFailure>? unrelatedFailures = null,
         string? attributionSource = null,
-        bool suppressPair = true)
+        bool suppressPair = true,
+        IReadOnlyList<string>? cohortFailingTests = null,
+        string? attributionReasonDetail = null)
     {
         ArgumentNullException.ThrowIfNull(partitions);
         if (partitions.Count != 2 ||
@@ -298,12 +300,15 @@ public sealed partial class CohortAcceptanceStore
         using (var update = connection.CreateCommand())
         {
             update.Transaction = transaction;
-            update.CommandText = "UPDATE cohort_receipts SET attribution=$attribution, attributed_members_json=$members, unrelated_failures_json=$unrelated, attribution_source=$source WHERE cohort_id=$cohort AND outcome='Failed';";
+            update.CommandText = "UPDATE cohort_receipts SET attribution=$attribution, attributed_members_json=$members, unrelated_failures_json=$unrelated, attribution_source=$source, cohort_failing_tests_json=COALESCE($tests, cohort_failing_tests_json), attribution_reason_detail=COALESCE($detail, attribution_reason_detail) WHERE cohort_id=$cohort AND outcome='Failed';";
             update.Parameters.AddWithValue("$cohort", cohortId);
             update.Parameters.AddWithValue("$attribution", attribution.ToString());
             update.Parameters.AddWithValue("$members", JsonSerializer.Serialize(attributedMembers ?? []));
             update.Parameters.AddWithValue("$unrelated", JsonSerializer.Serialize(unrelatedFailures ?? []));
             update.Parameters.AddWithValue("$source", (object?)attributionSource ?? DBNull.Value);
+            update.Parameters.AddWithValue("$tests", cohortFailingTests is null ? DBNull.Value :
+                JsonSerializer.Serialize(cohortFailingTests.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)));
+            update.Parameters.AddWithValue("$detail", (object?)attributionReasonDetail ?? DBNull.Value);
             if (update.ExecuteNonQuery() != 1)
             {
                 throw new InvalidOperationException("Attribution can update only one persisted deterministic RED cohort receipt.");
@@ -1042,6 +1047,9 @@ public sealed partial class CohortAcceptanceStore
         EnsureColumn(connection, "cohort_receipts", "attributed_members_json", "TEXT NOT NULL DEFAULT '[]'");
         EnsureColumn(connection, "cohort_receipts", "unrelated_failures_json", "TEXT NOT NULL DEFAULT '[]'");
         EnsureColumn(connection, "cohort_receipts", "attribution_source", "TEXT NULL");
+        EnsureColumn(connection, "cohort_receipts", "cohort_failing_tests_json", "TEXT NULL");
+        EnsureColumn(connection, "cohort_receipts", "attribution_reason_detail", "TEXT NULL");
+        EnsureRetractionSchema(connection);
         EnsureColumn(connection, "cohort_landing_intents", "prior_integration_revision", "TEXT NULL");
         EnsureReusablePartitionReceiptSchema(connection);
         EnsureColumn(connection, "cohort_partition_receipts", "failed_checks_json", "TEXT NULL");
