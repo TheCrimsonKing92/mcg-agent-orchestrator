@@ -45,7 +45,18 @@ internal sealed partial class OperatorIntentCoordinator
                 cancelled.WorkingDirectory,
                 $"operator-cancel-dispatch-{ShortGoalId(goal.Id.Value)}-{ShortGoalId(task.Id.Value)}-{cancelled.ProcessId}");
             kernel.RecordTaskNote(goal.Id, task.Id,
-                $"CANCEL_DISPOSITION task_status=Cancelled redispatch=awaits-operator-retry preservation={preservation}");
+                $"CANCEL_DISPOSITION task_status=Cancelled redispatch=awaits-operator-retry preservation={preservation} next={BuildCancelDispatchRecoveryCommand(goal, task)}");
         }
+    }
+
+    internal static string BuildCancelDispatchRecoveryCommand(Goal goal, TaskSpec task)
+    {
+        for (var index = 0; index < goal.Tasks.Count; index++)
+        {
+            if (goal.Tasks[index].Id == task.Id)
+                return $"adjudicate --goal {ShortGoalId(goal.Id.Value)} {index + 1} route --cause <cause> --text-file <note> --evidence <reference>";
+        }
+
+        throw new InvalidOperationException($"Task '{task.Id}' is not in goal '{goal.Id}'.");
     }
 }

@@ -246,6 +246,16 @@ internal sealed class ApparatusRedGate
                     attribution.TestIdentity.Equals(identity, StringComparison.Ordinal) &&
                     attribution.Origin == AcceptanceTestFailureOrigin.Introduced &&
                     attribution.CandidateRerun?.Outcome == "Failed") == true;
+                var notExecutedReruns = check.FailingTestAttributions?
+                    .Where(attribution =>
+                        attribution.TestIdentity.Equals(identity, StringComparison.Ordinal) &&
+                        attribution.Origin == AcceptanceTestFailureOrigin.Introduced &&
+                        attribution.CandidateRerun?.Outcome == "NotExecuted")
+                    .Select(attribution => attribution.CandidateRerun!)
+                    .ToArray() ?? [];
+                var rerunInfrastructureSignature = notExecutedReruns
+                    .Select(rerun => ApparatusInfrastructureSignatures.Match(rerun.Error))
+                    .FirstOrDefault(match => match is not null);
                 failingTests.Add(new ApparatusRedFailingTest(
                     check.Name,
                     identity,
@@ -260,7 +270,9 @@ internal sealed class ApparatusRedGate
                     FailureMessage: message,
                     MessageFingerprint: messageFingerprint,
                     ReferencedChangedTypes: CandidateChangedTypeReferenceReader.MatchReferencedTypes(
-                        sourceRoot, sourcePaths, declaredChangedTypes.Value)));
+                        sourceRoot, sourcePaths, declaredChangedTypes.Value),
+                    CandidateRerunNotExecuted: notExecutedReruns.Length > 0,
+                    CandidateRerunInfrastructureSignature: rerunInfrastructureSignature));
             }
         }
 
@@ -280,7 +292,10 @@ internal sealed class ApparatusRedGate
                     InsideChangedPaths: failingTest.InsideChangedPaths,
                     EvidenceKind: failingTest.CandidateRerunPassed
                         ? ApparatusRedClassifier.CandidateRerunEvidenceKind
-                        : null,
+                        : failingTest.CandidateRerunNotExecuted &&
+                            !string.IsNullOrWhiteSpace(failingTest.CandidateRerunInfrastructureSignature)
+                            ? ApparatusRedClassifier.CandidateRerunNotExecutedEvidenceKind
+                            : null,
                     MessageFingerprint: failingTest.MessageFingerprint))
                 .ToArray(),
             recordedAt);

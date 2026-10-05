@@ -8,6 +8,7 @@ internal static partial class AcceptancePolicyShardPlanner
     internal const string CoreProject = "src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj";
     internal const string ProvidersProject = "src/Mcg.AgentOrchestrator.Infrastructure.Providers/Mcg.AgentOrchestrator.Infrastructure.Providers.csproj";
     internal const string OperatorCommsProject = "src/Mcg.AgentOrchestrator.Infrastructure.OperatorComms/Mcg.AgentOrchestrator.Infrastructure.OperatorComms.csproj";
+    internal const string ExecutionProject = "src/Mcg.AgentOrchestrator.Execution/Mcg.AgentOrchestrator.Execution.csproj";
     internal const string InfrastructureProject = "src/Mcg.AgentOrchestrator.Infrastructure/Mcg.AgentOrchestrator.Infrastructure.csproj";
     internal const string AppProject = "src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj";
     internal const string CoreTestsProject = "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj";
@@ -19,9 +20,10 @@ internal static partial class AcceptancePolicyShardPlanner
 
     private static readonly Dictionary<string, string[]> ReferencingProjectsByProject = new(StringComparer.OrdinalIgnoreCase)
     {
-        [CoreProject] = [ProvidersProject, OperatorCommsProject, InfrastructureProject, AppProject, CoreTestsProject, InfrastructureTestsProject, AcceptanceTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject],
-        [ProvidersProject] = [InfrastructureProject, AppProject, InfrastructureTestsProject, ProviderEnvironmentTestsProject],
+        [CoreProject] = [ExecutionProject, ProvidersProject, OperatorCommsProject, InfrastructureProject, AppProject, CoreTestsProject, InfrastructureTestsProject, AcceptanceTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject],
+        [ProvidersProject] = [ExecutionProject, InfrastructureProject, AppProject, InfrastructureTestsProject, ProviderEnvironmentTestsProject],
         [OperatorCommsProject] = [AppProject, InfrastructureTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject],
+        [ExecutionProject] = [InfrastructureProject, AppProject, InfrastructureTestsProject, AcceptanceTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject],
         [InfrastructureProject] = [AppProject, InfrastructureTestsProject, AcceptanceTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject],
         [AppProject] = [InfrastructureTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject],
         [CoreTestsProject] = [],
@@ -262,6 +264,8 @@ internal static partial class AcceptancePolicyShardPlanner
             return ProvidersProject;
         if (normalized.StartsWith("src/Mcg.AgentOrchestrator.Infrastructure.OperatorComms/", StringComparison.OrdinalIgnoreCase))
             return OperatorCommsProject;
+        if (normalized.StartsWith("src/Mcg.AgentOrchestrator.Execution/", StringComparison.OrdinalIgnoreCase))
+            return ExecutionProject;
         if (normalized.StartsWith("src/Mcg.AgentOrchestrator.Infrastructure/", StringComparison.OrdinalIgnoreCase))
             return InfrastructureProject;
         if (normalized.StartsWith("src/Mcg.AgentOrchestrator.App/", StringComparison.OrdinalIgnoreCase))
@@ -283,6 +287,7 @@ internal static partial class AcceptancePolicyShardPlanner
         project.Equals(CoreProject, StringComparison.OrdinalIgnoreCase) ? "Core" :
         project.Equals(ProvidersProject, StringComparison.OrdinalIgnoreCase) ? "Infrastructure.Providers" :
         project.Equals(OperatorCommsProject, StringComparison.OrdinalIgnoreCase) ? "Infrastructure.OperatorComms" :
+        project.Equals(ExecutionProject, StringComparison.OrdinalIgnoreCase) ? "Execution" :
         project.Equals(InfrastructureProject, StringComparison.OrdinalIgnoreCase) ? "Infrastructure" :
         project.Equals(AppProject, StringComparison.OrdinalIgnoreCase) ? "App" :
         project.Equals(CoreTestsProject, StringComparison.OrdinalIgnoreCase) ? "Core.Tests" :

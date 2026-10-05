@@ -1069,13 +1069,24 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             ConsoleViews.PrintTerminalGoalSweep(readinessSweep);
             TerminalGoalSweepAttention.Surface(context.Kernel, readinessSweep, context.Workspace.OrchestratorDirectory, context.CurrentGoal.Id);
             context.CurrentGoal = context.Kernel.GetGoal(context.CurrentGoal.Id);
+            IReadOnlyCollection<Goal> readinessHoldScope = context.Kernel.Goals;
+            if (!ConductLoopGoalStatus.IsTerminal(context.CurrentGoal.Status.ToString()) &&
+                DispatchReadinessRules.HasAssignedDispatchCandidates(context.CurrentGoal))
+            {
+                var actionableIds = SqliteOperatorIntentStore.ForDirectories(
+                    context.Workspace.OrchestratorDirectory, context.Workspace.LogDirectory)
+                    .ListActionableGoalIdsAsync().GetAwaiter().GetResult();
+                readinessHoldScope = context.ReloadKernel(actionableIds).Goals
+                    .Where(goal => goal.Id != context.CurrentGoal.Id)
+                    .Append(context.CurrentGoal).ToArray();
+            }
             ConsoleViews.PrintGoalReadinessPreflight(GoalReadinessPreflight.Build(
                 context.CurrentGoal,
                 context.Agents,
                 context.Workspace.ExecutionDirectory,
                 context.WorkerProfiles,
                 context.Worktrees.TryResolve,
-                context.Kernel.Goals));
+                readinessHoldScope));
             return readinessSweep.Changed;
 
         case "goal-recovery":
@@ -1624,6 +1635,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     // Refresh tracked goals from persisted state before every tick, then ingest newly
                     // submitted goals. This keeps role handoff decisions tied to durable task status
                     // instead of stale loop-local objects.
+                    IReadOnlyDictionary<GoalId, string>? reloadBaseline = null;
                     try
                     {
                         evictedGoalStatuses.Clear();
@@ -1681,6 +1693,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                                     .Where(request => !checkpointHeldGoalIds.Contains(request.GoalId))
                                     .ToArray()
                             });
+                            reloadBaseline = GoalKernelChange.CaptureAll(loopKernel);
                             foreach (var (goalId, status) in evictedGoalStatuses)
                             {
                                 context.EventWriter.AppendGoalEvictedFromConductor(
@@ -1756,6 +1769,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     // progress-event channel as remediation, and an assignment here would silently drop them.
                     terminalSweep = terminalSweep with
                     {
+                        ReloadBaseline = reloadBaseline,
                         ProgressEvents = [.. remediation.Events, .. unappliedExitWatch.Observe(loopKernel)]
                     };
                     ConsoleViews.PrintTerminalGoalSweep(terminalSweep, includeBlockers: false);
@@ -1827,6 +1841,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         workspace: context.Workspace).WithSteward(ConductorStewardHost.CreateDefault(context.Workspace))
                         .WithUnintendedExitDiagnostics(conductorDiagnosticPath, conductorOutputLogPath)
                         .WithJudgePanel(ConductorJudgePanelHost.CreateDefault(context.Workspace))
+                        .WithBoardFill(ConductorBoardFillHost.CreateDefault(context.Workspace, () => ResolveConductorPolicy(loopPolicyName, context.Workspace.OrchestratorDirectory).Policy))
                         .WithAuthor(ConductorAuthorHost.CreateDefault(context.Workspace))
                         .WithStoreEvidence(ConductorStoreEvidenceStep.CreateDefault(context.Workspace)).Run(
                         context.Kernel, loopDriver, loopPolicy, stopFilePath, loopMaxIter,
@@ -1953,6 +1968,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         new SqliteRunEventStore(context.Workspace.RunEventStorePath)),
                     workspace: context.Workspace).WithSteward(ConductorStewardHost.CreateDefault(context.Workspace))
                     .WithJudgePanel(ConductorJudgePanelHost.CreateDefault(context.Workspace))
+                    .WithBoardFill(ConductorBoardFillHost.CreateDefault(context.Workspace, () => ResolveConductorPolicy(conductPolicyName, context.Workspace.OrchestratorDirectory).Policy))
                     .WithAuthor(ConductorAuthorHost.CreateDefault(context.Workspace))
                     .WithStoreEvidence(ConductorStoreEvidenceStep.CreateDefault(context.Workspace)).Run(
                     context.Kernel, conductDriver, conductPolicy, watchStopPath,

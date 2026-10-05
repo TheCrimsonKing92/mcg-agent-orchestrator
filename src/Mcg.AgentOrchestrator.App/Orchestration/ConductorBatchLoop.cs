@@ -656,6 +656,7 @@ internal sealed partial class ConductorBatchLoop
                         deferEmission: true);
                 }
             }
+            var preSweepBaseline = GoalKernelChange.CaptureAll(kernel);
             TerminalGoalJournalMetadataCache.BeginMeasurement();
             var sweepClock = Stopwatch.StartNew();
             var sweepResult = RunJanitorialPhase(
@@ -1075,7 +1076,7 @@ internal sealed partial class ConductorBatchLoop
             }
 
             var changedGoalLines = new List<string>();
-            var changedGoalIds = new HashSet<GoalId>(preWalkIntentChangedGoalIds);
+            var changedGoalIds = new HashSet<GoalId>(preWalkIntentChangedGoalIds.Concat(GoalKernelChange.ChangedSince(kernel, sweepResult?.ReloadBaseline ?? preSweepBaseline, checkpointHeldGoals.Keys, sweepTerminalizedGoalIds)));
             var liveChangeSnapshots = new Dictionary<(string Worktree, string? BaseCommit), DispatchLiveChangeSnapshot>();
 
             DispatchLiveChangeSnapshot LiveChangesFor(TaskSpec task)

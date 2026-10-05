@@ -1816,7 +1816,8 @@ internal static partial class CliPersistentStateRunner
             ref currentGoal,
             channel,
             () => LoadSingleGoalKernel(stateRepository, goalId),
-            Persist);
+            Persist,
+            reloadKernelForGoals: ids => LoadConductLoopKernel(stateRepository, ids, workspace.ExecutionDirectory));
 
         if (shouldSave)
         {

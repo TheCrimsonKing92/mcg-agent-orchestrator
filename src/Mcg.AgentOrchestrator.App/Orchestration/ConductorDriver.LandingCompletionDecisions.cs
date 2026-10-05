@@ -107,11 +107,11 @@ internal sealed partial class ConductorDriver
             return null;
         if (decision.Action == LandingCompletionAction.Hold)
             return MakeResult(goal.Id.Value, goalPrefix, policy,
-                new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, decision.Reason) { Decision = decision.ToRecord() });
+                new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, decision.Reason) { Decision = landResult.Decision.Decision ?? decision.ToRecord() });
         if (kind == "ownership-hold")
             return MakeResult(goal.Id.Value, goalPrefix, policy,
-                new ConductorAdvanceOutcome.Escalated(GoalLifecycleState.Verified, decision.Reason) { Decision = decision.ToRecord() });
+                new ConductorAdvanceOutcome.Escalated(GoalLifecycleState.Verified, decision.Reason) { Decision = landResult.Decision.Decision ?? decision.ToRecord() });
         var result = Escalate(goal, goalPrefix, policy, GoalLifecycleState.Verified, decision.Reason);
-        return result with { Outcome = ((ConductorAdvanceOutcome.Escalated)result.Outcome) with { Decision = decision.ToRecord() } };
+        return result with { Outcome = ((ConductorAdvanceOutcome.Escalated)result.Outcome) with { Decision = landResult.Decision.Decision ?? decision.ToRecord() } };
     }
 }

@@ -58,6 +58,8 @@ internal sealed record TerminalGoalSweepResult(
     IReadOnlyList<string>? ProgressEvents = null,
     IReadOnlyList<GoalId>? TerminalizedGoalIds = null)
 {
+    // Supplied by the host after reload and before any sweep mutation, for this tick only.
+    public IReadOnlyDictionary<GoalId, string>? ReloadBaseline { get; init; }
     public long GitIndexDurationMs { get; init; }
     public long EvidenceDurationMs { get; init; }
     public long EphemeralDurationMs { get; init; }

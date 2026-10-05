@@ -69,8 +69,8 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
     {
         var triggering = new[]
         {
-            "src/Mcg.AgentOrchestrator.Infrastructure/Processes/DotnetBuildStorageRoot.cs",
-            "src/Mcg.AgentOrchestrator.Infrastructure/Processes/TempRootApparatusLossReceipts.cs",
+            "src/Mcg.AgentOrchestrator.Execution/Processes/DotnetBuildStorageRoot.cs",
+            "src/Mcg.AgentOrchestrator.Execution/Processes/TempRootApparatusLossReceipts.cs",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceSharedApparatusInvalidation.cs"
         };
 
@@ -87,8 +87,8 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
     {
         var triggering = new[]
         {
-            "src/Mcg.AgentOrchestrator.Infrastructure/Processes/DotnetBuildStorageLayout.cs",
-            "src/Mcg.AgentOrchestrator.Infrastructure/Processes/AcceptanceTempRootNames.cs"
+            "src/Mcg.AgentOrchestrator.Execution/Processes/DotnetBuildStorageLayout.cs",
+            "src/Mcg.AgentOrchestrator.Execution/Processes/AcceptanceTempRootNames.cs"
         };
 
         foreach (var path in triggering)
@@ -104,8 +104,8 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
     {
         var triggering = new[]
         {
-            "src/Mcg.AgentOrchestrator.Infrastructure/Verification/AcceptanceTrxOutcomeTaxonomy.cs",
-            "src/Mcg.AgentOrchestrator.Infrastructure/Verification/AcceptanceTrxTestIdentityResolver.cs"
+            "src/Mcg.AgentOrchestrator.Execution/Verification/AcceptanceTrxOutcomeTaxonomy.cs",
+            "src/Mcg.AgentOrchestrator.Execution/Verification/AcceptanceTrxTestIdentityResolver.cs"
         };
 
         foreach (var path in triggering)

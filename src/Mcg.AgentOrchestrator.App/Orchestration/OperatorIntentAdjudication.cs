@@ -267,14 +267,14 @@ internal sealed class OperatorIntentAdjudication(
         {
             if (goal.Tasks.Any(candidate => candidate.Status is not
                 (WorkTaskStatus.Completed or WorkTaskStatus.Cancelled)))
-                return "goal-not-acceptance-failed";
+                return WithCancelledRouteHint(task, "goal-not-acceptance-failed");
             if (HasLiveAcceptanceAttempt(goal.Id)) return "acceptance-attempt-live";
         }
         else if (shape == "reopen-regate" && goal.Status != GoalStatus.AcceptanceFailed)
-            return "goal-not-acceptance-failed";
+            return WithCancelledRouteHint(task, "goal-not-acceptance-failed");
         if (shape is "close" or "reopen-regate" && task.Status is not
             (WorkTaskStatus.Assigned or WorkTaskStatus.Failed or WorkTaskStatus.Completed))
-            return "task-not-closable";
+            return WithCancelledRouteHint(task, "task-not-closable");
         if (shape == "route" && task.Status is WorkTaskStatus.Running or WorkTaskStatus.WaitingForHuman)
             return "task-not-retryable";
         if (shape == "route" &&
@@ -285,6 +285,11 @@ internal sealed class OperatorIntentAdjudication(
         if (unresolvedEvidence) return "evidence-reference-unresolved";
         return null;
     }
+
+    private static string WithCancelledRouteHint(TaskSpec task, string reason) =>
+        task.Status == WorkTaskStatus.Cancelled
+            ? reason + "; task is Cancelled (cancel-dispatch): use route --cause <cause>"
+            : reason;
 
     private bool HasLiveAcceptanceAttempt(GoalId goalId)
     {
