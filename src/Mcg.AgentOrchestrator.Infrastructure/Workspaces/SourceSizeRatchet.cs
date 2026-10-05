@@ -107,14 +107,22 @@ internal static class SourceSizeRatchet
             // Goal 4fac1b84 (backlog 28b37515) moved landing completion and acceptance-retry evidence unchanged to its partial.
             // Goal 868fd04a (backlog c758b2c3) moved review-contract and verifying-finding recovery unchanged to its partial.
             // Goal 6f38e132 (backlog 6d658f46) moved pre-review evidence unchanged to its partial.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 3006),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 1837),
             // Goal 0e30d5e9 extracted impact-plan mapping to PreReviewEvidenceContextBuilder.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.PreReviewEvidence.cs", 641),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.PreReviewEvidence.cs", 480),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.ReviewRecovery.cs", 461),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.LandingCompletion.cs", 692),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.AcceptanceCohortExecution.cs", 641),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FindingEvidenceRequests.cs", 918),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FailedGoalRecovery.cs", 369),
+            // Goal 4ff31b70 (ConductorDriver size relief) moved parallel acceptance members unchanged to this partial.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.ParallelAcceptance.cs", 593),
+            // Goal 4ff31b70 (ConductorDriver size relief) moved dispatch diagnostics unchanged to this partial.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.DispatchDiagnostics.cs", 470),
+            // Goal 4ff31b70 (ConductorDriver size relief) moved git and lease helpers unchanged to this partial.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.GitAndLeaseHelpers.cs", 145),
+            // Goal 4ff31b70 (ConductorDriver size relief) moved pre-review evidence routing unchanged to this partial.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.PreReviewEvidenceRouting.cs", 199),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Core/Application/FailedGoalRecoveryPolicy.cs", 775),
             // Raised for goal dadadfac: set-aside re-admission must be decided where the loop already holds
             // the goal, its recorded set-aside entry, and the current sweep blockers together.
