@@ -1799,6 +1799,10 @@ internal sealed partial class ConductorDriver
                     startFacts with { CancelledPredecessorBlocker = terminalBlocker });
             }
 
+            if (TryDescribeCancelledReviewerBlocker(goal, out var reviewerBlocker))
+                return DispatchStartResult(goal, goalPrefix, policy, fromState,
+                    startFacts with { CancelledPredecessorBlocker = reviewerBlocker });
+
             if (readiness is not DispatchReadinessBlocked { HasCandidates: false })
             {
                 return DispatchStartResult(goal, goalPrefix, policy, fromState, startFacts with
