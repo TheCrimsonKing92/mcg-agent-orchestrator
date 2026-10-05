@@ -11,6 +11,9 @@
   <ItemGroup>
     <Compile Include="..\ConsoleCapture.cs" Link="ConsoleCapture.cs" />
     <Compile Include="..\CliChildProcessRunner.cs" Link="CliChildProcessRunner.cs" />
+    <Compile Include="..\FailureClusterFixtureData.cs" Link="FailureClusterFixtureData.cs" />
+    <Compile Include="..\FailureClusterTestData.cs" Link="FailureClusterTestData.cs" />
+    <Compile Include="..\VerifiedRepositoryRoot.cs" Link="VerifiedRepositoryRoot.cs" />
     <Compile Include="..\AssemblyTempRedirect.cs" Link="AssemblyTempRedirect.cs" />
     <Compile Include="..\AssemblyTempRootCleanupFixture.cs" Link="AssemblyTempRootCleanupFixture.cs" />
     <Compile Include="..\AssemblyTempRootCleanupHolderDiagnostics.cs" Link="AssemblyTempRootCleanupHolderDiagnostics.cs" />

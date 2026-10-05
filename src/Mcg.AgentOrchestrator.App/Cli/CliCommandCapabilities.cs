@@ -11,6 +11,7 @@ internal static class CliCommandCapabilities
     private static readonly HashSet<string> QueryCommands = new(StringComparer.OrdinalIgnoreCase)
     {
         "tasks", "task", "status", "goals", "monitor-goal",
+        "failure-clusters",
         "architecture", "config", "agent-list", "worker-profile-list", "model-outcomes",
         "backlog-list", "backlog-show", "backlog-depends", "backlog-similar", "goal-events", "timeline",
         "owner-digest", "context-usage", "next"

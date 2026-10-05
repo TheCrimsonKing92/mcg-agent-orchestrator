@@ -6,6 +6,7 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 internal static class CliReadOnlyCommandRunner
 {
     internal static bool IsReadOnlyCommand(IReadOnlyList<string> args) =>
+        CliFailureClustersQueryCommand.IsFailureClustersQueryCommand(args) ||
         GoalBoardCommand.IsBoardCommand(args) ||
         TrialCompareCliCommand.RequiresHistoricalState(args) ||
         CliTaskQueryCommand.IsTaskQueryCommand(args) ||
@@ -31,6 +32,7 @@ internal static class CliReadOnlyCommandRunner
         out bool changed,
         IClock? diagnosticsClock = null)
     {
+        if (CliFailureClustersQueryCommand.IsFailureClustersQueryCommand(args)) { CliFailureClustersQueryCommand.Execute(args, workspace); changed = false; return true; }
         if (GoalBoardCommand.IsBoardCommand(args))
         {
             GoalBoardCommand.Run(args, stateRepository, workspace);

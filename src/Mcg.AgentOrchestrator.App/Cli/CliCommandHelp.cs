@@ -76,6 +76,7 @@ internal static class CliCommandHelp
     public const string RunEventUsage = "Usage: run-event show <sequence> [--format text|json]";
     public const string FlakeCensusUsage = "Usage: flake-census [--min-goals <n>] [--since <yyyy-MM-dd|ISO-8601-with-offset>]";
     public const string OwnerDigestUsage = "Usage: owner-digest [--since <ISO-8601-with-offset>] [--until <ISO-8601-with-offset>] [--json] [--rounds]";
+    public const string FailureClustersUsage = "Usage: failure-clusters [--since <ISO-8601>] [--until <ISO-8601>] [--top <n>] [--json]";
     public const string LessonUsage = "Usage: lesson record --situation <text> --rule <text> --evidence <ref>... [--applies-to <tag>...] [--goal <goal-prefix>] [--until-goal <goal-prefix>] [--actor-kind human|agent] | lesson retire <lesson-id> --reason <text> [--evidence <ref>...]";
     public const string LessonsUsage = "Usage: lessons [--all] [--applies-to <tag>] [--json]";
     public const string EscapeUsage = "Usage: escape record --goal <landed-goal-prefix> --reason <text> --evidence <ref>... [--found-by-goal <goal-prefix>] [--actor-kind human|agent]";
@@ -530,6 +531,11 @@ internal static class CliCommandHelp
         OwnerDigestUsage,
         "Report interventions, landings, escapes, tail time and mechanical hours.",
         ["--since", "--until", "--json", "--rounds", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry FailureClusters = new(
+        FailureClustersUsage,
+        "Rank recurring failure families by paid rounds, knock-on rounds, operator touches and gate minutes; default window is 14 days.",
+        ["--since", "--until", "--top", "--json", "--help", "-h"]);
 
     private static readonly CommandHelpEntry Lesson = new(
         LessonUsage,
@@ -1006,6 +1012,11 @@ internal static class CliCommandHelp
         if (args[0].Equals("owner-digest", StringComparison.OrdinalIgnoreCase))
         {
             entry = OwnerDigest;
+            return true;
+        }
+        if (args[0].Equals("failure-clusters", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = FailureClusters;
             return true;
         }
         if (args[0].Equals("escape", StringComparison.OrdinalIgnoreCase))

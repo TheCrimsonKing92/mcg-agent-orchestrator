@@ -1619,6 +1619,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         new RepositoryIntegrityProbe(context.Workspace.ExecutionDirectory, new IcaclsIntegrityLabeler())));
                 var maintenanceCadence = RunEventMaintenanceCadenceRunner.ForWorkspace(context.Workspace);
                 var stateLogCheck = StateLogDivergenceCheckRunner.ForWorkspace(context.Workspace);
+                var failureClustersDaily = FailureClustersDailyRunner.ForWorkspace(context.Workspace);
                 var operatorIntents = OperatorIntentCoordinator.CreateDefault(context.Workspace);
                 var evictedGoalStatuses = new Dictionary<string, GoalStatus>(StringComparer.Ordinal);
                 var intentGoalReloadObservations = new Dictionary<string, ConductorGoalReloadObservation>(StringComparer.Ordinal);
@@ -1785,6 +1786,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     }
                     maintenanceCadence.OnTick();
                     stateLogCheck.OnTick();
+                    failureClustersDaily.OnTick();
                     hostHealthMonitor.Evaluate();
                     RemoteGitMirror.TryStartBackgroundProcessing(loopKernel, context.Workspace.ExecutionDirectory);
                     return terminalSweep;
@@ -1878,6 +1880,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 {
                     maintenanceCadence.WaitForCurrentRunAsync().GetAwaiter().GetResult();
                     stateLogCheck.WaitForCurrentRunAsync().GetAwaiter().GetResult();
+                    failureClustersDaily.WaitForCurrentRunAsync().GetAwaiter().GetResult();
                 }
             }
             CliArgumentParser.RequirePartCount(parts, 2, "conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>]");
