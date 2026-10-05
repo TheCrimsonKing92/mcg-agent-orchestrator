@@ -241,6 +241,7 @@ public sealed class ConductorDriverTestsReviewRetryBudget
         private readonly ConductorDriver _driver;
         private int _reviewNumber;
         private int _retriesBeforeAdvance;
+        private int _dispatchesDuringAdvance;
 
         public Scenario()
         {
@@ -251,7 +252,7 @@ public sealed class ConductorDriverTestsReviewRetryBudget
             PassVerification(Kernel, Goal, Developer, hasCommittedChanges: true);
             PassVerification(Kernel, Goal, Tester);
             _driver = MakeDriver(getFacts: _ => GoalLifecycleFacts.None,
-                dispatchAndStart: _ => throw new InvalidOperationException("Finding recovery must not dispatch inline."),
+                dispatchAndStart: _ => { _dispatchesDuringAdvance++; return DispatchStartOutcome.Started(); },
                 retryTask: Retry,
                 retryTaskWithRoundKind: (gid, tid, message, kind) => Retry(gid, tid, message, kind),
                 retryTaskWithCause: (gid, tid, message, kind, _) => Retry(gid, tid, message, kind),
@@ -285,6 +286,7 @@ public sealed class ConductorDriverTestsReviewRetryBudget
         public void Advance()
         {
             Message = Escalation = null;
+            _dispatchesDuringAdvance = 0;
             _retriesBeforeAdvance = Goal.Timeline.Count(evt => evt.Kind == ProgressKind.TaskRetried);
             _driver.AdvanceOnce(Goal, ConductorAutonomyPolicy.Permissive);
         }
@@ -292,6 +294,7 @@ public sealed class ConductorDriverTestsReviewRetryBudget
         public void AssertRetried(int round)
         {
             Assert.Null(Escalation);
+            Assert.Equal(1, _dispatchesDuringAdvance);
             Assert.StartsWith($"auto-review-retry round {round} convergence brief", Message);
             var retry = Assert.Single(Goal.Timeline.Where(evt => evt.Kind == ProgressKind.TaskRetried).Skip(_retriesBeforeAdvance)
                 .Where(evt => evt.Message.Contains("auto-review-retry", StringComparison.OrdinalIgnoreCase)));
@@ -302,6 +305,7 @@ public sealed class ConductorDriverTestsReviewRetryBudget
         public void AssertStopped(string prefix)
         {
             Assert.Null(Message);
+            Assert.Equal(0, _dispatchesDuringAdvance);
             Assert.Contains(prefix, Escalation);
             Assert.Equal(_retriesBeforeAdvance, Goal.Timeline.Count(evt => evt.Kind == ProgressKind.TaskRetried));
         }
