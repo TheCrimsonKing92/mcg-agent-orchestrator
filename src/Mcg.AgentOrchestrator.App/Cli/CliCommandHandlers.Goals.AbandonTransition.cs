@@ -64,7 +64,8 @@ internal static partial class CliCommandHandlers
         AgentOrchestratorKernel? kernel,
         OrchestratorWorkspace workspace,
         GoalWorktreeCleanupHooks hooks,
-        Action? deliverCommittedLifecycleEvent = null)
+        Action? deliverCommittedLifecycleEvent = null,
+        Func<GoalAbandonPlan?>? deliverAfterCommitEffect = null)
     {
         if (outcome.Disposition == GoalLifecycleTransitionDisposition.ConflictExhausted)
         {
@@ -100,13 +101,18 @@ internal static partial class CliCommandHandlers
         GoalAbandonPlan plan;
         if (leaveRunning)
         {
-            GoalAbandonPlanner.RecordAbandonedTerminalDisposition(outcome.Goal, workspace, command.Reason.Trim());
+            if (deliverAfterCommitEffect is null)
+                GoalAbandonPlanner.RecordAbandonedTerminalDisposition(outcome.Goal, workspace, command.Reason.Trim());
+            else
+                _ = deliverAfterCommitEffect();
             plan = GoalAbandonPlanner.Build(kernel, outcome.Goal, workspace, command.Reason, hooks,
                 dryRun: false, leaveLiveDispatchesRunning: true);
         }
         else
         {
-            plan = GoalAbandonPlanner.CompleteAfterCommit(kernel, outcome.Goal, workspace, command.Reason.Trim(), hooks);
+            plan = deliverAfterCommitEffect is null
+                ? GoalAbandonPlanner.CompleteAfterCommit(kernel, outcome.Goal, workspace, command.Reason.Trim(), hooks)
+                : deliverAfterCommitEffect() ?? GoalAbandonPlanner.Build(kernel, outcome.Goal, workspace, command.Reason, hooks, dryRun: false);
         }
 
         ConsoleViews.PrintGoalAbandonPlan(plan);

@@ -342,6 +342,63 @@ public sealed partial class CollaborationItemStore
         }, cancellationToken);
     }
 
+    public async Task<int> ResolveOpenForGoalRaisedAtOrBeforeAsync(
+        string goalId,
+        string resolution,
+        DateTimeOffset raisedAtOrBefore,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(goalId))
+            throw new ArgumentException("Goal id cannot be empty.", nameof(goalId));
+
+        return await WithBusyRetryAsync(async () =>
+        {
+            await using var conn = OpenConnection();
+            await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
+            await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
+            try
+            {
+                var ids = new List<string>();
+                await using (var select = conn.CreateCommand())
+                {
+                    select.CommandText = """
+                        SELECT id, raised_at FROM collaboration_items
+                        WHERE goal_id = $goal_id AND type IN ('Decision', 'Clarification', 'Verify')
+                          AND status NOT IN ('Resolved', 'Closed')
+                        """;
+                    select.Parameters.AddWithValue("$goal_id", goalId);
+                    await using var reader = await select.ExecuteReaderAsync(cancellationToken);
+                    while (await reader.ReadAsync(cancellationToken))
+                        if (DateTimeOffset.Parse(reader.GetString(1), System.Globalization.CultureInfo.InvariantCulture,
+                            System.Globalization.DateTimeStyles.RoundtripKind) <= raisedAtOrBefore)
+                            ids.Add(reader.GetString(0));
+                }
+                var rows = 0;
+                var resolvedAt = DateTimeOffset.UtcNow.ToString("O");
+                foreach (var id in ids)
+                {
+                    await using var update = conn.CreateCommand();
+                    update.CommandText = """
+                        UPDATE collaboration_items
+                        SET status = 'Resolved', resolved_at = $resolved_at, resolution = $resolution
+                        WHERE id = $id
+                        """;
+                    update.Parameters.AddWithValue("$resolved_at", resolvedAt);
+                    update.Parameters.AddWithValue("$resolution", resolution);
+                    update.Parameters.AddWithValue("$id", id);
+                    rows += await update.ExecuteNonQueryAsync(cancellationToken);
+                }
+                await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
+                return rows;
+            }
+            catch
+            {
+                try { await RunNonQueryAsync(conn, "ROLLBACK", cancellationToken); } catch { }
+                throw;
+            }
+        }, cancellationToken);
+    }
+
     public async Task<bool> TryMarkDeliveredAsync(
         string correlationKey,
         CancellationToken cancellationToken = default)

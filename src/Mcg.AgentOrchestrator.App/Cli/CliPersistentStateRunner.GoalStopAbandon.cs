@@ -28,11 +28,12 @@ internal static partial class CliPersistentStateRunner
         CliCommandHandlers.GoalLifecycleTransitionOutcome outcome;
         AgentOrchestratorKernel? committed;
         string? pendingMessageId;
+        string? pendingCleanupId;
         try
         {
-            outcome = TransactGoalLifecycleTransitionWithOutbox(repository, "cli:abandon-goal", goalId, kernel =>
+            outcome = TransactGoalAbandonWithOutbox(repository, goalId, before.Reason, kernel =>
                 CliCommandHandlers.ApplyGoalAbandonStopAliasWithoutRendering(
-                    command, kernel, goalId, workspace, hooks, before, receipts), out committed, out pendingMessageId);
+                    command, kernel, goalId, workspace, hooks, before, receipts), out committed, out pendingMessageId, out pendingCleanupId);
             if (outcome.Disposition == CliCommandHandlers.GoalLifecycleTransitionDisposition.ConflictExhausted)
                 throw CliCommandHandlers.CreateConflictExhaustedException("abandon-goal", goalId);
         }
@@ -44,7 +45,10 @@ internal static partial class CliPersistentStateRunner
         currentGoal = outcome.Goal;
         CliCommandHandlers.RenderGoalAbandonStopAliasOutcome(outcome, committed!, workspace, before.Reason, hooks,
             pendingMessageId is null ? null : () => DeliverCommittedGoalLifecycleEvent(
-                (IOrchestratorStateOutboxRepository)repository, workspace, goalId, GoalStatus.Cancelled, pendingMessageId));
+                (IOrchestratorStateOutboxRepository)repository, workspace, goalId, GoalStatus.Cancelled, pendingMessageId),
+            pendingCleanupId is null ? null : () => DeliverCommittedGoalAbandonCleanup(
+                (IOrchestratorStateOutboxRepository)repository, workspace, goalId, outcome.Goal!.Status,
+                pendingCleanupId, committed!, hooks));
         return true;
     }
 }
