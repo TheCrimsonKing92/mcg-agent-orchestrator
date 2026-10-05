@@ -165,10 +165,19 @@ public sealed class CliBacklogReadOnlyRouteTests : CliTaskQueryTestSupport
             Goals = snapshot.Goals.Select(goal => goal.Id == CompletedGoalId
                 ? goal with { Status = GoalStatus.Completed } : goal).ToArray()
         });
-        await new SqliteOrchestratorStateRepository(workspace.SqliteStatePath).SaveAsync(kernel);
-        var claim = new SourceBacklogClaimStore(workspace.SqliteStatePath)
-            .ResolveOrMaterializeClaim(kernel, prerequisite.Id);
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        await repository.SaveAsync(kernel);
+        var claimStore = new SourceBacklogClaimStore(workspace.SqliteStatePath);
+        var claim = await repository.TransactAsync((persistedKernel, _) =>
+        {
+            var materialized = claimStore.ResolveOrMaterializeClaim(persistedKernel, prerequisite.Id);
+            return Task.FromResult((ShouldSave: false, Result: materialized));
+        });
         Xunit.Assert.Equal(LinkedGoalId, claim.OwnerGoalId);
+        // An empty kernel prevents legacy-link fallback from masking an uncommitted claim.
+        var persistedClaim = claimStore.ResolveClaim(new AgentOrchestratorKernel(), prerequisite.Id);
+        Xunit.Assert.NotNull(persistedClaim);
+        Xunit.Assert.Equal(LinkedGoalId, persistedClaim.OwnerGoalId);
         Xunit.Assert.Equal(2, kernel.Goals.Count);
         Xunit.Assert.Single(kernel.Goals, goal => goal.Status == GoalStatus.Completed);
         Xunit.Assert.Single((await store.GetByIdPrefixAsync(dependent.Id))!.Dependencies);
