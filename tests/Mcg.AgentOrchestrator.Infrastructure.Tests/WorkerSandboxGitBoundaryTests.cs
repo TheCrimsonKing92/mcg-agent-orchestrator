@@ -223,7 +223,7 @@ public sealed class WorkerSandboxGitBoundaryTests
             var sandboxRoot = Path.Combine(workingDirectory, ".mcg-sandbox");
             Labeler.States[workingDirectory] = new IntegrityLabelState(true, true, true, Medium: true);
             Labeler.States[sandboxRoot] = new IntegrityLabelState(true, true, true, Medium: true);
-            var startInfo = new ProcessStartInfo { UseShellExecute = false, WorkingDirectory = workingDirectory };
+            var startInfo = new ProcessStartInfo { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = workingDirectory };
             startInfo.Environment.Clear();
             startInfo.Environment["PATH"] = string.Empty;
             startInfo.ArgumentList.Add("Write-Output ok");
