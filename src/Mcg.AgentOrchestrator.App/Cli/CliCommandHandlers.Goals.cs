@@ -1624,6 +1624,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     // Refresh tracked goals from persisted state before every tick, then ingest newly
                     // submitted goals. This keeps role handoff decisions tied to durable task status
                     // instead of stale loop-local objects.
+                    IReadOnlyDictionary<GoalId, string>? reloadBaseline = null;
                     try
                     {
                         evictedGoalStatuses.Clear();
@@ -1681,6 +1682,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                                     .Where(request => !checkpointHeldGoalIds.Contains(request.GoalId))
                                     .ToArray()
                             });
+                            reloadBaseline = GoalKernelChange.CaptureAll(loopKernel);
                             foreach (var (goalId, status) in evictedGoalStatuses)
                             {
                                 context.EventWriter.AppendGoalEvictedFromConductor(
@@ -1756,6 +1758,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     // progress-event channel as remediation, and an assignment here would silently drop them.
                     terminalSweep = terminalSweep with
                     {
+                        ReloadBaseline = reloadBaseline,
                         ProgressEvents = [.. remediation.Events, .. unappliedExitWatch.Observe(loopKernel)]
                     };
                     ConsoleViews.PrintTerminalGoalSweep(terminalSweep, includeBlockers: false);
