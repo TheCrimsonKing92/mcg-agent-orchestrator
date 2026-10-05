@@ -946,6 +946,8 @@ public sealed partial class BackgroundDispatchRunner
         {
             kernel.RecordTaskNote(goalId, taskId, FormatResourceReceipt(goalId, taskId, accounting));
         }
+        if (verification is not null && outcome.SkillsReceipt is { } skillsReceipt)
+            RecordSkillsReceipt(kernel, goalId, taskId, skillsReceipt);
 
         if (outcome.AutoRequeueDisposition is { } disposition)
         {
@@ -1873,7 +1875,8 @@ public sealed partial class BackgroundDispatchRunner
                 recoveryDecision),
             ProviderUsage: providerUsage.Usage,
             ProviderUsageUnavailableReason: providerUsage.UnavailableReason,
-            DispatchAttemptAt: contextReceiptAttemptAt, ReceiptlessUsageAttemptAt: ReceiptlessUsageAttemptAt(dispatchAttempt), FailedRoundReceipt: failedRoundReceipt);
+            DispatchAttemptAt: contextReceiptAttemptAt, ReceiptlessUsageAttemptAt: ReceiptlessUsageAttemptAt(dispatchAttempt), FailedRoundReceipt: failedRoundReceipt,
+            SkillsReceipt: ResolveSkillsReceipt(goalId, taskId, dispatchAttempt, processRecord.StandardOutputPath, verification));
         _processLogReader.Evict(processRecord);
         return outcome;
     }

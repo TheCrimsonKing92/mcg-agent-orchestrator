@@ -22,7 +22,8 @@ public sealed record DispatchRefreshOutcome(
     string ProviderUsageUnavailableReason = "unsupported",
     DateTimeOffset? DispatchAttemptAt = null,
     DateTimeOffset? ReceiptlessUsageAttemptAt = null,
-    FailedRoundCheckpointReceipt? FailedRoundReceipt = null);
+    FailedRoundCheckpointReceipt? FailedRoundReceipt = null,
+    string? SkillsReceipt = null);
 
 public sealed record DispatchDiagnosticPayload(int ExitCode, string StandardOutput, string StandardError);
 

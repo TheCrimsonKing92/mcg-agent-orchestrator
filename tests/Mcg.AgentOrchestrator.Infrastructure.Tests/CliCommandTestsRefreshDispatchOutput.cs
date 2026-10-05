@@ -52,13 +52,13 @@ public sealed class CliCommandTestsRefreshDispatchOutput : CliCommandTestBase
     {
         var fixture = CreateDeepHistoryFixture();
 
-        var output = ExecuteCliAndCapture(["refresh-dispatch", "1", "--history-limit", "4"], fixture.Kernel, fixture.Workspace);
+        var output = ExecuteCliAndCapture(["refresh-dispatch", "1", "--history-limit", "5"], fixture.Kernel, fixture.Workspace);
         var timeline = output[(output.IndexOf("Task timeline:", StringComparison.Ordinal) + "Task timeline:".Length)..];
         var newest = timeline.IndexOf("HISTORY_SENTINEL_259", StringComparison.Ordinal);
         var verification = timeline.IndexOf("Dispatch execution passed", StringComparison.Ordinal);
         var completion = timeline.IndexOf("Dispatch completed successfully", StringComparison.Ordinal);
 
-        Xunit.Assert.Equal(4, CountNonEmptyLines(timeline));
+        Xunit.Assert.Equal(5, CountNonEmptyLines(timeline));
         Xunit.Assert.DoesNotContain("HISTORY_SENTINEL_000", timeline);
         Xunit.Assert.True(newest >= 0 && newest < verification && verification < completion, timeline);
     }
