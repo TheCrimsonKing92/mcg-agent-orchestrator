@@ -483,42 +483,16 @@ private static string RenderBacklogDependencyState(
 private static string RenderBacklogReadinessSuffix(
     BacklogItem item,
     CliExecutionContext context,
-    BacklogStore store)
-{
-    foreach (var dependency in item.Dependencies)
-    {
-        Goal? goal;
-        if (dependency.TargetKind == BacklogDependencyTargetKind.Goal)
+    BacklogStore store) =>
+    BacklogDependencyReadiness.Evaluate(item,
+        id => context.Kernel.Goals.FirstOrDefault(goal => goal.Id.Value == id),
+        id => store.GetByExactIdAsync(id).GetAwaiter().GetResult(),
+        id =>
         {
-            goal = context.Kernel.Goals.FirstOrDefault(candidate => candidate.Id.Value == dependency.PrerequisiteId);
-        }
-        else
-        {
-            var prerequisite = store.GetByExactIdAsync(dependency.PrerequisiteId).GetAwaiter().GetResult();
-            LegacySourceBacklogOwnerAmbiguousException? ambiguity = null;
-            goal = prerequisite is null
-                ? null
-                : FindAuthoritativeSourceGoalForRead(context, prerequisite.Id, out ambiguity);
-            if (ambiguity is not null)
-                return $" [Blocked: reason=legacy-owner-ambiguous prerequisite {ShortBacklogId(dependency.PrerequisiteId)}]";
-            if (goal is null)
-                return $" [Blocked: waiting on open prerequisite {ShortBacklogId(dependency.PrerequisiteId)}]";
-        }
-
-        if (goal is null)
-            return $" [Blocked: missing prerequisite {ShortBacklogId(dependency.PrerequisiteId)}]";
-        var landingState = ResolveBacklogShowGoalLandingState(context, goal);
-        if (landingState is "Merged" or "Recorded" or "CleanedUp")
-            continue;
-        if (goal.Status is GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded)
-        {
-            return $" [Blocked: dependency-terminal-without-landing {ShortBacklogId(goal.Id.Value)} state={goal.Status}]";
-        }
-        return $" [Blocked: waiting on active prerequisite goal {ShortBacklogId(goal.Id.Value)}]";
-    }
-
-    return item.Dependencies.Count == 0 ? "" : " [Ready: dependencies landed]";
-}
+            var goal = FindAuthoritativeSourceGoalForRead(context, id, out var ambiguity);
+            return new BacklogPrerequisiteOwner(goal, ambiguity is not null);
+        },
+        goal => ResolveBacklogShowGoalLandingState(context, goal)).Suffix;
 
 private static BacklogItemUpdate ParseBacklogItemUpdate(IReadOnlyList<string> parts)
 {

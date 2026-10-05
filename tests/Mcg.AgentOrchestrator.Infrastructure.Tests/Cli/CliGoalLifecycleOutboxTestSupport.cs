@@ -79,12 +79,19 @@ public abstract class CliGoalLifecycleOutboxTestSupport : CliGoalParkTestSupport
         internal GoalId OtherGoalId { get; } = new("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
         internal string EventPath => CliGoalLifecycleOutboxTestSupport.EventPath(Workspace, GoalId);
 
-        internal static async Task<Seed> Create(string command = "supersede", GoalStatus? status = null)
+        internal static async Task<Seed> Create(
+            string command = "supersede", GoalStatus? status = null, TimeSpan? writeHoldDuration = null)
         {
             var root = CreateTempDirectory();
             var workspace = OrchestratorWorkspace.ForDirectory(root);
-            StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
-            var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            // Pin telemetry time so stdout fixtures cannot gain logs based on real transaction duration.
+            var telemetry = new SqliteWriteTelemetryOptions
+            {
+                HoldDurationSource = _ => () => writeHoldDuration ?? TimeSpan.Zero,
+                MirrorToConductEventStream = false
+            };
+            StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath, null, telemetry);
+            var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath, null, telemetry);
             var seed = new Seed(root, workspace, repository);
             var kernel = new AgentOrchestratorKernel();
             kernel.CreateGoal(seed.GoalId, "Lifecycle target",

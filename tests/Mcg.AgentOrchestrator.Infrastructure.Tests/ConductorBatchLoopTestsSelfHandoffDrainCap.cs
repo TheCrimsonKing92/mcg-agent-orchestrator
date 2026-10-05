@@ -56,7 +56,7 @@ public sealed class ConductorBatchLoopTestsSelfHandoffDrainCap : ConductorBatchL
     public void DispatchHandlingLandingKeepsFullDrainAtCap()
     {
         var result = RunScenario(
-            "src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", true);
+            "src/Mcg.AgentOrchestrator.Execution/Processes/BackgroundDispatchRunner.cs", true);
 
         Assert.Equal(0, result.Detached);
         Assert.Equal(0, result.Cancelled);

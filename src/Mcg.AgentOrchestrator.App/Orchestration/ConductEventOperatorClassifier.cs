@@ -19,6 +19,8 @@ internal static class ConductEventOperatorClassifier
 
         return eventKind switch
         {
+            "rebase-automerge" when StartsWithToken("REBASE_CONFLICT_AUTOMERGE") && HasToken("result=merged") && !HasToken("result=refused") => Outcome,
+            "rebase-automerge" when StartsWithToken("REBASE_CONFLICT_AUTOMERGE") && HasToken("result=refused") && !HasToken("result=merged") => Decision,
             "cohort-attribution-retracted" when StartsWithToken("COHORT_ATTRIBUTION_RETRACTED") => Decision,
             "host-health" when StartsWithToken("HOST_HEALTH_DEGRADED") => Decision,
             "host-health" when StartsWithToken("HOST_HEALTH_RECOVERED") => Outcome,
@@ -47,6 +49,7 @@ internal static class ConductEventOperatorClassifier
             "acceptance-cohort" when (detail.StartsWith("ACCEPTANCE_COHORT ", StringComparison.Ordinal)
                 && HasToken("outcome=passed"))
                 || StartsWithToken("ACCEPTANCE_COHORT_RECONCILED_DEAD") => Outcome,
+            "board-fill-draft" when StartsWithToken("BOARD_FILL_DRAFT") => Decision,
             _ => null
         };
     }

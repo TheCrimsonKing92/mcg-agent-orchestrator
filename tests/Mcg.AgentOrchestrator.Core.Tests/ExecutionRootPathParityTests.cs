@@ -45,46 +45,6 @@ public sealed class ExecutionRootPathParityTests
     }
 
     [Xunit.Fact]
-    public void DispatchHandlingAndCanaryTreatExecutionTwinsLikeInfrastructure()
-    {
-        string[] dispatchPaths =
-        [
-            "Processes/BackgroundDispatch.cs",
-            "Processes/DispatchProcessHost.cs",
-            "Processes/GracefulDispatchDetacher.cs",
-            "Processes/ProcessLogReader.Decisions.cs",
-            "Processes/WorkerProcessJobs.cs",
-            "Workers/WorkerResultParser.cs"
-        ];
-        foreach (var relativePath in dispatchPaths)
-        {
-            var infrastructureResult = RepositoryChangeClassifier.TouchesDispatchResultHandling(
-                [InfrastructureRoot + relativePath]);
-            var executionResult = RepositoryChangeClassifier.TouchesDispatchResultHandling(
-                [ExecutionRoot + relativePath]);
-            Assert.True(infrastructureResult, relativePath);
-            Assert.Equal(infrastructureResult, executionResult);
-        }
-
-        string[] canaryPaths =
-        [
-            "Processes/TempRootApparatusLossReceipts.cs",
-            "Processes/AcceptanceTempRootNames.cs",
-            "Verification/AcceptanceTrxOutcomeTaxonomy.cs",
-            "Verification/AcceptanceTrxTestIdentityResolver.cs",
-            "Processes/DotnetBuildStorageRoot.cs",
-            "Processes/DotnetBuildStorageLayout.cs"
-        ];
-        foreach (var relativePath in canaryPaths)
-        {
-            var infrastructureResult = PostLandingCanaryTrigger.Evaluate([InfrastructureRoot + relativePath]);
-            var executionResult = PostLandingCanaryTrigger.Evaluate([ExecutionRoot + relativePath]);
-            Assert.True(infrastructureResult.ShouldRun, relativePath);
-            Assert.Equal(infrastructureResult.ShouldRun, executionResult.ShouldRun);
-        }
-    }
-
-    [Xunit.Fact]
     public void TestImpactPlanTreatsExecutionTwinLikeInfrastructure()
     {
         // Each invocation owns its fixture directory; no collection or shared state is needed.

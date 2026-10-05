@@ -68,12 +68,24 @@ public static partial class GoalWorktrees
             !TryVerifyIntegrationMergesClean(executionDirectory, newBase, newHead, out refusalReason))
         {
             if (refusalReason.StartsWith("integration-merge-not-clean;", StringComparison.Ordinal) &&
-                TryReadGit(executionDirectory, ["rev-parse", "--verify", "refs/heads/main"], out var currentMain) &&
-                TryCompareGoalOwnedLines(executionDirectory, oldBase, oldHead, currentMain, newHead))
+                TryReadIntegratedMainParent(executionDirectory, newBase, newHead, out var merge, out var mainParent))
             {
-                evidence = $"goal-owned lines {oldBase}..{oldHead} vs {currentMain}..{newHead}: zero-context added and removed lines per file are identical";
-                refusalReason = string.Empty;
-                return true;
+                if (merge.Length > 0)
+                {
+                    if (TryCompareGoalOwnedLines(executionDirectory, oldBase, oldHead, mainParent, newHead))
+                    {
+                        evidence = $"goal-owned lines {oldBase}..{oldHead} vs {mainParent}..{newHead} (merge {merge} main parent): zero-context added and removed lines per file are identical";
+                        refusalReason = string.Empty;
+                        return true;
+                    }
+                }
+                else if (TryReadGit(executionDirectory, ["rev-parse", "--verify", "refs/heads/main"], out var currentMain) &&
+                         TryCompareGoalOwnedLines(executionDirectory, oldBase, oldHead, currentMain, newHead))
+                {
+                    evidence = $"goal-owned lines {oldBase}..{oldHead} vs {currentMain}..{newHead}: zero-context added and removed lines per file are identical";
+                    refusalReason = string.Empty;
+                    return true;
+                }
             }
             return false;
         }
