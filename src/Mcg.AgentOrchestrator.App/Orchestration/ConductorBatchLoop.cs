@@ -120,7 +120,8 @@ internal sealed partial class ConductorBatchLoop
         Action<string>? janitorialPhaseProbe = null,
         Func<long>? janitorialTimestamp = null,
         Func<string?>? readRelaunchDrainCap = null,
-        PromptRolloutWatchCoordinator? promptRolloutWatch = null)
+        PromptRolloutWatchCoordinator? promptRolloutWatch = null,
+        Func<TimeSpan>? processCpuTime = null)
     {
         _sweep = measuredSweepWithCheckpointHolds is not null
             ? measuredSweepWithCheckpointHolds
@@ -148,6 +149,7 @@ internal sealed partial class ConductorBatchLoop
         _conductEventLogWriter = conductEventLogWriter;
         _lifecycleRecorder = lifecycleRecorder;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
+        _processCpuTime = processCpuTime ?? (() => Environment.CpuUsage.TotalTime);
         _readRelaunchDrainCap = readRelaunchDrainCap ?? (() => Environment.GetEnvironmentVariable(RelaunchDrainCapEnvironmentVariable));
         _writeJitter = writeJitter ?? Random.Shared.NextDouble;
         _goalReloadObservation = goalReloadObservation ?? (_ => new ConductorGoalReloadObservation.Missing());
@@ -611,6 +613,7 @@ internal sealed partial class ConductorBatchLoop
             }
 
             var nextTick = totalTicks + 1;
+            BeginTickCpuAccounting();
             if (reloadPolicy is not null)
             {
                 try
@@ -661,6 +664,7 @@ internal sealed partial class ConductorBatchLoop
             var preSweepBaseline = GoalKernelChange.CaptureAll(kernel);
             TerminalGoalJournalMetadataCache.BeginMeasurement();
             var sweepClock = Stopwatch.StartNew();
+            var sweepCpuStart = ReadProcessCpu();
             var sweepResult = RunJanitorialPhase(
                 "sweep",
                 nextTick,
@@ -722,12 +726,13 @@ internal sealed partial class ConductorBatchLoop
             sweepClock.Stop();
             var dependencyMetadataTiming = TerminalGoalJournalMetadataCache.CompleteMeasurement();
             preTickTimingLines.Add(FormatPhaseTiming(nextTick, "sweep", sweepClock.Elapsed,
-                $"goals={kernel.Goals.Count} completed_dependencies={completedGoals.Count} set_aside={setAsideGoals.Count} dependency_metadata_ms={dependencyMetadataTiming.ElapsedMilliseconds} dependency_journals_read={dependencyMetadataTiming.JournalsRead}{FormatSweepCacheDetail(sweepResult)}{FormatSweepPhaseAttribution(_tickPhaseElapsedMs)}"));
+                $"goals={kernel.Goals.Count} completed_dependencies={completedGoals.Count} set_aside={setAsideGoals.Count} dependency_metadata_ms={dependencyMetadataTiming.ElapsedMilliseconds} dependency_journals_read={dependencyMetadataTiming.JournalsRead}{FormatSweepCacheDetail(sweepResult)}{FormatSweepPhaseAttribution(_tickPhaseElapsedMs)}", cpuMs: EndCpuPhase(sweepCpuStart, ref _tickCpuSweepMs)));
 
             _promptRolloutWatch?.EvaluateTick(kernel);
             RunJanitorialPhase("main-suspect-release", nextTick,
                 () => ServiceMainSuspectRelease(driver, canaryTasks, canaryTasksGate));
             var preWalkClock = Stopwatch.StartNew();
+            var preWalkCpuStart = ReadProcessCpu();
             RunJanitorialPhase("retire-until-goal-lessons", nextTick, () => RetireUntilGoalLessons(kernel));
             var hostedChangedGoalIds = ServiceStewardAndAuthor(kernel, onlyGoalId);
             var actionableIntentGoalIds = new HashSet<string>(StringComparer.Ordinal);
@@ -851,7 +856,7 @@ internal sealed partial class ConductorBatchLoop
             ResetScopedGoalStallCounters(eligible, unscopedDispatchableTicks);
             preWalkClock.Stop();
             preTickTimingLines.Add(FormatPhaseTiming(nextTick, "prewalk", preWalkClock.Elapsed,
-                $"scoped={scopedGoals.Length} candidates={preWalkCandidates.Length} eligible={eligible.Length} deferred_intent={preWalkIntentChangedGoalIds.Count} excluded_parked={parkedExcludedCount} excluded_terminal={terminalExcludedCount} cache_entries={goalProjectionCache.Count}"));
+                $"scoped={scopedGoals.Length} candidates={preWalkCandidates.Length} eligible={eligible.Length} deferred_intent={preWalkIntentChangedGoalIds.Count} excluded_parked={parkedExcludedCount} excluded_terminal={terminalExcludedCount} cache_entries={goalProjectionCache.Count}", cpuMs: EndCpuPhase(preWalkCpuStart, ref _tickCpuPrewalkMs)));
 
             if (eligible.Length == 0)
             {
@@ -1127,6 +1132,7 @@ internal sealed partial class ConductorBatchLoop
             var goalWalkTimings = new List<GoalWalkTiming>();
             driver.BeginTick(kernel, totalTicks);
             var goalWalkClock = Stopwatch.StartNew();
+            var goalWalkCpuStart = ReadProcessCpu();
             var glanceDurationStats = _progressiveReviewGlances is null
                 ? Array.Empty<TaskDurationStatsRecord>()
                 : kernel.BuildTaskDurationStats();
@@ -1457,7 +1463,7 @@ internal sealed partial class ConductorBatchLoop
             }
 
             EmitProgress(FormatPhaseTiming(totalTicks, "per-goal-walk", goalWalkClock.Elapsed,
-                $"goals={goalWalkTimings.Count} slowest={FormatSlowestGoalWalks(goalWalkTimings)}"), tickLines);
+                $"goals={goalWalkTimings.Count} slowest={FormatSlowestGoalWalks(goalWalkTimings)}", cpuMs: EndCpuPhase(goalWalkCpuStart, ref _tickCpuWalkMs)), tickLines);
 
             totalAdvanced  += tickAdvanced;
             totalHeld      += tickHeld;
@@ -1488,7 +1494,7 @@ internal sealed partial class ConductorBatchLoop
                 }
 
                 var summaryPrefix = changedGoalLines.Count > 0 ? "TICK_END" : "TICK_SUMMARY";
-                EmitProgress($"{summaryPrefix} tick={totalTicks} advanced={tickAdvanced} held={tickHeld} escalated={tickEscalated} done={tickDone}", tickLines);
+                EmitProgress($"{summaryPrefix} tick={totalTicks} advanced={tickAdvanced} held={tickHeld} escalated={tickEscalated} done={tickDone}{FormatTickCpuSummary()}", tickLines);
                 Console.WriteLine($"[conduct --loop] Tick {totalTicks} summary: advanced={tickAdvanced} held={tickHeld} escalated={tickEscalated} retried={tickRetried} done={tickDone}");
             }
 

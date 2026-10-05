@@ -223,8 +223,8 @@ internal sealed partial class ConductorBatchLoop
         return end < 0 ? line[start..] : line[start..end];
     }
 
-    private static string FormatPhaseTiming(int tick, string phase, TimeSpan elapsed, string detail) =>
-        $"PHASE_TIMING tick={tick} phase={phase} elapsed_ms={(long)elapsed.TotalMilliseconds} {detail}";
+    private static string FormatPhaseTiming(int tick, string phase, TimeSpan elapsed, string detail, long? cpuMs = null) =>
+        $"PHASE_TIMING tick={tick} phase={phase} elapsed_ms={(long)elapsed.TotalMilliseconds} {detail}{(cpuMs is { } cpu ? $" cpu_ms={cpu}" : string.Empty)}";
 
     private static string FormatSweepCacheDetail(TerminalGoalSweepResult? result) =>
         result is null
