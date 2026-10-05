@@ -189,7 +189,8 @@ internal sealed partial class ConductorDriver
                     eventWriter.AppendGoalLanded(
                         goal.Id,
                         $"cohort/{recovery.Receipt.Identity.Value}",
-                        GoalWorktrees.BranchName(goal.Id));
+                        GoalWorktrees.BranchName(goal.Id), LandingAdmissionReceipt.Recovered(
+                            recovery.Receipt.Identity.Members.Single(member => member.GoalId == goal.Id).CandidateRevision));
                     StateEffectProposalApplier.ApplyLandedProposals(
                         kernel,
                         goal,

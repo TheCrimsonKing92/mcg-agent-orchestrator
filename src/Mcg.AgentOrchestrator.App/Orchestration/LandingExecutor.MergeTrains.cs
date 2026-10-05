@@ -205,6 +205,7 @@ internal static partial class LandingExecutor
         }
 
         var coverage = store.FinalizeLanding(receipt.Identity.Value, receipt.ReceiptId);
+        var landingDenylist = eventWriter is null ? null : LoadLandingDenylist(executionDirectory, liveMain);
         foreach (var goal in goals)
         {
             GoalOperationJournal.Completed(
@@ -216,7 +217,9 @@ internal static partial class LandingExecutor
                 eventWriter.AppendGoalLanded(
                     goal.Id,
                     $"train/{receipt.Identity.Value}",
-                    GoalWorktrees.BranchName(goal.Id));
+                    GoalWorktrees.BranchName(goal.Id), BuildLandingAdmission(landingDenylist!,
+                        receipt.Identity.Members.Single(member => member.GoalId == goal.Id).CandidateRevision,
+                        receipt.Identity.Members.Single(member => member.GoalId == goal.Id).LandingPaths));
             else
                 kernel.RecordGoalLandedFromMergeEvidence(
                     goal.Id,
