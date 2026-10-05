@@ -6,9 +6,9 @@ public sealed class OrchestratorTempRootSourceGuardTests
 
     private static readonly AllowedUse[] Allowed =
     [
-        new("Mcg.AgentOrchestrator.Infrastructure/Processes/LockAttribution.cs", "var temp = Path.GetTempPath();", 1, "Reads the temp search root only."),
+        new("Mcg.AgentOrchestrator.Execution/Processes/LockAttribution.cs", "var temp = Path.GetTempPath();", 1, "Reads the temp search root only."),
         new("Mcg.AgentOrchestrator.App/Orchestration/TerminalGoalSweep.OwnedRoots.cs", "Path.GetTempPath(), OrchestratorTempRoot.GetParent(), TimeProvider.System).SummaryLine;", 1, "Janitor scans the legacy temp root for leaked artifacts."),
-        new("Mcg.AgentOrchestrator.Infrastructure/Processes/DotnetBuildStorageLayout.cs", "Path.GetTempPath(),", 1, "Fallback base for the separately excluded dotnet isolated root."),
+        new("Mcg.AgentOrchestrator.Execution/Processes/DotnetBuildStorageLayout.cs", "Path.GetTempPath(),", 1, "Fallback base for the separately excluded dotnet isolated root."),
         new("Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetBuildEnvironmentManager.cs", "var landingTestsRoot = Path.GetFullPath(Path.Combine(Path.GetTempPath(), LandingTestsRootDirectoryName))", 1, "Read-only containment check for landing test fixtures."),
         new("Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", "var baselineRoot = Path.Combine(Path.GetTempPath(), FocusedEvidenceBaselinesRootDirectoryName);", 1, "Existing baseline path is pinned by a test."),
         new("Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", "return Path.Combine(Path.GetTempPath(), OwnerResultsRootDirectoryName);", 1, "Existing owner results path is pinned by a test."),
@@ -17,7 +17,7 @@ public sealed class OrchestratorTempRootSourceGuardTests
         new("Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", "var profileRoot = Path.Combine(Path.GetTempPath(), HermeticProfileRootDirectoryName);", 1, "Profile root already has a scanner exclusion."),
         new("Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.OwnerResultsRooting.cs", "return configuredRoot ?? Path.Combine(Path.GetTempPath(), OwnerResultsRootDirectoryName);", 1, "Existing owner results fallback is pinned by a test."),
         new("Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.OwnerResultsRooting.cs", "Path.Combine(Path.GetTempPath(), OwnerResultsRootDirectoryName),", 1, "Compares against the pinned owner results fallback."),
-        new("Mcg.AgentOrchestrator.Infrastructure/Processes/HostScanExclusionRoots.cs", "var tempPath = Path.GetTempPath();", 1, "Reads the temp base to list scanner-exclusion roots; creates nothing.")
+        new("Mcg.AgentOrchestrator.Execution/Processes/HostScanExclusionRoots.cs", "var tempPath = Path.GetTempPath();", 1, "Reads the temp base to list scanner-exclusion roots; creates nothing.")
     ];
 
     [Fact]
@@ -45,7 +45,7 @@ public sealed class OrchestratorTempRootSourceGuardTests
                 item.Line.Contains("Directory.CreateTempSubdirectory(", StringComparison.Ordinal))
                 errors.Add($"{item.Path}:{item.Number}: implicit temp root construction");
             if (!item.Line.Contains("Path.GetTempPath()", StringComparison.Ordinal) ||
-                item.Path == "Mcg.AgentOrchestrator.Infrastructure/Processes/OrchestratorTempRoot.cs") continue;
+                item.Path == "Mcg.AgentOrchestrator.Execution/Processes/OrchestratorTempRoot.cs") continue;
             if (!IsAllowed(item.Path, item.Line))
                 errors.Add($"{item.Path}:{item.Number}: {item.Line}");
         }

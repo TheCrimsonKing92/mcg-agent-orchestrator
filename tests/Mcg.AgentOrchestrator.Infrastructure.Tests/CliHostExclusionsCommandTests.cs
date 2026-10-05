@@ -185,7 +185,7 @@ public sealed class CliHostExclusionsCommandTests
     {
         var root = FindRepositoryRoot();
         var allowed = new[] {
-            "src/Mcg.AgentOrchestrator.Infrastructure/Processes/DefenderExclusionPreferences.cs",
+            "src/Mcg.AgentOrchestrator.Execution/Processes/DefenderExclusionPreferences.cs",
             "src/Mcg.AgentOrchestrator.App/Cli/CliHostExclusionsCommand.cs" };
         var callers = Directory.EnumerateFiles(Path.Combine(root, "src"), "*.cs", SearchOption.AllDirectories)
             .Where(path => !path.Split(Path.DirectorySeparatorChar).Any(part => part is "bin" or "obj"))
@@ -193,7 +193,7 @@ public sealed class CliHostExclusionsCommandTests
             .Select(path => Path.GetRelativePath(root, path).Replace('\\', '/')).ToArray();
         Assert.Equal(allowed.Order(), callers.Order());
         var script = File.ReadAllText(Path.Combine(root,
-            "src/Mcg.AgentOrchestrator.Infrastructure/Processes/DefenderExclusionPreferences.ps1"));
+            "src/Mcg.AgentOrchestrator.Execution/Processes/DefenderExclusionPreferences.ps1"));
         Assert.Contains("Get-MpPreference", script);
         Assert.Contains("Add-MpPreference -ExclusionPath $ExclusionPath", script);
         Assert.DoesNotContain("Remove-" + "MpPreference", script);
