@@ -8,13 +8,15 @@ public sealed class ConductorBatchLoopTestsBoardFillOffTick(ITestOutputHelper ou
     public void Loop_services_later_ticks_while_drafting_is_held()
     {
         using var h = new BoardFillTestHarness();
+        // onTick runs for dispatchable goals; an empty kernel only performs idle sweeps.
+        GoalLifecycleCommands.CreateAndActivateSimpleGoal(h.Kernel, DefaultAgents(), "Board fill loop test");
         h.Held = true;
         h.Policy = h.Policy with { BoardFillMaxDraftsPerDay = 1 };
         var ticks = 0;
         new ConductorBatchLoop(utcNow: () => h.Clock.UtcNow).WithBoardFill(h.Host).Run(h.Kernel,
             MakeDriver(utcNow: () => h.Clock.UtcNow), ConductorAutonomyPolicy.Conservative,
             Path.Combine(h.Root, "stop.signal"), maxIterations: 2, watchInterval: TimeSpan.FromMilliseconds(1),
-            sleepFunc: _ => false, keepAliveWhenIdle: true, persistGoalTick: (_, _) => { }, onTick: _ =>
+            sleepFunc: _ => false, keepAliveWhenIdle: false, persistGoalTick: (_, _) => { }, onTick: _ =>
             {
                 ticks++;
                 if (ticks == 1)
@@ -42,13 +44,14 @@ public sealed class ConductorBatchLoopTestsBoardFillOffTick(ITestOutputHelper ou
     public void Drafting_exception_does_not_stop_the_conductor_loop()
     {
         using var h = new BoardFillTestHarness();
+        GoalLifecycleCommands.CreateAndActivateSimpleGoal(h.Kernel, DefaultAgents(), "Board fill loop test");
         h.Policy = h.Policy with { BoardFillMaxDraftsPerDay = 1 };
         h.Reply = () => throw new InvalidOperationException("injected loop failure");
         var ticks = 0;
         new ConductorBatchLoop(utcNow: () => h.Clock.UtcNow).WithBoardFill(h.Host).Run(h.Kernel,
             MakeDriver(utcNow: () => h.Clock.UtcNow), ConductorAutonomyPolicy.Conservative,
             Path.Combine(h.Root, "stop.signal"), maxIterations: 2, watchInterval: TimeSpan.FromMilliseconds(1),
-            sleepFunc: _ => false, keepAliveWhenIdle: true, persistGoalTick: (_, _) => { }, onTick: _ =>
+            sleepFunc: _ => false, keepAliveWhenIdle: false, persistGoalTick: (_, _) => { }, onTick: _ =>
             {
                 ticks++;
                 if (ticks == 1)
