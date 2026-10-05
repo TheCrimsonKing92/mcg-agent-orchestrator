@@ -4,6 +4,20 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 public sealed class ConductEventOperatorClassifierTests
 {
     [Theory]
+    [InlineData("host-health", "HOST_HEALTH_FOREGROUND_LOCK_ARMED timeout_ms=2147483647 build=26200", "decision")]
+    [InlineData("host-health", "HOST_HEALTH_FOREGROUND_LOCK_DISARMED timeout_ms=0 build=26200", "outcome")]
+    [InlineData("host-health", "HOST_HEALTH_PAGED_POOL_HIGH paged_pool_mb=8192", "decision")]
+    [InlineData("host-health", "HOST_HEALTH_PAGED_POOL_NORMAL paged_pool_mb=3500", "outcome")]
+    [InlineData("host-health", "HOST_HEALTH_FOREGROUND_LOCK_ARMED_EXTRA", null)]
+    [InlineData("host-health", "HOST_HEALTH_FOREGROUND_LOCK_DISARMED_EXTRA", null)]
+    [InlineData("host-health", "HOST_HEALTH_PAGED_POOL_HIGH_EXTRA", null)]
+    [InlineData("host-health", "HOST_HEALTH_PAGED_POOL_NORMAL_EXTRA", null)]
+    [InlineData("other", "HOST_HEALTH_FOREGROUND_LOCK_ARMED", null)]
+    [InlineData("other", "HOST_HEALTH_PAGED_POOL_HIGH", null)]
+    public void Classify_HostHealthConditionTransitions_ReturnsOperatorClass(string kind, string detail, string? expected) =>
+        Assert.Equal(expected, ConductEventOperatorClassifier.Classify(kind, detail));
+
+    [Theory]
     [InlineData("sweep-blocker", "SWEEP_BLOCKER goal=g kind=completed-branch-unmerged evidence=\"e\" command=\"acceptance g\" owner=acceptance-queue")]
     [InlineData("canary-gate", "CANARY_GATE sha=s result=queued paths=p")]
     [InlineData("canary-gate", "CANARY_GATE sha=s result=started attempt=1")]

@@ -63,7 +63,8 @@ internal static partial class CliCommandHandlers
         GoalLifecycleTransitionOutcome outcome,
         AgentOrchestratorKernel? kernel,
         OrchestratorWorkspace workspace,
-        GoalWorktreeCleanupHooks hooks)
+        GoalWorktreeCleanupHooks hooks,
+        Action? deliverCommittedLifecycleEvent = null)
     {
         if (outcome.Disposition == GoalLifecycleTransitionDisposition.ConflictExhausted)
         {
@@ -90,7 +91,10 @@ internal static partial class CliCommandHandlers
 
         if (outcome.CommittedTimelineEvent is not null)
         {
-            AppendCommittedLifecycleEvent(outcome, workspace, GoalStatus.Cancelled);
+            if (deliverCommittedLifecycleEvent is null)
+                AppendCommittedLifecycleEvent(outcome, workspace, GoalStatus.Cancelled);
+            else
+                deliverCommittedLifecycleEvent();
         }
 
         GoalAbandonPlan plan;

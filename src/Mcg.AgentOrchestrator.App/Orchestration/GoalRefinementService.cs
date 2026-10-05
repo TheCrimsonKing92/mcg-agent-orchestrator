@@ -1245,7 +1245,9 @@ internal sealed partial class GoalRefinementService
             decisions,
             question.Question,
             answer,
-            $"Feasibility disposition applied and re-checked (topic: {ResolveQuestionTopicKey(question)}).");
+            disposition.Kind == FeasibilityDisposition.ReScope
+                ? $"Feasibility re-scope recorded as refined-spec version {(goal.AuthoritativeRefinedSpecVersion?.Version ?? 0) + 1} and re-checked (topic: {ResolveQuestionTopicKey(question)})."
+                : $"Feasibility disposition applied and re-checked (topic: {ResolveQuestionTopicKey(question)}).");
         var updated = spec with
         {
             AcceptanceCriteria = workerCriteria,
@@ -1254,7 +1256,10 @@ internal sealed partial class GoalRefinementService
             OperatorOwnedAcceptanceCriteria = operatorOwnedCriteria,
             AcceptanceGateOwnedAcceptanceCriteria = acceptanceGateOwnedCriteria
         };
-        kernel.SetGoalRefinedSpec(goalId, updated);
+        if (disposition.Kind == FeasibilityDisposition.ReScope)
+            kernel.RecordGoalRefinement(goalId, updated);
+        else
+            kernel.SetGoalRefinedSpec(goalId, updated);
         if (raisedClarificationRound)
             kernel.RecordGoalClarificationRound(goalId);
         return updated;

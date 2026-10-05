@@ -95,10 +95,12 @@ internal sealed partial class ConductorDriver
     }
 
     private ConductorAdvanceResult OwnerReviewHeld(
-        Goal goal, string prefix, ConductorAutonomyPolicy policy, string sha, OwnerReviewHoldReceipt receipt) =>
+        Goal goal, string prefix, ConductorAutonomyPolicy policy, string sha, OwnerReviewHoldReceipt receipt,
+        VerifiedAdmissionDecision? decision = null) =>
         MakeResult(goal.Id.Value, prefix, policy, new ConductorAdvanceOutcome.Held(
             GoalLifecycleState.Verified, receipt.Reason,
-            StableIdentity: $"owner-review-hold:{sha}:{receipt.Fingerprint ?? "none"}"));
+            StableIdentity: $"owner-review-hold:{sha}:{receipt.Fingerprint ?? "none"}")
+            { Decision = decision?.ToRecord() });
 
     private bool IsOwnerReviewApproved(Goal goal, string sha, string? fingerprint)
     {

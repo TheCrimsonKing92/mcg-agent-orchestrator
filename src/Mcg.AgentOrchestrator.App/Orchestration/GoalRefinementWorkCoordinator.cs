@@ -200,10 +200,19 @@ internal static partial class GoalRefinementWorkCoordinator
                             var refinementEvents = refinedSnapshot.Timeline
                                 .Skip(baselineSnapshot.Timeline.Count)
                                 .ToArray();
+                            var storedVersion = current.RefinedSpecVersions?.Max(item => (int?)item.Version) ?? 0;
+                            var obligations = (current.CriterionEvidenceObligations ?? []).ToList();
+                            var storedObligationIds = obligations.Select(item => item.Id).ToHashSet(StringComparer.Ordinal);
+                            foreach (var obligation in refinedSnapshot.CriterionEvidenceObligations ?? [])
+                            {
+                                if (obligation.CriterionVersion > storedVersion && storedObligationIds.Add(obligation.Id))
+                                    obligations.Add(obligation);
+                            }
                             var merged = current with
                             {
                                 RefinedSpec = refinedSnapshot.RefinedSpec,
                                 RefinedSpecVersions = refinedSnapshot.RefinedSpecVersions,
+                                CriterionEvidenceObligations = obligations,
                                 ClarificationRoundCount = Math.Max(
                                     current.ClarificationRoundCount,
                                     refinedSnapshot.ClarificationRoundCount),

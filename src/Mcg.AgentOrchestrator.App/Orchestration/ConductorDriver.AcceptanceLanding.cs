@@ -14,27 +14,37 @@ internal sealed partial class ConductorDriver
 
     private ConductorAdvanceResult ExecuteLanding(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)
     {
+        var facts = new VerifiedAdmissionFacts(goal.Status);
         if (HasActiveOwnerReviewHold(goal, out var ownerSha, out var ownerReceipt))
-            return OwnerReviewHeld(goal, goalPrefix, policy, ownerSha, ownerReceipt!);
+            return OwnerReviewHeld(goal, goalPrefix, policy, ownerSha, ownerReceipt!,
+                VerifiedAdmissionPolicy.Evaluate(facts with
+                {
+                    OwnerReviewHold = true, OwnerReviewSha = ownerSha, OwnerReviewReason = ownerReceipt!.Reason,
+                    OwnerReviewFingerprint = ownerReceipt.Fingerprint ?? "none"
+                }));
+        facts = facts with { OwnerReviewHold = false };
 
-        if (RouteRecordedCohortAttributionFailure(goal, goalPrefix, policy) is { } attributedFailure)
+        if (HasRoutableRecordedCohortAttributionFailure(goal))
         {
-            return attributedFailure;
+            return RouteRecordedCohortAttributionFailure(goal, goalPrefix, policy,
+                VerifiedAdmissionPolicy.Evaluate(facts with
+                {
+                    CohortAttribution = true,
+                    CohortAttributionEvidence = goal.LatestAcceptanceFailure!.CheckAttributions![0].Evidence
+                }));
         }
+        facts = facts with { CohortAttribution = false };
         if (HasActiveApparatusHold(goal, out _))
         {
             var failure = goal.LatestAcceptanceFailure!;
-            return MakeResult(
-                goal.Id.Value,
-                goalPrefix,
-                policy,
-                new ConductorAdvanceOutcome.Held(
-                    GoalLifecycleState.Verified,
-                    $"Acceptance apparatus hold remains active for unchanged candidate " +
-                    $"{FormatAcceptanceCandidate(failure.BranchHeadSha, failure.MainHeadSha)}. " +
-                    "Repair main or confirm acceptance-retry before another acceptance process starts.",
-                    StableIdentity: $"acceptance-apparatus:{failure.BranchHeadSha ?? "unknown"}:{failure.MainHeadSha ?? "unknown"}"));
+            return AdmissionHeld(facts with
+            {
+                ApparatusHold = true, ApparatusBranchSha = failure.BranchHeadSha ?? "unknown",
+                ApparatusMainSha = failure.MainHeadSha ?? "unknown",
+                ApparatusCandidate = FormatAcceptanceCandidate(failure.BranchHeadSha, failure.MainHeadSha)
+            });
         }
+        facts = facts with { ApparatusHold = false };
 
         var sharedAcceptance = TryRunFallbackAcceptance(goal, goalPrefix, policy, GoalLifecycleState.Verified);
         if (sharedAcceptance is not null)
@@ -44,15 +54,20 @@ internal sealed partial class ConductorDriver
 
         using var evidenceMutationLease = _tryAcquireEvidenceMutationLease(goal, "conductor:acceptance-and-land");
         if (evidenceMutationLease is null)
-            return ReplacementEvidenceMutationHeld(goal, goalPrefix, policy);
+        {
+            var result = ReplacementEvidenceMutationHeld(goal, goalPrefix, policy);
+            var held = (ConductorAdvanceOutcome.Held)result.Outcome;
+            var decision = VerifiedAdmissionPolicy.Evaluate(facts with
+                { EvidenceLease = false, EvidenceLeaseReason = held.Reason });
+            return result with { Outcome = held with { Decision = decision.ToRecord() } };
+        }
+        facts = facts with { EvidenceLease = true };
 
         if (!AcceptancePrecheck.HasCompletedPassedVerificationForAllTasks(goal))
         {
-            return MakeResult(goal.Id.Value, goalPrefix, policy,
-                new ConductorAdvanceOutcome.Held(
-                    GoalLifecycleState.Verified,
-                    "Goal is not ready for acceptance: complete every task with a passed verification before accepting this gate."));
+            return AdmissionHeld(facts with { AllTasksPassed = false });
         }
+        facts = facts with { AllTasksPassed = true };
 
         var early = RebaseBeforeAcceptance(goal, goalPrefix, policy, applySideEffects: true, out _);
         if (early is not null)
@@ -74,34 +89,38 @@ internal sealed partial class ConductorDriver
         }
         catch (AcceptanceInfrastructureDeferredException ex)
         {
-            return MakeResult(goal.Id.Value, goalPrefix, policy,
-                new ConductorAdvanceOutcome.Held(
-                    GoalLifecycleState.Verified,
-                    $"Acceptance infrastructure deferred ({ex.ReasonCode}); retry on next conduct tick. {ex.Message}"));
+            return AdmissionHeld(facts with
+            {
+                GateStartDeferral = "infrastructure-deferred",
+                InfrastructureDeferredReasonCode = ex.ReasonCode, InfrastructureDeferredMessage = ex.Message
+            });
         }
         catch (DotnetBuildSlotsBusyException ex)
         {
-            return MakeResult(goal.Id.Value, goalPrefix, policy,
-                new ConductorAdvanceOutcome.Held(
-                    GoalLifecycleState.Verified,
-                    $"Stable dotnet build slots busy; retry on next conduct tick. {FormatSlotsBusy(ex.SlotsBusy)}"));
+            return AdmissionHeld(facts with
+                { GateStartDeferral = "build-slots-busy", BuildSlotsBusyDetail = FormatSlotsBusy(ex.SlotsBusy) });
         }
         catch (BuildLockBlockedException ex)
         {
-            return MakeResult(goal.Id.Value, goalPrefix, policy,
-                new ConductorAdvanceOutcome.Held(
-                    GoalLifecycleState.Verified,
-                    $"Build artifact lock blocked acceptance; retry on next conduct tick. {FormatBuildLockBlocked(ex.Attribution)}"));
+            return AdmissionHeld(facts with
+                { GateStartDeferral = "build-lock-blocked", BuildLockBlockedDetail = FormatBuildLockBlocked(ex.Attribution) });
         }
         catch (AcceptanceAttemptCancelledException ex)
         {
-            return MakeResult(goal.Id.Value, goalPrefix, policy,
-                new ConductorAdvanceOutcome.Held(
-                    GoalLifecycleState.Verified,
-                    $"Acceptance attempt stopped by cancellation probe ({ex.Decision.Cause}); retry when the goal is eligible."));
+            return AdmissionHeld(facts with
+                { GateStartDeferral = "attempt-cancelled", CancellationProbeCause = ex.Decision.Cause.ToString() });
         }
 
         return CompleteLandingAfterAcceptance(goal, goalPrefix, policy, acceptance);
+
+        ConductorAdvanceResult AdmissionHeld(VerifiedAdmissionFacts observed)
+        {
+            var decision = VerifiedAdmissionPolicy.Evaluate(observed);
+            return MakeResult(goal.Id.Value, goalPrefix, policy,
+                new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, decision.Reason,
+                    StableIdentity: decision.StableIdentity.Length == 0 ? null : decision.StableIdentity)
+                { Decision = decision.ToRecord() });
+        }
     }
 
     private ConductorAdvanceResult ExecuteVerifying(
