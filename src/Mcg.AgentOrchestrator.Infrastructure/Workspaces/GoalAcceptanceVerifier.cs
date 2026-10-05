@@ -1619,15 +1619,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         if (independentChecks.Length > 0 && laneChecks.Length > 0)
         {
             var overlapped = await AcceptanceOverlappedCheckRunner.RunAsync(
-                async () =>
-                {
-                    var independent = await RunCheckBatchAsync(independentChecks, cacheContext, worktreePath,
-                        goalId, stableSlotIndex, stableSlotLease, dotnetTestBuildPhase, 1,
-                        cancellationToken, continueAfterFailure, executionOwner).ConfigureAwait(false);
-                    if (independent.Results.All(result => result.Passed))
-                        SignalStructuralCoveragePrechecksPassed();
-                    return independent;
-                },
+                () => RunStructuralCoveragePrechecksAsync(() => RunCheckBatchAsync(independentChecks, cacheContext, worktreePath,
+                    goalId, stableSlotIndex, stableSlotLease, dotnetTestBuildPhase, 1,
+                    cancellationToken, continueAfterFailure, executionOwner)),
                 () => RunCheckBatchAsync(laneChecks, cacheContext, worktreePath, goalId, stableSlotIndex,
                     stableSlotLease, dotnetTestBuildPhase, maxConcurrentShards, cancellationToken, continueAfterFailure, executionOwner),
                 executionOwner).ConfigureAwait(false);
@@ -1733,7 +1727,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             if (prebuild.Run.Result.Passed)
             {
                 VerifyPrebuiltMtpArtifacts(shardChecks, primaryBuildPhase);
-                primaryLease.ReleaseExecutionLock();
+                ReleaseStableSlotExecutionLockUnlessCoverageHoldActive(primaryLease);
                 SignalStructuralCoverageCandidateBuildComplete();
             }
         }
@@ -3314,7 +3308,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             attemptName,
             stableSlotIndex,
             stableSlotLease);
-        stableSlotLease?.ReleaseExecutionLock();
+        ReleaseStableSlotExecutionLockUnlessCoverageHoldActive(stableSlotLease);
 
         var telemetry = GoalAcceptanceVerifierTestTelemetry.ResolveTestTelemetry(
             check,
