@@ -78,7 +78,7 @@ public sealed class SqliteOrchestratorStateRepositoryTestsCrossProviderRelease :
         }
         else
         {
-            tick.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Assigned, "Tick note");
+            tick.RecordTaskNote(goal.Id, task.Id, "Tick note");
         }
 
         await repository.TransactGoalAsync<bool>(goal.Id, (stored, _) =>
@@ -90,7 +90,7 @@ public sealed class SqliteOrchestratorStateRepositoryTestsCrossProviderRelease :
             }
             else
             {
-                operatorKernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Assigned, "Operator note");
+                operatorKernel.RecordTaskNote(goal.Id, task.Id, "Operator note");
             }
             return Task.FromResult((true, operatorKernel.ExportGoalSnapshot(goal.Id), true));
         });
