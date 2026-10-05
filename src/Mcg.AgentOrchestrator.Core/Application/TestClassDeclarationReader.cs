@@ -64,28 +64,32 @@ internal sealed record ReverseDependencyTestSelection(
     IReadOnlyList<string> TestClassNames,
     string? Reason,
     ReverseDependencyCacheReceipt? CacheReceipt = null,
-    ReverseDependencyDegradationKind? DegradationKind = null)
+    ReverseDependencyDegradationKind? DegradationKind = null,
+    RepositoryTestImpactHeadroom? Headroom = null)
 {
     internal static ReverseDependencyTestSelection Resolved(
         IEnumerable<string> testClassNames,
-        ReverseDependencyCacheReceipt? cacheReceipt = null) =>
+        ReverseDependencyCacheReceipt? cacheReceipt = null,
+        RepositoryTestImpactHeadroom? headroom = null) =>
         new(
             ReverseDependencySelectionOutcome.Resolved,
             testClassNames.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
             null,
-            cacheReceipt);
+            cacheReceipt, Headroom: headroom);
 
     internal static ReverseDependencyTestSelection Unreadable(
         string reason,
-        ReverseDependencyCacheReceipt? cacheReceipt = null) =>
+        ReverseDependencyCacheReceipt? cacheReceipt = null,
+        RepositoryTestImpactHeadroom? headroom = null) =>
         new(ReverseDependencySelectionOutcome.Unreadable, [], reason, cacheReceipt,
-            ReverseDependencyDegradationKind.Unreadable);
+            ReverseDependencyDegradationKind.Unreadable, headroom);
 
     internal static ReverseDependencyTestSelection Abandoned(
         ReverseDependencyDegradationKind kind,
         string reason,
-        ReverseDependencyCacheReceipt? cacheReceipt = null) =>
-        new(ReverseDependencySelectionOutcome.Abandoned, [], reason, cacheReceipt, kind);
+        ReverseDependencyCacheReceipt? cacheReceipt = null,
+        RepositoryTestImpactHeadroom? headroom = null) =>
+        new(ReverseDependencySelectionOutcome.Abandoned, [], reason, cacheReceipt, kind, headroom);
 
     internal static ReverseDependencyTestSelection Unavailable { get; } =
         new(ReverseDependencySelectionOutcome.Unavailable, [], "Reverse-dependency evidence is unavailable.");
@@ -108,13 +112,19 @@ internal sealed class FileSystemTestClassDeclarationReader : ITestClassDeclarati
     private static readonly string[] ExcludedDirectorySegments = ["bin", "obj", "artifacts", ".scratch"];
     private readonly string _repositoryRoot;
     private readonly int _maximumIndexedSourceFiles;
+    private readonly int _maximumSelectedTestClasses;
+    private readonly int? _maximumFrontierSymbols;
 
     internal FileSystemTestClassDeclarationReader(
         string repositoryRoot,
-        int maximumIndexedSourceFiles = ReverseDependencyTestImpactReader.MaximumIndexedSourceFiles)
+        int maximumIndexedSourceFiles = ReverseDependencyTestImpactReader.MaximumIndexedSourceFiles,
+        int maximumSelectedTestClasses = ReverseDependencyTestImpactReader.MaximumSelectedTestClasses,
+        int? maximumFrontierSymbols = null)
     {
         _repositoryRoot = Path.GetFullPath(repositoryRoot);
         _maximumIndexedSourceFiles = maximumIndexedSourceFiles;
+        _maximumSelectedTestClasses = maximumSelectedTestClasses;
+        _maximumFrontierSymbols = maximumFrontierSymbols;
     }
 
     internal static ITestClassDeclarationReader CreateForCurrentRepository()
@@ -178,7 +188,8 @@ internal sealed class FileSystemTestClassDeclarationReader : ITestClassDeclarati
     public ReverseDependencyTestSelection ReadReverseDependentTestClasses(
         IReadOnlyList<string> changedSourcePaths) =>
         ReverseDependencyTestImpactReader.Read(
-            _repositoryRoot, changedSourcePaths, maximumIndexedSourceFiles: _maximumIndexedSourceFiles);
+            _repositoryRoot, changedSourcePaths, maximumIndexedSourceFiles: _maximumIndexedSourceFiles,
+            maximumSelectedTestClasses: _maximumSelectedTestClasses, maximumFrontierSymbols: _maximumFrontierSymbols);
 
     private TestClassDeclarations ReadProjectDeclarations(string[] sourceFiles)
     {
