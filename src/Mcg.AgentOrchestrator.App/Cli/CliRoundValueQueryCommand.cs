@@ -18,9 +18,11 @@ internal static class CliRoundValueQueryCommand
         DateTimeOffset? since = null;
         var until = DateTimeOffset.UtcNow;
         var json = false;
+        var bySkill = false;
         for (var i = 1; i < args.Count; i++)
         {
             if (args[i] == "--json") { json = true; continue; }
+            if (args[i] == "--by-skill") { bySkill = true; continue; }
             if (args[i] is not ("--since" or "--until") || i + 1 == args.Count) { Invalid(); return; }
             var flag = args[i++];
             if (!TryTimestamp(args[i], out var at)) { Invalid(); return; }
@@ -31,6 +33,12 @@ internal static class CliRoundValueQueryCommand
         var metadata = queries.ListGoalMetadataAsync().GetAwaiter().GetResult();
         var goals = metadata.Count == 0 ? [] : queries.LoadGoalsAsync(
             metadata.Select(g => new GoalId(g.Id)).ToArray()).GetAwaiter().GetResult().Goals;
+        if (bySkill)
+        {
+            WriteSkills(RoundValueSkillSlice.Build(goals, since.Value, until,
+                CliOwnerDigestRetryIntents.Read(workspace, until)), json);
+            return;
+        }
         var report = RoundValueReport.Build(goals, since.Value, until,
             CliOwnerDigestRetryIntents.Read(workspace, until));
         if (json)
@@ -63,6 +71,20 @@ internal static class CliRoundValueQueryCommand
                 Console.WriteLine(FormattableString.Invariant($"{route.Decision} | {route.Rounds} | {route.Productive} | {route.Overhead} | {route.Wasted}"));
         }
         Console.WriteLine(FormattableString.Invariant($"Pending goals | {report.PendingGoals} | rounds={report.PendingRounds}"));
+    }
+
+    private static void WriteSkills(RoundValueSkillSlice slice, bool json)
+    {
+        if (json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(slice, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+            return;
+        }
+        Console.WriteLine(FormattableString.Invariant($"Round value by skill [{slice.Since:O}, {slice.Until:O}) | cohort = landed or lost goals whose last round is in the window"));
+        Console.WriteLine("Skill | Selected | Read | Claimed | Productive | Overhead | Wasted");
+        foreach (var row in slice.Rows)
+            Console.WriteLine(FormattableString.Invariant($"{row.Skill} | {row.Selected} | {row.Read} | {row.Claimed} | {row.Productive} | {row.Overhead} | {row.Wasted}"));
+        Console.WriteLine(FormattableString.Invariant($"Read unavailable | {slice.ReadUnavailable}"));
     }
 
     private static bool TryTimestamp(string text, out DateTimeOffset at)

@@ -333,6 +333,7 @@ public static partial class WorkerProfileDispatcher
             ReviewFindingTouchProofDiagnostic: reviewerRoundTouchScope.Diagnostic,
             ReviewRetryCap: effectiveReviewRetryCap,
             ContextPackageReceipt: contextPackageReceipt,
+            SelectedSkills: WorkerContextArtifacts.SelectSkillRequirements(goal, task, workingDirectory).Select(s => s.Name).ToArray(),
             PlannerSampleCount: PlannerSamplingPolicy.EffectiveSampleCount(task.RequiredRole, plannerSampleCount),
             RetryContextFingerprint: retryContextFingerprint,
             PaidRoute: paidRoute,

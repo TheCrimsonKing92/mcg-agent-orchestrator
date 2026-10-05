@@ -168,7 +168,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsDispatchRecovery : Cl
         var repository = new InMemoryTransactionalStateRepository(kernel);
 
         var output = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
-            ["refresh-dispatch", goal.Id.Value[..8], "1", "--history-limit", "4"],
+            ["refresh-dispatch", goal.Id.Value[..8], "1", "--history-limit", "5"],
             repository,
             workspace,
             ref agents,
@@ -180,7 +180,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsDispatchRecovery : Cl
         var verification = timeline.IndexOf("Dispatch execution passed", StringComparison.Ordinal);
         var completion = timeline.IndexOf("Dispatch completed successfully", StringComparison.Ordinal);
 
-        Xunit.Assert.Equal(4, CountNonEmptyLines(timeline));
+        Xunit.Assert.Equal(5, CountNonEmptyLines(timeline));
         Xunit.Assert.True(verification >= 0 && verification < selfCheck && selfCheck < completion, timeline);
         Xunit.Assert.Equal(1, repository.TransactionCount);
         Xunit.Assert.Equal(1, repository.SaveGoalSnapshotsCount);
