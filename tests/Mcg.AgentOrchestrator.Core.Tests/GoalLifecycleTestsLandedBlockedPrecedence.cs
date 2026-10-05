@@ -36,7 +36,7 @@ public sealed class GoalLifecycleTestsLandedBlockedPrecedence
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Blocked active goal",
             [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
-        kernel.ActivateGoal(goal.Id, []);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
 
         Assert.Equal(GoalStatus.Active, goal.Status);
         Assert.Equal(GoalLifecycleState.Blocked, GoalLifecycle.ResolveState(
