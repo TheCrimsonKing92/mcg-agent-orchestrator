@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 using static AdditiveConflictGitFixture;
@@ -29,7 +30,11 @@ public sealed class ConductorDriverTestsAdditiveConflictMerge
             },
             writeEscalation: (_, _, reason) => throw new InvalidOperationException(reason));
 
-        Assert.IsType<ConductorAdvanceOutcome.Done>(driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative).Outcome);
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        var executed = Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
+        Assert.Equal(GoalLifecycleState.Verified, executed.FromState);
+        Assert.Equal("Landed: Landed", executed.Description);
 
         Assert.Equal(new[] { "acceptance" }, effects);
         AssertEvent(logPath, "merged", "outcome");

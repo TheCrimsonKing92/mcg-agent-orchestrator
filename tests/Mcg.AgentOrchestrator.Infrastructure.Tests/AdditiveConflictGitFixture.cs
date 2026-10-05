@@ -37,7 +37,8 @@ internal sealed class AdditiveConflictGitFixture : GoalWorktreeTestBase, IDispos
             foreach (var file in files)
                 if (file.Base is not null) Write(Repository, file.Path, file.Base);
             if (attributes is not null) Write(Repository, ".gitattributes", attributes);
-            Commit(Repository, "Fixture base");
+            // An add/add fixture intentionally has no file at the base commit.
+            RunGit(Repository, "commit", "--allow-empty", "-m", "Fixture base");
             Worktree = GoalWorktrees.Ensure(Repository, GoalId);
             foreach (var file in files) Write(Worktree, file.Path, file.Goal);
             Commit(Worktree, "Goal changes");
@@ -83,6 +84,8 @@ internal sealed class AdditiveConflictGitFixture : GoalWorktreeTestBase, IDispos
         var fullPath = Path.Combine(root, path);
         Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
         File.WriteAllText(fullPath, text.ReplaceLineEndings(lineEnding), encoding);
+        // Stage only this fixture input, including paths ignored by the seeded repository.
+        RunGit(root, "add", "-f", "--", path);
     }
 
     public void Dispose() => DeleteDirectory(Repository);
