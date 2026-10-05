@@ -8,7 +8,7 @@ internal sealed partial class ConductorBoardFillHost
 {
     internal static ConductorBoardFillHost CreateDefault(OrchestratorWorkspace workspace,
         Func<ConductorAutonomyPolicy> policy) => new(
-        new(Path.Combine(workspace.OrchestratorDirectory, "board-fill.db")),
+        new(ConductorBoardFillDraftStore.DefaultPath(workspace)),
         (id, token) => AuthorBriefDraftService.Run(id, workspace,
             new(WorkerProcessRunner.RunBufferedAsync, new GitAuthorBriefDraftRepository(workspace.ExecutionDirectory),
                 ModelFunctionCatalogStore.Load(workspace.ModelFunctionCatalogPath)),
@@ -31,7 +31,9 @@ internal sealed partial class ConductorBoardFillHost
                     catch (LegacySourceBacklogOwnerAmbiguousException) { return new(null, true); }
                 },
                 goal => LandingState(workspace, goal));
-        }, policy, new(workspace.ConductEventsLogPath));
+        }, policy, new(workspace.ConductEventsLogPath), verifier: new BoardFillPremiseVerifier(
+            () => ModelFunctionCatalogStore.Load(workspace.ModelFunctionCatalogPath),
+            new GitAuthorBriefDraftRepository(workspace.ExecutionDirectory), workspace.ExecutionDirectory));
 
     private static string LandingState(OrchestratorWorkspace workspace, Goal goal)
     {
