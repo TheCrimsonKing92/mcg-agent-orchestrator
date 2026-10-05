@@ -3537,7 +3537,7 @@ internal static partial class CliPersistentStateRunner
                 deferredCollaborationWriter.SnapshotEffects(),
                 deferredEventWriter.SnapshotEffects());
             var refinementMessage = GoalRefinementWorkCoordinator.CreateMessage(goal.Id);
-            outboxRepository.TransactWithOutboxAsync(
+            CommitGoalCreationAsync(outboxRepository, workspace, preparedSnapshot,
                     (currentKernel, _) =>
                     {
                         GoalCreationPreconditionValidator.Validate(currentKernel, preparedSnapshot, workspace);

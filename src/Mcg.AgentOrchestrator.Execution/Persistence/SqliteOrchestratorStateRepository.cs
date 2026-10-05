@@ -10,7 +10,7 @@ using Microsoft.Data.Sqlite;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutboxRepository
+public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorStateOutboxRepository
 {
     public bool SupportsGoalCheckpointContainment => true;
 

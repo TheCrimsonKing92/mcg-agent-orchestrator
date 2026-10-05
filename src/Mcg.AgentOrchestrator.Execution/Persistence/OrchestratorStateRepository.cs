@@ -241,6 +241,15 @@ public sealed record OrchestratorStateOutboxProcessingResult(
 
 public interface IOrchestratorStateOutboxRepository : ITransactionalOrchestratorStateRepository
 {
+    Task<T> TransactGoalCreationWithOutboxAsync<T>(
+        GoalCreationLoadScope scope,
+        Func<AgentOrchestratorKernel, CancellationToken, Task<(
+            bool ShouldSave,
+            T Result,
+            IReadOnlyList<OrchestratorStateOutboxMessage> OutboxMessages)>> transaction,
+        CancellationToken cancellationToken = default) =>
+        TransactWithOutboxAsync(transaction, cancellationToken);
+
     Task<T> TransactWithOutboxAsync<T>(
         Func<AgentOrchestratorKernel, CancellationToken, Task<(
             bool ShouldSave,
