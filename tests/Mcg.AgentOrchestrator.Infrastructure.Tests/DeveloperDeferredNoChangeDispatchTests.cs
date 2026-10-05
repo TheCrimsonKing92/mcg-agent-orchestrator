@@ -65,7 +65,7 @@ public sealed class DeveloperDeferredNoChangeDispatchTests : WorkerDispatchTestS
         var clock = new MutableClock(DateTimeOffset.UtcNow.AddMinutes(2));
         var output = (missing == "no-rationale" ? string.Empty :
                 "NO_CHANGE: the current candidate already contains the repair.\n") +
-            WorkerResultBlock("none", "none",
+            WorkerResultBlock(missing == "no-rationale" ? "Alpha.cs" : "none", "none",
                 missing == "no-classes" ? "deferred - conductor will verify" :
                     "deferred - DeferredAlphaTests",
                 commit: "none", blockers: missing == "blocker" ? "source work remains" : "none");

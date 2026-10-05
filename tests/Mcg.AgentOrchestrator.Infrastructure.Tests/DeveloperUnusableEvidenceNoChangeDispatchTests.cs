@@ -172,5 +172,5 @@ public sealed class DeveloperUnusableEvidenceNoChangeDispatchTests : WorkerDispa
 
     private static string Output(bool rationale = true) =>
         (rationale ? "NO_CHANGE: the candidate already contains the repair.\n" : string.Empty) +
-        WorkerResultBlock("none", "none", "deferred - DeferredAlphaTests, DeferredBetaTests", commit: "none");
+        WorkerResultBlock(rationale ? "none" : "Alpha.cs", "none", "deferred - DeferredAlphaTests, DeferredBetaTests", commit: "none");
 }

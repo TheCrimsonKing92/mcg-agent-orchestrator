@@ -115,7 +115,7 @@ public sealed class DeveloperDeferredNoChangeQualifierTests
 
     private static string Output(string classes, bool rationale = true, bool blocker = false) =>
         (rationale ? "NO_CHANGE: the candidate already has the repair.\n" : string.Empty) +
-        "WORKER_RESULT:\nfiles: none\ncommands: none\ntests: deferred - " + classes +
+        "WORKER_RESULT:\nfiles: " + (rationale ? "none" : "Alpha.cs") + "\ncommands: none\ntests: deferred - " + classes +
         "\ncommit: none\nblockers: " + (blocker ? "source work remains" : "none") +
         "\nassigned_scope_complete: true\nmodel_fit: test/model - adequate - fixture\n" +
         "skills: none\nconfidence: high\nEND_WORKER_RESULT";

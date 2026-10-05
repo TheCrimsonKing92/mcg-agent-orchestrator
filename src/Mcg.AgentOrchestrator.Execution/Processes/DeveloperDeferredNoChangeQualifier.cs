@@ -5,6 +5,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal static class DeveloperDeferredNoChangeQualifier
 {
+    internal const string StructuredDeclarationMarker = "DEFERRED_NO_CHANGE_STRUCTURED_DECLARATION";
     private static readonly Regex RationaleLine = new(
         @"(?im)^\s*(?:NO_CHANGE:|No-change rationale:|No changes needed:)\s*(?<reason>\S[^\r\n]*?)\r?$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -50,7 +51,11 @@ internal static class DeveloperDeferredNoChangeQualifier
             !Regex.IsMatch(candidate, "^[a-fA-F0-9]{40}(?:[a-fA-F0-9]{24})?$") ||
             !string.Equals(candidate, head, StringComparison.OrdinalIgnoreCase))
             return Decline("candidate-not-head", out declineCode);
-        if (!classifier.HasExplicitNoChangeRationale(standardOutput, string.Empty))
+        var hasExplicitRationale = classifier.HasExplicitNoChangeRationale(standardOutput, string.Empty);
+        var filesLine = string.Empty;
+        var structuredDeclaration = !hasExplicitRationale &&
+            TryReadStructuredDeclaration(standardOutput, out filesLine);
+        if (!hasExplicitRationale && !structuredDeclaration)
             return Decline("no-rationale", out declineCode);
         if (!WorkerResultParser.TryParseResult(standardOutput, out var result, out _))
             return Decline("no-worker-result", out declineCode);
@@ -61,7 +66,7 @@ internal static class DeveloperDeferredNoChangeQualifier
             return Decline("tests-not-deferred", out declineCode);
 
         var rationale = RationaleLine.Match(standardOutput);
-        if (!rationale.Success) return Decline("no-rationale", out declineCode);
+        if (!rationale.Success && !structuredDeclaration) return Decline("no-rationale", out declineCode);
         var classes = DeveloperDeferredTestClassNames.Parse(testsField);
         if (classes.Count == 0) return Decline("no-classes", out declineCode);
 
@@ -96,12 +101,53 @@ internal static class DeveloperDeferredNoChangeQualifier
         if (findingClasses.Any(name => !IsDeclared(name)))
             return Decline("finding-class-undeclared", out declineCode);
 
-        outcome = new DeferredNoChangeOutcome(candidate, classes, rationale.Value.Trim());
+        outcome = new DeferredNoChangeOutcome(candidate, classes,
+            rationale.Success ? rationale.Value.Trim() : filesLine);
         return true;
 
         bool IsDeclared(string name) => classes.Any(declared =>
             string.Equals(declared, name, StringComparison.OrdinalIgnoreCase) ||
             string.Equals(declared, name.Split(['.', '+']).Last(), StringComparison.OrdinalIgnoreCase));
+    }
+
+    internal static bool TryReadStructuredDeclaration(string standardOutput, out string filesLine)
+    {
+        filesLine = string.Empty;
+        if (!WorkerResultParser.TryParseResult(standardOutput, out var result, out _) ||
+            !HasExactValue("files", "none") || !HasExactValue("commit", "none") ||
+            !HasExactValue("assigned_scope_complete", "true") ||
+            result.BlockersStatus != WorkerResultParser.BlockersStatus.None ||
+            result.TestsStatus != WorkerResultParser.TestsStatus.Deferred ||
+            !result.Fields.TryGetValue("tests", out var tests) ||
+            DeveloperDeferredTestClassNames.Parse(tests).Count == 0)
+            return false;
+
+        // Match the parser's authoritative final block and last-writer-wins field rule,
+        // retaining the raw line so Core can find the rationale verbatim in stdout.
+        var lines = standardOutput.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+        var start = Array.FindLastIndex(lines, line =>
+            WorkerResultParser.IsOpener(WorkerResultLineUnwrap.Unwrap(line.Trim())));
+        if (start < 0) return false;
+        var end = Array.FindIndex(lines, start + 1, line =>
+            WorkerResultParser.IsEndMarker(WorkerResultLineUnwrap.Unwrap(line.Trim())));
+        if (end < 0)
+        {
+            end = Array.FindIndex(lines, start + 1, line =>
+                string.IsNullOrWhiteSpace(line) || line.TrimStart().StartsWith('#'));
+            if (end < 0) end = lines.Length;
+        }
+        for (var i = start + 1; i < end; i++)
+        {
+            var line = WorkerResultLineUnwrap.Unwrap(lines[i].Trim());
+            var separator = line.IndexOf(':', StringComparison.Ordinal);
+            if (separator > 0 && string.Equals(WorkerResultParser.NormalizeKey(line[..separator]),
+                    "files", StringComparison.OrdinalIgnoreCase))
+                filesLine = lines[i].Trim();
+        }
+        return filesLine.Length > 0;
+
+        bool HasExactValue(string key, string expected) => result.Fields.TryGetValue(key, out var value) &&
+            string.Equals(value.Trim(), expected, StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool Decline(string code, out string? declineCode)
