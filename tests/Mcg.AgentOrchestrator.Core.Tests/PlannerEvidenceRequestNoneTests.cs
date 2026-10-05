@@ -69,7 +69,7 @@ public sealed class PlannerEvidenceRequestNoneTests
 
         Assert.True(parsed.IsMalformed);
         Assert.Null(parsed.Directive);
-        Assert.Equal("Malformed PLANNER_EVIDENCE_REQUEST: exactly one evidence request may be emitted per round", parsed.Diagnostic);
+        Assert.Equal("Malformed PLANNER_EVIDENCE_REQUEST: exactly one evidence request may be emitted per round.", parsed.Diagnostic);
     }
 
     [Xunit.Fact]
