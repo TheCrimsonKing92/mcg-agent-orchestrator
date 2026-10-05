@@ -11,15 +11,18 @@ internal static class BoardFillReadyItemSelector
     internal static DateTimeOffset ChangeStamp(BacklogItem item) =>
         item.Notes.Select(note => note.CreatedAt).Append(item.UpdatedAt).Max();
 
+    internal static bool IsOwnerGated(BacklogItem item) =>
+        item.Tags.Split([',', ' ', '\t', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .Contains("owner-gated", StringComparer.OrdinalIgnoreCase) ||
+        OwnerMarkers.Any(marker => item.Body.Contains(marker, StringComparison.OrdinalIgnoreCase) ||
+            item.Notes.Any(note => note.Text.Contains(marker, StringComparison.OrdinalIgnoreCase)));
+
     internal static BacklogItem? Select(IReadOnlyList<BacklogItem> items, IReadOnlyList<Goal> goals,
         IReadOnlySet<string> alreadyDrafted, Func<BacklogItem, BacklogReadiness> readiness) =>
         items.Where(item => item.Status == BacklogItemStatus.Open &&
             !alreadyDrafted.Contains(item.Id) &&
             !goals.Any(goal => goal.SourceBacklogItemId == item.Id && !goal.IsTerminal) &&
-            !item.Tags.Split([',', ' ', '\t', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
-                .Contains("owner-gated", StringComparer.OrdinalIgnoreCase) &&
-            !OwnerMarkers.Any(marker => item.Body.Contains(marker, StringComparison.OrdinalIgnoreCase) ||
-                item.Notes.Any(note => note.Text.Contains(marker, StringComparison.OrdinalIgnoreCase))))
+            !IsOwnerGated(item))
         .Select(item => (Item: item, Ready: readiness(item)))
         .Where(candidate => candidate.Ready.Eligible)
         .OrderByDescending(candidate => !string.IsNullOrWhiteSpace(candidate.Item.Priority))

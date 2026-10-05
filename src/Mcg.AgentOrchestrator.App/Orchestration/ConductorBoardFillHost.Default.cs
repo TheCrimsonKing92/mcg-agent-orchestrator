@@ -33,7 +33,18 @@ internal sealed partial class ConductorBoardFillHost
                 goal => LandingState(workspace, goal));
         }, policy, new(workspace.ConductEventsLogPath), verifier: new BoardFillPremiseVerifier(
             () => ModelFunctionCatalogStore.Load(workspace.ModelFunctionCatalogPath),
-            new GitAuthorBriefDraftRepository(workspace.ExecutionDirectory), workspace.ExecutionDirectory));
+            new GitAuthorBriefDraftRepository(workspace.ExecutionDirectory), workspace.ExecutionDirectory),
+        filing: CreateFilingSeams(workspace));
+
+    private static BoardFillFilingSeams CreateFilingSeams(OrchestratorWorkspace workspace)
+    {
+        var intake = new BoardFillCliGoalIntake(workspace);
+        return new(intake, intake.ReadBoard, () =>
+        {
+            var result = GitCli.Run(workspace.ExecutionDirectory, "rev-parse", "--verify", "main^{commit}");
+            return result.Succeeded ? result.Output.Trim() : null;
+        });
+    }
 
     private static string LandingState(OrchestratorWorkspace workspace, Goal goal)
     {
