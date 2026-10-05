@@ -22,7 +22,7 @@ public sealed class DeveloperDeferredTestsExactFormPromptTests
                 "- No edits: start `NO_CHANGE:` line with reason; report `tests: deferred` naming test classes for conductor.",
                 "- First honor an eligible typed early-convergence decision for the exact candidate by returning its passed focused receipts without replaying history or manufacturing edits.",
                 "- Keep edits scoped and report changed files plus behavior enabled.",
-                "- Name the test that fails without the change; list it in `tests: deferred`; never run tests.",
+                "- Name the failing test in `tests: deferred`; never run tests.",
                 "- Build changed projects with the worker build check.",
                 "- Call out blockers or follow-up work explicitly."
             }
@@ -31,7 +31,7 @@ public sealed class DeveloperDeferredTestsExactFormPromptTests
                 "- First honor eligible typed convergence for this candidate: return fresh passed focused receipts; clean worktree, no replay or invented edits.",
                 "- No edits: start `NO_CHANGE:` line with reason; report `tests: deferred` naming test classes for conductor.",
                 "- Implement only the requested behavior and keep edits scoped.",
-                "- Name the test that fails without the change; list it in `tests: deferred`; never run tests.",
+                "- Name the failing test in `tests: deferred`; never run tests.",
                 "- Report changed files and the behavior each change enables.",
                 "- Build changed projects with the worker build check.",
                 "- Leave follow-up work explicit when the orchestrator blocks the ideal path."

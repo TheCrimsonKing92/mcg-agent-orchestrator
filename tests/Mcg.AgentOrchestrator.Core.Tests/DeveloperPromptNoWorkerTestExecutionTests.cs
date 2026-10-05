@@ -4,7 +4,7 @@ using Mcg.AgentOrchestrator.Core;
 public sealed class DeveloperPromptNoWorkerTestExecutionTests
 {
     private const string LineA =
-        "- Name the test that fails without the change; list it in `tests: deferred`; never run tests.";
+        "- Name the failing test in `tests: deferred`; never run tests.";
     private const string LineB =
         "- Build changed projects with the worker build check.";
 
