@@ -115,6 +115,9 @@ public static partial class ProviderLimitEvidenceParser
           text.Contains("resets in", StringComparison.OrdinalIgnoreCase))) ||
         text.Contains("reached your usage limit", StringComparison.OrdinalIgnoreCase) ||
         text.Contains("hit your usage limit", StringComparison.OrdinalIgnoreCase) ||
+        text.Contains("weekly limit", StringComparison.OrdinalIgnoreCase) ||
+        text.Contains("hit your session limit", StringComparison.OrdinalIgnoreCase) ||
+        text.Contains("hit your daily limit", StringComparison.OrdinalIgnoreCase) ||
         text.Contains("rate limit", StringComparison.OrdinalIgnoreCase) ||
         text.Contains("rate-limit", StringComparison.OrdinalIgnoreCase) ||
         text.Contains("rate-limited", StringComparison.OrdinalIgnoreCase) ||

@@ -885,7 +885,7 @@ public static partial class DispatchFailureClassifier
                 null,
                 null,
                 RecoveryRecommendation.OperatorNeeded,
-                BuildProviderAuthenticationEvidenceSummary(verification)));
+                BuildProviderAuthenticationEvidenceSummary(task, verification)));
         }
 
         if (IsRecoverableProviderConnectivityFailure(verification))
@@ -1607,11 +1607,6 @@ public static partial class DispatchFailureClassifier
 
         return $"verified-no-change-round: candidate {task.LastDispatch?.BaseCommit ?? "unknown"}{testsEvidence}";
     }
-
-    private static string BuildProviderAuthenticationEvidenceSummary(TaskVerificationRecord verification) =>
-        TryGetProviderAuthenticationLine(verification, out var line)
-            ? $"provider-authentication: {TruncateEvidence(line)}; remediation=codex login / provider re-auth"
-            : "provider-authentication; remediation=codex login / provider re-auth";
 
     private static string BuildProviderConnectivityEvidenceSummary(TaskVerificationRecord verification) =>
         TryGetProviderConnectivityLine(verification, out var line)
@@ -2531,6 +2526,11 @@ public static partial class DispatchFailureClassifier
             return true;
         }
 
+        if (TryGetAbsoluteResetRetryAfter(output, verification.CompletedAt, out retryAfter))
+        {
+            return true;
+        }
+
         var marker = "try again at ";
         var markerIndex = output.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
         if (markerIndex < 0)
@@ -2575,7 +2575,7 @@ public static partial class DispatchFailureClassifier
     private static bool TryGetRecoverableSubscriptionLimitLine(TaskVerificationRecord verification, out string line) =>
         ProviderLimitEvidenceParser.TryGetEvidenceLine(
             EnumerateEvidenceLines(verification, includeStandardOutput: true, includeStandardError: true),
-            out line);
+            out line) || TryGetCliRefusalLimitLine(verification, out line);
 
     private static bool TryGetProviderBudgetExhaustionLine(TaskVerificationRecord verification, out string line) =>
         ProviderLimitEvidenceParser.TryGetBudgetExhaustionEvidenceLine(
@@ -2682,12 +2682,14 @@ public static partial class DispatchFailureClassifier
             (text.Contains("transport", StringComparison.OrdinalIgnoreCase) &&
              (text.Contains("refused", StringComparison.OrdinalIgnoreCase) ||
               text.Contains("unavailable", StringComparison.OrdinalIgnoreCase) ||
-              text.Contains("failed", StringComparison.OrdinalIgnoreCase)));
+              text.Contains("failed", StringComparison.OrdinalIgnoreCase))) ||
+            IsApiErrorOverloadLine(text);
     }
 
     private static bool ContainsProviderAuthenticationText(string text)
     {
         return text.Contains("Failed to authenticate", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("Not signed in", StringComparison.OrdinalIgnoreCase) ||
             text.Contains("API Error 401", StringComparison.OrdinalIgnoreCase) ||
             text.Contains("401 Unauthorized", StringComparison.OrdinalIgnoreCase) ||
             text.Contains("403 Forbidden", StringComparison.OrdinalIgnoreCase) ||
@@ -2757,6 +2759,11 @@ public static partial class DispatchFailureClassifier
             {
                 yield return rawLine;
             }
+        }
+
+        foreach (var line in GetCliRefusalSignalLines(verification))
+        {
+            yield return line;
         }
     }
 
