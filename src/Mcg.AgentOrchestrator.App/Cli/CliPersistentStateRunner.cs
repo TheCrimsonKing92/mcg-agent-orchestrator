@@ -296,6 +296,9 @@ internal static partial class CliPersistentStateRunner
             return ExecuteCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
         }
 
+        if (IsIntentOnlyAttentionCommand(args))
+            return ExecuteIntentOnlyAttentionCommand(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
+
         var nextAgents = agents;
         var nextWorkerProfiles = workerProfiles;
         var currentGoalId = currentGoal?.Id.Value;
