@@ -388,11 +388,14 @@ $safeGoalPrefix = ConvertTo-SafePathSegment -Value (Get-GoalPrefix)
 $isolatedRoot = Get-IsolatedRootBase
 $buildConcurrencySlotCount = Get-BuildConcurrencySlotCount
 $buildSlotName = Get-BuildSlotName -Value $safeGoalPrefix -SlotCount $buildConcurrencySlotCount
+$hashedBuildSlotIndex = [int]$buildSlotName.Substring("build-".Length)
 $leaseId = "goal-$safeGoalPrefix"
 $runRoot = Join-Path $isolatedRoot "goals\$safeGoalPrefix"
 $leaseRoot = Join-Path $runRoot "lease"
 $artifactsPath = Join-Path $runRoot "artifacts"
+$canonicalArtifactsPath = $artifactsPath
 $executionLockPath = Join-Path $isolatedRoot "build-slots\$buildSlotName.lock"
+$hashedExecutionLockPath = $executionLockPath
 New-Item -ItemType Directory -Force -Path $leaseRoot | Out-Null
 
 $metadata = [ordered]@{
@@ -437,23 +440,51 @@ try {
     New-Item -ItemType Directory -Force -Path $lockDirectory | Out-Null
     $deadline = [DateTime]::UtcNow.AddMinutes(5)
     while (-not $lockHeld) {
-        $lockStream = [System.IO.File]::Open($executionLockPath, [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite)
-        try {
-            $lockStream.Lock(0, 1)
-            $lockHeld = $true
-            Initialize-ArtifactsDirectory -Path $artifactsPath -OwnerToken $leaseId -ForceClean $false
-            Remove-Item -LiteralPath $receiptPath -Force -ErrorAction SilentlyContinue
+        for ($offset = 0; $offset -lt $buildConcurrencySlotCount; $offset++) {
+            $buildSlotIndex = ($hashedBuildSlotIndex + $offset) % $buildConcurrencySlotCount
+            $buildSlotName = "build-$buildSlotIndex"
+            $executionLockPath = Join-Path $isolatedRoot "build-slots\$buildSlotName.lock"
+            $lockStream = [System.IO.File]::Open($executionLockPath, [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite)
+            try {
+                $lockStream.Lock(0, 1)
+                $lockHeld = $true
+            }
+            catch [System.IO.IOException] {
+                $lockStream.Dispose()
+                $lockStream = $null
+            }
+
+            if ($lockHeld) { break }
         }
-        catch [System.IO.IOException] {
-            $lockStream.Dispose()
-            $lockStream = $null
+
+        if (-not $lockHeld) {
             if ([DateTime]::UtcNow -ge $deadline) {
-                throw "Timed out waiting for build lease execution lock: $executionLockPath"
+                throw "Timed out waiting for build lease execution lock: $hashedExecutionLockPath"
             }
 
             Start-Sleep -Milliseconds 100
         }
     }
+
+    if ($buildSlotIndex -ne $hashedBuildSlotIndex) {
+        $artifactsPath = Join-Path $runRoot "artifacts-$buildSlotName"
+    }
+    try {
+        $holder = [ordered]@{
+            version = 1
+            leaseId = $leaseId
+            slotOwnerToken = $leaseId
+            artifactsPath = $artifactsPath
+            ownerProcessId = $PID
+            machineName = [Environment]::MachineName
+            acquiredAt = (Get-Date).ToUniversalTime().ToString("o")
+        }
+        [System.IO.File]::WriteAllText("$executionLockPath.owner.json", ($holder | ConvertTo-Json -Depth 3), [System.Text.UTF8Encoding]::new($false))
+    }
+    catch { } # Holder attribution is diagnostic; the OS lock remains authoritative.
+
+    Initialize-ArtifactsDirectory -Path $artifactsPath -OwnerToken $leaseId -ForceClean $false
+    Remove-Item -LiteralPath $receiptPath -Force -ErrorAction SilentlyContinue
 
     $isolatedArguments = @(
         "--artifacts-path",
@@ -521,6 +552,14 @@ catch {
 }
 finally {
     if ($lockHeld -and $null -ne $lockStream) {
+        try {
+            $holderPath = "$executionLockPath.owner.json"
+            $holder = Get-Content -LiteralPath $holderPath -Raw | ConvertFrom-Json
+            if ($holder.ownerProcessId -eq $PID) {
+                Remove-Item -LiteralPath $holderPath -Force
+            }
+        }
+        catch { } # Do not let diagnostic cleanup prevent releasing the slot.
         $lockStream.Unlock(0, 1)
         $lockStream.Dispose()
     }
@@ -545,7 +584,8 @@ else {
             configuration = $Configuration
             projects = @($projectPaths | ForEach-Object { Get-DisplayPath -Root $repositoryRoot -Path $_ })
         }
-        $temporaryReceipt = Join-Path $artifactsPath ("worker-build-receipt-$PID.tmp")
+        New-Item -ItemType Directory -Force -Path $canonicalArtifactsPath | Out-Null
+        $temporaryReceipt = Join-Path $canonicalArtifactsPath ("worker-build-receipt-$PID.tmp")
         [System.IO.File]::WriteAllText($temporaryReceipt, ($receipt | ConvertTo-Json -Depth 4), [System.Text.UTF8Encoding]::new($false))
         Move-Item -LiteralPath $temporaryReceipt -Destination $receiptPath -Force
     }
