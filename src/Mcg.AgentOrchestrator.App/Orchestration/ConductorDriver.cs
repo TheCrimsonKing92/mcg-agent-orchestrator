@@ -53,6 +53,11 @@ internal sealed record DeveloperBranchIntegrationResult(
 
 internal sealed partial class ConductorDriver
 {
+    internal static DispatchReadinessVerdict EvaluateConductorReadiness(
+        AgentOrchestratorKernel kernel, Goal goal, IReadOnlyList<AgentDefinition> agents,
+        WorkerProfileCatalog profiles, DateTimeOffset now) =>
+        DispatchReadinessAssessment.Evaluate(goal, kernel.Goals, agents, profiles, now).Verdict;
+
     private sealed record JournalLifecycleFacts(bool IsMerged, bool IsRecorded, bool IsCleanedUp);
 
     private sealed record CohortGateRun(
@@ -990,11 +995,7 @@ internal sealed partial class ConductorDriver
         };
         _emptyOutputBackoffDelay = Thread.Sleep;
         _recoverSandboxPrep = action => action.Execute();
-        _evaluateReadiness = goal =>
-        {
-            var plan = SubscriptionPlanBuilder.Build(goal, agents, profiles, providerHoldScope: kernel.Goals);
-            return DispatchReadinessEvaluator.EvaluateDispatchReadiness(goal, plan, DateTimeOffset.UtcNow);
-        };
+        _evaluateReadiness = goal => EvaluateConductorReadiness(kernel, goal, agents, profiles, DateTimeOffset.UtcNow);
         _getLandingFileScopes = goal =>
         {
             var worktreePath = GoalWorktrees.TryResolve(dir, goal.Id);

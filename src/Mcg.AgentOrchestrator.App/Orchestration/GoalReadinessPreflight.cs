@@ -1,5 +1,4 @@
 using System.Text.RegularExpressions;
-using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -107,7 +106,8 @@ public static class GoalReadinessPreflight
         string executionDirectory,
         WorkerProfileCatalog? profiles = null,
         Func<string, GoalId, string?>? resolveWorktree = null,
-        IReadOnlyCollection<Goal>? providerHoldScope = null)
+        IReadOnlyCollection<Goal>? providerHoldScope = null,
+        DateTimeOffset? now = null)
     {
         var findings = new List<GoalReadinessFinding>();
         var text = $"{goal.Objective}\n{string.Join('\n', goal.Tasks.Select(task => $"{task.Description}\n{task.VerificationPlan}"))}";
@@ -186,10 +186,8 @@ public static class GoalReadinessPreflight
         // Always evaluate the canonical dispatch verdict when profiles are available. Existing
         // workspace/risk findings must not mask a held provider binding in ordinary status.
         var readinessVerdict = profiles is not null
-            ? DispatchReadinessEvaluator.EvaluateDispatchReadiness(
-                goal,
-                SubscriptionPlanBuilder.Build(goal, agents, profiles, providerHoldScope: providerHoldScope),
-                DateTimeOffset.UtcNow)
+            ? DispatchReadinessAssessment.Evaluate(
+                goal, providerHoldScope, agents, profiles, now ?? DateTimeOffset.UtcNow).Verdict
             : DispatchReadinessRules.HasAssignedDispatchCandidates(goal)
                 ? (DispatchReadinessVerdict)new DispatchReadinessReady()
                 : new DispatchReadinessBlocked("No assigned dispatch candidates");

@@ -1069,13 +1069,24 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             ConsoleViews.PrintTerminalGoalSweep(readinessSweep);
             TerminalGoalSweepAttention.Surface(context.Kernel, readinessSweep, context.Workspace.OrchestratorDirectory, context.CurrentGoal.Id);
             context.CurrentGoal = context.Kernel.GetGoal(context.CurrentGoal.Id);
+            IReadOnlyCollection<Goal> readinessHoldScope = context.Kernel.Goals;
+            if (!ConductLoopGoalStatus.IsTerminal(context.CurrentGoal.Status.ToString()) &&
+                DispatchReadinessRules.HasAssignedDispatchCandidates(context.CurrentGoal))
+            {
+                var actionableIds = SqliteOperatorIntentStore.ForDirectories(
+                    context.Workspace.OrchestratorDirectory, context.Workspace.LogDirectory)
+                    .ListActionableGoalIdsAsync().GetAwaiter().GetResult();
+                readinessHoldScope = context.ReloadKernel(actionableIds).Goals
+                    .Where(goal => goal.Id != context.CurrentGoal.Id)
+                    .Append(context.CurrentGoal).ToArray();
+            }
             ConsoleViews.PrintGoalReadinessPreflight(GoalReadinessPreflight.Build(
                 context.CurrentGoal,
                 context.Agents,
                 context.Workspace.ExecutionDirectory,
                 context.WorkerProfiles,
                 context.Worktrees.TryResolve,
-                context.Kernel.Goals));
+                readinessHoldScope));
             return readinessSweep.Changed;
 
         case "goal-recovery":
