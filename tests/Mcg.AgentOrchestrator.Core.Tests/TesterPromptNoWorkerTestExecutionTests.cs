@@ -140,6 +140,10 @@ public sealed class TesterPromptNoWorkerTestExecutionTests
             "- `REVIEW DEFECT` is a later-round blocker demonstrably present in an earlier reviewed complete candidate diff. Self-check for it; absent historical comparison evidence prevents this label, not current-diff review.",
             "- Remediable open blockers require `needs-work`; reserve `fail` for non-remediable stops. With none, use `verdict: pass` and `blockers: none`; advisories belong only in `findings`.",
             "- State residual risk, test gaps, and whether acceptance is justified; do not approve from another role's summary alone.",
+            "- Treat `Completed` status and worker prose as claims: check each claimed file, commit, command, and test against `git diff main...HEAD` and the repository.",
+            "- A claim naming a file, command, endpoint, or test that does not exist is a blocking `correctness` finding.",
+            "- Exit 0 with no relevant source change, or only generated or scratch noise, is not a pass.",
+            "- Pass only when a relevant source change exists, the claims match the diff, and nothing unrelated changed.",
             "- Do not modify repository files; implementation belongs to the Developer task."
         ],
         (AgentRole.Reviewer, true) =>
@@ -163,6 +167,10 @@ public sealed class TesterPromptNoWorkerTestExecutionTests
             "- Remediable open blockers require `needs-work`; reserve `fail` for non-remediable stops. With none, use `verdict: pass` and `blockers: none`; advisories belong only in `findings`.",
             "- Challenge generic summaries by comparing implementation and verification evidence.",
             "- Ignore generated bin/obj output unless targeted; state residual risk, test gaps, and acceptance recommendation.",
+            "- Treat `Completed` status and worker prose as claims: check each claimed file, commit, command, and test against `git diff main...HEAD` and the repository.",
+            "- A claim naming a file, command, endpoint, or test that does not exist is a blocking `correctness` finding.",
+            "- Exit 0 with no relevant source change, or only generated or scratch noise, is not a pass.",
+            "- Pass only when a relevant source change exists, the claims match the diff, and nothing unrelated changed.",
             "- Do not modify repository files; implementation belongs to the Developer task."
         ],
         (AgentRole.Planner, false) =>
@@ -176,6 +184,9 @@ public sealed class TesterPromptNoWorkerTestExecutionTests
             "- If repository evidence disproves the goal premise, report `blockers: premise-invalid - <fact and evidence>` and stop before proposing implementation.",
             "- Do not return a generic SDLC checklist or restate the user's goal as a plan.",
             "- Cite files without a line RANGE. `File.cs`, `File.cs:442`, `File.cs#L442`, and `File.cs::Symbol` are accepted; `File.cs:442-479` is REJECTED and discards your entire plan, because the validator treats the whole string including the range as the path and finds no such file. Before emitting, scan your output for `.cs:<digits>-<digits>` and replace each with its single start line.",
+            "- For each criterion name the evidence owner (checked against `docs/role-capability-matrix.md`), the owning seam, and the class `TEST-VERIFIABLE` or `REAL-WORLD-DEPENDENT`.",
+            "- Route full-suite, test-host, and acceptance evidence to Acceptance and live or post-landing evidence to the operator; never assign evidence a worker cannot reach to Tester or Reviewer.",
+            "- For evidence you cannot obtain, name what would settle it, its source, and why it is unavailable, then plan every other criterion in the same round.",
             "- Do not modify repository files; implementation belongs to the Developer task."
         ],
         (AgentRole.Planner, true) =>
@@ -187,6 +198,9 @@ public sealed class TesterPromptNoWorkerTestExecutionTests
             "- Define falsifiable proof for downstream roles; do not return a generic checklist.",
             "- If repository evidence disproves the goal premise, report `blockers: premise-invalid - <fact and evidence>` and stop before proposing implementation.",
             "- Cite files without a line RANGE. `File.cs`, `File.cs:442`, `File.cs#L442`, and `File.cs::Symbol` are accepted; `File.cs:442-479` is REJECTED and discards your entire plan, because the validator treats the whole string including the range as the path and finds no such file. Before emitting, scan your output for `.cs:<digits>-<digits>` and replace each with its single start line.",
+            "- For each criterion name the evidence owner (checked against `docs/role-capability-matrix.md`), the owning seam, and the class `TEST-VERIFIABLE` or `REAL-WORLD-DEPENDENT`.",
+            "- Route full-suite, test-host, and acceptance evidence to Acceptance and live or post-landing evidence to the operator; never assign evidence a worker cannot reach to Tester or Reviewer.",
+            "- For evidence you cannot obtain, name what would settle it, its source, and why it is unavailable, then plan every other criterion in the same round.",
             "- Do not modify repository files; implementation belongs to the Developer task."
         ],
         _ => throw new ArgumentOutOfRangeException(nameof(role), role, "No baseline for this role.")

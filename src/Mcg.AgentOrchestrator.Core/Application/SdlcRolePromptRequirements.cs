@@ -22,10 +22,19 @@ internal static class SdlcRolePromptRequirements
         "- Before WORKER_RESULT, for each criterion naming Developer as owner, open the test written/changed for it: its assertion must check the specific named outcome, not a weaker property, and fail on pre-change code. If both hold, report proven with the test in criteria_self_check; else strengthen it or report unmet and set assigned_scope_complete: false.";
     internal const string SelfCheckAttestation =
         "- For each proven entry in Developer Criteria Self-Check on a criterion you attest, check the named test exists in the candidate and its assertion checks the named outcome; otherwise raise a finding against that criterion.";
+    private const string ReviewerWorkerClaimsRule =
+        "- Treat `Completed` status and worker prose as claims: check each claimed file, commit, command, and test against `git diff main...HEAD` and the repository.";
+    private const string ReviewerNonexistentClaimRule =
+        "- A claim naming a file, command, endpoint, or test that does not exist is a blocking `correctness` finding.";
+    private const string ReviewerSourceChangeRule =
+        "- Exit 0 with no relevant source change, or only generated or scratch noise, is not a pass.";
+    private const string ReviewerPassConditionRule =
+        "- Pass only when a relevant source change exists, the claims match the diff, and nothing unrelated changed.";
     // Goal 79061df4 adds one attestation line; preserve existing budget headroom.
     // Goal 6552eebc adds the accepted policy-file clause; raise overflowing budgets by exactly its length.
-    internal static readonly int ReviewerComplexRequirementsMaxChars = 4961 + SelfCheckAttestation.Length + 2 + NegativeControlPolicyFileClause.Length;
-    internal static readonly int ReviewerCompactRequirementsMaxChars = 3870 + SelfCheckAttestation.Length + 2 + NegativeControlPolicyFileClause.Length;
+    // Goal c1c8e4d3 adds four inline Reviewer rules; preserve existing budget headroom.
+    internal static readonly int ReviewerComplexRequirementsMaxChars = 4961 + SelfCheckAttestation.Length + 2 + NegativeControlPolicyFileClause.Length + ReviewerWorkerClaimsRule.Length + 2 + ReviewerNonexistentClaimRule.Length + 2 + ReviewerSourceChangeRule.Length + 2 + ReviewerPassConditionRule.Length + 2;
+    internal static readonly int ReviewerCompactRequirementsMaxChars = 3870 + SelfCheckAttestation.Length + 2 + NegativeControlPolicyFileClause.Length + ReviewerWorkerClaimsRule.Length + 2 + ReviewerNonexistentClaimRule.Length + 2 + ReviewerSourceChangeRule.Length + 2 + ReviewerPassConditionRule.Length + 2;
     internal static readonly int TesterCompactRequirementsMaxChars = 3590 + SelfCheckAttestation.Length + 2 + NegativeControlPolicyFileClause.Length;
 
     private const string ReviewerExhaustiveFindingsContract =
@@ -60,6 +69,9 @@ internal static class SdlcRolePromptRequirements
                 "- If repository evidence disproves the goal premise, report `blockers: premise-invalid - <fact and evidence>` and stop before proposing implementation.",
                 "- Do not return a generic SDLC checklist or restate the user's goal as a plan.",
                 "- Cite files without a line RANGE. `File.cs`, `File.cs:442`, `File.cs#L442`, and `File.cs::Symbol` are accepted; `File.cs:442-479` is REJECTED and discards your entire plan, because the validator treats the whole string including the range as the path and finds no such file. Before emitting, scan your output for `.cs:<digits>-<digits>` and replace each with its single start line.",
+                "- For each criterion name the evidence owner (checked against `docs/role-capability-matrix.md`), the owning seam, and the class `TEST-VERIFIABLE` or `REAL-WORLD-DEPENDENT`.",
+                "- Route full-suite, test-host, and acceptance evidence to Acceptance and live or post-landing evidence to the operator; never assign evidence a worker cannot reach to Tester or Reviewer.",
+                "- For evidence you cannot obtain, name what would settle it, its source, and why it is unavailable, then plan every other criterion in the same round.",
                 "- Do not modify repository files; implementation belongs to the Developer task."
             ],
             AgentRole.Researcher =>
@@ -140,6 +152,10 @@ internal static class SdlcRolePromptRequirements
                 ReviewerDefectContract,
                 "- Remediable open blockers require `needs-work`; reserve `fail` for non-remediable stops. With none, use `verdict: pass` and `blockers: none`; advisories belong only in `findings`.",
                 "- State residual risk, test gaps, and whether acceptance is justified; do not approve from another role's summary alone.",
+                ReviewerWorkerClaimsRule,
+                ReviewerNonexistentClaimRule,
+                ReviewerSourceChangeRule,
+                ReviewerPassConditionRule,
                 "- Do not modify repository files; implementation belongs to the Developer task."
             ],
             _ => []
@@ -235,6 +251,9 @@ internal static class SdlcRolePromptRequirements
                 "- Define falsifiable proof for downstream roles; do not return a generic checklist.",
                 "- If repository evidence disproves the goal premise, report `blockers: premise-invalid - <fact and evidence>` and stop before proposing implementation.",
                 "- Cite files without a line RANGE. `File.cs`, `File.cs:442`, `File.cs#L442`, and `File.cs::Symbol` are accepted; `File.cs:442-479` is REJECTED and discards your entire plan, because the validator treats the whole string including the range as the path and finds no such file. Before emitting, scan your output for `.cs:<digits>-<digits>` and replace each with its single start line.",
+                "- For each criterion name the evidence owner (checked against `docs/role-capability-matrix.md`), the owning seam, and the class `TEST-VERIFIABLE` or `REAL-WORLD-DEPENDENT`.",
+                "- Route full-suite, test-host, and acceptance evidence to Acceptance and live or post-landing evidence to the operator; never assign evidence a worker cannot reach to Tester or Reviewer.",
+                "- For evidence you cannot obtain, name what would settle it, its source, and why it is unavailable, then plan every other criterion in the same round.",
                 "- Do not modify repository files; implementation belongs to the Developer task."
             ],
             AgentRole.Researcher =>
@@ -302,6 +321,10 @@ internal static class SdlcRolePromptRequirements
                 "- Remediable open blockers require `needs-work`; reserve `fail` for non-remediable stops. With none, use `verdict: pass` and `blockers: none`; advisories belong only in `findings`.",
                 "- Challenge generic summaries by comparing implementation and verification evidence.",
                 "- Ignore generated bin/obj output unless targeted; state residual risk, test gaps, and acceptance recommendation.",
+                ReviewerWorkerClaimsRule,
+                ReviewerNonexistentClaimRule,
+                ReviewerSourceChangeRule,
+                ReviewerPassConditionRule,
                 "- Do not modify repository files; implementation belongs to the Developer task."
             ],
             _ => []

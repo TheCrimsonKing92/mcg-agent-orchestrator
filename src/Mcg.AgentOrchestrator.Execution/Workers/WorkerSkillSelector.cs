@@ -120,8 +120,9 @@ internal sealed class WorkerSkillSelector
             "workspace create",
             "workspace remove",
             "subscription-dispatch");
-        var verificationSignals = task.RequiredRole is AgentRole.Tester or AgentRole.Reviewer ||
-            ContainsAny(text, "verify", "verification", "review", "worker result", "dispatch log", "worktree diff", "acceptance");
+        var verificationSignals = task.RequiredRole == AgentRole.Tester ||
+            (task.RequiredRole != AgentRole.Reviewer &&
+             ContainsAny(text, "verify", "verification", "review", "worker result", "dispatch log", "worktree diff", "acceptance"));
         var skillAuthoringSignals = ContainsAny(
             text,
             ".agents/skills",
@@ -184,8 +185,8 @@ internal sealed class WorkerSkillSelector
                 ? "Developer/Tester work in this repository usually needs .NET build/test hygiene and Windows lock avoidance."
                 : "Task text references .NET, build, test, dashboard, or known Windows build-lock failure modes.",
             "orchestrator-dogfood" => "Task or goal text names an operator-seat command or artifact: dogfood, backlog, run-goal, simple-goal, lifecycle-simple-goal, dogfood-log, conduct --loop, Get-OrchestratorSnapshot, workspace create, workspace remove, or subscription-dispatch.",
-            "orchestrator-worker-verification" => task.RequiredRole is AgentRole.Tester or AgentRole.Reviewer
-                ? "Tester/Reviewer work must verify worker output, logs, diffs, and acceptance evidence before trusting task status."
+            "orchestrator-worker-verification" => task.RequiredRole == AgentRole.Tester
+                ? "Tester work must verify worker output, logs, diffs, and acceptance evidence before trusting task status."
                 : "Task text references verification, review, worker result contracts, dispatch evidence, or worktree diffs.",
             "skill-authoring" => "Task text references repo-scoped worker skills, SKILL.md files, skill routing, selected skills, or skill usage evidence.",
             "research-evidence" => "Every Researcher must frame a named evidence question, anchor and classify material statements, and stop on an invalid premise.",
