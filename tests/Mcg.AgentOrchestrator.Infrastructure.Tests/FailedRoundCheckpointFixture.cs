@@ -27,6 +27,9 @@ internal sealed class FailedRoundCheckpointFixture : WorkerDispatchTestSupport, 
         Git(Repository, "config", "user.email", "test@example.test");
         Git(Repository, "config", "user.name", "Checkpoint Test");
         Git(Repository, "config", "commit.gpgsign", "false");
+        // Assertion probes disable host Git config; production Git inherits it.
+        // Pin checkout conversion locally so both see the same tracked-file state.
+        Git(Repository, "config", "core.autocrlf", "false");
         Git(Repository, "config", "core.hooksPath", Path.Combine(_root, "no-hooks"));
         File.WriteAllText(Path.Combine(Repository, "seed.txt"), "seed");
         File.WriteAllText(Path.Combine(Repository, ".gitignore"), "ignored.txt\n");
@@ -46,6 +49,7 @@ internal sealed class FailedRoundCheckpointFixture : WorkerDispatchTestSupport, 
         Goal = Kernel.CreateGoal("Failed-round checkpoint", [Worker]);
         Kernel.ActivateGoal(Goal.Id, AgentCatalog.Default().Agents);
         Worktree = GoalWorktrees.Ensure(Repository, Goal.Id);
+        Assert.Empty(Git(Worktree, "status", "--short"));
         var head = Git(Worktree, "rev-parse", "HEAD");
         Kernel.RecordTaskDispatch(Goal.Id, Worker.Id,
             new TaskDispatchRecord("codex-cli", "worker command", Worktree, DispatchedAt,
