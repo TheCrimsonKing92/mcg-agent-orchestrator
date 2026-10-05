@@ -67,7 +67,7 @@ public sealed class DeveloperResumedDeferredNoChangeQualifierTests
         var (goal, task) = Scenario();
         var output = missing switch
         {
-            "no-rationale" => Output.Replace(Rationale + "\n", string.Empty, StringComparison.Ordinal),
+            "no-rationale" => Output.Replace(Rationale + "\n", string.Empty, StringComparison.Ordinal).Replace("files: none", "files: Alpha.cs", StringComparison.Ordinal),
             "blocker" => Output.Replace("blockers: none", "blockers: source work remains", StringComparison.Ordinal),
             "no-classes" => Output.Replace("deferred - ClassA", "deferred - conductor will verify", StringComparison.Ordinal),
             _ => Output

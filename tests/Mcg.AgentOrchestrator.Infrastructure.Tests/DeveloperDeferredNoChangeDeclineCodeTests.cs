@@ -38,7 +38,7 @@ public sealed class DeveloperDeferredNoChangeDeclineCodeTests
         if (expected == "finding-class-undeclared") RecordFinding(kernel, goal, "UndeclaredTests");
         var output = expected switch
         {
-            "no-rationale" => Output.Replace(Rationale + "\n", string.Empty, StringComparison.Ordinal),
+            "no-rationale" => Output.Replace(Rationale + "\n", string.Empty, StringComparison.Ordinal).Replace("files: none", "files: Alpha.cs", StringComparison.Ordinal),
             "no-worker-result" => Rationale,
             "blockers" => Output.Replace("blockers: none", "blockers: source work remains", StringComparison.Ordinal),
             "tests-not-deferred" => Output.Replace("deferred - ClassA", "pass - ClassA", StringComparison.Ordinal),
