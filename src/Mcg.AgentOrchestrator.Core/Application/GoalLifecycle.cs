@@ -47,7 +47,7 @@ public static class GoalLifecycle
             return GoalLifecycleState.AwaitingClarification;
 
         // Operator-set external block (preflight fail, dirty worktree, etc.)
-        if (facts.IsBlocked)
+        if (facts.IsBlocked && !(goal.Status == GoalStatus.Completed && facts.IsMerged))
             return GoalLifecycleState.Blocked;
 
         if (goal.Status == GoalStatus.Verifying)
