@@ -22,8 +22,8 @@ public sealed class DeveloperDeferredTestsExactFormPromptTests
                 "- No edits: start `NO_CHANGE:` line with reason; report `tests: deferred` naming test classes for conductor.",
                 "- First honor an eligible typed early-convergence decision for the exact candidate by returning its passed focused receipts without replaying history or manufacturing edits.",
                 "- Keep edits scoped and report changed files plus behavior enabled.",
-                "- Before editing, name the test (existing or new) whose assertion fails without your change; do not run it: list it in tests: deferred, and the acceptance gate's source-reverted run proves it fails against main.",
-                "- Verify by building each changed project with the worker build check; name the focused test classes in tests: deferred instead of running them.",
+                "- Name the test that fails without the change; list it in `tests: deferred`; never run tests.",
+                "- Build changed projects with the worker build check.",
                 "- Call out blockers or follow-up work explicitly."
             }
             : new[]
@@ -31,9 +31,9 @@ public sealed class DeveloperDeferredTestsExactFormPromptTests
                 "- First honor eligible typed convergence for this candidate: return fresh passed focused receipts; clean worktree, no replay or invented edits.",
                 "- No edits: start `NO_CHANGE:` line with reason; report `tests: deferred` naming test classes for conductor.",
                 "- Implement only the requested behavior and keep edits scoped.",
-                "- Before editing, name the test (existing or new) whose assertion fails without your change; do not run it: list it in tests: deferred, and the acceptance gate's source-reverted run proves it fails against main.",
+                "- Name the test that fails without the change; list it in `tests: deferred`; never run tests.",
                 "- Report changed files and the behavior each change enables.",
-                "- Verify by building each changed project with the worker build check; name the focused test classes in tests: deferred instead of running them.",
+                "- Build changed projects with the worker build check.",
                 "- Leave follow-up work explicit when the orchestrator blocks the ideal path."
             };
         Assert.Contains("## Developer Requirements", instructions, StringComparison.Ordinal);

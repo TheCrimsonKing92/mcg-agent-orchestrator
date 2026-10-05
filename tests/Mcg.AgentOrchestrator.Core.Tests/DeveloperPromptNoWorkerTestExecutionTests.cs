@@ -4,9 +4,9 @@ using Mcg.AgentOrchestrator.Core;
 public sealed class DeveloperPromptNoWorkerTestExecutionTests
 {
     private const string LineA =
-        "- Before editing, name the test (existing or new) whose assertion fails without your change; do not run it: list it in tests: deferred, and the acceptance gate's source-reverted run proves it fails against main.";
+        "- Name the test that fails without the change; list it in `tests: deferred`; never run tests.";
     private const string LineB =
-        "- Verify by building each changed project with the worker build check; name the focused test classes in tests: deferred instead of running them.";
+        "- Build changed projects with the worker build check.";
 
     [Theory]
     [InlineData(null)]
