@@ -51,6 +51,18 @@ public sealed partial class AgentOrchestratorKernel
 
     private static TaskVerificationGate BuildTaskVerificationGate(Goal goal, TaskSpec task)
     {
+        if (IsCancelledReviewAwaitingRerun(goal, task))
+        {
+            return new TaskVerificationGate(
+                task.Id,
+                task.RequiredRole,
+                task.Description,
+                task.Status,
+                VerificationGateStatus.NotReady,
+                FormatCancelledReviewRerunGuidance(goal, task),
+                VerificationGateReason.CancelledReviewNeedsRerun);
+        }
+
         if (task.Status == WorkTaskStatus.Cancelled)
         {
             return new TaskVerificationGate(
@@ -167,6 +179,7 @@ public sealed partial class AgentOrchestratorKernel
     {
         return gate.Reason switch
         {
+            VerificationGateReason.CancelledReviewNeedsRerun => gate.Message,
             VerificationGateReason.OutputTokenLimit =>
                 "Retry with narrower scope or a stronger model, rerun verification, and record model fit if this was subscription/API work.",
             VerificationGateReason.TesterWorkerResultBlocker =>

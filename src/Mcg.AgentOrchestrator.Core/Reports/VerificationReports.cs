@@ -10,7 +10,8 @@ public enum VerificationGateReason
     TesterWorkerResultBlocker,
     ReviewerWorkerResultBlocker,
     DirtyUsefulRecovery,
-    DirtyUnverifiedRecovery
+    DirtyUnverifiedRecovery,
+    CancelledReviewNeedsRerun
 }
 
 public sealed record GoalVerificationGate(
