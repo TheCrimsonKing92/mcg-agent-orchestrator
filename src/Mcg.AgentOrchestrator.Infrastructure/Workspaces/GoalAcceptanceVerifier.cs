@@ -959,7 +959,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         if (checks.All(check => check.Passed) && structuralCoverageApplies)
         {
             var (prepared, preparationDuration, preparationWait) =
-                await AwaitStructuralCoveragePreparationAsync(cancellationToken).ConfigureAwait(false);
+                await AwaitStructuralCoveragePreparationAsync(goalId, cancellationToken).ConfigureAwait(false);
             phaseAccountant.RecordStructuralCoveragePreparation(preparationDuration, preparationWait);
             var structuralCoverage = await EvaluateStructuralCoverageCheckAsync(
                 prepared, checks, cancellationToken).ConfigureAwait(false);
