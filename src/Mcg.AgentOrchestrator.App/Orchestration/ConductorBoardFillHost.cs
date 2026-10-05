@@ -21,13 +21,13 @@ internal sealed partial class ConductorBoardFillHost
     private bool _recovered;
     internal Task? CurrentRound => _round;
 
-    // No state repository, backlog writer, goal creator, transaction or outbox seam.
+    // Drafting is read-only; optional filing delegates all goal mutations to the CLI intake seam.
     internal ConductorBoardFillHost(ConductorBoardFillDraftStore store,
         Func<string, CancellationToken, AuthorBriefDraftOutcome> draft,
         Func<IReadOnlyList<BacklogItem>> backlog,
         Func<AgentOrchestratorKernel, IReadOnlyList<BacklogItem>, Func<BacklogItem, BacklogReadiness>> readiness,
         Func<ConductorAutonomyPolicy> policy, ConductEventLogWriter events, Func<DateTimeOffset>? utcNow = null,
-        IBoardFillPremiseVerifier? verifier = null)
+        IBoardFillPremiseVerifier? verifier = null, BoardFillFilingSeams? filing = null)
     {
         _store = store;
         _draft = draft;
@@ -37,6 +37,7 @@ internal sealed partial class ConductorBoardFillHost
         _events = events;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         _verifier = verifier;
+        _filingSeams = filing;
     }
 
     internal void ServiceTick(AgentOrchestratorKernel kernel, string? onlyGoalId = null)
@@ -58,6 +59,7 @@ internal sealed partial class ConductorBoardFillHost
         }
         Harvest(now);
         ReportFinished();
+        ServiceFiling();
         if (_round is not null || kernel.Goals.Count(goal => !goal.IsTerminal) >= policy.BoardFillTargetActiveGoals ||
             _store.StartedOnUtcDay(now) >= policy.BoardFillMaxDraftsPerDay) return;
         var items = _backlog();
@@ -110,6 +112,7 @@ internal sealed partial class ConductorBoardFillHost
         if (_running is { } running) _store.Finish(running, Failed("conductor-stop"), _utcNow());
         _running = null;
         _round = null;
+        StopFiling();
     }
 
     private static AuthorBriefDraftOutcome Failed(string reason) => new("failed", 1, null, null, null, [], reason);
