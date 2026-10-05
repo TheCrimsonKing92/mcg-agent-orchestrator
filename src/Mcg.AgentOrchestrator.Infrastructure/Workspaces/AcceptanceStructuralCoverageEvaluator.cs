@@ -5,7 +5,9 @@ internal sealed record AcceptanceStructuralCoverageBaseline(
     string WorktreePath,
     string RepositoryRoot,
     bool BareTestList,
-    bool LockRemediationApplied);
+    bool LockRemediationApplied,
+    GoalAcceptanceVerifier.CommandResult? CachedDiscovery = null,
+    MainBaselineDiscoveryCacheWrite? CacheWrite = null);
 
 internal sealed record AcceptanceStructuralCoverageRequest(
     string[] CandidateDiscoveryArguments,
@@ -101,7 +103,7 @@ internal sealed class AcceptanceStructuralCoverageEvaluator
         {
             try
             {
-                baselineDiscovery = await _discoveryRunner(
+                baselineDiscovery = baseline.CachedDiscovery ?? await _discoveryRunner(
                     baseline.DiscoveryArguments,
                     baseline.WorktreePath,
                     request.DiscoveryTimeout,
@@ -131,6 +133,7 @@ internal sealed class AcceptanceStructuralCoverageEvaluator
                 baselineDiscovery.Output,
                 baseline.BareTestList,
                 baseline.RepositoryRoot);
+            baseline.CacheWrite?.Publish(baselineDiscovery);
         }
 
         return new AcceptanceStructuralCoveragePrepared(
@@ -147,10 +150,12 @@ internal sealed class AcceptanceStructuralCoverageEvaluator
     {
         try
         {
-            var discovery = await _discoveryRunner(baseline.DiscoveryArguments, baseline.WorktreePath,
+            var discovery = baseline.CachedDiscovery ?? await _discoveryRunner(baseline.DiscoveryArguments, baseline.WorktreePath,
                 timeout, cancellationToken).ConfigureAwait(false);
-            return (discovery, null, discovery.TimedOut || discovery.ExitCode != 0 ? null :
-                TestCoverageInvariant.ParseDiscovery(discovery.Output, baseline.BareTestList, baseline.RepositoryRoot));
+            if (discovery.TimedOut || discovery.ExitCode != 0) return (discovery, null, null);
+            var snapshot = TestCoverageInvariant.ParseDiscovery(discovery.Output, baseline.BareTestList, baseline.RepositoryRoot);
+            baseline.CacheWrite?.Publish(discovery);
+            return (discovery, null, snapshot);
         }
         catch (Exception error) when (_isBaselineDiscoveryIoException(error))
         {

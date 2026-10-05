@@ -161,6 +161,29 @@ public sealed partial class GoalAcceptanceVerifier
 
         var mainArtifactsPath = Path.Combine(environment.ArtifactsPath, artifactsDirectoryName);
         var mainEnvironment = environment.DeriveArtifactsPath(mainArtifactsPath);
+        MainBaselineDiscoveryCacheWrite? cacheWrite = null;
+        if (operationName == "acceptance-main-coverage-baseline" &&
+            _testOverrides.MainBaselineDiscoveryCacheForTests is { } cache)
+        {
+            string[]? discoveryArguments = null;
+            MainBaselineDiscoveryCacheKey? key = null;
+            try
+            {
+                discoveryArguments = BuildUnattendedDiscoveryArguments(baselineCheck, discoverySettings, mainEnvironment);
+                key = MainBaselineDiscoveryCache.TryCreateKey(baselineWorktreePath,
+                    baselineCheck.Project!, "Debug", discoveryArguments, mainArtifactsPath);
+            }
+            catch (Exception error) when (error is InvalidDataException or JsonException or ArgumentException)
+            {
+                // Preserve the existing post-build argument-validation failure on a bypass.
+            }
+            var cachedDiscovery = key is null ? null : cache.TryRead(key);
+            Console.WriteLine($"MAIN_BASELINE_DISCOVERY_CACHE status={(key is null ? "bypass" : cachedDiscovery is null ? "miss" : "hit")} project={baselineCheck.Project}");
+            if (cachedDiscovery is not null)
+                return new AcceptanceStructuralCoverageBaseline(discoveryArguments!, baselineWorktreePath,
+                    baselineWorktreePath, UsesMicrosoftTestingPlatform(baselineCheck), false, cachedDiscovery);
+            if (key is not null) cacheWrite = new MainBaselineDiscoveryCacheWrite(cache, key);
+        }
         var mainBuildArguments = new[]
         {
             "dotnet",
@@ -229,6 +252,7 @@ public sealed partial class GoalAcceptanceVerifier
             baselineWorktreePath,
             baselineWorktreePath,
             UsesMicrosoftTestingPlatform(baselineCheck),
-            lockRemediationApplied);
+            lockRemediationApplied,
+            CacheWrite: cacheWrite);
     }
 }
