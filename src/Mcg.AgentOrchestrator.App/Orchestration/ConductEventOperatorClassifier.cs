@@ -48,6 +48,7 @@ internal static class ConductEventOperatorClassifier
             "loop-handoff" when StartsWithToken("ACTIVATION_ADOPTED") => Outcome,
             "loop-relaunch" when StartsWithToken("LOOP_RELAUNCH_SCHEDULED") => Outcome,
             "judge-panel" when StartsWithToken("PANEL_CASE") => Outcome,
+            "failure-clusters" when StartsWithToken("FAILURE_CLUSTERS_DAILY") => Outcome,
             "acceptance" when HasToken("result=passed") => Outcome,
             "canary-gate" when HasToken("result=passed") => Outcome,
             "acceptance-cohort" when (detail.StartsWith("ACCEPTANCE_COHORT ", StringComparison.Ordinal)

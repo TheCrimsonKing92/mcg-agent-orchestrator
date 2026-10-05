@@ -37,6 +37,7 @@ internal static IReadOnlyList<string> RecognizedCommands { get; } =
     "dogfood-log",
     "record-goal",
     "failure-triage",
+    "failure-clusters",
     "flake-census",
     "owner-digest",
     "lesson",
