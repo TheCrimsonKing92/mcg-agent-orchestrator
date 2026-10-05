@@ -7,13 +7,14 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed record BoardFillDraftRound(string Id, string BacklogItemId, DateTimeOffset ItemUpdatedAt,
     DateTimeOffset? ItemNewestNoteAt, string? MainHead, string? Outcome, string? DraftPath, string? ReceiptPath,
     IReadOnlyList<AuthorBriefDraftCheck> Checks, DateTimeOffset StartedAt, DateTimeOffset? FinishedAt,
-    string? Failure = null, bool Reported = false, BoardFillDraftAssessment? Assessment = null)
+    string? Failure = null, bool Reported = false, BoardFillDraftAssessment? Assessment = null,
+    IReadOnlyList<BoardFillFilingAttempt>? Filings = null, bool StaleHead = false)
 {
     internal DateTimeOffset ChangeStamp => ItemNewestNoteAt is { } note && note > ItemUpdatedAt ? note : ItemUpdatedAt;
 }
 
 // Only this service's rounds live here. Reads do not create a file or change a schema.
-internal sealed class ConductorBoardFillDraftStore(string path)
+internal sealed partial class ConductorBoardFillDraftStore(string path)
 {
     internal static string DefaultPath(OrchestratorWorkspace workspace) => Path.Combine(workspace.OrchestratorDirectory, "board-fill.db");
 

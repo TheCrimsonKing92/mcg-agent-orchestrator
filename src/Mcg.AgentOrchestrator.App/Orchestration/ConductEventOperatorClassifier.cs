@@ -50,6 +50,7 @@ internal static class ConductEventOperatorClassifier
                 && HasToken("outcome=passed"))
                 || StartsWithToken("ACCEPTANCE_COHORT_RECONCILED_DEAD") => Outcome,
             "board-fill-draft" when StartsWithToken("BOARD_FILL_DRAFT") => Decision,
+            "board-fill-filed" when StartsWithToken("BOARD_FILL_FILED") => Decision,
             _ => null
         };
     }
