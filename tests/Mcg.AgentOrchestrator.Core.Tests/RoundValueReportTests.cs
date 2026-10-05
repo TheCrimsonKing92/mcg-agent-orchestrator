@@ -56,7 +56,8 @@ public sealed class RoundValueReportTests
     [Fact]
     public void Build_NoRounds_ReturnsEmptyTotals()
     {
-        var goal = new GoalSnapshot("empty", "empty", GoalStatus.Completed, [], []);
+        var task = RoundValueFixture.Task("undispatched", AgentRole.Developer, WorkTaskStatus.Completed);
+        var goal = new GoalSnapshot("empty", "empty", GoalStatus.Completed, [task], []);
         var kernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([goal], []));
         var report = RoundValueReport.Build(kernel.Goals, RoundValueFixture.Since, RoundValueFixture.Until);
         Assert.Equal(new RoundValueTotals(0, 0, 0, 0, 0, 0, null, 0, 0, 0, 0, 0), report.Window);
