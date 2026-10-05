@@ -310,10 +310,12 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
     [Xunit.InlineData("1) PLACEHOLDER:;,!?")]
     [Xunit.InlineData("- placeholder")]
     [Xunit.InlineData("* placeholder.")]
-    [Xunit.InlineData("• placeholder:")]
+    [Xunit.InlineData("\\u2022 placeholder:")]
     [Xunit.InlineData(" \t1. placeholder. \t")]
     public void PlannerContract_IntegrationWholeLinePlaceholderWithSubstantiveCompanion_Fails(string markerLine)
     {
+        // Expand the bullet during execution so discovery keeps its JSON display name ASCII.
+        markerLine = markerLine.Replace("\\u2022", "\u2022", StringComparison.Ordinal);
         var workingDirectory = CreateTempDirectory();
         File.WriteAllText(Path.Combine(workingDirectory, "seed.txt"), "seed");
         var plan = ReplaceSectionBody(
