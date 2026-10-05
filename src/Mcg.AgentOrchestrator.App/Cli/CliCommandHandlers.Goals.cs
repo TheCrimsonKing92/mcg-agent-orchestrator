@@ -590,7 +590,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 goal.RefinedSpec!.AcceptanceCriteria.ToArray(),
                 item => string.Equals(item.Trim(), waiver.SupersededCriterion, StringComparison.Ordinal)) + 1;
             Console.WriteLine(
-                $"Acceptance criterion waived: goal={goal.Id.Value[..8]} criterion={criterionNumber} actor={waiver.Actor} reason={waiver.WaiverReason}");
+                $"Acceptance criterion waived: goal={goal.Id.Value[..8]} criterion={criterionNumber} text={FormatWaivedCriterionText(waiver.SupersededCriterion)} actor={waiver.Actor} reason={waiver.WaiverReason}");
+            Console.WriteLine("note: goal-amend --waive criterion numbers are one-based; Reviewer criterion_index values are zero-based.");
             return true;
         }
 
@@ -2032,6 +2033,13 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
         default:
             return null;
     }
+}
+
+private static string FormatWaivedCriterionText(string text)
+{
+    const int textLimit = 200;
+    var collapsed = string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+    return collapsed.Length > textLimit ? collapsed[..textLimit] + "..." : collapsed;
 }
 
 private static GoalReplacementDisposition ParseGoalReplacementDisposition(string? value) =>
