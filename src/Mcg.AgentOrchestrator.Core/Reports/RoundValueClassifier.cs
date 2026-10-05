@@ -59,11 +59,16 @@ public static class RoundValueClassifier
                     var unchangedReview = round.Role == AgentRole.Reviewer && round.RoundIndex > 1 &&
                         !string.IsNullOrEmpty(baseCommit) && string.Equals(baseCommit,
                             dispatches[round.RoundIndex - 2].BaseCommit, StringComparison.Ordinal);
+                    var expectedReviewRerun = unchangedReview && round.ReworkCause is
+                        ReworkCauseFamily.EvidenceRerun or ReworkCauseFamily.Environment or
+                        ReworkCauseFamily.OperatorRetry or ReworkCauseFamily.StewardRoute;
                     string? cause = outcome == RoundGoalOutcome.Lost ? "abandoned-goal"
                         : round.StopCause == WorkerRoundStopCause.Unknown ? "orphaned-dispatch"
-                        : unchangedReview ? "unchanged-commit-review" : null;
+                        : unchangedReview && !expectedReviewRerun ? "unchanged-commit-review" : null;
                     if (cause is not null)
                         result.Add(new(round, outcome, RoundValueClass.Wasted, cause));
+                    else if (expectedReviewRerun)
+                        result.Add(new(round, outcome, RoundValueClass.ExpectedOverhead, null));
                     else
                     {
                         var rule = FamilyTable[round.ReworkCause];
