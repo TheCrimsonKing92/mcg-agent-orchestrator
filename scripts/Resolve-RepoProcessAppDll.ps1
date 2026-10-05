@@ -22,8 +22,9 @@ $relevantPathspec = @(
     'src/Mcg.AgentOrchestrator.App/Program.cs',
     'src/Mcg.AgentOrchestrator.App/Cli',
     'src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj',
-    'src/Mcg.AgentOrchestrator.Infrastructure/Processes',
+    'src/Mcg.AgentOrchestrator.Execution/Processes',
     'src/Mcg.AgentOrchestrator.Infrastructure/Mcg.AgentOrchestrator.Infrastructure.csproj',
+    'src/Mcg.AgentOrchestrator.Execution/Mcg.AgentOrchestrator.Execution.csproj',
     'Directory.Build.props',
     'Directory.Build.rsp',
     'global.json'

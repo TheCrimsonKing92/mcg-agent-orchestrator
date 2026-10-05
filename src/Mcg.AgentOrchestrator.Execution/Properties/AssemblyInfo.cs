@@ -1,0 +1,10 @@
+using System.Runtime.CompilerServices;
+
+[assembly: InternalsVisibleTo("Mcg.AgentOrchestrator.Infrastructure.Tests")]
+[assembly: InternalsVisibleTo("Mcg.AgentOrchestrator.Infrastructure.Cli.Tests")]
+[assembly: InternalsVisibleTo("Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests")]
+[assembly: InternalsVisibleTo("Mcg.AgentOrchestrator.Infrastructure.Acceptance.Tests")]
+[assembly: InternalsVisibleTo("Mcg.AgentOrchestrator.App")]
+[assembly: InternalsVisibleTo("Mcg.AgentOrchestrator.ConsoleIoProbe")]
+
+[assembly: InternalsVisibleTo("Mcg.AgentOrchestrator.Infrastructure")]

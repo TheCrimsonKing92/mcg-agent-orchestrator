@@ -895,7 +895,7 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
         Assert.Contains("CreateNoWindow = 0x08000000", source, StringComparison.Ordinal);
         Assert.DoesNotContain("WindowsCreationFlags.DetachedProcess", source, StringComparison.Ordinal);
 
-        var jobSource = File.ReadAllText(Path.Combine(InfrastructureTestSupport.FindRepositoryRoot(), "src", "Mcg.AgentOrchestrator.Infrastructure", "Processes", "OwnedProcessGroup.cs"));
+        var jobSource = File.ReadAllText(Path.Combine(InfrastructureTestSupport.FindRepositoryRoot(), "src", "Mcg.AgentOrchestrator.Execution", "Processes", "OwnedProcessGroup.cs"));
         Assert.Contains("JobObjectLimitBreakawayOk", jobSource, StringComparison.Ordinal);
     }
 

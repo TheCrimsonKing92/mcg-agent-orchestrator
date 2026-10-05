@@ -8,6 +8,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Mcg.AgentOrchestrator.App",
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Mcg.AgentOrchestrator.Infrastructure", "src\Mcg.AgentOrchestrator.Infrastructure\Mcg.AgentOrchestrator.Infrastructure.csproj", "{9FDC7084-55CF-4460-BF0D-70D8A4560694}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Mcg.AgentOrchestrator.Execution", "src\Mcg.AgentOrchestrator.Execution\Mcg.AgentOrchestrator.Execution.csproj", "{65E84781-739A-41AB-841E-4FE07D0A4022}"
+EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Mcg.AgentOrchestrator.Infrastructure.Providers", "src\Mcg.AgentOrchestrator.Infrastructure.Providers\Mcg.AgentOrchestrator.Infrastructure.Providers.csproj", "{7A1E5499-6201-4D70-AD6C-7139E42B73D0}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Mcg.AgentOrchestrator.Infrastructure.OperatorComms", "src\Mcg.AgentOrchestrator.Infrastructure.OperatorComms\Mcg.AgentOrchestrator.Infrastructure.OperatorComms.csproj", "{01F532DB-A7CB-4346-BB0C-A8DEB6F815DE}"
@@ -44,6 +46,10 @@ Global
 		{9FDC7084-55CF-4460-BF0D-70D8A4560694}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{9FDC7084-55CF-4460-BF0D-70D8A4560694}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{9FDC7084-55CF-4460-BF0D-70D8A4560694}.Release|Any CPU.Build.0 = Release|Any CPU
+		{65E84781-739A-41AB-841E-4FE07D0A4022}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{65E84781-739A-41AB-841E-4FE07D0A4022}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{65E84781-739A-41AB-841E-4FE07D0A4022}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{65E84781-739A-41AB-841E-4FE07D0A4022}.Release|Any CPU.Build.0 = Release|Any CPU
 		{7A1E5499-6201-4D70-AD6C-7139E42B73D0}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{7A1E5499-6201-4D70-AD6C-7139E42B73D0}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{7A1E5499-6201-4D70-AD6C-7139E42B73D0}.Release|Any CPU.ActiveCfg = Release|Any CPU

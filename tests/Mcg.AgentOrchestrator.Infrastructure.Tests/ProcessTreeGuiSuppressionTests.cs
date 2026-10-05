@@ -357,7 +357,7 @@ public sealed class ProcessTreeGuiSuppressionTests
         var dispatchHost = File.ReadAllText(Path.Combine(
             root,
             "src",
-            "Mcg.AgentOrchestrator.Infrastructure",
+            "Mcg.AgentOrchestrator.Execution",
             "Processes",
             "DispatchProcessHost.cs"));
         var gateVerifier = File.ReadAllText(Path.Combine(
@@ -399,13 +399,13 @@ public sealed class ProcessTreeGuiSuppressionTests
         var suppression = File.ReadAllText(Path.Combine(
             root,
             "src",
-            "Mcg.AgentOrchestrator.Infrastructure",
+            "Mcg.AgentOrchestrator.Execution",
             "Processes",
             "ProcessTreeGuiSuppression.cs"));
         var policy = File.ReadAllText(Path.Combine(
             root,
             "src",
-            "Mcg.AgentOrchestrator.Infrastructure",
+            "Mcg.AgentOrchestrator.Execution",
             "Processes",
             "ChildConsoleLaunchPolicy.cs"));
 

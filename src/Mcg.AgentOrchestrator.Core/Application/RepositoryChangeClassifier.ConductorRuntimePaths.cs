@@ -10,6 +10,7 @@ public static partial class RepositoryChangeClassifier
     [
         "src/Mcg.AgentOrchestrator.App/",
         "src/Mcg.AgentOrchestrator.Core/",
+        "src/Mcg.AgentOrchestrator.Execution/",
         "src/Mcg.AgentOrchestrator.Infrastructure/",
         "src/Mcg.AgentOrchestrator.Infrastructure.Providers/",
         "src/Mcg.AgentOrchestrator.Infrastructure.OperatorComms/"
