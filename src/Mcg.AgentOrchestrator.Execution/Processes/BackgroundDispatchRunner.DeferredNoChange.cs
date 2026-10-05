@@ -22,6 +22,10 @@ public sealed partial class BackgroundDispatchRunner
             return false;
         }
 
+        if (!_completionClassifier.HasExplicitNoChangeRationale(standardOutput, string.Empty) &&
+            DeveloperDeferredNoChangeQualifier.TryReadStructuredDeclaration(standardOutput, out _))
+            standardErrorDiagnostic = AppendDiagnostic(standardErrorDiagnostic ?? string.Empty,
+                DeveloperDeferredNoChangeQualifier.StructuredDeclarationMarker + " candidate_sha=" + outcome.CandidateSha);
         standardErrorDiagnostic = AppendDiagnostic(
             standardErrorDiagnostic ?? string.Empty, outcome.FormatMarker());
         return true;
@@ -43,7 +47,8 @@ public sealed partial class BackgroundDispatchRunner
         TaskSpec task, string standardOutput, string? diagnostic, string? declineCode)
     {
         if (task.RequiredRole != AgentRole.Developer || declineCode is null ||
-            !_completionClassifier.HasExplicitNoChangeRationale(standardOutput, string.Empty))
+            (!_completionClassifier.HasExplicitNoChangeRationale(standardOutput, string.Empty) &&
+             !DeveloperDeferredNoChangeQualifier.TryReadStructuredDeclaration(standardOutput, out _)))
             return diagnostic ?? string.Empty;
         return AppendDiagnostic(diagnostic ?? string.Empty, "DEFERRED_NO_CHANGE_DECLINED reason=" + declineCode);
     }
