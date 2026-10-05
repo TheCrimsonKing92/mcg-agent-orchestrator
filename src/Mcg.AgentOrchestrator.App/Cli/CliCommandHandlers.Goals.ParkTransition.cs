@@ -59,7 +59,8 @@ internal static partial class CliCommandHandlers
     internal static void RenderGoalParkOutcome(
         GoalParkCommand command,
         GoalLifecycleTransitionOutcome outcome,
-        OrchestratorWorkspace workspace)
+        OrchestratorWorkspace workspace,
+        Func<int>? deliverAttentionResolution = null)
     {
         switch (outcome.Disposition)
         {
@@ -70,8 +71,8 @@ internal static partial class CliCommandHandlers
                     throw new InvalidOperationException("Committed park outcome is missing its dispatch or wait counts.");
                 }
 
-                var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
-                var resolvedAttentionItems = store.ResolveOpenForGoalAsync(
+                var resolvedAttentionItems = deliverAttentionResolution is not null ? deliverAttentionResolution() :
+                    CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory).ResolveOpenForGoalAsync(
                     outcome.GoalId.Value, $"Goal parked: {command.Reason}").GetAwaiter().GetResult();
                 Console.WriteLine($"Goal parked {outcome.GoalId.Value[..8]}.");
                 if (outcome.Disposition == GoalLifecycleTransitionDisposition.AppliedWithLiveDispatches)
