@@ -35,7 +35,7 @@ internal static partial class LandingExecutor
     public const string IntegrationBranchName = "integration";
     private const string TempWorktreeDirName = ".orchestrator-integration-tmp";
     private const string LandingAnchorRefPrefix = "refs/orchestrator/landing/";
-    private const string OwnershipHoldReasonPrefix = "ownership-denylist hold";
+    private const string OwnershipHoldReasonPrefix = LandingPolicy.OwnershipHoldReasonPrefix;
     private const string MutationHoldReasonPrefix = "landing mutation blocked:";
     private const string PostLandingConfirmationReasonPrefix =
         "goal landed previously, then post-landing confirmation failed:";
@@ -87,10 +87,23 @@ internal static partial class LandingExecutor
             executionDirectory,
             goal.Id,
             GitRunner);
+        var landingFacts = new LandingFacts
+        {
+            ChangedFilesResolved = changedFilesResult.Succeeded,
+            ChangedFilesFailureReason = changedFilesResult.FailureReason
+        };
+        LandingPolicyDecision EvaluateLanding(int expectedRung)
+        {
+            var decision = LandingPolicy.Evaluate(landingFacts);
+            var expectedAction = expectedRung == 0 ? LandingPolicyAction.Proceed : LandingPolicyAction.Escalate;
+            if (decision.Action != expectedAction || decision.DiscriminatingRung != expectedRung)
+                throw new InvalidOperationException("Landing policy decision disagrees with the executor pre-mutation check.");
+            return decision;
+        }
         if (!changedFilesResult.Succeeded)
         {
-            var diffDecision = new LandingDecision.Escalate(
-                $"diff scope unknown: {changedFilesResult.FailureReason}");
+            var recordedDecision = EvaluateLanding(1);
+            var diffDecision = new LandingDecision.Escalate(recordedDecision.Reason) { Decision = recordedDecision.ToRecord() };
             OperatorInbox.RecordLandingEscalation(
                 workspace,
                 goal,
@@ -114,6 +127,11 @@ internal static partial class LandingExecutor
 
         var changedFiles = changedFilesResult.Files;
         var acceptance = GoalAcceptanceStatusProjector.Build(kernel, goal, workspace.ExecutionDirectory);
+        landingFacts = landingFacts with
+        {
+            AcceptanceAccepted = acceptance.IsAccepted,
+            AcceptanceHoldDescription = acceptance.AcceptanceHoldDescription
+        };
         if (!acceptance.IsAccepted)
         {
             // A sibling landing path can complete after this attempt's initial journal read.
@@ -130,18 +148,8 @@ internal static partial class LandingExecutor
                 return concurrentlyCompletedLanding;
             }
 
-            var decision = LandingDecisionEngine.Decide(new LandingInputs(
-                RepositoryChangeClassifier.Classify(changedFiles),
-                AcceptancePassed: false,
-                IntegrationToMainIsCleanFastForward: true,
-                GoalFailureRetryCount: 0,
-                Policy: policy,
-                AcceptanceHoldDescription: acceptance.AcceptanceHoldDescription));
-            if (decision is not LandingDecision.Escalate acceptanceDecision)
-            {
-                throw new InvalidOperationException(
-                    "Landing decision engine promoted a candidate whose acceptance status was not accepted.");
-            }
+            var decision = EvaluateLanding(2);
+            var acceptanceDecision = new LandingDecision.Escalate(decision.Reason) { Decision = decision.ToRecord() };
             OperatorInbox.RecordLandingEscalation(workspace, goal, acceptanceDecision.Reason, IntegrationBranchName, channel);
             eventWriter?.AppendGoalEscalated(goal.Id, GoalLifecycleState.Verified, goal.Status, acceptanceDecision.Reason, IntegrationBranchName);
             return new LandingResult(goal.Id.Value, goalPrefix, acceptanceDecision, IntegrationBranchName,
@@ -156,9 +164,16 @@ internal static partial class LandingExecutor
             boundMainRevision,
             kernel,
             executionDirectory);
+        landingFacts = landingFacts with
+        {
+            EvidenceRebindOutstanding = evidenceDiagnostic is not null,
+            EvidenceDiagnostic = evidenceDiagnostic
+        };
         if (evidenceDiagnostic is not null)
         {
-            var evidenceDecision = new LandingDecision.Escalate(evidenceDiagnostic);
+            var decision = EvaluateLanding(3);
+            evidenceDiagnostic = decision.Reason;
+            var evidenceDecision = new LandingDecision.Escalate(evidenceDiagnostic) { Decision = decision.ToRecord() };
             OperatorInbox.RecordLandingEscalation(workspace, goal, evidenceDiagnostic, IntegrationBranchName, channel);
             eventWriter?.AppendGoalEscalated(
                 goal.Id,
@@ -176,21 +191,29 @@ internal static partial class LandingExecutor
         }
 
         var ownershipGuard = RepositoryOwnershipMap.GuardWriteSet(changedFiles);
-        if (ownershipGuard.RequiresOperatorApproval && policy?.AllowsAutonomousHighRiskOwnership != true)
+        landingFacts = landingFacts with
+        {
+            OwnershipRequiresApproval = ownershipGuard.RequiresOperatorApproval,
+            AllowsAutonomousHighRiskOwnership = policy?.AllowsAutonomousHighRiskOwnership
+        };
+        if (LandingPolicy.OwnershipHoldApplies(landingFacts))
         {
             var holdRequests = BuildOwnershipHoldRequests(goal, executionDirectory, ownershipGuard);
+            landingFacts = landingFacts with { AttributableHoldRequestCount = holdRequests.Count };
             if (holdRequests.Count > 0)
             {
                 OperatorInbox.RecordOwnershipHolds(workspace, goal, holdRequests, channel);
-                var reason = $"{OwnershipHoldReasonPrefix}: {holdRequests.Count} task(s) touched RequiresOperatorApproval path(s)";
-                var holdDecision = new LandingDecision.Escalate(reason);
+                var decision = EvaluateLanding(4);
+                var reason = decision.Reason;
+                var holdDecision = new LandingDecision.Escalate(reason) { Decision = decision.ToRecord() };
                 eventWriter?.AppendGoalEscalated(goal.Id, GoalLifecycleState.Verified, goal.Status, reason, "ownership-hold");
                 return new LandingResult(goal.Id.Value, goalPrefix, holdDecision, IntegrationBranchName,
                     false, $"Parked on {IntegrationBranchName}: {reason}");
             }
 
-            var unknownReason = "ownership-denylist diff touched RequiresOperatorApproval path(s), but no writing task attribution was available";
-            var unknownDecision = new LandingDecision.Escalate(unknownReason);
+            var unknownPolicyDecision = EvaluateLanding(5);
+            var unknownReason = unknownPolicyDecision.Reason;
+            var unknownDecision = new LandingDecision.Escalate(unknownReason) { Decision = unknownPolicyDecision.ToRecord() };
             OperatorInbox.RecordLandingEscalation(workspace, goal, unknownReason, IntegrationBranchName, channel);
             eventWriter?.AppendGoalEscalated(goal.Id, GoalLifecycleState.Verified, goal.Status, unknownReason, IntegrationBranchName);
             return new LandingResult(goal.Id.Value, goalPrefix, unknownDecision, IntegrationBranchName,
@@ -198,15 +221,22 @@ internal static partial class LandingExecutor
         }
 
         var previousIntegrationRevision = TryResolveBranch(executionDirectory, IntegrationBranchName);
-        if (previousIntegrationRevision is not null &&
-            RunGit(executionDirectory, "merge-base", "--is-ancestor", previousIntegrationRevision, boundMainRevision).ExitCode != 0)
+        var integrationDiverged = previousIntegrationRevision is not null &&
+            RunGit(executionDirectory, "merge-base", "--is-ancestor", previousIntegrationRevision, boundMainRevision).ExitCode != 0;
+        landingFacts = landingFacts with
         {
-            const string reason = "integration branch contains state not present on bound main";
+            IntegrationAncestry = previousIntegrationRevision is null ? "absent" : integrationDiverged ? "diverged" : "on-bound-main"
+        };
+        if (integrationDiverged)
+        {
+            var decision = EvaluateLanding(6);
+            var reason = decision.Reason;
             OperatorInbox.RecordLandingEscalation(workspace, goal, reason, IntegrationBranchName, channel);
             eventWriter?.AppendGoalEscalated(goal.Id, GoalLifecycleState.Verified, goal.Status, reason, IntegrationBranchName);
-            return new LandingResult(goal.Id.Value, goalPrefix, new LandingDecision.Escalate(reason), IntegrationBranchName,
+            return new LandingResult(goal.Id.Value, goalPrefix, new LandingDecision.Escalate(reason) { Decision = decision.ToRecord() }, IntegrationBranchName,
                 false, $"Parked on {IntegrationBranchName}: {reason}");
         }
+        var proceedDecision = EvaluateLanding(0);
 
         var tempPath = Path.Combine(executionDirectory, TempWorktreeDirName);
         if (IsRegisteredWorktree(executionDirectory, tempPath))
@@ -340,7 +370,7 @@ internal static partial class LandingExecutor
         eventWriter?.AppendGoalLanded(goal.Id, IntegrationBranchName, goalBranch);
         OperatorInbox.ClearOwnershipHoldsAfterLanding(workspace, goal, $"land {goalPrefix}");
         StateEffectProposalApplier.ApplyLandedProposals(kernel, goal, workspace, changedFiles, Console.WriteLine);
-        return new LandingResult(goal.Id.Value, goalPrefix, new LandingDecision.Promote(), IntegrationBranchName,
+        return new LandingResult(goal.Id.Value, goalPrefix, new LandingDecision.Promote { Decision = proceedDecision.ToRecord() }, IntegrationBranchName,
             true, $"Promoted: {goalBranch} prepared from bound main via {IntegrationBranchName} into main.",
             candidateRevision,
             changedFiles);
