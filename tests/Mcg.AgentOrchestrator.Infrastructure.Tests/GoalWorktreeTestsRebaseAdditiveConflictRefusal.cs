@@ -5,6 +5,34 @@ using static AdditiveConflictGitFixture;
 public sealed class GoalWorktreeTestsRebaseAdditiveConflictRefusal
 {
     [Fact]
+    public void UntrackedWorkerResult_RefusesNonAdditiveConflictWithOriginalMessage()
+    {
+        using var fixture = new AdditiveConflictGitFixture([new(WidgetPath, "base\n", "main\n", "goal\n")]);
+        var artifactPath = Path.Combine(fixture.Worktree, "WORKER_RESULT.md");
+        File.WriteAllText(artifactPath, "worker evidence");
+        Assert.Equal("?? WORKER_RESULT.md", Git(fixture.Worktree, "status", "--porcelain=v1",
+            "--untracked-files=all").Trim());
+        Assert.False(GitCli.IsWorktreeDirty(fixture.Worktree));
+        var events = new List<string>();
+
+        var result = GoalWorktrees.TryRebaseOntoMain(fixture.Repository, fixture.GoalId, new([], events.Add));
+
+        Assert.Equal(GoalWorktreeRebaseStatus.Conflict, result.Status);
+        Assert.Equal($"Rebase of {GoalWorktrees.BranchName(fixture.GoalId)} onto " +
+            $"{Git(fixture.Repository, "branch", "--show-current").Trim()} found conflicts; branch was restored to its pre-rebase state.", result.Message);
+        Assert.Equal(new[] { WidgetPath }, result.ConflictFiles);
+        Assert.Equal("goal\n", fixture.Read());
+        Assert.Equal("worker evidence", File.ReadAllText(artifactPath));
+        Assert.Equal("?? WORKER_RESULT.md", Git(fixture.Worktree, "status", "--porcelain=v1",
+            "--untracked-files=all").Trim());
+        Assert.False(GitCli.IsWorktreeDirty(fixture.Worktree));
+        Assert.Equal($"REBASE_CONFLICT_AUTOMERGE goal={fixture.GoalId.Value[..8]} result=refused " +
+            $"files={WidgetPath} hunks=1 reason=non-empty-base merge=none", Assert.Single(events));
+        File.Delete(artifactPath);
+        fixture.AssertRestored();
+    }
+
+    [Fact]
     public void NonEmptyBase_RefusesAndRestoresOriginalGoalHead()
     {
         using var fixture = new AdditiveConflictGitFixture([new(WidgetPath, "base\n", "main\n", "goal\n")]);

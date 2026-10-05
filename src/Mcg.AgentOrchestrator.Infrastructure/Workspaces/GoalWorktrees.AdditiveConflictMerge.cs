@@ -110,7 +110,7 @@ public static partial class GoalWorktrees
         var status = RunAdditiveGit(path, "status", "--porcelain=v1", "-z", "--untracked-files=all");
         var currentHead = RunAdditiveGit(path, "rev-parse", "HEAD");
         var currentBranch = RunAdditiveGit(path, "symbolic-ref", "--short", "HEAD");
-        return CompleteGit(status) && status.Output.Length == 0 && CompleteGit(currentHead) &&
+        return CompleteGit(status) && FilterInternalArtifactStatusEntries(status.Output).Length == 0 && CompleteGit(currentHead) &&
             currentHead.Output.Trim() == head && CompleteGit(currentBranch) && currentBranch.Output.Trim() == branch;
     }
 

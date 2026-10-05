@@ -4,6 +4,34 @@ using static AdditiveConflictGitFixture;
 // Parallel-safe: each fact owns an isolated real git repository and worktree.
 public sealed class GoalWorktreeTestsRebaseAdditiveConflictMerge
 {
+    [Fact]
+    public void UntrackedWorkerResult_MergesAdditiveConflictAndPreservesArtifact()
+    {
+        using var fixture = new AdditiveConflictGitFixture();
+        var artifactPath = Path.Combine(fixture.Worktree, "WORKER_RESULT.md");
+        File.WriteAllText(artifactPath, "worker evidence");
+        Assert.Equal("?? WORKER_RESULT.md", Git(fixture.Worktree, "status", "--porcelain=v1",
+            "--untracked-files=all").Trim());
+        Assert.False(GitCli.IsWorktreeDirty(fixture.Worktree));
+        var events = new List<string>();
+
+        var result = GoalWorktrees.TryRebaseOntoMain(fixture.Repository, fixture.GoalId, new([], events.Add));
+
+        Assert.Equal(GoalWorktreeRebaseStatus.Rebased, result.Status);
+        Assert.Equal("additive-conflict-auto-merge", result.Detail);
+        Assert.Equal(MergedText, fixture.Read());
+        var parents = Git(fixture.Worktree, "rev-list", "--parents", "-n", "1", "HEAD").Trim().Split(' ');
+        Assert.Equal(3, parents.Length);
+        Assert.Equal(fixture.OriginalHead, parents[1]);
+        Assert.Equal(fixture.MainHead, parents[2]);
+        Assert.Equal("worker evidence", File.ReadAllText(artifactPath));
+        Assert.Equal("?? WORKER_RESULT.md", Git(fixture.Worktree, "status", "--porcelain=v1",
+            "--untracked-files=all").Trim());
+        Assert.False(GitCli.IsWorktreeDirty(fixture.Worktree));
+        Assert.Equal($"REBASE_CONFLICT_AUTOMERGE goal={fixture.GoalId.Value[..8]} result=merged " +
+            $"files={WidgetPath} hunks=1 reason=none merge={parents[0]}", Assert.Single(events));
+    }
+
     [Theory]
     [InlineData(false, "\n")]
     [InlineData(true, "\r\n")]
