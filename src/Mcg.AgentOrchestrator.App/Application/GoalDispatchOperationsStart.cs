@@ -27,7 +27,9 @@ internal sealed partial class GoalDispatchOperations
         int? plannerSampleCount = null,
         ConductorAutonomyPolicy? conductorPolicy = null,
         Action<GoalSnapshot>? recordDurableGoalBaseline = null,
-        IReadOnlySet<TaskId>? excludedTaskIds = null)
+        IReadOnlySet<TaskId>? excludedTaskIds = null,
+        bool? cascadeTesterCheapFirst = null,
+        string? cascadeCheapModelAlias = null)
     {
         ReconcileExitedAssignedProcessRecords(kernel, goal);
         goal = kernel.GetGoal(goal.Id);
@@ -49,7 +51,9 @@ internal sealed partial class GoalDispatchOperations
             reviewAutoRetryStopRound: ResolveReviewAutoRetryStopRound(workspace, reviewAutoRetryStopRound, conductorPolicy),
             citedPriorEvidenceResolver: CreateCitedPriorEvidenceResolver(workspace),
             sandboxOptions: sandboxOptions,
-            plannerSampleCount: ResolvePlannerSampleCount(workspace, plannerSampleCount, conductorPolicy));
+            plannerSampleCount: ResolvePlannerSampleCount(workspace, plannerSampleCount, conductorPolicy),
+            cascadeTesterCheapFirst: ResolveCascadeTesterCheapFirst(workspace, cascadeTesterCheapFirst, conductorPolicy),
+            cascadeCheapModelAlias: ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy));
         // Validate recovery authority before admission can hydrate a whole durable snapshot.
         // The runner repeats this guard immediately before launch to cover later state changes.
         var rejectedRecoveryIds = batch.Dispatches
@@ -160,7 +164,9 @@ internal sealed partial class GoalDispatchOperations
         BackgroundDispatchRunner? runner = null,
         WorkerSandboxOptions? sandboxOptions = null,
         ConductorAutonomyPolicy? conductorPolicy = null,
-        Action<GoalSnapshot>? recordDurableGoalBaseline = null)
+        Action<GoalSnapshot>? recordDurableGoalBaseline = null,
+        bool? cascadeTesterCheapFirst = null,
+        string? cascadeCheapModelAlias = null)
     {
         return StartDispatches(
             kernel,
@@ -177,7 +183,8 @@ internal sealed partial class GoalDispatchOperations
             runner,
             sandboxOptions,
             conductorPolicy,
-            recordDurableGoalBaseline: recordDurableGoalBaseline);
+            recordDurableGoalBaseline: recordDurableGoalBaseline,
+            cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias);
     }
 
     private ProcessBatchExecutionResult StartDispatches(
@@ -196,7 +203,9 @@ internal sealed partial class GoalDispatchOperations
         WorkerSandboxOptions? sandboxOptions = null,
         ConductorAutonomyPolicy? conductorPolicy = null,
         IReadOnlySet<TaskId>? admittedTaskIds = null,
-        Action<GoalSnapshot>? recordDurableGoalBaseline = null)
+        Action<GoalSnapshot>? recordDurableGoalBaseline = null,
+        bool? cascadeTesterCheapFirst = null,
+        string? cascadeCheapModelAlias = null)
     {
         runner ??= new BackgroundDispatchRunner();
         var logRoot = workspace.LogDirectory;
@@ -238,7 +247,8 @@ internal sealed partial class GoalDispatchOperations
                         providers,
                         reviewAutoRetryStopRound,
                         sandboxOptions,
-                        conductorPolicy: conductorPolicy);
+                        conductorPolicy: conductorPolicy,
+                        cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias);
                 }
                 catch (DispatchAssignmentHoldException ex)
                 {

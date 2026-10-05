@@ -45,7 +45,7 @@ internal static class CliRoundValueQueryCommand
                     d.Totals.ExpectedOverhead, d.Totals.Wasted, d.Totals.RoundsPerLanding, d.Totals.WasteShare,
                     d.Totals.InputTokens, d.Totals.CachedInputTokens, d.Totals.OutputTokens, d.Totals.UsageUnreported
                 }),
-                report.Window, report.WasteByCause, report.PendingGoals, report.PendingRounds
+                report.Window, report.WasteByCause, report.CascadeRoutes, report.PendingGoals, report.PendingRounds
             }, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
             return;
         }
@@ -56,6 +56,12 @@ internal static class CliRoundValueQueryCommand
         Console.WriteLine("Waste cause | Rounds | Share");
         foreach (var cause in report.WasteByCause)
             Console.WriteLine(FormattableString.Invariant($"{cause.Cause} | {cause.Rounds} | {cause.Share:0.###}"));
+        if (report.CascadeRoutes.Count > 0)
+        {
+            Console.WriteLine("Cascade route | Rounds | Productive | Overhead | Wasted");
+            foreach (var route in report.CascadeRoutes)
+                Console.WriteLine(FormattableString.Invariant($"{route.Decision} | {route.Rounds} | {route.Productive} | {route.Overhead} | {route.Wasted}"));
+        }
         Console.WriteLine(FormattableString.Invariant($"Pending goals | {report.PendingGoals} | rounds={report.PendingRounds}"));
     }
 

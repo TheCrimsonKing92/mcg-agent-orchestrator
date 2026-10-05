@@ -46,8 +46,11 @@ public sealed record ConductorAutonomyPolicy(
     bool AcceptanceAttemptBelowNormalPriority = true,
     ConductorBoardFillMode BoardFillMode = ConductorBoardFillMode.Shadow,
     int BoardFillTargetActiveGoals = 10,
-    int BoardFillMaxDraftsPerDay = 3)
+    int BoardFillMaxDraftsPerDay = 3,
+    bool CascadeTesterCheapFirst = true,
+    string CascadeCheapModelAlias = ConductorAutonomyPolicy.DefaultCascadeCheapModelAlias)
 {
+    public const string DefaultCascadeCheapModelAlias = "gpt-6-luna";
     public const int DefaultAcceptanceCohortGatherWindowSeconds = 480;
     public const int MinimumAcceptanceWidth = 1;
     public const int MaximumAcceptanceWidth = 4;
@@ -183,6 +186,8 @@ public sealed record ConductorAutonomyPolicy(
         if (AcceptanceCohortGatherWindowSeconds < 0)
             errors.Add($"acceptanceCohortGatherWindowSeconds must be zero or greater (got {AcceptanceCohortGatherWindowSeconds}).");
 
+        if (string.IsNullOrWhiteSpace(CascadeCheapModelAlias))
+            errors.Add("cascadeCheapModelAlias must not be empty.");
         if (!Enum.IsDefined(BoardFillMode))
             errors.Add($"boardFillMode must be Off, Shadow or File (got {BoardFillMode}).");
         if (BoardFillTargetActiveGoals is < 0 or > 30)
@@ -222,6 +227,8 @@ public sealed record ConductorAutonomyPolicy(
         sb.AppendLine($"  \"boardFillMode\": {JsonStr(BoardFillMode.ToString())},");
         sb.AppendLine($"  \"boardFillTargetActiveGoals\": {BoardFillTargetActiveGoals},");
         sb.AppendLine($"  \"boardFillMaxDraftsPerDay\": {BoardFillMaxDraftsPerDay},");
+        sb.AppendLine($"  \"cascadeTesterCheapFirst\": {CascadeTesterCheapFirst.ToString().ToLowerInvariant()},");
+        sb.AppendLine($"  \"cascadeCheapModelAlias\": {JsonStr(CascadeCheapModelAlias)},");
 
         sb.AppendLine(AutoPromoteRiskThreshold.HasValue
             ? $"  \"autoPromoteRiskThreshold\": {JsonStr(AutoPromoteRiskThreshold.Value.ToString())},"
@@ -316,6 +323,22 @@ public sealed record ConductorAutonomyPolicy(
                         $"conductor-policy.json{src}: acceptanceAttemptBelowNormalPriority must be a boolean.");
                 belowNormalPriority = priorityElement.GetBoolean();
             }
+            var cascadeTesterCheapFirst = true;
+            if (root.TryGetProperty("cascadeTesterCheapFirst", out var cascadeSwitch) &&
+                cascadeSwitch.ValueKind != JsonValueKind.Null)
+            {
+                if (cascadeSwitch.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                    throw new FormatException($"conductor-policy.json{src}: cascadeTesterCheapFirst must be a boolean.");
+                cascadeTesterCheapFirst = cascadeSwitch.GetBoolean();
+            }
+            var cascadeCheapModelAlias = DefaultCascadeCheapModelAlias;
+            if (root.TryGetProperty("cascadeCheapModelAlias", out var cascadeAlias) &&
+                cascadeAlias.ValueKind != JsonValueKind.Null)
+            {
+                if (cascadeAlias.ValueKind != JsonValueKind.String)
+                    throw new FormatException($"conductor-policy.json{src}: cascadeCheapModelAlias must be a string.");
+                cascadeCheapModelAlias = cascadeAlias.GetString()!;
+            }
             var boardFillMode = ConductorBoardFillMode.Shadow;
             if (root.TryGetProperty("boardFillMode", out var boardFillElement) &&
                 boardFillElement.ValueKind != JsonValueKind.Null)
@@ -384,7 +407,9 @@ public sealed record ConductorAutonomyPolicy(
                 belowNormalPriority,
                 boardFillMode,
                 boardFillTarget,
-                boardFillCap);
+                boardFillCap,
+                cascadeTesterCheapFirst,
+                cascadeCheapModelAlias);
 
             var errors = policy.Validate();
             if (errors.Count > 0)
