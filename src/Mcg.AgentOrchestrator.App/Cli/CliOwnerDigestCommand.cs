@@ -49,6 +49,7 @@ internal static class CliOwnerDigestCommand
             {
                 WriteDigestText(writer, digest);
                 CliOwnerDigestLessons.WriteText(writer, workspace, digest.Since, digest.Until);
+                CliOwnerDigestBoardFill.WriteText(writer, workspace, goals, digest.Until);
                 if (rounds)
                     CliOwnerDigestRounds.WriteText(writer, digest, goals, intents);
                 if (panel is not null)
