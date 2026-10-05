@@ -31,7 +31,7 @@ public sealed class AcceptancePolicyShardPlannerTests
             variables["MCG_ACCEPTANCE_CHANGE_SCOPED"] = "1";
             Assert.Equal(
                 "build-system file changed: src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj; " +
-                "changed projects: Core; dependency closure: App, Core, Core.Tests, " +
+                "changed projects: Core; dependency closure: App, Core, Core.Tests, Execution, " +
                 "Infrastructure, Infrastructure.Acceptance.Tests, Infrastructure.Cli.Tests, Infrastructure.OperatorComms, " +
                 "Infrastructure.ProviderEnvironment.Tests, Infrastructure.Providers, Infrastructure.Tests, TestSupport",
                 AcceptancePolicyShardPlanner.BuildPolicyShardPlan(
