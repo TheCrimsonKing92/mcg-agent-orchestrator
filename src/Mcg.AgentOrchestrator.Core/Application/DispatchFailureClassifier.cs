@@ -870,6 +870,11 @@ public static partial class DispatchFailureClassifier
                 providerOutcome);
         }
 
+        if (TryClassifyWorkerSandboxRefusal(task, verification, workerResultPresent, hasCommittedChanges, out var sandboxRefusal))
+        {
+            return sandboxRefusal;
+        }
+
         if (IsRecoverableProviderAuthenticationFailure(verification))
         {
             return BuildOutcome(
