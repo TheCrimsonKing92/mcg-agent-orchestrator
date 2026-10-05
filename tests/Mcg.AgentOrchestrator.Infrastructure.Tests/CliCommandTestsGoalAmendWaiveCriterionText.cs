@@ -97,7 +97,7 @@ public sealed class CliCommandTestsGoalAmendWaiveCriterionText : CliCommandTestB
         {
             var changed = CliPersistentStateRunner.ExecuteCommand(
                 CliArgumentParser.SplitCommand(
-                    $"goal-amend {goal.Id.Value[..8]} --waive 2 --reason \"scope clarified\""),
+                    $"goal-amend {goal.Id.Value[..8]} --waive 2 --reason scope clarified"),
                 repository,
                 workspace,
                 ref agents,
