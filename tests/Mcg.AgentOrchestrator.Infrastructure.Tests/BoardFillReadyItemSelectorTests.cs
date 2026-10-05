@@ -11,7 +11,7 @@ public sealed class BoardFillReadyItemSelectorTests
 
     [Theory]
     [InlineData(BacklogItemStatus.Open, true)]
-    [InlineData(BacklogItemStatus.Closed, false)]
+    [InlineData(BacklogItemStatus.Done, false)]
     [InlineData(BacklogItemStatus.Superseded, false)]
     public void Only_open_items_are_eligible(BacklogItemStatus status, bool eligible)
     {
