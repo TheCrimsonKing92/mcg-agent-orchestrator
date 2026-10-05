@@ -98,12 +98,12 @@ public sealed class AcceptanceAttemptPriorityTests
         var root = InfrastructureTestSupport.FindRepositoryRoot();
         string[] workerLaunchPaths =
         [
-            "src/Mcg.AgentOrchestrator.Infrastructure/Processes/DispatchProcessHost.cs",
-            "src/Mcg.AgentOrchestrator.Infrastructure/Processes/WorkerProcessRunner.cs",
-            "src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs",
-            "src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs",
-            "src/Mcg.AgentOrchestrator.Infrastructure/Processes/WorkerProcessJobs.cs",
-            "src/Mcg.AgentOrchestrator.Infrastructure/Processes/OwnedProcessGroup.cs"
+            "src/Mcg.AgentOrchestrator.Execution/Processes/DispatchProcessHost.cs",
+            "src/Mcg.AgentOrchestrator.Execution/Processes/WorkerProcessRunner.cs",
+            "src/Mcg.AgentOrchestrator.Execution/Processes/BackgroundDispatchRunner.cs",
+            "src/Mcg.AgentOrchestrator.Execution/Workers/WorkerProfileDispatcher.cs",
+            "src/Mcg.AgentOrchestrator.Execution/Processes/WorkerProcessJobs.cs",
+            "src/Mcg.AgentOrchestrator.Execution/Processes/OwnedProcessGroup.cs"
         ];
         foreach (var path in workerLaunchPaths)
         {
