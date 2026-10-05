@@ -19,7 +19,8 @@ internal sealed record PreReviewEvidenceContext(
     bool NoApplicableTests,
     bool MappingNeedsInput,
     IReadOnlyList<string>? SourceCleanupPaths = null,
-    RepositoryTestImpactDegradation? TestImpactDegradation = null)
+    RepositoryTestImpactDegradation? TestImpactDegradation = null,
+    RepositoryTestImpactHeadroom? TestImpactHeadroom = null)
 {
     public bool RequiresSourceCleanup => SourceCleanupPaths is { Count: > 0 };
 }
@@ -1399,48 +1400,10 @@ internal sealed partial class ConductorDriver
         if (state == GoalLifecycleState.CleanedUp)
             return MakeResult(goalId, goalPrefix, policy, new ConductorAdvanceOutcome.Done(state));
 
-        if (state is GoalLifecycleState.Created or GoalLifecycleState.WorkspaceReady or GoalLifecycleState.Dispatched &&
-            SliceBatchParentExecutionGuard?.TryDescribeHold(goal) is { } sliceBatchParentHold)
-        {
-            return MakeResult(
-                goalId,
-                goalPrefix,
-                policy,
-                new ConductorAdvanceOutcome.Held(state, sliceBatchParentHold));
-        }
-
-        if (state == GoalLifecycleState.Failed)
-        {
+        if (TryDecideLifecycleEntry(goal, goalPrefix, policy, state, out var lifecycleEntryResult, out var lifecycleEntryDecision))
+            return lifecycleEntryResult;
+        if (lifecycleEntryDecision.DiscriminatingEvidence == "failed-recovery")
             return ExecuteFailedGoalRecovery(goal, goalPrefix, policy, state);
-        }
-
-        if (state == GoalLifecycleState.AwaitingClarification)
-        {
-            return Escalate(goal, goalPrefix, policy, state,
-                _tryBuildAwaitingClarificationEscalationReason(goal) ??
-                $"Goal is in {state} state; operator action required");
-        }
-
-        // Error states always escalate regardless of policy
-        if (state is GoalLifecycleState.Failed
-                  or GoalLifecycleState.Blocked
-                  or GoalLifecycleState.AwaitingHumanInput)
-        {
-            return Escalate(goal, goalPrefix, policy, state,
-                BuildTerminalEscalationReason(goal, state));
-        }
-
-        // TransitionMap[Merged] is the base for ExecuteLanding's risk gate (at Verified state),
-        // not a gate on the post-landing record step. Skip the pre-check for Merged state.
-        if (state != GoalLifecycleState.Merged)
-        {
-            var decision = policy.GetTransitionDecision(state);
-            if (decision == ConductorTransitionDecision.Escalate)
-            {
-                return Escalate(goal, goalPrefix, policy, state,
-                    $"Policy '{policy.Name}' requires manual review at {state}");
-            }
-        }
 
         if (TryRunDeferredNoChangeEvidence(goal, goalPrefix, policy, state, out var deferredNoChangeResult) || TryRouteDeliveredFindingEvidenceToDeveloper(goal, goalPrefix, policy, state, out deferredNoChangeResult)) return deferredNoChangeResult;
         return state switch
@@ -2166,21 +2129,6 @@ internal sealed partial class ConductorDriver
             candidate.GoalPrefix,
             policy,
             new ConductorAdvanceOutcome.Done(earlyOutcome.State));
-    }
-
-    private ConductorAdvanceResult ExecuteCreateWorkspace(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)
-    {
-        try
-        {
-            var path = _createWorkspace(goal);
-            return MakeResult(goal.Id.Value, goalPrefix, policy,
-                new ConductorAdvanceOutcome.Executed(GoalLifecycleState.Created, $"Workspace created: {path}"));
-        }
-        catch (EvidenceMutationLeaseUnavailableException ex)
-        {
-            return MakeResult(goal.Id.Value, goalPrefix, policy,
-                new ConductorAdvanceOutcome.Held(GoalLifecycleState.Created, ex.Message));
-        }
     }
 
     private ConductorAdvanceResult ExecuteDispatchAndStart(

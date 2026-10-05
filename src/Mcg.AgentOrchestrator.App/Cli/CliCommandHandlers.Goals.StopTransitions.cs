@@ -83,10 +83,16 @@ internal static partial class CliCommandHandlers
 
     internal static void RenderGoalAbandonStopAliasOutcome(GoalLifecycleTransitionOutcome outcome,
         AgentOrchestratorKernel committed, OrchestratorWorkspace workspace, string reason,
-        GoalWorktreeCleanupHooks hooks)
+        GoalWorktreeCleanupHooks hooks,
+        Action? deliverCommittedLifecycleEvent = null)
     {
         if (outcome.CommittedTimelineEvent is not null)
-            AppendCommittedLifecycleEvent(outcome, workspace, GoalStatus.Cancelled);
+        {
+            if (deliverCommittedLifecycleEvent is null)
+                AppendCommittedLifecycleEvent(outcome, workspace, GoalStatus.Cancelled);
+            else
+                deliverCommittedLifecycleEvent();
+        }
         var plan = GoalAbandonPlanner.CompleteAfterCommit(committed, outcome.Goal!, workspace, reason, hooks);
         ConsoleViews.PrintGoalAbandonPlan(plan);
     }

@@ -124,7 +124,7 @@ public sealed class SliceBatchExecutionTests
         Xunit.Assert.Empty(workspaceCreations);
     }
 
-    private static Goal CreateBatch(
+    internal static Goal CreateBatch(
         AgentOrchestratorKernel kernel,
         OrchestratorWorkspace workspace,
         IReadOnlyList<AgentDefinition> agents,
@@ -145,7 +145,7 @@ public sealed class SliceBatchExecutionTests
         return Xunit.Assert.Single(kernel.Goals.Where(goal => goal.SliceBatchParentId is null));
     }
 
-    private static ConductorDriver CreateDriver(
+    internal static ConductorDriver CreateDriver(
         AgentOrchestratorKernel kernel,
         ICollection<GoalId> workspaceCreations,
         ICollection<GoalId> dispatches)
@@ -197,7 +197,7 @@ public sealed class SliceBatchExecutionTests
         return driver;
     }
 
-    private static (
+    internal static (
         AgentOrchestratorKernel Kernel,
         OrchestratorWorkspace Workspace,
         IReadOnlyList<AgentDefinition> Agents,
@@ -232,7 +232,7 @@ public sealed class SliceBatchExecutionTests
         return (kernel, workspace, agents, providers);
     }
 
-    private const string DisjointSliceBatchJson = """
+    internal const string DisjointSliceBatchJson = """
         ```json
         [{"id":"g1","objective":"Implement feature A.\n\nTarget files/scopes:\nScope confidence: precise\nIncludes:\n- src/FeatureA/A.cs","dependsOn":[]},{"id":"g2","objective":"Implement feature B.\n\nTarget files/scopes:\nScope confidence: precise\nIncludes:\n- src/FeatureB/B.cs","dependsOn":[]},{"id":"g3","objective":"Implement feature C.\n\nTarget files/scopes:\nScope confidence: precise\nIncludes:\n- src/FeatureC/C.cs","dependsOn":[]}]
         ```

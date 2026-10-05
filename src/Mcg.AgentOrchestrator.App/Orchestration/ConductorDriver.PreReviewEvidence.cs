@@ -72,7 +72,7 @@ internal sealed partial class ConductorDriver
             return true;
         }
 
-        TryRecordTestImpactDegradedEvent(goal, goalPrefix, context);
+        RecordTestImpactEvents(goal, goalPrefix, context);
 
         var round = GetCurrentReviewerRoundNumber(goal, reviewerTask);
         var currentReceipt = reviewerTask.PreReviewEvidenceReceipt;

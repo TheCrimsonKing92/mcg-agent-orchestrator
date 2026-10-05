@@ -27,11 +27,12 @@ internal static partial class CliPersistentStateRunner
         var receipts = GoalWorkerTermination.Terminate(snapshot, "abandon");
         CliCommandHandlers.GoalLifecycleTransitionOutcome outcome;
         AgentOrchestratorKernel? committed;
+        string? pendingMessageId;
         try
         {
-            outcome = TransactGoalSnapshotTransition(repository, "cli:abandon-goal", goalId, kernel =>
+            outcome = TransactGoalLifecycleTransitionWithOutbox(repository, "cli:abandon-goal", goalId, kernel =>
                 CliCommandHandlers.ApplyGoalAbandonStopAliasWithoutRendering(
-                    command, kernel, goalId, workspace, hooks, before, receipts), out committed);
+                    command, kernel, goalId, workspace, hooks, before, receipts), out committed, out pendingMessageId);
             if (outcome.Disposition == CliCommandHandlers.GoalLifecycleTransitionDisposition.ConflictExhausted)
                 throw CliCommandHandlers.CreateConflictExhaustedException("abandon-goal", goalId);
         }
@@ -41,7 +42,9 @@ internal static partial class CliPersistentStateRunner
         }
 
         currentGoal = outcome.Goal;
-        CliCommandHandlers.RenderGoalAbandonStopAliasOutcome(outcome, committed!, workspace, before.Reason, hooks);
+        CliCommandHandlers.RenderGoalAbandonStopAliasOutcome(outcome, committed!, workspace, before.Reason, hooks,
+            pendingMessageId is null ? null : () => DeliverCommittedGoalLifecycleEvent(
+                (IOrchestratorStateOutboxRepository)repository, workspace, goalId, GoalStatus.Cancelled, pendingMessageId));
         return true;
     }
 }

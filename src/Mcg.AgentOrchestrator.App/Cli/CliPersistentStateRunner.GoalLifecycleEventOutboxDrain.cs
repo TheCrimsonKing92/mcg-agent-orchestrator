@@ -52,6 +52,14 @@ internal static partial class CliPersistentStateRunner
         IOrchestratorStateOutboxRepository outbox,
         OrchestratorWorkspace workspace,
         GoalId goalId,
+        string messageId) =>
+        DeliverCommittedGoalLifecycleEvent(outbox, workspace, goalId, GoalStatus.Cancelled, messageId);
+
+    private static void DeliverCommittedGoalLifecycleEvent(
+        IOrchestratorStateOutboxRepository outbox,
+        OrchestratorWorkspace workspace,
+        GoalId goalId,
+        GoalStatus committedStatus,
         string messageId)
     {
         try
@@ -63,7 +71,7 @@ internal static partial class CliPersistentStateRunner
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             throw new CliCommandHandlers.GoalLifecycleProjectionException(
-                $"Goal '{goalId.Value[..8]}' is committed Cancelled, but lifecycle event projection failed: {ex.Message} " +
+                $"Goal '{goalId.Value[..8]}' is committed {committedStatus}, but lifecycle event projection failed: {ex.Message} " +
                 "The lifecycle event delivery is pending and will be retried by the next writer-path command.", ex);
         }
     }
