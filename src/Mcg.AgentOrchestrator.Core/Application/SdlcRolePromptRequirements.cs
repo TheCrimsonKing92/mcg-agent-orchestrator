@@ -98,12 +98,12 @@ internal static class SdlcRolePromptRequirements
                 NegativeControlRequestRule,
                 TesterReceiptFirstContract,
                 TesterInconclusiveReceiptContract,
-                "- PRIMARY PATH: prefer a Conductor-side run over executing tests yourself. Emit evidence_request with selections of test_project and test_class inside your findings JSON, and report tests: deferred naming what you requested. The Conductor runs that selection and returns receipts. This is faster, avoids composing runner commands for this platform and runner, and keeps large test output out of your context. Execute directly only when a test-class selection cannot settle the question.",
+                "- PRIMARY PATH: prefer a Conductor-side run over executing tests yourself. Emit evidence_request with selections of test_project and test_class inside your findings JSON, and report tests: deferred naming what you requested. The Conductor runs that selection and returns receipts. This is faster, avoids composing runner commands for this platform and runner, and keeps large test output out of your context.",
                 "- A Developer-owned finding (`correctness`, `spec-compliance`, `code-quality`, `test-coverage`) that is still waiting on execution MUST carry `evidence_request`; the conductor runs that selection once per candidate before it re-dispatches Developer. Read the brief's `evidence_index` line to tell the two apart: `state=pending-execution` means no run exists for this `candidate_sha` yet and is NOT a pass, `state=executed-on-candidate` means the receipt for that exact candidate is already in hand. A finding with no `evidence_request` has no `evidence_index` line at all: it is writable source work now, never a pass. Never call the source correct, and never resolve a finding, from narrative or from a run that did not happen; keep it open and either cite the receipt or request one.",
                 "- Derive a focused verification matrix from the requested behavior, changed files, and known risks.",
                 "- Listed in matching OPERATOR-OWNED/ACCEPTANCE-GATE-OWNED: not-verifiable; else attest met/not-met.",
                 SelfCheckAttestation,
-                "- Run or attempt the exact verification commands relevant to this task.",
+                "- Name the test classes to run in evidence_request; never run tests.",
                 "- Keep test discovery focused on source and intentional test assets; avoid treating bin/obj output as changed source.",
                 "- Report command, exit code, and concise output summary for every check.",
                 "- Tie each pass/fail conclusion to concrete evidence: command output, changed file behavior, manual smoke steps, or exact reproduction data.",
@@ -112,10 +112,9 @@ internal static class SdlcRolePromptRequirements
                 TesterFindingRequestRule,
                 "- Reuse a carried finding's stable_id. Keep its original location unless the code moved: when the system-derived round diff touched the prior anchor, keep the stable_id and report the defect's current location. Otherwise a different location is rejected. If a new stable_id describes the same open anchor, reuse the canonical stable_id instead.",
                 "- A verification command that is killed, times out, or produces no results file is an environment/plumbing outcome, NOT a test failure: report `tests: inconclusive - <current-round evidence>` with `blockers: none`, and never restate a prior round's conclusion as this round's evidence.",
-                "- Keep each verification command bounded in wall time: build once as its own step, then run tests with a narrow filter and no rebuild; do not bundle a build and a broad or full-suite test run into a single command.",
+                "- Build only with the worker build check; do not modify source files.",
                 "- Do not ask for shell restoration unless an attempted command actually failed because of execution access.",
-                "- You may build and run tests but must not modify source files.",
-                "- Prefer scripts/Invoke-TestSummary.ps1 with -Target <csproj>, -Filter FullyQualifiedName~<Class>, and -NoBuild over hand-composed runner commands. It emits one compact MTP_TERMINAL_SUMMARY line instead of full runner output. MTP filters require FullyQualifiedName~Class or Name~Method-symbol syntax and reject DisplayName text and a bare class name."
+                "- Conductor-run selections use FullyQualifiedName~Class or Name~Method-symbol syntax and reject DisplayName text and a bare class name."
             ],
             AgentRole.Reviewer =>
             [
@@ -269,19 +268,18 @@ internal static class SdlcRolePromptRequirements
                 NegativeControlRequestRule,
                 TesterCompactReceiptFirstContract,
                 TesterCompactInconclusiveReceiptContract,
-                "- PRIMARY PATH: prefer Conductor-side runs. Emit `evidence_request` selections (`test_project`, `test_class`) in findings JSON; report `tests: deferred` naming requested work. The Conductor returns receipts. Execute directly only if selection cannot settle it.",
+                "- PRIMARY PATH: prefer Conductor-side runs. Emit `evidence_request` selections (`test_project`, `test_class`) in findings JSON; report `tests: deferred` naming requested work. The Conductor returns receipts.",
                 "- A Developer-owned finding still waiting on execution MUST carry `evidence_request`; the conductor runs it once per candidate before re-dispatching Developer. In `evidence_index`, `state=pending-execution` means no run exists for that `candidate_sha` and is NOT a pass; `state=executed-on-candidate` means the receipt for that exact candidate exists. Never call the source correct, or resolve a finding, from narrative or a run that did not happen.",
                 "- Derive focused checks from requested behavior; report concrete evidence.",
                 "- Listed in matching OPERATOR-OWNED/ACCEPTANCE-GATE-OWNED: not-verifiable; else attest met/not-met.",
                 SelfCheckAttestation,
-                "- Run or attempt exact commands; include exit code and concise output summary.",
+                "- Name the test classes to run in evidence_request; never run tests.",
                 "- Cover edge/negative cases when practical and avoid treating bin/obj output as changed source.",
                 TesterFindingRequestRule,
                 "- Reuse a carried finding's stable_id. Keep its original location unless the code moved: when the system-derived round diff touched the prior anchor, keep the stable_id and report the defect's current location. Otherwise a different location is rejected. If a new stable_id describes the same open anchor, reuse the canonical stable_id instead.",
                 "- A killed/timed-out/no-results verification is an environment outcome, not a failure: report `tests: inconclusive - <current-round evidence>` with `blockers: none`, and do not reuse a prior round's conclusion as evidence.",
-                "- Keep each command bounded: build once, then run narrow no-rebuild test filters; never bundle a build and a broad test run in one command.",
-                "- You may build and run tests but must not modify source files.",
-                "- Prefer scripts/Invoke-TestSummary.ps1 with -Target <csproj>, -Filter FullyQualifiedName~<Class>, and -NoBuild over hand-composed runner commands. It emits one compact MTP_TERMINAL_SUMMARY line instead of full runner output. MTP filters require FullyQualifiedName~Class or Name~Method-symbol syntax and reject DisplayName text and a bare class name."
+                "- Build only with the worker build check; do not modify source files.",
+                "- Conductor-run selections use FullyQualifiedName~Class or Name~Method-symbol syntax and reject DisplayName text and a bare class name."
             ],
             AgentRole.Reviewer =>
             [
