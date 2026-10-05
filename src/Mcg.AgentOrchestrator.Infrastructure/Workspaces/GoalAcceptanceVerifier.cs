@@ -1614,6 +1614,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         bool continueAfterFailure = false,
         IAcceptanceRunExecutionContext? executionOwner = null)
     {
+        BeginStructuralCoverageLockHoldForBatch(batchChecks, stableSlotIndex, stableSlotLease, dotnetTestBuildPhase, maxConcurrentShards);
         var independentChecks = batchChecks.Where(check => !check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase)).ToArray();
         var laneChecks = batchChecks.Where(check => check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase)).ToArray();
         if (independentChecks.Length > 0 && laneChecks.Length > 0)

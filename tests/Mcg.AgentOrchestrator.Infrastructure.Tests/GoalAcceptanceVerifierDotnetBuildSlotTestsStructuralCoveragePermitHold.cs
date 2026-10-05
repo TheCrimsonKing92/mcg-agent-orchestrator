@@ -20,6 +20,94 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsStructuralCoverage
         bool coverageApplies, bool failPrecheck) =>
         RunPermitScenarioAsync(coverageApplies, failPrecheck, holdBaseline: false);
 
+    [Fact]
+    public async Task SequentialMtpWithCoverage_ReleasesPermitBeforeExecutionAndDiscovery()
+    {
+        var (root, mainRoot) = CreateWorkspace(coverageApplies: true, failPrecheck: false, maxConcurrentShards: 1);
+        var goalId = GoalId.New();
+        var baselineStarts = 0;
+        var buildCalls = 0;
+        var executionCalls = 0;
+        var discoveryWorktrees = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        TestOverrides.ResolveMainWorktreePathForTests = _ => mainRoot;
+        TestOverrides.ResolveDeletedTestFilesForTests = _ => [];
+        TestOverrides.ResolveShardCoreBudgetForTests = () => 2;
+        TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = false;
+        TestOverrides.OnTrustedMainBaselineBuildStartingForTests = _ => Interlocked.Increment(ref baselineStarts);
+        DotnetBuildEnvironmentLease? lease = null;
+        try
+        {
+            Task<GoalAcceptanceVerifier.CommandResult> RunAsync(
+                string[] arguments, string worktree, CancellationToken token)
+            {
+                var isBuild = arguments.Length > 1 && arguments[0] == "dotnet" && arguments[1] == "build";
+                var isDiscovery = arguments.Contains("--list-tests", StringComparer.OrdinalIgnoreCase);
+                var isCore = IsMtpExecutableCall(arguments, "Mcg.AgentOrchestrator.Core.Tests");
+                var isInfrastructure = IsMtpExecutableCall(arguments, "Mcg.AgentOrchestrator.Infrastructure.Tests");
+                if (isBuild || isDiscovery || isCore || isInfrastructure)
+                {
+                    var probe = DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(
+                        lease!.Environment, TimeSpan.Zero);
+                    try
+                    {
+                        if (isBuild)
+                            Assert.IsType<DotnetBuildLeaseAcquisition.SlotsBusy>(probe);
+                        else
+                            Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(probe);
+                    }
+                    finally
+                    {
+                        (probe as DotnetBuildLeaseAcquisition.Acquired)?.Lease.Dispose();
+                    }
+                }
+
+                if (isBuild)
+                {
+                    buildCalls++;
+                    if (worktree == root)
+                        WriteCandidateBuildArtifacts(arguments);
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+                }
+                if (isDiscovery)
+                {
+                    discoveryWorktrees.Add(worktree);
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0,
+                        isCore ? "DISCOVERED_TEST:CoreShardTests.Passes"
+                            : "DISCOVERED_TEST:AlphaShardTests.Passes\nDISCOVERED_TEST:BetaShardTests.Passes"));
+                }
+                if (isCore || isInfrastructure)
+                {
+                    executionCalls++;
+                    var name = isCore ? "CoreShardTests.Passes"
+                        : arguments.Any(argument => argument.Contains("AlphaShardTests", StringComparison.Ordinal))
+                            ? "AlphaShardTests.Passes" : "BetaShardTests.Passes";
+                    WriteMtpTrx(arguments, 1, [name]);
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1"));
+                }
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, string.Empty));
+            }
+
+            var verifier = new GoalAcceptanceVerifier(TestOverrides, RunAsync);
+            lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(TimeSpan.FromSeconds(2));
+            var result = await verifier.RunAsync(root, goalId, changedFiles: ["src/Sample.cs"],
+                stableSlotIndex: StableSlotIndex(lease.Environment.ArtifactsPath), stableSlotLease: lease);
+            Assert.True(result.Passed, result.OutputTail);
+            Assert.True(Assert.Single(result.Checks!, check => check.Name == "structural test coverage").Passed);
+            Assert.Equal(2, baselineStarts);
+            Assert.True(buildCalls > baselineStarts, "The candidate and both baseline builds must run.");
+            Assert.Equal(3, executionCalls);
+            Assert.Contains(root, discoveryWorktrees);
+            Assert.Contains(mainRoot, discoveryWorktrees);
+        }
+        finally
+        {
+            lease?.Dispose();
+            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+            DeleteDirectoryWithRetry(root);
+            DeleteDirectoryWithRetry(mainRoot);
+        }
+    }
+
     private async Task RunPermitScenarioAsync(bool coverageApplies, bool failPrecheck, bool holdBaseline)
     {
         var (root, mainRoot) = CreateWorkspace(coverageApplies, failPrecheck);
@@ -180,7 +268,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsStructuralCoverage
         }
     }
 
-    private static (string CandidateRoot, string MainRoot) CreateWorkspace(bool coverageApplies, bool failPrecheck)
+    private static (string CandidateRoot, string MainRoot) CreateWorkspace(
+        bool coverageApplies, bool failPrecheck, int maxConcurrentShards = 2)
     {
         var precheck = failPrecheck
             ? """{ "name": "missing precheck file", "type": "file-exists", "filePath": "missing.txt" },"""
@@ -189,7 +278,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsStructuralCoverage
             {
               "version": 1,
               "engine": {
-                "maxConcurrentShards": 2,
+                "maxConcurrentShards": {{maxConcurrentShards}},
                 "enforceStructuralCoverage": {{(coverageApplies ? "true" : "false")}},
                 "infrastructureTestLanes": [
                   { "name": "Alpha", "filter": "FullyQualifiedName~AlphaShardTests" },

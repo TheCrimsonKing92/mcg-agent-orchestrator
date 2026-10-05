@@ -295,20 +295,36 @@ public sealed partial class GoalAcceptanceVerifier
     private static readonly ConditionalWeakTable<IAcceptanceRunExecutionContext, StructuralCoverageLockHold>
         CoverageLockHolds = new();
     private StructuralCoverageLockHold? _coverageLockHold;
-    private Func<CancellationToken, Task<StructuralCoveragePreparation>>? _coveragePreparationFactoryValue;
-    private Func<CancellationToken, Task<StructuralCoveragePreparation>>? _coveragePreparationFactory
+    private Func<CancellationToken, Task<StructuralCoveragePreparation>>? _coveragePreparationFactory;
+
+    private void BeginStructuralCoverageLockHoldForBatch(
+        IReadOnlyList<AcceptanceManifestCheck> checks,
+        int? stableSlotIndex,
+        DotnetBuildEnvironmentLease? stableSlotLease,
+        DotnetTestBuildPhase? buildPhase,
+        int maxConcurrentShards)
     {
-        get => _coveragePreparationFactoryValue;
-        set
+        // Match RunCheckBatchAsync's infrastructure shard branch: only that path signals
+        // candidate-build completion while lanes run. Sequential MTP releases stay immediate.
+        if (_coveragePreparationFactory is null || _coverageLockHold is not null ||
+            !stableSlotIndex.HasValue || stableSlotLease is null || buildPhase is null || maxConcurrentShards <= 1)
+            return;
+
+        for (var index = 0; index < checks.Count; index++)
         {
-            if (value is not null)
+            if (!TryGetInfrastructurePartitionId(checks[index], out _, out _))
+                continue;
+            var shardChecks = checks.Skip(index)
+                .TakeWhile(check => TryGetInfrastructurePartitionId(check, out _, out _)).ToArray();
+            // RunInfrastructureShardBatchAsync signals preparation only for an MTP prebuild.
+            if (shardChecks.All(UsesMicrosoftTestingPlatform))
             {
                 var owner = _executionContext ?? throw new InvalidOperationException(
                     "Structural coverage preparation requires an execution owner.");
-                _coverageLockHold = new StructuralCoverageLockHold();
-                CoverageLockHolds.Add(owner, _coverageLockHold);
+                _coverageLockHold = CoverageLockHolds.GetValue(owner, _ => new StructuralCoverageLockHold());
+                return;
             }
-            _coveragePreparationFactoryValue = value;
+            index += shardChecks.Length - 1;
         }
     }
     private Task<StructuralCoveragePreparationOutcome>? _coveragePreparationTask;
