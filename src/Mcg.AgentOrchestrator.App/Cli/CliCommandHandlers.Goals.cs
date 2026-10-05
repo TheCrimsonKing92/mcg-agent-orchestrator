@@ -1521,8 +1521,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 var loopDaemon = HasCliConfirmation(parts, "--daemon");
                 if (loopDaemon && watchInterval is null)
                 {
-                    watchInterval = TimeSpan.FromSeconds(ConductorBatchLoop.DefaultWatchIntervalSeconds);
-                    Console.WriteLine($"[conduct --loop --daemon] Persistent mode; polling every {ConductorBatchLoop.DefaultWatchIntervalSeconds}s and staying alive on an empty backlog. Stop via {ConductorBatchLoop.StopFileName} or --max-duration.");
+                    var seconds = ResolveConductPollSeconds(parts);
+                    watchInterval = TimeSpan.FromSeconds(seconds);
+                    Console.WriteLine($"[conduct --loop --daemon] Persistent mode; polling every {seconds}s and staying alive on an empty backlog. Stop via {ConductorBatchLoop.StopFileName} or --max-duration.");
                 }
 
                 Action<BatchTickSummary>? onTick = ConductorTickPusher.CreateStoreCallback(context.Workspace.RunEventStorePath);
