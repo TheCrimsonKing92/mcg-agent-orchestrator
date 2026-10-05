@@ -16,7 +16,8 @@ internal sealed partial class ConductorBatchLoop
         HashSet<string> completedGoals,
         HashSet<string> escalatedGoals,
         AgentOrchestratorKernel kernel,
-        out bool requiresPerson)
+        out bool requiresPerson,
+        IReadOnlySet<string>? dependencyEscalatedGoals = null)
     {
         requiresPerson = true;
         foreach (var depId in goal.DependsOn)
@@ -35,7 +36,7 @@ internal sealed partial class ConductorBatchLoop
                 return $"dependency-terminal-without-landing: {depId.Value[..8]} state={terminalStatus}";
             }
 
-            if (escalatedGoals.Contains(depId.Value))
+            if (escalatedGoals.Contains(depId.Value) && dependencyEscalatedGoals?.Contains(depId.Value) != true)
                 return $"dependency escalated: {depId.Value[..8]}";
 
             if (kernel.TryGetKnownDependencyGoalStatus(depId, out var knownStatus))

@@ -265,6 +265,8 @@ internal sealed partial class ConductorBatchLoop
         var readmittedRetryReservations = new HashSet<string>(StringComparer.Ordinal);
         var completedGoals = new HashSet<string>(StringComparer.Ordinal);
         var escalatedGoals = new HashSet<string>(StringComparer.Ordinal);
+        var dependencyEscalatedGoals = new HashSet<string>(StringComparer.Ordinal);
+        var advanceFaultRetries = new HashSet<(string GoalId, string Fingerprint)>();
         var reapedGoals = new HashSet<string>(StringComparer.Ordinal);
         var retryCounts = new Dictionary<string, int>(StringComparer.Ordinal);
         var lastGoalDisposition = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -701,6 +703,8 @@ internal sealed partial class ConductorBatchLoop
                 ReadmitResolvedSetAsideGoals(
                     kernel, driver, sweepResult, onlyGoalId, setAsideGoals, selfClearedSetAsideEntries,
                     excludedGoals, escalatedGoals, reapedGoals, goalProjectionCache, _utcNow(), readmittedRetryReservations);
+                ReadmitRecoveredSetAsideGoals(kernel, onlyGoalId, setAsideGoals, completedGoals,
+                    escalatedGoals, dependencyEscalatedGoals, reapedGoals, advanceFaultRetries, goalProjectionCache);
                 return true;
             });
             RunJanitorialPhase("mark-completed-dependency-goals", nextTick, () =>
@@ -1158,7 +1162,7 @@ internal sealed partial class ConductorBatchLoop
                 var dependencyRequiresPerson = true;
                 var depHoldReason = HasStartedGoalWork(goal)
                     ? null
-                    : GetDependencyHoldReason(goal, completedGoals, escalatedGoals, kernel, out dependencyRequiresPerson);
+                    : GetDependencyHoldReason(goal, completedGoals, escalatedGoals, kernel, out dependencyRequiresPerson, dependencyEscalatedGoals);
                 if (depHoldReason is not null)
                 {
                     var progressLine = $"GOAL goal={label} result=held reason={SanitizeReason(depHoldReason)}";
@@ -1176,7 +1180,7 @@ internal sealed partial class ConductorBatchLoop
                         ClearGoalHold(kernel, goal, changedGoalIds);
                         escalatedGoals.Add(goal.Id.Value);
                         ReapGoalOnce(kernel, goal, reapedGoals, totalTicks, tickLines);
-                        SetAside(kernel, driver, goal, BatchSetAsideCondition.DependencyEscalated, setAsideGoals, selfClearedSetAsideEntries);
+                        SetAsideDependencyEscalated(kernel, driver, goal, depHoldReason, setAsideGoals, selfClearedSetAsideEntries, dependencyEscalatedGoals);
                         tickEscalated++;
                     }
                     else
@@ -1845,7 +1849,7 @@ internal sealed partial class ConductorBatchLoop
             kernel.RecordGoalPolicyDecision(goal.Id, msg);
             escalatedGoals.Add(goal.Id.Value);
             ReapGoalOnce(kernel, goal, reapedGoals, totalTicks, tickLines);
-            SetAside(kernel, driver, goal, BatchSetAsideCondition.AdvanceFault, setAsideGoals, selfClearedSetAsideEntries);
+            SetAsideAdvanceFault(kernel, driver, goal, SanitizeReason(ex.Message), setAsideGoals, selfClearedSetAsideEntries);
             tickEscalated++;
             finishGoalWalk("advance-fault");
             result = null!;
@@ -2552,29 +2556,12 @@ internal sealed partial class ConductorBatchLoop
     };
 }
 
-internal enum BatchSetAsideCondition
-{
-    AwaitingClarification,
-    DependencyEscalated,
-    AdvanceFault,
-    LifecycleEscalation,
-    PreLandingRebaseConflict
-}
-
 internal enum WatchSleepResult
 {
     FallbackElapsed,
     StopRequested,
     WakeSignaled
 }
-
-internal sealed record BatchSetAsideEntry(
-    string GoalId,
-    BatchSetAsideCondition Condition,
-    string StateFingerprint,
-    string? LastSelfClearEvidenceFingerprint = null,
-    string? SweepBlockerKind = null,
-    string? SweepBlockerFingerprint = null);
 
 internal sealed record ParallelLandingOutcome(ConductorAdvanceResult Result, int? SlotIndex);
 
