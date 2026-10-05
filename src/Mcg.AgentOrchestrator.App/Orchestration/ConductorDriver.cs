@@ -1436,7 +1436,8 @@ internal sealed partial class ConductorDriver
         ConductorFocusedEvidenceRequestContext? requestContext,
         out FocusedEvidenceRunResult evidence,
         out ConductorParallelAcceptanceAttempt? evidenceAttempt,
-        out FailedGoalFindingObservation decision, out ConductorParallelAcceptanceAttemptDecisionKind? attemptKind)
+        out FailedGoalFindingObservation decision, out ConductorParallelAcceptanceAttemptDecisionKind? attemptKind,
+        ConductorParallelAcceptanceAttempt? existingAttempt = null)
     {
         evidence = null!;
         evidenceAttempt = null;
@@ -1451,7 +1452,9 @@ internal sealed partial class ConductorDriver
         ConductorParallelAcceptanceAttemptDecision attemptDecision;
         try
         {
-            attemptDecision = _focusedEvidenceAttemptCoordinator.EvaluateFocusedEvidence(
+            attemptDecision = existingAttempt is not null
+                ? _focusedEvidenceAttemptCoordinator.ObserveExistingAttempt(existingAttempt, candidate)
+                : _focusedEvidenceAttemptCoordinator.EvaluateFocusedEvidence(
                 candidate,
                 policy,
                 request,

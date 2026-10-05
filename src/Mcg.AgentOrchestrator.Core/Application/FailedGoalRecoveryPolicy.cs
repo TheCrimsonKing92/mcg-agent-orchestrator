@@ -12,7 +12,7 @@ public enum FailedGoalRecoveryAction
     FindingRetry,
     ObserveReviewContract,
     ObserveVerifyingFinding,
-    Escalate
+    Escalate, RerunTimedOutSelections
 }
 
 public enum FailedGoalStaleRecoveryDisposition
@@ -70,7 +70,7 @@ public sealed record FailedGoalRecoveryTaskFacts(
     int? ExitCode,
     string? Command,
     TimeSpan RetryBackoff,
-    FailedGoalInconclusiveRoundPair? InconclusiveRounds = null);
+    FailedGoalInconclusiveRoundPair? InconclusiveRounds = null, FailedGoalTimedOutSelectionFacts? TimedOutSelections = null);
 
 public sealed record FailedGoalPendingNote(TaskId TaskId, string Message);
 
@@ -309,7 +309,7 @@ public sealed record FailedGoalRecoveryDecision(
     TimeSpan Backoff = default,
     string? FeedbackCommand = null,
     string? FeedbackEvidence = null,
-    string? WarningMessage = null, Conductor.ConductorHoldOwner HoldOwner = default);
+    string? WarningMessage = null, Conductor.ConductorHoldOwner HoldOwner = default, FailedGoalTimedOutSelectionRerun? TimedOutRerun = null);
 
 /// <summary>
 /// Selects one Failed-lifecycle recovery action from already-observed immutable facts.
@@ -491,7 +491,7 @@ public static class FailedGoalRecoveryPolicy
             }
 
             if (inconclusiveTester.InconclusiveRounds is { InputsUnchanged: true } rounds)
-                return Decide(facts, inconclusiveTester, FailedGoalRecoveryAction.Escalate, 3,
+                return FailedGoalTimedOutSelectionRerunRule.TryDecide(facts, inconclusiveTester, rounds) ?? Decide(facts, inconclusiveTester, FailedGoalRecoveryAction.Escalate, 3,
                     "verification-inconclusive-unchanged-inputs",
                     $"Tester task {Short(inconclusiveTester.TaskId)} stayed verification-inconclusive on unchanged inputs; operator action required. {rounds.DescribeUnchanged(inconclusiveTester.EvidenceSummary)}");
 

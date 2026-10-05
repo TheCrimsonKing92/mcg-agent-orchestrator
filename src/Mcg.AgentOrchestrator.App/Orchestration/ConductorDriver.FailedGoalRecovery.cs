@@ -84,7 +84,7 @@ internal sealed partial class ConductorDriver
         }
         if (decision.Action == FailedGoalRecoveryAction.ReconcileExitedDispatch)
             return ReconcileFailedGoalExitedDispatches(goal, goalPrefix, policy, state, facts, decision);
-
+        if (decision.Action == FailedGoalRecoveryAction.RerunTimedOutSelections) return ExecuteTimedOutSelectionRerun(goal, goalPrefix, policy, state, decision, pendingNotes);
         if (decision.Action == FailedGoalRecoveryAction.Hold)
         {
             ApplyPendingFailedGoalNotes(goal, pendingNotes);
@@ -97,6 +97,8 @@ internal sealed partial class ConductorDriver
 
         if (decision.Action == FailedGoalRecoveryAction.Escalate)
         {
+            if (TryResumeTimedOutSelectionRerun(goal, goalPrefix, policy, state, facts, decision, pendingNotes) is { } resumed)
+                return resumed;
             ApplyPendingFailedGoalNotes(goal, pendingNotes);
             return Escalate(goal, goalPrefix, policy, state, decision.Reason);
         }
@@ -286,7 +288,7 @@ internal sealed partial class ConductorDriver
                 task.LastVerification?.ExitCode,
                 task.LastVerification?.Command,
                 ComputeEmptyOutputBackoff(policy, task.EmptyOutputRetryCount),
-                TesterInconclusiveRoundInputsReader.Read(goal, task));
+                TesterInconclusiveRoundInputsReader.Read(goal, task), BuildTimedOutSelectionFacts(goal, task));
         });
 
         return new FailedGoalRecoveryFacts(
