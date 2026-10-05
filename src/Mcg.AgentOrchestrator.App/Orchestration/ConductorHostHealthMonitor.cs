@@ -18,6 +18,10 @@ internal sealed class ConductorHostHealthMonitor(
     internal const string ForegroundLockDisarmedEvent = "HOST_HEALTH_FOREGROUND_LOCK_DISARMED";
     internal const string PagedPoolHighEvent = "HOST_HEALTH_PAGED_POOL_HIGH";
     internal const string PagedPoolNormalEvent = "HOST_HEALTH_PAGED_POOL_NORMAL";
+    internal const string WorkerSandboxOffEvent = "HOST_HEALTH_WORKER_SANDBOX_OFF";
+    internal const string WorkerSandboxOnEvent = "HOST_HEALTH_WORKER_SANDBOX_ON";
+    internal const string RepositoryLowWritableEvent = "HOST_HEALTH_REPOSITORY_LOW_WRITABLE";
+    internal const string RepositoryLowWritableClearedEvent = "HOST_HEALTH_REPOSITORY_LOW_WRITABLE_CLEARED";
     private const string ForegroundLockRemedy =
         ".orchestrator/operator-tools/Set-ForegroundLockTimeout.ps1 (run from a focused console)";
     private const int RequiredBuild = 26200;
@@ -70,14 +74,49 @@ internal sealed class ConductorHostHealthMonitor(
         // Legacy callers remain latency-only; the conductor opts into the additional observations.
         if (signals is null) return;
         if (!EvaluatePagedPool(ref state, records)) return;
-        var reading = signals.ForegroundLock.Read();
-        if (!reading.IsAvailable || reading.Build != RequiredBuild) return;
+        if (!EvaluateForegroundLock(ref state)) return;
+        if (!EvaluateWorkerSandbox(ref state)) return;
+        EvaluateRepositoryIntegrity(ref state);
+    }
+
+    private bool EvaluateForegroundLock(ref MonitorState state)
+    {
+        var reading = signals!.ForegroundLock.Read();
+        if (!reading.IsAvailable || reading.Build != RequiredBuild) return true;
         var armed = reading.TimeoutMs != 0;
-        if (armed == state.ForegroundLockArmed) return;
+        if (armed == state.ForegroundLockArmed) return true;
         var detail = armed
             ? FormattableString.Invariant($"{ForegroundLockArmedEvent} timeout_ms={reading.TimeoutMs} build={reading.Build} remedy={ForegroundLockRemedy}")
             : FormattableString.Invariant($"{ForegroundLockDisarmedEvent} timeout_ms=0 build={reading.Build}");
-        Transition(ref state, "foreground-lock", armed, detail);
+        return Transition(ref state, "foreground-lock", armed, detail);
+    }
+
+    private bool EvaluateWorkerSandbox(ref MonitorState state)
+    {
+        if (signals!.WorkerSandbox is not { } reader) return true;
+        var reading = reader.Read();
+        if (!reading.IsAvailable) return true;
+        var off = reading.Enabled == false;
+        if (off == state.WorkerSandboxOff) return true;
+        var detail = off
+            ? $"{WorkerSandboxOffEvent} variable={WorkerSandboxOptions.EnabledVariable} value={reading.RawValue ?? "unset"} " +
+                "remedy=set MCG_WORKER_SANDBOX=1 at User scope, then restart the conductor"
+            : WorkerSandboxOnEvent;
+        return Transition(ref state, "worker-sandbox", off, detail);
+    }
+
+    private bool EvaluateRepositoryIntegrity(ref MonitorState state)
+    {
+        if (signals!.RepositoryIntegrity is not { } probe) return true;
+        var reading = probe.Read();
+        if (!reading.IsAvailable) return true;
+        var lowWritable = reading.LowPaths!.Count > 0;
+        if (lowWritable == state.RepositoryLowWritable) return true;
+        var detail = lowWritable
+            ? $"{RepositoryLowWritableEvent} paths={string.Join(",", reading.LowPaths)} " +
+                "remedy=report-only; relabeling needs owner approval"
+            : RepositoryLowWritableClearedEvent;
+        return Transition(ref state, "repository-integrity", lowWritable, detail);
     }
 
     private bool EvaluatePagedPool(ref MonitorState state, IReadOnlyList<HostHealthLedgerRecord> records)
@@ -113,6 +152,8 @@ internal sealed class ConductorHostHealthMonitor(
         "latency" => state with { IsDegraded = transition.IsDegraded, Pending = null },
         "foreground-lock" => state with { ForegroundLockArmed = transition.IsDegraded, Pending = null },
         "paged-pool" => state with { PagedPoolHigh = transition.IsDegraded, Pending = null },
+        "worker-sandbox" => state with { WorkerSandboxOff = transition.IsDegraded, Pending = null },
+        "repository-integrity" => state with { RepositoryLowWritable = transition.IsDegraded, Pending = null },
         _ => throw new InvalidDataException($"Unknown host-health condition: {transition.Condition}")
     };
 
@@ -151,10 +192,12 @@ internal sealed class ConductorHostHealthMonitor(
     private static string Number(double? value) => value?.ToString("0.###", CultureInfo.InvariantCulture) ?? "unavailable";
 
     private sealed record MonitorState(bool IsDegraded, PendingTransition? Pending = null,
-        bool ForegroundLockArmed = false, bool PagedPoolHigh = false);
+        bool ForegroundLockArmed = false, bool PagedPoolHigh = false,
+        bool WorkerSandboxOff = false, bool RepositoryLowWritable = false);
     // IsDegraded retains the legacy JSON field name and holds the target state of the named condition.
     private sealed record PendingTransition(string Id, bool IsDegraded, string Detail, DateTimeOffset ObservedAt,
         string Condition = "latency");
 }
 
-internal sealed record ConductorHostHealthSignals(IForegroundLockReader ForegroundLock, TimeProvider Clock);
+internal sealed record ConductorHostHealthSignals(IForegroundLockReader ForegroundLock, TimeProvider Clock,
+    IWorkerSandboxReader? WorkerSandbox = null, IRepositoryIntegrityProbe? RepositoryIntegrity = null);

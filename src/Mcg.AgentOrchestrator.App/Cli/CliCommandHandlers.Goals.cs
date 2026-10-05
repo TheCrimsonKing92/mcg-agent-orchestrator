@@ -1614,7 +1614,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 var hostHealthMonitor = new ConductorHostHealthMonitor(
                     GateHostHealthLedger.ResolveStorePath(context.Workspace.ExecutionDirectory),
                     Path.Combine(context.Workspace.OrchestratorDirectory, ConductorHostHealthMonitor.StateFileName),
-                    conductEventLogWriter, signals: new(new WindowsForegroundLockReader(), TimeProvider.System));
+                    conductEventLogWriter, signals: new(new WindowsForegroundLockReader(), TimeProvider.System,
+                        new WindowsWorkerSandboxReader(),
+                        new RepositoryIntegrityProbe(context.Workspace.ExecutionDirectory, new IcaclsIntegrityLabeler())));
                 var maintenanceCadence = RunEventMaintenanceCadenceRunner.ForWorkspace(context.Workspace);
                 var stateLogCheck = StateLogDivergenceCheckRunner.ForWorkspace(context.Workspace);
                 var operatorIntents = OperatorIntentCoordinator.CreateDefault(context.Workspace);
