@@ -305,7 +305,9 @@ public static class DispatchProcessHost
         // depend on host auth). It answers ANTHROPIC_API_KEY in every case; it selects a source ONLY
         // when the dispatch transported none, which in production is a hard failure, not a fallback -
         // see CreateClaudeCredentialResolver.
-        Func<string, string?>? providerEnvironmentReader = null)
+        Func<string, string?>? providerEnvironmentReader = null,
+        IWorkerIntegrityLabeler? gitMetadataLabeler = null,
+        IWorkerSandboxFileSystem? sandboxFileSystem = null)
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -352,6 +354,14 @@ public static class DispatchProcessHost
         // guarantee. The worker only EDITS the worktree; the orchestrator (medium) commits those edits
         // afterwards (BackgroundDispatchRunner.TryCommitWorktreeEdits). This also removes the slow,
         // broad per-dispatch icacls /T walk over the whole .git that labeling the common dir required.
+        string? linkedWorktreeGitFile = null;
+        if (parameters.SandboxWorktreeWritable)
+        {
+            sandboxFileSystem ??= new SystemWorkerSandboxFileSystem();
+            linkedWorktreeGitFile = WorkerSandboxGitBoundary.EnsureWritableSandboxInLinkedWorktree(
+                parameters.WorkingDirectory, sandboxFileSystem);
+        }
+
         var preparation = Track("prepare-roots", () => parameters.SandboxWorktreeWritable
             ? preparer.Prepare(parameters.WorkingDirectory, sandboxRoot)
             : preparer.PrepareSandboxRootOnly(parameters.WorkingDirectory, sandboxRoot));
@@ -383,6 +393,8 @@ public static class DispatchProcessHost
 
         if (parameters.SandboxWorktreeWritable)
         {
+            TrackAction("verify-git-metadata-integrity", () => WorkerSandboxGitBoundary.EnsureSharedGitMetadataNotLowWritable(
+                linkedWorktreeGitFile, gitMetadataLabeler ?? ResolveIntegrityLabeler(), sandboxFileSystem!));
             WorkerSandboxPreparer.WriteCompletedProtectionReceipts(parameters.WorkingDirectory, sandboxRoot);
         }
 

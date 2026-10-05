@@ -1335,12 +1335,20 @@ public sealed class DispatchProcessHostTests
         }
 
         var root = Path.Combine(Path.GetTempPath(), "mcg-apply-sandbox-root-only-receipt-test", Guid.NewGuid().ToString("n"));
+        var repo = Path.Combine(root, "repo");
         var worktree = Path.Combine(root, "worktree");
         var sandboxRoot = Path.Combine(worktree, ".mcg-sandbox");
         var labeler = new RecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true, Medium: true));
         try
         {
-            CreateGitRepository(worktree);
+            CreateLinkedWorktree(repo, worktree);
+            var commonDirectory = Path.Combine(repo, ".git");
+            var mediumState = new IntegrityLabelState(Exists: true, Low: false, Inheritable: false, Medium: true);
+            labeler.SetQueryState(commonDirectory, mediumState);
+            foreach (var child in new[] { "hooks", "refs", "objects" })
+            {
+                labeler.SetQueryState(Path.Combine(commonDirectory, child), mediumState);
+            }
             var preparer = new WorkerSandboxPreparer(labeler);
             var rootOnlyReceipt = preparer.Prepare(worktree, sandboxRoot);
             Assert.False(rootOnlyReceipt.PrepReceiptHit);
@@ -1354,7 +1362,8 @@ public sealed class DispatchProcessHostTests
                 preparer,
                 (phase, _, _) => phases.Add(phase),
                 _ => protectedPhases.Add(WorkerSandboxPreparer.ProtectWorkspaceBoundaryPhase),
-                _ => protectedPhases.Add(WorkerSandboxPreparer.ProtectGitMetadataPhase));
+                _ => protectedPhases.Add(WorkerSandboxPreparer.ProtectGitMetadataPhase),
+                gitMetadataLabeler: labeler);
 
             Assert.False(result.PrepReceiptHit);
             Assert.Empty(labeler.SetCalls);
@@ -1374,7 +1383,8 @@ public sealed class DispatchProcessHostTests
                 CreateSandboxParameters(root, worktree, WorkerSandboxProvider.Unknown),
                 preparer,
                 protectWorkspaceBoundary: _ => protectedPhases.Add(WorkerSandboxPreparer.ProtectWorkspaceBoundaryPhase),
-                protectGitMetadata: _ => protectedPhases.Add(WorkerSandboxPreparer.ProtectGitMetadataPhase));
+                protectGitMetadata: _ => protectedPhases.Add(WorkerSandboxPreparer.ProtectGitMetadataPhase),
+                gitMetadataLabeler: labeler);
 
             Assert.True(completedResult.PrepReceiptHit);
             Assert.True(completedResult.ReceiptCoversProtectionPhase(WorkerSandboxPreparer.ProtectWorkspaceBoundaryPhase));
