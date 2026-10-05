@@ -21,36 +21,49 @@ internal sealed partial class ConductorDriver
         bool RequiresCommittedTarget = false,
         IReadOnlyList<ReviewFinding>? DeveloperOwnedFindings = null);
 
+    internal const string CandidateDeclineCohortAttributionFailure = "cohort-attribution-failure";
+    internal const string CandidateDeclineVerifiedTransitionRequiresOperator = "verified-transition-requires-operator";
+    internal const string CandidateDeclineLifecycleNotVerified = "lifecycle-not-verified";
+    internal const string CandidateDeclineVerificationIncomplete = "verification-incomplete";
+    internal const string CandidateDeclineHoldActive = "hold-active";
+
     internal ConductorParallelAcceptanceCandidate? TryBuildParallelAcceptanceCandidate(
         Goal goal,
         ConductorAutonomyPolicy policy,
-        int slotIndex)
+        int slotIndex,
+        out string? reason)
     {
         if (HasRoutableRecordedCohortAttributionFailure(goal))
         {
+            reason = CandidateDeclineCohortAttributionFailure;
             return null;
         }
 
         if (policy.GetTransitionDecision(GoalLifecycleState.Verified) == ConductorTransitionDecision.Escalate)
         {
+            reason = CandidateDeclineVerifiedTransitionRequiresOperator;
             return null;
         }
 
         if (GoalLifecycle.ResolveState(goal, GetFacts(goal)) is not (GoalLifecycleState.Verified or GoalLifecycleState.Verifying))
         {
+            reason = CandidateDeclineLifecycleNotVerified;
             return null;
         }
 
         if (!AcceptancePrecheck.HasCompletedPassedVerificationForAllTasks(goal))
         {
+            reason = CandidateDeclineVerificationIncomplete;
             return null;
         }
 
         if (HasActiveApparatusHold(goal, out _) || HasActiveOwnerReviewHold(goal, out _, out _))
         {
+            reason = CandidateDeclineHoldActive;
             return null;
         }
 
+        reason = null;
         var acceptanceHeads = _resolveAcceptanceHeads(goal);
 
         if (!_parallelAcceptanceAttemptCoordinator.HasLiveAttempt(goal.Id.Value) &&

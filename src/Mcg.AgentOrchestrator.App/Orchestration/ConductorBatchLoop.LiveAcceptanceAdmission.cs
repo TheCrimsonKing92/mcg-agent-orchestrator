@@ -274,12 +274,14 @@ internal sealed partial class ConductorBatchLoop
         Goal goal,
         ConductorAutonomyPolicy policy,
         int slotIndex,
-        out Exception? exception)
+        out Exception? exception,
+        out string? declineReason)
     {
         exception = null;
+        declineReason = null;
         try
         {
-            return driver.TryBuildParallelAcceptanceCandidate(goal, policy, slotIndex);
+            return driver.TryBuildParallelAcceptanceCandidate(goal, policy, slotIndex, out declineReason);
         }
         catch (Exception ex)
         {

@@ -1094,7 +1094,7 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
             new FakeAcceptanceVerifier(),
             DefaultAgents(),
             WorkerProfileCatalog.Default());
-        var candidate = driver.TryBuildParallelAcceptanceCandidate(goal, ConductorAutonomyPolicy.Conservative, 0);
+        var candidate = driver.TryBuildParallelAcceptanceCandidate(goal, ConductorAutonomyPolicy.Conservative, 0, out _);
         Assert.NotNull(candidate);
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
             Path.Combine(root, ".orchestrator", "test-acceptance-attempts"),

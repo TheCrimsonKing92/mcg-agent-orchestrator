@@ -193,7 +193,7 @@ internal sealed partial class ConductorDriver
         ConductorParallelAcceptanceCandidate? candidate;
         try
         {
-            candidate = TryBuildParallelAcceptanceCandidate(goal, policy, slotIndex: 0);
+            candidate = TryBuildParallelAcceptanceCandidate(goal, policy, slotIndex: 0, out _);
         }
         catch (EvidenceMutationLeaseUnavailableException)
         {

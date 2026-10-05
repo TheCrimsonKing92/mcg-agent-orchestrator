@@ -551,6 +551,79 @@ public sealed class ConductorBatchLoopTestsLiveAcceptanceAdmission : ConductorBa
         }
     }
 
+    [Xunit.Fact]
+    public void ManualPolicyVerifiedGoalRecordsCandidateNoneProgressLine()
+    {
+        var (goal, tick) = RunVerifiedGoalAdmissionTick(ConductorAutonomyPolicy.Manual);
+
+        var line = Assert.Single(tick.ProgressLines!, progress =>
+            progress.Contains("reason=parallel-acceptance-candidate-none", StringComparison.Ordinal));
+        Assert.Contains($"goal={goal.Id.Value[..8]}", line);
+        Assert.Contains("detail=verified-transition-requires-operator", line);
+        Assert.Contains("ADMISSION tick=1 result=held", line);
+    }
+
+    [Xunit.Fact]
+    public void ConservativePolicyVerifiedGoalStartsAcceptanceWithoutCandidateNoneLine()
+    {
+        var (manualGoal, manualTick) = RunVerifiedGoalAdmissionTick(ConductorAutonomyPolicy.Manual);
+        Assert.Contains(manualTick.ProgressLines!, line =>
+            line.Contains($"reason=parallel-acceptance-candidate-none goal={manualGoal.Id.Value[..8]}", StringComparison.Ordinal) &&
+            line.Contains("detail=verified-transition-requires-operator", StringComparison.Ordinal));
+        var (goal, tick) = RunVerifiedGoalAdmissionTick(ConductorAutonomyPolicy.Conservative);
+
+        Assert.DoesNotContain(tick.ProgressLines!, line =>
+            line.Contains("parallel-acceptance-candidate-none", StringComparison.Ordinal));
+        // Main 0009e75aa admits this single verified goal into slot-0 with result=started.
+        Assert.Contains(tick.ProgressLines!, line =>
+            line.Contains($"ACCEPTANCE goal={goal.Id.Value[..8]}", StringComparison.Ordinal) &&
+            line.Contains("slot=slot-0", StringComparison.Ordinal) &&
+            line.Contains("result=started", StringComparison.Ordinal));
+    }
+
+    private static (Goal Goal, BatchTickSummary Tick) RunVerifiedGoalAdmissionTick(ConductorAutonomyPolicy policy)
+    {
+        using var isolatedRoot = IsolatedDotnetRootScope();
+        var root = CreateTempDirectory("mcg-conductor-candidate-none");
+        try
+        {
+            var now = DateTimeOffset.Parse("2026-10-05T12:00:00Z");
+            var kernel = new AgentOrchestratorKernel(new ParallelAcceptanceTestClock(now));
+            var goal = CreateGoals(kernel, 1, "CandidateNone").Single();
+            PassVerificationAt(kernel, goal, goal.Tasks.Single(), now);
+            Assert.Equal(GoalStatus.Verified, goal.Status);
+            Assert.Equal(WorkTaskStatus.Completed, goal.Tasks.Single().Status);
+            Assert.True(kernel.BuildVerificationGate(goal.Id).IsSatisfied);
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                root,
+                utcNow: () => now,
+                isProcessAlive: _ => true,
+                launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(9701));
+
+            BatchTickSummary? tick = null;
+            new ConductorBatchLoop().Run(
+                kernel,
+                MakeDriver(
+                    getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                    runAcceptanceWithSlot: (_, _) => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
+                    getLandingFileScopes: _ => ["src/CandidateNone.cs"],
+                    parallelAcceptanceAttemptCoordinator: coordinator,
+                    utcNow: () => now,
+                    executionDirectory: root),
+                policy,
+                NoStopPath(),
+                maxIterations: 1,
+                onTick: current => tick = current);
+
+            Assert.NotNull(tick);
+            return (goal, tick);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
     private static Goal[] CreateGoals(AgentOrchestratorKernel kernel, int count, string suffix) =>
         Enumerable.Range(0, count)
             .Select(index => GoalLifecycleCommands.CreateAndActivateSimpleGoal(

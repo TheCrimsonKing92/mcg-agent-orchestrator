@@ -11,6 +11,22 @@ public sealed class ConductorDriverTestsVerifiedAdmissionDecision
     private const string Fingerprint = "v1:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
 
     [Fact]
+    public void TryBuildParallelAcceptanceCandidateReportsVerifiedTransitionReasonUnderManual()
+    {
+        var (kernel, goal) = SimpleGoal();
+        PassVerification(kernel, goal, goal.Tasks.Single());
+        var driver = MakeDriver();
+
+        Assert.Null(driver.TryBuildParallelAcceptanceCandidate(
+            goal, ConductorAutonomyPolicy.Manual, 0, out var manualReason));
+        Assert.Equal("verified-transition-requires-operator", manualReason);
+
+        Assert.NotNull(driver.TryBuildParallelAcceptanceCandidate(
+            goal, ConductorAutonomyPolicy.Conservative, 0, out var conservativeReason));
+        Assert.Null(conservativeReason);
+    }
+
+    [Fact]
     public void ActiveOwnerReviewHoldCarriesAdmissionDecisionWithoutRegating()
     {
         using var fixture = new OwnerFixture();
