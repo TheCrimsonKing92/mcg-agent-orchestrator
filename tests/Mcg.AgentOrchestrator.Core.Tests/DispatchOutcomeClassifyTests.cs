@@ -1644,6 +1644,91 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Equal(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
     }
 
+    [Xunit.Fact]
+    public void ClassifyReapedMaxRuntimeIsEnvironmentalOperatorNeeded()
+    {
+        var outcome = DispatchFailureClassifier.Classify(
+            SimpleTask(),
+            Verification(1, "Starting worker...", "[dispatch-host] terminating worker tree: exceeded max runtime 60 min."));
+
+        Xunit.Assert.StartsWith("CLASSIFIER ", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("rule=reaped-max-runtime", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("outcome_class=environmental", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Equal(TaskOutcomeClass.Environmental, outcome.OutcomeClass);
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
+        Xunit.Assert.Equal(
+            "Worker tree reaped by the dispatch host at its max runtime of 60 min; uncommitted tree contents are not evidence of a code failure.",
+            outcome.EvidenceSummary);
+    }
+
+    [Xunit.Fact]
+    public void ClassifyReapedMaxRuntimeOutranksScriptingRealFailure()
+    {
+        var outcome = DispatchFailureClassifier.Classify(
+            SimpleTask(),
+            Verification(1, "Starting worker...",
+                "Get-ChildItem : Cannot find path 'C:\\work\\summary' because it does not exist. CommandNotFoundException\n" +
+                "[dispatch-host] terminating worker tree: exceeded max runtime 60 min."));
+
+        Xunit.Assert.Contains("rule=reaped-max-runtime", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("rule=real-failure", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
+    }
+
+    [Xunit.Fact]
+    public void ClassifyDispatchHostIdleStallAndExitZeroKeepExistingRules()
+    {
+        var reapedOutcome = DispatchFailureClassifier.Classify(
+            SimpleTask(),
+            Verification(1, "Starting worker...", "[dispatch-host] terminating worker tree: exceeded max runtime 60 min."));
+        var idleOutcome = DispatchFailureClassifier.Classify(
+            SimpleTask(),
+            Verification(1, "Starting worker...", "[dispatch-host] terminating worker tree: stalled 25 min with no output (idle cap 25 min)."));
+        var exitZeroOutcome = DispatchFailureClassifier.Classify(
+            SimpleTask(),
+            Verification(0, "Starting worker...", "[dispatch-host] terminating worker tree: exceeded max runtime 60 min."));
+
+        Xunit.Assert.Contains("rule=reaped-max-runtime", reapedOutcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("rule=reaped-max-runtime", idleOutcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("rule=reaped-max-runtime", exitZeroOutcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("rule=unknown-failure", idleOutcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("rule=succeeded-dispatch-completion-evidence", exitZeroOutcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void ClassifyReapedMaxRuntimePreservesCeilingTokenAndHandlesMissingMinutes()
+    {
+        var ceilingOutcome = DispatchFailureClassifier.Classify(
+            SimpleTask(),
+            Verification(1, "Starting worker...", "prefix [dispatch-host] terminating worker tree: exceeded max runtime 090 min."));
+        var missingMinutesOutcome = DispatchFailureClassifier.Classify(
+            SimpleTask(),
+            Verification(1, "Starting worker...", "[dispatch-host] terminating worker tree: exceeded max runtime unknown min."));
+
+        Xunit.Assert.Contains("rule=reaped-max-runtime", ceilingOutcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("090 min", ceilingOutcome.EvidenceSummary, StringComparison.Ordinal);
+        Xunit.Assert.Contains("rule=reaped-max-runtime", missingMinutesOutcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Equal(
+            "Worker tree reaped by the dispatch host at its max runtime; uncommitted tree contents are not evidence of a code failure.",
+            missingMinutesOutcome.EvidenceSummary);
+    }
+
+    [Xunit.Fact]
+    public void ClassifyReapedMaxRuntimeRequiresExactStderrMarker()
+    {
+        var differentCaseOutcome = DispatchFailureClassifier.Classify(
+            SimpleTask(),
+            Verification(1, "Starting worker...", "[dispatch-host] terminating worker tree: Exceeded max runtime 60 min."));
+        var stdoutOutcome = DispatchFailureClassifier.Classify(
+            SimpleTask(),
+            Verification(1, "[dispatch-host] terminating worker tree: exceeded max runtime 60 min."));
+
+        Xunit.Assert.DoesNotContain("rule=reaped-max-runtime", differentCaseOutcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("rule=reaped-max-runtime", stdoutOutcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "Classify returns ProviderAuthentication for provider auth output")]
     public void ClassifyProviderAuthentication()
     {

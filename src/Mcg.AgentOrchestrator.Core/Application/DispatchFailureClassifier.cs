@@ -200,6 +200,8 @@ public static class DispatchRejectionDiagnosticMarker
 
 public static partial class DispatchFailureClassifier
 {
+    private const string DispatchHostMaxRuntimeReapMarker = "[dispatch-host] terminating worker tree: exceeded max runtime";
+
     private static readonly TimeSpan BareClockRetryStalenessTolerance = TimeSpan.FromHours(1);
 
     private enum ProviderTurnRecordKind
@@ -1027,6 +1029,24 @@ public static partial class DispatchFailureClassifier
                 BuildEvidenceSummary(verification)));
         }
 
+        if (exitCode != 0 && TryGetDispatchHostMaxRuntimeReapSummary(verification, out var reapSummary))
+        {
+            return BuildOutcome(
+                TaskOutcomeRules.ReapedMaxRuntime,
+                task,
+                verification,
+                workerResultPresent,
+                hasCommittedChanges,
+                new DispatchOutcome(
+                DispatchOutcomeKind.UnknownFailure,
+                exitCode,
+                hasZeroByteOutput,
+                null,
+                null,
+                RecoveryRecommendation.OperatorNeeded,
+                reapSummary));
+        }
+
         if (providerFailureKind == ProviderFailureKind.RateLimit &&
             !HasWorkerEvidenceThatOutranksSubscriptionLimit(verification, workerResultPresent, hasCommittedChanges) &&
             TryGetRecoverableSubscriptionLimitLine(verification, out _))
@@ -1562,6 +1582,29 @@ public static partial class DispatchFailureClassifier
             ? BuildEvidenceSummary(verification)
             : $"real-failure stderr-tail: {TruncateEvidence(string.Join(" | ", substantiveLines))}";
     }
+
+    private static bool TryGetDispatchHostMaxRuntimeReapSummary(TaskVerificationRecord verification, out string summary)
+    {
+        foreach (var line in GetStandardErrorEvidenceLines(verification))
+        {
+            var markerIndex = line.IndexOf(DispatchHostMaxRuntimeReapMarker, StringComparison.Ordinal);
+            if (markerIndex < 0)
+            {
+                continue;
+            }
+
+            var ceiling = DispatchHostMaxRuntimeMinutes().Match(line[(markerIndex + DispatchHostMaxRuntimeReapMarker.Length)..]);
+            var ceilingText = ceiling.Success ? $" of {ceiling.Groups["minutes"].Value} min" : string.Empty;
+            summary = $"Worker tree reaped by the dispatch host at its max runtime{ceilingText}; uncommitted tree contents are not evidence of a code failure.";
+            return true;
+        }
+
+        summary = string.Empty;
+        return false;
+    }
+
+    [GeneratedRegex(@"^ (?<minutes>[0-9]+) min\b", RegexOptions.CultureInvariant)]
+    private static partial Regex DispatchHostMaxRuntimeMinutes();
 
     private static bool HasScriptingFailureEvidence(TaskVerificationRecord verification) =>
         GetSubstantiveStandardErrorLines(verification).Any(IsScriptingFailureLine);

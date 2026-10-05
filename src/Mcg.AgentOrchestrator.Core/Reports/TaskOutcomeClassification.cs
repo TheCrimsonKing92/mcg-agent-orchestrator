@@ -33,6 +33,7 @@ internal static class TaskOutcomeRules
     public static readonly TaskOutcomeRule ProviderConnectivity = new("provider-connectivity", TaskOutcomeClass.Environmental);
     public static readonly TaskOutcomeRule ProviderInterruption = new("provider-interruption", TaskOutcomeClass.Environmental);
     public static readonly TaskOutcomeRule ProviderNeutralProgressStall = new("provider-neutral-progress-stall", TaskOutcomeClass.Environmental);
+    public static readonly TaskOutcomeRule ReapedMaxRuntime = new("reaped-max-runtime", TaskOutcomeClass.Environmental);
     public static readonly TaskOutcomeRule ProviderModelRejection = new("provider-model-rejection", TaskOutcomeClass.Environmental);
     public static readonly TaskOutcomeRule ProviderRateLimit = new("provider-rate-limit", TaskOutcomeClass.Environmental);
     public static readonly TaskOutcomeRule ProviderBudgetExhausted = new("provider-budget-exhausted", TaskOutcomeClass.Environmental);
@@ -80,6 +81,7 @@ internal static class TaskOutcomeRules
         ProviderConnectivity,
         ProviderInterruption,
         ProviderNeutralProgressStall,
+        ReapedMaxRuntime,
         ProviderModelRejection,
         ProviderRateLimit,
         ProviderBudgetExhausted,

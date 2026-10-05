@@ -134,6 +134,19 @@ public sealed class ModelOutcomeScorecardTests
         Assert.Equal(TaskOutcomeClass.Environmental, classification.Class);
     }
 
+    [Xunit.Fact]
+    public void TaskOutcomeClassifierReapedMaxRuntimeIsEnvironmental()
+    {
+        var classification = TaskOutcomeClassifier.Classify(WorkTaskStatus.Failed, "reaped-max-runtime");
+
+        Assert.Equal("reaped-max-runtime", classification.Rule);
+        Assert.Equal(TaskOutcomeClass.Environmental, classification.Class);
+        Assert.Contains(TaskOutcomeRules.Produced, rule =>
+            rule.Token == "reaped-max-runtime" && rule.Class == TaskOutcomeClass.Environmental);
+        Assert.True(TaskOutcomeRules.Known.TryGetValue("reaped-max-runtime", out var known));
+        Assert.Equal(TaskOutcomeClass.Environmental, known!.Class);
+    }
+
     [Xunit.Fact(DisplayName = "TaskOutcomeClassifier_producer_rule_catalog_has_exact_coverage")]
     public void TaskOutcomeClassifierProducerRuleCatalogHasExactCoverage()
     {
