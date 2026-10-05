@@ -487,6 +487,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     }
     private readonly Func<string[], string, TimeSpan, CancellationToken, Task<CommandResult>> _runner;
     private readonly DotnetBuildStorageRoot _storageRoot;
+    internal MainBaselineDiscoveryCache? ResolvedMainBaselineDiscoveryCache { get; }
     private readonly AcceptanceStructuralCoverageEvaluator _structuralCoverageEvaluator;
     private readonly TimeProvider _timeProvider;
     private readonly Action<TimeSpan> _leaseSleep;
@@ -593,11 +594,15 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         _requiresTestTelemetryReceipt = requiresTestTelemetryReceipt;
         _testOverrideSource = testOverrides ?? new GoalAcceptanceVerifierTestOverrides();
         _testOverrides = _testOverrideSource.Snapshot();
+        ResolvedMainBaselineDiscoveryCache = _testOverrides.MainBaselineDiscoveryCacheForTests ??
+            (_testOverrides.MainBaselineDiscoveryCacheEnabled
+                ? new MainBaselineDiscoveryCache(MainBaselineDiscoveryCache.DefaultRootPath(_storageRoot.RootPath)) : null);
     }
     internal GoalAcceptanceVerifier(GoalAcceptanceVerifier source, IAcceptanceRunExecutionContext executionContext)
     {
         _runner = source._runner;
         _storageRoot = source._storageRoot;
+        ResolvedMainBaselineDiscoveryCache = source.ResolvedMainBaselineDiscoveryCache;
         _ownerPolicyDecisionStoreDirectory = source._ownerPolicyDecisionStoreDirectory;
         _structuralCoverageEvaluator = source._structuralCoverageEvaluator;
         _timeProvider = source._timeProvider;
@@ -610,6 +615,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     {
         _runner = source._runner;
         _storageRoot = source._storageRoot;
+        ResolvedMainBaselineDiscoveryCache = source.ResolvedMainBaselineDiscoveryCache;
         _ownerPolicyDecisionStoreDirectory = source._ownerPolicyDecisionStoreDirectory;
         _structuralCoverageEvaluator = source._structuralCoverageEvaluator;
         _timeProvider = source._timeProvider;
