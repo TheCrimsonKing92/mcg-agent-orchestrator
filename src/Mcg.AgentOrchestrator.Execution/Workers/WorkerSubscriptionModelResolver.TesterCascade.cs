@@ -7,6 +7,69 @@ internal static partial class WorkerSubscriptionModelResolver
     internal const string TesterCascadeCheapLane = "codex-spark:cascade-cheap";
     internal const string TesterCascadeEscalatedLane = "codex-cli:cascade-escalated";
 
+    private static SubscriptionModelSelection RouteDeveloperCascade(
+        AgentDefinition agent, Goal goal, TaskSpec task, SubscriptionModelSelection primary,
+        WorkerProviderCatalog providers, WorkerProfileCatalog? profiles,
+        bool enabled, string? alias)
+    {
+        SubscriptionModelSelection Full(string decision, string rule) => primary with
+        {
+            Reason = new CascadeRouteMarker(decision, rule).AppendTo(primary.Reason),
+            DispatchLane = decision == CascadeRouteMarker.Escalated ? TesterCascadeEscalatedLane : primary.DispatchLane
+        };
+        SubscriptionModelSelection Cheap(string rule, IReadOnlyList<string> ids)
+        {
+            var modelAlias = alias ?? AgentCatalog.OpenAiGpt6LunaSubscriptionModelAlias;
+            if (string.IsNullOrWhiteSpace(modelAlias))
+                throw new ArgumentException("cascadeCheapModelAlias must not be empty.", nameof(alias));
+            return new(primary.Complexity,
+                new ModelProfile("OpenAI", modelAlias, agent.Model.Capabilities, SubscriptionMode.ApiKey,
+                    AgentCatalog.DefaultSubscriptionReasoningEffort("OpenAI", modelAlias), agent.Model.MaxOutputTokens),
+                UsesComplexModel: false, UsesSubscriptionLaunchProfile: false,
+                Reason: new CascadeRouteMarker(CascadeRouteMarker.Cheap, rule, ids).AppendTo(primary.Reason),
+                LaunchProfileName: WorkerProfileDispatcher.OpenAiSparkSubscriptionProfileName,
+                DispatchLane: TesterCascadeCheapLane);
+        }
+        bool ProfileAvailable() => profiles is not null && TryValidateSparkProfile(profiles, providers, out _);
+
+        if (!enabled) return Full(CascadeRouteMarker.Primary, "switched-off");
+        // Refresh rebuilds the prepared round; it must not treat its own ids as persisting findings.
+        if (task.Status == WorkTaskStatus.Running && task.LastProcess is null &&
+            CascadeRouteMarker.TryParse(task.LastDispatch?.ModelSelectionReason, out var prepared))
+            return prepared.Decision == CascadeRouteMarker.Cheap
+                ? ProfileAvailable() ? Cheap(prepared.RuleId, prepared.Ids ?? []) : Full(CascadeRouteMarker.Primary, "cheap-profile-unavailable")
+                : Full(prepared.Decision, prepared.RuleId);
+
+        if (task.DispatchHistory.Count == 0) return Full(CascadeRouteMarker.Primary, "first-round");
+        if (task.DispatchHistory.Any(d => CascadeRouteMarker.TryParse(d.ModelSelectionReason, out var route) &&
+                route.Decision == CascadeRouteMarker.Escalated))
+            return Full(CascadeRouteMarker.Primary, "prior-escalation");
+        var classification = MechanicalReworkClassifier.Classify(goal, task);
+        if (!classification.IsMechanical) return Full(CascadeRouteMarker.Primary, "non-mechanical");
+        var previous = task.DispatchHistory.Last();
+        if (CascadeRouteMarker.TryParse(previous.ModelSelectionReason, out var cheap) && cheap.Decision == CascadeRouteMarker.Cheap)
+        {
+            if ((cheap.Ids ?? []).Intersect(classification.Ids, StringComparer.Ordinal).Any())
+                return Full(CascadeRouteMarker.Escalated, "mechanical-finding-persisted");
+            // Kernel event order binds the latest verification to this latest dispatch, even if clocks differ.
+            var anchor = -1;
+            for (var i = goal.Timeline.Count - 1; i >= 0; i--)
+                if (goal.Timeline[i].TaskId == task.Id && goal.Timeline[i].Kind == ProgressKind.TaskDispatchRecorded)
+                {
+                    anchor = i;
+                    break;
+                }
+            var verification = anchor >= 0
+                ? goal.Timeline.Skip(anchor + 1).Any(e => e.TaskId == task.Id && e.Kind == ProgressKind.TaskVerificationRecorded)
+                    ? task.VerificationHistory.LastOrDefault() : null
+                : task.VerificationHistory.LastOrDefault(v => v.CompletedAt > previous.DispatchedAt);
+            if (verification?.CompletionVerdictRule == "provider-model-rejection")
+                return Full(CascadeRouteMarker.Escalated, "cheap-model-rejected");
+        }
+        if (!ProfileAvailable()) return Full(CascadeRouteMarker.Primary, "cheap-profile-unavailable");
+        return Cheap(classification.RuleId!, classification.Ids);
+    }
+
     private static SubscriptionModelSelection RouteTesterCascade(
         AgentDefinition agent, Goal goal, TaskSpec task, SubscriptionModelSelection primary,
         WorkerProviderCatalog providers, WorkerProfileCatalog? profiles,
