@@ -137,7 +137,8 @@ public sealed record TaskSnapshot(
     int WorkerBuildCheckRecoveryCount = 0,
     DateTimeOffset? LatestRoleInputRetryAt = null,
     DateTimeOffset? CriterionRetryFeedbackRoundAt = null,
-    bool LatestRetryInherited = false);
+    bool LatestRetryInherited = false,
+    DateTimeOffset? SubscriptionDeferralReleasedAt = null);
 
 public sealed record TaskExecutionSnapshot(
     string AgentId,

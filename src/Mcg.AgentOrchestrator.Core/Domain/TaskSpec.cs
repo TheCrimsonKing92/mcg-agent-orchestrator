@@ -27,6 +27,7 @@ public sealed partial class TaskSpec
     public string? VerificationPlan { get; private set; }
 
     public DateTimeOffset? SubscriptionRetryAfter { get; private set; }
+    public DateTimeOffset? SubscriptionDeferralReleasedAt { get; private set; }
 
     public string? SubscriptionLimitReviewNote { get; private set; }
 
@@ -274,7 +275,8 @@ public sealed partial class TaskSpec
             WorkerBuildCheckRecoveryCount,
             LatestRoleInputRetryAt,
             CriterionRetryFeedbackRoundAt,
-            LatestRetryInherited);
+            LatestRetryInherited,
+            SubscriptionDeferralReleasedAt);
     }
 
     internal static TaskSpec FromSnapshot(TaskSnapshot snapshot)
@@ -493,6 +495,7 @@ public sealed partial class TaskSpec
         }
 
         task.SetSubscriptionRetryAfter(snapshot.SubscriptionRetryAfter);
+        task.SubscriptionDeferralReleasedAt = snapshot.SubscriptionDeferralReleasedAt;
         task.RecordSubscriptionLimitReview(
             snapshot.SubscriptionLimitReviewNote,
             snapshot.SubscriptionLimitReviewedAt,
@@ -705,6 +708,8 @@ public sealed partial class TaskSpec
     internal void SetSubscriptionRetryAfter(DateTimeOffset? retryAfter) => SubscriptionRetryAfter = retryAfter;
 
     internal void ClearSubscriptionRetryAfter() => SubscriptionRetryAfter = null;
+
+    internal void RecordSubscriptionDeferralRelease(DateTimeOffset releasedAt) => SubscriptionDeferralReleasedAt = releasedAt;
 
     internal bool RecordPreReviewEvidence(PreReviewEvidenceReceipt receipt)
     {

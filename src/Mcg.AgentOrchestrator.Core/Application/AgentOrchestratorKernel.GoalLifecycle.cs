@@ -1095,6 +1095,10 @@ public sealed partial class AgentOrchestratorKernel
             task.Id,
             ProgressKind.TaskRedelegated,
             $"Re-delegated {task.RequiredRole} task from agent '{previousAgentId}' to agent '{agent.Id.Value}' ({agent.Name}).");
+        if (assignmentChanged)
+        {
+            ReleaseCrossProviderSubscriptionDeferral(goal, task, agent);
+        }
         RefreshGoalStatus(goal);
         return task;
     }
@@ -1141,8 +1145,42 @@ public sealed partial class AgentOrchestratorKernel
             $"Reassigned {task.RequiredRole} task from agent '{previousAgentId}' to agent '{agent.Id.Value}' ({agent.Name})." +
             routingEffect +
             operatorReason);
+        if (assignmentChanged)
+        {
+            ReleaseCrossProviderSubscriptionDeferral(goal, task, agent);
+        }
         RefreshGoalStatus(goal);
         return task;
+    }
+
+    private void ReleaseCrossProviderSubscriptionDeferral(Goal goal, TaskSpec task, AgentDefinition newAgent)
+    {
+        if (!DispatchFailureClassifier.TryGetSubscriptionLimitRetryAfter(task, out var retryAfter))
+        {
+            return;
+        }
+
+        var dispatch = task.LastDispatch;
+        if (task.SubscriptionRetryAfter is null && task.VerificationHistory.LastOrDefault() is { } verification)
+        {
+            dispatch = verification.DispatchStartedAt is { } startedAt
+                ? task.DispatchHistory.LastOrDefault(record => record.DispatchedAt == startedAt)
+                : null;
+            dispatch ??= task.DispatchHistory.LastOrDefault(record => record.DispatchedAt <= verification.CompletedAt);
+        }
+
+        var releasedProvider = dispatch?.ProviderName;
+        var newProvider = newAgent.Model.ProviderName;
+        if (string.IsNullOrWhiteSpace(releasedProvider) || string.IsNullOrWhiteSpace(newProvider) ||
+            string.Equals(releasedProvider, newProvider, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        task.ClearSubscriptionRetryAfter();
+        task.RecordSubscriptionDeferralRelease(_clock.UtcNow);
+        Append(goal, task.Id, ProgressKind.TaskNote,
+            $"Released subscription deferral on provider '{releasedProvider}' until {retryAfter.ToUniversalTime():O} after reassignment to provider '{newProvider}'.");
     }
 
     public TaskSpec AcknowledgeSubscriptionLimitReview(GoalId goalId, TaskId taskId, string note)

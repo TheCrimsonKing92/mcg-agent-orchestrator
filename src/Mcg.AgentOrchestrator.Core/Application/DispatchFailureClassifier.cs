@@ -2483,6 +2483,11 @@ public static partial class DispatchFailureClassifier
             return false;
         }
 
+        if (task.SubscriptionDeferralReleasedAt is { } releasedAt && latest.CompletedAt <= releasedAt)
+        {
+            return false;
+        }
+
         // RetryTask is the operator's explicit reset boundary. Keep the historical receipt, but do not
         // let a verification from before that boundary regenerate a deferral after the stored value was cleared.
         if (task.LatestRetryAt is { } latestRetryAt &&
