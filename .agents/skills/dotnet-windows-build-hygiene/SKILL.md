@@ -27,7 +27,7 @@ Use this skill when building, testing, or diagnosing this repository on Windows.
 
 If build/test fails with CS2012, "file in use", or locked `bin`/`obj` outputs:
 
-1. Run `dotnet build-server shutdown`.
+1. The Roslyn and MSBuild build servers are disabled repo-wide by `Directory.Build.props` and `Directory.Build.rsp`, so do not run a build-server shutdown; identify the exact process holding the file first.
 2. Retry the same narrow command once.
 3. If still locked, inspect exact known processes such as `Mcg.AgentOrchestrator.App`, `dotnet`, or the recorded worker pid.
 4. Stop only exact known stale processes; never run broad cleanup such as killing every `codex`, `dotnet`, or app process.

@@ -2830,8 +2830,8 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     Assert.True(skillArtifact.GetProperty("exists").GetBoolean());
     Assert.Contains("dotnet-windows-build-hygiene", selectedSkills, StringComparison.Ordinal);
     Assert.Contains("orchestrator-dogfood", selectedSkills, StringComparison.Ordinal);
-    Assert.Contains("aspnet-core", selectedSkills, StringComparison.Ordinal);
-    Assert.Contains("playwright", selectedSkills, StringComparison.Ordinal);
+    Assert.DoesNotContain("aspnet-core", selectedSkills, StringComparison.Ordinal);
+    Assert.DoesNotContain("playwright", selectedSkills, StringComparison.Ordinal);
     Assert.Contains("skill-authoring", selectedSkills, StringComparison.Ordinal);
     Assert.Contains("verification-before-completion", selectedSkills, StringComparison.Ordinal);
     Assert.DoesNotContain("systematic-debugging", selectedSkills, StringComparison.Ordinal);
@@ -3893,8 +3893,8 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     var reviewPackageSkills = File.ReadAllText(Path.Combine(contextDirectory, "packages", review.Id.Value, "selected-skills.md"));
 
     Assert.Contains("dotnet-windows-build-hygiene", implementationSkills, StringComparison.Ordinal);
-    Assert.Contains("aspnet-core", implementationSkills, StringComparison.Ordinal);
-    Assert.Contains("playwright", implementationSkills, StringComparison.Ordinal);
+    Assert.DoesNotContain("aspnet-core", implementationSkills, StringComparison.Ordinal);
+    Assert.DoesNotContain("playwright", implementationSkills, StringComparison.Ordinal);
     Assert.Contains("orchestrator-worker-verification", reviewSkills, StringComparison.Ordinal);
     Assert.False(reviewSkills.Contains("aspnet-core", StringComparison.Ordinal));
     Assert.False(reviewSkills.Contains("playwright", StringComparison.Ordinal));

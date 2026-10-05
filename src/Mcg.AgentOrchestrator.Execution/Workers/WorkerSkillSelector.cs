@@ -13,19 +13,11 @@ internal sealed class WorkerSkillSelector
         new(
             "orchestrator-dogfood",
             Path.Combine(".agents", "skills", "orchestrator-dogfood", "SKILL.md"),
-            "Use for orchestrator dogfood goals, backlog changes, goal/workspace lifecycle commands, subscription dispatches, dashboard validation, acceptance gates, and SQLite dogfood-log evidence."),
+            "Use for operator-seat commands and artifacts: dogfood, backlog, run-goal, simple-goal, lifecycle-simple-goal, dogfood-log, conduct --loop, Get-OrchestratorSnapshot, workspace create, workspace remove, and subscription-dispatch."),
         new(
             "orchestrator-worker-verification",
             Path.Combine(".agents", "skills", "orchestrator-worker-verification", "SKILL.md"),
             "Use for reviewing worker completions, dispatch logs, goal worktree diffs, dirty recovery, false-positive completion risk, manual verification, and acceptance readiness."),
-        new(
-            "aspnet-core",
-            Path.Combine(".agents", "skills", "aspnet-core", "SKILL.md"),
-            "Use for ASP.NET Core, Blazor, Razor Pages, MVC, Minimal APIs, middleware, SignalR, authentication, authorization, and .NET web application changes."),
-        new(
-            "playwright",
-            Path.Combine(".agents", "skills", "playwright", "SKILL.md"),
-            "Use for browser automation, dashboard UI flows, screenshots, end-to-end smoke checks, and Playwright-based validation."),
         new(
             "skill-authoring",
             Path.Combine(".agents", "skills", "skill-authoring", "SKILL.md"),
@@ -114,48 +106,22 @@ internal sealed class WorkerSkillSelector
             "CS2012",
             "VBCSCompiler",
             "MSBuild",
-            "apphost",
-            "dashboard");
+            "apphost");
         var dogfoodSignals = ContainsAny(
             text,
-            "orchestrator",
             "dogfood",
             "backlog",
-            "goal",
             "run-goal",
             "simple-goal",
-            "workspace",
-            "subscription",
-            "dispatch",
-            "acceptance",
+            "lifecycle-simple-goal",
             "dogfood-log",
-            "dashboard");
+            "conduct --loop",
+            "Get-OrchestratorSnapshot",
+            "workspace create",
+            "workspace remove",
+            "subscription-dispatch");
         var verificationSignals = task.RequiredRole is AgentRole.Tester or AgentRole.Reviewer ||
             ContainsAny(text, "verify", "verification", "review", "worker result", "dispatch log", "worktree diff", "acceptance");
-        var aspNetSignals = ContainsAny(
-            text,
-            "asp.net",
-            "aspnet",
-            "blazor",
-            "razor",
-            "mvc",
-            "minimal api",
-            "controller",
-            "middleware",
-            "signalr",
-            "authentication",
-            "authorization");
-        var browserAutomationSignals = ContainsAny(
-            text,
-            "playwright",
-            "browser automation",
-            "browser smoke",
-            "dashboard ui",
-            "ui flow",
-            "e2e",
-            "end-to-end smoke",
-            "screenshot",
-            "prototype-ui");
         var skillAuthoringSignals = ContainsAny(
             text,
             ".agents/skills",
@@ -181,16 +147,6 @@ internal sealed class WorkerSkillSelector
         if (verificationSignals)
         {
             yield return KnownSkills.Single(skill => skill.Name == "orchestrator-worker-verification");
-        }
-
-        if (aspNetSignals)
-        {
-            yield return KnownSkills.Single(skill => skill.Name == "aspnet-core");
-        }
-
-        if (browserAutomationSignals)
-        {
-            yield return KnownSkills.Single(skill => skill.Name == "playwright");
         }
 
         if (skillAuthoringSignals)
@@ -227,12 +183,10 @@ internal sealed class WorkerSkillSelector
             "dotnet-windows-build-hygiene" => task.RequiredRole is AgentRole.Developer or AgentRole.Tester
                 ? "Developer/Tester work in this repository usually needs .NET build/test hygiene and Windows lock avoidance."
                 : "Task text references .NET, build, test, dashboard, or known Windows build-lock failure modes.",
-            "orchestrator-dogfood" => "Task or goal text references orchestrator dogfood, backlog, goal lifecycle, subscription dispatch, dashboard, or acceptance workflow.",
+            "orchestrator-dogfood" => "Task or goal text names an operator-seat command or artifact: dogfood, backlog, run-goal, simple-goal, lifecycle-simple-goal, dogfood-log, conduct --loop, Get-OrchestratorSnapshot, workspace create, workspace remove, or subscription-dispatch.",
             "orchestrator-worker-verification" => task.RequiredRole is AgentRole.Tester or AgentRole.Reviewer
                 ? "Tester/Reviewer work must verify worker output, logs, diffs, and acceptance evidence before trusting task status."
                 : "Task text references verification, review, worker result contracts, dispatch evidence, or worktree diffs.",
-            "aspnet-core" => "Task text references ASP.NET Core or .NET web application concepts.",
-            "playwright" => "Task text references browser automation, dashboard UI validation, end-to-end smoke checks, screenshots, or Playwright.",
             "skill-authoring" => "Task text references repo-scoped worker skills, SKILL.md files, skill routing, selected skills, or skill usage evidence.",
             "research-evidence" => "Every Researcher must frame a named evidence question, anchor and classify material statements, and stop on an invalid premise.",
             "criterion-ownership-planning" => "Every Planner must map each criterion to a feasible evidence owner, owning seam, verification class, and stop condition.",
