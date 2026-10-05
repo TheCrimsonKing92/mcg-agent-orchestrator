@@ -126,7 +126,7 @@ public sealed class ConductorDriverTestsCandidateRerunNotExecuted
 
     private sealed class Fixture : IDisposable
     {
-        internal string Root { get; } = CreateTempDirectory();
+        internal string Root { get; } = ConductorDriverTests.CreateTempDirectory();
         internal AgentOrchestratorKernel Kernel { get; }
         internal Goal Goal { get; }
         internal AcceptanceFailingTestIndex Index { get; }

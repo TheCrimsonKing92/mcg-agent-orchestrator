@@ -61,7 +61,7 @@ public sealed class ApparatusRedClassifierRerunNotExecutedTests
         using var fixture = new Fixture();
         var check = fixture.Check(SlotsBusy) with
         {
-            FailingTestAttributions:
+            FailingTestAttributions =
             [new AcceptanceTestFailureAttribution(
                 Identity, origin, "baseline evidence", new CandidateFailureRerunEvidence(outcome, null, SlotsBusy))]
         };
