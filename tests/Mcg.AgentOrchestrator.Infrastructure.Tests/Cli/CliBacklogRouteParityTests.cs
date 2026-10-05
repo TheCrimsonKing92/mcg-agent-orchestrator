@@ -29,6 +29,7 @@ public sealed class CliBacklogRouteParityTests : CliTaskQueryTestSupport
             AssertErrorParity(["backlog-show", "missing"], repository, seed.Workspace);
             AssertErrorParity(["backlog-similar", "--id", "missing"], repository, seed.Workspace);
             AssertErrorParity(["backlog-similar", "--id"], repository, seed.Workspace);
+            AssertErrorParity(["backlog-similar", $"--id={seed.Prerequisite.Id[..8]}", "--excerpt"], repository, seed.Workspace);
             AssertErrorParity(["backlog-similar", "text", "--id", seed.Prerequisite.Id[..8]], repository, seed.Workspace);
             AssertErrorParity(["backlog-show"], repository, seed.Workspace);
             foreach (var verb in new[] { "backlog-list", "backlog-show", "backlog-similar" })

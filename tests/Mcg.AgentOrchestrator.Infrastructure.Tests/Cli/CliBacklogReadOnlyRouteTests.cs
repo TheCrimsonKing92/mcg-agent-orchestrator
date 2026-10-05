@@ -140,7 +140,7 @@ public sealed class CliBacklogReadOnlyRouteTests : CliTaskQueryTestSupport
         ["backlog-list", "--text", "quartz", "--limit", "1"],
         ["backlog-similar", "quartz", "--excerpt", "--limit", "2", "--status", "open"],
         ["BACKLOG-SHOW", prefix.ToUpperInvariant()],
-        ["backlog-similar", $"--id={prefix}", "--excerpt"]
+        ["backlog-similar", "--id", prefix, "--excerpt"]
     ];
 
     internal sealed record Seed(
