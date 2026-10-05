@@ -22,7 +22,8 @@ public sealed class BacklogReadinessSuffixParityTests
         var backlogKind = scenario is "satisfied-backlog" or "blocked-backlog";
         await fixture.Store.AddDependencyAsync(dependent.Id, new(
             backlogKind ? prerequisite.Id : goal.Id.Value,
-            backlogKind ? BacklogDependencyTargetKind.Backlog : BacklogDependencyTargetKind.Goal));
+            backlogKind ? BacklogDependencyTargetKind.Backlog : BacklogDependencyTargetKind.Goal),
+            goalExists: id => kernel.Goals.Any(candidate => candidate.Id.Value == id));
         if (scenario == "satisfied-backlog")
             kernel.SetGoalSourceBacklogItemLink(goal.Id, prerequisite.Id, SourceBacklogCoverage.Full);
         if (scenario.StartsWith("satisfied", StringComparison.Ordinal))
