@@ -26,6 +26,8 @@ public static class FailureClusterReport
     public static IReadOnlyList<string> SteadyStateHoldPrefixes { get; } = Array.AsReadOnly(new[]
     {
         "At worker cap", "acceptance width ", "acceptance verification running in background",
+        "acceptance verification still running in background", "Worker process running",
+        "Acceptance cohort gate is running in the background", "Acceptance cohort gate owns this member",
         "Background finding-requested focused evidence is running",
         "Background finding-baseline-arm focused evidence is running",
         "Background finding-candidate-rerun focused evidence is running",
@@ -44,7 +46,9 @@ public static class FailureClusterReport
         var families = new Dictionary<string, ReworkCauseFamily>();
         foreach (var e in RootEvents(events))
         {
-            if (!IsFailure(e) || e.EventType == DailyEventKind || IsSteadyHold(e.Message)) continue;
+            if (!IsFailure(e) || e.EventType == DailyEventKind ||
+                (e.EventType == "GoalLifecycleDecision" &&
+                    Regex.IsMatch(e.Message, @"\bheld at\b", RegexOptions.IgnoreCase) && IsSteadyHold(e.Message))) continue;
             var message = Normalize(e.Message, e.GoalId, e.TaskId);
             var cli = e.EventType == "TaskFailed" ? WorkerCli(e.Message) : null;
             var marker = Marker(e.Message) ?? cli ?? FailingTest(e.Message);
@@ -70,12 +74,19 @@ public static class FailureClusterReport
         var touches = operatorTouches.Where(t => t.At >= since && t.At < until).ToArray();
         var dispatches = events.Where(IsDispatch).GroupBy(e => e.GoalId)
             .ToDictionary(g => g.Key, g => g.Select(e => e.Timestamp).ToArray());
-        foreach (var row in clusters.Values)
-        foreach (var (goal, first) in row.FirstByGoal)
+        var windows = clusters.SelectMany(cluster => cluster.Value.FirstByGoal.Select(pair =>
         {
+            var (goal, first) = pair;
             var next = dispatches.GetValueOrDefault(goal)?.FirstOrDefault(t => t > first) ?? default;
             var end = next == default ? until : next;
-            row.Touches += touches.Count(t => t.GoalId == goal && t.At >= first && t.At < end);
+            return (Row: cluster.Value, Goal: goal, First: first, End: end, Key: cluster.Key);
+        })).GroupBy(w => w.Goal).ToDictionary(g => g.Key,
+            g => g.OrderByDescending(w => w.First).ThenBy(w => w.Key, StringComparer.Ordinal).ToArray());
+        foreach (var touch in touches)
+        {
+            if (!windows.TryGetValue(touch.GoalId, out var candidates)) continue;
+            var owner = candidates.FirstOrDefault(w => touch.At >= w.First && touch.At < w.End);
+            if (owner.Row is not null) owner.Row.Touches++;
         }
         return clusters.Values.Select(row => row.Finish(since, until))
             .OrderByDescending(row => row.TotalCost).ThenBy(row => row.Key, StringComparer.Ordinal).ToArray();
