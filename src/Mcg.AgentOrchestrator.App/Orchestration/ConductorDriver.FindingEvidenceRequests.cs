@@ -179,7 +179,7 @@ internal sealed partial class ConductorDriver
 
         if (groups.Count == 0 && reusedGreenReceipt)
         {
-            decision = BuildCappedFindingEvidenceDeliveryRetry(
+            decision = BuildReceiptClosureOrDeliveryRetry(
                 goal, requestingTask, telemetryCandidateSha, requestingFindings, [],
                 "Previously executed green evidence still matches the candidate and normalized request; its receipt was reattached without rerunning tests.");
             return true;
@@ -468,7 +468,7 @@ internal sealed partial class ConductorDriver
             ? FailedGoalFindingObservation.Observed(
                 FailedGoalFindingObservationKind.FindingEvidencePending,
                 "Focused evidence completed; another distinct request from the same finding round remains pending.")
-            : BuildCappedFindingEvidenceDeliveryRetry(
+            : BuildReceiptClosureOrDeliveryRetry(
                 goal,
                 requestingTask,
                 candidateSha!,

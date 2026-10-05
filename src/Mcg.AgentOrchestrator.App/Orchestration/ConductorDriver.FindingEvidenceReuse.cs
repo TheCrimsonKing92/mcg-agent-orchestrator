@@ -176,7 +176,7 @@ internal sealed partial class ConductorDriver
         if (TryBuildFindingEvidenceRequest(goal, task, policy, out observation)) return true;
         if (currentReceipts.Count != findings.Count) return false;
 
-        observation = BuildCappedFindingEvidenceDeliveryRetry(
+        observation = BuildReceiptClosureOrDeliveryRetry(
             goal, task, candidateSha!, findings, currentReceipts,
             "The Developer-owned findings have honoured GREEN evidence at this candidate.");
         return true;
