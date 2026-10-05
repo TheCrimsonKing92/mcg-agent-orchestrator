@@ -15,7 +15,8 @@ internal static class CliReadOnlyCommandRunner
         CliStatusQueryCommand.IsStatusQueryCommand(args) ||
         CliGoalEventsQueryCommand.IsGoalEventsQueryCommand(args) ||
         CliAttentionQueryCommand.IsAttentionQueryCommand(args) ||
-        CliNextFullQueryCommand.IsNextFullQueryCommand(args);
+        CliNextFullQueryCommand.IsNextFullQueryCommand(args) ||
+        CliInspectionQueryCommand.IsInspectionQueryCommand(args);
 
     internal static bool TryExecute(
         IReadOnlyList<string> args,
@@ -115,6 +116,14 @@ internal static class CliReadOnlyCommandRunner
             CliNextFullQueryCommand.TryExecute(args, stateRepository, workspace, providers, channel,
                 ref agents, ref workerProfiles, ref currentGoal, diagnosticsClock))
         {
+            changed = false;
+            return true;
+        }
+
+        if (CliInspectionQueryCommand.IsInspectionQueryCommand(args))
+        {
+            CliInspectionQueryCommand.Execute(args, stateRepository, workspace, providers, channel,
+                ref agents, ref workerProfiles);
             changed = false;
             return true;
         }

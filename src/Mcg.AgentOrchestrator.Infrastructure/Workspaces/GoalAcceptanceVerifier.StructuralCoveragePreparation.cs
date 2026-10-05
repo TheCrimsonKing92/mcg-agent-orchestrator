@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Runtime.ExceptionServices;
+using System.Runtime.CompilerServices;
 using Mcg.AgentOrchestrator.Core;
 using static Mcg.AgentOrchestrator.Infrastructure.AcceptancePolicyShardPlanner;
 
@@ -290,12 +291,105 @@ public sealed partial class GoalAcceptanceVerifier
     };
 
     private readonly object _coveragePreparationSync = new();
+    // Invocation verifiers share the execution owner, not the preparation's instance fields.
+    private static readonly ConditionalWeakTable<IAcceptanceRunExecutionContext, StructuralCoverageLockHold>
+        CoverageLockHolds = new();
+    private StructuralCoverageLockHold? _coverageLockHold;
     private Func<CancellationToken, Task<StructuralCoveragePreparation>>? _coveragePreparationFactory;
+
+    private void BeginStructuralCoverageLockHoldForBatch(
+        IReadOnlyList<AcceptanceManifestCheck> checks,
+        int? stableSlotIndex,
+        DotnetBuildEnvironmentLease? stableSlotLease,
+        DotnetTestBuildPhase? buildPhase,
+        int maxConcurrentShards)
+    {
+        // Match RunCheckBatchAsync's infrastructure shard branch: only that path signals
+        // candidate-build completion while lanes run. Sequential MTP releases stay immediate.
+        if (_coveragePreparationFactory is null || _coverageLockHold is not null ||
+            !stableSlotIndex.HasValue || stableSlotLease is null || buildPhase is null || maxConcurrentShards <= 1)
+            return;
+
+        for (var index = 0; index < checks.Count; index++)
+        {
+            if (!TryGetInfrastructurePartitionId(checks[index], out _, out _))
+                continue;
+            var shardChecks = checks.Skip(index)
+                .TakeWhile(check => TryGetInfrastructurePartitionId(check, out _, out _)).ToArray();
+            // RunInfrastructureShardBatchAsync signals preparation only for an MTP prebuild.
+            if (shardChecks.All(UsesMicrosoftTestingPlatform))
+            {
+                var owner = _executionContext ?? throw new InvalidOperationException(
+                    "Structural coverage preparation requires an execution owner.");
+                _coverageLockHold = CoverageLockHolds.GetValue(owner, _ => new StructuralCoverageLockHold());
+                return;
+            }
+            index += shardChecks.Length - 1;
+        }
+    }
     private Task<StructuralCoveragePreparationOutcome>? _coveragePreparationTask;
     private CancellationTokenSource? _coveragePreparationCancellation;
     private bool _coveragePrechecksPassed;
     private bool _coverageCandidateBuildComplete;
     private bool _coverageHasIndependentChecks;
+
+    private sealed class StructuralCoverageLockHold
+    {
+        private readonly object _sync = new();
+        private readonly HashSet<DotnetBuildEnvironmentLease> _releaseRequests = [];
+        private bool _ended;
+
+        public void RequestRelease(DotnetBuildEnvironmentLease lease)
+        {
+            lock (_sync)
+            {
+                if (!_releaseRequests.Add(lease))
+                    return;
+                if (_ended)
+                    lease.ReleaseExecutionLock();
+            }
+        }
+
+        public void End()
+        {
+            lock (_sync)
+            {
+                if (_ended)
+                    return;
+                _ended = true;
+                foreach (var lease in _releaseRequests)
+                    lease.ReleaseExecutionLock();
+            }
+        }
+    }
+
+    private void ReleaseStableSlotExecutionLockUnlessCoverageHoldActive(DotnetBuildEnvironmentLease? lease)
+    {
+        if (lease is null)
+            return;
+        if (_executionContext is { } owner && CoverageLockHolds.TryGetValue(owner, out var hold))
+            hold.RequestRelease(lease);
+        else
+            lease.ReleaseExecutionLock();
+    }
+
+    private async Task<CheckBatchResult> RunStructuralCoveragePrechecksAsync(Func<Task<CheckBatchResult>> runPrechecks)
+    {
+        var passed = false;
+        try
+        {
+            var result = await runPrechecks().ConfigureAwait(false);
+            passed = result.Results.All(check => check.Passed);
+            if (passed)
+                SignalStructuralCoveragePrechecksPassed();
+            return result;
+        }
+        finally
+        {
+            if (!passed)
+                _coverageLockHold?.End();
+        }
+    }
 
     private void SignalStructuralCoveragePrechecksPassed()
     {
@@ -339,6 +433,10 @@ public sealed partial class GoalAcceptanceVerifier
                 return new StructuralCoveragePreparationOutcome(null, ExceptionDispatchInfo.Capture(exception),
                     _timeProvider.GetElapsedTime(started));
             }
+            finally
+            {
+                _coverageLockHold?.End();
+            }
         }));
         _coveragePreparationTask = task;
         if (_testOverrides.OnStructuralCoveragePreparationFinishedForTests is { } onFinished)
@@ -371,13 +469,20 @@ public sealed partial class GoalAcceptanceVerifier
 
     private async Task<TimeSpan> DiscardStructuralCoveragePreparationAsync()
     {
-        _coveragePreparationCancellation?.Cancel();
-        if (_coveragePreparationTask is { } task)
+        try
         {
-            try { return (await task.ConfigureAwait(false)).Duration; }
-            catch { /* A discarded preparation never replaces the lane verdict. */ }
+            _coveragePreparationCancellation?.Cancel();
+            if (_coveragePreparationTask is { } task)
+            {
+                try { return (await task.ConfigureAwait(false)).Duration; }
+                catch { /* A discarded preparation never replaces the lane verdict. */ }
+            }
+            return TimeSpan.Zero;
         }
-        return TimeSpan.Zero;
+        finally
+        {
+            _coverageLockHold?.End();
+        }
     }
 
 }

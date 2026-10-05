@@ -7,7 +7,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed record BoardFillDraftRound(string Id, string BacklogItemId, DateTimeOffset ItemUpdatedAt,
     DateTimeOffset? ItemNewestNoteAt, string? MainHead, string? Outcome, string? DraftPath, string? ReceiptPath,
     IReadOnlyList<AuthorBriefDraftCheck> Checks, DateTimeOffset StartedAt, DateTimeOffset? FinishedAt,
-    string? Failure = null, bool Reported = false)
+    string? Failure = null, bool Reported = false, BoardFillDraftAssessment? Assessment = null)
 {
     internal DateTimeOffset ChangeStamp => ItemNewestNoteAt is { } note && note > ItemUpdatedAt ? note : ItemUpdatedAt;
 }
@@ -15,6 +15,12 @@ internal sealed record BoardFillDraftRound(string Id, string BacklogItemId, Date
 // Only this service's rounds live here. Reads do not create a file or change a schema.
 internal sealed class ConductorBoardFillDraftStore(string path)
 {
+    internal static string DefaultPath(OrchestratorWorkspace workspace) => Path.Combine(workspace.OrchestratorDirectory, "board-fill.db");
+
+    internal void Assess(string id, BoardFillDraftAssessment assessment) => Update(id, current =>
+        current.Outcome is not null && current.Assessment is null ? current with { Assessment = assessment } :
+        throw new InvalidOperationException("Cannot assess an unfinished or already assessed board-fill round."));
+
     internal IReadOnlyList<BoardFillDraftRound> ReadAll()
     {
         if (!File.Exists(path)) return [];
