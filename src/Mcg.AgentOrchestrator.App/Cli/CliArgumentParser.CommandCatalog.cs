@@ -38,6 +38,7 @@ internal static IReadOnlyList<string> RecognizedCommands { get; } =
     "record-goal",
     "failure-triage",
     "failure-clusters",
+    "round-value",
     "flake-census",
     "owner-digest",
     "lesson",
