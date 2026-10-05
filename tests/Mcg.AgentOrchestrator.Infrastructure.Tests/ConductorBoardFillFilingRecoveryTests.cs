@@ -24,6 +24,7 @@ public sealed class ConductorBoardFillFilingRecoveryTests
         var filingEvent = Assert.Single(h.FilingEvents());
         Assert.Contains("result=refused goal=none depends=none reason=board-unavailable", filingEvent);
         h.BeforeBoard = null;
+        h.Policy = h.Policy with { BoardFillMode = ConductorBoardFillMode.File };
         Assert.Equal("filed", h.Host.AttemptFiling(draft.Id).Result);
         Assert.Single(h.Intake.Requests);
     }
