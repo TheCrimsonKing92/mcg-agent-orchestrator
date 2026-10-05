@@ -1979,7 +1979,8 @@ public sealed class GoalWorktreeTestsAcceptanceRetry : GoalWorktreeTestBase
                 ref agents,
                 providers,
                 ref profiles,
-                ref currentGoal);
+                ref currentGoal,
+                skipReadOnlyRoute: true);
 
             Assert.False(changed);
             Assert.Empty(repository
@@ -2049,7 +2050,8 @@ public sealed class GoalWorktreeTestsAcceptanceRetry : GoalWorktreeTestBase
                 ref agents,
                 providers,
                 ref profiles,
-                ref currentGoal);
+                ref currentGoal,
+                skipReadOnlyRoute: true);
 
             Assert.False(changed);
             Assert.Empty(repository
@@ -2121,7 +2123,7 @@ public sealed class GoalWorktreeTestsAcceptanceRetry : GoalWorktreeTestBase
             };
 
             var firstDrainer = Task.Factory.StartNew(
-                () => RunPersistentCommand(repository, workspace, ["goals"]),
+                () => RunPersistentCommand(repository, workspace, ["goals"], skipReadOnlyRoute: true),
                 CancellationToken.None,
                 TaskCreationOptions.LongRunning | TaskCreationOptions.DenyChildAttach,
                 TaskScheduler.Default);
@@ -2135,7 +2137,8 @@ public sealed class GoalWorktreeTestsAcceptanceRetry : GoalWorktreeTestBase
                         // The primary helper already migrated this store; a competing drainer must not run DDL.
                         new SqliteOrchestratorStateRepository(workspace.SqliteStatePath),
                         workspace,
-                        ["goals"]);
+                        ["goals"],
+                        skipReadOnlyRoute: true);
                 },
                 CancellationToken.None,
                 TaskCreationOptions.LongRunning | TaskCreationOptions.DenyChildAttach,
@@ -2162,7 +2165,8 @@ public sealed class GoalWorktreeTestsAcceptanceRetry : GoalWorktreeTestBase
     private static bool RunPersistentCommand(
         ITransactionalOrchestratorStateRepository repository,
         OrchestratorWorkspace workspace,
-        IReadOnlyList<string> args)
+        IReadOnlyList<string> args,
+        bool skipReadOnlyRoute = false)
     {
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var providers = new InMemoryModelProviderRegistry([]);
@@ -2175,7 +2179,8 @@ public sealed class GoalWorktreeTestsAcceptanceRetry : GoalWorktreeTestBase
             ref agents,
             providers,
             ref profiles,
-            ref currentGoal);
+            ref currentGoal,
+            skipReadOnlyRoute: skipReadOnlyRoute);
     }
 
     private static void AssertAcceptanceRetryRolledBack(
