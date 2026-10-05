@@ -938,6 +938,9 @@ public sealed partial class BackgroundDispatchRunner
             verification = null;
         }
 
+        if (outcome.FailedRoundReceipt is { } failedReceipt && verification is { Succeeded: false } &&
+            task.LastProcess?.WasCancelled != true && !outcome.ProcessRecord.WasCancelled)
+            kernel.RecordFailedRoundCheckpointReceipt(goalId, taskId, failedReceipt);
         kernel.RecordTaskProcessRefreshed(goalId, taskId, outcome.ProcessRecord, verification, outcome.ProviderFailureKind);
         if (verification is not null && outcome.ProcessRecord.ResourceAccounting is { } accounting)
         {
@@ -1442,6 +1445,7 @@ public sealed partial class BackgroundDispatchRunner
         var hasCommittedChanges = false;
         var orchestratorCommitted = false;
         InterruptedWorkCheckpointDisposition? checkpointDisposition = null;
+        FailedRoundCheckpointReceipt? failedRoundReceipt = null;
         var completedWorktreeInspection = RequiresFileChangeEvidence(task)
             ? _worktreeCommitter.InspectGoalWorktree(
                 processRecord.WorkingDirectory,
@@ -1688,6 +1692,11 @@ public sealed partial class BackgroundDispatchRunner
                 }
             }
 
+            failedRoundReceipt = TryBuildFailedRoundReceipt(task, BuildDispatchId(goalId, taskId, task.LastDispatch),
+                worktreeEvidence, orchestratorCommitted || (commitAttempted && commitAttempt.Succeeded),
+                checkpointDisposition?.IsCheckpoint == true,
+                task.LastDispatch.SandboxLowIntegrity && !lowIntegrityConfinementEvidence, processRecord.WasCancelled);
+
             // WORKER_RESULT is advisory only. Substance is proven from git ground truth
             // (relevant commit after dispatch + clean worktree, checked above) and the
             // acceptance test run — not from the worker's self-reported field shape, which
@@ -1864,7 +1873,7 @@ public sealed partial class BackgroundDispatchRunner
                 recoveryDecision),
             ProviderUsage: providerUsage.Usage,
             ProviderUsageUnavailableReason: providerUsage.UnavailableReason,
-            DispatchAttemptAt: contextReceiptAttemptAt, ReceiptlessUsageAttemptAt: ReceiptlessUsageAttemptAt(dispatchAttempt));
+            DispatchAttemptAt: contextReceiptAttemptAt, ReceiptlessUsageAttemptAt: ReceiptlessUsageAttemptAt(dispatchAttempt), FailedRoundReceipt: failedRoundReceipt);
         _processLogReader.Evict(processRecord);
         return outcome;
     }
@@ -1926,25 +1935,6 @@ public sealed partial class BackgroundDispatchRunner
         return match.Success && match.Groups["id"].Value is { Length: > 0 } value
             ? value
             : null;
-    }
-
-    private static string? TryGetDirtyStateHash(string workingDirectory)
-    {
-        try
-        {
-            if (!Directory.Exists(workingDirectory))
-                return null;
-
-            var result = GitCli.Run(workingDirectory, "status", "--porcelain=v1", "--untracked-files=all");
-            if (!result.Succeeded)
-                return null;
-
-            return DispatchWorktreeCommitter.ComputeDirtyStateHash(result.Output);
-        }
-        catch
-        {
-            return null;
-        }
     }
 
     internal static bool RequiresFileChangeEvidence(TaskSpec task)

@@ -19,10 +19,15 @@ internal sealed partial class ConductorDriver
             return DeveloperIntegrationFailure($"Goal branch {branch} has no registered worktree.");
         }
 
-        if (GitCli.IsWorktreeDirty(worktreePath))
+        var status = GitCli.InspectWorktreeStatus(worktreePath);
+        if (!status.Succeeded || status.IsDirty)
         {
+            var paths = status.Succeeded && status.CommitWorthyPaths.Count > 0
+                ? " Dirty paths: " + string.Join(", ", status.CommitWorthyPaths.Take(20)) +
+                  (status.CommitWorthyPaths.Count > 20 ? $" (+{status.CommitWorthyPaths.Count - 20} more)" : "")
+                : "";
             return DeveloperIntegrationFailure(
-                $"Goal branch {branch} has uncommitted changes; conductor integration cannot start from a dirty worktree.");
+                $"Goal branch {branch} has uncommitted changes; conductor integration cannot start from a dirty worktree." + paths);
         }
 
         var currentBranch = GitCli.Run(worktreePath, "branch", "--show-current");

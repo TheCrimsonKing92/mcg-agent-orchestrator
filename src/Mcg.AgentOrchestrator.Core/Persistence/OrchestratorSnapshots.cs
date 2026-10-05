@@ -243,7 +243,11 @@ public sealed record TaskDispatchSnapshot(
     DispatchProviderUsage? ProviderUsage = null,
     FailedGoalInconclusiveRoundInputs? InconclusiveRoundInputs = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    DispatchShadowDecision? ShadowDecision = null);
+    DispatchShadowDecision? ShadowDecision = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    FailedRoundCheckpointReceipt? FailedRoundCheckpointReceipt = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    FailedRoundCheckpointDecision? FailedRoundCheckpointDecision = null);
 
 public sealed record TaskProcessSnapshot(
     int ProcessId,
