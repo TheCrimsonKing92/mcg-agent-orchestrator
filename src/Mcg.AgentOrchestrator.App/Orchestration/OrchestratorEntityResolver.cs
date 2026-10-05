@@ -149,6 +149,26 @@ public static TaskSpec GetTaskByDisplayNumber(Goal goal, string value)
         return goal.Tasks[displayNumber - 1];
     }
 
+    var roleName = Enum.GetNames<AgentRole>()
+        .FirstOrDefault(name => name.Equals(value, StringComparison.OrdinalIgnoreCase));
+    if (roleName is not null)
+    {
+        var role = Enum.Parse<AgentRole>(roleName);
+        var roleMatches = goal.Tasks
+            .Select((task, index) => (Task: task, Number: index + 1))
+            .Where(match => match.Task.RequiredRole == role)
+            .ToList();
+
+        return roleMatches.Count switch
+        {
+            1 => roleMatches[0].Task,
+            0 => throw new KeyNotFoundException($"Goal has no {roleName} task."),
+            _ => throw new KeyNotFoundException(
+                $"Task role '{roleName}' is ambiguous; goal has {roleName} tasks at numbers " +
+                $"{string.Join(", ", roleMatches.Select(match => match.Number))}. Re-run with a task number.")
+        };
+    }
+
     var matches = goal.Tasks
         .Where(task => task.Id.Value.StartsWith(value, StringComparison.OrdinalIgnoreCase))
         .ToList();
