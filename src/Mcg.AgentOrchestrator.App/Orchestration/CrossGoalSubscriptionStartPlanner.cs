@@ -36,11 +36,13 @@ public static class CrossGoalSubscriptionStartPlanner
         AgentOrchestratorKernel kernel,
         IReadOnlyList<AgentDefinition> agents,
         WorkerProfileCatalog profiles,
-        bool costRiskConfirmed = false)
+        bool costRiskConfirmed = false,
+        DateTimeOffset? now = null)
     {
+        var effectiveNow = now ?? DateTimeOffset.UtcNow;
         var candidates = kernel.Goals
             .Where(goal => goal.Status is GoalStatus.Active or GoalStatus.WaitingForHuman)
-            .Select(goal => BuildCandidate(goal, agents, profiles, kernel.Goals))
+            .Select(goal => BuildCandidate(goal, agents, profiles, kernel.Goals, effectiveNow))
             .Where(candidate => candidate is not null)
             .Select(candidate => candidate!)
             .ToList();
@@ -71,10 +73,12 @@ public static class CrossGoalSubscriptionStartPlanner
         Goal goal,
         IReadOnlyList<AgentDefinition> agents,
         WorkerProfileCatalog profiles,
-        IReadOnlyCollection<Goal> providerHoldScope)
+        IReadOnlyCollection<Goal> providerHoldScope,
+        DateTimeOffset now)
     {
-        var subscriptionPlan = SubscriptionPlanBuilder.Build(goal, agents, profiles, providerHoldScope: providerHoldScope);
-        var readinessVerdict = DispatchReadinessEvaluator.EvaluateDispatchReadiness(goal, subscriptionPlan, DateTimeOffset.UtcNow);
+        var assessment = DispatchReadinessAssessment.Evaluate(goal, providerHoldScope, agents, profiles, now);
+        var subscriptionPlan = assessment.Plan;
+        var readinessVerdict = assessment.Verdict;
         if (readinessVerdict is not DispatchReadinessReady)
         {
             return null;
