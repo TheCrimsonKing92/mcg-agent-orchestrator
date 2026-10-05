@@ -378,6 +378,16 @@ Additional recovery notes:
 
 Use `adjudicate --goal <goal> <task-number> <close|reopen-regate|route> --text-file <explanation-path> --evidence <reference>` for evidence-backed task recovery. `close` completes and verifies a task; `reopen-regate` does that after mechanically reopening an `AcceptanceFailed` goal; `route` retries with `--cause <cause>`. Repeat `--evidence` for each receipt. Named references resolve as `trx:<path>`, `focused-evidence:<pointer-or-candidate-sha>`, `acceptance-attempt:<attempt-id>`, or `operator-evidence:<path>`. File paths may be absolute or relative to the workspace and must still exist when the tick applies the intent. Add `--reversibility <reversible|reversible-with-cost|irreversible>` and `--precedent <decision-id|rule>` when those attributes apply. The tick handles this as one intent; poll `operator-intent-status <intent-id>` for `Applied` and inspect the decision and effect receipts. An unresolved named reference is rejected with `evidence-reference-unresolved` and leaves task state unchanged.
 
+### Recovering after cancel-dispatch
+
+After `cancel-dispatch` is `Applied`, the task is `Cancelled` and awaits an operator retry. The `CANCEL_DISPOSITION` note and CLI output name the next command, using the goal prefix and 1-based task number:
+
+```text
+adjudicate --goal <goal-prefix> <task-number> route --cause <cause> --text-file <note> --evidence <reference>
+```
+
+Supply the retry cause, explanation file and evidence reference described above. Alternatively, use `retry --goal <goal-prefix> <task-number> --text-file <note> --cause <cause>`. Keep the conductor running and poll `operator-intent-status <intent-id>` until the recovery intent is `Applied`. `close` and `reopen-regate` do not apply to a cancelled task; their rejection keeps the reason code and appends `; task is Cancelled (cancel-dispatch): use route --cause <cause>`.
+
 ### State-repair quiet window
 
 Direct SQLite repair tools and artifact retirement still require a quiet window because they bypass the typed operator-intent inbox. Routine `retry`, `progress`, `verify-manual`, and `adjudicate` commands do not: keep the loop running and let its next tick apply them. Use this stop sequence only for direct repair commands:

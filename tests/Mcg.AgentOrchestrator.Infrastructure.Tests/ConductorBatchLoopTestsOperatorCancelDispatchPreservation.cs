@@ -26,7 +26,7 @@ public sealed class ConductorBatchLoopTestsOperatorCancelDispatchPreservation : 
 
         Assert.Empty(Git(repository.Path, "status", "--porcelain", "--untracked-files=all"));
         var note = Disposition(goal, task);
-        var match = Regex.Match(note, "^" + Regex.Escape(DispositionPrefix) + "preserved=([0-9a-f]{40})$");
+        var match = Regex.Match(note, "^" + Regex.Escape(DispositionPrefix) + "preserved=([0-9a-f]{40}) next=adjudicate ");
         Assert.True(match.Success, note);
         var sha = match.Groups[1].Value;
         var message = $"operator-cancel-dispatch-{goal.Id.Value[..8]}-{task.Id.Value[..8]}-{task.LastProcess!.ProcessId}";
@@ -55,7 +55,7 @@ public sealed class ConductorBatchLoopTestsOperatorCancelDispatchPreservation : 
 
         await ApplyCancelTick(kernel, goal, task);
 
-        Assert.Equal(DispositionPrefix + "clean-no-edits", Disposition(goal, task));
+        Assert.StartsWith(DispositionPrefix + "clean-no-edits next=adjudicate ", Disposition(goal, task));
         Assert.Empty(Git(repository.Path, "stash", "list"));
         Assert.Empty(Git(repository.Path, "status", "--porcelain", "--untracked-files=all"));
     }

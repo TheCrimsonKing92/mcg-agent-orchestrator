@@ -12,7 +12,9 @@ internal sealed record ApparatusRedFailingTest(
     bool CandidateRerunFailed = false,
     string? FailureMessage = null,
     string? MessageFingerprint = null,
-    IReadOnlyList<string>? ReferencedChangedTypes = null);
+    IReadOnlyList<string>? ReferencedChangedTypes = null,
+    bool CandidateRerunNotExecuted = false,
+    string? CandidateRerunInfrastructureSignature = null);
 
 /// <summary>Materialized classification inputs. No I/O happens below this record.</summary>
 internal sealed record ApparatusRedEvidence(
@@ -47,6 +49,7 @@ internal static class ApparatusRedClassifier
 {
     internal const string CrossGoalEvidenceKind = "cross-goal-flake";
     internal const string CandidateRerunEvidenceKind = "candidate-rerun-pass";
+    internal const string CandidateRerunNotExecutedEvidenceKind = "candidate-rerun-not-executed";
     internal const string BoundExhaustedToken = "apparatus-regate-bound-exhausted";
 
     /// <summary>
@@ -124,6 +127,20 @@ internal static class ApparatusRedClassifier
                 }
 
                 evidenceKinds.Add(CandidateRerunEvidenceKind);
+                continue;
+            }
+
+            if (failingTest.CandidateRerunNotExecuted &&
+                !string.IsNullOrWhiteSpace(failingTest.CandidateRerunInfrastructureSignature))
+            {
+                if (failingTest.ReferencedChangedTypes is { Count: > 0 } types)
+                {
+                    return new ApparatusRedDisposition.Genuine(
+                        $"failing test {failingTest.TestIdentity} references candidate-changed type {string.Join(", ", types)}; " +
+                        "a candidate rerun that did not execute does not exclude a candidate-introduced failure");
+                }
+
+                evidenceKinds.Add(CandidateRerunNotExecutedEvidenceKind);
                 continue;
             }
 
