@@ -39,7 +39,6 @@ public sealed class RuntimeAssemblyArchitectureTests
         new("Mcg.AgentOrchestrator.App.Cli.SystemConductorProcessLauncher", "Conductor start script behind IConductorProcessLauncher", "src/Mcg.AgentOrchestrator.App/Cli/CliConductorSeams.cs:38"),
         new("Mcg.AgentOrchestrator.App.Orchestration.SystemConductorSupervisorProcessHost", "Supervised conductor child", "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorContinuitySupervisor.cs:839"),
         new("Mcg.AgentOrchestrator.App.Orchestration.DotnetDumpConductorDiagnosticDumpCapture", "dotnet-dump capture of a frozen conductor", "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDiagnosticDumpCapture.cs:90"),
-        new("Mcg.AgentOrchestrator.App.Orchestration.ConductorDriver", "dotnet build-server shutdown", "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs:5228"),
         new("Mcg.AgentOrchestrator.App.Orchestration.ConductorLoopHandoff", "Detached conduct loop successor", "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorLoopHandoff.cs:870"),
         new("Mcg.AgentOrchestrator.App.Orchestration.ConductorSelfRelaunch", "Successor preparation commands", "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorSelfRelaunch.cs:367"),
         new("Mcg.AgentOrchestrator.App.Orchestration.PanelJudgeProcess", "Blinded shadow judge calls retaining partial raw output on timeout", "src/Mcg.AgentOrchestrator.App/Orchestration/PanelJudgeProcess.cs:27"),
@@ -57,7 +56,7 @@ public sealed class RuntimeAssemblyArchitectureTests
         new("Mcg.AgentOrchestrator.Infrastructure.AcceptanceLaneClosureHasher", "Git reads for lane closure hashing", "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneClosureHasher.cs:117"),
         new("Mcg.AgentOrchestrator.Infrastructure.DotnetBuildEnvironmentManager", "Build-server shutdown", "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetBuildEnvironmentManager.cs:596"),
         new("Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier", "Git scalar reads", "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs:6470"),
-        new("Mcg.AgentOrchestrator.Infrastructure.GoalWorktrees", "Build-server shutdown and direct git", "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalWorktrees.Cleanup.cs:1073; src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalWorktrees.GitOps.cs:372"),
+        new("Mcg.AgentOrchestrator.Infrastructure.GoalWorktrees", "Build-server shutdown and direct git", "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalWorktrees.GitOps.cs:372"),
         new("Mcg.AgentOrchestrator.Infrastructure.WindowsSandboxAclHelper", "icacls sandbox reset", "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalWorktrees.cs:247")
     ];
 
