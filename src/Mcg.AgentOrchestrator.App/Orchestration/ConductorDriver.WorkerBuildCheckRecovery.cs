@@ -7,6 +7,9 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed partial class ConductorDriver
 {
     private const int MaxWorkerBuildCheckRecoveries = 2;
+    private const string BuildSlotLockTimeout = "Timed out waiting for build lease execution lock";
+    private const string BuildSlotLockTimeoutBlock =
+        "build-slot lock timeout: the build check never ran because the build-slot lock timed out.";
     private Func<GoalId, TaskId, string, TaskSpec>? _workerBuildRecoveryRetry;
     private Func<GoalId, string> _workerBuildArtifactsPath =
         goalId => DotnetBuildEnvironmentManager.GoalArtifactsPath(goalId);
@@ -35,7 +38,8 @@ internal sealed partial class ConductorDriver
             return null;
 
         var errors = WorkerBuildLogErrorReader.ReadNewest(_workerBuildArtifactsPath(goal.Id));
-        if (errors is null)
+        var lockTimeout = errors is null && IsBuildSlotLockTimeout(task.LastVerification!);
+        if (errors is null && !lockTimeout)
         {
             ApplyPendingFailedGoalNotes(goal, pendingNotes);
             return Escalate(goal, goalPrefix, policy, state, decision.Reason);
@@ -50,7 +54,7 @@ internal sealed partial class ConductorDriver
         }
         ApplyPendingFailedGoalNotes(goal, pendingNotes);
 
-        var errorBlock = errors.Format(20);
+        var errorBlock = errors?.Format(20) ?? BuildSlotLockTimeoutBlock;
         var worktreePath = _executionDirectory is null ? null : GoalWorktrees.TryResolve(_executionDirectory, goal.Id);
         if (worktreePath is null)
             return Escalate(goal, goalPrefix, policy, state,
@@ -88,8 +92,10 @@ internal sealed partial class ConductorDriver
         var feedback = $"worker-build-check-failed automatic recovery {task.WorkerBuildCheckRecoveryCount + 1}/2:" +
             Environment.NewLine + (committed ? $"checkpoint commit {checkpoint}" :
                 $"no uncommitted changes were found; goal branch HEAD {checkpoint}") +
-            Environment.NewLine + "Fix only what the build reports below, and run scripts/Invoke-WorkerBuildCheck.ps1 after the last edit." +
-            Environment.NewLine + errors.Format(50);
+            Environment.NewLine + (lockTimeout
+                ? BuildSlotLockTimeoutBlock + Environment.NewLine + "Rerun scripts/Invoke-WorkerBuildCheck.ps1 after the last edit."
+                : "Fix only what the build reports below, and run scripts/Invoke-WorkerBuildCheck.ps1 after the last edit." +
+                    Environment.NewLine + errors!.Format(50));
         try
         {
             _workerBuildRecoveryRetry(goal.Id, task.Id, feedback);
@@ -109,5 +115,12 @@ internal sealed partial class ConductorDriver
                     GoalLifecycle.ResolveState(refreshedGoal, GetFacts(refreshedGoal)),
                     "Worker build check retry was applied; dispatch start awaits a fresh lifecycle observation."));
         return ExecuteDispatchAndStart(refreshedGoal, goalPrefix, policy, GoalLifecycleState.WorkspaceReady);
+    }
+
+    private static bool IsBuildSlotLockTimeout(TaskVerificationRecord verification)
+    {
+        var output = verification.StandardError + Environment.NewLine + verification.StandardOutput;
+        return output.Contains(BuildSlotLockTimeout, StringComparison.Ordinal) &&
+            !output.Split('\n').Any(WorkerBuildLogErrorReader.IsCompilerDiagnostic);
     }
 }
