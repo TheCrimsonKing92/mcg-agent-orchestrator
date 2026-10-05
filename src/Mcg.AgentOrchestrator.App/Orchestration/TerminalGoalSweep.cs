@@ -902,6 +902,14 @@ internal static partial class TerminalGoalSweep
                         $"workspace remove {prefix}"));
                     goal = kernel.GetGoal(originalGoal.Id);
                 }
+                else if (!GoalOperationJournal.HasCompletedCleanupEvidence(
+                    GoalOperationJournal.Read(executionDirectory, goal.Id)))
+                {
+                    GoalOperationJournal.RecordCleanupCompleted(
+                        executionDirectory,
+                        goal,
+                        "Terminal sweep recorded merged goal cleanup: workspace already gone; no worktree or branch remained.");
+                }
 
                 AddOwnedEphemeralCleanupRepair(removeResult.OwnedEphemeralCleanup, prefix, repairs);
             }
