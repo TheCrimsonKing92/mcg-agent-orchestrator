@@ -168,6 +168,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsMainBaselineDiscov
         internal async Task<AcceptanceCheckResult> Run()
         {
             _overrides.MainBaselineDiscoveryCacheForTests = _enableCache ? new MainBaselineDiscoveryCache(CacheRoot) : null;
+            _overrides.MainBaselineDiscoveryCacheEnabled = _enableCache;
             var goal = GoalId.New();
             _goals.Add(goal);
             var verifier = new GoalAcceptanceVerifier(_overrides, (args, worktree, _) =>
@@ -227,6 +228,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsMainBaselineDiscov
         public void Dispose()
         {
             _overrides.MainBaselineDiscoveryCacheForTests = null;
+            _overrides.MainBaselineDiscoveryCacheEnabled = true;
             _overrides.ResolveMainWorktreePathForTests = null;
             _overrides.ResolveDeletedTestFilesForTests = null;
             _overrides.OnTrustedMainBaselineBuildStartingForTests = null;
