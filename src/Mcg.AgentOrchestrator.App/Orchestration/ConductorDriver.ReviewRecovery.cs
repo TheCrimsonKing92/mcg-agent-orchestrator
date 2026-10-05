@@ -166,7 +166,8 @@ internal sealed partial class ConductorDriver
             reviewerRoute = ResolveReviewerRetryRoute(goal, triggeringTask, trigger.Finding);
         }
 
-        var round = ReviewRetryCapReceipt.Create(goal, policy.ReviewAutoRetryStopRound).Round;
+        var receipt = ReviewRetryCapReceipt.Create(goal, policy.ReviewAutoRetryStopRound, policy.ReviewAutoRetryLifetimeMultiplier);
+        var round = receipt.Round;
         var route = FailedGoalRecoveryPolicy.SelectVerifyingFindingRoute(
             new FailedGoalVerifyingFindingRouteFacts(
                 triggeringTask.Id,
@@ -185,7 +186,7 @@ internal sealed partial class ConductorDriver
                     .TakeWhile(task => task.Id != triggeringTask.Id)
                     .Select(task => new FailedGoalFindingRouteTask(task.Id, task.RequiredRole))
                     .ToImmutableArray(),
-                SummarizeRepeatedFailingSet(goal)));
+                SummarizeRepeatedFailingSet(goal), LifetimeRound: receipt.LifetimeRound ?? 0, LifetimeBackstop: receipt.LifetimeBackstop ?? 0));
 
         if (route.Kind == FailedGoalVerifyingFindingRouteKind.OperatorEvidenceRequired)
         {
@@ -218,7 +219,7 @@ internal sealed partial class ConductorDriver
         }
 
         var targetTask = goal.Tasks.Single(task => task.Id == route.TargetTaskId);
-        if (route.Kind == FailedGoalVerifyingFindingRouteKind.RetryCapReached)
+        if (route.Kind is FailedGoalVerifyingFindingRouteKind.RetryCapReached or FailedGoalVerifyingFindingRouteKind.LifetimeBackstopReached)
         {
             observation = FailedGoalFindingObservation.Observed(
                 FailedGoalFindingObservationKind.FindingRetryCapReached,
@@ -226,13 +227,11 @@ internal sealed partial class ConductorDriver
                     ? BuildReviewCapDecisionMessage(
                         goal,
                         triggeringTask,
-                        new ReviewRetryCapReceipt(round, policy.ReviewAutoRetryStopRound),
+                        receipt,
                         trigger.Finding,
                         outputArtifact,
                         triggeringTask.LastVerification?.MergedReviewFindings ?? [])
-                    : $"auto-review-retry stopped at review round {round}/{policy.ReviewAutoRetryStopRound} for task {targetTask.Id.Value[..8]}; " +
-                        $"operator decision required (split, supersede, or continue). Findings: {TrimForConductorMessage(trigger.Finding)}. " +
-                        $"Full {triggeringTask.RequiredRole.ToString().ToLowerInvariant()} output: {outputArtifact}");
+                    : BuildTesterReviewCapDecisionMessage(goal, triggeringTask, targetTask, receipt, trigger.Finding, outputArtifact));
             observation = observation with { PendingNotes = pendingNotes.ToImmutableArray() };
             return true;
         }
@@ -288,7 +287,7 @@ internal sealed partial class ConductorDriver
             FailedGoalFindingObservationKind.FindingRouteObserved,
             targetTask.Id,
             BuildFailedGoalAttemptIdentity(targetTask),
-            message,
+            InsertReviewBudgetResetMarker(message, ReviewRetryBudgetLedger.Evaluate(goal).ResetMarker),
             warning,
             route.RoundKind,
             route.RetryCause);
@@ -353,36 +352,6 @@ internal sealed partial class ConductorDriver
         }
 
         return new VerifyingFindingTrigger(task, blocker, [], upstreamDeveloper);
-    }
-
-    private static string BuildReviewCapDecisionMessage(
-        Goal goal,
-        TaskSpec reviewerTask,
-        ReviewRetryCapReceipt? receipt,
-        string trigger,
-        string outputArtifact,
-        IReadOnlyList<ReviewFinding> ledger)
-    {
-        var open = ReviewFindings.GetOpenBlockingFindings(
-            ledger,
-            goal.EffectiveAcceptanceCriteriaCorrections);
-        var stableIds = open.Count == 0
-            ? "unavailable"
-            : string.Join(",", open.Select(finding => finding.StableId));
-        var findings = open.Count == 0
-            ? TrimForConductorMessage(trigger)
-            : string.Join("; ", open.Select(finding =>
-                $"stable_id={finding.StableId} description={TrimForConductorMessage(finding.Description)}"));
-        var candidateSha = reviewerTask.LastVerification?.ReviewedCommit ??
-            reviewerTask.LastDispatch?.BaseCommit ??
-            "missing";
-        var capBoundary = receipt is null
-            ? "because the system-owned review-cap receipt is missing"
-            : $"at review round {receipt.Round}/{receipt.StopRound}";
-        return $"auto-review-retry stopped {capBoundary}: blocked-at-cap for Reviewer task {reviewerTask.Id.Value[..8]}; " +
-            $"candidate_sha={candidateSha}; surviving_stable_ids={stableIds}; findings: {findings}. " +
-            "operator decision required: continue work, waive the applicable criterion as an explicit override, split the goal, or supersede the requirement. " +
-            $"The goal remains non-terminal and cannot advance to acceptance. Full reviewer output: {outputArtifact}";
     }
 
     private static IReadOnlyList<FailedGoalPendingNote> BuildSuppressedAutoReviewRetryFindingNotes(

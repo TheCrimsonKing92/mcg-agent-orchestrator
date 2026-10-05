@@ -119,6 +119,7 @@ private static IReadOnlyList<string> DescribeConductorPolicyDifferences(
     Add(nameof(ConductorAutonomyPolicy.EmptyOutputRetryMaxDelaySeconds), preset.EmptyOutputRetryMaxDelaySeconds, file.EmptyOutputRetryMaxDelaySeconds);
     Add(nameof(ConductorAutonomyPolicy.ReviewAutoRetryWarningRound), preset.ReviewAutoRetryWarningRound, file.ReviewAutoRetryWarningRound);
     Add(nameof(ConductorAutonomyPolicy.ReviewAutoRetryStopRound), preset.ReviewAutoRetryStopRound, file.ReviewAutoRetryStopRound);
+    Add(nameof(ConductorAutonomyPolicy.ReviewAutoRetryLifetimeMultiplier), preset.ReviewAutoRetryLifetimeMultiplier, file.ReviewAutoRetryLifetimeMultiplier);
     Add(nameof(ConductorAutonomyPolicy.PlannerSampleCount), preset.PlannerSampleCount, file.PlannerSampleCount);
     foreach (var state in Enum.GetValues<GoalLifecycleState>())
     {

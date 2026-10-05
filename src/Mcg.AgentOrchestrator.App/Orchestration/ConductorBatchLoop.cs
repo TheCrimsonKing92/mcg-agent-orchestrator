@@ -2111,6 +2111,7 @@ internal sealed partial class ConductorBatchLoop
                $"{prefix}EmptyOutputRetryMaxDelaySeconds={policy.EmptyOutputRetryMaxDelaySeconds} " +
                $"{prefix}ReviewAutoRetryWarningRound={policy.ReviewAutoRetryWarningRound} " +
                $"{prefix}ReviewAutoRetryStopRound={policy.ReviewAutoRetryStopRound} " +
+               $"{prefix}ReviewAutoRetryLifetimeMultiplier={policy.ReviewAutoRetryLifetimeMultiplier} " +
                $"{prefix}TransitionMap={transitions}";
     }
 
