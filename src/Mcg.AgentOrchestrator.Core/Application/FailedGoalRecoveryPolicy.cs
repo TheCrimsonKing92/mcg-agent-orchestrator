@@ -138,42 +138,6 @@ public sealed record FailedGoalFindingRouteTask(
     TaskId TaskId,
     AgentRole RequiredRole);
 
-public enum FailedGoalVerifyingFindingRouteKind
-{
-    OperatorEvidenceRequired,
-    TargetUnavailable,
-    RetryCapReached,
-    MissingFindingResult,
-    RepeatedFailingTestSet,
-    Routed
-}
-
-public sealed record FailedGoalVerifyingFindingRouteFacts(
-    TaskId TriggeringTaskId,
-    AgentRole TriggeringRole,
-    string TriggerAttemptIdentity,
-    TaskId? ExplicitTargetTaskId,
-    bool RequiresCommittedTarget,
-    AgentRole? ReviewerTargetRole,
-    bool ReviewerEscalatesToOperator,
-    int Round,
-    int StopRound,
-    int WarningRound,
-    bool MissingFindingResult,
-    RetryCause? ObservedCause,
-    ImmutableArray<FailedGoalFindingRouteTask> PriorTasks,
-    PreReviewRepeatedFailureSummary? RepeatedFailure = null);
-
-public sealed record FailedGoalVerifyingFindingRouteSelection(
-    FailedGoalVerifyingFindingRouteKind Kind,
-    TaskId? TargetTaskId,
-    AgentRole TargetRole,
-    string AttemptIdentity,
-    int Round,
-    RetryCause? RetryCause,
-    RetryRoundKind? RoundKind,
-    bool EmitWarning);
-
 public sealed class FailedGoalRecoveryFacts : IEquatable<FailedGoalRecoveryFacts>
 {
     public FailedGoalRecoveryFacts(
@@ -399,6 +363,8 @@ public static class FailedGoalRecoveryPolicy
 
         if (targetTaskId is null)
             return Selection(FailedGoalVerifyingFindingRouteKind.TargetUnavailable, null, targetRole);
+        if (facts.LifetimeBackstop > 0 && facts.LifetimeRound >= facts.LifetimeBackstop)
+            return Selection(FailedGoalVerifyingFindingRouteKind.LifetimeBackstopReached, targetTaskId, targetRole);
         if (facts.Round >= facts.StopRound)
             return Selection(FailedGoalVerifyingFindingRouteKind.RetryCapReached, targetTaskId, targetRole);
         if (facts.MissingFindingResult)

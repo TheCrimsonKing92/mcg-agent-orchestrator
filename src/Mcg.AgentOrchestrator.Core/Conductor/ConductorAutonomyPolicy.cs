@@ -39,6 +39,7 @@ public sealed record ConductorAutonomyPolicy(
     double EmptyOutputRetryMaxDelaySeconds = 30,
     int ReviewAutoRetryWarningRound = 4,
     int ReviewAutoRetryStopRound = 7,
+    int ReviewAutoRetryLifetimeMultiplier = 3,
     int PlannerSampleCount = 1,
     int AcceptanceWidth = 2,
     int AcceptanceCohortGatherWindowSeconds = 480,
@@ -167,6 +168,9 @@ public sealed record ConductorAutonomyPolicy(
         if (ReviewAutoRetryStopRound <= 0)
             errors.Add($"reviewAutoRetryStopRound must be greater than zero (got {ReviewAutoRetryStopRound}).");
 
+        if (ReviewAutoRetryLifetimeMultiplier < 2)
+            errors.Add($"reviewAutoRetryLifetimeMultiplier must be at least two (got {ReviewAutoRetryLifetimeMultiplier}).");
+
         if (ReviewAutoRetryStopRound <= ReviewAutoRetryWarningRound)
             errors.Add($"reviewAutoRetryStopRound ({ReviewAutoRetryStopRound}) must be greater than reviewAutoRetryWarningRound ({ReviewAutoRetryWarningRound}).");
 
@@ -210,6 +214,7 @@ public sealed record ConductorAutonomyPolicy(
         sb.AppendLine($"  \"emptyOutputRetryMaxDelaySeconds\": {EmptyOutputRetryMaxDelaySeconds},");
         sb.AppendLine($"  \"reviewAutoRetryWarningRound\": {ReviewAutoRetryWarningRound},");
         sb.AppendLine($"  \"reviewAutoRetryStopRound\": {ReviewAutoRetryStopRound},");
+        sb.AppendLine($"  \"reviewAutoRetryLifetimeMultiplier\": {ReviewAutoRetryLifetimeMultiplier},");
         sb.AppendLine($"  \"plannerSampleCount\": {PlannerSampleCount},");
         sb.AppendLine($"  \"acceptanceWidth\": {AcceptanceWidth},");
         sb.AppendLine($"  \"acceptanceCohortGatherWindowSeconds\": {AcceptanceCohortGatherWindowSeconds},");
@@ -284,6 +289,9 @@ public sealed record ConductorAutonomyPolicy(
             var reviewAutoRetryStopRound = root.TryGetProperty("reviewAutoRetryStopRound", out _)
                 ? RequireInt(root, "reviewAutoRetryStopRound", src)
                 : 7;
+            var reviewAutoRetryLifetimeMultiplier = root.TryGetProperty("reviewAutoRetryLifetimeMultiplier", out _)
+                ? RequireInt(root, "reviewAutoRetryLifetimeMultiplier", src)
+                : 3;
             var plannerSampleCount = root.TryGetProperty("plannerSampleCount", out _)
                 ? RequireInt(root, "plannerSampleCount", src)
                 : 1;
@@ -369,6 +377,7 @@ public sealed record ConductorAutonomyPolicy(
                 emptyOutputRetryMaxDelaySeconds,
                 reviewAutoRetryWarningRound,
                 reviewAutoRetryStopRound,
+                reviewAutoRetryLifetimeMultiplier,
                 plannerSampleCount,
                 acceptanceWidth,
                 gatherWindowSeconds,

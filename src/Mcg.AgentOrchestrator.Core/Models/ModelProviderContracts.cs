@@ -348,11 +348,16 @@ public sealed record DispatchProviderUsage(
         : ProviderUsageValue.Unknown(string.IsNullOrWhiteSpace(reason) ? "absent" : reason);
 }
 
-public sealed record ReviewRetryCapReceipt(int Round, int StopRound)
+public sealed record ReviewRetryCapReceipt(int Round, int StopRound, int? LifetimeRound = null, int? LifetimeBackstop = null)
 {
-    public bool IsAtCap => Round >= StopRound;
+    public bool IsAtConsecutiveCap => Round >= StopRound;
+    public bool IsAtLifetimeBackstop => LifetimeRound is { } round && LifetimeBackstop is { } stop && round >= stop;
+    public bool IsAtCap => IsAtConsecutiveCap || IsAtLifetimeBackstop;
 
-    public static ReviewRetryCapReceipt Create(Goal goal, int stopRound)
+    public static ReviewRetryCapReceipt Create(Goal goal, int stopRound) =>
+        Create(goal, stopRound, Conductor.ConductorAutonomyPolicy.Default.ReviewAutoRetryLifetimeMultiplier);
+
+    public static ReviewRetryCapReceipt Create(Goal goal, int stopRound, int lifetimeMultiplier)
     {
         ArgumentNullException.ThrowIfNull(goal);
         if (stopRound <= 0)
@@ -360,10 +365,10 @@ public sealed record ReviewRetryCapReceipt(int Round, int StopRound)
             throw new ArgumentOutOfRangeException(nameof(stopRound), "Review retry stop round must be greater than zero.");
         }
 
-        var priorAutomaticRetries = goal.Timeline.Count(evt =>
-            evt.Kind == ProgressKind.TaskRetried &&
-            evt.Message.Contains("auto-review-retry", StringComparison.OrdinalIgnoreCase));
-        return new ReviewRetryCapReceipt(priorAutomaticRetries + 1, stopRound);
+        if (lifetimeMultiplier < 2)
+            throw new ArgumentOutOfRangeException(nameof(lifetimeMultiplier), "Review retry lifetime multiplier must be at least two.");
+        var budget = ReviewRetryBudgetLedger.Evaluate(goal);
+        return new ReviewRetryCapReceipt(budget.Round, stopRound, budget.LifetimeRound, checked(stopRound * lifetimeMultiplier));
     }
 }
 

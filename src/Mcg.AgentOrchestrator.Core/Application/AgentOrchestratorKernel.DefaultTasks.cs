@@ -86,7 +86,8 @@ public sealed partial class AgentOrchestratorKernel
         string message,
         OperatorActorKind actorKind = OperatorActorKind.Human,
         string? decisionId = null,
-        string? outcome = null)
+        string? outcome = null,
+        RetryRoundKind? retryRoundKind = null)
     {
         var goal = GetGoal(goalId);
         var payload = new OperatorIntentAppliedPayload(
@@ -98,7 +99,8 @@ public sealed partial class AgentOrchestratorKernel
             authenticationAssurance,
             actorKind,
             decisionId,
-            outcome);
+            outcome,
+            retryRoundKind);
         if (!string.IsNullOrEmpty(intentId) &&
             goal.Timeline.Any(evt => evt.OperatorIntentApplied?.IntentId == intentId))
         {
