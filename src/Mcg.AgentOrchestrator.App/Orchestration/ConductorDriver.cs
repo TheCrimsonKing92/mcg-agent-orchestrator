@@ -53,6 +53,11 @@ internal sealed record DeveloperBranchIntegrationResult(
 
 internal sealed partial class ConductorDriver
 {
+    internal static DispatchReadinessVerdict EvaluateConductorReadiness(
+        AgentOrchestratorKernel kernel, Goal goal, IReadOnlyList<AgentDefinition> agents,
+        WorkerProfileCatalog profiles, DateTimeOffset now) =>
+        DispatchReadinessAssessment.Evaluate(goal, kernel.Goals, agents, profiles, now).Verdict;
+
     private sealed record JournalLifecycleFacts(bool IsMerged, bool IsRecorded, bool IsCleanedUp);
 
     private sealed record CohortGateRun(
@@ -859,7 +864,7 @@ internal sealed partial class ConductorDriver
         _integrateMainBeforeReadOnlyDispatch = (goal, role) =>
             IntegrateMainBeforeReadOnlyDispatch(dir, goal, role);
         _recordPreDispatchIntegrationReceipt = new PreDispatchIntegrationReceiptRecorder(kernel).Record;
-        _rebaseOntoMain = goal => GoalWorktrees.TryRebaseOntoMain(dir, goal.Id);
+        _rebaseOntoMain = goal => GoalWorktrees.TryRebaseOntoMain(dir, goal.Id, CreateAdditiveConflictMergeOptions(kernel, goal, workspace.ConductEventsLogPath));
         _recheckPreLandingRebaseConflict = goal =>
         {
             var worktreePath = GoalWorktrees.TryResolve(dir, goal.Id);
@@ -990,11 +995,7 @@ internal sealed partial class ConductorDriver
         };
         _emptyOutputBackoffDelay = Thread.Sleep;
         _recoverSandboxPrep = action => action.Execute();
-        _evaluateReadiness = goal =>
-        {
-            var plan = SubscriptionPlanBuilder.Build(goal, agents, profiles, providerHoldScope: kernel.Goals);
-            return DispatchReadinessEvaluator.EvaluateDispatchReadiness(goal, plan, DateTimeOffset.UtcNow);
-        };
+        _evaluateReadiness = goal => EvaluateConductorReadiness(kernel, goal, agents, profiles, DateTimeOffset.UtcNow);
         _getLandingFileScopes = goal =>
         {
             var worktreePath = GoalWorktrees.TryResolve(dir, goal.Id);
@@ -1435,7 +1436,8 @@ internal sealed partial class ConductorDriver
         ConductorFocusedEvidenceRequestContext? requestContext,
         out FocusedEvidenceRunResult evidence,
         out ConductorParallelAcceptanceAttempt? evidenceAttempt,
-        out FailedGoalFindingObservation decision, out ConductorParallelAcceptanceAttemptDecisionKind? attemptKind)
+        out FailedGoalFindingObservation decision, out ConductorParallelAcceptanceAttemptDecisionKind? attemptKind,
+        ConductorParallelAcceptanceAttempt? existingAttempt = null)
     {
         evidence = null!;
         evidenceAttempt = null;
@@ -1450,7 +1452,9 @@ internal sealed partial class ConductorDriver
         ConductorParallelAcceptanceAttemptDecision attemptDecision;
         try
         {
-            attemptDecision = _focusedEvidenceAttemptCoordinator.EvaluateFocusedEvidence(
+            attemptDecision = existingAttempt is not null
+                ? _focusedEvidenceAttemptCoordinator.ObserveExistingAttempt(existingAttempt, candidate)
+                : _focusedEvidenceAttemptCoordinator.EvaluateFocusedEvidence(
                 candidate,
                 policy,
                 request,
@@ -1797,6 +1801,10 @@ internal sealed partial class ConductorDriver
                 return DispatchStartResult(goal, goalPrefix, policy, fromState,
                     startFacts with { CancelledPredecessorBlocker = terminalBlocker });
             }
+
+            if (TryDescribeCancelledReviewerBlocker(goal, out var reviewerBlocker))
+                return DispatchStartResult(goal, goalPrefix, policy, fromState,
+                    startFacts with { CancelledPredecessorBlocker = reviewerBlocker });
 
             if (readiness is not DispatchReadinessBlocked { HasCandidates: false })
             {

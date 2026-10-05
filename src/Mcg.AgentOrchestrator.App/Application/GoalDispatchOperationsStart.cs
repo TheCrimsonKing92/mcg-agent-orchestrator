@@ -457,8 +457,12 @@ internal sealed partial class GoalDispatchOperations
             .GetResult();
         if (persisted is not null)
         {
+            var addedEvents = GoalEventsTimelineMirror.AddedEntries(kernel.GetGoal(goalId).Timeline, persisted.Snapshot.Timeline);
             kernel.ReplaceGoalStateWithSnapshot(persisted.Snapshot, persisted.HumanInputRequests ?? []);
             recordDurableGoalBaseline?.Invoke(persisted.Snapshot);
+            GoalEventsTimelineMirror.AppendMissing(
+                new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, kernel: kernel),
+                goalId, addedEvents, "retry-admission");
             return persisted.Admission;
         }
 

@@ -225,7 +225,7 @@ public static partial class GoalWorktrees
             : materialized;
     }
 
-    public static GoalWorktreeRebaseResult TryRebaseOntoMain(string executionDirectory, GoalId goalId)
+    public static GoalWorktreeRebaseResult TryRebaseOntoMain(string executionDirectory, GoalId goalId, AdditiveConflictMergeOptions? additiveMerge = null)
     {
         RequireGitWorkTree(executionDirectory);
 
@@ -301,6 +301,9 @@ public static partial class GoalWorktrees
 
         var conflictFiles = GetConflictFiles(worktreePath);
         _ = GitCli.Run(worktreePath, "rebase", "--abort");
+        if (conflictFiles.Length > 0 && additiveMerge is not null &&
+            TryMergeAdditiveConflict(worktreePath, branch, baseBranch, goalId, integratedMain, conflictFiles, additiveMerge) is { } merged)
+            return merged;
         if (conflictFiles.Length > 0)
         {
             return new GoalWorktreeRebaseResult(

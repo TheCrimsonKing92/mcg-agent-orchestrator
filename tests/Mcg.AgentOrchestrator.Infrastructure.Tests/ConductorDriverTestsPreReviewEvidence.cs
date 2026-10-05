@@ -841,7 +841,7 @@ public sealed class ConductorDriverTestsPreReviewEvidence
                 RequestFragment: (string?)null),
             (
                 Name: "infrastructure",
-                Files: new[] { "src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerResultParser.cs" },
+                Files: new[] { "src/Mcg.AgentOrchestrator.Execution/Workers/WorkerResultParser.cs" },
                 MappingNeedsInput: false,
                 NoApplicableTests: true,
                 RequestFragment: (string?)null),

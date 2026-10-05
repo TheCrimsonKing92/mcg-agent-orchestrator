@@ -10,6 +10,7 @@ internal sealed partial class ConductorBatchLoop
         changed.UnionWith(ServiceAuthor(kernel, onlyGoalId));
         changed.UnionWith(ServiceStoreEvidence(kernel, onlyGoalId));
         ServiceJudgePanel(kernel, onlyGoalId);
+        ServiceBoardFill(kernel, onlyGoalId);
         return changed;
     }
 
@@ -18,5 +19,6 @@ internal sealed partial class ConductorBatchLoop
         StopSteward();
         StopAuthor();
         StopJudgePanel();
+        StopBoardFill();
     }
 }

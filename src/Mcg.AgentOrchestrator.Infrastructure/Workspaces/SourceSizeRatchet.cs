@@ -198,7 +198,7 @@ internal static class SourceSizeRatchet
             // detach. 2707 is the measured size after integrating that handoff with the rows above; the
             // branch measured 2678 against a main that has since grown this file to 2684.
             // Goal 5077a6b8 extracted process reaping for the typed operator cancel path.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 2682),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Processes/BackgroundDispatchRunner.cs", 2682),
             // Goal 5a75fed0 extracted typed projection parsing and literal restoration into
             // WorkerContextProjectionResidual, leaving the dispatcher to sequence package assembly.
             // Goal fd252fe4 adds retry fingerprints for the resolved provider, model, paid route, and
@@ -243,7 +243,7 @@ internal static class SourceSizeRatchet
             // Raised two lines for goal ed9b76cf: the dispatcher's context-artifact registry must declare
             // Developer/Tester and Planner standing-rule files as mandatory delivery sources. Rule text
             // and artifact rendering remain in WorkerStandingRules; 2607 is the measured integrated size.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs", 2607),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Workers/WorkerProfileDispatcher.cs", 2607),
             // Raised for goal fd252fe4: the single typed retry-cause argument belongs at the durable CLI
             // command-application boundary; classification and admission behavior remain elsewhere.
             // Goal 17d96426 classifies the stateless Hermes trial beside the existing stateless commands.

@@ -10,7 +10,8 @@ public static class WorkerTargetTextRules
             text.Contains(".agents\\skills", StringComparison.Ordinal);
     }
 
-    // Matches .git at end of text or before a non-letter/digit, never .gitignore.
+    // Matches .git after start of text or a non-filename character (not a letter/digit, '.', '_' or '-'),
+    // and before end of text or a non-letter/digit, never .gitignore.
     public static int FindGitDirectoryReference(string text, int startIndex = 0)
     {
         text = text.ToLowerInvariant();
@@ -18,7 +19,8 @@ public static class WorkerTargetTextRules
         while ((idx = text.IndexOf(".git", idx, StringComparison.Ordinal)) >= 0)
         {
             var after = idx + 4;
-            if (after >= text.Length || !char.IsLetterOrDigit(text[after]))
+            if ((idx == 0 || (!char.IsLetterOrDigit(text[idx - 1]) && text[idx - 1] is not ('.' or '_' or '-'))) &&
+                (after >= text.Length || !char.IsLetterOrDigit(text[after])))
                 return idx;
             idx = after;
         }
