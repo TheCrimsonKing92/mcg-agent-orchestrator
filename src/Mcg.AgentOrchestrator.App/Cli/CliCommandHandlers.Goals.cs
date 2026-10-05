@@ -1605,6 +1605,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     Path.Combine(context.Workspace.OrchestratorDirectory, ConductorHostHealthMonitor.StateFileName),
                     conductEventLogWriter, signals: new(new WindowsForegroundLockReader(), TimeProvider.System));
                 var maintenanceCadence = RunEventMaintenanceCadenceRunner.ForWorkspace(context.Workspace);
+                var stateLogCheck = StateLogDivergenceCheckRunner.ForWorkspace(context.Workspace);
                 var operatorIntents = OperatorIntentCoordinator.CreateDefault(context.Workspace);
                 var evictedGoalStatuses = new Dictionary<string, GoalStatus>(StringComparer.Ordinal);
                 var intentGoalReloadObservations = new Dictionary<string, ConductorGoalReloadObservation>(StringComparer.Ordinal);
@@ -1623,6 +1624,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     // Refresh tracked goals from persisted state before every tick, then ingest newly
                     // submitted goals. This keeps role handoff decisions tied to durable task status
                     // instead of stale loop-local objects.
+                    IReadOnlyDictionary<GoalId, string>? reloadBaseline = null;
                     try
                     {
                         evictedGoalStatuses.Clear();
@@ -1680,6 +1682,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                                     .Where(request => !checkpointHeldGoalIds.Contains(request.GoalId))
                                     .ToArray()
                             });
+                            reloadBaseline = GoalKernelChange.CaptureAll(loopKernel);
                             foreach (var (goalId, status) in evictedGoalStatuses)
                             {
                                 context.EventWriter.AppendGoalEvictedFromConductor(
@@ -1755,6 +1758,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     // progress-event channel as remediation, and an assignment here would silently drop them.
                     terminalSweep = terminalSweep with
                     {
+                        ReloadBaseline = reloadBaseline,
                         ProgressEvents = [.. remediation.Events, .. unappliedExitWatch.Observe(loopKernel)]
                     };
                     ConsoleViews.PrintTerminalGoalSweep(terminalSweep, includeBlockers: false);
@@ -1767,6 +1771,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                             context.Workspace);
                     }
                     maintenanceCadence.OnTick();
+                    stateLogCheck.OnTick();
                     hostHealthMonitor.Evaluate();
                     RemoteGitMirror.TryStartBackgroundProcessing(loopKernel, context.Workspace.ExecutionDirectory);
                     return terminalSweep;
@@ -1858,6 +1863,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 finally
                 {
                     maintenanceCadence.WaitForCurrentRunAsync().GetAwaiter().GetResult();
+                    stateLogCheck.WaitForCurrentRunAsync().GetAwaiter().GetResult();
                 }
             }
             CliArgumentParser.RequirePartCount(parts, 2, "conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>]");

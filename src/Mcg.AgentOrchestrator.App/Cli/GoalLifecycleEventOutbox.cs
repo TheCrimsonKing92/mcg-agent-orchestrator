@@ -14,12 +14,12 @@ internal static class GoalLifecycleEventOutbox
         Converters = { new JsonStringEnumConverter() }
     };
 
-    private sealed record Payload(string GoalId, string EventKind, ProgressEvent Event);
+    private sealed record Payload(string GoalId, string? EventKind, ProgressEvent Event);
 
     internal static OrchestratorStateOutboxMessage CreateMessage(ProgressEvent progressEvent) =>
         new(Guid.NewGuid().ToString("N"), Kind,
             JsonSerializer.Serialize(new Payload(progressEvent.GoalId.Value,
-                nameof(ProgressKind.GoalCancelled), progressEvent), JsonOptions), DateTimeOffset.UtcNow);
+                progressEvent.Kind.ToString(), progressEvent), JsonOptions), DateTimeOffset.UtcNow);
 
     internal static void AppendForMessage(OrchestratorWorkspace workspace, OrchestratorStateOutboxMessage message)
     {
@@ -63,8 +63,9 @@ internal static class GoalLifecycleEventOutbox
             ?? throw new JsonException("Goal lifecycle event payload is null.");
         if (!Guid.TryParseExact(payload.GoalId, "N", out _))
             throw new ArgumentException("Goal id must be a GUID in N format.");
-        if (message.Kind != Kind || payload.EventKind != nameof(ProgressKind.GoalCancelled) ||
-            payload.Event is null || payload.Event.Kind != ProgressKind.GoalCancelled ||
+        if (message.Kind != Kind || payload.Event is null ||
+            payload.Event.Kind is not (ProgressKind.GoalCancelled or ProgressKind.GoalSuperseded or ProgressKind.GoalPolicyDecision) ||
+            (payload.EventKind ?? nameof(ProgressKind.GoalCancelled)) != payload.Event.Kind.ToString() ||
             payload.Event.GoalId?.Value != payload.GoalId)
             throw new JsonException("Goal lifecycle event payload does not describe a matching GoalCancelled event.");
         return payload;

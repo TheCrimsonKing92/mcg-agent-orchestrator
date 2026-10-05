@@ -24,16 +24,12 @@ internal static partial class CliPersistentStateRunner
         CliCommandHandlers.ValidateGoalParkStopAlias(command, preparation, goalId);
         var receipts = GoalWorkerTermination.Terminate(snapshot, "park");
         CliCommandHandlers.GoalLifecycleTransitionOutcome outcome;
+        string? pendingMessageId;
         try
         {
-            outcome = repository.TransactGoalStateAsync("cli:park-goal", goalId, (state, _) =>
-            {
-                if (state is null) throw new KeyNotFoundException($"Goal '{goalId.Value}' was not found.");
-                var kernel = new AgentOrchestratorKernel();
-                kernel.ReplaceGoalStateWithSnapshot(state.Goal, state.HumanInputRequests);
-                var applied = CliCommandHandlers.ApplyGoalParkStopAliasWithoutRendering(command, kernel, goalId, receipts);
-                return Task.FromResult((true, (GoalStateSnapshot?)ExportGoalStateSnapshot(kernel, goalId), applied));
-            }).GetAwaiter().GetResult();
+            outcome = TransactGoalParkState(repository, goalId,
+                kernel => CliCommandHandlers.ApplyGoalParkStopAliasWithoutRendering(command, kernel, goalId, receipts),
+                $"Goal parked: {command.Reason}", out pendingMessageId);
         }
         catch (Exception ex) when (receipts.Count > 0)
         {
@@ -45,7 +41,9 @@ internal static partial class CliPersistentStateRunner
         }
 
         currentGoal = outcome.Goal;
-        CliCommandHandlers.RenderGoalParkStopAliasOutcome(command, outcome, receipts.Count, workspace);
+        CliCommandHandlers.RenderGoalParkStopAliasOutcome(command, outcome, receipts.Count, workspace,
+            pendingMessageId is null ? null : () => DeliverCommittedGoalParkAttentionResolution(
+                (IOrchestratorStateOutboxRepository)repository, workspace, goalId, pendingMessageId));
         return true;
     }
 }

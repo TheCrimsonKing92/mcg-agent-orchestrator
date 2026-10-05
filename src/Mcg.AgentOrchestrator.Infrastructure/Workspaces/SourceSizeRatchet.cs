@@ -107,14 +107,22 @@ internal static class SourceSizeRatchet
             // Goal 4fac1b84 (backlog 28b37515) moved landing completion and acceptance-retry evidence unchanged to its partial.
             // Goal 868fd04a (backlog c758b2c3) moved review-contract and verifying-finding recovery unchanged to its partial.
             // Goal 6f38e132 (backlog 6d658f46) moved pre-review evidence unchanged to its partial.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 3006),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 1837),
             // Goal 0e30d5e9 extracted impact-plan mapping to PreReviewEvidenceContextBuilder.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.PreReviewEvidence.cs", 641),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.PreReviewEvidence.cs", 480),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.ReviewRecovery.cs", 461),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.LandingCompletion.cs", 692),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.AcceptanceCohortExecution.cs", 641),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FindingEvidenceRequests.cs", 918),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FailedGoalRecovery.cs", 369),
+            // Goal 4ff31b70 (ConductorDriver size relief) moved parallel acceptance members unchanged to this partial.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.ParallelAcceptance.cs", 593),
+            // Goal 4ff31b70 (ConductorDriver size relief) moved dispatch diagnostics unchanged to this partial.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.DispatchDiagnostics.cs", 470),
+            // Goal 4ff31b70 (ConductorDriver size relief) moved git and lease helpers unchanged to this partial.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.GitAndLeaseHelpers.cs", 145),
+            // Goal 4ff31b70 (ConductorDriver size relief) moved pre-review evidence routing unchanged to this partial.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.PreReviewEvidenceRouting.cs", 199),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Core/Application/FailedGoalRecoveryPolicy.cs", 775),
             // Raised for goal dadadfac: set-aside re-admission must be decided where the loop already holds
             // the goal, its recorded set-aside entry, and the current sweep blockers together.
@@ -190,7 +198,7 @@ internal static class SourceSizeRatchet
             // detach. 2707 is the measured size after integrating that handoff with the rows above; the
             // branch measured 2678 against a main that has since grown this file to 2684.
             // Goal 5077a6b8 extracted process reaping for the typed operator cancel path.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs", 2682),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Processes/BackgroundDispatchRunner.cs", 2682),
             // Goal 5a75fed0 extracted typed projection parsing and literal restoration into
             // WorkerContextProjectionResidual, leaving the dispatcher to sequence package assembly.
             // Goal fd252fe4 adds retry fingerprints for the resolved provider, model, paid route, and
@@ -235,7 +243,7 @@ internal static class SourceSizeRatchet
             // Raised two lines for goal ed9b76cf: the dispatcher's context-artifact registry must declare
             // Developer/Tester and Planner standing-rule files as mandatory delivery sources. Rule text
             // and artifact rendering remain in WorkerStandingRules; 2607 is the measured integrated size.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs", 2607),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Workers/WorkerProfileDispatcher.cs", 2607),
             // Raised for goal fd252fe4: the single typed retry-cause argument belongs at the durable CLI
             // command-application boundary; classification and admission behavior remain elsewhere.
             // Goal 17d96426 classifies the stateless Hermes trial beside the existing stateless commands.

@@ -30,6 +30,13 @@ public interface ICollaborationItemStore
         string resolution,
         CancellationToken cancellationToken = default);
 
+    Task<int> ResolveOpenForGoalRaisedAtOrBeforeAsync(
+        string goalId,
+        string resolution,
+        DateTimeOffset raisedAtOrBefore,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This collaboration store does not support bounded attention resolution.");
+
     Task<bool> TryMarkDeliveredAsync(
         string correlationKey,
         CancellationToken cancellationToken = default);

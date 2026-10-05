@@ -22,7 +22,7 @@ public sealed class DispatchProcessHostTests
         var sourcePath = Path.Combine(
             InfrastructureTestSupport.FindRepositoryRoot(),
             "src",
-            "Mcg.AgentOrchestrator.Infrastructure",
+            "Mcg.AgentOrchestrator.Execution",
             "Processes",
             "DispatchProcessHost.cs");
         var source = File.ReadAllText(sourcePath);

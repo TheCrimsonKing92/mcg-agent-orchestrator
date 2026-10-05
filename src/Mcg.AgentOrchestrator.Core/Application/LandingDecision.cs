@@ -13,6 +13,8 @@ public enum ChangeRiskClass
 
 public abstract record LandingDecision
 {
+    public PolicyDecisionRecord? Decision { get; init; }
+
     public sealed record Promote : LandingDecision;
     public sealed record Escalate(string Reason) : LandingDecision;
 }

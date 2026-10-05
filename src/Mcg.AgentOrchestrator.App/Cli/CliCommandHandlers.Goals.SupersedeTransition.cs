@@ -54,7 +54,8 @@ internal static partial class CliCommandHandlers
 
     internal static void RenderGoalSupersedeOutcome(
         GoalLifecycleTransitionOutcome outcome,
-        OrchestratorWorkspace workspace)
+        OrchestratorWorkspace workspace,
+        Action? deliverCommittedLifecycleEvent = null)
     {
         switch (outcome.Disposition)
         {
@@ -67,7 +68,10 @@ internal static partial class CliCommandHandlers
                     WriteLiveDispatches(outcome.LiveDispatches);
                 }
 
-                AppendCommittedLifecycleEvent(outcome, workspace, GoalStatus.Superseded);
+                if (deliverCommittedLifecycleEvent is null)
+                    AppendCommittedLifecycleEvent(outcome, workspace, GoalStatus.Superseded);
+                else
+                    deliverCommittedLifecycleEvent();
                 return;
 
             case GoalLifecycleTransitionDisposition.Rejected:

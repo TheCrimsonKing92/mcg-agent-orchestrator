@@ -1595,7 +1595,7 @@ public sealed class LandingExecutorTests
         }
     }
 
-    private static (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Developer, string ApprovalPath, string NonApprovalPath)
+    internal static (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Developer, string ApprovalPath, string NonApprovalPath)
         CreateVerifiedOwnershipApprovalGoal(string repo)
     {
         const string approvalPath = "src/Mcg.AgentOrchestrator.Infrastructure/OwnershipTouched.cs";
@@ -1709,7 +1709,7 @@ public sealed class LandingExecutorTests
         return (kernel, goal);
     }
 
-    private static (OrchestratorWorkspace Workspace, AgentOrchestratorKernel Kernel, Goal Goal)
+    internal static (OrchestratorWorkspace Workspace, AgentOrchestratorKernel Kernel, Goal Goal)
         CreateAcceptedCandidate(string repo, string fileName)
     {
         var workspace = OrchestratorWorkspace.ForDirectory(repo);
