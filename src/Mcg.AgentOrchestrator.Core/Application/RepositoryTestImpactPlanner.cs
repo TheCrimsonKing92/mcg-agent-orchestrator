@@ -196,6 +196,7 @@ public static partial class RepositoryTestImpactPlanner
         var touchesAcceptanceTests = summary.Files.Any(file => StartsWith(file.Path, acceptanceTestsPrefix));
         var touchesInfrastructure = summary.Files.Any(file =>
             StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Infrastructure/") ||
+            StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Execution/") ||
             StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Infrastructure.Providers/") ||
             StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Infrastructure.OperatorComms/") ||
             StartsWith(file.Path, "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/") &&
@@ -314,6 +315,7 @@ public static partial class RepositoryTestImpactPlanner
         }
         else if (infrastructureTestFilter.Filter is not null &&
             !summary.Files.Any(file => StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Infrastructure/")) &&
+            !summary.Files.Any(file => StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Execution/")) &&
             !summary.Files.Any(file => StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Infrastructure.Providers/")) &&
             !touchesApp &&
             !touchesScriptsOrConfig)
@@ -654,6 +656,7 @@ public static partial class RepositoryTestImpactPlanner
     private static bool CanUseFocusedAppFilters(RepositoryChangeSummary summary) =>
         !summary.Files.Any(file =>
             StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Infrastructure/") ||
+            StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Execution/") ||
             StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Infrastructure.Providers/") ||
             file.Categories.Contains(RepositoryChangeCategory.Script) ||
             file.Categories.Contains(RepositoryChangeCategory.Configuration)) &&

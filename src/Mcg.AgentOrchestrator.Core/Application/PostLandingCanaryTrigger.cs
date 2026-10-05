@@ -18,10 +18,14 @@ public static class AcceptanceEngineSurfaceRegistry
         new("acceptance-verifier", [
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier",
             "src/Mcg.AgentOrchestrator.Infrastructure/Processes/TempRootApparatusLossReceipts",
+            "src/Mcg.AgentOrchestrator.Execution/Processes/TempRootApparatusLossReceipts",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceSharedApparatusInvalidation",
             "src/Mcg.AgentOrchestrator.Infrastructure/Processes/AcceptanceTempRootNames",
+            "src/Mcg.AgentOrchestrator.Execution/Processes/AcceptanceTempRootNames",
             "src/Mcg.AgentOrchestrator.Infrastructure/Verification/AcceptanceTrxOutcomeTaxonomy",
-            "src/Mcg.AgentOrchestrator.Infrastructure/Verification/AcceptanceTrxTestIdentityResolver"
+            "src/Mcg.AgentOrchestrator.Execution/Verification/AcceptanceTrxOutcomeTaxonomy",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Verification/AcceptanceTrxTestIdentityResolver",
+            "src/Mcg.AgentOrchestrator.Execution/Verification/AcceptanceTrxTestIdentityResolver"
         ]),
         new("test-impact-planner", ["src/Mcg.AgentOrchestrator.Core/Application/RepositoryTestImpactPlanner"]),
         new("reverse-dependency-index", [
@@ -31,7 +35,9 @@ public static class AcceptanceEngineSurfaceRegistry
         new("build-environment", [
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetBuildEnvironmentManager",
             "src/Mcg.AgentOrchestrator.Infrastructure/Processes/DotnetBuildStorageRoot",
-            "src/Mcg.AgentOrchestrator.Infrastructure/Processes/DotnetBuildStorageLayout"
+            "src/Mcg.AgentOrchestrator.Execution/Processes/DotnetBuildStorageRoot",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Processes/DotnetBuildStorageLayout",
+            "src/Mcg.AgentOrchestrator.Execution/Processes/DotnetBuildStorageLayout"
         ]),
         new("change-classifier", ["src/Mcg.AgentOrchestrator.Core/Application/RepositoryChangeClassifier"]),
         new("gate-settings", ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceGateEngineSettings"]),

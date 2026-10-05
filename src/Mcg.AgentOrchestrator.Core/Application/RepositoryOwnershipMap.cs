@@ -42,6 +42,7 @@ public static class RepositoryOwnershipMap
             ["Mcg.AgentOrchestrator.Infrastructure"] = (
                 "infrastructure",
                 ["Diagnostics", "Persistence", "Processes", "Verification", "Workers", "Workspaces"]),
+            ["Mcg.AgentOrchestrator.Execution"] = ("infrastructure", ["Persistence", "Processes", "Verification", "Workers"]),
             ["Mcg.AgentOrchestrator.Infrastructure.Providers"] = ("infrastructure.providers", []),
             ["Mcg.AgentOrchestrator.Infrastructure.OperatorComms"] = ("infrastructure.operatorcomms", [])
         };
@@ -78,6 +79,7 @@ public static class RepositoryOwnershipMap
 
         if (path.StartsWith("src/Mcg.AgentOrchestrator.Core/", StringComparison.OrdinalIgnoreCase) ||
             path.StartsWith("src/Mcg.AgentOrchestrator.Infrastructure/", StringComparison.OrdinalIgnoreCase) ||
+            path.StartsWith("src/Mcg.AgentOrchestrator.Execution/", StringComparison.OrdinalIgnoreCase) ||
             path.StartsWith("src/Mcg.AgentOrchestrator.Infrastructure.Providers/", StringComparison.OrdinalIgnoreCase) ||
             path.StartsWith("src/Mcg.AgentOrchestrator.Infrastructure.OperatorComms/", StringComparison.OrdinalIgnoreCase))
         {
