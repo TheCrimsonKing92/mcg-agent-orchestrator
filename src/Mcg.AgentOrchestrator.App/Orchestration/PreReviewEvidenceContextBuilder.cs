@@ -9,7 +9,8 @@ internal static class PreReviewEvidenceContextBuilder
         string? candidateSha, RepositoryChangeSummary changeSummary, RepositoryTestImpactPlan plan) =>
         BuildMappedPreReviewEvidenceContext(candidateSha, changeSummary, plan) with
         {
-            TestImpactDegradation = plan.ReverseDependencyDegradation
+            TestImpactDegradation = plan.ReverseDependencyDegradation,
+            TestImpactHeadroom = plan.ReverseDependencyHeadroom
         };
 
     private static PreReviewEvidenceContext BuildMappedPreReviewEvidenceContext(

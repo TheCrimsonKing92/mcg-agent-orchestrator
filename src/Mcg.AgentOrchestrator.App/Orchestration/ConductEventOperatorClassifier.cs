@@ -26,6 +26,7 @@ internal static class ConductEventOperatorClassifier
             "host-health" when StartsWithToken("HOST_HEALTH_PAGED_POOL_HIGH") => Decision,
             "host-health" when StartsWithToken("HOST_HEALTH_PAGED_POOL_NORMAL") => Outcome,
             "test-impact-degraded" when StartsWithToken("TEST_IMPACT_DEGRADED") => Outcome,
+            "test-impact-headroom-low" when StartsWithToken("TEST_IMPACT_HEADROOM_LOW") => Decision,
             "sweep-blocker" => HasToken(ReconcileSweepRemediationCoordinator.AcceptanceQueueOwnerField)
                 ? null : Decision,
             "loop-handoff" when StartsWithToken("ACTIVATION_REVERTED")
