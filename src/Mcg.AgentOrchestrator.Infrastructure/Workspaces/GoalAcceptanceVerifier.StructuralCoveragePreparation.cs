@@ -445,7 +445,7 @@ public sealed partial class GoalAcceptanceVerifier
     }
 
     private async Task<(StructuralCoveragePreparation Preparation, TimeSpan Duration, TimeSpan Wait)>
-        AwaitStructuralCoveragePreparationAsync(CancellationToken cancellationToken)
+        AwaitStructuralCoveragePreparationAsync(GoalId? goalId, CancellationToken cancellationToken)
     {
         Task<StructuralCoveragePreparationOutcome> task;
         lock (_coveragePreparationSync)
@@ -463,6 +463,10 @@ public sealed partial class GoalAcceptanceVerifier
         var started = _timeProvider.GetTimestamp();
         var outcome = await task.WaitAsync(cancellationToken).ConfigureAwait(false);
         var wait = pending ? _timeProvider.GetElapsedTime(started) : TimeSpan.Zero;
+        var originalDuration = outcome.Duration;
+        outcome = await RetryStructuralCoveragePermitMissAsync(outcome, goalId, cancellationToken)
+            .ConfigureAwait(false);
+        wait += outcome.Duration - originalDuration;
         outcome.Fault?.Throw();
         return (outcome.Preparation!, outcome.Duration, wait);
     }
