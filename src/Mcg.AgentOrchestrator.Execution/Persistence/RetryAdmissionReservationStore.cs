@@ -32,6 +32,9 @@ public static class RetryAdmissionReservationStore
                     return Task.FromResult((false, (GoalStateSnapshot?)null, (RetryAdmissionSnapshotResult?)null));
 
                 var goalBeforeRetry = state.Goal;
+                var storedDispatch = goalBeforeRetry.Tasks.Single(task => task.Id == taskId.Value).LastDispatch;
+                var dispatchAlreadyDurable = storedDispatch?.DispatchedAt == preparedDispatch.DispatchedAt &&
+                    string.Equals(storedDispatch.WorkerName, preparedDispatch.WorkerName, StringComparison.Ordinal);
                 var reservationSnapshot = goalBeforeRetry;
                 AgentOrchestratorKernel? retryKernel = null;
                 RetryMarkerClock? retryClock = null;
@@ -105,6 +108,7 @@ public static class RetryAdmissionReservationStore
                 // A denied admission persists only the retry marker, leaving a failed task Failed; the prepared dispatch is persisted only when start is allowed.
                 if (retryKernel is not null && reservation.Admission.AllowsProcessStart)
                 {
+                    var timelineCount = retryKernel.GetGoal(goalId).Timeline.Count;
                     var durableTask = retryKernel.GetTask(goalId, taskId);
                     var preparedDispatchAlreadyPersisted =
                         durableTask.LastDispatch?.DispatchedAt == preparedDispatch.DispatchedAt &&
@@ -115,8 +119,19 @@ public static class RetryAdmissionReservationStore
                         retryKernel.RecordTaskDispatch(goalId, taskId, preparedDispatch);
                     }
 
+                    var dispatchedSnapshot = retryKernel.ExportGoalSnapshot(goalId);
+                    if (dispatchAlreadyDurable && !preparedDispatchAlreadyPersisted)
+                    {
+                        // Replay restores the task's dispatch state; the original durable event already describes it.
+                        dispatchedSnapshot = dispatchedSnapshot with
+                        {
+                            Timeline = dispatchedSnapshot.Timeline.Where((entry, index) =>
+                                index != timelineCount || entry.Kind != ProgressKind.TaskDispatchRecorded ||
+                                entry.TaskId != taskId.Value).ToArray()
+                        };
+                    }
                     reservation = RetryAdmissionSnapshotReservation.Apply(
-                        retryKernel.ExportGoalSnapshot(goalId), taskId, fingerprint, paidRoute, cause,
+                        dispatchedSnapshot, taskId, fingerprint, paidRoute, cause,
                         preparedDispatch, recordedAt, reservationOwnerId, reservationLeaseExpiresAt,
                         reservationRecoveryConfirmed);
                 }

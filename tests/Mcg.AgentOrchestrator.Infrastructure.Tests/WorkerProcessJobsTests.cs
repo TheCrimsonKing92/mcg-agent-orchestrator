@@ -3123,7 +3123,7 @@ public sealed class WorkerProcessJobsTests : IDisposable
             : Path.GetFullPath(Path.Combine(Path.GetDirectoryName(sourceFilePath)!, "..", ".."));
         var checkedCallers = new Dictionary<string, string>
         {
-            [Path.Combine("src", "Mcg.AgentOrchestrator.Infrastructure", "Processes", "BackgroundDispatchRunner.cs")] =
+            [Path.Combine("src", "Mcg.AgentOrchestrator.Execution", "Processes", "BackgroundDispatchRunner.cs")] =
                 "if (!WorkerProcessJobs.TryRegister(",
             [Path.Combine("src", "Mcg.AgentOrchestrator.Infrastructure", "Workspaces", "LocalProcessVerifier.cs")] =
                 "WorkerProcessJobs.StartRegisteredOwnedRedirectedOrThrow(",

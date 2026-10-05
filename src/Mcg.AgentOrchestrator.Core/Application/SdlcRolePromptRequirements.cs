@@ -86,9 +86,9 @@ internal static class SdlcRolePromptRequirements
                 DeveloperDeferredTestsExactForm,
                 DeveloperSelfCheckProcedure,
                 "- Implement only the requested behavior and keep edits scoped.",
-                "- Before editing, name the failing test and quote its assertion output.",
+                "- Name the failing test in `tests: deferred`; never run tests.",
                 "- Report changed files and the behavior each change enables.",
-                "- Run focused verification when practical and include exact command names.",
+                "- Build changed projects with the worker build check.",
                 "- Leave follow-up work explicit when the orchestrator blocks the ideal path."
             ],
             AgentRole.Tester =>
@@ -258,8 +258,8 @@ internal static class SdlcRolePromptRequirements
                 DeveloperSelfCheckProcedure,
                 "- First honor an eligible typed early-convergence decision for the exact candidate by returning its passed focused receipts without replaying history or manufacturing edits.",
                 "- Keep edits scoped and report changed files plus behavior enabled.",
-                "- Before editing, name the failing test and quote its assertion output.",
-                "- Run focused verification when practical and name exact commands.",
+                "- Name the failing test in `tests: deferred`; never run tests.",
+                "- Build changed projects with the worker build check.",
                 "- Call out blockers or follow-up work explicitly."
             ],
             AgentRole.Tester =>

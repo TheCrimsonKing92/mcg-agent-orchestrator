@@ -16,11 +16,12 @@ public sealed class RuntimeAssemblyArchitectureTests
 {
     private static readonly ReflectionAssembly CoreAssembly = typeof(AgentOrchestratorKernel).Assembly;
     private static readonly ReflectionAssembly InfrastructureAssembly = typeof(GoalAcceptanceVerifier).Assembly;
+    private static readonly ReflectionAssembly ExecutionAssembly = typeof(CohortAcceptanceStore).Assembly;
     private static readonly ReflectionAssembly ProvidersAssembly = typeof(ProviderSmokeTester).Assembly;
     private static readonly ReflectionAssembly OperatorCommsAssembly = typeof(DiscordDecisionApplier).Assembly;
     private static readonly ReflectionAssembly AppAssembly = typeof(SubscriptionPlanBuilder).Assembly;
     private static readonly ReflectionAssembly[] RuntimeAssemblies =
-        [CoreAssembly, InfrastructureAssembly, ProvidersAssembly, OperatorCommsAssembly, AppAssembly];
+        [CoreAssembly, InfrastructureAssembly, ExecutionAssembly, ProvidersAssembly, OperatorCommsAssembly, AppAssembly];
 
     // Parallel-safe: immutable assembly inputs and one published, shared architecture; no external I/O seam.
     private static int architectureLoadCount;
@@ -42,16 +43,16 @@ public sealed class RuntimeAssemblyArchitectureTests
         new("Mcg.AgentOrchestrator.App.Orchestration.ConductorLoopHandoff", "Detached conduct loop successor", "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorLoopHandoff.cs:870"),
         new("Mcg.AgentOrchestrator.App.Orchestration.ConductorSelfRelaunch", "Successor preparation commands", "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorSelfRelaunch.cs:367"),
         new("Mcg.AgentOrchestrator.App.Orchestration.PanelJudgeProcess", "Blinded shadow judge calls retaining partial raw output on timeout", "src/Mcg.AgentOrchestrator.App/Orchestration/PanelJudgeProcess.cs:27"),
-        new("Mcg.AgentOrchestrator.Infrastructure.BackgroundDispatchRunner", "Default start delegate, method group", "src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs:125"),
-        new("Mcg.AgentOrchestrator.Infrastructure.DefenderPreferenceCmdletAdapter", "Defender preference PowerShell child for the explicit host-exclusions CLI verb", "src/Mcg.AgentOrchestrator.Infrastructure/Processes/DefenderExclusionPreferences.cs:70"),
-        new("Mcg.AgentOrchestrator.Infrastructure.DispatchProcessHost", "where.exe resolution and low-integrity preflight", "src/Mcg.AgentOrchestrator.Infrastructure/Processes/DispatchProcessHost.cs:856,956"),
-        new("Mcg.AgentOrchestrator.Infrastructure.GitCli", "Shared git runner", "src/Mcg.AgentOrchestrator.Infrastructure/Processes/GitCli.cs:111"),
-        new("Mcg.AgentOrchestrator.Infrastructure.LockAttribution", "Handle probe for build-lock attribution", "src/Mcg.AgentOrchestrator.Infrastructure/Processes/LockAttribution.cs:462"),
-        new("Mcg.AgentOrchestrator.Infrastructure.ProcessTreeGuiSuppression", "Window-suppressing launcher seam", "src/Mcg.AgentOrchestrator.Infrastructure/Processes/ProcessTreeGuiSuppression.cs:185,213"),
-        new("Mcg.AgentOrchestrator.Infrastructure.WorkerProcessJobs", "taskkill tree fallback", "src/Mcg.AgentOrchestrator.Infrastructure/Processes/WorkerProcessJobs.cs:2396"),
-        new("Mcg.AgentOrchestrator.Infrastructure.WorkerProcessRunner", "Buffered and streaming worker runs", "src/Mcg.AgentOrchestrator.Infrastructure/Processes/WorkerProcessRunner.cs:64,130"),
-        new("Mcg.AgentOrchestrator.Infrastructure.IcaclsIntegrityLabeler", "Default start delegate for icacls, method group", "src/Mcg.AgentOrchestrator.Infrastructure/Processes/WorkerSandboxPreparer.cs:490"),
-        new("Mcg.AgentOrchestrator.Infrastructure.WorktreeTreeDigest", "Git tree digest", "src/Mcg.AgentOrchestrator.Infrastructure/Processes/WorktreeTreeDigest.cs:71"),
+        new("Mcg.AgentOrchestrator.Infrastructure.BackgroundDispatchRunner", "Default start delegate, method group", "src/Mcg.AgentOrchestrator.Execution/Processes/BackgroundDispatchRunner.cs:125"),
+        new("Mcg.AgentOrchestrator.Infrastructure.DefenderPreferenceCmdletAdapter", "Defender preference PowerShell child for the explicit host-exclusions CLI verb", "src/Mcg.AgentOrchestrator.Execution/Processes/DefenderExclusionPreferences.cs:70"),
+        new("Mcg.AgentOrchestrator.Infrastructure.DispatchProcessHost", "where.exe resolution and low-integrity preflight", "src/Mcg.AgentOrchestrator.Execution/Processes/DispatchProcessHost.cs:856,956"),
+        new("Mcg.AgentOrchestrator.Infrastructure.GitCli", "Shared git runner", "src/Mcg.AgentOrchestrator.Execution/Processes/GitCli.cs:111"),
+        new("Mcg.AgentOrchestrator.Infrastructure.LockAttribution", "Handle probe for build-lock attribution", "src/Mcg.AgentOrchestrator.Execution/Processes/LockAttribution.cs:462"),
+        new("Mcg.AgentOrchestrator.Infrastructure.ProcessTreeGuiSuppression", "Window-suppressing launcher seam", "src/Mcg.AgentOrchestrator.Execution/Processes/ProcessTreeGuiSuppression.cs:185,213"),
+        new("Mcg.AgentOrchestrator.Infrastructure.WorkerProcessJobs", "taskkill tree fallback", "src/Mcg.AgentOrchestrator.Execution/Processes/WorkerProcessJobs.cs:2396"),
+        new("Mcg.AgentOrchestrator.Infrastructure.WorkerProcessRunner", "Buffered and streaming worker runs", "src/Mcg.AgentOrchestrator.Execution/Processes/WorkerProcessRunner.cs:64,130"),
+        new("Mcg.AgentOrchestrator.Infrastructure.IcaclsIntegrityLabeler", "Default start delegate for icacls, method group", "src/Mcg.AgentOrchestrator.Execution/Processes/WorkerSandboxPreparer.cs:490"),
+        new("Mcg.AgentOrchestrator.Infrastructure.WorktreeTreeDigest", "Git tree digest", "src/Mcg.AgentOrchestrator.Execution/Processes/WorktreeTreeDigest.cs:71"),
         new("Mcg.AgentOrchestrator.Infrastructure.AcceptanceGitTextResolver", "Git text reads for acceptance", "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceGitTextResolver.cs:26"),
         new("Mcg.AgentOrchestrator.Infrastructure.AcceptanceLaneClosureHasher", "Git reads for lane closure hashing", "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneClosureHasher.cs:117"),
         new("Mcg.AgentOrchestrator.Infrastructure.DotnetBuildEnvironmentManager", "Build-server shutdown", "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetBuildEnvironmentManager.cs:596"),
@@ -72,6 +73,7 @@ public sealed class RuntimeAssemblyArchitectureTests
         string[] expected =
         [
             "Mcg.AgentOrchestrator.Core", "Mcg.AgentOrchestrator.Infrastructure",
+            "Mcg.AgentOrchestrator.Execution",
             "Mcg.AgentOrchestrator.Infrastructure.Providers",
             "Mcg.AgentOrchestrator.Infrastructure.OperatorComms", "Mcg.AgentOrchestrator.App"
         ];
@@ -86,7 +88,7 @@ public sealed class RuntimeAssemblyArchitectureTests
 
     [Fact]
     public void Core_has_no_outward_runtime_dependencies() => AssertPasses(LayeringRule(
-        [CoreAssembly], [InfrastructureAssembly, ProvidersAssembly, OperatorCommsAssembly, AppAssembly]));
+        [CoreAssembly], [InfrastructureAssembly, ExecutionAssembly, ProvidersAssembly, OperatorCommsAssembly, AppAssembly]));
 
     [Fact]
     public void Core_layering_control_detects_App_dependency_on_Infrastructure() =>
@@ -94,7 +96,32 @@ public sealed class RuntimeAssemblyArchitectureTests
 
     [Fact]
     public void Infrastructure_assemblies_do_not_depend_on_App() => AssertPasses(LayeringRule(
-        [InfrastructureAssembly, ProvidersAssembly, OperatorCommsAssembly], [AppAssembly]));
+        [InfrastructureAssembly, ExecutionAssembly, ProvidersAssembly, OperatorCommsAssembly], [AppAssembly]));
+
+    [Fact]
+    public void Execution_types_do_not_depend_on_Infrastructure_or_App() => AssertPasses(LayeringRule(
+        [ExecutionAssembly], [InfrastructureAssembly, AppAssembly]));
+
+    [Fact]
+    public void Execution_project_references_only_Core_and_Providers()
+    {
+        var root = InfrastructureTestSupport.FindRepositoryRoot();
+        var project = System.Xml.Linq.XDocument.Load(Path.Combine(root, "src",
+            "Mcg.AgentOrchestrator.Execution", "Mcg.AgentOrchestrator.Execution.csproj"));
+        var references = project.Descendants()
+            .Where(element => element.Name.LocalName == "ProjectReference")
+            .Select(element => (string?)element.Attribute("Include"))
+            .Select(path => Path.GetFileName(path!.Replace('\\', '/')))
+            .Order(StringComparer.Ordinal).ToArray();
+
+        Assert.DoesNotContain("Mcg.AgentOrchestrator.Infrastructure.csproj", references);
+        Assert.DoesNotContain("Mcg.AgentOrchestrator.App.csproj", references);
+        Assert.Equal(new[]
+        {
+            "Mcg.AgentOrchestrator.Core.csproj",
+            "Mcg.AgentOrchestrator.Infrastructure.Providers.csproj"
+        }, references);
+    }
 
     [Fact]
     public void Infrastructure_layering_control_detects_dependency_on_Core() =>

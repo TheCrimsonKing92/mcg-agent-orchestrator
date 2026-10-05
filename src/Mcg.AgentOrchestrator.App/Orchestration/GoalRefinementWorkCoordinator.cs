@@ -94,6 +94,8 @@ internal static partial class GoalRefinementWorkCoordinator
         string? rawOutputStamp = null)
     {
         var attached = false;
+        IReadOnlyList<ProgressEventSnapshot> committedRefinementEvents = [];
+        GoalLifecycleEventWriter? committedEventWriter = null;
         var claimed = await repository.TryProcessOutboxMessageAsync(
             MessageId(goalId),
             async (message, claimCancellationToken) =>
@@ -218,6 +220,8 @@ internal static partial class GoalRefinementWorkCoordinator
                                     refinedSnapshot.ClarificationRoundCount),
                                 Timeline = current.Timeline.Concat(refinementEvents).ToArray()
                             };
+                            committedRefinementEvents = refinementEvents;
+                            committedEventWriter = eventWriter;
                             return Task.FromResult((true, merged, true));
                         },
                         claimCancellationToken).ConfigureAwait(false);
@@ -233,6 +237,9 @@ internal static partial class GoalRefinementWorkCoordinator
                 }
             },
             cancellationToken).ConfigureAwait(false);
+
+        if (attached)
+            GoalEventsTimelineMirror.AppendMissing(committedEventWriter!, goalId, committedRefinementEvents, "spec-refinement");
 
         if (claimed)
             SpecRefinementLaunchAttemptStore.ForWorkspace(workspace).Reset(goalId);

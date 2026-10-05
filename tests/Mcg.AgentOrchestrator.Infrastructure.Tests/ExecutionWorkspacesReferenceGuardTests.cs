@@ -8,10 +8,10 @@ using System.Text.RegularExpressions;
 // Parallel-safe: repository source reads only; no shared state is changed.
 public sealed class ExecutionWorkspacesReferenceGuardTests
 {
-    private const string InfrastructureSourceRoot = "src/Mcg.AgentOrchestrator.Infrastructure/";
+    private const string InfrastructureSourceRoot = "src/Mcg.AgentOrchestrator.Execution/";
     private static readonly string[] ExecutionFolders = ["Processes", "Workers", "Persistence", "Verification"];
     private static readonly Lazy<Architecture> InfrastructureArchitecture = new(
-        () => new ArchLoader().LoadAssemblies(typeof(CohortAcceptanceStore).Assembly).Build(),
+        () => new ArchLoader().LoadAssemblies(typeof(CohortAcceptanceStore).Assembly, typeof(GoalWorktrees).Assembly).Build(),
         LazyThreadSafetyMode.ExecutionAndPublication);
     private static readonly Lazy<IReadOnlyDictionary<string, string[]>> DeclarationIndex = new(
         BuildDeclarationIndex, LazyThreadSafetyMode.ExecutionAndPublication);
@@ -42,7 +42,8 @@ public sealed class ExecutionWorkspacesReferenceGuardTests
                 .Concat(type.GenericParameters.Concat(type.Members.SelectMany(member => member.GenericParameters))
                     .SelectMany(parameter => parameter.Dependencies))
                 .Where(dependency => !dependency.Target.IsGenericParameter &&
-                    dependency.Target.Assembly?.FullName == assemblyName)
+                    (dependency.Target.Assembly?.FullName == assemblyName ||
+                     dependency.Target.Assembly?.FullName == typeof(GoalWorktrees).Assembly.FullName))
                 .Select(dependency => (Source: type.FullName, Target: dependency.Target.FullName)))
             .ToArray();
         Assert.NotEmpty(pairs);
@@ -76,7 +77,9 @@ public sealed class ExecutionWorkspacesReferenceGuardTests
         var folder = Path.Combine(root, "src", "Mcg.AgentOrchestrator.Infrastructure");
         Assert.True(Directory.Exists(folder), $"Missing Infrastructure source directory: {folder}");
         var index = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
-        foreach (var file in Directory.EnumerateFiles(folder, "*.cs", SearchOption.AllDirectories))
+        foreach (var file in Directory.EnumerateFiles(folder, "*.cs", SearchOption.AllDirectories)
+            .Concat(Directory.EnumerateFiles(Path.Combine(root, "src", "Mcg.AgentOrchestrator.Execution"),
+                "*.cs", SearchOption.AllDirectories)))
         {
             var path = Path.GetRelativePath(root, file).Replace('\\', '/');
             if (path.Split('/').Any(segment => segment is "bin" or "obj" or "artifacts"))
@@ -168,7 +171,7 @@ public sealed class ExecutionWorkspacesReferenceGuardTests
         var offenders = new List<string>();
         foreach (var area in new[] { "Processes", "Workers" })
         {
-            var directory = Path.Combine(root, "src", "Mcg.AgentOrchestrator.Infrastructure", area);
+            var directory = Path.Combine(root, "src", "Mcg.AgentOrchestrator.Execution", area);
             Assert.True(Directory.Exists(directory), $"Missing source directory: {directory}");
             var files = Directory.EnumerateFiles(directory, "*.cs", SearchOption.AllDirectories)
                 .Where(file => !Path.GetRelativePath(root, file)
@@ -196,7 +199,7 @@ public sealed class ExecutionWorkspacesReferenceGuardTests
     {
         var root = InfrastructureTestSupport.FindRepositoryRoot();
         var directories = new[] { "Processes", "Workers" }
-            .Select(area => Path.Combine(root, "src", "Mcg.AgentOrchestrator.Infrastructure", area))
+            .Select(area => Path.Combine(root, "src", "Mcg.AgentOrchestrator.Execution", area))
             .ToArray();
         var tokens = new[] { "DotnetBuildEnvironment", "GoalAcceptanceVerifier.", "LocalProcessVerifier" };
         var offenders = new List<string>();
@@ -234,7 +237,7 @@ public sealed class ExecutionWorkspacesReferenceGuardTests
         var offenders = new List<string>();
         foreach (var area in new[] { "Processes", "Workers" })
         {
-            var directory = Path.Combine(root, "src", "Mcg.AgentOrchestrator.Infrastructure", area);
+            var directory = Path.Combine(root, "src", "Mcg.AgentOrchestrator.Execution", area);
             Assert.True(Directory.Exists(directory), $"Missing source directory: {directory}");
             var files = Directory.EnumerateFiles(directory, "*.cs", SearchOption.AllDirectories)
                 .Where(file => !Path.GetRelativePath(root, file)

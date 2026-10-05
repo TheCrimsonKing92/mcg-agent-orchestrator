@@ -46,6 +46,7 @@ internal static class ConductEventOperatorClassifier
             "acceptance-cohort" when (detail.StartsWith("ACCEPTANCE_COHORT ", StringComparison.Ordinal)
                 && HasToken("outcome=passed"))
                 || StartsWithToken("ACCEPTANCE_COHORT_RECONCILED_DEAD") => Outcome,
+            "board-fill-draft" when StartsWithToken("BOARD_FILL_DRAFT") => Decision,
             _ => null
         };
     }

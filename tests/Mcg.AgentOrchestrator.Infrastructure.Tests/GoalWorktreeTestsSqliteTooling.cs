@@ -138,7 +138,7 @@ public sealed partial class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBas
         var resolverText = File.ReadAllText(Path.Combine(repoRoot, "scripts", "Resolve-RepoProcessAppDll.ps1"));
         Assert.Contains("src/Mcg.AgentOrchestrator.App/Program.cs", resolverText, StringComparison.Ordinal);
         Assert.Contains("src/Mcg.AgentOrchestrator.App/Cli", resolverText, StringComparison.Ordinal);
-        Assert.Contains("src/Mcg.AgentOrchestrator.Infrastructure/Processes", resolverText, StringComparison.Ordinal);
+        Assert.Contains("src/Mcg.AgentOrchestrator.Execution/Processes", resolverText, StringComparison.Ordinal);
         Assert.Contains("merge-base --is-ancestor", resolverText, StringComparison.Ordinal);
         Assert.Contains("status --porcelain=v1 --untracked-files=all", resolverText, StringComparison.Ordinal);
         Assert.Contains("resolve-run-dir.ps1", resolverText, StringComparison.Ordinal);

@@ -42,7 +42,10 @@ public sealed record ConductorAutonomyPolicy(
     int PlannerSampleCount = 1,
     int AcceptanceWidth = 2,
     int AcceptanceCohortGatherWindowSeconds = 480,
-    bool AcceptanceAttemptBelowNormalPriority = true)
+    bool AcceptanceAttemptBelowNormalPriority = true,
+    ConductorBoardFillMode BoardFillMode = ConductorBoardFillMode.Shadow,
+    int BoardFillTargetActiveGoals = 10,
+    int BoardFillMaxDraftsPerDay = 3)
 {
     public const int DefaultAcceptanceCohortGatherWindowSeconds = 480;
     public const int MinimumAcceptanceWidth = 1;
@@ -176,6 +179,13 @@ public sealed record ConductorAutonomyPolicy(
         if (AcceptanceCohortGatherWindowSeconds < 0)
             errors.Add($"acceptanceCohortGatherWindowSeconds must be zero or greater (got {AcceptanceCohortGatherWindowSeconds}).");
 
+        if (!Enum.IsDefined(BoardFillMode))
+            errors.Add($"boardFillMode must be Off, Shadow or File (got {BoardFillMode}).");
+        if (BoardFillTargetActiveGoals is < 0 or > 30)
+            errors.Add($"boardFillTargetActiveGoals must be between 0 and 30 (got {BoardFillTargetActiveGoals}).");
+        if (BoardFillMaxDraftsPerDay is < 0 or > 20)
+            errors.Add($"boardFillMaxDraftsPerDay must be between 0 and 20 (got {BoardFillMaxDraftsPerDay}).");
+
         foreach (var state in AllStates)
         {
             if (!TransitionMap.ContainsKey(state))
@@ -204,6 +214,9 @@ public sealed record ConductorAutonomyPolicy(
         sb.AppendLine($"  \"acceptanceWidth\": {AcceptanceWidth},");
         sb.AppendLine($"  \"acceptanceCohortGatherWindowSeconds\": {AcceptanceCohortGatherWindowSeconds},");
         sb.AppendLine($"  \"acceptanceAttemptBelowNormalPriority\": {AcceptanceAttemptBelowNormalPriority.ToString().ToLowerInvariant()},");
+        sb.AppendLine($"  \"boardFillMode\": {JsonStr(BoardFillMode.ToString())},");
+        sb.AppendLine($"  \"boardFillTargetActiveGoals\": {BoardFillTargetActiveGoals},");
+        sb.AppendLine($"  \"boardFillMaxDraftsPerDay\": {BoardFillMaxDraftsPerDay},");
 
         sb.AppendLine(AutoPromoteRiskThreshold.HasValue
             ? $"  \"autoPromoteRiskThreshold\": {JsonStr(AutoPromoteRiskThreshold.Value.ToString())},"
@@ -295,6 +308,20 @@ public sealed record ConductorAutonomyPolicy(
                         $"conductor-policy.json{src}: acceptanceAttemptBelowNormalPriority must be a boolean.");
                 belowNormalPriority = priorityElement.GetBoolean();
             }
+            var boardFillMode = ConductorBoardFillMode.Shadow;
+            if (root.TryGetProperty("boardFillMode", out var boardFillElement) &&
+                boardFillElement.ValueKind != JsonValueKind.Null)
+            {
+                if (boardFillElement.ValueKind != JsonValueKind.String ||
+                    !Enum.TryParse(boardFillElement.GetString(), ignoreCase: true, out boardFillMode) ||
+                    !Enum.IsDefined(boardFillMode))
+                    throw new FormatException(
+                        $"conductor-policy.json{src}: boardFillMode must be Off, Shadow or File.");
+            }
+            var boardFillTarget = root.TryGetProperty("boardFillTargetActiveGoals", out _)
+                ? RequireInt(root, "boardFillTargetActiveGoals", src) : 10;
+            var boardFillCap = root.TryGetProperty("boardFillMaxDraftsPerDay", out _)
+                ? RequireInt(root, "boardFillMaxDraftsPerDay", src) : 3;
             ChangeRiskTier? riskThreshold = null;
             if (root.TryGetProperty("autoPromoteRiskThreshold", out var thresholdEl)
                 && thresholdEl.ValueKind != JsonValueKind.Null)
@@ -345,7 +372,10 @@ public sealed record ConductorAutonomyPolicy(
                 plannerSampleCount,
                 acceptanceWidth,
                 gatherWindowSeconds,
-                belowNormalPriority);
+                belowNormalPriority,
+                boardFillMode,
+                boardFillTarget,
+                boardFillCap);
 
             var errors = policy.Validate();
             if (errors.Count > 0)
