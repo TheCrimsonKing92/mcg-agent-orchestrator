@@ -55,6 +55,11 @@ internal sealed partial class OperatorIntentCoordinator
             return;
         }
 
+        var firstLine = payload.Text.ReplaceLineEndings("\n").Trim().Split('\n')[0].Trim();
+        if (string.Equals(firstLine, FrozenFactRuling.Header, StringComparison.Ordinal) &&
+            FrozenFactRuling.TryParse(payload.Text) is null)
+            throw new InvalidOperationException("frozen-fact-ruling-malformed: answer must contain every structured ruling field.");
+
         switch (payload.TargetKind)
         {
             case OperatorAnswerTargetKind.Clarification:

@@ -4,6 +4,9 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal static class ConductorAuthorPrompt
 {
+    public const string StepZero = "Every allowed change must be a literal edit the Developer can make without running tests.";
+    public const string FixtureInputs = "An allowed change may also edit fixture inputs (literals, arguments or setup lines) that feed the pinned behavior, provided every assertion stays byte-identical.";
+
     internal static string Render(ConductorAuthorRoundInput input) => $$"""
         You are the conductor Author. Read repository source at the current candidate to answer
         a residual specification clarification. You have read-only access. Return exactly one
@@ -17,6 +20,8 @@ internal static class ConductorAuthorPrompt
         source show all four steps: the fact builds exactly the behavior deliberately removed or moved;
         only assertions or path pieces pinning that behavior change; name every other assertion in the
         fact and every other fact in every frozen class as unmodified; give a runnable candidate diff check.
+        {{StepZero}}
+        {{FixtureInputs}}
         Otherwise ask-owner, or answer with a refusal that points to the owner.
         Removing an assertion is never an allowed change.
         Read docs/frozen-fact-rulings.md for the full procedure and worked exemplars.
