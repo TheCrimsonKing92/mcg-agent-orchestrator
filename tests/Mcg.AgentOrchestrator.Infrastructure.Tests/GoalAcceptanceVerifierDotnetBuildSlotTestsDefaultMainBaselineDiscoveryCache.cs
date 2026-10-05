@@ -31,6 +31,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsDefaultMainBaselin
     {
         using var fixture = new Fixture();
         var first = await fixture.Run();
+        Assert.True(first.Gate.Passed);
         Assert.True(first.Check.Passed);
         Assert.Contains("MAIN_BASELINE_DISCOVERY_CACHE status=miss project=tests/Sample.Tests/Sample.Tests.csproj", first.Log);
         Assert.Equal(1, fixture.BuildStarts);
@@ -42,6 +43,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsDefaultMainBaselin
         Assert.Contains("MAIN_BASELINE_DISCOVERY_CACHE status=hit project=tests/Sample.Tests/Sample.Tests.csproj", second.Log);
         Assert.Equal(1, fixture.BuildStarts);
         fixture.AssertBaselineCommands(0, 0);
+        Assert.Equal(first.Gate.Passed, second.Gate.Passed);
         Assert.Equal(first.Check.Passed, second.Check.Passed);
         Assert.Equal(first.Check.ResultSummary, second.Check.ResultSummary);
     }
@@ -63,6 +65,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsDefaultMainBaselin
         Assert.Contains("MAIN_BASELINE_DISCOVERY_CACHE status=miss", second.Log);
         Assert.Equal(2, fixture.BuildStarts);
         fixture.AssertBaselineCommands(1, 1);
+        Assert.False(second.Gate.Passed);
         Assert.False(second.Check.Passed);
         Assert.Equal(AcceptanceFailureClassifications.StructuralCoverageFailed, second.Check.FailureClassification);
         Assert.Contains("cross-generation-count:candidate=1,minimum=3,main=3,deleted=0", second.Check.ResultSummary);
@@ -93,6 +96,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsDefaultMainBaselin
         Assert.Contains("MAIN_BASELINE_DISCOVERY_CACHE status=miss", second.Log);
         Assert.Equal(2, fixture.BuildStarts);
         fixture.AssertBaselineCommands(1, 1);
+        Assert.Equal(first.Gate.Passed, second.Gate.Passed);
         Assert.Equal(first.Check.Passed, second.Check.Passed);
         Assert.Equal(first.Check.ResultSummary, second.Check.ResultSummary);
         fixture.Calls.Clear();
@@ -135,21 +139,30 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsDefaultMainBaselin
         internal Fixture()
         {
             (CandidateRoot, MainRoot) = CreateTrustedBaselineWorkspace();
+            var mainConfig = Path.Combine(MainRoot, "config");
+            Directory.CreateDirectory(mainConfig);
+            File.Copy(Path.Combine(CandidateRoot, "config", "acceptance-manifest.json"),
+                Path.Combine(mainConfig, "acceptance-manifest.json"));
             AddMainTests("OriginalTests.cs", "Sample.Tests.Passes");
-            Git("init");
+            Git("init", "--initial-branch=main");
             CommitMain();
+            DeleteDirectoryWithRetry(CandidateRoot);
+            Git("worktree", "add", "-b", "candidate", CandidateRoot, "main");
+            var resolvedMain = GoalAcceptanceVerifier.ResolveMainWorktreePathWithGitForTests(
+                CandidateRoot, AcceptanceGitTextResolver.Resolve);
+            Assert.NotNull(resolvedMain);
+            Assert.Equal(Path.GetFullPath(MainRoot), Path.GetFullPath(resolvedMain));
+            MainRoot = resolvedMain;
             Assert.True(WorktreeTreeDigest.TryCompute(MainRoot, out _, out _), "Fixture main tree must be digestible.");
         }
 
-        internal async Task<(AcceptanceCheckResult Check, string Log)> Run()
+        internal async Task<(AcceptanceVerificationResult Gate, AcceptanceCheckResult Check, string Log)> Run()
         {
-            // The public constructor has no runner/hook channel. Exercise the same private
-            // resolution path with a fresh verifier, no cache override and explicit temp storage.
+            // Resolve the disk cache exactly as a live gate does, using only the two
+            // operator-approved overrides and a real linked main worktree.
             var overrides = new GoalAcceptanceVerifierTestOverrides
             {
                 BuildStorageRootForTests = Storage,
-                ResolveMainWorktreePathForTests = _ => MainRoot,
-                ResolveDeletedTestFilesForTests = _ => [],
                 OnTrustedMainBaselineBuildStartingForTests = _ => Interlocked.Increment(ref BuildStarts)
             };
             var goal = GoalId.New();
@@ -177,9 +190,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsDefaultMainBaselin
             AcceptanceVerificationResult? result = null;
             var log = await AsyncLocalConsoleRouter.Out.CaptureLocalAsync(async () =>
                 result = await verifier.RunAsync(CandidateRoot, goal, changedFiles: ["src/Sample.cs"]));
-            var check = Assert.Single(Assert.IsType<AcceptanceVerificationResult>(result).Checks!,
+            var gate = Assert.IsType<AcceptanceVerificationResult>(result);
+            var check = Assert.Single(gate.Checks!,
                 item => item.Name.StartsWith("structural test coverage", StringComparison.Ordinal));
-            return (check, log);
+            return (gate, check, log);
         }
 
         internal void AssertBaselineCommands(int builds, int discoveries)
@@ -208,6 +222,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsDefaultMainBaselin
         public void Dispose()
         {
             foreach (var goal in _goals) DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goal, Storage);
+            Git("worktree", "remove", "--force", CandidateRoot);
             DeleteDirectoryWithRetry(CandidateRoot);
             DeleteDirectoryWithRetry(MainRoot);
             DeleteDirectoryWithRetry(Storage.RootPath);
