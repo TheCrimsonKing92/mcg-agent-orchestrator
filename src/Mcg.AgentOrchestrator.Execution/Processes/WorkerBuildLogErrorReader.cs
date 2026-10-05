@@ -19,14 +19,16 @@ internal static partial class WorkerBuildLogErrorReader
     [GeneratedRegex(@"^.+\(\d+,\d+\): error [A-Za-z]+\d+: .+$", RegexOptions.CultureInvariant)]
     private static partial Regex DiagnosticPattern();
 
+    internal static bool IsCompilerDiagnostic(string line) => DiagnosticPattern().IsMatch(line.Trim());
+
     internal static WorkerBuildErrors? ReadNewest(string artifactsPath)
     {
         try
         {
-            var root = Path.Combine(artifactsPath, "worker-build-logs");
-            if (!Directory.Exists(root))
-                return null;
-            var newest = Directory.EnumerateDirectories(root)
+            var newest = GetArtifactsRoots(artifactsPath)
+                .Select(path => Path.Combine(path, "worker-build-logs"))
+                .Where(Directory.Exists)
+                .SelectMany(path => Directory.EnumerateDirectories(path))
                 .OrderByDescending(Path.GetFileName, StringComparer.Ordinal)
                 .ThenByDescending(Directory.GetLastWriteTimeUtc)
                 .FirstOrDefault();
@@ -43,7 +45,7 @@ internal static partial class WorkerBuildLogErrorReader
                 foreach (var line in File.ReadLines(log))
                 {
                     var diagnostic = line.Trim();
-                    if (DiagnosticPattern().IsMatch(diagnostic) && seen.Add(diagnostic))
+                    if (IsCompilerDiagnostic(diagnostic) && seen.Add(diagnostic))
                         errors.Add(diagnostic);
                 }
             }
@@ -53,5 +55,31 @@ internal static partial class WorkerBuildLogErrorReader
         {
             return null;
         }
+    }
+
+    private static IReadOnlyList<string> GetArtifactsRoots(string artifactsPath)
+    {
+        var roots = new List<string> { artifactsPath };
+        try
+        {
+            var canonicalPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(artifactsPath));
+            var parent = Path.GetDirectoryName(canonicalPath);
+            if (parent is null || !Directory.Exists(parent))
+                return roots;
+            var prefix = Path.GetFileName(canonicalPath) + "-build-";
+            var siblings = Directory.EnumerateDirectories(parent, prefix + "*")
+                .Where(path =>
+                {
+                    var name = Path.GetFileName(path);
+                    return name.StartsWith(prefix, StringComparison.Ordinal) && name.Length > prefix.Length &&
+                        name.Skip(prefix.Length).All(char.IsAsciiDigit);
+                }).ToArray();
+            roots.AddRange(siblings);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            // Canonical logs remain usable when sibling discovery is unavailable.
+        }
+        return roots;
     }
 }
