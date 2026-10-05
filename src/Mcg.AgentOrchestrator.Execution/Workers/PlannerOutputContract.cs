@@ -1508,7 +1508,7 @@ internal static partial class PlannerOutputContract
     [GeneratedRegex(@"(?m)^[ \t]*(?<number>\d+)[.)][ \t]+(?<content>\S[^\r\n]*)$")]
     private static partial Regex NumberedIntegrationItem();
 
-    [GeneratedRegex(@"(?i)\b(?:tbd|todo|placeholder)\b")]
+    [GeneratedRegex(@"(?im)\b(?:tbd|todo)\b|^[ \t]*(?:(?:\d+[.)]|[-*•])[ \t]+)?placeholder[ \t.:;,!?]*$")]
     private static partial Regex IntegrationPlaceholderMarker();
 
     [GeneratedRegex(@"\p{L}[\p{L}\p{Nd}]*")]
