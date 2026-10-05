@@ -111,7 +111,7 @@ public sealed class ConductorHostHealthSandboxConditionTests
         fixture.Foreground.Reading = ForegroundLockReading.Available(2147483647, 26200);
         fixture.Sandbox.Reading = WorkerSandboxReading.Available(false, null);
         fixture.Repository.Reading = RepositoryIntegrityReading.Available(["."]);
-        fixture.Evaluate(3);
+        fixture.Evaluate(1);
         var events = fixture.Events();
         Assert.Equal(new[]
         {
@@ -130,6 +130,14 @@ public sealed class ConductorHostHealthSandboxConditionTests
             "workerSandboxOff", "repositoryLowWritable" })
             Assert.True(state.RootElement.GetProperty(field).GetBoolean());
         Assert.Equal(JsonValueKind.Null, state.RootElement.GetProperty("pending").ValueKind);
+        Assert.Equal(1, fixture.Sandbox.Calls);
+        Assert.Equal(1, fixture.Repository.Calls);
+
+        var committedState = File.ReadAllBytes(fixture.State);
+        fixture.Evaluate(2);
+        Assert.Equal(events.Select(record => record.GetRawText()),
+            fixture.Events().Select(record => record.GetRawText()));
+        Assert.Equal(committedState, File.ReadAllBytes(fixture.State));
     }
 
     [Theory]
