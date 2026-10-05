@@ -78,12 +78,12 @@ internal sealed partial class GoalDispatchOperations
         ConductorAutonomyPolicy? conductorPolicy = null,
         bool? cascadeTesterCheapFirst = null,
         string? cascadeCheapModelAlias = null,
-        WorkerProfileCatalog? subscriptionProfiles = null)
+        WorkerProfileCatalog? subscriptionProfiles = null, bool? cascadeMechanicalReworkCheap = null)
     {
         EnsureRefinedForTask(kernel, workspace, providers, goal, task);
         var subscriptionMetadata = TryBuildProfileSubscriptionMetadata(goal, task, profile, agents,
             subscriptionProfiles, ResolveCascadeTesterCheapFirst(workspace, cascadeTesterCheapFirst, conductorPolicy),
-            ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy));
+            ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy), cascadeMechanicalReworkCheap: ResolveCascadeMechanicalReworkCheap(workspace, cascadeMechanicalReworkCheap, conductorPolicy));
         return WorkerProfileDispatcher.PrepareTask(
             kernel,
             goal,
@@ -128,7 +128,7 @@ internal sealed partial class GoalDispatchOperations
         int? plannerSampleCount = null,
         ConductorAutonomyPolicy? conductorPolicy = null,
         bool? cascadeTesterCheapFirst = null,
-        string? cascadeCheapModelAlias = null)
+        string? cascadeCheapModelAlias = null, bool? cascadeMechanicalReworkCheap = null)
     {
         var lastDispatch = task.LastDispatch
             ?? throw new InvalidOperationException($"Task '{task.Id}' has no dispatch to refresh before start.");
@@ -184,7 +184,7 @@ internal sealed partial class GoalDispatchOperations
                     resolvedProfiles,
                     sandboxOptions: sandboxOptions,
                     cascadeTesterCheapFirst: ResolveCascadeTesterCheapFirst(workspace, cascadeTesterCheapFirst, conductorPolicy),
-                    cascadeCheapModelAlias: ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy));
+                    cascadeCheapModelAlias: ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy), cascadeMechanicalReworkCheap: ResolveCascadeMechanicalReworkCheap(workspace, cascadeMechanicalReworkCheap, conductorPolicy));
                 profile = resolvedProfiles.GetRequired(profileName);
             }
             catch (Exception ex) when (ex is InvalidOperationException or KeyNotFoundException)
@@ -241,7 +241,7 @@ internal sealed partial class GoalDispatchOperations
             sandboxOptions: sandboxOptions,
             plannerSampleCount: ResolvePlannerSampleCount(workspace, plannerSampleCount, conductorPolicy),
             conductorPolicy: conductorPolicy, cascadeTesterCheapFirst: cascadeTesterCheapFirst,
-            cascadeCheapModelAlias: cascadeCheapModelAlias, subscriptionProfiles: resolvedProfiles);
+            cascadeCheapModelAlias: cascadeCheapModelAlias, subscriptionProfiles: resolvedProfiles, cascadeMechanicalReworkCheap: cascadeMechanicalReworkCheap);
     }
 
     private static DispatchAssignmentHoldException AssignmentHold(
@@ -271,7 +271,7 @@ internal sealed partial class GoalDispatchOperations
         int? plannerSampleCount = null,
         ConductorAutonomyPolicy? conductorPolicy = null,
         bool? cascadeTesterCheapFirst = null,
-        string? cascadeCheapModelAlias = null)
+        string? cascadeCheapModelAlias = null, bool? cascadeMechanicalReworkCheap = null)
     {
         var plan = kernel.BuildProcessBatchPlan(goal.Id, ProcessBatchActionKind.StartDispatches);
         var resolvedAgents = agents ?? AgentCatalogStore.Load(workspace.AgentCatalogPath).Agents;
@@ -291,7 +291,7 @@ internal sealed partial class GoalDispatchOperations
                 providers,
                 reviewAutoRetryStopRound,
                 sandboxOptions,
-                plannerSampleCount, conductorPolicy, cascadeTesterCheapFirst, cascadeCheapModelAlias);
+                plannerSampleCount, conductorPolicy, cascadeTesterCheapFirst, cascadeCheapModelAlias, cascadeMechanicalReworkCheap);
             refreshed.Add(dispatch);
         }
 
@@ -303,7 +303,7 @@ internal sealed partial class GoalDispatchOperations
         TaskSpec task,
         WorkerProfile profile,
         IReadOnlyList<AgentDefinition>? agents,
-        WorkerProfileCatalog? subscriptionProfiles, bool cascadeTesterCheapFirst, string cascadeCheapModelAlias)
+        WorkerProfileCatalog? subscriptionProfiles, bool cascadeTesterCheapFirst, string cascadeCheapModelAlias, bool cascadeMechanicalReworkCheap)
     {
         if (agents is null)
         {
@@ -330,7 +330,7 @@ internal sealed partial class GoalDispatchOperations
         try
         {
             profileName = WorkerProfileDispatcher.ResolveSubscriptionProfileName(agent, goal, task, profiles,
-                cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias);
+                cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias, cascadeMechanicalReworkCheap: cascadeMechanicalReworkCheap);
         }
         catch (InvalidOperationException)
         {
@@ -343,7 +343,7 @@ internal sealed partial class GoalDispatchOperations
         }
 
         var variables = WorkerProfileDispatcher.BuildSubscriptionTemplateVariables(agent, goal, task, profiles,
-            cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias);
+            cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias, cascadeMechanicalReworkCheap: cascadeMechanicalReworkCheap);
         var providerName = variables.GetValueOrDefault("providerName");
         var modelName = variables.GetValueOrDefault("subscriptionModelName");
         var reasoningEffort = variables.GetValueOrDefault("subscriptionReasoningEffort");
@@ -388,7 +388,7 @@ internal sealed partial class GoalDispatchOperations
         int? plannerSampleCount = null,
         ConductorAutonomyPolicy? conductorPolicy = null,
         bool? cascadeTesterCheapFirst = null,
-        string? cascadeCheapModelAlias = null)
+        string? cascadeCheapModelAlias = null, bool? cascadeMechanicalReworkCheap = null)
     {
         return SubscriptionDispatchReadyBatch(
             kernel,
@@ -399,7 +399,7 @@ internal sealed partial class GoalDispatchOperations
             providers,
             reviewAutoRetryStopRound,
             sandboxOptions,
-            plannerSampleCount, conductorPolicy, cascadeTesterCheapFirst, cascadeCheapModelAlias).Dispatches;
+            plannerSampleCount, conductorPolicy, cascadeTesterCheapFirst, cascadeCheapModelAlias, cascadeMechanicalReworkCheap).Dispatches;
     }
 
     public WorkerProfileReadyBatchResult SubscriptionDispatchReadyBatch(
@@ -414,7 +414,7 @@ internal sealed partial class GoalDispatchOperations
         int? plannerSampleCount = null,
         ConductorAutonomyPolicy? conductorPolicy = null,
         bool? cascadeTesterCheapFirst = null,
-        string? cascadeCheapModelAlias = null)
+        string? cascadeCheapModelAlias = null, bool? cascadeMechanicalReworkCheap = null)
     {
         ReconcileExitedAssignedProcessRecords(kernel, goal);
         goal = kernel.GetGoal(goal.Id);
@@ -435,7 +435,7 @@ internal sealed partial class GoalDispatchOperations
             sandboxOptions: sandboxOptions,
             plannerSampleCount: ResolvePlannerSampleCount(workspace, plannerSampleCount),
             cascadeTesterCheapFirst: ResolveCascadeTesterCheapFirst(workspace, cascadeTesterCheapFirst, conductorPolicy),
-            cascadeCheapModelAlias: ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy));
+            cascadeCheapModelAlias: ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy), cascadeMechanicalReworkCheap: ResolveCascadeMechanicalReworkCheap(workspace, cascadeMechanicalReworkCheap, conductorPolicy));
     }
 
     public WorkerProfileDispatchResult SubscriptionDispatchTask(
@@ -452,7 +452,7 @@ internal sealed partial class GoalDispatchOperations
         int? plannerSampleCount = null,
         ConductorAutonomyPolicy? conductorPolicy = null,
         bool? cascadeTesterCheapFirst = null,
-        string? cascadeCheapModelAlias = null)
+        string? cascadeCheapModelAlias = null, bool? cascadeMechanicalReworkCheap = null)
     {
         EnsureRefinedForTask(kernel, workspace, providers, goal, task);
         return WorkerProfileDispatcher.PrepareSubscriptionTask(
@@ -470,7 +470,7 @@ internal sealed partial class GoalDispatchOperations
             citedPriorEvidenceResolver: CreateCitedPriorEvidenceResolver(workspace),
             plannerSampleCount: ResolvePlannerSampleCount(workspace, plannerSampleCount, conductorPolicy),
             cascadeTesterCheapFirst: ResolveCascadeTesterCheapFirst(workspace, cascadeTesterCheapFirst, conductorPolicy),
-            cascadeCheapModelAlias: ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy));
+            cascadeCheapModelAlias: ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy), cascadeMechanicalReworkCheap: ResolveCascadeMechanicalReworkCheap(workspace, cascadeMechanicalReworkCheap, conductorPolicy));
     }
 
     private static CitedPriorEvidenceResolver CreateCitedPriorEvidenceResolver(OrchestratorWorkspace workspace) =>
@@ -497,6 +497,10 @@ internal sealed partial class GoalDispatchOperations
     private static bool ResolveCascadeTesterCheapFirst(OrchestratorWorkspace workspace, bool? explicitValue,
         ConductorAutonomyPolicy? policy = null) => explicitValue ?? policy?.CascadeTesterCheapFirst ??
         ConductorAutonomyPolicy.LoadFromOrchestratorDirectory(new DirectoryInfo(workspace.OrchestratorDirectory)).CascadeTesterCheapFirst;
+
+    private static bool ResolveCascadeMechanicalReworkCheap(OrchestratorWorkspace workspace, bool? explicitValue,
+        ConductorAutonomyPolicy? policy = null) => explicitValue ?? policy?.CascadeMechanicalReworkCheap ??
+        ConductorAutonomyPolicy.LoadFromOrchestratorDirectory(new DirectoryInfo(workspace.OrchestratorDirectory)).CascadeMechanicalReworkCheap;
 
     private static string ResolveCascadeCheapModelAlias(OrchestratorWorkspace workspace, string? explicitValue,
         ConductorAutonomyPolicy? policy = null)

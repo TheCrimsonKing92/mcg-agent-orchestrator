@@ -48,7 +48,8 @@ public sealed record ConductorAutonomyPolicy(
     int BoardFillTargetActiveGoals = 10,
     int BoardFillMaxDraftsPerDay = 3,
     bool CascadeTesterCheapFirst = true,
-    string CascadeCheapModelAlias = ConductorAutonomyPolicy.DefaultCascadeCheapModelAlias)
+    string CascadeCheapModelAlias = ConductorAutonomyPolicy.DefaultCascadeCheapModelAlias,
+    bool CascadeMechanicalReworkCheap = true)
 {
     public const string DefaultCascadeCheapModelAlias = "gpt-6-luna";
     public const int DefaultAcceptanceCohortGatherWindowSeconds = 480;
@@ -228,6 +229,7 @@ public sealed record ConductorAutonomyPolicy(
         sb.AppendLine($"  \"boardFillTargetActiveGoals\": {BoardFillTargetActiveGoals},");
         sb.AppendLine($"  \"boardFillMaxDraftsPerDay\": {BoardFillMaxDraftsPerDay},");
         sb.AppendLine($"  \"cascadeTesterCheapFirst\": {CascadeTesterCheapFirst.ToString().ToLowerInvariant()},");
+        sb.AppendLine($"  \"cascadeMechanicalReworkCheap\": {CascadeMechanicalReworkCheap.ToString().ToLowerInvariant()},");
         sb.AppendLine($"  \"cascadeCheapModelAlias\": {JsonStr(CascadeCheapModelAlias)},");
 
         sb.AppendLine(AutoPromoteRiskThreshold.HasValue
@@ -331,6 +333,14 @@ public sealed record ConductorAutonomyPolicy(
                     throw new FormatException($"conductor-policy.json{src}: cascadeTesterCheapFirst must be a boolean.");
                 cascadeTesterCheapFirst = cascadeSwitch.GetBoolean();
             }
+            var cascadeMechanicalReworkCheap = true;
+            if (root.TryGetProperty("cascadeMechanicalReworkCheap", out var mechanicalSwitch) &&
+                mechanicalSwitch.ValueKind != JsonValueKind.Null)
+            {
+                if (mechanicalSwitch.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                    throw new FormatException($"conductor-policy.json{src}: cascadeMechanicalReworkCheap must be a boolean.");
+                cascadeMechanicalReworkCheap = mechanicalSwitch.GetBoolean();
+            }
             var cascadeCheapModelAlias = DefaultCascadeCheapModelAlias;
             if (root.TryGetProperty("cascadeCheapModelAlias", out var cascadeAlias) &&
                 cascadeAlias.ValueKind != JsonValueKind.Null)
@@ -409,7 +419,8 @@ public sealed record ConductorAutonomyPolicy(
                 boardFillTarget,
                 boardFillCap,
                 cascadeTesterCheapFirst,
-                cascadeCheapModelAlias);
+                cascadeCheapModelAlias,
+                cascadeMechanicalReworkCheap);
 
             var errors = policy.Validate();
             if (errors.Count > 0)

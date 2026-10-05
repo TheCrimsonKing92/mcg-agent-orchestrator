@@ -18,12 +18,12 @@ internal static partial class WorkerSubscriptionModelResolver
         Func<string, bool>? commandExists = null,
         bool allowCheapLane = true,
         bool cascadeTesterCheapFirst = true,
-        string? cascadeCheapModelAlias = null)
+        string? cascadeCheapModelAlias = null, bool cascadeMechanicalReworkCheap = true)
     {
         var fullSelection = ResolveSubscriptionModel(agent, goal, task);
         return modelOverride is not null
             ? fullSelection with { Reason = "override: explicit dispatch profile/model selection" }
-            : ResolveRoleModelSelection(agent, goal, task, fullSelection, providers, sandboxProbe, claudeAuthProbe, profiles, commandExists, allowCheapLane, cascadeTesterCheapFirst, cascadeCheapModelAlias);
+            : ResolveRoleModelSelection(agent, goal, task, fullSelection, providers, sandboxProbe, claudeAuthProbe, profiles, commandExists, allowCheapLane, cascadeTesterCheapFirst, cascadeCheapModelAlias, cascadeMechanicalReworkCheap);
     }
 
     private static SubscriptionModelSelection ResolveSubscriptionModel(AgentDefinition agent, Goal goal, TaskSpec task)
@@ -50,7 +50,7 @@ internal static partial class WorkerSubscriptionModelResolver
         Func<string, bool>? commandExists,
         bool allowCheapLane,
         bool cascadeTesterCheapFirst,
-        string? cascadeCheapModelAlias)
+        string? cascadeCheapModelAlias, bool cascadeMechanicalReworkCheap)
     {
         if (!IsLightReadOnlyRole(task.RequiredRole))
         {
@@ -60,13 +60,19 @@ internal static partial class WorkerSubscriptionModelResolver
                 {
                     Reason = $"provider-constrained: {task.RequiredRole} remains on {agent.Model.ProviderName}"
                 };
-                return task.RequiredRole == AgentRole.Tester &&
+                if (task.RequiredRole is (AgentRole.Developer or AgentRole.Tester) &&
                     agent.Model.ProviderName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase) &&
                     WorkerProfileDispatcher.ResolveSubscriptionProfileName(agent, constrainedSelection)
-                        .Equals(WorkerProfileDispatcher.OpenAiSubscriptionProfileName, StringComparison.OrdinalIgnoreCase)
-                    ? RouteTesterCascade(agent, goal, task, constrainedSelection, providers, profiles,
-                        cascadeTesterCheapFirst, cascadeCheapModelAlias)
-                    : constrainedSelection;
+                        .Equals(WorkerProfileDispatcher.OpenAiSubscriptionProfileName, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (task.RequiredRole == AgentRole.Tester)
+                        return RouteTesterCascade(agent, goal, task, constrainedSelection, providers, profiles,
+                            cascadeTesterCheapFirst, cascadeCheapModelAlias);
+                    if (task.RequiredRole == AgentRole.Developer)
+                        return RouteDeveloperCascade(agent, goal, task, constrainedSelection, providers, profiles,
+                            cascadeMechanicalReworkCheap, cascadeCheapModelAlias);
+                }
+                return constrainedSelection;
             }
 
             if (allowCheapLane &&
