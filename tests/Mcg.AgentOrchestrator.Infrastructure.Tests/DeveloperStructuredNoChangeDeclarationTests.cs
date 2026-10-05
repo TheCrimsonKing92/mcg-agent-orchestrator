@@ -4,21 +4,20 @@ using Mcg.AgentOrchestrator.Infrastructure;
 [Xunit.Collection("IsolatedProcessSpawning")]
 public sealed class DeveloperStructuredNoChangeDeclarationTests : WorkerDispatchTestSupport
 {
-    // Synthetic output for boundary coverage; the historical stdout fixture requires
-    // a complete c0cfa8ae/2c4a4681 evidence copy (the supplied store reference is truncated).
+    // Verbatim c0cfa8ae/2c4a4681 final WORKER_RESULT supplied by the operator on 2026-10-05.
     private const string Output = """
         WORKER_RESULT:
         files: none
-        commands: none
+        commands: git status --short; scoped git diff; git diff --check; line-count measurement; moved-body comparison; JSON/TRX receipt inspection
         tests: deferred - GoalAcceptanceVerifierSplitFactParityTests, GoalAcceptanceVerifierSizeRatchetTests, GoalAcceptanceEvidenceBundleTests, GoalAcceptanceVerifierDotnetBuildSlotTests, CanaryEngineSurfaceCoverageTests
         commit: none
         blockers: none
         assigned_scope_complete: true
-        model_fit: test/model - adequate - structured declaration fixture
-        skills: none
-        confidence: high
-        END_WORKER_RESULT
         """;
+    // Boundary cases retain the current parser's required metadata so each mutation
+    // exercises its intended guard independently of the historical fixture gap.
+    private const string BoundaryOutput = Output +
+        "\nmodel_fit: test/model - adequate - structured declaration boundary\nskills: none\nconfidence: high\nEND_WORKER_RESULT";
     private static readonly string[] Classes =
     [
         "GoalAcceptanceVerifierSplitFactParityTests", "GoalAcceptanceVerifierSizeRatchetTests",
@@ -69,7 +68,7 @@ public sealed class DeveloperStructuredNoChangeDeclarationTests : WorkerDispatch
     [Xunit.InlineData("tests: deferred", "tests: pass")]
     public void Qualify_OneBrokenField_KeepsExistingDeclineAndNoOutcome(string from, string to)
     {
-        var output = Output.Replace(from, to, StringComparison.Ordinal);
+        var output = BoundaryOutput.Replace(from, to, StringComparison.Ordinal);
         var (goal, task) = QualifierScenario();
 
         Xunit.Assert.False(Qualify(goal, task, output, out _, out var code));
@@ -86,7 +85,7 @@ public sealed class DeveloperStructuredNoChangeDeclarationTests : WorkerDispatch
     [Xunit.Fact]
     public void Refresh_UndeclaredFailingClass_RecordsOneDecline()
     {
-        var (kernel, goal, task, runner, _) = DispatchScenario(Output,
+        var (kernel, goal, task, runner, _) = DispatchScenario(BoundaryOutput,
             "ACTIONABLE_CANDIDATE_RED failing_tests=Suite.UndeclaredTests.Fails");
 
         runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
@@ -102,7 +101,7 @@ public sealed class DeveloperStructuredNoChangeDeclarationTests : WorkerDispatch
     [Xunit.Fact]
     public void Qualify_TrimmedMixedCaseFields_PreservesVerbatimFilesLine()
     {
-        var output = Output.Replace("files: none", "  Files:  NoNe  ", StringComparison.Ordinal)
+        var output = BoundaryOutput.Replace("files: none", "  Files:  NoNe  ", StringComparison.Ordinal)
             .Replace("commit: none", "commit:  NONE  ", StringComparison.Ordinal)
             .Replace("assigned_scope_complete: true", "assigned_scope_complete:  TRUE  ", StringComparison.Ordinal)
             .Replace("\n", "\r\n", StringComparison.Ordinal);
@@ -124,7 +123,7 @@ public sealed class DeveloperStructuredNoChangeDeclarationTests : WorkerDispatch
     {
         var (goal, task) = QualifierScenario();
 
-        Xunit.Assert.False(Qualify(goal, task, Output.Replace(from, to, StringComparison.Ordinal), out _, out var code));
+        Xunit.Assert.False(Qualify(goal, task, BoundaryOutput.Replace(from, to, StringComparison.Ordinal), out _, out var code));
 
         Xunit.Assert.Equal("no-rationale", code);
     }
@@ -133,7 +132,7 @@ public sealed class DeveloperStructuredNoChangeDeclarationTests : WorkerDispatch
     public void Qualify_NoDeclaredClasses_DeclinesWithoutRationale()
     {
         var (goal, task) = QualifierScenario();
-        var output = Output.Replace("deferred - " + string.Join(", ", Classes), "deferred", StringComparison.Ordinal);
+        var output = BoundaryOutput.Replace("deferred - " + string.Join(", ", Classes), "deferred", StringComparison.Ordinal);
 
         Xunit.Assert.False(Qualify(goal, task, output, out _, out var code));
 
@@ -144,7 +143,8 @@ public sealed class DeveloperStructuredNoChangeDeclarationTests : WorkerDispatch
     public void Qualify_FinalBlockAndDuplicateField_UsesAuthoritativeFilesLine()
     {
         var (goal, task) = QualifierScenario();
-        var output = Output + "\n" + Output.Replace("files: none", "files: Alpha.cs\nFiles:  None", StringComparison.Ordinal)
+        var output = BoundaryOutput + "\n" +
+            BoundaryOutput.Replace("files: none", "files: Alpha.cs\nFiles:  None", StringComparison.Ordinal)
             + "\nfiles: unrelated prose";
 
         Xunit.Assert.True(Qualify(goal, task, output, out var outcome, out _));
@@ -156,7 +156,7 @@ public sealed class DeveloperStructuredNoChangeDeclarationTests : WorkerDispatch
     public void Refresh_ExplicitRationale_WinsWithoutStructuredDiagnostic()
     {
         const string rationale = "NO_CHANGE: the candidate already contains the repair.";
-        var (kernel, goal, task, runner, _) = DispatchScenario(rationale + "\n" + Output);
+        var (kernel, goal, task, runner, _) = DispatchScenario(rationale + "\n" + BoundaryOutput);
 
         runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
 
