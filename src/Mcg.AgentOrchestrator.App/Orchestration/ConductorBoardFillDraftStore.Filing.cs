@@ -26,6 +26,21 @@ internal sealed partial class ConductorBoardFillDraftStore
         });
     }
 
+    internal void RecordFilingIntake(string draftId, string attemptId, BoardFillIntakeResult intake)
+    {
+        if (intake.Kind is not ("filed" or "replayed") || intake.ExitCode != 0 || string.IsNullOrWhiteSpace(intake.GoalId))
+            throw new InvalidOperationException("Cannot checkpoint an unsuccessful board-fill intake.");
+        Update(draftId, current =>
+        {
+            var rows = current.Filings ?? [];
+            if (rows.Single(row => row.Id == attemptId).Result is not null)
+                throw new InvalidOperationException("Board-fill filing is already finished.");
+            return current with { Filings = rows.Select(row => row.Id == attemptId ? row with
+                { Intake = intake, GoalId = intake.GoalId, Stdout = intake.Stdout, Stderr = intake.Stderr,
+                    ExitCode = intake.ExitCode } : row).ToArray() };
+        });
+    }
+
     internal void MarkFilingReported(string draftId, string attemptId) => Update(draftId, current =>
     {
         var rows = current.Filings ?? [];

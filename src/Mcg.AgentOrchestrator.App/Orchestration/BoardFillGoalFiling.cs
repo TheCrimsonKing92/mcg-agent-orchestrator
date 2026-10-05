@@ -3,6 +3,8 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 // Intake owns goal creation; this seam only supplies the verb's arguments and receipts.
 internal interface IBoardFillGoalIntake
 {
+    // Positive durable evidence only: a pending attempt alone does not authorize bypassing admission.
+    string? FindCreatedGoal(string requestKey);
     BoardFillIntakeResult File(BoardFillIntakeRequest request, CancellationToken token);
     BoardFillIntakeResult Depend(string goalId, string dependencyGoalId, CancellationToken token);
 }
@@ -23,7 +25,8 @@ internal sealed record BoardFillDependencyResult(string GoalId, bool Applied, st
 internal sealed record BoardFillFilingAttempt(string Id, string RequestKey, DateTimeOffset StartedAt,
     DateTimeOffset? FinishedAt = null, string? Result = null, string Reason = "pending", string? GoalId = null,
     string Stdout = "", string Stderr = "", int ExitCode = 0,
-    IReadOnlyList<BoardFillDependencyResult>? Dependencies = null, bool Reported = false, bool Terminal = false);
+    IReadOnlyList<BoardFillDependencyResult>? Dependencies = null, bool Reported = false, bool Terminal = false,
+    BoardFillIntakeResult? Intake = null);
 
 internal static class BoardFillFiledEvent
 {

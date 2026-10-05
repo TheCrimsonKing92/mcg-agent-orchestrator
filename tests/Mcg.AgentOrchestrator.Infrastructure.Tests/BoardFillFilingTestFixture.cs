@@ -11,6 +11,7 @@ internal sealed class BoardFillFilingTestFixture : IDisposable
     internal BoardFillGoalBoard Board { get; set; } = new(0, new HashSet<string>());
     internal string? Head { get; set; } = BoardFillAssessmentTestFixture.Head;
     internal Action? BeforeHead { get; set; }
+    internal Action? BeforeBoard { get; set; }
     internal IntakeFake Intake { get; } = new();
     internal ConductorBoardFillHost Host { get; }
     internal BoardFillFilingTestFixture()
@@ -18,7 +19,7 @@ internal sealed class BoardFillFilingTestFixture : IDisposable
         Host = new(Drafts.Store, (_, _) => throw new InvalidOperationException("No drafting expected."),
             () => [Drafts.Item], (_, _) => BoardFillAssessmentTestFixture.Ready, () => Policy,
             new(Drafts.EventPath, utcNow: () => Drafts.Clock.UtcNow), () => Drafts.Clock.UtcNow,
-            filing: new(Intake, () => Board, () => { BeforeHead?.Invoke(); return Head; }));
+            filing: new(Intake, () => { BeforeBoard?.Invoke(); return Board; }, () => { BeforeHead?.Invoke(); return Head; }));
     }
 
     internal BoardFillDraftRound Assessed(bool fileable = true, BoardFillScopeProposal? scope = null)
@@ -44,6 +45,7 @@ internal sealed class BoardFillFilingTestFixture : IDisposable
         internal Dictionary<string, string> Goals { get; } = new();
         internal Func<BoardFillIntakeRequest, BoardFillIntakeResult>? Filing { get; set; }
         internal Func<string, BoardFillIntakeResult>? Dependency { get; set; }
+        public string? FindCreatedGoal(string requestKey) => Goals.GetValueOrDefault(requestKey);
         public BoardFillIntakeResult File(BoardFillIntakeRequest request, CancellationToken token)
         {
             Requests.Add(request);

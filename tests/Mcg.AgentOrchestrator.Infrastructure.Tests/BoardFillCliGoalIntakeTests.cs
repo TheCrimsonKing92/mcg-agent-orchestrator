@@ -22,7 +22,10 @@ public sealed class BoardFillCliGoalIntakeTests : CliCommandTestBase
             File.WriteAllText(path, BoardFillAssessmentTestFixture.Brief);
             var request = new BoardFillIntakeRequest("draft-identity", path, item.Id);
             var adapter = new BoardFillCliGoalIntake(workspace);
+            Assert.Null(adapter.FindCreatedGoal(request.RequestKey));
             var filed = adapter.File(request, CancellationToken.None);
+            Assert.Equal(filed.GoalId, adapter.FindCreatedGoal(request.RequestKey));
+            Assert.Null(adapter.FindCreatedGoal("board-fill-unrelated-draft"));
             var replayed = adapter.File(request, CancellationToken.None);
             Assert.Equal("filed", filed.Kind);
             Assert.Equal("replayed", replayed.Kind);

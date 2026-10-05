@@ -7,6 +7,13 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed class BoardFillCliGoalIntake(OrchestratorWorkspace workspace) : IBoardFillGoalIntake
 {
+    public string? FindCreatedGoal(string requestKey)
+    {
+        var receipt = new GoalIntakeRequestStore(workspace.SqliteStatePath).Get(requestKey);
+        return receipt?.State == GoalIntakeRequestStates.Created && receipt.GoalId is { } id &&
+            ReadGoals().Any(goal => goal.Id.Value == id) ? id : null;
+    }
+
     public BoardFillIntakeResult File(BoardFillIntakeRequest request, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
