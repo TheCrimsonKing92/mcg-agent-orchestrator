@@ -6,12 +6,15 @@ public sealed record RoundValueTotals(int LandedGoals, int LostGoals, int Rounds
 
 public sealed record RoundValueDay(DateOnly Day, RoundValueTotals Totals);
 public sealed record RoundValueCauseShare(string Cause, int Rounds, double Share);
+public sealed record RoundValueCascadeRoute(string Decision, int Rounds, int Productive, int Overhead, int Wasted);
 
 /// <summary>Attributes every terminal goal's full round history to its final dispatch date.</summary>
 public sealed record RoundValueReport(DateTimeOffset Since, DateTimeOffset Until,
     IReadOnlyList<RoundValueDay> Days, RoundValueTotals Window,
     IReadOnlyList<RoundValueCauseShare> WasteByCause, int PendingGoals, int PendingRounds)
 {
+    public IReadOnlyList<RoundValueCascadeRoute> CascadeRoutes { get; init; } = [];
+
     public static RoundValueReport Build(IEnumerable<Goal> goals, DateTimeOffset since, DateTimeOffset until) =>
         Build(goals, since, until, []);
 
@@ -19,7 +22,8 @@ public sealed record RoundValueReport(DateTimeOffset Since, DateTimeOffset Until
         IReadOnlyCollection<AppliedRetryIntent> intents)
     {
         if (since >= until) throw new ArgumentException("The round-value window must end after it starts.");
-        var groups = RoundValueClassifier.Classify(goals, intents).GroupBy(r => r.Round.GoalId).ToArray();
+        var materializedGoals = goals.ToArray();
+        var groups = RoundValueClassifier.Classify(materializedGoals, intents).GroupBy(r => r.Round.GoalId).ToArray();
         bool InWindow(DateTimeOffset at) => at >= since && at < until;
         var cohort = groups.Where(g => g.First().Outcome != RoundGoalOutcome.Pending &&
             InWindow(g.Max(r => r.Round.DispatchedAt))).ToArray();
@@ -33,7 +37,27 @@ public sealed record RoundValueReport(DateTimeOffset Since, DateTimeOffset Until
         var pending = groups.Where(g => g.First().Outcome == RoundGoalOutcome.Pending)
             .SelectMany(g => g.Where(r => InWindow(r.Round.DispatchedAt))).ToArray();
         return new(since, until, days, Total(rounds), causes,
-            pending.Select(r => r.Round.GoalId).Distinct(StringComparer.Ordinal).Count(), pending.Length);
+            pending.Select(r => r.Round.GoalId).Distinct(StringComparer.Ordinal).Count(), pending.Length)
+        {
+            CascadeRoutes = CascadeTotals(materializedGoals, rounds)
+        };
+    }
+
+    private static IReadOnlyList<RoundValueCascadeRoute> CascadeTotals(IReadOnlyList<Goal> goals,
+        IReadOnlyList<RoundValueRecord> rounds)
+    {
+        var dispatches = goals.SelectMany(g => g.Tasks.SelectMany(t => t.DispatchHistory.Select(d =>
+            (Key: (g.Id.Value, t.Id.Value, d.DispatchedAt), Dispatch: d))))
+            .GroupBy(d => d.Key).ToDictionary(g => g.Key, g => g.Last().Dispatch);
+        var routed = rounds.Select(r => (Round: r, Decision:
+            dispatches.TryGetValue((r.Round.GoalId, r.Round.TaskId, r.Round.DispatchedAt), out var dispatch) &&
+            CascadeRouteMarker.TryParse(dispatch.ModelSelectionReason, out var marker) ? marker.Decision : null)).ToArray();
+        return new[] { CascadeRouteMarker.Cheap, CascadeRouteMarker.Escalated, CascadeRouteMarker.Primary }
+            .Select(decision => (Decision: decision, Rounds: routed.Where(r => r.Decision == decision).ToArray()))
+            .Where(g => g.Rounds.Length > 0).Select(g => new RoundValueCascadeRoute(g.Decision, g.Rounds.Length,
+                g.Rounds.Count(r => r.Round.ValueClass == RoundValueClass.Productive),
+                g.Rounds.Count(r => r.Round.ValueClass == RoundValueClass.ExpectedOverhead),
+                g.Rounds.Count(r => r.Round.ValueClass == RoundValueClass.Wasted))).ToArray();
     }
 
     private static RoundValueTotals Total(IReadOnlyList<RoundValueRecord> rounds)

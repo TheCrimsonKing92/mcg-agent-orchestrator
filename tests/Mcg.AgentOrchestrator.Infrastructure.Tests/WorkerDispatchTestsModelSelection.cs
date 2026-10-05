@@ -885,7 +885,7 @@ public void WorkerProfileDispatcherRejectsVerifiedTaskDispatch()
 
         WorkerProfileDispatcher.PrepareSubscriptionTask(
             kernel, goal, task, agents, WorkerProfileCatalog.Default(),
-            Path.Combine(root, "prompts"), workingDirectory, DateTimeOffset.UtcNow);
+            Path.Combine(root, "prompts"), workingDirectory, DateTimeOffset.UtcNow, cascadeTesterCheapFirst: false);
 
         Assert.Equal(AgentCatalog.OpenAiTerraSubscriptionModelAlias, task.LastDispatch!.ModelName);
         Assert.Equal(TaskComplexity.Complex, task.LastDispatch.TaskComplexity);
