@@ -33,12 +33,30 @@ public enum ReverseDependencyDegradationKind
 
 public sealed record RepositoryTestImpactDegradation(ReverseDependencyDegradationKind Kind, string Reason);
 
+public sealed record RepositoryTestImpactHeadroom(
+    int? IndexedSourceFileCount,
+    int IndexedSourceFileCap,
+    int? SelectedTestClassCount,
+    int SelectedTestClassCap,
+    int? LargestFrontierSymbolCount,
+    int FrontierSymbolCap)
+{
+    internal string Render() =>
+        $"headroom indexed-files={Count(IndexedSourceFileCount)}/{IndexedSourceFileCap} " +
+        $"selected-classes={Count(SelectedTestClassCount)}/{SelectedTestClassCap} " +
+        $"frontier-symbols={Count(LargestFrontierSymbolCount)}/{FrontierSymbolCap}";
+
+    private static string Count(int? value) =>
+        value?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "n/a";
+}
+
 public sealed record RepositoryTestImpactPlan(
     bool RequiresBuild,
     bool RequiresBroadVerification,
     string Summary,
     IReadOnlyList<RepositoryTestImpactCheck> Checks,
-    RepositoryTestImpactDegradation? ReverseDependencyDegradation = null);
+    RepositoryTestImpactDegradation? ReverseDependencyDegradation = null,
+    RepositoryTestImpactHeadroom? ReverseDependencyHeadroom = null);
 
 public static partial class RepositoryTestImpactPlanner
 {
@@ -178,6 +196,7 @@ public static partial class RepositoryTestImpactPlanner
         var touchesAcceptanceTests = summary.Files.Any(file => StartsWith(file.Path, acceptanceTestsPrefix));
         var touchesInfrastructure = summary.Files.Any(file =>
             StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Infrastructure/") ||
+            StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Execution/") ||
             StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Infrastructure.Providers/") ||
             StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Infrastructure.OperatorComms/") ||
             StartsWith(file.Path, "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/") &&
@@ -249,7 +268,7 @@ public static partial class RepositoryTestImpactPlanner
                 ],
                 AppendReverseDependencyCacheReceipt(
                     "Core production behavior changed; run integration tests that reference its bounded two-hop consumers.",
-                    resolved.CacheReceipt),
+                    resolved.CacheReceipt, resolved.Headroom),
                 RepositoryTestProject.Infrastructure,
                 resolved.TestClassNames));
         }
@@ -264,7 +283,7 @@ public static partial class RepositoryTestImpactPlanner
                 InfrastructureTests,
                 AppendReverseDependencyCacheReceipt(
                     degraded.Reason ?? "Reverse-dependency evidence was unavailable; run the full Infrastructure test suite.",
-                    degraded.CacheReceipt),
+                    degraded.CacheReceipt, degraded.Headroom),
                 RepositoryTestProject.Infrastructure));
         }
 
@@ -296,6 +315,7 @@ public static partial class RepositoryTestImpactPlanner
         }
         else if (infrastructureTestFilter.Filter is not null &&
             !summary.Files.Any(file => StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Infrastructure/")) &&
+            !summary.Files.Any(file => StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Execution/")) &&
             !summary.Files.Any(file => StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Infrastructure.Providers/")) &&
             !touchesApp &&
             !touchesScriptsOrConfig)
@@ -341,13 +361,16 @@ public static partial class RepositoryTestImpactPlanner
                 ? $"Selected {distinctChecks[0].Name} from changed file scope."
                 : $"Selected {distinctChecks.Length} test commands from changed file scope.",
             Checks: distinctChecks,
-            ReverseDependencyDegradation: reverseDependencyDegradation);
+            ReverseDependencyDegradation: reverseDependencyDegradation,
+            ReverseDependencyHeadroom: reverseDependencySelection?.Headroom);
     }
 
     private static string AppendReverseDependencyCacheReceipt(
         string reason,
-        ReverseDependencyCacheReceipt? receipt) =>
-        receipt is null ? reason : $"{reason} {receipt.Render()}";
+        ReverseDependencyCacheReceipt? receipt,
+        RepositoryTestImpactHeadroom? headroom) =>
+        receipt is null ? reason : $"{reason} {receipt.Render()}" +
+            (headroom is null ? "" : $" {headroom.Render()}");
 
     private static RepositoryTestImpactPlan NoBuild(string summary) =>
         new(
@@ -633,6 +656,7 @@ public static partial class RepositoryTestImpactPlanner
     private static bool CanUseFocusedAppFilters(RepositoryChangeSummary summary) =>
         !summary.Files.Any(file =>
             StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Infrastructure/") ||
+            StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Execution/") ||
             StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Infrastructure.Providers/") ||
             file.Categories.Contains(RepositoryChangeCategory.Script) ||
             file.Categories.Contains(RepositoryChangeCategory.Configuration)) &&

@@ -92,21 +92,31 @@ internal static partial class CliPersistentStateRunner
             stateRepository,
             currentGoal?.Id.Value,
             command.GoalSelector);
-        var outcome = ExecuteGoalUnparkApplication(command, goalId, stateRepository);
+        var outcome = ExecuteGoalUnparkApplication(command, goalId, stateRepository, out var pendingMessageId);
         if (outcome.Goal is not null)
         {
             currentGoal = outcome.Goal;
         }
 
-        CliCommandHandlers.RenderGoalUnparkOutcome(command, outcome, workspace);
+        CliCommandHandlers.RenderGoalUnparkOutcome(command, outcome, workspace,
+            pendingMessageId is null ? null : () => DeliverCommittedGoalLifecycleEvent(
+                (IOrchestratorStateOutboxRepository)stateRepository, workspace, goalId, GoalStatus.Active, pendingMessageId));
         return outcome.ShouldSave;
     }
 
     internal static CliCommandHandlers.GoalLifecycleTransitionOutcome ExecuteGoalUnparkApplication(
         CliCommandHandlers.GoalUnparkCommand command,
         GoalId goalId,
-        ITransactionalOrchestratorStateRepository stateRepository)
+        ITransactionalOrchestratorStateRepository stateRepository) =>
+        ExecuteGoalUnparkApplication(command, goalId, stateRepository, out _);
+
+    private static CliCommandHandlers.GoalLifecycleTransitionOutcome ExecuteGoalUnparkApplication(
+        CliCommandHandlers.GoalUnparkCommand command,
+        GoalId goalId,
+        ITransactionalOrchestratorStateRepository stateRepository,
+        out string? pendingMessageId)
     {
+        pendingMessageId = null;
         if (!command.Confirmed)
         {
             var snapshot = stateRepository.LoadGoalAsync(goalId).GetAwaiter().GetResult()
@@ -115,10 +125,10 @@ internal static partial class CliPersistentStateRunner
             return CliCommandHandlers.ApplyGoalUnparkWithoutRendering(command, kernel, goalId);
         }
 
-        return TransactGoalSnapshotTransition(
+        return TransactGoalLifecycleTransitionWithOutbox(
             stateRepository, "cli:unpark-goal", goalId,
             kernel => CliCommandHandlers.ApplyGoalUnparkWithoutRendering(command, kernel, goalId),
-            out _);
+            out _, out pendingMessageId);
     }
 
     private static CliCommandHandlers.GoalLifecycleTransitionOutcome TransactGoalSnapshotTransition(

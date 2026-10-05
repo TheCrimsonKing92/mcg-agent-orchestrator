@@ -92,7 +92,8 @@ internal static partial class CliCommandHandlers
     internal static void RenderGoalUnparkOutcome(
         GoalUnparkCommand command,
         GoalLifecycleTransitionOutcome outcome,
-        OrchestratorWorkspace workspace)
+        OrchestratorWorkspace workspace,
+        Action? deliverCommittedLifecycleEvent = null)
     {
         switch (outcome.Disposition)
         {
@@ -104,7 +105,10 @@ internal static partial class CliCommandHandlers
 
                 Console.WriteLine($"Goal unparked {outcome.GoalId.Value[..8]}.");
                 Console.WriteLine("Status change: Parked -> Active");
-                AppendCommittedLifecycleEvent(outcome, workspace, GoalStatus.Active);
+                if (deliverCommittedLifecycleEvent is null)
+                    AppendCommittedLifecycleEvent(outcome, workspace, GoalStatus.Active);
+                else
+                    deliverCommittedLifecycleEvent();
 
                 return;
 

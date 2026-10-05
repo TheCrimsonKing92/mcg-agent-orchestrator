@@ -11,7 +11,13 @@ public static partial class RepositoryChangeClassifier
         ("src/Mcg.AgentOrchestrator.Infrastructure/Processes/", "GracefulDispatchDetacher"),
         ("src/Mcg.AgentOrchestrator.Infrastructure/Processes/", "ProcessLogReader.Decisions"),
         ("src/Mcg.AgentOrchestrator.Infrastructure/Processes/", "WorkerProcessJobs"),
-        ("src/Mcg.AgentOrchestrator.Infrastructure/Workers/", "WorkerResultParser")
+        ("src/Mcg.AgentOrchestrator.Infrastructure/Workers/", "WorkerResultParser"),
+        ("src/Mcg.AgentOrchestrator.Execution/Processes/", "BackgroundDispatch"),
+        ("src/Mcg.AgentOrchestrator.Execution/Processes/", "DispatchProcessHost"),
+        ("src/Mcg.AgentOrchestrator.Execution/Processes/", "GracefulDispatchDetacher"),
+        ("src/Mcg.AgentOrchestrator.Execution/Processes/", "ProcessLogReader.Decisions"),
+        ("src/Mcg.AgentOrchestrator.Execution/Processes/", "WorkerProcessJobs"),
+        ("src/Mcg.AgentOrchestrator.Execution/Workers/", "WorkerResultParser")
     ];
 
     public static bool TouchesDispatchResultHandling(IEnumerable<string> paths) =>

@@ -63,7 +63,9 @@ internal static partial class CliCommandHandlers
         GoalLifecycleTransitionOutcome outcome,
         AgentOrchestratorKernel? kernel,
         OrchestratorWorkspace workspace,
-        GoalWorktreeCleanupHooks hooks)
+        GoalWorktreeCleanupHooks hooks,
+        Action? deliverCommittedLifecycleEvent = null,
+        Func<GoalAbandonPlan?>? deliverAfterCommitEffect = null)
     {
         if (outcome.Disposition == GoalLifecycleTransitionDisposition.ConflictExhausted)
         {
@@ -90,19 +92,27 @@ internal static partial class CliCommandHandlers
 
         if (outcome.CommittedTimelineEvent is not null)
         {
-            AppendCommittedLifecycleEvent(outcome, workspace, GoalStatus.Cancelled);
+            if (deliverCommittedLifecycleEvent is null)
+                AppendCommittedLifecycleEvent(outcome, workspace, GoalStatus.Cancelled);
+            else
+                deliverCommittedLifecycleEvent();
         }
 
         GoalAbandonPlan plan;
         if (leaveRunning)
         {
-            GoalAbandonPlanner.RecordAbandonedTerminalDisposition(outcome.Goal, workspace, command.Reason.Trim());
+            if (deliverAfterCommitEffect is null)
+                GoalAbandonPlanner.RecordAbandonedTerminalDisposition(outcome.Goal, workspace, command.Reason.Trim());
+            else
+                _ = deliverAfterCommitEffect();
             plan = GoalAbandonPlanner.Build(kernel, outcome.Goal, workspace, command.Reason, hooks,
                 dryRun: false, leaveLiveDispatchesRunning: true);
         }
         else
         {
-            plan = GoalAbandonPlanner.CompleteAfterCommit(kernel, outcome.Goal, workspace, command.Reason.Trim(), hooks);
+            plan = deliverAfterCommitEffect is null
+                ? GoalAbandonPlanner.CompleteAfterCommit(kernel, outcome.Goal, workspace, command.Reason.Trim(), hooks)
+                : deliverAfterCommitEffect() ?? GoalAbandonPlanner.Build(kernel, outcome.Goal, workspace, command.Reason, hooks, dryRun: false);
         }
 
         ConsoleViews.PrintGoalAbandonPlan(plan);

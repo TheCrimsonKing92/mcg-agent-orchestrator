@@ -29,13 +29,19 @@ internal static class ReverseDependencyTestImpactReader
         string repositoryRoot,
         IReadOnlyList<string> changedSourcePaths,
         bool bypassCache = false,
-        int maximumIndexedSourceFiles = MaximumIndexedSourceFiles)
+        int maximumIndexedSourceFiles = MaximumIndexedSourceFiles,
+        int maximumSelectedTestClasses = MaximumSelectedTestClasses,
+        int? maximumFrontierSymbols = MaximumFrontierSymbols)
     {
+        var headroom = new RepositoryTestImpactHeadroom(
+            null, maximumIndexedSourceFiles, null, maximumSelectedTestClasses,
+            null, maximumFrontierSymbols ?? MaximumFrontierSymbols);
         if (changedSourcePaths.Count is 0 or > MaximumChangedSourceFiles)
         {
             return ReverseDependencyTestSelection.Abandoned(
                 ReverseDependencyDegradationKind.ChangedSourceFileCount,
-                $"Focused reverse-dependency selection supports 1-{MaximumChangedSourceFiles} changed source files.");
+                $"Focused reverse-dependency selection supports 1-{MaximumChangedSourceFiles} changed source files.",
+                headroom: headroom);
         }
 
         try
@@ -45,21 +51,21 @@ internal static class ReverseDependencyTestImpactReader
             if (testProjectPath is null)
             {
                 return ReverseDependencyTestSelection.Unreadable(
-                    $"The dependent test project could not be read: {InfrastructureTestProject}");
+                    $"The dependent test project could not be read: {InfrastructureTestProject}", headroom: headroom);
             }
 
             if (!File.Exists(testProjectPath))
             {
                 return IsDeliberatelyPartialRepositoryRoot(repositoryRoot)
-                    ? ReverseDependencyTestSelection.Unavailable
+                    ? ReverseDependencyTestSelection.Unavailable with { Headroom = headroom }
                     : ReverseDependencyTestSelection.Unreadable(
-                        $"The dependent test project could not be read: {InfrastructureTestProject}");
+                        $"The dependent test project could not be read: {InfrastructureTestProject}", headroom: headroom);
             }
 
             var projects = ReadProjectClosure(repositoryRoot, testProjectPath, out var projectFailure);
             if (projects is null)
             {
-                return ReverseDependencyTestSelection.Unreadable(projectFailure!);
+                return ReverseDependencyTestSelection.Unreadable(projectFailure!, headroom: headroom);
             }
 
             var sourceOwnership = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
@@ -75,11 +81,13 @@ internal static class ReverseDependencyTestImpactReader
                 }
             }
 
+            headroom = headroom with { IndexedSourceFileCount = sourceOwnership.Count };
             if (sourceOwnership.Count > maximumIndexedSourceFiles)
             {
                 return ReverseDependencyTestSelection.Abandoned(
                     ReverseDependencyDegradationKind.IndexedSourceBound,
-                    $"Reverse-dependency indexing exceeded the {maximumIndexedSourceFiles}-source-file bound.");
+                    $"Reverse-dependency indexing exceeded the {maximumIndexedSourceFiles}-source-file bound.",
+                    headroom: headroom);
             }
 
             var snapshot = ReadSnapshot(
@@ -89,7 +97,7 @@ internal static class ReverseDependencyTestImpactReader
                 out var snapshotFailure);
             if (snapshot is null)
             {
-                return ReverseDependencyTestSelection.Unreadable(snapshotFailure!);
+                return ReverseDependencyTestSelection.Unreadable(snapshotFailure!, headroom: headroom);
             }
 
             var disposition = bypassCache
@@ -102,7 +110,7 @@ internal static class ReverseDependencyTestImpactReader
                 index = cachedIndex;
                 disposition = ReverseDependencyCacheDisposition.Hit;
                 var hitReceipt = CreateReceipt(snapshot, disposition, reparsedFileCount, hitCount);
-                return Select(index, changedSourcePaths, repositoryRoot, hitReceipt);
+                return Select(index, changedSourcePaths, repositoryRoot, hitReceipt, headroom);
             }
 
             index = ParseSnapshot(snapshot, repositoryRoot, out var parseFailure, out reparsedFileCount)!;
@@ -113,44 +121,44 @@ internal static class ReverseDependencyTestImpactReader
                     disposition,
                     reparsedFileCount,
                     RetainedSnapshotCount());
-                return ReverseDependencyTestSelection.Unreadable(parseFailure!, failedReceipt);
+                return ReverseDependencyTestSelection.Unreadable(parseFailure!, failedReceipt, headroom);
             }
 
             var retainedSnapshotCount = bypassCache
                 ? RetainedSnapshotCount()
                 : RetainIndex(snapshot.Fingerprint, index);
             var receipt = CreateReceipt(snapshot, disposition, reparsedFileCount, retainedSnapshotCount);
-            return Select(index, changedSourcePaths, repositoryRoot, receipt);
+            return Select(index, changedSourcePaths, repositoryRoot, receipt, headroom);
         }
         catch (IOException exception)
         {
             return ReverseDependencyTestSelection.Unreadable(
-                $"Reverse-dependency source I/O failed: {exception.Message}");
+                $"Reverse-dependency source I/O failed: {exception.Message}", headroom: headroom);
         }
         catch (UnauthorizedAccessException exception)
         {
             return ReverseDependencyTestSelection.Unreadable(
-                $"Reverse-dependency source access failed: {exception.Message}");
+                $"Reverse-dependency source access failed: {exception.Message}", headroom: headroom);
         }
         catch (System.Xml.XmlException exception)
         {
             return ReverseDependencyTestSelection.Unreadable(
-                $"Reverse-dependency project graph is malformed: {exception.Message}");
+                $"Reverse-dependency project graph is malformed: {exception.Message}", headroom: headroom);
         }
         catch (ArgumentException exception)
         {
             return ReverseDependencyTestSelection.Unreadable(
-                $"Reverse-dependency path evidence is malformed: {exception.Message}");
+                $"Reverse-dependency path evidence is malformed: {exception.Message}", headroom: headroom);
         }
         catch (NotSupportedException exception)
         {
             return ReverseDependencyTestSelection.Unreadable(
-                $"Reverse-dependency path evidence is unsupported: {exception.Message}");
+                $"Reverse-dependency path evidence is unsupported: {exception.Message}", headroom: headroom);
         }
         catch (Exception exception)
         {
             return ReverseDependencyTestSelection.Unreadable(
-                $"Reverse-dependency evidence failed: {exception.Message}");
+                $"Reverse-dependency evidence failed: {exception.Message}", headroom: headroom);
         }
     }
 
@@ -158,7 +166,8 @@ internal static class ReverseDependencyTestImpactReader
         ReverseDependencyIndex index,
         IReadOnlyList<string> changedSourcePaths,
         string repositoryRoot,
-        ReverseDependencyCacheReceipt receipt)
+        ReverseDependencyCacheReceipt receipt,
+        RepositoryTestImpactHeadroom headroom)
     {
         var indexedFiles = index.Files;
         try
@@ -174,7 +183,7 @@ internal static class ReverseDependencyTestImpactReader
                 {
                     return ReverseDependencyTestSelection.Unreadable(
                         $"Changed source is outside the dependent project graph or unreadable: {changedSourcePath}",
-                        receipt);
+                        receipt, headroom);
                 }
 
                 if (!indexedFiles.ContainsKey(fullPath))
@@ -183,7 +192,7 @@ internal static class ReverseDependencyTestImpactReader
                     {
                         return ReverseDependencyTestSelection.Unreadable(
                             $"Changed source is outside the dependent project graph or unreadable: {changedSourcePath}",
-                            receipt);
+                            receipt, headroom);
                     }
 
                     continue;
@@ -194,7 +203,7 @@ internal static class ReverseDependencyTestImpactReader
 
             if (changedPaths.Count == 0)
             {
-                return ReverseDependencyTestSelection.Unavailable with { CacheReceipt = receipt };
+                return ReverseDependencyTestSelection.Unavailable with { CacheReceipt = receipt, Headroom = headroom };
             }
 
             var declarationsByName = indexedFiles.Values
@@ -209,23 +218,28 @@ internal static class ReverseDependencyTestImpactReader
                 .Distinct()
                 .OrderBy(symbol => symbol.Name, StringComparer.Ordinal)
                 .ToArray();
+            headroom = headroom with { LargestFrontierSymbolCount = frontier.Length };
             if (frontier.Length == 0)
             {
                 return ReverseDependencyTestSelection.Unreadable(
                     "Changed source declared no top-level type for reverse-dependency selection.",
-                    receipt);
+                    receipt, headroom);
             }
 
             var seenPaths = changedPaths.ToHashSet(StringComparer.OrdinalIgnoreCase);
             var selectedTestClasses = new SortedSet<string>(StringComparer.Ordinal);
             for (var hop = 1; hop <= MaximumDependencyHops; hop++)
             {
-                if (frontier.Length > MaximumFrontierSymbols)
+                headroom = headroom with
+                {
+                    LargestFrontierSymbolCount = Math.Max(headroom.LargestFrontierSymbolCount!.Value, frontier.Length)
+                };
+                if (frontier.Length > headroom.FrontierSymbolCap)
                 {
                     return ReverseDependencyTestSelection.Abandoned(
                         ReverseDependencyDegradationKind.FrontierSymbolBound,
-                        $"Reverse-dependency hop {hop} exceeded the {MaximumFrontierSymbols}-symbol frontier bound.",
-                        receipt);
+                        $"Reverse-dependency hop {hop} exceeded the {headroom.FrontierSymbolCap}-symbol frontier bound.",
+                        receipt, headroom);
                 }
 
                 foreach (var symbol in frontier.Select(item => item.Name).Distinct(StringComparer.Ordinal))
@@ -237,7 +251,7 @@ internal static class ReverseDependencyTestImpactReader
                         return ReverseDependencyTestSelection.Abandoned(
                             ReverseDependencyDegradationKind.AmbiguousDeclaration,
                             $"Reverse-dependency symbol '{symbol}' has ambiguous non-partial declarations.",
-                            receipt);
+                            receipt, headroom);
                     }
                 }
 
@@ -274,12 +288,12 @@ internal static class ReverseDependencyTestImpactReader
                                 declaration.ReferencedIdentifiers.Overlaps(allReferencingSymbols))
                             .Select(declaration => declaration.Name));
 
-                    if (selectedTestClasses.Count > MaximumSelectedTestClasses)
+                    if (selectedTestClasses.Count > headroom.SelectedTestClassCap)
                     {
                         return ReverseDependencyTestSelection.Abandoned(
                             ReverseDependencyDegradationKind.SelectedTestClassBound,
-                            $"Reverse-dependency selection exceeded the {MaximumSelectedTestClasses}-test-class bound.",
-                            receipt);
+                            $"Reverse-dependency selection exceeded the {headroom.SelectedTestClassCap}-test-class bound.",
+                            receipt, headroom with { SelectedTestClassCount = selectedTestClasses.Count });
                     }
                 }
 
@@ -314,37 +328,38 @@ internal static class ReverseDependencyTestImpactReader
                 }
             }
 
-            return ReverseDependencyTestSelection.Resolved(selectedTestClasses, receipt);
+            return ReverseDependencyTestSelection.Resolved(selectedTestClasses, receipt,
+                headroom with { SelectedTestClassCount = selectedTestClasses.Count });
         }
         catch (IOException exception)
         {
             return ReverseDependencyTestSelection.Unreadable(
-                $"Reverse-dependency source I/O failed: {exception.Message}");
+                $"Reverse-dependency source I/O failed: {exception.Message}", headroom: headroom);
         }
         catch (UnauthorizedAccessException exception)
         {
             return ReverseDependencyTestSelection.Unreadable(
-                $"Reverse-dependency source access failed: {exception.Message}");
+                $"Reverse-dependency source access failed: {exception.Message}", headroom: headroom);
         }
         catch (System.Xml.XmlException exception)
         {
             return ReverseDependencyTestSelection.Unreadable(
-                $"Reverse-dependency project graph is malformed: {exception.Message}");
+                $"Reverse-dependency project graph is malformed: {exception.Message}", headroom: headroom);
         }
         catch (ArgumentException exception)
         {
             return ReverseDependencyTestSelection.Unreadable(
-                $"Reverse-dependency path evidence is malformed: {exception.Message}");
+                $"Reverse-dependency path evidence is malformed: {exception.Message}", headroom: headroom);
         }
         catch (NotSupportedException exception)
         {
             return ReverseDependencyTestSelection.Unreadable(
-                $"Reverse-dependency path evidence is unsupported: {exception.Message}");
+                $"Reverse-dependency path evidence is unsupported: {exception.Message}", headroom: headroom);
         }
         catch (Exception exception)
         {
             return ReverseDependencyTestSelection.Unreadable(
-                $"Reverse-dependency evidence failed: {exception.Message}");
+                $"Reverse-dependency evidence failed: {exception.Message}", headroom: headroom);
         }
     }
 

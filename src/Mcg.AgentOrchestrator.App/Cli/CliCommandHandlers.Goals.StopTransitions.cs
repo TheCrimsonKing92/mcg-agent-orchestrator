@@ -40,9 +40,10 @@ internal static partial class CliCommandHandlers
     }
 
     internal static void RenderGoalParkStopAliasOutcome(GoalParkCommand command,
-        GoalLifecycleTransitionOutcome outcome, int cancelledCount, OrchestratorWorkspace workspace)
+        GoalLifecycleTransitionOutcome outcome, int cancelledCount, OrchestratorWorkspace workspace,
+        Func<int>? deliverAttentionResolution = null)
     {
-        var resolved = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory)
+        var resolved = deliverAttentionResolution is not null ? deliverAttentionResolution() : CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory)
             .ResolveOpenForGoalAsync(outcome.GoalId.Value, $"Goal parked: {command.Reason}").GetAwaiter().GetResult();
         Console.WriteLine($"Goal parked {outcome.GoalId.Value[..8]}.");
         Console.WriteLine($"Cancelled running dispatches: {cancelledCount}");
@@ -83,11 +84,20 @@ internal static partial class CliCommandHandlers
 
     internal static void RenderGoalAbandonStopAliasOutcome(GoalLifecycleTransitionOutcome outcome,
         AgentOrchestratorKernel committed, OrchestratorWorkspace workspace, string reason,
-        GoalWorktreeCleanupHooks hooks)
+        GoalWorktreeCleanupHooks hooks,
+        Action? deliverCommittedLifecycleEvent = null,
+        Func<GoalAbandonPlan?>? deliverAfterCommitEffect = null)
     {
         if (outcome.CommittedTimelineEvent is not null)
-            AppendCommittedLifecycleEvent(outcome, workspace, GoalStatus.Cancelled);
-        var plan = GoalAbandonPlanner.CompleteAfterCommit(committed, outcome.Goal!, workspace, reason, hooks);
+        {
+            if (deliverCommittedLifecycleEvent is null)
+                AppendCommittedLifecycleEvent(outcome, workspace, GoalStatus.Cancelled);
+            else
+                deliverCommittedLifecycleEvent();
+        }
+        var plan = deliverAfterCommitEffect is null
+            ? GoalAbandonPlanner.CompleteAfterCommit(committed, outcome.Goal!, workspace, reason, hooks)
+            : deliverAfterCommitEffect() ?? GoalAbandonPlanner.Build(committed, outcome.Goal!, workspace, reason, hooks, dryRun: false);
         ConsoleViews.PrintGoalAbandonPlan(plan);
     }
 

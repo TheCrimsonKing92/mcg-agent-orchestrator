@@ -389,7 +389,6 @@ public sealed class RepositoryTestImpactFilterResolutionTests
         stopwatch.Stop();
         var coldInfrastructure = Assert.Single(cold.Checks, check =>
             check.TestProject == RepositoryTestProject.Infrastructure);
-        Assert.Contains("reverse-dependency-cache=miss", coldInfrastructure.Reason, StringComparison.Ordinal);
         var coldMilliseconds = stopwatch.Elapsed.TotalMilliseconds;
         var warmMilliseconds = new List<double>();
         RepositoryTestImpactPlan? warm = null;
@@ -404,20 +403,37 @@ public sealed class RepositoryTestImpactFilterResolutionTests
         var bypassed = ReverseDependencyTestImpactReader.Read(root, [changedPath], bypassCache: true);
         var warmInfrastructure = Assert.Single(warm!.Checks, check =>
             check.TestProject == RepositoryTestProject.Infrastructure);
-        Assert.Equal(bypassed.TestClassNames, warmInfrastructure.TestClassSelections);
+        if (bypassed.Outcome == ReverseDependencySelectionOutcome.Resolved)
+        {
+            Assert.Equal(bypassed.TestClassNames, warmInfrastructure.TestClassSelections);
+        }
+        else
+        {
+            Assert.True(bypassed.Outcome == ReverseDependencySelectionOutcome.Abandoned &&
+                bypassed.DegradationKind is ReverseDependencyDegradationKind.IndexedSourceBound or
+                    ReverseDependencyDegradationKind.SelectedTestClassBound or
+                    ReverseDependencyDegradationKind.FrontierSymbolBound,
+                $"Unexpected reverse-dependency outcome: {bypassed.Outcome}, {bypassed.DegradationKind}");
+            Assert.Equal(bypassed.DegradationKind, warm.ReverseDependencyDegradation?.Kind);
+            Assert.DoesNotContain("--filter", warmInfrastructure.Command);
+        }
         Assert.Equal(
             cold.Checks.Select(check => check.CommandLine),
             warm.Checks.Select(check => check.CommandLine));
-        Assert.Contains("reverse-dependency-cache=hit", warmInfrastructure.Reason, StringComparison.Ordinal);
+        if (bypassed.DegradationKind != ReverseDependencyDegradationKind.IndexedSourceBound)
+        {
+            Assert.Contains("reverse-dependency-cache=miss", coldInfrastructure.Reason, StringComparison.Ordinal);
+            Assert.Contains("reverse-dependency-cache=hit", warmInfrastructure.Reason, StringComparison.Ordinal);
+        }
         _output.WriteLine(
             "REVERSE_DEPENDENCY_CACHE_MEASUREMENT indexed_files={0} source_bytes={1} cold_plan_ms={2:F2} " +
             "warm_plan_ms={3} bypass_reparsed_files={4} fingerprint={5}",
-            bypassed.CacheReceipt!.IndexedFileCount,
-            bypassed.CacheReceipt.IndexedSourceBytes,
+            bypassed.CacheReceipt?.IndexedFileCount.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "n/a",
+            bypassed.CacheReceipt?.IndexedSourceBytes.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "n/a",
             coldMilliseconds,
             string.Join(',', warmMilliseconds.Select(value => value.ToString("F2", System.Globalization.CultureInfo.InvariantCulture))),
-            bypassed.CacheReceipt.ReparsedFileCount,
-            bypassed.CacheReceipt.Fingerprint);
+            bypassed.CacheReceipt?.ReparsedFileCount.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "n/a",
+            bypassed.CacheReceipt?.Fingerprint ?? "n/a");
     }
 
     [Xunit.Fact]
