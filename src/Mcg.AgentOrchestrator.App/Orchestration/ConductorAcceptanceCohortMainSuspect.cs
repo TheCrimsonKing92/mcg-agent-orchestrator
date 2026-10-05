@@ -24,26 +24,44 @@ internal static class ConductorAcceptanceCohortMainSuspect
         if (first.Count == 0 || !first.ToHashSet(StringComparer.Ordinal).SetEquals(second))
             return null;
 
-        var changedPaths = bindings.SelectMany(member => member.LandingPaths)
+        var isUntouched = CreateUntouchedSourcePredicate(bindings.SelectMany(member => member.LandingPaths),
+            workspacePath, resolveSources);
+        foreach (var test in first)
+            if (!isUntouched(test)) return null;
+        return first.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+    }
+
+    internal static IReadOnlyList<string> KeepUntouched(IEnumerable<string> tests,
+        IEnumerable<string> candidateChangedPaths, string workspacePath,
+        Func<string, IReadOnlyList<string>> resolveSources)
+        => tests.Where(CreateUntouchedSourcePredicate(candidateChangedPaths, workspacePath, resolveSources))
+            .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+
+    private static Func<string, bool> CreateUntouchedSourcePredicate(
+        IEnumerable<string> candidateChangedPaths, string workspacePath,
+        Func<string, IReadOnlyList<string>> resolveSources)
+    {
+        var changedPaths = candidateChangedPaths
             .Select(path => NormalizePath(workspacePath, path)).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var sourcesByClass = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
-        foreach (var test in first)
+        return test =>
         {
             var className = AcceptanceTestSourceResolver.ExtractClassName(test);
-            if (string.IsNullOrWhiteSpace(className)) return null;
+            if (string.IsNullOrWhiteSpace(className)) return false;
             if (!sourcesByClass.TryGetValue(className, out var sources))
             {
                 sources = resolveSources(test);
                 sourcesByClass.Add(className, sources);
             }
-            if (sources.Count == 0 || sources.Any(path => changedPaths.Contains(NormalizePath(workspacePath, path))))
-                return null;
-        }
-        return first.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+            return sources.Count > 0 && !sources.Any(path => changedPaths.Contains(NormalizePath(workspacePath, path)));
+        };
     }
 
     internal static string EventId(string sha, string cohortId) =>
         $"post-landing-canary:{sha}:{FailureToken}:{cohortId}";
+
+    internal static string SoloEventId(string sha, string fingerprint) =>
+        $"post-landing-canary:{sha}:{FailureToken}:solo:{fingerprint}";
 
     internal static string FormatTests(IReadOnlyList<string> tests) =>
         string.Join(",", tests.Take(10).Select(test =>

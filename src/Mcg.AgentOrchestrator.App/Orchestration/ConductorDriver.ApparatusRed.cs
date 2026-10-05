@@ -82,6 +82,8 @@ internal sealed partial class ConductorDriver
             $"Acceptance gate failures are all outside this goal's attributable scope: {excludedSummary}. " +
             "The candidate remains held at Verified for operator/main-red routing; no worker was reopened.";
         RecordEscalation(goal, GoalLifecycleState.Verified, reason);
+        TryRecordSoloMainSuspect(goal, goalPrefix, acceptance, retryDisposition.ExcludedFailures,
+            branchHeadSha, mainHeadSha, apparatusRedReading?.ChangedPaths);
         return MakeResult(
             goal.Id.Value,
             goalPrefix,
