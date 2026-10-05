@@ -14,7 +14,7 @@ public sealed class BoardFillPreflightChecksTests
     [InlineData("Inspect .git/config.", "preflight:brief-lint-blocking", "git-directory-reference")]
     [InlineData("Edit SKILL.md.", "preflight:brief-lint-blocking", "skill-definition-file")]
     [InlineData("Implement authentication.", "preflight:brief-lint-blocking", "readiness-high-risk-word")]
-    [InlineData("A sentence ## Next heading", "preflight:inline-heading-split", "")]
+    [InlineData("A sentence## Next heading", "preflight:inline-heading-split", "##")]
     [InlineData("Remove old tests.", "preflight:missing-test-removal-bullet", "")]
     public void Each_lint_condition_fails_only_its_board_fill_check(string text, string name, string kind)
     {
@@ -43,6 +43,7 @@ public sealed class BoardFillPreflightChecksTests
     }
 
     [Theory]
+    [InlineData("A sentence ## Next heading")]
     [InlineData("the scratch artifacts bin and obj folders")]
     [InlineData("src/Robin/objective.cs")]
     [InlineData("src/binary/artifact.cs")]
