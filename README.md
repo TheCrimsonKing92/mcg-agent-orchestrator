@@ -61,7 +61,7 @@ Start with the [operator runbook](docs/operator-runbook.md) for setup, operation
 
 ## Projects
 
-The current project inventory is derived from `src/**/*.csproj` (5 production projects) and
+The current project inventory is derived from `src/**/*.csproj` (6 production projects) and
 `tests/**/*.csproj` (9 test/support projects). See the
 [architecture map](docs/architecture.md) for the dependency graph, state ownership, current seams,
 and the separately labelled modular-monolith target.
