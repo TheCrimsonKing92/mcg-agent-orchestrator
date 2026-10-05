@@ -161,6 +161,17 @@ public sealed class GoalLifecycleEventWriter : IGoalLifecycleEventWriter
             obj["goalBranch"] = goalBranch;
         });
 
+    public void AppendGoalLanded(GoalId goalId, string integrationBranch, string goalBranch, LandingAdmissionReceipt receipt) =>
+        Append(goalId, "GoalLanded", obj =>
+        {
+            obj["integrationBranch"] = integrationBranch;
+            obj["goalBranch"] = goalBranch;
+            obj["admissionRule"] = receipt.AdmissionRule;
+            obj["admissionCandidateSha"] = receipt.CandidateSha;
+            obj["landingDenylistSource"] = receipt.DenylistSource;
+            obj["landingDenylistMatches"] = new JsonArray(receipt.DenylistMatches.Select(match => JsonValue.Create(match)).ToArray<JsonNode?>());
+        });
+
     public void AppendGoalLandedFromAncestry(
         GoalId goalId,
         string goalBranch,
