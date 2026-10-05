@@ -59,6 +59,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsDefaultMainBaselin
         Assert.Single(Directory.GetFiles(fixture.CacheRoot, "*.json"));
         fixture.AddMainTests("AdditionalTests.cs", "Sample.Tests.Added", "Sample.Tests.AlsoAdded");
         fixture.CommitMain();
+        fixture.IntegrateMainIntoCandidate();
         fixture.Calls.Clear();
 
         var second = await fixture.Run();
@@ -69,6 +70,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsDefaultMainBaselin
         Assert.False(second.Check.Passed);
         Assert.Equal(AcceptanceFailureClassifications.StructuralCoverageFailed, second.Check.FailureClassification);
         Assert.Contains("cross-generation-count:candidate=1,minimum=3,main=3,deleted=0", second.Check.ResultSummary);
+        Assert.Contains("disposition=coverage-shortfall", second.Check.ResultSummary);
     }
 
     [Xunit.Theory]
@@ -211,6 +213,18 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsDefaultMainBaselin
             Git("add", "-A");
             Git("-c", "user.name=Default cache fixture", "-c", "user.email=cache-fixture@example.invalid",
                 "-c", "commit.gpgsign=false", "-c", "core.hooksPath=NUL", "commit", "-m", "fixture main content");
+        }
+
+        internal void IntegrateMainIntoCandidate()
+        {
+            // Pin the new main generation so the simulated candidate discovery shortfall
+            // cannot be reclassified as a stale candidate against its older merge base.
+            var merge = GitCli.Run(CandidateRoot, ["merge", "--ff-only", "main"]);
+            Assert.True(merge.Succeeded, merge.Error);
+            var contained = AcceptanceGitTextResolver.Resolve(CandidateRoot, ["merge-base", "HEAD", "main"]);
+            var observed = AcceptanceGitTextResolver.Resolve(CandidateRoot, ["rev-parse", "main"]);
+            Assert.False(string.IsNullOrWhiteSpace(observed), "Fixture main commit must resolve.");
+            Assert.Equal(observed, contained);
         }
 
         private void Git(params string[] args)
