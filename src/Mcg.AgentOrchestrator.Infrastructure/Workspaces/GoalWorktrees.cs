@@ -123,7 +123,7 @@ public sealed record GoalWorktreeCleanupHooks
         };
     }
 
-    public Action<string, int> BuildServerShutdown { get; init; } = GoalWorktrees.DefaultBuildServerShutdown;
+    public Action<string, int> BuildServerShutdown { get; init; } = GoalWorktrees.NoOpBuildServerShutdown;
     // Null preserves callers that configure the ambient root after constructing hook overrides.
     // Cleanup resolves that default once per artifact sweep, never separately for lookup and delete.
     public DotnetBuildStorageRoot? BuildStorageRoot { get; init; }
@@ -260,6 +260,5 @@ public static partial class GoalWorktrees
     private const int DeleteRetryAttempts = 6;
     private static readonly string[] LockHolderCandidates =
         ["dotnet", "VBCSCompiler", "MSBuild", "claude", "codex", "node", "powershell", "pwsh"];
-    private static readonly TimeSpan BuildServerShutdownTimeout = TimeSpan.FromSeconds(10);
 
 }

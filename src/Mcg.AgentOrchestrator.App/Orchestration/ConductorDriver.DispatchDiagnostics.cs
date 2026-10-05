@@ -1,6 +1,5 @@
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
-using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -108,60 +107,7 @@ internal sealed partial class ConductorDriver
         }
     }
 
-    internal static string RunBuildServerShutdown(string workingDirectory, TimeSpan timeout)
-    {
-        try
-        {
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = "dotnet",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                WorkingDirectory = workingDirectory
-            };
-            startInfo.ArgumentList.Add("build-server");
-            startInfo.ArgumentList.Add("shutdown");
-            using var process = Process.Start(startInfo);
-            if (process is null)
-            {
-                return "error";
-            }
-
-            process.OutputDataReceived += static (_, _) => { };
-            process.ErrorDataReceived += static (_, _) => { };
-            process.BeginOutputReadLine();
-            process.BeginErrorReadLine();
-
-            var timeoutMilliseconds = (int)Math.Clamp(
-                Math.Ceiling(timeout.TotalMilliseconds),
-                1,
-                int.MaxValue);
-            if (process.WaitForExit(timeoutMilliseconds))
-            {
-                return process.ExitCode == 0
-                    ? "ran exit=0"
-                    : $"error exit={process.ExitCode}";
-            }
-
-            try
-            {
-                process.Kill(entireProcessTree: true);
-                process.WaitForExit(1_000);
-            }
-            catch
-            {
-                // The process may have exited between the timed wait and tree kill.
-            }
-
-            return "timeout";
-        }
-        catch
-        {
-            return "error";
-        }
-    }
+    private static string RunRetryOnlyRemediation(TimeSpan timeout) => "retry-only";
 
     private static void AppendGateProgressEvent(
         ConductEventLogWriter writer,

@@ -41,7 +41,7 @@ public sealed class ConductorDriverPartialLayoutTests
             ("EmitGoalPhaseTiming", 1),
             ("RunDispatchRemediation", 1),
             ("RunBoundedBuildServerShutdown", 1),
-            ("RunBuildServerShutdown", 1),
+            ("RunRetryOnlyRemediation", 1),
             ("AppendGateProgressEvent", 1),
             ("AppendCohortGateProgressEvents", 1),
             ("FormatGateProgressConductEvent", 1),

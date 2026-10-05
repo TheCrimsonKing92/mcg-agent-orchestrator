@@ -1054,34 +1054,8 @@ public static partial class GoalWorktrees
     }
 
 
-    internal static void DefaultBuildServerShutdown(string worktreePath, int timeoutMilliseconds)
+    internal static void NoOpBuildServerShutdown(string worktreePath, int timeoutMilliseconds)
     {
-        try
-        {
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = "dotnet",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                WorkingDirectory = worktreePath
-            };
-            startInfo.ArgumentList.Add("build-server");
-            startInfo.ArgumentList.Add("shutdown");
-
-            using var process = Process.Start(startInfo);
-            if (process is null) return;
-            var boundedTimeout = Math.Min(timeoutMilliseconds, (int)BuildServerShutdownTimeout.TotalMilliseconds);
-            if (!process.WaitForExit(boundedTimeout))
-            {
-                process.Kill(entireProcessTree: true);
-            }
-        }
-        catch
-        {
-            // Best-effort; ignore all failures so removal always proceeds.
-        }
     }
 
     internal static List<WorktreeLockHolder> FindLockHolders(
