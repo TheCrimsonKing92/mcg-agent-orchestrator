@@ -160,7 +160,11 @@ public static class AgentOutputDirectives
             }
 
             var evidenceRequest = evidenceRequests[0];
-            return ParsePlannerEvidenceRequest(evidenceRequest["PLANNER_EVIDENCE_REQUEST:".Length..].Trim());
+            var parsed = ParsePlannerEvidenceRequest(evidenceRequest["PLANNER_EVIDENCE_REQUEST:".Length..].Trim());
+            if (parsed.Directive is not null || parsed.IsMalformed)
+            {
+                return parsed;
+            }
         }
 
         foreach (var line in lines)
@@ -181,6 +185,12 @@ public static class AgentOutputDirectives
 
     private static HumanInputDirectiveParseResult ParsePlannerEvidenceRequest(string json)
     {
+        if (json.StartsWith("none", StringComparison.OrdinalIgnoreCase) &&
+            (json.Length == 4 || char.IsWhiteSpace(json[4]) || char.IsPunctuation(json[4])))
+        {
+            return new HumanInputDirectiveParseResult(null, null);
+        }
+
         try
         {
             using var document = JsonDocument.Parse(json);

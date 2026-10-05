@@ -892,6 +892,11 @@ internal static partial class PlannerOutputContract
                 continue;
             }
 
+            if (suggestion is null && IsRuntimeJsonArtifactMention(citedPath))
+            {
+                continue;
+            }
+
             var suggestionText = suggestion is null
                 ? string.Empty
                 : $" Did you mean `{suggestion}`?";
@@ -1120,8 +1125,39 @@ internal static partial class PlannerOutputContract
             : null;
     }
 
-    private static bool ContainsProsePathCharacters(string path) =>
-        path.Any(character => char.IsWhiteSpace(character) || character is '<' or '>');
+    private static bool ContainsProsePathCharacters(string path)
+    {
+        for (var index = 0; index < path.Length; index++)
+        {
+            var character = path[index];
+            if (char.IsWhiteSpace(character) || character is '<' or '>' ||
+                (character == '$' && index + 1 < path.Length && char.IsAsciiLetter(path[index + 1])))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsRuntimeJsonArtifactMention(string path)
+    {
+        if (!path.EndsWith(".json", StringComparison.Ordinal) || path.IndexOfAny(['*', '?']) >= 0)
+        {
+            return false;
+        }
+
+        var normalized = path.Replace('\\', '/');
+        if (!normalized.Contains('/'))
+        {
+            return true;
+        }
+
+        var firstSegmentStart = normalized.StartsWith('/') ? 1 : 0;
+        var separator = normalized.IndexOf('/', firstSegmentStart);
+        return separator >= 0 && normalized[firstSegmentStart..separator]
+            .Equals(".orchestrator", StringComparison.OrdinalIgnoreCase);
+    }
 
     private static bool HasRequiredSectionEvidence(string label, string body)
     {
@@ -1490,7 +1526,7 @@ internal static partial class PlannerOutputContract
     [GeneratedRegex(@"`(?<citation>[^`\r\n]+)`")]
     private static partial Regex BacktickedCitation();
 
-    [GeneratedRegex(@"(?i)^(?<path>.+?\.(?:cs|csproj|ps1|md|json|yml|yaml|props|targets|txt))(?:(?::\d+(?:-\d+)?)|(?:#L\d+(?:-L?\d+)?)|(?:::.+))?$")]
+    [GeneratedRegex(@"(?i)^(?<path>.+?\.(?-i:cs|csproj|ps1|md|json|yml|yaml|props|targets|txt))(?:(?::\d+(?:-\d+)?)|(?:#L\d+(?:-L?\d+)?)|(?:::.+))?$")]
     private static partial Regex CitedFilePath();
 
     [GeneratedRegex(@"(?m)^[ \t]{0,3}#{1,6}[ \t]+")]
