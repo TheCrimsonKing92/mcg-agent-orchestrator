@@ -53,14 +53,22 @@ internal sealed partial class ConductorDriver
         var classified = ConductorAcceptanceCohortFailingTestAttribution.Classify(cohortFailingTests, first, second);
         var workspace = _cohortWorkspace
             ?? throw new InvalidOperationException("Production acceptance cohort workspace is unavailable.");
+        var identicalFailure = ConductorAcceptanceCohortIdenticalFailure.Decide(identity.Value,
+            bindings.Select(member => member.GoalId).ToArray(), identity.ObservedMainRevision,
+            cohortFailingTests, classified.AttributedMembers,
+            store.ReadFailedCohortEvidence(identity.ObservedMainRevision, identity.Value));
         var sharedTests = ConductorAcceptanceCohortMainSuspect.TryDecide(classified, bindings,
             workspace.ExecutionDirectory,
             test => AcceptanceTestSourceResolver.ResolveSourcePaths(workspace.ExecutionDirectory, null, test));
+        sharedTests = identicalFailure?.Tests ?? sharedTests;
         if (sharedTests is not null)
         {
             var sha = identity.ObservedMainRevision;
             var tests = ConductorAcceptanceCohortMainSuspect.FormatTests(sharedTests);
             var detail = $"main-suspect cohort={identity.Value} shared-failing-tests={sharedTests.Count} tests={tests}";
+            var reasonDetail = identicalFailure is null ? null :
+                $"{ConductorAcceptanceCohortIdenticalFailure.ReasonDetail} earlier={string.Join(",", identicalFailure.Withheld.Concat(identicalFailure.Retractions).Select(item => item.EarlierCohortId).Distinct(StringComparer.Ordinal))} later={identity.Value}";
+            if (reasonDetail is not null) detail += $" reason-detail={reasonDetail}";
             var now = _utcNow();
             var events = new PostLandingCanaryEventStore(
                 new SqliteRunEventStore(workspace.RunEventStorePath), workspace.RunEventStorePath);
@@ -69,13 +77,25 @@ internal sealed partial class ConductorDriver
                     sha, [], ConductorAcceptanceCohortMainSuspect.FailureToken, sharedTests.Count, detail, null, now,
                     SharedFailingTests: sharedTests),
                 ConductorAcceptanceCohortMainSuspect.EventId(sha, identity.Value), now).GetAwaiter().GetResult().Appended;
+            if (identicalFailure is not null)
+                foreach (var retraction in identicalFailure.Retractions)
+                {
+                    var recorded = store.RecordAttributionRetraction(retraction.EarlierCohortId,
+                        retraction.Member.GoalId, retraction.Member.CandidateRevision, identity.Value, sharedTests.Count);
+                    if (!writer.AppendRequired("cohort-attribution-retracted", recorded.GoalId.Value,
+                        ConductorAcceptanceCohortIdenticalFailure.FormatRetractionEvent(recorded), now,
+                        ConductorAcceptanceCohortIdenticalFailure.RetractionEventId(recorded)))
+                        throw new IOException("Cohort attribution retraction operator event could not be persisted.");
+                }
             // Persistence failure must fault the gate before attribution is saved, without a process-local hold.
             // Record the circuit first: a crash before attribution persistence can safely replay the append.
             var receipt = store.SaveAttribution(identity.Value, classified.Outcome, [first, second], pairFingerprint,
-                null, [], classified.UnrelatedFailures, ConductorAcceptanceCohortMainSuspect.FailureToken, suppressPair: false);
+                null, [], classified.UnrelatedFailures, ConductorAcceptanceCohortMainSuspect.FailureToken, suppressPair: false,
+                cohortFailingTests: cohortFailingTests, attributionReasonDetail: reasonDetail);
             if (appended)
                 TryAppendGateProgressEvent(writer, goalId: null,
-                    $"CANARY_GATE sha={sha} result=failed reason=main-suspect cohort={identity.Value} tests={tests}",
+                    $"CANARY_GATE sha={sha} result=failed reason=main-suspect cohort={identity.Value} tests={tests}" +
+                    (reasonDetail is null ? string.Empty : $" reason-detail={reasonDetail}"),
                     eventKind: "canary-gate");
             return receipt;
         }
@@ -87,7 +107,8 @@ internal sealed partial class ConductorDriver
             _ => (GoalId?)null
         };
         return store.SaveAttribution(identity.Value, attribution, [first, second], pairFingerprint,
-            innocentGoalId, classified.AttributedMembers, classified.UnrelatedFailures, source);
+            innocentGoalId, classified.AttributedMembers, classified.UnrelatedFailures, source,
+            cohortFailingTests: cohortFailingTests);
     }
 
     private static ConductorCohortFocusedPassResult RunFocusedSafely(IConductorCohortPartitionRunner runner,

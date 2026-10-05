@@ -19,6 +19,7 @@ internal static class ConductEventOperatorClassifier
 
         return eventKind switch
         {
+            "cohort-attribution-retracted" when StartsWithToken("COHORT_ATTRIBUTION_RETRACTED") => Decision,
             "host-health" when StartsWithToken("HOST_HEALTH_DEGRADED") => Decision,
             "host-health" when StartsWithToken("HOST_HEALTH_RECOVERED") => Outcome,
             "state-log-divergence" when StartsWithToken("STATE_LOG_DIVERGENCE") =>
