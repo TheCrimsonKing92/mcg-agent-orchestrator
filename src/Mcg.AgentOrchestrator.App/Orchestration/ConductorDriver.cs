@@ -555,7 +555,7 @@ internal sealed partial class ConductorDriver
         };
 
         _buildServerShutdownTimeout = DefaultBuildServerShutdownTimeout;
-        _buildServerShutdown = timeout => RunBuildServerShutdown(dir, timeout);
+        _buildServerShutdown = RunRetryOnlyRemediation;
 
         _runAcceptanceVerification = (goal, stableSlotIndex, stableSlotLease, cancellationToken, attemptOptions) =>
         {
@@ -1173,9 +1173,9 @@ internal sealed partial class ConductorDriver
         _workerBuildRecoveryRetry = workerBuildRecoveryRetry;
         _workerBuildArtifactsPath = workerBuildArtifactsPath ?? (goalId => DotnetBuildEnvironmentManager.GoalArtifactsPath(goalId));
         _buildServerShutdownTimeout = buildServerShutdownTimeout ?? DefaultBuildServerShutdownTimeout;
-        _buildServerShutdown = timeout => RunBoundedBuildServerShutdown(
-            buildServerShutdown ?? (() => { }),
-            timeout);
+        _buildServerShutdown = buildServerShutdown is null
+            ? RunRetryOnlyRemediation
+            : timeout => RunBoundedBuildServerShutdown(buildServerShutdown, timeout);
         _runAcceptanceVerification = runAcceptanceVerificationWithLease is not null
             ? ((goal, slot, lease, token, _) => runAcceptanceVerificationWithLease(goal, slot, lease, token))
             : (runAcceptanceVerificationWithSlot is not null
