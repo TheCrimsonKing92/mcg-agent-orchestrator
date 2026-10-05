@@ -19,6 +19,8 @@ internal static class ConductEventOperatorClassifier
 
         return eventKind switch
         {
+            "rebase-automerge" when StartsWithToken("REBASE_CONFLICT_AUTOMERGE") && HasToken("result=merged") && !HasToken("result=refused") => Outcome,
+            "rebase-automerge" when StartsWithToken("REBASE_CONFLICT_AUTOMERGE") && HasToken("result=refused") && !HasToken("result=merged") => Decision,
             "host-health" when StartsWithToken("HOST_HEALTH_DEGRADED") => Decision,
             "host-health" when StartsWithToken("HOST_HEALTH_RECOVERED") => Outcome,
             "state-log-divergence" when StartsWithToken("STATE_LOG_DIVERGENCE") =>

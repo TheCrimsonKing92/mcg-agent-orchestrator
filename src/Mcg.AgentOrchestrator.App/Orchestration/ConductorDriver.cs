@@ -864,7 +864,7 @@ internal sealed partial class ConductorDriver
         _integrateMainBeforeReadOnlyDispatch = (goal, role) =>
             IntegrateMainBeforeReadOnlyDispatch(dir, goal, role);
         _recordPreDispatchIntegrationReceipt = new PreDispatchIntegrationReceiptRecorder(kernel).Record;
-        _rebaseOntoMain = goal => GoalWorktrees.TryRebaseOntoMain(dir, goal.Id);
+        _rebaseOntoMain = goal => GoalWorktrees.TryRebaseOntoMain(dir, goal.Id, CreateAdditiveConflictMergeOptions(kernel, goal, workspace.ConductEventsLogPath));
         _recheckPreLandingRebaseConflict = goal =>
         {
             var worktreePath = GoalWorktrees.TryResolve(dir, goal.Id);
