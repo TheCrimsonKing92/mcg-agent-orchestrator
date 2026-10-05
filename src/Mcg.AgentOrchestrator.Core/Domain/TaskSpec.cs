@@ -99,6 +99,21 @@ public sealed partial class TaskSpec
         AssignedAgentId = agentId;
         Status = WorkTaskStatus.Assigned;
         WasCancelledByConductor = false;
+        if (LastVerification?.Succeeded is true)
+        {
+            ClearLatestVerification();
+            _passingVerificationClearedOnAssignment = true;
+        }
+    }
+
+    // Transient notification for the kernel timeline; verification history stays durable.
+    private bool _passingVerificationClearedOnAssignment;
+
+    internal bool ConsumePassingVerificationClearedOnAssignment()
+    {
+        var cleared = _passingVerificationClearedOnAssignment;
+        _passingVerificationClearedOnAssignment = false;
+        return cleared;
     }
 
     internal void AdvanceConductorRoutingRevision()
