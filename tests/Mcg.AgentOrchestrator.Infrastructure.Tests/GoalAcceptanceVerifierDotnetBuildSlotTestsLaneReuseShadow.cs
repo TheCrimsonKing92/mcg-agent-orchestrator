@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Diagnostics;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
@@ -258,22 +257,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsLaneReuseShadow : 
 
     private static string Git(string root, params string[] args)
     {
-        var startInfo = new ProcessStartInfo("git")
-        {
-            WorkingDirectory = root, UseShellExecute = false, CreateNoWindow = true,
-            RedirectStandardOutput = true, RedirectStandardError = true
-        };
-        foreach (var arg in args) startInfo.ArgumentList.Add(arg);
-        using var process = Process.Start(startInfo)!;
-        var stdout = process.StandardOutput.ReadToEndAsync();
-        var stderr = process.StandardError.ReadToEndAsync();
-        if (!process.WaitForExit(30_000))
-        {
-            process.Kill(entireProcessTree: true);
-            throw new TimeoutException($"Fixture git {args[0]} did not exit.");
-        }
-        Assert.True(process.ExitCode == 0, stderr.GetAwaiter().GetResult());
-        return stdout.GetAwaiter().GetResult().Trim();
+        var result = InfrastructureTestSupport.RunGitProbe(root, args);
+        Assert.True(result.Succeeded, result.ToString());
+        return result.StandardOutput.Trim();
     }
 
     private static void WriteTrx(string[] args, string className, bool passed)
