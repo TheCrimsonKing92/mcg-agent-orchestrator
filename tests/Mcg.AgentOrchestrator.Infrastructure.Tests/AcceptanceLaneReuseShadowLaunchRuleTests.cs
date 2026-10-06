@@ -259,6 +259,85 @@ public sealed class AcceptanceLaneReuseShadowLaunchRuleTests
         Assert.All(rule.Provenance.LaunchTargets, site => Assert.Equal(helperPath, site.SourcePath));
     }
 
+    [Theory]
+    [InlineData("items.Select(Helpers.ChainedLaunch).ToArray();")]
+    [InlineData("Task.Run(Helpers.ChainedLaunch).Wait();")]
+    [InlineData("new Thread(Helpers.ChainedLaunch).Start();")]
+    [InlineData("items.Select(ChainedLaunch).ToArray();")]
+    [InlineData("Task.Run(ChainedLaunch).Wait();")]
+    [InlineData("new Thread(ChainedLaunch).Start();")]
+    public void ChainedMethodGroup_ReachesUnresolvedLaunch(string body)
+    {
+        var text = $"public class PlainTests {{ [Fact] public void Example() {{ {body} }} }}";
+        const string helperPath = "tests/Mcg.AgentOrchestrator.TestSupport/Helpers.cs";
+        const string helpers = """
+            public class Helpers {
+                public static void ChainedLaunch() {
+                    Process.Start(executable);
+                }
+            }
+            """;
+        var rule = Classify(text, extraFiles: [(helperPath, helpers)]);
+        AssertDecision(rule, "must-run", "launch-target-unresolved:PlainTests");
+        var site = Assert.Single(rule.Provenance.UnresolvedContracts);
+        Assert.Equal(site, Assert.Single(rule.Provenance.LaunchTargets));
+        Assert.Equal("Helpers", site.MemberClass);
+        Assert.Equal(helperPath, site.SourcePath);
+        Assert.Equal(3, site.Line);
+        Assert.Equal("Process.Start", site.SinkName);
+        Assert.Equal("executable", site.Target);
+    }
+
+    [Fact]
+    public void ConditionalHelperCall_ReachesUnresolvedLaunch()
+    {
+        const string text = """
+            public class PlainTests {
+                [Fact] public void Example() {
+                    Helpers helper = null;
+                    helper?.ConditionalLaunch();
+                }
+            }
+            """;
+        const string helperPath = "tests/Mcg.AgentOrchestrator.TestSupport/Helpers.cs";
+        const string helpers = """
+            public class Helpers {
+                public void ConditionalLaunch() {
+                    Process.Start(executable);
+                }
+            }
+            """;
+        var rule = Classify(text, extraFiles: [(helperPath, helpers)]);
+        AssertDecision(rule, "must-run", "launch-target-unresolved:PlainTests");
+        var site = Assert.Single(rule.Provenance.UnresolvedContracts);
+        Assert.Equal(site, Assert.Single(rule.Provenance.LaunchTargets));
+        Assert.Equal("Helpers", site.MemberClass);
+        Assert.Equal(helperPath, site.SourcePath);
+        Assert.Equal(3, site.Line);
+        Assert.Equal("Process.Start", site.SinkName);
+    }
+
+    [Fact]
+    public void ConditionalProcessStart_RecordsRepositoryBinarySink()
+    {
+        const string text = """
+            public class PlainTests {
+                [Fact] public void Example() {
+                    var process = new Process { StartInfo = new ProcessStartInfo("dotnet") };
+                    process?.Start();
+                }
+            }
+            """;
+        var rule = Classify(text);
+        AssertDecision(rule, "must-run", "launch-target-repo-binary:PlainTests");
+        var site = Assert.Single(rule.Provenance.LaunchTargets);
+        Assert.Equal("dotnet", site.Target);
+        Assert.Equal("repo-binary", site.Kind);
+        Assert.Equal(TestPath, site.SourcePath);
+        Assert.Equal(4, site.Line);
+        Assert.Equal(".Start", site.SinkName);
+    }
+
     [Fact]
     public void MissingDeclarationOrMalformedSyntax_FailsLoudly()
     {

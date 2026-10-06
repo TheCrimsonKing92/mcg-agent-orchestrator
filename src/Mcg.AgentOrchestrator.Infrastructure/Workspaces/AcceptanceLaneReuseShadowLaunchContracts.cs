@@ -112,7 +112,9 @@ internal static class AcceptanceLaneReuseShadowLaunchContracts
                         reads.Add(Site(identifier, name, null, "repository-read"));
                     // Invocation targets were handled above; remaining identifiers include method groups.
                     if (!identifier.Ancestors().OfType<InvocationExpressionSyntax>()
-                        .Any(call => call.Expression.Span.Contains(identifier.Span) ||
+                        .Any(call => call.Expression == identifier ||
+                            call.Expression is MemberAccessExpressionSyntax access && access.Name == identifier ||
+                            call.Expression is MemberBindingExpressionSyntax binding && binding.Name == identifier ||
                             call.Expression is IdentifierNameSyntax { Identifier.ValueText: "nameof" })) Follow(name);
                 }
             }
@@ -162,6 +164,7 @@ internal static class AcceptanceLaneReuseShadowLaunchContracts
     {
         SimpleNameSyntax name => name.Identifier.ValueText,
         MemberAccessExpressionSyntax access => access.Name.Identifier.ValueText,
+        MemberBindingExpressionSyntax binding => binding.Name.Identifier.ValueText,
         QualifiedNameSyntax qualified => SimpleName(qualified.Right),
         AliasQualifiedNameSyntax alias => SimpleName(alias.Name),
         _ => node.ToString()
