@@ -27,6 +27,37 @@ public sealed class ProcessTreeGuiSuppressionTestsChildConsoleLaunchPolicy
     {
         if (!OperatingSystem.IsWindows()) return;
         using var report = await ConsoleHostExperimentHarness.Run(1, "both", startupOnly: true);
+        Assert.Equal("InheritWindowlessConsole", report.RootElement.GetProperty("switchAtStartup").GetString());
+    }
+
+    [Fact]
+    public void DefaultModeInheritsWindowlessConsole()
+    {
+        Assert.Equal(ChildConsoleExperiment.InheritWindowlessConsole, ChildConsoleLaunchPolicy.DefaultExperiment);
+        Assert.Equal(ChildConsoleExperiment.InheritWindowlessConsole, ChildConsoleLaunchPolicy.ParseOffSwitch(null));
+    }
+
+    [Theory]
+    [InlineData("off", true)]
+    [InlineData("OFF", true)]
+    [InlineData("Off", true)]
+    [InlineData(null, false)]
+    [InlineData("", false)]
+    [InlineData("on", false)]
+    [InlineData("1", false)]
+    [InlineData(" off ", false)]
+    [InlineData("false", false)]
+    [InlineData("0", false)]
+    public void OffSwitchOnlyAcceptsExactCaseInsensitiveOff(string? value, bool off)
+        => Assert.Equal(off ? ChildConsoleExperiment.Off : ChildConsoleExperiment.InheritWindowlessConsole,
+            ChildConsoleLaunchPolicy.ParseOffSwitch(value));
+
+    [Fact]
+    public async Task FreshMeasurementHostWithOffSwitchReportsOff()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        using var report = await ConsoleHostExperimentHarness.Run(1, "both", startupOnly: true,
+            environmentOverrides: new Dictionary<string, string> { [ChildConsoleLaunchPolicy.OffSwitchVariable] = "off" });
         Assert.Equal("Off", report.RootElement.GetProperty("switchAtStartup").GetString());
     }
 }

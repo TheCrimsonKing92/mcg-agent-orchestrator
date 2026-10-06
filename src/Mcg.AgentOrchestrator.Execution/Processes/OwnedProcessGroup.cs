@@ -47,11 +47,11 @@ internal sealed class OwnedProcessGroup : IDisposable
         }
     }
 
-    public static SuspendedProcessStart StartSuspended(ProcessStartInfo startInfo)
-        => StartSuspendedCore(startInfo, null, null, contained: false, inheritableWindowObserver: null);
+    public static SuspendedProcessStart StartSuspended(ProcessStartInfo startInfo, bool requestOwnConsole = false)
+        => StartSuspendedCore(startInfo, null, null, contained: false, inheritableWindowObserver: null, requestOwnConsole);
 
-    internal static SuspendedProcessStart StartSuspendedContained(ProcessStartInfo startInfo)
-        => StartSuspendedCore(startInfo, null, null, contained: true, inheritableWindowObserver: null);
+    internal static SuspendedProcessStart StartSuspendedContained(ProcessStartInfo startInfo, bool requestOwnConsole = false)
+        => StartSuspendedCore(startInfo, null, null, contained: true, inheritableWindowObserver: null, requestOwnConsole);
 
     internal static SuspendedRedirectedProcessStart StartSuspendedContainedRedirected(ProcessStartInfo startInfo)
     {
@@ -125,26 +125,26 @@ internal sealed class OwnedProcessGroup : IDisposable
             Path.GetFullPath(stdoutPath),
             Path.GetFullPath(stderrPath),
             contained: false,
-            inheritableWindowObserver);
+            inheritableWindowObserver, requestOwnConsole: false);
 
     internal static SuspendedProcessStart StartSuspendedContainedWithFileCapture(
         ProcessStartInfo startInfo,
         string stdoutPath,
         string stderrPath,
-        Action? inheritableWindowObserver = null)
+        Action? inheritableWindowObserver = null, bool requestOwnConsole = false)
         => StartSuspendedCore(
             startInfo,
             Path.GetFullPath(stdoutPath),
             Path.GetFullPath(stderrPath),
             contained: true,
-            inheritableWindowObserver);
+            inheritableWindowObserver, requestOwnConsole);
 
     private static SuspendedProcessStart StartSuspendedCore(
         ProcessStartInfo startInfo,
         string? stdoutPath,
         string? stderrPath,
         bool contained,
-        Action? inheritableWindowObserver)
+        Action? inheritableWindowObserver, bool requestOwnConsole)
     {
         ArgumentNullException.ThrowIfNull(startInfo);
         if (!OperatingSystem.IsWindows())
@@ -169,7 +169,7 @@ internal sealed class OwnedProcessGroup : IDisposable
                 startInfo,
                 stdoutPath,
                 stderrPath,
-                inheritableWindowObserver);
+                inheritableWindowObserver, requestOwnConsole);
             group._processIds.Add(processStart.Process.Id);
             return new SuspendedProcessStart(
                 group,
@@ -720,7 +720,7 @@ internal sealed class OwnedProcessGroup : IDisposable
             ProcessStartInfo startInfo,
             string? stdoutPath,
             string? stderrPath,
-            Action? inheritableWindowObserver = null)
+            Action? inheritableWindowObserver = null, bool requestOwnConsole = false)
         {
             if (stdoutPath is null || stderrPath is null)
             {
@@ -728,7 +728,7 @@ internal sealed class OwnedProcessGroup : IDisposable
                     job,
                     startInfo,
                     InheritableStandardHandles.AcquireNone,
-                    inheritableWindowObserver);
+                    inheritableWindowObserver, requestOwnConsole);
             }
 
             // The capture files are opened NON-inheritable and only duplicated as inheritable for the
@@ -743,7 +743,7 @@ internal sealed class OwnedProcessGroup : IDisposable
                 job,
                 startInfo,
                 () => InheritableStandardHandles.DuplicateForCapture(stdoutHandle, stderrHandle),
-                inheritableWindowObserver);
+                inheritableWindowObserver, requestOwnConsole);
         }
 
         public static WindowsSuspendedProcess StartSuspendedInJobWithStandardHandles(
@@ -756,7 +756,7 @@ internal sealed class OwnedProcessGroup : IDisposable
                 job,
                 startInfo,
                 () => InheritableStandardHandles.Borrowed(stdin, stdout, stderr),
-                inheritableWindowObserver: null);
+                inheritableWindowObserver: null, requestOwnConsole: false);
 
         public static int ReadProcessExitCode(SafeFileHandle processHandle)
         {
@@ -772,7 +772,7 @@ internal sealed class OwnedProcessGroup : IDisposable
             SafeFileHandle job,
             ProcessStartInfo startInfo,
             Func<InheritableStandardHandles> acquireStandardHandles,
-            Action? inheritableWindowObserver)
+            Action? inheritableWindowObserver, bool requestOwnConsole)
         {
             // Everything that can allocate, enumerate, or throw is done before any inheritable handle
             // exists, so the process-global inheritance window is only the CreateProcessW call itself.
@@ -782,7 +782,7 @@ internal sealed class OwnedProcessGroup : IDisposable
                 ? Environment.CurrentDirectory
                 : startInfo.WorkingDirectory;
 
-            using var suppression = ProcessTreeGuiSuppression.AcquireSuppressedChildSpawn();
+            using var suppression = ProcessTreeGuiSuppression.AcquireSuppressedChildSpawn(requestOwnConsole);
             PROCESS_INFORMATION processInformation;
             using (var standardHandles = acquireStandardHandles())
             {

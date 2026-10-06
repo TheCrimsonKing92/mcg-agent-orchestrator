@@ -24,7 +24,11 @@ internal static class ConsoleHostExperimentProbe
         };
         try
         {
-            if (values.GetValueOrDefault("--startup-only", "false") != "true")
+            if (values.GetValueOrDefault("--own-console-check", "false") == "true")
+            {
+                report.OwnConsoleCheck = await RunOwnConsoleCheck(directory);
+            }
+            else if (values.GetValueOrDefault("--startup-only", "false") != "true")
             {
                 report.PowerShellExecutable = ResolveExecutable("pwsh");
                 var launches = int.Parse(values.GetValueOrDefault("--launches", "4"), System.Globalization.CultureInfo.InvariantCulture);
@@ -99,6 +103,30 @@ internal static class ConsoleHostExperimentProbe
         return report.Error is null ? 0 : 1;
     }
 
+    private static async Task<OwnConsoleCheck> RunOwnConsoleCheck(string directory)
+    {
+        var before = new CodePages(Windows.GetConsoleCP(), Windows.GetConsoleOutputCP());
+        var stdout = Path.Combine(directory, "utf8.out");
+        var stderr = Path.Combine(directory, "utf8.err");
+        var release = Path.Combine(directory, "utf8.release");
+        var ready = release + ".ready";
+        var info = GoalAcceptanceVerifier.BuildAcceptanceProcessStartInfo(
+            [ResolveExecutable("dotnet"), typeof(ConsoleHostExperimentProbe).Assembly.Location,
+                "--write-console-text", "non-ASCII caf\u00e9 \u6f22\u5b57 e\u0301", ready, release],
+            directory, stdout, stderr, forceUtf8ConsoleOutput: true);
+        info.Environment.Remove("DOTNET_STARTUP_HOOKS");
+        using var events = new WindowEvents();
+        var child = await RunOwned(info, "utf8", directory, events, ready, release, requestOwnConsole: true);
+        child.StdoutBase64 = Convert.ToBase64String(File.ReadAllBytes(stdout));
+        child.StderrBase64 = Convert.ToBase64String(File.ReadAllBytes(stderr));
+        child.Stdout = Encoding.UTF8.GetString(Convert.FromBase64String(child.StdoutBase64));
+        child.Stderr = Encoding.UTF8.GetString(Convert.FromBase64String(child.StderrBase64));
+        var afterOwnConsole = new CodePages(Windows.GetConsoleCP(), Windows.GetConsoleOutputCP());
+        var git = await RunOwned(Command("git", directory), "git", directory, events);
+        var afterGit = new CodePages(Windows.GetConsoleCP(), Windows.GetConsoleOutputCP());
+        return new OwnConsoleCheck(before, afterOwnConsole, afterGit, child, git);
+    }
+
     private static ProcessStartInfo Command(string command, string directory) => command switch
     {
         "git" => StartInfo(ResolveExecutable(command), directory, "--version"),
@@ -141,10 +169,11 @@ internal static class ConsoleHostExperimentProbe
     }
 
     private static async Task<Child> RunOwned(ProcessStartInfo info, string command, string directory, WindowEvents events,
-        string? ready = null, string? release = null)
+        string? ready = null, string? release = null, bool requestOwnConsole = false)
     {
         var stem = Path.Combine(directory, Guid.NewGuid().ToString("n"));
-        using var start = OwnedProcessGroup.StartSuspendedContainedWithFileCapture(info, stem + ".out", stem + ".err");
+        using var start = OwnedProcessGroup.StartSuspendedContainedWithFileCapture(info, stem + ".out", stem + ".err",
+            requestOwnConsole: requestOwnConsole);
         using var group = start.Group;
         var child = new Child { Command = command, ProcessId = start.Process.Id };
         events.Register(start.Process, group);
@@ -306,6 +335,7 @@ internal static class ConsoleHostExperimentProbe
         public long ConsoleWindow { get; init; }
         public uint ConsoleProcessCount { get; init; }
         public List<Arm> Arms { get; } = [];
+        public OwnConsoleCheck? OwnConsoleCheck { get; set; }
         public string? Error { get; set; }
     }
 
@@ -348,6 +378,8 @@ internal static class ConsoleHostExperimentProbe
         public Image[] HeldImages { get; set; } = [];
     }
 
+    private sealed record CodePages(uint Input, uint Output);
+    private sealed record OwnConsoleCheck(CodePages Before, CodePages AfterOwnConsole, CodePages AfterGit, Child Child, Child Git);
     private sealed record Image(int ProcessId, string Path, bool IsConhost);
     private sealed record OutputMatch(string Command, bool? MatchesOff);
     private sealed record WindowEvent(uint Kind, long Window, int ProcessId, long? StartedAt, int? ParentId, long? ParentStartedAt, string? Image,
@@ -535,6 +567,7 @@ internal static class ConsoleHostExperimentProbe
         internal delegate void WinEventCallback(IntPtr hook, uint kind, IntPtr window, int objectId, int childId, uint thread, uint time);
         [DllImport("kernel32.dll")] internal static extern IntPtr GetConsoleWindow();
         [DllImport("kernel32.dll")] internal static extern uint GetConsoleProcessList([Out] uint[] ids, uint count);
+        [DllImport("kernel32.dll")] internal static extern uint GetConsoleCP();
         [DllImport("kernel32.dll")] internal static extern uint GetConsoleOutputCP();
         [DllImport("kernel32.dll", SetLastError = true)] internal static extern bool SetConsoleOutputCP(uint codePage);
         [DllImport("kernel32.dll")] internal static extern uint GetCurrentThreadId();

@@ -205,8 +205,8 @@ public sealed partial class GoalAcceptanceVerifier
                         captureDrainCts.Token, capturePublicationInterval)
                 ];
             }
-
-            process = StartAcceptanceProcess(startInfo, workingDirectory, registrationIdentityReader);
+            if (forceUtf8ConsoleOutput) process = StartAcceptanceProcess(startInfo, workingDirectory, registrationIdentityReader, requestOwnConsole: true);
+            else process = StartAcceptanceProcess(startInfo, workingDirectory, registrationIdentityReader);
             commandIdentityTracker = new AcceptanceCommandProcessIdentityTracker(process, commandIdentityObserver);
             commandIdentityTracker.Start();
             startedProcessId = process.Id;
@@ -488,7 +488,7 @@ public sealed partial class GoalAcceptanceVerifier
     private static RegisteredOwnedProcess StartAcceptanceProcess(
         ProcessStartInfo startInfo,
         string workingDirectory,
-        Func<Process, SpawnProcessIdentityReadResult>? registrationIdentityReader)
+        Func<Process, SpawnProcessIdentityReadResult>? registrationIdentityReader, bool requestOwnConsole = false)
     {
         if (OperatingSystem.IsWindows() &&
             string.Equals(
@@ -522,7 +522,7 @@ public sealed partial class GoalAcceptanceVerifier
         return WorkerProcessJobs.StartRegisteredOwnedOrThrow(
             startInfo,
             $"acceptance:{workingDirectory}",
-            registrationIdentityReader);
+            registrationIdentityReader, requestOwnConsole: requestOwnConsole);
     }
 
     private static async Task WriteGateHeartbeatLoopAsync(

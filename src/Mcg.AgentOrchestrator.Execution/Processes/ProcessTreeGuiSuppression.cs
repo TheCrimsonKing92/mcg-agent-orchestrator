@@ -114,14 +114,14 @@ internal static partial class ProcessTreeGuiSuppression
         }
     }
 
-    internal static ConsoleSpawnScope AcquireSuppressedChildSpawn()
+    internal static ConsoleSpawnScope AcquireSuppressedChildSpawn(bool requestOwnConsole = false)
     {
         if (!OperatingSystem.IsWindows())
         {
             return new ConsoleSpawnScope(childConsolePolicyApplied: false);
         }
 
-        var childConsolePolicy = ChildConsoleLaunchPolicy.Prepare();
+        var childConsolePolicy = ChildConsoleLaunchPolicy.Prepare(requestOwnConsole);
         var waitStarted = Stopwatch.GetTimestamp();
         Monitor.Enter(WindowsLaunchLock);
         var acquired = Stopwatch.GetTimestamp();
