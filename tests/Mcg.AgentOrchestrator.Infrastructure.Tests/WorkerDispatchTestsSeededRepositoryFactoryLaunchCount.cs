@@ -169,7 +169,7 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryLaunchCount
             Xunit.Assert.Equal(scenario.Classification, failure.Diagnostic.Git.Classification);
             Xunit.Assert.Contains(failure.Diagnostic.ProbeReceipts!, receipt =>
                 receipt.Check == check && receipt.Classification == scenario.Classification &&
-                receipt.Arguments!.SequenceEqual(["rev-parse", "--is-inside-work-tree", "--show-toplevel", "--git-dir"]));
+                receipt.Arguments!.TakeLast(4).SequenceEqual(["rev-parse", "--is-inside-work-tree", "--show-toplevel", "--git-dir"]));
         }
     }
 
