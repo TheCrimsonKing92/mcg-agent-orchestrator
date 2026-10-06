@@ -137,6 +137,8 @@ public sealed class MtpTestRunnerScriptTestsSilenceGuard
             var child = new Child();
             Directory.CreateDirectory(child._root);
             var script = $"$root = '{child._root.Replace("'", "''", StringComparison.Ordinal)}'; " +
+                // EncodedCommand serializes module-autoload progress onto stderr as CLIXML.
+                "$ProgressPreference = 'SilentlyContinue'; " +
                 "[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); " +
                 "function AwaitFile($name) { " +
                 "$watcher = New-Object System.IO.FileSystemWatcher; $watcher.Path = $root; " +
