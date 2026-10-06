@@ -212,6 +212,18 @@ internal sealed partial class ConductorDriver
             return true;
         }
 
+        var liveHead = _getPreReviewEvidenceContext(goal).CandidateSha?.Trim();
+        if (IsSupersededPreTesterCandidate(worktreePath, candidateSha, liveHead))
+        {
+            decision = FailedGoalFindingObservation.Observed(
+                FailedGoalFindingObservationKind.FindingEvidencePending,
+                $"Pre-Tester focused evidence for candidate {FormatShortSha(candidateSha)} " +
+                $"superseded by live head {FormatShortSha(liveHead)}; re-running at the live head.");
+            result = MakeResult(goal.Id.Value, goalPrefix, policy,
+                FocusedEvidencePendingHeld(fromState, decision, kind));
+            return true;
+        }
+
         var candidate = (evidence?.Arms ?? []).Select(CreateFindingEvidenceArmReceipt)
             .FirstOrDefault(arm => arm.Arm == FindingEvidenceArm.Candidate &&
                                    string.Equals(arm.Sha, candidateSha, StringComparison.OrdinalIgnoreCase));
@@ -254,6 +266,17 @@ internal sealed partial class ConductorDriver
         result = ExecuteDispatchAndStart(
             refreshed, goalPrefix, policy, GoalLifecycle.ResolveState(refreshed, GetFacts(refreshed)));
         return true;
+    }
+
+    private static bool IsSupersededPreTesterCandidate(
+        string worktreePath, string? candidateSha, string? liveHead)
+    {
+        if (string.IsNullOrWhiteSpace(candidateSha) || string.IsNullOrWhiteSpace(liveHead) ||
+            string.Equals(candidateSha, liveHead, StringComparison.OrdinalIgnoreCase)) return false;
+        var ancestry = GitCli.Run(worktreePath, "merge-base", "--is-ancestor", candidateSha, liveHead);
+        // Only a completed negative ancestry query proves supersession; git faults keep today's behavior.
+        return ancestry.ProcessStarted && !ancestry.DrainTimedOut && ancestry.ExitCode == 1 &&
+               string.IsNullOrWhiteSpace(ancestry.Error);
     }
 
     private bool TryEscalatePreTesterRedLoop(
