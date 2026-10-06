@@ -40,7 +40,7 @@ public sealed class ConductorDriverTestsPreTesterAlwaysRunGuards
         var started = scenario.Latest();
         Assert.Equal("started", started.Outcome);
         Assert.Equal(new[] { CoreSelection }.Concat(GuardSelections), started.Selections);
-        Assert.Equal(7, started.Selections.Count);
+        Assert.Equal(10, started.Selections.Count);
         Assert.Empty(started.NotRun);
         Assert.Equal(1, launches);
         Assert.Empty(roles);

@@ -9,7 +9,7 @@ public sealed class PreTesterAlwaysRunGuardTestClassesTests
     {
         var root = VerifiedRepositoryRoot.Find();
         var entries = PreTesterAlwaysRunGuardTestClasses.Entries;
-        Assert.Equal(6, entries.Count);
+        Assert.Equal(9, entries.Count);
         Assert.Equal(entries.Count, entries.Select(entry => entry.TestClass).Distinct(StringComparer.Ordinal).Count());
         foreach (var entry in entries)
         {

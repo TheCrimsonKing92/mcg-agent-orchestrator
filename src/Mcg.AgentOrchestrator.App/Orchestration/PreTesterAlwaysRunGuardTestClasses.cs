@@ -14,7 +14,10 @@ internal static class PreTesterAlwaysRunGuardTestClasses
         new("CallerFilePathRootSourceGuardTests", "Use the verified repository root for source discovery."),
         new("OrchestratorTempRootSourceGuardTests", "Keep temporary test state under the orchestrator temp root."),
         new("DirectGitLaunchSourceGuardTests", "Route git launches through the repository process runner."),
-        new("ParallelSharedStateSourceGuardTests", "Keep parallel tests independent of shared mutable state.")
+        new("ParallelSharedStateSourceGuardTests", "Keep parallel tests independent of shared mutable state."),
+        new("RuntimeAssemblyArchitectureTests", "Keep process launches limited to sanctioned callers."),
+        new("ProcessStartInfoSourceGuardTests", "Keep test process starts free of visible console windows."),
+        new("CanaryEngineSurfaceCoverageTests", "Keep the canary surface registry matched to acceptance collaborators.")
     ]);
 
     internal static IReadOnlyList<FindingEvidenceSelection> Select(string worktreePath) =>
