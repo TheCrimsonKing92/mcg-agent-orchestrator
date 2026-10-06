@@ -93,6 +93,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsIdenticalTreeReuse
             Assert.False(red.Result.Passed);
             var redRecord = Assert.Single(Verdicts(redRoot, "attempt-red"), row => row.PartitionId == "core-tests");
             Assert.Equal("RED", redRecord.PartitionVerdict);
+            var rawRed = Assert.Single(RawVerdicts(redRoot, "attempt-red"), row => row.GetProperty("partitionId").GetString() == "core-tests");
+            Assert.Equal(AcceptanceLaneClosureHasher.TryCompute(redRoot, TestCheck("core tests", CoreProject)),
+                rawRed.GetProperty("partitionClosureHash").GetString());
             var afterRed = await Gate(redRoot, "attempt-after-red");
             AssertPassed(afterRed);
             AssertLaunch(afterRed, CoreProject, 1);
@@ -107,6 +110,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsIdenticalTreeReuse
             AssertPassed(dirty);
             AssertLaunch(dirty, CoreProject, 1);
             Assert.Contains("missed_lane=core-tests:closure-hash-unavailable", dirty.Detail, StringComparison.Ordinal);
+            Assert.DoesNotContain(Verdicts(dirtyRoot, "attempt-dirty"), row => row.PartitionId == "core-tests");
             Assert.False(Assert.Single(dirty.Result.Checks, check => check.Name == "core tests").TestResultIsExplicitCrossAttemptReuse);
             AssertReuse(dirtyRoot, dirty, "attempt-dirty", "attempt-clean", [CliProject, OwnerProject]);
         }

@@ -656,7 +656,10 @@ internal sealed partial class AcceptancePartitionVerdictCache
     {
         if (TryBuildIdenticalTreeKey(check, out var identicalTreeId, out var identity, out var identicalTreeKey))
         {
-            var identicalTreeClosureHash = result.Passed ? ResolveClosureHash(check) : null;
+            var identicalTreeClosureHash = ResolveClosureHash(check);
+            // A verdict without closure evidence cannot be bound to this candidate tree.
+            if (string.IsNullOrWhiteSpace(identicalTreeClosureHash))
+                return;
             lock (_gate)
             {
                 _executed.Add(new PartitionVerdictExecutionReceipt(identicalTreeId, result.Passed ? "GREEN" : "RED"));
