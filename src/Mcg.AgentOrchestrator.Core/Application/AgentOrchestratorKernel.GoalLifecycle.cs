@@ -2121,6 +2121,7 @@ public sealed partial class AgentOrchestratorKernel
                     goal.AuthoritativeBrief.Version);
             }
 
+            TaskSpec? answeredTesterToRequeue = null;
             if (request.TaskId is not null && HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind))
             {
                 var task = goal.FindTask(request.TaskId);
@@ -2130,7 +2131,10 @@ public sealed partial class AgentOrchestratorKernel
                         !candidate.IsCompleted &&
                         HumanWaitPolicyDefaults.BlocksActiveWork(candidate.Kind)))
                 {
-                    RestoreTaskAfterHumanInput(goal, task);
+                    if (ShouldRequeueAnsweredTesterBlocker(goal, task, request, answer))
+                        answeredTesterToRequeue = task;
+                    else
+                        RestoreTaskAfterHumanInput(goal, task);
                 }
             }
 
@@ -2140,6 +2144,8 @@ public sealed partial class AgentOrchestratorKernel
                 ? string.Empty
                 : $" Resolved {siblings.Count} sibling duplicate request(s).";
             Append(goal, request.TaskId, ProgressKind.HumanInputReceived, answer + siblingReceipt);
+            if (answeredTesterToRequeue is not null)
+                RequeueAnsweredTesterBlocker(goal, answeredTesterToRequeue, answer);
         }
     }
 
