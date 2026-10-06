@@ -5,6 +5,39 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class GitAuthorBriefDraftRepositoryTests
 {
     [Fact]
+    public void Trailing_separator_root_at_main_returns_main_sha()
+    {
+        using var fixture = new RepositoryFixture();
+        var main = fixture.Git("rev-parse", "main");
+        Assert.Equal(main, fixture.Git("rev-parse", "HEAD"));
+        var repository = new GitAuthorBriefDraftRepository(fixture.Root + "\\");
+
+        Assert.Equal(main, repository.ResolveMainHead());
+    }
+
+    [Fact]
+    public void Trailing_separator_root_with_different_head_reports_head_not_main_only()
+    {
+        using var fixture = new RepositoryFixture();
+        var first = fixture.Git("rev-parse", "HEAD");
+        fixture.Git("commit", "-q", "--allow-empty", "-m", "Second");
+        var main = fixture.Git("rev-parse", "main");
+        Assert.NotEqual(first, main);
+        fixture.Git("checkout", "-q", "--detach", first);
+        Assert.Equal(first, fixture.Git("rev-parse", "HEAD"));
+        var configuredRoot = fixture.Root + "\\";
+        var repository = new GitAuthorBriefDraftRepository(configuredRoot);
+
+        var exception = Assert.Throws<AuthorDraftRepositoryNotAtMainException>(() => repository.ResolveMainHead());
+        Assert.Equal("head-not-main", exception.Condition);
+        Assert.Equal(first, exception.Head);
+        Assert.Equal(main, exception.Main);
+        Assert.Equal(fixture.Root, exception.Toplevel);
+        Assert.Equal(configuredRoot, exception.ConfiguredRoot);
+        Assert.Contains(configuredRoot, exception.Message);
+    }
+
+    [Fact]
     public void Different_head_reports_both_shas_and_matching_main_returns_its_sha()
     {
         using var fixture = new RepositoryFixture();

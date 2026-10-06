@@ -7,7 +7,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed partial class ConductorBoardFillHost
 {
     internal static ConductorBoardFillHost CreateDefault(OrchestratorWorkspace workspace,
-        Func<ConductorAutonomyPolicy> policy) => new(
+        Func<ConductorAutonomyPolicy> policy, Func<string?>? mainHead = null) => new(
         new(ConductorBoardFillDraftStore.DefaultPath(workspace)),
         (id, token) => AuthorBriefDraftService.Run(id, workspace,
             new(WorkerProcessRunner.RunBufferedAsync, new GitAuthorBriefDraftRepository(workspace.ExecutionDirectory),
@@ -34,7 +34,7 @@ internal sealed partial class ConductorBoardFillHost
         }, policy, new(workspace.ConductEventsLogPath), verifier: new BoardFillPremiseVerifier(
             () => ModelFunctionCatalogStore.Load(workspace.ModelFunctionCatalogPath),
             new GitAuthorBriefDraftRepository(workspace.ExecutionDirectory), workspace.ExecutionDirectory),
-        filing: CreateFilingSeams(workspace));
+        filing: CreateFilingSeams(workspace), mainHead: mainHead);
 
     private static BoardFillFilingSeams CreateFilingSeams(OrchestratorWorkspace workspace)
     {
