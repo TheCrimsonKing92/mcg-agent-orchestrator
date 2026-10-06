@@ -21,9 +21,15 @@ public sealed partial class GoalAcceptanceVerifier
             return null;
         }
         if (cache is null || ShardPermitLaneClass != GateShardLaneClass.Gate) return null;
+        var clock = _testOverrides.RemoteLaneTimeProviderForTests ?? _timeProvider;
+        IRemoteLaneExecutor executor = _testOverrides.RemoteLaneExecutorForTests ??
+            (configuration.Executors.Any(entry => entry.Transport == "ssh")
+                ? new SshRemoteLaneExecutor(configuration, worktreePath, _executionContext?.ResultsPrefix, clock,
+                    _testOverrides.RemoteLaneTransportRunnerForTests ?? RunProcessAsync,
+                    _testOverrides.RemoteLaneGitRunnerForTests ?? GitCli.Run)
+                : UnavailableRemoteLaneExecutor.Instance);
         var coordinator = new RemoteLaneCoordinator(configuration, cache, worktreePath, _executionContext?.ResultsPrefix,
-            _testOverrides.RemoteLaneExecutorForTests ?? UnavailableRemoteLaneExecutor.Instance,
-            _testOverrides.RemoteLaneTimeProviderForTests ?? _timeProvider,
+            executor, clock,
             _testOverrides.RemoteLanePollInterval ?? TimeSpan.FromSeconds(1), _testOverrides.OnRemoteLaneOutcomeForTests);
         _remoteLaneCoordinators.Add(cache, coordinator);
         return coordinator;
