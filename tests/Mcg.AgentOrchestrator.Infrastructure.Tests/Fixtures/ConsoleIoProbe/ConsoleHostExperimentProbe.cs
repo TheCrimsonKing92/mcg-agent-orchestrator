@@ -279,9 +279,9 @@ internal static class ConsoleHostExperimentProbe
         """;
 
     private static readonly string DescendantScript = ConsoleProbeScript + "\n" + """
-        # MCG_ALLOW_DEFAULT_WINDOW_SETTINGS_PROBE: prove the inherited windowless console contract.
         $psi = [System.Diagnostics.ProcessStartInfo]::new($env:MCG_DESCENDANT_SHELL)
         $psi.UseShellExecute = $false
+        # MCG_ALLOW_DEFAULT_WINDOW_SETTINGS_PROBE: prove the inherited windowless console contract.
         $psi.RedirectStandardInput = $true
         $psi.RedirectStandardOutput = $true
         $psi.RedirectStandardError = $true
