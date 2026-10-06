@@ -31,6 +31,7 @@ internal sealed record GoalAcceptanceVerifierTestOverrides
     internal Action? OnBuildArtifactIoRetryLeaseReleasedForTests { get; set; }
     internal Action<string>? OnGateWorktreeCleanupLineForTests { get; set; }
     internal bool PartitionVerdictWithinAttemptRerunEnabled { get; set; } = true;
+    internal bool DisableLaneReuseShadowForTests { get; set; }
     internal DotnetBaseBuildCache? BaseBuildCacheForTests { get; set; }
     internal MainBaselineDiscoveryCache? MainBaselineDiscoveryCacheForTests { get; set; }
     internal bool MainBaselineDiscoveryCacheEnabled { get; set; } = true;
@@ -70,6 +71,7 @@ internal sealed record GoalAcceptanceVerifierTestOverrides
         OnBuildArtifactIoRetryLeaseReleasedForTests = OnBuildArtifactIoRetryLeaseReleasedForTests,
         OnGateWorktreeCleanupLineForTests = OnGateWorktreeCleanupLineForTests,
         PartitionVerdictWithinAttemptRerunEnabled = PartitionVerdictWithinAttemptRerunEnabled,
+        DisableLaneReuseShadowForTests = DisableLaneReuseShadowForTests,
         BaseBuildCacheForTests = BaseBuildCacheForTests,
         MainBaselineDiscoveryCacheForTests = MainBaselineDiscoveryCacheForTests,
         MainBaselineDiscoveryCacheEnabled = MainBaselineDiscoveryCacheEnabled,
