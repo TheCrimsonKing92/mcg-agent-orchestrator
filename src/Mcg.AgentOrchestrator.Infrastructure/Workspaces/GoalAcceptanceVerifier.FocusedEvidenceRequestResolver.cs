@@ -160,12 +160,12 @@ internal static partial class FocusedEvidenceRequestResolver
                 }
                 else
                 {
-                    planned.AddRange(compatible.Select(item => new FocusedEvidencePlannedCheck(
-                        (IReadOnlyList<string>)[item.Target],
-                        item.Project,
-                        item.Filter,
-                        [item.Filter!])));
-                    projectUnbatchedReasons.Add("bounded-filter-overflow");
+                    var packedGroups = FocusedEvidenceOverflowPacker.Pack(compatible, projectGroup.Key);
+                    planned.AddRange(packedGroups);
+                    if (packedGroups.Count > 1)
+                    {
+                        projectUnbatchedReasons.Add("bounded-filter-overflow");
+                    }
                 }
             }
             else
