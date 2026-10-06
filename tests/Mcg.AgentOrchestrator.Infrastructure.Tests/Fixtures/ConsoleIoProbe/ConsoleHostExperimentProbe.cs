@@ -150,6 +150,8 @@ internal static class ConsoleHostExperimentProbe
         events.Register(start.Process, group);
         var images = new Dictionary<int, Image>();
         Observe(group, images);
+        if (!images.ContainsKey(start.Process.Id))
+            throw new InvalidOperationException("Suspended root process image could not be classified before resume.");
         start.Resume();
         using var guard = new CancellationTokenSource(TimeSpan.FromSeconds(60));
         var exit = start.WaitForOwnedExitAsync(guard.Token);
@@ -207,8 +209,16 @@ internal static class ConsoleHostExperimentProbe
             try
             {
                 using var process = Process.GetProcessById(id);
-                var path = process.MainModule?.FileName;
-                if (path is not null) images[id] = new Image(id, path, ProcessObservationRoles.IsWindowsConsoleInfrastructure(path));
+                // The loader has not initialized MainModule in a suspended child: it can
+                // be absent or report ntdll.dll. Query the process image independently of
+                // its module list, before the root can exit after Resume.
+                var capacity = 32768u;
+                var path = new StringBuilder((int)capacity);
+                if (Windows.QueryFullProcessImageNameW(process.Handle, 0, path, ref capacity))
+                {
+                    var executable = path.ToString();
+                    images[id] = new Image(id, executable, ProcessObservationRoles.IsWindowsConsoleInfrastructure(executable));
+                }
             }
             catch (ArgumentException) { }
             catch (InvalidOperationException) { }
@@ -528,6 +538,8 @@ internal static class ConsoleHostExperimentProbe
         [DllImport("kernel32.dll")] internal static extern uint GetConsoleOutputCP();
         [DllImport("kernel32.dll", SetLastError = true)] internal static extern bool SetConsoleOutputCP(uint codePage);
         [DllImport("kernel32.dll")] internal static extern uint GetCurrentThreadId();
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        internal static extern bool QueryFullProcessImageNameW(IntPtr process, uint flags, StringBuilder path, ref uint capacity);
         [DllImport("kernel32.dll", SetLastError = true)] internal static extern bool IsProcessInJob(IntPtr process, SafeFileHandle job, out bool member);
         [DllImport("user32.dll")] internal static extern bool IsWindowVisible(IntPtr window);
         [DllImport("user32.dll")] internal static extern IntPtr GetAncestor(IntPtr window, uint flags);

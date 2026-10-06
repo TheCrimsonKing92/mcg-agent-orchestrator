@@ -108,8 +108,11 @@ public sealed class ProcessTreeGuiSuppressionTestsConsoleHostExperiment(ITestOut
 
     private static void CheckCensus(JsonElement child, int? expectedConhosts)
     {
-        Assert.Equal(0, child.GetProperty("unclassifiedProcesses").GetInt32());
+        Assert.True(child.GetProperty("unclassifiedProcesses").GetInt32() == 0, $"Incomplete process census: {child}");
         var images = child.GetProperty("images").EnumerateArray().ToArray();
+        Assert.Contains(images, image => image.GetProperty("processId").GetInt32() == child.GetProperty("processId").GetInt32()
+            && !image.GetProperty("isConhost").GetBoolean());
+        Assert.All(images, image => Assert.Equal(".exe", Path.GetExtension(image.GetProperty("path").GetString()), ignoreCase: true));
         Assert.Equal(child.GetProperty("totalProcesses").GetUInt32(), (uint)images.Length);
         Assert.Equal(images.Count(image => !image.GetProperty("isConhost").GetBoolean()), child.GetProperty("nonConhostProcesses").GetInt32());
         var conhosts = child.GetProperty("conhostCount").GetInt32();
