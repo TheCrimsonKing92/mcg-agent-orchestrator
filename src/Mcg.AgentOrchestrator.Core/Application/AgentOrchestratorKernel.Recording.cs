@@ -820,7 +820,7 @@ public sealed partial class AgentOrchestratorKernel
                     verification.ReviewedCommit,
                     _clock.UtcNow) ?? matches[0];
                 Append(goal, task.Id, ProgressKind.TaskNote,
-                    $"Deferred criterion evidence remains pending: obligation={obligation.Id}; owner={obligation.Owner}; " +
+                    $"Deferred criterion evidence remains pending: obligation={obligation.DisplayLabel}; owner={obligation.Owner}; " +
                     $"state={obligation.State}; next_action={obligation.RequiredScope}; reviewer_verdict={deferred.Verdict}; " +
                     $"expected_candidate={obligation.ExpectedCandidateSha ?? "unbound"}.");
             }
@@ -844,7 +844,7 @@ public sealed partial class AgentOrchestratorKernel
                     continue;
                 Append(goal, task.Id, ProgressKind.TaskNote,
                     $"Acceptance-gate-owned criterion met verdict is advisory; the gate remains the evidence: " +
-                    $"obligation={obligation.Id}; state={obligation.State}; expected_candidate={obligation.ExpectedCandidateSha ?? "unbound"}.");
+                    $"obligation={obligation.DisplayLabel}; state={obligation.State}; expected_candidate={obligation.ExpectedCandidateSha ?? "unbound"}.");
             }
             if (workerOwnedNonPassingVerdicts.Length > 0)
             {
@@ -857,8 +857,8 @@ public sealed partial class AgentOrchestratorKernel
                     workerOwnedNonPassingVerdicts
                         .Where(item => item.Verdict.Equals("not-verifiable", StringComparison.Ordinal))
                         .Select(item =>
-                            $"criterion-evidence-map --goal {goal.Id.Value} {item.CriterionIndex} " +
-                            $"{goal.AuthoritativeRefinedSpecVersion!.Version} acceptance {CriterionEvidenceScopes.FullAcceptanceGate} " +
+                            $"criterion-evidence-map --goal {goal.Id.Value} --criterion {item.CriterionIndex + 1} " +
+                            $"--version {goal.AuthoritativeRefinedSpecVersion!.Version} acceptance {CriterionEvidenceScopes.FullAcceptanceGate} " +
                             $"deferred-criterion-{item.CriterionIndex} {verification.ReviewedCommit ?? "missing"}"));
                 nonPassingCriteriaDiagnostic =
                     $"Reviewer WORKER_RESULT criteria attestation rejected: non-waived criteria are not passing: {details}." +
@@ -935,7 +935,7 @@ public sealed partial class AgentOrchestratorKernel
                 task.Id,
                 ProgressKind.TaskNote,
                 $"Deferred acceptance-owned finding remains pending: stable_id={deferredFinding.StableId}; " +
-                $"obligation={obligation.Id}; owner={obligation.Owner}; state={obligation.State}; " +
+                $"obligation={obligation.DisplayLabel}; owner={obligation.Owner}; state={obligation.State}; " +
                 $"next_action={obligation.RequiredScope}.");
         }
         if (verification.WorkerResultPresent &&

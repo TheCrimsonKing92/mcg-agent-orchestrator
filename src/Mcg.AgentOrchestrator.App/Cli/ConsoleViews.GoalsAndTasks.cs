@@ -108,7 +108,7 @@ public static void PrintGoal(
         Console.WriteLine("Criterion evidence obligations:");
         foreach (var obligation in goal.CriterionEvidenceObligations.OrderBy(item => item.CriterionVersion).ThenBy(item => item.CriterionIndex))
         {
-            Console.WriteLine($"  - {obligation.Id}: owner={obligation.Owner.ToString().ToLowerInvariant()} state={obligation.State.ToString().ToLowerInvariant()} next_action={obligation.RequiredScope} provenance={obligation.Provenance}");
+            Console.WriteLine($"  - {obligation.DisplayLabel}: owner={obligation.Owner.ToString().ToLowerInvariant()} state={obligation.State.ToString().ToLowerInvariant()} next_action={obligation.RequiredScope} provenance={obligation.Provenance}");
             Console.WriteLine(
                 $"    mapped_candidate={obligation.ExpectedCandidateSha ?? "unbound"} " +
                 $"receipt={obligation.ReceiptId ?? "pending"} receipt_candidate={obligation.CandidateSha ?? "pending"} " +

@@ -32,7 +32,7 @@ internal static partial class AcceptanceCriterionEvidence
                 !string.IsNullOrWhiteSpace(item.ExpectedCandidateSha) &&
                 !string.Equals(item.ExpectedCandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase) &&
                 string.Equals(item.RequiredScope, CriterionEvidenceScopes.FullAcceptanceGate, StringComparison.Ordinal))
-            .Select(item => $"criterion-evidence-map --goal {goal.Id.Value} {item.CriterionIndex} {item.CriterionVersion} acceptance {item.RequiredScope} {item.FindingStableId ?? item.Id} {candidateSha}");
+            .Select(item => $"criterion-evidence-map --goal {goal.Id.Value} --criterion {item.CriterionNumber} --version {item.CriterionVersion} acceptance {item.RequiredScope} {item.FindingStableId ?? item.Id} {candidateSha}");
         return $"{prefix} Operator rebind: {string.Join("; ", commands)}";
     }
 

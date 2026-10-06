@@ -69,7 +69,7 @@ private static bool HandleWorkspaceCommand(CliExecutionContext context, IReadOnl
             {
                 Console.WriteLine(
                     "Workspace merge blocked by outstanding criterion evidence: " +
-                    string.Join(", ", outstandingEvidence.Select(item => $"{item.Id}:{item.Owner}:{item.State}")));
+                    string.Join(", ", outstandingEvidence.Select(item => $"{item.DisplayLabel}:{item.Owner}:{item.State}")));
                 return false;
             }
             var engineHealth = PostLandingCanaryFactory.CreateCircuit(context.Workspace).Read();

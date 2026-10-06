@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Mcg.AgentOrchestrator.Core;
 
 // An obligation is the durable, authoritative statement of who can close a
@@ -49,6 +51,15 @@ public sealed record CriterionEvidenceObligation(
     string? ReplacementObligationId = null,
     CriterionEvidenceOwner? ReplacementOwner = null)
 {
+    [JsonIgnore]
+    public int CriterionNumber => CriterionIndex + 1;
+
+    [JsonIgnore]
+    public string DisplayLabel => DescribeCriterion(CriterionVersion, CriterionIndex);
+
+    public static string DescribeCriterion(int criterionVersion, int criterionIndex) =>
+        $"criterion {criterionIndex + 1} (v{criterionVersion}) {BuildId(criterionVersion, criterionIndex)}";
+
     public bool IsPending => State == CriterionEvidenceState.Pending;
 
     internal bool HasValidEvidenceState =>

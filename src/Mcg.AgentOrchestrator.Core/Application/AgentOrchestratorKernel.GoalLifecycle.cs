@@ -1323,7 +1323,7 @@ public sealed partial class AgentOrchestratorKernel
         if (outstandingObligations.Count > 0)
         {
             var detail = string.Join(", ", outstandingObligations.Select(item =>
-                $"{item.Id}:{item.Owner}:{item.State}"));
+                $"{item.DisplayLabel}:{item.Owner}:{item.State}"));
             throw new InvalidOperationException(
                 $"Goal '{goalId}' cannot complete while criterion evidence obligations remain outstanding: {detail}.");
         }
@@ -1418,7 +1418,7 @@ public sealed partial class AgentOrchestratorKernel
         if (outstandingObligations.Count > 0)
         {
             var detail = string.Join(", ", outstandingObligations.Select(item =>
-                $"{item.Id}:{item.Owner}:{item.State}"));
+                $"{item.DisplayLabel}:{item.Owner}:{item.State}"));
             return $"Goal '{goal.Id}' cannot complete from merge evidence while criterion evidence obligations remain outstanding: {detail}.";
         }
 
