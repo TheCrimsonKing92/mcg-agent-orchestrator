@@ -4,6 +4,7 @@ using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Xunit;
 
 // Parallel safe: private roots and AsyncLocal console capture; no shared mutable state.
 public sealed class CliLaneReuseShadowReadOnlyRouteTestsRuleSummary : CliTaskQueryTestSupport
