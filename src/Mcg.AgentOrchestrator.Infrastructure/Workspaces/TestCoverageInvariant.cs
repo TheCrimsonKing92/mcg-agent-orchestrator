@@ -154,7 +154,7 @@ internal static class TestCoverageInvariant
 
         try
         {
-            var utf8 = Encoding.UTF8.GetBytes(output[jsonStart..]);
+            var utf8 = Encoding.UTF8.GetBytes(TestCoverageInvariantDiscoveryJson.EscapeRawControlCharacters(output[jsonStart..]));
             var reader = new Utf8JsonReader(utf8);
             using var document = JsonDocument.ParseValue(ref reader);
             var root = document.RootElement;
