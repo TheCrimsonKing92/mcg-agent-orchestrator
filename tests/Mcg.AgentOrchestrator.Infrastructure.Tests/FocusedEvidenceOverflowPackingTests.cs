@@ -7,49 +7,44 @@ public sealed class FocusedEvidenceOverflowPackingTests
     private const string ClassPrefix = "FullyQualifiedName~";
     private static readonly string[] ClassNames =
     [
-        "AdvanceLoopTests",
-        "AutoReviewRetryConvergenceBriefBuilderTests",
-        "ChaosGateAssignedScopeIncompleteTests",
-        "ChaosGateDispatchDirtyWorktreeTests",
-        "ChaosGateDispatchNoChangeTests",
-        "CitedPriorEvidenceResolverTests",
-        "CliCommandTestsSubscriptionDispatchCommands",
-        "ConductorBatchLoopTestsReapingDetach",
-        "ConductorBatchLoopTestsWatchProgress",
-        "ConductorBatchLoopVerificationReconcileTests",
-        "ConductorDriverTests",
-        "ConductorDriverTestsDispatchRecovery",
-        "DirtyDispatchRecoveryViewTests",
-        "DispatchRecoveryPolicyTests",
-        "FailureTriageDecisionTests",
-        "GoalRefinementTests",
-        "InterruptedWorkCheckpointContinuationTests",
-        "LandingExecutorTests",
-        "PlannerEvidenceDispatchTests",
-        "PlannerOutputContractTests",
-        "PlannerSamplingDispatchTests",
-        "PreDispatchIntegrationNoChangeTests",
-        "RunGoalServiceProcessContractTests",
-        "RunGoalServiceTests",
-        "VerificationAndProcessLogTests",
-        "WorkerBuildEvidenceRequirementTests",
-        "WorkerContextRendererDispatchPathTests",
-        "WorkerDispatchBuildEvidenceClassificationTests",
-        "WorkerDispatchCompletionClassifierTests",
-        "WorkerDispatchJobAccountingTests",
-        "WorkerDispatchTestsDispatchPreparation",
-        "WorkerDispatchTestsModelSelection"
+        nameof(AdvanceLoopTests),
+        nameof(AutoReviewRetryConvergenceBriefBuilderTests),
+        nameof(ChaosGateAssignedScopeIncompleteTests),
+        nameof(ChaosGateDispatchDirtyWorktreeTests),
+        nameof(ChaosGateDispatchNoChangeTests),
+        nameof(CitedPriorEvidenceResolverTests),
+        nameof(CliCommandTestsSubscriptionDispatchCommands),
+        nameof(ConductorBatchLoopTestsReapingDetach),
+        nameof(ConductorBatchLoopTestsWatchProgress),
+        nameof(ConductorBatchLoopVerificationReconcileTests),
+        nameof(ConductorDriverTests),
+        nameof(ConductorDriverTestsDispatchRecovery),
+        nameof(DirtyDispatchRecoveryViewTests),
+        nameof(DispatchRecoveryPolicyTests),
+        nameof(FailureTriageDecisionTests),
+        nameof(GoalRefinementTests),
+        nameof(InterruptedWorkCheckpointContinuationTests),
+        nameof(LandingExecutorTests),
+        nameof(PlannerEvidenceDispatchTests),
+        nameof(PlannerOutputContractTests),
+        nameof(PlannerSamplingDispatchTests),
+        nameof(PreDispatchIntegrationNoChangeTests),
+        nameof(RunGoalServiceProcessContractTests),
+        nameof(RunGoalServiceTests),
+        nameof(VerificationAndProcessLogTests),
+        nameof(WorkerBuildEvidenceRequirementTests),
+        nameof(WorkerContextRendererDispatchPathTests),
+        nameof(WorkerDispatchBuildEvidenceClassificationTests),
+        nameof(WorkerDispatchCompletionClassifierTests),
+        nameof(WorkerDispatchJobAccountingTests),
+        nameof(WorkerDispatchTestsDispatchPreparation),
+        nameof(WorkerDispatchTestsModelSelection)
     ];
 
     [Xunit.Fact]
     public void WideRequest_PacksBoundedChecksAndPreservesEverySelectionAndTarget()
     {
-        var root = InfrastructureTestSupport.FindRepositoryRoot();
         Assert.Equal(32, ClassNames.Length);
-        foreach (var name in ClassNames)
-        {
-            Assert.True(File.Exists(Path.Combine(root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests", name + ".cs")), name);
-        }
         var filters = ClassNames.Select(name => ClassPrefix + name).ToArray();
         Assert.True(string.Join('|', filters).Length > GoalAcceptanceVerifier.MaxFocusedEvidenceFilterLength);
         var targets = filters.Select(Target).ToArray();
