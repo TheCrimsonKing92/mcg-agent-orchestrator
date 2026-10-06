@@ -11,7 +11,7 @@ public sealed class AcceptanceLaneReuseShadowClassifierTests
     [Theory]
     [InlineData("ProcessStartInfo", "process-spawning")]
     [InlineData("Process.Start(", "process-spawning")]
-    [InlineData("pwsh", "process-spawning")]
+    [InlineData("fixture text containing pwsh", "process-spawning")]
     [InlineData("powershell", "process-spawning")]
     [InlineData(".exe\"", "built-binary")]
     [InlineData(".dll\"", "built-binary")]
