@@ -90,6 +90,17 @@ internal static class TestCoverageInvariant
             return structured;
         }
 
+        foreach (var rawLine in output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+        {
+            var line = rawLine.Trim();
+            if (line.StartsWith("{\"", StringComparison.Ordinal))
+            {
+                var prefix = line[..Math.Min(120, line.Length)];
+                throw new InvalidDataException(
+                    $"Test discovery output is JSON-shaped but lacks a schemaVersion schema marker and a tests array: \"{prefix}\".");
+            }
+        }
+
         return new TestDiscoverySnapshot(ParseTextDiscovery(output, bareTestList), null);
     }
 
