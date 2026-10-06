@@ -98,12 +98,17 @@ public sealed class GitAuthorBriefDraftRepositoryTestsRangeCitations
 
     private static string Draft(string premise) => $$"""
         # Citation fixture
+        ## Planner output format, read this first
+
+        Begin each mapping line with the bare criterion number and a period, exactly `N. maps to <subject>. disposition=planned; plan=<text>` (the semicolon after the disposition value is required). Only `planned` and `undecidable` are accepted. The literal text `disposition=` must appear only on mapping lines. Only mapping lines may begin with a digit and a period. Cite files by full repository-relative path that exists at HEAD, or mark them as new; never cite a wildcard pattern. Do not use the words placeholder, TBD or TODO. The text after plan= must be a non-empty one-sentence summary on the same line; detail bullets may follow but must not begin with a digit and a period.
+
         ## Measured premise
         {{premise}}
         ## What to build
         Check repository citations.
         ## Acceptance criteria
-        - Citations resolve. Developer owns; Acceptance executes. TEST-VERIFIABLE.
+        1. Citations resolve. Developer owns; Acceptance executes. TEST-VERIFIABLE.
+        2. The Developer reports `tests: deferred - ` followed, directly after the hyphen and comma-separated, by every test class it touched or added. The Tester's evidence_request runs them. Developer owns; Acceptance executes. TEST-VERIFIABLE.
         ## Scope
         Repository citations.
         """;
