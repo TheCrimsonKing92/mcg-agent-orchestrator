@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO.Pipes;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
@@ -1460,28 +1461,26 @@ public sealed class MtpTestRunnerScriptTests
         params string[] filterArguments)
     {
         InvocationCounterScope.CountDiscovery();
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = "dotnet",
-            WorkingDirectory = RepositoryRoot(),
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true
-        };
-        startInfo.ArgumentList.Add(typeof(MtpTestRunnerScriptTests).Assembly.Location);
-        startInfo.ArgumentList.Add("--list-tests");
-        startInfo.ArgumentList.Add("json");
-        foreach (var argument in filterArguments)
-        {
-            startInfo.ArgumentList.Add(argument);
-        }
+        var stdoutPipeName = $"mcg-managed-discovery-{Guid.NewGuid():N}-out";
+        var stderrPipeName = $"mcg-managed-discovery-{Guid.NewGuid():N}-err";
+        using var stdoutPipe = OperatingSystem.IsWindows()
+            ? GoalAcceptanceVerifierCaptureCustody.CreateCapturePipe(stdoutPipeName) : null;
+        using var stderrPipe = OperatingSystem.IsWindows()
+            ? GoalAcceptanceVerifierCaptureCustody.CreateCapturePipe(stderrPipeName) : null;
+        var startInfo = GoalAcceptanceVerifierCaptureCustody.BuildAcceptanceProcessStartInfo(
+            [ResolveDotnetHostPath(), typeof(MtpTestRunnerScriptTests).Assembly.Location, "--list-tests", "json", .. filterArguments],
+            RepositoryRoot(),
+            stdoutPipe is null ? null : $@"\\.\pipe\{stdoutPipeName}",
+            stderrPipe is null ? null : $@"\\.\pipe\{stderrPipeName}",
+            forceUtf8ConsoleOutput: true);
 
-        var result = Run(startInfo, TimeSpan.FromMinutes(2));
+        // Owned pipes keep cmd's UTF-8 preflight isolated from the parent's console and handles.
+        var result = Run(startInfo, TimeSpan.FromMinutes(2),
+            capturePipes: stdoutPipe is null ? null : (stdoutPipe, stderrPipe!));
         Assert.True(
             result.ExitCode == 0 || (allowEmpty && result.ExitCode is 1 or 8),
             $"exit={result.ExitCode}{Environment.NewLine}{result.Stdout}{result.Stderr}");
-        using var document = JsonDocument.Parse(result.Stdout.Trim());
+        using var document = JsonDocument.Parse(TestCoverageInvariantDiscoveryJson.EscapeRawControlCharacters(result.Stdout.Trim()));
         var tests = document.RootElement.GetProperty("tests")
             .EnumerateArray()
             .Select(test =>
@@ -1721,8 +1720,23 @@ public sealed class MtpTestRunnerScriptTests
         ProcessStartInfo startInfo,
         TimeSpan? timeout = null,
         string? readinessPath = null,
-        string? descendantPidPath = null)
+        string? descendantPidPath = null,
+        (NamedPipeServerStream Stdout, NamedPipeServerStream Stderr)? capturePipes = null)
     {
+        if (startInfo.RedirectStandardOutput && startInfo.StandardOutputEncoding is null)
+        {
+            startInfo.StandardOutputEncoding = Encoding.UTF8;
+        }
+        if (startInfo.RedirectStandardError && startInfo.StandardErrorEncoding is null)
+        {
+            startInfo.StandardErrorEncoding = Encoding.UTF8;
+        }
+        using var captureCancellation = capturePipes is null ? null
+            : new CancellationTokenSource(timeout ?? TimeSpan.FromSeconds(30));
+        var ownedStdout = capturePipes is { } outputPipes
+            ? ReadCaptureAsync(outputPipes.Stdout, captureCancellation!.Token) : null;
+        var ownedStderr = capturePipes is { } errorPipes
+            ? ReadCaptureAsync(errorPipes.Stderr, captureCancellation!.Token) : null;
         Process process;
         using (ProcessTreeGuiSuppression.AcquireErrorModeForChildSpawn())
         {
@@ -1730,8 +1744,8 @@ public sealed class MtpTestRunnerScriptTests
                 ?? throw new InvalidOperationException($"Failed to start {startInfo.FileName}.");
         }
         using var processScope = process;
-        var stdout = process.StandardOutput.ReadToEndAsync();
-        var stderr = process.StandardError.ReadToEndAsync();
+        var stdout = ownedStdout ?? process.StandardOutput.ReadToEndAsync();
+        var stderr = ownedStderr ?? process.StandardError.ReadToEndAsync();
         Process? descendant = null;
         if (readinessPath is not null)
         {
@@ -1776,6 +1790,13 @@ public sealed class MtpTestRunnerScriptTests
         }
         descendant?.Dispose();
         return new ProcessResult(process.ExitCode, stdout.GetAwaiter().GetResult(), stderr.GetAwaiter().GetResult());
+
+        static async Task<string> ReadCaptureAsync(NamedPipeServerStream pipe, CancellationToken cancellationToken)
+        {
+            await pipe.WaitForConnectionAsync(cancellationToken).ConfigureAwait(false);
+            using var reader = new StreamReader(pipe, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, leaveOpen: true);
+            return await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
+        }
     }
 
     private static async Task WaitForFilesAsync(string directory, string[] paths, TimeSpan hangGuard)
