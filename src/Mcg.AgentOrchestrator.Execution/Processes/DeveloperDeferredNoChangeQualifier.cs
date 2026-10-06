@@ -93,7 +93,8 @@ internal static class DeveloperDeferredNoChangeQualifier
                     ReviewFindingRouting.Project([finding])[0].TargetRole == AgentRole.Developer)
                 .SelectMany(finding => finding.EvidenceRequest!.Selections)
                 .Select(selection => selection.TestClass).ToArray();
-            if (required.Length == 0 && findingClasses.Length == 0 && !NewestRetryIsEvidenceUnusable(goal, task))
+            if (required.Length == 0 && findingClasses.Length == 0 && !NewestRetryIsEvidenceUnusable(goal, task) &&
+                !AnswerTriggeredRound(goal, task))
                 return Decline("no-finding-classes", out declineCode);
         }
         if (required.Any(name => !IsDeclared(name)))
@@ -180,6 +181,18 @@ internal static class DeveloperDeferredNoChangeQualifier
         return goal.Timeline.Any(item => item.TaskId == task.Id &&
             item.Kind == ProgressKind.HumanInputReceived &&
             item.OccurredAt > previous.DispatchedAt && item.OccurredAt < current.DispatchedAt);
+    }
+
+    private static bool AnswerTriggeredRound(Goal goal, TaskSpec task)
+    {
+        if (task.LastDispatch is not { } current) return false;
+        var newestRetry = goal.Timeline.Where(item => item.TaskId == task.Id &&
+                item.Kind is ProgressKind.TaskRetried or ProgressKind.TaskRetryFeedbackUpdated)
+            .Select(item => (DateTimeOffset?)item.OccurredAt).Max();
+        return goal.Timeline.Any(item => item.TaskId == task.Id &&
+            item.Kind == ProgressKind.HumanInputReceived &&
+            (newestRetry is null || item.OccurredAt > newestRetry.Value) &&
+            item.OccurredAt <= current.DispatchedAt);
     }
 
     private static string DeclaringClass(string identity)
