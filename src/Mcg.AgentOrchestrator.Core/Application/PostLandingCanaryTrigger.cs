@@ -86,6 +86,7 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/SourceSizeRatchetPreflight",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/SshRemoteLaneExecutor",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/StateEffectProposals",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/StructuralCoverageFailureDetail",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/StructuralCoveragePermitWait"
         ]),
         new("post-landing-canary", [
