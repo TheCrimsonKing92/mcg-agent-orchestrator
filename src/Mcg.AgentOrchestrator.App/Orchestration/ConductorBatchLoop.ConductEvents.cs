@@ -107,7 +107,7 @@ internal sealed partial class ConductorBatchLoop
             "TICK_WRITE_DEGRADED" => "lock-blocker",
             "GLANCE" => "progressive-review-glance",
             "WATCH_TRANSITION" => "watch-transition",
-            "PROMPT_ROLLOUT_SUSPECT" => "prompt-rollout-suspect",
+            "PROMPT_ROLLOUT_SUSPECT" => "prompt-rollout-suspect", "CONSOLE_CODE_PAGE_CHANGED" => "console-code-page-changed",
             _ => string.Empty
         };
 

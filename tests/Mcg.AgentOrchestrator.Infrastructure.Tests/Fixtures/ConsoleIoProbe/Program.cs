@@ -6,6 +6,13 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 if (args.Length > 0 && args[0] == "--startup-launch") return StartupPipeProbe.Launch(args[1..]);
 if (args.Length > 0 && args[0] == "--conhost-experiment") return await ConsoleHostExperimentProbe.Run(args[1..]);
+if (args.Length > 0 && args[0] == "--write-console-text")
+{
+    File.WriteAllText(args[2], "ready");
+    while (!File.Exists(args[3])) Thread.Yield();
+    Console.Out.WriteLine(args[1]);
+    return 0;
+}
 if (args.Length > 0 && args[0] == "--startup-child") return StartupPipeProbe.Run(args[1..]);
 if (args.Length > 0 && args[0] == "--priority-grandchild") return await BelowNormalGrandchildProbe.Run(args[1..]);
 

@@ -18,7 +18,7 @@ public sealed class ProcessTreeGuiSuppressionTestsConsoleHostExperiment(ITestOut
         var reportPath = Environment.GetEnvironmentVariable("MCG_CONHOST_EXPERIMENT_REPORT");
         using var document = await ConsoleHostExperimentHarness.Run(launches, selectedArms, reportPath: reportPath, writeOutput: output.WriteLine);
         var report = document.RootElement;
-        Assert.Equal("Off", report.GetProperty("switchAtStartup").GetString());
+        Assert.Equal("InheritWindowlessConsole", report.GetProperty("switchAtStartup").GetString());
         Assert.Equal(0, report.GetProperty("consoleWindow").GetInt64());
         Assert.True(report.GetProperty("consoleProcessCount").GetUInt32() > 0, report.GetRawText());
         var shell = report.GetProperty("powerShellExecutable").GetString()!;
@@ -145,7 +145,8 @@ public sealed class ProcessTreeGuiSuppressionTestsConsoleHostExperiment(ITestOut
 internal static class ConsoleHostExperimentHarness
 {
     internal static async Task<JsonDocument> Run(int launches, string arms, bool startupOnly = false,
-        string? reportPath = null, Action<string>? writeOutput = null)
+        string? reportPath = null, Action<string>? writeOutput = null,
+        IReadOnlyDictionary<string, string>? environmentOverrides = null, bool ownConsoleCheck = false)
     {
         var directory = Path.Combine(Path.GetTempPath(), "mcg-conhost-test", Guid.NewGuid().ToString("n"));
         Directory.CreateDirectory(directory);
@@ -162,6 +163,11 @@ internal static class ConsoleHostExperimentHarness
                          "--arms", arms, "--report", path, "--startup-only", startupOnly.ToString().ToLowerInvariant(), "--work-dir", directory })
                 info.ArgumentList.Add(arg);
             info.Environment.Remove("DOTNET_STARTUP_HOOKS");
+            info.Environment.Remove(ChildConsoleLaunchPolicy.OffSwitchVariable);
+            if (environmentOverrides is not null)
+                foreach (var entry in environmentOverrides) info.Environment[entry.Key] = entry.Value;
+            info.ArgumentList.Add("--own-console-check");
+            info.ArgumentList.Add(ownConsoleCheck.ToString().ToLowerInvariant());
             // Explicit CreateNoWindow gives this fixture its own windowless console even in an interactive test run.
             using (ProcessTreeGuiSuppression.AcquireErrorModeForChildSpawn())
                 host = Process.Start(info) ?? throw new InvalidOperationException("Measurement host did not start.");

@@ -1614,6 +1614,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         context.Workspace.OrchestratorDirectory, context.Workspace.LogDirectory)
                 };
                 var unappliedExitWatch = new ConductorUnappliedExitWatch();
+                var consoleCodePageWatch = new ConductorConsoleCodePageWatch();
                 var hostHealthMonitor = new ConductorHostHealthMonitor(
                     GateHostHealthLedger.ResolveStorePath(context.Workspace.ExecutionDirectory),
                     Path.Combine(context.Workspace.OrchestratorDirectory, ConductorHostHealthMonitor.StateFileName),
@@ -1776,7 +1777,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     terminalSweep = terminalSweep with
                     {
                         ReloadBaseline = reloadBaseline,
-                        ProgressEvents = [.. remediation.Events, .. unappliedExitWatch.Observe(loopKernel)]
+                        ProgressEvents = [.. remediation.Events, .. unappliedExitWatch.Observe(loopKernel), .. consoleCodePageWatch.Observe()]
                     };
                     ConsoleViews.PrintTerminalGoalSweep(terminalSweep, includeBlockers: false);
                     TerminalGoalSweepAttention.Surface(loopKernel, terminalSweep, context.Workspace.OrchestratorDirectory);

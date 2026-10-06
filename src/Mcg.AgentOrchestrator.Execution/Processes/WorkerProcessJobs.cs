@@ -601,7 +601,7 @@ public static partial class WorkerProcessJobs
         string? ownerId = null,
         Func<Process, SpawnProcessIdentityReadResult>? registrationIdentityReader = null,
         bool containDescendants = false,
-        Action<int>? resumeObserver = null)
+        Action<int>? resumeObserver = null, bool requestOwnConsole = false)
     {
         ArgumentNullException.ThrowIfNull(startInfo);
         var lifecycleAuthority = new object();
@@ -624,8 +624,8 @@ public static partial class WorkerProcessJobs
 
         return StartRegisteredOwnedWindows(
             () => containDescendants
-                ? OwnedProcessGroup.StartSuspendedContained(startInfo)
-                : OwnedProcessGroup.StartSuspended(startInfo),
+                ? OwnedProcessGroup.StartSuspendedContained(startInfo, requestOwnConsole)
+                : OwnedProcessGroup.StartSuspended(startInfo, requestOwnConsole),
             startInfo,
             lifecycleAuthority,
             registrationIdentityReader,

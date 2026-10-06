@@ -14,16 +14,23 @@ internal sealed record ChildConsoleLaunchPolicy(bool LauncherHasConsoleWindow, b
 
     internal bool ChildCreateNoWindow => !LauncherHasConsoleWindow && !InheritLauncherConsole;
 
-    internal static ChildConsoleExperiment ExperimentForTests { get; set; } = ChildConsoleExperiment.Off;
+    internal const ChildConsoleExperiment DefaultExperiment = ChildConsoleExperiment.InheritWindowlessConsole;
+    internal const string OffSwitchVariable = "MCG_CHILD_CONSOLE_INHERIT";
+
+    internal static ChildConsoleExperiment ExperimentForTests { get; set; } =
+        ParseOffSwitch(Environment.GetEnvironmentVariable(OffSwitchVariable));
+
+    internal static ChildConsoleExperiment ParseOffSwitch(string? value) =>
+        string.Equals(value, "off", StringComparison.OrdinalIgnoreCase) ? ChildConsoleExperiment.Off : DefaultExperiment;
 
     // Test-only injection point. It is intentionally evaluated before the process-wide
     // error-mode lock so preparation cannot serialize unrelated launches.
     internal static Action? PrepareDelayHookForTests { get; set; }
 
-    internal static ChildConsoleLaunchPolicy Prepare()
+    internal static ChildConsoleLaunchPolicy Prepare(bool requestOwnConsole = false)
     {
         PrepareDelayHookForTests?.Invoke();
-        return Select(ExperimentForTests, Windows.GetConsoleWindow() != IntPtr.Zero,
+        return Select(requestOwnConsole ? ChildConsoleExperiment.Off : ExperimentForTests, Windows.GetConsoleWindow() != IntPtr.Zero,
             static () => Windows.GetConsoleProcessList(new uint[1], 1) > 0);
     }
 
