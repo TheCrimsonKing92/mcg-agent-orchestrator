@@ -52,12 +52,73 @@ internal static class AuthorBriefDraftChecks
                     citationFailures.Add($"{token}: line is outside file (line count {count})");
             }
         }
+        var plannerFormat = markdown.ReplaceLineEndings("\n").Contains(
+            AuthorBriefDraftPrompt.PlannerFormatSection.ReplaceLineEndings("\n"), StringComparison.Ordinal);
+        var plannerHeading = headings.FirstOrDefault(heading => heading.Groups[1].Value.Trim()
+            .Equals("Planner output format, read this first", StringComparison.OrdinalIgnoreCase));
+        var bulletedLines = UnfencedLines(SectionText("Acceptance criteria"))
+            .Select(line => line.Text)
+            .Where(line => line.StartsWith("- ", StringComparison.Ordinal) || line.StartsWith("* ", StringComparison.Ordinal))
+            .ToArray();
+        var numberedCriteria = criteria.Count == 0 || bulletedLines.Length == 0;
+        var developerDeferred = criteria.Any(criterion => criterion.Contains("tests: deferred - ", StringComparison.Ordinal) &&
+            criterion.TrimEnd().EndsWith("Developer owns; Acceptance executes. TEST-VERIFIABLE.", StringComparison.Ordinal));
+        var buildItemCount = SectionText("What to build").ReplaceLineEndings("\n").Split('\n')
+            .Count(line => Regex.IsMatch(line.TrimStart(), @"^\d+\.", RegexOptions.CultureInvariant));
         return
         [
             new("sections", missing.Length == 0, missing.Length == 0 ? "All four sections present." : $"Missing headings: {string.Join(", ", missing)}"),
             new("criteria-present", criteria.Count > 0, criteria.Count > 0 ? $"{criteria.Count} declared criteria." : "Acceptance criteria contains no declared criteria."),
             new("owner-sentence", ownerFailures.Length == 0, ownerFailures.Length == 0 ? "Every declared criterion has an owner sentence and verification class." : $"Missing owner sentence: {string.Join(" | ", ownerFailures)}"),
-            new("premise-citations", citationFailures.Count == 0, citationFailures.Count == 0 ? "All premise file citations resolve at main HEAD." : string.Join(" | ", citationFailures))
+            new("premise-citations", citationFailures.Count == 0, citationFailures.Count == 0 ? "All premise file citations resolve at main HEAD." : string.Join(" | ", citationFailures)),
+            new("planner-format", plannerFormat, plannerFormat ? "Planner format section present verbatim." :
+                $"Observed Planner heading: {plannerHeading?.Groups[1].Value.Trim() ?? "none"}; required section was not present verbatim."),
+            new("numbered-criteria", numberedCriteria, criteria.Count == 0 ? "No declared criteria; criteria-present reports the absence." :
+                numberedCriteria ? "No bulleted criteria outside fenced code blocks." : $"Observed bulleted lines: {string.Join(" | ", bulletedLines)}"),
+            new("developer-deferred-criterion", criteria.Count == 0 || developerDeferred, criteria.Count == 0 ?
+                "No declared criteria; criteria-present reports the absence." : developerDeferred ? "Developer deferred-tests criterion present." :
+                $"Observed {criteria.Count} declared criteria; none contains tests: deferred - and ends with Developer owns; Acceptance executes. TEST-VERIFIABLE."),
+            new("build-item-count", buildItemCount <= 4, $"Observed {buildItemCount} numbered build items; maximum is 4.")
         ];
+
+        string SectionText(string name)
+        {
+            var section = headings.FirstOrDefault(heading => heading.Groups[1].Value.Trim()
+                .Equals(name, StringComparison.OrdinalIgnoreCase));
+            if (section is null) return string.Empty;
+            var remainder = markdown[(section.Index + section.Length)..].ReplaceLineEndings("\n");
+            var end = UnfencedLines(remainder).Where(line => Headings.IsMatch(line.Text))
+                .Select(line => (int?)line.Index).FirstOrDefault() ?? remainder.Length;
+            return remainder[..end];
+        }
+    }
+
+    private static IEnumerable<(string Text, int Index)> UnfencedLines(string text)
+    {
+        char fenceCharacter = '\0';
+        var fenceLength = 0;
+        var index = 0;
+        foreach (var line in text.ReplaceLineEndings("\n").Split('\n'))
+        {
+            var lineIndex = index;
+            index += line.Length + 1;
+            var trimmed = line.TrimStart();
+            var markerLength = trimmed.Length > 0 && trimmed[0] is '`' or '~'
+                ? trimmed.TakeWhile(character => character == trimmed[0]).Count() : 0;
+            if (fenceLength == 0)
+            {
+                if (markerLength >= 3)
+                {
+                    fenceCharacter = trimmed[0];
+                    fenceLength = markerLength;
+                }
+                else yield return (trimmed, lineIndex);
+            }
+            else if (markerLength >= fenceLength && trimmed[0] == fenceCharacter &&
+                     string.IsNullOrWhiteSpace(trimmed[markerLength..]))
+            {
+                fenceLength = 0;
+            }
+        }
     }
 }
