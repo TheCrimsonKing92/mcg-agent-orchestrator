@@ -258,7 +258,10 @@ internal static class SourceSizeRatchet
             // The operation owner threads through this runner's own call sites.
             // Goal 798f1c58 adds only adjudicate routing and typed actor-kind attribution call sites;
             // payload parsing and version lookup live in CliCommandHandlers.Adjudicate.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 4867),
+            // Raised by five lines for goal 10abca19: scoped CLI writes are extracted to
+            // CliPersistentStateRunner.GoalScopedWrite, while the shared dispatch boundary
+            // must retain the single route-selection call so existing fallback semantics stay centralized.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 4872),
             // Goal 03aaf13e adds the explicit-root isolation fact at the verifier's existing execution-
             // environment seam; the production verifier remains at its prior ceiling.
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs", 1611),
