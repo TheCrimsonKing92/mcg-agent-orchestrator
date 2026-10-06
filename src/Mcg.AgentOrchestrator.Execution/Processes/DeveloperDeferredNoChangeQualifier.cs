@@ -94,7 +94,7 @@ internal static class DeveloperDeferredNoChangeQualifier
                 .SelectMany(finding => finding.EvidenceRequest!.Selections)
                 .Select(selection => selection.TestClass).ToArray();
             if (required.Length == 0 && findingClasses.Length == 0 && !NewestRetryIsEvidenceUnusable(goal, task) &&
-                !AnswerTriggeredRound(goal, task))
+                !AnswerTriggeredRound(goal, task) && !StaleFindingRetry(goal, task))
                 return Decline("no-finding-classes", out declineCode);
         }
         if (required.Any(name => !IsDeclared(name)))
@@ -181,6 +181,30 @@ internal static class DeveloperDeferredNoChangeQualifier
         return goal.Timeline.Any(item => item.TaskId == task.Id &&
             item.Kind == ProgressKind.HumanInputReceived &&
             item.OccurredAt > previous.DispatchedAt && item.OccurredAt < current.DispatchedAt);
+    }
+
+    private static bool StaleFindingRetry(Goal goal, TaskSpec task)
+    {
+        if (task.LatestRetryAt is not { } retryAt) return false;
+        var retry = goal.Timeline.Where(item => item.TaskId == task.Id &&
+                item.Kind is ProgressKind.TaskRetried or ProgressKind.TaskRetryFeedbackUpdated &&
+                item.OccurredAt >= retryAt)
+            .OrderBy(item => item.OccurredAt).LastOrDefault();
+        if (retry is null) return false;
+        var match = Regex.Match(retry.Message,
+            @"\Aauto-review-retry round \d+ convergence brief: (?<role>Tester|Reviewer) task (?<id>[a-fA-F0-9]{8}) ",
+            RegexOptions.CultureInvariant);
+        if (!match.Success) return false;
+        var role = match.Groups["role"].Value == "Tester" ? AgentRole.Tester : AgentRole.Reviewer;
+        var raisingTasks = goal.Tasks.Where(other => other.RequiredRole == role &&
+            other.Id.Value.StartsWith(match.Groups["id"].Value, StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (raisingTasks.Length != 1) return false;
+        var reviewed = raisingTasks[0].VerificationHistory
+            .Where(record => record.CompletedAt <= retry.OccurredAt)
+            .OrderBy(record => record.CompletedAt).LastOrDefault()?.ReviewedCommit;
+        var candidate = task.LastDispatch?.BaseCommit;
+        return !string.IsNullOrWhiteSpace(reviewed) && !string.IsNullOrWhiteSpace(candidate) &&
+            !string.Equals(reviewed.Trim(), candidate.Trim(), StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool AnswerTriggeredRound(Goal goal, TaskSpec task)

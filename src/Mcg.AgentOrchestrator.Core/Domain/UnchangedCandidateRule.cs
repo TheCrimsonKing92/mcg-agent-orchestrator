@@ -11,7 +11,7 @@ public static class UnchangedCandidateRule
         var prior = FindPriorVerdict(goal, candidateTask);
         if (prior.verification is null ||
             !CandidateIdentity.AreSameCandidate(prior.verification.CandidateIdentity, current) ||
-            HasNewInput(goal, candidateTask, prior.verification.CompletedAt))
+            HasNewInput(goal, candidateTask, prior.verification))
             return null;
         var verdict = UnchangedCandidateVerdict.Derive(goal, prior.task, prior.verification);
         if (verdict == UnchangedCandidateVerdict.Rejected) return null;
@@ -53,8 +53,9 @@ public static class UnchangedCandidateRule
         .OrderByDescending(pair => pair.verification.CompletedAt)
         .FirstOrDefault();
 
-    private static bool HasNewInput(Goal goal, TaskSpec task, DateTimeOffset verdictAt)
+    private static bool HasNewInput(Goal goal, TaskSpec task, TaskVerificationRecord verdict)
     {
+        var verdictAt = verdict.CompletedAt;
         if (task.AcceptedRetryFeedback?.AcceptedAt > verdictAt ||
             goal.Timeline.Any(evt => evt.Kind == ProgressKind.HumanInputReceived && evt.OccurredAt > verdictAt))
             return true;
@@ -68,6 +69,13 @@ public static class UnchangedCandidateRule
             foreach (var later in peer.VerificationHistory.Where(verification => verification.CompletedAt > verdictAt))
             {
                 if (later.FindingEvidenceReceipts is { Count: > 0 }) return true;
+                if (task.RequiredRole is AgentRole.Tester or AgentRole.Reviewer &&
+                    peer.RequiredRole == AgentRole.Developer &&
+                    later.CompletionVerdictRule == TaskOutcomeRules.DeferredNoChangeRound.Token &&
+                    !string.IsNullOrWhiteSpace(verdict.ReviewedCommit) &&
+                    RoundBase(peer, later) is { } baseCommit && !string.IsNullOrWhiteSpace(baseCommit) &&
+                    !string.Equals(baseCommit.Trim(), verdict.ReviewedCommit.Trim(), StringComparison.OrdinalIgnoreCase))
+                    return true;
                 if (task.RequiredRole == AgentRole.Developer &&
                     peer.RequiredRole is AgentRole.Tester or AgentRole.Reviewer &&
                     (!later.Succeeded || later.MergedReviewFindings is { Count: > 0 })) return true;
@@ -78,5 +86,16 @@ public static class UnchangedCandidateRule
             }
         }
         return false;
+    }
+
+    private static string? RoundBase(TaskSpec task, TaskVerificationRecord verification)
+    {
+        if (task.LastVerification is { } latest && latest.HasSameRoundIdentity(verification))
+            return task.LastDispatch?.BaseCommit;
+        // An explicit round identity must resolve to that round, never a neighboring dispatch.
+        if (verification.DispatchStartedAt is { } startedAt)
+            return task.DispatchHistory.LastOrDefault(dispatch => dispatch.DispatchedAt == startedAt)?.BaseCommit;
+        return task.DispatchHistory.Where(dispatch => dispatch.DispatchedAt <= verification.CompletedAt)
+            .OrderBy(dispatch => dispatch.DispatchedAt).LastOrDefault()?.BaseCommit;
     }
 }
