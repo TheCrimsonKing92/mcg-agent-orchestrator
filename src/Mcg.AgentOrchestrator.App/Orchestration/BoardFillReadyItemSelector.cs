@@ -5,6 +5,8 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal static class BoardFillReadyItemSelector
 {
+    internal const int MaxFailedRoundsPerChange = 2;
+
     private static readonly string[] OwnerMarkers =
         ["owner decision", "owner approval", "owner ruling", "approve-policy-change", "decision for you"];
 
@@ -18,9 +20,12 @@ internal static class BoardFillReadyItemSelector
             item.Notes.Any(note => note.Text.Contains(marker, StringComparison.OrdinalIgnoreCase)));
 
     internal static BacklogItem? Select(IReadOnlyList<BacklogItem> items, IReadOnlyList<Goal> goals,
-        IReadOnlySet<string> alreadyDrafted, Func<BacklogItem, BacklogReadiness> readiness) =>
+        IReadOnlySet<string> alreadyDrafted, Func<BacklogItem, BacklogReadiness> readiness,
+        IReadOnlyList<BoardFillDraftRound>? rounds = null) =>
         items.Where(item => item.Status == BacklogItemStatus.Open &&
             !alreadyDrafted.Contains(item.Id) &&
+            (rounds is null || rounds.Count(round => round.BacklogItemId == item.Id &&
+                round.Outcome == "failed" && round.ChangeStamp >= ChangeStamp(item)) < MaxFailedRoundsPerChange) &&
             !goals.Any(goal => goal.SourceBacklogItemId == item.Id && !goal.IsTerminal) &&
             !IsOwnerGated(item))
         .Select(item => (Item: item, Ready: readiness(item)))

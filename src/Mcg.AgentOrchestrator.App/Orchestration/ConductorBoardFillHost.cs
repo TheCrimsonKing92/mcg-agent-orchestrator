@@ -57,23 +57,23 @@ internal sealed partial class ConductorBoardFillHost
                 Assess(unfinished, null, new("unavailable", 0, [], "assessment-interrupted"), kernel);
             _recovered = true;
         }
-        Harvest(now);
+        var held = Harvest(now);
         ReportFinished();
         ServiceFiling();
-        if (_round is not null || kernel.Goals.Count(goal => !goal.IsTerminal) >= policy.BoardFillTargetActiveGoals ||
+        if (held || _round is not null || kernel.Goals.Count(goal => !goal.IsTerminal) >= policy.BoardFillTargetActiveGoals ||
             _store.StartedOnUtcDay(now) >= policy.BoardFillMaxDraftsPerDay) return;
         var items = ConductorTickStepLedger.CountBacklogRows(_backlog());
         var item = BoardFillReadyItemSelector.Select(items, kernel.Goals.ToArray(), _store.AlreadyDrafted(items),
-            ConductorTickStepLedger.CountReadinessEvaluations(_readiness(kernel, items)));
+            ConductorTickStepLedger.CountReadinessEvaluations(_readiness(kernel, items)), _store.ReadAll());
         if (item is null) return;
         _running = _store.Begin(item, now);
         // Only immutable identity crosses the thread boundary; the model never reads the live kernel.
         _round = Task.Run(() => RunRoundAsync(item.Id));
     }
 
-    private void Harvest(DateTimeOffset now)
+    private bool Harvest(DateTimeOffset now)
     {
-        if (_round is not { IsCompleted: true } || _running is null) return;
+        if (_round is not { IsCompleted: true } || _running is null) return false;
         BoardFillRoundResult result;
         try { result = _round.GetAwaiter().GetResult(); }
         catch (Exception exception) { result = new(Failed($"{exception.GetType().Name}: {exception.Message}"), null,
@@ -83,6 +83,7 @@ internal sealed partial class ConductorBoardFillHost
         Assess(finished, result.Markdown, result.Verification, _kernel!);
         _running = null;
         _round = null;
+        return result.Outcome.Kind == "held";
     }
 
     private void ReportFinished()
