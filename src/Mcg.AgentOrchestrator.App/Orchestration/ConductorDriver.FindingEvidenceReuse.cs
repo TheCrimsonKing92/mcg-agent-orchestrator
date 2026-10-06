@@ -664,7 +664,7 @@ internal sealed partial class ConductorDriver
                 .ToArray(),
             TryGetExecutedTestCount(arm.Checks),
             testResultPaths,
-            receiptArtifacts);
+            receiptArtifacts, arm.RestoredPaths, arm.DroppedPaths);
     }
 
     private static IReadOnlyList<string> NormalizeFindingEvidenceTestResultPaths(IEnumerable<string> paths)

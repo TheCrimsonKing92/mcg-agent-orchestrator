@@ -372,7 +372,9 @@ public sealed record FindingEvidenceArmReceipt(
     IReadOnlyList<string>? FailingTestIdentities = null,
     int? ExecutedTestCount = null,
     IReadOnlyList<string>? TestResultPaths = null,
-    IReadOnlyList<AcceptanceCohortEvidenceArtifact>? ReceiptArtifacts = null);
+    IReadOnlyList<AcceptanceCohortEvidenceArtifact>? ReceiptArtifacts = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string>? RestoredPaths = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string>? DroppedPaths = null);
 
 public sealed record FindingEvidenceRequestDisposition(
     string FindingStableId,

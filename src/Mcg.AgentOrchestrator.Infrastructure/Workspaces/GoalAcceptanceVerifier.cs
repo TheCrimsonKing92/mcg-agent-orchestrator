@@ -367,7 +367,8 @@ public sealed record FocusedEvidenceArmRunResult(
     IReadOnlyList<AcceptanceCheckResult> Checks,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     [property: System.Text.Json.Serialization.JsonConverter(typeof(FindingEvidenceRevertPathsRejectionJsonConverter))]
-    FindingEvidenceRevertPathsRejection? RevertPathsRejection = null);
+    FindingEvidenceRevertPathsRejection? RevertPathsRejection = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string>? RestoredPaths = null, [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string>? DroppedPaths = null);
 
 public sealed record FocusedEvidenceTargetCoverage(
     string Target,
@@ -407,7 +408,7 @@ public interface IGoalAcceptanceVerifier
         IAcceptanceFocusedVerificationOwner executionOwner,
         FindingEvidenceNegativeControl negativeControl,
         int? stableSlotIndex = null, DotnetBuildEnvironmentLease? stableSlotLease = null,
-        bool runBaselineArm = false, IReadOnlyList<string>? revertPaths = null, FindingEvidenceMutation? mutation = null) => throw new NotSupportedException("Negative-control focused evidence is not supported.");
+        bool runBaselineArm = false, IReadOnlyList<string>? revertPaths = null, FindingEvidenceMutation? mutation = null, IReadOnlyList<string>? declaredPaths = null) => throw new NotSupportedException("Negative-control focused evidence is not supported.");
 }
 
 public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
@@ -1456,11 +1457,11 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         DotnetBuildEnvironmentLease? stableSlotLease = null,
         bool runBaselineArm = false,
         CancellationToken cancellationToken = default,
-        FindingEvidenceNegativeControl? negativeControl = null, IReadOnlyList<string>? revertPaths = null, FindingEvidenceMutation? mutation = null) =>
+        FindingEvidenceNegativeControl? negativeControl = null, IReadOnlyList<string>? revertPaths = null, FindingEvidenceMutation? mutation = null, IReadOnlyList<string>? declaredPaths = null) =>
         FocusedEvidenceExecution.RunFocusedEvidenceAsync(
             RunNegativeControlFocusedEvidenceOwnedAsync, RunFocusedEvidenceOwnedAsync,
             worktreePath, goalId, request, stableSlotIndex, stableSlotLease, runBaselineArm,
-            cancellationToken, negativeControl, revertPaths, mutation);
+            cancellationToken, negativeControl, revertPaths, mutation, declaredPaths);
 
     public Task<FocusedEvidenceRunResult> RunFocusedEvidenceOwnedAsync(
         string worktreePath,
@@ -1490,12 +1491,12 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         DotnetBuildEnvironmentLease? stableSlotLease = null,
         bool runBaselineArm = false,
         CancellationToken cancellationToken = default,
-        FindingEvidenceNegativeControl? negativeControl = null, IReadOnlyList<string>? revertPaths = null, FindingEvidenceMutation? mutation = null) =>
+        FindingEvidenceNegativeControl? negativeControl = null, IReadOnlyList<string>? revertPaths = null, FindingEvidenceMutation? mutation = null, IReadOnlyList<string>? declaredPaths = null) =>
         FocusedEvidenceExecution.RunOwnedFocusedEvidenceAsync(
             _executionContext, RunFocusedEvidenceArmAsync, RunBaselineFocusedEvidenceArmAsync,
             AddSourceRevertedEvidenceAsync, ResolveFocusedEvidenceMergeBase,
             worktreePath, goalId, request, stableSlotIndex, stableSlotLease, runBaselineArm,
-            cancellationToken, negativeControl, revertPaths, mutation);
+            cancellationToken, negativeControl, revertPaths, mutation, declaredPaths);
 
     private Task<FocusedEvidenceArmRunResult> RunFocusedEvidenceArmAsync(
         FindingEvidenceArm arm,

@@ -790,7 +790,8 @@ internal sealed partial class ConductorDriver
             var result = AcceptanceExecutionRunner.RunFocusedVerification(
                 acceptanceVerifier, worktreePath, goal.Id, request,
                 stableSlotLease?.Environment.BuildPermitIndex, stableSlotLease,
-                runBaselineArm, cancellationToken, negativeControl, revertPaths, mutation);
+                runBaselineArm, cancellationToken, negativeControl, revertPaths, mutation,
+                NegativeControlRevertDeclaration.Parse(goal.Objective) is { Declared: true, Rejection: null } declaration ? declaration.Paths : null);
             if (result.Passed)
             {
                 GoalOperationJournal.Completed(dir, goal, "conductor:finding-evidence", result.Summary);
