@@ -80,6 +80,9 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateShardPermitPool.Priority",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateShardWaiterMarkers",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/MainBaselineDiscoveryCache",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/RemoteLaneCoordinator",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/RemoteLaneExecutor",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/RemoteLaneExecutorConfiguration",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/SourceSizeRatchetPreflight",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/StateEffectProposals",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/StructuralCoveragePermitWait"
