@@ -10,7 +10,7 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryLaunchCount
     {
         using var scope = new FactoryScope();
         scope.Factory.Create();
-        Xunit.Assert.Equal(17, scope.Runner.Count);
+        Xunit.Assert.Equal(16, scope.Runner.Count);
         for (var create = 0; create < 2; create++)
         {
             var before = scope.Runner.Count;

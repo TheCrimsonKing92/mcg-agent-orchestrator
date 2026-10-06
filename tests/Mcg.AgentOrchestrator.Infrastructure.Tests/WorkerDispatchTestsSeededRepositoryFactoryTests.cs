@@ -1113,12 +1113,12 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
             .Where(candidate => candidate.Check ==
                 WorkerDispatchTestsSeededRepositoryFactory.ValidationCheck.TemplateCommit)
             .ToArray();
-        Xunit.Assert.Equal(3, receipts.Length);
+        Xunit.Assert.Equal(2, receipts.Length);
         Xunit.Assert.Equal(
             Enumerable.Range(receipts[0].ProbeOrdinal, receipts.Length),
             receipts.Select(receipt => receipt.ProbeOrdinal));
         Xunit.Assert.Equal(
-            2,
+            1,
             receipts.Count(receipt => receipt.Arguments?.TakeLast(3).SequenceEqual(
                 ["rev-parse", "--verify", "HEAD^{commit}"]) == true));
         var receipt = Xunit.Assert.Single(
