@@ -26,7 +26,7 @@ internal sealed class BoardFillPremiseVerifier(Func<ModelFunctionCatalog> catalo
         {
             if (!MatchesHead(head)) return Failure("failed", "repository-changed");
             var result = await (process ?? PanelJudgeProcess.RunAsync)(new(Command(binding), repositoryRoot,
-                ConductorJudgePanelBudgets.JudgeTimeout, BoardFillVerifierContract.Prompt(premise, head)), token).ConfigureAwait(false);
+                BoardFillVerifierBudget.For(count), BoardFillVerifierContract.Prompt(premise, head)), token).ConfigureAwait(false);
             if (!MatchesHead(head)) return Failure("failed", "repository-changed");
             if (token.IsCancellationRequested) return Failure("failed", "cancelled");
             if (result.TimedOut) return Failure("failed", "timeout");
