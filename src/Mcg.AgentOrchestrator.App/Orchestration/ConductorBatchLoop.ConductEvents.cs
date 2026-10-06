@@ -7,7 +7,7 @@ internal sealed partial class ConductorBatchLoop
     // Emit a compact progress line to stdout with immediate flush; optionally accumulate in a list.
     internal static void EmitProgress(string line, List<string>? accumulator = null)
     {
-        var stampedLine = $"{line} ts={DateTimeOffset.UtcNow:O}";
+        var stampedLine = $"{line} ts={DiagnosticUtcNow():O}";
         Console.WriteLine(stampedLine);
         Console.Out.Flush();
         accumulator?.Add(stampedLine);

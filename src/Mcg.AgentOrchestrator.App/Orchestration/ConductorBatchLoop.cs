@@ -663,7 +663,7 @@ internal sealed partial class ConductorBatchLoop
             }
             var preSweepBaseline = GoalKernelChange.CaptureAll(kernel);
             TerminalGoalJournalMetadataCache.BeginMeasurement();
-            var sweepClock = Stopwatch.StartNew();
+            var sweepClock = StartDiagnosticTimer();
             var sweepCpuStart = ReadProcessCpu();
             var sweepResult = RunJanitorialPhase(
                 "sweep",
@@ -731,7 +731,7 @@ internal sealed partial class ConductorBatchLoop
             _promptRolloutWatch?.EvaluateTick(kernel);
             RunJanitorialPhase("main-suspect-release", nextTick,
                 () => ServiceMainSuspectRelease(driver, canaryTasks, canaryTasksGate));
-            var preWalkClock = Stopwatch.StartNew();
+            var preWalkClock = StartDiagnosticTimer();
             var preWalkCpuStart = ReadProcessCpu();
             RunJanitorialPhase("retire-until-goal-lessons", nextTick, () => ConductorTickStepLedger.Measure("retire-until-goal-lessons", () => RetireUntilGoalLessons(kernel)));
             var hostedChangedGoalIds = ServiceStewardAndAuthor(kernel, onlyGoalId);
@@ -1131,7 +1131,7 @@ internal sealed partial class ConductorBatchLoop
             driver.PhaseTimingSink = line => perGoalPhaseTimingLines.Add($"PHASE_TIMING tick={totalTicks} {line}");
             var goalWalkTimings = new List<GoalWalkTiming>();
             driver.BeginTick(kernel, totalTicks);
-            var goalWalkClock = Stopwatch.StartNew();
+            var goalWalkClock = StartDiagnosticTimer();
             var goalWalkCpuStart = ReadProcessCpu();
             var glanceDurationStats = _progressiveReviewGlances is null
                 ? Array.Empty<TaskDurationStatsRecord>()
@@ -1151,7 +1151,7 @@ internal sealed partial class ConductorBatchLoop
                 }
 
                 var label = goal.Id.Value[..8];
-                var singleGoalClock = Stopwatch.StartNew();
+                var singleGoalClock = StartDiagnosticTimer();
                 void FinishGoalWalk(string result)
                 {
                     if (!singleGoalClock.IsRunning)

@@ -17,7 +17,7 @@ internal sealed partial class ConductorBatchLoop
     {
         BeginTickCpuAccounting();
         _stepLedger = new(ReadProcessCpu, _stepProbe);
-        return _stepLedger.Activate();
+        return ActivateDiagnosticTime(_stepLedger.Activate());
     }
 
     private void AddLedgerPhaseTimings(List<string> lines, int tick, string phase, TimeSpan elapsed, string detail, long cpuMs)

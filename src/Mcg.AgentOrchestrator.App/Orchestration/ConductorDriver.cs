@@ -1719,7 +1719,7 @@ internal sealed partial class ConductorDriver
 
         var start = fromState == GoalLifecycleState.Dispatched ? _startRecordedDispatches : _dispatchAndStart;
         var dispatchTimingGoal = goal;
-        var startClock = Stopwatch.StartNew();
+        var startClock = ConductorBatchLoop.StartDiagnosticTimer();
         var outcome = start(goal, policy);
         startClock.Stop();
         EmitPhaseTiming("dispatch-prep", dispatchTimingGoal, outcome, startClock.Elapsed, $"result={outcome.Category}");
