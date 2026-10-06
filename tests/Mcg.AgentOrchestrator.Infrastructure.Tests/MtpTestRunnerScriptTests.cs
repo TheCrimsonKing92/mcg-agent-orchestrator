@@ -1731,8 +1731,9 @@ public sealed class MtpTestRunnerScriptTests
         {
             startInfo.StandardErrorEncoding = Encoding.UTF8;
         }
+        var guard = RealProcessSilenceGuard.Start();
         using var captureCancellation = capturePipes is null ? null
-            : new CancellationTokenSource(timeout ?? TimeSpan.FromSeconds(30));
+            : new CancellationTokenSource(timeout ?? guard.Ceiling);
         var ownedStdout = capturePipes is { } outputPipes
             ? ReadCaptureAsync(outputPipes.Stdout, captureCancellation!.Token) : null;
         var ownedStderr = capturePipes is { } errorPipes
@@ -1744,8 +1745,8 @@ public sealed class MtpTestRunnerScriptTests
                 ?? throw new InvalidOperationException($"Failed to start {startInfo.FileName}.");
         }
         using var processScope = process;
-        var stdout = ownedStdout ?? process.StandardOutput.ReadToEndAsync();
-        var stderr = ownedStderr ?? process.StandardError.ReadToEndAsync();
+        var stdout = ownedStdout ?? RealProcessSilenceGuard.ReadChunksAsync(process.StandardOutput, guard.Stamp);
+        var stderr = ownedStderr ?? RealProcessSilenceGuard.ReadChunksAsync(process.StandardError, guard.Stamp);
         Process? descendant = null;
         if (readinessPath is not null)
         {
@@ -1771,9 +1772,9 @@ public sealed class MtpTestRunnerScriptTests
             }
         }
 
-        var timeoutMilliseconds = checked((int)(timeout ?? TimeSpan.FromSeconds(30)).TotalMilliseconds);
+        var timeoutMilliseconds = checked((int)(timeout ?? guard.Ceiling).TotalMilliseconds);
         var stopwatch = Stopwatch.StartNew();
-        if (!process.WaitForExit(timeoutMilliseconds))
+        if (!guard.WaitForExit(process, timeout))
         {
             process.Kill(entireProcessTree: true);
             var rootExited = process.WaitForExit(10_000);
@@ -1782,7 +1783,9 @@ public sealed class MtpTestRunnerScriptTests
             var timedOutStderr = stderr.GetAwaiter().GetResult();
             descendant?.Dispose();
             throw new RealProcessHangGuardException(
-                $"{startInfo.FileName} did not exit within {timeoutMilliseconds / 1000} seconds; elapsed={stopwatch.Elapsed}." +
+                (timeout is not null
+                    ? $"{startInfo.FileName} did not exit within {timeoutMilliseconds / 1000} seconds; elapsed={stopwatch.Elapsed}."
+                    : $"{startInfo.FileName} {guard.Failure}") +
                 $"{Environment.NewLine}stdout:{Environment.NewLine}{timedOutStdout}" +
                 $"{Environment.NewLine}stderr:{Environment.NewLine}{timedOutStderr}",
                 rootExited,
@@ -1791,11 +1794,11 @@ public sealed class MtpTestRunnerScriptTests
         descendant?.Dispose();
         return new ProcessResult(process.ExitCode, stdout.GetAwaiter().GetResult(), stderr.GetAwaiter().GetResult());
 
-        static async Task<string> ReadCaptureAsync(NamedPipeServerStream pipe, CancellationToken cancellationToken)
+        async Task<string> ReadCaptureAsync(NamedPipeServerStream pipe, CancellationToken cancellationToken)
         {
             await pipe.WaitForConnectionAsync(cancellationToken).ConfigureAwait(false);
             using var reader = new StreamReader(pipe, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, leaveOpen: true);
-            return await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
+            return await RealProcessSilenceGuard.ReadChunksAsync(reader, guard.Stamp, cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -1916,7 +1919,7 @@ public sealed class MtpTestRunnerScriptTests
 
     internal sealed record ProcessResult(int ExitCode, string Stdout, string Stderr);
 
-    private sealed class RealProcessHangGuardException(
+    internal sealed class RealProcessHangGuardException(
         string message,
         bool rootExited,
         bool descendantExited) : TimeoutException(message)
