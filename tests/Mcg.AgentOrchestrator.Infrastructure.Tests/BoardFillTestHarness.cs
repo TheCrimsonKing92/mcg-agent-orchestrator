@@ -22,6 +22,9 @@ internal sealed class BoardFillTestHarness : IDisposable
     internal int Calls => Volatile.Read(ref _calls);
     internal bool Held { get; set; }
     internal Func<AuthorBriefDraftOutcome>? Reply { get; set; }
+    internal string MainHead { get; set; } = new string('c', 40);
+    private int _mainMoves;
+    internal void MoveMain() => MainHead = (++_mainMoves).ToString("x40");
 
     internal BoardFillTestHarness()
     {
@@ -32,15 +35,18 @@ internal sealed class BoardFillTestHarness : IDisposable
         Host = NewHost();
     }
 
-    internal ConductorBoardFillHost NewHost() => new(Store, (_, token) =>
+    internal ConductorBoardFillHost NewHost(Func<string?>? mainHead = null) => new(Store, (_, token) =>
     {
         Interlocked.Increment(ref _calls);
         Started.TrySetResult(true);
         if (Held) _release.Task.WaitAsync(token).GetAwaiter().GetResult();
-        return Reply?.Invoke() ?? Draft();
+        var outcome = Reply?.Invoke() ?? Draft();
+        return outcome.Kind == "held" && outcome.HeldMainHead is null
+            ? outcome with { HeldMainHead = MainHead }
+            : outcome;
     }, () => Items,
         (_, _) => item => BacklogDependencyReadiness.Evaluate(item, _ => null, _ => null, _ => new(null), _ => "Running"),
-        () => Policy, new(EventsPath, utcNow: () => Clock.UtcNow), () => Clock.UtcNow);
+        () => Policy, new(EventsPath, utcNow: () => Clock.UtcNow), () => Clock.UtcNow, mainHead: mainHead ?? (() => MainHead));
 
     internal AuthorBriefDraftOutcome Draft() => new("draft", 0, new string('c', 40),
         Path.Combine(Root, "draft.md"), Path.Combine(Root, "receipt.json"),

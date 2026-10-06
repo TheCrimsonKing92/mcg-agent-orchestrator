@@ -4,7 +4,7 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 public sealed class ConductorBoardFillHostHeldRoundTests
 {
     [Fact]
-    public async Task Held_round_is_reported_once_and_retried_only_on_the_next_tick()
+    public async Task Held_round_is_reported_once_and_retried_after_main_moves()
     {
         using var h = new BoardFillTestHarness();
         h.Reply = () => new("held", 1, null, null, null, [], "head-not-main");
@@ -26,6 +26,7 @@ public sealed class ConductorBoardFillHostHeldRoundTests
         Assert.Contains("BOARD_FILL_DRAFT", reported.RootElement.GetProperty("detail").GetString());
         Assert.Contains("outcome=held", reported.RootElement.GetProperty("detail").GetString());
 
+        h.MoveMain();
         h.Host.ServiceTick(h.Kernel);
         await PanelTestHarness.Signal(h.Host.CurrentRound!, "retry draft finished");
         var retry = Assert.Single(h.Store.ReadAll().Where(candidate => candidate.Outcome is null));
@@ -50,6 +51,7 @@ public sealed class ConductorBoardFillHostHeldRoundTests
         {
             await PanelTestHarness.Signal(h.Host.CurrentRound!, "daily-cap draft finished");
             h.Host.ServiceTick(h.Kernel);
+            if (outcome == "held" && finished < 2) h.MoveMain();
             if (outcome == "held" && finished < 2) h.Host.ServiceTick(h.Kernel);
         }
 
@@ -64,6 +66,7 @@ public sealed class ConductorBoardFillHostHeldRoundTests
         Assert.Null(h.Host.CurrentRound);
         Assert.Equal(fourthStarts ? 0 : 3, h.Store.StartedOnUtcDay(h.Clock.UtcNow));
 
+        if (outcome == "held") h.MoveMain();
         h.Host.ServiceTick(h.Kernel);
         if (fourthStarts)
         {

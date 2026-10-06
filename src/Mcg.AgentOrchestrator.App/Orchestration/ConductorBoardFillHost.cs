@@ -13,12 +13,15 @@ internal sealed partial class ConductorBoardFillHost
     private readonly Func<ConductorAutonomyPolicy> _policy;
     private readonly ConductEventLogWriter _events;
     private readonly Func<DateTimeOffset> _utcNow;
+    private readonly Func<string?> _mainHead;
     private readonly IBoardFillPremiseVerifier? _verifier;
     private readonly CancellationTokenSource _shutdown = new();
     private BoardFillDraftRound? _running;
     private Task<BoardFillRoundResult>? _round;
     private AgentOrchestratorKernel? _kernel;
     private bool _recovered;
+    // In memory only; a process restart clears the hold.
+    private string? _heldMainHead;
     internal Task? CurrentRound => _round;
 
     // Drafting is read-only; optional filing delegates all goal mutations to the CLI intake seam.
@@ -27,7 +30,8 @@ internal sealed partial class ConductorBoardFillHost
         Func<IReadOnlyList<BacklogItem>> backlog,
         Func<AgentOrchestratorKernel, IReadOnlyList<BacklogItem>, Func<BacklogItem, BacklogReadiness>> readiness,
         Func<ConductorAutonomyPolicy> policy, ConductEventLogWriter events, Func<DateTimeOffset>? utcNow = null,
-        IBoardFillPremiseVerifier? verifier = null, BoardFillFilingSeams? filing = null)
+        IBoardFillPremiseVerifier? verifier = null, BoardFillFilingSeams? filing = null,
+        Func<string?>? mainHead = null)
     {
         _store = store;
         _draft = draft;
@@ -38,6 +42,7 @@ internal sealed partial class ConductorBoardFillHost
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         _verifier = verifier;
         _filingSeams = filing;
+        _mainHead = mainHead ?? (() => null);
     }
 
     internal void ServiceTick(AgentOrchestratorKernel kernel, string? onlyGoalId = null)
@@ -62,6 +67,15 @@ internal sealed partial class ConductorBoardFillHost
         ServiceFiling();
         if (held || _round is not null || kernel.Goals.Count(goal => !goal.IsTerminal) >= policy.BoardFillTargetActiveGoals ||
             _store.StartedOnUtcDay(now) >= policy.BoardFillMaxDraftsPerDay) return;
+        if (_heldMainHead is not null)
+        {
+            string? mainHead;
+            try { mainHead = _mainHead(); }
+            catch { return; } // An unresolved head cannot release a repository hold.
+            if (string.IsNullOrWhiteSpace(mainHead) ||
+                string.Equals(mainHead, _heldMainHead, StringComparison.OrdinalIgnoreCase)) return;
+            _heldMainHead = null;
+        }
         var items = ConductorTickStepLedger.CountBacklogRows(_backlog());
         var item = BoardFillReadyItemSelector.Select(items, kernel.Goals.ToArray(), _store.AlreadyDrafted(items),
             ConductorTickStepLedger.CountReadinessEvaluations(_readiness(kernel, items)), _store.ReadAll());
@@ -83,6 +97,8 @@ internal sealed partial class ConductorBoardFillHost
         Assess(finished, result.Markdown, result.Verification, _kernel!);
         _running = null;
         _round = null;
+        if (result.Outcome.Kind == "held" && !string.IsNullOrWhiteSpace(result.Outcome.HeldMainHead))
+            _heldMainHead = result.Outcome.HeldMainHead;
         return result.Outcome.Kind == "held";
     }
 

@@ -5,6 +5,29 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // Parallel-safe: each fixture owns its backlog/receipt root, with fake repository and process seams.
 public sealed class AuthorBriefDraftServiceHeldTests
 {
+    [Fact]
+    public void Repository_hold_carries_observed_main_separately_from_successful_main()
+    {
+        using var fixture = new CliAuthorDraftCommandTests.Fixture();
+        var exception = Mismatch("head-not-main");
+        fixture.Repository.Head = () => throw exception;
+        var modelCalls = 0;
+
+        var outcome = AuthorBriefDraftService.Run(fixture.Item.Id, fixture.Workspace,
+            new((_, _) =>
+            {
+                modelCalls++;
+                return Task.FromResult(new WorkerProcessRunResult(0, "{}", ""));
+            }, fixture.Repository), fixture.Output, fixture.Error);
+
+        Assert.Equal("held", outcome.Kind);
+        Assert.Equal(exception.Main, outcome.HeldMainHead);
+        Assert.Null(outcome.MainHead);
+        Assert.Equal(0, modelCalls);
+        using var receipt = fixture.Receipt();
+        Assert.False(receipt.RootElement.TryGetProperty("heldMainHead", out _));
+    }
+
     [Theory]
     [InlineData("head-not-main")]
     [InlineData("toplevel-not-root")]

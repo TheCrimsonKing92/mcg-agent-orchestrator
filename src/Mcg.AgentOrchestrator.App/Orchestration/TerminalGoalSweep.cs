@@ -106,6 +106,7 @@ internal sealed class TerminalGoalSweepCache
     private bool _dirty;
 
     internal int Count => _terminalFingerprints.Count;
+    internal string? ObservedMainSha => _integrationEvidenceMainSha;
 
     internal IGoalIntegrationEvidenceResolver GetIntegrationEvidenceResolver(
         string executionDirectory,

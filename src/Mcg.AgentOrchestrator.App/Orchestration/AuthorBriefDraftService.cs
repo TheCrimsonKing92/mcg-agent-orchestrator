@@ -5,7 +5,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed record AuthorBriefDraftOutcome(string Kind, int ExitCode, string? MainHead,
-    string? DraftPath, string? ReceiptPath, IReadOnlyList<AuthorBriefDraftCheck> Checks, string? Failure = null);
+    string? DraftPath, string? ReceiptPath, IReadOnlyList<AuthorBriefDraftCheck> Checks, string? Failure = null,
+    string? HeldMainHead = null);
 
 internal static class AuthorBriefDraftService
 {
@@ -19,6 +20,7 @@ internal static class AuthorBriefDraftService
         string? receiptPath = null;
         string? backlogItemId = null;
         string? mainHead = null;
+        string? heldMainHead = null;
         int? exitCode = null;
         string? model = null;
         var kind = "failed";
@@ -78,7 +80,11 @@ internal static class AuthorBriefDraftService
         catch (Exception ex)
         {
             // A hold is free of model spend; a repository change after dispatch remains a failure.
-            if (ex is AuthorDraftRepositoryNotAtMainException && mainHead is null) kind = "held";
+            if (ex is AuthorDraftRepositoryNotAtMainException notAtMain && mainHead is null)
+            {
+                kind = "held";
+                heldMainHead = notAtMain.Main;
+            }
             failureDetail = $"{ex.GetType().Name}: {ex.Message}";
             if (receiptPath is not null) WriteReceipt(ex is ConductorModelRoundException { ModelAlias: null }
                 ? ex.Message : $"{ex.GetType().Name}: {ex.Message}");
@@ -88,7 +94,7 @@ internal static class AuthorBriefDraftService
 
         AuthorBriefDraftOutcome Outcome(int code) => new(
             kind == "held" || failureDetail is null && kind is "draft" or "stale" ? kind : "failed",
-            code, mainHead, draftPath, receiptPath, checks, failureDetail);
+            code, mainHead, draftPath, receiptPath, checks, failureDetail, heldMainHead);
 
         void WriteReceipt(string? failure) => File.WriteAllText(receiptPath!, JsonSerializer.Serialize(new
         {

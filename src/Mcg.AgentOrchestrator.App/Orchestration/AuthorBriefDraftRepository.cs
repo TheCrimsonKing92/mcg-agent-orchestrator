@@ -15,7 +15,8 @@ internal sealed class GitAuthorBriefDraftRepository(string repositoryRoot) : IAu
         var main = Require(GitCli.Run(repositoryRoot, "rev-parse", "--verify", "main^{commit}")).Trim();
         var head = Require(GitCli.Run(repositoryRoot, "rev-parse", "--verify", "HEAD^{commit}")).Trim();
         var root = Require(GitCli.Run(repositoryRoot, "rev-parse", "--show-toplevel")).Trim();
-        var wrongRoot = !Path.GetFullPath(root).Equals(Path.GetFullPath(repositoryRoot), StringComparison.OrdinalIgnoreCase);
+        var wrongRoot = !Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)).Equals(
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryRoot)), StringComparison.OrdinalIgnoreCase);
         if (wrongRoot || head != main)
             throw new AuthorDraftRepositoryNotAtMainException(
                 wrongRoot ? head != main ? "head-not-main, toplevel-not-root" : "toplevel-not-root" : "head-not-main",
