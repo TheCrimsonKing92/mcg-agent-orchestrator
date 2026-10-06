@@ -193,8 +193,12 @@ public static partial class RepositoryTestImpactPlanner
         var touchesCore = summary.Files.Any(file => StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Core/") ||
             StartsWith(file.Path, "tests/Mcg.AgentOrchestrator.Core.Tests/"));
         const string acceptanceTestsPrefix = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Acceptance/";
+        const string cliTestsPrefix = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/";
+        var cliTestSources = summary.Files.Where(file => StartsWith(file.Path, cliTestsPrefix) &&
+            file.Path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)).ToArray();
+        var nonCliSummary = summary with { Files = summary.Files.Except(cliTestSources).ToArray() };
         var touchesAcceptanceTests = summary.Files.Any(file => StartsWith(file.Path, acceptanceTestsPrefix));
-        var touchesInfrastructure = summary.Files.Any(file =>
+        var touchesInfrastructure = nonCliSummary.Files.Any(file =>
             StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Infrastructure/") ||
             StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Execution/") ||
             StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Infrastructure.Providers/") ||
@@ -206,7 +210,7 @@ public static partial class RepositoryTestImpactPlanner
             "tests/Mcg.AgentOrchestrator.Core.Tests/",
             declarationReader);
         var infrastructureTestFilter = BuildChangedTestClassFilter(
-            summary,
+            nonCliSummary,
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/",
             declarationReader,
             acceptanceTestsPrefix);
@@ -224,7 +228,7 @@ public static partial class RepositoryTestImpactPlanner
             file.Categories.Contains(RepositoryChangeCategory.Script) ||
             file.Categories.Contains(RepositoryChangeCategory.Configuration));
         var reverseDependencySelection = TrySelectReverseDependentInfrastructureTests(
-            summary,
+            nonCliSummary,
             touchesInfrastructure,
             touchesApp,
             touchesScriptsOrConfig,
@@ -339,6 +343,17 @@ public static partial class RepositoryTestImpactPlanner
                     ? "App behavior lacks a focused test-impact mapping; run the full Infrastructure test suite."
                     : "Infrastructure, script, or configuration behavior changed."),
                 RepositoryTestProject.Infrastructure));
+        }
+
+        if (cliTestSources.Length > 0)
+        {
+            var cliTestFilter = BuildChangedTestClassFilter(summary, cliTestsPrefix, declarationReader);
+            checks.Add(new RepositoryTestImpactCheck(
+                "focused changed cli tests",
+                cliTestFilter.Filter is null ? CliTests : [.. CliTests, "--filter", cliTestFilter.Filter],
+                cliTestFilter.AbandonReason ?? "Cli test files changed; run the touched test classes.",
+                RepositoryTestProject.Cli,
+                cliTestFilter.Filter is null ? null : cliTestFilter.TestClasses));
         }
 
         var distinctChecks = checks
