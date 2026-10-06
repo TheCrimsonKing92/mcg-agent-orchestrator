@@ -441,7 +441,7 @@ internal static partial class TerminalGoalSweep
             OperatorIntents = SqliteOperatorIntentStore.ForDirectories(orchestratorDirectory, workspace.LogDirectory)
         };
         var ownedRootTiming = System.Diagnostics.Stopwatch.StartNew();
-        var ownedRoots = ReapOwnedBuildRoots(workspace.SqliteStatePath, reclaimGoalRoots);
+        var ownedRoots = ConductorTickStepLedger.Measure("owned-root-reap", () => ReapOwnedBuildRoots(workspace.SqliteStatePath, reclaimGoalRoots));
         ownedRootTiming.Stop();
         var gitIndexTiming = System.Diagnostics.Stopwatch.StartNew();
         var branchFactIndex = GoalGitFactIndex.Build(executionDirectory, gitRunner);

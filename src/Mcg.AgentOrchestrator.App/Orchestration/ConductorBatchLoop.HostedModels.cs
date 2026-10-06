@@ -6,11 +6,11 @@ internal sealed partial class ConductorBatchLoop
 {
     private IReadOnlySet<GoalId> ServiceStewardAndAuthor(AgentOrchestratorKernel kernel, string? onlyGoalId)
     {
-        var changed = new HashSet<GoalId>(ServiceSteward(kernel, onlyGoalId));
-        changed.UnionWith(ServiceAuthor(kernel, onlyGoalId));
-        changed.UnionWith(ServiceStoreEvidence(kernel, onlyGoalId));
-        ServiceJudgePanel(kernel, onlyGoalId);
-        ServiceBoardFill(kernel, onlyGoalId);
+        var changed = new HashSet<GoalId>(ConductorTickStepLedger.Measure("steward", () => ServiceSteward(kernel, onlyGoalId)));
+        changed.UnionWith(ConductorTickStepLedger.Measure("author", () => ServiceAuthor(kernel, onlyGoalId)));
+        changed.UnionWith(ConductorTickStepLedger.Measure("store-evidence", () => ServiceStoreEvidence(kernel, onlyGoalId)));
+        ConductorTickStepLedger.Measure("judge-panel", () => ServiceJudgePanel(kernel, onlyGoalId));
+        ConductorTickStepLedger.Measure("board-fill", () => ServiceBoardFill(kernel, onlyGoalId));
         return changed;
     }
 

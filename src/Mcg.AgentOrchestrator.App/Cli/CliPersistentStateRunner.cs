@@ -1505,7 +1505,7 @@ internal static partial class CliPersistentStateRunner
         IReadOnlyCollection<string>? additionalHydratedGoalIds = null,
         string? executionDirectory = null)
     {
-        var summaries = stateRepository.ListConductLoopGoalMetadataAsync().GetAwaiter().GetResult();
+        var summaries = ConductorTickStepLedger.CountMetadataRows(stateRepository.ListConductLoopGoalMetadataAsync().GetAwaiter().GetResult());
         var terminalSummaries = summaries
             .Where(summary => IsConductLoopTerminalStatus(summary.Status))
             .ToArray();
@@ -1521,7 +1521,7 @@ internal static partial class CliPersistentStateRunner
                 .Select(id => new GoalId(id)))
             .Distinct()
             .ToArray();
-        var kernel = stateRepository.LoadGoalsAsync(hydratedIds).GetAwaiter().GetResult();
+        var kernel = ConductorTickStepLedger.CountGoalsHydrated(stateRepository.LoadGoalsAsync(hydratedIds).GetAwaiter().GetResult());
         kernel.MarkKnownDependencyGoalStatuses(summaries.Select(summary =>
             new KeyValuePair<GoalId, string>(
                 new GoalId(summary.Id),
@@ -1716,7 +1716,7 @@ internal static partial class CliPersistentStateRunner
             return new ConductLoopDependencyMetadata(summary.Id, summary.Status, IsLanded: false);
         }
 
-        var journal = TerminalGoalJournalMetadataCache.Read(executionDirectory, new GoalId(summary.Id));
+        var journal = ConductorTickStepLedger.CountTerminalJournalCheck(() => TerminalGoalJournalMetadataCache.Read(executionDirectory, new GoalId(summary.Id)));
         var isLanded = journal.IsLanded;
         var status = !isLanded &&
             journal.IsRetiredDisposition &&

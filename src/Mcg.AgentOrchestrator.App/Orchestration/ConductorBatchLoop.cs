@@ -613,7 +613,7 @@ internal sealed partial class ConductorBatchLoop
             }
 
             var nextTick = totalTicks + 1;
-            BeginTickCpuAccounting();
+            using var tickStepLedger = BeginTickCpuAndStepLedger();
             if (reloadPolicy is not null)
             {
                 try
@@ -663,7 +663,7 @@ internal sealed partial class ConductorBatchLoop
             }
             var preSweepBaseline = GoalKernelChange.CaptureAll(kernel);
             TerminalGoalJournalMetadataCache.BeginMeasurement();
-            var sweepClock = Stopwatch.StartNew();
+            var sweepClock = StartDiagnosticTimer();
             var sweepCpuStart = ReadProcessCpu();
             var sweepResult = RunJanitorialPhase(
                 "sweep",
@@ -731,19 +731,19 @@ internal sealed partial class ConductorBatchLoop
             _promptRolloutWatch?.EvaluateTick(kernel);
             RunJanitorialPhase("main-suspect-release", nextTick,
                 () => ServiceMainSuspectRelease(driver, canaryTasks, canaryTasksGate));
-            var preWalkClock = Stopwatch.StartNew();
+            var preWalkClock = StartDiagnosticTimer();
             var preWalkCpuStart = ReadProcessCpu();
-            RunJanitorialPhase("retire-until-goal-lessons", nextTick, () => RetireUntilGoalLessons(kernel));
+            RunJanitorialPhase("retire-until-goal-lessons", nextTick, () => ConductorTickStepLedger.Measure("retire-until-goal-lessons", () => RetireUntilGoalLessons(kernel)));
             var hostedChangedGoalIds = ServiceStewardAndAuthor(kernel, onlyGoalId);
             var actionableIntentGoalIds = new HashSet<string>(StringComparer.Ordinal);
-            var preWalkIntentLines = ServiceWorkspaceIntents(kernel);
+            var preWalkIntentLines = ConductorTickStepLedger.Measure("workspace-intents", () => ServiceWorkspaceIntents(kernel));
             var preWalkIntentProcessed = preWalkIntentLines.Count > 0;
             var intentsAwaitingReload = 0;
             if (_operatorIntents is not null)
             {
                 try
                 {
-                    actionableIntentGoalIds.UnionWith(_operatorIntents.ListActionableGoalIds());
+                    actionableIntentGoalIds.UnionWith(ConductorTickStepLedger.Measure("operator-intent-list", () => _operatorIntents.ListActionableGoalIds()));
                 }
                 catch (Exception ex)
                 {
@@ -851,12 +851,12 @@ internal sealed partial class ConductorBatchLoop
                 .ToArray();
             var eligible = preWalkCandidates
                 .Where(g => !preWalkIntentChangedGoalIds.Contains(g.Id))
-                .Where(g => IsLoopEligibleGoal(g, driver, goalProjectionCache))
+                .Where(g => ConductorTickStepLedger.Measure("eligibility", () => IsLoopEligibleGoal(g, driver, goalProjectionCache)))
                 .ToArray();
             ResetScopedGoalStallCounters(eligible, unscopedDispatchableTicks);
             preWalkClock.Stop();
-            preTickTimingLines.Add(FormatPhaseTiming(nextTick, "prewalk", preWalkClock.Elapsed,
-                $"scoped={scopedGoals.Length} candidates={preWalkCandidates.Length} eligible={eligible.Length} deferred_intent={preWalkIntentChangedGoalIds.Count} excluded_parked={parkedExcludedCount} excluded_terminal={terminalExcludedCount} cache_entries={goalProjectionCache.Count}", cpuMs: EndCpuPhase(preWalkCpuStart, ref _tickCpuPrewalkMs)));
+            AddLedgerPhaseTimings(preTickTimingLines, nextTick, "prewalk", preWalkClock.Elapsed,
+                $"scoped={scopedGoals.Length} candidates={preWalkCandidates.Length} eligible={eligible.Length} deferred_intent={preWalkIntentChangedGoalIds.Count} excluded_parked={parkedExcludedCount} excluded_terminal={terminalExcludedCount} cache_entries={goalProjectionCache.Count}", cpuMs: EndCpuPhase(preWalkCpuStart, ref _tickCpuPrewalkMs));
 
             if (eligible.Length == 0)
             {
@@ -1131,7 +1131,7 @@ internal sealed partial class ConductorBatchLoop
             driver.PhaseTimingSink = line => perGoalPhaseTimingLines.Add($"PHASE_TIMING tick={totalTicks} {line}");
             var goalWalkTimings = new List<GoalWalkTiming>();
             driver.BeginTick(kernel, totalTicks);
-            var goalWalkClock = Stopwatch.StartNew();
+            var goalWalkClock = StartDiagnosticTimer();
             var goalWalkCpuStart = ReadProcessCpu();
             var glanceDurationStats = _progressiveReviewGlances is null
                 ? Array.Empty<TaskDurationStatsRecord>()
@@ -1151,7 +1151,7 @@ internal sealed partial class ConductorBatchLoop
                 }
 
                 var label = goal.Id.Value[..8];
-                var singleGoalClock = Stopwatch.StartNew();
+                var singleGoalClock = StartDiagnosticTimer();
                 void FinishGoalWalk(string result)
                 {
                     if (!singleGoalClock.IsRunning)

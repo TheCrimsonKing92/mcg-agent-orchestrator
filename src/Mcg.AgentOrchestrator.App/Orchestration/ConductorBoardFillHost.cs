@@ -62,9 +62,9 @@ internal sealed partial class ConductorBoardFillHost
         ServiceFiling();
         if (_round is not null || kernel.Goals.Count(goal => !goal.IsTerminal) >= policy.BoardFillTargetActiveGoals ||
             _store.StartedOnUtcDay(now) >= policy.BoardFillMaxDraftsPerDay) return;
-        var items = _backlog();
+        var items = ConductorTickStepLedger.CountBacklogRows(_backlog());
         var item = BoardFillReadyItemSelector.Select(items, kernel.Goals.ToArray(), _store.AlreadyDrafted(items),
-            _readiness(kernel, items));
+            ConductorTickStepLedger.CountReadinessEvaluations(_readiness(kernel, items)));
         if (item is null) return;
         _running = _store.Begin(item, now);
         // Only immutable identity crosses the thread boundary; the model never reads the live kernel.
