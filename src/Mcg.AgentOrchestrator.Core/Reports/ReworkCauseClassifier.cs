@@ -42,7 +42,10 @@ public static class ReworkCauseClassifier
         ("Dispatch hit ProviderInterruption", ReworkCauseFamily.Environment),
         ("Auto-requeued interrupted dispatch after conductor loop stop", ReworkCauseFamily.Environment),
         ("Invalidated ", ReworkCauseFamily.DownstreamRerun),
-        ("missing-planner-artifact: dependency reroute", ReworkCauseFamily.Routing)
+        ("missing-planner-artifact: dependency reroute", ReworkCauseFamily.Routing),
+        ("worker-build-check-failed automatic recovery ", ReworkCauseFamily.CandidateRed),
+        ("Auto-retry real worker/command failure for task ", ReworkCauseFamily.CandidateRed),
+        ("developer-completion structural pre-check failed: ", ReworkCauseFamily.CandidateRed)
     ];
 
     public static ReworkCauseFamily Classify(Goal goal, TaskSpec task, int roundIndex,
