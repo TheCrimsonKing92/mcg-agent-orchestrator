@@ -791,7 +791,7 @@ internal sealed partial class ConductorDriver
                 acceptanceVerifier, worktreePath, goal.Id, request,
                 stableSlotLease?.Environment.BuildPermitIndex, stableSlotLease,
                 runBaselineArm, cancellationToken, negativeControl, revertPaths, mutation,
-                NegativeControlRevertDeclaration.Parse(goal.Objective) is { Declared: true, Rejection: null } declaration ? declaration.Paths : null);
+                NegativeControlRevertSetResolver.Resolve(goal));
             if (result.Passed)
             {
                 GoalOperationJournal.Completed(dir, goal, "conductor:finding-evidence", result.Summary);
