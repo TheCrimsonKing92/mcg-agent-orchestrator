@@ -7,7 +7,8 @@ public sealed class PlannerReviewerInlineSkillRulesTests
     [
         "- For each criterion name the evidence owner (checked against `docs/role-capability-matrix.md`), the owning seam, and the class `TEST-VERIFIABLE` or `REAL-WORLD-DEPENDENT`.",
         "- Route full-suite, test-host, and acceptance evidence to Acceptance and live or post-landing evidence to the operator; never assign evidence a worker cannot reach to Tester or Reviewer.",
-        "- For evidence you cannot obtain, name what would settle it, its source, and why it is unavailable, then plan every other criterion in the same round."
+        "- For evidence you cannot obtain, name what would settle it, its source, and why it is unavailable, then plan every other criterion in the same round.",
+        "- Only when a criterion needs a fail-on-main proof and the implementation lives under tests/, config/ or .agents/, add one plan line `negative-control-revert: <comma-separated repository-relative paths>` naming those implementation files; never name a file that declares a test class the criterion selects."
     ];
 
     private static readonly string[] ReviewerRules =
