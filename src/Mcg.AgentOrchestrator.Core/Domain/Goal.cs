@@ -1190,7 +1190,7 @@ public sealed class Goal
         return goal;
     }
 
-    internal TaskSpec FindTask(TaskId taskId)
+    public TaskSpec FindTask(TaskId taskId)
     {
         return _tasks.FirstOrDefault(task => task.Id == taskId)
             ?? throw new KeyNotFoundException($"Task '{taskId}' was not found.");
