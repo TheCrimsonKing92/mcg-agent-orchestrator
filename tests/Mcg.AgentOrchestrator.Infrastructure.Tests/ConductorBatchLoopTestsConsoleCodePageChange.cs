@@ -13,12 +13,13 @@ public sealed class ConductorBatchLoopTestsConsoleCodePageChange(ITestOutputHelp
         var root = Path.Combine(Path.GetTempPath(), $"mcg-code-page-stream-{Guid.NewGuid():N}");
         try
         {
-            var (kernel, _, _, _) = DispatchExitSweepEligibilityTests.SeedExitedRound(WorkTaskStatus.Failed, root);
+            var kernel = new AgentOrchestratorKernel();
             var logPath = Path.Combine(root, ".orchestrator", "logs", ConductEventLogWriter.CurrentFileName);
             Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
             var readings = new Queue<(uint Input, uint Output)>([(437, 437), (437, 437), (437, 65001), (437, 65001)]);
             var watch = new ConductorConsoleCodePageWatch(() => readings.Dequeue());
             var ticks = new List<IReadOnlyList<string>>();
+            var idleCycles = 0;
             var driver = MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true));
             AsyncLocalConsoleRouter.Capture(() => new ConductorBatchLoop(
                 measuredSweep: _ =>
@@ -29,7 +30,9 @@ public sealed class ConductorBatchLoopTestsConsoleCodePageChange(ITestOutputHelp
                 },
                 conductEventLogWriter: new ConductEventLogWriter(logPath)).Run(
                     kernel, driver, ConductorAutonomyPolicy.Conservative, NoStopPath(),
-                    maxIterations: 3, sleepFunc: _ => false));
+                    // Keep an idle loop alive for all three observations without waiting in real time.
+                    maxIterations: 3, watchInterval: TimeSpan.FromSeconds(1), keepAliveWhenIdle: true,
+                    sleepFunc: _ => ++idleCycles == 3));
 
             Assert.Equal(3, ticks.Count);
             Assert.Empty(readings);
