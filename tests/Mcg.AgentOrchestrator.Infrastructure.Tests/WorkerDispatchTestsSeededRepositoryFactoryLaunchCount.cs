@@ -164,9 +164,13 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryLaunchCount
 
             var failure = Xunit.Assert.Throws<Factory.SeededRepositoryFailureException>(() => scope.Factory.Create());
             var check = Enum.Parse<Check>((published ? "Published" : "Staging") + scenario.Suffix);
-            Xunit.Assert.Equal(1, rewrites);
-            Xunit.Assert.Equal(check, failure.Diagnostic.Check);
-            Xunit.Assert.Equal(scenario.Classification, failure.Diagnostic.Git.Classification);
+            var message = $"Collapsed probe scenario {Array.IndexOf(scenarios, scenario) + 1} ({scenario.Suffix}, published={published}): " +
+                $"expected check={check}, thrown check={failure.Diagnostic.Check}; " +
+                $"expected classification={scenario.Classification}, thrown classification={failure.Diagnostic.Git.Classification}; " +
+                $"rewrites={rewrites}. Exception: {failure.Message}";
+            Xunit.Assert.True(check == failure.Diagnostic.Check, message);
+            Xunit.Assert.True(scenario.Classification == failure.Diagnostic.Git.Classification, message);
+            Xunit.Assert.True(1 == rewrites, message);
             Xunit.Assert.Contains(failure.Diagnostic.ProbeReceipts!, receipt =>
                 receipt.Check == check && receipt.Classification == scenario.Classification &&
                 receipt.Arguments!.TakeLast(4).SequenceEqual(["rev-parse", "--is-inside-work-tree", "--show-toplevel", "--git-dir"]));
