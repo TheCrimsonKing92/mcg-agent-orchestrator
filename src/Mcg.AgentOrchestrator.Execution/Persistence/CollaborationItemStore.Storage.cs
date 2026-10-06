@@ -78,6 +78,10 @@ public sealed partial class CollaborationItemStore
             CREATE INDEX IF NOT EXISTS idx_collaboration_items_goal_id
                 ON collaboration_items (goal_id)
             """);
+        RunNonQuery(conn, """
+            CREATE INDEX IF NOT EXISTS idx_collaboration_items_status_raised
+                ON collaboration_items (status, raised_at)
+            """);
         AddColumnIfMissing(conn, "collaboration_items", "answer_history_json", "TEXT");
         RunNonQuery(conn, """
             CREATE TABLE IF NOT EXISTS collaboration_item_actions (
