@@ -226,9 +226,9 @@ internal sealed partial class WorkerDispatchTestsSeededRepositoryFactory
         var fixtureAttempt = FixtureAttempt.Create("fixture-git");
         var isCommit = arguments.Any(argument =>
             string.Equals(argument, "commit", StringComparison.Ordinal));
-        var previousHead = isCommit
-            ? TryReadHead(runner, workingDirectory, fixtureAttempt, ValidationCheck.FixtureGitCommand)
-            : null;
+        string? previousHead = null;
+        if (isCommit && !InfrastructureTestSupport.TryReadGitHeadInProcess(workingDirectory, out previousHead))
+            previousHead = TryReadHead(runner, workingDirectory, fixtureAttempt, ValidationCheck.FixtureGitCommand);
         var result = fixtureAttempt.Record(
             runner.Run(
                 workingDirectory,
@@ -342,7 +342,9 @@ internal sealed partial class WorkerDispatchTestsSeededRepositoryFactory
         DateTimeOffset? commitTime = null)
     {
         var isCommit = commitTime.HasValue;
-        var previousHead = isCommit ? TryReadHead(_gitRunner, path, attempt, check) : null;
+        string? previousHead = null;
+        if (isCommit && !InfrastructureTestSupport.TryReadGitHeadInProcess(path, out previousHead))
+            previousHead = TryReadHead(_gitRunner, path, attempt, check);
         var result = attempt.Record(
             _gitRunner.Run(
                 path,
