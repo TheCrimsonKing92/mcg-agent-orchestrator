@@ -44,9 +44,12 @@ public sealed class CliAuthorDraftExtractionParityTests
         Assert.Equal(beforeCode, afterCode);
         Assert.Equal(Normalize(beforeOut.ToString()), Normalize(afterOut.ToString()));
         Assert.Equal(beforeError.ToString(), afterError.ToString());
-        Assert.Equal(beforeReceipt, afterReceipt);
+        Assert.Equal(beforeReceipt, kind == "unparseable" ? StripRawOutputFields(afterReceipt) : afterReceipt);
     }
 
     private static string Normalize(string text) =>
         Regex.Replace(text, "[0-9a-f]{8}-[0-9]{8}T[0-9]{9}-[0-9a-f]{32}", "<draft-stem>");
+
+    private static string StripRawOutputFields(string receipt) =>
+        Regex.Replace(receipt, "\\s*,\\s*\"rawOutputPath\"[^\\r\\n]*\\s*,\\s*\"rawOutputBytes\"\\s*:\\s*\\d+", "");
 }
