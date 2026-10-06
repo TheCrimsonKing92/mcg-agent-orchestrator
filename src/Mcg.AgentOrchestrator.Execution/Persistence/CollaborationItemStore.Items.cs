@@ -433,8 +433,21 @@ public sealed partial class CollaborationItemStore
     public async Task<IReadOnlyList<CollaborationItem>> GetAttentionQueueAsync(
         CancellationToken cancellationToken = default)
     {
-        var all = await ListAsync(null, cancellationToken);
-        return CollaborationItemLifecycle.BuildAttentionQueue(all);
+        var open = await ListOpenItemsAsync(cancellationToken);
+        return CollaborationItemLifecycle.BuildAttentionQueue(open);
+    }
+
+    private async Task<IReadOnlyList<CollaborationItem>> ListOpenItemsAsync(
+        CancellationToken cancellationToken)
+    {
+        await using var conn = OpenConnection();
+        var results = new List<CollaborationItem>();
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT id, type, goal_id, status, subject, body, correlation_key, raised_at, resolved_at, resolution, answer_history_json FROM collaboration_items WHERE status IN ('Raised', 'Delivered') ORDER BY raised_at ASC";
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+            results.Add(ReadItem(reader));
+        return results;
     }
 
     public async Task<IReadOnlyList<CollaborationItem>> ListAsync(
