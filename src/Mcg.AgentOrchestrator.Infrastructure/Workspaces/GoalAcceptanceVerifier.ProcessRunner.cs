@@ -205,7 +205,7 @@ public sealed partial class GoalAcceptanceVerifier
                         captureDrainCts.Token, capturePublicationInterval)
                 ];
             }
-            if (forceUtf8ConsoleOutput) process = StartAcceptanceProcess(startInfo, workingDirectory, registrationIdentityReader, requestOwnConsole: true);
+            if (forceUtf8ConsoleOutput || AcceptanceSdkConsoleRule.RequiresOwnConsole(arguments)) process = StartAcceptanceProcess(startInfo, workingDirectory, registrationIdentityReader, requestOwnConsole: true);
             else process = StartAcceptanceProcess(startInfo, workingDirectory, registrationIdentityReader);
             commandIdentityTracker = new AcceptanceCommandProcessIdentityTracker(process, commandIdentityObserver);
             commandIdentityTracker.Start();
