@@ -25,6 +25,8 @@ internal sealed partial class ConductorJudgePanelCaseStore
                 judge TEXT PRIMARY KEY, consecutive_failures INTEGER NOT NULL,
                 state TEXT NOT NULL, suspended_case_id TEXT);
             CREATE TABLE IF NOT EXISTS panel_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS panel_source_cursors (source TEXT PRIMARY KEY, cursor_json TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS panel_source_retained (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS panel_goals (ordinal INTEGER PRIMARY KEY,
                 goal_id TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL);
             """);

@@ -5,9 +5,66 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal sealed record AcceptanceTestClassDescriptor(string FullName, string? Collection);
+internal sealed record AcceptanceTestClassSource(string FullName, IReadOnlyList<string> SourcePaths, string SourceText);
 
 internal static class AcceptanceTestClassSourceScanner
 {
+    // Preserve Scan's membership contract while exposing declaring and ancestor files for observation.
+    internal static IReadOnlyList<AcceptanceTestClassSource> ScanSources(string worktreePath)
+    {
+        var classes = Scan(worktreePath);
+        var declarations = new Dictionary<string, List<(string Path, string Text, string? BaseName)>>(StringComparer.Ordinal);
+        foreach (var project in new[] { "Mcg.AgentOrchestrator.Infrastructure.Tests", "Mcg.AgentOrchestrator.TestSupport" })
+        {
+            var root = Path.Combine(worktreePath, "tests", project);
+            if (!Directory.Exists(root)) continue;
+            foreach (var path in Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
+                         .Where(path => !path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                             .Any(part => part is "bin" or "obj")))
+            {
+                var text = File.ReadAllText(path);
+                var syntax = CSharpSyntaxTree.ParseText(text).GetRoot();
+                if (syntax.ContainsDiagnostics && syntax.GetDiagnostics().Any(item => item.Severity == DiagnosticSeverity.Error))
+                    throw new InvalidDataException($"Cannot parse test source '{path}'.");
+                foreach (var node in syntax.DescendantNodes().OfType<ClassDeclarationSyntax>())
+                {
+                    var name = NameOf(node);
+                    if (!declarations.TryGetValue(name, out var parts)) declarations[name] = parts = [];
+                    var baseType = node.BaseList?.Types.FirstOrDefault()?.Type;
+                    var baseName = BaseNameOf(baseType);
+                    parts.Add((Path.GetRelativePath(worktreePath, path).Replace('\\', '/'), text, baseName));
+                }
+            }
+        }
+        var byShortName = declarations.Keys.GroupBy(name => name.Split('.', '+').Last(), StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.Ordinal);
+        return classes.Select(item =>
+        {
+            var files = new SortedDictionary<string, string>(StringComparer.Ordinal);
+            var visited = new HashSet<string>(StringComparer.Ordinal);
+            void Include(string name)
+            {
+                if (!visited.Add(name) || !declarations.TryGetValue(name, out var parts)) return;
+                foreach (var part in parts)
+                {
+                    files[part.Path] = part.Text;
+                    if (part.BaseName is not null && byShortName.TryGetValue(part.BaseName, out var bases))
+                        foreach (var parent in bases) Include(parent);
+                }
+            }
+            Include(item.FullName);
+            return new AcceptanceTestClassSource(item.FullName, files.Keys.ToArray(), string.Join("\n", files.Values));
+        }).ToArray();
+    }
+
+    private static string? BaseNameOf(TypeSyntax? type) => type switch
+    {
+        SimpleNameSyntax simple => simple.Identifier.ValueText,
+        QualifiedNameSyntax qualified => BaseNameOf(qualified.Right),
+        AliasQualifiedNameSyntax alias => BaseNameOf(alias.Name),
+        _ => null
+    };
+
     internal static IReadOnlyList<AcceptanceTestClassDescriptor> Scan(string worktreePath)
     {
         var testRoot = Path.Combine(worktreePath, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests");
