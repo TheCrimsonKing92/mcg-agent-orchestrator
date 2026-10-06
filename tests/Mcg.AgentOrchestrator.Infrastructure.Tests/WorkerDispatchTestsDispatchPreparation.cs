@@ -3895,7 +3895,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     Assert.Contains("dotnet-windows-build-hygiene", implementationSkills, StringComparison.Ordinal);
     Assert.DoesNotContain("aspnet-core", implementationSkills, StringComparison.Ordinal);
     Assert.DoesNotContain("playwright", implementationSkills, StringComparison.Ordinal);
-    Assert.Contains("orchestrator-worker-verification", reviewSkills, StringComparison.Ordinal);
+    Assert.DoesNotContain("orchestrator-worker-verification", reviewSkills, StringComparison.Ordinal);
     Assert.False(reviewSkills.Contains("aspnet-core", StringComparison.Ordinal));
     Assert.False(reviewSkills.Contains("playwright", StringComparison.Ordinal));
     Assert.False(string.Equals(implementationSkills, reviewSkills, StringComparison.Ordinal));
