@@ -135,9 +135,9 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryLaunchCount
             ("true\n{template}\n.git\n", "TopLevel", Classification.InvalidRequiredOutput),
             ("true\n{path}\n{template}/.git\n", "GitDirectory", Classification.InvalidRequiredOutput),
             ("", "TopLevel", Classification.EmptyRequiredOutput),
-            ("\n{path}\n.git\n", "InsideWorkTree", Classification.EmptyRequiredOutput),
-            ("true\n\n.git\n", "TopLevel", Classification.EmptyRequiredOutput),
-            ("true\n{path}\n\n", "GitDirectory", Classification.EmptyRequiredOutput),
+            ("\n{path}\n.git\n", "InsideWorkTree", Classification.InvalidRequiredOutput),
+            ("true\n\n.git\n", "TopLevel", Classification.InvalidRequiredOutput),
+            ("true\n{path}\n\n", "GitDirectory", Classification.InvalidRequiredOutput),
             ("true\n   \n.git\n", "TopLevel", Classification.InvalidRequiredOutput),
             ("true\n{path}\n.git\nunexpected\n", "GitDirectory", Classification.InvalidRequiredOutput)
         };

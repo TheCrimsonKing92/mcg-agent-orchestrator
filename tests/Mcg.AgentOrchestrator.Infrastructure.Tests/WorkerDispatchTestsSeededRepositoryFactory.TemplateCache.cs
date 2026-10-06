@@ -85,11 +85,10 @@ internal sealed partial class WorkerDispatchTestsSeededRepositoryFactory
 
         string Line(int index) => index < lineCount ? lines[index] : string.Empty;
 
-        void Reject(GitProbeResult receipt, string suffix, string rawOutput)
+        void Reject(GitProbeResult receipt, string suffix)
         {
-            receipt = attempt.Reclassify(receipt, rawOutput.Length == 0
-                ? GitProbeClassification.EmptyRequiredOutput
-                : GitProbeClassification.InvalidRequiredOutput);
+            // RequiredProbe already rejected zero-byte output; malformed lines are invalid output.
+            receipt = attempt.Reclassify(receipt, GitProbeClassification.InvalidRequiredOutput);
             throw Failure(
                 Check(stage, suffix), sourceTemplatePath, stagingPath, finalPath,
                 _fileSystem.ObserveRepository(path), receipt, templateIdentity, stagingIdentity,
@@ -100,25 +99,25 @@ internal sealed partial class WorkerDispatchTestsSeededRepositoryFactory
         var rawInside = Line(0);
         if (!string.Equals(rawInside.Trim(), "true", StringComparison.Ordinal))
         {
-            Reject(inside, "InsideWorkTree", rawInside);
+            Reject(inside, "InsideWorkTree");
         }
 
         var rawTopLevel = Line(1);
         if (string.IsNullOrWhiteSpace(rawTopLevel))
         {
-            Reject(result, "TopLevel", rawTopLevel);
+            Reject(result, "TopLevel");
         }
         var topLevel = CanonicalPath(rawTopLevel.Trim());
         if (!string.Equals(topLevel, path, PathComparison))
         {
-            Reject(result, "TopLevel", rawTopLevel);
+            Reject(result, "TopLevel");
         }
 
         var gitDirectoryResult = attempt.Record(result, path, Check(stage, "GitDirectory"));
         var rawGitDirectory = Line(2);
         if (string.IsNullOrWhiteSpace(rawGitDirectory))
         {
-            Reject(gitDirectoryResult, "GitDirectory", rawGitDirectory);
+            Reject(gitDirectoryResult, "GitDirectory");
         }
         var gitDirectory = CanonicalPath(Path.IsPathRooted(rawGitDirectory.Trim())
             ? rawGitDirectory.Trim()
@@ -126,7 +125,7 @@ internal sealed partial class WorkerDispatchTestsSeededRepositoryFactory
         if (!string.Equals(gitDirectory, CanonicalPath(Path.Combine(path, ".git")), PathComparison) ||
             lineCount != 3)
         {
-            Reject(gitDirectoryResult, "GitDirectory", rawGitDirectory);
+            Reject(gitDirectoryResult, "GitDirectory");
         }
 
         return (topLevel, gitDirectory);
