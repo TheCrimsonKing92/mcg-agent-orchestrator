@@ -613,7 +613,7 @@ internal sealed partial class ConductorBatchLoop
             }
 
             var nextTick = totalTicks + 1;
-            BeginTickCpuAccounting();
+            using var tickStepLedger = BeginTickCpuAndStepLedger();
             if (reloadPolicy is not null)
             {
                 try
@@ -733,17 +733,17 @@ internal sealed partial class ConductorBatchLoop
                 () => ServiceMainSuspectRelease(driver, canaryTasks, canaryTasksGate));
             var preWalkClock = Stopwatch.StartNew();
             var preWalkCpuStart = ReadProcessCpu();
-            RunJanitorialPhase("retire-until-goal-lessons", nextTick, () => RetireUntilGoalLessons(kernel));
+            RunJanitorialPhase("retire-until-goal-lessons", nextTick, () => ConductorTickStepLedger.Measure("retire-until-goal-lessons", () => RetireUntilGoalLessons(kernel)));
             var hostedChangedGoalIds = ServiceStewardAndAuthor(kernel, onlyGoalId);
             var actionableIntentGoalIds = new HashSet<string>(StringComparer.Ordinal);
-            var preWalkIntentLines = ServiceWorkspaceIntents(kernel);
+            var preWalkIntentLines = ConductorTickStepLedger.Measure("workspace-intents", () => ServiceWorkspaceIntents(kernel));
             var preWalkIntentProcessed = preWalkIntentLines.Count > 0;
             var intentsAwaitingReload = 0;
             if (_operatorIntents is not null)
             {
                 try
                 {
-                    actionableIntentGoalIds.UnionWith(_operatorIntents.ListActionableGoalIds());
+                    actionableIntentGoalIds.UnionWith(ConductorTickStepLedger.Measure("operator-intent-list", () => _operatorIntents.ListActionableGoalIds()));
                 }
                 catch (Exception ex)
                 {
@@ -851,12 +851,12 @@ internal sealed partial class ConductorBatchLoop
                 .ToArray();
             var eligible = preWalkCandidates
                 .Where(g => !preWalkIntentChangedGoalIds.Contains(g.Id))
-                .Where(g => IsLoopEligibleGoal(g, driver, goalProjectionCache))
+                .Where(g => ConductorTickStepLedger.Measure("eligibility", () => IsLoopEligibleGoal(g, driver, goalProjectionCache)))
                 .ToArray();
             ResetScopedGoalStallCounters(eligible, unscopedDispatchableTicks);
             preWalkClock.Stop();
-            preTickTimingLines.Add(FormatPhaseTiming(nextTick, "prewalk", preWalkClock.Elapsed,
-                $"scoped={scopedGoals.Length} candidates={preWalkCandidates.Length} eligible={eligible.Length} deferred_intent={preWalkIntentChangedGoalIds.Count} excluded_parked={parkedExcludedCount} excluded_terminal={terminalExcludedCount} cache_entries={goalProjectionCache.Count}", cpuMs: EndCpuPhase(preWalkCpuStart, ref _tickCpuPrewalkMs)));
+            AddLedgerPhaseTimings(preTickTimingLines, nextTick, "prewalk", preWalkClock.Elapsed,
+                $"scoped={scopedGoals.Length} candidates={preWalkCandidates.Length} eligible={eligible.Length} deferred_intent={preWalkIntentChangedGoalIds.Count} excluded_parked={parkedExcludedCount} excluded_terminal={terminalExcludedCount} cache_entries={goalProjectionCache.Count}", cpuMs: EndCpuPhase(preWalkCpuStart, ref _tickCpuPrewalkMs));
 
             if (eligible.Length == 0)
             {

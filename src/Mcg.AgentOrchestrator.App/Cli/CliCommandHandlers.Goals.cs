@@ -1653,7 +1653,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                             .ToHashSet(StringComparer.Ordinal);
                         var requestedGoalIds = trackedGoalIds.Concat(actionableGoalIds).Distinct(StringComparer.Ordinal).ToArray();
                         if (CliPersistentStateRunner.TryReloadConductLoopKernel(
-                                () => context.ReloadKernel(requestedGoalIds),
+                                () => ConductorTickStepLedger.Measure("kernel-reload", () => context.ReloadKernel(requestedGoalIds)),
                                 context.Workspace,
                                 conductEventLogWriter,
                                 ref scheduledLoadHold,
@@ -1718,7 +1718,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     {
                         // Fast path: every tick, query completed human-input rows for Parked goal ids,
                         // hydrate only those candidates, and persist promotions for the next tick's prewalk.
-                        resolvedParkedHumanWaitKernel = context.ReloadResolvedParkedHumanWaitKernel();
+                        resolvedParkedHumanWaitKernel = ConductorTickStepLedger.Measure("parked-reloads", () => context.ReloadResolvedParkedHumanWaitKernel());
                     }
                     catch { /* dynamic pickup is best-effort */ }
 
@@ -1733,7 +1733,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     {
                         try
                         {
-                            parkedGoalSafetyNetKernel = context.ReloadParkedGoalSafetyNetKernel();
+                            parkedGoalSafetyNetKernel = ConductorTickStepLedger.Measure("parked-reloads", () => context.ReloadParkedGoalSafetyNetKernel());
                         }
                         catch { /* dynamic pickup is best-effort */ }
                     }
@@ -1750,25 +1750,25 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
 
                     foreach (var loopGoal in loopKernel.Goals.ToArray())
                     {
-                        try { new GoalDispatchOperations().RefreshDispatches(loopKernel, loopGoal, loopReaper); }
+                        try { ConductorTickStepLedger.Measure("refresh-dispatches", () => new GoalDispatchOperations().RefreshDispatches(loopKernel, loopGoal, loopReaper)); }
                         catch { /* per-goal isolation */ }
                     }
 
-                    var terminalSweep = TerminalGoalSweep.Run(
+                    var terminalSweep = ConductorTickStepLedger.Measure("terminal-sweep-run", () => TerminalGoalSweep.Run(
                         loopKernel,
                         context.Workspace.ExecutionDirectory,
                         cache: terminalSweepCache,
                         cleanupHooks: context.CleanupContext.Hooks,
-                        orchestratorDirectory: context.Workspace.OrchestratorDirectory);
-                    var remediation = reconcileSweepCoordinator.Process(terminalSweep);
+                        orchestratorDirectory: context.Workspace.OrchestratorDirectory));
+                    var remediation = ConductorTickStepLedger.Measure("reconcile-remediation", () => reconcileSweepCoordinator.Process(terminalSweep));
                     if (remediation.RemedySucceeded)
                     {
-                        var remediatedSweep = TerminalGoalSweep.Run(
+                        var remediatedSweep = ConductorTickStepLedger.Measure("terminal-sweep-run", () => TerminalGoalSweep.Run(
                             loopKernel,
                             context.Workspace.ExecutionDirectory,
                             cache: terminalSweepCache,
                             cleanupHooks: context.CleanupContext.Hooks,
-                            orchestratorDirectory: context.Workspace.OrchestratorDirectory);
+                            orchestratorDirectory: context.Workspace.OrchestratorDirectory));
                         terminalSweep = remediatedSweep.PreserveTerminalizationsFrom(terminalSweep);
                     }
                     // Concatenate, never overwrite: the unapplied-exit records are surfaced through the same
@@ -1783,15 +1783,15 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     context.CleanupContext.Scheduler.SweepIfDue(context.Workspace.ExecutionDirectory, loopKernel);
                     if (!suppressGoalRefinementForMaxDurationDeferral)
                     {
-                        GoalRefinementWorkCoordinator.TryLaunchFirstPending(
+                        ConductorTickStepLedger.Measure("goal-refinement", () => GoalRefinementWorkCoordinator.TryLaunchFirstPending(
                             new SqliteOrchestratorStateRepository(context.Workspace.SqliteStatePath),
-                            context.Workspace);
+                            context.Workspace));
                     }
-                    maintenanceCadence.OnTick();
-                    stateLogCheck.OnTick();
-                    failureClustersDaily.OnTick();
-                    hostHealthMonitor.Evaluate();
-                    RemoteGitMirror.TryStartBackgroundProcessing(loopKernel, context.Workspace.ExecutionDirectory);
+                    ConductorTickStepLedger.Measure("maintenance", () => maintenanceCadence.OnTick());
+                    ConductorTickStepLedger.Measure("state-log-check", () => stateLogCheck.OnTick());
+                    ConductorTickStepLedger.Measure("failure-clusters", () => failureClustersDaily.OnTick());
+                    ConductorTickStepLedger.Measure("host-health", () => hostHealthMonitor.Evaluate());
+                    ConductorTickStepLedger.Measure("remote-git-mirror", () => RemoteGitMirror.TryStartBackgroundProcessing(loopKernel, context.Workspace.ExecutionDirectory));
                     return terminalSweep;
                 }
                 ConductorGoalReloadObservation resolveGoalReloadObservation(string goalId)
