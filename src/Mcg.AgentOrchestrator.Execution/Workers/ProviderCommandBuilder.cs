@@ -30,7 +30,7 @@ public static class ProviderCommandBuilder
                 resolvedSandboxMode,
                 workingDirectory,
                 repositoryPolicyMaxBytes),
-            ProviderKind.OpenAICodexSpark => BuildCodex(
+            ProviderKind.OpenAICodexLuna => BuildCodex(
                 modelAlias,
                 reasoningEffort,
                 resolvedSandboxMode,
@@ -55,7 +55,7 @@ public static class ProviderCommandBuilder
 
     public static bool IsBuiltIn(ProviderKind providerKind) =>
         providerKind is ProviderKind.OpenAICodexCli
-            or ProviderKind.OpenAICodexSpark
+            or ProviderKind.OpenAICodexLuna
             or ProviderKind.OpenAICodexOssCli
             or ProviderKind.AnthropicClaudeCli
             or ProviderKind.OllamaQwenCodeCli;

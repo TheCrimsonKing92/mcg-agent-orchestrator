@@ -15,7 +15,7 @@ public sealed class ProviderCommandBuilderParityTests
         foreach (var providerKind in new[]
                  {
                      ProviderKind.OpenAICodexCli,
-                     ProviderKind.OpenAICodexSpark,
+                     ProviderKind.OpenAICodexLuna,
                      ProviderKind.OpenAICodexOssCli,
                      ProviderKind.AnthropicClaudeCli,
                      ProviderKind.OllamaQwenCodeCli
@@ -205,7 +205,7 @@ public sealed class ProviderCommandBuilderParityTests
 
     [Xunit.Theory(DisplayName = "ProviderCommandBuilder_composes_structured_output_for_subscription_codex")]
     [Xunit.InlineData(ProviderKind.OpenAICodexCli)]
-    [Xunit.InlineData(ProviderKind.OpenAICodexSpark)]
+    [Xunit.InlineData(ProviderKind.OpenAICodexLuna)]
     public void ProviderCommandBuilderComposesStructuredOutputForSubscriptionCodex(
         ProviderKind providerKind)
     {

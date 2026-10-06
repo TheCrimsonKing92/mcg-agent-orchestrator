@@ -144,7 +144,7 @@ public sealed class BudgetAwareRoutingTests
         var sparkPlan = SubscriptionPlanBuilder.Build(updatedGoal, sparkAgents, DefaultProfiles, scorecard: scorecard);
         var sparkItem = sparkPlan.Items.Single(i => i.Role == AgentRole.Developer);
 
-        Assert.Equal("codex-spark", sparkItem.ProfileName);
+        Assert.Equal("codex-luna", sparkItem.ProfileName);
         Assert.Equal(WorkerRouteDisposition.Blocked, sparkItem.Route!.Disposition);
         Assert.Contains(sparkItem.Route.Reasons, reason => reason.Contains("scorecard=Avoid", StringComparison.OrdinalIgnoreCase));
     }

@@ -91,7 +91,7 @@ public static partial class DispatchFailureClassifier
         var dispatch = FindDispatchForVerification(task, verification) ?? task.LastDispatch;
         var remediation = "codex login / provider re-auth";
         if (dispatch is not null &&
-            dispatch.WorkerProviderKind is not (ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark or ProviderKind.OpenAICodexOssCli) &&
+            dispatch.WorkerProviderKind is not (ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexLuna or ProviderKind.OpenAICodexOssCli) &&
             !dispatch.WorkerName.StartsWith("codex", StringComparison.OrdinalIgnoreCase))
         {
             var command = ProviderLoginCommand().Match(line);

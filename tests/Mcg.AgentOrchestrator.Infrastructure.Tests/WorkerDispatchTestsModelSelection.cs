@@ -771,8 +771,8 @@ public void WorkerProfileDispatcherRejectsVerifiedTaskDispatch()
         DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
 
     var provider = WorkerProviderCatalog.Default().ResolveProfile(task.LastDispatch!.WorkerName);
-    Assert.Equal(ProviderKind.OpenAICodexSpark, provider.Identity.Kind);
-    Assert.Equal(ProviderKind.OpenAICodexSpark, task.LastDispatch.WorkerProviderKind);
+    Assert.Equal(ProviderKind.OpenAICodexLuna, provider.Identity.Kind);
+    Assert.Equal(ProviderKind.OpenAICodexLuna, task.LastDispatch.WorkerProviderKind);
     Assert.Equal(TaskComplexity.Simple, task.LastDispatch.TaskComplexity);
     Assert.Equal("gpt-5.3-codex-spark", task.LastDispatch.ModelName);
 }

@@ -213,6 +213,7 @@ public sealed record TaskDispatchSnapshot(
     string? ResultCommit = null,
     bool SandboxLowIntegrity = false,
     string? PromptPath = null,
+    [property: System.Text.Json.Serialization.JsonConverter(typeof(ProviderKindJsonConverter))]
     ProviderKind WorkerProviderKind = ProviderKind.Unknown,
     string? ReasoningEffortReason = null,
     string? DispatchLane = null,

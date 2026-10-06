@@ -119,7 +119,7 @@ public sealed class ModelOutcomeScorecardTests
             record.Completed == 1);
         Assert.Contains(scorecard, record => record.ProviderName == "OpenAI" &&
             record.ModelName == OpenAiSubscriptionModelAlias &&
-            record.DispatchLane == "codex-spark" &&
+            record.DispatchLane == "codex-luna" &&
             record.Failed == 1);
     }
 

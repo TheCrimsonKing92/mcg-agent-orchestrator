@@ -568,7 +568,7 @@ public sealed partial class BackgroundDispatchRunner
             return WorkerSandboxProvider.Claude;
         }
 
-        if (provider.Identity.Kind is ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark or ProviderKind.OpenAICodexOssCli)
+        if (provider.Identity.Kind is ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexLuna or ProviderKind.OpenAICodexOssCli)
         {
             return WorkerSandboxProvider.Codex;
         }

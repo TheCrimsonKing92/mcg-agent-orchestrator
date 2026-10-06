@@ -410,7 +410,7 @@ public static class OrchestratorHealthInspector
     private static bool IsOptionalProfile(string name)
     {
         return name.Equals("codex-cli", StringComparison.OrdinalIgnoreCase) ||
-            name.Equals("codex-spark", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(LunaLaneNames.NormalizeProfileName(name), LunaLaneNames.LunaProfileName, StringComparison.OrdinalIgnoreCase) ||
             name.Equals("codex-oss-cli", StringComparison.OrdinalIgnoreCase) ||
             name.Equals("qwen-code-cli", StringComparison.OrdinalIgnoreCase) ||
             name.Equals("claude-cli", StringComparison.OrdinalIgnoreCase) ||

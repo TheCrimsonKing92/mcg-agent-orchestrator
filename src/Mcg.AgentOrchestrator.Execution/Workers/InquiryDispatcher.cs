@@ -230,7 +230,7 @@ public sealed class InquiryDispatcher
     {
         return providerKind switch
         {
-            ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark => BuildCodexCommand(dispatch, worktree, sessionId, executionMode),
+            ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexLuna => BuildCodexCommand(dispatch, worktree, sessionId, executionMode),
             ProviderKind.AnthropicClaudeCli => BuildClaudeCommand(dispatch, sessionId, executionMode),
             _ => throw new InvalidOperationException($"Inquiry supports codex and claude subscription lanes only; dispatch provider was {providerKind}.")
         };
@@ -292,7 +292,7 @@ public sealed class InquiryDispatcher
         return dispatch.WorkerName.Equals(WorkerProfileDispatcher.AnthropicSubscriptionProfileName, StringComparison.OrdinalIgnoreCase)
             ? ProviderKind.AnthropicClaudeCli
             : dispatch.WorkerName.Equals(WorkerProfileDispatcher.OpenAiSubscriptionProfileName, StringComparison.OrdinalIgnoreCase) ||
-              dispatch.WorkerName.Equals(WorkerProfileDispatcher.OpenAiSparkSubscriptionProfileName, StringComparison.OrdinalIgnoreCase)
+              string.Equals(LunaLaneNames.NormalizeProfileName(dispatch.WorkerName), WorkerProfileDispatcher.OpenAiLunaSubscriptionProfileName, StringComparison.OrdinalIgnoreCase)
                 ? ProviderKind.OpenAICodexCli
                 : ProviderKind.Unknown;
     }

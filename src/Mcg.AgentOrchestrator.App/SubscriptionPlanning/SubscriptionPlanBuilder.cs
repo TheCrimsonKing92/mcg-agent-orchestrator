@@ -709,7 +709,7 @@ public static class SubscriptionPlanBuilder
 
     private static string BuildScorecardKey(string providerName, string modelName, string? dispatchLane)
     {
-        return $"{providerName}/{modelName}/{dispatchLane ?? string.Empty}";
+        return $"{providerName}/{modelName}/{LunaLaneNames.NormalizeDispatchLane(dispatchLane) ?? string.Empty}";
     }
 
     private static bool UsesComplexModel(AgentDefinition agent, string providerName, string modelName)

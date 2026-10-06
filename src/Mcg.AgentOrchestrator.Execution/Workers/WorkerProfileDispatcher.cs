@@ -75,7 +75,7 @@ public static partial class WorkerProfileDispatcher
 {
     internal const string ProviderBudgetExhaustionErrorCode = "provider-budget-exhausted";
     public const string OpenAiSubscriptionProfileName = "codex-cli";
-    public const string OpenAiSparkSubscriptionProfileName = "codex-spark";
+    public const string OpenAiLunaSubscriptionProfileName = LunaLaneNames.LunaProfileName;
     public const string AnthropicSubscriptionProfileName = "claude-cli";
     public const string XaiSubscriptionProfileName = "grok-cli";
     public const string QwenCodeCliProfileName = "qwen-code-cli";
@@ -1498,7 +1498,7 @@ public static partial class WorkerProfileDispatcher
         if (model.ProviderName.Equals(agent.Model.ProviderName, StringComparison.OrdinalIgnoreCase) &&
             !string.IsNullOrWhiteSpace(agent.Subscription?.WorkerProfileName))
         {
-            return agent.Subscription.WorkerProfileName;
+            return LunaLaneNames.NormalizeProfileName(agent.Subscription.WorkerProfileName);
         }
 
         return DefaultProviders.ResolveModelProvider(model.ProviderName).ProfileName;
@@ -1852,7 +1852,7 @@ public static partial class WorkerProfileDispatcher
         {
             return false;
         }
-        return provider.Identity.Kind is ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark or ProviderKind.OpenAICodexOssCli &&
+        return provider.Identity.Kind is ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexLuna or ProviderKind.OpenAICodexOssCli &&
             !string.IsNullOrWhiteSpace(reasoningEffort);
     }
     internal static WorkerContextPackage BuildContextPackage(
@@ -2557,7 +2557,7 @@ public static partial class WorkerProfileDispatcher
     {
         return providerKind switch
         {
-            ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark =>
+            ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexLuna =>
                 HasKeys(
                     variables,
                     "subscriptionModelName",

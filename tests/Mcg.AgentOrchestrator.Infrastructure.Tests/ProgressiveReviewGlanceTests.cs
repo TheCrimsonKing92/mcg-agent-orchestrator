@@ -1794,7 +1794,7 @@ public sealed class ProgressiveReviewGlanceTests
     public async Task DispatchUsesReadOnlyProfileSelectionAndBoundedInputs()
     {
         var sparkSelection = SubscriptionCliProgressiveReviewGlanceRunner.SelectProfile(WorkerProfileCatalog.Default());
-        Xunit.Assert.Equal("codex-spark", sparkSelection.ProfileName);
+        Xunit.Assert.Equal("codex-luna", sparkSelection.ProfileName);
         Xunit.Assert.Equal(AgentCatalog.OpenAiGpt6LunaSubscriptionModelAlias, sparkSelection.ModelAlias);
 
         var fallbackSelection = SubscriptionCliProgressiveReviewGlanceRunner.SelectProfile(
@@ -1891,7 +1891,7 @@ public sealed class ProgressiveReviewGlanceTests
             new WorkerProfileCatalog([WorkerProfileCatalog.Default().GetRequired("codex-cli")]),
             inputs);
 
-        Xunit.Assert.Equal("codex-spark", lightDelivery.ProfileName);
+        Xunit.Assert.Equal("codex-luna", lightDelivery.ProfileName);
         Xunit.Assert.Equal("codex-cli", fallbackDelivery.ProfileName);
         foreach (var delivery in new[] { lightDelivery, fallbackDelivery })
         {
@@ -2365,7 +2365,7 @@ public sealed class ProgressiveReviewGlanceTests
     }
 
     private static ProgressiveReviewGlanceContractIdentity Contract(string commandFingerprint) => new(
-        ProviderKind.OpenAICodexSpark.ToString(),
+        ProviderKind.OpenAICodexLuna.ToString(),
         "codex-spark",
         "gpt-5.3-codex-spark",
         commandFingerprint,

@@ -14,7 +14,7 @@ internal static class StructuredCodexOutputNormalizer
         string standardOutputPath,
         Func<string, string>? readAllText = null)
     {
-        if (dispatch?.WorkerProviderKind is not (ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark) ||
+        if (dispatch?.WorkerProviderKind is not (ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexLuna) ||
             !dispatch.Command.Contains("--json", StringComparison.OrdinalIgnoreCase))
         {
             return new StructuredCodexNormalizationResult(null, PlannerCandidateNormalizationState.NotRequired);

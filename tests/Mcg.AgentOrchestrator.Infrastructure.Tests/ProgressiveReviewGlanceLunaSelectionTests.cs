@@ -12,7 +12,7 @@ public sealed class ProgressiveReviewGlanceLunaSelectionTests
     {
         var selection = SubscriptionCliProgressiveReviewGlanceRunner.SelectProfile(WorkerProfileCatalog.Default());
 
-        Assert.Equal("codex-spark", selection.ProfileName);
+        Assert.Equal("codex-luna", selection.ProfileName);
         Assert.Equal(AgentCatalog.OpenAiGpt6LunaSubscriptionModelAlias, selection.ModelAlias);
     }
 
@@ -36,7 +36,7 @@ public sealed class ProgressiveReviewGlanceLunaSelectionTests
             "gpt-5.3-codex-spark", AgentCatalog.RoutineSubscriptionReasoningEffort);
         var oldFingerprint = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(commandContract)));
 
-        Assert.Equal("codex-spark", identity.Profile);
+        Assert.Equal("codex-luna", identity.Profile);
         Assert.Equal(AgentCatalog.OpenAiGpt6LunaSubscriptionModelAlias, identity.Model);
         Assert.NotEqual(oldFingerprint, identity.CommandFingerprint);
     }

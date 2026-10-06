@@ -166,7 +166,8 @@ public sealed class WorkerProviderCatalog
         if (!string.IsNullOrWhiteSpace(profileName))
         {
             var match = _providers.FirstOrDefault(provider =>
-                provider.ProfileName.Equals(profileName, StringComparison.OrdinalIgnoreCase));
+                string.Equals(LunaLaneNames.NormalizeProfileName(provider.ProfileName),
+                    LunaLaneNames.NormalizeProfileName(profileName), StringComparison.OrdinalIgnoreCase));
             if (match is not null)
             {
                 return match;
@@ -232,8 +233,8 @@ public sealed class WorkerProviderCatalog
                 SupportsInteractiveSession: true,
                 SupportsPlanMode: true)),
         new StaticWorkerProvider(
-            new WorkerProviderIdentity(ProviderKind.OpenAICodexSpark, UsesCodexExitFileBehavior: true),
-            "codex-spark",
+            new WorkerProviderIdentity(ProviderKind.OpenAICodexLuna, UsesCodexExitFileBehavior: true),
+            WorkerProfileDispatcher.OpenAiLunaSubscriptionProfileName,
             "OpenAI",
             new WorkerCapabilities(
                 CanSelfCommit: false,
