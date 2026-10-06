@@ -841,33 +841,7 @@ public abstract class GoalWorktreeTestBase : HostCapacityBoundTestBase
 
     private protected static void RunGit(string workingDirectory, params string[] arguments)
     {
-        const int maximumAttempts = 2;
-        var isCommit = arguments.Any(argument => string.Equals(argument, "commit", StringComparison.Ordinal));
-        var previousHead = isCommit ? TryGetGitHead(workingDirectory) : null;
-        for (var attempt = 1; attempt <= maximumAttempts; attempt++)
-        {
-            var exitCode = RunGitExitCode(workingDirectory, arguments, out var output, out var error);
-            if (exitCode == 0)
-            {
-                return;
-            }
-
-            if (isCommit && HasNewCommittedCleanGitHead(workingDirectory, previousHead))
-            {
-                return;
-            }
-
-            if (isCommit && string.IsNullOrWhiteSpace(output) && string.IsNullOrWhiteSpace(error) &&
-                attempt < maximumAttempts)
-            {
-                continue;
-            }
-
-            throw new InvalidOperationException(
-                $"git {string.Join(' ', arguments)} failed: exit={exitCode}{Environment.NewLine}" +
-                $"stdout: {output.Trim()}{Environment.NewLine}" +
-                $"stderr: {error.Trim()}");
-        }
+        InfrastructureTestSupport.RunGitWithCommitPostcondition(workingDirectory, arguments);
     }
 
     private protected static (int ExitCode, string Stdout, string Stderr) RunInvokeRepoGit(

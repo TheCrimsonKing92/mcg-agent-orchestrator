@@ -100,6 +100,7 @@ internal static WorkerDispatchTestsSeededRepositoryFactory.GitProbeResult RunGit
     Action<OwnedProcessGroup.SuspendedProcessStart>? beforeOwnedExitObservation = null,
     IReadOnlyDictionary<string, string?>? verificationEnvironment = null)
 {
+    RecordGitProbeLaunch();
     var seam = GitProbeSeamScope.Value;
     inheritedEnvironment ??= seam?.InheritedEnvironment;
     startProcess ??= seam?.StartProcess;

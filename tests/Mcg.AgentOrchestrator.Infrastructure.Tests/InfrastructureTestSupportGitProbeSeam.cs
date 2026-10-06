@@ -8,6 +8,35 @@ internal static partial class InfrastructureTestSupport
         Func<Process, bool> StartProcess);
 
     private static readonly AsyncLocal<GitProbeSeam?> GitProbeSeamScope = new();
+    private static readonly AsyncLocal<GitProbeLaunchCounter?> GitProbeLaunchCounterScope = new();
+
+    internal static GitProbeLaunchCounter CountGitProbeLaunches()
+    {
+        var counter = new GitProbeLaunchCounter(GitProbeLaunchCounterScope.Value);
+        GitProbeLaunchCounterScope.Value = counter;
+        return counter;
+    }
+
+    private static void RecordGitProbeLaunch() => GitProbeLaunchCounterScope.Value?.Increment();
+
+    internal sealed class GitProbeLaunchCounter(GitProbeLaunchCounter? previous) : IDisposable
+    {
+        private int count;
+        private bool disposed;
+
+        internal int Count => Volatile.Read(ref count);
+
+        internal void Increment() => Interlocked.Increment(ref count);
+
+        public void Dispose()
+        {
+            if (disposed)
+                return;
+
+            GitProbeLaunchCounterScope.Value = previous;
+            disposed = true;
+        }
+    }
 
     internal static IDisposable UseGitProbeSeam(
         IReadOnlyDictionary<string, string?> inheritedEnvironment,
