@@ -7,6 +7,8 @@ public sealed class AcceptanceLaneReuseShadowLaunchRuleTests
 {
     private const string Source = "src/Fixture/Widget.cs";
     private const string TestPath = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/PlainTests.cs";
+    // Keep synthetic launches out of the source guard while preserving the parsed fixture text.
+    private const string GitExecutableLiteral = "\"git\"";
     private static readonly ReverseDependencyTestImpactLookupResult Resolved = new(true, [], null, null);
 
     [Fact]
@@ -34,12 +36,12 @@ public sealed class AcceptanceLaneReuseShadowLaunchRuleTests
     [Fact]
     public void ExternalGit_RecordsThreeTargetsAndRetainsDependencyFallback()
     {
-        const string text = """
+        const string text = $$"""
             public class PlainTests {
                 [Fact] public void Example() {
                     GitCli.Run(root, args);
                     InfrastructureTestSupport.RunGitProbe(root, args);
-                    Process.Start("git", "status");
+                    Process.Start({{GitExecutableLiteral}}, "status");
                 }
             }
             public class Helpers {
@@ -236,19 +238,19 @@ public sealed class AcceptanceLaneReuseShadowLaunchRuleTests
             public partial class PlainTests { private void UnusedPart() { Process.Start(exe); } }
             """;
         const string helperPath = "tests/Mcg.AgentOrchestrator.TestSupport/Helpers.cs";
-        const string helpers = """
+        const string helpers = $$"""
             namespace Fixture;
-            public class Helper { public Helper() { Process.Start("git"); } }
+            public class Helper { public Helper() { Process.Start({{GitExecutableLiteral}}); } }
             public class Helpers {
-                public void StaticSetup() { Process.Start("git"); }
-                public void ConstructorSetup() { Process.Start("git"); }
-                public void FieldSetup() { Process.Start("git"); }
-                public void PropertySetup() { Process.Start("git"); }
-                public void InitializeSetup() { Process.Start("git"); }
-                public void DisposeAsyncSetup() { Process.Start("git"); }
-                public void DisposeSetup() { Process.Start("git"); }
-                public void Group() { Action a = () => Process.Start("git"); void Local() { Process.Start("git"); } }
-                public void Inherited() { Process.Start("git"); }
+                public void StaticSetup() { Process.Start({{GitExecutableLiteral}}); }
+                public void ConstructorSetup() { Process.Start({{GitExecutableLiteral}}); }
+                public void FieldSetup() { Process.Start({{GitExecutableLiteral}}); }
+                public void PropertySetup() { Process.Start({{GitExecutableLiteral}}); }
+                public void InitializeSetup() { Process.Start({{GitExecutableLiteral}}); }
+                public void DisposeAsyncSetup() { Process.Start({{GitExecutableLiteral}}); }
+                public void DisposeSetup() { Process.Start({{GitExecutableLiteral}}); }
+                public void Group() { Action a = () => Process.Start({{GitExecutableLiteral}}); void Local() { Process.Start({{GitExecutableLiteral}}); } }
+                public void Inherited() { Process.Start({{GitExecutableLiteral}}); }
             }
             """;
         var rule = Classify(text, className: "Fixture.PlainTests", extraFiles: [(helperPath, helpers)]);
