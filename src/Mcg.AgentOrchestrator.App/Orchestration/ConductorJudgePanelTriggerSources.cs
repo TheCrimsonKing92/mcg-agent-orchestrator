@@ -62,6 +62,7 @@ internal sealed partial class ConductorJudgePanelTriggerSources(
 
     internal GoalSnapshot? ReadGoal(string goalId)
     {
+        Reads?.GoalRead();
         if (!File.Exists(statePath)) return null;
         var repository = SqliteOrchestratorStateRepository.OpenReadOnly(statePath);
         var goal = repository.LoadGoalAsync(new GoalId(goalId)).GetAwaiter().GetResult();
@@ -78,32 +79,37 @@ internal sealed partial class ConductorJudgePanelTriggerSources(
         foreach (var path in Directory.EnumerateFiles(eventsDirectory, "*.jsonl").Order(StringComparer.Ordinal))
         foreach (var line in Lines(path))
         {
-            PanelTrigger? trigger = null;
-            try
-            {
-                using var doc = JsonDocument.Parse(line);
-                var root = doc.RootElement;
-                var eventType = String(root, "eventType");
-                var text = String(root, "reason") ?? String(root, "message") ?? "";
-                // Policy notes and operator answers may quote a dispute code. Only the
-                // producer's direct decision text is itself a new dispute.
-                var decisionDispute = text.StartsWith("PRE_REVIEW_RED_UNCHANGED_CANDIDATE:", StringComparison.Ordinal) ||
-                    text.StartsWith("PRE_REVIEW_EVIDENCE_TIMEOUT:", StringComparison.Ordinal) ||
-                    text.StartsWith("PRE_TESTER_RED_LOOP:", StringComparison.Ordinal) ||
-                    text.StartsWith("Acceptance RED classified as apparatus", StringComparison.Ordinal);
-                if ((eventType == "GoalEscalated" ||
-                     String(root, "progressKind") == "GoalPolicyDecision" && decisionDispute) &&
-                    String(root, "source") != "author-owner-question")
-                {
-                    var goal = String(root, "goalId");
-                    if (goal is not null && root.TryGetProperty("cursor", out var cursor) &&
-                        root.TryGetProperty("timestamp", out var time) && time.TryGetDateTimeOffset(out var at))
-                        trigger = Dispute(goal, $"goal-event:{goal}:{cursor}", at, text);
-                }
-            }
-            catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException) { }
-            if (trigger is not null) yield return trigger;
+            if (TimelineTrigger(line) is { } trigger) yield return trigger;
         }
+    }
+
+    private static PanelTrigger? TimelineTrigger(string line)
+    {
+        PanelTrigger? trigger = null;
+        try
+        {
+            using var doc = JsonDocument.Parse(line);
+            var root = doc.RootElement;
+            var eventType = String(root, "eventType");
+            var text = String(root, "reason") ?? String(root, "message") ?? "";
+            // Policy notes and operator answers may quote a dispute code. Only the
+            // producer's direct decision text is itself a new dispute.
+            var decisionDispute = text.StartsWith("PRE_REVIEW_RED_UNCHANGED_CANDIDATE:", StringComparison.Ordinal) ||
+                text.StartsWith("PRE_REVIEW_EVIDENCE_TIMEOUT:", StringComparison.Ordinal) ||
+                text.StartsWith("PRE_TESTER_RED_LOOP:", StringComparison.Ordinal) ||
+                text.StartsWith("Acceptance RED classified as apparatus", StringComparison.Ordinal);
+            if ((eventType == "GoalEscalated" ||
+                 String(root, "progressKind") == "GoalPolicyDecision" && decisionDispute) &&
+                String(root, "source") != "author-owner-question")
+            {
+                var goal = String(root, "goalId");
+                if (goal is not null && root.TryGetProperty("cursor", out var cursor) &&
+                    root.TryGetProperty("timestamp", out var time) && time.TryGetDateTimeOffset(out var at))
+                    trigger = Dispute(goal, $"goal-event:{goal}:{cursor}", at, text);
+            }
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException) { }
+        return trigger;
     }
 
     private IReadOnlyList<OwnerConductEvent> ReadConduct()
@@ -163,13 +169,14 @@ internal sealed partial class ConductorJudgePanelTriggerSources(
     private static string? String(JsonElement root, string key) => root.TryGetProperty(key, out var value) &&
         value.ValueKind == JsonValueKind.String ? value.GetString() : null;
 
-    private static IEnumerable<string> Lines(string path)
+    private IEnumerable<string> Lines(string path)
     {
         if (!File.Exists(path)) yield break;
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
         using var reader = new StreamReader(stream);
         while (reader.ReadLine() is { } line)
         {
+            Reads?.EventLine();
             // ReadLine also returns a torn final record; never act on it even if it parses.
             if (reader.EndOfStream && stream.Length > 0)
             {
@@ -179,6 +186,7 @@ internal sealed partial class ConductorJudgePanelTriggerSources(
                 stream.Position = position;
                 if (!terminated) yield break;
             }
+            Reads?.ParsedLine();
             yield return line;
         }
     }

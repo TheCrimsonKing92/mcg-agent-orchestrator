@@ -6,15 +6,17 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorJudgePanelTriggerSources
 {
-    private IEnumerable<PanelTrigger> ReadAuthor(IReadOnlyList<OwnerConductEvent> conduct)
+    private IEnumerable<PanelTrigger> ReadAuthor(IReadOnlyList<OwnerConductEvent> conduct, HashSet<string>? consumed = null)
     {
         if (!File.Exists(authorPath)) yield break;
+        Reads?.StoreScan();
         using var connection = OpenReadOnly(authorPath);
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT identity, claimed_at, item_json FROM author_claims WHERE outcome = 'owner-question'";
         using var reader = command.ExecuteReader();
         while (reader.Read())
         {
+            if (consumed is not null && !consumed.Add(reader.GetString(0))) continue;
             PanelTrigger? trigger = null;
             try
             {
@@ -36,9 +38,10 @@ internal sealed partial class ConductorJudgePanelTriggerSources
         }
     }
 
-    private IEnumerable<PanelTrigger> ReadCohort()
+    private IEnumerable<PanelTrigger> ReadCohort(HashSet<string>? consumed = null)
     {
         if (!File.Exists(cohortPath)) yield break;
+        Reads?.StoreScan();
         using var connection = OpenReadOnly(cohortPath);
         using var command = connection.CreateCommand();
         command.CommandText = """
@@ -50,6 +53,7 @@ internal sealed partial class ConductorJudgePanelTriggerSources
         using var reader = command.ExecuteReader();
         while (reader.Read())
         {
+            if (consumed is not null && !consumed.Add(reader.GetString(0))) continue;
             PanelTrigger? trigger = null;
             try
             {

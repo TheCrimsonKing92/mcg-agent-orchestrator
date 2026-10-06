@@ -28,21 +28,56 @@ internal sealed class ConductorJudgePanelTriggerDetector(
     ConductorJudgePanelCaseStore store, ConductorJudgePanelTriggerSources sources,
     ConductorJudgePanelPacketBuilder packets)
 {
+    private PanelSourceState? _sourceState;
+    private List<PanelCase>? _existing;
+
     internal IReadOnlyList<PanelCase> Detect(string? onlyGoalId = null)
     {
-        var existing = store.Cases().ToList();
+        _sourceState ??= store.LoadSourceState();
+        // Deleting the panel's cursor rows explicitly requests a full rebuild, even
+        // when the host remains alive. Idle ticks otherwise keep read-side state in memory.
+        if (_sourceState.Initialized && !store.HasSourceCursors())
+        {
+            _sourceState = PanelSourceState.Empty();
+            _existing = null;
+        }
+        var batch = sources.ReadSince(_sourceState);
+        var retained = batch.State.Retained;
+        var deferred = retained.Deferred.Values.Where(item => onlyGoalId is null || item.ResolvedGoalId == onlyGoalId).ToArray();
+        var triggers = batch.Triggers.Concat(deferred.Select(item => item.Trigger)).ToArray();
+        if (triggers.Length == 0)
+        {
+            if (batch.Changed) store.CommitSourceAdvance(_sourceState, batch.State);
+            _sourceState = batch.State;
+            return [];
+        }
+        if (ReferenceEquals(retained, _sourceState.Retained))
+        {
+            retained = retained.Copy();
+            batch = batch with { State = batch.State with { Retained = retained } };
+        }
+        var existing = _existing ??= store.Cases().ToList();
         var added = new List<PanelCase>();
         var snapshots = new Dictionary<string, Mcg.AgentOrchestrator.Core.GoalSnapshot?>();
-        foreach (var persisted in sources.Read()
+        foreach (var persisted in triggers
                      .OrderBy(item => item.RecordedAt).ThenBy(item => item.TriggerId, StringComparer.Ordinal))
         {
             try
             {
                 var trigger = persisted;
+                retained.Deferred.Remove(trigger.TriggerId);
+                if (existing.Any(item => item.Key.TriggerId == trigger.TriggerId &&
+                        item.Key.CandidateSha == trigger.CandidateSha && item.Key.BaseSha == trigger.BaseSha &&
+                        (item.Key.GoalId == trigger.GoalId || trigger.GoalId.Length >= 8 &&
+                         item.Key.GoalId.StartsWith(trigger.GoalId, StringComparison.Ordinal)))) continue;
                 if (!snapshots.TryGetValue(trigger.GoalId, out var snapshot))
                     snapshots[trigger.GoalId] = snapshot = sources.ReadGoal(trigger.GoalId);
                 if (snapshot is not null) trigger = trigger with { GoalId = snapshot.Id };
-                if (onlyGoalId is not null && trigger.GoalId != onlyGoalId) continue;
+                if (onlyGoalId is not null && trigger.GoalId != onlyGoalId)
+                {
+                    retained.Deferred[trigger.TriggerId] = new(persisted, trigger.GoalId);
+                    continue;
+                }
                 // An already captured event owns its decision-time criteria version. A later
                 // update to the goal snapshot cannot reinterpret that same persisted event.
                 if (existing.Any(item => item.Key.GoalId == trigger.GoalId &&
@@ -70,6 +105,8 @@ internal sealed class ConductorJudgePanelTriggerDetector(
                 store.RecordTriggerFailure(persisted.TriggerId, persisted.GoalId, exception);
             }
         }
+        store.CommitSourceAdvance(_sourceState, batch.State);
+        _sourceState = batch.State;
         return added;
     }
 }
