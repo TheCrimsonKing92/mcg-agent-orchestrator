@@ -291,6 +291,10 @@ internal static partial class CliPersistentStateRunner
             return ExecuteGoalLifecycleDispositionCommand(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
         }
 
+        if (IsGoalScopedWriteCommand(args) && stateRepository is IOrchestratorStateOutboxRepository scopedRepository &&
+            TryExecuteGoalScopedWrite(args, scopedRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel, out var scopedChanged))
+            return scopedChanged;
+
         if (args.Count > 0 && !ShouldRunInStateTransaction(args[0]))
         {
             return ExecuteCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
@@ -566,6 +570,7 @@ internal static partial class CliPersistentStateRunner
         return args[0].ToLowerInvariant() switch
         {
             _ when CliCommandHelp.IsCommandSpecificHelp(args) => true,
+            "help" or "model-functions" or "model-function-add" => true,
             "operator-listen" or "operator-channel" or "goal-intake-status" => true,
             // These backlog commands operate solely on the independent BacklogStore, never the
             // orchestrator kernel/state.db. Running them with an empty kernel — no state load, no
