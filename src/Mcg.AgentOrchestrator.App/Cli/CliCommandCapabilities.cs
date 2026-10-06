@@ -12,6 +12,7 @@ internal static class CliCommandCapabilities
     {
         "tasks", "task", "status", "goals", "monitor-goal",
         "failure-clusters",
+        "lane-reuse-shadow",
         "round-value",
         "architecture", "config", "agent-list", "worker-profile-list", "model-outcomes",
         "backlog-list", "backlog-show", "backlog-depends", "backlog-similar", "goal-events", "timeline",

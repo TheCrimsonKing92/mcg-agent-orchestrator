@@ -7,6 +7,7 @@ internal static class CliReadOnlyCommandRunner
 {
     internal static bool IsReadOnlyCommand(IReadOnlyList<string> args) =>
         CliFailureClustersQueryCommand.IsFailureClustersQueryCommand(args) ||
+        CliLaneReuseShadowQueryCommand.IsLaneReuseShadowQueryCommand(args) ||
         CliRoundValueQueryCommand.IsRoundValueQueryCommand(args) ||
         GoalBoardCommand.IsBoardCommand(args) ||
         TrialCompareCliCommand.RequiresHistoricalState(args) ||
@@ -34,6 +35,7 @@ internal static class CliReadOnlyCommandRunner
         IClock? diagnosticsClock = null)
     {
         if (CliFailureClustersQueryCommand.IsFailureClustersQueryCommand(args)) { CliFailureClustersQueryCommand.Execute(args, workspace); changed = false; return true; }
+        if (CliLaneReuseShadowQueryCommand.IsLaneReuseShadowQueryCommand(args)) { CliLaneReuseShadowQueryCommand.Execute(args, workspace); changed = false; return true; }
         if (CliRoundValueQueryCommand.IsRoundValueQueryCommand(args)) { CliRoundValueQueryCommand.Execute(args, stateRepository, workspace); changed = false; return true; }
         if (GoalBoardCommand.IsBoardCommand(args))
         {
