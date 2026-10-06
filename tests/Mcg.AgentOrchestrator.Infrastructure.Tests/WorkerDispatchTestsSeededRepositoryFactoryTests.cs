@@ -275,7 +275,7 @@ public sealed class WorkerDispatchTestsSeededRepositoryFactoryTests
         Xunit.Assert.Contains(
             failure.Diagnostic.ProbeReceipts!,
             receipt => receipt.Check ==
-                WorkerDispatchTestsSeededRepositoryFactory.ValidationCheck.TemplateStatus);
+                WorkerDispatchTestsSeededRepositoryFactory.ValidationCheck.TemplateAfterCopyMetadata);
     }
 
     [Xunit.Fact]
