@@ -11,7 +11,7 @@ public sealed partial class GoalAcceptanceVerifier
         IAcceptanceFocusedVerificationOwner executionOwner,
         FindingEvidenceNegativeControl negativeControl,
         int? stableSlotIndex = null, DotnetBuildEnvironmentLease? stableSlotLease = null,
-        bool runBaselineArm = false, IReadOnlyList<string>? revertPaths = null, FindingEvidenceMutation? mutation = null)
+        bool runBaselineArm = false, IReadOnlyList<string>? revertPaths = null, FindingEvidenceMutation? mutation = null, IReadOnlyList<string>? declaredPaths = null)
     {
         EnsureTestOverridesUnchanged();
         if (mutation is not null && revertPaths is not null)
@@ -20,7 +20,7 @@ public sealed partial class GoalAcceptanceVerifier
             throw new ArgumentOutOfRangeException(nameof(negativeControl));
         return executionOwner is AcceptanceFocusedVerificationOwner owner
             ? owner.ExecuteAsync(this, worktreePath, goalId, request, stableSlotIndex,
-                stableSlotLease, runBaselineArm, negativeControl, revertPaths, mutation)
+                stableSlotLease, runBaselineArm, negativeControl, revertPaths, mutation, declaredPaths)
             : throw new ArgumentException("A focused-verification execution owner is required.", nameof(executionOwner));
     }
 
@@ -32,7 +32,7 @@ public sealed partial class GoalAcceptanceVerifier
         string worktreePath, GoalId? goalId, IReadOnlyList<AcceptanceManifestCheck> checks,
         FocusedEvidenceCoverage coverage, int? stableSlotIndex,
         DotnetBuildEnvironmentLease? stableSlotLease, IAcceptanceRunExecutionContext executionOwner,
-        string? mergeBase = null, IReadOnlyList<string>? revertPaths = null, FindingEvidenceMutation? mutation = null)
+        string? mergeBase = null, IReadOnlyList<string>? revertPaths = null, FindingEvidenceMutation? mutation = null, IReadOnlyList<string>? declaredPaths = null)
     {
         if (mode is null) return evidence;
         if (mode != FindingEvidenceNegativeControl.RevertSrc)
@@ -42,7 +42,7 @@ public sealed partial class GoalAcceptanceVerifier
         var reverted = candidate.Disposition == FindingEvidenceArmDisposition.Green
             ? await RunSourceRevertedFocusedEvidenceArmAsync(worktreePath, candidate.Sha,
                 mergeBase ?? ResolveFocusedEvidenceMergeBase(worktreePath), goalId, checks, coverage,
-                stableSlotIndex, stableSlotLease, executionOwner, revertPaths, mutation).ConfigureAwait(false)
+                stableSlotIndex, stableSlotLease, executionOwner, revertPaths, mutation, declaredPaths).ConfigureAwait(false)
             : InconclusiveSourceReverted(candidate.Sha,
                 $"Candidate arm is {candidate.Disposition}; source-reverted arm not run");
         EmitFocusedEvidenceArmResolved(reverted);
@@ -73,12 +73,13 @@ public sealed partial class GoalAcceptanceVerifier
         string candidatePath, string candidateSha, string? mergeBase, GoalId? goalId,
         IReadOnlyList<AcceptanceManifestCheck> checks, FocusedEvidenceCoverage coverage,
         int? stableSlotIndex, DotnetBuildEnvironmentLease? stableSlotLease,
-        IAcceptanceRunExecutionContext executionOwner, IReadOnlyList<string>? revertPaths, FindingEvidenceMutation? mutation)
+        IAcceptanceRunExecutionContext executionOwner, IReadOnlyList<string>? revertPaths, FindingEvidenceMutation? mutation, IReadOnlyList<string>? declaredPaths)
     {
         string? revertedPath = null;
         var root = OrchestratorTempRoot.GetPurposeDirectory(FocusedEvidenceBaselinesRootDirectoryName);
         DotnetBuildEnvironment? environment = null;
         GoalId? environmentId = null;
+        List<string>? restoredPaths = null, droppedPaths = null;
         try
         {
             if (string.IsNullOrWhiteSpace(mergeBase))
@@ -89,28 +90,32 @@ public sealed partial class GoalAcceptanceVerifier
                     "candidate has tracked uncommitted changes, untracked candidate files, or unreadable status");
             if (!string.Equals(ResolveGitScalar(candidatePath, "rev-parse", "HEAD"), candidateSha, StringComparison.Ordinal))
                 return InconclusiveSourceReverted(candidateSha, "candidate HEAD changed after the Candidate arm");
+            var declared = ValidDeclaredRevertPaths(declaredPaths);
             var diff = GitCli.Run(candidatePath,
-                ["diff", "--name-status", "--no-renames", "-z", mergeBase, candidateSha, "--", "src/",
-                    .. (revertPaths is null ? [] : NegativeControlRevertPolicy.RevertablePolicyFiles)]);
+                [.. (declared is null ? Array.Empty<string>() : ["--literal-pathspecs"]), "diff", "--name-status", "--no-renames", "-z", mergeBase, candidateSha, "--",
+                    .. NegativeControlDiffPathspecs(revertPaths, mutation, declared)]);
             if (!diff.Succeeded || diff.DrainTimedOut)
                 return InconclusiveSourceReverted(candidateSha, $"source diff failed: {TrimForReceipt(diff.Error)}");
             var fields = diff.Output.Split('\0', StringSplitOptions.RemoveEmptyEntries);
             if (fields.Length % 2 != 0)
                 return InconclusiveSourceReverted(candidateSha, "malformed source name-status diff");
-            if (mutation is not null && ValidateSourceMutation(mutation, fields, candidatePath) is { } mutationRejection)
+            if (mutation is not null && ValidateSourceMutation(mutation, fields, candidatePath, candidateSha, mergeBase, checks, declared) is { } mutationRejection)
                 return InconclusiveSourceReverted(candidateSha,
                     FindingEvidenceRevertPathsRejectionJsonConverter.ToWireValue(mutationRejection), mutationRejection);
             var selected = revertPaths is null ? null : FindingEvidenceRevertPaths.Canonicalize(revertPaths);
-            if (selected is not null && ValidateSourceRevertPaths(selected, fields, allowPolicyFiles: true) is { } rejection)
+            if (selected is not null && ValidateSourceRevertPaths(selected, fields, allowPolicyFiles: true, declared: declared) is { } rejection)
                 return InconclusiveSourceReverted(candidateSha,
                     FindingEvidenceRevertPathsRejectionJsonConverter.ToWireValue(rejection), rejection);
+            if (selected is not null && ValidateSelectedTestClassPaths(selected, fields, candidatePath, candidateSha, mergeBase, checks, declared) is { } selectedRejection)
+                return InconclusiveSourceReverted(candidateSha,
+                    FindingEvidenceRevertPathsRejectionJsonConverter.ToWireValue(selectedRejection), selectedRejection);
             var restore = new List<string>();
             var added = new List<string>();
             for (var i = 0; mutation is null && i < fields.Length; i += 2)
             {
                 var path = fields[i + 1];
                 if (!path.StartsWith("src/", StringComparison.Ordinal) &&
-                    !(selected is not null && NegativeControlRevertPolicy.RevertablePolicyFiles.Contains(path, StringComparer.Ordinal)))
+                    !(selected is not null && (NegativeControlRevertPolicy.RevertablePolicyFiles.Contains(path, StringComparer.Ordinal) || IsDeclaredRevertPath(path, declared))))
                     return InconclusiveSourceReverted(candidateSha, "source diff contained a path outside src/");
                 if (selected is not null && !selected.Contains(path, StringComparer.Ordinal)) continue;
                 switch (fields[i])
@@ -128,8 +133,10 @@ public sealed partial class GoalAcceptanceVerifier
             var add = GitCli.Run(candidatePath, "worktree", "add", "--detach", revertedPath, candidateSha);
             if (!add.Succeeded)
                 return InconclusiveSourceReverted(candidateSha, $"source-reverted worktree creation failed: {TrimForReceipt(add.Error)}");
+            restoredPaths = [];
+            droppedPaths = [];
             if (TryLabelFocusedEvidenceBaselineWorktree(revertedPath) is { } integrityFailure)
-                return InconclusiveSourceReverted(candidateSha, integrityFailure);
+                return WithSourceRevertedPathReceipt(InconclusiveSourceReverted(candidateSha, integrityFailure), restoredPaths, droppedPaths);
             if (mutation is not null) ApplySourceMutation(revertedPath, mutation);
             if (restore.Count > 0)
             {
@@ -141,7 +148,9 @@ public sealed partial class GoalAcceptanceVerifier
                     var restored = GitCli.Run(revertedPath, "--literal-pathspecs", "restore",
                         $"--source={mergeBase}", "--worktree", $"--pathspec-from-file={pathspec}", "--pathspec-file-nul");
                     if (!restored.Succeeded)
-                        return InconclusiveSourceReverted(candidateSha, $"source restore failed: {TrimForReceipt(restored.Error)}");
+                        return WithSourceRevertedPathReceipt(InconclusiveSourceReverted(candidateSha,
+                            $"source restore failed: {TrimForReceipt(restored.Error)}"), restoredPaths, droppedPaths);
+                    restoredPaths.AddRange(restore);
                 }
                 finally { File.Delete(pathspec); }
             }
@@ -151,18 +160,21 @@ public sealed partial class GoalAcceptanceVerifier
                 if (!target.StartsWith(Path.GetFullPath(revertedPath) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
                     throw new InvalidDataException("Source deletion escaped the reverted worktree.");
                 File.Delete(target);
+                droppedPaths.Add(path);
             }
             environmentId = GoalId.New();
             environment = DotnetBuildEnvironmentManager.CreateAttempt(environmentId,
                 $"focused-evidence-source-reverted-{candidateSha[..Math.Min(8, candidateSha.Length)]}", storageRoot: _storageRoot);
             // Tests remain at the candidate, including new selections. Never partition them as baseline-only.
-            return await RunFocusedEvidenceArmAsync(FindingEvidenceArm.SourceReverted, candidateSha,
+            var arm = await RunFocusedEvidenceArmAsync(FindingEvidenceArm.SourceReverted, candidateSha,
                 revertedPath, null, checks, coverage, stableSlotIndex, stableSlotLease, environment,
                 executionOwner.CancellationToken, executionOwner: executionOwner).ConfigureAwait(false);
+            return WithSourceRevertedPathReceipt(arm, restoredPaths, droppedPaths);
         }
         catch (Exception ex) when (ex is not (DotnetBuildSlotsBusyException or BuildLockBlockedException or OperationCanceledException))
         {
-            return InconclusiveSourceReverted(candidateSha, $"source-reverted apparatus failure: {TrimForReceipt(ex.Message)}");
+            return WithSourceRevertedPathReceipt(InconclusiveSourceReverted(candidateSha,
+                $"source-reverted apparatus failure: {TrimForReceipt(ex.Message)}"), restoredPaths, droppedPaths);
         }
         finally
         {
@@ -179,15 +191,15 @@ public sealed partial class GoalAcceptanceVerifier
     }
 
     private static FindingEvidenceRevertPathsRejection? ValidateSourceRevertPaths(
-        string[] paths, string[] diff, bool allowPolicyFiles = false)
+        string[] paths, string[] diff, bool allowPolicyFiles = false, IReadOnlySet<string>? declared = null)
     {
         if (paths.Length == 0) return FindingEvidenceRevertPathsRejection.EmptyList;
         var changed = diff.Where((_, index) => index % 2 == 1).ToHashSet(StringComparer.Ordinal);
         foreach (var path in paths)
         {
-            if (path.StartsWith("tests/", StringComparison.Ordinal)) return FindingEvidenceRevertPathsRejection.UnderTests;
+            if (!IsDeclaredRevertPath(path, declared) && path.StartsWith("tests/", StringComparison.Ordinal)) return FindingEvidenceRevertPathsRejection.UnderTests;
             if (Path.IsPathRooted(path) ||
-                (!path.StartsWith("src/", StringComparison.Ordinal) &&
+                (!path.StartsWith("src/", StringComparison.Ordinal) && !IsDeclaredRevertPath(path, declared) &&
                     !(allowPolicyFiles && NegativeControlRevertPolicy.RevertablePolicyFiles.Contains(path, StringComparer.Ordinal))) ||
                 path.Split('/').Any(part => part is "." or ".." or ""))
                 return FindingEvidenceRevertPathsRejection.OutsideSrc;

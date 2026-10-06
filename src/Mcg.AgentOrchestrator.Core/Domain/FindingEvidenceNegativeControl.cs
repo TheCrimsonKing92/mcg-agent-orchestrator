@@ -73,7 +73,9 @@ public enum FindingEvidenceRevertPathsRejection
     MutationEmptyOldText,
     MutationUnchangedText,
     MutationOldTextNotFound,
-    MutationOldTextAmbiguous
+    MutationOldTextAmbiguous,
+    SelectedTestClass,
+    MutationSelectedTestClass
 }
 
 public sealed class FindingEvidenceRevertPathsRejectionJsonConverter : JsonConverter<FindingEvidenceRevertPathsRejection>
@@ -81,6 +83,8 @@ public sealed class FindingEvidenceRevertPathsRejectionJsonConverter : JsonConve
     public override FindingEvidenceRevertPathsRejection Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
         reader.TokenType == JsonTokenType.String ? reader.GetString() switch
         {
+            "revert-paths-selected-test-class" => FindingEvidenceRevertPathsRejection.SelectedTestClass,
+            "mutation-selected-test-class" => FindingEvidenceRevertPathsRejection.MutationSelectedTestClass,
             "revert-paths-empty" => FindingEvidenceRevertPathsRejection.EmptyList,
             "revert-paths-under-tests" => FindingEvidenceRevertPathsRejection.UnderTests,
             "revert-paths-outside-src" => FindingEvidenceRevertPathsRejection.OutsideSrc,
@@ -100,6 +104,8 @@ public sealed class FindingEvidenceRevertPathsRejectionJsonConverter : JsonConve
 
     public static string ToWireValue(FindingEvidenceRevertPathsRejection value) => value switch
     {
+        FindingEvidenceRevertPathsRejection.SelectedTestClass => "revert-paths-selected-test-class",
+        FindingEvidenceRevertPathsRejection.MutationSelectedTestClass => "mutation-selected-test-class",
         FindingEvidenceRevertPathsRejection.EmptyList => "revert-paths-empty",
         FindingEvidenceRevertPathsRejection.UnderTests => "revert-paths-under-tests",
         FindingEvidenceRevertPathsRejection.OutsideSrc => "revert-paths-outside-src",

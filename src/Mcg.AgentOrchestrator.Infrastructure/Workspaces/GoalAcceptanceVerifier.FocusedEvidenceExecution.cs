@@ -38,10 +38,10 @@ internal static class FocusedEvidenceExecution
         string worktreePath, GoalId? goalId, IReadOnlyList<AcceptanceManifestCheck> checks,
         FocusedEvidenceCoverage coverage, int? stableSlotIndex,
         DotnetBuildEnvironmentLease? stableSlotLease, IAcceptanceRunExecutionContext executionOwner,
-        string? mergeBase = null, IReadOnlyList<string>? revertPaths = null, FindingEvidenceMutation? mutation = null);
+        string? mergeBase = null, IReadOnlyList<string>? revertPaths = null, FindingEvidenceMutation? mutation = null, IReadOnlyList<string>? declaredPaths = null);
 
     internal static async Task<FocusedEvidenceRunResult> RunFocusedEvidenceAsync(
-        Func<string, GoalId?, string, IAcceptanceFocusedVerificationOwner, FindingEvidenceNegativeControl, int?, DotnetBuildEnvironmentLease?, bool, IReadOnlyList<string>?, FindingEvidenceMutation?, Task<FocusedEvidenceRunResult>> runNegativeControlFocusedEvidenceOwned,
+        Func<string, GoalId?, string, IAcceptanceFocusedVerificationOwner, FindingEvidenceNegativeControl, int?, DotnetBuildEnvironmentLease?, bool, IReadOnlyList<string>?, FindingEvidenceMutation?, IReadOnlyList<string>?, Task<FocusedEvidenceRunResult>> runNegativeControlFocusedEvidenceOwned,
         Func<string, GoalId?, string, IAcceptanceFocusedVerificationOwner, int?, DotnetBuildEnvironmentLease?, bool, Task<FocusedEvidenceRunResult>> runFocusedEvidenceOwned,
         string worktreePath,
         GoalId? goalId,
@@ -50,7 +50,7 @@ internal static class FocusedEvidenceExecution
         DotnetBuildEnvironmentLease? stableSlotLease = null,
         bool runBaselineArm = false,
         CancellationToken cancellationToken = default,
-        FindingEvidenceNegativeControl? negativeControl = null, IReadOnlyList<string>? revertPaths = null, FindingEvidenceMutation? mutation = null)
+        FindingEvidenceNegativeControl? negativeControl = null, IReadOnlyList<string>? revertPaths = null, FindingEvidenceMutation? mutation = null, IReadOnlyList<string>? declaredPaths = null)
     {
         if (mutation is not null && negativeControl != FindingEvidenceNegativeControl.RevertSrc)
             throw new ArgumentException("mutation requires negative_control 'revert-src'");
@@ -60,7 +60,7 @@ internal static class FocusedEvidenceExecution
         {
             if (negativeControl is { } mode)
                 return await runNegativeControlFocusedEvidenceOwned(worktreePath, goalId, request,
-                    executionOwner, mode, stableSlotIndex, stableSlotLease, runBaselineArm, revertPaths, mutation).ConfigureAwait(false);
+                    executionOwner, mode, stableSlotIndex, stableSlotLease, runBaselineArm, revertPaths, mutation, declaredPaths).ConfigureAwait(false);
             return await runFocusedEvidenceOwned(
                 worktreePath, goalId, request, executionOwner, stableSlotIndex,
                 stableSlotLease, runBaselineArm).ConfigureAwait(false);
@@ -97,7 +97,7 @@ internal static class FocusedEvidenceExecution
         DotnetBuildEnvironmentLease? stableSlotLease = null,
         bool runBaselineArm = false,
         CancellationToken cancellationToken = default,
-        FindingEvidenceNegativeControl? negativeControl = null, IReadOnlyList<string>? revertPaths = null, FindingEvidenceMutation? mutation = null)
+        FindingEvidenceNegativeControl? negativeControl = null, IReadOnlyList<string>? revertPaths = null, FindingEvidenceMutation? mutation = null, IReadOnlyList<string>? declaredPaths = null)
     {
         var executionOwner = (AcceptanceFocusedVerificationOwner)(executionContext ?? throw new InvalidOperationException(
             "Focused verification execution context was not supplied."));
@@ -171,7 +171,7 @@ internal static class FocusedEvidenceExecution
                 OutcomeReason: candidate.Disposition == FindingEvidenceArmDisposition.ApparatusFailure
                     ? FindingEvidenceOutcomeReason.ApparatusFailure
                     : null), negativeControl, worktreePath, goalId, focusedChecks, coverage,
-                stableSlotIndex, stableSlotLease, executionOwner, revertPaths: revertPaths, mutation: mutation).ConfigureAwait(false);
+                stableSlotIndex, stableSlotLease, executionOwner, revertPaths: revertPaths, mutation: mutation, declaredPaths: declaredPaths).ConfigureAwait(false);
         }
 
         var baselineSha = resolveFocusedEvidenceMergeBase(worktreePath);
@@ -219,7 +219,7 @@ internal static class FocusedEvidenceExecution
         }
 
         return await addSourceRevertedEvidence(evidence, negativeControl, worktreePath, goalId,
-            focusedChecks, coverage, stableSlotIndex, stableSlotLease, executionOwner, baselineSha, revertPaths, mutation).ConfigureAwait(false);
+            focusedChecks, coverage, stableSlotIndex, stableSlotLease, executionOwner, baselineSha, revertPaths, mutation, declaredPaths).ConfigureAwait(false);
     }
 
     internal static async Task<FocusedEvidenceArmRunResult> RunFocusedEvidenceArmAsync(
