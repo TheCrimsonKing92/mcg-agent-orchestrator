@@ -126,6 +126,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsLaneReuseShadow : 
         TestOverrides.DisableLaneReuseShadowForTests = disableShadow;
         TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = false;
         var calls = new ConcurrentBag<string[]>();
+        var cleanupLines = new ConcurrentBag<string>();
+        var oldCleanupObserver = TestOverrides.OnGateWorktreeCleanupLineForTests;
+        TestOverrides.OnGateWorktreeCleanupLineForTests = cleanupLines.Add;
         try
         {
             var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
@@ -143,6 +146,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsLaneReuseShadow : 
                         "Failed! - Failed: 1, Passed: 0, Skipped: 0, Total: 1."));
             });
             var result = await verifier.RunAsync(root, new GoalId(Goal));
+            Assert.DoesNotContain(cleanupLines, line =>
+                line.StartsWith("GATE_WORKTREE_UNTRACKED_REMOVED", StringComparison.Ordinal) &&
+                line.Contains(".orchestrator/lane-reuse-shadow/", StringComparison.Ordinal));
             var filters = calls.Where(IsInfrastructurePartitionTestCall)
                 .Select(args => args[Array.IndexOf(args, "--filter") + 1]).Order(StringComparer.Ordinal).ToArray();
             Assert.Equal(new[] { "Alpha", "Beta", "Remainder" }.Select(name => ResolveLaneFilter(root, name)).Order(StringComparer.Ordinal), filters);
@@ -152,6 +158,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsLaneReuseShadow : 
         {
             TestOverrides.DisableLaneReuseShadowForTests = oldDisable;
             TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = oldRerun;
+            TestOverrides.OnGateWorktreeCleanupLineForTests = oldCleanupObserver;
         }
     }
 
@@ -212,6 +219,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsLaneReuseShadow : 
             """);
         try
         {
+            // Match the repository's state-directory ignore so gate cleanup retains its records.
+            Write(root, ".gitignore", ".orchestrator/\n");
             Write(root, "src/Fixture/Fixture.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\" />");
             Write(root, WidgetPath, "public class ShadowWidget { public int Value => 1; }");
             Write(root, "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
@@ -223,7 +232,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsLaneReuseShadow : 
             Write(root, "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GammaPlainTests.cs",
                 "public class GammaPlainTests { [Xunit.Fact] public void Example() { } }");
             Git(root, "init", "--initial-branch=main");
-            Git(root, "add", "config", "src", "tests");
+            Git(root, "add", ".gitignore", "config", "src", "tests");
             Commit(root, "fixture main");
             Git(root, "checkout", "-b", "goal/shadow");
             Write(root, WidgetPath, "public class ShadowWidget { public int Value => 2; }");
