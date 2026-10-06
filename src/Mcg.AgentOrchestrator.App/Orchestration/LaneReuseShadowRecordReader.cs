@@ -54,10 +54,15 @@ internal static class LaneReuseShadowRecordReader
             var lane = row.GetProperty("lane").GetString() ?? throw new JsonException("Missing lane.");
             var decision = row.GetProperty("decision").GetString() ?? throw new JsonException("Missing decision.");
             var executed = row.GetProperty("executed").GetBoolean();
+            var ruleV2 = Optional(row, "rule_v2");
+            if (ruleV2 is not null && ruleV2.Value.ValueKind != JsonValueKind.Object)
+                throw new JsonException("Invalid rule_v2.");
             lanes.Add(new(lane, decision, String(row, "reason"), executed,
                 Optional(row, "duration_ms")?.GetInt64(), Boolean(row, "shadow_miss"),
                 String(row, "miss_reason"), String(row, "reference_source"), Boolean(row, "flake_confirmed"),
-                String(row, "failed_predicate"), Strings(row, "failing_classes")));
+                String(row, "failed_predicate"), Strings(row, "failing_classes"), String(row, "verdict"),
+                ruleV2 is null ? null : String(ruleV2.Value, "decision"),
+                ruleV2 is null ? null : String(ruleV2.Value, "reason")));
         }
         return lanes;
     }

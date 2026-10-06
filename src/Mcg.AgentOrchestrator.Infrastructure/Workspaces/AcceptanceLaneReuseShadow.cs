@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Mcg.AgentOrchestrator.Core;
 using AcceptanceManifestCheck = Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier.AcceptanceManifestCheck;
 
@@ -52,6 +53,22 @@ internal sealed class AcceptanceLaneReuseShadow(
             }
             var classification = AcceptanceLaneReuseShadowClassifier.Classify(changedPaths, checks, inventory, lookup,
                 unavailableCause, inventoryFailure);
+            Dictionary<string, RuleV2> ruleV2;
+            Dictionary<string, RuleV2> UnavailableV2(Exception ex)
+            {
+                Log($"LANE_REUSE_SHADOW_UNAVAILABLE rule-v2:{ex.GetType().Name}");
+                return classification.Lanes.ToDictionary(lane => lane.Lane, lane =>
+                    new RuleV2("must-run", $"rule-v2-unavailable:{ex.GetType().Name}", new([], "unavailable", [], null)), StringComparer.Ordinal);
+            }
+            try
+            {
+                var contracts = inventory.Count == 0 ? [] : AcceptanceLaneReuseShadowLaunchContracts.Build(
+                    AcceptanceLaneReuseShadowLaunchContracts.ReadSources(worktreePath), inventory);
+                ruleV2 = AcceptanceLaneReuseShadowLaunchRule.Classify(changedPaths, checks, inventory, lookup, contracts,
+                        unavailableCause, inventoryFailure)
+                    .ToDictionary(lane => lane.Lane, lane => new RuleV2(lane.Decision, lane.Reason, lane.Provenance), StringComparer.Ordinal);
+            }
+            catch (Exception ex) { ruleV2 = UnavailableV2(ex); }
             if (inventoryFailure is not null) statusCause = $"class-inventory:{inventoryFailure}";
             if (statusCause is not null) Log($"LANE_REUSE_SHADOW_UNAVAILABLE {statusCause}");
             var recordRoot = Path.Combine(AcceptancePartitionVerdictCache.ResolveHostStateRoot(worktreePath),
@@ -85,13 +102,28 @@ internal sealed class AcceptanceLaneReuseShadow(
                     return new LaneRow(lane.Lane, lane.PartitionId, lane.Decision, lane.Reason, result is not null,
                         verdict, result?.DurationMilliseconds, miss.MissEvaluated, miss.ReferenceVerdict,
                         miss.ReferenceSource, miss.ShadowMiss, miss.MissReason, result?.CompletionDecision?.FailedPredicate,
-                        observation.FlakeConfirmed, failingClasses);
+                        observation.FlakeConfirmed, failingClasses, ruleV2[lane.Lane]);
                 }).ToArray();
+            Summary summaryV2;
+            try
+            {
+                summaryV2 = new(rows.Length, rows.Count(row => row.RuleV2.Decision == "would-reuse"),
+                    rows.Count(row => row.RuleV2.Decision == "must-run"),
+                    rows.Count(row => row.RuleV2.Decision == "would-reuse" && row.Executed),
+                    rows.Count(row => AcceptanceLaneReuseShadowMiss.Evaluate(row.RuleV2.Decision, row.Executed, row.Verdict,
+                        AcceptanceLaneReuseShadowMiss.ResolveReference(references, row.Lane, row.PartitionId)).ShadowMiss));
+            }
+            catch (Exception ex)
+            {
+                ruleV2 = UnavailableV2(ex);
+                rows = rows.Select(row => row with { RuleV2 = ruleV2[row.Lane] }).ToArray();
+                summaryV2 = new(rows.Length, 0, rows.Length, 0, 0);
+            }
             var record = new ShadowRecord(mainSha, candidateTreeSha, verifyingCommitSha, changedPaths?.Count,
                 statusCause is null ? "resolved" : $"unavailable:{statusCause}", classification.IgnoredPaths,
                 rows, new Summary(rows.Length, rows.Count(row => row.Decision == "would-reuse"), rows.Count(row => row.Decision == "must-run"),
                     rows.Count(row => row.Decision == "would-reuse" && row.Executed), rows.Count(row => row.ShadowMiss)),
-                DateTimeOffset.UtcNow, mainTreeSha, unreadableReferenceRecords);
+                DateTimeOffset.UtcNow, mainTreeSha, unreadableReferenceRecords, ["marker-v1", "launch-contract-v2"], summaryV2);
             var directory = Path.Combine(recordRoot, SafeFileName(goalId));
             Directory.CreateDirectory(directory);
             var path = Path.Combine(directory, $"{SafeFileName(attemptId)}.json");
@@ -121,10 +153,14 @@ internal sealed class AcceptanceLaneReuseShadow(
     private sealed record LaneRow(string Lane, string PartitionId, string Decision, string Reason,
         bool Executed, string? Verdict, long? DurationMs, bool MissEvaluated, string? ReferenceVerdict,
         string? ReferenceSource, bool ShadowMiss, string? MissReason, string? FailedPredicate,
-        bool? FlakeConfirmed, IReadOnlyList<string> FailingClasses);
+        bool? FlakeConfirmed, IReadOnlyList<string> FailingClasses,
+        [property: JsonPropertyName("rule_v2")] RuleV2 RuleV2);
+    private sealed record RuleV2(string Decision, string Reason, AcceptanceLaneReuseShadowLaunchProvenance Provenance);
     private sealed record Summary(int LaneCount, int WouldReuseCount, int MustRunCount,
         int WouldReuseExecutedCount, int ShadowMissCount);
     private sealed record ShadowRecord(string MainSha, string CandidateTreeSha, string VerifyingCommitSha,
         int? ChangedFileCount, string Status, IReadOnlyList<string> IgnoredPaths, IReadOnlyList<LaneRow> Lanes, Summary Summary,
-        DateTimeOffset RecordedAt, string? MainTreeSha, int UnreadableReferenceRecords);
+        DateTimeOffset RecordedAt, string? MainTreeSha, int UnreadableReferenceRecords,
+        [property: JsonPropertyName("rule_versions")] IReadOnlyList<string> RuleVersions,
+        [property: JsonPropertyName("summary_v2")] Summary SummaryV2);
 }
