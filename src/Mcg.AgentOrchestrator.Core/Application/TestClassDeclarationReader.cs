@@ -365,6 +365,11 @@ internal static class CSharpTestClassScanner
                 continue;
             }
 
+            if (keyword is "class" or "struct" && index > 0 && tokens[index - 1].Value == "record")
+            {
+                continue;
+            }
+
             var nameIndex = index + 1;
             var isRecordStruct = keyword == "record" &&
                 nameIndex < tokens.Count &&
@@ -383,16 +388,54 @@ internal static class CSharpTestClassScanner
             }
 
             var openBraceIndex = FindBodyOpenBrace(tokens, nameIndex + 1);
+            int closeBraceIndex;
             if (openBraceIndex < 0)
             {
-                continue;
-            }
+                var parameterListIndex = nameIndex + 1;
+                if (parameterListIndex < tokens.Count && tokens[parameterListIndex].Value == "<")
+                {
+                    var genericEndIndex = FindMatching(tokens, parameterListIndex, "<", ">");
+                    if (genericEndIndex < 0)
+                    {
+                        continue;
+                    }
 
-            var closeBraceIndex = FindMatching(tokens, openBraceIndex, "{", "}");
-            if (closeBraceIndex < 0)
+                    parameterListIndex = genericEndIndex + 1;
+                }
+
+                if (parameterListIndex >= tokens.Count || tokens[parameterListIndex].Value != "(")
+                {
+                    continue;
+                }
+
+                var parameterEndIndex = FindMatching(tokens, parameterListIndex, "(", ")");
+                if (parameterEndIndex < 0)
+                {
+                    continue;
+                }
+
+                var endIndex = nameIndex + 1;
+                while (endIndex < tokens.Count && tokens[endIndex].Value is not ("{" or ";" or "=>"))
+                {
+                    endIndex++;
+                }
+
+                if (endIndex >= tokens.Count || tokens[endIndex].Value != ";" || parameterEndIndex >= endIndex)
+                {
+                    continue;
+                }
+
+                // An empty body span keeps nesting and test-method detection unchanged.
+                openBraceIndex = closeBraceIndex = endIndex;
+            }
+            else
             {
-                declarations = [];
-                return false;
+                closeBraceIndex = FindMatching(tokens, openBraceIndex, "{", "}");
+                if (closeBraceIndex < 0)
+                {
+                    declarations = [];
+                    return false;
+                }
             }
 
             var modifiers = ReadModifiers(tokens, index);
