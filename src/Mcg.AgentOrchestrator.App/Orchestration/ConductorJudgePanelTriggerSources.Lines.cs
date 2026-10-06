@@ -13,11 +13,16 @@ internal sealed partial class ConductorJudgePanelTriggerSources
         var info = new FileInfo(path);
         state.Cursors.TryGetValue(source, out var old);
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        // Snapshot metadata before reading, including for a first-seen file.
+        info.Refresh();
+        var length = info.Length;
+        var writeTicks = info.LastWriteTimeUtc.Ticks;
+        var creationTicks = info.CreationTimeUtc.Ticks;
         var identity = FileIdentity(stream, info);
-        if (old is not null && old.Length == info.Length && old.WriteTicks == info.LastWriteTimeUtc.Ticks &&
-            old.CreationTicks == info.CreationTimeUtc.Ticks && old.Identity == identity) yield break;
+        if (old is not null && old.Length == length && old.WriteTicks == writeTicks &&
+            old.CreationTicks == creationTicks && old.Identity == identity) yield break;
         var offset = old is not null && stream.Length >= old.Length && old.Identity == identity &&
-            old.CreationTicks == info.CreationTimeUtc.Ticks &&
+            old.CreationTicks == creationTicks &&
             Fingerprint(stream, old.Offset) == old.Fingerprint ? old.Offset : 0;
         stream.Position = offset;
         var buffer = new byte[64 * 1024];
@@ -48,8 +53,9 @@ internal sealed partial class ConductorJudgePanelTriggerSources
         }
         // Observe a torn record, but never parse or consume it. A later append retries it.
         if (pending.Length > 0) Reads?.EventLine();
-        state.Cursors[source] = new(offset, stream.Length, info.LastWriteTimeUtc.Ticks,
-            info.CreationTimeUtc.Ticks, Fingerprint(stream, offset), identity);
+        // Bytes appended after EOF have not been observed and must remain discoverable.
+        state.Cursors[source] = new(offset, offset + pending.Length, writeTicks,
+            creationTicks, Fingerprint(stream, offset), identity);
     }
 
     private static string Fingerprint(FileStream stream, long offset)
