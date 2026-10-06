@@ -11,14 +11,14 @@ internal sealed class AcceptanceLaneReuseShadow(
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
     private readonly object _gate = new();
-    private readonly Dictionary<string, AcceptanceCheckResult> _observed = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (AcceptanceCheckResult Result, bool? FlakeConfirmed)> _observed = new(StringComparer.Ordinal);
 
-    internal void Observe(AcceptanceManifestCheck check, AcceptanceCheckResult result)
+    internal void Observe(AcceptanceManifestCheck check, AcceptanceCheckResult result, bool? flakeConfirmed = null)
     {
         try
         {
             if (!GoalAcceptanceVerifier.TryGetInfrastructurePartitionId(check, out _, out _)) return;
-            lock (_gate) _observed[check.Name] = result;
+            lock (_gate) _observed[check.Name] = (result, flakeConfirmed);
         }
         catch (Exception ex) { Log($"LANE_REUSE_SHADOW_UNAVAILABLE observation:{ex.GetType().Name}"); }
     }
@@ -54,19 +54,45 @@ internal sealed class AcceptanceLaneReuseShadow(
                 unavailableCause, inventoryFailure);
             if (inventoryFailure is not null) statusCause = $"class-inventory:{inventoryFailure}";
             if (statusCause is not null) Log($"LANE_REUSE_SHADOW_UNAVAILABLE {statusCause}");
+            var recordRoot = Path.Combine(AcceptancePartitionVerdictCache.ResolveHostStateRoot(worktreePath),
+                ".orchestrator", "lane-reuse-shadow");
+            string? mainTreeSha = null;
+            IReadOnlyList<AcceptanceLaneReuseShadowMiss.ReferenceRow> references = [];
+            var unreadableReferenceRecords = 0;
+            try
+            {
+                mainTreeSha = AcceptanceLaneReuseShadowReferenceReader.ResolveMainTreeSha(worktreePath, mainSha);
+                (references, unreadableReferenceRecords) = AcceptanceLaneReuseShadowReferenceReader.Read(
+                    recordRoot, SafeFileName(goalId), SafeFileName(attemptId), mainTreeSha);
+            }
+            catch (Exception ex) { Log($"LANE_REUSE_SHADOW_UNAVAILABLE reference:{ex.GetType().Name}"); }
             LaneRow[] rows;
             lock (_gate)
                 rows = classification.Lanes.Select(lane =>
                 {
-                    _observed.TryGetValue(lane.Lane, out var result);
+                    _observed.TryGetValue(lane.Lane, out var observation);
+                    var result = observation.Result;
+                    var verdict = result is null ? null : result.Passed ? "GREEN" : "RED";
+                    var miss = new AcceptanceLaneReuseShadowMiss.Result(false, null, null, false, null);
+                    string[] failingClasses = [];
+                    try
+                    {
+                        miss = AcceptanceLaneReuseShadowMiss.Evaluate(lane.Decision, result is not null, verdict,
+                            AcceptanceLaneReuseShadowMiss.ResolveReference(references, lane.Lane, lane.PartitionId));
+                        failingClasses = AcceptanceLaneReuseShadowMiss.ReduceFailingClasses(result?.FailingTestIdentities);
+                    }
+                    catch (Exception ex) { Log($"LANE_REUSE_SHADOW_UNAVAILABLE miss:{ex.GetType().Name}"); }
                     return new LaneRow(lane.Lane, lane.PartitionId, lane.Decision, lane.Reason, result is not null,
-                        result is null ? null : result.Passed ? "GREEN" : "RED", result?.DurationMilliseconds);
+                        verdict, result?.DurationMilliseconds, miss.MissEvaluated, miss.ReferenceVerdict,
+                        miss.ReferenceSource, miss.ShadowMiss, miss.MissReason, result?.CompletionDecision?.FailedPredicate,
+                        observation.FlakeConfirmed, failingClasses);
                 }).ToArray();
             var record = new ShadowRecord(mainSha, candidateTreeSha, verifyingCommitSha, changedPaths?.Count,
                 statusCause is null ? "resolved" : $"unavailable:{statusCause}", classification.IgnoredPaths,
-                rows, new Summary(rows.Length, rows.Count(row => row.Decision == "would-reuse"), rows.Count(row => row.Decision == "must-run")));
-            var directory = Path.Combine(AcceptancePartitionVerdictCache.ResolveHostStateRoot(worktreePath),
-                ".orchestrator", "lane-reuse-shadow", SafeFileName(goalId));
+                rows, new Summary(rows.Length, rows.Count(row => row.Decision == "would-reuse"), rows.Count(row => row.Decision == "must-run"),
+                    rows.Count(row => row.Decision == "would-reuse" && row.Executed), rows.Count(row => row.ShadowMiss)),
+                DateTimeOffset.UtcNow, mainTreeSha, unreadableReferenceRecords);
+            var directory = Path.Combine(recordRoot, SafeFileName(goalId));
             Directory.CreateDirectory(directory);
             var path = Path.Combine(directory, $"{SafeFileName(attemptId)}.json");
             temporaryPath = $"{path}.{Guid.NewGuid():N}.tmp";
@@ -93,8 +119,12 @@ internal sealed class AcceptanceLaneReuseShadow(
     }
 
     private sealed record LaneRow(string Lane, string PartitionId, string Decision, string Reason,
-        bool Executed, string? Verdict, long? DurationMs);
-    private sealed record Summary(int LaneCount, int WouldReuseCount, int MustRunCount);
+        bool Executed, string? Verdict, long? DurationMs, bool MissEvaluated, string? ReferenceVerdict,
+        string? ReferenceSource, bool ShadowMiss, string? MissReason, string? FailedPredicate,
+        bool? FlakeConfirmed, IReadOnlyList<string> FailingClasses);
+    private sealed record Summary(int LaneCount, int WouldReuseCount, int MustRunCount,
+        int WouldReuseExecutedCount, int ShadowMissCount);
     private sealed record ShadowRecord(string MainSha, string CandidateTreeSha, string VerifyingCommitSha,
-        int? ChangedFileCount, string Status, IReadOnlyList<string> IgnoredPaths, IReadOnlyList<LaneRow> Lanes, Summary Summary);
+        int? ChangedFileCount, string Status, IReadOnlyList<string> IgnoredPaths, IReadOnlyList<LaneRow> Lanes, Summary Summary,
+        DateTimeOffset RecordedAt, string? MainTreeSha, int UnreadableReferenceRecords);
 }
