@@ -6,6 +6,7 @@ internal interface IAuthorBriefDraftRepository
 {
     string ResolveMainHead();
     int? TrackedLineCount(string sha, string path);
+    bool IsTrackedDirectory(string sha, string path) => false;
 }
 
 internal sealed class GitAuthorBriefDraftRepository(string repositoryRoot) : IAuthorBriefDraftRepository
@@ -31,9 +32,7 @@ internal sealed class GitAuthorBriefDraftRepository(string repositoryRoot) : IAu
     public int? TrackedLineCount(string sha, string path)
     {
         // A citation is a repository-relative file, never a git revision expression or directory.
-        if (Path.IsPathRooted(path) || path.Contains(':') || path.Contains('\\') ||
-            path.Split('/').Any(segment => segment is "" or "." or ".."))
-            return null;
+        if (!IsRepositoryPath(path)) return null;
         var type = GitCli.Run(repositoryRoot, "cat-file", "-t", $"{sha}:{path}");
         if (!type.ProcessStarted || type.DrainTimedOut)
             throw new InvalidOperationException($"Cannot inspect citation {path}: {type.Error}");
@@ -44,6 +43,19 @@ internal sealed class GitAuthorBriefDraftRepository(string repositoryRoot) : IAu
         while (reader.ReadLine() is not null) lines++;
         return lines;
     }
+
+    public bool IsTrackedDirectory(string sha, string path)
+    {
+        if (!IsRepositoryPath(path)) return false;
+        var type = GitCli.Run(repositoryRoot, "cat-file", "-t", $"{sha}:{path}");
+        if (!type.ProcessStarted || type.DrainTimedOut)
+            throw new InvalidOperationException($"Cannot inspect citation {path}: {type.Error}");
+        return type.Succeeded && type.Output.Trim() == "tree";
+    }
+
+    private static bool IsRepositoryPath(string path) =>
+        !Path.IsPathRooted(path) && !path.Contains(':') && !path.Contains('\\') &&
+        !path.Split('/').Any(segment => segment is "" or "." or "..");
 
     private static string Require(GitCli.GitResult result)
     {

@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Core;
 
@@ -29,19 +28,27 @@ internal static class AuthorBriefDraftChecks
         {
             var end = headings.FirstOrDefault(heading => heading.Index > premise.Index)?.Index ?? markdown.Length;
             var text = markdown[(premise.Index + premise.Length)..end];
+            string? previousPath = null;
             foreach (Match citation in Regex.Matches(text, @"`([^`\r\n]+)`", RegexOptions.CultureInvariant))
             {
                 var token = citation.Groups[1].Value;
-                var lineSuffix = Regex.Match(token, @":([0-9]+)$", RegexOptions.CultureInvariant);
-                var path = lineSuffix.Success ? token[..lineSuffix.Index] : token;
-                if (!lineSuffix.Success && !path.Contains('/') && !path.Contains('\\') &&
-                    !Regex.IsMatch(path, @"\.[a-z0-9]+$", RegexOptions.CultureInvariant)) continue;
-                if (path.StartsWith("./", StringComparison.Ordinal)) path = path[2..];
-                var count = repository.TrackedLineCount(mainHead, path);
-                if (count is null)
+                var parsed = BoardFillCitation.Parse(token);
+                if (parsed.IsContinuation)
+                {
+                    if (previousPath is null)
+                    {
+                        citationFailures.Add($"{token}: continuation has no preceding file citation");
+                        continue;
+                    }
+                    parsed = parsed with { Path = previousPath };
+                }
+                else if (!parsed.HasLineSuffix && !token.Contains('/') && !token.Contains('\\') &&
+                    !Regex.IsMatch(token, @"\.[a-z0-9]+$", RegexOptions.CultureInvariant)) continue;
+                previousPath = parsed.Path;
+                var count = repository.TrackedLineCount(mainHead, parsed.Path);
+                if (count is null && (parsed.HasLineSuffix || !repository.IsTrackedDirectory(mainHead, parsed.Path)))
                     citationFailures.Add($"{token}: file is not tracked at {mainHead}");
-                else if (lineSuffix.Success && (!int.TryParse(lineSuffix.Groups[1].Value,
-                    NumberStyles.None, CultureInfo.InvariantCulture, out var line) || line < 1 || line > count))
+                else if (count is { } lines && parsed.HasLineSuffix && !parsed.InRange(lines))
                     citationFailures.Add($"{token}: line is outside file (line count {count})");
             }
         }
