@@ -167,7 +167,7 @@ public sealed class DeveloperCascadeDispatchTests : WorkerDispatchTestSupport
         using var f = new Fixture();
         f.Prepare();
         f.Retry(RatchetRetry);
-        var profiles = WorkerProfileCatalog.Default().Profiles.Where(p => p.Name != "codex-spark").ToList();
+        var profiles = WorkerProfileCatalog.Default().Profiles.Where(p => p.Name != "codex-luna").ToList();
         if (defect != "missing")
         {
             var spark = WorkerProfileCatalog.Default().GetRequired("codex-spark");
@@ -237,9 +237,9 @@ public sealed class DeveloperCascadeDispatchTests : WorkerDispatchTestSupport
     {
         var dispatch = task.LastDispatch!;
         Assert.NotNull(dispatch);
-        Assert.Equal(decision == "cheap" ? "codex-spark" : "codex-cli", dispatch.WorkerName);
+        Assert.Equal(decision == "cheap" ? "codex-luna" : "codex-cli", dispatch.WorkerName);
         Assert.Equal(decision == "cheap" ? "gpt-6-luna" : "gpt-6.1-sol", dispatch.ModelName);
-        Assert.Equal(decision switch { "cheap" => "codex-spark:cascade-cheap", "escalated" => "codex-cli:cascade-escalated", _ => "codex-cli" }, dispatch.DispatchLane);
+        Assert.Equal(decision switch { "cheap" => "codex-luna:cascade-cheap", "escalated" => "codex-cli:cascade-escalated", _ => "codex-cli" }, dispatch.DispatchLane);
         Assert.EndsWith($"cascade={decision} rule={rule}" + (ids is null ? "" : " ids=" + ids), dispatch.ModelSelectionReason);
     }
 

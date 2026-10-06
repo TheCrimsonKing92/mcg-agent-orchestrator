@@ -70,7 +70,7 @@ public static class ModelOutcomeScorecard
             .GroupBy(row => (
                 row.ProviderName,
                 row.ModelName,
-                row.DispatchLane))
+                DispatchLane: LunaLaneNames.NormalizeDispatchLane(row.DispatchLane)))
             .OrderBy(group => group.Key.ProviderName, StringComparer.OrdinalIgnoreCase)
             .ThenBy(group => group.Key.ModelName, StringComparer.OrdinalIgnoreCase)
             .ThenBy(group => group.Key.DispatchLane, StringComparer.OrdinalIgnoreCase)

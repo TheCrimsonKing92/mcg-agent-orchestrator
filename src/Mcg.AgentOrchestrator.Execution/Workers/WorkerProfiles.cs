@@ -123,7 +123,7 @@ public static class WorkerProfileDiagnostics
         return provider.Identity.Kind switch
         {
             ProviderKind.AnthropicClaudeCli => EvaluateClaudePatchCapability(normalized),
-            ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark or ProviderKind.OpenAICodexOssCli => EvaluateCodexPatchCapability(normalized),
+            ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexLuna or ProviderKind.OpenAICodexOssCli => EvaluateCodexPatchCapability(normalized),
             ProviderKind.HermesAcp => new WorkerProfilePatchCapability(
                 true,
                 "Hermes ACP may patch only inside the orchestrator sandbox; CanSelfCommit=false keeps commit and landing authority with the orchestrator."),
@@ -360,7 +360,7 @@ public static class WorkerProfileDiagnostics
         provider.Identity.Kind switch
         {
             ProviderKind.AnthropicClaudeCli => ["claude"],
-            ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark or ProviderKind.OpenAICodexOssCli => ["codex"],
+            ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexLuna or ProviderKind.OpenAICodexOssCli => ["codex"],
             ProviderKind.OllamaQwenCodeCli => ["qwen"],
             ProviderKind.HermesAcp => ["mcg-orchestrator", "mcg-orchestrator.cmd"],
             _ => []
@@ -600,7 +600,8 @@ public sealed record WorkerProfileCatalog(IReadOnlyList<WorkerProfile> Profiles)
 {
     public WorkerProfile GetRequired(string name)
     {
-        return Profiles.FirstOrDefault(profile => profile.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
+        return Profiles.FirstOrDefault(profile => string.Equals(
+            LunaLaneNames.NormalizeProfileName(profile.Name), LunaLaneNames.NormalizeProfileName(name), StringComparison.OrdinalIgnoreCase))
             ?? throw new KeyNotFoundException($"Worker profile '{name}' was not found.");
     }
 
@@ -616,9 +617,10 @@ public sealed record WorkerProfileCatalog(IReadOnlyList<WorkerProfile> Profiles)
             throw new ArgumentException("Worker profile command template cannot be empty.", nameof(profile));
         }
 
+        var normalizedName = LunaLaneNames.NormalizeProfileName(profile.Name.Trim());
         var profiles = Profiles
-            .Where(existing => !existing.Name.Equals(profile.Name, StringComparison.OrdinalIgnoreCase))
-            .Append(profile with { Name = profile.Name.Trim(), CommandTemplate = profile.CommandTemplate.Trim() })
+            .Where(existing => !string.Equals(LunaLaneNames.NormalizeProfileName(existing.Name), normalizedName, StringComparison.OrdinalIgnoreCase))
+            .Append(profile with { Name = normalizedName, CommandTemplate = profile.CommandTemplate.Trim() })
             .OrderBy(existing => existing.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
@@ -628,7 +630,9 @@ public sealed record WorkerProfileCatalog(IReadOnlyList<WorkerProfile> Profiles)
     public WorkerProfileCatalog Merge(WorkerProfileCatalog catalog)
     {
         var merged = this;
-        foreach (var profile in catalog.Profiles)
+        // Apply read aliases first so an explicitly named luna entry wins in either file order.
+        foreach (var profile in catalog.Profiles.OrderBy(profile =>
+            string.Equals(profile.Name.Trim(), LunaLaneNames.RetiredProfileName, StringComparison.OrdinalIgnoreCase) ? 0 : 1))
         {
             merged = merged.Upsert(profile);
         }
@@ -642,7 +646,7 @@ public sealed record WorkerProfileCatalog(IReadOnlyList<WorkerProfile> Profiles)
         [
             new WorkerProfile("local-echo", "Write-Output {promptPath}"),
             new WorkerProfile("codex-cli", "codex exec --json --skip-git-repo-check --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} -c project_doc_max_bytes=65536 --sandbox {sandboxMode} --cd {workingDirectory}", AutoLoadsRepositoryPolicy: true, RepositoryPolicyMaxBytes: 65_536),
-            new WorkerProfile("codex-spark", "codex exec --json --skip-git-repo-check --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} -c project_doc_max_bytes=65536 --sandbox {sandboxMode} --cd {workingDirectory}", AutoLoadsRepositoryPolicy: true, RepositoryPolicyMaxBytes: 65_536),
+            new WorkerProfile(WorkerProfileDispatcher.OpenAiLunaSubscriptionProfileName, "codex exec --json --skip-git-repo-check --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} -c project_doc_max_bytes=65536 --sandbox {sandboxMode} --cd {workingDirectory}", AutoLoadsRepositoryPolicy: true, RepositoryPolicyMaxBytes: 65_536),
             new WorkerProfile("codex-oss-cli", "codex exec --skip-git-repo-check --oss --local-provider ollama --model {subscriptionModelName} --sandbox {sandboxMode} --cd {workingDirectory}"),
             new WorkerProfile(WorkerProfile.QwenCodeCliName, "$env:OPENAI_BASE_URL={openaiBaseUrl}; $env:OPENAI_API_KEY={openaiApiKey}; $env:OPENAI_MODEL={subscriptionModelName}; Set-Location {workingDirectory}; qwen --bare --approval-mode {approvalMode} --input-format text"),
             // -p = headless print mode; without it Claude opens the interactive REPL and emits nothing (exits 0 empty, so the task is wrongly classified Failed). The prompt is piped via stdin and --session-id is appended by the spawn layer.
@@ -747,7 +751,7 @@ public static class WorkerProfileStore
         foreach (var profileName in new[]
                   {
                       WorkerProfileDispatcher.OpenAiSubscriptionProfileName,
-                      providers.Resolve(ProviderKind.OpenAICodexSpark).ProfileName,
+                      providers.Resolve(ProviderKind.OpenAICodexLuna).ProfileName,
                       providers.Resolve(ProviderKind.OpenAICodexOssCli).ProfileName,
                       WorkerProfileDispatcher.AnthropicSubscriptionProfileName,
                       WorkerProfileDispatcher.QwenCodeCliProfileName
@@ -770,7 +774,7 @@ public static class WorkerProfileStore
             return true;
         }
 
-        if (provider.Identity.Kind is ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark)
+        if (provider.Identity.Kind is ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexLuna)
         {
             const string legacyStructuredOutputTemplate =
                 "codex exec --skip-git-repo-check --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory}";

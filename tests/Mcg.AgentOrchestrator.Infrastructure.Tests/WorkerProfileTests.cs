@@ -13,7 +13,7 @@ public sealed class WorkerProfileTests
         var profiles = WorkerProfileCatalog.Default().Profiles;
         var fallback = Assert.Single(profiles, profile => profile.Name == "claude-cli");
 
-        foreach (var profileName in new[] { "codex-cli", "codex-spark" })
+        foreach (var profileName in new[] { "codex-cli", "codex-luna" })
         {
             var codex = Assert.Single(profiles, profile => profile.Name == profileName);
             Assert.True(codex.HasCompleteRepositoryPolicyAutoLoadContract);

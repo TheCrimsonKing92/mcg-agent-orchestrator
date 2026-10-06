@@ -4,7 +4,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal static partial class WorkerSubscriptionModelResolver
 {
-    internal const string TesterCascadeCheapLane = "codex-spark:cascade-cheap";
+    internal const string TesterCascadeCheapLane = "codex-luna:cascade-cheap";
     internal const string TesterCascadeEscalatedLane = "codex-cli:cascade-escalated";
 
     private static SubscriptionModelSelection RouteDeveloperCascade(
@@ -27,10 +27,10 @@ internal static partial class WorkerSubscriptionModelResolver
                     AgentCatalog.DefaultSubscriptionReasoningEffort("OpenAI", modelAlias), agent.Model.MaxOutputTokens),
                 UsesComplexModel: false, UsesSubscriptionLaunchProfile: false,
                 Reason: new CascadeRouteMarker(CascadeRouteMarker.Cheap, rule, ids).AppendTo(primary.Reason),
-                LaunchProfileName: WorkerProfileDispatcher.OpenAiSparkSubscriptionProfileName,
+                LaunchProfileName: WorkerProfileDispatcher.OpenAiLunaSubscriptionProfileName,
                 DispatchLane: TesterCascadeCheapLane);
         }
-        bool ProfileAvailable() => profiles is not null && TryValidateSparkProfile(profiles, providers, out _);
+        bool ProfileAvailable() => profiles is not null && TryValidateLunaProfile(profiles, providers, out _);
 
         if (!enabled) return Full(CascadeRouteMarker.Primary, "switched-off");
         // Refresh rebuilds the prepared round; it must not treat its own ids as persisting findings.
@@ -90,10 +90,10 @@ internal static partial class WorkerSubscriptionModelResolver
                     AgentCatalog.DefaultSubscriptionReasoningEffort("OpenAI", modelAlias), agent.Model.MaxOutputTokens),
                 UsesComplexModel: false, UsesSubscriptionLaunchProfile: false,
                 Reason: new CascadeRouteMarker(CascadeRouteMarker.Cheap, rule).AppendTo(primary.Reason),
-                LaunchProfileName: WorkerProfileDispatcher.OpenAiSparkSubscriptionProfileName,
+                LaunchProfileName: WorkerProfileDispatcher.OpenAiLunaSubscriptionProfileName,
                 DispatchLane: TesterCascadeCheapLane);
         }
-        bool ProfileAvailable() => profiles is not null && TryValidateSparkProfile(profiles, providers, out _);
+        bool ProfileAvailable() => profiles is not null && TryValidateLunaProfile(profiles, providers, out _);
 
         if (!enabled) return Full(CascadeRouteMarker.Primary, "switched-off");
 

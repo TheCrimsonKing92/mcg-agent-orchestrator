@@ -30,7 +30,7 @@ public sealed class TesterCascadeDispatchTests : WorkerDispatchTestSupport
         Assert.Contains("model_reasoning_effort='medium'", f.Task.LastDispatch.Command, StringComparison.Ordinal);
         var preflightPath = Path.Combine(f.WorkingDirectory, ".orchestrator-context", f.Goal.Id.Value, "subscription-preflight.md");
         var preflight = File.ReadAllText(preflightPath);
-        Assert.Contains("profile: codex-spark", preflight, StringComparison.Ordinal);
+        Assert.Contains("profile: codex-luna", preflight, StringComparison.Ordinal);
         Assert.Contains("model: OpenAI/gpt-6-luna", preflight, StringComparison.Ordinal);
     }
 
@@ -190,7 +190,7 @@ public sealed class TesterCascadeDispatchTests : WorkerDispatchTestSupport
     public void UnavailableCheapProfile_FallsBackToPrimary(string defect)
     {
         using var f = new Fixture();
-        var profiles = WorkerProfileCatalog.Default().Profiles.Where(p => p.Name != "codex-spark").ToList();
+        var profiles = WorkerProfileCatalog.Default().Profiles.Where(p => p.Name != "codex-luna").ToList();
         if (defect != "missing")
         {
             var spark = WorkerProfileCatalog.Default().GetRequired("codex-spark");
@@ -246,7 +246,7 @@ public sealed class TesterCascadeDispatchTests : WorkerDispatchTestSupport
         escalated.Verify(ValidResult);
         escalated.Kernel.ReportTaskProgress(escalated.Goal.Id, escalated.Task.Id, WorkTaskStatus.Completed, "done");
         var records = ModelOutcomeScorecard.Build([cheap.Goal, escalated.Goal]);
-        Assert.Contains(records, r => r.ModelName == "gpt-6-luna" && r.DispatchLane == "codex-spark:cascade-cheap");
+        Assert.Contains(records, r => r.ModelName == "gpt-6-luna" && r.DispatchLane == "codex-luna:cascade-cheap");
         Assert.Contains(records, r => r.ModelName == "gpt-6.1-sol" && r.DispatchLane == "codex-cli:cascade-escalated");
     }
 
@@ -254,9 +254,9 @@ public sealed class TesterCascadeDispatchTests : WorkerDispatchTestSupport
     {
         var dispatch = task.LastDispatch!;
         Assert.NotNull(dispatch);
-        Assert.Equal(decision == "cheap" ? "codex-spark" : "codex-cli", dispatch.WorkerName);
+        Assert.Equal(decision == "cheap" ? "codex-luna" : "codex-cli", dispatch.WorkerName);
         Assert.Equal(decision == "cheap" ? alias : "gpt-6.1-sol", dispatch.ModelName);
-        Assert.Equal(decision switch { "cheap" => "codex-spark:cascade-cheap", "escalated" => "codex-cli:cascade-escalated", _ => "codex-cli" }, dispatch.DispatchLane);
+        Assert.Equal(decision switch { "cheap" => "codex-luna:cascade-cheap", "escalated" => "codex-cli:cascade-escalated", _ => "codex-cli" }, dispatch.DispatchLane);
         Assert.Contains($"cascade={decision} rule={rule}", dispatch.ModelSelectionReason!, StringComparison.Ordinal);
     }
 

@@ -17,7 +17,7 @@ public sealed class WorkerSkillTranscriptReader(
             var claude = dispatch?.WorkerProviderKind == ProviderKind.AnthropicClaudeCli;
             string? path;
             if (claude) path = FindClaudeTranscript(dispatch!);
-            else if (dispatch?.WorkerProviderKind is ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark)
+            else if (dispatch?.WorkerProviderKind is ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexLuna)
                 path = File.Exists(stdoutPath + ".jsonl") ? stdoutPath + ".jsonl" : null;
             else return null;
             if (path is null) return null;

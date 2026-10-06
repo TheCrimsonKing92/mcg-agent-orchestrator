@@ -110,7 +110,7 @@ public static class WorkerSandboxCapabilityPlanner
         if (provider.Identity.Kind is not (
             ProviderKind.AnthropicClaudeCli or
             ProviderKind.OpenAICodexCli or
-            ProviderKind.OpenAICodexSpark or
+            ProviderKind.OpenAICodexLuna or
             ProviderKind.OpenAICodexOssCli))
         {
             detail = "Repository-scoped skill writes require a typed Codex or Claude CLI provider.";

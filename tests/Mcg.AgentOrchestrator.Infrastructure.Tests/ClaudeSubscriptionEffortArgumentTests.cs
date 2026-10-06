@@ -375,7 +375,7 @@ public sealed class ClaudeSubscriptionEffortArgumentTests
 
         var codexDispatch = WorkerProfileDispatcher.BuildDispatchCommandTemplate(
             codex,
-            ProviderKind.OpenAICodexSpark,
+            ProviderKind.OpenAICodexLuna,
             new Dictionary<string, string?>
             {
                 ["subscriptionModelName"] = "gpt-5.3-codex-spark",

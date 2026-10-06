@@ -308,7 +308,7 @@ public sealed class WorkerContextUsageReceiptTests
 
     [Xunit.Theory]
     [Xunit.InlineData(ProviderKind.OpenAICodexCli)]
-    [Xunit.InlineData(ProviderKind.OpenAICodexSpark)]
+    [Xunit.InlineData(ProviderKind.OpenAICodexLuna)]
     public void NormalizeStructuredCodexOutput_JsonCommandWithoutContextPackageReceipt_PreservesWorkerDecision(
         ProviderKind providerKind)
     {

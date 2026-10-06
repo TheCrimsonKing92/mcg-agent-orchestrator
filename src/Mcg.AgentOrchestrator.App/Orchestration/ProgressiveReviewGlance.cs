@@ -2175,9 +2175,9 @@ internal sealed class SubscriptionCliProgressiveReviewGlanceRunner : IProgressiv
             ? "codex-jsonl"
             : "plain-json";
         var provider = selection.ProfileName.Equals(
-            WorkerProfileDispatcher.OpenAiSparkSubscriptionProfileName,
+            WorkerProfileDispatcher.OpenAiLunaSubscriptionProfileName,
             StringComparison.OrdinalIgnoreCase)
-            ? ProviderKind.OpenAICodexSpark.ToString()
+            ? ProviderKind.OpenAICodexLuna.ToString()
             : ProviderKind.OpenAICodexCli.ToString();
         var commandContract = string.Join(
             "\n",
@@ -2196,15 +2196,15 @@ internal sealed class SubscriptionCliProgressiveReviewGlanceRunner : IProgressiv
 
     internal static GlanceProfileSelection SelectProfile(WorkerProfileCatalog profiles)
     {
-        var spark = profiles.Profiles.FirstOrDefault(profile =>
-            profile.Name.Equals(WorkerProfileDispatcher.OpenAiSparkSubscriptionProfileName, StringComparison.OrdinalIgnoreCase));
-        if (spark is not null &&
-            !WorkerProfileDiagnostics.IsEchoOnlyCommand(spark.CommandTemplate) &&
-            WorkerProfileDiagnostics.UsesSubscriptionModelPlaceholder(spark.CommandTemplate) &&
-            WorkerProfileDiagnostics.UsesSubscriptionReasoningPlaceholder(spark.CommandTemplate))
+        var luna = profiles.Profiles.FirstOrDefault(profile =>
+            string.Equals(LunaLaneNames.NormalizeProfileName(profile.Name), WorkerProfileDispatcher.OpenAiLunaSubscriptionProfileName, StringComparison.OrdinalIgnoreCase));
+        if (luna is not null &&
+            !WorkerProfileDiagnostics.IsEchoOnlyCommand(luna.CommandTemplate) &&
+            WorkerProfileDiagnostics.UsesSubscriptionModelPlaceholder(luna.CommandTemplate) &&
+            WorkerProfileDiagnostics.UsesSubscriptionReasoningPlaceholder(luna.CommandTemplate))
         {
             return new GlanceProfileSelection(
-                WorkerProfileDispatcher.OpenAiSparkSubscriptionProfileName,
+                WorkerProfileDispatcher.OpenAiLunaSubscriptionProfileName,
                 AgentCatalog.OpenAiGpt6LunaSubscriptionModelAlias);
         }
 

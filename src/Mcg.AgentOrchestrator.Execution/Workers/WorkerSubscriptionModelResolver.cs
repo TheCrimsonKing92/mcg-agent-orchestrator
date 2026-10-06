@@ -118,7 +118,7 @@ internal static partial class WorkerSubscriptionModelResolver
             Reason: $"light-role: {task.RequiredRole} uses {WorkerProfileDispatcher.AnthropicSubscriptionProfileName}/{WorkerProfileDispatcher.LightRoleAnthropicModelName}");
     }
 
-    private static bool TryValidateSparkProfile(
+    private static bool TryValidateLunaProfile(
         WorkerProfileCatalog profiles,
         WorkerProviderCatalog providers,
         out string unavailableReason)
@@ -126,34 +126,34 @@ internal static partial class WorkerSubscriptionModelResolver
         try
         {
             var profile = profiles.Profiles.FirstOrDefault(profile =>
-                profile.Name.Equals(WorkerProfileDispatcher.OpenAiSparkSubscriptionProfileName, StringComparison.OrdinalIgnoreCase));
+                string.Equals(LunaLaneNames.NormalizeProfileName(profile.Name), WorkerProfileDispatcher.OpenAiLunaSubscriptionProfileName, StringComparison.OrdinalIgnoreCase));
             if (profile is null)
             {
-                unavailableReason = $"worker profile '{WorkerProfileDispatcher.OpenAiSparkSubscriptionProfileName}' was not found";
+                unavailableReason = $"worker profile '{WorkerProfileDispatcher.OpenAiLunaSubscriptionProfileName}' was not found";
                 return false;
             }
 
             if (WorkerProfileDiagnostics.IsEchoOnlyCommand(profile.CommandTemplate))
             {
-                unavailableReason = $"worker profile '{WorkerProfileDispatcher.OpenAiSparkSubscriptionProfileName}' only echoes prompt path";
+                unavailableReason = $"worker profile '{WorkerProfileDispatcher.OpenAiLunaSubscriptionProfileName}' only echoes prompt path";
                 return false;
             }
 
             if (!WorkerProfileDiagnostics.UsesSubscriptionModelPlaceholder(profile.CommandTemplate))
             {
-                unavailableReason = $"worker profile '{WorkerProfileDispatcher.OpenAiSparkSubscriptionProfileName}' does not include {{subscriptionModelName}}";
+                unavailableReason = $"worker profile '{WorkerProfileDispatcher.OpenAiLunaSubscriptionProfileName}' does not include {{subscriptionModelName}}";
                 return false;
             }
 
             if (!WorkerProfileDiagnostics.UsesSubscriptionReasoningPlaceholder(profile.CommandTemplate))
             {
-                unavailableReason = $"worker profile '{WorkerProfileDispatcher.OpenAiSparkSubscriptionProfileName}' does not include {{subscriptionReasoningEffort}}";
+                unavailableReason = $"worker profile '{WorkerProfileDispatcher.OpenAiLunaSubscriptionProfileName}' does not include {{subscriptionReasoningEffort}}";
                 return false;
             }
 
             var capability = WorkerProfileDiagnostics.EvaluatePatchCapability(
                 profile,
-                providers.Resolve(ProviderKind.OpenAICodexSpark));
+                providers.Resolve(ProviderKind.OpenAICodexLuna));
             if (!capability.IsPatchCapable)
             {
                 unavailableReason = capability.Detail;

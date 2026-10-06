@@ -920,7 +920,7 @@ Evidence: {intent.MisdirectionEvidence}
         var model = string.IsNullOrWhiteSpace(dispatch.ModelName) ? string.Empty : $" --model {Quote(dispatch.ModelName)}";
         return dispatch.WorkerProviderKind switch
         {
-            ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark => BuildCodexResumeCommand(dispatch, model, sessionId),
+            ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexLuna => BuildCodexResumeCommand(dispatch, model, sessionId),
             ProviderKind.AnthropicClaudeCli => $"claude{model} --permission-mode bypassPermissions -p --resume {Quote(sessionId)}",
             _ => throw new InvalidOperationException($"Progressive review steering supports codex and claude subscription lanes only; dispatch provider was {dispatch.WorkerProviderKind}.")
         };

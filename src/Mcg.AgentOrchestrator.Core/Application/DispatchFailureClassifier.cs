@@ -2697,7 +2697,7 @@ public static partial class DispatchFailureClassifier
         if (dispatch.WorkerProviderKind is
             ProviderKind.OpenAICodexCli or
             ProviderKind.AnthropicClaudeCli or
-            ProviderKind.OpenAICodexSpark or
+            ProviderKind.OpenAICodexLuna or
             ProviderKind.OpenAICodexOssCli or
             ProviderKind.OllamaQwenCodeCli or
             ProviderKind.XaiGrokCli)
@@ -2707,7 +2707,7 @@ public static partial class DispatchFailureClassifier
 
         return dispatch.WorkerName.Equals("codex-cli", StringComparison.OrdinalIgnoreCase) ||
             dispatch.WorkerName.Equals("claude-cli", StringComparison.OrdinalIgnoreCase) ||
-            dispatch.WorkerName.Equals("codex-spark", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(LunaLaneNames.NormalizeProfileName(dispatch.WorkerName), LunaLaneNames.LunaProfileName, StringComparison.OrdinalIgnoreCase) ||
             dispatch.WorkerName.Equals("codex-oss-cli", StringComparison.OrdinalIgnoreCase) ||
             dispatch.WorkerName.Equals("qwen-code-cli", StringComparison.OrdinalIgnoreCase) ||
             dispatch.WorkerName.Equals("grok-cli", StringComparison.OrdinalIgnoreCase);
