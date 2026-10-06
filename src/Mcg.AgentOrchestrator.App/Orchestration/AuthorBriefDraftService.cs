@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -25,6 +26,8 @@ internal static class AuthorBriefDraftService
         string? model = null;
         var kind = "failed";
         string? staleReason = null;
+        string? rawOutputPath = null;
+        int? rawOutputBytes = null;
         IReadOnlyList<string> evidenceReferences = [];
         IReadOnlyList<AuthorBriefDraftCheck> checks = [];
         try
@@ -48,6 +51,19 @@ internal static class AuthorBriefDraftService
             if (result is null)
             {
                 kind = "unparseable";
+                try
+                {
+                    var bytes = Encoding.UTF8.GetBytes(round.StandardOutput ?? "");
+                    var tail = bytes.Length > 65536 ? bytes[^65536..] : bytes;
+                    var path = Path.Combine(directory, stem + ".raw.txt");
+                    File.WriteAllBytes(path, tail);
+                    rawOutputPath = path;
+                    rawOutputBytes = tail.Length;
+                }
+                catch (Exception)
+                {
+                    // Diagnostic I/O must preserve the original model failure and receipt shape.
+                }
                 throw new InvalidOperationException("Author did not return one valid draft or stale JSON object.");
             }
             if (seams.Repository.ResolveMainHead() != mainHead)
@@ -96,10 +112,19 @@ internal static class AuthorBriefDraftService
             kind == "held" || failureDetail is null && kind is "draft" or "stale" ? kind : "failed",
             code, mainHead, draftPath, receiptPath, checks, failureDetail, heldMainHead);
 
-        void WriteReceipt(string? failure) => File.WriteAllText(receiptPath!, JsonSerializer.Serialize(new
+        void WriteReceipt(string? failure)
         {
-            backlogItemId, mainHead, exitCode, kind, checks, staleReason, evidenceReferences, failure, model
-        }, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, WriteIndented = true }));
+            object receipt = rawOutputPath is null ? new
+            {
+                backlogItemId, mainHead, exitCode, kind, checks, staleReason, evidenceReferences, failure, model
+            } : new
+            {
+                backlogItemId, mainHead, exitCode, kind, checks, staleReason, evidenceReferences, failure, model,
+                rawOutputPath, rawOutputBytes
+            };
+            File.WriteAllText(receiptPath!, JsonSerializer.Serialize(receipt,
+                new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, WriteIndented = true }));
+        }
     }
 
     private static string LintDetail(BriefLintFinding finding) => string.IsNullOrEmpty(finding.Remedy)
