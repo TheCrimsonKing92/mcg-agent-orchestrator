@@ -77,6 +77,8 @@ internal static class AuthorBriefDraftService
         }
         catch (Exception ex)
         {
+            // A hold is free of model spend; a repository change after dispatch remains a failure.
+            if (ex is AuthorDraftRepositoryNotAtMainException && mainHead is null) kind = "held";
             failureDetail = $"{ex.GetType().Name}: {ex.Message}";
             if (receiptPath is not null) WriteReceipt(ex is ConductorModelRoundException { ModelAlias: null }
                 ? ex.Message : $"{ex.GetType().Name}: {ex.Message}");
@@ -85,7 +87,7 @@ internal static class AuthorBriefDraftService
         }
 
         AuthorBriefDraftOutcome Outcome(int code) => new(
-            failureDetail is null && kind is "draft" or "stale" ? kind : "failed",
+            kind == "held" || failureDetail is null && kind is "draft" or "stale" ? kind : "failed",
             code, mainHead, draftPath, receiptPath, checks, failureDetail);
 
         void WriteReceipt(string? failure) => File.WriteAllText(receiptPath!, JsonSerializer.Serialize(new

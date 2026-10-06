@@ -52,7 +52,7 @@ internal sealed partial class ConductorBoardFillDraftStore(string path)
 
     internal void Finish(BoardFillDraftRound round, AuthorBriefDraftOutcome outcome, DateTimeOffset now)
     {
-        if (outcome.Kind is not ("draft" or "stale" or "failed"))
+        if (outcome.Kind is not ("draft" or "stale" or "failed" or "held"))
             throw new InvalidOperationException($"Invalid board-fill outcome '{outcome.Kind}'.");
         Update(round.Id, current => current.Outcome is null ? current with
         {
@@ -66,7 +66,7 @@ internal sealed partial class ConductorBoardFillDraftStore(string path)
         throw new InvalidOperationException("Cannot report an unfinished board-fill round."));
 
     internal int StartedOnUtcDay(DateTimeOffset now) =>
-        ReadAll().Count(round => round.StartedAt.UtcDateTime.Date == now.UtcDateTime.Date);
+        ReadAll().Count(round => round.Outcome != "held" && round.StartedAt.UtcDateTime.Date == now.UtcDateTime.Date);
 
     internal IReadOnlySet<string> AlreadyDrafted(IReadOnlyList<BacklogItem> items)
     {
