@@ -1,6 +1,6 @@
 using Mcg.AgentOrchestrator.Infrastructure;
 
-internal sealed class WorkerDispatchTestsSeededRepositoryFactory
+internal sealed partial class WorkerDispatchTestsSeededRepositoryFactory
 {
     private static readonly DateTimeOffset SeedCommitTime =
         DateTimeOffset.Parse("2026-01-01T00:00:00Z");
@@ -40,22 +40,14 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
         var attempt = FixtureAttempt.Create("create");
         var template = _template.Value;
         _hooks.BeforeTemplateValidation?.Invoke(template.Path);
-        var templateBefore = ValidateRepository(
-            template.Path,
+        var templateBefore = ValidateTemplateStage(
+            template,
             ValidationStage.Template,
-            template.Path,
-            stagingPath: null,
-            finalPath: null,
-            templateIdentity: template.Identity,
-            attempt: attempt);
-        EnsureSameIdentity(
             ValidationCheck.TemplateIdentityChanged,
             template.Identity,
-            templateBefore,
-            template.Path,
             stagingPath: null,
             finalPath: null,
-            attempt);
+            attempt: attempt);
 
         string? allocatedStagingPath = null;
         string? stagingPath = null;
@@ -127,22 +119,14 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
                     attempt.Receipts);
             }
 
-            var templateAfter = ValidateRepository(
-                template.Path,
+            var templateAfter = ValidateTemplateStage(
+                template,
                 ValidationStage.TemplateAfterCopy,
-                template.Path,
-                stagingPath,
-                finalPath,
-                templateBefore,
-                attempt: attempt);
-            EnsureSameIdentity(
                 ValidationCheck.TemplateIdentityChangedAfterCopy,
                 templateBefore,
-                templateAfter,
-                template.Path,
                 stagingPath,
                 finalPath,
-                attempt);
+                attempt: attempt);
 
             stagingIdentity = ValidateRepository(
                 stagingPath,
@@ -329,7 +313,7 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
                 stagingPath: null,
                 finalPath: null,
                 attempt: attempt);
-            return new TemplateState(path, identity, attempt.Receipts.ToArray());
+            return new TemplateState(path, identity, attempt.Receipts.ToArray(), ComputeTemplateDigest(path));
         }
         catch (SeededRepositoryFailureException failure)
         {
@@ -460,106 +444,117 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
                 probeReceipts: attempt.Receipts);
         }
 
-        var inside = RequiredProbe(
-            path,
-            ["rev-parse", "--is-inside-work-tree"],
-            Check(stage, "InsideWorkTree"),
-            sourceTemplatePath,
-            stagingPath,
-            finalPath,
-            observation,
-            templateIdentity,
-            stagingIdentity,
-            attempt);
-        if (!string.Equals(SingleOutput(inside), "true", StringComparison.Ordinal))
+        string topLevel;
+        string gitDirectory;
+        if (stage is ValidationStage.Staging or ValidationStage.Published)
         {
-            inside = attempt.Reclassify(inside, GitProbeClassification.InvalidRequiredOutput);
-            throw Failure(
+            (topLevel, gitDirectory) = ValidateCollapsedLocation(
+                path, stage, sourceTemplatePath, stagingPath, finalPath,
+                observation, templateIdentity, stagingIdentity, attempt);
+        }
+        else
+        {
+            var inside = RequiredProbe(
+                path,
+                ["rev-parse", "--is-inside-work-tree"],
                 Check(stage, "InsideWorkTree"),
                 sourceTemplatePath,
                 stagingPath,
                 finalPath,
-                _fileSystem.ObserveRepository(path),
-                inside,
+                observation,
                 templateIdentity,
                 stagingIdentity,
-                probeReceipts: attempt.Receipts);
-        }
+                attempt);
+            if (!string.Equals(SingleOutput(inside), "true", StringComparison.Ordinal))
+            {
+                inside = attempt.Reclassify(inside, GitProbeClassification.InvalidRequiredOutput);
+                throw Failure(
+                    Check(stage, "InsideWorkTree"),
+                    sourceTemplatePath,
+                    stagingPath,
+                    finalPath,
+                    _fileSystem.ObserveRepository(path),
+                    inside,
+                    templateIdentity,
+                    stagingIdentity,
+                    probeReceipts: attempt.Receipts);
+            }
 
-        var topLevelResult = RequiredProbe(
-            path,
-            ["rev-parse", "--show-toplevel"],
-            Check(stage, "TopLevel"),
-            sourceTemplatePath,
-            stagingPath,
-            finalPath,
-            observation,
-            templateIdentity,
-            stagingIdentity,
-            attempt);
-        var rawTopLevel = SingleOutput(topLevelResult);
-        if (string.IsNullOrEmpty(rawTopLevel))
-        {
-            topLevelResult = attempt.Reclassify(topLevelResult, GitProbeClassification.InvalidRequiredOutput);
-            throw Failure(
+            var topLevelResult = RequiredProbe(
+                path,
+                ["rev-parse", "--show-toplevel"],
                 Check(stage, "TopLevel"),
                 sourceTemplatePath,
                 stagingPath,
                 finalPath,
-                _fileSystem.ObserveRepository(path),
-                topLevelResult,
+                observation,
                 templateIdentity,
                 stagingIdentity,
-                probeReceipts: attempt.Receipts);
-        }
+                attempt);
+            var rawTopLevel = SingleOutput(topLevelResult);
+            if (string.IsNullOrEmpty(rawTopLevel))
+            {
+                topLevelResult = attempt.Reclassify(topLevelResult, GitProbeClassification.InvalidRequiredOutput);
+                throw Failure(
+                    Check(stage, "TopLevel"),
+                    sourceTemplatePath,
+                    stagingPath,
+                    finalPath,
+                    _fileSystem.ObserveRepository(path),
+                    topLevelResult,
+                    templateIdentity,
+                    stagingIdentity,
+                    probeReceipts: attempt.Receipts);
+            }
 
-        var topLevel = CanonicalPath(rawTopLevel);
-        if (!string.Equals(topLevel, path, PathComparison))
-        {
-            topLevelResult = attempt.Reclassify(topLevelResult, GitProbeClassification.InvalidRequiredOutput);
-            throw Failure(
-                Check(stage, "TopLevel"),
-                sourceTemplatePath,
-                stagingPath,
-                finalPath,
-                _fileSystem.ObserveRepository(path),
-                topLevelResult,
-                templateIdentity,
-                stagingIdentity,
-                probeReceipts: attempt.Receipts);
-        }
+            topLevel = CanonicalPath(rawTopLevel);
+            if (!string.Equals(topLevel, path, PathComparison))
+            {
+                topLevelResult = attempt.Reclassify(topLevelResult, GitProbeClassification.InvalidRequiredOutput);
+                throw Failure(
+                    Check(stage, "TopLevel"),
+                    sourceTemplatePath,
+                    stagingPath,
+                    finalPath,
+                    _fileSystem.ObserveRepository(path),
+                    topLevelResult,
+                    templateIdentity,
+                    stagingIdentity,
+                    probeReceipts: attempt.Receipts);
+            }
 
-        var gitDirectoryResult = RequiredProbe(
-            path,
-            ["rev-parse", "--git-dir"],
-            Check(stage, "GitDirectory"),
-            sourceTemplatePath,
-            stagingPath,
-            finalPath,
-            observation,
-            templateIdentity,
-            stagingIdentity,
-            attempt);
-        var rawGitDirectory = SingleOutput(gitDirectoryResult);
-        var gitDirectory = CanonicalPath(Path.IsPathRooted(rawGitDirectory)
-            ? rawGitDirectory
-            : Path.Combine(path, rawGitDirectory));
-        var expectedGitDirectory = CanonicalPath(Path.Combine(path, ".git"));
-        if (!string.Equals(gitDirectory, expectedGitDirectory, PathComparison))
-        {
-            gitDirectoryResult = attempt.Reclassify(
-                gitDirectoryResult,
-                GitProbeClassification.InvalidRequiredOutput);
-            throw Failure(
+            var gitDirectoryResult = RequiredProbe(
+                path,
+                ["rev-parse", "--git-dir"],
                 Check(stage, "GitDirectory"),
                 sourceTemplatePath,
                 stagingPath,
                 finalPath,
-                _fileSystem.ObserveRepository(path),
-                gitDirectoryResult,
+                observation,
                 templateIdentity,
                 stagingIdentity,
-                probeReceipts: attempt.Receipts);
+                attempt);
+            var rawGitDirectory = SingleOutput(gitDirectoryResult);
+            gitDirectory = CanonicalPath(Path.IsPathRooted(rawGitDirectory)
+                ? rawGitDirectory
+                : Path.Combine(path, rawGitDirectory));
+            var expectedGitDirectory = CanonicalPath(Path.Combine(path, ".git"));
+            if (!string.Equals(gitDirectory, expectedGitDirectory, PathComparison))
+            {
+                gitDirectoryResult = attempt.Reclassify(
+                    gitDirectoryResult,
+                    GitProbeClassification.InvalidRequiredOutput);
+                throw Failure(
+                    Check(stage, "GitDirectory"),
+                    sourceTemplatePath,
+                    stagingPath,
+                    finalPath,
+                    _fileSystem.ObserveRepository(path),
+                    gitDirectoryResult,
+                    templateIdentity,
+                    stagingIdentity,
+                    probeReceipts: attempt.Receipts);
+            }
         }
 
         var statusResult = RequiredProbe(
@@ -912,7 +907,8 @@ internal sealed class WorkerDispatchTestsSeededRepositoryFactory
     private sealed record TemplateState(
         string Path,
         RepositoryIdentity Identity,
-        IReadOnlyList<GitProbeResult> ProbeReceipts);
+        IReadOnlyList<GitProbeResult> ProbeReceipts,
+        string? ContentDigest);
 
     private sealed class FixtureAttempt(string id)
     {
