@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.CostControl;
 
@@ -23,11 +24,26 @@ internal static class PaidPromptThresholds
             : SimplePaidPrompt;
     }
 
+    public static int PromptThreshold(
+        string? providerName, string? modelName, TaskComplexity? complexity, bool usesComplexModel)
+    {
+        return string.Equals(providerName, "OpenAI", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(modelName, AgentCatalog.OpenAiGpt6LunaSubscriptionModelAlias, StringComparison.OrdinalIgnoreCase)
+            ? ComplexPaidPrompt
+            : PromptThreshold(complexity, usesComplexModel);
+    }
+
     // The disproportionate-to-complexity ceiling: above this, a single prompt is treated as an
     // anomaly worth a human glance regardless of the autonomy posture.
     public static int AnomalyPromptThreshold(TaskComplexity? complexity, bool usesComplexModel)
     {
         return AnomalyMultiplier * PromptThreshold(complexity, usesComplexModel);
+    }
+
+    public static int AnomalyPromptThreshold(
+        string? providerName, string? modelName, TaskComplexity? complexity, bool usesComplexModel)
+    {
+        return AnomalyMultiplier * PromptThreshold(providerName, modelName, complexity, usesComplexModel);
     }
 
     // A batch total this far over the soft batch ceiling is treated as anomalous fan-in.

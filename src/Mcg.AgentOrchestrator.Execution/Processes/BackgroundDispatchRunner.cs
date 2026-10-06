@@ -160,7 +160,6 @@ public sealed partial class BackgroundDispatchRunner
 
         return normalized.Contains("codex exec", StringComparison.OrdinalIgnoreCase) ||
             normalized.Contains("@openai/codex", StringComparison.OrdinalIgnoreCase) ||
-            normalized.Contains("gpt-5.3-codex-spark", StringComparison.OrdinalIgnoreCase) ||
             normalized.Contains("gpt-5-codex", StringComparison.OrdinalIgnoreCase) ||
             normalized.Contains("gpt-5.5-codex", StringComparison.OrdinalIgnoreCase) ||
             IsClaudeSubscriptionCommand(normalized);

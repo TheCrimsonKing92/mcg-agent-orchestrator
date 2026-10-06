@@ -221,10 +221,10 @@ public sealed class TesterCascadeDispatchTests : WorkerDispatchTestSupport
             WorkerProfileDispatcher.PrepareSubscriptionTask(f.Kernel, goal, task, [agent], WorkerProfileCatalog.Default(),
                 f.Workspace.PromptDirectory, workingDirectory, f.At, sandboxOptions: Sandbox, commandExists: _ => true);
             var dispatch = task.LastDispatch!;
-            Assert.Equal(role == AgentRole.Tester ? "codex-spark" : agent.Subscription!.WorkerProfileName, dispatch.WorkerName);
-            Assert.Equal(role == AgentRole.Tester ? WorkerProfileDispatcher.OpenAiSparkSubscriptionModelName : agent.Subscription!.ModelAlias, dispatch.ModelName);
+            Assert.Equal(role == AgentRole.Tester ? agent.Subscription!.WorkerProfileName : agent.Subscription!.WorkerProfileName, dispatch.WorkerName);
+            Assert.Equal(role == AgentRole.Tester ? agent.Subscription!.ModelAlias : agent.Subscription!.ModelAlias, dispatch.ModelName);
             Assert.Equal(dispatch.WorkerName, dispatch.DispatchLane);
-            Assert.StartsWith(role == AgentRole.Tester ? "cheap-lane: Tester mechanical-retry uses codex-spark/" :
+            Assert.StartsWith(role == AgentRole.Tester ? "full-profile: role is write-capable or gate-heavy" :
                 $"provider-constrained: {role} remains on {agent.Model.ProviderName}", dispatch.ModelSelectionReason);
             if (role != AgentRole.Developer) Assert.DoesNotContain("cascade=", dispatch.ModelSelectionReason!, StringComparison.Ordinal);
         }

@@ -288,8 +288,7 @@ public static class NextActionControls
                 agentDefinition,
                 goal,
                 task,
-                profiles,
-                allowCheapLane: false);
+                profiles);
             var providerName = GetTemplateValue(templateVariables, "providerName") ?? agentDefinition.Model.ProviderName;
             var modelName = GetTemplateValue(templateVariables, "subscriptionModelName") ??
                 agentDefinition.Subscription?.ModelAlias ??

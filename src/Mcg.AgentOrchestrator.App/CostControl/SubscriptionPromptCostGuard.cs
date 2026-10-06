@@ -361,12 +361,14 @@ public static class SubscriptionPromptCostGuard
 
     private static int PromptThreshold(PaidPromptCandidate candidate)
     {
-        return PaidPromptThresholds.PromptThreshold(candidate.TaskComplexity, candidate.UsesComplexModel);
+        return PaidPromptThresholds.PromptThreshold(
+            candidate.ProviderName, candidate.ModelName, candidate.TaskComplexity, candidate.UsesComplexModel);
     }
 
     private static int AnomalyThreshold(PaidPromptCandidate candidate)
     {
-        return PaidPromptThresholds.AnomalyPromptThreshold(candidate.TaskComplexity, candidate.UsesComplexModel);
+        return PaidPromptThresholds.AnomalyPromptThreshold(
+            candidate.ProviderName, candidate.ModelName, candidate.TaskComplexity, candidate.UsesComplexModel);
     }
 
     private sealed record PaidPromptCandidate(

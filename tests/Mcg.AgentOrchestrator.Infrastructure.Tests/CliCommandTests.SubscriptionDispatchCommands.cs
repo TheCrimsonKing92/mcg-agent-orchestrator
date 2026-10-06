@@ -1328,7 +1328,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
 
         Xunit.Assert.Contains("Subscription dispatches created: 0", stdout);
         var line = Xunit.Assert.Single(ReadyBlockedLines(stderr));
-        Xunit.Assert.StartsWith($"READY_BLOCKED goal={goal.Id.Value[..8]} task=1 provider=codex-spark reason=dirty-worktree details=", line);
+        Xunit.Assert.StartsWith($"READY_BLOCKED goal={goal.Id.Value[..8]} task=1 provider=codex-cli reason=dirty-worktree details=", line);
         Xunit.Assert.Contains("dirty.txt", line, StringComparison.Ordinal);
         Xunit.Assert.Null(task.LastDispatch);
         Xunit.Assert.Null(task.LastProcess);
@@ -1363,7 +1363,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         });
 
         var line = Xunit.Assert.Single(ReadyBlockedLines(stderr));
-        Xunit.Assert.Equal($"READY_BLOCKED goal={goal.Id.Value[..8]} task=1 provider=codex-spark reason=autonomy-policy", line);
+        Xunit.Assert.Equal($"READY_BLOCKED goal={goal.Id.Value[..8]} task=1 provider=codex-cli reason=autonomy-policy", line);
     }
 
     [Xunit.Fact(DisplayName = "Cli_start_subscription_ready_surfaces_cross_goal_provider_budget_hold")]
@@ -2601,8 +2601,8 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         Xunit.Assert.True(dispatched);
         Xunit.Assert.Equal(newAgent.Id, task.AssignedAgentId);
         Xunit.Assert.Equal("OpenAI", task.LastDispatch!.ProviderName);
-        Xunit.Assert.Equal("gpt-5.3-codex-spark", task.LastDispatch.ModelName);
-        Xunit.Assert.Equal("codex-spark", task.LastDispatch.DispatchLane);
+        Xunit.Assert.Equal(AgentCatalog.OpenAiSubscriptionModelAlias, task.LastDispatch.ModelName);
+        Xunit.Assert.Equal("codex-cli", task.LastDispatch.DispatchLane);
         Xunit.Assert.Contains(goal.Timeline, evt =>
             evt.TaskId == task.Id &&
             evt.Kind == ProgressKind.TaskRedelegated &&

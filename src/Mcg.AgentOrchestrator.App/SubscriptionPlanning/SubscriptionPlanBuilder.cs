@@ -149,7 +149,6 @@ public static class SubscriptionPlanBuilder
         var sharedClaudeAuthState = new Lazy<ClaudeCliAuthState>(sourceClaudeAuthProbe);
         Func<ClaudeCliAuthState> sharedClaudeAuthProbe = () => sharedClaudeAuthState.Value;
 
-        var allowCheapLaneInPlan = scorecard is not null;
         var items = goal.Tasks
             .Select(task => BuildItem(
                 goal,
@@ -160,7 +159,6 @@ public static class SubscriptionPlanBuilder
                 estimatePromptCharacterCount,
                 scorecardLookup,
                 now,
-                allowCheapLaneInPlan,
                 resolvedSandboxOptions,
                 commandExists,
                 providerHoldScope,
@@ -203,7 +201,6 @@ public static class SubscriptionPlanBuilder
         Func<TaskSpec, int?>? estimatePromptCharacterCount = null,
         IReadOnlyDictionary<string, ModelOutcomeRecord>? scorecardLookup = null,
         DateTimeOffset? now = null,
-        bool allowCheapLane = false,
         WorkerSandboxOptions? sandboxOptions = null,
         Func<string, bool>? commandExists = null,
         IReadOnlyCollection<Goal>? providerHoldScope = null,
@@ -272,7 +269,6 @@ public static class SubscriptionPlanBuilder
             goal,
             task,
             profiles,
-            allowCheapLane,
             sandboxOptions,
             commandExists);
         var effectiveProviderName = GetTemplateValue(templateVariables, "providerName") ?? agent.Model.ProviderName;
@@ -291,7 +287,6 @@ public static class SubscriptionPlanBuilder
                 goal,
                 task,
                 profiles,
-                allowCheapLane,
                 sandboxOptions,
                 commandExists);
             var dispatchLane = GetTemplateValue(templateVariables, "dispatchLane");
