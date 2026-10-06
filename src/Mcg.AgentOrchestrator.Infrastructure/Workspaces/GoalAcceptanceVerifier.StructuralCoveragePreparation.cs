@@ -228,19 +228,7 @@ public sealed partial class GoalAcceptanceVerifier
                 ?? throw new InvalidOperationException("Structural coverage evaluation produced no verdict.");
             if (!coverage.Passed)
             {
-                var details = new List<string>
-                {
-                    $"classification: {coverage.FailureClassification}",
-                    coverage.Summary
-                };
-                details.AddRange(coverage.EmptyPartitions.Take(10).Select(name => $"empty partition: {name}"));
-                var identityMismatches = coverage.IdentityMismatches ?? [];
-                details.AddRange(identityMismatches.Take(10).Select(mismatch =>
-                    $"missing test: discovered={JsonSerializer.Serialize(mismatch.Discovered)}; executed={JsonSerializer.Serialize(mismatch.Executed)}"));
-                details.AddRange(coverage.MissingTests
-                    .Except(identityMismatches.Select(mismatch => mismatch.Discovered), StringComparer.OrdinalIgnoreCase)
-                    .Take(10)
-                    .Select(name => $"missing test: {name}"));
+                var details = StructuralCoverageFailureDetail.Format(coverage, limit: 10);
                 return new AcceptanceCheckResult(
                     $"structural test coverage: {broadCheck.Name}",
                     false,
