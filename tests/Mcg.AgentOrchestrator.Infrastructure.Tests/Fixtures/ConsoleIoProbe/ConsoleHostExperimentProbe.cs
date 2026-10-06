@@ -64,7 +64,7 @@ internal static class ConsoleHostExperimentProbe
                     arm.CodePageBefore = Windows.GetConsoleOutputCP();
                     try
                     {
-                        arm.CodePageChild = await RunOwned(StartInfo("cmd", workDirectory, "/d", "/c", "chcp", "65001"), "chcp", directory, events);
+                        arm.CodePageChild = await RunOwned(StartInfo(ResolveExecutable("cmd"), workDirectory, "/d", "/c", "chcp", "65001"), "chcp", directory, events);
                         arm.CodePageAfter = Windows.GetConsoleOutputCP();
                     }
                     finally
@@ -101,18 +101,18 @@ internal static class ConsoleHostExperimentProbe
 
     private static ProcessStartInfo Command(string command, string directory) => command switch
     {
-        "git" => StartInfo(command, directory, "--version"),
-        "pwsh" => StartInfo(command, directory, "-NoProfile", "-Command", "exit"),
-        "dotnet" => StartInfo(command, directory, "--version"),
+        "git" => StartInfo(ResolveExecutable(command), directory, "--version"),
+        "pwsh" => StartInfo(ResolveExecutable(command), directory, "-NoProfile", "-Command", "exit"),
+        "dotnet" => StartInfo(ResolveExecutable(command), directory, "--version"),
         _ => throw new ArgumentOutOfRangeException(nameof(command))
     };
 
     private static ProcessStartInfo PowerShell(string script, string directory) =>
-        StartInfo("pwsh", directory, "-NoProfile", "-NonInteractive", "-EncodedCommand", Convert.ToBase64String(Encoding.Unicode.GetBytes(script)));
+        StartInfo(ResolveExecutable("pwsh"), directory, "-NoProfile", "-NonInteractive", "-EncodedCommand", Convert.ToBase64String(Encoding.Unicode.GetBytes(script)));
 
     private static ProcessStartInfo StartInfo(string executable, string directory, params string[] args)
     {
-        var info = new ProcessStartInfo(ResolveExecutable(executable)) { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = directory };
+        var info = new ProcessStartInfo(executable) { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = directory };
         foreach (var arg in args) info.ArgumentList.Add(arg);
         info.Environment["DOTNET_NOLOGO"] = "1";
         info.Environment["DOTNET_SKIP_FIRST_TIME_EXPERIENCE"] = "1";
