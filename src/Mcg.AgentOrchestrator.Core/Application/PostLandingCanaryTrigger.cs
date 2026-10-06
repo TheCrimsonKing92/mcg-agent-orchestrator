@@ -19,6 +19,8 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneReuseShadow",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneReuseShadowClassifier",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneReuseShadowMiss",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneReuseShadowReferenceReader",
             "src/Mcg.AgentOrchestrator.Execution/Processes/TempRootApparatusLossReceipts",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceSharedApparatusInvalidation",
             "src/Mcg.AgentOrchestrator.Execution/Processes/AcceptanceTempRootNames",

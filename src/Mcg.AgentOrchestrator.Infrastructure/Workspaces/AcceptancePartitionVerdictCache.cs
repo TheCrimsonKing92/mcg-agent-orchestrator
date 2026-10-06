@@ -639,9 +639,10 @@ internal sealed partial class AcceptancePartitionVerdictCache
         }
 
         var closureHash = result.Passed ? ResolveClosureHash(check) : null;
+        PartitionWithinAttemptRetryReceipt? probeReceipt;
         lock (_gate)
         {
-            var probeReceipt = _retries.LastOrDefault(receipt =>
+            probeReceipt = _retries.LastOrDefault(receipt =>
                 receipt.PartitionId.Equals(partitionId, StringComparison.OrdinalIgnoreCase));
             _executed.Add(new PartitionVerdictExecutionReceipt(
                 partitionId,
@@ -665,7 +666,7 @@ internal sealed partial class AcceptancePartitionVerdictCache
                 probeReceipt?.FlakeConfirmed));
         }
         TestReuseShadow?.Observe(check, result);
-        LaneReuseShadow?.Observe(check, result);
+        LaneReuseShadow?.Observe(check, result, probeReceipt?.FlakeConfirmed);
     }
 
     internal void RecordSemanticDeduplications(
