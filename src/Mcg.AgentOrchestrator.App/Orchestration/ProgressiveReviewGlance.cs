@@ -2205,7 +2205,7 @@ internal sealed class SubscriptionCliProgressiveReviewGlanceRunner : IProgressiv
         {
             return new GlanceProfileSelection(
                 WorkerProfileDispatcher.OpenAiSparkSubscriptionProfileName,
-                WorkerProfileDispatcher.OpenAiSparkSubscriptionModelName);
+                AgentCatalog.OpenAiGpt6LunaSubscriptionModelAlias);
         }
 
         _ = profiles.GetRequired(WorkerProfileDispatcher.OpenAiSubscriptionProfileName);

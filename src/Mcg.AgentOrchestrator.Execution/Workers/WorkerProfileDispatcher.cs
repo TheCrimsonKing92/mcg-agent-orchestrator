@@ -76,7 +76,6 @@ public static partial class WorkerProfileDispatcher
     internal const string ProviderBudgetExhaustionErrorCode = "provider-budget-exhausted";
     public const string OpenAiSubscriptionProfileName = "codex-cli";
     public const string OpenAiSparkSubscriptionProfileName = "codex-spark";
-    public const string OpenAiSparkSubscriptionModelName = "gpt-5.3-codex-spark";
     public const string AnthropicSubscriptionProfileName = "claude-cli";
     public const string XaiSubscriptionProfileName = "grok-cli";
     public const string QwenCodeCliProfileName = "qwen-code-cli";
@@ -1472,7 +1471,6 @@ public static partial class WorkerProfileDispatcher
         Goal goal,
         TaskSpec task,
         WorkerProfileCatalog profiles,
-        bool allowCheapLane = true,
         WorkerSandboxOptions? sandboxOptions = null,
         Func<string, bool>? commandExists = null, bool cascadeTesterCheapFirst = true, string? cascadeCheapModelAlias = null, bool cascadeMechanicalReworkCheap = true)
     {
@@ -1485,7 +1483,7 @@ public static partial class WorkerProfileDispatcher
                 profiles: profiles,
                 sandboxOptions: sandboxOptions,
                 commandExists: commandExists,
-                allowCheapLane: allowCheapLane, cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias, cascadeMechanicalReworkCheap: cascadeMechanicalReworkCheap));
+                cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias, cascadeMechanicalReworkCheap: cascadeMechanicalReworkCheap));
     }
 
     internal static string ResolveSubscriptionProfileName(AgentDefinition agent, SubscriptionModelSelection selection)
@@ -1548,7 +1546,6 @@ public static partial class WorkerProfileDispatcher
         Goal goal,
         TaskSpec task,
         WorkerProfileCatalog profiles,
-        bool allowCheapLane = true,
         WorkerSandboxOptions? sandboxOptions = null,
         Func<string, bool>? commandExists = null, bool cascadeTesterCheapFirst = true, string? cascadeCheapModelAlias = null, bool cascadeMechanicalReworkCheap = true)
     {
@@ -1559,7 +1556,7 @@ public static partial class WorkerProfileDispatcher
             profiles: profiles,
             sandboxOptions: sandboxOptions,
             commandExists: commandExists,
-            allowCheapLane: allowCheapLane, cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias, cascadeMechanicalReworkCheap: cascadeMechanicalReworkCheap);
+            cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias, cascadeMechanicalReworkCheap: cascadeMechanicalReworkCheap);
         return BuildSubscriptionTemplateVariables(agent, ApplyReasoningEffortPolicy(agent, goal, task, selection));
     }
 
@@ -1745,7 +1742,7 @@ public static partial class WorkerProfileDispatcher
         Func<ClaudeCliAuthState>? claudeAuthProbe = null,
         WorkerSandboxOptions? sandboxOptions = null,
         Func<string, bool>? commandExists = null,
-        bool allowCheapLane = true, bool cascadeTesterCheapFirst = true, string? cascadeCheapModelAlias = null, bool cascadeMechanicalReworkCheap = true)
+        bool cascadeTesterCheapFirst = true, string? cascadeCheapModelAlias = null, bool cascadeMechanicalReworkCheap = true)
     {
         return WorkerSubscriptionModelResolver.ResolveEffectiveSubscriptionModelSelection(
             agent,
@@ -1757,7 +1754,7 @@ public static partial class WorkerProfileDispatcher
             modelOverride,
             profiles,
             commandExists,
-            allowCheapLane, cascadeTesterCheapFirst, cascadeCheapModelAlias, cascadeMechanicalReworkCheap);
+            cascadeTesterCheapFirst, cascadeCheapModelAlias, cascadeMechanicalReworkCheap);
     }
 
     private sealed record EffectiveReasoningEffortSelection(string? Effort, string Reason);

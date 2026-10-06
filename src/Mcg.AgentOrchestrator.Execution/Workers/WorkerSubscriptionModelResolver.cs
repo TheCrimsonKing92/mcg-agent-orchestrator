@@ -16,14 +16,13 @@ internal static partial class WorkerSubscriptionModelResolver
         DispatchModelOverride? modelOverride = null,
         WorkerProfileCatalog? profiles = null,
         Func<string, bool>? commandExists = null,
-        bool allowCheapLane = true,
         bool cascadeTesterCheapFirst = true,
         string? cascadeCheapModelAlias = null, bool cascadeMechanicalReworkCheap = true)
     {
         var fullSelection = ResolveSubscriptionModel(agent, goal, task);
         return modelOverride is not null
             ? fullSelection with { Reason = "override: explicit dispatch profile/model selection" }
-            : ResolveRoleModelSelection(agent, goal, task, fullSelection, providers, sandboxProbe, claudeAuthProbe, profiles, commandExists, allowCheapLane, cascadeTesterCheapFirst, cascadeCheapModelAlias, cascadeMechanicalReworkCheap);
+            : ResolveRoleModelSelection(agent, goal, task, fullSelection, providers, sandboxProbe, claudeAuthProbe, profiles, commandExists, cascadeTesterCheapFirst, cascadeCheapModelAlias, cascadeMechanicalReworkCheap);
     }
 
     private static SubscriptionModelSelection ResolveSubscriptionModel(AgentDefinition agent, Goal goal, TaskSpec task)
@@ -48,7 +47,6 @@ internal static partial class WorkerSubscriptionModelResolver
         Func<ClaudeCliAuthState> claudeAuthProbe,
         WorkerProfileCatalog? profiles,
         Func<string, bool>? commandExists,
-        bool allowCheapLane,
         bool cascadeTesterCheapFirst,
         string? cascadeCheapModelAlias, bool cascadeMechanicalReworkCheap)
     {
@@ -73,12 +71,6 @@ internal static partial class WorkerSubscriptionModelResolver
                             cascadeMechanicalReworkCheap, cascadeCheapModelAlias);
                 }
                 return constrainedSelection;
-            }
-
-            if (allowCheapLane &&
-                TrySelectCheapLane(agent, goal, task, fullSelection, providers, profiles, out var cheapSelection))
-            {
-                return cheapSelection;
             }
 
             return fullSelection with { Reason = "full-profile: role is write-capable or gate-heavy" };
@@ -124,77 +116,6 @@ internal static partial class WorkerSubscriptionModelResolver
             UsesComplexModel: false,
             UsesSubscriptionLaunchProfile: false,
             Reason: $"light-role: {task.RequiredRole} uses {WorkerProfileDispatcher.AnthropicSubscriptionProfileName}/{WorkerProfileDispatcher.LightRoleAnthropicModelName}");
-    }
-
-    private static bool TrySelectCheapLane(
-        AgentDefinition agent,
-        Goal goal,
-        TaskSpec task,
-        SubscriptionModelSelection fullSelection,
-        WorkerProviderCatalog providers,
-        WorkerProfileCatalog? profiles,
-        out SubscriptionModelSelection selection)
-    {
-        selection = fullSelection;
-        var mechanicalRetry = task.PendingRetryRoundKind == RetryRoundKind.Mechanical;
-        if (!agent.Model.ProviderName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase) ||
-            HasCustomWorkerProfileOverride(agent, providers))
-        {
-            return false;
-        }
-
-        if (!mechanicalRetry && task.RequiredRole != AgentRole.Developer)
-        {
-            return false;
-        }
-
-        if (!mechanicalRetry &&
-            fullSelection.UsesComplexModel &&
-            fullSelection.Complexity is not TaskComplexity.Complex)
-        {
-            return false;
-        }
-
-        var smallTask = (fullSelection.Complexity is not TaskComplexity.Complex || HasExplicitSmallTaskIntakeLabel(goal)) &&
-            !HasHighRiskOrComplexIntakeRiskLabel(goal);
-        if (!mechanicalRetry && !smallTask)
-        {
-            return false;
-        }
-
-        var triggerReason = mechanicalRetry
-            ? "mechanical-retry"
-            : fullSelection.Complexity is TaskComplexity.Complex
-                ? "small-task-label"
-                : "small-task";
-
-        var unavailableReason = "worker profile catalog unavailable";
-        if (profiles is null ||
-            !TryValidateSparkProfile(profiles, providers, out unavailableReason))
-        {
-            selection = fullSelection with
-            {
-                Reason = $"fallback-default-lane: spark unavailable ({unavailableReason})",
-                DispatchLane = WorkerProfileDispatcher.ResolveSubscriptionProfileName(agent, fullSelection)
-            };
-            return true;
-        }
-
-        selection = new SubscriptionModelSelection(
-            fullSelection.Complexity,
-            new ModelProfile(
-                "OpenAI",
-                WorkerProfileDispatcher.OpenAiSparkSubscriptionModelName,
-                agent.Model.Capabilities,
-                SubscriptionMode.ApiKey,
-                AgentCatalog.RoutineSubscriptionReasoningEffort,
-                agent.Model.MaxOutputTokens),
-            UsesComplexModel: false,
-            UsesSubscriptionLaunchProfile: false,
-            Reason: $"cheap-lane: {task.RequiredRole} {triggerReason} uses {WorkerProfileDispatcher.OpenAiSparkSubscriptionProfileName}/{WorkerProfileDispatcher.OpenAiSparkSubscriptionModelName}",
-            LaunchProfileName: WorkerProfileDispatcher.OpenAiSparkSubscriptionProfileName,
-            DispatchLane: WorkerProfileDispatcher.OpenAiSparkSubscriptionProfileName);
-        return true;
     }
 
     private static bool TryValidateSparkProfile(
@@ -312,14 +233,6 @@ internal static partial class WorkerSubscriptionModelResolver
         return EnumerateStoredIntakeRiskLabels(goal).Any(label =>
             label.Equals("high-risk", StringComparison.OrdinalIgnoreCase) ||
             label.Equals("complex", StringComparison.OrdinalIgnoreCase));
-    }
-
-    private static bool HasExplicitSmallTaskIntakeLabel(Goal goal)
-    {
-        return EnumerateStoredIntakeRiskLabels(goal).Any(label =>
-            label.Equals("small-task", StringComparison.OrdinalIgnoreCase) ||
-            label.Equals("small", StringComparison.OrdinalIgnoreCase) ||
-            label.Equals("simple", StringComparison.OrdinalIgnoreCase));
     }
 
     private static IEnumerable<string> EnumerateStoredIntakeRiskLabels(Goal goal)

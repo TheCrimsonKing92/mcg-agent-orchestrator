@@ -83,47 +83,6 @@ public sealed class BudgetAwareRoutingTests
         Assert.False(string.Equals("Ollama", item.ProviderName, StringComparison.OrdinalIgnoreCase));
     }
 
-    [Xunit.Fact(DisplayName = "BudgetAwareRouting_scorecard_avoid_overrides_cheap_lane")]
-    public void BudgetAwareRoutingScorecardAvoidOverridesCheapLane()
-    {
-        var kernel = new AgentOrchestratorKernel();
-        // The Developer default is the scoped Sol subscription lane; Ideation remains on the legacy default alias.
-        var agents = AgentCatalog.Default().Agents;
-        var task = new TaskSpec(TaskId.New(), "Update docs for the new API endpoint", AgentRole.Developer);
-        var goal = kernel.CreateGoal("Documentation update", [task]);
-        kernel.ActivateGoal(goal.Id, agents);
-        var updatedGoal = kernel.GetGoal(goal.Id);
-
-        // Scorecard says Avoid for the selected spark cheap lane.
-        var scorecard = new[]
-        {
-            new ModelOutcomeRecord(
-                "OpenAI",
-                "gpt-5.3-codex-spark",
-                Completed: 1,
-                Failed: 2,
-                SelfRatedAdequate: 2,
-                SelfRatedOverkill: 0,
-                SelfRatedUnderpowered: 0,
-                Divergence: 2,
-                Recommendation: ModelOutcomeRecommendation.Avoid,
-                Reason: "2/3 recent dispatches failed. 2 self-rated adequate dispatch(es) failed.",
-                DispatchLane: "codex-spark")
-        };
-
-        var plan = SubscriptionPlanBuilder.Build(updatedGoal, agents, DefaultProfiles, scorecard: scorecard);
-        var item = plan.Items.Single(i => i.Role == AgentRole.Developer);
-
-        // Scorecard Avoid must BLOCK the route even when canPrepare would otherwise be true
-        Assert.Equal(WorkerRouteDisposition.Blocked, item.Route!.Disposition);
-        Assert.True(
-            item.Route.Reasons.Any(r => r.Contains("scorecard=Avoid", StringComparison.OrdinalIgnoreCase)));
-        Assert.True(
-            item.Route.Alternatives.Any(a =>
-                a.Contains("Scorecard says Avoid", StringComparison.OrdinalIgnoreCase) &&
-                a.Contains("route to a different provider", StringComparison.OrdinalIgnoreCase)));
-    }
-
     [Xunit.Fact(DisplayName = "BudgetAwareRouting_scorecard_lookup_accepts_same_model_in_multiple_lanes")]
     public void BudgetAwareRoutingScorecardLookupAcceptsSameModelInMultipleLanes()
     {
