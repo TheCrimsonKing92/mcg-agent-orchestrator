@@ -798,7 +798,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 () => executionOwner.Identity.AttemptId,
                 () => ComputeEffectiveAcceptanceManifestIdentity(effectiveChecks, engineSettings),
                 () => EngineSettings.EnforceStructuralCoverage,
-                () => TempRootApparatusLossReceiptStore.Read(executionOwner.ApparatusReceiptPath), DisableLaneReuseShadow: _testOverrides.DisableLaneReuseShadowForTests));
+                () => TempRootApparatusLossReceiptStore.Read(executionOwner.ApparatusReceiptPath), DisableLaneReuseShadow: _testOverrides.DisableLaneReuseShadowForTests, IdenticalTreeChecks: [.. effectiveChecks.Where(check => AcceptanceIdenticalTreeReuseRule.TryGetCheckIdentity(check, out _))]));
         var dotnetTestBuildPhase = GateUsesStableSlot(stableSlotIndex, stableSlotLease)
             ? CreateDotnetTestBuildPhase(worktreePath, effectiveChecks, changedFiles, policyShardPlan)
             : null;

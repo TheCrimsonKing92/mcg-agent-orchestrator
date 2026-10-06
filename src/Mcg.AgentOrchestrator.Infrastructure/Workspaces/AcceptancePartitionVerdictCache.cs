@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Mcg.AgentOrchestrator.Core;
 using AcceptanceManifestCheck = Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier.AcceptanceManifestCheck;
 
@@ -35,7 +36,8 @@ internal sealed record PartitionVerdictJournalEntry(
     int? PartitionReuseAttemptCount = null,
     bool? PartitionForcedFullRerun = null,
     PartitionWithinAttemptRetryReceipt? PartitionRetryReceipt = null,
-    AcceptanceSharedApparatusInvalidation? SharedApparatusInvalidation = null);
+    AcceptanceSharedApparatusInvalidation? SharedApparatusInvalidation = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PartitionClosureHash = null);
 
 internal sealed record PartitionWithinAttemptRetryReceipt(
     string PartitionId,
@@ -67,7 +69,8 @@ internal sealed record PartitionVerdictRecord(
     string? ClosureHash = null,
     string? VerdictSource = null,
     bool ProbeRan = false,
-    bool? ProbeConfirmedFlake = null);
+    bool? ProbeConfirmedFlake = null,
+    bool IdenticalTree = false);
 
 internal sealed record PartitionVerdictReuseReceipt(
     string PartitionId,
@@ -95,7 +98,8 @@ internal sealed record AcceptancePartitionVerdictCacheOptions(
     Func<IReadOnlyList<TempRootApparatusLossReceiptV1>>? ResolveApparatusLossReceipts = null,
     Func<AcceptanceManifestCheck, string?>? ResolveClosureHash = null,
     Func<string, string, string, IReadOnlyList<string>>? ResolveChangedFiles = null,
-    bool DisableLaneReuseShadow = false);
+    bool DisableLaneReuseShadow = false,
+    IReadOnlyList<AcceptanceManifestCheck>? IdenticalTreeChecks = null);
 
 internal sealed partial class AcceptancePartitionVerdictCache
 {
@@ -120,6 +124,7 @@ internal sealed partial class AcceptancePartitionVerdictCache
     private readonly Func<IReadOnlyList<TempRootApparatusLossReceiptV1>> _resolveApparatusLossReceipts;
     private readonly Func<AcceptanceManifestCheck, string?> _resolveClosureHash;
     private readonly AcceptanceClosureVerdictIndex _closureIndex;
+    private readonly HashSet<string> _identicalTreeCheckIdentities;
     private readonly ConcurrentDictionary<string, Lazy<string?>> _closureHashes = new(StringComparer.OrdinalIgnoreCase);
     private AcceptanceSharedApparatusInvalidation? _sharedApparatusInvalidation;
     private AcceptanceTestReuseShadow? TestReuseShadow { get; init; }
@@ -142,7 +147,8 @@ internal sealed partial class AcceptancePartitionVerdictCache
         Func<bool> enforceStructuralCoverage,
         Func<IReadOnlyList<TempRootApparatusLossReceiptV1>> resolveApparatusLossReceipts,
         Func<AcceptanceManifestCheck, string?> resolveClosureHash,
-        AcceptanceClosureVerdictIndex closureIndex)
+        AcceptanceClosureVerdictIndex closureIndex,
+        HashSet<string> identicalTreeCheckIdentities)
     {
         GoalId = goalId;
         CandidateTreeSha = candidateTreeSha;
@@ -161,6 +167,7 @@ internal sealed partial class AcceptancePartitionVerdictCache
         _resolveApparatusLossReceipts = resolveApparatusLossReceipts;
         _resolveClosureHash = resolveClosureHash;
         _closureIndex = closureIndex;
+        _identicalTreeCheckIdentities = identicalTreeCheckIdentities;
     }
 
     internal string GoalId { get; }
@@ -186,7 +193,14 @@ internal sealed partial class AcceptancePartitionVerdictCache
 
         var partitionCount = options.EffectiveChecks.Count(check =>
             GoalAcceptanceVerifier.TryGetInfrastructurePartitionId(check, out _, out _));
-        if (partitionCount == 0)
+        var identicalTreeChecks = (options.IdenticalTreeChecks ?? [])
+            .Where(check => AcceptanceIdenticalTreeReuseRule.TryGetCheckIdentity(check, out _)).ToArray();
+        var identicalTreeIdentities = identicalTreeChecks.Select(check =>
+        {
+            AcceptanceIdenticalTreeReuseRule.TryGetCheckIdentity(check, out var identity);
+            return identity;
+        }).ToHashSet(StringComparer.Ordinal);
+        if (partitionCount == 0 && identicalTreeChecks.Length == 0)
             return null;
 
         var candidateTreeSha = options.ResolveCandidateTreeSha(options.WorktreePath);
@@ -215,6 +229,9 @@ internal sealed partial class AcceptancePartitionVerdictCache
                 out _,
                 out var cacheKey) &&
             LatestGreenVerdict(journal, options.GoalId.Value, cacheKey) is not null);
+        reusableGreenExists |= identicalTreeChecks.Any(check =>
+            LatestGreenVerdict(journal, options.GoalId.Value,
+                BuildIdenticalTreeKey(options.GoalId.Value, candidateTreeSha, mainSha, manifestIdentity, check)) is not null);
         var forceFullRerun = reusableGreenExists &&
             priorReuseAttemptCount + 1 >= options.FullRerunEveryN;
         var attemptId = options.ResolveAttemptId();
@@ -229,22 +246,23 @@ internal sealed partial class AcceptancePartitionVerdictCache
             pairKey,
             journalPath,
             journal,
-            partitionCount,
+            partitionCount + identicalTreeChecks.Length,
             priorReuseAttemptCount,
             forceFullRerun,
             options.WithinAttemptRerunEnabled,
             options.EnforceStructuralCoverage,
             options.ResolveApparatusLossReceipts ?? (() => []),
             options.ResolveClosureHash ?? (check => AcceptanceLaneClosureHasher.TryCompute(options.WorktreePath, check)),
-            new AcceptanceClosureVerdictIndex(options.WorktreePath))
+            new AcceptanceClosureVerdictIndex(options.WorktreePath),
+            identicalTreeIdentities)
         {
-            TestReuseShadow = new AcceptanceTestReuseShadow(
+            TestReuseShadow = partitionCount == 0 ? null : new AcceptanceTestReuseShadow(
                 options.WorktreePath, options.GoalId.Value, attemptId,
                 GoalAcceptanceVerifier.NormalizeShaToken(mainSha),
                 GoalAcceptanceVerifier.NormalizeShaToken(candidateTreeSha),
                 GoalAcceptanceVerifier.NormalizeShaToken(verifyingCommitSha),
                 options.ResolveChangedFiles ?? AcceptanceTestReuseShadow.ResolveChangedFilesFromGit),
-            LaneReuseShadow = options.DisableLaneReuseShadow ? null : new AcceptanceLaneReuseShadow(
+            LaneReuseShadow = partitionCount == 0 || options.DisableLaneReuseShadow ? null : new AcceptanceLaneReuseShadow(
                 options.WorktreePath, options.GoalId.Value, attemptId,
                 GoalAcceptanceVerifier.NormalizeShaToken(mainSha),
                 GoalAcceptanceVerifier.NormalizeShaToken(candidateTreeSha),
@@ -254,9 +272,12 @@ internal sealed partial class AcceptancePartitionVerdictCache
 
     internal AcceptanceCheckResult? TryReuse(AcceptanceManifestCheck check)
     {
+        if (TryBuildIdenticalTreeKey(check, out var identicalTreeId, out _, out var identicalTreeKey))
+            return TryReuseIdenticalTree(check, identicalTreeId, identicalTreeKey);
         if (!TryBuildCacheKey(check, out var partitionId, out var filterHash, out var cacheKey))
         {
-            RecordMiss(check.Name, PartitionVerdictMissReasons.CacheKeyUnavailable);
+            RecordMiss(check.Name, PartitionVerdictMissReasons.CacheKeyUnavailable,
+                reasonCode: AcceptanceIdenticalTreeReuseRule.UncacheableReasonCode(check.Name));
             return null;
         }
         if (ForceFullRerun)
@@ -633,6 +654,23 @@ internal sealed partial class AcceptancePartitionVerdictCache
 
     internal void RecordExecution(AcceptanceManifestCheck check, AcceptanceCheckResult result)
     {
+        if (TryBuildIdenticalTreeKey(check, out var identicalTreeId, out var identity, out var identicalTreeKey))
+        {
+            var identicalTreeClosureHash = ResolveClosureHash(check);
+            // A verdict without closure evidence cannot be bound to this candidate tree.
+            if (string.IsNullOrWhiteSpace(identicalTreeClosureHash))
+                return;
+            lock (_gate)
+            {
+                _executed.Add(new PartitionVerdictExecutionReceipt(identicalTreeId, result.Passed ? "GREEN" : "RED"));
+                RecordExecutedDuration(result.DurationMilliseconds);
+                _freshRecords.Add(new PartitionVerdictRecord(
+                    GoalId, AttemptId, CandidateTreeSha, MainSha, identity, identicalTreeId, identicalTreeKey,
+                    result.Passed, result.Passed ? "GREEN" : "RED", result.TestResultPaths ?? [],
+                    DateTimeOffset.UtcNow, identicalTreeClosureHash, "first_run", IdenticalTree: true));
+            }
+            return;
+        }
         if (!TryBuildCacheKey(check, out var partitionId, out var filterHash, out var cacheKey))
         {
             return;
@@ -737,6 +775,7 @@ internal sealed partial class AcceptancePartitionVerdictCache
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (var record in _freshRecords.Where(record =>
                      record.Passed &&
+                     !record.IdenticalTree &&
                      !string.IsNullOrWhiteSpace(record.ClosureHash) &&
                      !retriedPartitionIds.Contains(record.PartitionId)))
             _closureIndex.AppendGreen(ManifestIdentity, record.PartitionFilterHash, record.ClosureHash!, record.AttemptId, record.TestResultPaths);
@@ -765,6 +804,62 @@ internal sealed partial class AcceptancePartitionVerdictCache
         _closureHashes.GetOrAdd(
             check.Project ?? check.Name,
             _ => new Lazy<string?>(() => _resolveClosureHash(check), LazyThreadSafetyMode.ExecutionAndPublication)).Value;
+
+    private AcceptanceCheckResult? TryReuseIdenticalTree(AcceptanceManifestCheck check, string partitionId, string cacheKey)
+    {
+        if (ForceFullRerun)
+        {
+            RecordMiss(partitionId, PartitionVerdictMissReasons.ForcedFullRerun);
+            return null;
+        }
+        var closureHash = ResolveClosureHash(check);
+        if (string.IsNullOrWhiteSpace(closureHash))
+        {
+            RecordMiss(partitionId, PartitionVerdictMissReasons.ClosureHashUnavailable);
+            return null;
+        }
+        var cached = LatestGreenVerdict(_journal, GoalId, cacheKey);
+        if (cached is null)
+        {
+            RecordMiss(partitionId, PartitionVerdictMissReasons.NoGreenVerdictForIdenticalTree, closureHash);
+            return null;
+        }
+        if (!string.Equals(cached.ClosureHash, closureHash, StringComparison.Ordinal))
+        {
+            RecordMiss(partitionId, PartitionVerdictMissReasons.IdenticalTreeClosureHashMismatch, closureHash);
+            return null;
+        }
+        if (!HasReusableStructuralCoverageEvidence(cached))
+        {
+            RecordMiss(partitionId, PartitionVerdictMissReasons.MissingStructuralCoverageEvidence, closureHash);
+            return null;
+        }
+        RecordReuse(new PartitionVerdictReuseReceipt(partitionId, cached.AttemptId, cacheKey, "identical-tree", closureHash));
+        return new AcceptanceCheckResult(check.Name, true, 0, null,
+            ResultSummary: $"partition-verdict-cache reused source_attempt_id={cached.AttemptId} cache_key={cacheKey} " +
+                $"reuse_rule=identical-tree closure_hash={closureHash}",
+            TestResultPaths: cached.TestResultPaths, TestResultAttemptId: cached.AttemptId,
+            TestResultIsExplicitCrossAttemptReuse: true);
+    }
+
+    private bool TryBuildIdenticalTreeKey(AcceptanceManifestCheck check, out string partitionId, out string identity, out string cacheKey)
+    {
+        partitionId = cacheKey = string.Empty;
+        if (!AcceptanceIdenticalTreeReuseRule.TryGetCheckIdentity(check, out identity) ||
+            !_identicalTreeCheckIdentities.Contains(identity))
+            return false;
+        partitionId = AcceptanceIdenticalTreeReuseRule.PartitionId(check);
+        cacheKey = BuildIdenticalTreeKey(GoalId, CandidateTreeSha, MainSha, ManifestIdentity, check);
+        return true;
+    }
+
+    private static string BuildIdenticalTreeKey(string goalId, string treeSha, string mainSha, string manifestIdentity, AcceptanceManifestCheck check)
+    {
+        if (!AcceptanceIdenticalTreeReuseRule.TryGetCheckIdentity(check, out var identity))
+            throw new InvalidOperationException("An identical-tree key requires an eligible check.");
+        return string.Join(':', goalId, GoalAcceptanceVerifier.NormalizeShaToken(treeSha),
+            GoalAcceptanceVerifier.NormalizeShaToken(mainSha), manifestIdentity, identity).ToLowerInvariant();
+    }
 
     private bool TryBuildCacheKey(
         AcceptanceManifestCheck check,
@@ -906,7 +1001,7 @@ internal sealed partial class AcceptancePartitionVerdictCache
                         entry.PartitionVerdict.Equals("GREEN", StringComparison.OrdinalIgnoreCase),
                         entry.PartitionVerdict,
                         entry.PartitionTestResultPaths ?? [],
-                        entry.At));
+                        entry.At, entry.PartitionClosureHash));
                 }
                 else if (entry.Operation.Equals(PartitionVerdictCacheJournalOperation, StringComparison.OrdinalIgnoreCase) &&
                     !string.IsNullOrWhiteSpace(entry.PartitionPairKey) &&
@@ -983,7 +1078,8 @@ internal sealed partial class AcceptancePartitionVerdictCache
                 PartitionFilterHash: record.PartitionFilterHash,
                 PartitionVerdict: record.Verdict,
                 PartitionAttemptId: record.AttemptId,
-                PartitionTestResultPaths: record.TestResultPaths))
+                PartitionTestResultPaths: record.TestResultPaths,
+                PartitionClosureHash: record.IdenticalTree ? record.ClosureHash : null))
             .ToList();
         if (cache._sharedApparatusInvalidation is { } invalidation)
         {

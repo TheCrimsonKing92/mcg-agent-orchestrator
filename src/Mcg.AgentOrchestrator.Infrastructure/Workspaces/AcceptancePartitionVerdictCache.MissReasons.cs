@@ -8,10 +8,12 @@ internal static class PartitionVerdictMissReasons
     internal const string ForcedFullRerun = "forced-full-rerun";
     internal const string ClosureHashUnavailable = "closure-hash-unavailable";
     internal const string NoGreenVerdictForClosure = "no-green-verdict-for-closure";
+    internal const string NoGreenVerdictForIdenticalTree = "no-green-verdict-for-identical-tree";
+    internal const string IdenticalTreeClosureHashMismatch = "identical-tree-closure-hash-mismatch";
     internal const string MissingStructuralCoverageEvidence = "missing-structural-coverage-evidence";
 }
 
-internal sealed record PartitionVerdictMissReceipt(string LaneId, string Reason, string? ClosureHash);
+internal sealed record PartitionVerdictMissReceipt(string LaneId, string Reason, string? ClosureHash, string? ReasonCode = null);
 
 internal sealed partial class AcceptancePartitionVerdictCache
 {
@@ -28,11 +30,11 @@ internal sealed partial class AcceptancePartitionVerdictCache
         }
     }
 
-    private void RecordMiss(string laneId, string reason, string? closureHash = null)
+    private void RecordMiss(string laneId, string reason, string? closureHash = null, string? reasonCode = null)
     {
         var escapedLaneId = Uri.EscapeDataString(laneId);
         lock (_gate)
-            _misses.TryAdd(escapedLaneId, new PartitionVerdictMissReceipt(escapedLaneId, reason, closureHash));
+            _misses.TryAdd(escapedLaneId, new PartitionVerdictMissReceipt(escapedLaneId, reason, closureHash, reasonCode));
     }
 
     // Called while RecordExecution holds _gate.
@@ -63,7 +65,8 @@ internal sealed partial class AcceptancePartitionVerdictCache
             tokens.AddRange(_misses.Values
                 .OrderBy(miss => miss.LaneId, StringComparer.Ordinal)
                 .Select(miss => $"missed_lane={miss.LaneId}:{miss.Reason}" +
-                    (miss.ClosureHash is null ? string.Empty : $":{miss.ClosureHash}")));
+                    (miss.ClosureHash is null ? string.Empty : $":{miss.ClosureHash}") +
+                    (miss.ReasonCode is null ? string.Empty : $":{miss.ReasonCode}")));
             return string.Join(' ', tokens);
         }
     }
