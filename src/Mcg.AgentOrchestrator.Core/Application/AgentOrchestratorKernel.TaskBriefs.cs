@@ -626,6 +626,7 @@ public sealed partial class AgentOrchestratorKernel
             segments.Add(TaskBriefSegment.Fixed([string.Empty]));
         }
 
+        segments.Add(TaskBriefSegment.Fixed(BuildNegativeControlRevertSetBriefBlock(goal, task)));
         var reviewerExecutedTestEvidence = BuildReviewerExecutedTestEvidenceBriefBlock(goal, task);
         if (reviewerExecutedTestEvidence.Count > 0)
         {

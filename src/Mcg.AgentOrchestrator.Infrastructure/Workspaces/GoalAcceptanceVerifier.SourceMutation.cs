@@ -6,10 +6,11 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 public sealed partial class GoalAcceptanceVerifier
 {
     private static FindingEvidenceRevertPathsRejection? ValidateSourceMutation(
-        FindingEvidenceMutation mutation, string[] diff, string candidatePath)
+        FindingEvidenceMutation mutation, string[] diff, string candidatePath, string candidateSha, string mergeBase,
+        IReadOnlyList<AcceptanceManifestCheck> checks, IReadOnlySet<string>? declared)
     {
         var path = FindingEvidenceRevertPaths.Normalize(mutation.Path);
-        var pathRejection = ValidateSourceRevertPaths([path], diff);
+        var pathRejection = ValidateSourceRevertPaths([path], diff, declared: declared);
         if (pathRejection is not null)
             return pathRejection switch
             {
@@ -18,6 +19,8 @@ public sealed partial class GoalAcceptanceVerifier
                 FindingEvidenceRevertPathsRejection.NotChangedByGoal => FindingEvidenceRevertPathsRejection.MutationNotChangedByGoal,
                 _ => throw new InvalidOperationException("Unexpected mutation path rejection.")
             };
+        if (ValidateSelectedTestClassPaths([path], diff, candidatePath, candidateSha, mergeBase, checks, declared) is not null)
+            return FindingEvidenceRevertPathsRejection.MutationSelectedTestClass;
         if (string.IsNullOrEmpty(mutation.OldText)) return FindingEvidenceRevertPathsRejection.MutationEmptyOldText;
         if (string.Equals(NormalizeSourceMutationLineBreaks(mutation.OldText),
             NormalizeSourceMutationLineBreaks(mutation.NewText ?? string.Empty), StringComparison.Ordinal))
