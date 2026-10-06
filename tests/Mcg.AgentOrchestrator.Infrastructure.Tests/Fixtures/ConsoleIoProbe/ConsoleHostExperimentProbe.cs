@@ -24,7 +24,11 @@ internal static class ConsoleHostExperimentProbe
         };
         try
         {
-            if (values.GetValueOrDefault("--own-console-check", "false") == "true")
+            if (values.GetValueOrDefault("--sdk-own-console-check", "false") == "true")
+            {
+                report.SdkOwnConsoleCheck = await RunSdkOwnConsoleCheck(directory);
+            }
+            else if (values.GetValueOrDefault("--own-console-check", "false") == "true")
             {
                 report.OwnConsoleCheck = await RunOwnConsoleCheck(directory);
             }
@@ -125,6 +129,87 @@ internal static class ConsoleHostExperimentProbe
         var git = await RunOwned(Command("git", directory), "git", directory, events);
         var afterGit = new CodePages(Windows.GetConsoleCP(), Windows.GetConsoleOutputCP());
         return new OwnConsoleCheck(before, afterOwnConsole, afterGit, child, git);
+    }
+
+    private static async Task<SdkOwnConsoleCheck> RunSdkOwnConsoleCheck(string directory)
+    {
+        var before = new CodePages(Windows.GetConsoleCP(), Windows.GetConsoleOutputCP());
+        using var guard = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        var launch = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var ready = Enumerable.Range(0, 2).Select(_ =>
+            new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).ToArray();
+        var tasks = ready.Select(signal => Task.Run(async () =>
+        {
+            signal.SetResult();
+            await launch.Task.WaitAsync(guard.Token);
+            return await RunSdkChild(directory, guard.Token);
+        })).ToArray();
+        try
+        {
+            await Task.WhenAll(ready.Select(signal => signal.Task)).WaitAsync(guard.Token);
+            // Both launchers are ready before either may enter the production runner.
+            launch.SetResult();
+            var children = await Task.WhenAll(tasks);
+            var afterSdk = new CodePages(Windows.GetConsoleCP(), Windows.GetConsoleOutputCP());
+            using var events = new WindowEvents();
+            var git = await RunOwned(Command("git", directory), "git", directory, events);
+            var afterGit = new CodePages(Windows.GetConsoleCP(), Windows.GetConsoleOutputCP());
+            return new SdkOwnConsoleCheck(before, afterSdk, afterGit, children, git);
+        }
+        catch (OperationCanceledException exception) when (guard.IsCancellationRequested)
+        {
+            throw new TimeoutException("SDK launch readiness or both SDK child exits were not observed.", exception);
+        }
+        finally
+        {
+            launch.TrySetCanceled();
+            guard.Cancel();
+            try { await Task.WhenAll(tasks); } catch (OperationCanceledException) { }
+        }
+    }
+
+    private static async Task<Child> RunSdkChild(string directory, CancellationToken cancellationToken)
+    {
+        var sync = new object();
+        var images = new Dictionary<int, Image>();
+        var root = 0;
+        var released = false;
+        var resultTask = GoalAcceptanceVerifier.RunProcessForTestsAsync(
+            ["dotnet", "msbuild", "-version"], directory, TimeSpan.FromMinutes(2), cancellationToken,
+            cleanupObserver: observation =>
+            {
+                lock (sync)
+                {
+                    if (observation.Stage == "started")
+                    {
+                        root = observation.ProcessId;
+                        if (!WorkerProcessJobs.TryGetActiveProcessIds(root, out var ids))
+                            throw new InvalidOperationException("SDK job membership unavailable at child start.");
+                        ObserveImages(ids, images);
+                    }
+                    if (observation.Stage == "registration-released") released = true;
+                }
+            });
+        // Sample membership until completion; the guard bounds missing exits, never performance.
+        while (!resultTask.IsCompleted)
+        {
+            lock (sync)
+            {
+                if (root != 0 && !released && WorkerProcessJobs.TryGetActiveProcessIds(root, out var ids))
+                    ObserveImages(ids, images);
+            }
+            await Task.Yield();
+        }
+        var result = await resultTask;
+        lock (sync)
+        {
+            return new Child
+            {
+                Command = "dotnet msbuild -version", ProcessId = root, ExitCode = result.ExitCode,
+                Stdout = result.Output, Stderr = result.Stderr ?? "",
+                Images = images.Values.ToArray(), ConhostCount = images.Values.Count(image => image.IsConhost)
+            };
+        }
     }
 
     private static ProcessStartInfo Command(string command, string directory) => command switch
@@ -232,6 +317,11 @@ internal static class ConsoleHostExperimentProbe
     private static void Observe(OwnedProcessGroup group, Dictionary<int, Image> images)
     {
         if (!group.TryGetActiveProcessIds(out var ids)) throw new InvalidOperationException("Job membership query failed.");
+        ObserveImages(ids, images);
+    }
+
+    private static void ObserveImages(IReadOnlyList<int> ids, Dictionary<int, Image> images)
+    {
         foreach (var id in ids)
         {
             if (images.ContainsKey(id)) continue;
@@ -336,6 +426,7 @@ internal static class ConsoleHostExperimentProbe
         public uint ConsoleProcessCount { get; init; }
         public List<Arm> Arms { get; } = [];
         public OwnConsoleCheck? OwnConsoleCheck { get; set; }
+        public SdkOwnConsoleCheck? SdkOwnConsoleCheck { get; set; }
         public string? Error { get; set; }
     }
 
@@ -380,6 +471,7 @@ internal static class ConsoleHostExperimentProbe
 
     private sealed record CodePages(uint Input, uint Output);
     private sealed record OwnConsoleCheck(CodePages Before, CodePages AfterOwnConsole, CodePages AfterGit, Child Child, Child Git);
+    private sealed record SdkOwnConsoleCheck(CodePages Before, CodePages AfterSdk, CodePages AfterGit, Child[] Children, Child Git);
     private sealed record Image(int ProcessId, string Path, bool IsConhost);
     private sealed record OutputMatch(string Command, bool? MatchesOff);
     private sealed record WindowEvent(uint Kind, long Window, int ProcessId, long? StartedAt, int? ParentId, long? ParentStartedAt, string? Image,

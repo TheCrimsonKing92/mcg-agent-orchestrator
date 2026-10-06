@@ -146,7 +146,8 @@ internal static class ConsoleHostExperimentHarness
 {
     internal static async Task<JsonDocument> Run(int launches, string arms, bool startupOnly = false,
         string? reportPath = null, Action<string>? writeOutput = null,
-        IReadOnlyDictionary<string, string>? environmentOverrides = null, bool ownConsoleCheck = false)
+        IReadOnlyDictionary<string, string>? environmentOverrides = null, bool ownConsoleCheck = false,
+        bool sdkOwnConsoleCheck = false)
     {
         var directory = Path.Combine(Path.GetTempPath(), "mcg-conhost-test", Guid.NewGuid().ToString("n"));
         Directory.CreateDirectory(directory);
@@ -168,6 +169,8 @@ internal static class ConsoleHostExperimentHarness
                 foreach (var entry in environmentOverrides) info.Environment[entry.Key] = entry.Value;
             info.ArgumentList.Add("--own-console-check");
             info.ArgumentList.Add(ownConsoleCheck.ToString().ToLowerInvariant());
+            info.ArgumentList.Add("--sdk-own-console-check");
+            info.ArgumentList.Add(sdkOwnConsoleCheck.ToString().ToLowerInvariant());
             // Explicit CreateNoWindow gives this fixture its own windowless console even in an interactive test run.
             using (ProcessTreeGuiSuppression.AcquireErrorModeForChildSpawn())
                 host = Process.Start(info) ?? throw new InvalidOperationException("Measurement host did not start.");
