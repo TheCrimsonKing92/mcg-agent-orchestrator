@@ -20,6 +20,15 @@ internal static class AuthorBriefDraftPrompt
         Include at least one declared numbered or bulleted acceptance criterion.
         End EVERY acceptance criterion with an owner sentence of the form "X owns; Y executes."
         followed by TEST-VERIFIABLE or REAL-WORLD-DEPENDENT.
+        The owner sentence is the last sentence of its criterion and is exactly one of these four lines, copied character for character with nothing after it:
+        Developer owns; Acceptance executes. TEST-VERIFIABLE.
+        Tester owns; Acceptance executes. TEST-VERIFIABLE.
+        Reviewer owns; Reviewer executes. TEST-VERIFIABLE.
+        Operator owns; Operator executes. REAL-WORLD-DEPENDENT.
+        Brief lint blocks a draft that contains any of these words anywhere, including code spans, quoted evidence and file paths, so never write them: {{string.Join(", ", GoalReadinessPreflight.HighRiskSignalWords)}}.
+        Say the same thing in other words, and describe a file in prose instead of citing its path when the path contains one of those words.
+        Cite every file by its full repository-relative path on every mention, never by bare file name, and cite a line range as path:start-end.
+        In the Measured premise section put only repository files in code spans; name runtime files and stores in plain text.
         Keep scope concrete and name integration and evidence owners. Do not create a goal or change any files.
         Return exactly one JSON object, with no surrounding commentary or fences:
         {"kind":"draft","markdown":"<complete brief markdown>"}

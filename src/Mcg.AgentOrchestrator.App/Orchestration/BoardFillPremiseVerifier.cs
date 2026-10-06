@@ -35,13 +35,16 @@ internal sealed class BoardFillPremiseVerifier(Func<ModelFunctionCatalog> catalo
             var (answer, providerFault) = Decode(result.Stdout, binding.Profile!);
             if (providerFault) return Failure("failed", "provider-fault");
             var verification = BoardFillVerifierContract.Parse(answer, count);
-            // Evidence must name an actual tracked line at the attested HEAD, not merely look like a citation.
+            // Evidence must resolve within a tracked file at the attested HEAD.
             foreach (var verdict in verification.Verdicts)
             {
-                var separator = verdict.Evidence.LastIndexOf(':');
-                if (!int.TryParse(verdict.Evidence[(separator + 1)..], out var line) ||
-                    repository.TrackedLineCount(head, verdict.Evidence[..separator]) is not { } lines || line > lines)
-                    return Failure("invalid", $"invalid-evidence:{verdict.Bullet}");
+                var citation = BoardFillCitation.Parse(verdict.Evidence);
+                var lines = repository.TrackedLineCount(head, citation.Path);
+                if (lines is null || !citation.InRange(lines.Value))
+                    return Failure("invalid", $"invalid-evidence:{verdict.Bullet}") with
+                    {
+                        InvalidEvidence = $"{verdict.Evidence} ({(lines is null ? "untracked" : "line-outside")})"
+                    };
             }
             return MatchesHead(head) ? verification : Failure("failed", "repository-changed");
         }
