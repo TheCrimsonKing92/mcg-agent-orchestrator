@@ -21,6 +21,10 @@ public sealed class ProcessTreeGuiSuppressionTestsConsoleHostExperiment(ITestOut
         Assert.Equal("Off", report.GetProperty("switchAtStartup").GetString());
         Assert.Equal(0, report.GetProperty("consoleWindow").GetInt64());
         Assert.True(report.GetProperty("consoleProcessCount").GetUInt32() > 0, report.GetRawText());
+        var shell = report.GetProperty("powerShellExecutable").GetString()!;
+        Assert.True(Path.IsPathFullyQualified(shell), report.GetRawText());
+        Assert.Equal("pwsh.exe", Path.GetFileName(shell), ignoreCase: true);
+        Assert.False(WorkerShell.IsWindowsAppsPath(shell), $"Contained launches require standalone PowerShell: {shell}");
         var arms = report.GetProperty("arms").EnumerateArray().ToArray();
         Assert.Equal(selectedArms == "both" ? 2 : 1, arms.Length);
         Assert.Equal(selectedArms == "inherit" ? "InheritWindowlessConsole" : "Off", arms[0].GetProperty("mode").GetString());

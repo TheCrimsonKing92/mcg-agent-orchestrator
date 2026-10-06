@@ -26,6 +26,7 @@ internal static class ConsoleHostExperimentProbe
         {
             if (values.GetValueOrDefault("--startup-only", "false") != "true")
             {
+                report.PowerShellExecutable = ResolveExecutable("pwsh");
                 var launches = int.Parse(values.GetValueOrDefault("--launches", "4"), System.Globalization.CultureInfo.InvariantCulture);
                 var arms = values.GetValueOrDefault("--arms", "both");
                 if (launches <= 0 || arms is not ("both" or "off" or "inherit"))
@@ -121,6 +122,16 @@ internal static class ConsoleHostExperimentProbe
 
     private static string ResolveExecutable(string name)
     {
+        if (name == "pwsh")
+        {
+            // Avoid app execution aliases on the contained job-list launch path.
+            // Reuse the repository's standalone PowerShell resolver, but require PowerShell 7.
+            var shell = WorkerShell.Executable;
+            if (Path.GetFileName(shell).Equals("pwsh.exe", StringComparison.OrdinalIgnoreCase) &&
+                !WorkerShell.IsWindowsAppsPath(shell) && File.Exists(shell))
+                return Path.GetFullPath(shell);
+            throw new FileNotFoundException($"The conhost experiment requires standalone pwsh.exe; resolved {shell}.");
+        }
         foreach (var directory in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator))
         {
             var path = Path.Combine(directory.Trim('"'), name + ".exe");
@@ -280,6 +291,7 @@ internal static class ConsoleHostExperimentProbe
 
     private sealed class Report
     {
+        public string? PowerShellExecutable { get; set; }
         public string SwitchAtStartup { get; init; } = "";
         public long ConsoleWindow { get; init; }
         public uint ConsoleProcessCount { get; init; }
