@@ -258,6 +258,14 @@ internal sealed class OwnedProcessGroup : IDisposable
         return WindowsJob.TryReadAccounting(_jobHandle, out accounting);
     }
 
+    internal bool TryGetTotalProcesses(out uint totalProcesses)
+    {
+        totalProcesses = 0;
+        return !_disposed && OperatingSystem.IsWindows() &&
+            _jobHandle is { IsClosed: false, IsInvalid: false } &&
+            WindowsJob.TryGetTotalProcesses(_jobHandle, out totalProcesses);
+    }
+
     public bool TryGetActiveProcessIds(out IReadOnlyList<int> processIds)
     {
         processIds = [];
@@ -1403,6 +1411,16 @@ internal sealed class OwnedProcessGroup : IDisposable
             }
 
             activeProcessCount = basic.ActiveProcesses;
+            return true;
+        }
+
+        internal static bool TryGetTotalProcesses(SafeFileHandle job, out uint totalProcesses)
+        {
+            totalProcesses = 0;
+            if (job.IsClosed || job.IsInvalid ||
+                !TryQuery(job, JobObjectBasicAccountingInformation, out JOBOBJECT_BASIC_ACCOUNTING_INFORMATION basic))
+                return false;
+            totalProcesses = basic.TotalProcesses;
             return true;
         }
 
