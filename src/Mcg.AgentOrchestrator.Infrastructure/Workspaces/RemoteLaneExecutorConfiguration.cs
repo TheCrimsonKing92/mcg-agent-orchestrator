@@ -1,8 +1,11 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-internal sealed record RemoteLaneExecutorEntry(string Id, int LeaseSeconds);
+internal sealed record RemoteLaneExecutorEntry(string Id, int LeaseSeconds,
+    string? Transport = null, string? RunnerAlias = null, string? AdminAlias = null,
+    string? RemoteRepository = null, string? RunRoot = null, int PollSeconds = 10);
 
 // Operator-owned, immutable for a single gate attempt. Invalid input always disables dispatch.
 internal sealed record RemoteLaneExecutorConfiguration(
@@ -37,7 +40,30 @@ internal sealed record RemoteLaneExecutorConfiguration(
                         return Disabled("invalid");
                     if (value > 0) seconds = value;
                 }
-                entries.Add(new(id.GetString()!, seconds));
+                if (!executor.TryGetProperty("transport", out var transport))
+                {
+                    entries.Add(new(id.GetString()!, seconds));
+                    continue;
+                }
+                if (transport.ValueKind != JsonValueKind.String || transport.GetString() != "ssh")
+                    return Disabled("invalid");
+                var runner = ReadString(executor, "runnerAlias");
+                var admin = ReadString(executor, "adminAlias");
+                var repository = ReadString(executor, "remoteRepository");
+                var runRoot = executor.TryGetProperty("runRoot", out _) ? ReadString(executor, "runRoot") : "C:/mcg-executor";
+                if (!Matches(runner, "^[A-Za-z0-9][A-Za-z0-9._-]*$") ||
+                    !Matches(admin, "^[A-Za-z0-9][A-Za-z0-9._-]*$") ||
+                    !Matches(repository, "^[A-Za-z]:/[A-Za-z0-9._/-]+$") ||
+                    !Matches(runRoot, "^[A-Za-z]:/[A-Za-z0-9._/-]+$"))
+                    return Disabled("invalid");
+                var pollSeconds = 10;
+                if (executor.TryGetProperty("pollSeconds", out var poll))
+                {
+                    if (poll.ValueKind != JsonValueKind.Number || !poll.TryGetInt32(out var value))
+                        return Disabled("invalid");
+                    if (value > 0) pollSeconds = value;
+                }
+                entries.Add(new(id.GetString()!, seconds, "ssh", runner, admin, repository, runRoot, pollSeconds));
             }
             var names = new List<string>();
             foreach (var lane in lanes.EnumerateArray())
@@ -54,4 +80,8 @@ internal sealed record RemoteLaneExecutorConfiguration(
         { return Disabled("invalid"); }
     }
     private static RemoteLaneExecutorConfiguration Disabled(string reason) => new([], [], reason);
+    private static string? ReadString(JsonElement entry, string name) =>
+        entry.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+    private static bool Matches(string? value, string pattern) =>
+        value is not null && Regex.IsMatch(value, pattern, RegexOptions.CultureInvariant) && !value.Contains('\n');
 }
