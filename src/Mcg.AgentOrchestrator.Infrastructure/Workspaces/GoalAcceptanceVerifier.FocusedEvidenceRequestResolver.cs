@@ -160,66 +160,11 @@ internal static partial class FocusedEvidenceRequestResolver
                 }
                 else
                 {
-                    var group = new List<(string Target, string Project, FocusedEvidenceFilter? Filter)>();
-                    var packedGroupCount = 0;
-                    foreach (var item in compatible
-                        .OrderBy(item => item.Filter!.CanonicalText, StringComparer.Ordinal)
-                        .ThenBy(item => item.Target, StringComparer.Ordinal))
-                    {
-                        var candidateTokens = group.Append(item)
-                            .SelectMany(member => member.Filter!.Tokens)
-                            .DistinctBy(token => token.CanonicalToken, StringComparer.Ordinal)
-                            .OrderBy(token => token.CanonicalToken, StringComparer.Ordinal)
-                            .ToArray();
-                        var candidateCanonical = string.Join("|", candidateTokens.Select(token => token.CanonicalToken));
-                        if (group.Count > 0 &&
-                            (candidateCanonical.Length > GoalAcceptanceVerifier.MaxFocusedEvidenceFilterLength ||
-                             item.Filter!.CanonicalText.Length >= GoalAcceptanceVerifier.MaxFocusedEvidenceFilterLength))
-                        {
-                            AddPackedGroup();
-                        }
-                        group.Add(item);
-                        // Boundary-sized items stay whole and occupy their own check.
-                        if (item.Filter!.CanonicalText.Length >= GoalAcceptanceVerifier.MaxFocusedEvidenceFilterLength)
-                        {
-                            AddPackedGroup();
-                        }
-                    }
-                    if (group.Count > 0)
-                    {
-                        AddPackedGroup();
-                    }
-                    if (packedGroupCount > 1)
+                    var packedGroups = FocusedEvidenceOverflowPacker.Pack(compatible, projectGroup.Key);
+                    planned.AddRange(packedGroups);
+                    if (packedGroups.Count > 1)
                     {
                         projectUnbatchedReasons.Add("bounded-filter-overflow");
-                    }
-
-                    void AddPackedGroup()
-                    {
-                        if (group.Count == 1)
-                        {
-                            var item = group[0];
-                            planned.Add(new FocusedEvidencePlannedCheck(
-                                [item.Target], item.Project, item.Filter, [item.Filter!]));
-                        }
-                        else
-                        {
-                            var groupTokens = group
-                                .SelectMany(item => item.Filter!.Tokens)
-                                .DistinctBy(token => token.CanonicalToken, StringComparer.Ordinal)
-                                .OrderBy(token => token.CanonicalToken, StringComparer.Ordinal)
-                                .ToArray();
-                            planned.Add(new FocusedEvidencePlannedCheck(
-                                group.Select(item => item.Target).Distinct(StringComparer.Ordinal).ToArray(),
-                                projectGroup.Key,
-                                new FocusedEvidenceFilter(
-                                    string.Join("; ", group.Select(item => item.Target)),
-                                    string.Join("|", groupTokens.Select(token => token.CanonicalToken)),
-                                    groupTokens),
-                                group.Select(item => item.Filter!).ToArray()));
-                        }
-                        packedGroupCount++;
-                        group.Clear();
                     }
                 }
             }
