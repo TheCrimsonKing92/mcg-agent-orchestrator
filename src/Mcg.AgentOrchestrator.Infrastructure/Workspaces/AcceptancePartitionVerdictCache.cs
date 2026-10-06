@@ -652,7 +652,7 @@ internal sealed partial class AcceptancePartitionVerdictCache
             AcceptanceShardCompletionPredicates.MalformedTrx ||
         AcceptanceFailureClassifications.IsEnvironmentalApparatus(failedPredicate);
 
-    internal void RecordExecution(AcceptanceManifestCheck check, AcceptanceCheckResult result)
+    internal void RecordExecution(AcceptanceManifestCheck check, AcceptanceCheckResult result, string verdictSource = "first_run")
     {
         if (TryBuildIdenticalTreeKey(check, out var identicalTreeId, out var identity, out var identicalTreeKey))
         {
@@ -667,7 +667,7 @@ internal sealed partial class AcceptancePartitionVerdictCache
                 _freshRecords.Add(new PartitionVerdictRecord(
                     GoalId, AttemptId, CandidateTreeSha, MainSha, identity, identicalTreeId, identicalTreeKey,
                     result.Passed, result.Passed ? "GREEN" : "RED", result.TestResultPaths ?? [],
-                    DateTimeOffset.UtcNow, identicalTreeClosureHash, "first_run", IdenticalTree: true));
+                    DateTimeOffset.UtcNow, identicalTreeClosureHash, verdictSource, IdenticalTree: true));
             }
             return;
         }
@@ -699,7 +699,7 @@ internal sealed partial class AcceptancePartitionVerdictCache
                 result.TestResultPaths ?? [],
                 DateTimeOffset.UtcNow,
                 closureHash,
-                "first_run",
+                verdictSource,
                 probeReceipt is not null,
                 probeReceipt?.FlakeConfirmed));
         }
@@ -776,6 +776,7 @@ internal sealed partial class AcceptancePartitionVerdictCache
         foreach (var record in _freshRecords.Where(record =>
                      record.Passed &&
                      !record.IdenticalTree &&
+                     record.VerdictSource != "remote_first_run" &&
                      !string.IsNullOrWhiteSpace(record.ClosureHash) &&
                      !retriedPartitionIds.Contains(record.PartitionId)))
             _closureIndex.AppendGreen(ManifestIdentity, record.PartitionFilterHash, record.ClosureHash!, record.AttemptId, record.TestResultPaths);

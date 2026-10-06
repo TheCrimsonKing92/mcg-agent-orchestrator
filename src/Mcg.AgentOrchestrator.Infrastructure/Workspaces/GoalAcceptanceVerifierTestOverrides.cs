@@ -39,6 +39,14 @@ internal sealed record GoalAcceptanceVerifierTestOverrides
     internal IWorkerIntegrityLabeler? BaselineIntegrityLabelerForTests { get; set; }
     internal TimeSpan? GateChildExitConfirmationBudget { get; set; }
     internal IGateChildReapSeam? GateChildReapSeamForTests { get; set; }
+    internal IRemoteLaneExecutor? RemoteLaneExecutorForTests { get; set; }
+    internal TimeProvider? RemoteLaneTimeProviderForTests { get; set; }
+    internal TimeSpan? RemoteLanePollInterval { get; set; }
+    internal string? RemoteLaneExecutorConfigurationPathForTests { get; set; }
+    internal Action<string>? OnRemoteLaneProgressLineForTests { get; set; }
+    internal Action<string, RemoteLaneOutcomeCode>? OnRemoteLaneOutcomeForTests { get; set; }
+    internal Action<string>? OnRemoteLaneFallbackWaitingForLocalSlotForTests { get; set; }
+    internal Func<GoalAcceptanceVerifier.AcceptanceManifestCheck, string?>? ResolvePartitionVerdictClosureHashForTests { get; set; }
 
     internal GoalAcceptanceVerifierTestOverrides Snapshot() => new()
     {
@@ -78,6 +86,14 @@ internal sealed record GoalAcceptanceVerifierTestOverrides
         BuildStorageRootForTests = BuildStorageRootForTests,
         BaselineIntegrityLabelerForTests = BaselineIntegrityLabelerForTests,
         GateChildExitConfirmationBudget = GateChildExitConfirmationBudget,
-        GateChildReapSeamForTests = GateChildReapSeamForTests
+        GateChildReapSeamForTests = GateChildReapSeamForTests,
+        RemoteLaneExecutorForTests = RemoteLaneExecutorForTests,
+        RemoteLaneTimeProviderForTests = RemoteLaneTimeProviderForTests,
+        RemoteLanePollInterval = RemoteLanePollInterval,
+        RemoteLaneExecutorConfigurationPathForTests = RemoteLaneExecutorConfigurationPathForTests,
+        OnRemoteLaneProgressLineForTests = OnRemoteLaneProgressLineForTests,
+        OnRemoteLaneOutcomeForTests = OnRemoteLaneOutcomeForTests,
+        OnRemoteLaneFallbackWaitingForLocalSlotForTests = OnRemoteLaneFallbackWaitingForLocalSlotForTests,
+        ResolvePartitionVerdictClosureHashForTests = ResolvePartitionVerdictClosureHashForTests
     };
 }
