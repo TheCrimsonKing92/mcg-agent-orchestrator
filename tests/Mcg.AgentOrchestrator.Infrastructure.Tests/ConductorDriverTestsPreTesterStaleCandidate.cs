@@ -232,7 +232,8 @@ public sealed class ConductorDriverTestsPreTesterStaleCandidate
         public void Dispose()
         {
             _runnerReleased.Dispose();
-            Directory.Delete(Root, recursive: true);
+            var elapsed = TimeSpan.Zero;
+            SharedTestSupport.RemoveTempDirectory(Root, () => elapsed, wait => elapsed += wait);
         }
     }
 }
