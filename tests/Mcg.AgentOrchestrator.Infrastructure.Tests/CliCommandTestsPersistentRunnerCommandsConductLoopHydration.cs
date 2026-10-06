@@ -104,46 +104,32 @@ public sealed class CliCommandTestsPersistentRunnerCommandsConductLoopHydration 
         var reduction = preFixBytes == 0
             ? 0
             : (double)(preFixBytes - repository.LoadedGoalSnapshotJsonBytes) / preFixBytes;
-        var artifactPath = WriteParkedHydrationMeasurementArtifact(
-            parkedGoalCount,
-            preFixBytes,
-            repository.LoadedGoalSnapshotJsonBytes,
-            reduction,
-            workingSetBefore,
-            workingSetAfter);
-        Console.WriteLine($"parked hydration measurement artifact: {artifactPath}");
-        Xunit.Assert.True(File.Exists(artifactPath));
-        Xunit.Assert.True(
-            reduction >= 0.70,
-            $"parked_count={parkedGoalCount}; pre_fix_goal_json_bytes={preFixBytes}; after_goal_json_bytes={repository.LoadedGoalSnapshotJsonBytes}; reduction={reduction:P1}; working_set_before={workingSetBefore}; working_set_after={workingSetAfter}");
-    }
-
-    private static string WriteParkedHydrationMeasurementArtifact(
-        int parkedGoalCount,
-        long preFixGoalJsonBytes,
-        long afterGoalJsonBytes,
-        double reduction,
-        long workingSetBefore,
-        long workingSetAfter)
-    {
-        var artifactPath = Path.Combine(Path.GetTempPath(), "mcg-conduct-loop-parked-hydration-measurement-latest.json");
-        File.WriteAllText(
-            artifactPath,
-            JsonSerializer.Serialize(
-                new
-                {
-                    fixture = "conduct-loop-parked-hydration",
-                    parked_goal_count = parkedGoalCount,
-                    safety_net_sweep_cadence_ticks = CliPersistentStateRunner.ParkedGoalSafetyNetSweepCadenceTicks,
-                    pre_fix_goal_json_bytes = preFixGoalJsonBytes,
-                    after_goal_json_bytes = afterGoalJsonBytes,
-                    reduction,
-                    working_set_before = workingSetBefore,
-                    working_set_after = workingSetAfter
-                },
-                new JsonSerializerOptions { WriteIndented = true }));
-
-        return artifactPath;
+        var artifactRoot = Path.Combine(Path.GetTempPath(), nameof(CliCommandTestsPersistentRunnerCommandsConductLoopHydration), Guid.NewGuid().ToString("n"));
+        try
+        {
+            var artifactPath = ParkedHydrationMeasurementArtifact.Write(
+                artifactRoot,
+                parkedGoalCount,
+                preFixBytes,
+                repository.LoadedGoalSnapshotJsonBytes,
+                reduction,
+                workingSetBefore,
+                workingSetAfter);
+            Console.WriteLine($"parked hydration measurement artifact: {artifactPath}");
+            Xunit.Assert.True(File.Exists(artifactPath));
+            Xunit.Assert.True(
+                reduction >= 0.70,
+                $"parked_count={parkedGoalCount}; pre_fix_goal_json_bytes={preFixBytes}; after_goal_json_bytes={repository.LoadedGoalSnapshotJsonBytes}; reduction={reduction:P1}; working_set_before={workingSetBefore}; working_set_after={workingSetAfter}");
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(artifactRoot, recursive: true);
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
     }
 
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_conduct_loop_hydrates_unparked_goal_on_next_kernel_load")]
