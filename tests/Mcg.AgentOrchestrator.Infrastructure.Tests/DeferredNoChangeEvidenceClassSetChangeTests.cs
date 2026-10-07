@@ -211,13 +211,15 @@ public sealed class DeferredNoChangeEvidenceClassSetChangeTests
         {
             Kernel.RetryTask(Goal.Id, Developer.Id, "Repeat no-change with a corrected class declaration.");
             DispatchTask(Kernel, Goal, Developer, baseCommit: Candidate);
+            var dispatch = Developer.LastDispatch!;
             const string rationale = "NO_CHANGE: the candidate already contains the revision.";
             var output = rationale + "\nWORKER_RESULT:\nfiles: none\ncommands: none\n" +
                 "tests: deferred - " + string.Join(", ", classes) + "\ncommit: none\nblockers: none\n" +
                 "assigned_scope_complete: true\nmodel_fit: test/model - adequate - fixture\n" +
                 "skills: none\nconfidence: high\nEND_WORKER_RESULT";
             Kernel.RecordDispatchExecutionResult(Goal.Id, Developer.Id, new TaskVerificationRecord(
-                "fixture", Root, 0, output, new DeferredNoChangeOutcome(Candidate, classes, rationale).FormatMarker(),
+                dispatch.Command, dispatch.WorkingDirectory, 0, output,
+                new DeferredNoChangeOutcome(Candidate, classes, rationale).FormatMarker(),
                 DateTimeOffset.UtcNow, WorkerResultPresent: true, HasCommittedChanges: false));
             Xunit.Assert.Equal(WorkTaskStatus.Completed, Developer.Status);
             Xunit.Assert.Equal("deferred-no-change-round", Developer.LastVerification!.CompletionVerdictRule);
