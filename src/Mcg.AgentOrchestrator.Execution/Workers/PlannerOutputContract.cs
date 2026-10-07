@@ -137,18 +137,10 @@ internal static partial class PlannerOutputContract
         var integrationSeams = 0;
         var verificationClasses = 0;
         var stopConditions = 0;
-        var mappings = new Dictionary<int, string>();
-        foreach (var line in mappingBody.Split('\n'))
-        {
-            if (!TryParseCriterionMappingLine(line, out var criterion, out var mapping) ||
-                criterion <= 0 ||
-                string.IsNullOrWhiteSpace(mapping))
-            {
-                continue;
-            }
-
-            mappings.TryAdd(criterion, mapping);
-        }
+        var eligibleMappingLines = mappingBody.Split('\n').Where(line =>
+            TryParseCriterionMappingLine(line, out var criterion, out var mapping) &&
+            criterion > 0 && !string.IsNullOrWhiteSpace(mapping));
+        var mappings = SelectCriterionMappings(string.Join("\n", eligibleMappingLines));
 
         var boundedCriterionCount = criterionCount ?? CountContiguousCriteria(mappings);
         foreach (var mapping in mappings
@@ -568,13 +560,12 @@ internal static partial class PlannerOutputContract
             ? sections[mappingIndex + 1].Start
             : FindPlanEnd(normalized, mapping.BodyStart);
         var body = normalized[mapping.BodyStart..end];
-        var mappingLines = new Dictionary<int, string>();
+        var mappingLines = SelectCriterionMappings(body);
         var unparsedLines = new Dictionary<int, string>();
         foreach (var line in body.Split('\n'))
         {
-            if (TryParseCriterionMappingLine(line, out var criterion, out var parsedMapping))
+            if (TryParseCriterionMappingLine(line, out var criterion, out _))
             {
-                mappingLines.TryAdd(criterion, parsedMapping);
                 continue;
             }
 
@@ -644,6 +635,27 @@ internal static partial class PlannerOutputContract
         return true;
     }
 
+    internal static IReadOnlyDictionary<int, string> SelectCriterionMappings(string mappingSectionBody)
+    {
+        var mappings = new Dictionary<int, string>();
+        foreach (var line in mappingSectionBody.Split('\n'))
+        {
+            if (!TryParseCriterionMappingLine(line, out var criterion, out var mapping))
+            {
+                continue;
+            }
+
+            if (!mappings.TryGetValue(criterion, out var selected) ||
+                (!Regex.IsMatch(selected, @"(?i)\bdisposition\s*=") &&
+                 Regex.IsMatch(mapping, @"(?i)\bdisposition\s*=")))
+            {
+                mappings[criterion] = mapping;
+            }
+        }
+
+        return new System.Collections.ObjectModel.ReadOnlyDictionary<int, string>(mappings);
+    }
+
     internal static bool TryParseCriterionMappingLine(
         string line,
         out int criterion,
@@ -674,6 +686,30 @@ internal static partial class PlannerOutputContract
         line.Length <= MaxOffendingLineChars
             ? line
             : line[..(MaxOffendingLineChars - 1)] + "…";
+
+    private static string DescribeOffendingPlanLine(string plan, int offset)
+    {
+        offset = Math.Clamp(offset, 0, plan.Length);
+        var lineNumber = 1;
+        var lineStart = 0;
+        for (var index = 0; index < offset; index++)
+        {
+            if (plan[index] == '\n' ||
+                (plan[index] == '\r' && (index + 1 >= plan.Length || plan[index + 1] != '\n')))
+            {
+                lineNumber++;
+                lineStart = index + 1;
+            }
+        }
+
+        var lineEnd = lineStart;
+        while (lineEnd < plan.Length && plan[lineEnd] is not ('\r' or '\n'))
+        {
+            lineEnd++;
+        }
+
+        return $"Offending plan line {lineNumber}: '{BoundOffendingLine(plan[lineStart..lineEnd].Trim())}'";
+    }
 
     private static Dictionary<string, string> ParseCriterionMappingFields(string mapping)
     {
@@ -875,7 +911,8 @@ internal static partial class PlannerOutputContract
                             repositoryMatches.Select(path => $"'{Path.GetRelativePath(workingDirectory, path).Replace(Path.DirectorySeparatorChar, '/')}'"));
                         diagnostic =
                             $"target citation '{citation}' is ambiguous; at least these repository files match: {candidates}; source span [{ambiguousCitationStart}..{ambiguousCitationStart + citation.Length})." +
-                            $"{Environment.NewLine}Offending citation: '{citation}'";
+                            $"{Environment.NewLine}Offending citation: '{citation}'" +
+                            $" {DescribeOffendingPlanLine(plan, ambiguousCitationStart)}";
                         return false;
                     }
                 }
@@ -902,7 +939,8 @@ internal static partial class PlannerOutputContract
                 : $" Did you mean `{suggestion}`?";
             diagnostic =
                 $"target citation '{citation}' does not exist and is not marked as a new file; source span [{citationStart}..{citationStart + citation.Length})." +
-                $"{suggestionText}{Environment.NewLine}Offending citation: '{citation}'";
+                $"{suggestionText}{Environment.NewLine}Offending citation: '{citation}'" +
+                $" {DescribeOffendingPlanLine(plan, citationStart)}";
             return false;
         }
 
