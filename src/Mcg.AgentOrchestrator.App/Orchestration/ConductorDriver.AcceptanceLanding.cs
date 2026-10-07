@@ -76,42 +76,28 @@ internal sealed partial class ConductorDriver
         }
 
         // Gate 2: acceptance verification (test suite quality check) on the integrated worktree.
-        AcceptanceVerificationSummary acceptance;
-        try
-        {
-            acceptance = RunInlineLandingSourceSizePreflight(goal) ??
-                _runAcceptanceVerification(
+        var gateStart = VerifiedGateStartExecutor.Execute(
+            () => RunInlineLandingSourceSizePreflight(goal),
+            () => _runAcceptanceVerification(
                     goal,
                     null,
                     null,
                     CancellationToken.None,
-                    new AcceptanceRunExecutionOptions());
-        }
-        catch (AcceptanceInfrastructureDeferredException ex)
+                    new AcceptanceRunExecutionOptions()));
+        if (gateStart.DeferralKind is null)
         {
-            return AdmissionHeld(facts with
-            {
-                GateStartDeferral = "infrastructure-deferred",
-                InfrastructureDeferredReasonCode = ex.ReasonCode, InfrastructureDeferredMessage = ex.Message
-            });
-        }
-        catch (DotnetBuildSlotsBusyException ex)
-        {
-            return AdmissionHeld(facts with
-                { GateStartDeferral = "build-slots-busy", BuildSlotsBusyDetail = FormatSlotsBusy(ex.SlotsBusy) });
-        }
-        catch (BuildLockBlockedException ex)
-        {
-            return AdmissionHeld(facts with
-                { GateStartDeferral = "build-lock-blocked", BuildLockBlockedDetail = FormatBuildLockBlocked(ex.Attribution) });
-        }
-        catch (AcceptanceAttemptCancelledException ex)
-        {
-            return AdmissionHeld(facts with
-                { GateStartDeferral = "attempt-cancelled", CancellationProbeCause = ex.Decision.Cause.ToString() });
+            return CompleteLandingAfterAcceptance(goal, goalPrefix, policy, gateStart.Summary!);
         }
 
-        return CompleteLandingAfterAcceptance(goal, goalPrefix, policy, acceptance);
+        return AdmissionHeld(facts with
+        {
+            GateStartDeferral = gateStart.DeferralKind,
+            InfrastructureDeferredReasonCode = gateStart.InfrastructureDeferredReasonCode,
+            InfrastructureDeferredMessage = gateStart.InfrastructureDeferredMessage,
+            BuildSlotsBusyDetail = gateStart.SlotsBusy is null ? null : FormatSlotsBusy(gateStart.SlotsBusy),
+            BuildLockBlockedDetail = gateStart.BuildLockAttribution is null ? null : FormatBuildLockBlocked(gateStart.BuildLockAttribution),
+            CancellationProbeCause = gateStart.CancellationCause
+        });
 
         ConductorAdvanceResult AdmissionHeld(VerifiedAdmissionFacts observed)
         {
