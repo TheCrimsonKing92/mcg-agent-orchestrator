@@ -144,9 +144,18 @@ public sealed class OwnerQuestionReadModelHydrationTests
          Request("future-evidence", Active, "Later evidence") with { Kind = HumanWaitKind.ProspectiveAcceptanceEvidence },
          Request("parked-request", Parked, "Parked wait")]);
 
-    private static GoalSnapshot Goal(string id, GoalStatus status, string? hold = null) =>
-        new(id, id, status, [], [], CurrentHold: hold is null ? null :
-            new GoalHoldSnapshot(hold, "steward-owner-question", "question=Review hold evidence=[receipt]", Now));
+    private static GoalSnapshot Goal(string id, GoalStatus status, string? hold = null)
+    {
+        var kernel = new AgentOrchestratorKernel();
+        kernel.CreateGoal(new GoalId(id), id,
+            [new TaskSpec(new TaskId(id + "-task"), "Work", AgentRole.Developer)]);
+        return kernel.ExportSnapshot().Goals.Single() with
+        {
+            Status = status,
+            CurrentHold = hold is null ? null :
+                new GoalHoldSnapshot(hold, "steward-owner-question", "question=Review hold evidence=[receipt]", Now)
+        };
+    }
 
     private static HumanInputRequestSnapshot Request(string id, string goal, string text) =>
         new(id, goal, null, text, Now);
