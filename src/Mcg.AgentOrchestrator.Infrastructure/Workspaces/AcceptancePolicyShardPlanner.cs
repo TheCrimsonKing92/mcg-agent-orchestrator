@@ -17,13 +17,14 @@ internal static partial class AcceptancePolicyShardPlanner
     internal const string TestSupportProject = "tests/Mcg.AgentOrchestrator.TestSupport/Mcg.AgentOrchestrator.TestSupport.csproj";
     internal const string ProviderEnvironmentTestsProject = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj";
     internal const string CliTestsProject = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj";
+    internal const string ExecutionTestsProject = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Execution/Mcg.AgentOrchestrator.Infrastructure.Execution.Tests.csproj";
 
     private static readonly Dictionary<string, string[]> ReferencingProjectsByProject = new(StringComparer.OrdinalIgnoreCase)
     {
-        [CoreProject] = [ExecutionProject, ProvidersProject, OperatorCommsProject, InfrastructureProject, AppProject, CoreTestsProject, InfrastructureTestsProject, AcceptanceTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject],
+        [CoreProject] = [ExecutionProject, ProvidersProject, OperatorCommsProject, InfrastructureProject, AppProject, CoreTestsProject, InfrastructureTestsProject, AcceptanceTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject, ExecutionTestsProject],
         [ProvidersProject] = [ExecutionProject, InfrastructureProject, AppProject, InfrastructureTestsProject, ProviderEnvironmentTestsProject],
         [OperatorCommsProject] = [AppProject, InfrastructureTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject],
-        [ExecutionProject] = [InfrastructureProject, AppProject, InfrastructureTestsProject, AcceptanceTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject],
+        [ExecutionProject] = [InfrastructureProject, AppProject, InfrastructureTestsProject, AcceptanceTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject, ExecutionTestsProject],
         [InfrastructureProject] = [AppProject, InfrastructureTestsProject, AcceptanceTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject],
         [AppProject] = [InfrastructureTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject],
         [CoreTestsProject] = [],
@@ -31,7 +32,8 @@ internal static partial class AcceptancePolicyShardPlanner
         [AcceptanceTestsProject] = [],
         [TestSupportProject] = [InfrastructureTestsProject],
         [ProviderEnvironmentTestsProject] = [],
-        [CliTestsProject] = []
+        [CliTestsProject] = [],
+        [ExecutionTestsProject] = []
     };
 
     internal static string? NormalizePath(string? path) =>
@@ -279,6 +281,7 @@ internal static partial class AcceptancePolicyShardPlanner
         if (normalized.StartsWith("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/", StringComparison.OrdinalIgnoreCase))
             return CliTestsProject;
         if (normalized.StartsWith("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Acceptance/", StringComparison.OrdinalIgnoreCase)) return AcceptanceTestsProject;
+        if (normalized.StartsWith("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Execution/", StringComparison.OrdinalIgnoreCase)) return ExecutionTestsProject;
         if (normalized.StartsWith("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/", StringComparison.OrdinalIgnoreCase))
             return InfrastructureTestsProject;
         return null;
