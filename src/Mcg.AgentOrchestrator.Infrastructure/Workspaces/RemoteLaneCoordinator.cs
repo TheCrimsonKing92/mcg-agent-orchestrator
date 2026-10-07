@@ -25,6 +25,7 @@ internal sealed class RemoteLaneCoordinator : IDisposable
     private readonly HashSet<string> _retired = new(StringComparer.Ordinal);
     private readonly HashSet<string> _excluded = new(StringComparer.Ordinal);
     private readonly HashSet<IRemoteLaneHandle> _handles = new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<string, IDisposable> _claims = new(StringComparer.Ordinal);
 
     internal RemoteLaneCoordinator(RemoteLaneExecutorConfiguration configuration,
         AcceptancePartitionVerdictCache cache, string worktreePath, string? attemptPrefix,
@@ -58,17 +59,28 @@ internal sealed class RemoteLaneCoordinator : IDisposable
     {
         lock (_gate)
         {
-            var entry = _configuration.Executors.FirstOrDefault(entry => !_busy.Contains(entry.Id) && !_retired.Contains(entry.Id));
-            if (entry is not null) _busy.Add(entry.Id);
-            if (entry is not null) RemoteExecutorOccupancy.Claim(_occupancyRoot, entry.Id, _cache.AttemptId);
-            return entry;
+            foreach (var entry in _configuration.Executors)
+            {
+                if (_busy.Contains(entry.Id) || _retired.Contains(entry.Id)) continue;
+                var claim = RemoteExecutorOccupancy.TryClaimExclusive(_occupancyRoot, entry.Id);
+                if (claim is null) continue;
+                _claims.Add(entry.Id, claim);
+                _busy.Add(entry.Id);
+                RemoteExecutorOccupancy.Claim(_occupancyRoot, entry.Id, _cache.AttemptId);
+                return entry;
+            }
+            return null;
         }
     }
 
     internal void Release(string executorId)
     {
-        lock (_gate) _busy.Remove(executorId);
-        RemoteExecutorOccupancy.Release(_occupancyRoot, executorId, _cache.AttemptId);
+        lock (_gate)
+        {
+            _busy.Remove(executorId);
+            RemoteExecutorOccupancy.Release(_occupancyRoot, executorId, _cache.AttemptId);
+            if (_claims.Remove(executorId, out var claim)) claim.Dispose();
+        }
     }
 
     private RemoteLaneRequest CreateRequest(Check check, string executorId)
@@ -157,7 +169,15 @@ internal sealed class RemoteLaneCoordinator : IDisposable
 
         async Task<RemoteLaneOutcome> Fallback(RemoteLaneOutcomeCode code, RemoteLaneResult? result = null, string? reason = null)
         {
-            lock (_gate) { _busy.Remove(entry.Id); _retired.Add(entry.Id); }
+            IDisposable? claim;
+            lock (_gate)
+            {
+                _busy.Remove(entry.Id); _retired.Add(entry.Id);
+                _claims.Remove(entry.Id, out claim);
+            }
+            if (observedResult is null && result is null && handle is IRemoteLaneQueuedJobCancellation cancellation)
+                try { cancellation.RequestQueuedJobCancellation(); }
+                catch (Exception) { /* Best effort; cannot change fallback. */ }
             RemoteLaneRunnerLogCapture? capture = null;
             if (handle is IRemoteLaneAttemptDiagnosticsSource source)
             {
@@ -171,6 +191,7 @@ internal sealed class RemoteLaneCoordinator : IDisposable
                 catch (Exception) { /* Diagnostics cannot change fallback. */ }
             }
             RemoteExecutorOccupancy.Release(_occupancyRoot, entry.Id, _cache.AttemptId);
+            claim?.Dispose();
             Record(request, code, result, reason, Detail(capture));
             return new(request, handle, null);
         }
@@ -240,9 +261,33 @@ internal sealed class RemoteLaneCoordinator : IDisposable
     internal void AbandonAll()
     {
         IRemoteLaneHandle[] handles;
-        lock (_gate) handles = _handles.ToArray();
-        foreach (var handle in handles) Abandon(handle);
+        lock (_gate) { handles = _handles.ToArray(); _handles.Clear(); }
+        foreach (var handle in handles)
+        {
+            try { (handle as IRemoteLaneQueuedJobCancellation)?.RequestQueuedJobCancellation(); }
+            catch (Exception) { /* Best effort; cannot change cancellation. */ }
+            try { handle.Abandon(); }
+            catch (Exception) { /* Best effort; no remote fault can fail a goal. */ }
+        }
+        ReleaseAllClaims();
     }
 
-    public void Dispose() => AbandonAll();
+    public void Dispose()
+    {
+        AbandonAll();
+        ReleaseAllClaims();
+    }
+
+    private void ReleaseAllClaims()
+    {
+        lock (_gate)
+        {
+            foreach (var (executorId, claim) in _claims)
+            {
+                RemoteExecutorOccupancy.Release(_occupancyRoot, executorId, _cache.AttemptId);
+                claim.Dispose();
+            }
+            _claims.Clear();
+        }
+    }
 }

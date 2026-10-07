@@ -1,6 +1,6 @@
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-internal sealed class SshRemoteLaneHandle : IRemoteLaneHandle, IRemoteLaneAttemptDiagnosticsSource
+internal sealed class SshRemoteLaneHandle : IRemoteLaneHandle, IRemoteLaneAttemptDiagnosticsSource, IRemoteLaneQueuedJobCancellation
 {
     private readonly object _sync = new();
     private readonly CancellationTokenSource _stop = new();
@@ -8,6 +8,9 @@ internal sealed class SshRemoteLaneHandle : IRemoteLaneHandle, IRemoteLaneAttemp
     private RemoteLaneResult? _result;
     private Exception? _fault;
     private readonly string _staging, _remote;
+    private readonly string _cancelName, _queueTarget;
+    private bool _jobStarted;
+    internal Task? QueuedJobCancellation { get; private set; }
     private readonly TimeProvider _clock;
     private readonly Func<string[], string, TimeSpan, CancellationToken, Task<GoalAcceptanceVerifier.CommandResult>> _transport;
     private int _pollCount, _failedPollCount;
@@ -26,6 +29,24 @@ internal sealed class SshRemoteLaneHandle : IRemoteLaneHandle, IRemoteLaneAttemp
         }
     }
     public void Abandon() => _stop.Cancel();
+    public void RequestQueuedJobCancellation()
+    {
+        lock (_sync)
+        {
+            if (_jobStarted || QueuedJobCancellation is not null) return;
+            QueuedJobCancellation = Task.Run(async () =>
+            {
+                try
+                {
+                    using var bound = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                    await File.WriteAllTextAsync(Path.Combine(_staging, _cancelName), "", bound.Token).ConfigureAwait(false);
+                    await _transport([SshRemoteLaneExecutor.ScpPath, "-o", "BatchMode=yes", _cancelName, _queueTarget],
+                        _staging, TimeSpan.FromSeconds(30), bound.Token).WaitAsync(bound.Token).ConfigureAwait(false);
+                }
+                catch (Exception) { /* Best effort; queued cancellation cannot change the gate outcome. */ }
+            });
+        }
+    }
     public RemoteLaneHandleDiagnostics Snapshot()
     {
         lock (_sync) return new(new(_pollCount, _failedPollCount, _lastState, _heartbeat, _lastFailedPoll),
@@ -38,6 +59,8 @@ internal sealed class SshRemoteLaneHandle : IRemoteLaneHandle, IRemoteLaneAttemp
         TimeSpan pollInterval, Action<SshPollObservation>? onPollCompleted)
     {
         _staging = staging;
+        _cancelName = $"{request.AttemptId}-{laneKey}.cancel";
+        _queueTarget = $"{entry.RunnerAlias}:{entry.RunRoot}/queue/";
         _remote = $"{entry.RunnerAlias}:{entry.RunRoot}/results/{shortSha}/{laneKey}/";
         _clock = clock;
         _transport = transport;
@@ -72,6 +95,7 @@ internal sealed class SshRemoteLaneHandle : IRemoteLaneHandle, IRemoteLaneAttemp
                         if (status is not null)
                             lock (_sync) { _lastStatus = status.Fields; _lastState = status.String("state"); }
                         if (status is null || status.String("attemptId") != request.AttemptId) continue;
+                        lock (_sync) _jobStarted = true;
                         try
                         {
                             var heartbeat = File.ReadAllText(Path.Combine(folder, "heartbeat.txt"));
