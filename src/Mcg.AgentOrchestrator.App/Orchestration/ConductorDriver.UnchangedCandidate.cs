@@ -96,9 +96,11 @@ internal sealed partial class ConductorDriver
         if (reasons.Any(reason => reason is null)) { ResetUnchangedCandidateHold(goal.Id); return false; }
         var typed = reasons[0]!;
         TrackUnchangedCandidateHold(goal, ready[0], typed);
-        var hold = new ConductorAdvanceOutcome.Held(fromState, typed.Render(), identity.Canonical)
+        var decision = UnchangedCandidatePolicy.Evaluate(UnchangedCandidateFacts.From(goal.Id, typed));
+        var hold = new ConductorAdvanceOutcome.Held(fromState, decision.Reason, identity.Canonical)
         {
-            TypedReason = typed
+            TypedReason = typed,
+            Decision = decision.ToRecord()
         };
         result = MakeResult(goal.Id.Value, goalPrefix, policy, hold);
         return true;
