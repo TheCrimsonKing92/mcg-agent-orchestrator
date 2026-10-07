@@ -1,10 +1,11 @@
 using Mcg.AgentOrchestrator.Core;
+using System.Text.Json;
 using Check = Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier.AcceptanceManifestCheck;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal sealed record RemoteLaneOutcome(RemoteLaneRequest Request, IRemoteLaneHandle? Handle,
-    AcceptanceCheckResult? Accepted);
+    AcceptanceCheckResult? Accepted, TimeSpan? RemoteDuration = null);
 
 // One attempt owns executor occupancy and handles. Faults retire an executor for this attempt;
 // retained handles exist only to diagnose a result arriving during the local fallback.
@@ -175,10 +176,12 @@ internal sealed class RemoteLaneCoordinator : IDisposable
                         TestResultAttemptId: _cache.AttemptId, ExecutedTestCount: trx.ExecutedTestCount,
                         DiscoveredTestCount: trx.DiscoveredTestCount, CompletionDecision: decision, TestProjectPath: check.Project);
                     inspectingTrx = false;
-                    Record(request, RemoteLaneOutcomeCode.Accepted, result, attempt: Detail());
+                    var detail = Detail();
+                    var remoteDuration = ResolveRemoteDuration(detail.LastStatus, _clock.GetUtcNow() - submittedAt);
+                    Record(request, RemoteLaneOutcomeCode.Accepted, result, attempt: detail);
                     Release(entry.Id);
                     Abandon(handle);
-                    return new(request, null, accepted);
+                    return new(request, null, accepted, remoteDuration);
                 }
                 // Cadence uses real time; decisions use only the injected clock.
                 await Task.Delay(_pollInterval, cancellationToken).ConfigureAwait(false);
@@ -232,6 +235,21 @@ internal sealed class RemoteLaneCoordinator : IDisposable
             return new(capture?.FailedStep is { } failed ? steps.Concat([failed]).ToArray() : steps,
                 snapshot?.Poll, snapshot?.Fetches ?? [], snapshot?.LastStatus, capture?.Path, exceptionMessage);
         }
+    }
+
+    private static TimeSpan ResolveRemoteDuration(JsonElement? lastStatus, TimeSpan elapsed)
+    {
+        try
+        {
+            if (lastStatus is { ValueKind: JsonValueKind.Object } status &&
+                status.TryGetProperty("seconds", out var seconds) &&
+                seconds.ValueKind == JsonValueKind.Number && seconds.TryGetDouble(out var value) &&
+                double.IsFinite(value) && value > 0)
+                return TimeSpan.FromSeconds(value);
+        }
+        catch (OverflowException) { /* An unrepresentable duration uses the clock observation. */ }
+        catch (InvalidOperationException) { /* Unavailable diagnostics cannot change acceptance. */ }
+        return elapsed > TimeSpan.Zero ? elapsed : TimeSpan.Zero;
     }
 
     internal static RemoteLaneOutcomeCode? BindingMismatch(RemoteLaneRequest request, RemoteLaneResult result)
