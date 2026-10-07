@@ -22,7 +22,7 @@ internal static class CliStatusQueryCommand
         ref WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal)
     {
-        var matches = stateQueries.ListGoalMetadataAsync().GetAwaiter().GetResult()
+        var matches = stateQueries.ListGoalIdStatusesAsync().GetAwaiter().GetResult()
             .Where(goal => goal.Id.StartsWith(args[1], StringComparison.OrdinalIgnoreCase))
             .ToArray();
         var goalId = matches.Length switch

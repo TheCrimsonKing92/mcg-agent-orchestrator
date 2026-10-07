@@ -35,7 +35,7 @@ internal static class CliTimelineQueryCommand
         // Help shapes are declined by the classifier, before validation or repository reads.
         CliCommandHelp.ThrowIfInvalidFlags(args);
         var prefix = args[1].Equals("--goal", StringComparison.OrdinalIgnoreCase) ? args[2] : args[1];
-        var matches = stateQueries.ListGoalMetadataAsync().GetAwaiter().GetResult()
+        var matches = stateQueries.ListGoalIdStatusesAsync().GetAwaiter().GetResult()
             .Where(goal => goal.Id.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
             .ToArray();
         var goalId = matches.Length switch
