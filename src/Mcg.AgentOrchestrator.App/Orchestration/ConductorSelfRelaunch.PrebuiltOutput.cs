@@ -3,11 +3,13 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed partial record ConductorSelfRelaunchOptions
 {
     internal string? PrebuiltAppOutputDirectory { get; init; }
+    internal LandingAppBuildStore? LandingAppBuildStore { get; init; }
 }
 
 internal sealed partial record ConductorSuccessorStagingOptions
 {
     internal string? PrebuiltAppOutputDirectory { get; init; }
+    internal LandingAppBuildStore? LandingAppBuildStore { get; init; }
 }
 
 internal static partial class ConductorSelfRelaunch
@@ -20,7 +22,8 @@ internal static partial class ConductorSelfRelaunch
         ConductorSuccessorStagingOptions options,
         string buildOutputDirectory,
         TimeSpan buildTimeout,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool skipStoreMarker = false)
     {
         if (options.PrebuiltAppOutputDirectory is null)
         {
@@ -57,6 +60,7 @@ internal static partial class ConductorSelfRelaunch
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var relativePath = Path.GetRelativePath(source, sourceFile);
+                if (skipStoreMarker && relativePath == LandingAppBuildStore.CompleteMarkerName) continue;
                 var destination = Path.Combine(buildOutputDirectory, relativePath);
                 Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
                 File.Copy(sourceFile, destination);
@@ -71,5 +75,22 @@ internal static partial class ConductorSelfRelaunch
         }
 
         return new CapturedProcessResult(0, $"prebuilt:{source}", "");
+    }
+
+    internal static LandingAppBuildResult RunAppBuildProcess(
+        string dotnetPath, LandingAppBuildRequest request, CancellationToken cancellationToken)
+    {
+        var result = RunProcess(dotnetPath,
+            [
+                "build",
+                Path.Combine(request.SourceRoot, "src", "Mcg.AgentOrchestrator.App", "Mcg.AgentOrchestrator.App.csproj"),
+                "--nologo",
+                "--output",
+                request.OutputDirectory,
+                "-v",
+                "quiet",
+                "-clp:ErrorsOnly"
+            ], request.SourceRoot, request.Timeout, cancellationToken);
+        return new(result.ExitCode, result.Stdout, result.Stderr, result.TimedOut);
     }
 }

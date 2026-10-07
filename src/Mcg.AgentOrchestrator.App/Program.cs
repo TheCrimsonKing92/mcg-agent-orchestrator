@@ -244,7 +244,11 @@ if (ConductorContinuitySupervisor.ShouldSupervise(
                 WorkerProfilePath: workspace.WorkerProfilePath,
                 ModelFunctionCatalogPath: workspace.ModelFunctionCatalogPath,
                 DotnetPath: Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_DOTNET_PATH") ?? "dotnet",
-                PowerShellPath: "powershell");
+                PowerShellPath: "powershell")
+            {
+                LandingAppBuildStore = LandingAppBuildStore.ForRepository(repositoryRoot,
+                    Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_DOTNET_PATH"))
+            };
             stageSuccessor = cancellationToken =>
                 ConductorSelfRelaunch.PrepareSuccessor(stagingOptions, cancellationToken);
         }

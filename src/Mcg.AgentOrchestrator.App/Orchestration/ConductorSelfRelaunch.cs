@@ -34,7 +34,8 @@ internal sealed partial record ConductorSelfRelaunchOptions(
         BuildTimeout,
         SelfCheckTimeout)
     {
-        PrebuiltAppOutputDirectory = PrebuiltAppOutputDirectory
+        PrebuiltAppOutputDirectory = PrebuiltAppOutputDirectory,
+        LandingAppBuildStore = LandingAppBuildStore
     };
 }
 
@@ -192,6 +193,25 @@ internal static partial class ConductorSelfRelaunch
                 "Merged git HEAD was empty.");
         }
 
+        var fromStore = options.PrebuiltAppOutputDirectory is null && options.LandingAppBuildStore is not null;
+        if (fromStore)
+        {
+            try
+            {
+                options = options with
+                {
+                    PrebuiltAppOutputDirectory = options.LandingAppBuildStore!.GetOrBuild(
+                        options.RepositoryRoot, gitHead, buildTimeout, cancellationToken)
+                };
+            }
+            catch (LandingAppBuildFailedException ex)
+            {
+                EnsureSucceeded("build", "build merged conductor", new CapturedProcessResult(
+                    ex.Result.ExitCode, ex.Result.Stdout, ex.Result.Stderr, ex.Result.TimedOut));
+                throw;
+            }
+        }
+
         var buildOutputDirectory = Path.Combine(
             Path.GetDirectoryName(options.AppDllPath)
                 ?? throw new ConductorSelfRelaunchPreparationException("build", "App output directory was not configured."),
@@ -201,7 +221,7 @@ internal static partial class ConductorSelfRelaunch
         FileStream? runDirectoryLease = null;
         try
         {
-        var build = ProduceBuildOutput(options, buildOutputDirectory, buildTimeout, cancellationToken);
+        var build = ProduceBuildOutput(options, buildOutputDirectory, buildTimeout, cancellationToken, fromStore);
         EnsureSucceeded("build", "build merged conductor", build);
 
         var marker = RunPowerShell(

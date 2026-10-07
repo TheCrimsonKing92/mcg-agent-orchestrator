@@ -1589,7 +1589,11 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     ModelFunctionCatalogPath: context.Workspace.ModelFunctionCatalogPath,
                     DotnetPath: Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_DOTNET_PATH") ?? "dotnet",
                     PowerShellPath: "powershell",
-                    HandoffOptions: handoffOptions));
+                    HandoffOptions: handoffOptions)
+                {
+                    LandingAppBuildStore = LandingAppBuildStore.ForRepository(repositoryRoot,
+                        Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_DOTNET_PATH"))
+                });
 
                 // Reconcile finished dispatches (read exit files, record results, advance tasks) at the
                 // start of every tick. Without this the loop holds a goal at Running forever — the worker

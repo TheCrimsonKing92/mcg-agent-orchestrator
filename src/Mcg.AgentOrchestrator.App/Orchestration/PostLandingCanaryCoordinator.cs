@@ -790,7 +790,10 @@ internal static class PostLandingCanaryFactory
             new PostLandingCanaryRunner(
                 workspace.ExecutionDirectory,
                 Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_DOTNET_PATH"),
-                logDirectory: workspace.LogDirectory),
+                logDirectory: workspace.LogDirectory,
+                applicationBinaryResolver: new LandingAppBuildStoreCanaryBinaryResolver(
+                    LandingAppBuildStore.ForRepository(workspace.ExecutionDirectory,
+                        Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_DOTNET_PATH")))),
             events,
             circuit,
             operatorItems,
