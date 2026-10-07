@@ -965,6 +965,11 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 return false;
             }
 
+            if (EpicProgressReadModel.IsEpicGoalsListing(parts))
+            {
+                ConsoleViews.PrintGoals(EpicProgressReadModel.ListMemberGoals(context.Workspace, GetFlagValue(parts, "--epic")));
+                return false;
+            }
             ConsoleViews.PrintGoals(context.Kernel);
             ConsoleViews.PrintCleanupDebtWarning(GoalWorktrees.ListCleanupDebt(
                 context.Workspace.ExecutionDirectory,

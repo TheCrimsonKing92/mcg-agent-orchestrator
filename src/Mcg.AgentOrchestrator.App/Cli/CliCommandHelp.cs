@@ -209,6 +209,11 @@ internal static class CliCommandHelp
         "Show the read-only operational goal board for takeover and loop supervision.",
         ["--board", "--limit", "--all", "--help", "-h"]);
 
+    private static readonly CommandHelpEntry Goals = new(
+        "Usage: goals [--epic <id-or-title>]",
+        "List goals, optionally restricted to members of an epic.",
+        ["--epic", "--help", "-h"]);
+
     private static readonly CommandHelpEntry AddTask = new(
         AddTaskUsage,
         "Add a task to the current or explicitly targeted goal.",
@@ -450,7 +455,7 @@ internal static class CliCommandHelp
 
     private static readonly CommandHelpEntry EpicShow = new(
         EpicShowUsage,
-        "Show an epic's description, members and rollup.",
+        "Show an epic's description, members and progress rollup, followed by goal status, last update and title; in-flight goals come first.",
         ["--help", "-h"]);
 
     private static readonly CommandHelpEntry EpicRename = new(
@@ -475,7 +480,7 @@ internal static class CliCommandHelp
 
     private static readonly CommandHelpEntry EpicList = new(
         EpicListUsage,
-        "List epics with membership and state rollups.",
+        "List epics with every goal status bucket and open/done backlog counts; newest is the latest member-goal metadata update (UpdatedAt).",
         ["--help", "-h"]);
 
     private static readonly CommandHelpEntry EpicMembers = new(
@@ -734,7 +739,7 @@ internal static class CliCommandHelp
         {
             "--text", "--request-key", "--brief-file", "--text-file", "--ids-file", "--pipeline",
             "--backlog-item", "--backlog-coverage", "--ideation", "--researcher", "--planner",
-            "--developer", "--tester", "--reviewer", "--wait"
+            "--developer", "--tester", "--reviewer", "--wait", "--epic"
         };
 
     public static bool TryPrintStartupHelp(IReadOnlyList<string> args)
@@ -768,7 +773,7 @@ internal static class CliCommandHelp
         Console.WriteLine("  author-draft      Draft a checked goal brief from a backlog item.");
         Console.WriteLine("  goal-intake-status Poll keyed goal creation status.");
         Console.WriteLine("  goal-replace      Replace an eligible terminal source-linked goal.");
-        Console.WriteLine("  goals             List goals.");
+        Console.WriteLine("  goals             List goals [--epic <id-or-title>].");
         Console.WriteLine("  status            Show goal or orchestrator status.");
         Console.WriteLine("  attention         List or answer operator attention items.");
         Console.WriteLine("  backlog-list      List backlog items.");
@@ -919,6 +924,12 @@ internal static class CliCommandHelp
         if (IsGoalsSubscribeHelpTarget(args))
         {
             entry = GoalsSubscribe;
+            return true;
+        }
+
+        if (args[0].Equals("goals", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = Goals;
             return true;
         }
 

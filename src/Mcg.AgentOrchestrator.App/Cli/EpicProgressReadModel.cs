@@ -62,6 +62,58 @@ internal static class EpicProgressReadModel
         && args.Skip(1).Any(arg => arg.Equals("--epic", StringComparison.OrdinalIgnoreCase)
             || arg.StartsWith("--epic=", StringComparison.OrdinalIgnoreCase));
 
+    internal static IReadOnlyList<EpicProgressRollup> Load(OrchestratorWorkspace workspace)
+    {
+        if (!File.Exists(workspace.PortfolioStorePath))
+            return [];
+        var store = new PortfolioStore(workspace.PortfolioStorePath);
+        return Load(workspace, store, store.ListEpicsAsync().GetAwaiter().GetResult());
+    }
+
+    internal static EpicProgressRollup LoadEpic(OrchestratorWorkspace workspace, string reference)
+    {
+        var (store, epic) = ResolveEpic(workspace, reference);
+        return Load(workspace, store, [epic]).Single();
+    }
+
+    internal static IReadOnlyList<GoalSummary> ListMemberGoals(OrchestratorWorkspace workspace, string? reference)
+    {
+        if (string.IsNullOrWhiteSpace(reference) || reference.StartsWith("--", StringComparison.Ordinal))
+            throw new ArgumentException("Usage: goals [--epic <id-or-title>]");
+        var (store, epic) = ResolveEpic(workspace, reference);
+        var ids = store.ListEpicMembersAsync(epic.Id).GetAwaiter().GetResult()
+            .Where(member => member.Kind == PortfolioMemberKind.Goal)
+            .Select(member => member.MemberId).ToHashSet(StringComparer.Ordinal);
+        return LoadGoalMetadata(workspace).Where(goal => ids.Contains(goal.Id)).ToArray();
+    }
+
+    private static (PortfolioStore Store, PortfolioEpic Epic) ResolveEpic(OrchestratorWorkspace workspace, string reference)
+    {
+        if (!File.Exists(workspace.PortfolioStorePath))
+            throw new InvalidOperationException($"Epic '{reference}' was not found.");
+        var store = new PortfolioStore(workspace.PortfolioStorePath);
+        var epic = store.ResolveEpicAsync(reference).GetAwaiter().GetResult()
+            ?? throw new InvalidOperationException($"Epic '{reference}' was not found.");
+        return (store, epic);
+    }
+
+    private static IReadOnlyList<EpicProgressRollup> Load(
+        OrchestratorWorkspace workspace, PortfolioStore store, IReadOnlyList<PortfolioEpic> epics)
+    {
+        var projects = store.ListProjectsAsync().GetAwaiter().GetResult();
+        var members = epics.SelectMany(epic => store.ListEpicMembersAsync(epic.Id).GetAwaiter().GetResult()).ToArray();
+        IReadOnlyList<BacklogItem> backlog = File.Exists(workspace.BacklogStorePath)
+            ? new BacklogStore(workspace.BacklogStorePath).ListAsync(includeAll: true).GetAwaiter().GetResult()
+            : [];
+        return Build(epics, projects, members, LoadGoalMetadata(workspace), backlog);
+    }
+
+    private static IReadOnlyList<GoalSummary> LoadGoalMetadata(OrchestratorWorkspace workspace) =>
+        File.Exists(workspace.SqliteStatePath)
+            ? SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath)
+                .ListGoalMetadataAsync().GetAwaiter().GetResult()
+            : [];
+
     private static EpicProgressMemberGoal ToMember(string id, GoalSummary? goal)
     {
         if (goal is null)

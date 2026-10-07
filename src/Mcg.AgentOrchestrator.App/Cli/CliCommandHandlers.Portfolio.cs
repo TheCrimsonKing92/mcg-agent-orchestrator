@@ -190,8 +190,7 @@ private static bool? TryExecutePortfolioCommand(string command, IReadOnlyList<st
 
         case "epic-list":
         {
-            var store = new PortfolioStore(context.Workspace.PortfolioStorePath);
-            ConsoleViews.PrintEpicRollups(store.BuildEpicRollupsAsync(context.Kernel.Goals).GetAwaiter().GetResult());
+            ConsoleViews.PrintEpicRollups(EpicProgressReadModel.Load(context.Workspace));
             return false;
         }
 
@@ -209,13 +208,7 @@ private static bool? TryExecutePortfolioCommand(string command, IReadOnlyList<st
         case "epic-show":
         {
             CliArgumentParser.RequirePartCount(parts, 2, "epic-show <epic>");
-            var store = new PortfolioStore(context.Workspace.PortfolioStorePath);
-            var epic = store.ResolveEpicAsync(parts[1]).GetAwaiter().GetResult()
-                ?? throw new InvalidOperationException($"Epic '{parts[1]}' was not found.");
-            var members = store.ListEpicMembersAsync(epic.Id).GetAwaiter().GetResult();
-            var rollup = store.BuildEpicRollupsAsync(context.Kernel.Goals).GetAwaiter().GetResult()
-                .Single(row => row.Epic.Id == epic.Id);
-            ConsoleViews.PrintEpicShow(rollup, members);
+            ConsoleViews.PrintEpicShow(EpicProgressReadModel.LoadEpic(context.Workspace, parts[1]));
             return false;
         }
 
