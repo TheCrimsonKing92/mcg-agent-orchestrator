@@ -83,12 +83,15 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceFollowerGates(ITest
         using var entered = new ManualResetEventSlim(false);
         using var release = new ManualResetEventSlim(false);
         var kernel = new AgentOrchestratorKernel();
-        var leader = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/Shared.cs leader");
-        var follower = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/Shared.cs follower");
+        const string sharedPath = "src/Mcg.AgentOrchestrator.Core/Domain/FollowerGates.cs";
+        var leader = CreateVerifiedSimpleGoal(kernel, $"Update {sharedPath} leader");
+        var follower = CreateVerifiedSimpleGoal(kernel, $"Update {sharedPath} follower");
         const string main = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         var leaderHead = new string('b', 40);
         var followerHead = new string('c', 40);
-        string[] paths = ["src/Mcg.AgentOrchestrator.App/Orchestration/Shared.cs"];
+        // Ready projections require a serialized resource; ordinary App source has none.
+        string[] paths = [sharedPath];
+        Assert.NotEmpty(RepositoryLandingScopeNormalization.Normalize(paths).ResourceKeys);
         var projector = new GateReadyCandidateProjector(
             id => new(id == leader.Id ? leaderHead : followerHead, main),
             _ => new(true, paths), (_, _, _) => new(true));
