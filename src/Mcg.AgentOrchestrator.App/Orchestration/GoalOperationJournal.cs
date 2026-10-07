@@ -739,13 +739,13 @@ internal static partial class GoalOperationJournal
             entry.Operation.Equals("conductor:land", StringComparison.OrdinalIgnoreCase)) ||
         journal.LatestByOperation.Any(entry =>
             entry.Status == GoalOperationStatus.Completed &&
-            entry.Operation.Equals("acceptance", StringComparison.OrdinalIgnoreCase));
+            entry.Operation.Equals("acceptance", StringComparison.OrdinalIgnoreCase) && !GoalOperationJournalGatePassedOutcome.Matches(entry));
 
     public static bool HasCompletedRecordEvidence(GoalOperationJournalSummary journal) =>
         HasRetiredTerminalDisposition(journal) ||
         journal.LatestByOperation.Any(entry =>
             entry.Status == GoalOperationStatus.Completed &&
-            (entry.Operation.Equals("acceptance", StringComparison.OrdinalIgnoreCase) ||
+            ((entry.Operation.Equals("acceptance", StringComparison.OrdinalIgnoreCase) && !GoalOperationJournalGatePassedOutcome.Matches(entry)) ||
              entry.Operation.Equals("conductor:record", StringComparison.OrdinalIgnoreCase)));
 
     public static bool HasCompletedCleanupEvidence(GoalOperationJournalSummary journal) =>

@@ -109,7 +109,7 @@ public sealed class GoalAcceptanceVerifierSizeRatchetTests
     {
         var ceiling = SourceSizeRatchet.SeededCeilings[0];
         var authorityPointer =
-            $"See {SourceSizeRatchet.SeededCeilingsSymbol} in {SourceSizeRatchet.SourcePath}.";
+            $"See {SourceSizeRatchet.SeededCeilingsSymbol} and {SourceSizeRatchet.SeededClassCeilingsSymbol} in {SourceSizeRatchet.SourcePath}.";
         var documents = new[]
         {
             new[]
@@ -144,7 +144,7 @@ public sealed class GoalAcceptanceVerifierSizeRatchetTests
     {
         var authorityCeiling = new SourceSizeCeiling(SourceSizeRatchet.SourcePath, 1);
         var authorityPointer =
-            $"See {SourceSizeRatchet.SeededCeilingsSymbol} in {SourceSizeRatchet.SourcePath}.";
+            $"See {SourceSizeRatchet.SeededCeilingsSymbol} and {SourceSizeRatchet.SeededClassCeilingsSymbol} in {SourceSizeRatchet.SourcePath}.";
         var validDocument = new[]
         {
             SourceSizeRatchet.DocumentationSectionHeading,
@@ -180,7 +180,7 @@ public sealed class GoalAcceptanceVerifierSizeRatchetTests
             new[] { SourceSizeRatchet.DocumentationSectionHeading },
             Array.Empty<SourceSizeCeiling>());
 
-        Assert.Equal(2, missingPointers.Count);
+        Assert.Equal(3, missingPointers.Count);
         Assert.All(missingPointers, violation => Assert.Equal("missing-authority-pointer", violation.Rule));
         Assert.Contains(
             missingPointers,
@@ -188,6 +188,9 @@ public sealed class GoalAcceptanceVerifierSizeRatchetTests
         Assert.Contains(
             missingPointers,
             violation => violation.Message.Contains(SourceSizeRatchet.SourcePath, StringComparison.Ordinal));
+        Assert.Contains(
+            missingPointers,
+            violation => violation.Message.Contains(SourceSizeRatchet.SeededClassCeilingsSymbol, StringComparison.Ordinal));
     }
 
     [Fact]

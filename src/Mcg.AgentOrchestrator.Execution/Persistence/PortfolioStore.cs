@@ -31,6 +31,24 @@ public sealed record PortfolioMembership(
 
 public enum PortfolioMemberKind { Goal, BacklogItem }
 
+// A null kind is an unresolved request; portfolio.db does not own goal/backlog existence.
+public sealed record PortfolioAssignmentRequest(string RequestedId, PortfolioMemberKind? Kind, string? MemberId);
+
+public enum PortfolioAssignmentOutcome { Assigned, AlreadyMember, MovedFrom, Unknown }
+
+public sealed record PortfolioAssignmentResult(
+    PortfolioAssignmentRequest Request, PortfolioAssignmentOutcome Outcome, string? PreviousEpicId)
+{
+    public string Token => Outcome switch
+    {
+        PortfolioAssignmentOutcome.Assigned => "assigned",
+        PortfolioAssignmentOutcome.AlreadyMember => "already-member",
+        PortfolioAssignmentOutcome.MovedFrom => $"moved-from {PreviousEpicId}",
+        PortfolioAssignmentOutcome.Unknown => "unknown",
+        _ => throw new InvalidOperationException($"Unknown portfolio assignment outcome: {Outcome}.")
+    };
+}
+
 public sealed record PortfolioEpicMember(
     string EpicId,
     PortfolioMemberKind Kind,
@@ -410,6 +428,85 @@ public sealed class PortfolioStore
         while (await reader.ReadAsync(cancellationToken))
             suggestions.Add(ReadSuggestion(reader));
         return suggestions;
+    }
+
+    public async Task<IReadOnlyList<PortfolioAssignmentResult>> AssignManyAsync(
+        string epicId,
+        IReadOnlyList<PortfolioAssignmentRequest> members,
+        bool dryRun,
+        string actor = "operator",
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(members);
+        return await WithBusyRetryAsync(async () =>
+        {
+            await using var conn = OpenConnection();
+            await BeginImmediateAsync(conn, cancellationToken);
+            try
+            {
+                await RequireEpicAsync(conn, epicId, cancellationToken);
+                var results = new List<PortfolioAssignmentResult>(members.Count);
+                var resolved = new Dictionary<(PortfolioMemberKind, string), PortfolioAssignmentResult>();
+                foreach (var member in members)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (member.Kind is null)
+                    {
+                        results.Add(new(member, PortfolioAssignmentOutcome.Unknown, null));
+                        continue;
+                    }
+                    var memberId = RequireText(member.MemberId
+                        ?? throw new ArgumentException("A resolved member requires an id.", nameof(members)), nameof(member.MemberId));
+                    var key = (member.Kind.Value, memberId);
+                    if (resolved.TryGetValue(key, out var prior))
+                    {
+                        results.Add(prior with { Request = member });
+                        continue;
+                    }
+                    var (table, column) = member.Kind.Value switch
+                    {
+                        PortfolioMemberKind.Goal => ("goal_epic_memberships", "goal_id"),
+                        PortfolioMemberKind.BacklogItem => ("backlog_epic_memberships", "backlog_item_id"),
+                        _ => throw new ArgumentOutOfRangeException(nameof(members), "Unknown portfolio member kind.")
+                    };
+                    var membership = await GetMembershipAsync(conn, table, column, memberId, cancellationToken);
+                    var outcome = membership is null ? PortfolioAssignmentOutcome.Assigned
+                        : membership.EpicId == epicId ? PortfolioAssignmentOutcome.AlreadyMember
+                        : PortfolioAssignmentOutcome.MovedFrom;
+                    if (outcome != PortfolioAssignmentOutcome.AlreadyMember)
+                    {
+                        await using var cmd = conn.CreateCommand();
+                        cmd.CommandText = $"""
+                            INSERT INTO {table} ({column}, epic_id, created_at, created_by)
+                            VALUES ($member_id, $epic_id, $created_at, $created_by)
+                            ON CONFLICT({column}) DO UPDATE SET
+                                epic_id = excluded.epic_id,
+                                created_at = excluded.created_at,
+                                created_by = excluded.created_by
+                            """;
+                        cmd.Parameters.AddWithValue("$member_id", memberId);
+                        cmd.Parameters.AddWithValue("$epic_id", epicId);
+                        cmd.Parameters.AddWithValue("$created_at", DateTimeOffset.UtcNow.ToString("O"));
+                        cmd.Parameters.AddWithValue("$created_by", RequireText(actor, nameof(actor)));
+                        await cmd.ExecuteNonQueryAsync(cancellationToken);
+                    }
+                    var result = new PortfolioAssignmentResult(member, outcome,
+                        outcome == PortfolioAssignmentOutcome.MovedFrom ? membership!.EpicId : null);
+                    results.Add(result);
+                    resolved.Add(key, result);
+                }
+                if (dryRun)
+                    await RunNonQueryAsync(conn, "ROLLBACK", cancellationToken);
+                else
+                    await CommitAsync(conn, cancellationToken);
+                return (IReadOnlyList<PortfolioAssignmentResult>)results;
+            }
+            catch
+            {
+                await RollbackQuietlyAsync(conn, CancellationToken.None);
+                throw;
+            }
+        }, cancellationToken);
     }
 
     private async Task AssignMemberAsync(

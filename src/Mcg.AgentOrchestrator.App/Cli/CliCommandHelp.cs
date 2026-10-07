@@ -63,6 +63,7 @@ internal static class CliCommandHelp
     public const string EpicRenameUsage = "Usage: epic-rename <epic> <new-title>";
     public const string EpicDescribeUsage = "Usage: epic-describe <epic> <text> | epic-describe <epic> --text-file <path>";
     public const string EpicAssignUsage = "Usage: epic-assign <goal-or-backlog-id> <epic>";
+    public const string EpicAssignManyUsage = "Usage: epic-assign-many <epic> [<id>...] [--ids-file <path>] [--dry-run]";
     public const string EpicListUsage = "Usage: epic-list";
     public const string EpicMembersUsage = "Usage: epic-members <epic>";
     public const string EpicSuggestUsage = "Usage: epic-suggest | epic-suggestions";
@@ -467,6 +468,11 @@ internal static class CliCommandHelp
         "Assign a goal or backlog item to one epic.",
         ["--help", "-h"]);
 
+    private static readonly CommandHelpEntry EpicAssignMany = new(
+        EpicAssignManyUsage,
+        "Assign goals and backlog items in one transaction; supply at least one id or an ids file.",
+        ["--ids-file", "--dry-run", "--help", "-h"]);
+
     private static readonly CommandHelpEntry EpicList = new(
         EpicListUsage,
         "List epics with membership and state rollups.",
@@ -726,7 +732,7 @@ internal static class CliCommandHelp
     private static readonly IReadOnlySet<string> InlineValueFlags =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            "--text", "--request-key", "--brief-file", "--text-file", "--pipeline",
+            "--text", "--request-key", "--brief-file", "--text-file", "--ids-file", "--pipeline",
             "--backlog-item", "--backlog-coverage", "--ideation", "--researcher", "--planner",
             "--developer", "--tester", "--reviewer", "--wait"
         };
@@ -1277,6 +1283,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("epic-assign", StringComparison.OrdinalIgnoreCase))
         {
             entry = EpicAssign;
+            return true;
+        }
+
+        if (args[0].Equals("epic-assign-many", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = EpicAssignMany;
             return true;
         }
 

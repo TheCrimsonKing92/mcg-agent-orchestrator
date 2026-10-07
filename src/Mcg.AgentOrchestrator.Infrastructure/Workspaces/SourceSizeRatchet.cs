@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.RegularExpressions;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -270,7 +271,9 @@ internal static class SourceSizeRatchet
             // Raised by five lines for goal 10abca19: scoped CLI writes are extracted to
             // CliPersistentStateRunner.GoalScopedWrite, while the shared dispatch boundary
             // must retain the single route-selection call so existing fallback semantics stay centralized.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 4872),
+            // Goal 28397f6a adds the store-only epic command routes; retain the runner's
+            // shared dispatch seam and account for its two-line net increase.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 4874),
             // Goal 03aaf13e adds the explicit-root isolation fact at the verifier's existing execution-
             // environment seam; the production verifier remains at its prior ceiling.
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs", 1611),
@@ -366,6 +369,117 @@ internal static class SourceSizeRatchet
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/DotnetBuildEnvironmentManagerTests.cs", 1480),
         });
 
+    // Reseeded at main 584b86d13 using complete File.ReadLines counts for files declaring each partial class.
+    // Lower a row when extraction shrinks the class; raise it only with a goal-specific justification
+    // directly above that row. Moving members into another partial file does not shrink the class.
+    internal static IReadOnlyList<SourceClassCeiling> SeededClassCeilings { get; } = Array.AsReadOnly(
+        new[]
+        {
+            new SourceClassCeiling("ConductorDriver", 15293, 70),
+            new SourceClassCeiling("CliCommandHandlers", 12205, 30),
+            new SourceClassCeiling("GoalAcceptanceVerifier", 9501, 32),
+            new SourceClassCeiling("AgentOrchestratorKernel", 9506, 27),
+            new SourceClassCeiling("ConductorBatchLoop", 9288, 56),
+            new SourceClassCeiling("CliPersistentStateRunner", 6043, 18),
+        });
+
+    internal static IReadOnlyList<SourceSizeViolation> EvaluateClasses(
+        string repositoryRoot,
+        IEnumerable<SourceClassCeiling> classCeilings,
+        Func<string, IEnumerable<string>>? readLines = null,
+        Func<string, IEnumerable<string>>? enumerateSourceFiles = null)
+    {
+        var ceilings = classCeilings.ToArray();
+        if (ceilings.Length == 0)
+        {
+            return [];
+        }
+
+        readLines ??= File.ReadLines;
+        enumerateSourceFiles ??= root => Directory.Exists(Path.Combine(root, "src"))
+            ? Directory.EnumerateFiles(Path.Combine(root, "src"), "*.cs", SearchOption.AllDirectories)
+            : [];
+        var patterns = ceilings.Select(ceiling => new Regex(
+            $@"\bpartial\s+class\s+{Regex.Escape(ceiling.ClassName)}\b",
+            RegexOptions.CultureInvariant)).ToArray();
+        var totals = new int[ceilings.Length];
+        var counts = new int[ceilings.Length];
+        var violations = new List<SourceSizeViolation>();
+        var seenPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            foreach (var sourcePath in enumerateSourceFiles(repositoryRoot))
+            {
+                var normalizedPath = sourcePath.Replace('\\', '/');
+                var relativePath = Path.IsPathRooted(normalizedPath)
+                    ? Path.GetRelativePath(repositoryRoot, normalizedPath).Replace('\\', '/')
+                    : normalizedPath;
+                var segments = relativePath.Split('/');
+                if (segments.Length < 2 || !string.Equals(segments[0], "src", StringComparison.OrdinalIgnoreCase) ||
+                    !relativePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) ||
+                    segments.Any(segment => segment.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
+                        segment.Equals("obj", StringComparison.OrdinalIgnoreCase) || segment == "..") ||
+                    !seenPaths.Add(relativePath))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    var lines = readLines(sourcePath).ToArray();
+                    var text = string.Join("\n", lines);
+                    for (var index = 0; index < ceilings.Length; index++)
+                    {
+                        if (patterns[index].IsMatch(text))
+                        {
+                            totals[index] += lines.Length;
+                            counts[index]++;
+                        }
+                    }
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                    violations.Add(new SourceSizeViolation(
+                        relativePath, null, 0, BuildUnreadableFileMessage(relativePath, exception)));
+                }
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            violations.Add(new SourceSizeViolation(
+                "src/", null, 0, BuildUnreadableFileMessage("src/", exception)));
+        }
+
+        for (var index = 0; index < ceilings.Length; index++)
+        {
+            var ceiling = ceilings[index];
+            if (totals[index] > ceiling.MaximumTotalLineCount)
+            {
+                violations.Add(new SourceSizeViolation(
+                    $"class:{ceiling.ClassName}", totals[index], ceiling.MaximumTotalLineCount,
+                    BuildClassOverCeilingMessage(ceiling, totals[index], ceiling.MaximumTotalLineCount, "class total-line")));
+            }
+
+            if (counts[index] > ceiling.MaximumPartialFileCount)
+            {
+                violations.Add(new SourceSizeViolation(
+                    $"class:{ceiling.ClassName}", counts[index], ceiling.MaximumPartialFileCount,
+                    BuildClassOverCeilingMessage(ceiling, counts[index], ceiling.MaximumPartialFileCount, "partial-file-count")));
+            }
+        }
+
+        return violations;
+    }
+
+    private static string BuildClassOverCeilingMessage(SourceClassCeiling ceiling, int actual, int maximum, string limit)
+    {
+        return $"class:{ceiling.ClassName} has {actual.ToString(CultureInfo.InvariantCulture)}, " +
+            $"exceeding the {limit} ceiling of {maximum.ToString(CultureInfo.InvariantCulture)}. " +
+            "Moving members into another partial file of the same class does not satisfy this limit. " +
+            "Extract members into a separately owned type and lower the row, or raise the row with " +
+            $"goal-specific justification directly above it in {SeededClassCeilingsSymbol}. See {DocumentationPath}.";
+    }
+
     internal static IReadOnlyList<SourceSizeViolation> Evaluate(
         string repositoryRoot,
         IEnumerable<SourceSizeCeiling> ceilings,
@@ -415,7 +529,8 @@ internal static class SourceSizeRatchet
 
     internal static IReadOnlyList<SourceSizeDocumentationViolation> EvaluateDocumentation(
         IEnumerable<string> documentationLines,
-        IEnumerable<SourceSizeCeiling> ceilings)
+        IEnumerable<SourceSizeCeiling> ceilings,
+        IEnumerable<SourceClassCeiling>? classCeilings = null)
     {
         var lines = documentationLines.ToArray();
         var sectionStart = Array.FindIndex(
@@ -448,6 +563,7 @@ internal static class SourceSizeRatchet
         var violations = new List<SourceSizeDocumentationViolation>();
         AddMissingAuthorityPointerViolation(section, SeededCeilingsSymbol, violations);
         AddMissingAuthorityPointerViolation(section, SourcePath, violations);
+        AddMissingAuthorityPointerViolation(section, SeededClassCeilingsSymbol, violations);
 
         foreach (var ceiling in ceilings)
         {
@@ -476,6 +592,31 @@ internal static class SourceSizeRatchet
                     lineNumber,
                     $"{DocumentationPath} line {lineNumber} duplicates guarded path '{ceiling.RelativePath}'. " +
                     $"Keep guarded paths and ceiling values only in {SeededCeilingsSymbol} at {SourcePath}."));
+            }
+        }
+
+        foreach (var ceiling in classCeilings ?? SeededClassCeilings)
+        {
+            var namePattern = $@"\b{Regex.Escape(ceiling.ClassName)}\b";
+            var values = new[] { ceiling.MaximumTotalLineCount, ceiling.MaximumPartialFileCount };
+            var valuePatterns = values.SelectMany(value => new[]
+                {
+                    value.ToString(CultureInfo.InvariantCulture),
+                    value.ToString("N0", CultureInfo.InvariantCulture),
+                })
+                .Distinct(StringComparer.Ordinal)
+                .Select(value => $@"(?<![\w,]){Regex.Escape(value)}(?![\w,])").ToArray();
+            for (var index = 0; index < section.Length; index++)
+            {
+                if (Regex.IsMatch(section[index], namePattern, RegexOptions.CultureInvariant) &&
+                    valuePatterns.Any(pattern => Regex.IsMatch(section[index], pattern, RegexOptions.CultureInvariant)))
+                {
+                    var lineNumber = sectionStart + index + 1;
+                    violations.Add(new SourceSizeDocumentationViolation(
+                        "duplicated-ceiling-record", lineNumber,
+                        $"{DocumentationPath} line {lineNumber} duplicates a class ceiling for '{ceiling.ClassName}'. " +
+                        $"Keep class ceiling values only in {SeededClassCeilingsSymbol} at {SourcePath}."));
+                }
             }
         }
 
@@ -522,9 +663,14 @@ internal static class SourceSizeRatchet
 
     internal static string SeededCeilingsSymbol =>
         $"{nameof(SourceSizeRatchet)}.{nameof(SeededCeilings)}";
+
+    internal static string SeededClassCeilingsSymbol =>
+        $"{nameof(SourceSizeRatchet)}.{nameof(SeededClassCeilings)}";
 }
 
 internal sealed record SourceSizeCeiling(string RelativePath, int MaximumLineCount);
+
+internal sealed record SourceClassCeiling(string ClassName, int MaximumTotalLineCount, int MaximumPartialFileCount);
 
 internal sealed record SourceSizeViolation(
     string RelativePath,

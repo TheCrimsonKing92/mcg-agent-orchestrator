@@ -23,6 +23,9 @@ internal interface IConductEventSource : IAsyncDisposable
 internal interface IOwnerQuestionSource
 {
     Task<IReadOnlyList<OwnerQuestion>> ListOpenAsync(CancellationToken cancellationToken);
+
+    async Task<OwnerQuestionSnapshot> ReadAsync(CancellationToken cancellationToken) =>
+        new(await ListOpenAsync(cancellationToken), []);
 }
 
 internal interface IOwnerAnswerSubmitter
@@ -62,6 +65,11 @@ internal enum OwnerQuestionKind { Clarification, HumanInput, StewardHold }
 internal sealed record OwnerQuestion(
     string ItemId, string GoalId, OwnerQuestionKind Kind, string Text,
     string? BlastRadius = null, string? Confidence = null, string? ProposedDefault = null);
+
+internal sealed record OwnerQuestionSnapshot(
+    IReadOnlyList<OwnerQuestion> Live, IReadOnlyList<HiddenOwnerQuestion> Hidden);
+
+internal sealed record HiddenOwnerQuestion(OwnerQuestion Question, string Reason);
 
 internal sealed record OwnerGoalCard(
     string Id, string Title, GoalStatus State, AgentRole? CurrentRole, DateTimeOffset? LastEvent);
