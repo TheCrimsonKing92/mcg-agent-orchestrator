@@ -4,9 +4,12 @@ using System.Xml.Linq;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
+// Keep this fixture in the build-slot acceptance lane selected by its qualified name.
+namespace Mcg.AgentOrchestrator.Infrastructure.Tests.GoalAcceptanceVerifierDotnetBuildSlotTests;
+
 // The base fixture uses the collection's isolated build root and shared stable slots.
 [Collection(TestCollections.JobAccounting)]
-public sealed class RemoteFocusedEvidenceShadowTests : GoalAcceptanceVerifierDotnetBuildSlotTests
+public sealed class RemoteFocusedEvidenceShadowTests : global::GoalAcceptanceVerifierDotnetBuildSlotTests
 {
     [Xunit.Fact]
     public async Task CleanSampledCandidate_SubmitsBoundJobsAndRecordsParityWithoutChangingLocalResults()
