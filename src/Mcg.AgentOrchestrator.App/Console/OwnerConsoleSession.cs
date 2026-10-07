@@ -19,6 +19,7 @@ internal sealed class OwnerConsoleSession(
     private readonly Dictionary<string, int> _numbers = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<int, OwnerQuestion> _open = [];
     private readonly HashSet<int> _retired = [];
+    private int _hiddenCount;
     private int _nextNumber = 1;
     private bool _bell = true;
     private DateTimeOffset? _lastConductEvent;
@@ -108,7 +109,9 @@ internal sealed class OwnerConsoleSession(
 
     private async Task RefreshQuestionsAsync(CancellationToken cancellationToken)
     {
-        var current = await questions.ListOpenAsync(cancellationToken);
+        var snapshot = await questions.ReadAsync(cancellationToken);
+        var current = snapshot.Live;
+        _hiddenCount = snapshot.Hidden.Count;
         var ids = current.Select(item => item.ItemId).ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (var pair in _open.Where(pair => !ids.Contains(pair.Value.ItemId)).ToArray())
         { _open.Remove(pair.Key); _retired.Add(pair.Key); }
@@ -139,7 +142,8 @@ internal sealed class OwnerConsoleSession(
     {
         var goals = await LoadActiveAsync(cancellationToken);
         var age = _lastConductEvent is null ? "unknown" : Age(_lastConductEvent.Value);
-        output.WriteLine($"conductor: {(liveness.IsRunning() ? "running" : "stopped")} | active goals: {goals.Count} | owner questions: {_open.Count} | last event: {age}");
+        var hidden = _hiddenCount > 0 ? $" | hidden: {_hiddenCount}" : string.Empty;
+        output.WriteLine($"conductor: {(liveness.IsRunning() ? "running" : "stopped")} | active goals: {goals.Count} | owner questions: {_open.Count}{hidden} | last event: {age}");
     }
 
     private async Task PrintBoardAsync(CancellationToken cancellationToken)
