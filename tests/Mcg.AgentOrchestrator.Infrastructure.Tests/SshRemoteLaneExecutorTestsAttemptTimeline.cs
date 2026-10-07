@@ -15,7 +15,7 @@ public sealed class SshRemoteLaneExecutorTestsAttemptTimeline
         Assert.Equal(1, step.ExitCode);
         Assert.False(step.TimedOut);
         Assert.Equal(fake.Noise[^2048..], step.StderrTail);
-        var staging = Path.Combine(fake.Root, "attempt", "remote-one-infrastructure-tests-cli-lane");
+        var staging = Path.Combine(fake.Root, "attempt", SshRemoteLaneExecutor.StagingFolderName("one", "infrastructure-tests-cli-lane", 0));
         Assert.Equal(Path.Combine(staging, "job-copy.out.txt"), step.StdoutPath);
         Assert.Equal(Path.Combine(staging, "job-copy.err.txt"), step.StderrPath);
         foreach (var path in new[] { step.StdoutPath!, step.StderrPath! })
@@ -57,7 +57,7 @@ public sealed class SshRemoteLaneExecutorTestsAttemptTimeline
         var step = Assert.IsType<RemoteLaneStep>(snapshot.Poll.LastFailedPoll);
         Assert.Equal(255, step.ExitCode);
         Assert.Equal(stderr, step.StderrTail);
-        var staging = Path.Combine(fake.Root, "attempt", "remote-one-infrastructure-tests-cli-lane");
+        var staging = Path.Combine(fake.Root, "attempt", SshRemoteLaneExecutor.StagingFolderName("one", "infrastructure-tests-cli-lane", 0));
         Assert.Equal(Path.Combine(staging, "poll.out.txt"), step.StdoutPath);
         Assert.Equal(Path.Combine(staging, "poll.err.txt"), step.StderrPath);
         Assert.True(File.Exists(step.StdoutPath));

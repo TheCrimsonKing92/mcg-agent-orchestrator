@@ -18,7 +18,7 @@ public sealed class SshRemoteLaneExecutorTestsShortJobPath
         var copy = calls[1];
         Assert.Equal("job.json", copy.Arguments[3]);
         Assert.Equal($"runner:C:/mcg-executor/queue/{request.AttemptId}-{laneKey}.json", copy.Arguments[4]);
-        Assert.Equal(Path.Combine(fake.Root, "attempt", $"remote-one-{laneKey}"), copy.Directory);
+        Assert.Equal(Path.Combine(fake.Root, "attempt", SshRemoteLaneExecutor.StagingFolderName("one", laneKey, 0)), copy.Directory);
 
         using var job = JsonDocument.Parse(File.ReadAllText(Path.Combine(copy.Directory, "job.json")));
         var expected = new Dictionary<string, string>

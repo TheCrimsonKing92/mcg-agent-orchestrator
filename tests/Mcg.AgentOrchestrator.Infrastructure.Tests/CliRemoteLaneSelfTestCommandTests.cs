@@ -26,7 +26,7 @@ public sealed class CliRemoteLaneSelfTestCommandTests
         var lines = output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
         var stagingLine = Assert.Single(lines.Where(line => line.StartsWith("staging=")));
         var length = int.Parse(stagingLine[(stagingLine.LastIndexOf("length=", StringComparison.Ordinal) + 7)..], CultureInfo.InvariantCulture);
-        Assert.True(length >= 156, stagingLine);
+        Assert.True(length >= SshRemoteLaneExecutor.RepresentativeAttemptFolderLength + 11, stagingLine);
         var staging = stagingLine[8..stagingLine.LastIndexOf(" length=", StringComparison.Ordinal)];
         Assert.Equal(length, staging.Length);
         Assert.StartsWith(Path.Combine(fake.Root, ".orchestrator", "remote-lane-selftest"), staging);
@@ -37,7 +37,7 @@ public sealed class CliRemoteLaneSelfTestCommandTests
         Assert.Contains("binding=match", lines);
         Assert.Contains("trx_exists=true", lines);
         Assert.Equal("SELFTEST result=passed", lines[^1]);
-        var job = Assert.Single(Directory.GetFiles(staging, "*.json"));
+        var job = Path.Combine(staging, "job.json");
         using var json = JsonDocument.Parse(File.ReadAllText(job));
         Assert.Equal(Lane, json.RootElement.GetProperty("lane").GetString());
         Assert.Equal(Filter, json.RootElement.GetProperty("filter").GetString());

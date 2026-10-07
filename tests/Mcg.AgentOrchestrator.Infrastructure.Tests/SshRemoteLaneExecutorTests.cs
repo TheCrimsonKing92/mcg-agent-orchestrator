@@ -26,7 +26,7 @@ public sealed class SshRemoteLaneExecutorTests
             Assert.Equal(new[] { "-o", "BatchMode=yes" }, call.Arguments[1..3]);
             Assert.Equal(TimeSpan.FromMinutes(2), call.Bound);
         }
-        Assert.Equal(Path.Combine(fake.Root, "attempt", "remote-one-infrastructure-tests-cli-lane"), calls[1].Directory);
+        Assert.Equal(Path.Combine(fake.Root, "attempt", SshRemoteLaneExecutor.StagingFolderName("one", "infrastructure-tests-cli-lane", 0)), calls[1].Directory);
         using var job = JsonDocument.Parse(File.ReadAllText(Path.Combine(calls[1].Directory, calls[1].Arguments[3])));
         var request = FakeSshRemoteLaneTransport.Request;
         var expected = new Dictionary<string, string>

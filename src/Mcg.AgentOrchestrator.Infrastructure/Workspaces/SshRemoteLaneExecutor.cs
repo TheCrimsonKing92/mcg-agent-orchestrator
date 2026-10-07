@@ -1,3 +1,6 @@
+using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -11,12 +14,63 @@ internal sealed class SshRemoteLaneExecutor(
     Func<string, int, string[], GitCli.GitResult> git,
     TimeSpan? pollInterval = null, Action<SshPollObservation>? onPollCompleted = null) : IRemoteLaneExecutor
 {
+    internal const int RepresentativeAttemptFolderLength = 117;
+    internal const int StagingPathBudget = 240;
+
     internal static string SshPath => OpenSshPath("ssh.exe");
     internal static string ScpPath => OpenSshPath("scp.exe");
     private static string OpenSshPath(string name) => Path.Combine(
         Environment.GetEnvironmentVariable("SystemRoot") ?? Environment.GetFolderPath(Environment.SpecialFolder.Windows),
         "System32", "OpenSSH", name);
     internal static string LaneKey(string lane) => Regex.Replace(lane, "[^A-Za-z0-9]+", "-").Trim('-').ToLowerInvariant();
+
+    internal static string StagingFolderName(string executorId, string laneKey, int probe)
+    {
+        var identity = executorId + "\n" + laneKey;
+        if (probe > 0) identity += "\n" + probe.ToString(CultureInfo.InvariantCulture);
+        return "r-" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(identity)))[..8];
+    }
+
+    internal static string PrepareStaging(string attemptFolder, string executorId, string lane, string laneKey)
+    {
+        for (var probe = 0; ; probe = checked(probe + 1))
+        {
+            var folder = Path.GetFullPath(Path.Combine(attemptFolder, StagingFolderName(executorId, laneKey, probe)));
+            var manifest = Path.Combine(folder, "lane.json");
+            if (Directory.Exists(folder))
+            {
+                if (MatchesLane(manifest)) return folder;
+                continue;
+            }
+
+            Directory.CreateDirectory(folder);
+            FileStream claim;
+            try { claim = new FileStream(manifest, FileMode.CreateNew, FileAccess.Write, FileShare.None); }
+            catch (IOException) when (File.Exists(manifest))
+            {
+                if (MatchesLane(manifest)) return folder;
+                continue;
+            }
+            using (claim) JsonSerializer.Serialize(claim, new { executorId, lane, laneKey });
+            return folder;
+        }
+
+        bool MatchesLane(string manifest)
+        {
+            try
+            {
+                using var json = JsonDocument.Parse(File.ReadAllBytes(manifest));
+                var root = json.RootElement;
+                return root.ValueKind == JsonValueKind.Object &&
+                    root.TryGetProperty("executorId", out var id) && id.ValueKind == JsonValueKind.String &&
+                    root.TryGetProperty("lane", out var name) && name.ValueKind == JsonValueKind.String &&
+                    root.TryGetProperty("laneKey", out var key) && key.ValueKind == JsonValueKind.String &&
+                    string.Equals(id.GetString(), executorId, StringComparison.Ordinal) &&
+                    string.Equals(key.GetString(), laneKey, StringComparison.Ordinal);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException) { return false; }
+        }
+    }
 
     public async Task<RemoteLaneSubmission> SubmitAsync(RemoteLaneRequest request, CancellationToken cancellationToken)
     {
@@ -29,9 +83,7 @@ internal sealed class SshRemoteLaneExecutor(
             entry.Id.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
             return new(null, "invalid-request");
         var shortSha = request.VerifyingCommitSha[..9];
-        var staging = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(attemptPrefix))!,
-            $"remote-{entry.Id}-{laneKey}");
-        Directory.CreateDirectory(staging);
+        var staging = PrepareStaging(Path.GetDirectoryName(Path.GetFullPath(attemptPrefix))!, entry.Id, request.Lane, laneKey);
         var steps = new List<RemoteLaneStep>();
         var startedAt = clock.GetUtcNow();
         var push = await Task.Run(() => git(worktreePath, 600_000,

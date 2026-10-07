@@ -37,7 +37,7 @@ public sealed class SshRemoteLaneHandleTestsShortCancelPath
         Assert.Equal(new[] { SshRemoteLaneExecutor.ScpPath, "-o", "BatchMode=yes", "cancel.txt",
             $"runner:C:/mcg-executor/queue/{remoteName}" }, copy.Arguments);
         Assert.EndsWith($"/queue/{remoteName}", copy.Arguments[4]);
-        Assert.Equal(Path.Combine(fake.Root, "attempt", $"remote-one-{laneKey}"), copy.Directory);
+        Assert.Equal(Path.Combine(fake.Root, "attempt", SshRemoteLaneExecutor.StagingFolderName("one", laneKey, 0)), copy.Directory);
         Assert.Equal(TimeSpan.FromSeconds(30), copy.Bound);
         Assert.Equal("", File.ReadAllText(Path.Combine(copy.Directory, "cancel.txt")));
         Assert.False(File.Exists(Path.Combine(copy.Directory, remoteName)));

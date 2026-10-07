@@ -47,9 +47,9 @@ internal static class CliRemoteLaneSelfTestCommand
             if (tree.ExitCode != 0 || string.IsNullOrWhiteSpace(tree.Output)) { firstFailure = "resolve-tree"; return 1; }
             var folder = Path.Combine(AcceptancePartitionVerdictCache.ResolveHostStateRoot(workspace.ExecutionDirectory),
                 ".orchestrator", "remote-lane-selftest", attemptId);
-            var stagingName = $"remote-{entry.Id}-{SshRemoteLaneExecutor.LaneKey(Lane)}";
-            var naturalLength = Path.GetFullPath(Path.Combine(folder, stagingName)).Length;
-            folder += new string('x', Math.Max(0, 156 - naturalLength));
+            var stagingName = SshRemoteLaneExecutor.StagingFolderName(entry.Id, SshRemoteLaneExecutor.LaneKey(Lane), 0);
+            var naturalLength = Path.GetFullPath(folder).Length;
+            folder += new string('x', Math.Max(0, SshRemoteLaneExecutor.RepresentativeAttemptFolderLength - naturalLength));
             var prefix = Path.Combine(folder, "result");
             var staging = Path.GetFullPath(Path.Combine(folder, stagingName));
             output.WriteLine($"staging={staging} length={staging.Length}");
