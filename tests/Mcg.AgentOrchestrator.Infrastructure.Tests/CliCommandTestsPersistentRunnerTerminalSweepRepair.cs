@@ -5,8 +5,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 [Xunit.Collection(TestCollections.CliProcessEnvironment)]
 public sealed class CliCommandTestsPersistentRunnerTerminalSweepRepair : CliCommandTestBase
 {
-    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_next_persists_terminal_sweep_repairs")]
-    public async Task PersistentRunnerNextPersistsTerminalSweepRepairs()
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_goal_recovery_persists_terminal_sweep_repairs")]
+    public async Task PersistentRunnerGoalRecoveryPersistsTerminalSweepRepairs()
     {
         var root = CreateTempDirectory();
         var workspace = CreateRefinedWorkspace(root);
@@ -24,7 +24,7 @@ public sealed class CliCommandTestsPersistentRunnerTerminalSweepRepair : CliComm
 
         var changed = false;
         CaptureConsole(() => changed = CliPersistentStateRunner.ExecuteCommand(
-            ["next", goal.Id.Value[..8]],
+            ["goal-recovery", goal.Id.Value[..8]],
             repository,
             workspace,
             ref agents,

@@ -76,16 +76,15 @@ public sealed class CliAttentionReadinessWriterPathTests : CliTaskQueryTestSuppo
         }.ToString());
 
     [Xunit.Fact]
-    public async Task NextRetainsItsExistingQueryOnlyCompositionWhileUsingTheWriterPath()
+    public async Task NextRetainsItsExistingQueryOnlyCompositionWhileUsingTheReadOnlyRoute()
     {
         var args = new[] { "next", "abc10000" };
-        Xunit.Assert.False(CliReadOnlyCommandRunner.IsReadOnlyCommand(args));
+        Xunit.Assert.True(CliReadOnlyCommandRunner.IsReadOnlyCommand(args));
         Xunit.Assert.Equal(CliCommandCapability.QueryOnly, CliCommandCapabilities.Classify(args));
         var repository = new ProbeStateRepository(new AgentOrchestratorKernel());
-        var error = await Xunit.Assert.ThrowsAsync<InvalidOperationException>(() =>
-            CliReadOnlyStartupHydration.PrepareStartupAsync(args, repository));
-        Xunit.Assert.Contains("Full-kernel hydration", error.Message, StringComparison.Ordinal);
-        Xunit.Assert.Equal(1, repository.FullLoadAttempts);
+        var startup = await CliReadOnlyStartupHydration.PrepareStartupAsync(args, repository);
+        Xunit.Assert.False(startup.Hydrated);
+        Xunit.Assert.Equal(0, repository.FullLoadAttempts);
     }
 
     [Xunit.Theory]

@@ -19,7 +19,7 @@ public sealed class CliSingleGoalReportRouteInventoryTests
     [Xunit.InlineData(true, "goal-timing")]
     [Xunit.InlineData(true, "failure-triage")]
     [Xunit.InlineData(false, "readiness")]
-    [Xunit.InlineData(false, "next")]
+    [Xunit.InlineData(true, "next")]
     [Xunit.InlineData(false, "goal-recovery")]
     [Xunit.InlineData(false, "dogfood-eval")]
     [Xunit.InlineData(false, "build-lease-cleanup")]

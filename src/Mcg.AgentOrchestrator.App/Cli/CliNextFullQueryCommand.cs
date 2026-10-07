@@ -8,12 +8,17 @@ internal static class CliNextFullQueryCommand
 {
     private const string SweepBlockerPrefix = "terminal-sweep-blocker:";
 
+    internal static bool IsNextPrefixQueryCommand(IReadOnlyList<string> args) =>
+        args.Count == 2 && args[0].Equals("next", StringComparison.OrdinalIgnoreCase) &&
+        !string.IsNullOrWhiteSpace(args[1]) && !args[1].StartsWith("-", StringComparison.Ordinal);
+
     internal static bool IsNextFullQueryCommand(IReadOnlyList<string> args) =>
         ((args.Count == 3 && args[0].Equals("next", StringComparison.OrdinalIgnoreCase) &&
           args[1].Equals("--full", StringComparison.OrdinalIgnoreCase) &&
           !string.IsNullOrWhiteSpace(args[2]) && !args[2].StartsWith("-", StringComparison.Ordinal)) ||
          (args.Count == 2 && args[0].Equals("goal-diagnostics", StringComparison.OrdinalIgnoreCase) &&
-          !string.IsNullOrWhiteSpace(args[1]) && !args[1].StartsWith("-", StringComparison.Ordinal))) &&
+          !string.IsNullOrWhiteSpace(args[1]) && !args[1].StartsWith("-", StringComparison.Ordinal)) ||
+         IsNextPrefixQueryCommand(args)) &&
         !CliCommandHelp.IsCommandSpecificHelp(args);
 
     internal static bool TryExecute(

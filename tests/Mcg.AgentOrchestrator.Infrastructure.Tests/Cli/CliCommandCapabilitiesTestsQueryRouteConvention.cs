@@ -23,7 +23,7 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteConvention
             ["backlog-similar"] = [["backlog-similar", "query"]],
             ["goal-events"] = [["goal-events", "abc10000"]],
             ["timeline"] = [["timeline", "abc10000"]],
-            ["next"] = [["next", "--full", "abc10000"]]
+            ["next"] = [["next", "--full", "abc10000"], ["next", "abc10000"]]
         };
 
     private static readonly IReadOnlyDictionary<string, string> Exemptions =
@@ -38,8 +38,7 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteConvention
 
     private static readonly (string[] Args, string Reason)[] WriterPathForms =
     [
-        (["status"], "Only status with a single goal prefix is routed read-only."),
-        (["next", "abc10000"], "Only next --full PREFIX is routed read-only; ordinary next uses the writer path.")
+        (["status"], "Only status with a single goal prefix is routed read-only.")
     ];
 
     [Fact]
@@ -136,7 +135,7 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteConvention
                 failures.Add($"{form}: writer-path form must retain QueryOnly composition.");
         }
 
-        string[][] required = [["status"], ["next", "abc10000"]];
+        string[][] required = [["status"]];
         foreach (var args in required)
         {
             if (!WriterPathForms.Any(form => form.Args.SequenceEqual(args, StringComparer.OrdinalIgnoreCase)))
