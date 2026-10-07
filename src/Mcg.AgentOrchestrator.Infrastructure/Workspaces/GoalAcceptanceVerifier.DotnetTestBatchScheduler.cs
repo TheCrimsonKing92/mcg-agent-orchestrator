@@ -75,6 +75,7 @@ internal static class AcceptanceDotnetTestBatchScheduler
                 await slots.WaitAsync(stop.Token).ConfigureAwait(false);
                 try
                 {
+                    stop.Token.ThrowIfCancellationRequested();
                     if (sharedApparatusInvalidated())
                         return;
                     var run = await runSingleCheck(group.Checks[0], stop.Token).ConfigureAwait(false);
