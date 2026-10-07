@@ -76,9 +76,6 @@ internal static class TestCoverageInvariant
         "Error"
     ];
 
-    public static IReadOnlyList<string> ParseDiscoveredTests(string output, bool bareTestList = false) =>
-        ParseDiscovery(output, bareTestList).Tests;
-
     public static TestDiscoverySnapshot ParseDiscovery(
         string output,
         bool bareTestList = false,

@@ -19,7 +19,8 @@ internal sealed record AcceptanceStructuralCoverageRequest(
     string? CurrentAttemptId,
     IReadOnlyList<string> SanctionedRemovedTests,
     Func<CancellationToken, Task<AcceptanceStructuralCoverageBaseline?>> PrepareBaseline,
-    Func<CancellationToken, Task<AcceptanceContainedGenerationBaseline>>? PrepareContainedBaseline = null);
+    Func<CancellationToken, Task<AcceptanceContainedGenerationBaseline>>? PrepareContainedBaseline = null,
+    Func<IReadOnlyList<GoalAcceptanceVerifier.UnresolvedRenameDestination>>? ResolveUnresolvedRenameDestinations = null);
 
 internal sealed record AcceptanceStructuralCoverageEvaluation(
     GoalAcceptanceVerifier.CommandResult CandidateDiscovery,
@@ -235,6 +236,12 @@ internal sealed class AcceptanceStructuralCoverageEvaluator
                     coverage = AppendGenerationReceipt(coverage, receipt, addToMissing: !coverage.Passed);
                 }
             }
+        }
+        foreach (var rename in request.ResolveUnresolvedRenameDestinations?.Invoke() ?? [])
+        {
+            coverage = AppendGenerationReceipt(coverage,
+                $"unresolved-rename-destination:source={rename.Source},destination={rename.Destination},effect=receipt-only",
+                addToMissing: false);
         }
         return new AcceptanceStructuralCoverageEvaluation(
             candidateDiscovery,
