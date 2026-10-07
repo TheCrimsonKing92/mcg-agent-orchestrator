@@ -10,6 +10,11 @@ public interface IOrchestratorStateQueries
 
     Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>Reads open request snapshots without loading goal snapshots, including orphan requests.</summary>
+    Task<IReadOnlyList<HumanInputRequestSnapshot>> ListOpenHumanInputRequestsAsync(
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This repository does not support request-only human-input queries.");
+
     Task<IReadOnlyList<GoalSummary>> ListGoalIdStatusesAsync(CancellationToken cancellationToken = default) =>
         ListGoalMetadataAsync(cancellationToken);
 }

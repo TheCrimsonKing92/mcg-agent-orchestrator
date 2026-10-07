@@ -1705,6 +1705,22 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         END AS condition
         """;
 
+    public async Task<IReadOnlyList<HumanInputRequestSnapshot>> ListOpenHumanInputRequestsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        await using var conn = OpenConnection();
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT snapshot_json FROM human_input_requests";
+        var results = new List<HumanInputRequestSnapshot>();
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var snapshot = JsonSerializer.Deserialize<HumanInputRequestSnapshot>(reader.GetString(0), SerializerOptions);
+            if (snapshot is { IsCompleted: false }) results.Add(snapshot);
+        }
+        return results;
+    }
+
     public async Task<IReadOnlyList<GoalId>> ListGoalIdsWithCompletedHumanInputAsync(
         IReadOnlyCollection<GoalId> goalIds,
         CancellationToken cancellationToken = default)
