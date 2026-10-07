@@ -185,6 +185,22 @@ public sealed class WorkflowDecisionCoverageRatchetTests
     }
 
     [Xunit.Fact]
+    public void LineStartingConstructionWithInitializer_IsNotAMemberDeclaration()
+    {
+        const string source = """
+            class Fixture
+            {
+                private static object HeldFactory() =>
+                    new(
+                        new ConductorAdvanceOutcome.Held(state, "x") { Owner = owner });
+                private static object EscalatedFactory() =>
+                    new ConductorAdvanceOutcome.Escalated(state, "x") { Owner = owner };
+            }
+            """;
+        Assert.Equal(new[] { "Fixture.cs : EscalatedFactory", "Fixture.cs : HeldFactory" }, Scan("Fixture.cs", source));
+    }
+
+    [Xunit.Fact]
     public void LiteralsCommentsAndLocalFunctions_DoNotCorruptMemberAttribution()
     {
         const string source = """"
@@ -233,8 +249,8 @@ public sealed class WorkflowDecisionCoverageRatchetTests
     {
         var sources = ReadSources();
         Assert.NotEmpty(sources);
-        Assert.Throws<XunitException>(() => AssertSourceFiles([]));
-        var failure = Assert.Throws<XunitException>(() => AssertSourceFiles(["ConductorDriver.cs"]));
+        Assert.ThrowsAny<XunitException>(() => AssertSourceFiles([]));
+        var failure = Assert.ThrowsAny<XunitException>(() => AssertSourceFiles(["ConductorDriver.cs"]));
         Assert.Contains("ConductorBatchLoop.cs", failure.Message, StringComparison.Ordinal);
     }
 
@@ -403,6 +419,9 @@ public sealed class WorkflowDecisionCoverageRatchetTests
         var members = new List<Member>();
         foreach (Match match in MemberDeclaration.Matches(code))
         {
+            // A qualified construction at the start of a line can match the
+            // declaration regex, but a method's return type cannot end in a dot.
+            if (match.Groups["signature"].Value.TrimEnd().EndsWith(".", StringComparison.Ordinal)) continue;
             var open = match.Groups["open"].Index;
             var bodyStart = SkipWhitespace(code, pairs[open] + 1);
             int end;
