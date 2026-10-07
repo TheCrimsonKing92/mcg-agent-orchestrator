@@ -400,6 +400,19 @@ public static class WorkerResultBlockers
         return false;
     }
 
+    public static bool TryFindUnstructuredFailingTests(TaskVerificationRecord? verification, out string tests)
+    {
+        if (TryFindTests(verification, out tests) &&
+            !TryParseTestsStatus(tests, out _) &&
+            TestsReportFailure(tests))
+        {
+            return true;
+        }
+
+        tests = string.Empty;
+        return false;
+    }
+
     public static bool TryGetTestsStatus(TaskVerificationRecord? verification, out TestsStatus status)
     {
         status = TestsStatus.Unknown;

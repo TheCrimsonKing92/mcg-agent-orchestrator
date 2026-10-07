@@ -860,6 +860,84 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Contains("commit=orchestrator", outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact]
+    public void ClassifyRejectsUnstructuredFailingTestsWithCommittedChanges()
+    {
+        var outcome = DispatchFailureClassifier.Classify(
+            DispatchedTaskWithResultCommit("29edee5c", "ce5e35c1"),
+            WorkerResultVerification(WorkerResultStdout("3 failed, see log"), hasCommittedChanges: true));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
+        Xunit.Assert.Contains("rule=succeeded-worker-result-unstructured-failing-tests", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("rule=succeeded-dispatch-completion-evidence", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("rule=committed-worker-result-evidence", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void ClassifyRejectsUnstructuredFailingTestsWithoutCommittedChangesFlag()
+    {
+        var outcome = DispatchFailureClassifier.Classify(
+            DispatchedTaskWithResultCommit("29edee5c", "ce5e35c1"),
+            WorkerResultVerification(WorkerResultStdout("3 failed, see log"), hasCommittedChanges: false));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
+        Xunit.Assert.Contains("rule=succeeded-worker-result-unstructured-failing-tests", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("rule=succeeded-dispatch-completion-evidence", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("rule=committed-worker-result-evidence", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void ClassifyRejectsUnstructuredFailingTestsWithoutCommitEvidence()
+    {
+        var outcome = DispatchFailureClassifier.Classify(
+            SimpleTask(AgentRole.Developer),
+            WorkerResultVerification(WorkerResultStdout("3 failed, see log"), hasCommittedChanges: false));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
+        Xunit.Assert.Contains("rule=succeeded-worker-result-unstructured-failing-tests", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("rule=succeeded-dispatch-completion-evidence", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("rule=committed-worker-result-evidence", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void ClassifyDoesNotApplyUnstructuredFailingTestsRuleToReadOnlyRoles()
+    {
+        var outcome = DispatchFailureClassifier.Classify(
+            SimpleTask(AgentRole.Reviewer),
+            WorkerResultVerification(WorkerResultStdout("3 failed, see log")));
+
+        Xunit.Assert.DoesNotContain("rule=succeeded-worker-result-unstructured-failing-tests", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void ClassifyKeepsStructuredFailTestsOnExistingRule()
+    {
+        var outcome = DispatchFailureClassifier.Classify(
+            DispatchedTaskWithResultCommit("29edee5c", "ce5e35c1"),
+            WorkerResultVerification(WorkerResultStdout("fail - 3 failed")));
+
+        Xunit.Assert.Contains("rule=succeeded-worker-result-failing-tests", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("rule=succeeded-worker-result-unstructured-failing-tests", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void ClassifyGivesUnstructuredFailingTestsPrecedenceOverIncompleteDeveloperScope()
+    {
+        var outcome = DispatchFailureClassifier.Classify(
+            DispatchedTaskWithResultCommit("29edee5c", "ce5e35c1"),
+            WorkerResultVerification(WorkerResultStdout(
+                "3 failed, see log",
+                assignedScopeComplete: false)) with { AssignedScopeComplete = false });
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
+        Xunit.Assert.Contains("rule=succeeded-worker-result-unstructured-failing-tests", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("rule=incomplete-scope-declaration", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "Classify routes incomplete Developer scope to bounded revision before every success branch")]
     public void ClassifyRoutesIncompleteDeveloperScopeToBoundedRevision()
     {

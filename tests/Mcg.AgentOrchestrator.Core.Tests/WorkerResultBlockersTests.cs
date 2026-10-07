@@ -80,6 +80,68 @@ public sealed class WorkerResultBlockersTests
         Assert.False(WorkerResultBlockers.TryFindFailingTests(verification, out _));
     }
 
+    [Xunit.Fact]
+    public void TryFindUnstructuredFailingTestsReturnsFieldText()
+    {
+        var verification = new TaskVerificationRecord(
+            "test",
+            "C:\\repo",
+            0,
+            "WORKER_RESULT:\ntests: 3 failed, see log\nblockers: none\nEND_WORKER_RESULT",
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            WorkerResultPresent: true);
+
+        Assert.True(WorkerResultBlockers.TryFindUnstructuredFailingTests(verification, out var tests));
+        Assert.Equal("3 failed, see log", tests);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("fail - 3 failed")]
+    [Xunit.InlineData("pass - an earlier run failed")]
+    [Xunit.InlineData("not-run - an earlier run failed")]
+    [Xunit.InlineData("deferred - an earlier run failed")]
+    [Xunit.InlineData("inconclusive - an earlier run failed")]
+    [Xunit.InlineData("TRX 5/5 passed")]
+    [Xunit.InlineData("0 failed")]
+    public void TryFindUnstructuredFailingTestsRejectsStructuredOrNonFailingFields(string field)
+    {
+        var verification = new TaskVerificationRecord(
+            "test",
+            "C:\\repo",
+            0,
+            $"WORKER_RESULT:\ntests: {field}\nblockers: none\nEND_WORKER_RESULT",
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            WorkerResultPresent: true);
+
+        Assert.False(WorkerResultBlockers.TryFindUnstructuredFailingTests(verification, out var tests));
+        Assert.Equal(string.Empty, tests);
+    }
+
+    [Xunit.Fact]
+    public void TryFindUnstructuredFailingTestsRejectsMissingTestsField()
+    {
+        var verification = new TaskVerificationRecord(
+            "test",
+            "C:\\repo",
+            0,
+            "WORKER_RESULT:\nblockers: none\nEND_WORKER_RESULT",
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            WorkerResultPresent: true);
+
+        Assert.False(WorkerResultBlockers.TryFindUnstructuredFailingTests(verification, out var tests));
+        Assert.Equal(string.Empty, tests);
+    }
+
+    [Xunit.Fact]
+    public void TryFindUnstructuredFailingTestsRejectsNullVerification()
+    {
+        Assert.False(WorkerResultBlockers.TryFindUnstructuredFailingTests(null, out var tests));
+        Assert.Equal(string.Empty, tests);
+    }
+
     [Xunit.Theory(DisplayName = "WorkerResultBlockers_parses_only_canonical_premise_invalid_evidence")]
     [Xunit.InlineData("premise-invalid - required API does not exist; see src/Api.cs", true, "required API does not exist; see src/Api.cs")]
     [Xunit.InlineData("premise-invalid", false, "")]

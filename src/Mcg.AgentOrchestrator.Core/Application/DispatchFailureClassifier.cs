@@ -667,6 +667,27 @@ public static partial class DispatchFailureClassifier
                 BuildProviderModelRejectionEvidenceSummary(verification)));
         }
 
+        if (verification.Succeeded &&
+            (!DispatchRoleOutputCapabilities.TryGet(task.RequiredRole, out var unstructuredRoleCapability) ||
+             unstructuredRoleCapability != DispatchRoleOutputCapability.ReadOnly) &&
+            WorkerResultBlockers.TryFindUnstructuredFailingTests(verification, out var unstructuredTests))
+        {
+            return BuildOutcome(
+                TaskOutcomeRules.SucceededWorkerResultUnstructuredFailingTests,
+                task,
+                verification,
+                workerResultPresent,
+                hasCommittedChanges,
+                new DispatchOutcome(
+                    DispatchOutcomeKind.UnknownFailure,
+                    exitCode,
+                    hasZeroByteOutput,
+                    null,
+                    null,
+                    RecoveryRecommendation.OperatorNeeded,
+                    $"Unstructured tests field: no leading status word and the text reports failure; restate it as 'fail - <evidence>' or 'pass - <evidence>': {TruncateEvidence(unstructuredTests)}"));
+        }
+
         if (task.RequiredRole == AgentRole.Developer &&
             WorkerResultBlockers.TryFindMalformedEvidenceBoundOutcome(
                 verification.AuthoritativeStandardOutput ?? verification.StandardOutput,
