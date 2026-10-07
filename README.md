@@ -9,6 +9,8 @@ flowchart LR
     Operator[Operator: create a goal] --> Conductor[Conductor tick]
     Conductor --> Workers[Workers in a goal worktree]
     Workers --> Gate[Acceptance gate]
+    Gate -->|allowlisted lanes over SSH| Executors[Remote executors]
+    Executors -->|results bound to the candidate| Gate
     Gate --> Risk[Change-risk gate]
     Risk --> Landing[Landing in main]
     Gate -->|failure| Operator
@@ -22,6 +24,23 @@ The [operator runbook](docs/operator-runbook.md#1-golden-path-conductor-first) d
 An operator creates a goal with an objective and acceptance criteria. Automatic intake selects the Scout pipeline: Planner, Developer, Tester, and Reviewer; `--pipeline five-role` also includes a Researcher. The [intake planner](src/Mcg.AgentOrchestrator.App/Orchestration/GoalObjectivePlanner.cs) selects the pipeline and defines its task boundaries and role order.
 
 The conductor creates an isolated git worktree, dispatches the workers, and waits for their results. After review, it runs the acceptance suite against the candidate and applies the change-risk gate. A passing candidate allowed by policy lands in `main`; failures, conflicts, and requests for human input return to the operator. The loop records the landing in SQLite and removes the worktree. Follow the [runbook](docs/operator-runbook.md#1-golden-path-conductor-first) for the complete operating sequence.
+
+### Distributed verification
+
+Acceptance gates are the throughput limit. They ran one at a time on the operator's workstation, which is also a daily-use machine. To relieve it, the gate can run allowlisted test lanes on remote Windows executors over SSH.
+
+For each lane, the host pushes the candidate commit to the executor's repository, queues the job, and polls its status and heartbeat until the TRX results are ready to fetch. A remote result is admitted only when the executor reports the commit, tree, main revision, test-filter hash, and acceptance-manifest identity the gate requested. A discrepancy, a lapsed heartbeat, or a transport failure returns the lane to local execution. [RemoteLaneCoordinator](src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/RemoteLaneCoordinator.cs) decides admission, and [SshRemoteLaneExecutor](src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/SshRemoteLaneExecutor.cs) owns the transport.
+
+The first remote runs, on 2026-10-07, passed 396 and 400 tests with every binding field matched, and both goals landed.
+
+An abridged executor-health record from the first accepted run:
+
+```json
+{"observed_at":"2026-10-07T00:59:59Z","executor_id":"mcg-exec-1",
+ "lane":"infrastructure tests: Cli","outcome":"accepted",
+ "expected":{"commit":"62a48770","tree":"1b60839e","main":"cb72d4fe","filter":"9aeb3b7f"},
+ "observed":{"commit":"62a48770","tree":"1b60839e","main":"cb72d4fe","filter":"9aeb3b7f"}}
+```
 
 ## Design decisions
 
@@ -51,7 +70,7 @@ Goal briefs and orchestrator state live under `.orchestrator/`, which is [ignore
 
 ## Status and limits
 
-The system is Windows only, run by a single operator, and dependent on locally installed Codex CLI and Claude CLI workers. It is not packaged for other users. The [CLI reference](docs/cli-reference.md) describes the local setup and worker bridges. The code is published for reading with all rights reserved.
+The system is Windows only, run by a single operator, and dependent on locally installed Codex CLI and Claude CLI workers. It is not packaged for other users. The [CLI reference](docs/cli-reference.md) describes the local setup and worker bridges. The code is published for reading with all rights reserved. Acceptance lanes can optionally run on remote Windows executors; see [Distributed verification](#distributed-verification).
 
 The operator surface is the command line and the event log, described in the [runbook](docs/operator-runbook.md#4-observe-whats-happening).
 
