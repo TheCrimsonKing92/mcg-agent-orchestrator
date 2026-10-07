@@ -779,13 +779,21 @@ public sealed partial class AgentOrchestratorKernel
             var expectedIndices = Enumerable.Range(0, refinedSpec.AcceptanceCriteria.Count).ToArray();
             if (!actualIndices.SequenceEqual(expectedIndices))
             {
+                var received = string.Join(", ", actualIndices);
+                var missing = string.Join(", ", expectedIndices.Except(actualIndices).Select(index => index + 1));
+                var duplicated = string.Join(", ", actualIndices
+                    .GroupBy(index => index)
+                    .Where(group => group.Count() > 1)
+                    .Select(group => group.Key + 1));
                 ReportWorkerTaskProgress(
                     goalId,
                     task.Id,
                     WorkTaskStatus.Failed,
                     "Reviewer WORKER_RESULT criteria attestation invalid: " +
-                    $"expected every registered criterion_index {string.Join(", ", expectedIndices)} exactly once; " +
-                    $"received registered indices {string.Join(", ", actualIndices)}.");
+                    $"expected every registered criterion_index 0..{expectedIndices.Length - 1} (criteria 1 to {expectedIndices.Length}) exactly once; " +
+                    $"received registered indices {(received.Length == 0 ? "none" : received)}; " +
+                    $"missing criteria: {(missing.Length == 0 ? "none" : missing)}; " +
+                    $"duplicated criteria: {(duplicated.Length == 0 ? "none" : duplicated)}.");
                 return true;
             }
 
@@ -811,7 +819,7 @@ public sealed partial class AgentOrchestratorKernel
                 if (matches.Length != 1)
                 {
                     nonPassingCriteriaDiagnostic =
-                        $"Reviewer WORKER_RESULT criteria attestation cannot be deferred: criterion_index={deferred.CriterionIndex} has {matches.Length} authoritative obligation records; operator repair is required.";
+                        $"Reviewer WORKER_RESULT criteria attestation cannot be deferred: {FormatCriterionIndex(deferred.CriterionIndex)} has {matches.Length} authoritative obligation records; operator repair is required.";
                     continue;
                 }
                 var obligation = goal.BindDeferredCriterionObligation(
@@ -851,7 +859,7 @@ public sealed partial class AgentOrchestratorKernel
                 var details = string.Join(
                     "; ",
                     workerOwnedNonPassingVerdicts.Select(item =>
-                        $"criterion_index={item.CriterionIndex} verdict={item.Verdict} evidence={item.Evidence}"));
+                        $"{FormatCriterionIndex(item.CriterionIndex)} verdict={item.Verdict} evidence={item.Evidence}"));
                 var repairCommands = string.Join(
                     "; ",
                     workerOwnedNonPassingVerdicts
@@ -873,7 +881,7 @@ public sealed partial class AgentOrchestratorKernel
                     task.Id,
                     ProgressKind.TaskNote,
                     $"Reviewer informational extra criterion attestation recorded: " +
-                    $"criterion_index={extra.CriterionIndex}; verdict={extra.Verdict}; evidence={extra.Evidence}");
+                    $"{FormatCriterionIndex(extra.CriterionIndex)}; verdict={extra.Verdict}; evidence={extra.Evidence}");
             }
         }
 
@@ -1050,6 +1058,9 @@ public sealed partial class AgentOrchestratorKernel
 
         return false;
     }
+
+    private static string FormatCriterionIndex(int criterionIndex) =>
+        $"criterion_index={criterionIndex} (criterion {criterionIndex + 1})";
 
     private static bool IsWorkerOwnedCriterionObligation(Goal goal, int criterionIndex)
     {
