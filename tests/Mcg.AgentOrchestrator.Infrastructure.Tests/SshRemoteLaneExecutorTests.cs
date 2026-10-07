@@ -15,7 +15,7 @@ public sealed class SshRemoteLaneExecutorTests
         Assert.Equal(fake.Root, calls[0].Directory);
         Assert.Equal(TimeSpan.FromMinutes(10), calls[0].Bound);
         Assert.Equal(new[] { SshRemoteLaneExecutor.ScpPath, "-o", "BatchMode=yes",
-            "attempt-one-infrastructure-tests-cli-lane.json", "runner:C:/mcg-executor/queue/" }, calls[1].Arguments);
+            "job.json", "runner:C:/mcg-executor/queue/attempt-one-infrastructure-tests-cli-lane.json" }, calls[1].Arguments);
         Assert.Equal(new[] { SshRemoteLaneExecutor.SshPath, "-o", "BatchMode=yes", "admin",
             "schtasks", "/run", "/tn", "mcg-executor-lane" }, calls[2].Arguments);
         Assert.DoesNotContain("runner", calls[2].Arguments);
