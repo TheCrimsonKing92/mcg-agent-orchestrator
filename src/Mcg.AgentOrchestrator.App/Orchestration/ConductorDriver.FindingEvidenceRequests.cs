@@ -523,7 +523,7 @@ internal sealed partial class ConductorDriver
                 return false;
             }
             var project = selection.TestProject?.Trim();
-            var originalTestClass = selection.TestClass ?? string.Empty;
+            var originalTestClass = FindingEvidenceNameSelector.ToFullyQualified(selection.TestClass ?? string.Empty);
             var testClass = originalTestClass.Trim();
             if (string.IsNullOrWhiteSpace(project) ||
                 string.IsNullOrWhiteSpace(testClass) ||
