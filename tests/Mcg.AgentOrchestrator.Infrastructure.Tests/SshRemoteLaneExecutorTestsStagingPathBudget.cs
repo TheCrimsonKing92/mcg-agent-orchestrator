@@ -91,7 +91,11 @@ public sealed class SshRemoteLaneExecutorTestsStagingPathBudget
 
     private static async Task Event(Task task, string missingEvent)
     {
-        try { await task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken); }
-        catch (TimeoutException) { throw new TimeoutException("Missing event: " + missingEvent); }
+        try { await task.WaitAsync(TestContext.Current.CancellationToken); }
+        catch (OperationCanceledException exception) when (TestContext.Current.CancellationToken.IsCancellationRequested)
+        {
+            throw new OperationCanceledException("Missing event: " + missingEvent, exception,
+                TestContext.Current.CancellationToken);
+        }
     }
 }
