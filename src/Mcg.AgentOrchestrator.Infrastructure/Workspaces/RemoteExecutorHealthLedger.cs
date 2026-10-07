@@ -9,7 +9,8 @@ internal enum RemoteLaneOutcomeCode
     Accepted, TransportUnavailable, Unreachable, LeaseExpired, LaneTimeout,
     BindingMismatchCommit, BindingMismatchTree, BindingMismatchMain, BindingMismatchFilter,
     BindingMismatchExecutor, BindingMismatchManifest, TrxIncomplete, RemoteRed,
-    LateAfterFallback, NotEligibleExclusiveResource, UnexpectedNotExecuted
+    LateAfterFallback, NotEligibleExclusiveResource, UnexpectedNotExecuted,
+    CancelledAfterGrace, ShadowSkippedNoExecutor
 }
 
 internal sealed record RemoteLaneBinding(
@@ -18,7 +19,15 @@ internal sealed record RemoteExecutorHealthRecord(
     DateTimeOffset ObservedAt, string ExecutorId, string GateAttemptId, string Lane,
     RemoteLaneOutcomeCode Outcome, string? FaultOwner, RemoteLaneBinding Expected,
     RemoteLaneBinding? Observed, string? Reason = null, int Version = 1,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] RemoteLaneAttemptDetail? Attempt = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] RemoteLaneAttemptDetail? Attempt = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? EvidenceShadow = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? GoalId = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? RemoteExecutedCount = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string>? RemoteFailingTests = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? RemoteDurationSeconds = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? LocalDurationSeconds = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? LocalVerdict = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? Agree = null);
 
 internal static class RemoteExecutorHealthLedger
 {

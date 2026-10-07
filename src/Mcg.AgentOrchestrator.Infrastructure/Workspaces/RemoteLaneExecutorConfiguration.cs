@@ -7,11 +7,15 @@ internal sealed record RemoteLaneExecutorEntry(string Id, int LeaseSeconds,
     string? Transport = null, string? RunnerAlias = null, string? AdminAlias = null,
     string? RemoteRepository = null, string? RunRoot = null, int PollSeconds = 10, int Slots = 1);
 
+internal sealed record RemoteFocusedEvidenceSettings(
+    string Mode = "off", int SampleEvery = 4, int GraceSeconds = 300, string? FaultReason = null);
+
 // Operator-owned, immutable for a single gate attempt. Invalid input always disables dispatch.
 internal sealed record RemoteLaneExecutorConfiguration(
     IReadOnlyList<RemoteLaneExecutorEntry> Executors, IReadOnlyList<string> Lanes, string? DisabledReason)
 {
     internal IReadOnlyList<string> MachineLocalResourceKeys { get; init; } = [];
+    internal RemoteFocusedEvidenceSettings FocusedEvidence { get; init; } = new();
     internal bool AllInfrastructureLanes { get; init; }
     internal RemoteLaneExecutorConfiguration ResolveLanes(IEnumerable<string> infrastructureLaneNames) =>
         AllInfrastructureLanes ? this with { Lanes = infrastructureLaneNames.Distinct(StringComparer.Ordinal).ToArray() } : this;
@@ -27,6 +31,8 @@ internal sealed record RemoteLaneExecutorConfiguration(
     }
 
     internal static IReadOnlyList<RemoteLaneExecutorEntry> LoadExecutors(string path) => Parse(path).Executors;
+
+    internal static RemoteLaneExecutorConfiguration LoadForFocusedEvidence(string path) => Parse(path);
 
     private static RemoteLaneExecutorConfiguration Parse(string path)
     {
@@ -106,12 +112,30 @@ internal sealed record RemoteLaneExecutorConfiguration(
                 }
             }
             return new(entries.ToArray(), names.ToArray(), null)
-            { MachineLocalResourceKeys = keys.ToArray(), AllInfrastructureLanes = allInfrastructureLanes };
-        }
+            {
+                MachineLocalResourceKeys = keys.ToArray(), AllInfrastructureLanes = allInfrastructureLanes,
+                FocusedEvidence = ParseFocusedEvidence(root)
+            };        }
         catch (FileNotFoundException) { return Disabled("missing"); }
         catch (DirectoryNotFoundException) { return Disabled("missing"); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or ArgumentException)
         { return Disabled("invalid"); }
+    }
+    private static RemoteFocusedEvidenceSettings ParseFocusedEvidence(JsonElement root)
+    {
+        if (!root.TryGetProperty("focusedEvidence", out var block)) return new();
+        var mode = "off";
+        var sampleEvery = 4;
+        var graceSeconds = 300;
+        if (block.ValueKind != JsonValueKind.Object ||
+            (block.TryGetProperty("mode", out var m) &&
+                (m.ValueKind != JsonValueKind.String || (mode = m.GetString()!) is not ("off" or "shadow"))) ||
+            (block.TryGetProperty("sampleEvery", out var s) &&
+                (s.ValueKind != JsonValueKind.Number || !s.TryGetInt32(out sampleEvery) || sampleEvery < 1)) ||
+            (block.TryGetProperty("graceSeconds", out var g) &&
+                (g.ValueKind != JsonValueKind.Number || !g.TryGetInt32(out graceSeconds) || graceSeconds < 0)))
+            return new(FaultReason: "invalid");
+        return new(mode, sampleEvery, graceSeconds);
     }
     private static RemoteLaneExecutorConfiguration Disabled(string reason) => new([], [], reason);
     private static string? ReadString(JsonElement entry, string name) =>
