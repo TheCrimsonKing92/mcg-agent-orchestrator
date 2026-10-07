@@ -262,7 +262,7 @@ internal sealed partial class ConductorDriver
         }
     }
 
-    internal void RunGroupedGateAttemptBody(ConductorGroupedGateAttempt attempt)
+    internal ConductorGroupedGateOutcome? RunGroupedGateAttemptBody(ConductorGroupedGateAttempt attempt)
     {
         var workspace = _cohortWorkspace ?? throw new InvalidOperationException("Cohort workspace is unavailable.");
         var verifier = _cohortAcceptanceVerifier ?? throw new InvalidOperationException("Cohort verifier is unavailable.");
@@ -280,25 +280,45 @@ internal sealed partial class ConductorDriver
             if (identity.Value != attempt.IdentityValue || manifest != attempt.ManifestIdentity ||
                 integration.TreeRevision != attempt.CombinedTreeRevision)
                 throw new InvalidOperationException("Grouped cohort gate identity changed before child execution.");
-            _ = ExecuteAcceptanceCohortGate(integration, identity, bindings,
+            var receipt = ExecuteAcceptanceCohortGate(integration, identity, bindings,
                 ConductorAcceptanceCohortSelector.PairFingerprint(members[0], members[1]),
                 CancellationToken.None, null);
+            return ToGroupedGateOutcome(receipt.Outcome, receipt.ReceiptId);
         }
         else if (attempt.Kind == "train")
         {
             var kernel = _cohortKernel ?? throw new InvalidOperationException("Cohort kernel is unavailable.");
             var goals = members.Select(member => kernel.Goals.Single(goal => goal.Id == member.GoalId)).ToArray();
-            _ = RunMergeTrain(new ConductorMergeTrainSelection(members), goals,
+            var result = RunMergeTrain(new ConductorMergeTrainSelection(members), goals,
                 ConductorAutonomyPolicy.ParseJson(attempt.PolicyJson, attempt.MetadataPath),
                 gateOnly: true, expectedGateIdentity: attempt.IdentityValue);
+            return result.Receipt is { } receipt
+                ? ToGroupedGateOutcome(receipt.Outcome, receipt.ReceiptId) : null;
         }
         else if (attempt.Kind == "follower")
         {
             RunFollowerGateBody(attempt);
+            return null;
         }
         else
         {
             throw new InvalidDataException($"Unknown grouped gate kind '{attempt.Kind}'.");
         }
     }
+
+    internal static ConductorGroupedGateOutcome? ToGroupedGateOutcome(
+        AcceptanceCohortGateOutcome outcome, string receiptId) => outcome switch
+    {
+        AcceptanceCohortGateOutcome.Passed => new("passed", receiptId),
+        AcceptanceCohortGateOutcome.Failed => new("failed", receiptId),
+        _ => null
+    };
+
+    internal static ConductorGroupedGateOutcome? ToGroupedGateOutcome(
+        MergeTrainGateOutcome outcome, string receiptId) => outcome switch
+    {
+        MergeTrainGateOutcome.Passed => new("passed", receiptId),
+        MergeTrainGateOutcome.Failed => new("failed", receiptId),
+        _ => null
+    };
 }
