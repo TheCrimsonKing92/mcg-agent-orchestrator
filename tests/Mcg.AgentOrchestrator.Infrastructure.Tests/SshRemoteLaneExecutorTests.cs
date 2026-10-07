@@ -140,11 +140,21 @@ public sealed class SshRemoteLaneExecutorTests
         Assert.Equal("reported-manifest", result.ManifestIdentity);
         Assert.Equal(7, result.ExitCode);
         Assert.Equal(2, result.TestResultPaths.Count);
-        var fetch = Assert.Single(fake.Calls.Where(call => call.Arguments[^1] == "."));
-        Assert.Equal(6, fetch.Arguments.Length);
-        Assert.Equal(new[] { SshRemoteLaneExecutor.ScpPath, "-o", "BatchMode=yes",
-            "runner:C:/mcg-executor/results/123456789/infrastructure-tests-cli-lane/one.trx",
-            "runner:C:/mcg-executor/results/123456789/infrastructure-tests-cli-lane/two.trx", "." }, fetch.Arguments);
+        var fetches = fake.Calls.Where(call => call.Arguments[3].EndsWith(".trx", StringComparison.Ordinal)).ToArray();
+        Assert.Equal(2, fetches.Length);
+        var names = new[] { "one.trx", "two.trx" };
+        for (var index = 0; index < fetches.Length; index++)
+        {
+            var call = fetches[index];
+            var destination = call.Arguments[^1];
+            Assert.NotEqual(".", destination);
+            Assert.Equal(Path.GetFileName(destination), destination);
+            Assert.True(destination.Length <= 16);
+            Assert.Equal(new[] { SshRemoteLaneExecutor.ScpPath, "-o", "BatchMode=yes",
+                "runner:C:/mcg-executor/results/123456789/infrastructure-tests-cli-lane/" + names[index],
+                destination }, call.Arguments);
+        }
+        var fetch = fetches[0];
         foreach (var path in result.TestResultPaths)
         { Assert.True(File.Exists(path)); Assert.Equal(fetch.Directory, Path.GetDirectoryName(path)); }
     }
@@ -162,7 +172,9 @@ public sealed class SshRemoteLaneExecutorTests
         if (fault == "unsafe-name") status["trx"] = new[] { "../unsafe.trx" };
         if (fault == "missing-exit") status.Remove("exitCode");
         await fake.PollOnce(new(status));
-        Assert.Equal(message, Assert.Throws<RemoteLaneTransportException>(() => handle.TryGetResult()).Message);
+        var error = Assert.Throws<RemoteLaneTransportException>(() => handle.TryGetResult());
+        if (fault == "fetch-failed") Assert.StartsWith(message, error.Message);
+        else Assert.Equal(message, error.Message);
         Assert.Equal(fault == "fetch-failed" ? 5 : 4, fake.Calls.Count);
     }
 
