@@ -594,6 +594,11 @@ public sealed partial class AgentOrchestratorKernel
                 TaskOutcomeRules.RequiredFileChangeEvidenceMissing.Token,
                 StringComparison.Ordinal))
         {
+            if (DispatchContractDiagnostic.TryExtract(verification.StandardError, rule, out var contractDiagnostic))
+            {
+                return $"Dispatch failed: rule={rule}: {contractDiagnostic} Command: {task.LastDispatch!.Command}";
+            }
+
             var exitCode = outcome.ExitCode != 0 &&
                 (string.Equals(rule, TaskOutcomeRules.SilentLaunchFailure.Token, StringComparison.Ordinal) ||
                  string.Equals(rule, TaskOutcomeRules.UnknownFailure.Token, StringComparison.Ordinal))
