@@ -4,8 +4,9 @@ using System.Xml.Linq;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-// The collection owns the acceptance lane and supplies an isolated build root.
-[Collection(TestCollections.DotnetBuildSlots)]
+// Only the isolated build-root fixture is shared; executor overrides are per instance.
+// This collection preserves the class's existing Remainder lane membership.
+[Collection("IsolatedProcessSpawning")]
 public sealed class RemoteFocusedEvidenceShadowTests : GoalAcceptanceVerifierTestBase
 {
     [Xunit.Fact]
@@ -250,8 +251,6 @@ public sealed class RemoteFocusedEvidenceShadowTests : GoalAcceptanceVerifierTes
         Assert.Equal(300, configuration.FocusedEvidence.GraceSeconds);
     }
 
-    // This independent fixture belongs to DotnetBuildSlots, rather than the
-    // historical split fixture family whose concurrency contract is JobAccounting.
     private static int StableSlotIndex(string path)
     {
         var match = System.Text.RegularExpressions.Regex.Match(
