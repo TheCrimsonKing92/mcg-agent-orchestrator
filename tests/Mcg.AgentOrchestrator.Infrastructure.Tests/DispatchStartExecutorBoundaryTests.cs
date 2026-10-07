@@ -17,7 +17,7 @@ public sealed class DispatchStartExecutorBoundaryTests
     {
         var directory = OrchestrationDirectory();
         var executor = Path.Combine(directory, "DispatchStartExecutor.cs");
-        Assert.Contains("TryRecoverSandboxPrep", File.ReadAllText(executor), StringComparison.Ordinal);
+        Assert.Contains("private static bool TryRecoverSandboxPrep(", File.ReadAllText(executor), StringComparison.Ordinal);
         var otherFiles = Directory.GetFiles(directory, "*.cs", SearchOption.AllDirectories)
             .Where(path => !string.Equals(path, executor, StringComparison.OrdinalIgnoreCase)).ToArray();
         Assert.NotEmpty(otherFiles);
