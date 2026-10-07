@@ -1522,6 +1522,31 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         return results;
     }
 
+    public async Task<IReadOnlyList<GoalSummary>> ListGoalIdStatusesAsync(CancellationToken cancellationToken = default)
+    {
+        await using var conn = OpenConnection();
+        var results = new List<GoalSummary>();
+
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT id, status, objective, updated_at
+            FROM goals
+            ORDER BY updated_at DESC
+            """;
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            results.Add(new GoalSummary(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3)));
+        }
+
+        return results;
+    }
+
     public async Task<IReadOnlyList<GoalSummary>> ListConductLoopGoalMetadataAsync(CancellationToken cancellationToken = default)
     {
         await using var conn = OpenConnection();

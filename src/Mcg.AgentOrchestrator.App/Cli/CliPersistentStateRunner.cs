@@ -1550,7 +1550,7 @@ internal static partial class CliPersistentStateRunner
         }
 
         var missingDependencySet = missingDependencyIds.ToHashSet(StringComparer.Ordinal);
-        var missingDependencySummaries = stateRepository.ListGoalMetadataAsync().GetAwaiter().GetResult()
+        var missingDependencySummaries = summaries
             .Where(summary => missingDependencySet.Contains(summary.Id))
             .ToArray();
         var missingDependencyMetadata = missingDependencySummaries
