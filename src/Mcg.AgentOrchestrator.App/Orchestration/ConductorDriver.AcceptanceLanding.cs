@@ -239,81 +239,35 @@ internal sealed partial class ConductorDriver
                     cancellationToken,
                     executionOptions,
                     omitStableSlotIndexWithoutLease: true);
-        ConductorParallelAcceptanceAttemptDecision decision;
-        try
+        var execution = VerifyingAttemptExecutor.Execute(
+            _isConductorTick,
+            exhaustion => _parallelAcceptanceAttemptCoordinator.Evaluate(candidate, policy, runAcceptance, exhaustion),
+            attempt => _parallelAcceptanceAttemptCoordinator.ObserveExistingAttempt(attempt, candidate),
+            attempt => EmitNoTickAcceptanceLifecycle(candidate, "started", attempt),
+            _utcNow,
+            _noTickAcceptancePollDelay,
+            NoTickAcceptancePollInterval,
+            _noTickAcceptancePollTimeout);
+        if (execution.ArtifactWriterBusyMessage is { } busyMessage)
         {
-            decision = _parallelAcceptanceAttemptCoordinator.Evaluate(
-                candidate,
-                policy,
-                runAcceptance,
-                _isConductorTick
-                    ? AcceptanceStableSlotExhaustionPolicy.Fail
-                    : AcceptanceStableSlotExhaustionPolicy.DegradeToSerial);
-            if (_isConductorTick &&
-                decision.Kind == ConductorParallelAcceptanceAttemptDecisionKind.Started &&
-                decision.Attempt.Outcome != ConductorParallelAcceptanceAttemptOutcome.Running)
-            {
-                decision = _parallelAcceptanceAttemptCoordinator.Evaluate(
-                    candidate,
-                    policy,
-                    runAcceptance);
-            }
-        }
-        catch (AcceptanceArtifactWriterLeaseBusyException ex)
-        {
-            facts = facts with { ArtifactWriterBusy = true, ArtifactWriterMessage = ex.Message };
+            facts = facts with { ArtifactWriterBusy = true, ArtifactWriterMessage = busyMessage };
             return Hold(GoalLifecycleState.Verified, facts);
         }
 
+        var decision = execution.Decision!;
         facts = facts with
         {
             ArtifactWriterBusy = false,
             AttemptDecisionKind = decision.Kind.ToString(),
             AttemptId = decision.Attempt.AttemptId
         };
-        if (!_isConductorTick &&
-            decision.Kind is ConductorParallelAcceptanceAttemptDecisionKind.Started or
-                ConductorParallelAcceptanceAttemptDecisionKind.Running)
+        if (execution.NoTickWaitOutcome is { } waitOutcome)
         {
-            if (decision.Kind == ConductorParallelAcceptanceAttemptDecisionKind.Started)
-            {
-                EmitNoTickAcceptanceLifecycle(candidate, "started", decision.Attempt);
-            }
-            var deadline = _utcNow().Add(_noTickAcceptancePollTimeout);
-            while (decision.Kind is ConductorParallelAcceptanceAttemptDecisionKind.Started or
-                   ConductorParallelAcceptanceAttemptDecisionKind.Running)
-            {
-                if (_utcNow() >= deadline)
-                {
-                    facts = facts with { NoTickWaitOutcome = "deadline-elapsed" };
-                    return Hold(GoalLifecycleState.Verified, facts, ConductorHoldOwner.BackgroundAttempt);
-                }
-
-                _noTickAcceptancePollDelay(NoTickAcceptancePollInterval);
-                try
-                {
-                    decision = _parallelAcceptanceAttemptCoordinator.ObserveExistingAttempt(
-                        decision.Attempt,
-                        candidate);
-                    facts = facts with { AttemptDecisionKind = decision.Kind.ToString(), AttemptId = decision.Attempt.AttemptId };
-                }
-                catch (InvalidDataException ex) when (
-                    ex.Message.Contains(" is unreadable.", StringComparison.Ordinal))
-                {
-                    continue;
-                }
-                catch (InvalidDataException ex) when (
-                    ex.Message.Contains("after reconciliation", StringComparison.Ordinal))
-                {
-                    facts = facts with { NoTickWaitOutcome = "reconciliation-ownership-changed" };
-                    return Hold(GoalLifecycleState.Verified, facts);
-                }
-                catch (InvalidDataException)
-                {
-                    facts = facts with { NoTickWaitOutcome = "ownership-changed" };
-                    return Hold(GoalLifecycleState.Verified, facts);
-                }
-            }
+            facts = facts with { NoTickWaitOutcome = waitOutcome };
+            return Hold(GoalLifecycleState.Verified, facts,
+                waitOutcome == VerifyingAttemptExecutor.DeadlineElapsed
+                    ? ConductorHoldOwner.BackgroundAttempt
+                    : ConductorHoldOwner.None);
         }
 
         switch (decision.Kind)
