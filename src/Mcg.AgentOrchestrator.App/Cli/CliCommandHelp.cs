@@ -78,6 +78,8 @@ internal static class CliCommandHelp
     public const string OwnerDigestUsage = "Usage: owner-digest [--since <ISO-8601-with-offset>] [--until <ISO-8601-with-offset>] [--json] [--rounds]";
     public const string FailureClustersUsage = "Usage: failure-clusters [--since <ISO-8601>] [--until <ISO-8601>] [--top <n>] [--json]";
     public const string LaneReuseShadowUsage = "Usage: lane-reuse-shadow [--since <ISO-8601>] [--until <ISO-8601>] [--json]";
+    public const string RemoteExecutorsUsage = "Usage: remote-executors [--since <ISO-8601>] [--last <N>] [--json]";
+    public const string RemoteLaneSelfTestUsage = "Usage: remote-lane-selftest --executor <id> [--timeout-minutes <n>]";
     public const string RoundValueUsage = "Usage: round-value [--since <ISO-8601-with-offset>] [--until <ISO-8601-with-offset>] [--json] [--by-skill]";
     public const string LessonUsage = "Usage: lesson record --situation <text> --rule <text> --evidence <ref>... [--applies-to <tag>...] [--goal <goal-prefix>] [--until-goal <goal-prefix>] [--actor-kind human|agent] | lesson retire <lesson-id> --reason <text> [--evidence <ref>...]";
     public const string LessonsUsage = "Usage: lessons [--all] [--applies-to <tag>] [--json]";
@@ -543,6 +545,13 @@ internal static class CliCommandHelp
         LaneReuseShadowUsage,
         "Report shadow lane reuse, hypothetical serial savings and misses; default window is 7 days.",
         ["--since", "--until", "--json", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry RemoteExecutors = new(
+        RemoteExecutorsUsage, "Read recent remote executor outcomes and advisory probes.",
+        ["--since", "--last", "--json", "--help", "-h"]);
+    private static readonly CommandHelpEntry RemoteLaneSelfTest = new(
+        RemoteLaneSelfTestUsage, "Operator-only self-test that pushes to the executor and runs one real SSH lane job.",
+        ["--executor", "--timeout-minutes", "--help", "-h"]);
 
     private static readonly CommandHelpEntry RoundValue = new(
         RoundValueUsage,
@@ -1034,6 +1043,16 @@ internal static class CliCommandHelp
         if (args[0].Equals("lane-reuse-shadow", StringComparison.OrdinalIgnoreCase))
         {
             entry = LaneReuseShadow;
+            return true;
+        }
+        if (args[0].Equals("remote-executors", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = RemoteExecutors;
+            return true;
+        }
+        if (args[0].Equals("remote-lane-selftest", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = RemoteLaneSelfTest;
             return true;
         }
         if (args[0].Equals("round-value", StringComparison.OrdinalIgnoreCase))

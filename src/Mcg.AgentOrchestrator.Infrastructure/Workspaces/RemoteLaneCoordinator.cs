@@ -16,6 +16,7 @@ internal sealed class RemoteLaneCoordinator : IDisposable
     private readonly TimeProvider _clock;
     private readonly TimeSpan _pollInterval;
     private readonly string _ledgerPath;
+    private readonly string _occupancyRoot;
     private readonly string? _attemptPrefix;
     private readonly Action<string, RemoteLaneOutcomeCode>? _onOutcome;
     private readonly object _gate = new();
@@ -35,6 +36,7 @@ internal sealed class RemoteLaneCoordinator : IDisposable
         _clock = clock;
         _pollInterval = pollInterval > TimeSpan.Zero ? pollInterval : TimeSpan.FromSeconds(1);
         _ledgerPath = RemoteExecutorHealthLedger.ResolveStorePath(worktreePath);
+        _occupancyRoot = AcceptancePartitionVerdictCache.ResolveHostStateRoot(worktreePath);
         _attemptPrefix = attemptPrefix;
         _onOutcome = onOutcome;
     }
@@ -56,6 +58,7 @@ internal sealed class RemoteLaneCoordinator : IDisposable
         {
             var entry = _configuration.Executors.FirstOrDefault(entry => !_busy.Contains(entry.Id) && !_retired.Contains(entry.Id));
             if (entry is not null) _busy.Add(entry.Id);
+            if (entry is not null) RemoteExecutorOccupancy.Claim(_occupancyRoot, entry.Id, _cache.AttemptId);
             return entry;
         }
     }
@@ -63,6 +66,7 @@ internal sealed class RemoteLaneCoordinator : IDisposable
     internal void Release(string executorId)
     {
         lock (_gate) _busy.Remove(executorId);
+        RemoteExecutorOccupancy.Release(_occupancyRoot, executorId, _cache.AttemptId);
     }
 
     private RemoteLaneRequest CreateRequest(Check check, string executorId)
@@ -148,12 +152,13 @@ internal sealed class RemoteLaneCoordinator : IDisposable
         RemoteLaneOutcome Fallback(RemoteLaneOutcomeCode code, RemoteLaneResult? result = null, string? reason = null)
         {
             lock (_gate) { _busy.Remove(entry.Id); _retired.Add(entry.Id); }
+            RemoteExecutorOccupancy.Release(_occupancyRoot, entry.Id, _cache.AttemptId);
             Record(request, code, result, reason);
             return new(request, handle, null);
         }
     }
 
-    private static RemoteLaneOutcomeCode? BindingMismatch(RemoteLaneRequest request, RemoteLaneResult result)
+    internal static RemoteLaneOutcomeCode? BindingMismatch(RemoteLaneRequest request, RemoteLaneResult result)
     {
         if (result.VerifyingCommitSha != request.VerifyingCommitSha) return RemoteLaneOutcomeCode.BindingMismatchCommit;
         if (result.ObservedTreeSha != request.CandidateTreeSha) return RemoteLaneOutcomeCode.BindingMismatchTree;

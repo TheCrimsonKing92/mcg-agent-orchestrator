@@ -204,6 +204,11 @@ if (CliConductorCommand.IsCommand(startupArgs))
     return ExitCompletedStartupCommand(CliConductorCommand.Run(startupArgs, workspace));
 }
 
+if (CliRemoteLaneSelfTestCommand.IsCommand(startupArgs))
+{
+    return ExitCompletedStartupCommand(await CliRemoteLaneSelfTestCommand.RunAsync(startupArgs, workspace));
+}
+
 if (Mcg.AgentOrchestrator.App.OwnerConsole.OwnerConsoleVerb.IsCommand(startupArgs))
     return ExitCompletedStartupCommand(await Mcg.AgentOrchestrator.App.OwnerConsole.OwnerConsoleVerb.RunAsync(workspace));
 

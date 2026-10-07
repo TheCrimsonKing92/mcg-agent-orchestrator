@@ -6,6 +6,10 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed partial class GoalAcceptanceVerifier
 {
+    internal static Task<CommandResult> RunRemoteLaneTransportAsync(
+        string[] args, string directory, TimeSpan bound, CancellationToken token) =>
+        RunProcessAsync(args, directory, bound, token);
+
     private readonly ConditionalWeakTable<AcceptancePartitionVerdictCache, RemoteLaneCoordinator> _remoteLaneCoordinators = new();
 
     private RemoteLaneCoordinator? LoadRemoteLanes(string worktreePath, AcceptancePartitionVerdictCache? cache)
