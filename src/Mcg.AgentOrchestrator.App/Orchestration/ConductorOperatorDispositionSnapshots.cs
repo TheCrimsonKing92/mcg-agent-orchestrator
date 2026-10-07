@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -62,8 +61,6 @@ public sealed record ConductorOperatorEvidenceSnapshot(string Kind, string Path,
 
 public static class ConductorOperatorDispositionSnapshots
 {
-    private static readonly JsonSerializerOptions CaseInsensitiveJson = new() { PropertyNameCaseInsensitive = true };
-
     public static IReadOnlyList<ConductorOperatorDispositionSnapshot> Build(
         AgentOrchestratorKernel kernel,
         string? executionDirectory)
@@ -90,95 +87,4 @@ public static class ConductorOperatorDispositionSnapshots
             .Select(ConductorOperatorDispositionSnapshot.From)
             .ToList();
     }
-
-    public static GoalOperatorDisposition? TryReadLatestForGoal(string runEventStorePath, Goal goal)
-    {
-        if (string.IsNullOrWhiteSpace(runEventStorePath) || !File.Exists(runEventStorePath))
-        {
-            return null;
-        }
-
-        try
-        {
-            var records = new SqliteRunEventStore(runEventStorePath)
-                .ReadSinceAsync(maxCount: 2000)
-                .GetAwaiter()
-                .GetResult();
-            return TryFindLatestForGoal(records, goal);
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    public static GoalOperatorDisposition? TryFindLatestForGoal(IEnumerable<RunEventRecord> records, Goal goal)
-    {
-        foreach (var record in records
-            .Where(record => record.EventType == RunEventTypes.ConductorTick)
-            .OrderByDescending(record => record.Sequence))
-        {
-            foreach (var snapshot in ReadSnapshots(record).Reverse())
-            {
-                if (snapshot.GoalId.Equals(goal.Id.Value, StringComparison.OrdinalIgnoreCase))
-                {
-                    return ToDisposition(goal, snapshot);
-                }
-            }
-        }
-
-        return null;
-    }
-
-    internal static IReadOnlyList<ConductorOperatorDispositionSnapshot> ReadSnapshots(RunEventRecord record)
-    {
-        if (string.IsNullOrWhiteSpace(record.PayloadJson))
-        {
-            return [];
-        }
-
-        try
-        {
-            var payload = JsonSerializer.Deserialize<ConductorTickDispositionPayload>(
-                record.PayloadJson,
-                CaseInsensitiveJson);
-            return payload?.OperatorDispositions ?? [];
-        }
-        catch (JsonException)
-        {
-            return [];
-        }
-    }
-
-    private static GoalOperatorDisposition ToDisposition(Goal goal, ConductorOperatorDispositionSnapshot snapshot) =>
-        new(
-            goal.Id,
-            snapshot.State,
-            snapshot.Confidence,
-            snapshot.Reason,
-            snapshot.NextSafeCommand,
-            snapshot.FreshAt,
-            snapshot.Blockers.ToList(),
-            snapshot.Evidence.Select(ToEvidence).ToList(),
-            snapshot.Dispatches.Select(ToDispatchDisposition).ToList());
-
-    private static DispatchOperatorDisposition ToDispatchDisposition(ConductorDispatchOperatorDispositionSnapshot snapshot) =>
-        new(
-            new TaskId(snapshot.TaskId),
-            snapshot.Role,
-            snapshot.TaskStatus,
-            snapshot.State,
-            snapshot.Confidence,
-            snapshot.Reason,
-            snapshot.NextSafeCommand,
-            snapshot.FreshAt,
-            snapshot.Blockers.ToList(),
-            snapshot.Evidence.Select(ToEvidence).ToList(),
-            DispatchState: null);
-
-    private static OperatorEvidencePointer ToEvidence(ConductorOperatorEvidenceSnapshot snapshot) =>
-        new(snapshot.Kind, snapshot.Path, snapshot.Detail);
-
-    private sealed record ConductorTickDispositionPayload(
-        IReadOnlyList<ConductorOperatorDispositionSnapshot>? OperatorDispositions);
 }
