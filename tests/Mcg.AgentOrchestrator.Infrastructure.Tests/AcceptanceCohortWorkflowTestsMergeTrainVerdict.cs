@@ -7,12 +7,12 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // Each case owns its repository, worktrees, receipt store and host artifacts; console redirection is stubbed.
 public sealed class AcceptanceCohortWorkflowTestsMergeTrainVerdict : AcceptanceCohortWorkflowTests
 {
-    [Theory(DisplayName = "Failed train gates publish the deciding receipt only in gate-only mode")]
+    [Theory(DisplayName = "Failed train gates preserve the deciding recorded receipt in every mode")]
     [InlineData(true, false, true)]
     [InlineData(false, false, true)]
     [InlineData(true, true, true)]
     [InlineData(true, false, false)]
-    public void NonPassedTrainPreservesReceiptForChildOnly(
+    public void NonPassedTrainPreservesRecordedReceipt(
         bool gateOnly, bool infrastructureFailure, bool publishChildResult)
     {
         var repo = CreateReducedAcceptanceCohortRepository();
@@ -104,17 +104,10 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrainVerdict : AcceptanceC
                     gateOnly: gateOnly);
 
                 Assert.Null(result.Receipt);
-                if (gateOnly)
-                {
-                    var recorded = Assert.IsType<MergeTrainReceipt>(result.RecordedGateReceipt);
-                    Assert.Equal(decidingIdentity.Value, recorded.Identity.Value);
-                    Assert.Equal(expectedOutcome, recorded.Outcome);
-                    Assert.Equal(store.TryReadReceipt(decidingIdentity.Value)!.ReceiptId, recorded.ReceiptId);
-                }
-                else
-                {
-                    Assert.Null(result.RecordedGateReceipt);
-                }
+                var recorded = Assert.IsType<MergeTrainReceipt>(result.RecordedReceipt);
+                Assert.Equal(decidingIdentity.Value, recorded.Identity.Value);
+                Assert.Equal(expectedOutcome, recorded.Outcome);
+                Assert.Equal(store.TryReadReceipt(decidingIdentity.Value)!.ReceiptId, recorded.ReceiptId);
                 Assert.Empty(result.MemberResults);
                 Assert.Equal("outcome=Failed attempts=2 fallback=ordinary", result.Detail);
                 Assert.Equal(goals[2].Id, Assert.Single(result.Ejections).GoalId);

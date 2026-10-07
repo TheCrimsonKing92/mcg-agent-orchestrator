@@ -59,6 +59,7 @@ internal sealed partial class ConductorDriver
         var originalBindings = selection.BindMembers();
         var attemptId = $"merge-train-attempt-{Guid.NewGuid():N}";
         var allEjections = new List<MergeTrainEjection>();
+        MergeTrainReceipt? lastRecordedReceipt = null;
         var selectedGoalIds = selection.Members.Select(member => member.GoalId.Value)
             .ToHashSet(StringComparer.Ordinal);
         var trainKey = TrainGateRunIdentity(selectedGoalIds);
@@ -258,6 +259,7 @@ internal sealed partial class ConductorDriver
                 }
             }
 
+            lastRecordedReceipt = receipt;
             if (receipt.Outcome == MergeTrainGateOutcome.Passed)
             {
                 if (redDropped is not null && redReceipt is not null)
@@ -345,9 +347,7 @@ internal sealed partial class ConductorDriver
                     RecordTrainImplicatedMember(attributed, receipt);
                 RecordTrainRedPair(selection, members, receipt);
                 var detail = $"outcome={receipt.Outcome} attempts={attempt + 1} fallback=ordinary";
-                return gateOnly
-                    ? Fallback(detail) with { RecordedGateReceipt = receipt }
-                    : Fallback(detail);
+                return Fallback(detail);
             }
 
             // Keep the bounded bisection; absent source attribution, retain drop-newest.
@@ -373,7 +373,7 @@ internal sealed partial class ConductorDriver
             Receipt: null,
             new Dictionary<string, ConductorAdvanceResult>(StringComparer.Ordinal),
             allEjections,
-            detail);
+            detail) { RecordedReceipt = lastRecordedReceipt };
 
         Dictionary<string, ConductorAdvanceResult> Hold(IReadOnlyList<Goal> goals, string detail) =>
             goals.ToDictionary(
@@ -390,7 +390,7 @@ internal sealed partial class ConductorDriver
             var detail = FormatCohortGateInFlightDetail(run, _utcNow());
             return new ConductorMergeTrainRunResult(null,
                 Hold(selection.Members.Select(member => goalsById[member.GoalId]).ToArray(), detail),
-                allEjections, detail);
+                allEjections, detail) { RecordedReceipt = lastRecordedReceipt };
         }
     }
 

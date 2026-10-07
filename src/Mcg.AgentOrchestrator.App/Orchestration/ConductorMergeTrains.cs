@@ -25,8 +25,8 @@ internal sealed record ConductorMergeTrainRunResult(
     IReadOnlyList<MergeTrainEjection> Ejections,
     string Detail)
 {
-    // Reporting a completed gate must not turn an ordinary fallback into a landable result.
-    internal MergeTrainReceipt? RecordedGateReceipt { get; init; }
+    // The last recorded gate receipt is separate from the passed receipt eligible for landing.
+    internal MergeTrainReceipt? RecordedReceipt { get; init; } = Receipt;
 }
 
 internal static class ConductorMergeTrainSelector
