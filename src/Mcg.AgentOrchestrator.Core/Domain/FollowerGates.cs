@@ -88,7 +88,7 @@ public enum FollowerGateDisposition
     Discard
 }
 
-public static class FollowerGateBindingRule
+public static partial class FollowerGateBindingRule
 {
     public static FollowerGateBindingVerdict Evaluate(
         FollowerGateReceipt receipt,

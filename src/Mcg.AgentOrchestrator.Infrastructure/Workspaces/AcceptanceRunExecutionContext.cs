@@ -67,7 +67,8 @@ public sealed record AcceptanceRunExecutionOptions(
     string? LivenessCheckHint = null,
     IReadOnlyList<AcceptanceOwnerProtectedCohortMember>? OwnerProtectedCohortMembers = null,
     string? GateRunIdentity = null,
-    Action<string>? RemoteLaneEventSink = null);
+    Action<string>? RemoteLaneEventSink = null,
+    AcceptanceFollowerPinnedBase? PinnedBase = null);
 
 public sealed record AcceptanceOwnerProtectedCohortMember(GoalId GoalId, string CandidateSha);
 
@@ -339,15 +340,7 @@ internal sealed class AcceptanceAttemptExecutionOwner : AcceptanceRunExecutionOw
                 stableSlotIndex,
                 stableSlotLease,
                 CancellationToken).ConfigureAwait(false);
-            if (Identity.CandidateTreeSha != "unavailable" &&
-                Identity.MainSha != "unavailable" &&
-                Identity.VerifyingCommitSha != "unavailable")
-            {
-                EnsureIdentityCurrent(
-                    _identityResolvers.ResolveCandidateTreeSha(worktreePath),
-                    _identityResolvers.ResolveMainSha(worktreePath),
-                    _identityResolvers.ResolveVerifyingCommitSha(worktreePath));
-            }
+            EnsureResolvedIdentityCurrent(worktreePath);
             if (result.Passed)
             {
                 stableSlotLease?.SetReleaseOutcome(OwnedRunRootReleaseOutcome.Succeeded);
@@ -376,6 +369,19 @@ internal sealed class AcceptanceAttemptExecutionOwner : AcceptanceRunExecutionOw
         ArgumentNullException.ThrowIfNull(check);
         return await verifier.RunInvocationForOwnerTestsAsync(
             this, invocation, check, worktreePath, cancellationToken).ConfigureAwait(false);
+    }
+
+    internal void EnsureResolvedIdentityCurrent(string worktreePath)
+    {
+        if (Identity.CandidateTreeSha != "unavailable" &&
+            Identity.MainSha != "unavailable" &&
+            Identity.VerifyingCommitSha != "unavailable")
+        {
+            EnsureIdentityCurrent(
+                _identityResolvers.ResolveCandidateTreeSha(worktreePath),
+                _identityResolvers.ResolveMainSha(worktreePath),
+                _identityResolvers.ResolveVerifyingCommitSha(worktreePath));
+        }
     }
 
     internal void EnsureIdentityCurrent(
@@ -482,7 +488,7 @@ internal sealed class AcceptanceRunExecutionContextView(
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }
 
-public static class AcceptanceExecutionOwners
+public static partial class AcceptanceExecutionOwners
 {
     public static IAcceptanceAttemptExecutionOwner CreateAttempt(
         string worktreePath,
@@ -503,6 +509,8 @@ public static class AcceptanceExecutionOwners
         }
 
         var identityResolvers = CreateGitIdentityResolvers();
+        if (options.PinnedBase is { } pinnedBase)
+            identityResolvers = identityResolvers with { ResolveMainSha = path => ResolveFollowerPinnedMain(path, pinnedBase) };
         return CreateAttemptCore(
             worktreePath,
             goalId,
@@ -558,24 +566,34 @@ public static class AcceptanceExecutionOwners
         string attemptId,
         AcceptanceGateEngineSettings settings,
         AcceptanceAttemptIdentityResolvers identityResolvers,
-        bool publishResultsPrefix = true) =>
-        new(
-            new AcceptanceAttemptIdentity(
-                attemptId,
-                goalId?.Value ?? "operator",
-                Path.GetFullPath(worktreePath),
-                identityResolvers.ResolveCandidateTreeSha(worktreePath) ?? "unavailable",
-                identityResolvers.ResolveMainSha(worktreePath) ?? "unavailable",
-                identityResolvers.ResolveVerifyingCommitSha(worktreePath) ?? "unavailable",
-                resultsPrefix,
-                stableSlotIndex,
-                Environment.ProcessId,
-                options.LivenessCheckHint),
+        bool publishResultsPrefix = true)
+    {
+        var identity = new AcceptanceAttemptIdentity(
+            attemptId,
+            goalId?.Value ?? "operator",
+            Path.GetFullPath(worktreePath),
+            identityResolvers.ResolveCandidateTreeSha(worktreePath) ?? "unavailable",
+            identityResolvers.ResolveMainSha(worktreePath) ?? "unavailable",
+            identityResolvers.ResolveVerifyingCommitSha(worktreePath) ?? "unavailable",
+            resultsPrefix,
+            stableSlotIndex,
+            Environment.ProcessId,
+            options.LivenessCheckHint);
+        if (options.PinnedBase is { } pinnedBase &&
+            !identity.MainSha.Equals(pinnedBase.LeaderCandidateRevision, StringComparison.Ordinal))
+        {
+            throw new AcceptanceExecutionIdentityChangedException(
+                $"Acceptance run '{attemptId}' follower base is no longer pending or landed exactly.",
+                isChangedIdentity: identity.MainSha != "unavailable");
+        }
+        return new(
+            identity,
             settings,
             cancellationToken,
             options,
             identityResolvers,
             publishResultsPrefix);
+    }
 
     private static AcceptanceAttemptIdentityResolvers CreateGitIdentityResolvers() =>
         new(
