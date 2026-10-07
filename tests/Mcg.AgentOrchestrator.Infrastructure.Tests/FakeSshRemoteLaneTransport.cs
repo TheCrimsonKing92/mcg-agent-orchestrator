@@ -8,7 +8,7 @@ internal sealed class FakeSshRemoteLaneTransport : IAsyncDisposable
 {
     internal sealed record Call(string[] Arguments, string Directory, TimeSpan Bound);
     internal sealed record Poll(Dictionary<string, object?>? Status, string Heartbeat = "executor-time", int Exit = 0,
-        bool TimedOut = false, bool Malformed = false);
+        bool TimedOut = false, bool Malformed = false, string? Stderr = null);
     internal readonly ConcurrentQueue<Call> Calls = new();
     internal readonly Channel<Poll> Polls = Channel.CreateUnbounded<Poll>();
     private readonly Channel<SshPollObservation> _observations = Channel.CreateUnbounded<SshPollObservation>();
@@ -44,7 +44,7 @@ internal sealed class FakeSshRemoteLaneTransport : IAsyncDisposable
             if (poll.Status is not null) File.WriteAllText(Path.Combine(destination, "status.json"), JsonSerializer.Serialize(poll.Status), new System.Text.UTF8Encoding(true));
             if (poll.Malformed) File.WriteAllText(Path.Combine(destination, "status.json"), "{");
             File.WriteAllText(Path.Combine(destination, "heartbeat.txt"), poll.Heartbeat);
-            return new(poll.Exit, Noise, poll.TimedOut, Stderr: Noise);
+            return new(poll.Exit, Noise, poll.TimedOut, Stderr: poll.Stderr ?? Noise);
         }
         Calls.Enqueue(new(args, directory, bound));
         if (args[3].EndsWith(".json", StringComparison.Ordinal))

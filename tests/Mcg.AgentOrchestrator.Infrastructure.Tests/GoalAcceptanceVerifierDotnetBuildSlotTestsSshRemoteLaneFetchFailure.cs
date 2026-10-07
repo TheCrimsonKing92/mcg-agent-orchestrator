@@ -21,7 +21,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSshRemoteLaneFetch
         var lane = Assert.Single(result.Checks!.Where(check => check.Name == Lane));
         Assert.Equal(!localRed, lane.Passed);
         Assert.DoesNotContain("remote-executor=", lane.ResultSummary ?? "");
-        Assert.Equal(1, scenario.Fetches);
+        Assert.Equal(2, scenario.Fetches);
         var row = Assert.Single(scenario.Health().Where(row => row.Outcome == RemoteLaneOutcomeCode.Unreachable));
         Assert.Contains("RemoteLaneTransportException: result-fetch-failed", row.Reason);
         Assert.Contains("exit=1", row.Reason);

@@ -13,7 +13,8 @@ internal interface IRemoteLaneHandle
     void Abandon();
 }
 
-internal sealed record RemoteLaneSubmission(IRemoteLaneHandle? Handle, string? FailureReason = null);
+internal sealed record RemoteLaneSubmission(IRemoteLaneHandle? Handle, string? FailureReason = null,
+    IReadOnlyList<RemoteLaneStep>? Steps = null);
 internal sealed record RemoteLaneRequest(
     string ExecutorId, string AttemptId, string GoalId, string Lane, string Project, string Filter,
     string FilterHash, string VerifyingCommitSha, string CandidateTreeSha, string MainSha, string ManifestIdentity);

@@ -30,7 +30,12 @@ public sealed partial class GoalAcceptanceVerifier
                 : UnavailableRemoteLaneExecutor.Instance);
         var coordinator = new RemoteLaneCoordinator(configuration, cache, worktreePath, _executionContext?.ResultsPrefix,
             executor, clock,
-            _testOverrides.RemoteLanePollInterval ?? TimeSpan.FromSeconds(1), _testOverrides.OnRemoteLaneOutcomeForTests);
+            _testOverrides.RemoteLanePollInterval ?? TimeSpan.FromSeconds(1), _testOverrides.OnRemoteLaneOutcomeForTests,
+            line =>
+            {
+                try { _executionContext?.ReportRemoteLaneEvent(line); } catch (Exception) { }
+                _testOverrides.OnRemoteLaneEventForTests?.Invoke(line);
+            });
         _remoteLaneCoordinators.Add(cache, coordinator);
         return coordinator;
     }

@@ -17,7 +17,8 @@ internal sealed record RemoteLaneBinding(
 internal sealed record RemoteExecutorHealthRecord(
     DateTimeOffset ObservedAt, string ExecutorId, string GateAttemptId, string Lane,
     RemoteLaneOutcomeCode Outcome, string? FaultOwner, RemoteLaneBinding Expected,
-    RemoteLaneBinding? Observed, string? Reason = null, int Version = 1);
+    RemoteLaneBinding? Observed, string? Reason = null, int Version = 1,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] RemoteLaneAttemptDetail? Attempt = null);
 
 internal static class RemoteExecutorHealthLedger
 {

@@ -21,6 +21,7 @@ internal interface IAcceptanceRunExecutionContext : IAsyncDisposable
     void TrackEnvironment(DotnetBuildEnvironment environment);
     void MarkSuccessful();
     void ReportProgress(AcceptanceGateProgress progress);
+    void ReportRemoteLaneEvent(string detail);
     Func<bool>? ResolveCancellationProbe(bool boundary);
     void ApplyApparatusReceiptEnvironment(IDictionary<string, string?> environment);
     Task DrainAsync(CancellationToken cancellationToken = default);
@@ -65,7 +66,8 @@ public sealed record AcceptanceRunExecutionOptions(
     string? ResultsPrefix = null,
     string? LivenessCheckHint = null,
     IReadOnlyList<AcceptanceOwnerProtectedCohortMember>? OwnerProtectedCohortMembers = null,
-    string? GateRunIdentity = null);
+    string? GateRunIdentity = null,
+    Action<string>? RemoteLaneEventSink = null);
 
 public sealed record AcceptanceOwnerProtectedCohortMember(GoalId GoalId, string CandidateSha);
 
@@ -188,6 +190,7 @@ internal abstract class AcceptanceRunExecutionOwner : IAcceptanceRunExecutionCon
         Interlocked.Exchange(ref _releaseOutcome, (int)OwnedRunRootReleaseOutcome.Cancelled);
 
     public void ReportProgress(AcceptanceGateProgress progress) => _options.ProgressSink?.Invoke(progress);
+    public void ReportRemoteLaneEvent(string detail) => _options.RemoteLaneEventSink?.Invoke(detail);
 
     public Func<bool>? ResolveCancellationProbe(bool boundary) =>
         boundary ? _options.BoundaryCancellationProbe : _options.CancellationProbe;
@@ -471,6 +474,7 @@ internal sealed class AcceptanceRunExecutionContextView(
     public void TrackEnvironment(DotnetBuildEnvironment environment) => owner.TrackEnvironment(environment);
     public void MarkSuccessful() => owner.MarkSuccessful();
     public void ReportProgress(AcceptanceGateProgress progress) => owner.ReportProgress(progress);
+    public void ReportRemoteLaneEvent(string detail) => owner.ReportRemoteLaneEvent(detail);
     public Func<bool>? ResolveCancellationProbe(bool boundary) => owner.ResolveCancellationProbe(boundary);
     public void ApplyApparatusReceiptEnvironment(IDictionary<string, string?> environment) =>
         TempRootApparatusLossReceiptStore.ApplyScope(environment, RunId, ApparatusReceiptPath);

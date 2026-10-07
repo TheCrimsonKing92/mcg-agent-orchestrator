@@ -124,6 +124,9 @@ internal sealed partial class ConductorDriver
         }
     }
 
+    internal static void AppendRemoteLaneEvent(ConductEventLogWriter writer, string? goalId, string detail) =>
+        TryAppendGateProgressEvent(writer, goalId, detail, eventKind: "remote-lane");
+
     internal static void AppendCohortGateProgressEvents(
         ConductEventLogWriter writer,
         AcceptanceCohortIdentity identity,
