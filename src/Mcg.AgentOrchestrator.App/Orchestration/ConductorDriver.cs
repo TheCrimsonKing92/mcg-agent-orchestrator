@@ -1736,13 +1736,12 @@ internal sealed partial class ConductorDriver
         }
         var outcome = execution.Outcome;
 
+        startFacts = startFacts with { StartOutcomeCategory = outcome.Category.ToString(), StartOutcomeReason = outcome.Reason ?? "" };
         if (outcome.Category == DispatchStartOutcomeCategory.Deferred)
         {
-            return MakeResult(goal.Id.Value, goalPrefix, policy,
-                new ConductorAdvanceOutcome.Held(fromState, outcome.Reason!) { Owner = outcome.HoldOwner });
+            var deferred = DispatchStartResult(goal, goalPrefix, policy, fromState, startFacts);
+            return deferred with { Outcome = ((ConductorAdvanceOutcome.Held)deferred.Outcome) with { Owner = outcome.HoldOwner } };
         }
-
-        startFacts = startFacts with { StartOutcomeCategory = outcome.Category.ToString(), StartOutcomeReason = outcome.Reason ?? "" };
         if (outcome.Category == DispatchStartOutcomeCategory.Started)
         {
             var startedDecision = DispatchStartPolicy.Evaluate(startFacts);
@@ -1750,7 +1749,7 @@ internal sealed partial class ConductorDriver
                 throw new InvalidOperationException($"Dispatch start decision for goal {goalPrefix} was {startedDecision.Action}, expected Proceed for a started dispatch.");
             SliceBatchAdmissionEvaluator?.RecordAdmitted(goal);
             return MakeResult(goal.Id.Value, goalPrefix, policy,
-                new ConductorAdvanceOutcome.Executed(fromState, "Subscription dispatch started"));
+                new ConductorAdvanceOutcome.Executed(fromState, "Subscription dispatch started") { Decision = startedDecision.ToRecord() });
         }
 
         // When all ready tasks are blocked or deferred, hold rather than escalate so the conductor

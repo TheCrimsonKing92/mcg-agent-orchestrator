@@ -31,6 +31,8 @@ public sealed class DispatchStartPolicyTests
             DispatchStartAction.Escalate, 9, "dispatch-start-failed", "Dispatched 1 task(s) but no processes started (spawn failed)"];
         yield return [new DispatchStartFacts("goal-123") { StartOutcomeCategory = "EmptyBatch", StartOutcomeReason = "No assigned dispatch candidates", ReadinessVerdict = "blocked-without-candidates" },
             DispatchStartAction.Escalate, 9, "dispatch-start-failed", "No assigned dispatch candidates"];
+        yield return [new DispatchStartFacts("goal-123") { StartOutcomeCategory = "Deferred", StartOutcomeReason = "Spec refinement pending" },
+            DispatchStartAction.Hold, 10, "start-deferred", "Spec refinement pending"];
         yield return [new DispatchStartFacts("goal-123"), DispatchStartAction.Proceed, 0, "proceed", "Dispatch start may proceed."];
         yield return [new DispatchStartFacts("goal-123") { StartOutcomeCategory = "Started" },
             DispatchStartAction.Proceed, 0, "proceed", "Dispatch start may proceed."];
@@ -129,7 +131,14 @@ public sealed class DispatchStartPolicyTests
     }
 
     [Xunit.Fact]
-    public void DeferredCategory_RemainsOwnedByExistingHoldPolicy() =>
-        Assert.Throws<InvalidOperationException>(() => DispatchStartPolicy.Evaluate(
-            new DispatchStartFacts("goal-123") { StartOutcomeCategory = "Deferred", StartOutcomeReason = "Spec refinement pending" }));
+    public void DeferredCategory_HoldsAtRungTen()
+    {
+        var decision = DispatchStartPolicy.Evaluate(
+            new DispatchStartFacts("goal-123") { StartOutcomeCategory = "Deferred", StartOutcomeReason = "Spec refinement pending" });
+
+        Assert.Equal(DispatchStartAction.Hold, decision.Action);
+        Assert.Equal(10, decision.DiscriminatingRung);
+        Assert.Equal("start-deferred", decision.DiscriminatingEvidence);
+        Assert.Equal("Spec refinement pending", decision.Reason);
+    }
 }

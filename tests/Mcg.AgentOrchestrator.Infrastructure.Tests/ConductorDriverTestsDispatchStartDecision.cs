@@ -125,7 +125,7 @@ public sealed class ConductorDriverTestsDispatchStartDecision
     }
 
     [Xunit.Fact]
-    public void DeferredStart_KeepsReasonOwnerAndNoDecision()
+    public void DeferredStart_KeepsReasonOwnerAndRecordsDecision()
     {
         var (_, goal) = SimpleGoal();
         var driver = MakeDriver(
@@ -137,12 +137,14 @@ public sealed class ConductorDriverTestsDispatchStartDecision
 
         Assert.Equal("Spec refinement pending", held.Reason);
         Assert.Equal(ConductorHoldOwner.DurableOutbox, held.Owner);
-        Assert.Null(held.Decision);
-        Assert.Null(VerifiedAcceptanceEscalationDecision.BuildTickOutcomePayload(held).Decision);
+        var decision = AssertDecision(held.Decision, "Hold", 10, "start-deferred", "Spec refinement pending");
+        AssertFact(decision, "startOutcomeCategory", "Deferred");
+        AssertPayloadDecision(held, decision, "Held", null);
+        Assert.Same(decision, VerifiedAcceptanceEscalationDecision.BuildTickOutcomePayload(held).Decision);
     }
 
     [Xunit.Fact]
-    public void Started_LeavesExecutedPayloadWithoutDecision()
+    public void Started_RecordsExecutedPayloadDecision()
     {
         var (_, goal) = SimpleGoal();
         var driver = MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true));
@@ -151,7 +153,9 @@ public sealed class ConductorDriverTestsDispatchStartDecision
 
         var executed = Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
         Assert.Equal("Subscription dispatch started", executed.Description);
-        Assert.Null(VerifiedAcceptanceEscalationDecision.BuildTickOutcomePayload(executed).Decision);
+        var decision = AssertDecision(executed.Decision, "Proceed", 0, "proceed", "Dispatch start may proceed.");
+        AssertFact(decision, "startOutcomeCategory", "Started");
+        AssertPayloadDecision(executed, decision, "Executed", null);
     }
 
     private static PolicyDecisionRecord AssertDecision(PolicyDecisionRecord? value, string action, int rung, string evidence, string reason)

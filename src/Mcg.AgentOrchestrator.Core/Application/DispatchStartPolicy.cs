@@ -118,7 +118,7 @@ public static class DispatchStartPolicy
         if (facts.StartOutcomeCategory is "" or "Started")
             return new(DispatchStartAction.Proceed, 0, "proceed", "Dispatch start may proceed.", facts);
         if (facts.StartOutcomeCategory == "Deferred")
-            throw new InvalidOperationException("Deferred dispatch start is owned by its existing hold policy.");
+            return new(DispatchStartAction.Hold, 10, "start-deferred", facts.StartOutcomeReason, facts);
         if (facts.StartOutcomeCategory == "EmptyBatch")
         {
             if (facts.ReadinessVerdict == "deferred")
