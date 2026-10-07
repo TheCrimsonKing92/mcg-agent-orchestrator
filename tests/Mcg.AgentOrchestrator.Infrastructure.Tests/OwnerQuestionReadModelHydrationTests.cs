@@ -141,7 +141,9 @@ public sealed class OwnerQuestionReadModelHydrationTests
             probe.Snapshot = probe.Snapshot with
             {
                 HumanInputRequests = probe.Snapshot.HumanInputRequests.Select(request =>
-                    request.Id == "completed-request" ? request with { IsCompleted = true } : request)
+                    request.Id == "completed-request"
+                        ? request with { IsCompleted = true, Answer = "Resolved", AnsweredAt = Now }
+                        : request)
                     .Append(Request("new-terminal-request", Completed, "New terminal wait")).ToArray()
             };
 
