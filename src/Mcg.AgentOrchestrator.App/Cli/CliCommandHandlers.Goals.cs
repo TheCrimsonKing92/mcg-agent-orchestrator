@@ -1137,7 +1137,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.CurrentGoal,
                 context.Agents,
                 context.Workspace.ExecutionDirectory,
-                triagePolicy));
+                triagePolicy,
+                now: context.DiagnosticsClock?.UtcNow));
             return false;
 
         case "retention-plan":

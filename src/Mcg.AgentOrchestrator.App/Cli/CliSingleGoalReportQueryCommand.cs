@@ -12,7 +12,8 @@ internal static class CliSingleGoalReportQueryCommand
         !string.IsNullOrWhiteSpace(CliSingleGoalReportSelector.ResolveGoalPrefix(args, GetOptionalArgument))) ||
         (args.Count == 2 &&
         (args[0].Equals("retention-plan", StringComparison.OrdinalIgnoreCase) ||
-         args[0].Equals("supervisor", StringComparison.OrdinalIgnoreCase)) &&
+         args[0].Equals("supervisor", StringComparison.OrdinalIgnoreCase) ||
+         args[0].Equals("goal-timing", StringComparison.OrdinalIgnoreCase)) &&
         !string.IsNullOrWhiteSpace(args[1]) &&
         !args[1].StartsWith('-') &&
         !CliCommandHelp.IsCommandSpecificHelp(args));
@@ -25,7 +26,8 @@ internal static class CliSingleGoalReportQueryCommand
         IOperatorChannel? channel,
         ref IReadOnlyList<AgentDefinition> agents,
         ref WorkerProfileCatalog workerProfiles,
-        ref Goal? currentGoal)
+        ref Goal? currentGoal,
+        IClock? diagnosticsClock = null)
     {
         var prefix = CliSingleGoalReportSelector.ResolveGoalPrefix(args, GetOptionalArgument)!;
         var matches = stateQueries.ListGoalMetadataAsync().GetAwaiter().GetResult()
@@ -41,7 +43,7 @@ internal static class CliSingleGoalReportQueryCommand
         currentGoal = kernel.Goals.SingleOrDefault(goal => goal.Id == goalId)
             ?? throw new KeyNotFoundException($"Goal '{goalId.Value}' was not found.");
         CliReadOnlyQueryExecutor.Execute(args, kernel, workspace, providers, channel,
-            ref agents, ref workerProfiles, ref currentGoal);
+            ref agents, ref workerProfiles, ref currentGoal, diagnosticsClock);
     }
 
     // Keep prefix parsing identical to CliPersistentStateRunner.GetOptionalArgument/IsCliValueFlag.

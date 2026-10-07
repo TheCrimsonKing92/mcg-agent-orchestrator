@@ -93,7 +93,7 @@ internal static class CliReadOnlyCommandRunner
         if (CliSingleGoalReportQueryCommand.IsSingleGoalReportQueryCommand(args))
         {
             CliSingleGoalReportQueryCommand.Execute(args, stateRepository, workspace, providers, channel,
-                ref agents, ref workerProfiles, ref currentGoal);
+                ref agents, ref workerProfiles, ref currentGoal, diagnosticsClock);
             changed = false;
             return true;
         }

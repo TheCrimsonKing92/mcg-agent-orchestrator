@@ -18,7 +18,7 @@ public sealed class CliGoalDiagnosticsReadOnlyRouteTests : CliTaskQueryTestSuppo
     [Xunit.InlineData(false, "goal-diagnostics", " ")]
     [Xunit.InlineData(false, "goal-diagnostics", "abc10000", "extra")]
     [Xunit.InlineData(false, "failure-triage", "abc10000")]
-    [Xunit.InlineData(false, "goal-timing", "abc10000")]
+    [Xunit.InlineData(false, "goal-timing", "abc10000", "extra")]
     [Xunit.InlineData(false, "dogfood-eval", "abc10000")]
     [Xunit.InlineData(false, "readiness", "abc10000")]
     [Xunit.InlineData(false, "next", "abc10000")]

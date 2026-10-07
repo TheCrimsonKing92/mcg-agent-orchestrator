@@ -142,7 +142,7 @@ internal static string? ResolveGoalFriendlyLabel(Goal goal, string backlogStoreP
 
 private static IReadOnlyDictionary<GoalId, GoalTimingReportContext> BuildGoalTimingContexts(CliExecutionContext context)
 {
-    var asOf = DateTimeOffset.UtcNow;
+    var asOf = context.DiagnosticsClock?.UtcNow ?? DateTimeOffset.UtcNow;
     var journals = GoalOperationJournal.ReadAll(
         context.Workspace.ExecutionDirectory,
         context.Kernel.Goals.Select(goal => goal.Id));
@@ -161,7 +161,7 @@ private static GoalTimingReportContext BuildGoalTimingContext(
     GoalOperationJournalSummary? journal = null,
     DateTimeOffset? asOf = null)
 {
-    asOf ??= DateTimeOffset.UtcNow;
+    asOf ??= context.DiagnosticsClock?.UtcNow ?? DateTimeOffset.UtcNow;
     journal ??= GoalOperationJournal.Read(context.Workspace.ExecutionDirectory, goal.Id);
     var backlogIntent = ResolveBacklogIntent(goal, context.Workspace.BacklogStorePath);
     var gateSpans = BuildGoalTimingGateSpans(journal);
