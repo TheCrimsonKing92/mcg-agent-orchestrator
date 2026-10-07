@@ -51,6 +51,7 @@ internal sealed class AcceptanceDotnetBuildPhase
         CoreTestsProject,
         InfrastructureTestsProject,
         AcceptanceTestsProject,
+        ExecutionTestsProject,
         TestSupportProject,
         ProviderEnvironmentTestsProject,
         CliTestsProject
@@ -68,8 +69,9 @@ internal sealed class AcceptanceDotnetBuildPhase
             .ToArray();
         var cacheableProjects = CacheableProjects
             .Where(project =>
-                !ProjectMatches(project, AcceptanceTestsProject) ||
-                dotnetTestChecks.Any(check => ProjectMatches(check.Project, AcceptanceTestsProject)))
+                (!ProjectMatches(project, AcceptanceTestsProject) &&
+                 !ProjectMatches(project, ExecutionTestsProject)) ||
+                dotnetTestChecks.Any(check => ProjectMatches(check.Project, project)))
             .ToArray();
         DotnetBaseBuildCachePlan? cachePlan = TryCreateBaseBuildCachePlan(
             worktreePath,
