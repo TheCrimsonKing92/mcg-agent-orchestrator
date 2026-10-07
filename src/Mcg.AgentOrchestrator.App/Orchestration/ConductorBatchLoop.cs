@@ -2369,10 +2369,10 @@ internal sealed partial class ConductorBatchLoop
         return $"path={attribution.Path}; holders: {holders}";
     }
 
-    private static string FormatGoalProgressLine(string label, ConductorAdvanceOutcome outcome, int? slotIndex = null)
+    internal static string FormatGoalProgressLine(string label, ConductorAdvanceOutcome outcome, int? slotIndex = null)
     {
         var slot = slotIndex.HasValue ? $" slot=slot-{slotIndex.Value}" : string.Empty;
-        return outcome switch
+        var line = outcome switch
         {
             ConductorAdvanceOutcome.Executed e  => $"GOAL goal={label} result=executed state={e.FromState}{slot}",
             ConductorAdvanceOutcome.Held h      => $"GOAL goal={label} result=held state={h.State}{slot} reason={SanitizeReason(h.Reason)}",
@@ -2380,6 +2380,16 @@ internal sealed partial class ConductorBatchLoop
             ConductorAdvanceOutcome.Done d      => $"GOAL goal={label} result=done state={d.State}{slot}",
             _                                   => $"GOAL goal={label} result=unknown{slot}"
         };
+        var decision = outcome switch
+        {
+            ConductorAdvanceOutcome.Held h => h.Decision,
+            ConductorAdvanceOutcome.Escalated e => e.Decision,
+            ConductorAdvanceOutcome.Done d => d.Decision,
+            _ => null
+        };
+        return decision is null
+            ? line
+            : $"{line} decision={decision.Stage}/{decision.Rung.ToString(System.Globalization.CultureInfo.InvariantCulture)}/{decision.DiscriminatingEvidence}";
     }
 
 
