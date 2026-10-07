@@ -20,8 +20,6 @@ public sealed class WorkflowDecisionCoverageRatchetTests
         "ConductorDriver.ApparatusRed.cs : HoldApparatusRedRegate : Apparatus re-gate hold has no decision.",
         "ConductorDriver.ApparatusRed.cs : TryDisposeExcludedAcceptanceFailures : Excluded acceptance failure routes through undecided Escalate.",
         "ConductorDriver.DeferredNoChangeEvidence.cs : TryRunDeferredNoChangeEvidence : Deferred evidence escalation and pending hold lack attribution.",
-        "ConductorDriver.FailedGoalRecovery.cs : ExecuteFailedGoalRecovery : Recovery holds and escalations omit the typed decision.",
-        "ConductorDriver.FailedGoalRecovery.cs : ReconcileFailedGoalExitedDispatches : Exited dispatch reconciliation holds have no decisions.",
         "ConductorDriver.FindingEvidenceDeveloperHandoff.cs : TryRouteDeliveredFindingEvidenceToDeveloper : Developer evidence handoff hold has no decision.",
         "ConductorDriver.FindingEvidenceRequests.cs : FocusedEvidencePendingHeld : Target-typed pending evidence hold sets ownership only.",
         "ConductorDriver.GitAndLeaseHelpers.cs : ReplacementEvidenceMutationHeld : Replacement mutation hold factory leaves attribution to callers.",

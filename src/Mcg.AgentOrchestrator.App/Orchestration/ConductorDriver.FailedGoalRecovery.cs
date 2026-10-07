@@ -55,13 +55,10 @@ internal sealed partial class ConductorDriver
             if (state != GoalLifecycleState.Failed)
             {
                 ApplyPendingFailedGoalNotes(goal, pendingNotes);
-                return MakeResult(
-                    goal.Id.Value,
-                    goalPrefix,
-                    policy,
-                    new ConductorAdvanceOutcome.Held(
-                        state,
-                        "Failed-goal observation changed lifecycle authority; recovery will be re-observed on the next tick (stale-recovery-facts)."));
+                const string observationHeldReason = "Failed-goal observation changed lifecycle authority; recovery will be re-observed on the next tick (stale-recovery-facts).";
+                return MakeResult(goal.Id.Value, goalPrefix, policy,
+                    new ConductorAdvanceOutcome.Held(state, observationHeldReason)
+                    { Decision = FailedGoalRecoveryDecisionRecords.StaleRecoveryFacts(decision.Identity, observationHeldReason) });
             }
 
             facts = BuildFailedGoalRecoveryFacts(goal, policy, state);
@@ -88,11 +85,9 @@ internal sealed partial class ConductorDriver
         if (decision.Action == FailedGoalRecoveryAction.Hold)
         {
             ApplyPendingFailedGoalNotes(goal, pendingNotes);
-            return MakeResult(
-                goal.Id.Value,
-                goalPrefix,
-                policy,
-                new ConductorAdvanceOutcome.Held(state, decision.Reason) { Owner = decision.HoldOwner });
+            return MakeResult(goal.Id.Value, goalPrefix, policy,
+                new ConductorAdvanceOutcome.Held(state, decision.Reason)
+                { Owner = decision.HoldOwner, Decision = FailedGoalRecoveryDecisionRecords.FromPolicy(decision) });
         }
 
         if (decision.Action == FailedGoalRecoveryAction.Escalate)
@@ -100,7 +95,14 @@ internal sealed partial class ConductorDriver
             if (TryResumeTimedOutSelectionRerun(goal, goalPrefix, policy, state, facts, decision, pendingNotes) is { } resumed)
                 return resumed;
             ApplyPendingFailedGoalNotes(goal, pendingNotes);
-            return Escalate(goal, goalPrefix, policy, state, decision.Reason);
+            var escalated = Escalate(goal, goalPrefix, policy, state, decision.Reason);
+            return escalated with
+            {
+                Outcome = ((ConductorAdvanceOutcome.Escalated)escalated.Outcome) with
+                {
+                    Decision = FailedGoalRecoveryDecisionRecords.FromPolicy(decision)
+                }
+            };
         }
         if (decision.Backoff > TimeSpan.Zero)
             _emptyOutputBackoffDelay(decision.Backoff);
@@ -108,11 +110,9 @@ internal sealed partial class ConductorDriver
         if (!IsFailedGoalRecoveryContextCurrent(goal, policy, state, decision, out var staleReason))
         {
             ApplyPendingFailedGoalNotes(goal, pendingNotes);
-            return MakeResult(
-                goal.Id.Value,
-                goalPrefix,
-                policy,
-                new ConductorAdvanceOutcome.Held(state, staleReason));
+            return MakeResult(goal.Id.Value, goalPrefix, policy,
+                new ConductorAdvanceOutcome.Held(state, staleReason)
+                { Decision = FailedGoalRecoveryDecisionRecords.StaleRecoveryFacts(decision.Identity, staleReason) });
         }
 
         ApplyPendingFailedGoalNotes(goal, pendingNotes);
@@ -142,13 +142,16 @@ internal sealed partial class ConductorDriver
             decision.Reason.StartsWith("ACTIONABLE_CANDIDATE_RED", StringComparison.Ordinal) &&
             ex.Message.Contains("running process", StringComparison.OrdinalIgnoreCase))
         {
-            return Escalate(
-                goal,
-                goalPrefix,
-                policy,
-                state,
-                $"ACTIONABLE_CANDIDATE_RED_LIFECYCLE_CONFLICT: {decision.Reason} " +
-                $"Developer retry was not applied because {ex.Message} No additional downstream dispatch was started.");
+            var conflictReason = $"ACTIONABLE_CANDIDATE_RED_LIFECYCLE_CONFLICT: {decision.Reason} " +
+                $"Developer retry was not applied because {ex.Message} No additional downstream dispatch was started.";
+            var escalated = Escalate(goal, goalPrefix, policy, state, conflictReason);
+            return escalated with
+            {
+                Outcome = ((ConductorAdvanceOutcome.Escalated)escalated.Outcome) with
+                {
+                    Decision = FailedGoalRecoveryDecisionRecords.CandidateRedLifecycleConflict(decision.Identity, conflictReason)
+                }
+            };
         }
 
         var refreshedGoal = GetCurrentGoal(goal);
@@ -156,13 +159,12 @@ internal sealed partial class ConductorDriver
         if (refreshedTarget is null || refreshedTarget.Status is not (WorkTaskStatus.Assigned or WorkTaskStatus.Pending) ||
             refreshedGoal.Tasks.Any(task => task.LastProcess is { IsRunning: true }))
         {
-            return MakeResult(
-                refreshedGoal.Id.Value,
-                goalPrefix,
-                policy,
+            var targetChangedReason = $"{decision.Reason} Dispatch start was re-observed and held because the target attempt changed after retry application (stale-recovery-facts).";
+            return MakeResult(refreshedGoal.Id.Value, goalPrefix, policy,
                 new ConductorAdvanceOutcome.Held(
                     GoalLifecycle.ResolveState(refreshedGoal, GetFacts(refreshedGoal)),
-                    $"{decision.Reason} Dispatch start was re-observed and held because the target attempt changed after retry application (stale-recovery-facts)."));
+                    targetChangedReason)
+                { Decision = FailedGoalRecoveryDecisionRecords.StaleRecoveryFacts(decision.Identity, targetChangedReason) });
         }
 
         return ExecuteDispatchAndStart(refreshedGoal, goalPrefix, policy, GoalLifecycleState.WorkspaceReady);
@@ -184,11 +186,9 @@ internal sealed partial class ConductorDriver
         {
             if (!IsFailedGoalRecoveryContextCurrent(goal, policy, state, decision, out var staleReason))
             {
-                return MakeResult(
-                    goal.Id.Value,
-                    goalPrefix,
-                    policy,
-                    new ConductorAdvanceOutcome.Held(state, staleReason));
+                return MakeResult(goal.Id.Value, goalPrefix, policy,
+                    new ConductorAdvanceOutcome.Held(state, staleReason)
+                    { Decision = FailedGoalRecoveryDecisionRecords.StaleRecoveryFacts(decision.Identity, staleReason) });
             }
             _reconcileExitedDispatch(goal, taskId);
             goal = GetCurrentGoal(goal);
@@ -197,13 +197,10 @@ internal sealed partial class ConductorDriver
                 var currentState = GoalLifecycle.ResolveState(goal, GetFacts(goal));
                 if (currentState != GoalLifecycleState.Failed)
                 {
-                    return MakeResult(
-                        goal.Id.Value,
-                        goalPrefix,
-                        policy,
-                        new ConductorAdvanceOutcome.Held(
-                            currentState,
-                            "Exited-dispatch reconciliation changed lifecycle authority; recovery will be re-observed on the next tick (stale-recovery-facts)."));
+                    const string reconcileHeldReason = "Exited-dispatch reconciliation changed lifecycle authority; recovery will be re-observed on the next tick (stale-recovery-facts).";
+                    return MakeResult(goal.Id.Value, goalPrefix, policy,
+                        new ConductorAdvanceOutcome.Held(currentState, reconcileHeldReason)
+                        { Decision = FailedGoalRecoveryDecisionRecords.StaleRecoveryFacts(decision.Identity, reconcileHeldReason) });
                 }
 
                 facts = BuildFailedGoalRecoveryFacts(
@@ -222,22 +219,16 @@ internal sealed partial class ConductorDriver
             DispatchProcessCompletionState.IsExitedWithoutAppliedCompletion(task, process));
         if (stillUnapplied is not null)
         {
-            return MakeResult(
-                goal.Id.Value,
-                goalPrefix,
-                policy,
-                new ConductorAdvanceOutcome.Held(
-                    state,
-                    $"Failure handling deferred for task {ShortTaskId(stillUnapplied.Id)}: latest process record exited without an applied completion (exited-unapplied-process-record)."));
+            var unappliedReason = $"Failure handling deferred for task {ShortTaskId(stillUnapplied.Id)}: latest process record exited without an applied completion (exited-unapplied-process-record).";
+            return MakeResult(goal.Id.Value, goalPrefix, policy,
+                new ConductorAdvanceOutcome.Held(state, unappliedReason)
+                { Decision = FailedGoalRecoveryDecisionRecords.ExitedUnappliedProcessRecord(decision.Identity, unappliedReason) });
         }
 
-        return MakeResult(
-            goal.Id.Value,
-            goalPrefix,
-            policy,
-            new ConductorAdvanceOutcome.Held(
-                state,
-                $"Reconciled exited dispatch for task {ShortTaskId(exitedTaskIds[0])} before failure handling (reconcile-before-failure-handling); deferring the retry decision to the next tick."));
+        var reconciledReason = $"Reconciled exited dispatch for task {ShortTaskId(exitedTaskIds[0])} before failure handling (reconcile-before-failure-handling); deferring the retry decision to the next tick.";
+        return MakeResult(goal.Id.Value, goalPrefix, policy,
+            new ConductorAdvanceOutcome.Held(state, reconciledReason)
+            { Decision = FailedGoalRecoveryDecisionRecords.ReconcileBeforeFailureHandling(decision.Identity, reconciledReason) });
     }
 
     private FailedGoalRecoveryFacts BuildFailedGoalRecoveryFacts(
