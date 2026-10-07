@@ -17,19 +17,30 @@ internal static class CliRoundValueQueryCommand
     {
         DateTimeOffset? since = null;
         var until = DateTimeOffset.UtcNow;
+        DateTimeOffset? baselineSince = null;
+        DateTimeOffset? baselineUntil = null;
         var json = false;
         var bySkill = false;
         for (var i = 1; i < args.Count; i++)
         {
             if (args[i] == "--json") { json = true; continue; }
             if (args[i] == "--by-skill") { bySkill = true; continue; }
-            if (args[i] is not ("--since" or "--until") || i + 1 == args.Count) { Invalid(); return; }
+            if (args[i] is not ("--since" or "--until" or "--baseline-since" or "--baseline-until") ||
+                i + 1 == args.Count) { Invalid(); return; }
             var flag = args[i++];
             if (!TryTimestamp(args[i], out var at)) { Invalid(); return; }
-            if (flag == "--since") since = at; else until = at;
+            switch (flag)
+            {
+                case "--since": since = at; break;
+                case "--until": until = at; break;
+                case "--baseline-since": baselineSince = at; break;
+                case "--baseline-until": baselineUntil = at; break;
+            }
         }
         since ??= until.AddDays(-7);
         if (since >= until) { Invalid(); return; }
+        if (baselineSince.HasValue != baselineUntil.HasValue || baselineSince >= baselineUntil)
+        { Invalid(); return; }
         var metadata = queries.ListGoalMetadataAsync().GetAwaiter().GetResult();
         var goals = metadata.Count == 0 ? [] : queries.LoadGoalsAsync(
             metadata.Select(g => new GoalId(g.Id)).ToArray()).GetAwaiter().GetResult().Goals;
@@ -39,10 +50,36 @@ internal static class CliRoundValueQueryCommand
                 CliOwnerDigestRetryIntents.Read(workspace, until)), json);
             return;
         }
-        var report = RoundValueReport.Build(goals, since.Value, until,
-            CliOwnerDigestRetryIntents.Read(workspace, until));
+        var intents = CliOwnerDigestRetryIntents.Read(workspace,
+            baselineUntil > until ? baselineUntil.Value : until);
+        var report = baselineSince is { } baselineStart && baselineUntil is { } baselineEnd
+            ? RoundValueReport.Build(goals, since.Value, until, baselineStart, baselineEnd, intents)
+            : RoundValueReport.Build(goals, since.Value, until, intents);
         if (json)
         {
+            if (report.Baseline is { } comparison)
+            {
+                Console.WriteLine(JsonSerializer.Serialize(new
+                {
+                    report.Since, report.Until,
+                    Days = report.Days.Select(d => new
+                    {
+                        Day = d.Day.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                        d.Totals.LandedGoals, d.Totals.LostGoals, d.Totals.Rounds, d.Totals.Productive,
+                        d.Totals.ExpectedOverhead, d.Totals.Wasted, d.Totals.RoundsPerLanding, d.Totals.WasteShare,
+                        d.Totals.InputTokens, d.Totals.CachedInputTokens, d.Totals.OutputTokens, d.Totals.UsageUnreported
+                    }),
+                    report.Window, report.WasteByCause, report.CascadeRoutes, report.PendingGoals, report.PendingRounds,
+                    Baseline = new
+                    {
+                        Window = new { comparison.Since, comparison.Until },
+                        Current = new { RoundsPerLanding = comparison.CurrentRoundsPerLanding },
+                        Baseline = new { RoundsPerLanding = comparison.BaselineRoundsPerLanding },
+                        comparison.Causes
+                    }
+                }, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+                return;
+            }
             Console.WriteLine(JsonSerializer.Serialize(new
             {
                 report.Since, report.Until,
@@ -71,6 +108,16 @@ internal static class CliRoundValueQueryCommand
                 Console.WriteLine(FormattableString.Invariant($"{route.Decision} | {route.Rounds} | {route.Productive} | {route.Overhead} | {route.Wasted}"));
         }
         Console.WriteLine(FormattableString.Invariant($"Pending goals | {report.PendingGoals} | rounds={report.PendingRounds}"));
+        if (report.Baseline is { } baseline)
+        {
+            Console.WriteLine(FormattableString.Invariant($"Baseline [{baseline.Since:O}, {baseline.Until:O}) | deltas = current minus baseline"));
+            Console.WriteLine("Waste cause | Current rounds | Current share | Baseline rounds | Baseline share | Rounds delta | Share delta");
+            foreach (var cause in baseline.Causes)
+                Console.WriteLine(FormattableString.Invariant($"{cause.Cause} | {cause.CurrentRounds} | {cause.CurrentShare:0.###} | {cause.BaselineRounds} | {cause.BaselineShare:0.###} | {cause.RoundsDelta} | {cause.ShareDelta:0.###}"));
+            var currentRatio = baseline.CurrentRoundsPerLanding?.ToString("0.###", CultureInfo.InvariantCulture) ?? "n/a";
+            var baselineRatio = baseline.BaselineRoundsPerLanding?.ToString("0.###", CultureInfo.InvariantCulture) ?? "n/a";
+            Console.WriteLine($"Rounds per landing | current={currentRatio} | baseline={baselineRatio}");
+        }
     }
 
     private static void WriteSkills(RoundValueSkillSlice slice, bool json)

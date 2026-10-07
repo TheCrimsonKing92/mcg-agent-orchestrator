@@ -381,17 +381,14 @@ public static class GoalTimingReport
             var verifications = task.VerificationHistory
                 .OrderBy(verification => verification.CompletedAt)
                 .ToList();
-            var usedVerifications = new HashSet<TaskVerificationRecord>();
+            var paired = FalseFailBridgeDetector.PairVerifications(verifications,
+                taskDispatches.Select(d => (d.OccurredAt, ExtractDispatchCommand(d.Message))).ToList());
 
             for (var index = 0; index < taskDispatches.Count; index++)
             {
                 var dispatch = taskDispatches[index];
                 var nextTaskDispatch = index + 1 < taskDispatches.Count ? taskDispatches[index + 1].OccurredAt : (DateTimeOffset?)null;
-                var verification = FindRoundVerification(verifications, usedVerifications, dispatch, nextTaskDispatch);
-                if (verification is not null)
-                {
-                    usedVerifications.Add(verification);
-                }
+                var verification = paired[index];
 
                 var processStartedAt = taskProcessStarts
                     .FirstOrDefault(evt => evt.OccurredAt >= dispatch.OccurredAt &&
@@ -400,9 +397,8 @@ public static class GoalTimingReport
                     ?.OccurredAt;
                 var completedAt = ResolveCompletedAt(task, verification, processStartedAt);
                 var runtimeEndedAt = completedAt ?? Earlier(nextTaskDispatch, reportEnd);
-                var laterSuccess = verifications.Any(candidate =>
-                    candidate.CompletedAt > (verification?.CompletedAt ?? dispatch.OccurredAt) &&
-                    DispatchFailureClassifier.Classify(task, candidate).Kind == DispatchOutcomeKind.VerifiedSuccess);
+                var laterSuccess = FalseFailBridgeDetector.HasLaterSuccess(task, verifications,
+                    verification?.CompletedAt ?? dispatch.OccurredAt);
                 var value = ClassifyValue(goal, task, verification, laterSuccess);
                 rounds.Add((task.Id, new GoalTimingRoundReport(
                     task.Id,
@@ -437,32 +433,6 @@ public static class GoalTimingReport
                 group.Key,
                 group.Select(item => item.Round).OrderBy(round => round.RoundNumber).ToList()))
             .ToList();
-    }
-
-    private static TaskVerificationRecord? FindRoundVerification(
-        IReadOnlyList<TaskVerificationRecord> verifications,
-        HashSet<TaskVerificationRecord> usedVerifications,
-        ProgressEvent dispatch,
-        DateTimeOffset? nextDispatchAt)
-    {
-        var candidates = verifications.Where(verification =>
-            !usedVerifications.Contains(verification) &&
-            verification.CompletedAt >= dispatch.OccurredAt &&
-            (nextDispatchAt is null || verification.CompletedAt < nextDispatchAt.Value))
-            .ToList();
-
-        var dispatchCommand = ExtractDispatchCommand(dispatch.Message);
-        if (!string.IsNullOrWhiteSpace(dispatchCommand))
-        {
-            var commandMatch = candidates.FirstOrDefault(verification =>
-                string.Equals(verification.Command, dispatchCommand, StringComparison.Ordinal));
-            if (commandMatch is not null)
-            {
-                return commandMatch;
-            }
-        }
-
-        return candidates.FirstOrDefault();
     }
 
     private static string? ExtractDispatchCommand(string message)
@@ -738,7 +708,8 @@ public static class GoalTimingReport
             : outcome.ClassifierReceipt;
         var evidence = $"verification.ExitCode={verification.ExitCode}; verification.CompletedAt={verification.CompletedAt:u}; {receipt}; evidence={outcome.EvidenceSummary}";
 
-        if (IsFalseFailBridge(verification, laterSuccess, terminal))
+        if (FalseFailBridgeDetector.IsFalseFailBridge(verification, laterSuccess,
+            terminal == GoalTerminalOutcome.Landed))
         {
             return new(outcome.Kind, DispatchRoundValueClass.WastedFalseFail, evidence, "false-file-change-guard");
         }
@@ -771,14 +742,6 @@ public static class GoalTimingReport
             or DispatchOutcomeKind.LaunchFailure
             or DispatchOutcomeKind.EmptyOutputFlake
             or DispatchOutcomeKind.RecoverableSubscriptionLimit;
-
-    private static bool IsFalseFailBridge(
-        TaskVerificationRecord verification,
-        bool laterSuccess,
-        GoalTerminalOutcome terminal) =>
-        (verification.StandardError.Contains("did not produce required relevant file-change evidence", StringComparison.OrdinalIgnoreCase) ||
-         verification.StandardError.Contains("did not produce relevant file-change evidence", StringComparison.OrdinalIgnoreCase)) &&
-        (laterSuccess || terminal == GoalTerminalOutcome.Landed);
 
     private static IEnumerable<string> SplitLines(string text) =>
         text.Split(["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);

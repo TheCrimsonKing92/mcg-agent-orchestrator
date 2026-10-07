@@ -6,6 +6,11 @@ public sealed record RoundValueTotals(int LandedGoals, int LostGoals, int Rounds
 
 public sealed record RoundValueDay(DateOnly Day, RoundValueTotals Totals);
 public sealed record RoundValueCauseShare(string Cause, int Rounds, double Share);
+public sealed record RoundValueCauseDelta(string Cause, int CurrentRounds, double CurrentShare,
+    int BaselineRounds, double BaselineShare, int RoundsDelta, double ShareDelta);
+public sealed record RoundValueBaselineComparison(DateTimeOffset Since, DateTimeOffset Until,
+    double? CurrentRoundsPerLanding, double? BaselineRoundsPerLanding,
+    IReadOnlyList<RoundValueCauseDelta> Causes);
 public sealed record RoundValueCascadeRoute(string Decision, int Rounds, int Productive, int Overhead, int Wasted);
 
 /// <summary>Attributes every terminal goal's full round history to its final dispatch date.</summary>
@@ -14,9 +19,41 @@ public sealed record RoundValueReport(DateTimeOffset Since, DateTimeOffset Until
     IReadOnlyList<RoundValueCauseShare> WasteByCause, int PendingGoals, int PendingRounds)
 {
     public IReadOnlyList<RoundValueCascadeRoute> CascadeRoutes { get; init; } = [];
+    public RoundValueBaselineComparison? Baseline { get; init; }
 
     public static RoundValueReport Build(IEnumerable<Goal> goals, DateTimeOffset since, DateTimeOffset until) =>
         Build(goals, since, until, []);
+
+    public static RoundValueReport Build(IEnumerable<Goal> goals, DateTimeOffset since, DateTimeOffset until,
+        DateTimeOffset baselineSince, DateTimeOffset baselineUntil) =>
+        Build(goals, since, until, baselineSince, baselineUntil, []);
+
+    public static RoundValueReport Build(IEnumerable<Goal> goals, DateTimeOffset since, DateTimeOffset until,
+        DateTimeOffset baselineSince, DateTimeOffset baselineUntil, IReadOnlyCollection<AppliedRetryIntent> intents)
+    {
+        var materializedGoals = goals.ToArray();
+        var current = Build(materializedGoals, since, until, intents);
+        var baseline = Build(materializedGoals, baselineSince, baselineUntil, intents);
+        var currentCauses = current.WasteByCause.ToDictionary(c => c.Cause, StringComparer.Ordinal);
+        var baselineCauses = baseline.WasteByCause.ToDictionary(c => c.Cause, StringComparer.Ordinal);
+        var causes = currentCauses.Keys.Union(baselineCauses.Keys, StringComparer.Ordinal)
+            .OrderBy(c => c, StringComparer.Ordinal).Select(cause =>
+            {
+                currentCauses.TryGetValue(cause, out var now);
+                baselineCauses.TryGetValue(cause, out var before);
+                var currentRounds = now?.Rounds ?? 0;
+                var baselineRounds = before?.Rounds ?? 0;
+                var currentShare = now?.Share ?? 0;
+                var baselineShare = before?.Share ?? 0;
+                return new RoundValueCauseDelta(cause, currentRounds, currentShare, baselineRounds, baselineShare,
+                    currentRounds - baselineRounds, currentShare - baselineShare);
+            }).ToArray();
+        return current with
+        {
+            Baseline = new(baselineSince, baselineUntil, current.Window.RoundsPerLanding,
+                baseline.Window.RoundsPerLanding, causes)
+        };
+    }
 
     public static RoundValueReport Build(IEnumerable<Goal> goals, DateTimeOffset since, DateTimeOffset until,
         IReadOnlyCollection<AppliedRetryIntent> intents)

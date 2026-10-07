@@ -17,6 +17,7 @@ public sealed class CliRoundValueReadOnlyRouteTests : CliTaskQueryTestSupport
     [InlineData("round-value", "--since", "2026-09-24T00:00:00Z")]
     [InlineData("round-value", "--until", "2026-09-26T00:00:00Z")]
     [InlineData("round-value", "--json")]
+    [InlineData("round-value", "--baseline-since", "2026-09-24T00:00:00Z", "--baseline-until", "2026-09-25T00:00:00Z")]
     public void IsReadOnlyCommand_EachSupportedForm_IsQueryOnly(params string[] args)
     {
         Assert.True(CliReadOnlyCommandRunner.IsReadOnlyCommand(args));
@@ -43,7 +44,7 @@ public sealed class CliRoundValueReadOnlyRouteTests : CliTaskQueryTestSupport
 
             var table = Run(WindowArgs);
             var lines = table.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => l.TrimEnd('\r')).ToArray();
-            Assert.Equal(
+            string[] expectedLines =
             [
                 "Round value [2026-09-24T00:00:00.0000000+00:00, 2026-09-26T00:00:00.0000000+00:00) | cohort = landed or lost goals whose last round is in the window",
                 "Day | Landed | Lost | Rounds | Productive | Overhead | Wasted | Rounds per landing | Waste share | Input | Cached input | Output | Usage unreported",
@@ -55,11 +56,16 @@ public sealed class CliRoundValueReadOnlyRouteTests : CliTaskQueryTestSupport
                 "flake-or-apparatus | 1 | 0.1",
                 "unchanged-commit-review | 1 | 0.1",
                 "Pending goals | 1 | rounds=2"
-            ], lines);
+            ];
+            Assert.Equal(expectedLines, lines);
+            Assert.Equal(string.Join(Environment.NewLine, expectedLines) + Environment.NewLine, table);
             Assert.DoesNotContain(lines, l => l.StartsWith("2026-09-26", StringComparison.Ordinal));
 
-            using var json = JsonDocument.Parse(Run([.. WindowArgs, "--json"]));
+            var jsonOutput = Run([.. WindowArgs, "--json"]);
+            using var json = JsonDocument.Parse(jsonOutput);
             var report = json.RootElement;
+            Assert.Equal(["since", "until", "days", "window", "wasteByCause", "cascadeRoutes", "pendingGoals", "pendingRounds"],
+                report.EnumerateObject().Select(p => p.Name));
             Assert.Equal(Fixture.Since, report.GetProperty("since").GetDateTimeOffset());
             Assert.Equal(Fixture.Until, report.GetProperty("until").GetDateTimeOffset());
             var totals = report.GetProperty("window");
@@ -105,6 +111,14 @@ public sealed class CliRoundValueReadOnlyRouteTests : CliTaskQueryTestSupport
     [InlineData("--bogus")]
     [InlineData("--since")]
     [InlineData("--until")]
+    [InlineData("--baseline-since")]
+    [InlineData("--baseline-until")]
+    [InlineData("--baseline-since", "2026-09-24T00:00:00Z")]
+    [InlineData("--baseline-until", "2026-09-25T00:00:00Z")]
+    [InlineData("--baseline-since", "invalid", "--baseline-until", "2026-09-25T00:00:00Z")]
+    [InlineData("--baseline-since", "2026-09-24T00:00:00", "--baseline-until", "2026-09-25T00:00:00Z")]
+    [InlineData("--baseline-since", "2026-09-25T00:00:00Z", "--baseline-until", "2026-09-25T00:00:00Z")]
+    [InlineData("--baseline-since", "2026-09-26T00:00:00Z", "--baseline-until", "2026-09-25T00:00:00Z")]
     [InlineData("--since", "invalid")]
     [InlineData("--since", "2026-09-24")]
     [InlineData("--since", "2026-09-24T00:00:00")]
@@ -171,6 +185,66 @@ public sealed class CliRoundValueReadOnlyRouteTests : CliTaskQueryTestSupport
     {
         Assert.False(CliReadOnlyCommandRunner.IsReadOnlyCommand(["round-value", "--help"]));
         Assert.False(CliReadOnlyCommandRunner.IsReadOnlyCommand(["round-value", "-h"]));
+    }
+
+    [Fact]
+    public void TryExecute_Baseline_EmitsComparisonInTextAndJsonWithoutWrites()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var repository = new ProbeStateRepository(Fixture.Create()) { ThrowOnOutbox = true };
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? goal = null;
+            string Run(string[] command) => CaptureConsole(() =>
+            {
+                Assert.True(CliReadOnlyCommandRunner.TryExecute(command, repository, workspace,
+                    new InMemoryModelProviderRegistry([]), null, ref agents, ref profiles, ref goal, out var changed));
+                Assert.False(changed);
+            });
+            string[] current = ["round-value", "--since", "2026-09-25T00:00:00Z", "--until", "2026-09-26T00:00:00Z"];
+            string[] args = [.. current, "--baseline-since", "2026-09-24T00:00:00Z", "--baseline-until", "2026-09-25T00:00:00Z"];
+            var singleWindow = Run(current);
+            var text = Run(args);
+            Assert.StartsWith(singleWindow, text);
+            Assert.Equal(string.Join(Environment.NewLine,
+            [
+                "Baseline [2026-09-24T00:00:00.0000000+00:00, 2026-09-25T00:00:00.0000000+00:00) | deltas = current minus baseline",
+                "Waste cause | Current rounds | Current share | Baseline rounds | Baseline share | Rounds delta | Share delta",
+                "abandoned-goal | 2 | 1 | 0 | 0 | 2 | 1",
+                "flake-or-apparatus | 0 | 0 | 1 | 0.125 | -1 | -0.125",
+                "unchanged-commit-review | 0 | 0 | 1 | 0.125 | -1 | -0.125",
+                "Rounds per landing | current=n/a | baseline=8", ""
+            ]), text[singleWindow.Length..]);
+
+            using var singleJson = JsonDocument.Parse(Run([.. current, "--json"]));
+            using var json = JsonDocument.Parse(Run([.. args, "--json"]));
+            foreach (var property in singleJson.RootElement.EnumerateObject())
+                Assert.Equal(property.Value.GetRawText(), json.RootElement.GetProperty(property.Name).GetRawText());
+            var comparison = json.RootElement.GetProperty("baseline");
+            Assert.Equal(Fixture.Since, comparison.GetProperty("window").GetProperty("since").GetDateTimeOffset());
+            Assert.Equal(JsonValueKind.Null, comparison.GetProperty("current").GetProperty("roundsPerLanding").ValueKind);
+            Assert.Equal(8, comparison.GetProperty("baseline").GetProperty("roundsPerLanding").GetDouble());
+            var causes = comparison.GetProperty("causes").EnumerateArray().ToArray();
+            Assert.Equal(["abandoned-goal", "flake-or-apparatus", "unchanged-commit-review"],
+                causes.Select(c => c.GetProperty("cause").GetString()));
+            Assert.Equal([2, 0, 0], causes.Select(c => c.GetProperty("currentRounds").GetInt32()));
+            Assert.Equal([1.0, 0, 0], causes.Select(c => c.GetProperty("currentShare").GetDouble()));
+            Assert.Equal([0, 1, 1], causes.Select(c => c.GetProperty("baselineRounds").GetInt32()));
+            Assert.Equal([0, 0.125, 0.125], causes.Select(c => c.GetProperty("baselineShare").GetDouble()));
+            Assert.Equal([2, -1, -1], causes.Select(c => c.GetProperty("roundsDelta").GetInt32()));
+            Assert.Equal([1, -0.125, -0.125], causes.Select(c => c.GetProperty("shareDelta").GetDouble()));
+            Assert.Equal(0, repository.SaveAttempts);
+            Assert.Equal(0, repository.MergeSaveAttempts);
+            Assert.Equal(0, repository.MutationAttempts);
+            Assert.Equal(0, repository.FullLoadAttempts);
+            Assert.Equal(0, repository.ListOutboxMessagesCount);
+            Assert.Equal(0, repository.OutboxClaimAttempts);
+            Assert.Empty(Directory.GetFiles(root, "*", SearchOption.AllDirectories));
+        }
+        finally { Directory.Delete(root, recursive: true); }
     }
 
     private static class Fixture
@@ -257,4 +331,3 @@ public sealed class CliRoundValueReadOnlyRouteTests : CliTaskQueryTestSupport
     
     }
 }
-

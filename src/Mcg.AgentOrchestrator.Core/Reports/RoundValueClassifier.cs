@@ -53,8 +53,16 @@ public static class RoundValueClassifier
             {
                 var dispatches = task.DispatchHistory.OrderBy(d => d.DispatchedAt)
                     .DistinctBy(d => d.DispatchedAt).ToArray();
+                var verifications = task.VerificationHistory.OrderBy(v => v.CompletedAt).ToArray();
+                var paired = FalseFailBridgeDetector.PairVerifications(verifications,
+                    dispatches.Select(d => (d.DispatchedAt, (string?)d.Command)).ToArray());
                 foreach (var round in rounds.Where(r => r.TaskId == task.Id.Value))
                 {
+                    var verification = paired[round.RoundIndex - 1];
+                    var bridge = verification is not null && FalseFailBridgeDetector.IsFalseFailBridge(
+                        verification, FalseFailBridgeDetector.HasLaterSuccess(task,
+                            paired.Skip(round.RoundIndex).OfType<TaskVerificationRecord>(), verification.CompletedAt),
+                        outcome == RoundGoalOutcome.Landed);
                     var baseCommit = dispatches[round.RoundIndex - 1].BaseCommit;
                     var unchangedReview = round.Role == AgentRole.Reviewer && round.RoundIndex > 1 &&
                         !string.IsNullOrEmpty(baseCommit) && string.Equals(baseCommit,
@@ -64,6 +72,7 @@ public static class RoundValueClassifier
                         ReworkCauseFamily.OperatorRetry or ReworkCauseFamily.StewardRoute;
                     string? cause = outcome == RoundGoalOutcome.Lost ? "abandoned-goal"
                         : round.StopCause == WorkerRoundStopCause.Unknown ? "orphaned-dispatch"
+                        : bridge ? "classifier-false-fail-bridge"
                         : unchangedReview && !expectedReviewRerun ? "unchanged-commit-review" : null;
                     if (cause is not null)
                         result.Add(new(round, outcome, RoundValueClass.Wasted, cause));
