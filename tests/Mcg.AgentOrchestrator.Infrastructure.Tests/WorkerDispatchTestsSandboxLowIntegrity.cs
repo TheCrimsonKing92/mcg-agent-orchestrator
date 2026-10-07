@@ -994,7 +994,12 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
         promptRoot,
         workingDirectory,
         dispatchedAt,
-        sandboxOptions: new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget));
+        sandboxOptions: new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget),
+        claudeAuthProbe: () => new ClaudeCliAuthState(
+            HasAnthropicApiKey: false,
+            HasCliCredentialArtifact: true,
+            CredentialArtifactPath: null),
+        commandExists: RealClaudeLauncherExists);
 
     Assert.Equal("claude-cli", researcher.LastDispatch!.WorkerName);
     Assert.Contains("--permission-mode 'dontAsk'", researcher.LastDispatch.Command, StringComparison.Ordinal);

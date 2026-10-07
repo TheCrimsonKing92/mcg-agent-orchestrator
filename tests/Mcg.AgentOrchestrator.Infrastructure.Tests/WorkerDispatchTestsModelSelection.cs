@@ -33,7 +33,12 @@ public sealed class WorkerDispatchTestsModelSelection : WorkerDispatchTestSuppor
             Path.Combine(root, "prompts"),
             root,
             DateTimeOffset.UtcNow,
-            sandboxOptions: new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget)));
+            sandboxOptions: new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget),
+            claudeAuthProbe: () => new ClaudeCliAuthState(
+                HasAnthropicApiKey: false,
+                HasCliCredentialArtifact: true,
+                CredentialArtifactPath: null),
+            commandExists: RealClaudeLauncherExists));
 
         Assert.Equal(newAgent.Id, task.AssignedAgentId);
         Assert.Equal("claude-cli", task.LastDispatch!.WorkerName);
@@ -66,7 +71,12 @@ public sealed class WorkerDispatchTestsModelSelection : WorkerDispatchTestSuppor
             Path.Combine(root, "prompts"),
             root,
             DateTimeOffset.UtcNow,
-            sandboxOptions: new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget)));
+            sandboxOptions: new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget),
+            claudeAuthProbe: () => new ClaudeCliAuthState(
+                HasAnthropicApiKey: false,
+                HasCliCredentialArtifact: true,
+                CredentialArtifactPath: null),
+            commandExists: RealClaudeLauncherExists));
 
         Assert.Equal(agent.Id, task.AssignedAgentId);
         Assert.Equal("claude-cli", task.LastDispatch!.WorkerName);
@@ -98,11 +108,55 @@ public sealed class WorkerDispatchTestsModelSelection : WorkerDispatchTestSuppor
             Path.Combine(root, "prompts"),
             root,
             DateTimeOffset.UtcNow,
-            sandboxOptions: new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget));
+            sandboxOptions: new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget),
+            claudeAuthProbe: () => new ClaudeCliAuthState(
+                HasAnthropicApiKey: false,
+                HasCliCredentialArtifact: true,
+                CredentialArtifactPath: null),
+            commandExists: RealClaudeLauncherExists);
 
         Assert.Equal(newAgent.Id, task.AssignedAgentId);
         Assert.Equal("claude-cli", task.LastDispatch!.WorkerName);
         Assert.Equal("Anthropic", task.LastDispatch.ProviderName);
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_light_role_dispatch_uses_codex_when_injected_launcher_check_reports_claude_absent")]
+    public void WorkerProfileDispatcherLightRoleDispatchUsesCodexWhenInjectedLauncherCheckReportsClaudeAbsent()
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Plan direct assignment.", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Keep valid agent pin", [task]);
+        var agent = SubscriptionPlannerAgent("planner", "Planner");
+        kernel.ActivateGoal(goal.Id, [agent]);
+
+        var stderr = CaptureConsoleError(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
+            kernel,
+            goal,
+            task,
+            [agent],
+            DispatchTestProfiles(),
+            Path.Combine(root, "prompts"),
+            root,
+            DateTimeOffset.UtcNow,
+            sandboxOptions: new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget),
+            claudeAuthProbe: () => new ClaudeCliAuthState(
+                HasAnthropicApiKey: false,
+                HasCliCredentialArtifact: true,
+                CredentialArtifactPath: null),
+            commandExists: executable => !RealClaudeLauncherExists(executable)));
+
+        Assert.Equal(agent.Id, task.AssignedAgentId);
+        Assert.Equal("codex-cli", task.LastDispatch!.WorkerName);
+        Assert.Equal("OpenAI", task.LastDispatch.ProviderName);
+        Assert.DoesNotContain("Warning:", stderr);
+        Assert.DoesNotContain(goal.Timeline, evt =>
+            evt.TaskId == task.Id &&
+            evt.Kind == ProgressKind.TaskRedelegated);
+
+        var preflight = File.ReadAllText(Path.Combine(root, ".orchestrator-context", goal.Id.Value, "subscription-preflight.md"));
+        Assert.Contains("model-selection: full-profile: light-role profile unavailable", preflight, StringComparison.Ordinal);
+        Assert.Contains("Launcher executable 'claude' was not found", preflight, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "WorkerCommandTemplate_expands_profile_template_and_writes_prompt")]
