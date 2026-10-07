@@ -66,6 +66,7 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptancePolicyShardPlanner",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptancePolicyShardPlanner.CandidateTree",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceRunExecutionContext",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceRunExecutionContext.FollowerPinnedBase",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceSdkConsoleRule",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceStructuralCoverageEvaluator",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceStructuralCoveragePartitionPlan",
