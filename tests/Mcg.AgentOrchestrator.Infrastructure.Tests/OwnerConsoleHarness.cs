@@ -68,8 +68,27 @@ internal sealed class OwnerConsoleHarness
             CancellationToken cancellationToken = default)
         {
             Calls.Add("goals");
-            return Task.FromResult(kernel);
+            var selected = ids.Select(id => id.Value).ToHashSet(StringComparer.Ordinal);
+            var snapshot = kernel.ExportSnapshot();
+            return Task.FromResult(AgentOrchestratorKernel.FromSnapshot(snapshot with
+            {
+                Goals = snapshot.Goals.Where(goal => selected.Contains(goal.Id)).ToArray(),
+                HumanInputRequests = snapshot.HumanInputRequests.Where(request => selected.Contains(request.GoalId)).ToArray()
+            }));
         }
+
+        public Task<IReadOnlyList<HumanInputRequestSnapshot>> ListOpenHumanInputRequestsAsync(
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<HumanInputRequestSnapshot>>(kernel.ExportSnapshot().HumanInputRequests
+                .Where(request => !request.IsCompleted).ToArray());
+
+        public Task<IReadOnlyList<TerminalOwnerQuestionHold>> ListTerminalOwnerQuestionHoldsAsync(
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<TerminalOwnerQuestionHold>>(kernel.Goals.Where(goal =>
+                goal.Status is GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Superseded &&
+                goal.CurrentHold?.State.Equals("steward-owner-question", StringComparison.OrdinalIgnoreCase) == true)
+                .Select(goal => new TerminalOwnerQuestionHold(goal.Id.Value, goal.CurrentHold!.Identity,
+                    goal.CurrentHold.State, goal.CurrentHold.Blocker, goal.CurrentHold.StartedAt)).ToArray());
     }
 
     internal sealed class FakeQuestions : IOwnerQuestionSource

@@ -40,6 +40,14 @@ internal static class OwnerConsoleVerb
 
     private sealed class EmptyStateQueries : IOrchestratorStateQueries
     {
+        public Task<IReadOnlyList<Mcg.AgentOrchestrator.Core.HumanInputRequestSnapshot>> ListOpenHumanInputRequestsAsync(
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<Mcg.AgentOrchestrator.Core.HumanInputRequestSnapshot>>([]);
+
+        public Task<IReadOnlyList<TerminalOwnerQuestionHold>> ListTerminalOwnerQuestionHoldsAsync(
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<TerminalOwnerQuestionHold>>([]);
+
         public Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<GoalSummary>>([]);
 

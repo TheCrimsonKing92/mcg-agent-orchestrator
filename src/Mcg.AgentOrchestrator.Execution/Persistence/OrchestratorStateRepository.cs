@@ -15,9 +15,17 @@ public interface IOrchestratorStateQueries
         CancellationToken cancellationToken = default) =>
         throw new NotSupportedException("This repository does not support request-only human-input queries.");
 
+    /// <summary>Projects terminal steward questions without loading goal snapshots into a kernel.</summary>
+    Task<IReadOnlyList<TerminalOwnerQuestionHold>> ListTerminalOwnerQuestionHoldsAsync(
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This repository does not support terminal owner-question hold queries.");
+
     Task<IReadOnlyList<GoalSummary>> ListGoalIdStatusesAsync(CancellationToken cancellationToken = default) =>
         ListGoalMetadataAsync(cancellationToken);
 }
+
+public sealed record TerminalOwnerQuestionHold(
+    string GoalId, string Identity, string State, string Blocker, DateTimeOffset StartedAt);
 
 public interface IOrchestratorStateRepository : IOrchestratorStateQueries
 {

@@ -217,6 +217,12 @@ public sealed class StateLogDivergenceDurableStateTests
     private sealed class TrackingQueries(Fixture fixture, string? lostGoalStatus = null) : IOrchestratorStateQueries
     {
         private readonly IOrchestratorStateQueries _target = SqliteOrchestratorStateRepository.OpenReadOnly(fixture.Workspace.SqliteStatePath);
+        public Task<IReadOnlyList<HumanInputRequestSnapshot>> ListOpenHumanInputRequestsAsync(
+            CancellationToken cancellationToken = default) => _target.ListOpenHumanInputRequestsAsync(cancellationToken);
+
+        public Task<IReadOnlyList<TerminalOwnerQuestionHold>> ListTerminalOwnerQuestionHoldsAsync(
+            CancellationToken cancellationToken = default) => _target.ListTerminalOwnerQuestionHoldsAsync(cancellationToken);
+
         internal int MetadataCalls;
         internal readonly List<string> LoadedIds = [];
 

@@ -196,6 +196,12 @@ public sealed class StateLogDivergenceCheckRunnerTests
 
     private sealed class ControlledQueries(IReadOnlyList<GoalSummary> summaries, Func<Task>? beforeList = null) : IOrchestratorStateQueries
     {
+        public Task<IReadOnlyList<HumanInputRequestSnapshot>> ListOpenHumanInputRequestsAsync(
+            CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<HumanInputRequestSnapshot>>([]);
+
+        public Task<IReadOnlyList<TerminalOwnerQuestionHold>> ListTerminalOwnerQuestionHoldsAsync(
+            CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<TerminalOwnerQuestionHold>>([]);
+
         internal int MetadataCalls;
         internal readonly List<string> LoadedIds = [];
         public async Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default)
