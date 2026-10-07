@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
@@ -153,6 +154,7 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceFollowerGates(ITest
             var hold = Assert.Single(lines.Where(line => line.StartsWith($"GOAL goal={follower.Id.Value[..8]} ", StringComparison.Ordinal)))
                 .Replace(leader.Id.Value, "leader").Replace(leader.Id.Value[..8], "leader")
                 .Replace(follower.Id.Value, "follower").Replace(follower.Id.Value[..8], "follower");
+            hold = Regex.Replace(hold, @" ts=\S+$", "");
             if (repeatTick)
                 loop.Run(kernel, driver, policy, NoStopPath(), maxIterations: 1,
                     onTick: tick => lines.AddRange(tick.ProgressLines ?? []));
