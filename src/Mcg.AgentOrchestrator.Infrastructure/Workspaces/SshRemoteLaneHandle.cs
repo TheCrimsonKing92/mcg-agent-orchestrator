@@ -39,8 +39,8 @@ internal sealed class SshRemoteLaneHandle : IRemoteLaneHandle, IRemoteLaneAttemp
                 try
                 {
                     using var bound = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-                    await File.WriteAllTextAsync(Path.Combine(_staging, _cancelName), "", bound.Token).ConfigureAwait(false);
-                    await _transport([SshRemoteLaneExecutor.ScpPath, "-o", "BatchMode=yes", _cancelName, _queueTarget],
+                    await File.WriteAllTextAsync(Path.Combine(_staging, "cancel.txt"), "", bound.Token).ConfigureAwait(false);
+                    await _transport([SshRemoteLaneExecutor.ScpPath, "-o", "BatchMode=yes", "cancel.txt", _queueTarget + _cancelName],
                         _staging, TimeSpan.FromSeconds(30), bound.Token).WaitAsync(bound.Token).ConfigureAwait(false);
                 }
                 catch (Exception) { /* Best effort; queued cancellation cannot change the gate outcome. */ }
