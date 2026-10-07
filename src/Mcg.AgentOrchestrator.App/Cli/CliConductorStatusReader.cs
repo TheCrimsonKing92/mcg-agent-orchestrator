@@ -74,6 +74,102 @@ internal static class CliConductorStatusReader
         output.WriteLine(landing is null
             ? "Most recent landing: unavailable"
             : $"Most recent landing: {landing.Value.Goal} at {landing.Value.At:O}");
+        output.WriteLine(ReadAdoptionLine(workspace.RunEventStorePath));
+        WriteIntentSection(workspace, owner, output);
+    }
+
+    private static string ReadAdoptionLine(string path)
+    {
+        const string unavailable = "Worker adoption: unavailable";
+        if (!File.Exists(path)) return unavailable;
+        try
+        {
+            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = path, Mode = SqliteOpenMode.ReadOnly, Pooling = false
+            }.ToString());
+            connection.Open();
+            using var summary = connection.CreateCommand();
+            summary.CommandText = """
+                SELECT detail, payload_json FROM run_events
+                WHERE event_type = $type AND operation = 'adoption-summary'
+                ORDER BY seq DESC LIMIT 1
+                """;
+            summary.Parameters.AddWithValue("$type", RunEventTypes.ConductorLifecycle);
+            string detail;
+            string? generation;
+            using (var reader = summary.ExecuteReader())
+            {
+                if (!reader.Read()) return unavailable;
+                detail = reader.GetString(0).Trim();
+                generation = ReadGenerationId(reader.IsDBNull(1) ? null : reader.GetString(1));
+            }
+
+            var deferred = 0;
+            if (generation is not null)
+            {
+                using var command = connection.CreateCommand();
+                command.CommandText = """
+                    SELECT payload_json FROM run_events
+                    WHERE event_type = $type AND operation = 'adoption'
+                        AND status = 'deferred-identity-unproven'
+                    """;
+                command.Parameters.AddWithValue("$type", RunEventTypes.ConductorLifecycle);
+                using var reader = command.ExecuteReader();
+                while (reader.Read())
+                    if (string.Equals(generation,
+                        ReadGenerationId(reader.IsDBNull(0) ? null : reader.GetString(0)), StringComparison.Ordinal))
+                        deferred++;
+            }
+            return $"Worker adoption: {detail} deferred-identity-unproven={deferred}";
+        }
+        catch (Exception ex) when (ex is SqliteException or IOException or UnauthorizedAccessException)
+        {
+            return unavailable;
+        }
+    }
+
+    private static string? ReadGenerationId(string? payload)
+    {
+        if (payload is null) return null;
+        try
+        {
+            using var document = JsonDocument.Parse(payload);
+            return document.RootElement.ValueKind == JsonValueKind.Object &&
+                document.RootElement.TryGetProperty("generationId", out var generation) &&
+                generation.ValueKind == JsonValueKind.String ? generation.GetString() : null;
+        }
+        catch (JsonException) { return null; }
+    }
+
+    private static void WriteIntentSection(OrchestratorWorkspace workspace, int? owner, TextWriter output)
+    {
+        var path = Path.Combine(workspace.OrchestratorDirectory, SqliteOperatorIntentStore.DatabaseFileName);
+        if (!File.Exists(path))
+        {
+            output.WriteLine("Pending operator intents: unavailable (intent database missing)");
+            return;
+        }
+        try
+        {
+            var store = SqliteOperatorIntentStore.OpenExisting(workspace.OrchestratorDirectory, workspace.LogDirectory);
+            var ids = store.ListActionableGoalIdsAsync().GetAwaiter().GetResult()
+                .OrderBy(id => id, StringComparer.Ordinal).ToArray();
+            var summaries = store.ListActionableSummariesAsync(ids).GetAwaiter().GetResult();
+            output.WriteLine(ids.Length == 0 ? "Pending operator intents: none" :
+                $"Pending operator intents: {ids.Length} goal(s)");
+            foreach (var id in ids)
+            {
+                summaries.TryGetValue(id, out var summary);
+                var latest = summary?.LatestAt?.ToString("O", CultureInfo.InvariantCulture) ?? "none";
+                var hint = owner is null ? $" | apply with: conductor apply-intents {id[..Math.Min(8, id.Length)]}" : "";
+                output.WriteLine($"  {id} | intents={summary?.Count ?? 0} | latest={latest}{hint}");
+            }
+        }
+        catch (Exception ex) when (ex is SqliteException or IOException or UnauthorizedAccessException)
+        {
+            output.WriteLine("Pending operator intents: unavailable");
+        }
     }
 
     private static string GenerationLine(string? buildCommit, Func<string?>? mainCommit)
