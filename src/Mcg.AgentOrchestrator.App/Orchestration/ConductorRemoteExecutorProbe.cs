@@ -12,7 +12,7 @@ internal sealed class ConductorRemoteExecutorProbe(
     Func<string[], string, TimeSpan, CancellationToken, Task<GoalAcceptanceVerifier.CommandResult>> transport,
     Func<int, DateTimeOffset?> startTimeOf, ConductEventLogWriter writer)
 {
-    private const string Script = "$task = schtasks /query /tn mcg-executor-lane /fo csv /nh 2>$null | Select-Object -First 1; " +
+    private const string Script = "$ProgressPreference = 'SilentlyContinue'; $task = schtasks /query /tn mcg-executor-lane /fo csv /nh 2>$null | Select-Object -First 1; " +
         "$power = $null; try { $battery = Get-CimInstance -Namespace root/wmi -ClassName BatteryStatus -ErrorAction Stop | Select-Object -First 1; " +
         "if ($null -ne $battery) { $power = [bool]$battery.PowerOnline } } catch {}; " +
         "[pscustomobject]@{ task = $task; powerOnline = $power } | ConvertTo-Json -Compress";
@@ -83,7 +83,7 @@ internal sealed class ConductorRemoteExecutorProbe(
                 catch (Exception) { state = null; power = null; reasons.Clear(); reasons.Add("probe-failed"); }
             }
             var now = clock.GetUtcNow();
-            var stderr = result.Stderr ?? "";
+            var stderr = PowerShellClixmlStandardError.Readable(result.Stderr ?? "");
             var row = new RemoteExecutorProbeRow(now, entry.Id, reachable, result.ExitCode, result.TimedOut,
                 state, power, reasons.ToArray(), stderr.Length > 2048 ? stderr[^2048..] : stderr);
             RemoteExecutorProbeLedger.Append(Path.Combine(hostStateRoot, ".orchestrator", RemoteExecutorProbeLedger.FileName), row);
