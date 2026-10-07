@@ -294,6 +294,16 @@ public sealed partial class GoalAcceptanceVerifier
                     {
                         cacheContext?.RecordExecution(completedRemote.Shard.Check, accepted, "remote_first_run");
                         outcomes[completedRemote.Shard.Index] = new ShardRunOutcome(accepted, false);
+                        if (outcome.RemoteDuration is { } remoteDuration)
+                        {
+                            try
+                            {
+                                AcceptanceGatePhaseAccountant.RecordCurrentRemoteLaneSample(remoteDuration);
+                                EmitShardTimingProgress(goalId, "remote-shard-complete", completedRemote.Shard.Check.Name,
+                                    primarySlotIndex, remoteDuration, shardConcurrency.Count, _storageRoot, EmitGateProgress);
+                            }
+                            catch (Exception) { /* Timing observations cannot change the gate verdict. */ }
+                        }
                     }
                     else if (!sharedApparatusCancellation.IsCancellationRequested)
                     {

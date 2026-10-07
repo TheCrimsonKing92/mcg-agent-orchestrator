@@ -1050,7 +1050,8 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
             profiles,
             checkpointBeforeWorkerStart: (_, _, _, _) => checkpointCalls++,
             runner: new BackgroundDispatchRunner(disableProcessStart: true),
-            sandboxOptions: DisabledSandbox);
+            sandboxOptions: DisabledSandbox,
+            commandExists: _ => true);
 
         Assert.Empty(result.Processes.Tasks);
         // The pre-admission checkpoint preserves current-tick state even when the reservation

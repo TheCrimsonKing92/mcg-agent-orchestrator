@@ -13,7 +13,8 @@ internal static class CliSingleGoalReportQueryCommand
         (args.Count == 2 &&
         (args[0].Equals("retention-plan", StringComparison.OrdinalIgnoreCase) ||
          args[0].Equals("supervisor", StringComparison.OrdinalIgnoreCase) ||
-         args[0].Equals("goal-timing", StringComparison.OrdinalIgnoreCase)) &&
+         args[0].Equals("goal-timing", StringComparison.OrdinalIgnoreCase) ||
+         args[0].Equals("failure-triage", StringComparison.OrdinalIgnoreCase)) &&
         !string.IsNullOrWhiteSpace(args[1]) &&
         !args[1].StartsWith('-') &&
         !CliCommandHelp.IsCommandSpecificHelp(args));

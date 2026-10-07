@@ -4,30 +4,28 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 // Each fixture owns its workspace; console capture uses the existing async-local router.
-public sealed class CliGoalTimingReadOnlyRouteTests : CliTaskQueryTestSupport
+public sealed class CliFailureTriageReadOnlyRouteTests : CliTaskQueryTestSupport
 {
     [Xunit.Theory]
-    [Xunit.InlineData(true, "goal-timing", "abc10000")]
-    [Xunit.InlineData(true, "GOAL-TIMING", "ABC10000")]
-    [Xunit.InlineData(false, "goal-timing")]
-    [Xunit.InlineData(false, "goal-timing", "--all")]
-    [Xunit.InlineData(false, "goal-timing", "--help")]
-    [Xunit.InlineData(false, "goal-timing", "-h")]
-    [Xunit.InlineData(false, "goal-timing", "-x")]
-    [Xunit.InlineData(false, "goal-timing", "abc10000", "extra")]
-    [Xunit.InlineData(false, "goal-timing", " ")]
-    [Xunit.InlineData(false, "goal-timing", "")]
     [Xunit.InlineData(true, "failure-triage", "abc10000")]
+    [Xunit.InlineData(true, "FAILURE-TRIAGE", "ABC10000")]
     [Xunit.InlineData(false, "failure-triage")]
     [Xunit.InlineData(false, "failure-triage", "--all")]
-    public void CommandForms_ClassifyOnlyOneExplicitTimingPrefix(bool expected, params string[] args)
+    [Xunit.InlineData(false, "failure-triage", "--help")]
+    [Xunit.InlineData(false, "failure-triage", "-h")]
+    [Xunit.InlineData(false, "failure-triage", "-x")]
+    [Xunit.InlineData(false, "failure-triage", "abc10000", "extra")]
+    [Xunit.InlineData(false, "failure-triage", "abc10000", "--autonomy", "conservative")]
+    [Xunit.InlineData(false, "failure-triage", " ")]
+    [Xunit.InlineData(false, "failure-triage", "")]
+    public void CommandForms_ClassifyOnlyOneExplicitTriagePrefix(bool expected, params string[] args)
     {
         Xunit.Assert.Equal(expected, CliReadOnlyCommandRunner.IsReadOnlyCommand(args));
     }
 
     [Xunit.Theory]
-    [Xunit.InlineData("goal-timing", "abc10000")]
-    [Xunit.InlineData("GOAL-TIMING", "ABC10000")]
+    [Xunit.InlineData("failure-triage", "abc10000")]
+    [Xunit.InlineData("FAILURE-TRIAGE", "ABC10000")]
     public void ExplicitPrefix_ReadsOnlyTargetWithoutOutboxOrWrites(params string[] args)
     {
         var root = CreateTempDirectory();
@@ -49,8 +47,7 @@ public sealed class CliGoalTimingReadOnlyRouteTests : CliTaskQueryTestSupport
                 Xunit.Assert.False(changed);
             });
 
-            Xunit.Assert.Contains(output.Split(Environment.NewLine),
-                line => line.StartsWith("Goal timing abc10000", StringComparison.Ordinal));
+            Xunit.Assert.Contains("Failure triage goal: abc10000", output.Split(Environment.NewLine));
             Xunit.Assert.Equal(target.Id, currentGoal!.Id);
             Xunit.Assert.Equal(1, repository.ListGoalMetadataCount);
             Xunit.Assert.Equal(1, repository.LoadGoalsCount);

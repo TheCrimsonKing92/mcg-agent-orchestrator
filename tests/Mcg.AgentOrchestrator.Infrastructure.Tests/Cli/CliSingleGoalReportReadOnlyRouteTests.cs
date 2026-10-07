@@ -69,7 +69,7 @@ public sealed class CliSingleGoalReportReadOnlyRouteTests : CliTaskQueryTestSupp
     [Xunit.InlineData("subscription-plan", "--help")]
     [Xunit.InlineData("goal-changes", "abc10000", "-h")]
     [Xunit.InlineData("goal-diagnostics", "abc10000", "extra")]
-    [Xunit.InlineData("failure-triage", "abc10000")]
+    [Xunit.InlineData("failure-triage", "abc10000", "extra")]
     [Xunit.InlineData("goal-timing", "abc10000", "extra")]
     public void ImplicitPrefixHelpAndClockReports_KeepTheirExistingRoute(params string[] args)
     {

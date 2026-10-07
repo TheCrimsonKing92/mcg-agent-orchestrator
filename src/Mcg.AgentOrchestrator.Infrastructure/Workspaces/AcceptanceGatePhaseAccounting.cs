@@ -105,7 +105,9 @@ public sealed record AcceptanceGatePhaseBreakdown(
     int? ShardPermitBudget = null,
     TimeSpan? ShardPermitWaitDuration = null,
     TimeSpan? StructuralCoveragePreparationDuration = null,
-    TimeSpan? StructuralCoveragePreparationWaitDuration = null);
+    TimeSpan? StructuralCoveragePreparationWaitDuration = null,
+    int? RemoteLaneCount = null,
+    TimeSpan? LongestRemoteLaneDuration = null);
 
 internal sealed class AcceptanceGatePhaseAccountant : IDisposable
 {
@@ -128,6 +130,8 @@ internal sealed class AcceptanceGatePhaseAccountant : IDisposable
     private int? _effectiveShardConcurrency;
     private int? _peakShardConcurrency;
     private long _longestLaneTicks;
+    private int _remoteLaneCount;
+    private long _longestRemoteLaneTicks;
     private TimeSpan? _slotWaitDuration;
     private int _shardPermitBudget;
     private long _shardPermitWaitTicks;
@@ -171,6 +175,9 @@ internal sealed class AcceptanceGatePhaseAccountant : IDisposable
 
     internal static void RecordCurrentLaneSample(TimeSpan duration) =>
         CurrentAccountant.Value?.RecordLaneSample(duration);
+
+    internal static void RecordCurrentRemoteLaneSample(TimeSpan duration) =>
+        CurrentAccountant.Value?.RecordRemoteLaneSample(duration);
 
     internal static void RecordCurrentSlotWait(TimeSpan? duration) =>
         CurrentAccountant.Value?.RecordSlotWait(duration);
@@ -273,6 +280,20 @@ internal sealed class AcceptanceGatePhaseAccountant : IDisposable
                 break;
             observed = prior;
         }
+    }
+
+    internal void RecordRemoteLaneSample(TimeSpan duration)
+    {
+        var candidate = duration.Ticks;
+        var observed = Volatile.Read(ref _longestRemoteLaneTicks);
+        while (candidate > observed)
+        {
+            var prior = Interlocked.CompareExchange(ref _longestRemoteLaneTicks, candidate, observed);
+            if (prior == observed)
+                break;
+            observed = prior;
+        }
+        Interlocked.Increment(ref _remoteLaneCount);
     }
 
     internal void RecordSlotWait(TimeSpan? duration)
@@ -389,6 +410,7 @@ internal sealed class AcceptanceGatePhaseAccountant : IDisposable
             .Aggregate(TimeSpan.Zero, (total, phase) => total + phase.Duration);
         var totalDuration = _timeProvider.GetElapsedTime(_startedTimestamp, completedTimestamp);
         var unattributedDuration = totalDuration - attributedDuration - laneDuration;
+        var remoteLaneCount = Volatile.Read(ref _remoteLaneCount);
         return new AcceptanceGatePhaseBreakdown(
             "verifier-run",
             _outcome,
@@ -404,7 +426,9 @@ internal sealed class AcceptanceGatePhaseAccountant : IDisposable
             _shardPermitBudget > 0 ? _shardPermitBudget : null,
             _shardPermitBudget > 0 ? TimeSpan.FromTicks(Interlocked.Read(ref _shardPermitWaitTicks)) : null,
             _structuralCoveragePreparationDuration,
-            _structuralCoveragePreparationWaitDuration);
+            _structuralCoveragePreparationWaitDuration,
+            remoteLaneCount > 0 ? remoteLaneCount : null,
+            remoteLaneCount > 0 ? TimeSpan.FromTicks(Interlocked.Read(ref _longestRemoteLaneTicks)) : null);
     }
 
     private static string FormatCompact(AcceptanceGatePhaseBreakdown breakdown)
@@ -427,6 +451,11 @@ internal sealed class AcceptanceGatePhaseAccountant : IDisposable
             $"attributed_ms={Milliseconds(breakdown.AttributedPhaseDuration)}",
             $"unattributed_ms={Milliseconds(breakdown.UnattributedDuration)}"
         };
+        if (breakdown.RemoteLaneCount is { } remoteLaneCount)
+        {
+            fields.Add($"remote_lanes={remoteLaneCount.ToString(CultureInfo.InvariantCulture)}");
+            fields.Add($"longest_remote_lane_ms={Milliseconds(breakdown.LongestRemoteLaneDuration ?? TimeSpan.Zero)}");
+        }
         if (breakdown.StructuralCoveragePreparationDuration is { } preparation)
         {
             fields.Add($"structural_coverage_preparation_ms={Milliseconds(preparation)}");
