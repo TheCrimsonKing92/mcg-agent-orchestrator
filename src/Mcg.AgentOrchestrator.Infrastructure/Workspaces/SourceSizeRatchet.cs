@@ -56,7 +56,8 @@ internal static class SourceSizeRatchet
             // Goal 78053cf4 extracted 313 lines of capture custody and process start-info construction.
             // Goal 28ea80c3 extracted 540 lines of acceptance process running.
             // Goal 1c226573 extracted build-phase planning, execution and cache receipts into AcceptanceDotnetBuildPhase.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 5651),
+            // Goal 9797ec59 extracted failure-cause receipt, codec and adjudication into AcceptanceFailureCauseAdjudicator.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 5351),
             // Goal c0cfa8ae test telemetry collaborator measured at 423 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.TestTelemetry.cs", 423),
             // Goal efdff7b2 build-artifact lock collaborator measured at 334 lines.
