@@ -8,10 +8,12 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class AcceptanceCohortWorkflowTestsMergeTrainVerdict : AcceptanceCohortWorkflowTests
 {
     [Theory(DisplayName = "Failed train gates publish the deciding receipt only in gate-only mode")]
-    [InlineData(true, false)]
-    [InlineData(false, false)]
-    [InlineData(true, true)]
-    public void NonPassedTrainPreservesReceiptForChildOnly(bool gateOnly, bool infrastructureFailure)
+    [InlineData(true, false, true)]
+    [InlineData(false, false, true)]
+    [InlineData(true, true, true)]
+    [InlineData(true, false, false)]
+    public void NonPassedTrainPreservesReceiptForChildOnly(
+        bool gateOnly, bool infrastructureFailure, bool publishChildResult)
     {
         var repo = CreateReducedAcceptanceCohortRepository();
         var cleanup = CreateIsolatedCleanupContext(repo);
@@ -62,7 +64,7 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrainVerdict : AcceptanceC
             Assert.Null(store.TryReadReceipt(originalIdentity.Value));
             Assert.Null(store.TryReadReceipt(decidingIdentity.Value));
 
-            if (gateOnly)
+            if (gateOnly && publishChildResult)
             {
                 var root = Path.Combine(workspace.OrchestratorDirectory, "verdict-attempt");
                 var attempt = new ConductorGroupedGateAttempt("train-verdict", "train",
@@ -98,9 +100,21 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrainVerdict : AcceptanceC
             }
             else
             {
-                var result = driver.RunMergeTrain(selection, goals, ConductorAutonomyPolicy.Permissive);
+                var result = driver.RunMergeTrain(selection, goals, ConductorAutonomyPolicy.Permissive,
+                    gateOnly: gateOnly);
 
                 Assert.Null(result.Receipt);
+                if (gateOnly)
+                {
+                    var recorded = Assert.IsType<MergeTrainReceipt>(result.RecordedGateReceipt);
+                    Assert.Equal(decidingIdentity.Value, recorded.Identity.Value);
+                    Assert.Equal(expectedOutcome, recorded.Outcome);
+                    Assert.Equal(store.TryReadReceipt(decidingIdentity.Value)!.ReceiptId, recorded.ReceiptId);
+                }
+                else
+                {
+                    Assert.Null(result.RecordedGateReceipt);
+                }
                 Assert.Empty(result.MemberResults);
                 Assert.Equal("outcome=Failed attempts=2 fallback=ordinary", result.Detail);
                 Assert.Equal(goals[2].Id, Assert.Single(result.Ejections).GoalId);

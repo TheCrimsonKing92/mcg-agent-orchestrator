@@ -23,7 +23,11 @@ internal sealed record ConductorMergeTrainRunResult(
     MergeTrainReceipt? Receipt,
     IReadOnlyDictionary<string, ConductorAdvanceResult> MemberResults,
     IReadOnlyList<MergeTrainEjection> Ejections,
-    string Detail);
+    string Detail)
+{
+    // Reporting a completed gate must not turn an ordinary fallback into a landable result.
+    internal MergeTrainReceipt? RecordedGateReceipt { get; init; }
+}
 
 internal static class ConductorMergeTrainSelector
 {

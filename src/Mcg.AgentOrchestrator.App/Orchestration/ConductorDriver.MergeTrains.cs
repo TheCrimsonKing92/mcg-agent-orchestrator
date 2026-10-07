@@ -346,8 +346,7 @@ internal sealed partial class ConductorDriver
                 RecordTrainRedPair(selection, members, receipt);
                 var detail = $"outcome={receipt.Outcome} attempts={attempt + 1} fallback=ordinary";
                 return gateOnly
-                    ? new ConductorMergeTrainRunResult(receipt,
-                        new Dictionary<string, ConductorAdvanceResult>(StringComparer.Ordinal), allEjections, detail)
+                    ? Fallback(detail) with { RecordedGateReceipt = receipt }
                     : Fallback(detail);
             }
 

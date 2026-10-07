@@ -292,7 +292,7 @@ internal sealed partial class ConductorDriver
             var result = RunMergeTrain(new ConductorMergeTrainSelection(members), goals,
                 ConductorAutonomyPolicy.ParseJson(attempt.PolicyJson, attempt.MetadataPath),
                 gateOnly: true, expectedGateIdentity: attempt.IdentityValue);
-            return result.Receipt is { } receipt
+            return (result.RecordedGateReceipt ?? result.Receipt) is { } receipt
                 ? ToGroupedGateOutcome(receipt.Outcome, receipt.ReceiptId) : null;
         }
         else if (attempt.Kind == "follower")
