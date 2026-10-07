@@ -46,15 +46,10 @@ internal sealed partial class ConductorDriver
 
     private ConductorAdvanceResult ExecuteCreateWorkspace(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)
     {
-        var facts = new CreatedStageFacts();
-        try
-        {
-            facts = facts with { CreatedPath = _createWorkspace(goal) };
-        }
-        catch (EvidenceMutationLeaseUnavailableException ex)
-        {
-            facts = facts with { LeaseUnavailableMessage = ex.Message };
-        }
+        var execution = CreatedWorkspaceExecutor.Execute(() => _createWorkspace(goal));
+        var facts = execution.LeaseUnavailableMessage is not null
+            ? new CreatedStageFacts { LeaseUnavailableMessage = execution.LeaseUnavailableMessage }
+            : new CreatedStageFacts { CreatedPath = execution.CreatedPath! };
 
         var decision = CreatedStagePolicy.Evaluate(facts);
         return MakeResult(goal.Id.Value, goalPrefix, policy,
