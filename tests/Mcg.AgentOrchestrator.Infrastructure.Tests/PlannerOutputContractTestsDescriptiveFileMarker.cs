@@ -30,7 +30,7 @@ public sealed class PlannerOutputContractTestsDescriptiveFileMarker : WorkerDisp
         var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
 
         Xunit.Assert.False(result.Succeeded);
-        Xunit.Assert.Contains("src/Missing.cs", result.Diagnostic, StringComparison.Ordinal);
+        Xunit.Assert.Contains("target citation 'src/Missing.cs' does not exist and is not marked as a new file", result.Diagnostic, StringComparison.Ordinal);
     }
 
     private static string PlanWithTargetLine(string line)
@@ -39,6 +39,8 @@ public sealed class PlannerOutputContractTestsDescriptiveFileMarker : WorkerDisp
         const string heading = "## Target seams and symbols";
         var bodyStart = plan.IndexOf(heading, StringComparison.Ordinal) + heading.Length;
         var bodyEnd = plan.IndexOf("\n## ", bodyStart, StringComparison.Ordinal);
-        return plan[..bodyStart] + "\n\n" + line + "\n" + plan[bodyEnd..];
+        // Short markers still need a substantive section body; keep their suffix unchanged.
+        var sectionLine = line.Length < 40 ? "Target seam: " + line : line;
+        return plan[..bodyStart] + "\n\n" + sectionLine + "\n" + plan[bodyEnd..];
     }
 }
