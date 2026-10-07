@@ -9,13 +9,37 @@ internal static class RemoteExecutorReportReader
     internal static RemoteExecutorReport Read(OrchestratorWorkspace workspace, DateTimeOffset? since, int last)
     {
         var outcomes = ReadLines(RemoteExecutorHealthLedger.ResolveStorePath(workspace.RootDirectory), root =>
-            new RemoteExecutorOutcomeRow(root.GetProperty("observed_at").GetDateTimeOffset(),
+        {
+            var (seconds, startedAt) = ReadAttempt(root);
+            return new RemoteExecutorOutcomeRow(root.GetProperty("observed_at").GetDateTimeOffset(),
                 RequiredString(root, "executor_id"), RequiredString(root, "gate_attempt_id"),
-                RequiredString(root, "lane"), RequiredString(root, "outcome"), OptionalString(root, "reason")), out var unreadable);
+                RequiredString(root, "lane"), RequiredString(root, "outcome"), OptionalString(root, "reason"), seconds, startedAt);
+        }, out var unreadable);
         var probes = ReadProbes(RemoteExecutorProbeLedger.ResolveStorePath(workspace.RootDirectory), out var unreadableProbes);
-        return RemoteExecutorReport.Build(
-            RemoteLaneExecutorConfiguration.LoadExecutors(RemoteLaneExecutorConfiguration.ResolveStorePath(workspace.RootDirectory))
-                .Select(entry => entry.Id), outcomes, probes, since, last, unreadable, unreadableProbes);
+        var executors = RemoteLaneExecutorConfiguration.LoadExecutors(RemoteLaneExecutorConfiguration.ResolveStorePath(workspace.RootDirectory));
+        var slots = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var executor in executors) slots.TryAdd(executor.Id, executor.Slots);
+        return RemoteExecutorReport.Build(executors.Select(entry => entry.Id), outcomes, probes,
+            since, last, unreadable, unreadableProbes, slots);
+    }
+
+    private static (double? Seconds, DateTimeOffset? StartedAt) ReadAttempt(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("attempt", out var attempt) ||
+            attempt.ValueKind != JsonValueKind.Object) return (null, null);
+        double? seconds = null;
+        if (attempt.TryGetProperty("last_status", out var status) && status.ValueKind == JsonValueKind.Object &&
+            status.TryGetProperty("seconds", out var value) && value.ValueKind == JsonValueKind.Number &&
+            value.TryGetDouble(out var number) && double.IsFinite(number) && number > 0)
+            seconds = number;
+        DateTimeOffset? startedAt = null;
+        if (attempt.TryGetProperty("steps", out var steps) && steps.ValueKind == JsonValueKind.Array)
+            foreach (var step in steps.EnumerateArray())
+                if (step.ValueKind == JsonValueKind.Object && step.TryGetProperty("started_at", out var start) &&
+                    start.ValueKind == JsonValueKind.String && start.TryGetDateTimeOffset(out var at) &&
+                    (startedAt is null || at < startedAt))
+                    startedAt = at;
+        return (seconds, startedAt);
     }
 
     internal static IReadOnlyList<RemoteExecutorProbeRow> ReadProbes(string path, out int unreadable) =>

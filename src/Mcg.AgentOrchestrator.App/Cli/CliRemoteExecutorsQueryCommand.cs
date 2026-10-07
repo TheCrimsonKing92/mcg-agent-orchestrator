@@ -41,8 +41,12 @@ internal static class CliRemoteExecutorsQueryCommand
             Console.WriteLine(FormattableString.Invariant($"{Cell(row.ExecutorId)}\t{row.Attempts}\t{JsonSerializer.Serialize(row.OutcomeCounts)}\t{row.AcceptedShare?.ToString("R", CultureInfo.InvariantCulture) ?? "null"}\t{row.LastSuccessAt?.ToString("O") ?? "null"}\t{JsonSerializer.Serialize(row.LastProbe, new JsonSerializerOptions(JsonSerializerDefaults.Web))}"));
             foreach (var attempt in row.RecentAttempts)
                 Console.WriteLine(FormattableString.Invariant($"attempt\t{Cell(row.ExecutorId)}\t{attempt.ObservedAt:O}\t{Cell(attempt.GateAttemptId)}\t{Cell(attempt.Lane)}\t{Cell(attempt.Outcome)}\t{Cell(attempt.Reason)}"));
+            Console.WriteLine(FormattableString.Invariant($"slots\t{Cell(row.ExecutorId)}\t{row.ConfiguredSlots?.ToString(CultureInfo.InvariantCulture) ?? "null"}\t{row.PeakConcurrentAttempts}\t{row.ConcurrentAttempts}"));
+            foreach (var lane in row.Lanes)
+                Console.WriteLine(FormattableString.Invariant($"lane\t{Cell(row.ExecutorId)}\t{Cell(lane.Lane)}\t{lane.Samples}\t{Seconds(lane.MedianSeconds)}\t{Seconds(lane.LastSeconds)}\t{Seconds(lane.SoloMedianSeconds)}\t{Seconds(lane.ConcurrentMedianSeconds)}"));
         }
     }
+    private static string Seconds(double? value) => value?.ToString("R", CultureInfo.InvariantCulture) ?? "null";
     private static string Cell(string? value) => value?.Replace('\t', ' ').Replace('\r', ' ').Replace('\n', ' ') ?? "";
     private static void Invalid() => Console.Error.WriteLine(CliCommandHelp.RemoteExecutorsUsage);
 }
