@@ -17,6 +17,15 @@ internal sealed record RemoteLaneExecutorConfiguration(
 
     internal static RemoteLaneExecutorConfiguration Load(string path)
     {
+        var parsed = Parse(path);
+        return parsed.DisabledReason is null && (parsed.Executors.Count == 0 || parsed.Lanes.Count == 0)
+            ? Disabled("empty") : parsed;
+    }
+
+    internal static IReadOnlyList<RemoteLaneExecutorEntry> LoadExecutors(string path) => Parse(path).Executors;
+
+    private static RemoteLaneExecutorConfiguration Parse(string path)
+    {
         try
         {
             using var document = JsonDocument.Parse(File.ReadAllText(path));
@@ -72,7 +81,7 @@ internal sealed record RemoteLaneExecutorConfiguration(
                     return Disabled("invalid");
                 names.Add(lane.GetString()!);
             }
-            return entries.Count == 0 || names.Count == 0 ? Disabled("empty") : new(entries.ToArray(), names.ToArray(), null);
+            return new(entries.ToArray(), names.ToArray(), null);
         }
         catch (FileNotFoundException) { return Disabled("missing"); }
         catch (DirectoryNotFoundException) { return Disabled("missing"); }
