@@ -541,7 +541,7 @@ public sealed partial class AgentOrchestratorKernel
             // required section.
             segments.Add(TaskBriefSegment.Fixed(prerequisiteEvidenceSection.Lines));
         }
-
+        segments.AddRange(ClarificationsAndRulingsDigest.RenderSegments(GoalScopedClarificationAnswersQuery.Select(HumanInputRequests, goal, taskId), goal.AuthoritativeBrief.Version));
         var frozenFactRulingLines = FrozenFactRulingBriefSection.Render(HumanInputRequests, goalId, task.RequiredRole);
         if (frozenFactRulingLines.Count > 0)
             segments.Add(TaskBriefSegment.Fixed(frozenFactRulingLines));
