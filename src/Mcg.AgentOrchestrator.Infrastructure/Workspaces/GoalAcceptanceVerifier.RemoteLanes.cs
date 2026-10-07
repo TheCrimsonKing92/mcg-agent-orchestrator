@@ -11,8 +11,10 @@ public sealed partial class GoalAcceptanceVerifier
         RunProcessAsync(args, directory, bound, token);
 
     private readonly ConditionalWeakTable<AcceptancePartitionVerdictCache, RemoteLaneCoordinator> _remoteLaneCoordinators = new();
+    private RemoteLaneCoordinator? _cachelessRemoteLaneCoordinator;
 
-    private RemoteLaneCoordinator? LoadRemoteLanes(string worktreePath, AcceptancePartitionVerdictCache? cache)
+    private RemoteLaneCoordinator? LoadRemoteLanes(string worktreePath, AcceptancePartitionVerdictCache? cache,
+        IRemoteLaneCandidateIdentity? candidateIdentity = null)
     {
         var configuration = RemoteLaneExecutorConfiguration.Load(_testOverrides.RemoteLaneExecutorConfigurationPathForTests ??
             RemoteLaneExecutorConfiguration.ResolveStorePath(worktreePath));
@@ -24,7 +26,8 @@ public sealed partial class GoalAcceptanceVerifier
             _testOverrides.OnRemoteLaneProgressLineForTests?.Invoke(line);
             return null;
         }
-        if (cache is null || ShardPermitLaneClass != GateShardLaneClass.Gate) return null;
+        var identity = (IRemoteLaneCandidateIdentity?)cache ?? candidateIdentity;
+        if (identity is null || ShardPermitLaneClass != GateShardLaneClass.Gate) return null;
         var clock = _testOverrides.RemoteLaneTimeProviderForTests ?? _timeProvider;
         IRemoteLaneExecutor executor = _testOverrides.RemoteLaneExecutorForTests ??
             (configuration.Executors.Any(entry => entry.Transport == "ssh")
@@ -32,7 +35,7 @@ public sealed partial class GoalAcceptanceVerifier
                     _testOverrides.RemoteLaneTransportRunnerForTests ?? RunProcessAsync,
                     _testOverrides.RemoteLaneGitRunnerForTests ?? GitCli.Run)
                 : UnavailableRemoteLaneExecutor.Instance);
-        var coordinator = new RemoteLaneCoordinator(configuration, cache, worktreePath, _executionContext?.ResultsPrefix,
+        var coordinator = new RemoteLaneCoordinator(configuration, identity, worktreePath, _executionContext?.ResultsPrefix,
             executor, clock,
             _testOverrides.RemoteLanePollInterval ?? TimeSpan.FromSeconds(1), _testOverrides.OnRemoteLaneOutcomeForTests,
             line =>
@@ -40,7 +43,8 @@ public sealed partial class GoalAcceptanceVerifier
                 try { _executionContext?.ReportRemoteLaneEvent(line); } catch (Exception) { }
                 _testOverrides.OnRemoteLaneEventForTests?.Invoke(line);
             });
-        _remoteLaneCoordinators.Add(cache, coordinator);
+        if (cache is not null) _remoteLaneCoordinators.Add(cache, coordinator);
+        else _cachelessRemoteLaneCoordinator = coordinator;
         return coordinator;
     }
 
@@ -97,6 +101,8 @@ public sealed partial class GoalAcceptanceVerifier
         RemoteLaneCoordinator? remote = null;
         if (cacheContext is not null && ShardPermitLaneClass == GateShardLaneClass.Gate)
             _remoteLaneCoordinators.TryGetValue(cacheContext, out remote);
+        else if (cacheContext is null && ShardPermitLaneClass == GateShardLaneClass.Gate)
+            remote = _cachelessRemoteLaneCoordinator;
         var shardConcurrency = new GateShardConcurrencyCounter();
         var failures = new List<Exception>();
         using var sharedApparatusCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, stopToken);
@@ -175,7 +181,7 @@ public sealed partial class GoalAcceptanceVerifier
                     pendingShards.RemoveAt(index--);
                     reuseConsulted[shard.Index] = true;
                     var reuseStarted = _timeProvider.GetTimestamp();
-                    if (cacheContext!.TryReuse(shard.Check) is { } reused)
+                    if (cacheContext?.TryReuse(shard.Check) is { } reused)
                     {
                         remote.Release(entry.Id);
                         CompleteShard(shard, reused, false, _timeProvider.GetElapsedTime(reuseStarted));
@@ -239,7 +245,7 @@ public sealed partial class GoalAcceptanceVerifier
                     var outcome = await completedRemote.Task.ConfigureAwait(false);
                     if (outcome.Accepted is { } accepted)
                     {
-                        cacheContext!.RecordExecution(completedRemote.Shard.Check, accepted, "remote_first_run");
+                        cacheContext?.RecordExecution(completedRemote.Shard.Check, accepted, "remote_first_run");
                         outcomes[completedRemote.Shard.Index] = new ShardRunOutcome(accepted, false);
                     }
                     else if (!sharedApparatusCancellation.IsCancellationRequested)
