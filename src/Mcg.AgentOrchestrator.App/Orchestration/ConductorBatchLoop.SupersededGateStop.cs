@@ -52,5 +52,13 @@ internal sealed partial class ConductorBatchLoop
                 }
             }
         }
+        try
+        {
+            driver.StopInvalidatedFollowerGates();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            EmitProgress($"FOLLOWER_GATE_STOP_FAILED error={SanitizeReason(ex.Message)}");
+        }
     }
 }

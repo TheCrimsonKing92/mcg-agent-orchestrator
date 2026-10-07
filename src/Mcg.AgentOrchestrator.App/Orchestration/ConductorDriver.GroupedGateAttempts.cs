@@ -35,6 +35,7 @@ internal sealed partial class ConductorDriver
         foreach (var recorded in coordinator.ReadAll())
         {
             var attempt = recorded;
+            if (attempt.Kind == "follower") continue;
             if (!attempt.Members.Any(member => selectedIds.Contains(member.GoalId))) continue;
 
             var difference = coordinator.IdentityDifference(attempt, kind, members, mainRevision, treeRevision);
@@ -145,6 +146,7 @@ internal sealed partial class ConductorDriver
                 !coordinator.IsAlive(attempt.OwnerProcessId))
                 run.Completion.TrySetResult();
         }
+        StopInvalidatedFollowerGates();
     }
 
     private void RestoreRunningGroupedGateAttempts()
@@ -179,6 +181,18 @@ internal sealed partial class ConductorDriver
                 if (_cohortGateRuns.Values.Any(run =>
                     string.Equals(run.AttemptMetadataPath, current.MetadataPath, StringComparison.Ordinal)))
                     continue;
+                if (current.Kind == "follower")
+                {
+                    RequireFollowerMembers(current);
+                    var followerRun = CreateFollowerGateRun(current);
+                    if (TryGetActiveCohortGateRun(followerRun.MemberGoalIds, out var followerOverlap))
+                        throw new InvalidOperationException(
+                            $"Live grouped gate attempts overlap: {followerOverlap!.AttemptMetadataPath} and {current.MetadataPath}.");
+                    var followerKey = FollowerGateRunKey(current);
+                    if (!_cohortGateRuns.TryAdd(followerKey, followerRun))
+                        throw new InvalidOperationException($"Grouped gate registry key '{followerKey}' is already owned.");
+                    continue;
+                }
                 var memberIds = current.Members.Select(member => member.GoalId)
                     .ToHashSet(StringComparer.Ordinal);
                 if (TryGetActiveCohortGateRun(memberIds, out var overlapping))
@@ -204,6 +218,7 @@ internal sealed partial class ConductorDriver
     private (bool Known, string? Difference) InspectRestoredGroupedGateIdentity(
         ConductorGroupedGateAttempt attempt)
     {
+        if (attempt.Kind == "follower") return InspectRestoredFollowerGateIdentity(attempt);
         if (_cohortKernel is null || _cohortWorkspace is null) return (false, null);
         var policy = ConductorAutonomyPolicy.ParseJson(attempt.PolicyJson, attempt.MetadataPath);
         var goalsById = _cohortKernel.Goals.ToDictionary(goal => goal.Id.Value, StringComparer.Ordinal);
@@ -276,6 +291,10 @@ internal sealed partial class ConductorDriver
             _ = RunMergeTrain(new ConductorMergeTrainSelection(members), goals,
                 ConductorAutonomyPolicy.ParseJson(attempt.PolicyJson, attempt.MetadataPath),
                 gateOnly: true, expectedGateIdentity: attempt.IdentityValue);
+        }
+        else if (attempt.Kind == "follower")
+        {
+            RunFollowerGateBody(attempt);
         }
         else
         {
