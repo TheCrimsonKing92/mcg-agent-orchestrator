@@ -94,7 +94,18 @@ internal sealed partial class ConductorDriver
                 StableIdentity: BuildUnattributableAcceptanceIdentity(
                     branchHeadSha,
                     mainHeadSha,
-                    retryDisposition.ExcludedFailures)));
+                    retryDisposition.ExcludedFailures))
+            {
+                Decision = AcceptanceApparatusDispositionPolicy.Evaluate(
+                    new AcceptanceApparatusDispositionFacts(goal.Id.Value, AcceptanceApparatusDisposition.ExcludedUnattributableHold)
+                    {
+                        BranchHeadSha = branchHeadSha,
+                        MainHeadSha = mainHeadSha,
+                        TestIdentities = AcceptanceApparatusDispositionFacts.CanonicalTestIdentities(
+                            retryDisposition.ExcludedFailures.Select(failure => failure.Identity)),
+                        Reason = reason
+                    }).ToRecord()
+            });
     }
 
     /// <summary>
@@ -182,7 +193,20 @@ internal sealed partial class ConductorDriver
                 reason,
                 StableIdentity:
                     $"acceptance-apparatus-red:{branchHeadSha ?? "unknown"}:{mainHeadSha ?? "unknown"}:" +
-                    regate.EvidenceKind));
+                    regate.EvidenceKind)
+            {
+                Decision = AcceptanceApparatusDispositionPolicy.Evaluate(
+                    new AcceptanceApparatusDispositionFacts(goal.Id.Value, AcceptanceApparatusDisposition.ApparatusRedRegateHold)
+                    {
+                        BranchHeadSha = branchHeadSha,
+                        MainHeadSha = mainHeadSha,
+                        EvidenceKind = regate.EvidenceKind,
+                        RegateOrdinal = regate.RegateOrdinal,
+                        RegateCap = regate.RegateCap,
+                        TestIdentities = AcceptanceApparatusDispositionFacts.CanonicalTestIdentities(regate.TestIdentities),
+                        Reason = reason
+                    }).ToRecord()
+            });
     }
 
     private void RestoreVerifiedAfterAcceptanceClassification(Goal goal, string reason)
@@ -207,16 +231,30 @@ internal sealed partial class ConductorDriver
         string goalPrefix,
         ConductorAutonomyPolicy policy,
         ApparatusRedGateReading reading,
-        ApparatusRedDisposition.BoundExhausted bound) =>
-        Escalate(
-            goal,
-            goalPrefix,
-            policy,
-            GoalLifecycleState.Verified,
+        ApparatusRedDisposition.BoundExhausted bound)
+    {
+        var reason =
             $"{ApparatusRedClassifier.BoundExhaustedToken}: this goal already re-gated " +
             $"{bound.RegateCount}/{bound.RegateCap} apparatus REDs without a green gate. The current RED is " +
             $"apparatus again ({bound.EvidenceKind}) on {ApparatusRedFailureSummary.Format(bound.TestIdentities, reading.FailingTests)}. " +
-            "Repair the apparatus or confirm acceptance-retry; no worker was reopened.");
+            "Repair the apparatus or confirm acceptance-retry; no worker was reopened.";
+        var result = Escalate(goal, goalPrefix, policy, GoalLifecycleState.Verified, reason);
+        return result with
+        {
+            Outcome = ((ConductorAdvanceOutcome.Escalated)result.Outcome) with
+            {
+                Decision = AcceptanceApparatusDispositionPolicy.Evaluate(
+                    new AcceptanceApparatusDispositionFacts(goal.Id.Value, AcceptanceApparatusDisposition.ApparatusRedBoundExhausted)
+                    {
+                        EvidenceKind = bound.EvidenceKind,
+                        RegateCount = bound.RegateCount,
+                        RegateCap = bound.RegateCap,
+                        TestIdentities = AcceptanceApparatusDispositionFacts.CanonicalTestIdentities(bound.TestIdentities),
+                        Reason = reason
+                    }).ToRecord()
+            }
+        };
+    }
 
     private void WriteApparatusRedRegateJournal(
         Goal goal,

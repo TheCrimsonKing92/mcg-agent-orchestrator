@@ -18,13 +18,30 @@ internal sealed partial class ConductorDriver
             var partitions = acceptance.RequiredUnmetCriteria
                 .Where(check => check.WithinAttemptRerun is not null)
                 .Select(check => $"{check.Name} ({check.WithinAttemptRerun!.FailedPredicate})");
-            return Escalate(
-                goal, goalPrefix, policy, GoalLifecycleState.Verified,
+            var boundReason =
                 $"{WithinAttemptRerunApparatusClassifier.BoundExhaustedToken}: " +
                 $"apparatus regate budget {bound.RegateCount}/{bound.RegateCap} exhausted for " +
                 $"{string.Join(", ", partitions)}; each in-attempt rerun passed. " +
                 "This is an infrastructure failure, not a criteria failure. " +
-                "Repair the apparatus or confirm acceptance-retry; no worker was reopened.");
+                "Repair the apparatus or confirm acceptance-retry; no worker was reopened.";
+            var result = Escalate(goal, goalPrefix, policy, GoalLifecycleState.Verified, boundReason);
+            return result with
+            {
+                Outcome = ((ConductorAdvanceOutcome.Escalated)result.Outcome) with
+                {
+                    Decision = AcceptanceApparatusDispositionPolicy.Evaluate(
+                        new AcceptanceApparatusDispositionFacts(goal.Id.Value, AcceptanceApparatusDisposition.WithinAttemptRerunBoundExhausted)
+                        {
+                            BranchHeadSha = acceptance.BranchHeadSha,
+                            MainHeadSha = acceptance.MainHeadSha,
+                            EvidenceKind = bound.EvidenceKind,
+                            RegateCount = bound.RegateCount,
+                            RegateCap = bound.RegateCap,
+                            TestIdentities = AcceptanceApparatusDispositionFacts.CanonicalTestIdentities(bound.TestIdentities),
+                            Reason = boundReason
+                        }).ToRecord()
+                }
+            };
         }
 
         if (disposition is not ApparatusRedDisposition.Regate regate)
@@ -55,6 +72,19 @@ internal sealed partial class ConductorDriver
                 reason,
                 StableIdentity:
                     $"acceptance-apparatus-rerun-pass:{branchHeadSha ?? "unknown"}:" +
-                    $"{mainHeadSha ?? "unknown"}:{regate.RegateOrdinal}"));
+                    $"{mainHeadSha ?? "unknown"}:{regate.RegateOrdinal}")
+            {
+                Decision = AcceptanceApparatusDispositionPolicy.Evaluate(
+                    new AcceptanceApparatusDispositionFacts(goal.Id.Value, AcceptanceApparatusDisposition.WithinAttemptRerunRegateHold)
+                    {
+                        BranchHeadSha = branchHeadSha,
+                        MainHeadSha = mainHeadSha,
+                        EvidenceKind = regate.EvidenceKind,
+                        RegateOrdinal = regate.RegateOrdinal,
+                        RegateCap = regate.RegateCap,
+                        TestIdentities = AcceptanceApparatusDispositionFacts.CanonicalTestIdentities(regate.TestIdentities),
+                        Reason = reason
+                    }).ToRecord()
+            });
     }
 }
