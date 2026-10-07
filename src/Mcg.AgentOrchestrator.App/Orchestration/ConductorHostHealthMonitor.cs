@@ -121,18 +121,28 @@ internal sealed class ConductorHostHealthMonitor(
 
     private bool EvaluatePagedPool(ref MonitorState state, IReadOnlyList<HostHealthLedgerRecord> records)
     {
-        if (records.Count == 0 || records[^1].PagedPoolMb is not { } latest) return true;
-        var window = records.TakeLast(PagedPoolWindow).ToArray();
-        var rise = latest - window[0].PagedPoolMb;
-        var monotonic = window.Length == PagedPoolWindow && window.All(record => record.PagedPoolMb.HasValue);
+        static bool HasCache(HostHealthLedgerRecord record) =>
+            record.FileCachePagedPoolMb is { } cache && double.IsFinite(cache) && cache >= 0;
+        static double? Residual(HostHealthLedgerRecord record) =>
+            record.PagedPoolMb is { } total && HasCache(record)
+                ? Math.Max(0, total - record.FileCachePagedPoolMb!.Value) : record.PagedPoolMb;
+
+        if (records.Count == 0 || records[^1].PagedPoolMb is not { } total) return true;
+        var latestRecord = records[^1];
+        var latest = Residual(latestRecord)!.Value;
+        var window = records.TakeLast(PagedPoolWindow).Select(Residual).ToArray();
+        var rise = latest - window[0];
+        var monotonic = window.Length == PagedPoolWindow && window.All(value => value.HasValue);
         for (var index = 1; monotonic && index < window.Length; index++)
-            monotonic = window[index].PagedPoolMb >= window[index - 1].PagedPoolMb;
+            monotonic = window[index] >= window[index - 1];
         var high = latest >= PagedPoolHighWaterMb || monotonic && rise >= PagedPoolRiseMb;
         if (high == state.PagedPoolHigh) return true;
+        var cacheDetail = HasCache(latestRecord) ? $" file_cache_mb={Number(latestRecord.FileCachePagedPoolMb)}" : "";
         var detail = high
-            ? $"{PagedPoolHighEvent} paged_pool_mb={Number(latest)} rise_mb={Number(rise)} records={window.Length} " +
-                $"remedy={ForegroundLockRemedy}; leaked pool is reclaimed only by a reboot"
-            : $"{PagedPoolNormalEvent} paged_pool_mb={Number(latest)}";
+            ? $"{PagedPoolHighEvent} paged_pool_mb={Number(total)} rise_mb={Number(rise)} records={window.Length}" +
+                cacheDetail + (HasCache(latestRecord) ? $" residual_mb={Number(latest)}" : "") +
+                $" remedy={ForegroundLockRemedy}; leaked pool is reclaimed only by a reboot"
+            : $"{PagedPoolNormalEvent} paged_pool_mb={Number(total)}" + cacheDetail;
         return Transition(ref state, "paged-pool", high, detail);
     }
 

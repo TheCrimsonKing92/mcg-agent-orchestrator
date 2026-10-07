@@ -4,7 +4,8 @@ using Mcg.AgentOrchestrator.Core;
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal sealed record HostHealthLedgerRecord(
-    DateTimeOffset ObservedAt, string GateAttemptId, double LaunchMs, double? PagedPoolMb, int Version = 1);
+    DateTimeOffset ObservedAt, string GateAttemptId, double LaunchMs, double? PagedPoolMb, int Version = 1,
+    double? FileCachePagedPoolMb = null);
 
 internal static class GateHostHealthLedger
 {

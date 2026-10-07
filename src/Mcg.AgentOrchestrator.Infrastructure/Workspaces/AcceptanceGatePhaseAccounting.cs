@@ -348,7 +348,7 @@ internal sealed class AcceptanceGatePhaseAccountant : IDisposable
                 {
                     GateHostHealthLedger.Append(ledgerPath, new HostHealthLedgerRecord(
                         observedAt, _gateAttemptId!, hostHealth.LaunchMs.Value!.Value,
-                        hostHealth.PagedPoolMb.Value));
+                        hostHealth.PagedPoolMb.Value, FileCachePagedPoolMb: hostHealth.FileCachePagedPoolMb?.Value));
                 }
                 catch { /* Ledger failure must not suppress the breakdown or change the verdict. */ }
             }
