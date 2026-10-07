@@ -21,7 +21,7 @@ public sealed class AcceptanceCohortWorkflowTestsFollowerGateCarry : AcceptanceC
         Assert.Null(driver.CarryFollowerGateReceipt(scenario.Follower, ConductorAutonomyPolicy.Permissive));
         var result = Assert.IsType<FollowerGateCarryResult>(driver.CarryFollowerGateReceipt(scenario.Follower, Enabled));
         Assert.Equal("LandFollower", result.Reason);
-        Assert.Equal(GoalStatus.Completed, scenario.Follower.Status);
+        Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Result!.Outcome);
         Assert.Equal(receipt.Binding.FollowerTestedTree, RunGitOutput(scenario.Repo, "rev-parse", "main^{tree}"));
         var entry = Assert.Single(GoalOperationJournal.Read(scenario.Repo, scenario.Follower.Id).Entries.Where(entry => entry.Operation == Carry));
         Assert.Equal("passed", entry.AcceptanceOutcome);
@@ -29,6 +29,9 @@ public sealed class AcceptanceCohortWorkflowTestsFollowerGateCarry : AcceptanceC
         Assert.NotEqual(receipt.Binding.FollowerBranchHead, entry.BranchHeadSha);
         Assert.Equal(receipt.Binding.FollowerTestedTree, RunGitOutput(scenario.Repo, "rev-parse", $"{entry.BranchHeadSha}^{{tree}}"));
         Assert.Contains($"receipt={receipt.ReceiptId}", entry.Detail);
+        Assert.IsType<ConductorAdvanceOutcome.Executed>(driver.AdvanceOnce(scenario.Follower, Enabled).Outcome);
+        Assert.IsType<ConductorAdvanceOutcome.Executed>(driver.AdvanceOnce(scenario.Follower, Enabled).Outcome);
+        Assert.Equal(GoalStatus.Completed, scenario.Follower.Status);
         Assert.Null(driver.CarryFollowerGateReceipt(scenario.Follower, Enabled));
         Assert.Single(GoalOperationJournal.Read(scenario.Repo, scenario.Follower.Id).Entries.Where(entry => entry.Operation == Carry));
     }
@@ -46,6 +49,9 @@ public sealed class AcceptanceCohortWorkflowTestsFollowerGateCarry : AcceptanceC
         Assert.Equal(GoalStatus.AcceptanceFailed, scenario.Follower.Status);
         Assert.Equal(leaderMain, RunGitOutput(scenario.Repo, "rev-parse", "main"));
         Assert.Equal(receipt.FailedChecks, scenario.Follower.LatestAcceptanceFailure!.FailedChecks);
+        Assert.Equal(leaderMain, scenario.Follower.LatestAcceptanceFailure.MainHeadSha);
+        Assert.Equal(RunGitOutput(GoalWorktrees.TryResolve(scenario.Repo, scenario.Follower.Id)!, "rev-parse", "HEAD"),
+            scenario.Follower.LatestAcceptanceFailure.BranchHeadSha);
         Assert.Empty(GoalOperationJournal.Read(scenario.Repo, scenario.Follower.Id).Entries.Where(entry => entry.Operation == Carry));
     }
 

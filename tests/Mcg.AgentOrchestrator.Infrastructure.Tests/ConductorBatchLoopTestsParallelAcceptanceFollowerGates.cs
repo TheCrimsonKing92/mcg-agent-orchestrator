@@ -79,6 +79,7 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceFollowerGates(ITest
         FollowerGateRunOutcome? newestOutcome = null, bool repeatTick = false, bool moveLeader = false)
     {
         using var isolatedRoot = ConductorBatchLoopTestsParallelAcceptance.IsolatedDotnetRootScope();
+        using var liveGateProbe = GateLoadContextProbe.PushLiveGateOccupantProbe(() => []);
         using var entered = new ManualResetEventSlim(false);
         using var release = new ManualResetEventSlim(false);
         var kernel = new AgentOrchestratorKernel();
@@ -119,6 +120,10 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceFollowerGates(ITest
             var started = coordinator.Evaluate(candidate, policy, driver.RunParallelLandingAcceptance);
             Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, started.Kind);
             Assert.True(entered.Wait(TestHangGuard.Bound), "leader acceptance entered event did not happen");
+            var liveAttempt = Assert.Single(coordinator.GetCapacityReservingAttempts([leader.Id.Value, follower.Id.Value]));
+            Assert.Equal(ConductorParallelAcceptanceAttemptCoordinator.GateDispatchKind, liveAttempt.Kind);
+            Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Running, liveAttempt.Outcome);
+            Assert.IsType<GateReadyCandidateProjectionResult.Ready>(driver.ProjectGateReadyCandidate(follower, policy));
             kernel.BeginGoalAcceptanceVerification(leader.Id, "leader solo gate running");
             if (moveLeader) leaderHead = new string('d', 40);
             var starts = 0;
@@ -142,7 +147,7 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceFollowerGates(ITest
             var loop = new ConductorBatchLoop();
             loop.Run(kernel, driver, policy, NoStopPath(), maxIterations: 1,
                 onTick: tick => lines.AddRange(tick.ProgressLines ?? []));
-            var hold = (follower.CurrentHold?.Blocker ?? "")
+            var hold = Assert.Single(lines.Where(line => line.StartsWith($"GOAL goal={follower.Id.Value[..8]} ", StringComparison.Ordinal)))
                 .Replace(leader.Id.Value, "leader").Replace(leader.Id.Value[..8], "leader")
                 .Replace(follower.Id.Value, "follower").Replace(follower.Id.Value[..8], "follower");
             if (repeatTick)

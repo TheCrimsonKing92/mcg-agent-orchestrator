@@ -114,6 +114,14 @@ internal sealed partial class ConductorDriver
         if (passed)
             GoalOperationJournal.AcceptancePassed(_executionDirectory, follower, FollowerCarryOperation, head, main, detail);
         var checks = passed ? Array.Empty<string>() : receipt.FailedChecks.Count > 0 ? receipt.FailedChecks : ["follower-gate"];
+        if (!passed)
+        {
+            var kernel = _cohortKernel ?? _conductorTickKernel ??
+                throw new InvalidOperationException("Follower failure reconciliation requires the authoritative kernel.");
+            kernel.BeginGoalAcceptanceVerification(follower.Id, $"Reconciling follower gate receipt {receipt.ReceiptId}.");
+            kernel.ReconcileGoalAcceptanceFailed(follower.Id, checks,
+                $"Follower gate receipt {receipt.ReceiptId} failed after its leader landed exactly.", head, main);
+        }
         var result = CompleteLandingAfterAcceptance(follower, prefix, policy,
             new AcceptanceVerificationSummary(passed, [], FailedChecks: checks,
                 BranchHeadSha: head, MainHeadSha: main, TestResultPaths: receipt.GateTestResultPaths));
