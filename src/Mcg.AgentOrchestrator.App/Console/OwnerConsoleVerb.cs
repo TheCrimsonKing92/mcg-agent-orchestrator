@@ -31,7 +31,7 @@ internal static class OwnerConsoleVerb
                 .RunAsync(cancellationToken);
             return 0;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or TimeoutException)
         {
             System.Console.Error.WriteLine($"Error: {ex.Message}");
             return 1;
