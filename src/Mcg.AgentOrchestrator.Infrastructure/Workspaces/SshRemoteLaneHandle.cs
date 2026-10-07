@@ -59,13 +59,39 @@ internal sealed class SshRemoteLaneHandle : IRemoteLaneHandle
                         if (status.String("state") != "completed") continue;
                         var (code, names) = status.Completion();
                         _stop.Token.ThrowIfCancellationRequested();
-                        var fetch = await transport(new[] { SshRemoteLaneExecutor.ScpPath, "-o", "BatchMode=yes" }
-                            .Concat(names.Select(name => remote + name)).Append(".").ToArray(), staging,
-                            TimeSpan.FromMinutes(2), _stop.Token).ConfigureAwait(false);
-                        _stop.Token.ThrowIfCancellationRequested();
                         var paths = names.Select(name => Path.Combine(staging, name)).ToArray();
-                        if (fetch.ExitCode != 0 || fetch.TimedOut || paths.Any(path => !File.Exists(path)))
-                            throw new RemoteLaneTransportException("result-fetch-failed");
+                        var temporaryPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        try
+                        {
+                            for (var resultIndex = 0; resultIndex < names.Length; resultIndex++)
+                            {
+                                // scp needs a short local path; .NET can publish the full TRX name.
+                                string localName, temporaryPath;
+                                do
+                                {
+                                    localName = $"f-{Guid.NewGuid().ToString("N")[..8]}.part";
+                                    temporaryPath = Path.Combine(staging, localName);
+                                } while (Path.Exists(temporaryPath) || !temporaryPaths.Add(temporaryPath));
+
+                                var fetch = await transport([SshRemoteLaneExecutor.ScpPath, "-o", "BatchMode=yes",
+                                    remote + names[resultIndex], localName], staging,
+                                    TimeSpan.FromMinutes(2), _stop.Token).ConfigureAwait(false);
+                                _stop.Token.ThrowIfCancellationRequested();
+                                if (fetch.ExitCode != 0 || fetch.TimedOut || !File.Exists(temporaryPath))
+                                    throw FetchFailure(fetch);
+                                try { File.Move(temporaryPath, paths[resultIndex], overwrite: true); }
+                                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                                { throw FetchFailure(fetch); }
+                            }
+                        }
+                        finally
+                        {
+                            foreach (var temporaryPath in temporaryPaths)
+                            {
+                                try { File.Delete(temporaryPath); }
+                                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+                            }
+                        }
                         lock (_sync) _result = status.Result(code, paths);
                         return;
                     }
@@ -83,5 +109,12 @@ internal sealed class SshRemoteLaneHandle : IRemoteLaneHandle
             catch (OperationCanceledException) when (_stop.IsCancellationRequested) { }
             catch (Exception ex) { lock (_sync) _fault = ex; }
         });
+    }
+
+    private static RemoteLaneTransportException FetchFailure(GoalAcceptanceVerifier.CommandResult fetch)
+    {
+        var error = (string.IsNullOrEmpty(fetch.Stderr) ? fetch.Output : fetch.Stderr).Trim();
+        var tail = error.Length > 2048 ? error[^2048..] : error;
+        return new($"result-fetch-failed exit={fetch.ExitCode} timedOut={fetch.TimedOut} stderr={tail}");
     }
 }
