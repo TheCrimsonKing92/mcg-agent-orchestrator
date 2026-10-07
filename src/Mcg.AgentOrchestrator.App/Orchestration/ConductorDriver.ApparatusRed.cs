@@ -84,17 +84,12 @@ internal sealed partial class ConductorDriver
         RecordEscalation(goal, GoalLifecycleState.Verified, reason);
         TryRecordSoloMainSuspect(goal, goalPrefix, acceptance, retryDisposition.ExcludedFailures,
             branchHeadSha, mainHeadSha, apparatusRedReading?.ChangedPaths);
-        return MakeResult(
-            goal.Id.Value,
-            goalPrefix,
-            policy,
-            new ConductorAdvanceOutcome.Held(
-                GoalLifecycleState.Verified,
-                reason,
-                StableIdentity: BuildUnattributableAcceptanceIdentity(
-                    branchHeadSha,
-                    mainHeadSha,
-                    retryDisposition.ExcludedFailures)));
+        return MakeResult(goal.Id.Value, goalPrefix, policy,
+            new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, reason,
+                StableIdentity: BuildUnattributableAcceptanceIdentity(branchHeadSha, mainHeadSha, retryDisposition.ExcludedFailures))
+            { Decision = AcceptanceApparatusDispositionPolicy.ExcludedHold(goal.Id.Value, reason,
+                    branchHeadSha, mainHeadSha, retryDisposition.ExcludedFailures.Select(failure => failure.Identity)).ToRecord()
+            });
     }
 
     /// <summary>
@@ -173,16 +168,13 @@ internal sealed partial class ConductorDriver
             $"{FormatAcceptanceCandidate(branchHeadSha, mainHeadSha)}: every failing test lies outside the " +
             $"candidate's changed paths ({ApparatusRedFailureSummary.Format(regate.TestIdentities, reading.FailingTests)}). Re-gating on the next " +
             $"conduct tick ({regate.RegateOrdinal}/{regate.RegateCap}); no worker was reopened.";
-        return MakeResult(
-            goal.Id.Value,
-            goalPrefix,
-            policy,
-            new ConductorAdvanceOutcome.Held(
-                GoalLifecycleState.Verified,
-                reason,
-                StableIdentity:
-                    $"acceptance-apparatus-red:{branchHeadSha ?? "unknown"}:{mainHeadSha ?? "unknown"}:" +
-                    regate.EvidenceKind));
+        return MakeResult(goal.Id.Value, goalPrefix, policy,
+            new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, reason,
+                StableIdentity: $"acceptance-apparatus-red:{branchHeadSha ?? "unknown"}:{mainHeadSha ?? "unknown"}:" + regate.EvidenceKind)
+            { Decision = AcceptanceApparatusDispositionPolicy.RegateHold(
+                    goal.Id.Value, AcceptanceApparatusDisposition.ApparatusRedRegateHold, reason, branchHeadSha, mainHeadSha,
+                    regate.EvidenceKind, regate.RegateOrdinal, regate.RegateCap, regate.TestIdentities).ToRecord()
+            });
     }
 
     private void RestoreVerifiedAfterAcceptanceClassification(Goal goal, string reason)
@@ -207,16 +199,19 @@ internal sealed partial class ConductorDriver
         string goalPrefix,
         ConductorAutonomyPolicy policy,
         ApparatusRedGateReading reading,
-        ApparatusRedDisposition.BoundExhausted bound) =>
-        Escalate(
-            goal,
-            goalPrefix,
-            policy,
-            GoalLifecycleState.Verified,
+        ApparatusRedDisposition.BoundExhausted bound)
+    {
+        var result = Escalate(goal, goalPrefix, policy, GoalLifecycleState.Verified,
             $"{ApparatusRedClassifier.BoundExhaustedToken}: this goal already re-gated " +
             $"{bound.RegateCount}/{bound.RegateCap} apparatus REDs without a green gate. The current RED is " +
             $"apparatus again ({bound.EvidenceKind}) on {ApparatusRedFailureSummary.Format(bound.TestIdentities, reading.FailingTests)}. " +
             "Repair the apparatus or confirm acceptance-retry; no worker was reopened.");
+        var escalated = (ConductorAdvanceOutcome.Escalated)result.Outcome;
+        return result with { Outcome = escalated with {
+            Decision = AcceptanceApparatusDispositionPolicy.BoundExhausted(
+                goal.Id.Value, AcceptanceApparatusDisposition.ApparatusRedBoundExhausted, escalated.Reason,
+                bound.EvidenceKind, bound.RegateCount, bound.RegateCap, bound.TestIdentities).ToRecord() } };
+    }
 
     private void WriteApparatusRedRegateJournal(
         Goal goal,
