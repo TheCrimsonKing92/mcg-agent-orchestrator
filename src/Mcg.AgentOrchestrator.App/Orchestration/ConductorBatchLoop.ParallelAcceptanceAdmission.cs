@@ -6,29 +6,6 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorBatchLoop
 {
-    // Mutable locals for one batch, assigned by the phase that originally declared them.
-    private sealed class ParallelAcceptanceBatchState
-    {
-        public int ConfiguredAcceptanceWidth;
-        public Dictionary<string, ParallelLandingOutcome> Results = null!;
-        public int DeferredByAdmission;
-        public IReadOnlyList<Goal> OrderedEligible = null!;
-        public bool CapacityStateUnavailable;
-        public List<ConductorParallelAcceptanceAttempt> LiveAttempts = null!;
-        public List<ConductorParallelAcceptanceCandidate> ActiveCandidates = null!;
-        public HashSet<string> ActiveAttemptIds = null!;
-        public HashSet<int> ActiveAttemptSlotIndexes = null!;
-        public ConductorAcceptanceCapacitySnapshot ActiveCohortCapacity = null!;
-        public LiveAcceptanceCensus AcceptanceCensus = null!;
-        public HashSet<string> LiveAttemptGoalIds = null!;
-        public Goal[] CohortEligible = null!;
-        public ConductorSpeculativeAcceptanceCandidate[] ProductionCandidates = null!;
-        public ParallelAcceptanceOldestWaiterObservation OldestWaiterObservation;
-        public Goal? TransientRetryPriorityGoal;
-        public bool GroupedAdmissionOpen;
-        public ConductorAcceptanceCohortFairnessPriority? ForcedCohortPriority;
-    }
-
     private ParallelAcceptanceBatchState BeginParallelAcceptanceBatch(
         IReadOnlyList<Goal> eligible,
         AgentOrchestratorKernel kernel,
@@ -287,11 +264,10 @@ internal sealed partial class ConductorBatchLoop
         List<string> changedGoalLines,
         bool suppressNewAcceptanceAdmission)
     {
-        var speculativeCandidates = state.OrderedEligible
-            .Select(goal => new ConductorSpeculativeAcceptanceCandidate(
-                goal.Id,
-                driver.ProjectGateReadyCandidate(goal, policy)))
-            .ToArray();
+        foreach (var (receipt, partitions) in driver.ConsumeTerminalFailedCohortReceipts())
+            RecordParallelAcceptanceProgress(ConductorDriver.FormatTerminalFailedCohortReceipt(tick, receipt, partitions), changedGoalLines);
+        var speculativeCandidates = state.OrderedEligible.Select(goal => new ConductorSpeculativeAcceptanceCandidate(
+            goal.Id, driver.ProjectGateReadyCandidate(goal, policy))).ToArray();
         state.ActiveCohortCapacity = driver.GetActiveAcceptanceCohortCapacity();
         state.AcceptanceCensus = CaptureLiveAcceptanceCensus(
             state.LiveAttempts, state.ActiveAttemptIds, state.ActiveCohortCapacity, tick,
@@ -300,9 +276,7 @@ internal sealed partial class ConductorBatchLoop
             preWalkIntentChangedGoalIds, eligible, state.OrderedEligible, speculativeCandidates,
             state.LiveAttempts, state.ActiveCohortCapacity, state.AcceptanceCensus, driver, policy,
             completedGoals, escalatedGoals, kernel, tick);
-        state.LiveAttemptGoalIds = state.LiveAttempts
-            .Select(attempt => attempt.GoalId)
-            .ToHashSet(StringComparer.Ordinal);
+        state.LiveAttemptGoalIds = state.LiveAttempts.Select(attempt => attempt.GoalId).ToHashSet(StringComparer.Ordinal);
         var activeCohortMemberGoalIds = driver.GetActiveCohortGateMemberGoalIds((memberGoalIds, detail) =>
         {
             var memberIds = memberGoalIds.OrderBy(id => id, StringComparer.Ordinal).ToArray();
@@ -337,8 +311,20 @@ internal sealed partial class ConductorBatchLoop
                 state.AcceptanceCensus, state.ConfiguredAcceptanceWidth, state.ActiveAttemptSlotIndexes,
                 state.ActiveCandidates, state.LiveAttemptGoalIds, state.OldestWaiterObservation, state.Results, tick, changedGoalLines)
             : null;
+        var interactionOnlyKeys = driver.ReadInteractionOnlyMemberKeys();
+        var interactionOnlyGoalIds = speculativeCandidates
+            .Where(candidate => candidate.ProjectionResult is GateReadyCandidateProjectionResult.Ready ready &&
+                interactionOnlyKeys.Contains(ConductorAcceptanceCohortAttributedMembers.Key(
+                    candidate.GoalId, ready.Projection.CandidateRevision)))
+            .Select(candidate => candidate.GoalId.Value).ToHashSet(StringComparer.Ordinal);
+        state.CohortEligible = state.CohortEligible
+            .Where(goal => !interactionOnlyGoalIds.Contains(goal.Id.Value)).ToArray();
+        state.ProductionCandidates = state.ProductionCandidates
+            .Where(candidate => !interactionOnlyGoalIds.Contains(candidate.GoalId.Value)).ToArray();
+        state.InteractionOnlyPriorityGoal = SelectInteractionOnlyPriorityGoal(state, interactionOnlyGoalIds, kernel, driver, policy,
+            tick, changedGoalLines, suppressNewAcceptanceAdmission);
         state.GroupedAdmissionOpen = !suppressNewAcceptanceAdmission &&
-            state.TransientRetryPriorityGoal is null &&
+            state.TransientRetryPriorityGoal is null && state.InteractionOnlyPriorityGoal is null &&
             trainAdmission.IsAdmitted &&
             driver.MergeTrainsEnabled &&
             state.CohortEligible.Length >= ConductorMergeTrainSelector.MinimumMembers &&
@@ -405,7 +391,7 @@ internal sealed partial class ConductorBatchLoop
         state.ForcedCohortPriority = null;
         var cohortAdmission = DecideLiveAcceptanceAdmission(state.AcceptanceCensus, state.ConfiguredAcceptanceWidth);
         if (!suppressNewAcceptanceAdmission &&
-            state.TransientRetryPriorityGoal is null &&
+            state.TransientRetryPriorityGoal is null && state.InteractionOnlyPriorityGoal is null &&
             cohortAdmission.IsAdmitted &&
             driver.AcceptanceCohortsEnabled &&
             state.CohortEligible.Length >= ConductorAcceptanceCohortSelector.CohortSize &&
