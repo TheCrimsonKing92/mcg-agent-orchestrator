@@ -168,17 +168,26 @@ public sealed class AcceptanceDotnetTestBatchSchedulerRunTests
         var failure = new InvalidOperationException("delegate failure");
         var stopObserved = Gate();
         var secondFinished = Gate();
+        var finished = new ConcurrentQueue<int>();
         fixture.Build.SetResult();
         fixture.Start(async (check, token) =>
         {
             var index = fixture.Index(check);
             fixture.Started[index].SetResult();
             using var registration = token.Register(() => stopObserved.TrySetResult());
-            await fixture.Release[index].Task;
-            if (check == "a")
-                throw failure;
-            secondFinished.SetResult();
-            return (check, false);
+            try
+            {
+                await fixture.Release[index].Task;
+                if (check == "a")
+                    throw failure;
+                if (check == "b")
+                    secondFinished.SetResult();
+                return (check, false);
+            }
+            finally
+            {
+                finished.Enqueue(index);
+            }
         });
 
         await Observe(fixture.Started[1].Task, "second group before delegate failure");
@@ -186,11 +195,14 @@ public sealed class AcceptanceDotnetTestBatchSchedulerRunTests
         await Observe(stopObserved.Task, "failure requested stop");
         Assert.False(fixture.Run!.IsCompleted);
         Assert.False(secondFinished.Task.IsCompleted);
-        fixture.Release[1].SetResult();
+        // A failed delegate releases its slot before the exception handler requests stop,
+        // so another group may already have entered. Drain every group that started.
+        fixture.ReleaseAll();
         var thrown = await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Results());
         Assert.Same(failure, thrown);
         Assert.True(secondFinished.Task.IsCompleted);
-        Assert.False(fixture.Started[2].Task.IsCompleted);
+        Assert.Equal(Enumerable.Range(0, fixture.Started.Length)
+            .Where(index => fixture.Started[index].Task.IsCompleted), finished.Order());
     }
 
     [Fact]
