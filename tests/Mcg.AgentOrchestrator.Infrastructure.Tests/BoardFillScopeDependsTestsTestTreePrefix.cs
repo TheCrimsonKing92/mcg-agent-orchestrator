@@ -8,8 +8,9 @@ public sealed class BoardFillScopeDependsTestsTestTreePrefix
         "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/SampleTests.cs")]
     [InlineData("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/SampleTests.cs",
         "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/")]
-    [InlineData("tests/", "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/SampleTests.cs")]
-    [InlineData("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/SampleTests.cs", "tests/")]
+    // Scope inference needs a character after the root slash; normalization trims both trailing slashes.
+    [InlineData("tests//", "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/SampleTests.cs")]
+    [InlineData("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/SampleTests.cs", "tests//")]
     [InlineData(@"TESTS\Mcg.AgentOrchestrator.Infrastructure.Tests\",
         "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/SampleTests.cs")]
     [InlineData("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/SampleTests.cs",
@@ -56,8 +57,9 @@ public sealed class BoardFillScopeDependsTestsTestTreePrefix
 
     [Theory]
     [InlineData("src/Mcg.AgentOrchestrator.App/Cli/", "src/Mcg.AgentOrchestrator.App/Cli/CliCommandHelp.cs")]
-    [InlineData("scripts/", "scripts/Sample.ps1")]
-    [InlineData("docs/", "docs/Sample.md")]
+    // As above, doubled trailing slashes let inference recognize a repository-root directory.
+    [InlineData("scripts//", "scripts/Sample.ps1")]
+    [InlineData("docs//", "docs/Sample.md")]
     [InlineData("docs/tests/", "docs/tests/Sample.md")]
     [InlineData("src/Feature/Tests/", "src/Feature/Tests/Sample.cs")]
     public void Prefix_outside_root_test_tree_still_proposes_dependency(string activePath, string draftPath)
