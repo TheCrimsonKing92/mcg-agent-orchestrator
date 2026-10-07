@@ -14,6 +14,8 @@ public sealed class CliCommandTestsPortfolioCommands : CliCommandTestBase
         kernel.ActivateGoal(active.Id, AgentCatalog.Default().Agents);
         kernel.ActivateGoal(landed.Id, AgentCatalog.Default().Agents);
         kernel = WithGoalStatus(kernel, landed.Id, GoalStatus.Completed);
+        new SqliteOrchestratorStateRepository(workspace.SqliteStatePath)
+            .SaveAsync(kernel).GetAwaiter().GetResult();
         var backlog = new BacklogStore(workspace.BacklogStorePath)
             .AddAsync("Portfolio backlog member")
             .GetAwaiter()

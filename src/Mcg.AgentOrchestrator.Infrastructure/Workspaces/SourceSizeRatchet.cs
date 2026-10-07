@@ -270,7 +270,9 @@ internal static class SourceSizeRatchet
             // Raised by five lines for goal 10abca19: scoped CLI writes are extracted to
             // CliPersistentStateRunner.GoalScopedWrite, while the shared dispatch boundary
             // must retain the single route-selection call so existing fallback semantics stay centralized.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 4872),
+            // Goal 28397f6a adds the store-only epic command routes; retain the runner's
+            // shared dispatch seam and account for its two-line net increase.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 4874),
             // Goal 03aaf13e adds the explicit-root isolation fact at the verifier's existing execution-
             // environment seam; the production verifier remains at its prior ceiling.
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs", 1611),
