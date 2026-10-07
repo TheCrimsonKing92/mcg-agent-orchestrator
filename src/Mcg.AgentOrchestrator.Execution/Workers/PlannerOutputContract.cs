@@ -1205,7 +1205,7 @@ internal static partial class PlannerOutputContract
                 HasMinimumLexicalDiversity(body),
             "target seams and symbols" =>
                 body.Contains('`') &&
-                TargetCitation().IsMatch(body),
+                (TargetCitation().IsMatch(body) || HasAdmittedRepositoryPathCitation(body)),
             "ownership and lifecycle" =>
                 HasMinimumLexicalDiversity(body),
             "external and edge contracts" =>
@@ -1222,6 +1222,30 @@ internal static partial class PlannerOutputContract
                 HasMinimumLexicalDiversity(body),
             _ => false
         };
+    }
+
+    private static bool HasAdmittedRepositoryPathCitation(string body)
+    {
+        string[] prefixes = ["docs/", "scripts/", "config/"];
+        foreach (Match match in BacktickedCitation().Matches(body))
+        {
+            var path = NormalizeCitedPath(match.Groups["citation"].Value.Trim());
+            if (path is null)
+            {
+                continue;
+            }
+
+            path = path.Replace('\\', '/');
+            foreach (var prefix in prefixes)
+            {
+                if (path.Length > prefix.Length && path.StartsWith(prefix, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private static bool HasMinimumLexicalDiversity(string body)
