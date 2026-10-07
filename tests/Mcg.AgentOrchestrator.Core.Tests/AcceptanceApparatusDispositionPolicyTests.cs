@@ -88,6 +88,58 @@ public sealed class AcceptanceApparatusDispositionPolicyTests
     }
 
     [Fact]
+    public void Replay_RejectsNonCanonicalTestIdentitiesInsteadOfNormalizingEvidence()
+    {
+        var recorded = Facts(AcceptanceApparatusDisposition.ApparatusRedRegateHold).ToRecordedFacts();
+        Assert.Throws<InvalidOperationException>(() => AcceptanceApparatusDispositionFacts.FromRecordedFacts(
+            recorded.Select(fact => fact.Name == "testIdentities" ? fact with { Value = "Z.Test\nA.Test" } : fact).ToArray()));
+        Assert.Throws<InvalidOperationException>(() => Facts(AcceptanceApparatusDisposition.ApparatusRedRegateHold)
+            with { TestIdentities = null! });
+    }
+
+    [Theory]
+    [InlineData("01")]
+    [InlineData("+1")]
+    [InlineData(" 1 ")]
+    public void Replay_RejectsNonCanonicalCountInsteadOfChangingRecordedFacts(string value)
+    {
+        var recorded = Facts(AcceptanceApparatusDisposition.ApparatusRedRegateHold).ToRecordedFacts();
+        Assert.Throws<InvalidOperationException>(() => AcceptanceApparatusDispositionFacts.FromRecordedFacts(
+            recorded.Select(fact => fact.Name == "regateOrdinal" ? fact with { Value = value } : fact).ToArray()));
+    }
+
+    [Theory]
+    [InlineData(AcceptanceApparatusDisposition.ExcludedUnattributableHold, "evidenceKind")]
+    [InlineData(AcceptanceApparatusDisposition.ExcludedUnattributableHold, "regateOrdinal")]
+    [InlineData(AcceptanceApparatusDisposition.ExcludedUnattributableHold, "regateCount")]
+    [InlineData(AcceptanceApparatusDisposition.ExcludedUnattributableHold, "regateCap")]
+    [InlineData(AcceptanceApparatusDisposition.ApparatusRedRegateHold, "regateCount")]
+    [InlineData(AcceptanceApparatusDisposition.WithinAttemptRerunRegateHold, "regateCount")]
+    [InlineData(AcceptanceApparatusDisposition.ApparatusRedBoundExhausted, "regateOrdinal")]
+    [InlineData(AcceptanceApparatusDisposition.WithinAttemptRerunBoundExhausted, "regateOrdinal")]
+    public void Record_RejectsFieldsOutsideSchemaInsteadOfDiscardingThem(
+        AcceptanceApparatusDisposition disposition, string field)
+    {
+        var facts = Facts(disposition);
+        var invalid = field switch
+        {
+            "evidenceKind" => facts with { EvidenceKind = "unexpected" },
+            "regateOrdinal" => facts with { RegateOrdinal = 1 },
+            "regateCount" => facts with { RegateCount = 1 },
+            "regateCap" => facts with { RegateCap = 1 },
+            _ => throw new InvalidOperationException("Unknown test field.")
+        };
+        Assert.Throws<InvalidOperationException>(() => invalid.ToRecordedFacts());
+    }
+
+    [Theory]
+    [InlineData("branch", null)]
+    [InlineData(null, "main")]
+    public void Record_RejectsHeadsOutsideBoundSchemaInsteadOfDiscardingThem(string? branch, string? main) =>
+        Assert.Throws<InvalidOperationException>(() => (Facts(AcceptanceApparatusDisposition.ApparatusRedBoundExhausted)
+            with { BranchHeadSha = branch, MainHeadSha = main }).ToRecordedFacts());
+
+    [Fact]
     public void Replay_RejectsFactsOutsideDispositionSchemaAndNullInput()
     {
         var bound = Facts(AcceptanceApparatusDisposition.ApparatusRedBoundExhausted).ToRecordedFacts();

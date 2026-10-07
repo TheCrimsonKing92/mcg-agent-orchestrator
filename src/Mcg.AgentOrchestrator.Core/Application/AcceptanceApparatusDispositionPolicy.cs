@@ -26,7 +26,8 @@ public sealed record AcceptanceApparatusDispositionFacts(string GoalId, Acceptan
     public string TestIdentities
     {
         get => _testIdentities;
-        init => _testIdentities = CanonicalTestIdentities(value.Split('\n'));
+        init => _testIdentities = value is not null ? CanonicalTestIdentities(value.Split('\n'))
+            : throw new InvalidOperationException("Acceptance apparatus disposition requires test identities.");
     }
     public string Reason { get; init; } = string.Empty;
 
@@ -35,6 +36,15 @@ public sealed record AcceptanceApparatusDispositionFacts(string GoalId, Acceptan
 
     public IReadOnlyList<PolicyDecisionFact> ToRecordedFacts()
     {
+        if (Disposition == AcceptanceApparatusDisposition.ApparatusRedBoundExhausted &&
+            (BranchHeadSha is not null || MainHeadSha is not null))
+            throw new InvalidOperationException("Apparatus RED bound facts cannot contain unobserved heads.");
+        if ((Disposition == AcceptanceApparatusDisposition.ExcludedUnattributableHold &&
+                (EvidenceKind != string.Empty || RegateOrdinal is not null || RegateCount is not null || RegateCap is not null)) ||
+            (IsRegate(Disposition) && RegateCount is not null) ||
+            (Disposition is AcceptanceApparatusDisposition.ApparatusRedBoundExhausted or
+                AcceptanceApparatusDisposition.WithinAttemptRerunBoundExhausted && RegateOrdinal is not null))
+            throw new InvalidOperationException("Acceptance apparatus facts contain fields outside the disposition schema.");
         var facts = new List<PolicyDecisionFact>
         {
             new("goalId", GoalId), new("disposition", DispositionName(Disposition))
@@ -69,7 +79,8 @@ public sealed record AcceptanceApparatusDispositionFacts(string GoalId, Acceptan
 
         string Read(string name) => values.TryGetValue(name, out var value) ? value
             : throw new InvalidOperationException($"Missing acceptance apparatus disposition fact '{name}'.");
-        int ReadCount(string name) => int.TryParse(Read(name), NumberStyles.Integer, CultureInfo.InvariantCulture, out var count)
+        int ReadCount(string name) => int.TryParse(Read(name), NumberStyles.Integer, CultureInfo.InvariantCulture, out var count) &&
+            Read(name) == count.ToString(CultureInfo.InvariantCulture)
             ? count : throw new InvalidOperationException($"Invalid acceptance apparatus disposition count '{name}'.");
         var disposition = Read("disposition") switch
         {
@@ -95,6 +106,9 @@ public sealed record AcceptanceApparatusDispositionFacts(string GoalId, Acceptan
         }
         if (values.Keys.Any(name => !allowed.Contains(name)))
             throw new InvalidOperationException("Unknown acceptance apparatus disposition fact.");
+        var identities = Read("testIdentities");
+        if (identities != CanonicalTestIdentities(identities.Split('\n')))
+            throw new InvalidOperationException("Recorded acceptance apparatus test identities must be ordinal-sorted.");
 
         return new(Read("goalId"), disposition)
         {
@@ -104,7 +118,7 @@ public sealed record AcceptanceApparatusDispositionFacts(string GoalId, Acceptan
             RegateOrdinal = !excluded && IsRegate(disposition) ? ReadCount("regateOrdinal") : null,
             RegateCount = !excluded && !IsRegate(disposition) ? ReadCount("regateCount") : null,
             RegateCap = excluded ? null : ReadCount("regateCap"),
-            TestIdentities = Read("testIdentities"),
+            TestIdentities = identities,
             Reason = Read("reason")
         };
     }
@@ -142,6 +156,46 @@ public sealed record AcceptanceApparatusDispositionDecision(
 public static class AcceptanceApparatusDispositionPolicy
 {
     public const string StageName = "acceptance-apparatus-disposition";
+
+    public static AcceptanceApparatusDispositionDecision ExcludedHold(
+        string goalId, string reason, string? branchHeadSha, string? mainHeadSha, IEnumerable<string> identities) =>
+        Evaluate(new(goalId, AcceptanceApparatusDisposition.ExcludedUnattributableHold)
+        {
+            Reason = reason, BranchHeadSha = branchHeadSha, MainHeadSha = mainHeadSha,
+            TestIdentities = AcceptanceApparatusDispositionFacts.CanonicalTestIdentities(identities)
+        });
+
+    public static AcceptanceApparatusDispositionDecision RegateHold(
+        string goalId, AcceptanceApparatusDisposition disposition, string reason,
+        string? branchHeadSha, string? mainHeadSha, string evidenceKind, int ordinal, int cap,
+        IEnumerable<string> identities)
+    {
+        if (disposition is not (AcceptanceApparatusDisposition.ApparatusRedRegateHold or
+            AcceptanceApparatusDisposition.WithinAttemptRerunRegateHold))
+            throw new InvalidOperationException("A re-gate hold requires a re-gate disposition.");
+        return Evaluate(new(goalId, disposition)
+        {
+            Reason = reason, BranchHeadSha = branchHeadSha, MainHeadSha = mainHeadSha,
+            EvidenceKind = evidenceKind, RegateOrdinal = ordinal, RegateCap = cap,
+            TestIdentities = AcceptanceApparatusDispositionFacts.CanonicalTestIdentities(identities)
+        });
+    }
+
+    public static AcceptanceApparatusDispositionDecision BoundExhausted(
+        string goalId, AcceptanceApparatusDisposition disposition, string reason,
+        string evidenceKind, int count, int cap, IEnumerable<string> identities,
+        string? branchHeadSha = null, string? mainHeadSha = null)
+    {
+        if (disposition is not (AcceptanceApparatusDisposition.ApparatusRedBoundExhausted or
+            AcceptanceApparatusDisposition.WithinAttemptRerunBoundExhausted))
+            throw new InvalidOperationException("A bound escalation requires a bound-exhausted disposition.");
+        return Evaluate(new(goalId, disposition)
+        {
+            Reason = reason, BranchHeadSha = branchHeadSha, MainHeadSha = mainHeadSha,
+            EvidenceKind = evidenceKind, RegateCount = count, RegateCap = cap,
+            TestIdentities = AcceptanceApparatusDispositionFacts.CanonicalTestIdentities(identities)
+        });
+    }
 
     public static AcceptanceApparatusDispositionDecision Evaluate(AcceptanceApparatusDispositionFacts facts)
     {
