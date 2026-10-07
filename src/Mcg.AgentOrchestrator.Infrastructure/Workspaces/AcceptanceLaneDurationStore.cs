@@ -41,6 +41,9 @@ internal static class AcceptanceLaneDurationStore
     internal static double ResolveSortSeconds(AcceptanceManifestCheck check) =>
         CurrentScope.Value?.ResolveSortSeconds(check) ?? check.EstimatedSerialSeconds;
 
+    internal static (double? MedianSeconds, int Samples) ResolveObservedSeconds(AcceptanceManifestCheck check) =>
+        CurrentScope.Value?.ResolveObservedSeconds(check) ?? (null, 0);
+
     internal static void Record(
         AcceptanceManifestCheck check,
         AcceptanceCheckResult result,
@@ -134,6 +137,12 @@ internal static class AcceptanceLaneDurationStore
         internal static Snapshot Empty { get; } = new(
             new Dictionary<LaneKey, IReadOnlyList<double>>());
 
+        internal (double? MedianSeconds, int Samples) ResolveObservedSeconds(LaneKey key)
+        {
+            if (!samples.TryGetValue(key, out var values)) return (null, 0);
+            return (TryResolve(key, out var seconds) ? seconds : null, values.Count);
+        }
+
         internal bool TryResolve(LaneKey key, out double seconds)
         {
             seconds = default;
@@ -159,6 +168,9 @@ internal static class AcceptanceLaneDurationStore
         private readonly ConcurrentQueue<AcceptanceLaneDurationObservation> _observations = new();
         private int _flushed;
         private int _disposed;
+
+        internal (double? MedianSeconds, int Samples) ResolveObservedSeconds(AcceptanceManifestCheck check) =>
+            TryCreateKey(check, out var key) ? snapshot.ResolveObservedSeconds(key) : (null, 0);
 
         internal double ResolveSortSeconds(AcceptanceManifestCheck check) =>
             TryCreateKey(check, out var key) && snapshot.TryResolve(key, out var observedSeconds)

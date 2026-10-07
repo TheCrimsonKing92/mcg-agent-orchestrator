@@ -45,6 +45,7 @@ internal sealed record GoalAcceptanceVerifierTestOverrides
     internal TimeProvider? RemoteLaneTimeProviderForTests { get; set; }
     internal TimeSpan? RemoteLanePollInterval { get; set; }
     internal string? RemoteLaneExecutorConfigurationPathForTests { get; set; }
+    internal string? RemoteLaneOfferHistoryPathForTests { get; set; }
     internal Action<string>? OnRemoteLaneProgressLineForTests { get; set; }
     internal Action<string, RemoteLaneOutcomeCode>? OnRemoteLaneOutcomeForTests { get; set; }
     internal Action<string>? OnRemoteLaneEventForTests { get; set; }
@@ -96,6 +97,7 @@ internal sealed record GoalAcceptanceVerifierTestOverrides
         RemoteLaneTimeProviderForTests = RemoteLaneTimeProviderForTests,
         RemoteLanePollInterval = RemoteLanePollInterval,
         RemoteLaneExecutorConfigurationPathForTests = RemoteLaneExecutorConfigurationPathForTests,
+        RemoteLaneOfferHistoryPathForTests = RemoteLaneOfferHistoryPathForTests,
         OnRemoteLaneProgressLineForTests = OnRemoteLaneProgressLineForTests,
         OnRemoteLaneOutcomeForTests = OnRemoteLaneOutcomeForTests,
         OnRemoteLaneEventForTests = OnRemoteLaneEventForTests,

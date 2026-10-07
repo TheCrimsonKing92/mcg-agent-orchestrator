@@ -169,6 +169,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSshRemoteLaneDiagn
             $"public class Lane{index}Tests {{ [Xunit.Fact] public void Executes() {{ }} }}");
         var scenario = new Scenario(this, root);
         TestOverrides.RemoteLaneExecutorConfigurationPathForTests = Path.Combine(root, "executors.json");
+        RemoteLaneOfferSeeding.PrepareFixture(root, TestOverrides);
         File.WriteAllText(TestOverrides.RemoteLaneExecutorConfigurationPathForTests, JsonSerializer.Serialize(new
         {
             executors = new[] { new { id = "fixture-executor", transport = "ssh", runnerAlias = "runner", adminAlias = "admin", remoteRepository = "C:/repo/bare.git" } },

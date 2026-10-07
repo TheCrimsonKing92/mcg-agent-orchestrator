@@ -12,6 +12,9 @@ internal sealed record RemoteLaneExecutorConfiguration(
     IReadOnlyList<RemoteLaneExecutorEntry> Executors, IReadOnlyList<string> Lanes, string? DisabledReason)
 {
     internal IReadOnlyList<string> MachineLocalResourceKeys { get; init; } = [];
+    internal bool AllInfrastructureLanes { get; init; }
+    internal RemoteLaneExecutorConfiguration ResolveLanes(IEnumerable<string> infrastructureLaneNames) =>
+        AllInfrastructureLanes ? this with { Lanes = infrastructureLaneNames.Distinct(StringComparer.Ordinal).ToArray() } : this;
     internal bool Enabled => DisabledReason is null;
     internal static string ResolveStorePath(string worktreePath) => Path.Combine(
         AcceptancePartitionVerdictCache.ResolveHostStateRoot(worktreePath), ".orchestrator", "remote-lane-executors.json");
@@ -89,6 +92,8 @@ internal sealed record RemoteLaneExecutorConfiguration(
                     return Disabled("invalid");
                 names.Add(lane.GetString()!);
             }
+            var allInfrastructureLanes = names.Contains("*", StringComparer.Ordinal);
+            if (allInfrastructureLanes && names.Count != 1) return Disabled("invalid");
             var keys = new List<string>();
             if (root.TryGetProperty("machineLocalResourceKeys", out var keyArray))
             {
@@ -100,7 +105,8 @@ internal sealed record RemoteLaneExecutorConfiguration(
                     keys.Add(key.GetString()!);
                 }
             }
-            return new(entries.ToArray(), names.ToArray(), null) { MachineLocalResourceKeys = keys.ToArray() };
+            return new(entries.ToArray(), names.ToArray(), null)
+            { MachineLocalResourceKeys = keys.ToArray(), AllInfrastructureLanes = allInfrastructureLanes };
         }
         catch (FileNotFoundException) { return Disabled("missing"); }
         catch (DirectoryNotFoundException) { return Disabled("missing"); }

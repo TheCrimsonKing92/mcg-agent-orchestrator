@@ -1,4 +1,6 @@
 using System.Runtime.CompilerServices;
+using System.Globalization;
+using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using static Mcg.AgentOrchestrator.Infrastructure.AcceptancePolicyShardPlanner;
 
@@ -12,6 +14,8 @@ public sealed partial class GoalAcceptanceVerifier
 
     private readonly ConditionalWeakTable<AcceptancePartitionVerdictCache, RemoteLaneCoordinator> _remoteLaneCoordinators = new();
     private RemoteLaneCoordinator? _cachelessRemoteLaneCoordinator;
+    private readonly ConditionalWeakTable<RemoteLaneCoordinator, RemoteLaneOfferPlan> _remoteLaneOfferPlans = new();
+    internal const int RemoteLaneOfferHistoryLineLimit = 500;
 
     private (AcceptancePartitionVerdictCache? Cache, RemoteLaneCoordinator? RemoteLanes)
         CreatePartitionVerdictCacheAndRemoteLanes(
@@ -57,10 +61,11 @@ public sealed partial class GoalAcceptanceVerifier
                     executionOwner.GateRunIdentity ?? string.Empty, NormalizeShaToken(verifyingCommitSha),
                     NormalizeShaToken(candidateTreeSha), NormalizeShaToken(mainSha), resolveManifestIdentity());
         }
-        return (partitionVerdictCache, LoadRemoteLanes(worktreePath, partitionVerdictCache, cohortIdentity));
+        return (partitionVerdictCache, LoadRemoteLanes(worktreePath, partitionVerdictCache, effectiveChecks, cohortIdentity));
     }
 
     private RemoteLaneCoordinator? LoadRemoteLanes(string worktreePath, AcceptancePartitionVerdictCache? cache,
+        IReadOnlyList<AcceptanceManifestCheck> effectiveChecks,
         IRemoteLaneCandidateIdentity? candidateIdentity = null)
     {
         var configuration = RemoteLaneExecutorConfiguration.Load(_testOverrides.RemoteLaneExecutorConfigurationPathForTests ??
@@ -75,6 +80,18 @@ public sealed partial class GoalAcceptanceVerifier
         }
         var identity = (IRemoteLaneCandidateIdentity?)cache ?? candidateIdentity;
         if (identity is null || ShardPermitLaneClass != GateShardLaneClass.Gate) return null;
+        var lanes = effectiveChecks.Where(check => TryGetInfrastructurePartitionId(check, out _, out _)).ToArray();
+        configuration = configuration.ResolveLanes(lanes.Select(check => check.Name));
+        var history = ReadRemoteLaneOfferHistory(_testOverrides.RemoteLaneOfferHistoryPathForTests ??
+            RemoteExecutorHealthLedger.ResolveStorePath(worktreePath));
+        var inputs = lanes.ToDictionary(check => check.Name, check =>
+        {
+            var local = AcceptanceLaneDurationStore.ResolveObservedSeconds(check);
+            TryGetInfrastructurePartitionId(check, out _, out var filter);
+            history.TryGetValue((check.Name, ShortHash(filter)), out var remote);
+            return new RemoteLaneOfferInputs(check.Name, local.MedianSeconds, local.Samples,
+                check.EstimatedSerialSeconds, remote?.MedianSeconds, remote?.Samples ?? 0, 0);
+        }, StringComparer.Ordinal);
         var clock = _testOverrides.RemoteLaneTimeProviderForTests ?? _timeProvider;
         IRemoteLaneExecutor executor = _testOverrides.RemoteLaneExecutorForTests ??
             (configuration.Executors.Any(entry => entry.Transport == "ssh")
@@ -90,9 +107,84 @@ public sealed partial class GoalAcceptanceVerifier
                 try { _executionContext?.ReportRemoteLaneEvent(line); } catch (Exception) { }
                 _testOverrides.OnRemoteLaneEventForTests?.Invoke(line);
             });
+        _remoteLaneOfferPlans.Add(coordinator, new RemoteLaneOfferPlan(inputs));
         if (cache is not null) _remoteLaneCoordinators.Add(cache, coordinator);
         else _cachelessRemoteLaneCoordinator = coordinator;
         return coordinator;
+    }
+
+    internal static IReadOnlyDictionary<(string Lane, string Filter), RemoteExecutorLaneSeconds>
+        ReadRemoteLaneOfferHistory(string path)
+    {
+        var rows = new List<RemoteExecutorOutcomeRow>();
+        var keys = new Dictionary<string, (string Lane, string Filter)>(StringComparer.Ordinal);
+        try
+        {
+            // Retain and parse only the tail, including malformed and non-accepted lines in the limit.
+            foreach (var line in SharedJsonlFile.ReadLines(path).TakeLast(RemoteLaneOfferHistoryLineLimit))
+            {
+                try
+                {
+                    using var document = JsonDocument.Parse(line);
+                    var root = document.RootElement;
+                    if (root.GetProperty("outcome").GetString() != "accepted") continue;
+                    var lane = root.GetProperty("lane").GetString();
+                    var filter = root.GetProperty("expected").GetProperty("filter").GetString();
+                    if (string.IsNullOrWhiteSpace(lane) || string.IsNullOrWhiteSpace(filter)) continue;
+                    var attempt = root.GetProperty("attempt");
+                    double? seconds = null;
+                    if (attempt.TryGetProperty("steps", out var steps) && steps.ValueKind == JsonValueKind.Array &&
+                        attempt.TryGetProperty("fetches", out var fetches) && fetches.ValueKind == JsonValueKind.Array)
+                    {
+                        var starts = steps.EnumerateArray().Select(step => step.GetProperty("started_at").GetDateTimeOffset()).ToArray();
+                        var ends = fetches.EnumerateArray().Select(step => step.GetProperty("ended_at").GetDateTimeOffset()).ToArray();
+                        if (starts.Length > 0 && ends.Length > 0) seconds = (ends.Max() - starts.Min()).TotalSeconds;
+                    }
+                    if (seconds is not > 0 && attempt.TryGetProperty("last_status", out var status) &&
+                        status.ValueKind == JsonValueKind.Object && status.TryGetProperty("seconds", out var duration) &&
+                        duration.TryGetDouble(out var fallback)) seconds = fallback;
+                    if (seconds is not { } total || !double.IsFinite(total) || total <= 0) continue;
+                    var key = JsonSerializer.Serialize(new[] { lane, filter });
+                    keys[key] = (lane, filter);
+                    // One aggregate executor combines all hosts; no interval is needed for the report median.
+                    rows.Add(new(DateTimeOffset.MinValue, "offer-history", "", key, "accepted", null, total));
+                }
+                catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException or KeyNotFoundException) { }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        return RemoteExecutorReport.Build([], rows, []).Executors.SelectMany(executor => executor.Lanes)
+            .ToDictionary(lane => keys[lane.Lane]);
+    }
+
+    private sealed class RemoteLaneOfferPlan(IReadOnlyDictionary<string, RemoteLaneOfferInputs> inputs)
+    {
+        private readonly object _sync = new();
+        private readonly Dictionary<string, RemoteLaneOfferDecision> _decisions = new(StringComparer.Ordinal);
+        private double? _finish;
+
+        internal RemoteLaneOfferDecision Decide(string lane, int concurrency, Action<string> report)
+        {
+            lock (_sync)
+            {
+                if (_decisions.TryGetValue(lane, out var existing)) return existing;
+                _finish ??= RemoteLaneOfferPolicy.ExpectedLocalFinishSeconds(inputs.Values.Select(input =>
+                    RemoteLaneOfferPolicy.ResolveLocalSeconds(input.LocalMedianSeconds, input.LocalSamples,
+                        input.ManifestEstimateSeconds)), concurrency);
+                var decision = RemoteLaneOfferPolicy.Decide(inputs[lane] with { ExpectedLocalFinishSeconds = _finish.Value });
+                _decisions.Add(lane, decision);
+                report(string.Create(CultureInfo.InvariantCulture,
+                    $"REMOTE_LANE_POLICY lane=\"{lane}\" decision={(decision.Offer ? "offer" : "keep-local")} reason={decision.Reason} L={decision.LocalSeconds:0.###} Ln={decision.Inputs.LocalSamples} R={decision.RemoteSeconds:0.###} Rn={decision.Inputs.RemoteSamples} F={_finish.Value:0.###}"));
+                return decision;
+            }
+        }
+    }
+
+    private void ReportRemoteLanePolicy(string line)
+    {
+        Console.WriteLine(line);
+        Console.Out.Flush();
+        _testOverrides.OnRemoteLaneProgressLineForTests?.Invoke(line);
     }
 
     private async Task<CheckBatchResult> RunInfrastructureShardBatchAsync(
@@ -223,6 +315,8 @@ public sealed partial class GoalAcceptanceVerifier
                 {
                     var shard = pendingShards[index];
                     if (reuseConsulted.ContainsKey(shard.Index) || !remote.IsEligible(shard.Check)) continue;
+                    if (!_remoteLaneOfferPlans.GetValue(remote, _ => throw new InvalidOperationException("Remote lane offer plan missing."))
+                        .Decide(shard.Check.Name, allShardsUseMtp ? maxConcurrentShards : 1, ReportRemoteLanePolicy).Offer) continue;
                     var entry = remote.TryClaimIdleExecutor();
                     if (entry is null) continue;
                     pendingShards.RemoveAt(index--);

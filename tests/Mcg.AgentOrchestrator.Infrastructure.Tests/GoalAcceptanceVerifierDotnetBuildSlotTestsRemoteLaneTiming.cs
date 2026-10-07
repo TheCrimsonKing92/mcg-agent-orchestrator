@@ -84,6 +84,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLaneTiming :
         TestOverrides.ResolveShardCoreBudgetForTests = () => 3;
         var scenario = new Scenario(this, CreateShardWorkspace());
         TestOverrides.RemoteLaneExecutorConfigurationPathForTests = scenario.ConfigurationPath;
+        RemoteLaneOfferSeeding.PrepareFixture(scenario.Root, TestOverrides);
         TestOverrides.RemoteLaneTimeProviderForTests = scenario.Clock;
         return scenario;
     }
