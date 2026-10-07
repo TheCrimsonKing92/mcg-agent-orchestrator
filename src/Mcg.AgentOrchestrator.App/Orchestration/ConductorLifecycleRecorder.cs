@@ -7,7 +7,8 @@ internal sealed class ConductorLifecycleRecorder(
     IRunEventStore store,
     Func<DateTimeOffset>? utcNow = null,
     Func<string>? generationId = null,
-    Func<IReadOnlyList<WorkerAdoptionCensusRow>>? readAdoptionCensus = null)
+    Func<IReadOnlyList<WorkerAdoptionCensusRow>>? readAdoptionCensus = null,
+    Func<IReadOnlyList<WorkerAdoptionCensusRow>, IReadOnlyList<WorkerAdoptionTransferResult>>? adoptInheritedWorkers = null)
 {
     private readonly Func<DateTimeOffset> _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
     private readonly Func<string> _generationId = generationId ?? (() => Guid.NewGuid().ToString("N"));
@@ -47,6 +48,26 @@ internal sealed class ConductorLifecycleRecorder(
                     WorkerAdoptionCensus.FormatRowDetail(row));
             Append(generation, "adoption-census-summary", "complete", null, startedAt, 0,
                 WorkerAdoptionCensus.FormatSummaryDetail(rows));
+            if (adoptInheritedWorkers is not null)
+            {
+                IReadOnlyList<WorkerAdoptionTransferResult> results;
+                try
+                {
+                    results = adoptInheritedWorkers(rows);
+                }
+                catch (Exception exception)
+                {
+                    Append(generation, "adoption", "unavailable", null, startedAt, 0,
+                        $"exception={exception.GetType().Name}");
+                    return new ConductorLifecycleSession(this, generation, goalId, startedAt);
+                }
+
+                foreach (var result in results)
+                    Append(generation, "adoption", result.Outcome, null, startedAt, 0,
+                        WorkerAdoptionCensus.FormatRowDetail(result.Row));
+                Append(generation, "adoption-summary", "complete", null, startedAt, 0,
+                    $"results={results.Count} adopted={results.Count(result => result.Outcome == "adopted")}");
+            }
         }
         return new ConductorLifecycleSession(this, generation, goalId, startedAt);
     }

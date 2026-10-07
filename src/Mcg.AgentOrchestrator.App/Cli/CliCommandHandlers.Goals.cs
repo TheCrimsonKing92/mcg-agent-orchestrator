@@ -1850,7 +1850,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         goalReloadObservation: resolveGoalReloadObservation,
                         lifecycleRecorder: new ConductorLifecycleRecorder(
                             new SqliteRunEventStore(context.Workspace.RunEventStorePath),
-                            readAdoptionCensus: WorkerAdoptionCensus.CreateDefault(context.Workspace.SqliteStatePath)),
+                            readAdoptionCensus: WorkerAdoptionCensus.CreateDefault(context.Workspace.SqliteStatePath),
+                            adoptInheritedWorkers: WorkerAdoptionTransfer.CreateDefault(context.Workspace.SqliteStatePath,
+                                goalIds => context.ReloadKernel(goalIds))),
                         blockedRecheckHeartbeatInterval: reconcileSweepOptions.HeartbeatInterval,
                         workspace: context.Workspace).WithSteward(ConductorStewardHost.CreateDefault(context.Workspace))
                         .WithUnintendedExitDiagnostics(conductorDiagnosticPath, conductorOutputLogPath)
@@ -1983,7 +1985,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     postLandingCanary: PostLandingCanaryFactory.CreateDefault(context.Workspace),
                     lifecycleRecorder: new ConductorLifecycleRecorder(
                         new SqliteRunEventStore(context.Workspace.RunEventStorePath),
-                        readAdoptionCensus: WorkerAdoptionCensus.CreateDefault(context.Workspace.SqliteStatePath)),
+                        readAdoptionCensus: WorkerAdoptionCensus.CreateDefault(context.Workspace.SqliteStatePath),
+                        adoptInheritedWorkers: WorkerAdoptionTransfer.CreateDefault(context.Workspace.SqliteStatePath,
+                            goalIds => context.ReloadKernel(goalIds))),
                     workspace: context.Workspace).WithSteward(ConductorStewardHost.CreateDefault(context.Workspace))
                     .WithJudgePanel(ConductorJudgePanelHost.CreateDefault(context.Workspace))
                     .WithBoardFill(ConductorBoardFillHost.CreateDefault(context.Workspace, () => ResolveConductorPolicy(conductPolicyName, context.Workspace.OrchestratorDirectory).Policy))

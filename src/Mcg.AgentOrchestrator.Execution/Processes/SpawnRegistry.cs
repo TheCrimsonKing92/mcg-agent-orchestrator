@@ -279,6 +279,50 @@ internal sealed class SpawnRegistry
         return updated;
     }
 
+    public bool TryTransferDetachedOwner(
+        string ownerId,
+        int processId,
+        DateTimeOffset processStartedAt,
+        int? expectedOwnerProcessId,
+        DateTimeOffset? expectedOwnerProcessStartedAt,
+        SpawnProcessIdentity newOwner,
+        string diagnostic)
+    {
+        var updated = false;
+        WithWriteConnection(conn =>
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                UPDATE spawn_registry
+                SET owner_process_id = $new_owner_process_id,
+                    owner_process_started_at = $new_owner_process_started_at,
+                    owner_process_image_path = $new_owner_process_image_path,
+                    last_diagnostic = $diagnostic
+                WHERE owner_id = $owner_id
+                  AND process_id = $process_id
+                  AND process_started_at = $process_started_at
+                  AND released_at IS NULL
+                  AND lifecycle = $conductor_detached
+                  AND owner_process_id IS $expected_owner_process_id
+                  AND owner_process_started_at IS $expected_owner_process_started_at
+                """;
+            cmd.Parameters.AddWithValue("$new_owner_process_id", newOwner.ProcessId);
+            cmd.Parameters.AddWithValue("$new_owner_process_started_at",
+                newOwner.StartedAt.ToString("O", CultureInfo.InvariantCulture));
+            cmd.Parameters.AddWithValue("$new_owner_process_image_path", (object?)newOwner.ImagePath ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$diagnostic", diagnostic);
+            cmd.Parameters.AddWithValue("$owner_id", ownerId);
+            cmd.Parameters.AddWithValue("$process_id", processId);
+            cmd.Parameters.AddWithValue("$process_started_at", processStartedAt.ToString("O"));
+            cmd.Parameters.AddWithValue("$conductor_detached", SpawnRegistryLifecycle.ConductorDetached.ToString());
+            cmd.Parameters.AddWithValue("$expected_owner_process_id", (object?)expectedOwnerProcessId ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$expected_owner_process_started_at",
+                (object?)expectedOwnerProcessStartedAt?.ToString("O", CultureInfo.InvariantCulture) ?? DBNull.Value);
+            updated = cmd.ExecuteNonQuery() == 1;
+        });
+        return updated;
+    }
+
     public bool TryMarkRuntimeOwned(SpawnProcessIdentity identity, string diagnostic) =>
         TryMarkDetached(identity, SpawnRegistryLifecycle.RuntimeOwned, diagnostic);
 
