@@ -11,8 +11,57 @@ public sealed partial class GoalAcceptanceVerifier
         RunProcessAsync(args, directory, bound, token);
 
     private readonly ConditionalWeakTable<AcceptancePartitionVerdictCache, RemoteLaneCoordinator> _remoteLaneCoordinators = new();
+    private RemoteLaneCoordinator? _cachelessRemoteLaneCoordinator;
 
-    private RemoteLaneCoordinator? LoadRemoteLanes(string worktreePath, AcceptancePartitionVerdictCache? cache)
+    private (AcceptancePartitionVerdictCache? Cache, RemoteLaneCoordinator? RemoteLanes)
+        CreatePartitionVerdictCacheAndRemoteLanes(
+            GoalId? goalId,
+            string worktreePath,
+            IReadOnlyList<AcceptanceManifestCheck> effectiveChecks,
+            AcceptanceGateEngineSettings engineSettings,
+            AcceptanceAttemptExecutionOwner executionOwner)
+    {
+        Func<string, string?> resolveCandidateTreeSha = path =>
+            _testOverrides.ResolvePartitionVerdictCandidateTreeShaForTests?.Invoke(path) ??
+            ResolveGitScalar(path, "rev-parse", "HEAD^{tree}");
+        Func<string, string?> resolveMainSha = path =>
+            _testOverrides.ResolvePartitionVerdictMainShaForTests?.Invoke(path) ??
+            ResolveGitScalar(path, "rev-parse", "main");
+        Func<string, string?> resolveVerifyingCommitSha = path =>
+            _testOverrides.ResolvePartitionVerdictVerifyingCommitShaForTests?.Invoke(path) ??
+            ResolveGitScalar(path, "rev-parse", "HEAD");
+        Func<string> resolveManifestIdentity = () => ComputeEffectiveAcceptanceManifestIdentity(effectiveChecks, engineSettings);
+        var partitionVerdictCache = AcceptancePartitionVerdictCache.Create(
+            new AcceptancePartitionVerdictCacheOptions(
+                goalId,
+                worktreePath,
+                effectiveChecks,
+                engineSettings.PartitionVerdictFullRerunEveryN,
+                _testOverrides.PartitionVerdictWithinAttemptRerunEnabled,
+                resolveCandidateTreeSha,
+                resolveMainSha,
+                resolveVerifyingCommitSha,
+                () => executionOwner.Identity.AttemptId,
+                resolveManifestIdentity,
+                () => EngineSettings.EnforceStructuralCoverage,
+                () => TempRootApparatusLossReceiptStore.Read(executionOwner.ApparatusReceiptPath), ResolveClosureHash: _testOverrides.ResolvePartitionVerdictClosureHashForTests, DisableLaneReuseShadow: _testOverrides.DisableLaneReuseShadowForTests, IdenticalTreeChecks: [.. effectiveChecks.Where(check => AcceptanceIdenticalTreeReuseRule.TryGetCheckIdentity(check, out _))]));
+        RemoteLaneCandidateIdentity? cohortIdentity = null;
+        if (partitionVerdictCache is null && executionOwner.CohortRemoteLanes)
+        {
+            var candidateTreeSha = resolveCandidateTreeSha(worktreePath);
+            var mainSha = resolveMainSha(worktreePath);
+            var verifyingCommitSha = resolveVerifyingCommitSha(worktreePath);
+            if (!string.IsNullOrWhiteSpace(candidateTreeSha) && !string.IsNullOrWhiteSpace(mainSha) &&
+                !string.IsNullOrWhiteSpace(verifyingCommitSha))
+                cohortIdentity = new RemoteLaneCandidateIdentity(executionOwner.Identity.AttemptId,
+                    executionOwner.GateRunIdentity ?? string.Empty, NormalizeShaToken(verifyingCommitSha),
+                    NormalizeShaToken(candidateTreeSha), NormalizeShaToken(mainSha), resolveManifestIdentity());
+        }
+        return (partitionVerdictCache, LoadRemoteLanes(worktreePath, partitionVerdictCache, cohortIdentity));
+    }
+
+    private RemoteLaneCoordinator? LoadRemoteLanes(string worktreePath, AcceptancePartitionVerdictCache? cache,
+        IRemoteLaneCandidateIdentity? candidateIdentity = null)
     {
         var configuration = RemoteLaneExecutorConfiguration.Load(_testOverrides.RemoteLaneExecutorConfigurationPathForTests ??
             RemoteLaneExecutorConfiguration.ResolveStorePath(worktreePath));
@@ -24,7 +73,8 @@ public sealed partial class GoalAcceptanceVerifier
             _testOverrides.OnRemoteLaneProgressLineForTests?.Invoke(line);
             return null;
         }
-        if (cache is null || ShardPermitLaneClass != GateShardLaneClass.Gate) return null;
+        var identity = (IRemoteLaneCandidateIdentity?)cache ?? candidateIdentity;
+        if (identity is null || ShardPermitLaneClass != GateShardLaneClass.Gate) return null;
         var clock = _testOverrides.RemoteLaneTimeProviderForTests ?? _timeProvider;
         IRemoteLaneExecutor executor = _testOverrides.RemoteLaneExecutorForTests ??
             (configuration.Executors.Any(entry => entry.Transport == "ssh")
@@ -32,7 +82,7 @@ public sealed partial class GoalAcceptanceVerifier
                     _testOverrides.RemoteLaneTransportRunnerForTests ?? RunProcessAsync,
                     _testOverrides.RemoteLaneGitRunnerForTests ?? GitCli.Run)
                 : UnavailableRemoteLaneExecutor.Instance);
-        var coordinator = new RemoteLaneCoordinator(configuration, cache, worktreePath, _executionContext?.ResultsPrefix,
+        var coordinator = new RemoteLaneCoordinator(configuration, identity, worktreePath, _executionContext?.ResultsPrefix,
             executor, clock,
             _testOverrides.RemoteLanePollInterval ?? TimeSpan.FromSeconds(1), _testOverrides.OnRemoteLaneOutcomeForTests,
             line =>
@@ -40,7 +90,8 @@ public sealed partial class GoalAcceptanceVerifier
                 try { _executionContext?.ReportRemoteLaneEvent(line); } catch (Exception) { }
                 _testOverrides.OnRemoteLaneEventForTests?.Invoke(line);
             });
-        _remoteLaneCoordinators.Add(cache, coordinator);
+        if (cache is not null) _remoteLaneCoordinators.Add(cache, coordinator);
+        else _cachelessRemoteLaneCoordinator = coordinator;
         return coordinator;
     }
 
@@ -97,6 +148,8 @@ public sealed partial class GoalAcceptanceVerifier
         RemoteLaneCoordinator? remote = null;
         if (cacheContext is not null && ShardPermitLaneClass == GateShardLaneClass.Gate)
             _remoteLaneCoordinators.TryGetValue(cacheContext, out remote);
+        else if (cacheContext is null && ShardPermitLaneClass == GateShardLaneClass.Gate)
+            remote = _cachelessRemoteLaneCoordinator;
         var shardConcurrency = new GateShardConcurrencyCounter();
         var failures = new List<Exception>();
         using var sharedApparatusCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, stopToken);
@@ -175,7 +228,7 @@ public sealed partial class GoalAcceptanceVerifier
                     pendingShards.RemoveAt(index--);
                     reuseConsulted[shard.Index] = true;
                     var reuseStarted = _timeProvider.GetTimestamp();
-                    if (cacheContext!.TryReuse(shard.Check) is { } reused)
+                    if (cacheContext?.TryReuse(shard.Check) is { } reused)
                     {
                         remote.Release(entry.Id);
                         CompleteShard(shard, reused, false, _timeProvider.GetElapsedTime(reuseStarted));
@@ -239,7 +292,7 @@ public sealed partial class GoalAcceptanceVerifier
                     var outcome = await completedRemote.Task.ConfigureAwait(false);
                     if (outcome.Accepted is { } accepted)
                     {
-                        cacheContext!.RecordExecution(completedRemote.Shard.Check, accepted, "remote_first_run");
+                        cacheContext?.RecordExecution(completedRemote.Shard.Check, accepted, "remote_first_run");
                         outcomes[completedRemote.Shard.Index] = new ShardRunOutcome(accepted, false);
                     }
                     else if (!sharedApparatusCancellation.IsCancellationRequested)

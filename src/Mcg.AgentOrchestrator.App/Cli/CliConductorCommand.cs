@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
@@ -13,14 +14,16 @@ internal static class CliConductorCommand
     internal static int Run(IReadOnlyList<string> args, OrchestratorWorkspace workspace,
         IConductorProcessLauncher? launcher = null, IConductorLockProbe? lockProbe = null,
         Func<DateTimeOffset>? bootTime = null, Func<string?>? mainCommit = null,
-        TextWriter? output = null, TextWriter? error = null)
+        TextWriter? output = null, TextWriter? error = null,
+        Func<OrchestratorWorkspace, ITransactionalOrchestratorStateRepository>? stateRepository = null)
     {
         output ??= Console.Out;
         error ??= Console.Error;
         lockProbe ??= new SystemConductorLockProbe();
         if (args.Count < 2 || args.Count > 3 ||
             args.Count == 3 && !(args[1].Equals("start", StringComparison.OrdinalIgnoreCase) &&
-                args[2].Equals("--clear-stop", StringComparison.OrdinalIgnoreCase)))
+                args[2].Equals("--clear-stop", StringComparison.OrdinalIgnoreCase)) &&
+                !args[1].Equals("apply-intents", StringComparison.OrdinalIgnoreCase))
         {
             error.WriteLine(CliCommandHelp.ConductorUsage);
             return 1;
@@ -30,6 +33,8 @@ internal static class CliConductorCommand
             var owner = lockProbe.ActiveOwnerPid(workspace);
             switch (args[1].ToLowerInvariant())
             {
+                case "apply-intents" when args.Count == 3:
+                    return ApplyIntents(args, workspace, owner, stateRepository, output, error);
                 case "start":
                     return Start(workspace, owner, args.Count == 3, launcher ?? new SystemConductorProcessLauncher(), output, error);
                 case "status":
@@ -58,6 +63,60 @@ internal static class CliConductorCommand
         {
             error.WriteLine($"Error: {ex.Message}");
             return 1;
+        }
+    }
+
+    private static int ApplyIntents(IReadOnlyList<string> args, OrchestratorWorkspace workspace, int? owner,
+        Func<OrchestratorWorkspace, ITransactionalOrchestratorStateRepository>? stateRepository,
+        TextWriter output, TextWriter error)
+    {
+        if (owner is not null)
+        {
+            error.WriteLine($"Refused: conductor running (pid {owner}); the running conductor applies pending intents on its next tick.");
+            return 1;
+        }
+
+        ProgramStartupLifecycle.EnsureStateDbInitialized(args, workspace);
+        var repository = stateRepository is null
+            ? new SqliteOrchestratorStateRepository(workspace.SqliteStatePath)
+            : stateRepository(workspace);
+        var prefix = args[2];
+        var matches = repository.ListGoalMetadataAsync().GetAwaiter().GetResult()
+            .Where(goal => goal.Id.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (matches.Length == 0)
+        {
+            error.WriteLine($"Error: Goal '{prefix}' was not found.");
+            return 1;
+        }
+        if (matches.Length > 1)
+        {
+            error.WriteLine($"Error: Goal prefix '{prefix}' is ambiguous.");
+            return 1;
+        }
+
+        var goalId = new GoalId(matches[0].Id);
+        var attempts = new ConductorParallelAcceptanceAttemptCoordinator(
+            Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts"), workspace.ExecutionDirectory);
+        var outcome = OperatorIntentGoalApplication.ApplyOffline(
+            workspace, repository, OperatorIntentCoordinator.CreateDefault(workspace), attempts, goalId)
+            .GetAwaiter().GetResult();
+        switch (outcome)
+        {
+            case OperatorIntentOfflineOutcome.Applied applied:
+                foreach (var line in applied.Lines)
+                    output.WriteLine(line);
+                return 0;
+            case OperatorIntentOfflineOutcome.NothingPending:
+                output.WriteLine($"No pending operator intents for goal {goalId.Value[..Math.Min(8, goalId.Value.Length)]}");
+                return 0;
+            case OperatorIntentOfflineOutcome.Refused refused:
+                error.WriteLine(refused.Message);
+                return 1;
+            case OperatorIntentOfflineOutcome.NotDurable notDurable:
+                error.WriteLine($"Not applied: {notDurable.Reason} The claimed intents stay for the next applier run or conductor tick.");
+                return 1;
+            default:
+                throw new InvalidOperationException($"Unexpected offline operator intent outcome: {outcome.GetType().Name}.");
         }
     }
 

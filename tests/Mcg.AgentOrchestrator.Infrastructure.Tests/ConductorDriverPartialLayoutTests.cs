@@ -36,7 +36,6 @@ public sealed class ConductorDriverPartialLayoutTests
     public void DispatchDiagnosticsMembersHaveOneOwningFile() =>
         AssertMemberLocations("ConductorDriver.DispatchDiagnostics.cs",
             ("GetCurrentGoal", 1),
-            ("TryRecoverSandboxPrep", 1),
             ("EmitPhaseTiming", 2),
             ("EmitGoalPhaseTiming", 1),
             ("RunDispatchRemediation", 1),

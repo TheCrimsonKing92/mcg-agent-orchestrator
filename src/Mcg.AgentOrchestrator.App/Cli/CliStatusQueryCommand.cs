@@ -7,7 +7,8 @@ internal static class CliStatusQueryCommand
 {
     internal static bool IsStatusQueryCommand(IReadOnlyList<string> args) =>
         args.Count == 2 &&
-        args[0].Equals("status", StringComparison.OrdinalIgnoreCase) &&
+        (args[0].Equals("status", StringComparison.OrdinalIgnoreCase) ||
+         args[0].Equals("monitor", StringComparison.OrdinalIgnoreCase)) &&
         !string.IsNullOrWhiteSpace(args[1]) &&
         !args[1].StartsWith("-", StringComparison.Ordinal) &&
         !CliCommandHelp.IsCommandSpecificHelp(args);

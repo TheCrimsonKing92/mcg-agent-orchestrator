@@ -87,7 +87,7 @@ internal static class CliCommandHelp
     public const string ContextUsageUsage = "Usage: context-usage [--since <ISO-8601-with-offset>] [--role <role>] [--json]";
     public const string AuthorDraftUsage = "Usage: author-draft <backlog-id-prefix>";
     public const string HostExclusionsUsage = "Usage: host-exclusions [--apply]";
-    public const string ConductorUsage = "Usage: conductor start [--clear-stop] | conductor status | conductor stop";
+    public const string ConductorUsage = "Usage: conductor start [--clear-stop] | conductor status | conductor stop | conductor apply-intents <goal-prefix>";
 
     private static readonly CommandHelpEntry Conduct = new(
         ConductUsage,
@@ -591,7 +591,7 @@ internal static class CliCommandHelp
 
     private static readonly CommandHelpEntry Conductor = new(
         ConductorUsage,
-        "Start, report or stop the conductor from the terminal.",
+        "Start, report or stop the conductor, or apply one goal's pending operator intents while no conductor runs.",
         ["--clear-stop", "--help", "-h"]);
 
     private static readonly IReadOnlyDictionary<string, IReadOnlySet<string>> GenericCommandFlags =

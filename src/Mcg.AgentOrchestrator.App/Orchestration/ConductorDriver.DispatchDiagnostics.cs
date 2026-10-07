@@ -15,32 +15,6 @@ internal sealed partial class ConductorDriver
     private Goal GetCurrentGoal(Goal goal) =>
         (_cohortKernel ?? _conductorTickKernel)?.Goals.SingleOrDefault(candidate => candidate.Id == goal.Id) ?? goal;
 
-    private bool TryRecoverSandboxPrep(DispatchStartOutcome outcome, string goalPrefix, out string failureReason)
-    {
-        if (outcome.SandboxPrepRecoveryAction is not { } action)
-        {
-            failureReason = outcome.Reason ?? "Low-IL sandbox prep recovery action was missing.";
-            return false;
-        }
-
-        try
-        {
-            if (_recoverSandboxPrep(action))
-            {
-                failureReason = string.Empty;
-                return true;
-            }
-        }
-        catch (Exception ex)
-        {
-            failureReason = $"Low-IL sandbox prep recovery failed for goal {goalPrefix}: {ex.Message}";
-            return false;
-        }
-
-        failureReason = $"Low-IL sandbox prep recovery failed for goal {goalPrefix}: {action.Reason}";
-        return false;
-    }
-
     private void EmitPhaseTiming(string phase, Goal goal, TimeSpan elapsed, string detail)
     {
         foreach (var task in goal.Tasks.Where(task => task.Status == WorkTaskStatus.Assigned))

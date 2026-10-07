@@ -11,7 +11,7 @@ internal sealed record RemoteLaneOutcome(RemoteLaneRequest Request, IRemoteLaneH
 internal sealed class RemoteLaneCoordinator : IDisposable
 {
     private readonly RemoteLaneExecutorConfiguration _configuration;
-    private readonly AcceptancePartitionVerdictCache _cache;
+    private readonly IRemoteLaneCandidateIdentity _cache;
     private readonly IRemoteLaneExecutor _executor;
     private readonly TimeProvider _clock;
     private readonly TimeSpan _pollInterval;
@@ -28,7 +28,7 @@ internal sealed class RemoteLaneCoordinator : IDisposable
     private readonly Dictionary<string, IDisposable> _claims = new(StringComparer.Ordinal);
 
     internal RemoteLaneCoordinator(RemoteLaneExecutorConfiguration configuration,
-        AcceptancePartitionVerdictCache cache, string worktreePath, string? attemptPrefix,
+        IRemoteLaneCandidateIdentity cache, string worktreePath, string? attemptPrefix,
         IRemoteLaneExecutor executor, TimeProvider clock, TimeSpan pollInterval,
         Action<string, RemoteLaneOutcomeCode>? onOutcome, Action<string>? onEvent = null)
     {
