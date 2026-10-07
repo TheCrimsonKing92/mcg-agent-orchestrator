@@ -29,7 +29,8 @@ internal sealed partial class GoalDispatchOperations
         Action<GoalSnapshot>? recordDurableGoalBaseline = null,
         IReadOnlySet<TaskId>? excludedTaskIds = null,
         bool? cascadeTesterCheapFirst = null,
-        string? cascadeCheapModelAlias = null, bool? cascadeMechanicalReworkCheap = null)
+        string? cascadeCheapModelAlias = null, bool? cascadeMechanicalReworkCheap = null,
+        Func<string, bool>? commandExists = null)
     {
         ReconcileExitedAssignedProcessRecords(kernel, goal);
         goal = kernel.GetGoal(goal.Id);
@@ -48,6 +49,7 @@ internal sealed partial class GoalDispatchOperations
             workspace.ResolveExecutionDirectory(goal.Id),
             DateTimeOffset.UtcNow,
             safeBatch.TaskIds,
+            commandExists: commandExists,
             reviewAutoRetryStopRound: ResolveReviewAutoRetryStopRound(workspace, reviewAutoRetryStopRound, conductorPolicy),
             citedPriorEvidenceResolver: CreateCitedPriorEvidenceResolver(workspace),
             sandboxOptions: sandboxOptions,
