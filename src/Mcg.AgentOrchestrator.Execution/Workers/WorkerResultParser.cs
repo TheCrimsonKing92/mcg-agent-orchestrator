@@ -156,7 +156,9 @@ internal static class WorkerResultParser
 
         if (TestsReportFailure(result, out _))
         {
-            diagnostic = $"WORKER_RESULT tests reported failure: {fields["tests"]}.";
+            diagnostic = result.TestsStatus == TestsStatus.Unknown
+                ? $"WORKER_RESULT tests field is unstructured and its text reads as failure: {fields["tests"]}. Restate tests with a leading status word (pass, fail, not-run, deferred, inconclusive)."
+                : $"WORKER_RESULT tests reported failure: {fields["tests"]}.";
             return false;
         }
 
