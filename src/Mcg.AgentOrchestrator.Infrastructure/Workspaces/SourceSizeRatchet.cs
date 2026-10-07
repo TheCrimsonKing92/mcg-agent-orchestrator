@@ -148,7 +148,8 @@ internal static class SourceSizeRatchet
             // Goal af61f4a6 (backlog 964a1df7) moved terminal reconciliation and run completion unchanged; measured at 3592 lines.
             // Goal 6e664238 (backlog c7f9845c) moved conduct-event classification and progress formatting unchanged; measured at 3338 lines.
             // Goal 8c677dd2 (backlog 21450794) split RunParallelAcceptanceBatch into named admission phases; measured at 2686 lines.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2686),
+            // Goal ae7d1201 extracted shared per-goal operator-intent application; measured at 2675 lines.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2675),
             // Goal 354522f1 tick persistence partial measured at 467 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.TickPersistence.cs", 467),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.DependencyReadmission.cs", 384),

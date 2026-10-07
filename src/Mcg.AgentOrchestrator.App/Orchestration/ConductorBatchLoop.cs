@@ -801,22 +801,12 @@ internal sealed partial class ConductorBatchLoop
                     }
 
                     OperatorIntentExecutionResult intentResult;
+                    OperatorIntentGoalApplicationResult application;
                     try
                     {
-                        intentResult = _operatorIntents.ExecutePending(kernel, scopedGoal);
-                        if (intentResult.MutatedGoalState)
-                        {
-                            var invalidation = AcceptanceAttemptRetryInvalidation.Apply(
-                                kernel,
-                                scopedGoal,
-                                driver.ParallelAcceptanceAttemptCoordinator,
-                                "Operator intent made an acceptance-verified task dispatchable; invalidated the current acceptance attempt before redispatch.");
-                            if (invalidation.Changed)
-                            {
-                                preWalkIntentLines.Add(
-                                    $"ACCEPTANCE_INVALIDATED goal={ShortGoalId(scopedGoal.Id.Value)} attempt_staled={invalidation.AttemptInvalidated.ToString().ToLowerInvariant()} goal_reopened={invalidation.GoalReopened.ToString().ToLowerInvariant()}");
-                            }
-                        }
+                        application = OperatorIntentGoalApplication.ApplyPending(
+                            kernel, scopedGoal, _operatorIntents, driver.ParallelAcceptanceAttemptCoordinator);
+                        intentResult = application.Result;
                     }
                     catch (Exception ex)
                     {
@@ -825,13 +815,12 @@ internal sealed partial class ConductorBatchLoop
                         continue;
                     }
 
-                    preWalkIntentLines.AddRange(intentResult.ProgressLines);
+                    preWalkIntentLines.AddRange(application.Lines);
                     preWalkIntentProcessed |= intentResult.ProgressLines.Count > 0;
                     if (intentResult.RejectedAdjudication)
                         preWalkIntentChangedGoalIds.Add(scopedGoal.Id);
                     if (intentResult.MutatedGoalState)
                     {
-                        kernel.ClearGoalHold(scopedGoal.Id);
                         preWalkIntentChangedGoalIds.Add(scopedGoal.Id);
                         excludedGoals.Remove(scopedGoal.Id.Value);
                         setAsideGoals.Remove(scopedGoal.Id.Value);
