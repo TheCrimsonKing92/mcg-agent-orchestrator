@@ -1718,54 +1718,23 @@ internal sealed partial class ConductorDriver
             return preReviewResult;
         }
 
-        var start = fromState == GoalLifecycleState.Dispatched ? _startRecordedDispatches : _dispatchAndStart;
-        var dispatchTimingGoal = goal;
-        var startClock = ConductorBatchLoop.StartDiagnosticTimer();
-        var outcome = start(goal, policy);
-        startClock.Stop();
-        EmitPhaseTiming("dispatch-prep", dispatchTimingGoal, outcome, startClock.Elapsed, $"result={outcome.Category}");
-        goal = GetCurrentGoal(goal);
-        if (outcome.Category == DispatchStartOutcomeCategory.RecoverableSandboxPrep)
-        {
-            if (!TryRecoverSandboxPrep(outcome, goalPrefix, out var recoveryFailure))
+        var currentGoal = goal;
+        var execution = DispatchStartExecutor.Execute(
+            goal, goalPrefix, policy, fromState, _dispatchAndStart, _startRecordedDispatches,
+            _recoverSandboxPrep, RunDispatchRemediation, () => currentGoal = GetCurrentGoal(currentGoal),
+            timing =>
             {
-                return Escalate(goal, goalPrefix, policy, fromState, recoveryFailure);
-            }
-
-            var retryStart = fromState == GoalLifecycleState.WorkspaceReady
-                ? _startRecordedDispatches
-                : start;
-            startClock.Restart();
-            outcome = retryStart(goal, policy);
-            startClock.Stop();
-            EmitPhaseTiming("dispatch-prep", dispatchTimingGoal, outcome, startClock.Elapsed, $"result={outcome.Category} retry=sandbox-prep");
-            goal = GetCurrentGoal(goal);
-        }
-
-        if (outcome.Category == DispatchStartOutcomeCategory.SpawnFailed)
+                if (timing.Phase == DispatchStartExecutor.PrepPhase)
+                    EmitPhaseTiming(timing.Phase, timing.Goal, timing.Outcome!, timing.Elapsed, timing.Detail);
+                else
+                    EmitGoalPhaseTiming(timing.Phase, timing.Goal, timing.Elapsed, timing.Detail);
+            });
+        goal = GetCurrentGoal(currentGoal);
+        if (execution.RecoveryFailureReason is { } recoveryFailure)
         {
-            var firstFailure = outcome;
-            var remediationClock = Stopwatch.StartNew();
-            var remediationResult = RunDispatchRemediation();
-            remediationClock.Stop();
-            EmitGoalPhaseTiming(
-                "dispatch-remediation",
-                goal,
-                remediationClock.Elapsed,
-                $"result={remediationResult}");
-            var retryStart = fromState == GoalLifecycleState.WorkspaceReady
-                ? _startRecordedDispatches
-                : start;
-            startClock.Restart();
-            outcome = retryStart(goal, policy);
-            startClock.Stop();
-            EmitPhaseTiming("dispatch-prep", dispatchTimingGoal, outcome, startClock.Elapsed, $"result={outcome.Category} retry=spawn-failed");
-            goal = GetCurrentGoal(goal);
-            if (outcome.Category == DispatchStartOutcomeCategory.EmptyBatch)
-            {
-                outcome = firstFailure;
-            }
+            return Escalate(goal, goalPrefix, policy, fromState, recoveryFailure);
         }
+        var outcome = execution.Outcome;
 
         if (outcome.Category == DispatchStartOutcomeCategory.Deferred)
         {
@@ -1776,7 +1745,9 @@ internal sealed partial class ConductorDriver
         startFacts = startFacts with { StartOutcomeCategory = outcome.Category.ToString(), StartOutcomeReason = outcome.Reason ?? "" };
         if (outcome.Category == DispatchStartOutcomeCategory.Started)
         {
-            _ = DispatchStartPolicy.Evaluate(startFacts);
+            var startedDecision = DispatchStartPolicy.Evaluate(startFacts);
+            if (startedDecision.Action != DispatchStartAction.Proceed)
+                throw new InvalidOperationException($"Dispatch start decision for goal {goalPrefix} was {startedDecision.Action}, expected Proceed for a started dispatch.");
             SliceBatchAdmissionEvaluator?.RecordAdmitted(goal);
             return MakeResult(goal.Id.Value, goalPrefix, policy,
                 new ConductorAdvanceOutcome.Executed(fromState, "Subscription dispatch started"));
