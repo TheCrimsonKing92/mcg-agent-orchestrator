@@ -1849,7 +1849,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         postLandingCanary: postLandingCanary,
                         goalReloadObservation: resolveGoalReloadObservation,
                         lifecycleRecorder: new ConductorLifecycleRecorder(
-                            new SqliteRunEventStore(context.Workspace.RunEventStorePath)),
+                            new SqliteRunEventStore(context.Workspace.RunEventStorePath),
+                            readAdoptionCensus: WorkerAdoptionCensus.CreateDefault(context.Workspace.SqliteStatePath)),
                         blockedRecheckHeartbeatInterval: reconcileSweepOptions.HeartbeatInterval,
                         workspace: context.Workspace).WithSteward(ConductorStewardHost.CreateDefault(context.Workspace))
                         .WithUnintendedExitDiagnostics(conductorDiagnosticPath, conductorOutputLogPath)
@@ -1981,7 +1982,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     progressiveReviewSteering: ProgressiveReviewSteeringCoordinator.CreateDefault(context.Workspace, context.Agents, context.WorkerProfiles, context.Providers),
                     postLandingCanary: PostLandingCanaryFactory.CreateDefault(context.Workspace),
                     lifecycleRecorder: new ConductorLifecycleRecorder(
-                        new SqliteRunEventStore(context.Workspace.RunEventStorePath)),
+                        new SqliteRunEventStore(context.Workspace.RunEventStorePath),
+                        readAdoptionCensus: WorkerAdoptionCensus.CreateDefault(context.Workspace.SqliteStatePath)),
                     workspace: context.Workspace).WithSteward(ConductorStewardHost.CreateDefault(context.Workspace))
                     .WithJudgePanel(ConductorJudgePanelHost.CreateDefault(context.Workspace))
                     .WithBoardFill(ConductorBoardFillHost.CreateDefault(context.Workspace, () => ResolveConductorPolicy(conductPolicyName, context.Workspace.OrchestratorDirectory).Policy))
