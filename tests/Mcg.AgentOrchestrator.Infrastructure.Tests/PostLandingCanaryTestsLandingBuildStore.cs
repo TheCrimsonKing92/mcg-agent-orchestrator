@@ -59,6 +59,30 @@ public sealed class PostLandingCanaryTestsLandingBuildStore
         Assert.Empty(Directory.GetDirectories(fixture.StoreRoot));
     }
 
+    [Xunit.Fact]
+    public async Task Store_io_fault_preserves_environment_fault_category()
+    {
+        using var fixture = new CanaryFixture();
+        var expectedFailure = new IOException("Cannot write App build output.");
+        var calls = 0;
+        var store = new LandingAppBuildStore(fixture.StoreRoot, build: (_, _) =>
+        {
+            calls++;
+            throw expectedFailure;
+        });
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+        var runner = fixture.Runner(new LandingAppBuildStoreCanaryBinaryResolver(store));
+
+        var failure = await Assert.ThrowsAsync<IOException>(() =>
+            runner.RunAsync(new PostLandingCanaryRequest(fixture.Sha, ["store-test"]), cancellation.Token));
+
+        Assert.Same(expectedFailure, failure);
+        Assert.Equal(PostLandingCanaryFaultDisposition.EnvironmentFault,
+            PostLandingCanaryFailureClassifier.Classify(failure));
+        Assert.Equal(1, calls);
+        Assert.Empty(Directory.GetDirectories(fixture.StoreRoot));
+    }
+
     private sealed class CanaryFixture : IDisposable
     {
         private readonly string _root = Directory.CreateTempSubdirectory("landing-canary-").FullName;

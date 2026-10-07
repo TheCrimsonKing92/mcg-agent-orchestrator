@@ -91,10 +91,6 @@ internal sealed class LandingAppBuildStore
             RetainNewest(completed);
             return completed;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            throw Failure(ex.Message);
-        }
         finally
         {
             if (partial is not null && Directory.Exists(partial)) Directory.Delete(partial, recursive: true);
