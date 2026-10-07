@@ -60,7 +60,7 @@ internal static class CliRemoteLaneSelfTestCommand
             var poll = 0;
             async Task<GoalAcceptanceVerifier.CommandResult> Transport(string[] arguments, string directory, TimeSpan bound, CancellationToken token)
             {
-                var step = arguments.Any(arg => arg.EndsWith("/queue/", StringComparison.Ordinal)) ? "job-copy"
+                var step = arguments.Any(arg => arg.Contains("/queue/", StringComparison.Ordinal)) ? "job-copy"
                     : arguments.Contains("schtasks") ? "trigger"
                     : arguments.Any(arg => arg.EndsWith("/status.json", StringComparison.Ordinal)) ? $"poll-{++poll}" : "fetch";
                 lastStep = step;
