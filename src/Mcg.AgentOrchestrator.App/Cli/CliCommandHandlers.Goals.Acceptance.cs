@@ -530,7 +530,7 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
     {
         Console.WriteLine(
             "Acceptance evidence: merge blocked by outstanding criterion evidence: " +
-            string.Join(", ", preMergeObligations.Select(item => $"{item.Id}:{item.Owner}:{item.State}")));
+            string.Join(", ", preMergeObligations.Select(item => $"{item.DisplayLabel}:{item.Owner}:{item.State}")));
         return false;
     }
 

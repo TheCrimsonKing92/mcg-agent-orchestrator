@@ -33,7 +33,7 @@ public sealed class GateOwnedCriterionDeferralTests
         var failure = Xunit.Assert.Single(scenario.Goal.Timeline.Where(item => item.Kind == ProgressKind.TaskFailed));
         Xunit.Assert.Contains("attestation rejected", failure.Message, StringComparison.Ordinal);
         Xunit.Assert.Contains("criterion-evidence-map --goal", failure.Message, StringComparison.Ordinal);
-        Xunit.Assert.Contains($"0 1 acceptance {CriterionEvidenceScopes.FullAcceptanceGate}", failure.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"--criterion 1 --version 1 acceptance {CriterionEvidenceScopes.FullAcceptanceGate}", failure.Message, StringComparison.Ordinal);
         Xunit.Assert.Contains(Candidate, failure.Message, StringComparison.Ordinal);
     }
 

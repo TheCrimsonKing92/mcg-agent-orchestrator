@@ -1935,7 +1935,7 @@ internal static partial class CliPersistentStateRunner
             ?? throw new KeyNotFoundException($"Goal '{goalId.Value}' was not found.");
         var kernel = KernelFromGoalSnapshot(snapshot, []);
         var goal = kernel.GetGoal(goalId);
-        CliCriterionEvidenceIntents.Submit(args, workspace, goal.Id, ResolveOperatorIntentAttribution(args, submissionSource));
+        CliCriterionEvidenceIntents.Submit(args, workspace, goal, ResolveOperatorIntentAttribution(args, submissionSource));
         currentGoal = goal;
         return false;
     }
@@ -4099,7 +4099,7 @@ internal static partial class CliPersistentStateRunner
                                 AcceptanceMergeGuardMismatchKind.CriterionEvidence,
                                 "Outstanding criterion evidence",
                                 "none",
-                                string.Join(", ", outstandingEvidence.Select(item => $"{item.Id}:{item.Owner}:{item.State}")));
+                                string.Join(", ", outstandingEvidence.Select(item => $"{item.DisplayLabel}:{item.Owner}:{item.State}")));
                             var guardedResult = GuardedAcceptanceAbort(
                                 request.GoalId,
                                 evidenceMismatch,

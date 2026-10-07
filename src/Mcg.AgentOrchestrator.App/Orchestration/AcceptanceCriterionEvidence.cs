@@ -50,7 +50,7 @@ internal static partial class AcceptanceCriterionEvidence
             if (!obligations.Any(item => item.CriterionIndex == index &&
                     item.Owner == CriterionEvidenceOwner.Operator))
             {
-                missing.Add($"{CriterionEvidenceObligation.BuildId(version.Version, index)}:Operator:NotCreated:next=operator observation");
+                missing.Add($"{CriterionEvidenceObligation.DescribeCriterion(version.Version, index)}:Operator:NotCreated:next=operator observation");
             }
         }
         return missing.Count == 0 ? null :
@@ -66,7 +66,7 @@ internal static partial class AcceptanceCriterionEvidence
             .ToArray();
         if (outstanding.Length == 0) return null;
         var detail = string.Join(", ", outstanding.Select(item =>
-            $"{item.Id}:{item.Owner}:{item.State}:next={item.RequiredScope}"));
+            $"{item.DisplayLabel}:{item.Owner}:{item.State}:next={item.RequiredScope}"));
         return $"Acceptance completed but required criterion evidence remains outstanding: {detail}.";
     }
 
@@ -121,7 +121,7 @@ internal static partial class AcceptanceCriterionEvidence
             .ToArray();
         if (outstanding.Length == 0) return null;
         var detail = string.Join(", ", outstanding.Select(item =>
-            $"{item.Id}:{item.Owner}:{item.State}:next={item.RequiredScope}"));
+            $"{item.DisplayLabel}:{item.Owner}:{item.State}:next={item.RequiredScope}"));
         return $"Acceptance completed but required criterion evidence remains outstanding: {detail}.";
     }
 
@@ -210,7 +210,7 @@ internal static partial class AcceptanceCriterionEvidence
             if (operatorObligations.Length > 0)
             {
                 var detail = string.Join(", ", operatorObligations.Select(item =>
-                    $"{item.Id}:{item.Owner}:{item.State}:next={item.RequiredScope}"));
+                    $"{item.DisplayLabel}:{item.Owner}:{item.State}:next={item.RequiredScope}"));
                 return $"Acceptance completed but required criterion evidence remains outstanding: {detail}. Carry-forward refused: {carryRefusal}.";
             }
         }

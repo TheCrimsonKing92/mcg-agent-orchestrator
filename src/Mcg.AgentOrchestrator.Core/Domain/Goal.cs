@@ -372,7 +372,7 @@ public sealed class Goal
         if (specVersion.IsSuperseded)
             throw new InvalidOperationException($"Criterion version {criterionVersion} is superseded and cannot receive a new ownership mapping.");
         if (criterionIndex < 0 || criterionIndex >= specVersion.Spec.AcceptanceCriteria.Count)
-            throw new ArgumentOutOfRangeException(nameof(criterionIndex), "Criterion index is not present in the requested version.");
+            throw new ArgumentOutOfRangeException(nameof(criterionIndex), $"Criterion {criterionIndex + 1} is not present in version {criterionVersion}, which has {specVersion.Spec.AcceptanceCriteria.Count} criteria numbered 1 to {specVersion.Spec.AcceptanceCriteria.Count}.");
 
         var id = CriterionEvidenceObligation.BuildId(criterionVersion, criterionIndex);
         var existingIndex = _criterionEvidenceObligations.FindIndex(item => item.Id == id);
