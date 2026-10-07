@@ -2,7 +2,7 @@ using System.Text.Json;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 [Collection(TestCollections.JobAccounting)]
-public sealed class AcceptanceCheckProcessInvokerEquivalenceTests
+public sealed class GoalAcceptanceVerifierTestsProcessInvokerEquivalence
 {
     // Baseline contract from main b3d3a30b9: running -> completed, exit 0, unchanged stdout;
     // focused capture-limit stop: exit -1, CaptureLimited true, TimedOut false, one marker.
