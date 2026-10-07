@@ -7,6 +7,31 @@ using Mcg.AgentOrchestrator.Infrastructure;
 [Xunit.Collection(TestCollections.LandingGitRunner)]
 public sealed class LandingExecutorTests
 {
+    private static readonly Lazy<string> GitRepositoryTemplate = new(() =>
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcg-landing-template", Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(root);
+            InfrastructureTestSupport.RunGitWithCommitPostcondition(root, ["init", "-b", "main"]);
+            InfrastructureTestSupport.RunGitWithCommitPostcondition(root, ["config", "user.email", "tests@example.invalid"]);
+            InfrastructureTestSupport.RunGitWithCommitPostcondition(root, ["config", "user.name", "Tests"]);
+            File.AppendAllText(
+                Path.Combine(root, ".git", "info", "exclude"),
+                ".orchestrator-test-remotes/" + Environment.NewLine +
+                ".orchestrator/" + Environment.NewLine);
+            File.WriteAllText(Path.Combine(root, "README.md"), "initial" + Environment.NewLine);
+            InfrastructureTestSupport.RunGitWithCommitPostcondition(root, ["add", "README.md"]);
+            InfrastructureTestSupport.RunGitWithCommitPostcondition(root, ["commit", "-m", "Initial"]);
+            return root;
+        }
+        catch (Exception exception)
+        {
+            TryDeleteDirectory(root);
+            throw new InvalidOperationException("Landing repository template could not be created.", exception);
+        }
+    }, LazyThreadSafetyMode.ExecutionAndPublication);
+
     [Xunit.Fact(DisplayName = "LandingExecutor_failed_count_excludes_auto_recovered_empty_output_flake")]
     public void LandingExecutorFailedCountExcludesAutoRecoveredEmptyOutputFlake()
     {
@@ -1751,19 +1776,23 @@ public sealed class LandingExecutorTests
         var root = Path.Combine(Path.GetTempPath(), "mcg-landing-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         DotnetBuildEnvironmentManager.RegisterCurrentLandingTestFixtureRoot(root);
-        RunGit(root, "init", "-b", "main");
-        RunGit(root, "config", "user.email", "tests@example.invalid");
-        RunGit(root, "config", "user.name", "Tests");
-        File.AppendAllText(
-            Path.Combine(root, ".git", "info", "exclude"),
-            ".orchestrator-test-remotes/" + Environment.NewLine +
-            ".orchestrator/" + Environment.NewLine);
-        File.WriteAllText(Path.Combine(root, "README.md"), "initial" + Environment.NewLine);
-        RunGit(root, "add", "README.md");
-        RunGit(root, "commit", "-m", "Initial");
+        CopyDirectory(GitRepositoryTemplate.Value, root);
         _ = CreateMigratedStateRepository(
             OrchestratorWorkspace.ForDirectory(root).SqliteStatePath);
         return root;
+
+        static void CopyDirectory(string source, string destination)
+        {
+            foreach (var directory in Directory.EnumerateDirectories(source, "*", SearchOption.AllDirectories))
+            {
+                Directory.CreateDirectory(Path.Combine(destination, Path.GetRelativePath(source, directory)));
+            }
+
+            foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+            {
+                File.Copy(file, Path.Combine(destination, Path.GetRelativePath(source, file)));
+            }
+        }
     }
 
     private static string CreateBareRepository(string repo, string name)
