@@ -8,7 +8,19 @@ internal static class OwnerConsoleVerb
     internal static bool IsCommand(IReadOnlyList<string> args) =>
         args.Count > 0 && args[0].Equals("console", StringComparison.OrdinalIgnoreCase);
 
-    internal static async Task<int> RunAsync(OrchestratorWorkspace workspace, CancellationToken cancellationToken = default)
+    internal static Task<int> RunAsync(IReadOnlyList<string> args, OrchestratorWorkspace workspace,
+        CancellationToken cancellationToken = default)
+    {
+        if (args.Skip(1).Any(arg => !arg.Equals("--plain", StringComparison.OrdinalIgnoreCase)))
+        {
+            System.Console.Error.WriteLine("Usage: console [--plain]");
+            return Task.FromResult(1);
+        }
+        return OwnerConsoleModeSelector.RunAsync(args, System.Console.IsInputRedirected, System.Console.IsOutputRedirected,
+            new(token => RunPlainAsync(workspace, token), token => OwnerConsoleFullScreenHost.RunAsync(workspace, token)), cancellationToken);
+    }
+
+    private static async Task<int> RunPlainAsync(OrchestratorWorkspace workspace, CancellationToken cancellationToken)
     {
         try
         {

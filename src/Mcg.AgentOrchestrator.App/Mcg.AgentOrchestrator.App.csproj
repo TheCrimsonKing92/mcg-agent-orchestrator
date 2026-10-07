@@ -15,6 +15,7 @@
     <DefaultItemExcludesInProjectFolder>$(DefaultItemExcludesInProjectFolder);**/obj/**;**/artifacts/**</DefaultItemExcludesInProjectFolder>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="Terminal.Gui" Version="[2.5.0]" />
     <ProjectReference Include="..\Mcg.AgentOrchestrator.Core\Mcg.AgentOrchestrator.Core.csproj" />
     <ProjectReference Include="..\Mcg.AgentOrchestrator.Infrastructure\Mcg.AgentOrchestrator.Infrastructure.csproj" />
     <ProjectReference Include="..\Mcg.AgentOrchestrator.Infrastructure.Providers\Mcg.AgentOrchestrator.Infrastructure.Providers.csproj" />

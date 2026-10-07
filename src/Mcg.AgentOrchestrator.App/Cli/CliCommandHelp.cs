@@ -555,6 +555,11 @@ internal static class CliCommandHelp
         "Summarize recurring test failures from the retained acceptance failing-test index.",
         ["--min-goals", "--since", "--help", "-h"]);
 
+    private static readonly CommandHelpEntry OwnerConsole = new(
+        "Usage: console [--plain]",
+        "Open the owner console; --plain uses line mode (also selected for redirected input or output).",
+        ["--plain", "--help", "-h"]);
+
     private static readonly CommandHelpEntry OwnerDigest = new(
         OwnerDigestUsage,
         "Report interventions, landings, escapes, tail time and mechanical hours.",
@@ -848,6 +853,12 @@ internal static class CliCommandHelp
         if (args.Count == 0)
         {
             return false;
+        }
+
+        if (args[0].Equals("console", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = OwnerConsole;
+            return true;
         }
 
         if (args[0].Equals("conduct", StringComparison.OrdinalIgnoreCase))
