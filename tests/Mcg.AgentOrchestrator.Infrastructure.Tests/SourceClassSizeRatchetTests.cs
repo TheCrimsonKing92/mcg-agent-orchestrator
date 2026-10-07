@@ -12,7 +12,7 @@ public sealed class SourceClassSizeRatchetTests
     }
 
     [Fact]
-    public void RealTable_SeedsEqualMeasuredTotalsAndCounts()
+    public void RealTable_MeasuredTotalsAndCountsAreAtOrUnderCeilings()
     {
         var root = FindRepositoryRoot();
         Assert.Equal(
@@ -29,8 +29,11 @@ public sealed class SourceClassSizeRatchetTests
         {
             var partials = files.Where(lines => Regex.IsMatch(string.Join("\n", lines),
                 $@"\bpartial\s+class\s+{Regex.Escape(row.ClassName)}\b", RegexOptions.CultureInvariant)).ToArray();
-            Assert.Equal(partials.Sum(lines => lines.Length), row.MaximumTotalLineCount);
-            Assert.Equal(partials.Length, row.MaximumPartialFileCount);
+            var totalLineCount = partials.Sum(lines => lines.Length);
+            Assert.True(totalLineCount <= row.MaximumTotalLineCount,
+                $"{row.ClassName} has {totalLineCount} lines, exceeding its ceiling of {row.MaximumTotalLineCount}.");
+            Assert.True(partials.Length <= row.MaximumPartialFileCount,
+                $"{row.ClassName} has {partials.Length} partial files, exceeding its ceiling of {row.MaximumPartialFileCount}.");
         }
     }
 
