@@ -20,7 +20,10 @@ public enum ConductorHoldOwner
 
 public abstract record ConductorAdvanceOutcome
 {
-    public sealed record Executed(GoalLifecycleState FromState, string Description) : ConductorAdvanceOutcome;
+    public sealed record Executed(GoalLifecycleState FromState, string Description) : ConductorAdvanceOutcome
+    {
+        public PolicyDecisionRecord? Decision { get; init; }
+    }
     public sealed record Held(GoalLifecycleState State, string Reason, string? StableIdentity = null) : ConductorAdvanceOutcome
     {
         public UnchangedCandidateHoldReason? TypedReason { get; init; }
