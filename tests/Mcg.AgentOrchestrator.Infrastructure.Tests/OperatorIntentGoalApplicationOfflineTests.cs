@@ -73,6 +73,7 @@ public sealed class OperatorIntentGoalApplicationOfflineTests
             Assert.Equal(OperatorIntentStatus.Claimed, (await seed.Store.GetAsync(seed.Intent.Id, TestContext.Current.CancellationToken))!.Status);
             var competing = (await seed.Repository.LoadGoalAsync(seed.GoalId, TestContext.Current.CancellationToken))!;
             Assert.Equal(competingObjective, competing.Objective);
+            Assert.Equal(competingObjective, Assert.Single(competing.BriefVersions!).Text);
             Assert.DoesNotContain(competing.Timeline, item => item.OperatorIntentApplied?.IntentId == seed.Intent.Id);
             Assert.Equal(WorkTaskStatus.Assigned, Assert.Single(competing.Tasks).Status);
             Assert.False(File.Exists(LockPath(seed)));
@@ -157,8 +158,16 @@ public sealed class OperatorIntentGoalApplicationOfflineTests
             await inner.TransactGoalStateAsync(goalId, (state, _) =>
             {
                 Assert.NotNull(state);
+                var brief = Assert.Single(state.Goal.BriefVersions!);
+                // Persist a coherent competing snapshot so reload does not repair the brief
+                // and create another baseline conflict during the fresh applier run.
+                var competingGoal = state.Goal with
+                {
+                    Objective = objective,
+                    BriefVersions = [brief with { Text = objective }]
+                };
                 return Task.FromResult((true,
-                    (GoalStateSnapshot?)(state with { Goal = state.Goal with { Objective = objective } }), true));
+                    (GoalStateSnapshot?)(state with { Goal = competingGoal }), true));
             }, cancellationToken);
             var results = await inner.SaveGoalSnapshotsWithMergeAsync(goals, cancellationToken);
             SaveResult = Assert.Single(results);
