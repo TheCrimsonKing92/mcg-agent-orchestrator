@@ -24,7 +24,15 @@ internal static class GoalMonitoringQuery
             agents,
             workerProfiles,
             providerHoldScope: kernel.Goals).CapacitySchedule;
-        var disposition = ConductorOperatorDispositionSnapshots.TryReadLatestForGoal(workspace.RunEventStorePath, goal);
+        var commandLineSnapshot = ProcessCommandLines.SnapshotOperation();
+        var disposition = new GoalOperatorDispositionSurface().Evaluate(
+            goal,
+            monitor.PendingHumanInputCount,
+            kernel.BuildVerificationGate(goal.Id).IsSatisfied,
+            workspace.ExecutionDirectory,
+            commandLineSnapshot,
+            skipTerminalDispatchEvaluation: true,
+            skipInactiveDispatchEvaluation: true);
         var snapshot = new GoalMonitoringSnapshot(
             goal.Id.Value,
             DateTimeOffset.UtcNow,
@@ -39,14 +47,12 @@ internal static class GoalMonitoringQuery
                 task.Status,
                 ToProcessSnapshot(task.LastProcess),
                 task.SubscriptionRetryAfter)).ToList(),
-            disposition is null
-                ? null
-                : new QueryOperatorDisposition(
-                    disposition.State,
-                    disposition.Confidence,
-                    disposition.Reason,
-                    disposition.NextSafeCommand,
-                    disposition.Blockers),
+            new QueryOperatorDisposition(
+                disposition.State,
+                disposition.Confidence,
+                disposition.Reason,
+                disposition.NextSafeCommand,
+                disposition.Blockers),
             new QueryOperatorInbox(inbox.OpenCount),
             new QueryProviderCapacity(capacity.Disposition, capacity.ReadyNowCount, capacity.DeferredCount),
             CliCommandHandlers.ResolveGoalFriendlyLabel(goal, workspace.BacklogStorePath));

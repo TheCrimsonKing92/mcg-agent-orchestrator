@@ -64,6 +64,7 @@ internal sealed partial class ConductorBatchLoop
             ConductorUnappliedExitWatch.EventName => "exit-unapplied",
             "GOAL" => ClassifyGoalEvent(line),
             "GOAL_STALLED" => "goal-stalled",
+            "GOAL_LEFT_WORKING_SET" => "goal-left-working-set",
             "LOCK" => "lock-blocker",
             "LOOP_HANDOFF" => "loop-handoff",
             "LOOP_HANDOFF_FAILED" => "loop-handoff",
@@ -197,19 +198,6 @@ internal sealed partial class ConductorBatchLoop
                 $"[evidence={SanitizeHeartbeatDetail(entry.Value.Evidence)}|clears={SanitizeHeartbeatDetail(entry.Value.Command)}]")
             .ToArray();
         return $"BLOCKED_RECHECK_HEARTBEAT rechecks={totalBlockedRechecks} blocked={string.Join(',', blocked)}";
-    }
-
-    private static string ClassifyGoalEvent(string line)
-    {
-        if (line.Contains("result=done", StringComparison.Ordinal) ||
-            line.Contains("result=landed", StringComparison.Ordinal))
-            return "goal-landing";
-        if (line.Contains("result=escalated", StringComparison.Ordinal) ||
-            line.Contains("escalated", StringComparison.Ordinal))
-            return "goal-escalation";
-        if (line.Contains("result=", StringComparison.Ordinal))
-            return "goal";
-        return string.Empty;
     }
 
     private static string? TryExtractToken(string line, string prefix)

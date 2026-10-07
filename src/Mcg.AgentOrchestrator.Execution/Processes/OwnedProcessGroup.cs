@@ -844,6 +844,32 @@ internal sealed class OwnedProcessGroup : IDisposable
 
         private static SafeFileHandle CreateOwnedOutputFile(string path)
         {
+            if (path.StartsWith(@"\\.\pipe\", StringComparison.OrdinalIgnoreCase))
+            {
+                var pipeSecurityAttributes = new SECURITY_ATTRIBUTES
+                {
+                    nLength = Marshal.SizeOf<SECURITY_ATTRIBUTES>(),
+                    bInheritHandle = false
+                };
+                const uint openExisting = 3;
+                var pipeHandle = CreateFileW(
+                    path,
+                    GenericWrite,
+                    FileShareRead | FileShareDelete,
+                    ref pipeSecurityAttributes,
+                    openExisting,
+                    FileAttributeNormal,
+                    IntPtr.Zero);
+                if (pipeHandle.IsInvalid)
+                {
+                    var nativeErrorCode = Marshal.GetLastWin32Error();
+                    pipeHandle.Dispose();
+                    throw new Win32Exception(nativeErrorCode, $"Failed to open owned-process capture file: {path}");
+                }
+
+                return pipeHandle;
+            }
+
             Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
             var securityAttributes = new SECURITY_ATTRIBUTES
             {

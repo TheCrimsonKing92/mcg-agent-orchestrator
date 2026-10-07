@@ -22,7 +22,8 @@ internal sealed partial class ConductorDriver
                 $" cohort={identity.Value[..Math.Min(18, identity.Value.Length)]} member={goalId} " +
                 $"members={string.Join(',', identity.Members.Select(binding => binding.GoalId.Value[..8]))} scope=attribution";
             TryAppendGateProgressEvent(writer, goalId, detail);
-        }, GateRunIdentity: CohortGateRunIdentity(identity.Members.Select(binding => binding.GoalId.Value)));
+        }, RemoteLaneEventSink: detail => AppendRemoteLaneEvent(writer, member.GoalId.Value[..8], detail),
+            GateRunIdentity: CohortGateRunIdentity(identity.Members.Select(binding => binding.GoalId.Value)));
 
     private static void AppendCohortAttributionStartEvent(
         ConductEventLogWriter writer,
@@ -66,6 +67,14 @@ internal sealed partial class ConductorDriver
             {
                 // Event-log setup is best-effort for the gate attempt.
             }
+        }, RemoteLaneEventSink: detail =>
+        {
+            try
+            {
+                writer ??= new ConductEventLogWriter(logPath);
+                AppendRemoteLaneEvent(writer, members.Count == 1 ? members[0].GoalId.Value[..8] : null, detail);
+            }
+            catch (Exception) { /* Event-log setup is observational. */ }
         }, GateRunIdentity: trainKey);
     }
 

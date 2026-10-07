@@ -4471,14 +4471,34 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         Func<string, string[], string?> resolveGitText) =>
         AcceptanceContainedGenerationBaseline.ResolveMainWorktreePath(worktreePath, resolveGitText);
 
-    private string[] ResolveDeletedTestFiles(string worktreePath, string project)
-    {
-        if (_testOverrides.ResolveDeletedTestFilesForTests is not null)
-        {
-            return _testOverrides.ResolveDeletedTestFilesForTests(worktreePath);
-        }
+    internal sealed record UnresolvedRenameDestination(string Source, string Destination);
 
-        return ResolveDeletedTestFilesCore(worktreePath, project, AcceptanceGitTextResolver.Resolve);
+    internal sealed record DeletedTestFileParse(
+        string[] Removed,
+        IReadOnlyList<UnresolvedRenameDestination> UnresolvedRenames);
+
+    // A source belongs to one preparation pass; only the project-independent input is cached.
+    private sealed class DeletedTestFileDiffSource(Func<string, string[]>? resolveOverride)
+    {
+        private readonly Dictionary<string, (string? Text, string[]? Override)> _inputs =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        public DeletedTestFileParse ForProject(string worktreePath, string project)
+        {
+            var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(worktreePath));
+            if (!_inputs.TryGetValue(root, out var input))
+            {
+                input = resolveOverride is not null
+                    ? (null, resolveOverride(worktreePath))
+                    : (ResolveDeletedTestFileDiff(worktreePath, AcceptanceGitTextResolver.Resolve), null);
+                _inputs.Add(root, input);
+            }
+
+            return input.Override is not null
+                ? new DeletedTestFileParse(input.Override, [])
+                : ParseDeletedTestFiles(input.Text ?? "", project,
+                    destination => ResolveOwningProject(worktreePath, destination));
+        }
     }
 
     internal static string[] ResolveDeletedTestFilesWithGitForTests(
@@ -4492,34 +4512,49 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string project,
         Func<string, string[], string?> resolveGitText)
     {
-        var output = resolveGitText(worktreePath, ["diff", "--name-status", "main...HEAD", "--"]);
-        if (string.IsNullOrWhiteSpace(output))
-        {
-            return [];
-        }
-
         return ParseDeletedTestFiles(
-            output,
+            ResolveDeletedTestFileDiff(worktreePath, resolveGitText) ?? "",
             project,
-            destination => ResolveOwningProject(worktreePath, destination));
+            destination => ResolveOwningProject(worktreePath, destination)).Removed;
     }
+
+    private static string? ResolveDeletedTestFileDiff(
+        string worktreePath,
+        Func<string, string[], string?> resolveGitText) =>
+        resolveGitText(worktreePath, ["diff", "--name-status", "main...HEAD", "--"]);
 
     internal static string[] ParseDeletedTestFilesForTests(
         string output,
         string project,
         Func<string, string?> resolveOwningProject) =>
+        ParseDeletedTestFiles(output, project, resolveOwningProject).Removed;
+
+    internal static DeletedTestFileParse ParseDeletedTestFilesWithUnresolvedRenamesForTests(
+        string output,
+        string project,
+        Func<string, string?> resolveOwningProject) =>
         ParseDeletedTestFiles(output, project, resolveOwningProject);
+
+    internal static IReadOnlyList<UnresolvedRenameDestination> UnresolvedRenamesForProject(
+        IReadOnlyList<UnresolvedRenameDestination> rows,
+        string project)
+    {
+        var sources = DeletedTestFilesForProject(rows.Select(row => row.Source).ToArray(), project)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return rows.Where(row => sources.Contains(row.Source)).ToArray();
+    }
 
     internal static string? ResolveOwningProjectForTests(string worktreePath, string path) =>
         ResolveOwningProject(worktreePath, path);
 
-    private static string[] ParseDeletedTestFiles(
+    private static DeletedTestFileParse ParseDeletedTestFiles(
         string output,
         string project,
         Func<string, string?> resolveOwningProject)
     {
         var normalizedProject = NormalizePath(project);
-        return output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+        var unresolved = new List<UnresolvedRenameDestination>();
+        var removed = output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
             .Select(line => line.Split('\t'))
             .Where(parts =>
             {
@@ -4540,11 +4575,19 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 }
 
                 var destinationProject = NormalizePath(resolveOwningProject(parts[2]));
+                if (string.IsNullOrWhiteSpace(destinationProject))
+                {
+                    unresolved.Add(new UnresolvedRenameDestination(NormalizePath(parts[1])!, parts[2]));
+                }
                 return !string.IsNullOrWhiteSpace(destinationProject) &&
                     !string.Equals(destinationProject, normalizedProject, StringComparison.OrdinalIgnoreCase);
             })
             .Select(parts => NormalizePath(parts[1])!)
             .ToArray();
+        return new DeletedTestFileParse(removed, unresolved.Distinct()
+            .OrderBy(row => row.Source, StringComparer.Ordinal)
+            .ThenBy(row => row.Destination, StringComparer.Ordinal)
+            .ToArray());
     }
 
     private static string? ResolveOwningProject(string worktreePath, string path)

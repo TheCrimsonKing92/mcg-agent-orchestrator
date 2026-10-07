@@ -19,6 +19,7 @@ internal sealed class RemoteLaneCoordinator : IDisposable
     private readonly string _occupancyRoot;
     private readonly string? _attemptPrefix;
     private readonly Action<string, RemoteLaneOutcomeCode>? _onOutcome;
+    private readonly Action<string>? _onEvent;
     private readonly object _gate = new();
     private readonly HashSet<string> _busy = new(StringComparer.Ordinal);
     private readonly HashSet<string> _retired = new(StringComparer.Ordinal);
@@ -28,7 +29,7 @@ internal sealed class RemoteLaneCoordinator : IDisposable
     internal RemoteLaneCoordinator(RemoteLaneExecutorConfiguration configuration,
         AcceptancePartitionVerdictCache cache, string worktreePath, string? attemptPrefix,
         IRemoteLaneExecutor executor, TimeProvider clock, TimeSpan pollInterval,
-        Action<string, RemoteLaneOutcomeCode>? onOutcome)
+        Action<string, RemoteLaneOutcomeCode>? onOutcome, Action<string>? onEvent = null)
     {
         _configuration = configuration;
         _cache = cache;
@@ -39,6 +40,7 @@ internal sealed class RemoteLaneCoordinator : IDisposable
         _occupancyRoot = AcceptancePartitionVerdictCache.ResolveHostStateRoot(worktreePath);
         _attemptPrefix = attemptPrefix;
         _onOutcome = onOutcome;
+        _onEvent = onEvent;
     }
 
     internal bool IsEligible(Check check)
@@ -85,14 +87,17 @@ internal sealed class RemoteLaneCoordinator : IDisposable
         IRemoteLaneHandle? handle = null;
         RemoteLaneResult? observedResult = null;
         var inspectingTrx = false;
+        IReadOnlyList<RemoteLaneStep> steps = [];
+        string? exceptionMessage = null;
         try
         {
             var submission = await _executor.SubmitAsync(request, cancellationToken).ConfigureAwait(false);
             handle = submission.Handle;
+            steps = submission.Steps ?? [];
             if (handle is null)
-                return Fallback(submission.FailureReason == "transport-unavailable"
+                return await Fallback(submission.FailureReason == "transport-unavailable"
                     ? RemoteLaneOutcomeCode.TransportUnavailable : RemoteLaneOutcomeCode.Unreachable,
-                    reason: submission.FailureReason);
+                    reason: submission.FailureReason).ConfigureAwait(false);
             lock (_gate) _handles.Add(handle);
             var heartbeat = submittedAt;
             while (true)
@@ -100,12 +105,12 @@ internal sealed class RemoteLaneCoordinator : IDisposable
                 cancellationToken.ThrowIfCancellationRequested();
                 if (handle.NewestHeartbeat is { } newest && newest > heartbeat) heartbeat = newest;
                 var now = _clock.GetUtcNow();
-                if (now - submittedAt > timeout) return Fallback(RemoteLaneOutcomeCode.LaneTimeout);
-                if (now - heartbeat > TimeSpan.FromSeconds(entry.LeaseSeconds)) return Fallback(RemoteLaneOutcomeCode.LeaseExpired);
+                if (now - submittedAt > timeout) return await Fallback(RemoteLaneOutcomeCode.LaneTimeout).ConfigureAwait(false);
+                if (now - heartbeat > TimeSpan.FromSeconds(entry.LeaseSeconds)) return await Fallback(RemoteLaneOutcomeCode.LeaseExpired).ConfigureAwait(false);
                 if (handle.TryGetResult() is { } result)
                 {
                     observedResult = result;
-                    if (BindingMismatch(request, result) is { } mismatch) return Fallback(mismatch, result);
+                    if (BindingMismatch(request, result) is { } mismatch) return await Fallback(mismatch, result).ConfigureAwait(false);
                     inspectingTrx = true;
                     var trx = GoalAcceptanceVerifierTestTelemetry.InspectTrxCompletionEvidence(result.TestResultPaths);
                     var decision = GoalAcceptanceVerifierTestTelemetry.DecideTestShardCompletion(
@@ -114,7 +119,7 @@ internal sealed class RemoteLaneCoordinator : IDisposable
                     {
                         var red = decision.FailedPredicate is AcceptanceShardCompletionPredicates.FailingTrx or
                             AcceptanceShardCompletionPredicates.AssemblyCleanupFailure or AcceptanceShardCompletionPredicates.NonzeroExit;
-                        return Fallback(red ? RemoteLaneOutcomeCode.RemoteRed : RemoteLaneOutcomeCode.TrxIncomplete, result);
+                        return await Fallback(red ? RemoteLaneOutcomeCode.RemoteRed : RemoteLaneOutcomeCode.TrxIncomplete, result).ConfigureAwait(false);
                     }
                     var paths = GoalAcceptanceVerifierTestTelemetry.CopyCompletedTestReceiptsToAttemptFolder(result.TestResultPaths, _attemptPrefix);
                     // Custody is part of acceptance: a missing or unretained receipt falls back too.
@@ -122,18 +127,18 @@ internal sealed class RemoteLaneCoordinator : IDisposable
                     if (paths is null || paths.Count == 0 || string.IsNullOrWhiteSpace(folder) ||
                         paths.Any(path => !File.Exists(path) ||
                             !Path.GetFullPath(path).StartsWith(Path.GetFullPath(folder) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)))
-                        return Fallback(RemoteLaneOutcomeCode.TrxIncomplete, result);
+                        return await Fallback(RemoteLaneOutcomeCode.TrxIncomplete, result).ConfigureAwait(false);
                     var retained = GoalAcceptanceVerifierTestTelemetry.InspectTrxCompletionEvidence(paths);
                     if (!GoalAcceptanceVerifierTestTelemetry.DecideTestShardCompletion(
                         new GoalAcceptanceVerifier.CommandResult(result.ExitCode, ""), retained, requireTrxEvidence: true).Passed)
-                        return Fallback(RemoteLaneOutcomeCode.TrxIncomplete, result);
+                        return await Fallback(RemoteLaneOutcomeCode.TrxIncomplete, result).ConfigureAwait(false);
                     cancellationToken.ThrowIfCancellationRequested();
                     var accepted = new AcceptanceCheckResult(check.Name, true, result.ExitCode, null,
                         ResultSummary: $"remote-executor={entry.Id}", TestResultPaths: paths,
                         TestResultAttemptId: _cache.AttemptId, ExecutedTestCount: trx.ExecutedTestCount,
                         DiscoveredTestCount: trx.DiscoveredTestCount, CompletionDecision: decision, TestProjectPath: check.Project);
                     inspectingTrx = false;
-                    Record(request, RemoteLaneOutcomeCode.Accepted, result);
+                    Record(request, RemoteLaneOutcomeCode.Accepted, result, attempt: Detail());
                     Release(entry.Id);
                     Abandon(handle);
                     return new(request, null, accepted);
@@ -145,16 +150,38 @@ internal sealed class RemoteLaneCoordinator : IDisposable
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception ex)
         {
-            return Fallback(inspectingTrx ? RemoteLaneOutcomeCode.TrxIncomplete : RemoteLaneOutcomeCode.Unreachable,
-                observedResult, reason: $"{ex.GetType().Name}: {ex.Message}");
+            exceptionMessage = ex.Message;
+            return await Fallback(inspectingTrx ? RemoteLaneOutcomeCode.TrxIncomplete : RemoteLaneOutcomeCode.Unreachable,
+                observedResult, reason: $"{ex.GetType().Name}: {ex.Message}").ConfigureAwait(false);
         }
 
-        RemoteLaneOutcome Fallback(RemoteLaneOutcomeCode code, RemoteLaneResult? result = null, string? reason = null)
+        async Task<RemoteLaneOutcome> Fallback(RemoteLaneOutcomeCode code, RemoteLaneResult? result = null, string? reason = null)
         {
             lock (_gate) { _busy.Remove(entry.Id); _retired.Add(entry.Id); }
+            RemoteLaneRunnerLogCapture? capture = null;
+            if (handle is IRemoteLaneAttemptDiagnosticsSource source)
+            {
+                try
+                {
+                    using var bound = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    bound.CancelAfter(TimeSpan.FromSeconds(30));
+                    // The source bounds its transport and file reads and returns after its cleanup.
+                    capture = await source.CaptureRunnerLogAsync(bound.Token).ConfigureAwait(false);
+                }
+                catch (Exception) { /* Diagnostics cannot change fallback. */ }
+            }
             RemoteExecutorOccupancy.Release(_occupancyRoot, entry.Id, _cache.AttemptId);
-            Record(request, code, result, reason);
+            Record(request, code, result, reason, Detail(capture));
             return new(request, handle, null);
+        }
+
+        RemoteLaneAttemptDetail Detail(RemoteLaneRunnerLogCapture? capture = null)
+        {
+            RemoteLaneHandleDiagnostics? snapshot = null;
+            try { snapshot = (handle as IRemoteLaneAttemptDiagnosticsSource)?.Snapshot(); }
+            catch (Exception) { /* Optional diagnostics cannot change the decision. */ }
+            return new(capture?.FailedStep is { } failed ? steps.Concat([failed]).ToArray() : steps,
+                snapshot?.Poll, snapshot?.Fetches ?? [], snapshot?.LastStatus, capture?.Path, exceptionMessage);
         }
     }
 
@@ -169,7 +196,8 @@ internal sealed class RemoteLaneCoordinator : IDisposable
         return null;
     }
 
-    private void Record(RemoteLaneRequest request, RemoteLaneOutcomeCode code, RemoteLaneResult? result = null, string? reason = null)
+    private void Record(RemoteLaneRequest request, RemoteLaneOutcomeCode code, RemoteLaneResult? result = null,
+        string? reason = null, RemoteLaneAttemptDetail? attempt = null)
     {
         RemoteExecutorHealthLedger.Append(_ledgerPath, new(_clock.GetUtcNow(), request.ExecutorId,
             request.AttemptId, request.Lane, code,
@@ -177,7 +205,17 @@ internal sealed class RemoteLaneCoordinator : IDisposable
             new(request.ExecutorId, request.Lane, request.VerifyingCommitSha, request.CandidateTreeSha,
                 request.MainSha, request.FilterHash, request.ManifestIdentity),
             result is null ? null : new(result.ExecutorId, result.Lane, result.VerifyingCommitSha, result.ObservedTreeSha,
-                result.MainSha, result.FilterHash, result.ManifestIdentity), reason));
+                result.MainSha, result.FilterHash, result.ManifestIdentity), reason, Attempt: attempt));
+        try
+        {
+            var compactReason = string.IsNullOrWhiteSpace(reason) ? "none" :
+                System.Text.RegularExpressions.Regex.Replace(reason, @"\s+", " ").Trim();
+            if (compactReason.Length > 200) compactReason = compactReason[..200];
+            var lane = request.Lane.Any(char.IsWhiteSpace) ? $"\"{request.Lane.Replace('"', '\'')}\"" : request.Lane;
+            _onEvent?.Invoke($"REMOTE_LANE executor={(string.IsNullOrEmpty(request.ExecutorId) ? "none" : request.ExecutorId)} " +
+                $"lane={lane} attempt={request.AttemptId} outcome={System.Text.Json.JsonNamingPolicy.KebabCaseLower.ConvertName(code.ToString())} reason={compactReason}");
+        }
+        catch (Exception) { /* Event reporting is observational. */ }
         _onOutcome?.Invoke(request.Lane, code);
     }
 

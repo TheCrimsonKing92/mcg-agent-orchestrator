@@ -12,21 +12,36 @@ internal static class AuthorBriefDraftResultParser
         // Parse the entire response so a second object or trailing narrative cannot be silently ignored.
         try
         {
-            using var document = JsonDocument.Parse(output);
-            var root = document.RootElement;
-            if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("kind", out var kind) ||
-                kind.ValueKind != JsonValueKind.String) return null;
-            if (kind.GetString() == "draft" && root.TryGetProperty("markdown", out var markdown) &&
-                markdown.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(markdown.GetString()))
-                return new("draft", markdown.GetString(), null, []);
-            if (kind.GetString() != "stale" || !root.TryGetProperty("reason", out var reason) ||
-                reason.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(reason.GetString()) ||
-                !root.TryGetProperty("evidenceReferences", out var evidence) ||
-                evidence.ValueKind != JsonValueKind.Array || evidence.GetArrayLength() == 0 ||
-                evidence.EnumerateArray().Any(reference => reference.ValueKind != JsonValueKind.String ||
-                    string.IsNullOrWhiteSpace(reference.GetString()))) return null;
-            return new("stale", null, reason.GetString(), evidence.EnumerateArray().Select(reference => reference.GetString()!).ToArray());
+            return FromDocument(output);
         }
-        catch (JsonException) { return null; }
+        catch (JsonException)
+        {
+            // A brace-free prefix makes the first opening brace the unambiguous object start.
+            var start = output.IndexOf('{');
+            if (start < 0 || output.AsSpan(0, start).IndexOfAny('{', '}') >= 0) return null;
+            try
+            {
+                return FromDocument(output[start..]);
+            }
+            catch (JsonException) { return null; }
+        }
+    }
+
+    private static AuthorBriefDraftResult? FromDocument(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("kind", out var kind) ||
+            kind.ValueKind != JsonValueKind.String) return null;
+        if (kind.GetString() == "draft" && root.TryGetProperty("markdown", out var markdown) &&
+            markdown.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(markdown.GetString()))
+            return new("draft", markdown.GetString(), null, []);
+        if (kind.GetString() != "stale" || !root.TryGetProperty("reason", out var reason) ||
+            reason.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(reason.GetString()) ||
+            !root.TryGetProperty("evidenceReferences", out var evidence) ||
+            evidence.ValueKind != JsonValueKind.Array || evidence.GetArrayLength() == 0 ||
+            evidence.EnumerateArray().Any(reference => reference.ValueKind != JsonValueKind.String ||
+                string.IsNullOrWhiteSpace(reference.GetString()))) return null;
+        return new("stale", null, reason.GetString(), evidence.EnumerateArray().Select(reference => reference.GetString()!).ToArray());
     }
 }

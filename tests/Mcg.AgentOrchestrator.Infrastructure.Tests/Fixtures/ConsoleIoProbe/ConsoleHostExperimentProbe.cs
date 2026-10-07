@@ -52,27 +52,33 @@ internal static class ConsoleHostExperimentProbe
                     foreach (var command in new[] { "git", "pwsh", "dotnet" })
                     {
                         for (var index = 0; index < launches; index++)
-                            arm.Children.Add(await RunOwned(Command(command, workDirectory), command, directory, events));
+                            arm.Children.Add(await MeasureOwned(() => RunOwned(Command(command, workDirectory), command, directory, events)));
                         arm.StartChildren.Add(await RunStart(Command(command, workDirectory), command, events));
                     }
-                    var release = Path.Combine(directory, Guid.NewGuid().ToString("n") + ".release");
-                    var ready = release + ".ready";
-                    var held = PowerShell("[IO.File]::WriteAllText($env:MCG_READY, 'ready'); while (!(Test-Path -LiteralPath $env:MCG_RELEASE)) { [Threading.Thread]::Yield() | Out-Null }", workDirectory);
-                    held.Environment["MCG_READY"] = ready;
-                    held.Environment["MCG_RELEASE"] = release;
-                    arm.HeldProbe = await RunOwned(held, "held-pwsh", directory, events, ready, release);
+                    arm.HeldProbe = await MeasureOwned(() =>
+                    {
+                        var release = Path.Combine(directory, Guid.NewGuid().ToString("n") + ".release");
+                        var ready = release + ".ready";
+                        var held = PowerShell("[IO.File]::WriteAllText($env:MCG_READY, 'ready'); while (!(Test-Path -LiteralPath $env:MCG_RELEASE)) { [Threading.Thread]::Yield() | Out-Null }", workDirectory);
+                        held.Environment["MCG_READY"] = ready;
+                        held.Environment["MCG_RELEASE"] = release;
+                        return RunOwned(held, "held-pwsh", directory, events, ready, release);
+                    });
 
                     var childScript = Path.Combine(directory, "descendant.ps1");
                     File.WriteAllText(childScript, ConsoleProbeScript);
-                    var descendant = PowerShell(DescendantScript, workDirectory);
-                    descendant.Environment["MCG_DESCENDANT_SCRIPT"] = childScript;
-                    descendant.Environment["MCG_DESCENDANT_SHELL"] = ResolveExecutable("pwsh");
-                    arm.Descendant = await RunOwned(descendant, "descendant", directory, events);
+                    arm.Descendant = await MeasureOwned(() =>
+                    {
+                        var descendant = PowerShell(DescendantScript, workDirectory);
+                        descendant.Environment["MCG_DESCENDANT_SCRIPT"] = childScript;
+                        descendant.Environment["MCG_DESCENDANT_SHELL"] = ResolveExecutable("pwsh");
+                        return RunOwned(descendant, "descendant", directory, events);
+                    });
 
                     arm.CodePageBefore = Windows.GetConsoleOutputCP();
                     try
                     {
-                        arm.CodePageChild = await RunOwned(StartInfo(ResolveExecutable("cmd"), workDirectory, "/d", "/c", "chcp", "65001"), "chcp", directory, events);
+                        arm.CodePageChild = await MeasureOwned(() => RunOwned(StartInfo(ResolveExecutable("cmd"), workDirectory, "/d", "/c", "chcp", "65001"), "chcp", directory, events));
                         arm.CodePageAfter = Windows.GetConsoleOutputCP();
                     }
                     finally
@@ -110,23 +116,28 @@ internal static class ConsoleHostExperimentProbe
     private static async Task<OwnConsoleCheck> RunOwnConsoleCheck(string directory)
     {
         var before = new CodePages(Windows.GetConsoleCP(), Windows.GetConsoleOutputCP());
-        var stdout = Path.Combine(directory, "utf8.out");
-        var stderr = Path.Combine(directory, "utf8.err");
-        var release = Path.Combine(directory, "utf8.release");
-        var ready = release + ".ready";
-        var info = GoalAcceptanceVerifier.BuildAcceptanceProcessStartInfo(
-            [ResolveExecutable("dotnet"), typeof(ConsoleHostExperimentProbe).Assembly.Location,
-                "--write-console-text", "non-ASCII caf\u00e9 \u6f22\u5b57 e\u0301", ready, release],
-            directory, stdout, stderr, forceUtf8ConsoleOutput: true);
-        info.Environment.Remove("DOTNET_STARTUP_HOOKS");
         using var events = new WindowEvents();
-        var child = await RunOwned(info, "utf8", directory, events, ready, release, requestOwnConsole: true);
-        child.StdoutBase64 = Convert.ToBase64String(File.ReadAllBytes(stdout));
-        child.StderrBase64 = Convert.ToBase64String(File.ReadAllBytes(stderr));
-        child.Stdout = Encoding.UTF8.GetString(Convert.FromBase64String(child.StdoutBase64));
-        child.Stderr = Encoding.UTF8.GetString(Convert.FromBase64String(child.StderrBase64));
+        var child = await MeasureOwned(async () =>
+        {
+            var stem = Path.Combine(directory, "utf8-" + Guid.NewGuid().ToString("n"));
+            var stdout = stem + ".out";
+            var stderr = stem + ".err";
+            var release = stem + ".release";
+            var ready = release + ".ready";
+            var info = GoalAcceptanceVerifier.BuildAcceptanceProcessStartInfo(
+                [ResolveExecutable("dotnet"), typeof(ConsoleHostExperimentProbe).Assembly.Location,
+                    "--write-console-text", "non-ASCII caf\u00e9 \u6f22\u5b57 e\u0301", ready, release],
+                directory, stdout, stderr, forceUtf8ConsoleOutput: true);
+            info.Environment.Remove("DOTNET_STARTUP_HOOKS");
+            var measurement = await RunOwned(info, "utf8", directory, events, ready, release, requestOwnConsole: true);
+            measurement.StdoutBase64 = Convert.ToBase64String(File.ReadAllBytes(stdout));
+            measurement.StderrBase64 = Convert.ToBase64String(File.ReadAllBytes(stderr));
+            measurement.Stdout = Encoding.UTF8.GetString(Convert.FromBase64String(measurement.StdoutBase64));
+            measurement.Stderr = Encoding.UTF8.GetString(Convert.FromBase64String(measurement.StderrBase64));
+            return measurement;
+        });
         var afterOwnConsole = new CodePages(Windows.GetConsoleCP(), Windows.GetConsoleOutputCP());
-        var git = await RunOwned(Command("git", directory), "git", directory, events);
+        var git = await MeasureOwned(() => RunOwned(Command("git", directory), "git", directory, events));
         var afterGit = new CodePages(Windows.GetConsoleCP(), Windows.GetConsoleOutputCP());
         return new OwnConsoleCheck(before, afterOwnConsole, afterGit, child, git);
     }
@@ -152,7 +163,7 @@ internal static class ConsoleHostExperimentProbe
             var children = await Task.WhenAll(tasks);
             var afterSdk = new CodePages(Windows.GetConsoleCP(), Windows.GetConsoleOutputCP());
             using var events = new WindowEvents();
-            var git = await RunOwned(Command("git", directory), "git", directory, events);
+            var git = await MeasureOwned(() => RunOwned(Command("git", directory), "git", directory, events));
             var afterGit = new CodePages(Windows.GetConsoleCP(), Windows.GetConsoleOutputCP());
             return new SdkOwnConsoleCheck(before, afterSdk, afterGit, children, git);
         }
@@ -253,6 +264,14 @@ internal static class ConsoleHostExperimentProbe
         throw new FileNotFoundException($"Required command {name}.exe was not found on PATH.");
     }
 
+    private static async Task<Child> MeasureOwned(Func<Task<Child>> measure)
+    {
+        var result = await ConsoleHostCensus.MeasureAsync(measure,
+            child => child.UnclassifiedProcesses, ConsoleHostCensus.MaxAttempts);
+        result.Measurement.CensusRetakes = result.Retakes;
+        return result.Measurement;
+    }
+
     private static async Task<Child> RunOwned(ProcessStartInfo info, string command, string directory, WindowEvents events,
         string? ready = null, string? release = null, bool requestOwnConsole = false)
     {
@@ -296,10 +315,11 @@ internal static class ConsoleHostExperimentProbe
             if (!group.TryGetTotalProcesses(out var total)) throw new InvalidOperationException("Job TotalProcesses query failed.");
             child.TotalProcesses = total;
             child.Images = images.Values.ToArray();
-            child.NonConhostProcesses = images.Values.Count(image => !image.IsConhost);
-            child.ConhostCount = checked((int)total - child.NonConhostProcesses);
+            var census = ConsoleHostCensus.Count(total, images.Values.Select(image => image.IsConhost).ToArray());
+            child.NonConhostProcesses = census.NonConhost;
+            child.ConhostCount = census.Conhost;
             // Unseen or unclassifiable members are explicit gaps, never silently treated as conhosts.
-            child.UnclassifiedProcesses = checked((int)total - images.Count);
+            child.UnclassifiedProcesses = census.Unclassified;
             child.StdoutBase64 = Convert.ToBase64String(File.ReadAllBytes(stem + ".out"));
             child.StderrBase64 = Convert.ToBase64String(File.ReadAllBytes(stem + ".err"));
             child.Stdout = Encoding.UTF8.GetString(Convert.FromBase64String(child.StdoutBase64));
@@ -465,6 +485,7 @@ internal static class ConsoleHostExperimentProbe
         public int NonConhostProcesses { get; set; }
         public int ConhostCount { get; set; }
         public int UnclassifiedProcesses { get; set; }
+        public int CensusRetakes { get; set; }
         public Image[] Images { get; set; } = [];
         public Image[] HeldImages { get; set; } = [];
     }

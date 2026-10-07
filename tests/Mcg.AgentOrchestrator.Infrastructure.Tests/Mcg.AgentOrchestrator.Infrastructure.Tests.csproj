@@ -31,6 +31,7 @@
     <Compile Remove="ProviderEnvironment\**\*.cs" />
     <Compile Remove="Fixtures\RealProcessShardProbe\**\*.cs" />
     <Compile Remove="Fixtures\ConsoleIoProbe\**\*.cs" />
+    <Compile Include="Fixtures\ConsoleIoProbe\ConsoleHostCensus.cs" />
     <Content Include="TestData\Fixtures\progressive-review-10bd7223.json" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Fixtures\PlannerOutputContract\*.out.txt" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Fixtures\ReviewerFindingsParse\*.out.txt" CopyToOutputDirectory="Always" />

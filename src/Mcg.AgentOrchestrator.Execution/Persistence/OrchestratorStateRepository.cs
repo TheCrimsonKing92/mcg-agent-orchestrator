@@ -9,6 +9,9 @@ public interface IOrchestratorStateQueries
         CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<GoalSummary>> ListGoalIdStatusesAsync(CancellationToken cancellationToken = default) =>
+        ListGoalMetadataAsync(cancellationToken);
 }
 
 public interface IOrchestratorStateRepository : IOrchestratorStateQueries

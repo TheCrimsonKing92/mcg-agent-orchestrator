@@ -94,6 +94,40 @@ public sealed class WorkerResultParserEvidenceTests
         Assert.Equal("inconclusive - latest command timed out; no TRX", result.Fields["tests"]);
     }
 
+    [Xunit.Fact(DisplayName = "WorkerResultParser_rejects_unstructured_failing_tests_with_status_guidance")]
+    public void WorkerResultParserRejectsUnstructuredFailingTestsWithStatusGuidance()
+    {
+        var text = WorkerResultBlock("focused verification", "3 failed, see log");
+
+        Assert.True(WorkerResultParser.TryParseResult(text, out var result, out var diagnostic), diagnostic);
+        Assert.Equal(WorkerResultParser.TestsStatus.Unknown, result.TestsStatus);
+        Assert.True(WorkerResultParser.TestsReportFailure(result, out _));
+
+        Assert.False(WorkerResultParser.TryParseSuccessfulResult(text, out _, out diagnostic, allowNoChangedFiles: true));
+        Assert.Contains("tests field is unstructured", diagnostic, StringComparison.Ordinal);
+        Assert.Contains("Restate tests with a leading status word", diagnostic, StringComparison.Ordinal);
+        Assert.DoesNotContain("tests reported failure", diagnostic, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerResultParser_accepts_leading_pass_with_failure_words_in_narrative")]
+    public void WorkerResultParserAcceptsLeadingPassWithFailureWordsInNarrative()
+    {
+        var text = WorkerResultBlock("focused verification", "pass - verified retry path that previously failed");
+
+        var parsed = WorkerResultParser.TryParseSuccessfulResult(text, out _, out var diagnostic, allowNoChangedFiles: true);
+
+        Assert.True(parsed, diagnostic);
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerResultParser_preserves_structured_fail_diagnostic")]
+    public void WorkerResultParserPreservesStructuredFailDiagnostic()
+    {
+        var text = WorkerResultBlock("focused verification", "fail - 2 assertions failed");
+
+        Assert.False(WorkerResultParser.TryParseSuccessfulResult(text, out _, out var diagnostic, allowNoChangedFiles: true));
+        Assert.Equal("WORKER_RESULT tests reported failure: fail - 2 assertions failed.", diagnostic);
+    }
+
     private static string WorkerResultBlock(
         string commands,
         string tests,

@@ -32,11 +32,15 @@ internal sealed class SshRemoteLaneExecutor(
         var staging = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(attemptPrefix))!,
             $"remote-{entry.Id}-{laneKey}");
         Directory.CreateDirectory(staging);
+        var steps = new List<RemoteLaneStep>();
+        var startedAt = clock.GetUtcNow();
         var push = await Task.Run(() => git(worktreePath, 600_000,
             ["-c", $"core.sshCommand={SshPath.Replace('\\', '/')}", "push",
                 $"{entry.RunnerAlias}:{entry.RemoteRepository}", $"{request.VerifyingCommitSha}:refs/heads/c-{shortSha}"]),
             cancellationToken).ConfigureAwait(false);
-        if (push.ExitCode != 0) return new(null, "push-failed");
+        steps.Add(RemoteLaneDiagnosticFiles.Step(staging, "push", push.ExitCode, null,
+            startedAt, clock.GetUtcNow(), push.Output, push.Error));
+        if (push.ExitCode != 0) return new(null, "push-failed", steps.ToArray());
         cancellationToken.ThrowIfCancellationRequested();
         var jobName = $"{request.AttemptId}-{laneKey}.json";
         await File.WriteAllTextAsync(Path.Combine(staging, jobName), JsonSerializer.Serialize(new
@@ -45,16 +49,22 @@ internal sealed class SshRemoteLaneExecutor(
             attemptId = request.AttemptId, executorId = request.ExecutorId, filterHash = request.FilterHash,
             mainSha = request.MainSha, manifestIdentity = request.ManifestIdentity
         }), cancellationToken).ConfigureAwait(false);
+        startedAt = clock.GetUtcNow();
         var copy = await transport([ScpPath, "-o", "BatchMode=yes", jobName,
             $"{entry.RunnerAlias}:{entry.RunRoot}/queue/"], staging, TimeSpan.FromMinutes(2), cancellationToken).ConfigureAwait(false);
-        if (copy.ExitCode != 0 || copy.TimedOut) return new(null, "job-copy-failed");
+        steps.Add(RemoteLaneDiagnosticFiles.Step(staging, "job-copy", copy.ExitCode, copy.TimedOut,
+            startedAt, clock.GetUtcNow(), copy.Output, copy.Stderr));
+        if (copy.ExitCode != 0 || copy.TimedOut) return new(null, "job-copy-failed", steps.ToArray());
         cancellationToken.ThrowIfCancellationRequested();
+        startedAt = clock.GetUtcNow();
         var trigger = await transport([SshPath, "-o", "BatchMode=yes", entry.AdminAlias!,
             "schtasks", "/run", "/tn", "mcg-executor-lane"], staging, TimeSpan.FromMinutes(2), cancellationToken).ConfigureAwait(false);
-        if (trigger.ExitCode != 0 || trigger.TimedOut) return new(null, "trigger-failed");
+        steps.Add(RemoteLaneDiagnosticFiles.Step(staging, "trigger", trigger.ExitCode, trigger.TimedOut,
+            startedAt, clock.GetUtcNow(), trigger.Output, trigger.Stderr));
+        if (trigger.ExitCode != 0 || trigger.TimedOut) return new(null, "trigger-failed", steps.ToArray());
         cancellationToken.ThrowIfCancellationRequested();
         return new(new SshRemoteLaneHandle(request, entry, staging, shortSha, laneKey, clock, transport,
-            pollInterval ?? TimeSpan.FromSeconds(entry.PollSeconds), onPollCompleted));
+            pollInterval ?? TimeSpan.FromSeconds(entry.PollSeconds), onPollCompleted), Steps: steps.ToArray());
     }
 }
 

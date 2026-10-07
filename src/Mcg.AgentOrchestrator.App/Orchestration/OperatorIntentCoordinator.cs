@@ -110,7 +110,7 @@ internal sealed partial class OperatorIntentCoordinator
                 },
                 prefix => !File.Exists(workspace.SqliteStatePath) ? [] :
                     SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath)
-                        .ListGoalMetadataAsync().GetAwaiter().GetResult()
+                        .ListGoalIdStatusesAsync().GetAwaiter().GetResult()
                         .Where(goal => goal.Id.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
                         .Select(goal => goal.Id).ToArray(),
                 BuildLessonLandedPredicate(workspace.ExecutionDirectory)),
@@ -118,7 +118,7 @@ internal sealed partial class OperatorIntentCoordinator
                 new SqliteOperatorEscapeStore(workspace.OperatorEscapesStorePath),
                 () => File.Exists(workspace.SqliteStatePath)
                     ? SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath)
-                        .ListGoalMetadataAsync().GetAwaiter().GetResult().Select(g => g.Id).ToArray()
+                        .ListGoalIdStatusesAsync().GetAwaiter().GetResult().Select(g => g.Id).ToArray()
                     : [],
                 id => HasGoalLandedEvent(workspace.GoalLifecycleEventsDirectory, id))
         };

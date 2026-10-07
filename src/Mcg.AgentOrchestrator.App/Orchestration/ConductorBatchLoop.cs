@@ -1163,6 +1163,7 @@ internal sealed partial class ConductorBatchLoop
                     goalWalkTimings.Add(new GoalWalkTiming(label, result, singleGoalClock.Elapsed));
                 }
 
+                if (TrySkipGoalLeftWorkingSet(kernel, goal, totalTicks, "walk-start", tickLines, FinishGoalWalk)) continue;
                 // Dependency ordering is a dispatch-start gate. Do not interrupt a worker that is
                 // currently in flight, but re-evaluate the edge before any later dispatch starts.
                 var dependencyRequiresPerson = true;
@@ -1409,6 +1410,8 @@ internal sealed partial class ConductorBatchLoop
                     if (retryAdvanceFaulted)
                         continue;
                 }
+
+                if (TrySkipGoalLeftWorkingSet(kernel, goal, totalTicks, "post-advance", tickLines, FinishGoalWalk)) continue;
 
                 if (GoalKernelChange.Changed(beforeAdvance, kernel, goal.Id)) changedGoalIds.Add(goal.Id);
                 if (TryReconcileAwaitingVerificationHold(kernel, goal, result, totalTicks, out var reconciledOutcome))
@@ -1829,6 +1832,8 @@ internal sealed partial class ConductorBatchLoop
                 return false;
             }
 
+            if (TrySkipGoalLeftWorkingSet(kernel, goal, totalTicks, "advance-fault", tickLines, finishGoalWalk, out result)) return false;
+
             var reason = $"dispatch-record-write-{disposition}-limit count={skips}/{DispatchRecordContentionSkipLimit} sqliteCode={code}";
             changedGoalLines.Add($"GOAL goal={label} result=escalated reason={reason}");
             lastGoalDisposition[goal.Id.Value] = changedGoalLines[^1];
@@ -1846,6 +1851,8 @@ internal sealed partial class ConductorBatchLoop
         }
         catch (Exception ex)
         {
+            if (TrySkipGoalLeftWorkingSet(kernel, goal, totalTicks, "advance-fault", tickLines, finishGoalWalk, out result)) return false;
+
             var msg = $"Batch loop tick {totalTicks}: fault isolating goal — advance threw: {SanitizeReason(ex.Message)}";
             changedGoalLines.Add($"GOAL goal={label} result=escalated reason={SanitizeReason(ex.Message)}");
             lastGoalDisposition[goal.Id.Value] = changedGoalLines[^1];

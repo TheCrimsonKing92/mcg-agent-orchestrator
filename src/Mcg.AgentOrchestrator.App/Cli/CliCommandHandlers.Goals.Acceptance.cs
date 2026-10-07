@@ -293,6 +293,7 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
                             "gate-progress",
                             goal.Id,
                             FormatGateProgressConductEvent(progress)),
+                        RemoteLaneEventSink: detail => AppendConductEvent(context, "remote-lane", goal.Id, detail),
                         RunId: Environment.GetEnvironmentVariable(
                             AcceptanceAttemptArtifactCustody.AttemptIdVariable),
                         ResultsPrefix: Environment.GetEnvironmentVariable(

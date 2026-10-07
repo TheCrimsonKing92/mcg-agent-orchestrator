@@ -1009,6 +1009,10 @@ public sealed partial class CohortAcceptanceStore
                 pair_fingerprint TEXT NOT NULL,
                 innocent_goal_id TEXT NULL,
                 applied_at TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS cohort_outcome_consumptions(
+                cohort_id TEXT PRIMARY KEY REFERENCES cohort_receipts(cohort_id) ON DELETE CASCADE,
+                receipt_id TEXT NOT NULL,
+                consumed_at TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS cohort_materialization_failures(
                 attempt_id TEXT PRIMARY KEY,
                 first_goal_id TEXT NOT NULL,

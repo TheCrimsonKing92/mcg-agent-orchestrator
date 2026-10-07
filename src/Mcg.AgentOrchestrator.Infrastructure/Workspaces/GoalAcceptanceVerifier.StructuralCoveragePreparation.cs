@@ -63,6 +63,7 @@ public sealed partial class GoalAcceptanceVerifier
             stableSlotLease);
         var projects = new List<StructuralCoverageProject>();
         IReadOnlyList<AcceptanceCheckResult>? completedChecks = null;
+        var deletedTestFileSource = new DeletedTestFileDiffSource(_testOverrides.ResolveDeletedTestFilesForTests);
         foreach (var broadCheck in broadChecks)
         {
             if (ClassifyRemovedTestProject(worktreePath, mainWorktreePath, broadCheck.Project!,
@@ -74,7 +75,7 @@ public sealed partial class GoalAcceptanceVerifier
             }
             try
             {
-            var deletedTestFiles = ResolveDeletedTestFiles(worktreePath, broadCheck.Project!);
+            var deletedTestFiles = deletedTestFileSource.ForProject(worktreePath, broadCheck.Project!);
             var candidateDiscoveryArguments = BuildUnattendedDiscoveryArguments(
                 broadCheck,
                 EngineSettings,
@@ -138,7 +139,7 @@ public sealed partial class GoalAcceptanceVerifier
                     EngineSettings.ResolveDiscoveryTimeout(),
                     UsesMicrosoftTestingPlatform(broadCheck),
                     ResolvePartitions,
-                    () => DeletedTestFilesForProject(deletedTestFiles, broadCheck.Project!),
+                    () => DeletedTestFilesForProject(deletedTestFiles.Removed, broadCheck.Project!),
                     currentAttemptId,
                     sanctionedRemovedTests,
                     cancellationToken => PrepareBaselineAsync(
@@ -146,7 +147,8 @@ public sealed partial class GoalAcceptanceVerifier
                         "main-coverage-baseline",
                         "acceptance-main-coverage-baseline",
                         cancellationToken),
-                    PrepareContainedBaselineAsync);
+                    PrepareContainedBaselineAsync,
+                    () => UnresolvedRenamesForProject(deletedTestFiles.UnresolvedRenames, broadCheck.Project!));
             var prepared = await _structuralCoverageEvaluator.PrepareAsync(request, cancellationToken)
                 .ConfigureAwait(false);
             projects.Add(new StructuralCoverageProject(broadCheck, request, prepared, null));

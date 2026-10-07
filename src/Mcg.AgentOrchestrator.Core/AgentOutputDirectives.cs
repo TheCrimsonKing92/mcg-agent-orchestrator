@@ -51,6 +51,7 @@ public static class AgentOutputDirectives
                 "Keep the text after `plan=` a non-empty one-sentence summary on that same line; any detail bullets that follow must not begin with a digit and a period. " +
                 "An undecidable criterion does not block other criteria and requires `blockers: none` when no operator action is needed. " +
                 "For evidence that exists only in an unreadable store, emit exactly one `PLANNER_EVIDENCE_REQUEST:` JSON directive with criterion_index, evidence_key, availability=retrievable, store, needed, and reason. " +
+                "In that directive criterion_index is the 1-based criterion number used on the mapping lines, so the first criterion is 1; this differs from the 0-based criterion_index of criteria_verdicts. " +
                 "For an orchestrator record, add store_ref as <kind>:<locator>[#<selector>]. " +
                 "For evidence that was never recorded, prefer an undecidable mapping; if operator action is still required, use availability=never-recorded and omit store. " +
                 "Evidence needed to decide or plan now is a blocking prerequisite; evidence that can only be produced after the candidate exists is prospective acceptance evidence. " +
@@ -200,6 +201,15 @@ public static class AgentOutputDirectives
             }
 
             var root = document.RootElement;
+            if (root.TryGetProperty("criterion_index", out var criterionIndexProperty) &&
+                criterionIndexProperty.ValueKind == JsonValueKind.Number &&
+                criterionIndexProperty.TryGetInt32(out var nonPositiveIndex) &&
+                nonPositiveIndex <= 0)
+            {
+                return MalformedEvidenceRequest(
+                    "criterion_index is the 1-based criterion number from the mapping lines; use 1 for the first criterion");
+            }
+
             if (!TryGetPositiveInt(root, "criterion_index", out var criterionIndex) ||
                 !TryGetRequiredString(root, "evidence_key", out var evidenceKey) ||
                 !TryGetRequiredString(root, "availability", out var availability) ||

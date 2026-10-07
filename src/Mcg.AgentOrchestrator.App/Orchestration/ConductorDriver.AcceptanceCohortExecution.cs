@@ -402,6 +402,7 @@ internal sealed partial class ConductorDriver
             Path.Combine(workspace.ExecutionDirectory, ".orchestrator", "logs", ConductEventLogWriter.CurrentFileName));
         var executionOptions = new AcceptanceRunExecutionOptions(
             ProgressSink: progress => AppendCohortGateProgressEvents(gateProgressEventWriter, identity, bindings, progress),
+            RemoteLaneEventSink: detail => AppendRemoteLaneEvent(gateProgressEventWriter, bindings.Count == 1 ? bindings[0].GoalId.Value[..8] : null, detail),
             OwnerProtectedCohortMembers: bindings.Select(binding =>
                 new AcceptanceOwnerProtectedCohortMember(binding.GoalId, binding.CandidateRevision)).ToArray(),
             GateRunIdentity: CohortGateRunIdentity(bindings.Select(binding => binding.GoalId.Value)));

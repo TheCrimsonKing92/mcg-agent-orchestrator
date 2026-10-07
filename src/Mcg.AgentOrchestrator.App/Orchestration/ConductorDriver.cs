@@ -639,6 +639,7 @@ internal sealed partial class ConductorDriver
                 var executionOptions = attemptOptions with
                 {
                     ProgressSink = progress => AppendGateProgressEvent(gateProgressEventWriter, goal.Id, progress),
+                    RemoteLaneEventSink = detail => AppendRemoteLaneEvent(gateProgressEventWriter, goal.Id.Value[..8], detail),
                     CancellationProbe = cancellationProbeState.ShouldCancel,
                     BoundaryCancellationProbe = cancellationProbeState.ShouldCancelNow
                 };

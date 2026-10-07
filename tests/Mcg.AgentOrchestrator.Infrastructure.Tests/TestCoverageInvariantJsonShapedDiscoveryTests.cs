@@ -24,7 +24,7 @@ public sealed class TestCoverageInvariantJsonShapedDiscoveryTests
     public void ParseDiscoveredTests_JsonWithoutSchema_PropagatesTypedError()
     {
         Assert.Throws<InvalidDataException>(
-            () => TestCoverageInvariant.ParseDiscoveredTests(JsonShapedOutput, bareTestList: true));
+            () => TestCoverageInvariant.ParseDiscovery(JsonShapedOutput, bareTestList: true).Tests);
     }
 
     [Fact]
