@@ -6,6 +6,9 @@ public sealed partial class GoalAcceptanceVerifier
     {
         [System.Text.Json.Serialization.JsonIgnore]
         public bool IsResolvedInfrastructureLane { get; init; }
+
+        [System.Text.Json.Serialization.JsonIgnore]
+        public bool RequiresBuildSystemChange { get; init; }
     }
 
     private static IReadOnlyList<AcceptanceTestLane> ResolveOwnedCollectionLanes(
@@ -29,6 +32,7 @@ public sealed partial class GoalAcceptanceVerifier
             Runner = check.Runner,
             EstimatedSerialSeconds = lane.EstimatedSerialSeconds,
             ExclusiveResourceKeys = lane.ExclusiveResourceKeys,
+            RequiresBuildSystemChange = lane.RequiresBuildSystemChange,
             IsResolvedInfrastructureLane = true
         };
 

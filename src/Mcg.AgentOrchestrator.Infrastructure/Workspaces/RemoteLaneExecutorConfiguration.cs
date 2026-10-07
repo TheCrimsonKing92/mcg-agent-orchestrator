@@ -11,6 +11,7 @@ internal sealed record RemoteLaneExecutorEntry(string Id, int LeaseSeconds,
 internal sealed record RemoteLaneExecutorConfiguration(
     IReadOnlyList<RemoteLaneExecutorEntry> Executors, IReadOnlyList<string> Lanes, string? DisabledReason)
 {
+    internal IReadOnlyList<string> MachineLocalResourceKeys { get; init; } = [];
     internal bool Enabled => DisabledReason is null;
     internal static string ResolveStorePath(string worktreePath) => Path.Combine(
         AcceptancePartitionVerdictCache.ResolveHostStateRoot(worktreePath), ".orchestrator", "remote-lane-executors.json");
@@ -81,7 +82,18 @@ internal sealed record RemoteLaneExecutorConfiguration(
                     return Disabled("invalid");
                 names.Add(lane.GetString()!);
             }
-            return new(entries.ToArray(), names.ToArray(), null);
+            var keys = new List<string>();
+            if (root.TryGetProperty("machineLocalResourceKeys", out var keyArray))
+            {
+                if (keyArray.ValueKind != JsonValueKind.Array) return Disabled("invalid");
+                foreach (var key in keyArray.EnumerateArray())
+                {
+                    if (key.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(key.GetString()))
+                        return Disabled("invalid");
+                    keys.Add(key.GetString()!);
+                }
+            }
+            return new(entries.ToArray(), names.ToArray(), null) { MachineLocalResourceKeys = keys.ToArray() };
         }
         catch (FileNotFoundException) { return Disabled("missing"); }
         catch (DirectoryNotFoundException) { return Disabled("missing"); }

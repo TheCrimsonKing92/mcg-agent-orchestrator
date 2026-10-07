@@ -9,7 +9,7 @@ internal enum RemoteLaneOutcomeCode
     Accepted, TransportUnavailable, Unreachable, LeaseExpired, LaneTimeout,
     BindingMismatchCommit, BindingMismatchTree, BindingMismatchMain, BindingMismatchFilter,
     BindingMismatchExecutor, BindingMismatchManifest, TrxIncomplete, RemoteRed,
-    LateAfterFallback, NotEligibleExclusiveResource
+    LateAfterFallback, NotEligibleExclusiveResource, UnexpectedNotExecuted
 }
 
 internal sealed record RemoteLaneBinding(
