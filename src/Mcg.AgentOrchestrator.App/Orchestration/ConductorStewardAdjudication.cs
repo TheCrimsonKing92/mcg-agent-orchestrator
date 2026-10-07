@@ -15,6 +15,12 @@ internal sealed record ConductorStewardAdjudication(
 
 internal static class ConductorStewardAdjudicationParser
 {
+    // Mirrors the accepted kinds in AdjudicationEvidenceResolver.TryResolve.
+    private static readonly HashSet<string> ResolverKinds = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "trx", "operator-evidence", "focused-evidence", "acceptance-attempt"
+    };
+
     internal static ConductorStewardAdjudication Parse(string output)
     {
         try
@@ -30,15 +36,36 @@ internal static class ConductorStewardAdjudicationParser
                 ? refs.EnumerateArray().Where(item => item.ValueKind == JsonValueKind.String)
                     .Select(item => item.GetString()!).Where(item => !string.IsNullOrWhiteSpace(item)).ToArray()
                 : [];
-            return new ConductorStewardAdjudication(kind,
-                Read(root, "text") ?? Read(root, "question") ?? Read(root, "reason") ?? string.Empty,
+            var (text, evidence) = PartitionEvidenceNotes(
+                Read(root, "text") ?? Read(root, "question") ?? Read(root, "reason") ?? string.Empty, references);
+            return new ConductorStewardAdjudication(kind, text,
                 Read(root, "targetTaskId"), Read(root, "cause"), Read(root, "reversibility"),
-                references, Read(root, "precedent"), Read(root, "instruction"));
+                evidence, Read(root, "precedent"), Read(root, "instruction"));
         }
         catch (JsonException)
         {
             return new ConductorStewardAdjudication("no-action", "unparseable-output");
         }
+    }
+
+    private static (string Text, string[] Evidence) PartitionEvidenceNotes(string text, string[] references)
+    {
+        var evidence = new List<string>();
+        var notes = new List<string>();
+        foreach (var reference in references)
+        {
+            var colon = reference.IndexOf(':');
+            var prefix = colon > 0 ? reference[..colon] : string.Empty;
+            var isNote = colon > 0 && colon + 1 < reference.Length &&
+                char.IsWhiteSpace(reference[colon + 1]) &&
+                prefix.All(ch => char.IsAsciiLetterOrDigit(ch) || ch == '-') &&
+                !ResolverKinds.Contains(prefix);
+            if (isNote) notes.Add(reference);
+            else evidence.Add(reference);
+        }
+        if (notes.Count == 0) return (text, references);
+        return (text + (text.Length == 0 ? string.Empty : "\n") + "Steward notes:\n" +
+            string.Join("\n", notes), evidence.ToArray());
     }
 
     private static string? Read(JsonElement root, string name) =>
