@@ -195,6 +195,76 @@ public sealed class OwnerQuestionReadModelHydrationTests
         finally { SharedTestSupport.RemoveTempDirectory(root); }
     }
 
+    [Fact]
+    public async Task ChangedTerminalHold_RefreshesOnlyChangedGoal_WithoutHydration()
+    {
+        var probe = new Probe(Arrangement());
+        var root = SharedTestSupport.CreateTempDirectory();
+        try
+        {
+            var source = new OwnerQuestionReadModel(probe, root);
+            await source.ReadAsync(CancellationToken.None);
+            probe.Snapshot = probe.Snapshot with
+            {
+                Goals = probe.Snapshot.Goals.Select(goal => goal.Id == Completed
+                    ? goal with { CurrentHold = goal.CurrentHold! with
+                    {
+                        Identity = "replacement-hold", Blocker = "question=Updated hold evidence=[receipt]",
+                        StartedAt = Now.AddMinutes(1)
+                    } } : goal).ToArray()
+            };
+            probe.UpdatedAt[Completed] = Now.AddMinutes(1).ToString("O");
+
+            var actual = await source.ReadAsync(CancellationToken.None);
+            var refreshed = await source.ReadAsync(CancellationToken.None);
+
+            Assert.DoesNotContain(actual.Hidden, item => item.Question.ItemId == "terminal-hold");
+            var replacement = Assert.Single(actual.Hidden, item => item.Question.ItemId == "replacement-hold");
+            Assert.Equal("Updated hold", replacement.Question.Text);
+            Assert.Equal("goal-completed", replacement.Reason);
+            Assert.Equal(actual.Live, refreshed.Live);
+            Assert.Equal(actual.Hidden, refreshed.Hidden);
+            Assert.Equal(2, probe.HoldQueries);
+            Assert.Equal([Completed], probe.HoldQueryIds[1]);
+            Assert.DoesNotContain(probe.Loaded.SelectMany(ids => ids), id =>
+                id is Completed or Cancelled or Superseded);
+        }
+        finally { SharedTestSupport.RemoveTempDirectory(root); }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RemovedTerminalHold_DropsCachedQuestion_AndMatchesMain(bool otherHold)
+    {
+        var probe = new Probe(Arrangement());
+        var root = SharedTestSupport.CreateTempDirectory();
+        try
+        {
+            var source = new OwnerQuestionReadModel(probe, root);
+            var first = await source.ReadAsync(CancellationToken.None);
+            Assert.Contains(first.Hidden, item => item.Question.ItemId == "terminal-hold");
+            probe.Snapshot = probe.Snapshot with
+            {
+                Goals = probe.Snapshot.Goals.Select(goal => goal.Id == Completed
+                    ? goal with { CurrentHold = otherHold
+                        ? goal.CurrentHold! with { State = "acceptance" } : null } : goal).ToArray()
+            };
+            probe.UpdatedAt[Completed] = Now.AddMinutes(1).ToString("O");
+
+            var actual = await source.ReadAsync(CancellationToken.None);
+            var expected = FullyHydratedMain(AgentOrchestratorKernel.FromSnapshot(probe.Snapshot));
+
+            Assert.Equal(expected.Live, actual.Live);
+            Assert.Equal(expected.Hidden, actual.Hidden);
+            Assert.DoesNotContain(actual.Hidden, item => item.Question.ItemId == "terminal-hold");
+            Assert.Equal(2, probe.HoldQueries);
+            Assert.Equal([Completed], probe.HoldQueryIds[1]);
+            Assert.DoesNotContain(probe.Loaded.SelectMany(ids => ids), id => id == Completed);
+        }
+        finally { SharedTestSupport.RemoveTempDirectory(root); }
+    }
+
     private static OrchestratorSnapshot Arrangement() => new(
         [Goal(Active, GoalStatus.Active, "active-hold"), Goal(Completed, GoalStatus.Completed, "terminal-hold"),
          Goal(Cancelled, GoalStatus.Cancelled), Goal(Superseded, GoalStatus.Superseded),
@@ -262,9 +332,11 @@ public sealed class OwnerQuestionReadModelHydrationTests
         internal readonly List<string[]> Loaded = [];
         internal int HoldQueries;
         internal readonly List<string[]> HoldQueryIds = [];
+        internal readonly Dictionary<string, string> UpdatedAt = new(StringComparer.Ordinal);
         public Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<GoalSummary>>(Snapshot.Goals.Select(goal =>
-                new GoalSummary(goal.Id, goal.Status.ToString(), goal.Objective, Now.ToString("O"))).ToArray());
+                new GoalSummary(goal.Id, goal.Status.ToString(), goal.Objective,
+                    UpdatedAt.GetValueOrDefault(goal.Id, Now.ToString("O")))).ToArray());
         public Task<AgentOrchestratorKernel> LoadGoalsAsync(IReadOnlyCollection<GoalId> ids,
             CancellationToken cancellationToken = default)
         {

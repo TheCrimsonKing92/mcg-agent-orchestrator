@@ -6,7 +6,7 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 internal sealed class OwnerQuestionReadModel(
     IOrchestratorStateQueries state, string orchestratorDirectory) : IOwnerQuestionSource
 {
-    private readonly HashSet<string> _terminalIds = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _terminalUpdatedAt = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, QuestionCandidate> _terminalHolds = new(StringComparer.OrdinalIgnoreCase);
 
     public async Task<IReadOnlyList<OwnerQuestion>> ListOpenAsync(CancellationToken cancellationToken) =>
@@ -19,20 +19,25 @@ internal sealed class OwnerQuestionReadModel(
         var ids = metadata.Where(item => !IsTerminal(item.Status)).Select(item => new GoalId(item.Id)).ToArray();
         var requests = await state.ListOpenHumanInputRequestsAsync(cancellationToken);
         var terminalIds = terminal.Select(item => item.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        _terminalIds.IntersectWith(terminalIds);
+        foreach (var id in _terminalUpdatedAt.Keys.Where(id => !terminalIds.Contains(id)).ToArray())
+            _terminalUpdatedAt.Remove(id);
         foreach (var id in _terminalHolds.Keys.Where(id => !terminalIds.Contains(id)).ToArray())
             _terminalHolds.Remove(id);
-        var newTerminalIds = terminal.Select(item => item.Id).Where(id => !_terminalIds.Contains(id))
+        var changedTerminalIds = terminal.Where(item =>
+                !_terminalUpdatedAt.TryGetValue(item.Id, out var updatedAt) || updatedAt != item.UpdatedAt)
+            .Select(item => item.Id)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        if (newTerminalIds.Count > 0)
+        if (changedTerminalIds.Count > 0)
         {
-            // Cache only terminal hold projections; requests can be completed or added between refreshes.
+            // Unchanged terminal goals reuse the session cache; changed rows replace even removed holds.
             var holds = await state.ListTerminalOwnerQuestionHoldsAsync(
-                newTerminalIds.Select(id => new GoalId(id)).ToArray(), cancellationToken);
-            foreach (var hold in holds.Where(hold => newTerminalIds.Contains(hold.GoalId)))
+                changedTerminalIds.Select(id => new GoalId(id)).ToArray(), cancellationToken);
+            foreach (var id in changedTerminalIds) _terminalHolds.Remove(id);
+            foreach (var hold in holds.Where(hold => changedTerminalIds.Contains(hold.GoalId)))
                 _terminalHolds[hold.GoalId] = new QuestionCandidate(new OwnerQuestion(hold.Identity, hold.GoalId,
                     OwnerQuestionKind.StewardHold, StewardQuestionText(hold.Blocker)), hold.StartedAt);
-            _terminalIds.UnionWith(newTerminalIds);
+            foreach (var item in terminal.Where(item => changedTerminalIds.Contains(item.Id)))
+                _terminalUpdatedAt[item.Id] = item.UpdatedAt;
         }
         var kernel = ids.Length == 0 ? new AgentOrchestratorKernel() :
             await state.LoadGoalsAsync(ids, cancellationToken);
