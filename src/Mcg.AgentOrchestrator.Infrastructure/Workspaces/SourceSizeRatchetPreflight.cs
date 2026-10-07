@@ -11,6 +11,37 @@ internal static class SourceSizeRatchetPreflight
         "new\\s+SourceSizeCeiling\\(\\s*\"(?<path>[^\"]+)\"\\s*,\\s*(?<ceiling>\\d+)\\s*\\)",
         RegexOptions.CultureInvariant);
 
+    private static readonly Regex ClassCeilingPattern = new(
+        "new\\s+SourceClassCeiling\\(\\s*\"(?<name>[^\"]+)\"\\s*,\\s*(?<total>\\d+)\\s*,\\s*(?<count>\\d+)\\s*\\)",
+        RegexOptions.CultureInvariant);
+
+    internal static IReadOnlyList<SourceClassCeiling> TryReadClassAuthority(string worktreeRoot)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(worktreeRoot);
+        var authorityPath = Path.Combine(
+            worktreeRoot,
+            SourceSizeRatchet.SourcePath.Replace('/', Path.DirectorySeparatorChar));
+        try
+        {
+            if (!File.Exists(authorityPath))
+            {
+                return [];
+            }
+
+            return ClassCeilingPattern.Matches(File.ReadAllText(authorityPath))
+                .Select(match => new SourceClassCeiling(
+                    match.Groups["name"].Value,
+                    int.Parse(match.Groups["total"].Value, CultureInfo.InvariantCulture),
+                    int.Parse(match.Groups["count"].Value, CultureInfo.InvariantCulture)))
+                .ToArray();
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or FormatException or OverflowException)
+        {
+            return [];
+        }
+    }
+
     internal static IReadOnlyList<SourceSizeCeiling>? TryReadAuthority(string worktreeRoot)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(worktreeRoot);
@@ -48,7 +79,9 @@ internal static class SourceSizeRatchetPreflight
             return SourceSizeRatchetPreflightResult.Declined;
         }
 
-        var violations = SourceSizeRatchet.Evaluate(worktreeRoot, ceilings, readLines);
+        var violations = SourceSizeRatchet.Evaluate(worktreeRoot, ceilings, readLines)
+            .Concat(SourceSizeRatchet.EvaluateClasses(worktreeRoot, TryReadClassAuthority(worktreeRoot), readLines))
+            .ToArray();
         var blockingViolations = violations
             .Where(violation => violation.ActualLineCount is not null)
             .ToArray();

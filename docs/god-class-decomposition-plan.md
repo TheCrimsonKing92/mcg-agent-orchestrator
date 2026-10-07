@@ -271,6 +271,8 @@ The guarded production entries are the ranked god classes whose growth the inven
 
 When extraction shrinks a guarded file, lower its row in the authority in the same change. If growth is unavoidable, add an inline comment immediately above that row naming the goal and justification, then raise only that value. A rename or deletion must update the authority in the same change. Never derive a ceiling automatically from the current file, make a row advisory, add an opt-out, or delete the guard.
 
+The largest partial classes are also bounded by total lines across their partial files and by partial-file count in `SourceSizeRatchet.SeededClassCeilings`; lower a row when extraction into a separately owned type shrinks the class, and raise it only with a goal-specific justification directly above the row, so moving members into another partial file does not satisfy the ratchet.
+
 ### Recorded row raises
 
 This is a closed historical record; new justifications belong in the inline comment immediately above the authoritative row.
