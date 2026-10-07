@@ -25,6 +25,7 @@ internal static IReadOnlyList<string> RecognizedCommands { get; } =
     "portfolio-view",
     "epic-add",
     "epic-assign",
+    "epic-assign-many",
     "epic-list",
     "epic-members",
     "epic-suggest",

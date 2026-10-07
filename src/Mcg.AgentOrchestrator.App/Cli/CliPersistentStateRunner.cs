@@ -572,6 +572,8 @@ internal static partial class CliPersistentStateRunner
             _ when CliCommandHelp.IsCommandSpecificHelp(args) => true,
             "help" or "model-functions" or "model-function-add" => true,
             "operator-listen" or "operator-channel" or "goal-intake-status" => true,
+            // Portfolio writes use their own store; assignment reads only goal metadata.
+            "epic-add" or "epic-assign" or "epic-assign-many" => true,
             // These backlog commands operate solely on the independent BacklogStore, never the
             // orchestrator kernel/state.db. Running them with an empty kernel — no state load, no
             // write lock, no process sweep — keeps them fully concurrent with a running conductor
