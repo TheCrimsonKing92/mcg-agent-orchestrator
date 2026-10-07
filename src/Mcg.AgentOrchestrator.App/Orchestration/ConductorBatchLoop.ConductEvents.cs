@@ -64,6 +64,7 @@ internal sealed partial class ConductorBatchLoop
             ConductorUnappliedExitWatch.EventName => "exit-unapplied",
             "GOAL" => ClassifyGoalEvent(line),
             "GOAL_STALLED" => "goal-stalled",
+            "GOAL_LEFT_WORKING_SET" => "goal-left-working-set",
             "LOCK" => "lock-blocker",
             "LOOP_HANDOFF" => "loop-handoff",
             "LOOP_HANDOFF_FAILED" => "loop-handoff",
