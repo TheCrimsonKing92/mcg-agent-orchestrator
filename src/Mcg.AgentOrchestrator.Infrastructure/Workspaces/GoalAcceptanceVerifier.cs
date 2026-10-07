@@ -769,43 +769,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var policyRequiredChecks = effectivePlan.PolicyRequiredChecks;
         var structuralCoverageApplies = effectivePlan.StructuralCoverageApplies;
         var effectiveChecks = effectivePlan.Checks;
-        Func<string, string?> resolveCandidateTreeSha = path =>
-            _testOverrides.ResolvePartitionVerdictCandidateTreeShaForTests?.Invoke(path) ??
-            ResolveGitScalar(path, "rev-parse", "HEAD^{tree}");
-        Func<string, string?> resolveMainSha = path =>
-            _testOverrides.ResolvePartitionVerdictMainShaForTests?.Invoke(path) ??
-            ResolveGitScalar(path, "rev-parse", "main");
-        Func<string, string?> resolveVerifyingCommitSha = path =>
-            _testOverrides.ResolvePartitionVerdictVerifyingCommitShaForTests?.Invoke(path) ??
-            ResolveGitScalar(path, "rev-parse", "HEAD");
-        Func<string> resolveManifestIdentity = () => ComputeEffectiveAcceptanceManifestIdentity(effectiveChecks, engineSettings);
-        var partitionVerdictCache = AcceptancePartitionVerdictCache.Create(
-            new AcceptancePartitionVerdictCacheOptions(
-                goalId,
-                worktreePath,
-                effectiveChecks,
-                engineSettings.PartitionVerdictFullRerunEveryN,
-                _testOverrides.PartitionVerdictWithinAttemptRerunEnabled,
-                resolveCandidateTreeSha,
-                resolveMainSha,
-                resolveVerifyingCommitSha,
-                () => executionOwner.Identity.AttemptId,
-                resolveManifestIdentity,
-                () => EngineSettings.EnforceStructuralCoverage,
-                () => TempRootApparatusLossReceiptStore.Read(executionOwner.ApparatusReceiptPath), ResolveClosureHash: _testOverrides.ResolvePartitionVerdictClosureHashForTests, DisableLaneReuseShadow: _testOverrides.DisableLaneReuseShadowForTests, IdenticalTreeChecks: [.. effectiveChecks.Where(check => AcceptanceIdenticalTreeReuseRule.TryGetCheckIdentity(check, out _))]));
-        RemoteLaneCandidateIdentity? cohortIdentity = null;
-        if (partitionVerdictCache is null && executionOwner.CohortRemoteLanes)
-        {
-            var candidateTreeSha = resolveCandidateTreeSha(worktreePath);
-            var mainSha = resolveMainSha(worktreePath);
-            var verifyingCommitSha = resolveVerifyingCommitSha(worktreePath);
-            if (!string.IsNullOrWhiteSpace(candidateTreeSha) && !string.IsNullOrWhiteSpace(mainSha) &&
-                !string.IsNullOrWhiteSpace(verifyingCommitSha))
-                cohortIdentity = new RemoteLaneCandidateIdentity(executionOwner.Identity.AttemptId,
-                    executionOwner.GateRunIdentity ?? string.Empty, NormalizeShaToken(verifyingCommitSha),
-                    NormalizeShaToken(candidateTreeSha), NormalizeShaToken(mainSha), resolveManifestIdentity());
-        }
-        using var remoteLaneScope = LoadRemoteLanes(worktreePath, partitionVerdictCache, cohortIdentity);
+        var (partitionVerdictCache, remoteLanes) = CreatePartitionVerdictCacheAndRemoteLanes(
+            goalId, worktreePath, effectiveChecks, engineSettings, executionOwner);
+        using var remoteLaneScope = remoteLanes;
         var dotnetTestBuildPhase = GateUsesStableSlot(stableSlotIndex, stableSlotLease)
             ? CreateDotnetTestBuildPhase(worktreePath, effectiveChecks, changedFiles, policyShardPlan)
             : null;
