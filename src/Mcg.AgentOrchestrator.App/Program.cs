@@ -410,6 +410,12 @@ if (CliPersistentStateRunner.SkipsKernelState(startupArgs))
     }
 }
 
+if (startupArgs.Count > 0 && !CliHandledVerbRegistry.IsHandled(startupArgs[0]))
+{
+    Console.Error.WriteLine($"Error: {CliArgumentParser.FormatUnknownCommandMessage(startupArgs)}");
+    return ExitCompletedStartupCommand(1);
+}
+
 ITransactionalOrchestratorStateRepository stateRepository;
 Goal? currentGoal;
 bool stateHydrated;
