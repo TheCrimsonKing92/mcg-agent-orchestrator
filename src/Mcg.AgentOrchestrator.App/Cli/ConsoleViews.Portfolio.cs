@@ -14,10 +14,31 @@ internal static partial class ConsoleViews
         }
 
         foreach (var row in rollups)
+            Console.WriteLine(FormatEpicRollupLine(row));
+    }
+
+    internal static string FormatEpicRollupLine(PortfolioEpicRollup row)
+    {
+        var project = row.Project is null ? "unassigned" : $"{row.Project.Title} ({ShortId(row.Project.Id)})";
+        return $"{row.Epic.Title} ({ShortId(row.Epic.Id)}) project={project} goals={row.GoalCount} backlog={row.BacklogItemCount} active={row.ActiveCount} verified={row.VerifiedCount} parked={row.ParkedCount} landed={row.LandedCount} newest={FormatTimestamp(row.NewestTransitionAt)}";
+    }
+
+    public static void PrintEpicShow(PortfolioEpicRollup row, IReadOnlyList<PortfolioEpicMember> members)
+    {
+        Console.WriteLine($"Epic: {row.Epic.Title}");
+        Console.WriteLine($"Id: {row.Epic.Id}");
+        Console.WriteLine(row.Project is null ? "Project: unassigned" : $"Project: {row.Project.Title} ({ShortId(row.Project.Id)})");
+        if (row.Epic.Description is null)
+            Console.WriteLine("Description: (no description)");
+        else
         {
-            var project = row.Project is null ? "unassigned" : $"{row.Project.Title} ({ShortId(row.Project.Id)})";
-            Console.WriteLine($"{row.Epic.Title} ({ShortId(row.Epic.Id)}) project={project} goals={row.GoalCount} backlog={row.BacklogItemCount} active={row.ActiveCount} verified={row.VerifiedCount} parked={row.ParkedCount} landed={row.LandedCount} newest={FormatTimestamp(row.NewestTransitionAt)}");
+            Console.WriteLine("Description:");
+            using var reader = new StringReader(row.Epic.Description);
+            while (reader.ReadLine() is { } line)
+                Console.WriteLine($"  {line}");
         }
+        PrintEpicMembers(row.Epic, members);
+        Console.WriteLine(FormatEpicRollupLine(row));
     }
 
     public static void PrintEpicMembers(PortfolioEpic epic, IReadOnlyList<PortfolioEpicMember> members)

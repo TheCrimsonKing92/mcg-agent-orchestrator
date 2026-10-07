@@ -20,7 +20,8 @@ public sealed record PortfolioEpic(
     DateTimeOffset CreatedAt,
     string CreatedBy,
     DateTimeOffset UpdatedAt,
-    string UpdatedBy);
+    string UpdatedBy,
+    string? Description = null);
 
 public sealed record PortfolioMembership(
     string EpicId,
@@ -117,7 +118,8 @@ public sealed class PortfolioStore
         string title,
         string? projectId = null,
         string actor = "operator",
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? description = null)
     {
         var now = DateTimeOffset.UtcNow;
         var epic = new PortfolioEpic(
@@ -127,7 +129,8 @@ public sealed class PortfolioStore
             now,
             RequireText(actor, nameof(actor)),
             now,
-            RequireText(actor, nameof(actor)));
+            RequireText(actor, nameof(actor)),
+            NormalizeDescription(description));
 
         return await WithBusyRetryAsync(async () =>
         {
@@ -140,6 +143,60 @@ public sealed class PortfolioStore
                 await InsertEpicAsync(conn, epic, cancellationToken);
                 await CommitAsync(conn, cancellationToken);
                 return epic;
+            }
+            catch
+            {
+                await RollbackQuietlyAsync(conn, cancellationToken);
+                throw;
+            }
+        }, cancellationToken);
+    }
+
+    /// <summary>Null fields are unchanged; a blank description clears it.</summary>
+    public async Task<PortfolioEpic> UpdateEpicAsync(
+        string epicId,
+        string? title = null,
+        string? description = null,
+        string actor = "operator",
+        CancellationToken cancellationToken = default)
+    {
+        var newTitle = title is null ? null : RequireText(title, nameof(title));
+        var updatedBy = RequireText(actor, nameof(actor));
+        return await WithBusyRetryAsync(async () =>
+        {
+            await using var conn = OpenConnection();
+            await BeginImmediateAsync(conn, cancellationToken);
+            try
+            {
+                var epic = await ResolveEpicAsync(conn, epicId, cancellationToken)
+                    ?? throw new InvalidOperationException($"Epic '{epicId}' was not found.");
+                if (newTitle is not null)
+                {
+                    await using var duplicate = conn.CreateCommand();
+                    duplicate.CommandText = "SELECT id FROM epics WHERE title = $title COLLATE NOCASE AND id <> $id LIMIT 1";
+                    duplicate.Parameters.AddWithValue("$title", newTitle);
+                    duplicate.Parameters.AddWithValue("$id", epic.Id);
+                    if (await duplicate.ExecuteScalarAsync(cancellationToken) is string otherId)
+                        throw new InvalidOperationException($"Epic title '{newTitle}' is already used by epic {otherId}.");
+                }
+
+                var updated = epic with
+                {
+                    Title = newTitle ?? epic.Title,
+                    Description = description is null ? epic.Description : NormalizeDescription(description),
+                    UpdatedAt = DateTimeOffset.UtcNow,
+                    UpdatedBy = updatedBy
+                };
+                await using var cmd = conn.CreateCommand();
+                cmd.CommandText = "UPDATE epics SET title = $title, description = $description, updated_at = $updated_at, updated_by = $updated_by WHERE id = $id";
+                cmd.Parameters.AddWithValue("$title", updated.Title);
+                cmd.Parameters.AddWithValue("$description", (object?)updated.Description ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$updated_at", updated.UpdatedAt.ToString("O"));
+                cmd.Parameters.AddWithValue("$updated_by", updated.UpdatedBy);
+                cmd.Parameters.AddWithValue("$id", epic.Id);
+                await cmd.ExecuteNonQueryAsync(cancellationToken);
+                await CommitAsync(conn, cancellationToken);
+                return updated;
             }
             catch
             {
@@ -204,7 +261,7 @@ public sealed class PortfolioStore
         await using var conn = OpenConnection();
         var epics = new List<PortfolioEpic>();
         await using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT id, title, project_id, created_at, created_by, updated_at, updated_by FROM epics ORDER BY title COLLATE NOCASE, id";
+        cmd.CommandText = "SELECT id, title, project_id, created_at, created_by, updated_at, updated_by, description FROM epics ORDER BY title COLLATE NOCASE, id";
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
             epics.Add(ReadEpic(reader));
@@ -428,6 +485,7 @@ public sealed class PortfolioStore
                 created_by TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 updated_by TEXT NOT NULL,
+                description TEXT NULL,
                 FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE SET NULL
             )
             """);
@@ -465,6 +523,26 @@ public sealed class PortfolioStore
             )
             """);
         RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS idx_cluster_suggestions_signal ON cluster_suggestions(signal, created_at)");
+        RunNonQuery(conn, "BEGIN IMMEDIATE");
+        try
+        {
+            var hasDescription = false;
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = "PRAGMA table_info(epics)";
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                    hasDescription |= reader.GetString(1).Equals("description", StringComparison.OrdinalIgnoreCase);
+            }
+            if (!hasDescription)
+                RunNonQuery(conn, "ALTER TABLE epics ADD COLUMN description TEXT NULL");
+            RunNonQuery(conn, "COMMIT");
+        }
+        catch
+        {
+            RunNonQuery(conn, "ROLLBACK");
+            throw;
+        }
     }
 
     private SqliteConnection OpenConnection()
@@ -567,7 +645,7 @@ public sealed class PortfolioStore
     {
         var epics = new List<PortfolioEpic>();
         await using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT id, title, project_id, created_at, created_by, updated_at, updated_by FROM epics";
+        cmd.CommandText = "SELECT id, title, project_id, created_at, created_by, updated_at, updated_by, description FROM epics";
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
             epics.Add(ReadEpic(reader));
@@ -579,7 +657,7 @@ public sealed class PortfolioStore
         var matches = new List<PortfolioEpic>();
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            SELECT id, title, project_id, created_at, created_by, updated_at, updated_by
+            SELECT id, title, project_id, created_at, created_by, updated_at, updated_by, description
             FROM epics
             WHERE id LIKE $prefix OR title = $title COLLATE NOCASE
             ORDER BY CASE WHEN title = $title COLLATE NOCASE THEN 0 ELSE 1 END, title COLLATE NOCASE
@@ -653,8 +731,8 @@ public sealed class PortfolioStore
     {
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            INSERT INTO epics (id, title, project_id, created_at, created_by, updated_at, updated_by)
-            VALUES ($id, $title, $project_id, $created_at, $created_by, $updated_at, $updated_by)
+            INSERT INTO epics (id, title, project_id, created_at, created_by, updated_at, updated_by, description)
+            VALUES ($id, $title, $project_id, $created_at, $created_by, $updated_at, $updated_by, $description)
             """;
         cmd.Parameters.AddWithValue("$id", epic.Id);
         cmd.Parameters.AddWithValue("$title", epic.Title);
@@ -663,6 +741,7 @@ public sealed class PortfolioStore
         cmd.Parameters.AddWithValue("$created_by", epic.CreatedBy);
         cmd.Parameters.AddWithValue("$updated_at", epic.UpdatedAt.ToString("O"));
         cmd.Parameters.AddWithValue("$updated_by", epic.UpdatedBy);
+        cmd.Parameters.AddWithValue("$description", (object?)epic.Description ?? DBNull.Value);
         await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 
@@ -701,7 +780,11 @@ public sealed class PortfolioStore
             DateTimeOffset.Parse(reader.GetString(3)),
             reader.GetString(4),
             DateTimeOffset.Parse(reader.GetString(5)),
-            reader.GetString(6));
+            reader.GetString(6),
+            reader.IsDBNull(7) ? null : reader.GetString(7));
+
+    private static string? NormalizeDescription(string? description) =>
+        string.IsNullOrWhiteSpace(description) ? null : description.Trim();
 
     private static PortfolioClusterSuggestion ReadSuggestion(SqliteDataReader reader) =>
         new(

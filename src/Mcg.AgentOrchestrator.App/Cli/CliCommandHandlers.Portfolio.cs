@@ -23,11 +23,37 @@ private static bool? TryExecutePortfolioCommand(string command, IReadOnlyList<st
 
         case "epic-add":
         {
-            CliArgumentParser.RequirePartCount(parts, 2, "epic-add <title> | epic-add --text-file <path>");
-            var title = ResolveTextArgumentOrDefault(parts, inlineIndex: 1, defaultValue: null, "--text-file")
-                ?? throw new ArgumentException("Usage: epic-add <title> | epic-add --text-file <path>");
+            var titleFlagCount = parts.Count(part => part.Equals("--title", StringComparison.OrdinalIgnoreCase));
+            var hasPositionalTitle = parts.Count > 1 && !parts[1].StartsWith("--", StringComparison.Ordinal);
+            if (titleFlagCount > 1)
+                throw new ArgumentException("Provide --title only once.");
+            if (titleFlagCount == 1 && hasPositionalTitle)
+                throw new ArgumentException("Provide the epic title either positionally or with --title, not both.");
+
+            var flaggedTitle = titleFlagCount == 1 ? GetFlagValue(parts, "--title") : null;
+            if (titleFlagCount == 1 &&
+                (string.IsNullOrWhiteSpace(flaggedTitle) || flaggedTitle.StartsWith("--", StringComparison.Ordinal)))
+                throw new ArgumentException("--title requires a non-empty title.");
+
+            string title;
+            string? description = null;
+            if (titleFlagCount == 0 && !hasPositionalTitle)
+            {
+                title = ResolveTextArgumentOrDefault(parts, 1, null, "--text-file")?.Trim()
+                    ?? throw new ArgumentException(CliCommandHelp.EpicAddUsage);
+                if (title.Length > 200 || title.Contains('\r') || title.Contains('\n'))
+                    throw new ArgumentException("For a multi-line or long epic description, provide --title <title> with --text-file <path>.");
+            }
+            else
+            {
+                var bodyParts = titleFlagCount == 1 ? RemoveFlagWithValue(parts, "--title") : parts;
+                if (titleFlagCount == 1 && bodyParts.Count > 1 && !bodyParts[1].StartsWith("--", StringComparison.Ordinal))
+                    throw new ArgumentException("When using --title, provide the description with --text-file or --body-file.");
+                title = flaggedTitle ?? parts[1];
+                description = ResolveTextArgumentOrDefault(bodyParts, titleFlagCount == 1 ? 1 : 2, null, "--body-file", "--text-file");
+            }
             var store = new PortfolioStore(context.Workspace.PortfolioStorePath);
-            var epic = store.AddEpicAsync(title).GetAwaiter().GetResult();
+            var epic = store.AddEpicAsync(title, description: description).GetAwaiter().GetResult();
             Console.WriteLine($"Added epic: [{epic.Id}] {epic.Title}");
             return false;
         }
@@ -80,6 +106,35 @@ private static bool? TryExecutePortfolioCommand(string command, IReadOnlyList<st
                 ?? throw new InvalidOperationException($"Epic '{parts[1]}' was not found.");
             var members = store.ListEpicMembersAsync(epic.Id).GetAwaiter().GetResult();
             ConsoleViews.PrintEpicMembers(epic, members);
+            return false;
+        }
+
+        case "epic-show":
+        {
+            CliArgumentParser.RequirePartCount(parts, 2, "epic-show <epic>");
+            var store = new PortfolioStore(context.Workspace.PortfolioStorePath);
+            var epic = store.ResolveEpicAsync(parts[1]).GetAwaiter().GetResult()
+                ?? throw new InvalidOperationException($"Epic '{parts[1]}' was not found.");
+            var members = store.ListEpicMembersAsync(epic.Id).GetAwaiter().GetResult();
+            var rollup = store.BuildEpicRollupsAsync(context.Kernel.Goals).GetAwaiter().GetResult()
+                .Single(row => row.Epic.Id == epic.Id);
+            ConsoleViews.PrintEpicShow(rollup, members);
+            return false;
+        }
+
+        case "epic-rename":
+        case "epic-describe":
+        {
+            var rename = command == "epic-rename";
+            CliArgumentParser.RequirePartCount(parts, 3, rename ? "epic-rename <epic> <new-title>" : "epic-describe <epic> <text> | epic-describe <epic> --text-file <path>");
+            var text = ResolveTextArgumentOrDefault(parts, 2, null, rename ? [] : ["--text-file"])
+                ?? throw new ArgumentException(rename ? CliCommandHelp.EpicRenameUsage : CliCommandHelp.EpicDescribeUsage);
+            var store = new PortfolioStore(context.Workspace.PortfolioStorePath);
+            var epic = store.ResolveEpicAsync(parts[1]).GetAwaiter().GetResult()
+                ?? throw new InvalidOperationException($"Epic '{parts[1]}' was not found.");
+            var updated = store.UpdateEpicAsync(epic.Id, title: rename ? text : null, description: rename ? null : text)
+                .GetAwaiter().GetResult();
+            Console.WriteLine(rename ? $"Renamed epic: [{updated.Id}] {updated.Title}" : $"Updated epic description: [{updated.Id}] {updated.Title}");
             return false;
         }
 

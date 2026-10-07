@@ -58,7 +58,10 @@ internal static class CliCommandHelp
     public const string BacklogReopenUsage = "Usage: backlog-reopen <id-prefix> [reason]";
     public const string BacklogViewUsage = "Usage: backlog-view";
     public const string BacklogSimilarUsage = "Usage: backlog-similar <query text> [--limit <n>] [--status <value>] [--excerpt] | backlog-similar --id <backlog-id> [--limit <n>] [--status <value>] [--excerpt]";
-    public const string EpicAddUsage = "Usage: epic-add <title> | epic-add --text-file <path>";
+    public const string EpicAddUsage = "Usage: epic-add <title> [description] | epic-add --title <title> [--body-file <path>|--text-file <path>] | epic-add --text-file <path>";
+    public const string EpicShowUsage = "Usage: epic-show <epic>";
+    public const string EpicRenameUsage = "Usage: epic-rename <epic> <new-title>";
+    public const string EpicDescribeUsage = "Usage: epic-describe <epic> <text> | epic-describe <epic> --text-file <path>";
     public const string EpicAssignUsage = "Usage: epic-assign <goal-or-backlog-id> <epic>";
     public const string EpicListUsage = "Usage: epic-list";
     public const string EpicMembersUsage = "Usage: epic-members <epic>";
@@ -442,6 +445,21 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry EpicAdd = new(
         EpicAddUsage,
         "Add a portfolio epic.",
+        ["--title", "--body-file", "--text-file", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry EpicShow = new(
+        EpicShowUsage,
+        "Show an epic's description, members and rollup.",
+        ["--help", "-h"]);
+
+    private static readonly CommandHelpEntry EpicRename = new(
+        EpicRenameUsage,
+        "Rename a portfolio epic.",
+        ["--help", "-h"]);
+
+    private static readonly CommandHelpEntry EpicDescribe = new(
+        EpicDescribeUsage,
+        "Replace an epic's description; blank text clears it.",
         ["--text-file", "--help", "-h"]);
 
     private static readonly CommandHelpEntry EpicAssign = new(
@@ -1271,6 +1289,24 @@ internal static class CliCommandHelp
         if (args[0].Equals("epic-members", StringComparison.OrdinalIgnoreCase))
         {
             entry = EpicMembers;
+            return true;
+        }
+
+        if (args[0].Equals("epic-show", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = EpicShow;
+            return true;
+        }
+
+        if (args[0].Equals("epic-rename", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = EpicRename;
+            return true;
+        }
+
+        if (args[0].Equals("epic-describe", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = EpicDescribe;
             return true;
         }
 
