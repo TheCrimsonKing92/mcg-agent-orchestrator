@@ -748,8 +748,8 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
     }
 
 
-    [Xunit.Fact(DisplayName = "TerminalGoalSweep_next_and_global_conduct_close_terminal_task_desync")]
-    public void TerminalGoalSweepNextAndGlobalConductCloseTerminalTaskDesync()
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_goal_recovery_and_global_conduct_close_terminal_task_desync")]
+    public void TerminalGoalSweepGoalRecoveryAndGlobalConductCloseTerminalTaskDesync()
     {
         var root = CreateTempDirectory();
         var workspace = CreateRefinedWorkspace(root);
@@ -767,7 +767,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         {
             var nextRepository = new InMemoryTransactionalStateRepository(kernel);
             CliPersistentStateRunner.ExecuteCommand(
-                ["next", goal.Id.Value[..8]],
+                ["goal-recovery", goal.Id.Value[..8]],
                 nextRepository,
                 workspace,
                 ref agents,
@@ -890,8 +890,8 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
     }
 
 
-    [Xunit.Fact(DisplayName = "TerminalGoalSweep_next_and_conduct_surface_same_unmerged_branch_blocker")]
-    public void TerminalGoalSweepNextAndConductSurfaceSameUnmergedBranchBlocker()
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_goal_recovery_and_conduct_surface_same_unmerged_branch_blocker")]
+    public void TerminalGoalSweepGoalRecoveryAndConductSurfaceSameUnmergedBranchBlocker()
     {
         var root = CreateShortAcceptanceRepository();
         GoalId? cleanupGoalId = null;
@@ -914,7 +914,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             {
                 var nextRepository = new InMemoryTransactionalStateRepository(kernel);
                 CliPersistentStateRunner.ExecuteCommand(
-                    ["next", goal.Id.Value[..8]],
+                    ["goal-recovery", goal.Id.Value[..8]],
                     nextRepository,
                     workspace,
                     ref agents,

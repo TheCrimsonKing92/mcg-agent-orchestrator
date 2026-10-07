@@ -1336,15 +1336,26 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 return false;
             }
 
-            var nextSweep = TerminalGoalSweep.Run(
-                context.Kernel,
-                context.Workspace.ExecutionDirectory,
-                context.CurrentGoal.Id,
-                cleanupHooks: context.CleanupContext.Hooks,
-                orchestratorDirectory: context.Workspace.OrchestratorDirectory);
-            ConsoleViews.PrintTerminalGoalSweep(nextSweep);
-            TerminalGoalSweepAttention.Surface(context.Kernel, nextSweep, context.Workspace.OrchestratorDirectory, context.CurrentGoal.Id);
-            context.CurrentGoal = context.Kernel.GetGoal(context.CurrentGoal.Id);
+            var nextChanged = false;
+            if (context.IsReadOnlyQuery)
+            {
+                var nextDiagnosis = TerminalGoalSweep.Diagnose(
+                    context.Kernel, context.Workspace.ExecutionDirectory, context.CurrentGoal.Id);
+                ConsoleViews.PrintTerminalGoalSweep(nextDiagnosis, includeRepairs: false);
+            }
+            else
+            {
+                var nextSweep = TerminalGoalSweep.Run(
+                    context.Kernel,
+                    context.Workspace.ExecutionDirectory,
+                    context.CurrentGoal.Id,
+                    cleanupHooks: context.CleanupContext.Hooks,
+                    orchestratorDirectory: context.Workspace.OrchestratorDirectory);
+                ConsoleViews.PrintTerminalGoalSweep(nextSweep);
+                TerminalGoalSweepAttention.Surface(context.Kernel, nextSweep, context.Workspace.OrchestratorDirectory, context.CurrentGoal.Id);
+                context.CurrentGoal = context.Kernel.GetGoal(context.CurrentGoal.Id);
+                nextChanged = nextSweep.Changed;
+            }
             var nextPolicy = ResolveCliAutonomyPolicy(parts);
             var nextHealth = GoalHealthEvaluator.Build(
                 context.Kernel,
@@ -1354,7 +1365,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.Workspace.ExecutionDirectory,
                 nextPolicy);
             ConsoleViews.PrintNextActions(context.CurrentGoal, context.Kernel.BuildNextActions(context.CurrentGoal.Id), context.WorkerProfiles, context.Agents, nextHealth);
-            return nextSweep.Changed;
+            return nextChanged;
         }
 
         case "subscription-plan":

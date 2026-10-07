@@ -28,7 +28,7 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteNoWriterEffects : CliTa
             ["backlog-similar"] = [["backlog-similar", "query"]],
             ["goal-events"] = [["goal-events", "abc10000"]],
             ["timeline"] = [["timeline", "abc10000"]],
-            ["next"] = [["next", "--full", "abc10000"]]
+            ["next"] = [["next", "--full", "abc10000"], ["next", "abc10000"]]
         };
 
     [Fact]
@@ -109,7 +109,7 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteNoWriterEffects : CliTa
     [Fact]
     public void WriterPathForms_Execution_ReadOnlyRunnerDeclines()
     {
-        string[][] forms = [["status"], ["next", "abc10000"]];
+        string[][] forms = [["status"]];
         foreach (var args in forms)
         {
             var root = CreateTempDirectory();
