@@ -22,6 +22,19 @@ internal static class RemoteExecutorOccupancy
         catch (Exception) { return null; }
     }
 
+    internal static IDisposable? TryClaimExclusive(string root, string executor)
+    {
+        try
+        {
+            if (!SafeName(executor)) return null;
+            var folder = Folder(root, executor);
+            Directory.CreateDirectory(folder);
+            return new FileStream(Path.Combine(folder, "claim.lock"), FileMode.OpenOrCreate,
+                FileAccess.ReadWrite, FileShare.None);
+        }
+        catch (Exception) { return null; }
+    }
+
     internal static void Claim(string root, string executor, string attempt)
     {
         string? temporary = null;

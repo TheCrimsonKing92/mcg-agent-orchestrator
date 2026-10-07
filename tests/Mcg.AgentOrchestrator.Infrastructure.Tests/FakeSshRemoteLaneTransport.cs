@@ -17,6 +17,7 @@ internal sealed class FakeSshRemoteLaneTransport : IAsyncDisposable
     internal int? FailStep;
     internal bool TimeoutStep;
     internal bool FetchFailure;
+    internal bool ThrowOnCancelCopy;
     internal string? FetchStderr;
     internal bool WritePartialFetch;
     internal readonly Dictionary<string, string> FetchContents = new();
@@ -47,6 +48,11 @@ internal sealed class FakeSshRemoteLaneTransport : IAsyncDisposable
             return new(poll.Exit, Noise, poll.TimedOut, Stderr: poll.Stderr ?? Noise);
         }
         Calls.Enqueue(new(args, directory, bound));
+        if (args[3].EndsWith(".cancel", StringComparison.Ordinal))
+        {
+            if (ThrowOnCancelCopy) throw new IOException("fixture-cancel-copy-failed");
+            return new(0, "");
+        }
         if (args[3].EndsWith(".json", StringComparison.Ordinal))
             return new(FailStep == 1 && !TimeoutStep ? 1 : 0, Noise, FailStep == 1 && TimeoutStep, Stderr: Noise);
         if (args[0] == SshRemoteLaneExecutor.SshPath)
