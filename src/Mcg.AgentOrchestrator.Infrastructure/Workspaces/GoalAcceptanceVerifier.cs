@@ -769,24 +769,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var policyRequiredChecks = effectivePlan.PolicyRequiredChecks;
         var structuralCoverageApplies = effectivePlan.StructuralCoverageApplies;
         var effectiveChecks = effectivePlan.Checks;
-        var partitionVerdictCache = AcceptancePartitionVerdictCache.Create(
-            new AcceptancePartitionVerdictCacheOptions(
-                goalId,
-                worktreePath,
-                effectiveChecks,
-                engineSettings.PartitionVerdictFullRerunEveryN,
-                _testOverrides.PartitionVerdictWithinAttemptRerunEnabled,
-                path => _testOverrides.ResolvePartitionVerdictCandidateTreeShaForTests?.Invoke(path) ??
-                    ResolveGitScalar(path, "rev-parse", "HEAD^{tree}"),
-                path => _testOverrides.ResolvePartitionVerdictMainShaForTests?.Invoke(path) ??
-                    ResolveGitScalar(path, "rev-parse", "main"),
-                path => _testOverrides.ResolvePartitionVerdictVerifyingCommitShaForTests?.Invoke(path) ??
-                    ResolveGitScalar(path, "rev-parse", "HEAD"),
-                () => executionOwner.Identity.AttemptId,
-                () => ComputeEffectiveAcceptanceManifestIdentity(effectiveChecks, engineSettings),
-                () => EngineSettings.EnforceStructuralCoverage,
-                () => TempRootApparatusLossReceiptStore.Read(executionOwner.ApparatusReceiptPath), ResolveClosureHash: _testOverrides.ResolvePartitionVerdictClosureHashForTests, DisableLaneReuseShadow: _testOverrides.DisableLaneReuseShadowForTests, IdenticalTreeChecks: [.. effectiveChecks.Where(check => AcceptanceIdenticalTreeReuseRule.TryGetCheckIdentity(check, out _))]));
-        using var remoteLaneScope = LoadRemoteLanes(worktreePath, partitionVerdictCache);
+        var (partitionVerdictCache, remoteLanes) = CreatePartitionVerdictCacheAndRemoteLanes(
+            goalId, worktreePath, effectiveChecks, engineSettings, executionOwner);
+        using var remoteLaneScope = remoteLanes;
         var dotnetTestBuildPhase = GateUsesStableSlot(stableSlotIndex, stableSlotLease)
             ? CreateDotnetTestBuildPhase(worktreePath, effectiveChecks, changedFiles, policyShardPlan)
             : null;

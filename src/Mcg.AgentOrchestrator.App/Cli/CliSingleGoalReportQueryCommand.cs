@@ -6,10 +6,16 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 internal static class CliSingleGoalReportQueryCommand
 {
     internal static bool IsSingleGoalReportQueryCommand(IReadOnlyList<string> args) =>
-        args.Count > 0 &&
+        (args.Count > 0 &&
         args[0].ToLowerInvariant() is "subscription-plan" or "goal-changes" &&
         !CliCommandHelp.IsCommandSpecificHelp(args) &&
-        !string.IsNullOrWhiteSpace(CliSingleGoalReportSelector.ResolveGoalPrefix(args, GetOptionalArgument));
+        !string.IsNullOrWhiteSpace(CliSingleGoalReportSelector.ResolveGoalPrefix(args, GetOptionalArgument))) ||
+        (args.Count == 2 &&
+        (args[0].Equals("retention-plan", StringComparison.OrdinalIgnoreCase) ||
+         args[0].Equals("supervisor", StringComparison.OrdinalIgnoreCase)) &&
+        !string.IsNullOrWhiteSpace(args[1]) &&
+        !args[1].StartsWith('-') &&
+        !CliCommandHelp.IsCommandSpecificHelp(args));
 
     internal static void Execute(
         IReadOnlyList<string> args,
