@@ -20,7 +20,8 @@ public abstract class CliTaskQueryTestSupport
             CancellationToken cancellationToken = default) => Task.FromResult(OpenRequests(_kernel));
 
         public Task<IReadOnlyList<TerminalOwnerQuestionHold>> ListTerminalOwnerQuestionHoldsAsync(
-            CancellationToken cancellationToken = default) => Task.FromResult(TerminalHolds(_kernel));
+            IReadOnlyCollection<GoalId> goalIds,
+            CancellationToken cancellationToken = default) => Task.FromResult(TerminalHolds(_kernel, goalIds));
 
         public Task<AgentOrchestratorKernel> LoadGoalsAsync(
             IReadOnlyCollection<GoalId> goalIds,
@@ -41,7 +42,8 @@ public abstract class CliTaskQueryTestSupport
             CancellationToken cancellationToken = default) => Task.FromResult(OpenRequests(_kernel));
 
         public Task<IReadOnlyList<TerminalOwnerQuestionHold>> ListTerminalOwnerQuestionHoldsAsync(
-            CancellationToken cancellationToken = default) => Task.FromResult(TerminalHolds(_kernel));
+            IReadOnlyCollection<GoalId> goalIds,
+            CancellationToken cancellationToken = default) => Task.FromResult(TerminalHolds(_kernel, goalIds));
 
         public bool ThrowOnOutbox { get; init; }
 
@@ -248,8 +250,10 @@ public abstract class CliTaskQueryTestSupport
     private static IReadOnlyList<HumanInputRequestSnapshot> OpenRequests(AgentOrchestratorKernel kernel) =>
         kernel.ExportSnapshot().HumanInputRequests.Where(request => !request.IsCompleted).ToArray();
 
-    private static IReadOnlyList<TerminalOwnerQuestionHold> TerminalHolds(AgentOrchestratorKernel kernel) =>
-        kernel.Goals.Where(goal => goal.Status is GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Superseded &&
+    private static IReadOnlyList<TerminalOwnerQuestionHold> TerminalHolds(
+        AgentOrchestratorKernel kernel, IReadOnlyCollection<GoalId> goalIds) =>
+        kernel.Goals.Where(goal => goalIds.Contains(goal.Id) &&
+            goal.Status is GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Superseded &&
             goal.CurrentHold?.State.Equals("steward-owner-question", StringComparison.OrdinalIgnoreCase) == true)
             .Select(goal => new TerminalOwnerQuestionHold(goal.Id.Value, goal.CurrentHold!.Identity,
                 goal.CurrentHold.State, goal.CurrentHold.Blocker, goal.CurrentHold.StartedAt)).ToArray();

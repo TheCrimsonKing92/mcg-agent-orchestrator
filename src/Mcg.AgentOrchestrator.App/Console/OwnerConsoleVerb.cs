@@ -45,6 +45,7 @@ internal static class OwnerConsoleVerb
             Task.FromResult<IReadOnlyList<Mcg.AgentOrchestrator.Core.HumanInputRequestSnapshot>>([]);
 
         public Task<IReadOnlyList<TerminalOwnerQuestionHold>> ListTerminalOwnerQuestionHoldsAsync(
+            IReadOnlyCollection<Mcg.AgentOrchestrator.Core.GoalId> goalIds,
             CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<TerminalOwnerQuestionHold>>([]);
 

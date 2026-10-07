@@ -200,6 +200,7 @@ public sealed class StateLogDivergenceCheckRunnerTests
             CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<HumanInputRequestSnapshot>>([]);
 
         public Task<IReadOnlyList<TerminalOwnerQuestionHold>> ListTerminalOwnerQuestionHoldsAsync(
+            IReadOnlyCollection<GoalId> goalIds,
             CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<TerminalOwnerQuestionHold>>([]);
 
         internal int MetadataCalls;

@@ -1706,20 +1706,29 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         """;
 
     public async Task<IReadOnlyList<TerminalOwnerQuestionHold>> ListTerminalOwnerQuestionHoldsAsync(
+        IReadOnlyCollection<GoalId> goalIds,
         CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(goalIds);
+        if (goalIds.Count == 0) return [];
+
         await using var conn = OpenConnection();
         await using var cmd = conn.CreateCommand();
-        cmd.CommandText = """
+        var parameterNames = goalIds.Select((_, index) => $"$goal_id{index}").ToArray();
+        cmd.CommandText = $"""
             SELECT id, json_extract(snapshot_json, '$.CurrentHold.Identity'),
                 json_extract(snapshot_json, '$.CurrentHold.State'),
                 json_extract(snapshot_json, '$.CurrentHold.Blocker'),
                 json_extract(snapshot_json, '$.CurrentHold.StartedAt')
             FROM goals
-            WHERE status COLLATE NOCASE IN ('Completed', 'Cancelled', 'Superseded')
+            WHERE id IN ({string.Join(", ", parameterNames)})
+                AND status COLLATE NOCASE IN ('Completed', 'Cancelled', 'Superseded')
                 AND json_valid(snapshot_json)
                 AND json_extract(snapshot_json, '$.CurrentHold.State') COLLATE NOCASE = 'steward-owner-question'
             """;
+        var index = 0;
+        foreach (var goalId in goalIds)
+            cmd.Parameters.AddWithValue(parameterNames[index++], goalId.Value);
         var results = new List<TerminalOwnerQuestionHold>();
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))

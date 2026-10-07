@@ -221,7 +221,8 @@ public sealed class StateLogDivergenceDurableStateTests
             CancellationToken cancellationToken = default) => _target.ListOpenHumanInputRequestsAsync(cancellationToken);
 
         public Task<IReadOnlyList<TerminalOwnerQuestionHold>> ListTerminalOwnerQuestionHoldsAsync(
-            CancellationToken cancellationToken = default) => _target.ListTerminalOwnerQuestionHoldsAsync(cancellationToken);
+            IReadOnlyCollection<GoalId> goalIds,
+            CancellationToken cancellationToken = default) => _target.ListTerminalOwnerQuestionHoldsAsync(goalIds, cancellationToken);
 
         internal int MetadataCalls;
         internal readonly List<string> LoadedIds = [];
