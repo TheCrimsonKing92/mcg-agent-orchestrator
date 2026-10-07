@@ -286,6 +286,72 @@ public sealed class OwnerConsoleLoopResponsivenessTests
         Assert.Equal("3", followUp.Detail);
     }
 
+    [Theory(Timeout = 30000)]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task FaultingEventRead_IdleCommandsRunAndRetryWaitsForFakeTime(bool synchronous)
+    {
+        var harness = new Harness();
+        harness.Events.AlwaysFail = true;
+        harness.Events.ThrowSynchronously = synchronous;
+        var pollBound = TimeSpan.FromMilliseconds(250);
+        var run = harness.RunAsync(pollBound);
+        await harness.Output.WaitForLineAsync("error: event read failed");
+
+        harness.Input.Send("help");
+        Assert.Equal("help", await harness.Steps.Commands.Reader.ReadAsync(TestToken));
+        Assert.Equal(1, harness.Events.ReadCount);
+        Assert.Single(harness.Output.Lines);
+
+        harness.Clock.Advance(pollBound);
+        await harness.Output.WaitForLineAsync("error: event read failed");
+        Assert.Equal(2, harness.Events.ReadCount);
+        harness.Input.Send("quit");
+        Assert.Equal("quit", await harness.Steps.Commands.Reader.ReadAsync(TestToken));
+        await run;
+
+        Assert.Equal(2, harness.Output.Lines.Count);
+        Assert.All(harness.Output.Lines, line => Assert.Equal("error: event read failed", line));
+        Assert.Equal(0, harness.Steps.EventCount);
+    }
+
+    [Theory(Timeout = 30000)]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task FaultingEventRead_ActiveCommandCompletesAndErrorsStayBounded(bool synchronous)
+    {
+        var harness = new Harness();
+        var release = Signal();
+        harness.Events.AlwaysFail = true;
+        harness.Events.ThrowSynchronously = synchronous;
+        harness.Steps.OnCommand = async (line, _) =>
+        {
+            if (line == "slow") await release.Task;
+            return line != "quit";
+        };
+        harness.Input.Send("slow");
+        var pollBound = TimeSpan.FromMilliseconds(250);
+        var run = harness.RunAsync(pollBound);
+        Assert.Equal("slow", await harness.Steps.Commands.Reader.ReadAsync(TestToken));
+        await harness.Output.WaitForLineAsync("error: event read failed");
+        Assert.Equal(1, harness.Events.ReadCount);
+        Assert.Single(harness.Output.Lines);
+
+        harness.Clock.Advance(pollBound);
+        await harness.Output.WaitForLineAsync("error: event read failed");
+        release.SetResult();
+        harness.Input.Send("help");
+        Assert.Equal("help", await harness.Steps.Commands.Reader.ReadAsync(TestToken));
+        harness.Input.Send("quit");
+        Assert.Equal("quit", await harness.Steps.Commands.Reader.ReadAsync(TestToken));
+        await run;
+
+        Assert.Equal(2, harness.Events.ReadCount);
+        Assert.Equal(2, harness.Output.Lines.Count);
+        Assert.All(harness.Output.Lines, line => Assert.Equal("error: event read failed", line));
+        Assert.Equal(0, harness.Steps.EventCount);
+    }
+
     private static TaskCompletionSource Signal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private sealed class Harness
@@ -296,8 +362,8 @@ public sealed class OwnerConsoleLoopResponsivenessTests
         internal FakeSteps Steps { get; } = new();
         internal SignallingOutput Output { get; } = new();
 
-        internal Task RunAsync() => new OwnerConsoleLoop(Steps, Input, Events, Output, Clock,
-            new OwnerConsoleLoopOptions(TimeSpan.FromHours(1), TimeSpan.FromSeconds(30), TimeSpan.Zero))
+        internal Task RunAsync(TimeSpan? pollBound = null) => new OwnerConsoleLoop(Steps, Input, Events, Output, Clock,
+            new OwnerConsoleLoopOptions(pollBound ?? TimeSpan.FromHours(1), TimeSpan.FromSeconds(30), TimeSpan.Zero))
             .RunAsync(TestToken);
     }
 
@@ -353,13 +419,22 @@ public sealed class OwnerConsoleLoopResponsivenessTests
         private readonly Channel<OwnerConductEvent> _items = Channel.CreateUnbounded<OwnerConductEvent>();
         private readonly Channel<int> _reads = Channel.CreateUnbounded<int>();
         private int _readCount;
+        internal int ReadCount => Volatile.Read(ref _readCount);
+        internal bool AlwaysFail { get; set; }
+        internal bool ThrowSynchronously { get; set; }
         public DateTimeOffset? LastActivity => null;
         internal void Send(int number, string kind = "tick") => _items.Writer.TryWrite(
             new OwnerConductEvent(DateTimeOffset.UnixEpoch.AddSeconds(number), kind, null, number.ToString()));
         public ValueTask<OwnerConductEvent> ReadAsync(CancellationToken cancellationToken)
         {
+            _reads.Writer.TryWrite(Interlocked.Increment(ref _readCount));
+            if (AlwaysFail)
+            {
+                var error = new IOException("event read failed");
+                if (ThrowSynchronously) throw error;
+                return ValueTask.FromException<OwnerConductEvent>(error);
+            }
             var read = _items.Reader.ReadAsync(cancellationToken);
-            _reads.Writer.TryWrite(++_readCount);
             return read;
         }
         internal async Task WaitForReadAsync(int number)

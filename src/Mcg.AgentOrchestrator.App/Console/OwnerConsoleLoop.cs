@@ -49,7 +49,7 @@ internal sealed class OwnerConsoleLoop(
             {
                 token.ThrowIfCancellationRequested();
                 lineTask ??= input.ReadLineAsync(token).AsTask();
-                eventTask ??= events.ReadAsync(token).AsTask();
+                eventTask ??= ReadEventAsync();
                 lateSteps.RemoveAll(task => task.IsCompleted);
 
                 // WhenAny's argument order cannot establish command priority.
@@ -77,7 +77,7 @@ internal sealed class OwnerConsoleLoop(
                     }, isRefresh: true);
                     continue;
                 }
-                eventTask ??= events.ReadAsync(token).AsTask();
+                eventTask ??= ReadEventAsync();
                 try
                 {
                     await Task.WhenAny(lateSteps.Concat([lineTask, eventTask]))
@@ -102,7 +102,19 @@ internal sealed class OwnerConsoleLoop(
             catch (Exception ex) { ReportError(ex); }
         }
 
-        async Task CollectEventAsync()
+        async Task<OwnerConductEvent> ReadEventAsync()
+        {
+            // Normalize synchronous source throws into the same faulted-read path.
+            return await events.ReadAsync(token);
+        }
+
+        async Task<OwnerConductEvent> RetryEventAsync()
+        {
+            await Task.Delay(_options.PollBound, clock, token);
+            return await ReadEventAsync();
+        }
+
+        async Task<bool> CollectEventAsync()
         {
             var read = eventTask!;
             eventTask = null;
@@ -115,9 +127,17 @@ internal sealed class OwnerConsoleLoop(
                     !PrintsBoard(latest.EventKind)
                     ? latest with { EventKind = pendingEvent.EventKind }
                     : latest;
+                return true;
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
-            catch (Exception ex) { ReportError(ex); }
+            catch (Exception ex)
+            {
+                // Keep the retry pending so input and active steps can progress.
+                // Arm the delay before publishing the error, including under fake time.
+                eventTask = RetryEventAsync();
+                ReportError(ex);
+                return false;
+            }
         }
 
         async Task<bool?> RunStepAsync(string label, Func<CancellationToken, Task<bool>> action,
@@ -159,7 +179,7 @@ internal sealed class OwnerConsoleLoop(
                     // Drain events into one pending refresh while a step is running.
                     if (collectEvents)
                     {
-                        eventTask ??= events.ReadAsync(token).AsTask();
+                        eventTask ??= ReadEventAsync();
                         if (eventTask.IsCompleted)
                         {
                             await CollectEventAsync();
@@ -176,8 +196,8 @@ internal sealed class OwnerConsoleLoop(
                 while (collectEvents && eventTask is { IsCompleted: true })
                 {
                     token.ThrowIfCancellationRequested();
-                    await CollectEventAsync();
-                    eventTask = events.ReadAsync(token).AsTask();
+                    if (!await CollectEventAsync()) break;
+                    eventTask = ReadEventAsync();
                 }
                 return await operation;
             }
