@@ -20,7 +20,7 @@ internal sealed record AcceptanceStructuralCoverageRequest(
     IReadOnlyList<string> SanctionedRemovedTests,
     Func<CancellationToken, Task<AcceptanceStructuralCoverageBaseline?>> PrepareBaseline,
     Func<CancellationToken, Task<AcceptanceContainedGenerationBaseline>>? PrepareContainedBaseline = null,
-    Func<IReadOnlyList<GoalAcceptanceVerifier.UnresolvedRenameDestination>>? ResolveUnresolvedRenameDestinations = null);
+    Func<IReadOnlyList<UnresolvedRenameDestination>>? ResolveUnresolvedRenameDestinations = null);
 
 internal sealed record AcceptanceStructuralCoverageEvaluation(
     GoalAcceptanceVerifier.CommandResult CandidateDiscovery,

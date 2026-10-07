@@ -92,8 +92,8 @@ public sealed class TestCoverageInvariantTests
         Assert.Equal(3, parsed.UnresolvedRenames.Count);
         Assert.Equal(new[]
         {
-            new GoalAcceptanceVerifier.UnresolvedRenameDestination("tests/A.Tests/ATests.cs", "raw/ATests.cs"),
-            new GoalAcceptanceVerifier.UnresolvedRenameDestination("tests/A.Tests/ZTests.cs", "raw\\ZTests.cs")
+            new UnresolvedRenameDestination("tests/A.Tests/ATests.cs", "raw/ATests.cs"),
+            new UnresolvedRenameDestination("tests/A.Tests/ZTests.cs", "raw\\ZTests.cs")
         }, GoalAcceptanceVerifier.UnresolvedRenamesForProject(parsed.UnresolvedRenames, project));
     }
 

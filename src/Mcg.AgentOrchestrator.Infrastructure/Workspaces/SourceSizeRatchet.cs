@@ -58,7 +58,8 @@ internal static class SourceSizeRatchet
             // Goal 1c226573 extracted build-phase planning, execution and cache receipts into AcceptanceDotnetBuildPhase.
             // Goal 9797ec59 extracted failure-cause receipt, codec and adjudication into AcceptanceFailureCauseAdjudicator.
             // Goal 402c1005 extracted shard completion adjudication into AcceptanceShardCompletionAdjudicator.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 5312),
+            // Goal 936b5a43 extracted structural coverage inputs into AcceptanceStructuralCoverageInputs.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 5177),
             // Goal c0cfa8ae test telemetry collaborator measured at 423 lines.
             // Goal 402c1005 moved TRX completion inspection and shard decisions into AcceptanceShardCompletionAdjudicator.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.TestTelemetry.cs", 281),
