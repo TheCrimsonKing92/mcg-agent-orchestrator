@@ -200,19 +200,6 @@ internal sealed partial class ConductorBatchLoop
         return $"BLOCKED_RECHECK_HEARTBEAT rechecks={totalBlockedRechecks} blocked={string.Join(',', blocked)}";
     }
 
-    private static string ClassifyGoalEvent(string line)
-    {
-        if (line.Contains("result=done", StringComparison.Ordinal) ||
-            line.Contains("result=landed", StringComparison.Ordinal))
-            return "goal-landing";
-        if (line.Contains("result=escalated", StringComparison.Ordinal) ||
-            line.Contains("escalated", StringComparison.Ordinal))
-            return "goal-escalation";
-        if (line.Contains("result=", StringComparison.Ordinal))
-            return "goal";
-        return string.Empty;
-    }
-
     private static string? TryExtractToken(string line, string prefix)
     {
         var start = line.IndexOf(prefix, StringComparison.Ordinal);
