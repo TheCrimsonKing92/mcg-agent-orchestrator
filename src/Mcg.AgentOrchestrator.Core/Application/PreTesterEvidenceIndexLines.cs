@@ -22,32 +22,38 @@ public static class PreTesterEvidenceIndexLines
         $"not_run={EncodeList(entry.NotRun)}; result_path={Uri.EscapeDataString(entry.ResultPath ?? "none")}; " +
         $"failing_tests={EncodeList(entry.FailingTests)}";
 
+    public static PreTesterEvidenceEntry? Parse(string message)
+    {
+        if (!message.StartsWith(Prefix, StringComparison.Ordinal)) return null;
+        var fields = message[Prefix.Length..].Split(';', StringSplitOptions.TrimEntries)
+            .Select(part => part.Split('=', 2))
+            .Where(parts => parts.Length == 2)
+            .ToDictionary(parts => parts[0], parts => parts[1], StringComparer.Ordinal);
+        if (!fields.TryGetValue("candidate_sha", out var sha) ||
+            !fields.TryGetValue("outcome", out var outcome)) return null;
+        static string[] Values(IReadOnlyDictionary<string, string> values, string key) =>
+            values.TryGetValue(key, out var value) && value.Length > 0
+                ? value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .Select(Uri.UnescapeDataString).ToArray()
+                : [];
+        fields.TryGetValue("receipt_id", out var receipt);
+        fields.TryGetValue("result_path", out var path);
+        return new PreTesterEvidenceEntry(
+            outcome, sha, receipt ?? "none", Values(fields, "selections"),
+            Values(fields, "not_run"), path == "none" ? null : Uri.UnescapeDataString(path ?? string.Empty),
+            Values(fields, "failing_tests"));
+    }
+
     public static PreTesterEvidenceEntry? Latest(Goal goal, TaskId testerTaskId, string? candidateSha)
     {
         if (string.IsNullOrWhiteSpace(candidateSha)) return null;
         foreach (var evt in goal.Timeline.Reverse())
         {
             if (evt.TaskId != testerTaskId ||
-                evt.Kind is not (ProgressKind.FindingEvidenceRequestRecorded or ProgressKind.FindingEvidenceRunRecorded) ||
-                !evt.Message.StartsWith(Prefix, StringComparison.Ordinal)) continue;
-            var fields = evt.Message[Prefix.Length..].Split(';', StringSplitOptions.TrimEntries)
-                .Select(part => part.Split('=', 2))
-                .Where(parts => parts.Length == 2)
-                .ToDictionary(parts => parts[0], parts => parts[1], StringComparer.Ordinal);
-            if (!fields.TryGetValue("candidate_sha", out var sha) ||
-                !string.Equals(sha, candidateSha, StringComparison.OrdinalIgnoreCase) ||
-                !fields.TryGetValue("outcome", out var outcome)) continue;
-            static string[] Values(IReadOnlyDictionary<string, string> values, string key) =>
-                values.TryGetValue(key, out var value) && value.Length > 0
-                    ? value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                        .Select(Uri.UnescapeDataString).ToArray()
-                    : [];
-            fields.TryGetValue("receipt_id", out var receipt);
-            fields.TryGetValue("result_path", out var path);
-            return new PreTesterEvidenceEntry(
-                outcome, sha, receipt ?? "none", Values(fields, "selections"),
-                Values(fields, "not_run"), path == "none" ? null : Uri.UnescapeDataString(path ?? string.Empty),
-                Values(fields, "failing_tests"));
+                evt.Kind is not (ProgressKind.FindingEvidenceRequestRecorded or ProgressKind.FindingEvidenceRunRecorded)) continue;
+            if (Parse(evt.Message) is not { } entry ||
+                !string.Equals(entry.CandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase)) continue;
+            return entry;
         }
         return null;
     }

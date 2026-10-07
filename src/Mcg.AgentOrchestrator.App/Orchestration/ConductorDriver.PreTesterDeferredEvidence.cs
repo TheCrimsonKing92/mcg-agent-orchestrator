@@ -297,11 +297,14 @@ internal sealed partial class ConductorDriver
         var lastTesterDispatch = goal.Timeline
             .Where(evt => evt.TaskId == tester.Id && evt.Kind == ProgressKind.TaskDispatchRecorded)
             .Select(evt => evt.OccurredAt).DefaultIfEmpty(DateTimeOffset.MinValue).Max();
-        var consecutiveRed = redHistory.Count(evt => evt.OccurredAt > lastTesterDispatch);
-        if (consecutiveRed < 3) return false;
+        var window = redHistory.Where(evt => evt.OccurredAt > lastTesterDispatch).ToArray();
+        var decision = PreTesterRedLoopRule.Evaluate(window.Select(evt =>
+            (IReadOnlyCollection<string>)(PreTesterEvidenceIndexLines.Parse(evt.Message)?.FailingTests ?? [])).ToArray());
+        if (!decision.Trip) return false;
         result = Escalate(goal, goalPrefix, policy, fromState,
             "PRE_TESTER_RED_LOOP: three consecutive candidate RED runs without Tester dispatch; " +
-            $"failing_sets={string.Join(" | ", redHistory.Where(evt => evt.OccurredAt > lastTesterDispatch).TakeLast(3).Select(evt => evt.Message))}");
+            $"failing_sets={string.Join(" | ", window.Select(evt => evt.Message))}; " +
+            $"failing_counts={string.Join(',', decision.FailingCounts)}; trip={decision.Kind}");
         return true;
     }
 
