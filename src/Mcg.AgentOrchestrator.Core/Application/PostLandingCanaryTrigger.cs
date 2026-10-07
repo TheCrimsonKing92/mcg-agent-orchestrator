@@ -88,6 +88,7 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateShardWaiterMarkers",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/MainBaselineDiscoveryCache",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/RemoteExecutorHealthLedger",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/RemoteFocusedEvidenceShadow",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/RemoteLaneCandidateIdentity",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/RemoteLaneCoordinator",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/RemoteLaneExecutor",

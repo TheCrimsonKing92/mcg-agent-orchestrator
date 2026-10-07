@@ -114,6 +114,12 @@ internal sealed class RemoteLaneCoordinator : IDisposable
             _cache.MainSha, _cache.ManifestIdentity);
     }
 
+    internal RemoteLaneRequest CreateRequest(string lane, string project, string filter,
+        IRemoteLaneCandidateIdentity identity, string executorId) =>
+        new(executorId, identity.AttemptId, identity.GoalId, lane, project, filter,
+            GoalAcceptanceVerifier.ShortHash(filter), identity.VerifyingCommitSha, identity.CandidateTreeSha,
+            identity.MainSha, identity.ManifestIdentity);
+
     internal async Task<RemoteLaneOutcome> RunRemoteAsync(Check check, RemoteLaneExecutorEntry entry,
         TimeSpan timeout, CancellationToken cancellationToken)
     {
