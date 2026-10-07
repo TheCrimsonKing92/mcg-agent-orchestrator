@@ -145,6 +145,34 @@ internal sealed partial class ConductorBatchLoop
         return result is null ? null : new ParallelLandingOutcome(result, null);
     }
 
+    private Goal? SelectInteractionOnlyPriorityGoal(
+        ParallelAcceptanceBatchState state, IReadOnlySet<string> interactionOnlyGoalIds,
+        AgentOrchestratorKernel kernel, ConductorDriver driver,
+        ConductorAutonomyPolicy policy, int tick, List<string> changedGoalLines, bool suppressNewAcceptanceAdmission)
+    {
+        if (suppressNewAcceptanceAdmission || !(driver.MergeTrainsEnabled || driver.AcceptanceCohortsEnabled)) return null;
+        foreach (var goal in state.OrderedEligible)
+        {
+            if (!interactionOnlyGoalIds.Contains(goal.Id.Value) || state.Results.ContainsKey(goal.Id.Value)) continue;
+            try
+            {
+                var admission = EvaluateSoloAcceptanceAdmissibility(kernel, driver, goal, policy,
+                    state.AcceptanceCensus, state.ConfiguredAcceptanceWidth, state.ActiveAttemptSlotIndexes,
+                    state.ActiveCandidates, state.LiveAttemptGoalIds, state.OldestWaiterObservation,
+                    oldestServedThisTick: false, tick);
+                if (admission.Kind != SoloAcceptanceAdmissionKind.Admissible) continue;
+            }
+            catch (Exception)
+            {
+                continue;
+            }
+            RecordParallelAcceptanceProgress(
+                $"ADMISSION tick={tick} result=deferred reason=interaction-only-priority goal={goal.Id.Value[..8]}", changedGoalLines);
+            return goal;
+        }
+        return null;
+    }
+
     private Goal? SelectTransientRetryPriorityGoal(
         AgentOrchestratorKernel kernel, ConductorDriver driver, IReadOnlyList<Goal> eligible,
         ConductorAutonomyPolicy policy, LiveAcceptanceCensus census, int configuredWidth,
