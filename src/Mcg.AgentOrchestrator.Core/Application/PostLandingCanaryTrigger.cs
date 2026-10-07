@@ -17,6 +17,8 @@ public static class AcceptanceEngineSurfaceRegistry
     [
         new("acceptance-verifier", [
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier",
+            // Cleanup evidence is reached through the independently owned failure-cause adjudicator.
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceAssemblyCleanupEvidence",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneReuseShadow",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneReuseShadowClassifier",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneReuseShadowMiss",
@@ -47,7 +49,6 @@ public static class AcceptanceEngineSurfaceRegistry
         ]),
         new("attempt-artifact-custody", ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceAttemptArtifactCustody"]),
         new("acceptance-collaborators", [
-            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceAssemblyCleanupEvidence",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCheckCommandBuilder",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCommandProcessIdentityTracker",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceContainedGenerationBaseline",
