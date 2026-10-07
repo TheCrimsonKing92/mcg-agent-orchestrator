@@ -142,7 +142,7 @@ internal sealed class RemoteLaneCoordinator : IDisposable
         catch (Exception ex)
         {
             return Fallback(inspectingTrx ? RemoteLaneOutcomeCode.TrxIncomplete : RemoteLaneOutcomeCode.Unreachable,
-                observedResult, reason: ex.GetType().Name);
+                observedResult, reason: $"{ex.GetType().Name}: {ex.Message}");
         }
 
         RemoteLaneOutcome Fallback(RemoteLaneOutcomeCode code, RemoteLaneResult? result = null, string? reason = null)

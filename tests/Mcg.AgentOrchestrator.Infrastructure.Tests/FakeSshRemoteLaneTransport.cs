@@ -17,6 +17,9 @@ internal sealed class FakeSshRemoteLaneTransport : IAsyncDisposable
     internal int? FailStep;
     internal bool TimeoutStep;
     internal bool FetchFailure;
+    internal string? FetchStderr;
+    internal bool WritePartialFetch;
+    internal readonly Dictionary<string, string> FetchContents = new();
     internal string Noise = "";
     internal SshRemoteLaneHandle? Handle;
     internal static RemoteLaneRequest Request => new("one", "attempt-one", "goal", "infrastructure tests: Cli / Lane",
@@ -48,9 +51,14 @@ internal sealed class FakeSshRemoteLaneTransport : IAsyncDisposable
             return new(FailStep == 1 && !TimeoutStep ? 1 : 0, Noise, FailStep == 1 && TimeoutStep, Stderr: Noise);
         if (args[0] == SshRemoteLaneExecutor.SshPath)
             return new(FailStep == 2 && !TimeoutStep ? 1 : 0, Noise, FailStep == 2 && TimeoutStep, Stderr: Noise);
-        if (!FetchFailure)
-            foreach (var source in args.Skip(3).SkipLast(1)) File.WriteAllText(Path.Combine(directory, source.Split('/')[^1]), "trx-fixture");
-        return new(FetchFailure ? 1 : 0, Noise, Stderr: Noise);
+        if (!FetchFailure || WritePartialFetch)
+            foreach (var source in args.Skip(3).SkipLast(1))
+            {
+                var name = source.Split('/')[^1];
+                var destination = args[^1] == "." ? name : args[^1];
+                File.WriteAllText(Path.Combine(directory, destination), FetchContents.GetValueOrDefault(name, "trx-fixture"));
+            }
+        return new(FetchFailure ? 1 : 0, Noise, Stderr: FetchStderr ?? Noise);
     }
     internal async Task<SshRemoteLaneHandle> Submit()
     {
