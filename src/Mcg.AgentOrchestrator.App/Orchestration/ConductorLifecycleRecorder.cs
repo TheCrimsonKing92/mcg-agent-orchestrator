@@ -6,7 +6,8 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed class ConductorLifecycleRecorder(
     IRunEventStore store,
     Func<DateTimeOffset>? utcNow = null,
-    Func<string>? generationId = null)
+    Func<string>? generationId = null,
+    Func<IReadOnlyList<WorkerAdoptionCensusRow>>? readAdoptionCensus = null)
 {
     private readonly Func<DateTimeOffset> _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
     private readonly Func<string> _generationId = generationId ?? (() => Guid.NewGuid().ToString("N"));
@@ -27,6 +28,26 @@ internal sealed class ConductorLifecycleRecorder(
             startedAt,
             ticks: 0,
             detail: $"policy={policy} maxIterations={maxIterations?.ToString() ?? "none"} maxDurationSeconds={(maxDuration.HasValue ? ((int)maxDuration.Value.TotalSeconds).ToString() : "none")}");
+        if (readAdoptionCensus is not null)
+        {
+            IReadOnlyList<WorkerAdoptionCensusRow> rows;
+            try
+            {
+                rows = readAdoptionCensus();
+            }
+            catch (Exception exception)
+            {
+                Append(generation, "adoption-census", "unavailable", null, startedAt, 0,
+                    $"exception={exception.GetType().Name}");
+                return new ConductorLifecycleSession(this, generation, goalId, startedAt);
+            }
+
+            foreach (var row in rows)
+                Append(generation, "adoption-census", row.Verdict, null, startedAt, 0,
+                    WorkerAdoptionCensus.FormatRowDetail(row));
+            Append(generation, "adoption-census-summary", "complete", null, startedAt, 0,
+                WorkerAdoptionCensus.FormatSummaryDetail(rows));
+        }
         return new ConductorLifecycleSession(this, generation, goalId, startedAt);
     }
 
