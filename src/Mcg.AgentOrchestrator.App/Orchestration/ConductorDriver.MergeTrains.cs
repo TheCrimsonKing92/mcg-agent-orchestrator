@@ -344,7 +344,11 @@ internal sealed partial class ConductorDriver
                 if (attributed is not null)
                     RecordTrainImplicatedMember(attributed, receipt);
                 RecordTrainRedPair(selection, members, receipt);
-                return Fallback($"outcome={receipt.Outcome} attempts={attempt + 1} fallback=ordinary");
+                var detail = $"outcome={receipt.Outcome} attempts={attempt + 1} fallback=ordinary";
+                return gateOnly
+                    ? new ConductorMergeTrainRunResult(receipt,
+                        new Dictionary<string, ConductorAdvanceResult>(StringComparer.Ordinal), allEjections, detail)
+                    : Fallback(detail);
             }
 
             // Keep the bounded bisection; absent source attribution, retain drop-newest.
