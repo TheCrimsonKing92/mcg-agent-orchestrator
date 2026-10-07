@@ -48,7 +48,7 @@ internal sealed class FakeSshRemoteLaneTransport : IAsyncDisposable
             return new(poll.Exit, Noise, poll.TimedOut, Stderr: poll.Stderr ?? Noise);
         }
         Calls.Enqueue(new(args, directory, bound));
-        if (args[3].EndsWith(".cancel", StringComparison.Ordinal))
+        if (args[^1].EndsWith(".cancel", StringComparison.Ordinal))
         {
             if (ThrowOnCancelCopy) throw new IOException("fixture-cancel-copy-failed");
             return new(0, "");

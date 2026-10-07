@@ -13,7 +13,7 @@ public sealed class SshRemoteLaneExecutorTestsQueuedJobCancellation
         await CancellationCompleted(handle);
         var copy = Assert.Single(fake.Calls.Skip(before));
         Assert.Equal(new[] { SshRemoteLaneExecutor.ScpPath, "-o", "BatchMode=yes",
-            "attempt-one-infrastructure-tests-cli-lane.cancel", "runner:C:/mcg-executor/queue/" }, copy.Arguments);
+            "cancel.txt", "runner:C:/mcg-executor/queue/attempt-one-infrastructure-tests-cli-lane.cancel" }, copy.Arguments);
         var jobCopy = Assert.Single(fake.Calls.Where(call => call.Arguments[0] == SshRemoteLaneExecutor.ScpPath &&
             call.Arguments[3].EndsWith(".json", StringComparison.Ordinal) && !call.Arguments[3].EndsWith("/status.json", StringComparison.Ordinal)));
         Assert.Equal(jobCopy.Directory, copy.Directory);
@@ -73,7 +73,7 @@ public sealed class SshRemoteLaneExecutorTestsQueuedJobCancellation
     }
 
     private static IEnumerable<FakeSshRemoteLaneTransport.Call> CancelCopies(FakeSshRemoteLaneTransport fake) =>
-        fake.Calls.Where(call => call.Arguments.Length > 3 && call.Arguments[3].EndsWith(".cancel", StringComparison.Ordinal));
+        fake.Calls.Where(call => call.Arguments.Length > 3 && call.Arguments[^1].EndsWith(".cancel", StringComparison.Ordinal));
 
     private static async Task CancellationCompleted(SshRemoteLaneHandle handle)
     {
