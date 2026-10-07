@@ -2,6 +2,101 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class TestCoverageInvariantTests
 {
+    [Xunit.Fact]
+    public void DiscoveryParser_ListReturningSurface_IsRetired()
+    {
+        Assert.Null(typeof(TestCoverageInvariant).GetMethod("ParseDiscoveredTests",
+            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic |
+            System.Reflection.BindingFlags.Static));
+    }
+
+    // Parallel-safe: each case owns its TRX and uses an in-memory discovery runner.
+    [Xunit.Theory]
+    [Xunit.InlineData(null, true)]
+    [Xunit.InlineData(null, false)]
+    [Xunit.InlineData("", true)]
+    [Xunit.InlineData(" ", false)]
+    public async Task RenameDestination_Unresolved_AddsReceiptWithoutChangingVerdict(
+        string? destinationOwner, bool recordMovedTest)
+    {
+        const string project = "tests/A.Tests/A.Tests.csproj";
+        const string diff = "D\ttests/A.Tests/GoneTests.cs\n" +
+            "R100\ttests/A.Tests/MovedTests.cs\tlost/MovedTests.cs";
+        var parsed = GoalAcceptanceVerifier.ParseDeletedTestFilesWithUnresolvedRenamesForTests(
+            diff, project, _ => destinationOwner);
+        Assert.Equal(["tests/A.Tests/GoneTests.cs"], parsed.Removed);
+        Assert.Equal(["tests/A.Tests/GoneTests.cs"],
+            GoalAcceptanceVerifier.ParseDeletedTestFilesForTests(diff, project, _ => destinationOwner));
+        var trx = recordMovedTest
+            ? WriteTrx(("1", "CurrentTests.Runs", "Passed"), ("2", "MovedTests.Runs", "Passed"))
+            : WriteTrx(("1", "CurrentTests.Runs", "Passed"));
+        try
+        {
+            var evaluator = new AcceptanceStructuralCoverageEvaluator((_, _, _, _) =>
+                Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0,
+                    "DISCOVERED_TEST: CurrentTests.Runs\nDISCOVERED_TEST: MovedTests.Runs")));
+            var request = new AcceptanceStructuralCoverageRequest(
+                CandidateDiscoveryArguments: ["discover"],
+                CandidateWorktreePath: Path.GetDirectoryName(trx)!,
+                DiscoveryTimeout: TimeSpan.FromMinutes(1),
+                BareTestList: false,
+                ResolvePartitions: () => [new TestPartitionCoverage("lane", true, [trx])],
+                ResolveDeletedTestFiles: () => GoalAcceptanceVerifier.DeletedTestFilesForProject(parsed.Removed, project),
+                CurrentAttemptId: null,
+                SanctionedRemovedTests: [],
+                PrepareBaseline: _ => Task.FromResult<AcceptanceStructuralCoverageBaseline?>(null));
+            var prepared = await evaluator.PrepareAsync(request, CancellationToken.None);
+            prepared = prepared with
+            {
+                BaselineSnapshot = ParseMtpDiscovery(
+                    ("CurrentTests.Runs", "tests/A.Tests/CurrentTests.cs"),
+                    ("MovedTests.Runs", "tests/A.Tests/MovedTests.cs"),
+                    ("GoneTests.Runs", "tests/A.Tests/GoneTests.cs"))
+            };
+            var control = (await evaluator.CompareAsync(request, prepared, CancellationToken.None)).Coverage!;
+            var receipt = (await evaluator.CompareAsync(request with
+            {
+                ResolveUnresolvedRenameDestinations = () =>
+                    GoalAcceptanceVerifier.UnresolvedRenamesForProject(parsed.UnresolvedRenames, project)
+            }, prepared, CancellationToken.None)).Coverage!;
+
+            Assert.Contains("unresolved-rename-destination:source=tests/A.Tests/MovedTests.cs," +
+                "destination=lost/MovedTests.cs,effect=receipt-only", receipt.Summary, StringComparison.Ordinal);
+            Assert.Equal(recordMovedTest, receipt.Passed);
+            Assert.Equal(recordMovedTest ? Array.Empty<string>() : ["MovedTests.Runs"], receipt.MissingTests);
+            Assert.Equal(recordMovedTest ? null : AcceptanceFailureClassifications.StructuralCoverageFailed,
+                receipt.FailureClassification);
+            Assert.Equal(new TestCoverageCountComparison(2, 2, 3, 1, false), receipt.CountComparison);
+            Assert.Equal(control.Passed, receipt.Passed);
+            Assert.Equal(control.MissingTests, receipt.MissingTests);
+            Assert.Equal(control.FailureClassification, receipt.FailureClassification);
+            Assert.Equal(control.CountComparison, receipt.CountComparison);
+            Assert.Equal(control.EmptyPartitions, receipt.EmptyPartitions);
+        }
+        finally
+        {
+            File.Delete(trx);
+        }
+    }
+
+    [Xunit.Fact]
+    public void RenameReceipts_DuplicatesAndOtherProjects_AreOrderedAndScoped()
+    {
+        const string project = "tests/A.Tests/A.Tests.csproj";
+        var parsed = GoalAcceptanceVerifier.ParseDeletedTestFilesWithUnresolvedRenamesForTests(
+            "R100\ttests/A.Tests/ZTests.cs\traw\\ZTests.cs\n" +
+            "R100\ttests/A.Tests/ATests.cs\traw/ATests.cs\n" +
+            "R100\ttests/A.Tests/ZTests.cs\traw\\ZTests.cs\n" +
+            "R100\ttests/B.Tests/BTests.cs\traw/BTests.cs", project, _ => null);
+        Assert.Empty(parsed.Removed);
+        Assert.Equal(3, parsed.UnresolvedRenames.Count);
+        Assert.Equal(new[]
+        {
+            new GoalAcceptanceVerifier.UnresolvedRenameDestination("tests/A.Tests/ATests.cs", "raw/ATests.cs"),
+            new GoalAcceptanceVerifier.UnresolvedRenameDestination("tests/A.Tests/ZTests.cs", "raw\\ZTests.cs")
+        }, GoalAcceptanceVerifier.UnresolvedRenamesForProject(parsed.UnresolvedRenames, project));
+    }
+
     [Xunit.Fact(DisplayName = "TestCoverageInvariant_attempt_receipt_copy_survives_originating_slot_clear")]
     public void TestCoverageInvariantAttemptReceiptCopySurvivesOriginatingSlotClear()
     {
@@ -85,8 +180,8 @@ public sealed class TestCoverageInvariantTests
         var trx = WriteTrx(("1", "ExampleTests.Runs", "Passed"));
         try
         {
-            var discovered = TestCoverageInvariant.ParseDiscoveredTests(
-                "The following Tests are available:\n  ExampleTests.Runs\n  ExampleTests.WasFilteredOut");
+            var discovered = TestCoverageInvariant.ParseDiscovery(
+                "The following Tests are available:\n  ExampleTests.Runs\n  ExampleTests.WasFilteredOut").Tests;
 
             var result = TestCoverageInvariant.Evaluate(
                 discovered,
@@ -197,13 +292,15 @@ public sealed class TestCoverageInvariantTests
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj";
         const string extractedProject =
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj";
-        var deleted = GoalAcceptanceVerifier.ParseDeletedTestFilesForTests(
-            "R100\ttests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironmentTests.cs" +
-                "\ttests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/ProviderEnvironmentTests.cs\n" +
-            "R097\ttests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironmentIsolationTests.cs" +
-                "\ttests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/ProviderEnvironmentIsolationTests.cs",
-            gatedProject,
-            _ => extractedProject);
+        var deleted = GoalAcceptanceVerifier.DeletedTestFilesForProject(
+            GoalAcceptanceVerifier.ParseDeletedTestFilesForTests(
+                "R100\ttests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironmentTests.cs" +
+                    "\ttests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/ProviderEnvironmentTests.cs\n" +
+                "R097\ttests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironmentIsolationTests.cs" +
+                    "\ttests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/ProviderEnvironmentIsolationTests.cs\n" +
+                "D\ttests/Other.Tests/GoneTests.cs",
+                gatedProject,
+                _ => extractedProject), gatedProject);
         var candidate = Enumerable.Range(0, 3439)
             .Select(index => $"current coverage case {index:D4}")
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -255,6 +352,7 @@ public sealed class TestCoverageInvariantTests
                 deleted);
             Xunit.Assert.True(receipt.Passed);
             Xunit.Assert.False(oneShort.Passed);
+            Xunit.Assert.Equal(3439, oneShort.CountComparison!.MinimumCandidateCount);
             Xunit.Assert.Contains(
                 "cross-generation-count:candidate=3438,minimum=3439,main=3452,deleted=13",
                 oneShort.MissingTests);
@@ -752,9 +850,9 @@ public sealed class TestCoverageInvariantTests
             ("1", "structural coverage uses the MTP display name", "Passed", "ExampleTests.Runs"));
         try
         {
-            var discovered = TestCoverageInvariant.ParseDiscoveredTests(
+            var discovered = TestCoverageInvariant.ParseDiscovery(
                 "structural coverage uses the MTP display name",
-                bareTestList: true);
+                bareTestList: true).Tests;
 
             var result = TestCoverageInvariant.Evaluate(
                 discovered,
@@ -775,7 +873,7 @@ public sealed class TestCoverageInvariantTests
         var trx = WriteTrx(("1", testName, "Passed"));
         try
         {
-            var discovered = TestCoverageInvariant.ParseDiscoveredTests(testName, bareTestList: true);
+            var discovered = TestCoverageInvariant.ParseDiscovery(testName, bareTestList: true).Tests;
 
             var result = TestCoverageInvariant.Evaluate(
                 discovered,
@@ -814,7 +912,7 @@ public sealed class TestCoverageInvariantTests
     [Xunit.Fact(DisplayName = "TestCoverageInvariant_bare_MTP_discovery_ignores_summaries_and_diagnostics")]
     public void TestCoverageInvariantBareMtpDiscoveryIgnoresSummariesAndDiagnostics()
     {
-        var discovered = TestCoverageInvariant.ParseDiscoveredTests(
+        var discovered = TestCoverageInvariant.ParseDiscovery(
             """
             Microsoft.Testing.Platform v1.8.0
             [xUnit.net 00:00:00.10] Discovering: Example.Tests
@@ -826,7 +924,7 @@ public sealed class TestCoverageInvariantTests
             succeeded: 1
             Duration: 00:00:00.42
             """,
-            bareTestList: true);
+            bareTestList: true).Tests;
 
         Xunit.Assert.Equal(["structural coverage uses the MTP display name"], discovered);
     }
@@ -835,9 +933,9 @@ public sealed class TestCoverageInvariantTests
     public void TestCoverageInvariantCountsDisplayNameWithDiagnosticPrefix()
     {
         const string testName = "ErrorHandlingWhenDispatchExits";
-        var discovered = TestCoverageInvariant.ParseDiscoveredTests(
+        var discovered = TestCoverageInvariant.ParseDiscovery(
             $"Microsoft.Testing.Platform v1.8.0{Environment.NewLine}{testName}",
-            bareTestList: true);
+            bareTestList: true).Tests;
         var trx = WriteTrx(("1", "UnrelatedTests.Runs", "Passed"));
         try
         {
