@@ -6,7 +6,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 // The collection owns the acceptance lane and supplies an isolated build root.
 [Collection(TestCollections.DotnetBuildSlots)]
-public sealed class RemoteFocusedEvidenceShadowTests : GoalAcceptanceVerifierDotnetBuildSlotTests
+public sealed class RemoteFocusedEvidenceShadowTests : GoalAcceptanceVerifierTestBase
 {
     [Xunit.Fact]
     public async Task CleanSampledCandidate_SubmitsBoundJobsAndRecordsParityWithoutChangingLocalResults()
@@ -248,6 +248,82 @@ public sealed class RemoteFocusedEvidenceShadowTests : GoalAcceptanceVerifierDot
         Assert.Equal(fault, configuration.FocusedEvidence.FaultReason);
         Assert.Equal(4, configuration.FocusedEvidence.SampleEvery);
         Assert.Equal(300, configuration.FocusedEvidence.GraceSeconds);
+    }
+
+    // This independent fixture belongs to DotnetBuildSlots, rather than the
+    // historical split fixture family whose concurrency contract is JobAccounting.
+    private static int StableSlotIndex(string path)
+    {
+        var match = System.Text.RegularExpressions.Regex.Match(
+            path,
+            @"(?:slot-|build-)(?<slot>\d+)",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase |
+                System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        return match.Success
+            ? int.Parse(match.Groups["slot"].Value, System.Globalization.CultureInfo.InvariantCulture)
+            : throw new InvalidOperationException($"Expected build-pool path, got '{path}'.");
+    }
+
+    private static bool IsMtpExecutableCall(string[] args, string projectName) =>
+        args.Length > 1 &&
+        args[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase) &&
+        args[1].EndsWith(".dll", StringComparison.OrdinalIgnoreCase) &&
+        Path.GetFileNameWithoutExtension(args[1]).Equals(projectName, StringComparison.OrdinalIgnoreCase);
+
+    private static string GetArtifactsPath(string[] args)
+    {
+        var artifactsPathIndex = Array.IndexOf(args, "--artifacts-path");
+        Assert.True(artifactsPathIndex >= 0);
+        Assert.True(artifactsPathIndex + 1 < args.Length);
+        return args[artifactsPathIndex + 1];
+    }
+
+    private static void WriteMtpTrx(string[] args, int executedTestCount, IReadOnlyList<string> executedTestIdentities)
+    {
+        var resultsDirectoryIndex = Array.IndexOf(args, "--results-directory");
+        var trxFileIndex = Array.IndexOf(args, "--report-trx-filename");
+        Assert.True(resultsDirectoryIndex >= 0);
+        Assert.True(resultsDirectoryIndex + 1 < args.Length);
+        Assert.True(trxFileIndex >= 0);
+        Assert.True(trxFileIndex + 1 < args.Length);
+        Directory.CreateDirectory(args[resultsDirectoryIndex + 1]);
+        var destinationPath = Path.Combine(args[resultsDirectoryIndex + 1], args[trxFileIndex + 1]);
+        var definitions = executedTestIdentities.Select((identity, index) =>
+        {
+            var separator = identity.LastIndexOf('.');
+            var className = separator > 0 ? identity[..separator] : identity;
+            var methodName = separator > 0 ? identity[(separator + 1)..] : "Executed";
+            return new XElement(
+                "UnitTest",
+                new XAttribute("id", $"test-{index}"),
+                new XAttribute("name", identity),
+                new XElement(
+                    "TestMethod",
+                    new XAttribute("className", className),
+                    new XAttribute("name", methodName)));
+        });
+        var results = executedTestIdentities.Select((identity, index) =>
+            new XElement(
+                "UnitTestResult",
+                new XAttribute("testId", $"test-{index}"),
+                new XAttribute("testName", identity),
+                new XAttribute("outcome", "Passed")));
+        new XDocument(
+            new XElement(
+                "TestRun",
+                new XElement("TestDefinitions", definitions),
+                new XElement("Results", results),
+                new XElement(
+                    "ResultSummary",
+                    new XAttribute("outcome", "Completed"),
+                    new XElement(
+                        "Counters",
+                        new XAttribute("total", Math.Max(1, executedTestCount)),
+                        new XAttribute("executed", executedTestCount),
+                        new XAttribute("passed", executedTestCount),
+                        new XAttribute("failed", 0),
+                        new XAttribute("notExecuted", 0)))))
+            .Save(destinationPath);
     }
 
     private const string Project = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj";
