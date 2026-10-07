@@ -377,7 +377,9 @@ internal static class SourceSizeRatchet
     internal static IReadOnlyList<SourceClassCeiling> SeededClassCeilings { get; } = Array.AsReadOnly(
         new[]
         {
-            new SourceClassCeiling("ConductorDriver", 15293, 70),
+            // Goal b67746ef adds 24 lines to return recorded cohort/train verdicts and preserve failed
+            // gate-only train receipts; keep the existing driver seams and bound the measured total.
+            new SourceClassCeiling("ConductorDriver", 15317, 70),
             new SourceClassCeiling("CliCommandHandlers", 12205, 30),
             new SourceClassCeiling("GoalAcceptanceVerifier", 9064, 32),
             new SourceClassCeiling("AgentOrchestratorKernel", 9506, 27),
