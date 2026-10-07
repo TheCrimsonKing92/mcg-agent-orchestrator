@@ -16,10 +16,11 @@ public sealed class GoalMonitoringQueryLiveDispositionTests
         {
             var workspace = OrchestratorWorkspace.ForDirectory(root);
             var kernel = new AgentOrchestratorKernel();
+            var agents = AgentCatalog.Default().Agents;
             var goal = kernel.CreateGoal("Live monitoring disposition", [
                 new TaskSpec(TaskId.New(), "Implement feature", AgentRole.Developer)
             ]);
-            kernel.ActivateGoal(goal.Id, []);
+            kernel.ActivateGoal(goal.Id, agents);
             goal = kernel.GetGoal(goal.Id);
             var payload = JsonSerializer.Serialize(new
             {
@@ -48,7 +49,7 @@ public sealed class GoalMonitoringQueryLiveDispositionTests
                 skipTerminalDispatchEvaluation: true,
                 skipInactiveDispatchEvaluation: true);
             var batch = GoalMonitoringQuery.BuildBatch(
-                kernel, goal, 0, [], WorkerProfileCatalog.Default(), workspace);
+                kernel, goal, 0, agents, WorkerProfileCatalog.Default(), workspace);
 
             Xunit.Assert.Equal(GoalStatus.Active, goal.Status);
             Xunit.Assert.Equal(AgentRole.Developer, Xunit.Assert.Single(goal.Tasks).RequiredRole);
