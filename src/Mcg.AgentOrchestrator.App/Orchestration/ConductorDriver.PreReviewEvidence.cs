@@ -195,8 +195,8 @@ internal sealed partial class ConductorDriver
                 goal.Id.Value,
                 goalPrefix,
                 policy,
-                new ConductorAdvanceOutcome.Held(
-                    fromState,
+                PreReviewEvidenceHold(
+                    fromState, goal.Id.Value, "writer-busy", "", "",
                     $"Background pre-review evidence artifact writer is busy; retry on next conduct tick. {ex.Message}"));
             return true;
         }
@@ -208,10 +208,11 @@ internal sealed partial class ConductorDriver
                 goal.Id.Value,
                 goalPrefix,
                 policy,
-                new ConductorAdvanceOutcome.Held(
-                    fromState,
+                PreReviewEvidenceHold(
+                    fromState, goal.Id.Value, "attempt-running",
+                    attemptDecision.Attempt.AttemptId, attemptDecision.Attempt.Outcome.ToString(),
                     _focusedEvidenceAttemptCoordinator.DescribeFocusedEvidenceHold(attemptDecision.Attempt),
-                    $"pre-review-evidence:{attemptDecision.Attempt.AttemptId}") { Owner = ConductorHoldOwner.BackgroundAttempt });
+                    $"pre-review-evidence:{attemptDecision.Attempt.AttemptId}", ConductorHoldOwner.BackgroundAttempt));
             return true;
         }
 
@@ -226,8 +227,9 @@ internal sealed partial class ConductorDriver
                 goal.Id.Value,
                 goalPrefix,
                 policy,
-                new ConductorAdvanceOutcome.Held(
-                    fromState,
+                PreReviewEvidenceHold(
+                    fromState, goal.Id.Value, "did-not-run",
+                    attemptDecision.Attempt.AttemptId, attemptDecision.Attempt.Outcome.ToString(),
                     $"Background pre-review evidence did not run ({attemptDecision.Attempt.Outcome}); " +
                     $"retry on next conduct tick. attempt={attemptDecision.Attempt.AttemptId}: " +
                     (attemptDecision.Attempt.Detail ?? "no result artifact was produced")));
