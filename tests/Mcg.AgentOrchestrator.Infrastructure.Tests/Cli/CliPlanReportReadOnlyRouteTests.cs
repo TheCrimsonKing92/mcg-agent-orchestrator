@@ -71,7 +71,7 @@ public sealed class CliPlanReportReadOnlyRouteTests : CliTaskQueryTestSupport
     [Xunit.InlineData("supervisor", "-prefix")]
     [Xunit.InlineData("dogfood-eval", "abc10000")]
     [Xunit.InlineData("goal-diagnostics", "abc10000", "extra")]
-    [Xunit.InlineData("failure-triage", "abc10000")]
+    [Xunit.InlineData("failure-triage", "abc10000", "extra")]
     [Xunit.InlineData("goal-timing", "abc10000", "extra")]
     [Xunit.InlineData("readiness", "abc10000")]
     [Xunit.InlineData("next", "abc10000")]
