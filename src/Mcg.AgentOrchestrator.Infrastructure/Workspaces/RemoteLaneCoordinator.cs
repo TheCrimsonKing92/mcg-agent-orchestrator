@@ -21,11 +21,10 @@ internal sealed class RemoteLaneCoordinator : IDisposable
     private readonly Action<string, RemoteLaneOutcomeCode>? _onOutcome;
     private readonly Action<string>? _onEvent;
     private readonly object _gate = new();
-    private readonly HashSet<string> _busy = new(StringComparer.Ordinal);
     private readonly HashSet<string> _retired = new(StringComparer.Ordinal);
     private readonly HashSet<string> _excluded = new(StringComparer.Ordinal);
     private readonly HashSet<IRemoteLaneHandle> _handles = new(ReferenceEqualityComparer.Instance);
-    private readonly Dictionary<string, IDisposable> _claims = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, SortedDictionary<int, IDisposable>> _claims = new(StringComparer.Ordinal);
 
     internal RemoteLaneCoordinator(RemoteLaneExecutorConfiguration configuration,
         IRemoteLaneCandidateIdentity cache, string worktreePath, string? attemptPrefix,
@@ -61,15 +60,22 @@ internal sealed class RemoteLaneCoordinator : IDisposable
     {
         lock (_gate)
         {
-            foreach (var entry in _configuration.Executors)
+            // OrderBy is stable: equally occupied executors retain configuration order.
+            foreach (var entry in _configuration.Executors
+                .Where(entry => !_retired.Contains(entry.Id) && HeldSlotCount(entry.Id) < entry.Slots)
+                .OrderBy(entry => HeldSlotCount(entry.Id)))
             {
-                if (_busy.Contains(entry.Id) || _retired.Contains(entry.Id)) continue;
-                var claim = RemoteExecutorOccupancy.TryClaimExclusive(_occupancyRoot, entry.Id);
-                if (claim is null) continue;
-                _claims.Add(entry.Id, claim);
-                _busy.Add(entry.Id);
-                RemoteExecutorOccupancy.Claim(_occupancyRoot, entry.Id, _cache.AttemptId);
-                return entry;
+                _claims.TryGetValue(entry.Id, out var slots);
+                for (var slotIndex = 0; slotIndex < entry.Slots; slotIndex++)
+                {
+                    if (slots?.ContainsKey(slotIndex) == true) continue;
+                    var claim = RemoteExecutorOccupancy.TryClaimExclusive(_occupancyRoot, entry.Id, slotIndex);
+                    if (claim is null) continue;
+                    if (slots is null) _claims.Add(entry.Id, slots = new());
+                    slots.Add(slotIndex, claim);
+                    RemoteExecutorOccupancy.Claim(_occupancyRoot, entry.Id, _cache.AttemptId, slotIndex);
+                    return entry;
+                }
             }
             return null;
         }
@@ -79,10 +85,24 @@ internal sealed class RemoteLaneCoordinator : IDisposable
     {
         lock (_gate)
         {
-            _busy.Remove(executorId);
-            RemoteExecutorOccupancy.Release(_occupancyRoot, executorId, _cache.AttemptId);
-            if (_claims.Remove(executorId, out var claim)) claim.Dispose();
+            if (TakeHighestSlot(executorId) is { } slot)
+            {
+                RemoteExecutorOccupancy.Release(_occupancyRoot, executorId, _cache.AttemptId, slot.Key);
+                slot.Value.Dispose();
+            }
         }
+    }
+
+    private int HeldSlotCount(string executorId) => _claims.TryGetValue(executorId, out var slots) ? slots.Count : 0;
+
+    // Caller holds _gate. A lane returns one interchangeable slot, leaving its peers held.
+    private KeyValuePair<int, IDisposable>? TakeHighestSlot(string executorId)
+    {
+        if (!_claims.TryGetValue(executorId, out var slots)) return null;
+        var slot = slots.Last();
+        slots.Remove(slot.Key);
+        if (slots.Count == 0) _claims.Remove(executorId);
+        return slot;
     }
 
     private RemoteLaneRequest CreateRequest(Check check, string executorId)
@@ -174,11 +194,11 @@ internal sealed class RemoteLaneCoordinator : IDisposable
 
         async Task<RemoteLaneOutcome> Fallback(RemoteLaneOutcomeCode code, RemoteLaneResult? result = null, string? reason = null)
         {
-            IDisposable? claim;
+            KeyValuePair<int, IDisposable>? slot;
             lock (_gate)
             {
-                _busy.Remove(entry.Id); _retired.Add(entry.Id);
-                _claims.Remove(entry.Id, out claim);
+                _retired.Add(entry.Id);
+                slot = TakeHighestSlot(entry.Id);
             }
             if (observedResult is null && result is null && handle is IRemoteLaneQueuedJobCancellation cancellation)
                 try { cancellation.RequestQueuedJobCancellation(); }
@@ -195,8 +215,11 @@ internal sealed class RemoteLaneCoordinator : IDisposable
                 }
                 catch (Exception) { /* Diagnostics cannot change fallback. */ }
             }
-            RemoteExecutorOccupancy.Release(_occupancyRoot, entry.Id, _cache.AttemptId);
-            claim?.Dispose();
+            if (slot is { } held)
+            {
+                RemoteExecutorOccupancy.Release(_occupancyRoot, entry.Id, _cache.AttemptId, held.Key);
+                held.Value.Dispose();
+            }
             Record(request, code, result, reason, Detail(capture));
             return new(request, handle, null);
         }
@@ -287,10 +310,13 @@ internal sealed class RemoteLaneCoordinator : IDisposable
     {
         lock (_gate)
         {
-            foreach (var (executorId, claim) in _claims)
+            foreach (var (executorId, slots) in _claims)
             {
-                RemoteExecutorOccupancy.Release(_occupancyRoot, executorId, _cache.AttemptId);
-                claim.Dispose();
+                foreach (var (slotIndex, claim) in slots)
+                {
+                    RemoteExecutorOccupancy.Release(_occupancyRoot, executorId, _cache.AttemptId, slotIndex);
+                    claim.Dispose();
+                }
             }
             _claims.Clear();
         }

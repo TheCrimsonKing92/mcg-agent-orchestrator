@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
@@ -16,6 +17,20 @@ internal sealed class SshRemoteLaneExecutor(
 {
     internal const int RepresentativeAttemptFolderLength = 117;
     internal const int StagingPathBudget = 240;
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _pushGates = new(StringComparer.Ordinal);
+
+    internal async Task<IDisposable> EnterPushGateAsync(string executorId, CancellationToken cancellationToken = default)
+    {
+        var gate = _pushGates.GetOrAdd(executorId, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        return new PushGateLease(gate);
+    }
+
+    private sealed class PushGateLease(SemaphoreSlim gate) : IDisposable
+    {
+        private SemaphoreSlim? _gate = gate;
+        public void Dispose() => Interlocked.Exchange(ref _gate, null)?.Release();
+    }
 
     internal static string SshPath => OpenSshPath("ssh.exe");
     internal static string ScpPath => OpenSshPath("scp.exe");
@@ -86,10 +101,14 @@ internal sealed class SshRemoteLaneExecutor(
         var staging = PrepareStaging(Path.GetDirectoryName(Path.GetFullPath(attemptPrefix))!, entry.Id, request.Lane, laneKey);
         var steps = new List<RemoteLaneStep>();
         var startedAt = clock.GetUtcNow();
-        var push = await Task.Run(() => git(worktreePath, 600_000,
-            ["-c", $"core.sshCommand={SshPath.Replace('\\', '/')}", "push",
-                $"{entry.RunnerAlias}:{entry.RemoteRepository}", $"{request.VerifyingCommitSha}:refs/heads/c-{shortSha}"]),
-            cancellationToken).ConfigureAwait(false);
+        GitCli.GitResult push;
+        using (await EnterPushGateAsync(entry.Id, cancellationToken).ConfigureAwait(false))
+        {
+            push = await Task.Run(() => git(worktreePath, 600_000,
+                ["-c", $"core.sshCommand={SshPath.Replace('\\', '/')}", "push",
+                    $"{entry.RunnerAlias}:{entry.RemoteRepository}", $"{request.VerifyingCommitSha}:refs/heads/c-{shortSha}"]),
+                cancellationToken).ConfigureAwait(false);
+        }
         steps.Add(RemoteLaneDiagnosticFiles.Step(staging, "push", push.ExitCode, null,
             startedAt, clock.GetUtcNow(), push.Output, push.Error));
         if (push.ExitCode != 0) return new(null, "push-failed", steps.ToArray());

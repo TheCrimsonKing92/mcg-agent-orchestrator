@@ -5,7 +5,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal sealed record RemoteLaneExecutorEntry(string Id, int LeaseSeconds,
     string? Transport = null, string? RunnerAlias = null, string? AdminAlias = null,
-    string? RemoteRepository = null, string? RunRoot = null, int PollSeconds = 10);
+    string? RemoteRepository = null, string? RunRoot = null, int PollSeconds = 10, int Slots = 1);
 
 // Operator-owned, immutable for a single gate attempt. Invalid input always disables dispatch.
 internal sealed record RemoteLaneExecutorConfiguration(
@@ -50,9 +50,16 @@ internal sealed record RemoteLaneExecutorConfiguration(
                         return Disabled("invalid");
                     if (value > 0) seconds = value;
                 }
+                var slots = 1;
+                if (executor.TryGetProperty("slots", out var slotCount))
+                {
+                    if (slotCount.ValueKind != JsonValueKind.Number || !slotCount.TryGetInt32(out slots) ||
+                        slots is < 1 or > 16)
+                        return Disabled("invalid");
+                }
                 if (!executor.TryGetProperty("transport", out var transport))
                 {
-                    entries.Add(new(id.GetString()!, seconds));
+                    entries.Add(new(id.GetString()!, seconds, Slots: slots));
                     continue;
                 }
                 if (transport.ValueKind != JsonValueKind.String || transport.GetString() != "ssh")
@@ -73,7 +80,7 @@ internal sealed record RemoteLaneExecutorConfiguration(
                         return Disabled("invalid");
                     if (value > 0) pollSeconds = value;
                 }
-                entries.Add(new(id.GetString()!, seconds, "ssh", runner, admin, repository, runRoot, pollSeconds));
+                entries.Add(new(id.GetString()!, seconds, "ssh", runner, admin, repository, runRoot, pollSeconds, slots));
             }
             var names = new List<string>();
             foreach (var lane in lanes.EnumerateArray())

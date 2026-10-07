@@ -23,30 +23,37 @@ internal static class RemoteExecutorOccupancy
     }
 
     internal static IDisposable? TryClaimExclusive(string root, string executor)
+        => TryClaimExclusive(root, executor, 0);
+
+    internal static IDisposable? TryClaimExclusive(string root, string executor, int slotIndex)
     {
         try
         {
-            if (!SafeName(executor)) return null;
+            if (slotIndex < 0 || !SafeName(executor)) return null;
             var folder = Folder(root, executor);
             Directory.CreateDirectory(folder);
-            return new FileStream(Path.Combine(folder, "claim.lock"), FileMode.OpenOrCreate,
+            var name = slotIndex == 0 ? "claim.lock" : $"slot-{slotIndex}.lock";
+            return new FileStream(Path.Combine(folder, name), FileMode.OpenOrCreate,
                 FileAccess.ReadWrite, FileShare.None);
         }
         catch (Exception) { return null; }
     }
 
     internal static void Claim(string root, string executor, string attempt)
+        => Claim(root, executor, attempt, 0);
+
+    internal static void Claim(string root, string executor, string attempt, int slotIndex)
     {
         string? temporary = null;
         try
         {
-            if (!SafeName(executor) || !SafeName(attempt) ||
+            if (slotIndex < 0 || !SafeName(executor) || !SafeName(attempt) ||
                 DefaultStartTime(Environment.ProcessId) is not { } start) return;
             var folder = Folder(root, executor);
             Directory.CreateDirectory(folder);
             temporary = Path.Combine(folder, Guid.NewGuid().ToString("N") + ".tmp");
             File.WriteAllText(temporary, JsonSerializer.Serialize(new Marker(Environment.ProcessId, start)));
-            File.Move(temporary, Path.Combine(folder, attempt + ".json"), overwrite: true);
+            File.Move(temporary, Path.Combine(folder, MarkerName(attempt, slotIndex)), overwrite: true);
         }
         catch (Exception) { }
         finally
@@ -57,14 +64,20 @@ internal static class RemoteExecutorOccupancy
     }
 
     internal static void Release(string root, string executor, string attempt)
+        => Release(root, executor, attempt, 0);
+
+    internal static void Release(string root, string executor, string attempt, int slotIndex)
     {
         try
         {
-            if (SafeName(executor) && SafeName(attempt))
-                File.Delete(Path.Combine(Folder(root, executor), attempt + ".json"));
+            if (slotIndex >= 0 && SafeName(executor) && SafeName(attempt))
+                File.Delete(Path.Combine(Folder(root, executor), MarkerName(attempt, slotIndex)));
         }
         catch (Exception) { }
     }
+
+    private static string MarkerName(string attempt, int slotIndex) =>
+        slotIndex == 0 ? attempt + ".json" : $"{attempt}.slot-{slotIndex}.json";
 
     internal static bool IsOccupied(string root, string executor, Func<int, DateTimeOffset?>? startTimeOf = null)
     {
