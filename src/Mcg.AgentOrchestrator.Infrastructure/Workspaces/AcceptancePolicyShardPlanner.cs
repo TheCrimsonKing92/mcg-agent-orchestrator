@@ -278,6 +278,7 @@ internal static partial class AcceptancePolicyShardPlanner
             return ProviderEnvironmentTestsProject;
         if (normalized.StartsWith("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/", StringComparison.OrdinalIgnoreCase))
             return CliTestsProject;
+        if (normalized.StartsWith("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Acceptance/", StringComparison.OrdinalIgnoreCase)) return AcceptanceTestsProject;
         if (normalized.StartsWith("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/", StringComparison.OrdinalIgnoreCase))
             return InfrastructureTestsProject;
         return null;
