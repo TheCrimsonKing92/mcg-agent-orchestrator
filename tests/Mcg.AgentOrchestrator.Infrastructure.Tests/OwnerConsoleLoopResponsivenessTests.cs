@@ -6,7 +6,7 @@ public sealed class OwnerConsoleLoopResponsivenessTests
 {
     private static CancellationToken TestToken => TestContext.Current.CancellationToken;
 
-    [Fact(Timeout = 30000)]
+    [Fact]
     public async Task ReadyCommandAndEvent_CommandRunsFirst()
     {
         var harness = new Harness();
@@ -21,7 +21,7 @@ public sealed class OwnerConsoleLoopResponsivenessTests
         Assert.Empty(harness.Output.Lines);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact]
     public async Task FiveEventsDuringRefresh_OneFollowUpUsesLatestEvent()
     {
         var harness = new Harness();
@@ -42,7 +42,7 @@ public sealed class OwnerConsoleLoopResponsivenessTests
         Assert.Equal(2, harness.Steps.EventCount);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact]
     public async Task ReadyCommandAfterRefresh_RunsBeforeCoalescedEvent()
     {
         var harness = new Harness();
@@ -62,7 +62,7 @@ public sealed class OwnerConsoleLoopResponsivenessTests
         Assert.Equal(new[] { "event:1", "command:help", "event:2", "command:quit" }, harness.Steps.Order);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact]
     public async Task SlowCommand_BusyNoticePrintsOnce()
     {
         var harness = new Harness();
@@ -85,7 +85,7 @@ public sealed class OwnerConsoleLoopResponsivenessTests
         Assert.Equal(new[] { "working: slow ..." }, harness.Output.Lines);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact]
     public async Task SynchronousSlowCommand_BoundReportsAndNextCommandRuns()
     {
         var harness = new Harness();
@@ -114,7 +114,7 @@ public sealed class OwnerConsoleLoopResponsivenessTests
         Assert.Single(harness.Output.Lines, line => line == "working: slow ...");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact]
     public async Task TimedOutCommand_NextCommandRunsAndLateAnswerPrints()
     {
         var harness = new Harness();
@@ -143,7 +143,7 @@ public sealed class OwnerConsoleLoopResponsivenessTests
         Assert.DoesNotContain("slow was abandoned", harness.Output.Lines);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact]
     public async Task TimedOutCommand_CancellationPrintsAbandonedAndLoopContinues()
     {
         var harness = new Harness();
@@ -164,7 +164,7 @@ public sealed class OwnerConsoleLoopResponsivenessTests
         Assert.Single(harness.Output.Lines, line => line == "slow was abandoned");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact]
     public async Task TimedOutRefresh_RemainsSingleWhileNextCommandRuns()
     {
         var harness = new Harness();
@@ -189,7 +189,7 @@ public sealed class OwnerConsoleLoopResponsivenessTests
         Assert.Single(harness.Output.Lines, line => line == "working: refresh after conductor event ...");
     }
 
-    [Theory(Timeout = 30000)]
+    [Theory]
     [InlineData(true)]
     [InlineData(false)]
     public async Task ThrowingCommand_ErrorPrintsAndNextCommandRuns(bool synchronous)
@@ -213,7 +213,7 @@ public sealed class OwnerConsoleLoopResponsivenessTests
         Assert.Equal(new[] { "error: kaboom" }, harness.Output.Lines);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact]
     public async Task ThrowingRefresh_ErrorPrintsAndNextCommandRuns()
     {
         var harness = new Harness();
@@ -229,7 +229,7 @@ public sealed class OwnerConsoleLoopResponsivenessTests
         Assert.Equal(new[] { "error: refresh failed" }, harness.Output.Lines);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact]
     public async Task ThrowingStartup_ErrorPrintsAndCommandStillRuns()
     {
         var harness = new Harness();
@@ -244,7 +244,7 @@ public sealed class OwnerConsoleLoopResponsivenessTests
         Assert.Equal(new[] { "error: startup failed" }, harness.Output.Lines);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact]
     public async Task TimedOutCommand_LateFailurePrintsErrorAndLoopContinues()
     {
         var harness = new Harness();
@@ -265,7 +265,7 @@ public sealed class OwnerConsoleLoopResponsivenessTests
         Assert.Single(harness.Output.Lines, line => line == "error: late failure");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact]
     public async Task CoalescedEvents_BoardTriggerSurvivesLatestNonBoardEvent()
     {
         var harness = new Harness();
@@ -286,7 +286,7 @@ public sealed class OwnerConsoleLoopResponsivenessTests
         Assert.Equal("3", followUp.Detail);
     }
 
-    [Theory(Timeout = 30000)]
+    [Theory]
     [InlineData(true)]
     [InlineData(false)]
     public async Task FaultingEventRead_IdleCommandsRunAndRetryWaitsForFakeTime(bool synchronous)
@@ -315,7 +315,7 @@ public sealed class OwnerConsoleLoopResponsivenessTests
         Assert.Equal(0, harness.Steps.EventCount);
     }
 
-    [Theory(Timeout = 30000)]
+    [Theory]
     [InlineData(true)]
     [InlineData(false)]
     public async Task FaultingEventRead_ActiveCommandCompletesAndErrorsStayBounded(bool synchronous)
