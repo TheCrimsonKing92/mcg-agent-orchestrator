@@ -237,15 +237,15 @@ internal static partial class ResearcherOutputContract
         }
     }
 
-    [GeneratedRegex(@"(?im)^[ \t]{0,3}#{1,6}[ \t]+current[ \t]+source[ \t]+findings?[ \t]*$")]
+    [GeneratedRegex(@"(?im)^[ \t]{0,3}#{1,6}[ \t]+current[ \t]+source[ \t]+findings?(?:[ \t]*\([^()\n]*\))?[ \t]*$")]
     private static partial Regex CurrentSourceHeading();
 
-    [GeneratedRegex(@"(?im)^[ \t]{0,3}#{1,6}[ \t]+prior[ \t]+goal[ \t]+evidence[ \t]*$")]
+    [GeneratedRegex(@"(?im)^[ \t]{0,3}#{1,6}[ \t]+prior[ \t]+goal[ \t]+evidence(?:[ \t]*\([^()\n]*\))?[ \t]*$")]
     private static partial Regex PriorGoalEvidenceHeading();
 
-    [GeneratedRegex(@"(?im)^[ \t]{0,3}#{1,6}[ \t]+upstream[ \t]+capabilities[ \t]*$")]
+    [GeneratedRegex(@"(?im)^[ \t]{0,3}#{1,6}[ \t]+upstream[ \t]+capabilities(?:[ \t]*\([^()\n]*\))?[ \t]*$")]
     private static partial Regex UpstreamCapabilitiesHeading();
 
-    [GeneratedRegex(@"(?im)^[ \t]{0,3}#{1,6}[ \t]+likely[ \t]+seams?[ \t]+and[ \t]+risks?[ \t]*$")]
+    [GeneratedRegex(@"(?im)^[ \t]{0,3}#{1,6}[ \t]+likely[ \t]+seams?[ \t]+and[ \t]+risks?(?:[ \t]*\([^()\n]*\))?[ \t]*$")]
     private static partial Regex LikelySeamsHeading();
 }
