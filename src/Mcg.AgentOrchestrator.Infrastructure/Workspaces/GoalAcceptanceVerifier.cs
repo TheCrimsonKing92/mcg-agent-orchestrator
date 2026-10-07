@@ -1637,38 +1637,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string? attemptId) =>
         $"{attemptId ?? "manual"}:{Slug(check.Name)}:{ordinal.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
 
-    private static AcceptanceShardCompletionDecision InferPartitionCompletionDecision(AcceptanceCheckResult result)
-    {
-        if (result.Passed)
-        {
-            return new AcceptanceShardCompletionDecision(
-                true,
-                null,
-                false,
-                result.ExitCode,
-                result.DiscoveredTestCount,
-                result.ExecutedTestCount,
-                "not-applicable",
-                result.FailureClassification);
-        }
-
-        var predicate = result.FailureClassification ??
-            (result.Name.StartsWith("acceptance-check-timeout:", StringComparison.Ordinal) ||
-             IsCaptureLimitFailureName(result.Name)
-                ? AcceptanceShardCompletionPredicates.TimedOut
-                : result.ExitCode != 0
-                    ? AcceptanceShardCompletionPredicates.NonzeroExit
-                    : AcceptanceShardCompletionPredicates.CheckFailed);
-        return new AcceptanceShardCompletionDecision(
-            false,
-            predicate,
-            predicate.Equals(AcceptanceShardCompletionPredicates.TimedOut, StringComparison.Ordinal),
-            result.ExitCode,
-            result.DiscoveredTestCount,
-            result.ExecutedTestCount,
-            "not-available",
-            result.FailureClassification);
-    }
+    private static AcceptanceShardCompletionDecision InferPartitionCompletionDecision(AcceptanceCheckResult result) =>
+        AcceptanceShardCompletionAdjudicator.InferPartition(result, IsCaptureLimitFailureName(result.Name));
 
     private void ThrowIfGateCancellationRequested(CancellationToken cancellationToken)
     {
@@ -5183,15 +5153,6 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         IReadOnlyList<string> UnreadableReceiptPaths);
 
     internal sealed record DotnetTestTelemetry(IReadOnlyList<string> Paths, string[] Arguments);
-
-    internal sealed record TrxCompletionEvidence(
-        int? DiscoveredTestCount,
-        int? ExecutedTestCount,
-        int? NotExecutedTestCount,
-        string Outcome,
-        bool Passed,
-        string? FailedPredicate,
-        bool AssemblyCleanupOnly = false);
 
     private sealed record IndexedShard(int Index, AcceptanceManifestCheck Check);
 
