@@ -633,6 +633,31 @@ public static partial class WorkerProcessJobs
             resumeObserver);
     }
 
+    internal static RegisteredOwnedProcess StartRegisteredOwnedWithFileCaptureOrThrow(
+        ProcessStartInfo startInfo,
+        string stdoutPath,
+        string stderrPath,
+        string? ownerId = null,
+        Func<Process, SpawnProcessIdentityReadResult>? registrationIdentityReader = null,
+        Action<int>? resumeObserver = null)
+    {
+        ArgumentNullException.ThrowIfNull(startInfo);
+        if (!OperatingSystem.IsWindows())
+        {
+            throw new PlatformNotSupportedException("Owned file-capture launch is Windows-only.");
+        }
+
+        var lifecycleAuthority = new object();
+        return StartRegisteredOwnedWindows(
+            () => OwnedProcessGroup.StartSuspendedContainedWithFileCapture(
+                startInfo, stdoutPath, stderrPath, requestOwnConsole: true),
+            startInfo,
+            lifecycleAuthority,
+            registrationIdentityReader,
+            ownerId,
+            resumeObserver);
+    }
+
     internal static RegisteredOwnedProcess StartRegisteredOwnedRedirectedOrThrow(
         ProcessStartInfo startInfo,
         string? ownerId = null)

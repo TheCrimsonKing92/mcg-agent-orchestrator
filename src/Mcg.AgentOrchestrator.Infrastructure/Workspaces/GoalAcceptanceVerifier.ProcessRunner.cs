@@ -25,17 +25,20 @@ public sealed partial class GoalAcceptanceVerifier
         Action<AcceptanceProcessCleanupObservation>? cleanupObserver = null,
         CancellationToken timeoutSignal = default,
         Action<SpawnProcessIdentity>? commandIdentityObserver = null,
-        bool? keepCaptureFiles = null) =>
+        bool? keepCaptureFiles = null,
+        Action<int>? resumeObserver = null,
+        bool forceUtf8ConsoleOutput = false) =>
         RunProcessAsync(
             arguments,
             workingDirectory,
             commandTimeout,
-            forceUtf8ConsoleOutput: false,
+            forceUtf8ConsoleOutput,
             cancellationToken,
             cleanupObserver,
             timeoutSignal,
             commandIdentityObserver: commandIdentityObserver,
-            keepCaptureFiles: keepCaptureFiles);
+            keepCaptureFiles: keepCaptureFiles,
+            resumeObserver: resumeObserver);
 
     internal static Task<(CommandResult Result, string HeartbeatPath)> RunProcessWithHeartbeatForTestsAsync(
         string[] arguments,
@@ -123,10 +126,11 @@ public sealed partial class GoalAcceptanceVerifier
         TimeSpan? heartbeatInterval = null, TimeSpan? progressInterval = null,
         TimeSpan? capturePublicationInterval = null,
         bool stopOnCaptureLimit = false,
-        bool? keepCaptureFiles = null)
+        bool? keepCaptureFiles = null,
+        Action<int>? resumeObserver = null)
     {
         engineSettings ??= new AcceptanceGateEngineSettings();
-        // Keep the shell command semantics, but own the capture file offsets in this process. The
+        // Own the capture file offsets in this process. The
         // drain keeps consuming after the cap so a noisy child cannot block or grow the files.
         var (stdoutPath, stderrPath) = CreateCaptureFilePaths();
 
@@ -165,6 +169,28 @@ public sealed partial class GoalAcceptanceVerifier
             TempRootApparatusLossReceiptStore.ApplyScope(
                 startInfo.Environment, gateInvocationId, apparatusReceiptPath);
 
+        var directSdk = OperatingSystem.IsWindows() && !forceUtf8ConsoleOutput &&
+            stdoutPipeName is not null && stderrPipeName is not null &&
+            AcceptanceSdkConsoleRule.RequiresOwnConsole(arguments);
+        ProcessStartInfo? directStartInfo = null;
+        if (directSdk)
+        {
+            directStartInfo = new ProcessStartInfo
+            {
+                FileName = arguments[0],
+                UseShellExecute = startInfo.UseShellExecute,
+                CreateNoWindow = startInfo.CreateNoWindow,
+                WindowStyle = startInfo.WindowStyle,
+                WorkingDirectory = startInfo.WorkingDirectory,
+                StandardInputEncoding = startInfo.StandardInputEncoding,
+                StandardOutputEncoding = startInfo.StandardOutputEncoding,
+                StandardErrorEncoding = startInfo.StandardErrorEncoding
+            };
+            foreach (var argument in arguments.Skip(1)) directStartInfo.ArgumentList.Add(argument);
+            directStartInfo.Environment.Clear();
+            foreach (var pair in startInfo.Environment) directStartInfo.Environment[pair.Key] = pair.Value;
+        }
+
         int? startedProcessId = null;
         int? completedProcessId = null;
         DateTimeOffset? completedProcessStartedAt = null;
@@ -172,10 +198,10 @@ public sealed partial class GoalAcceptanceVerifier
         {
             captureDrainCts = new CancellationTokenSource();
             Task[]? captureConnections = null;
-            if (stdoutPipeName is not null && stderrPipeName is not null)
+            void BeginOwnedCapture()
             {
-                var stdoutPipe = CreateCapturePipe(stdoutPipeName);
-                var stderrPipe = CreateCapturePipe(stderrPipeName);
+                var stdoutPipe = CreateCapturePipe(stdoutPipeName!);
+                var stderrPipe = CreateCapturePipe(stderrPipeName!);
                 captureSources = [stdoutPipe, stderrPipe];
                 var stdoutConnection = stdoutPipe.WaitForConnectionAsync(captureDrainCts.Token);
                 var stderrConnection = stderrPipe.WaitForConnectionAsync(captureDrainCts.Token);
@@ -205,10 +231,56 @@ public sealed partial class GoalAcceptanceVerifier
                         captureDrainCts.Token, capturePublicationInterval)
                 ];
             }
-            if (forceUtf8ConsoleOutput || AcceptanceSdkConsoleRule.RequiresOwnConsole(arguments)) process = StartAcceptanceProcess(startInfo, workingDirectory, registrationIdentityReader, requestOwnConsole: true);
-            else process = StartAcceptanceProcess(startInfo, workingDirectory, registrationIdentityReader);
-            commandIdentityTracker = new AcceptanceCommandProcessIdentityTracker(process, commandIdentityObserver);
-            commandIdentityTracker.Start();
+            if (stdoutPipeName is not null && stderrPipeName is not null) BeginOwnedCapture();
+            var requestOwnConsole = forceUtf8ConsoleOutput || AcceptanceSdkConsoleRule.RequiresOwnConsole(arguments);
+            try
+            {
+                if (directStartInfo is null && !requestOwnConsole && resumeObserver is null)
+                {
+                    process = StartAcceptanceProcess(startInfo, workingDirectory, registrationIdentityReader);
+                }
+                else
+                {
+                    process = StartAcceptanceProcess(
+                        startInfo, workingDirectory, registrationIdentityReader, requestOwnConsole,
+                        directStartInfo,
+                        stdoutPipeName is null ? null : $@"\\.\pipe\{stdoutPipeName}",
+                        stderrPipeName is null ? null : $@"\\.\pipe\{stderrPipeName}",
+                        resumeObserver);
+                }
+            }
+            catch (InvalidOperationException ex) when (directSdk &&
+                ex.InnerException is OwnedProcessLaunchException { NativeErrorCode: 2 or 3 or 267 })
+            {
+                // Only CreateProcess's missing-image failure permits fallback. Capture-open failures
+                // are plain Win32Exceptions and must propagate. The client handles have closed, so
+                // require EOF and no captured bytes before giving the shell fresh capture custody.
+                var failedCaptures = await Task.WhenAll(captureDrains!)
+                    .WaitAsync(CaptureDrainTimeout, cancellationToken).ConfigureAwait(false);
+                if (failedCaptures.Any(capture => capture.WrittenBytes != 0)) throw;
+                foreach (var source in captureSources!) source.Dispose();
+                stdoutPipeName = $"mcg-acc-{Guid.NewGuid():N}-out";
+                stderrPipeName = $"mcg-acc-{Guid.NewGuid():N}-err";
+                var fallbackStartInfo = BuildAcceptanceProcessStartInfo(
+                    arguments, workingDirectory,
+                    $@"\\.\pipe\{stdoutPipeName}", $@"\\.\pipe\{stderrPipeName}", forceUtf8ConsoleOutput);
+                fallbackStartInfo.Environment.Clear();
+                foreach (var pair in startInfo.Environment) fallbackStartInfo.Environment[pair.Key] = pair.Value;
+                BeginOwnedCapture();
+                process = StartAcceptanceProcess(
+                    fallbackStartInfo, workingDirectory, registrationIdentityReader, requestOwnConsole,
+                    resumeObserver: resumeObserver);
+                directSdk = false;
+            }
+            if (!directSdk)
+            {
+                commandIdentityTracker = new AcceptanceCommandProcessIdentityTracker(process, commandIdentityObserver);
+                commandIdentityTracker.Start();
+            }
+            else if (process.Identity is { } identity)
+            {
+                commandIdentityObserver?.Invoke(identity);
+            }
             startedProcessId = process.Id;
             completedProcessId = process.Id;
             completedProcessStartedAt = process.Identity?.StartedAt;
@@ -320,10 +392,13 @@ public sealed partial class GoalAcceptanceVerifier
             var captureLimited = captureLimitStop.Stopped;
             timedOut &= !captureLimited;
             var exitCode = timedOut || captureLimited ? -1 : process.ExitCode;
-            await commandIdentityTracker.DisposeAsync().ConfigureAwait(false);
-            completedProcessId = commandIdentityTracker.Identity?.ProcessId ?? completedProcessId;
-            completedProcessStartedAt = commandIdentityTracker.Identity?.StartedAt ?? completedProcessStartedAt;
-            commandIdentityTracker = null;
+            if (commandIdentityTracker is not null)
+            {
+                await commandIdentityTracker.DisposeAsync().ConfigureAwait(false);
+                completedProcessId = commandIdentityTracker.Identity?.ProcessId ?? completedProcessId;
+                completedProcessStartedAt = commandIdentityTracker.Identity?.StartedAt ?? completedProcessStartedAt;
+                commandIdentityTracker = null;
+            }
             keepOutputFiles = ShouldKeepCaptureFiles(keepCaptureFiles, timedOut, exitCode);
             WorkerProcessJobAccounting? accounting = null;
             try
@@ -488,7 +563,12 @@ public sealed partial class GoalAcceptanceVerifier
     private static RegisteredOwnedProcess StartAcceptanceProcess(
         ProcessStartInfo startInfo,
         string workingDirectory,
-        Func<Process, SpawnProcessIdentityReadResult>? registrationIdentityReader, bool requestOwnConsole = false)
+        Func<Process, SpawnProcessIdentityReadResult>? registrationIdentityReader,
+        bool requestOwnConsole = false,
+        ProcessStartInfo? directStartInfo = null,
+        string? stdoutPipePath = null,
+        string? stderrPipePath = null,
+        Action<int>? resumeObserver = null)
     {
         if (OperatingSystem.IsWindows() &&
             string.Equals(
@@ -519,10 +599,17 @@ public sealed partial class GoalAcceptanceVerifier
             }
         }
 
+        if (directStartInfo is not null)
+        {
+            return WorkerProcessJobs.StartRegisteredOwnedWithFileCaptureOrThrow(
+                directStartInfo, stdoutPipePath!, stderrPipePath!,
+                $"acceptance:{workingDirectory}", registrationIdentityReader, resumeObserver);
+        }
+
         return WorkerProcessJobs.StartRegisteredOwnedOrThrow(
             startInfo,
             $"acceptance:{workingDirectory}",
-            registrationIdentityReader, requestOwnConsole: requestOwnConsole);
+            registrationIdentityReader, resumeObserver: resumeObserver, requestOwnConsole: requestOwnConsole);
     }
 
     private static async Task WriteGateHeartbeatLoopAsync(
