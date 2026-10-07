@@ -53,7 +53,7 @@ public sealed class OwnerConsoleLoopResponsivenessTests
         await harness.Steps.EventsHandled.Reader.ReadAsync(TestToken);
         harness.Events.Send(2);
         await harness.Events.WaitForReadAsync(3);
-        harness.Input.Send("help");
+        await harness.Input.SendToPendingReadAsync("help");
         release.SetResult();
         await harness.Steps.EventsHandled.Reader.ReadAsync(TestToken);
         harness.Input.Send("quit");
@@ -332,10 +332,20 @@ public sealed class OwnerConsoleLoopResponsivenessTests
     private sealed class FakeInput : IOwnerConsoleInput
     {
         private readonly Channel<string?> _lines = Channel.CreateUnbounded<string?>();
+        private Task<string?>? _pendingRead;
         public bool IsEditingLine => false;
         internal void Send(string? line) => _lines.Writer.TryWrite(line);
         public ValueTask<string?> ReadLineAsync(CancellationToken cancellationToken) =>
-            _lines.Reader.ReadAsync(cancellationToken);
+            new(_pendingRead = _lines.Reader.ReadAsync(cancellationToken).AsTask());
+
+        internal async Task SendToPendingReadAsync(string line)
+        {
+            var read = _pendingRead ?? throw new InvalidOperationException("No console line read is pending.");
+            Send(line);
+            // Await the same Task exposed to the loop before releasing its active refresh.
+            // Channel delivery alone does not complete the ValueTask's AsTask continuation.
+            await read.WaitAsync(TestToken);
+        }
     }
 
     private sealed class FakeEvents : IConductEventSource
