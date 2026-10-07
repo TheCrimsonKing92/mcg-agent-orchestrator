@@ -49,6 +49,8 @@ internal sealed class RemoteLaneCoordinator : IDisposable
         if (!_configuration.Lanes.Contains(check.Name, StringComparer.Ordinal) ||
             !GoalAcceptanceVerifier.TryGetInfrastructurePartitionId(check, out _, out _)) return false;
         if (check.ExclusiveResourceKeys.Count == 0) return true;
+        if (!check.RequiresBuildSystemChange && check.ExclusiveResourceKeys.All(key =>
+                _configuration.MachineLocalResourceKeys.Contains(key, StringComparer.Ordinal))) return true;
         bool first;
         lock (_gate) first = _excluded.Add(check.Name);
         if (first) Record(CreateRequest(check, ""), RemoteLaneOutcomeCode.NotEligibleExclusiveResource);
@@ -133,6 +135,9 @@ internal sealed class RemoteLaneCoordinator : IDisposable
                             AcceptanceShardCompletionPredicates.AssemblyCleanupFailure or AcceptanceShardCompletionPredicates.NonzeroExit;
                         return await Fallback(red ? RemoteLaneOutcomeCode.RemoteRed : RemoteLaneOutcomeCode.TrxIncomplete, result).ConfigureAwait(false);
                     }
+                    if (check.ExclusiveResourceKeys.Count > 0 && trx.NotExecutedTestCount is not 0)
+                        return await Fallback(RemoteLaneOutcomeCode.UnexpectedNotExecuted, result,
+                            reason: $"not_executed={trx.NotExecutedTestCount?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}").ConfigureAwait(false);
                     var paths = GoalAcceptanceVerifierTestTelemetry.CopyCompletedTestReceiptsToAttemptFolder(result.TestResultPaths, _attemptPrefix);
                     // Custody is part of acceptance: a missing or unretained receipt falls back too.
                     var folder = Path.GetDirectoryName(_attemptPrefix);
