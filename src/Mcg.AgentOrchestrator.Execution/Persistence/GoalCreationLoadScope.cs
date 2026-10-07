@@ -2,11 +2,18 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-/// <summary>The goal and backlog identities consulted when admitting a prepared goal.</summary>
+/// <summary>The goal and backlog identities consulted by a scoped goal transaction.</summary>
 public sealed record GoalCreationLoadScope(
     IReadOnlyCollection<GoalId> GoalIds,
-    IReadOnlyCollection<string> BacklogItemIds)
+    IReadOnlyCollection<string> BacklogItemIds,
+    IReadOnlyCollection<GoalId>? DependsOnClosureRoots = null)
 {
+    public IReadOnlyCollection<GoalId> DependsOnClosureRoots { get; init; } = DependsOnClosureRoots ?? [];
+
+    public static GoalCreationLoadScope ForGoals(
+        IEnumerable<GoalId> goalIds, IEnumerable<GoalId> dependsOnClosureRoots) =>
+        new(goalIds.Distinct().ToArray(), [], dependsOnClosureRoots.Distinct().ToArray());
+
     public static GoalCreationLoadScope ForPreparedGoal(GoalSnapshot prepared, BacklogItem? sourceItem)
     {
         var goalIds = new HashSet<string>(prepared.DependsOn ?? [], StringComparer.Ordinal) { prepared.Id };

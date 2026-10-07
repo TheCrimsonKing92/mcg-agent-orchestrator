@@ -65,6 +65,7 @@ public sealed partial class SqliteOrchestratorStateRepository
         SqliteConnection conn, GoalCreationLoadScope scope, CancellationToken cancellationToken)
     {
         var goalIds = scope.GoalIds.ToHashSet();
+        await AddDependsOnClosureAsync(conn, scope.DependsOnClosureRoots, goalIds, cancellationToken);
         if (scope.BacklogItemIds.Count == 0)
             return goalIds;
         var itemIds = scope.BacklogItemIds.Distinct(StringComparer.Ordinal).ToArray();
@@ -81,6 +82,57 @@ public sealed partial class SqliteOrchestratorStateRepository
         while (await reader.ReadAsync(cancellationToken))
             goalIds.Add(new GoalId(reader.GetString(0)));
         return goalIds;
+    }
+
+    private static async Task AddDependsOnClosureAsync(
+        SqliteConnection conn,
+        IReadOnlyCollection<GoalId> roots,
+        HashSet<GoalId> goalIds,
+        CancellationToken cancellationToken)
+    {
+        var visited = roots.ToHashSet();
+        goalIds.UnionWith(visited);
+        var frontier = visited.ToArray();
+        while (frontier.Length > 0)
+        {
+            var next = new List<GoalId>();
+            foreach (var batch in frontier.Chunk(500))
+            {
+                var parameters = batch.Select((_, index) => $"$goal{index}").ToArray();
+                await using var cmd = conn.CreateCommand();
+                cmd.CommandText = $"SELECT snapshot_json FROM goals WHERE id IN ({string.Join(", ", parameters)})";
+                for (var index = 0; index < batch.Length; index++)
+                    cmd.Parameters.AddWithValue(parameters[index], batch[index].Value);
+                await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+                while (await reader.ReadAsync(cancellationToken))
+                {
+                    try
+                    {
+                        using var document = JsonDocument.Parse(reader.GetString(0));
+                        if (document.RootElement.ValueKind != JsonValueKind.Object ||
+                            !document.RootElement.TryGetProperty(nameof(GoalSnapshot.DependsOn), out var dependencies) ||
+                            dependencies.ValueKind != JsonValueKind.Array)
+                            continue;
+                        foreach (var dependency in dependencies.EnumerateArray())
+                        {
+                            if (dependency.ValueKind != JsonValueKind.String)
+                                continue;
+                            var id = new GoalId(dependency.GetString()!);
+                            if (visited.Add(id))
+                            {
+                                goalIds.Add(id);
+                                next.Add(id);
+                            }
+                        }
+                    }
+                    catch (JsonException)
+                    {
+                        // The scoped loader retains ownership of malformed-row quarantine.
+                    }
+                }
+            }
+            frontier = next.ToArray();
+        }
     }
 
     private static async Task WriteGoalCreationChangesAsync(
