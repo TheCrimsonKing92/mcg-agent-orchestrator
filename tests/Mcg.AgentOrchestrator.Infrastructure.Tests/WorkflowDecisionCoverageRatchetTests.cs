@@ -35,7 +35,6 @@ public sealed class WorkflowDecisionCoverageRatchetTests
         "ConductorDriver.TimedOutSelectionRerun.cs : ExecuteTimedOutSelectionRerun : Timeout rerun holds and escalation lack attribution.",
         "ConductorDriver.TimedOutSelectionRerun.cs : RetryTesterAfterTimedOutRerun : Tester retry authority change creates an undecided hold.",
         "ConductorDriver.TimedOutSelectionRerun.cs : TryResumeTimedOutSelectionRerun : Stale timeout resumption creates an undecided hold.",
-        "ConductorDriver.WorkerBuildCheckRecovery.cs : TryRecoverFailedWorkerBuildCheck : Worker build recovery holds and escalations lack decisions.",
         "ConductorDriver.cs : AdvanceOnce : Awaiting verification and unknown lifecycle outcomes lack decisions.",
         "ConductorDriver.cs : ExecuteDispatchAndStart : Failed dispatch recovery escalates without a decision.",
         "ConductorParallelAcceptanceAttempts.RefusedCarryRelaunch.cs : TryHoldRefusedCarryRelaunch : Refused carry helper result is held without a decision.",
