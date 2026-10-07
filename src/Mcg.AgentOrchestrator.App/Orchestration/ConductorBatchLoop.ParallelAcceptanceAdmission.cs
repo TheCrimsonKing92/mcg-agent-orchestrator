@@ -302,6 +302,7 @@ internal sealed partial class ConductorBatchLoop
         }
         (state.CohortEligible, state.ProductionCandidates) = LandPassedMergeTrainReceiptsBeforeAdmission(
             driver, policy, state.CohortEligible, state.ProductionCandidates, state.Results, tick, changedGoalLines);
+        CarryFollowerGateReceipts(state, driver, policy, tick, changedGoalLines);
         state.OldestWaiterObservation = suppressNewAcceptanceAdmission
             ? new ParallelAcceptanceOldestWaiterObservation(null, 0)
             : ObserveOldestParallelAcceptanceWaiter(state.OrderedEligible, state.LiveAttemptGoalIds);
@@ -531,6 +532,7 @@ internal sealed partial class ConductorBatchLoop
         List<string> changedGoalLines,
         HashSet<GoalId> changedGoalIds)
     {
+        AdmitFollowerGate(state, kernel, driver, policy, tick, changedGoalLines);
         var oldestWaiter = state.OldestWaiterObservation.Waiter;
         var oldestServedThisTick = false;
         foreach (var goal in state.OrderedEligible)

@@ -49,7 +49,8 @@ public sealed record ConductorAutonomyPolicy(
     int BoardFillMaxDraftsPerDay = 3,
     bool CascadeTesterCheapFirst = true,
     string CascadeCheapModelAlias = ConductorAutonomyPolicy.DefaultCascadeCheapModelAlias,
-    bool CascadeMechanicalReworkCheap = true)
+    bool CascadeMechanicalReworkCheap = true,
+    bool FollowerGatesEnabled = false)
 {
     public const string DefaultCascadeCheapModelAlias = "gpt-6-luna";
     public const int DefaultAcceptanceCohortGatherWindowSeconds = 480;
@@ -230,6 +231,7 @@ public sealed record ConductorAutonomyPolicy(
         sb.AppendLine($"  \"boardFillMaxDraftsPerDay\": {BoardFillMaxDraftsPerDay},");
         sb.AppendLine($"  \"cascadeTesterCheapFirst\": {CascadeTesterCheapFirst.ToString().ToLowerInvariant()},");
         sb.AppendLine($"  \"cascadeMechanicalReworkCheap\": {CascadeMechanicalReworkCheap.ToString().ToLowerInvariant()},");
+        sb.AppendLine($"  \"followerGatesEnabled\": {FollowerGatesEnabled.ToString().ToLowerInvariant()},");
         sb.AppendLine($"  \"cascadeCheapModelAlias\": {JsonStr(CascadeCheapModelAlias)},");
 
         sb.AppendLine(AutoPromoteRiskThreshold.HasValue
@@ -333,6 +335,15 @@ public sealed record ConductorAutonomyPolicy(
                     throw new FormatException($"conductor-policy.json{src}: cascadeTesterCheapFirst must be a boolean.");
                 cascadeTesterCheapFirst = cascadeSwitch.GetBoolean();
             }
+            var followerGatesEnabled = false;
+            if (root.TryGetProperty("followerGatesEnabled", out var followerSwitch) &&
+                followerSwitch.ValueKind != JsonValueKind.Null)
+            {
+                if (followerSwitch.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                    throw new FormatException($"conductor-policy.json{src}: followerGatesEnabled must be a boolean.");
+                followerGatesEnabled = followerSwitch.GetBoolean();
+            }
+
             var cascadeMechanicalReworkCheap = true;
             if (root.TryGetProperty("cascadeMechanicalReworkCheap", out var mechanicalSwitch) &&
                 mechanicalSwitch.ValueKind != JsonValueKind.Null)
@@ -420,7 +431,8 @@ public sealed record ConductorAutonomyPolicy(
                 boardFillCap,
                 cascadeTesterCheapFirst,
                 cascadeCheapModelAlias,
-                cascadeMechanicalReworkCheap);
+                cascadeMechanicalReworkCheap,
+                followerGatesEnabled);
 
             var errors = policy.Validate();
             if (errors.Count > 0)
