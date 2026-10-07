@@ -44,6 +44,8 @@ internal static class CliLaneReuseShadowQueryCommand
         Console.WriteLine("miss\tgoal\tattempt\tlane\tmiss_reason\treference_source\tflake_confirmed\trecorded_at\treason\tfailed_predicate\tfailing_classes");
         foreach (var miss in report.Misses)
             Console.WriteLine(FormattableString.Invariant($"miss\t{Cell(miss.GoalId)}\t{Cell(miss.AttemptId)}\t{Cell(miss.Lane)}\t{Cell(miss.MissReason)}\t{Cell(miss.ReferenceSource)}\t{miss.FlakeConfirmed.ToString().ToLowerInvariant()}\t{miss.RecordedAt:O}\t{Cell(miss.Reason)}\t{Cell(miss.FailedPredicate)}\t{JsonSerializer.Serialize(miss.FailingClasses)}"));
+        foreach (var rule in report.RuleSummaries)
+            Console.WriteLine(FormattableString.Invariant($"rule\t{rule.Rule}\tpaired_lane_rows={rule.PairedLaneRows}\twould_reuse_rows={rule.WouldReuseRows}\twould_reuse_share={rule.WouldReuseShare:R}\tsaved_lane_seconds={rule.SavedLaneSeconds:R}\tmisses={rule.Misses}\trecords_without_rule_v2={report.RecordsWithoutRuleV2}"));
     }
 
     private static string Cell(string? value) => value?.Replace('\t', ' ').Replace('\r', ' ').Replace('\n', ' ') ?? "";

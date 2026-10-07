@@ -5,7 +5,11 @@ public sealed record LaneReuseShadowRecord(string GoalId, string AttemptId, Date
 
 public sealed record LaneReuseShadowLaneRow(string Lane, string Decision, string? Reason, bool Executed,
     long? DurationMs, bool ShadowMiss = false, string? MissReason = null, string? ReferenceSource = null,
-    bool FlakeConfirmed = false, string? FailedPredicate = null, IReadOnlyList<string>? FailingClasses = null);
+    bool FlakeConfirmed = false, string? FailedPredicate = null, IReadOnlyList<string>? FailingClasses = null,
+    string? Verdict = null, string? RuleV2Decision = null, string? RuleV2Reason = null);
+
+public sealed record LaneReuseShadowRuleSummary(string Rule, int PairedLaneRows, int WouldReuseRows,
+    double WouldReuseShare, double SavedLaneSeconds, int Misses);
 
 public sealed record LaneReuseShadowReasonCount(string Family, int Lanes);
 
@@ -20,6 +24,9 @@ public sealed record LaneReuseShadowReport(DateTimeOffset Since, DateTimeOffset 
     IReadOnlyList<LaneReuseShadowMissRow> Misses, int FlakeConfirmedMisses, int UntimedRecords,
     int UnreadableRecords)
 {
+    public IReadOnlyList<LaneReuseShadowRuleSummary> RuleSummaries { get; init; } = [];
+    public int RecordsWithoutRuleV2 { get; init; }
+
     public static LaneReuseShadowReport Build(IEnumerable<LaneReuseShadowRecord> records,
         DateTimeOffset since, DateTimeOffset until, int untimedRecords = 0, int unreadableRecords = 0)
     {
@@ -40,10 +47,21 @@ public sealed record LaneReuseShadowReport(DateTimeOffset Since, DateTimeOffset 
             .OrderBy(r => r.RecordedAt).ThenBy(r => r.GoalId, StringComparer.Ordinal)
             .ThenBy(r => r.AttemptId, StringComparer.Ordinal).ThenBy(r => r.Lane, StringComparer.Ordinal)
             .ToArray();
+        var paired = lanes.Where(r => r.RuleV2Decision is not null && !string.IsNullOrEmpty(r.Decision)).ToArray();
+        LaneReuseShadowRuleSummary Summarize(string rule, Func<LaneReuseShadowLaneRow, string?> decision)
+        {
+            var wouldReuse = paired.Where(r => decision(r) == "would-reuse").ToArray();
+            return new(rule, paired.Length, wouldReuse.Length, Share(wouldReuse.Length, paired.Length),
+                Seconds(wouldReuse), wouldReuse.Count(r => r.Executed && r.Verdict == "RED"));
+        }
         return new(since.ToUniversalTime(), until.ToUniversalTime(), gates.Length, lanes.Length,
             reuse.Length, Share(reuse.Length, lanes.Length), executedSeconds, savedSeconds,
             Share(savedSeconds, executedSeconds), reasons, misses, misses.Count(r => r.FlakeConfirmed),
-            untimedRecords, unreadableRecords);
+            untimedRecords, unreadableRecords)
+        {
+            RuleSummaries = [Summarize("marker-v1", r => r.Decision), Summarize("launch-contract-v2", r => r.RuleV2Decision)],
+            RecordsWithoutRuleV2 = gates.Count(g => g.Lanes.Count == 0 || g.Lanes.Any(r => r.RuleV2Decision is null))
+        };
     }
 
     private static double Seconds(IEnumerable<LaneReuseShadowLaneRow> rows) =>
