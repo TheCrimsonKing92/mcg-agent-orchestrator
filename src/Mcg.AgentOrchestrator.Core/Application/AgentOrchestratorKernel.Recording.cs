@@ -357,6 +357,36 @@ public sealed partial class AgentOrchestratorKernel
             return;
         }
 
+        if (string.Equals(
+                TaskOutcomeClassifier.TryExtractRule(outcome.ClassifierReceipt),
+                TaskOutcomeRules.DetachedWithoutWorkerResult.Token,
+                StringComparison.Ordinal))
+        {
+            task.RecordCompletionVerdict(false, TaskOutcomeRules.DetachedWithoutWorkerResult.Token);
+            var detachedRounds = DispatchFailureClassifier.CountConsecutiveDetachedWithoutWorkerResultRounds(task);
+            if (detachedRounds <= DispatchFailureClassifier.DetachedWithoutWorkerResultRetryLimit)
+            {
+                task.SetSubscriptionRetryAfter(_clock.UtcNow + BuildProviderInterruptionBackoff(detachedRounds));
+                task.RecordRetry(_clock.UtcNow, retryCause: RetryCause.ProviderInterruption);
+                task.ClearLatestVerification();
+                task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned);
+                Append(
+                    goal,
+                    taskId,
+                    ProgressKind.TaskRetried,
+                    $"Dispatch was gracefully detached and exited without a WORKER_RESULT; task is ready to retry after bounded backoff (attempt {detachedRounds}/{DispatchFailureClassifier.DetachedWithoutWorkerResultRetryLimit}): {task.LastDispatch.Command}");
+                RefreshGoalStatus(goal);
+                return;
+            }
+
+            ReportWorkerTaskProgress(
+                goalId,
+                taskId,
+                WorkTaskStatus.Failed,
+                $"Dispatch detached-without-worker-result repeated {detachedRounds} consecutive time(s); automatic retry budget {DispatchFailureClassifier.DetachedWithoutWorkerResultRetryLimit} exhausted: {task.LastDispatch.Command}");
+            return;
+        }
+
         if (outcome.Kind == DispatchOutcomeKind.ProviderInterruption)
         {
             var interruptionFailures = DispatchFailureClassifier.CountConsecutiveProviderInterruptionFailures(task);

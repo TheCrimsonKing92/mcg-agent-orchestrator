@@ -823,6 +823,24 @@ public static partial class DispatchFailureClassifier
                 "retry round produced no commit and no deferral"));
         }
 
+        if (IsDetachedWithoutWorkerResult(task, verification, workerResultPresent))
+        {
+            return BuildOutcome(
+                TaskOutcomeRules.DetachedWithoutWorkerResult,
+                task,
+                verification,
+                workerResultPresent,
+                hasCommittedChanges,
+                new DispatchOutcome(
+                DispatchOutcomeKind.ProviderInterruption,
+                exitCode,
+                hasZeroByteOutput,
+                null,
+                null,
+                RecoveryRecommendation.AutoRetry,
+                $"detached-without-worker-result: process {task.LastProcess!.ProcessId} was gracefully detached and exited 0 without a WORKER_RESULT block"));
+        }
+
         if (verification.Succeeded &&
             HasDispatchCompletionEvidence(task, verification, workerResultPresent, hasCommittedChanges))
         {
