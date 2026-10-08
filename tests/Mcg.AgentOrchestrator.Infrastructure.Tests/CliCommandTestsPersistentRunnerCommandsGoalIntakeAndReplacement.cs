@@ -304,6 +304,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
         var providers = new InMemoryModelProviderRegistry([
             new FakeSmokeProvider(plannerOutput, providerName: "Fake")
         ]);
+        using var samples = PlanSampleProviderBridge.Use(providers);
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
 

@@ -41,6 +41,7 @@ public static class ModelFunctionPurposes
     public const string SpecRefiner = "spec-refiner";
     public const string StewardTriage = "steward-triage";
     public const string ConductorAuthor = "conductor-author";
+    public const string PlanSampler = "plan-sampler";
     public const string BoardFillVerifier = "board-fill-verifier";
     public const string ConductorSteward = "conductor-steward";
     public const string PanelJudgeSol = "panel-judge-sol";
