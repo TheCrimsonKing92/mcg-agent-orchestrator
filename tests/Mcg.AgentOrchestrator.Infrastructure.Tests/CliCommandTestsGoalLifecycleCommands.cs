@@ -565,7 +565,7 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
     {
         var defaultRoot = CreateTempDirectory();
         var projectRoot = CreateTempDirectory();
-        var registry = new OrchestratorProjectRegistry(CreateTempDirectory());
+        var registry = new OrchestratorProjectRegistry(CreateTempDirectory(), dataRootDirectory: CreateTempDirectory());
         SeedProjectCreationSource(defaultRoot);
 
         var output = CaptureConsole(() =>
@@ -596,9 +596,9 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         Xunit.Assert.Contains("Project selected: client_a", output);
         Xunit.Assert.Contains("* client_a:", output);
         Xunit.Assert.Contains($"Root: {projectRoot}", output);
-        Xunit.Assert.Contains(Path.Combine(projectRoot, ".orchestrator", "projects", "client_a", "state.db"), output);
-        Xunit.Assert.True(File.Exists(Path.Combine(projectRoot, ".orchestrator", "projects", "client_a", "state.db")));
-        Xunit.Assert.True(File.Exists(Path.Combine(projectRoot, ".orchestrator", "projects", "client_a", "backlog.db")));
+        Xunit.Assert.Contains(Path.Combine(registry.DataRootDirectory, "projects", "client_a", "state.db"), output);
+        Xunit.Assert.True(File.Exists(Path.Combine(registry.DataRootDirectory, "projects", "client_a", "state.db")));
+        Xunit.Assert.True(File.Exists(Path.Combine(registry.DataRootDirectory, "projects", "client_a", "backlog.db")));
         Xunit.Assert.Equal("client_a", registry.ReadSelectedProjectName());
     }
 
@@ -608,7 +608,7 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         var defaultRoot = CreateTempDirectory();
         var projectRootA = CreateTempDirectory();
         var projectRootB = CreateTempDirectory();
-        var registry = new OrchestratorProjectRegistry(CreateTempDirectory());
+        var registry = new OrchestratorProjectRegistry(CreateTempDirectory(), dataRootDirectory: CreateTempDirectory());
         var sourceWorkspace = SeedProjectCreationSource(defaultRoot);
         var sourceConfigBefore = SnapshotConfigurationBytes(sourceWorkspace);
 
@@ -755,7 +755,7 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         var defaultRoot = CreateTempDirectory();
         var projectRoot = CreateTempDirectory();
         var otherRoot = CreateTempDirectory();
-        var registry = new OrchestratorProjectRegistry(CreateTempDirectory());
+        var registry = new OrchestratorProjectRegistry(CreateTempDirectory(), dataRootDirectory: CreateTempDirectory());
         SeedProjectCreationSource(defaultRoot);
 
         ProjectCliCommand.Execute(
@@ -796,7 +796,7 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
             activeProjectOverride: null));
         Xunit.Assert.Contains("cannot be repointed", error.Message);
         Xunit.Assert.Equal(projectRoot, registry.GetRequiredProject("client_a").RootDirectory);
-        Xunit.Assert.False(Directory.Exists(OrchestratorWorkspace.ForProject("client_a", otherRoot).OrchestratorDirectory));
+        Xunit.Assert.False(Directory.Exists(Path.Combine(otherRoot, ".orchestrator")));
     }
 
     [Xunit.Fact(DisplayName = "Cli_project_create_missing_refiner_fails_before_destination_or_registry_mutation")]
@@ -804,8 +804,8 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
     {
         var defaultRoot = CreateTempDirectory();
         var projectRoot = CreateTempDirectory();
-        var registry = new OrchestratorProjectRegistry(CreateTempDirectory());
-        var destination = OrchestratorWorkspace.ForProject("client_a", projectRoot);
+        var registry = new OrchestratorProjectRegistry(CreateTempDirectory(), dataRootDirectory: CreateTempDirectory());
+        var destination = OrchestratorWorkspace.ForProject("client_a", projectRoot, dataRootDirectory: registry.DataRootDirectory);
 
         var error = Xunit.Assert.Throws<InvalidOperationException>(() => ProjectCliCommand.Execute(
             ["project", "create", "client_a", "--root", projectRoot],
@@ -825,9 +825,9 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
     {
         var defaultRoot = CreateTempDirectory();
         var projectRoot = CreateTempDirectory();
-        var registry = new OrchestratorProjectRegistry(CreateTempDirectory());
+        var registry = new OrchestratorProjectRegistry(CreateTempDirectory(), dataRootDirectory: CreateTempDirectory());
         SeedProjectCreationSource(defaultRoot);
-        var destination = OrchestratorWorkspace.ForProject("client_a", projectRoot);
+        var destination = OrchestratorWorkspace.ForProject("client_a", projectRoot, dataRootDirectory: registry.DataRootDirectory);
         Directory.CreateDirectory(destination.OrchestratorDirectory);
         var sentinelPath = Path.Combine(destination.OrchestratorDirectory, "keep.txt");
         File.WriteAllText(sentinelPath, "keep");
@@ -851,8 +851,8 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         SeedProjectCreationSource(defaultRoot);
         var blockedRegistryPath = Path.Combine(CreateTempDirectory(), "registry-blocked");
         File.WriteAllText(blockedRegistryPath, "not a directory");
-        var registry = new OrchestratorProjectRegistry(blockedRegistryPath);
-        var destination = OrchestratorWorkspace.ForProject("client_a", projectRoot);
+        var registry = new OrchestratorProjectRegistry(blockedRegistryPath, dataRootDirectory: CreateTempDirectory());
+        var destination = OrchestratorWorkspace.ForProject("client_a", projectRoot, dataRootDirectory: registry.DataRootDirectory);
 
         var error = Xunit.Assert.Throws<InvalidOperationException>(() => ProjectCliCommand.Execute(
             ["project", "create", "client_a", "--root", projectRoot],

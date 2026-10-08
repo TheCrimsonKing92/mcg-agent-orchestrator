@@ -19,7 +19,7 @@ public sealed class ProjectModeStatePathTests
         Assert.Empty(fixture.Git("status", "--porcelain=v1", "--untracked-files=all").Trim());
         AssertEntryOnce(fixture.ExcludePath, ".orchestrator/");
         AssertEntryOnce(fixture.ExcludePath, ConductorBatchLoop.StopFileName);
-        var projectState = Path.Combine(fixture.Home, ".orchestrator", "projects", "alpha");
+        var projectState = Path.Combine(fixture.DataRoot, "projects", "alpha");
         Assert.Equal(Path.Combine(projectState, "logs", ConductEventLogWriter.CurrentFileName),
             workspace.ConductEventsLogPath);
         Assert.NotEqual(Path.Combine(fixture.Target, ".orchestrator", "logs",
@@ -45,7 +45,7 @@ public sealed class ProjectModeStatePathTests
             "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "fixture");
         var linked = Path.Combine(fixture.Root, "linked");
         fixture.Git("worktree", "add", "-b", "linked", linked);
-        var workspace = OrchestratorWorkspace.ForProject("alpha", fixture.Home, linked);
+        var workspace = OrchestratorWorkspace.ForProject("alpha", fixture.Home, linked, dataRootDirectory: fixture.DataRoot);
         Assert.True(File.Exists(Path.Combine(linked, ".git")));
         Assert.Equal(fixture.ExcludePath, RepositoryFixture.ResolveExclude(linked));
 
@@ -123,7 +123,7 @@ public sealed class ProjectModeStatePathTests
         Directory.CreateDirectory(nonGit);
         var messages = new List<string>();
         Assert.False(ConductorTargetGitExclude.Apply(
-            OrchestratorWorkspace.ForProject("alpha", fixture.Home, nonGit), messages.Add));
+            OrchestratorWorkspace.ForProject("alpha", fixture.Home, nonGit, dataRootDirectory: fixture.DataRoot), messages.Add));
         Assert.Single(messages);
         Assert.Contains("Warning:", messages[0]);
         Assert.Empty(Directory.EnumerateFileSystemEntries(nonGit));
@@ -203,7 +203,8 @@ public sealed class ProjectModeStatePathTests
         public string Root { get; } = SharedTestSupport.CreateTempDirectory();
         public string Target => Path.Combine(Root, "target");
         public string Home => Path.Combine(Root, "home");
-        public OrchestratorWorkspace Workspace => OrchestratorWorkspace.ForProject("alpha", Home, Target);
+        public string DataRoot => Path.Combine(Root, "data");
+        public OrchestratorWorkspace Workspace => OrchestratorWorkspace.ForProject("alpha", Home, Target, dataRootDirectory: DataRoot);
         public string ExcludePath => ResolveExclude(Target);
 
         public RepositoryFixture()

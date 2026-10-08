@@ -89,8 +89,8 @@ public sealed class AcceptanceManifestLocatorTests
     public void WorkspaceAccessor_DefaultSuppliesNoneAndProjectSuppliesItsHome()
     {
         using var fixture = new ManifestFixture();
-        var project = OrchestratorWorkspace.ForProject("alpha", fixture.Root, fixture.Worktree);
-        var tenantProject = OrchestratorWorkspace.ForProject("alpha", fixture.Root, fixture.Worktree, "tenant");
+        var project = OrchestratorWorkspace.ForProject("alpha", fixture.Root, fixture.Worktree, dataRootDirectory: fixture.DataRoot);
+        var tenantProject = OrchestratorWorkspace.ForProject("alpha", fixture.Root, fixture.Worktree, "tenant", dataRootDirectory: fixture.DataRoot);
         Assert.Equal(project.OrchestratorDirectory, project.ProjectHomeDirectoryOrNull);
         Assert.Equal(tenantProject.OrchestratorDirectory, tenantProject.ProjectHomeDirectoryOrNull);
         Assert.Null(OrchestratorWorkspace.ForDirectory(fixture.Root).ProjectHomeDirectoryOrNull);
@@ -104,7 +104,7 @@ public sealed class AcceptanceManifestLocatorTests
     {
         using var fixture = new ManifestFixture();
         fixture.WriteWorktreeManifest();
-        var workspace = OrchestratorWorkspace.ForProject("alpha", fixture.Root, fixture.Worktree);
+        var workspace = OrchestratorWorkspace.ForProject("alpha", fixture.Root, fixture.Worktree, dataRootDirectory: fixture.DataRoot);
         Directory.CreateDirectory(workspace.OrchestratorDirectory);
         File.WriteAllText(Path.Combine(workspace.OrchestratorDirectory, "acceptance-manifest.json"),
             "{\"engine\":{\"maxConcurrentShards\":0}}");
@@ -121,7 +121,7 @@ public sealed class AcceptanceManifestLocatorTests
     {
         using var fixture = new ManifestFixture();
         fixture.WriteWorktreeManifest();
-        var workspace = OrchestratorWorkspace.ForProject("alpha", fixture.Root, fixture.Worktree);
+        var workspace = OrchestratorWorkspace.ForProject("alpha", fixture.Root, fixture.Worktree, dataRootDirectory: fixture.DataRoot);
         ManifestFixture.WriteManifest(Path.Combine(workspace.OrchestratorDirectory, "acceptance-manifest.json"),
             "ProjectHomeOnlyLane");
         var project = new ManifestConductorStewardLaneSubstringResolver(workspace.ProjectHomeDirectoryOrNull);
@@ -145,6 +145,7 @@ public sealed class AcceptanceManifestLocatorTests
     private sealed class ManifestFixture : IDisposable
     {
         public string Root { get; } = SharedTestSupport.CreateTempDirectory();
+        public string DataRoot { get; } = SharedTestSupport.CreateTempDirectory();
         public string Worktree => Path.Combine(Root, "worktree");
         public string ProjectHome => Path.Combine(Root, "project-home");
         public string WorktreeManifest => Path.Combine(Worktree, "config", "acceptance-manifest.json");
@@ -176,6 +177,6 @@ public sealed class AcceptanceManifestLocatorTests
             }));
         }
 
-        public void Dispose() => SharedTestSupport.RemoveTempDirectory(Root);
+        public void Dispose() { SharedTestSupport.RemoveTempDirectory(Root); SharedTestSupport.RemoveTempDirectory(DataRoot); }
     }
 }

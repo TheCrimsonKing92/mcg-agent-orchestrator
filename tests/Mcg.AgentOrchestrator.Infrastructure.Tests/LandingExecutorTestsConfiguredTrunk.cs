@@ -11,11 +11,12 @@ public sealed class LandingExecutorTestsConfiguredTrunk
     public void Execute_ConfiguredOrDefaultTrunk_AdvancesOnlyThatRef(string trunk, bool configured)
     {
         var repo = CreateGitRepository();
+        var dataRoot = SharedTestSupport.CreateTempDirectory();
         try
         {
             if (configured) ReadGit(repo, "branch", "-M", trunk);
             var workspace = configured
-                ? OrchestratorWorkspace.ForProject("alpha", repo, integrationBranch: trunk)
+                ? OrchestratorWorkspace.ForProject("alpha", repo, integrationBranch: trunk, dataRootDirectory: dataRoot)
                 : OrchestratorWorkspace.ForDirectory(repo);
             Assert.Equal(trunk, workspace.IntegrationBranch);
             var before = ReadGit(repo, "rev-parse", $"refs/heads/{trunk}");
@@ -45,6 +46,7 @@ public sealed class LandingExecutorTestsConfiguredTrunk
         finally
         {
             TryDeleteDirectory(repo);
+            SharedTestSupport.RemoveTempDirectory(dataRoot);
         }
     }
 

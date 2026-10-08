@@ -85,7 +85,8 @@ public sealed record OrchestratorWorkspace(
         string rootDirectory,
         string? executionDirectory = null,
         string? tenantName = null,
-        string? integrationBranch = null)
+        string? integrationBranch = null,
+        string? dataRootDirectory = null)
     {
         var normalizedProject = OrchestratorProjectSelection.NormalizeProjectName(projectName);
         if (normalizedProject.Equals(DefaultProjectName, StringComparison.OrdinalIgnoreCase))
@@ -100,7 +101,15 @@ public sealed record OrchestratorWorkspace(
         var executionRoot = Path.GetFullPath(string.IsNullOrWhiteSpace(executionDirectory) ? rootDirectory : executionDirectory);
         var normalizedTenant = OrchestratorTenantSelection.NormalizeTenantName(tenantName);
         var isTenantScoped = !normalizedTenant.Equals(DefaultTenantName, StringComparison.OrdinalIgnoreCase);
-        var orchestrator = ResolveOrchestratorDirectory(root, normalizedProject, normalizedTenant);
+        var dataRoot = dataRootDirectory is null
+            ? OrchestratorDataRoot.Resolve()
+            : OrchestratorDataRoot.FromDirectory(dataRootDirectory);
+        var projectDirectory = dataRoot.ProjectDirectory(normalizedProject);
+        if (IsWithinDirectory(projectDirectory, root) || IsWithinDirectory(projectDirectory, executionRoot))
+            throw new InvalidOperationException("Project data root must be outside the target repository.");
+        var orchestrator = normalizedTenant.Equals(DefaultTenantName, StringComparison.OrdinalIgnoreCase)
+            ? projectDirectory
+            : Path.Combine(projectDirectory, "tenants", normalizedTenant);
         return Create(
             root,
             executionRoot,
@@ -119,6 +128,19 @@ public sealed record OrchestratorWorkspace(
         return tenantName.Equals(DefaultTenantName, StringComparison.OrdinalIgnoreCase)
             ? baseDirectory
             : Path.Combine(baseDirectory, "tenants", tenantName);
+    }
+
+    internal static string LegacyProjectDirectory(string rootDirectory, string projectName) =>
+        Path.Combine(Path.GetFullPath(rootDirectory), ".orchestrator", "projects",
+            OrchestratorProjectSelection.NormalizeProjectName(projectName));
+
+    internal static bool IsWithinDirectory(string path, string directory)
+    {
+        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory));
+        var fullPath = Path.GetFullPath(path);
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        return fullPath.Equals(root, comparison) ||
+            fullPath.StartsWith(root + Path.DirectorySeparatorChar, comparison);
     }
 
     private static OrchestratorWorkspace Create(

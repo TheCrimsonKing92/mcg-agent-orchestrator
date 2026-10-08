@@ -75,15 +75,16 @@ public sealed class StatePersistenceAndPerformanceTests
     public void OrchestratorWorkspaceNonDefaultProjectUsesProjectScopedState()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForProject("client_a", root);
+        var dataRoot = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForProject("client_a", root, dataRootDirectory: dataRoot);
 
         Assert.Equal("client_a", workspace.ProjectName);
         Assert.True(workspace.IsProjectScoped);
-        Assert.Equal(Path.Combine(root, ".orchestrator", "projects", "client_a"), workspace.OrchestratorDirectory);
-        Assert.Equal(Path.Combine(root, ".orchestrator", "projects", "client_a", "state.db"), workspace.SqliteStatePath);
-        Assert.Equal(Path.Combine(root, ".orchestrator", "projects", "client_a", "backlog.db"), workspace.BacklogStorePath);
+        Assert.Equal(Path.Combine(dataRoot, "projects", "client_a"), workspace.OrchestratorDirectory);
+        Assert.Equal(Path.Combine(dataRoot, "projects", "client_a", "state.db"), workspace.SqliteStatePath);
+        Assert.Equal(Path.Combine(dataRoot, "projects", "client_a", "backlog.db"), workspace.BacklogStorePath);
         Assert.Equal(
-            Path.Combine(root, ".orchestrator", "projects", "client_a", OrchestratorWorkspace.ContinuationStoreFileName),
+            Path.Combine(dataRoot, "projects", "client_a", OrchestratorWorkspace.ContinuationStoreFileName),
             workspace.ContinuationStorePath);
     }
 
@@ -116,7 +117,7 @@ public sealed class StatePersistenceAndPerformanceTests
     {
         var defaultRoot = CreateTempDirectory();
         var projectRoot = CreateTempDirectory();
-        var registry = new OrchestratorProjectRegistry(CreateTempDirectory());
+        var registry = new OrchestratorProjectRegistry(CreateTempDirectory(), dataRootDirectory: CreateTempDirectory());
         registry.CreateProject("client_a", projectRoot);
         registry.SelectProject("client_a");
 
@@ -125,7 +126,7 @@ public sealed class StatePersistenceAndPerformanceTests
 
         Assert.Equal("client_a", active.Name);
         Assert.Equal(projectRoot, active.RootDirectory);
-        Assert.Equal(Path.Combine(projectRoot, ".orchestrator", "projects", "client_a", "state.db"), workspace.SqliteStatePath);
+        Assert.Equal(Path.Combine(registry.DataRootDirectory, "projects", "client_a", "state.db"), workspace.SqliteStatePath);
 
         registry.SelectProject("default");
         var restoredDefault = registry.ResolveActiveProject(defaultRoot, null);
@@ -139,7 +140,7 @@ public sealed class StatePersistenceAndPerformanceTests
         var defaultRoot = CreateTempDirectory();
         var projectRoot = CreateTempDirectory();
         var defaultWorkspace = OrchestratorWorkspace.ForDirectory(defaultRoot);
-        var projectWorkspace = OrchestratorWorkspace.ForProject("client_a", projectRoot);
+        var projectWorkspace = OrchestratorWorkspace.ForProject("client_a", projectRoot, dataRootDirectory: CreateTempDirectory());
 
         var projectKernel = new AgentOrchestratorKernel();
         projectKernel.CreateGoal("Project-only goal");
@@ -589,4 +590,3 @@ public sealed class StatePersistenceAndPerformanceTests
     private static SqliteOrchestratorStateRepository OpenMigratedStateRepository(string path)
         => CreateMigratedStateRepository(path);
 }
-

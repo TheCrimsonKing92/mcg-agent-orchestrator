@@ -60,7 +60,7 @@ public sealed class ProjectDiscoverCliTests
     {
         using var defaultFixture = new ProjectOnboardingFixture("no-solution");
         using var selectedFixture = new ProjectOnboardingFixture("solution");
-        var registry = new OrchestratorProjectRegistry(Path.Combine(defaultFixture.Root, "registry"));
+        var registry = new OrchestratorProjectRegistry(Path.Combine(defaultFixture.Root, "registry"), Path.Combine(defaultFixture.Root, "data"));
         registry.CreateProject("sample", selectedFixture.Root);
         registry.SelectProject("sample");
         var workspace = registry.GetRequiredProject("sample").ResolveWorkspace();
@@ -84,7 +84,7 @@ public sealed class ProjectDiscoverCliTests
     {
         using var defaultFixture = new ProjectOnboardingFixture("no-solution");
         using var namedFixture = new ProjectOnboardingFixture("solution");
-        var registry = new OrchestratorProjectRegistry(Path.Combine(defaultFixture.Root, "registry"));
+        var registry = new OrchestratorProjectRegistry(Path.Combine(defaultFixture.Root, "registry"), Path.Combine(defaultFixture.Root, "data"));
         registry.CreateProject("sample", namedFixture.Root);
         using var output = new StringWriter();
 

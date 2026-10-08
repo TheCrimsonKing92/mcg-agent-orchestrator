@@ -121,6 +121,7 @@ var repoRoot = !string.IsNullOrWhiteSpace(executionDirectory)
     ? executionDirectory
     : OrchestratorWorkspace.ResolveRepoRoot(Environment.CurrentDirectory);
 OrchestratorHome.ExportForDescendants(repoRoot);
+OrchestratorDataRoot.ExportForDescendants();
 var projectRegistry = OrchestratorProjectRegistry.CreateDefault();
 if (startupArgs.Count > 0 && startupArgs[0].Equals("project", StringComparison.OrdinalIgnoreCase))
 {
@@ -155,7 +156,8 @@ var workspace = activeProject.Name.Equals(OrchestratorWorkspace.DefaultProjectNa
         activeProject.Name,
         activeProject.RootDirectory,
         tenantName: tenantSelection.TenantName,
-        integrationBranch: activeProject.IntegrationBranch);
+        integrationBranch: activeProject.IntegrationBranch,
+        dataRootDirectory: activeProject.DataRootDirectory);
 try
 {
     if (CliCommandHelp.TryPrintStartupHelp(startupArgs))

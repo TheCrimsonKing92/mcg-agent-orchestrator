@@ -2,6 +2,7 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using System.Text.RegularExpressions;
+using System.Security.Cryptography;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
@@ -40,7 +41,7 @@ internal static class ProjectCliCommand
                 return 0;
 
             default:
-                throw new ArgumentException("Usage: project list|show [name]|discover [name] [--root <path>] [--measure build|test|all]|create <name> --root <path> [--integration-branch <name>]|select <name>");
+                throw new ArgumentException("Usage: project list|show [name]|discover [name] [--root <path>] [--measure build|test|all]|create <name> --root <path> [--integration-branch <name>] [--relocate-state]|select <name>");
         }
     }
 
@@ -148,13 +149,13 @@ internal static class ProjectCliCommand
     {
         if (parts.Count < 5)
         {
-            throw new ArgumentException("Usage: project create <name> --root <path> [--integration-branch <name>]");
+            throw new ArgumentException("Usage: project create <name> --root <path> [--integration-branch <name>] [--relocate-state]");
         }
 
         var root = GetFlagValue(parts, "--root");
         if (string.IsNullOrWhiteSpace(root))
         {
-            throw new ArgumentException("Usage: project create <name> --root <path> [--integration-branch <name>]");
+            throw new ArgumentException("Usage: project create <name> --root <path> [--integration-branch <name>] [--relocate-state]");
         }
 
         var integrationBranch = GetFlagValue(parts, "--integration-branch");
@@ -166,27 +167,39 @@ internal static class ProjectCliCommand
             }
             catch (ArgumentException)
             {
-                throw new ArgumentException("Usage: project create <name> --root <path> [--integration-branch <name>]");
+                throw new ArgumentException("Usage: project create <name> --root <path> [--integration-branch <name>] [--relocate-state]");
             }
         }
 
+        var relocateState = parts.Any(part => part.Equals("--relocate-state", StringComparison.OrdinalIgnoreCase));
         var alreadyRegistered = false;
         var project = RunCreateStep(
             "project validation",
             () => registry.ResolveProjectForCreation(parts[2], root, integrationBranch, out alreadyRegistered));
+        var workspace = RunCreateStep("destination validation", () => project.ResolveWorkspace());
+        var legacyDirectory = OrchestratorWorkspace.LegacyProjectDirectory(project.RootDirectory, project.Name);
+        if (relocateState && !alreadyRegistered)
+            throw new InvalidOperationException("Project creation failed during relocation validation: --relocate-state requires an existing registration.");
+        if (Directory.Exists(legacyDirectory))
+        {
+            if (!alreadyRegistered || !relocateState)
+                throw new InvalidOperationException(
+                    "Project creation failed during relocation validation: legacy workspace is inside the target; use --relocate-state on its existing registration.");
+            RunCreateStep("state relocation", () => RelocateLegacyState(legacyDirectory, workspace.OrchestratorDirectory, project.Name));
+        }
         if (alreadyRegistered)
         {
             Console.WriteLine($"Project already exists: {project.Name}");
             Console.WriteLine($"Root: {project.RootDirectory}");
-            Console.WriteLine($"Workspace: {project.ResolveWorkspace().OrchestratorDirectory}");
+            Console.WriteLine($"Workspace: {workspace.OrchestratorDirectory}");
+            Console.WriteLine($"State: {workspace.SqliteStatePath}");
             return;
         }
 
         var sourceWorkspace = OrchestratorWorkspace.ForDirectory(defaultRootDirectory);
         var snapshot = RunCreateStep(
             "source configuration validation",
-            () => LoadConfigurationSnapshot(sourceWorkspace, project.ResolveWorkspace()));
-        var workspace = project.ResolveWorkspace();
+            () => LoadConfigurationSnapshot(sourceWorkspace, workspace));
         EnsureDestinationAvailable(workspace.OrchestratorDirectory);
 
         var parentDirectory = Path.GetDirectoryName(workspace.OrchestratorDirectory)
@@ -251,6 +264,97 @@ internal static class ProjectCliCommand
         Console.WriteLine($"Project created: {project.Name}");
         Console.WriteLine($"Root: {project.RootDirectory}");
         Console.WriteLine($"Workspace: {workspace.OrchestratorDirectory}");
+        Console.WriteLine($"State: {workspace.SqliteStatePath}");
+    }
+
+    private static void RelocateLegacyState(string source, string destination, string projectName)
+    {
+        // Do not follow junctions out of the project tree or remove unrelated target files.
+        var directories = new List<string> { source };
+        var files = new List<string>();
+        for (var index = 0; index < directories.Count; index++)
+        {
+            var directory = directories[index];
+            if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidOperationException($"Legacy workspace contains a link or junction: {directory}");
+            foreach (var entry in Directory.EnumerateFileSystemEntries(directory))
+            {
+                var attributes = File.GetAttributes(entry);
+                if ((attributes & FileAttributes.ReparsePoint) != 0)
+                    throw new InvalidOperationException($"Legacy workspace contains a link or junction: {entry}");
+                if ((attributes & FileAttributes.Directory) != 0)
+                    directories.Add(entry);
+                else
+                    files.Add(entry);
+            }
+        }
+
+        EnsureDestinationAvailable(destination);
+        var parent = Path.GetDirectoryName(destination)!;
+        var staging = Path.Combine(parent, $".{projectName}.relocate-{Guid.NewGuid():N}");
+        try
+        {
+            // Copy first so source and destination may be on different volumes.
+            Directory.CreateDirectory(staging);
+            foreach (var directory in directories.Skip(1))
+                Directory.CreateDirectory(Path.Combine(staging, Path.GetRelativePath(source, directory)));
+            foreach (var file in files)
+            {
+                var copy = Path.Combine(staging, Path.GetRelativePath(source, file));
+                File.Copy(file, copy);
+                using var originalStream = File.OpenRead(file);
+                using var copyStream = File.OpenRead(copy);
+                if (!SHA256.HashData(originalStream).AsSpan().SequenceEqual(SHA256.HashData(copyStream)))
+                    throw new IOException($"Relocation copy verification failed: {file}");
+            }
+            foreach (var file in files.Where(path => Path.GetFileName(path).Equals("state.db", StringComparison.OrdinalIgnoreCase)))
+            {
+                var database = Path.Combine(staging, Path.GetRelativePath(source, file));
+                // Probe the detached copy: WAL readers can create sidecars even in read-only mode.
+                // Unknown schemas fail closed, without migrating or touching the legacy store.
+                using (var connection = StateDbConnectionFactory.Open(database, StateDbConnectionProfile.FastFailRead))
+                using (var command = connection.CreateCommand())
+                {
+                    command.CommandText = "SELECT EXISTS(SELECT 1 FROM goals)";
+                    if (Convert.ToInt64(command.ExecuteScalar()) != 0)
+                        throw new InvalidOperationException($"Legacy state database contains goals; relocation refused: {file}");
+                }
+                foreach (var suffix in new[] { "-wal", "-shm" })
+                {
+                    if (!files.Contains(file + suffix) && File.Exists(database + suffix))
+                        File.Delete(database + suffix);
+                }
+            }
+            // Refuse a source that changed during validation rather than deleting newer bytes.
+            var currentFiles = Directory.GetFiles(source, "*", SearchOption.AllDirectories);
+            if (!currentFiles.Order(StringComparer.Ordinal).SequenceEqual(files.Order(StringComparer.Ordinal)))
+                throw new IOException("Legacy workspace changed during relocation; source retained.");
+            foreach (var file in files)
+            {
+                using var originalStream = File.OpenRead(file);
+                using var copyStream = File.OpenRead(Path.Combine(staging, Path.GetRelativePath(source, file)));
+                if (!SHA256.HashData(originalStream).AsSpan().SequenceEqual(SHA256.HashData(copyStream)))
+                    throw new IOException($"Legacy workspace changed during relocation; source retained: {file}");
+            }
+            if (Directory.Exists(destination))
+                Directory.Delete(destination); // Only the empty destination validated above.
+            Directory.Move(staging, destination);
+            Directory.Delete(source, recursive: true);
+            var projectsDirectory = Path.GetDirectoryName(source)!;
+            RemoveDirectoryIfEmpty(projectsDirectory);
+            RemoveDirectoryIfEmpty(Path.GetDirectoryName(projectsDirectory)!);
+        }
+        finally
+        {
+            if (Directory.Exists(staging))
+                Directory.Delete(staging, recursive: true);
+        }
+    }
+
+    private static void RemoveDirectoryIfEmpty(string directory)
+    {
+        if (Directory.Exists(directory) && !Directory.EnumerateFileSystemEntries(directory).Any())
+            Directory.Delete(directory);
     }
 
     private static ProjectConfigurationSnapshot LoadConfigurationSnapshot(
