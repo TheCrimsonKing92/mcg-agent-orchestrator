@@ -5,7 +5,7 @@ public sealed class WorkflowDecisionCoverageRatchetTests
 {
     // Read-only inventory of 5f55ee9fa. Keys are file/member pairs, not line numbers;
     // any undecided sibling keeps its member here until the last site is decided.
-    private static readonly string[] AllowList =
+    internal static readonly string[] AllowList =
     [
         "AcceptanceCriterionEvidence.RefusedCarry.cs : DescribeRefusedCarryHold : Refused carry hold is returned without a policy decision.",
         "AcceptanceCriterionEvidence.cs : RecordAndCreateHold : Criterion evidence diagnostic becomes an undecided hold.",
@@ -250,6 +250,9 @@ public sealed class WorkflowDecisionCoverageRatchetTests
     internal static string[] Scan(string fileName, string text) => Scan([(fileName, text)]);
 
     internal static string[] Scan(IEnumerable<(string FileName, string Text)> sources)
+        => ScanSites(sources).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+
+    internal static string[] ScanSites(IEnumerable<(string FileName, string Text)> sources)
     {
         var files = sources.Select(source => Parse(source.FileName, source.Text)).ToArray();
         var helpers = files.SelectMany(file => file.Members.Where(member => ReturnsOutcome(member.Signature)))
@@ -257,7 +260,7 @@ public sealed class WorkflowDecisionCoverageRatchetTests
             // A mixed overload set is conservatively undecided.
             .ToDictionary(group => group.Key, group => group.All(member => DecisionMarker.IsMatch(member.Body)), StringComparer.Ordinal);
         var attaching = helpers.Where(pair => pair.Value).Select(pair => pair.Key).ToHashSet(StringComparer.Ordinal);
-        var found = new HashSet<string>(StringComparer.Ordinal);
+        var found = new List<string>();
         foreach (var file in files)
         {
             var driver = Regex.IsMatch(file.Code, @"\bpartial\s+class\s+ConductorDriver\b");
@@ -295,9 +298,9 @@ public sealed class WorkflowDecisionCoverageRatchetTests
         if (stale.Length != 0) throw new XunitException("Stale allow-list entries:\n" + string.Join('\n', stale));
     }
 
-    private static string EntryKey(string entry) => string.Join(" : ", entry.Split(" : ", 3, StringSplitOptions.None).Take(2));
+    internal static string EntryKey(string entry) => string.Join(" : ", entry.Split(" : ", 3, StringSplitOptions.None).Take(2));
 
-    private static (string FileName, string Text)[] ReadSources()
+    internal static (string FileName, string Text)[] ReadSources()
     {
         var root = VerifiedRepositoryRoot.Find();
         Assert.True(Directory.Exists(Path.Combine(root, "src")) && Directory.Exists(Path.Combine(root, "tests")), $"Invalid source root: {root}");

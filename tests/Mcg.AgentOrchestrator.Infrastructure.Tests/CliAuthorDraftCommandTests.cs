@@ -8,10 +8,6 @@ public sealed class CliAuthorDraftCommandTests
     internal const string ValidMarkdown = """
         # Check a brief
 
-        ## Planner output format, read this first
-
-        Begin each mapping line with the bare criterion number and a period, exactly `N. maps to <subject>. disposition=planned; plan=<text>` (the semicolon after the disposition value is required). Only `planned` and `undecidable` are accepted. The literal text `disposition=` must appear only on mapping lines. Only mapping lines may begin with a digit and a period. Cite files by full repository-relative path that exists at HEAD, or mark them as new; never cite a wildcard pattern. Do not use the words placeholder, TBD or TODO. The text after plan= must be a non-empty one-sentence summary on the same line; detail bullets may follow but must not begin with a digit and a period.
-
         ## Measured premise
         Observed in `docs/role-capability-matrix.md:1`.
 
@@ -45,7 +41,7 @@ public sealed class CliAuthorDraftCommandTests
         Assert.Equal(fixture.Item.Id, root.GetProperty("backlogItemId").GetString());
         Assert.Equal(Fixture.MainSha, root.GetProperty("mainHead").GetString());
         Assert.Equal(0, root.GetProperty("exitCode").GetInt32());
-        Assert.Equal(new[] { "sections", "criteria-present", "owner-sentence", "premise-citations", "planner-format", "numbered-criteria", "developer-deferred-criterion", "build-item-count" },
+        Assert.Equal(new[] { "sections", "criteria-present", "owner-sentence", "premise-citations", "numbered-criteria", "developer-deferred-criterion", "build-item-count" },
             root.GetProperty("checks").EnumerateArray().Select(check => check.GetProperty("name").GetString()).ToArray());
         Assert.All(root.GetProperty("checks").EnumerateArray(), check => Assert.True(check.GetProperty("passed").GetBoolean()));
         Assert.Contains($"goal --brief-file \"{draft}\" --backlog-item {fixture.Item.Id} --backlog-coverage full",
@@ -82,7 +78,7 @@ public sealed class CliAuthorDraftCommandTests
 
         Assert.Equal(markdown, File.ReadAllText(Assert.Single(Directory.GetFiles(fixture.Drafts, "*.md"))));
         using var receipt = fixture.Receipt();
-        Assert.Equal(8, receipt.RootElement.GetProperty("checks").GetArrayLength());
+        Assert.Equal(7, receipt.RootElement.GetProperty("checks").GetArrayLength());
         var failed = Assert.Single(receipt.RootElement.GetProperty("checks").EnumerateArray()
             .Where(check => !check.GetProperty("passed").GetBoolean()));
         Assert.Equal(checkName, failed.GetProperty("name").GetString());
@@ -197,7 +193,7 @@ public sealed class CliAuthorDraftCommandTests
 
         Assert.Equal(markdown, File.ReadAllText(Assert.Single(Directory.GetFiles(fixture.Drafts, "*.md"))));
         using var receipt = fixture.Receipt();
-        Assert.Equal(8, receipt.RootElement.GetProperty("checks").GetArrayLength());
+        Assert.Equal(7, receipt.RootElement.GetProperty("checks").GetArrayLength());
         var failed = Assert.Single(receipt.RootElement.GetProperty("checks").EnumerateArray()
             .Where(check => !check.GetProperty("passed").GetBoolean()));
         Assert.Equal("premise-citations", failed.GetProperty("name").GetString());
@@ -221,7 +217,7 @@ public sealed class CliAuthorDraftCommandTests
 
         Assert.Equal(markdown, File.ReadAllText(Assert.Single(Directory.GetFiles(fixture.Drafts, "*.md"))));
         using var receipt = fixture.Receipt();
-        Assert.Equal(8, receipt.RootElement.GetProperty("checks").GetArrayLength());
+        Assert.Equal(7, receipt.RootElement.GetProperty("checks").GetArrayLength());
         Assert.All(receipt.RootElement.GetProperty("checks").EnumerateArray(),
             check => Assert.True(check.GetProperty("passed").GetBoolean()));
         Assert.Empty(fixture.Error.ToString());

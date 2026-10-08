@@ -4,7 +4,7 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 public sealed class CliAuthorDraftCommandTestsHouseConventions
 {
     private static readonly string[] HouseChecks =
-        ["planner-format", "numbered-criteria", "developer-deferred-criterion", "build-item-count"];
+        ["numbered-criteria", "developer-deferred-criterion", "build-item-count"];
     private const string DeferredCriterion = "2. The Developer reports `tests: deferred - ` followed, directly after the hyphen and comma-separated, by every test class it touched or added. The Tester's evidence_request runs them. Developer owns; Acceptance executes. TEST-VERIFIABLE.";
     private const string BuildItems = "1. First item.\n2. Second item.\n3. Third item.\n4. Fourth item.";
     private static string HouseDraft => CliAuthorDraftCommandTests.ValidMarkdown.ReplaceLineEndings("\n")
@@ -13,16 +13,15 @@ public sealed class CliAuthorDraftCommandTestsHouseConventions
     [Theory]
     [InlineData("\n")]
     [InlineData("\r\n")]
-    public void House_draft_all_four_new_checks_pass(string newline)
+    public void House_draft_without_planner_section_passes_all_seven_checks(string newline)
     {
         var checks = Run(HouseDraft.ReplaceLineEndings(newline));
-        foreach (var name in HouseChecks)
-            Assert.True(Assert.Single(checks, check => check.Name == name).Passed, name);
+        Assert.Equal(new[] { "sections", "criteria-present", "owner-sentence", "premise-citations", "numbered-criteria", "developer-deferred-criterion", "build-item-count" },
+            checks.Select(check => check.Name).ToArray());
         Assert.All(checks, check => Assert.True(check.Passed, check.Detail));
     }
 
     [Theory]
-    [InlineData("planner-format", "Observed Planner heading: none")]
     [InlineData("numbered-criteria", "- The receipt records the result.")]
     [InlineData("developer-deferred-criterion", "Observed 2 declared criteria")]
     [InlineData("build-item-count", "Observed 5 numbered build items")]
@@ -31,7 +30,6 @@ public sealed class CliAuthorDraftCommandTestsHouseConventions
     {
         var markdown = checkName switch
         {
-            "planner-format" => HouseDraft.Replace(AuthorBriefDraftPrompt.PlannerFormatSection.ReplaceLineEndings("\n"), ""),
             "numbered-criteria" => HouseDraft.Replace("1. The receipt", "- The receipt"),
             "developer-deferred-criterion" => HouseDraft.Replace(DeferredCriterion + "\n", ""),
             "build-item-count" => HouseDraft.Replace(BuildItems, BuildItems + "\n5. Fifth item."),
@@ -99,16 +97,7 @@ public sealed class CliAuthorDraftCommandTestsHouseConventions
     }
 
     [Fact]
-    public void Altered_planner_paragraph_fails_verbatim_check()
-    {
-        var check = Assert.Single(Run(HouseDraft.Replace("never cite a wildcard pattern.", "Cite a wildcard pattern.")),
-            check => check.Name == "planner-format");
-        Assert.False(check.Passed);
-        Assert.Contains("Observed Planner heading: Planner output format, read this first", check.Detail);
-    }
-
-    [Fact]
-    public void Original_board_fill_sections_fail_all_four_house_checks()
+    public void Original_board_fill_sections_fail_all_three_house_checks()
     {
         var markdown = "# Original board-fill draft\n## Measured premise\nObserved in `docs/role-capability-matrix.md:1`.\n" +
             OriginalBoardFillSections + "\n## Scope\nFirst board-fill draft.";

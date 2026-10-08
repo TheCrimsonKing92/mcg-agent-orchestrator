@@ -7,48 +7,26 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 internal sealed class SystemConsoleInput : IOwnerConsoleInput
 {
-    private int _editing;
-    public bool IsEditingLine => Volatile.Read(ref _editing) != 0;
+    private readonly OwnerConsoleLineEditor _editor;
+
+    public SystemConsoleInput() : this(OwnerConsoleLineEditor.System) { }
+    internal SystemConsoleInput(OwnerConsoleLineEditor editor) => _editor = editor;
+    public bool IsEditingLine => _editor.IsEditingLine;
 
     public ValueTask<string?> ReadLineAsync(CancellationToken cancellationToken) =>
-        new(Task.Run(() => System.Console.IsInputRedirected
-            ? System.Console.ReadLine()
-            : ReadInteractiveLine(), cancellationToken));
-
-    private string ReadInteractiveLine()
-    {
-        var line = new System.Text.StringBuilder();
-        while (true)
-        {
-            var key = System.Console.ReadKey(intercept: true);
-            if (key.Key == ConsoleKey.Enter)
-            {
-                System.Console.WriteLine();
-                Volatile.Write(ref _editing, 0);
-                return line.ToString();
-            }
-            if (key.Key == ConsoleKey.Backspace)
-            {
-                if (line.Length > 0)
-                {
-                    line.Length--;
-                    System.Console.Write("\b \b");
-                }
-                Volatile.Write(ref _editing, line.Length == 0 ? 0 : 1);
-                continue;
-            }
-            if (char.IsControl(key.KeyChar)) continue;
-            Volatile.Write(ref _editing, 1);
-            line.Append(key.KeyChar);
-            System.Console.Write(key.KeyChar);
-        }
-    }
+        _editor.IsInputRedirected
+            ? new(Task.Run(() => System.Console.ReadLine(), cancellationToken))
+            : _editor.ReadLineAsync(cancellationToken);
 }
 
 internal sealed class SystemConsoleOutput : IOwnerConsoleOutput
 {
-    public void Write(string text) { System.Console.Write(text); System.Console.Out.Flush(); }
-    public void WriteLine(string text) { System.Console.WriteLine(text); System.Console.Out.Flush(); }
+    private readonly OwnerConsoleLineEditor _editor;
+
+    public SystemConsoleOutput() : this(OwnerConsoleLineEditor.System) { }
+    internal SystemConsoleOutput(OwnerConsoleLineEditor editor) => _editor = editor;
+    public void Write(string text) => _editor.WriteOutput(text, newLine: false);
+    public void WriteLine(string text) => _editor.WriteOutput(text, newLine: true);
 }
 
 internal sealed class OwnerDigestSummaryAdapter(OrchestratorWorkspace workspace) : IOwnerDigestSummary

@@ -21,8 +21,8 @@ public sealed class CliAuthorDraftBriefLintTests
         Assert.Equal(markdown, File.ReadAllText(draft));
         using var receipt = fixture.Receipt();
         var checks = receipt.RootElement.GetProperty("checks").EnumerateArray().ToArray();
-        Assert.Equal(9, checks.Length);
-        Assert.All(checks.Take(8), check => Assert.True(check.GetProperty("passed").GetBoolean()));
+        Assert.Equal(8, checks.Length);
+        Assert.All(checks.Take(7), check => Assert.True(check.GetProperty("passed").GetBoolean()));
         var failed = Assert.Single(checks.Where(check => !check.GetProperty("passed").GetBoolean()));
         Assert.Equal($"brief-lint:{kind}", failed.GetProperty("name").GetString());
         Assert.Equal(detail, failed.GetProperty("detail").GetString());
@@ -72,7 +72,7 @@ public sealed class CliAuthorDraftBriefLintTests
         Assert.Equal(GoalCommand(fixture, draft), LastOutputLine(fixture));
         using var receipt = fixture.Receipt();
         var checks = receipt.RootElement.GetProperty("checks").EnumerateArray().ToArray();
-        Assert.Equal(new[] { "sections", "criteria-present", "owner-sentence", "premise-citations", "planner-format", "numbered-criteria", "developer-deferred-criterion", "build-item-count" },
+        Assert.Equal(new[] { "sections", "criteria-present", "owner-sentence", "premise-citations", "numbered-criteria", "developer-deferred-criterion", "build-item-count" },
             checks.Select(check => check.GetProperty("name").GetString()).ToArray());
         Assert.All(checks, check => Assert.True(check.GetProperty("passed").GetBoolean()));
         Assert.Empty(fixture.Error.ToString());
