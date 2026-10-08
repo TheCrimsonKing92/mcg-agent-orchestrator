@@ -31,7 +31,9 @@ public sealed class OwnerConsoleActivityHistoryTests
                 TestContext.Current.CancellationToken);
             Assert.NotNull(loaded);
             Assert.Equal(2, loaded.LandedToday);
-            Assert.Contains(scene.View.ActivityLines, line => line.Contains("Landed together: Search (11111111), Export (22222222)"));
+            var landing = Assert.Single(scene.View.ActivityLines, line => line.Contains("Landed together: "));
+            Assert.Contains("Search (11111111)", landing);
+            Assert.Contains("Export (22222222)", landing);
             Assert.Contains("landed today: 2", scene.View.StatusText);
             Assert.DoesNotContain("hidden:", scene.View.StatusText);
         }
