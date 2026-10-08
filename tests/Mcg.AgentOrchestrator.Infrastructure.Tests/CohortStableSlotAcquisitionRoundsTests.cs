@@ -1,4 +1,6 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class CohortStableSlotAcquisitionRoundsTests : DotnetBuildEnvironmentManagerRootedTestBase
@@ -88,6 +90,29 @@ public sealed class CohortStableSlotAcquisitionRoundsTests : DotnetBuildEnvironm
             throw new InvalidOperationException("A non-busy failure must not retry."));
         Assert.Same(failure, Assert.Throws<IOException>(() => rounds.Acquire("cohort", _ => throw failure)));
         Assert.Throws<ArgumentOutOfRangeException>(() => new CohortStableSlotAcquisitionRounds(0));
+    }
+
+    [Fact]
+    public void DeferredRunRecordsBuildSlotsBusyDecisionWithoutGateReceipt()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Cohort member", [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+
+        var run = CohortStableSlotAcquisitionRounds.DeferredRun([goal], ConductorAutonomyPolicy.Permissive, "same-cohort");
+
+        Assert.Null(run.Receipt);
+        var held = Assert.IsType<ConductorAdvanceOutcome.Held>(Assert.Single(run.MemberResults).Value.Outcome);
+        Assert.Equal(GoalLifecycleState.Verified, held.State);
+        Assert.Equal("same-cohort", held.StableIdentity);
+        Assert.NotNull(held.Decision);
+        Assert.Equal(VerifiedAdmissionPolicy.StageName, held.Decision.Stage);
+        Assert.Equal(nameof(VerifiedAdmissionAction.Hold), held.Decision.Action);
+        Assert.Equal("gate-start-build-slots-busy", held.Decision.DiscriminatingEvidence);
+        var facts = VerifiedAdmissionFacts.FromRecordedFacts(held.Decision.Facts);
+        Assert.Equal(goal.Status, facts.GoalStatus);
+        Assert.Equal("build-slots-busy", facts.GateStartDeferral);
+        Assert.Contains("cohort=same-cohort", facts.BuildSlotsBusyDetail);
+        Assert.Equal(held.Reason, VerifiedAdmissionPolicy.Evaluate(facts).Reason);
     }
 
     private static DotnetBuildSlotsBusyException Busy() => new(new("first-available-stable-slot", []));

@@ -5,7 +5,7 @@ using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 [Collection(TestCollections.DotnetBuildEnvironmentManagerStaticHooks)]
-public sealed class DotnetBuildEnvironmentManagerStableSlotHolderLabelTests : DotnetBuildEnvironmentManagerRootedTestBase
+public sealed class DotnetBuildEnvironmentManagerTestsStableSlotHolderLabel : DotnetBuildEnvironmentManagerRootedTestBase
 {
     [Fact]
     public void CohortAndGoalAttemptWriteLabelsAndBusyLineNamesBoth()

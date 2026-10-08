@@ -49,9 +49,16 @@ internal sealed class CohortStableSlotAcquisitionRounds
     internal static ConductorAcceptanceCohortRunResult DeferredRun(
         IReadOnlyList<Goal> goals, ConductorAutonomyPolicy policy, string identity) => new(
         null,
-        goals.ToDictionary(goal => goal.Id.Value, goal => new ConductorAdvanceResult(
-            goal.Id.Value, goal.Id.Value[..8], policy.Name,
-            new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified,
-                "Cohort gate deferred while stable build slots are busy.", identity)), StringComparer.Ordinal),
+        goals.ToDictionary(goal => goal.Id.Value, goal =>
+        {
+            var decision = VerifiedAdmissionPolicy.Evaluate(new VerifiedAdmissionFacts(goal.Status)
+            {
+                GateStartDeferral = "build-slots-busy",
+                BuildSlotsBusyDetail = $"Cohort gate deferred while stable build slots are busy. cohort={identity}"
+            });
+            return new ConductorAdvanceResult(goal.Id.Value, goal.Id.Value[..8], policy.Name,
+                new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, decision.Reason, identity)
+                    { Decision = decision.ToRecord() });
+        }, StringComparer.Ordinal),
         $"outcome={DeferredVerdict} cohort={identity}");
 }
