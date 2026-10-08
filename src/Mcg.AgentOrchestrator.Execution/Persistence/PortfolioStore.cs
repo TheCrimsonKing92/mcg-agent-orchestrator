@@ -87,14 +87,23 @@ public sealed class PortfolioStore
     private const int MaxBusyRetries = 6;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly string _dbPath;
+    private readonly bool _readOnly;
 
-    public PortfolioStore(string dbPath)
+    public PortfolioStore(string dbPath) : this(dbPath, false) { }
+
+    private PortfolioStore(string dbPath, bool readOnly)
     {
         _dbPath = dbPath;
-        EnsureSchema();
+        _readOnly = readOnly;
+        if (!readOnly) EnsureSchema();
     }
 
-    private string ConnectionString => $"Data Source={_dbPath};Mode=ReadWriteCreate;Pooling=False;";
+    public static PortfolioStore OpenReadOnly(string dbPath) => new(dbPath, true);
+
+    private string ConnectionString => new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder
+    {
+        DataSource = _dbPath, Mode = _readOnly ? SqliteOpenMode.ReadOnly : SqliteOpenMode.ReadWriteCreate, Pooling = false
+    }.ToString();
 
     public async Task<PortfolioProject> AddProjectAsync(
         string title,

@@ -573,6 +573,7 @@ internal static partial class CliPersistentStateRunner
             "help" or "model-functions" or "model-function-add" => true,
             "operator-listen" or "operator-channel" or "goal-intake-status" => true,
             // Portfolio views and writes use their own stores; goals read only metadata.
+            "experiment-add" or "experiment-show" or "experiment-decide" => true,
             "epic-add" or "epic-assign" or "epic-assign-many" or "epic-list" or "epic-show" => true, _ when EpicProgressReadModel.IsEpicGoalsListing(args) => true,
             // These backlog commands operate solely on the independent BacklogStore, never the
             // orchestrator kernel/state.db. Running them with an empty kernel — no state load, no
