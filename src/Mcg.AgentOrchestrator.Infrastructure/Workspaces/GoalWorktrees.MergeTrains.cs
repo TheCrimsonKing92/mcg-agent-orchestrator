@@ -119,49 +119,21 @@ public static partial class GoalWorktrees
             var ejections = new List<MergeTrainEjection>();
             foreach (var member in members)
             {
-                var priorHead = ResolveRequiredRef(workspacePath, "HEAD");
-                var mergeBase = GitCli.Run(root, "merge-base", main, member.CandidateRevision);
-                if (mergeBase.ExitCode != 0 || string.IsNullOrWhiteSpace(mergeBase.Output))
+                var step = StreamComposer.RebaseOntoPriorHead(root, workspacePath, main,
+                    member.CandidateRevision, member.GoalId, "Merge train",
+                    args => committerDate is null
+                        ? GitCli.Run(workspacePath, args)
+                        : GitCli.RunWithEnvironment(workspacePath,
+                            new Dictionary<string, string>
+                            {
+                                ["GIT_COMMITTER_DATE"] = FormattableString.Invariant($"@{committerDate.Value.ToUnixTimeSeconds()} +0000")
+                            }, args));
+                if (step.Ejection is not null)
                 {
-                    ejections.Add(new MergeTrainEjection(
-                        member.GoalId,
-                        MergeTrainEjectionReason.MaterializationFailure,
-                        [],
-                        $"merge base unavailable: {mergeBase.Error}"));
+                    ejections.Add(step.Ejection);
                     continue;
                 }
-                var rebase = committerDate is null
-                    ? GitCli.Run(
-                        workspacePath,
-                        "-c", "user.name=mcg-orchestrator",
-                        "-c", "user.email=mcg-orchestrator@localhost",
-                        "rebase", "--merge", "--no-stat", "--onto", priorHead, mergeBase.Output.Trim(), member.CandidateRevision)
-                    : GitCli.RunWithEnvironment(workspacePath,
-                        new Dictionary<string, string>
-                        {
-                            ["GIT_COMMITTER_DATE"] = FormattableString.Invariant($"@{committerDate.Value.ToUnixTimeSeconds()} +0000")
-                        },
-                        "-c", "user.name=mcg-orchestrator",
-                        "-c", "user.email=mcg-orchestrator@localhost",
-                        "rebase", "--merge", "--no-stat", "--onto", priorHead, mergeBase.Output.Trim(), member.CandidateRevision);
-                if (rebase.ExitCode != 0)
-                {
-                    var conflicts = ReadMergeTrainConflictPaths(workspacePath);
-                    _ = GitCli.Run(workspacePath, "rebase", "--abort");
-                    var restore = GitCli.Run(workspacePath, "reset", "--hard", priorHead);
-                    if (restore.ExitCode != 0)
-                    {
-                        throw new InvalidOperationException(
-                            $"Merge train conflict abort could not restore the tested prefix: {restore.Error}");
-                    }
-                    ejections.Add(new MergeTrainEjection(
-                        member.GoalId,
-                        MergeTrainEjectionReason.RebaseConflict,
-                        conflicts,
-                        $"rebase conflict: {rebase.Error}"));
-                    continue;
-                }
-                materialized.Add(member.WithRebasedHead(ResolveRequiredRef(workspacePath, "HEAD")));
+                materialized.Add(member.WithRebasedHead(step.Head!));
             }
 
             SourceSizeRatchetRetightener.RetightenAndCommit(workspacePath, main,
@@ -197,7 +169,7 @@ public static partial class GoalWorktrees
         _ = GitCli.Run(executionDirectory, "worktree", "prune");
     }
 
-    private static IReadOnlyList<string> ReadMergeTrainConflictPaths(string workspacePath)
+    internal static IReadOnlyList<string> ReadMergeTrainConflictPaths(string workspacePath)
     {
         var result = GitCli.Run(workspacePath, "diff", "--name-only", "--diff-filter=U");
         return result.ExitCode == 0
