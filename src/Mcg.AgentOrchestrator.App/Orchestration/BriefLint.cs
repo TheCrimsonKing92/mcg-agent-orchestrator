@@ -128,8 +128,8 @@ public static partial class BriefLint
     [GeneratedRegex(@"^\s*(#{1,2})[ \t]+(.+)$", RegexOptions.CultureInvariant)]
     private static partial Regex SectionHeading();
 
-    [GeneratedRegex(@"^\s*\d+[.)]\s", RegexOptions.CultureInvariant)]
-    private static partial Regex NumberedLine();
+    [GeneratedRegex(@"^\s*(?<number>\d+)[.)]\s", RegexOptions.CultureInvariant)]
+    internal static partial Regex NumberedLine();
 
     [GeneratedRegex(@"^\s*- test-removal:", RegexOptions.Multiline | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex TestRemovalBullet();

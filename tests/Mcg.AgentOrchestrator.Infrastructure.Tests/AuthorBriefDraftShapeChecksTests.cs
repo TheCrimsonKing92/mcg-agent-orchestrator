@@ -96,6 +96,19 @@ public sealed class AuthorBriefDraftShapeChecksTests
             "pre-change-failure-criterion").Passed);
 
     [Fact]
+    public void Pre_change_check_uses_numbered_lines_and_their_declared_numbers()
+    {
+        const string demand = "The test fails against prior code. Acceptance executes.";
+        var markdown = $"## Acceptance criteria\n- {demand}\n3. The receipt exists.\n7) {demand}\n" +
+            $"8. The test passes against\n{demand}\n## Scope\n9. {demand}";
+        var check = Check(markdown, new CliAuthorDraftCommandTests.FakeRepository(),
+            "pre-change-failure-criterion");
+
+        Assert.False(check.Passed);
+        Assert.Equal($"criterion 7 matched \"prior code\". {BriefLint.PreChangeFailureRemedy}", check.Detail);
+    }
+
+    [Fact]
     public void Multiple_pre_change_criteria_Report_numbers_in_one_check()
     {
         const string demand = "The test fails against prior code. Acceptance executes.";

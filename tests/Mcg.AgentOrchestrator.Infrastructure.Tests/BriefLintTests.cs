@@ -19,6 +19,8 @@ public sealed class BriefLintTests
         yield return [$"## What to build\n1. {demand}\n## Acceptance criteria\n1. The receipt exists."];
         yield return [$"## Acceptance criteria\n1. The receipt exists.\n## Scope\n{demand}"];
         yield return [$"## Acceptance criteria\n{demand}\n1. The receipt exists."];
+        yield return [$"## Acceptance criteria\n- {demand}"];
+        yield return [$"## Acceptance criteria\n* {demand}"];
         yield return ["## Acceptance criteria\n1. A committed negative-control test runs on the candidate and fails against old code. Developer owns; Acceptance executes. TEST-VERIFIABLE."];
         yield return ["## Acceptance criteria\n1. On the candidate, a committed negative control test is red for prior code. Developer owns; Acceptance runs. TEST-VERIFIABLE."];
         yield return ["## Acceptance criteria\n1. Returns a failing pre-change-failure-criterion check. Developer owns; Acceptance executes. TEST-VERIFIABLE."];

@@ -72,8 +72,11 @@ internal static class AuthorBriefDraftChecks
             .Where(file => repository.TrackedLineCount(mainHead, file.Path) is null &&
                 repository.TrackedLineCount(mainHead, file.Sibling) is not null)
             .Select(file => file.Path).ToArray();
-        var preChangeCriteria = criteria.Select((criterion, index) =>
-                (Index: index + 1, Match: BriefLint.PreChangeFailureCriterion().Match(criterion)))
+        var preChangeCriteria = UnfencedLines(SectionText("Acceptance criteria"))
+            .Where(line => BriefLint.NumberedLine().IsMatch(line.Text))
+            .Select(line =>
+                (Index: BriefLint.NumberedLine().Match(line.Text).Groups["number"].Value,
+                    Match: BriefLint.PreChangeFailureCriterion().Match(line.Text)))
             .Where(criterion => criterion.Match.Success).ToArray();
         return
         [
