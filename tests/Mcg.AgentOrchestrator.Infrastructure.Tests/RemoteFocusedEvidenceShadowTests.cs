@@ -132,8 +132,8 @@ public sealed class RemoteFocusedEvidenceShadowTests : GoalAcceptanceVerifierTes
         Assert.False(run.IsCompleted);
         scenario.Clock.Advance(TimeSpan.FromSeconds(1));
         var result = await Event(run, "local result returned when grace expired");
-        await Event(handle.Cancelled.Task, "remote cancellation token signalled");
-        await Event(handle.Abandoned.Task, "pending handle abandoned");
+        await Signal(handle.Cancelled.Task, "remote cancellation signalled");
+        await Signal(handle.Abandoned.Task, "pending handle abandoned");
         Assert.True(result.Passed, result.Summary);
         var row = Assert.Single(scenario.Health());
         Assert.Equal(RemoteLaneOutcomeCode.CancelledAfterGrace, row.Outcome);
@@ -359,6 +359,15 @@ public sealed class RemoteFocusedEvidenceShadowTests : GoalAcceptanceVerifierTes
                 summary = summary.Replace(check.ArtifactsPath, "<local-build-artifacts>", StringComparison.Ordinal);
         return summary;
     }
+    // These asynchronous cleanup signals use the test-run cancellation rather than an elapsed-time bound.
+    private static async Task Signal(Task task, string name)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        try { await task.WaitAsync(cancellationToken); }
+        catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested)
+        { throw new OperationCanceledException("Missing event: " + name, ex, cancellationToken); }
+    }
+
     private static async Task Event(Task task, string name)
     {
         try { await task.WaitAsync(TimeSpan.FromSeconds(30)); }
