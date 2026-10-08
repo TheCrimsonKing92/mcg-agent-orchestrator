@@ -19,7 +19,7 @@ public sealed class ConductorDriverTestsGreenTesterFindingDelivery
             var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
             var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
             PassVerification(kernel, goal, developer, hasCommittedChanges: true);
-            DispatchTask(kernel, goal, tester, "test");
+            DispatchTask(kernel, goal, tester, "test", baseCommit: candidateSha);
             var findings = new[]
             {
                 EvidenceFindingWithRequest("First focused request", "green-first",
@@ -36,6 +36,7 @@ public sealed class ConductorDriverTestsGreenTesterFindingDelivery
             kernel.RecordDispatchExecutionResult(goal.Id, tester.Id, new TaskVerificationRecord(
                 "test", "C:\\tmp", 0, stdout, "", DateTimeOffset.UtcNow,
                 StandardOutputPath: "C:\\tmp\\tester.out.log", WorkerResultPresent: true));
+            Assert.Equal(candidateSha, tester.LastVerification!.ReviewedCommit);
 
             var requests = new List<string>();
             var retried = new List<TaskId>();
