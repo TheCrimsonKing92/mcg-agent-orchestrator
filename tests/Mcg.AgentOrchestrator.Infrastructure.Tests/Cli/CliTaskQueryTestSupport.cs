@@ -37,13 +37,24 @@ public abstract class CliTaskQueryTestSupport
     {
         private readonly AgentOrchestratorKernel _kernel = Clone(kernel);
         private readonly Dictionary<string, OrchestratorStateOutboxMessage> _outbox = new(StringComparer.Ordinal);
+        private readonly List<string?> _observedWriteOperationTags = [];
+
+        public IReadOnlyList<string?> ObservedWriteOperationTags => _observedWriteOperationTags.AsReadOnly();
 
         public Task<IReadOnlyList<HumanInputRequestSnapshot>> ListOpenHumanInputRequestsAsync(
-            CancellationToken cancellationToken = default) => Task.FromResult(OpenRequests(_kernel));
+            CancellationToken cancellationToken = default)
+        {
+            ObserveWriteOperationTag();
+            return Task.FromResult(OpenRequests(_kernel));
+        }
 
         public Task<IReadOnlyList<TerminalOwnerQuestionHold>> ListTerminalOwnerQuestionHoldsAsync(
             IReadOnlyCollection<GoalId> goalIds,
-            CancellationToken cancellationToken = default) => Task.FromResult(TerminalHolds(_kernel, goalIds));
+            CancellationToken cancellationToken = default)
+        {
+            ObserveWriteOperationTag();
+            return Task.FromResult(TerminalHolds(_kernel, goalIds));
+        }
 
         public bool ThrowOnOutbox { get; init; }
 
@@ -75,6 +86,7 @@ public abstract class CliTaskQueryTestSupport
 
         public Task<AgentOrchestratorKernel> LoadAsync(CancellationToken cancellationToken = default)
         {
+            ObserveWriteOperationTag();
             FullLoadAttempts++;
             throw new InvalidOperationException("Full-kernel hydration is not allowed for this test.");
         }
@@ -83,6 +95,7 @@ public abstract class CliTaskQueryTestSupport
             IReadOnlyCollection<GoalId> goalIds,
             CancellationToken cancellationToken = default)
         {
+            ObserveWriteOperationTag();
             LoadGoalsCount++;
             if (DisappearSelectedGoals)
                 return Task.FromResult(new AgentOrchestratorKernel());
@@ -98,35 +111,52 @@ public abstract class CliTaskQueryTestSupport
         public Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(
             CancellationToken cancellationToken = default)
         {
+            ObserveWriteOperationTag();
             ListGoalMetadataCount++;
             return Task.FromResult(BuildMetadata(_kernel));
         }
 
         public Task<IReadOnlyList<GoalSummary>> ListConductLoopGoalMetadataAsync(
-            CancellationToken cancellationToken = default) =>
-            Task.FromResult(BuildMetadata(_kernel));
+            CancellationToken cancellationToken = default)
+        {
+            ObserveWriteOperationTag();
+            return Task.FromResult(BuildMetadata(_kernel));
+        }
 
         public Task<IReadOnlyList<GoalId>> ListGoalIdsWithCompletedHumanInputAsync(
             IReadOnlyCollection<GoalId> goalIds,
-            CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<GoalId>>([]);
+            CancellationToken cancellationToken = default)
+        {
+            ObserveWriteOperationTag();
+            return Task.FromResult<IReadOnlyList<GoalId>>([]);
+        }
 
         public Task<IReadOnlyList<ModelFitHistoryRow>> ListModelFitHistoryAsync(
-            CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<ModelFitHistoryRow>>([]);
+            CancellationToken cancellationToken = default)
+        {
+            ObserveWriteOperationTag();
+            return Task.FromResult<IReadOnlyList<ModelFitHistoryRow>>([]);
+        }
 
         public Task<IReadOnlyList<ModelOutcomeRecord>> BuildModelOutcomeScorecardAsync(
             int windowSize = ModelOutcomeScorecard.DefaultWindowSize,
-            CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<ModelOutcomeRecord>>([]);
+            CancellationToken cancellationToken = default)
+        {
+            ObserveWriteOperationTag();
+            return Task.FromResult<IReadOnlyList<ModelOutcomeRecord>>([]);
+        }
 
         public Task<ModelFitBestFit?> QueryBestFitForRoleAsync(
             AgentRole role,
-            CancellationToken cancellationToken = default) =>
-            Task.FromResult<ModelFitBestFit?>(null);
+            CancellationToken cancellationToken = default)
+        {
+            ObserveWriteOperationTag();
+            return Task.FromResult<ModelFitBestFit?>(null);
+        }
 
         public Task SaveAsync(AgentOrchestratorKernel kernel, CancellationToken cancellationToken = default)
         {
+            ObserveWriteOperationTag();
             RecordSave();
             return Task.CompletedTask;
         }
@@ -135,6 +165,7 @@ public abstract class CliTaskQueryTestSupport
             IReadOnlyCollection<GoalSnapshot> goals,
             CancellationToken cancellationToken = default)
         {
+            ObserveWriteOperationTag();
             RecordSave();
             return Task.CompletedTask;
         }
@@ -143,6 +174,7 @@ public abstract class CliTaskQueryTestSupport
             IReadOnlyCollection<GoalSnapshotSaveRequest> goals,
             CancellationToken cancellationToken = default)
         {
+            ObserveWriteOperationTag();
             MergeSaveAttempts++;
             RecordSave();
             return Task.FromResult<IReadOnlyList<GoalSnapshotSaveResult>>([]);
@@ -150,43 +182,62 @@ public abstract class CliTaskQueryTestSupport
 
         public Task<T> TransactAsync<T>(
             Func<AgentOrchestratorKernel, CancellationToken, Task<(bool ShouldSave, T Result)>> transaction,
-            CancellationToken cancellationToken = default) =>
-            ThrowMutation<T>();
+            CancellationToken cancellationToken = default)
+        {
+            ObserveWriteOperationTag();
+            return ThrowMutation<T>();
+        }
 
         public Task<T> TransactAsync<T>(
             Func<AgentOrchestratorKernel, Func<Task>, CancellationToken, Task<(bool ShouldSave, T Result)>> transaction,
-            CancellationToken cancellationToken = default) =>
-            ThrowMutation<T>();
+            CancellationToken cancellationToken = default)
+        {
+            ObserveWriteOperationTag();
+            return ThrowMutation<T>();
+        }
 
         public Task<T> TransactWithOutboxAsync<T>(
             Func<AgentOrchestratorKernel, CancellationToken, Task<(
                 bool ShouldSave,
                 T Result,
                 IReadOnlyList<OrchestratorStateOutboxMessage> OutboxMessages)>> transaction,
-            CancellationToken cancellationToken = default) =>
-            ThrowMutation<T>();
+            CancellationToken cancellationToken = default)
+        {
+            ObserveWriteOperationTag();
+            return ThrowMutation<T>();
+        }
 
         public Task<GoalSnapshot?> LoadGoalAsync(
             GoalId goalId,
-            CancellationToken cancellationToken = default) =>
-            Task.FromResult<GoalSnapshot?>(_kernel.ExportSnapshot().Goals.SingleOrDefault(goal => goal.Id == goalId.Value));
+            CancellationToken cancellationToken = default)
+        {
+            ObserveWriteOperationTag();
+            return Task.FromResult<GoalSnapshot?>(_kernel.ExportSnapshot().Goals.SingleOrDefault(goal => goal.Id == goalId.Value));
+        }
 
         public Task<T> TransactGoalAsync<T>(
             GoalId goalId,
             Func<GoalSnapshot?, CancellationToken, Task<(bool ShouldSave, GoalSnapshot? NewSnapshot, T Result)>> transaction,
-            CancellationToken cancellationToken = default) =>
-            ThrowMutation<T>();
+            CancellationToken cancellationToken = default)
+        {
+            ObserveWriteOperationTag();
+            return ThrowMutation<T>();
+        }
 
         public Task<T> TransactGoalStateAsync<T>(
             GoalId goalId,
             Func<GoalStateSnapshot?, CancellationToken, Task<(bool ShouldSave, GoalStateSnapshot? NewState, T Result)>> transaction,
-            CancellationToken cancellationToken = default) =>
-            ThrowMutation<T>();
+            CancellationToken cancellationToken = default)
+        {
+            ObserveWriteOperationTag();
+            return ThrowMutation<T>();
+        }
 
         public Task<IReadOnlyList<OrchestratorStateOutboxMessage>> ListOutboxMessagesAsync(
             string kind,
             CancellationToken cancellationToken = default)
         {
+            ObserveWriteOperationTag();
             ListOutboxMessagesCount++;
             if (ThrowOnOutbox)
                 throw new InvalidOperationException("Outbox reads are not allowed for this test.");
@@ -201,12 +252,16 @@ public abstract class CliTaskQueryTestSupport
             Func<OrchestratorStateOutboxMessage, CancellationToken, Task<OrchestratorStateOutboxProcessingResult>> processor,
             CancellationToken cancellationToken = default)
         {
+            ObserveWriteOperationTag();
             OutboxClaimAttempts++;
             if (ThrowOnOutbox)
                 throw new InvalidOperationException("Outbox claims are not allowed for this test.");
 
             return Task.FromResult(false);
         }
+
+        private void ObserveWriteOperationTag() =>
+            _observedWriteOperationTags.Add(SqliteOrchestratorStateRepository.AmbientWriteOperationTag);
 
         private Task<T> ThrowMutation<T>()
         {

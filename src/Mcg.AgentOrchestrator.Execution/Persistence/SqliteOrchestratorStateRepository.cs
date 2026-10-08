@@ -139,6 +139,8 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         _connectionProfile = connectionProfile;
     }
 
+    internal static string? AmbientWriteOperationTag => CurrentWriteOperationTag.Value;
+
     internal static IDisposable UseWriteOperationTag(string operationTag)
     {
         if (string.IsNullOrWhiteSpace(operationTag))

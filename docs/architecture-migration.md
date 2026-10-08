@@ -65,8 +65,10 @@ and `f392f031` have landed since the premise; `01e5271b` is in flight, with no l
   `goal-recovery`, `dogfood-eval` and `failure-triage`
   (`src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs:760-787`), and goal-prefixed
   `goal-timing` (`src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs:743-754`), are absent from the
-  read-route predicates above. That path drains the outbox
-  (`src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs:86-91`).
+  read-route predicates above. The served-form partition and read-route assertions are pinned by
+  `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/CliCommandCapabilitiesTestsQueryRouteConvention.cs:29-85`;
+  execution without outbox effects or ambient write tags, with a writer-path tag observation control, is pinned by
+  `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/CliCommandCapabilitiesTestsQueryRouteNoWriterEffects.cs:75-141`.
   `monitor-goal` is outside the state transaction
   (`src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs:609-619`), but remains off the read route.
   Startup still hydrates everything for any verb off that route
