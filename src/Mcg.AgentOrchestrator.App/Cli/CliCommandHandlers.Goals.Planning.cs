@@ -238,7 +238,7 @@ private static bool HandlePlan(CliExecutionContext context, IReadOnlyList<string
     var objPlan = sliceBatch
         ? GoalObjectivePlanner.Build(
             direction,
-            GoalIntakePipeline.DeveloperReviewer,
+            GoalIntakePipeline.WholeGoalReview,
             context.Kernel.BuildTaskDurationStats())
         : BuildGoalObjectivePlan(context, direction, simple: true);
     GoalObjectivePlanner.ThrowIfBlocked(objPlan);
@@ -294,7 +294,7 @@ private static bool HandlePlan(CliExecutionContext context, IReadOnlyList<string
         var parent = GoalLifecycleCommands.CreateDormantGoal(
             context.Kernel,
             direction,
-            GoalIntakePipeline.DeveloperReviewer,
+            GoalIntakePipeline.WholeGoalReview,
             context.Workspace,
             context.Providers,
             context.EventWriter);

@@ -633,6 +633,12 @@ public sealed partial class AgentOrchestratorKernel
             segments.Add(TaskBriefSegment.Fixed(reviewerExecutedTestEvidence));
         }
 
+        var sliceBatchParentReview = BuildSliceBatchParentReviewBriefBlock(goal, task);
+        if (sliceBatchParentReview.Count > 0)
+        {
+            segments.Add(TaskBriefSegment.Fixed(sliceBatchParentReview));
+        }
+
         var priorEvidence = usesFileAccessContext
             ? PromptContextFormatter.BuildPriorTaskEvidencePointerLines(goal.Tasks, taskId)
             : PromptContextFormatter.BuildPriorTaskEvidenceLines(goal.Tasks, taskId, complexity);
@@ -1249,6 +1255,101 @@ public sealed partial class AgentOrchestratorKernel
             ? "<provider>/<model or launcher>"
             : modelFitTarget.Trim();
         return $"Include a final model-selection note: {ModelFitEvidence.BuildNoteTemplate(target)}.";
+    }
+
+    private IReadOnlyList<string> BuildSliceBatchParentReviewBriefBlock(Goal goal, TaskSpec task)
+    {
+        if (task.RequiredRole != AgentRole.Reviewer || goal.SliceBatchParentId is not null)
+        {
+            return [];
+        }
+
+        // GoalCreated is durable across snapshot reloads. Stable sorting preserves creation order
+        // for planner nodes created in the same clock tick.
+        var children = _goals.Values
+            .Where(child => child.SliceBatchParentId == goal.Id)
+            .OrderBy(child => child.Timeline.FirstOrDefault(evt => evt.Kind == ProgressKind.GoalCreated)?.OccurredAt
+                ?? child.MetadataCreatedAt)
+            .ToArray();
+        if (children.Length == 0)
+        {
+            return [];
+        }
+
+        var lines = new List<string>
+        {
+            "## Slice-Batch Decomposition Plan and Stream Review Receipts",
+            $"Parent objective: {goal.Objective}",
+            "Child objectives in plan order:"
+        };
+        for (var index = 0; index < children.Length; index++)
+        {
+            lines.Add($"- {index + 1}. {children[index].Id.Value}: {children[index].Objective}");
+        }
+
+        foreach (var child in children)
+        {
+            lines.Add(string.Empty);
+            lines.Add($"### Child {child.Id.Value}");
+            lines.Add($"Objective: {child.Objective}");
+            var reviewer = child.Tasks.LastOrDefault(candidate => candidate.RequiredRole == AgentRole.Reviewer);
+            lines.Add("Pre-review evidence receipt:");
+            if (reviewer?.PreReviewEvidenceReceipt is { } receipt)
+            {
+                lines.Add($"Disposition={receipt.Disposition}; reviewer_round={receipt.ReviewerRound}; " +
+                    $"candidate_sha={receipt.CandidateSha}; selected={receipt.SelectedFocusedTests.Count}; " +
+                    $"passed={receipt.PassedCheckCount}; failed={receipt.FailedCheckCount}.");
+                lines.Add($"Recorded at: {receipt.RecordedAt:u}");
+                lines.Add($"Selected focused tests: {string.Join(", ", receipt.SelectedFocusedTests)}");
+                lines.Add($"Mapping reason: {receipt.MappingReason}");
+                foreach (var check in receipt.Checks)
+                {
+                    lines.Add($"- {check.Name}: passed={check.Passed}; exit={check.ExitCode?.ToString() ?? "none"}; " +
+                        $"command={check.Command}; artifact={check.ArtifactPath ?? "none"}");
+                    foreach (var path in check.TestResultPaths ?? [])
+                    {
+                        lines.Add($"  Test result: {path}");
+                    }
+                }
+
+                lines.Add($"Failing tests: {string.Join(", ", receipt.FailingTestIdentities)}");
+                foreach (var advisory in receipt.Advisories ?? [])
+                {
+                    lines.Add($"Advisory: {advisory}");
+                }
+
+                foreach (var timeout in receipt.EvidenceTimeoutChecks ?? [])
+                {
+                    lines.Add($"Evidence timeout check: {timeout}");
+                }
+
+                lines.Add($"Evidence pointer: {receipt.EvidencePointer ?? "none"}");
+            }
+            else
+            {
+                lines.Add("(none recorded)");
+            }
+
+            lines.Add("Last Reviewer result:");
+            var verification = reviewer?.VerificationHistory.OrderByDescending(item => item.CompletedAt).FirstOrDefault();
+            if (verification is not null)
+            {
+                var verdict = TryGetWorkerResultField(verification, "verdict", out var value) ? value : "(none recorded)";
+                lines.Add($"result {(verification.Succeeded ? "pass" : "fail")} (exit {verification.ExitCode}); " +
+                    $"completed {verification.CompletedAt:u}; reviewed commit {verification.ReviewedCommit ?? "none"}; verdict {verdict}");
+                // Keep findings as well as the verdict: a whole-goal Reviewer needs the recorded
+                // summary itself, not just a success flag for each stream.
+                lines.Add($"Stdout: {verification.AuthoritativeStandardOutput ?? verification.StandardOutput}");
+                lines.Add($"Stderr: {verification.AuthoritativeStandardError ?? verification.StandardError}");
+            }
+            else
+            {
+                lines.Add("(none recorded)");
+            }
+        }
+
+        lines.Add(string.Empty);
+        return lines;
     }
 
     private static IReadOnlyList<string> BuildReviewerExecutedTestEvidenceBriefBlock(Goal goal, TaskSpec task)

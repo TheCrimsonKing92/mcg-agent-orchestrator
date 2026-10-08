@@ -4,6 +4,31 @@ using Mcg.AgentOrchestrator.Core;
 public sealed class GoalObjectivePlannerPipelineShapeTests
 {
     [Xunit.Fact]
+    public void Build_WholeGoalReview_CreatesOneReadOnlyReviewer()
+    {
+        var plan = GoalObjectivePlanner.Build(
+            "Implement src/Feature.cs with focused tests.",
+            GoalIntakePipeline.WholeGoalReview);
+
+        Xunit.Assert.Equal([AgentRole.Reviewer], plan.TaskBoundaries.Select(boundary => boundary.Role));
+        var reviewer = Xunit.Assert.Single(plan.TaskBoundaries);
+        Xunit.Assert.Equal(1, reviewer.Index);
+        Xunit.Assert.Equal("read-only", reviewer.Capability);
+        Xunit.Assert.Contains("composed whole goal against all acceptance criteria", reviewer.Purpose, StringComparison.Ordinal);
+        Xunit.Assert.Equal("whole-goal-review", plan.Workflow);
+        Xunit.Assert.Equal("whole-goal-review", plan.PipelineDecision.Workflow);
+        Xunit.Assert.Contains("operator override selected Whole-Goal Reviewer", plan.PipelineDecision.Reasons);
+    }
+
+    [Xunit.Fact]
+    public void Parse_WholeGoalReview_RejectsInternalValueAndKeepsExistingValues()
+    {
+        Xunit.Assert.Equal("auto, scout, five-role, developer-reviewer, developer-only",
+            GoalIntakePipelineRequestParser.AllowedValues);
+        Xunit.Assert.Throws<ArgumentException>(() => GoalIntakePipelineRequestParser.Parse("whole-goal-review"));
+    }
+
+    [Xunit.Fact]
     public void Build_StreamPipeline_CreatesDeveloperThenStreamReviewer()
     {
         var plan = GoalObjectivePlanner.Build(

@@ -15,11 +15,11 @@ public sealed class SliceBatchExecutionTests
         var children = kernel.Goals.Where(goal => goal.SliceBatchParentId == parent.Id).ToArray();
 
         Xunit.Assert.Equal(2, children.Length);
-        Xunit.Assert.Equal([AgentRole.Developer, AgentRole.Reviewer],
+        Xunit.Assert.Equal([AgentRole.Reviewer],
             parent.Tasks.Select(task => task.RequiredRole));
         Xunit.Assert.Contains(parent.Timeline, item =>
             item.Kind == ProgressKind.GoalPolicyDecision &&
-            item.Message.StartsWith("Intake pipeline decision (override): developer-reviewer;", StringComparison.Ordinal));
+            item.Message.StartsWith("Intake pipeline decision (override): whole-goal-review;", StringComparison.Ordinal));
         Xunit.Assert.All(children, child =>
         {
             Xunit.Assert.Equal([AgentRole.Developer, AgentRole.Reviewer],
@@ -40,7 +40,7 @@ public sealed class SliceBatchExecutionTests
         });
         var parentMismatch = Xunit.Assert.Throws<InvalidOperationException>(() =>
             GoalLifecycleCommands.EnsureRequestedPipelineMatchesPersistedGoal(requested, restored.GetGoal(parent.Id)));
-        Xunit.Assert.Contains("persisted workflow='developer-reviewer'", parentMismatch.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("orderedRoles=[Reviewer]", parentMismatch.Message, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
