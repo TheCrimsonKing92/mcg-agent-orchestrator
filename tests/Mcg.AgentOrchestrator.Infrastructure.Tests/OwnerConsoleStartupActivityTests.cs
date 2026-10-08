@@ -14,11 +14,11 @@ public sealed class OwnerConsoleStartupActivityTests
         {
             File.WriteAllLines(path,
             [
-                Line(1, "acceptance", "result=passed older landing"),
+                Line(1, "acceptance", "result=passed reason=older landing"),
                 Line(4, "watch-transition", "unclassified internal transition"),
                 "malformed JSON",
-                Line(3, "host-health", "HOST_HEALTH_DEGRADED newest health"),
-                Line(2, "acceptance", "result=failed middle failure")
+                Line(3, "host-health", "HOST_HEALTH_DEGRADED reason=newest health"),
+                Line(2, "acceptance", "result=failed reason=middle failure")
             ]);
             var harness = new OwnerConsoleHarness();
             var dialogs = new Dialogs();

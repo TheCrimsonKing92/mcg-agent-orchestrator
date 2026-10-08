@@ -22,6 +22,17 @@ internal static class OwnerConsoleActivityPresentation
     {
         var tokens = item.Detail.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
         bool Has(string value) => tokens.Contains(value, StringComparer.Ordinal);
+        // These emitters carry commands, questions and evidence for the detail dialog.
+        // The activity line describes the owner's next action without copying that payload.
+        if (item.EventKind == "goal-escalation")
+        {
+            switch (tokens.FirstOrDefault())
+            {
+                case "owner-review-hold": return "needs your approval";
+                case "author-owner-question":
+                case "steward-owner-question": return "needs your input";
+            }
+        }
         var phrase = item.EventKind switch
         {
             "goal-escalation" => "escalated",
@@ -49,19 +60,20 @@ internal static class OwnerConsoleActivityPresentation
             "board-fill-filed" => "new work filed",
             _ => tag == ConductEventOperatorClassifier.Decision ? "needs your attention" : "completed"
         };
-        var reason = Field(tokens, "reason") ?? Field(tokens, "blocker");
-        // Retain an unstructured human explanation, never dump the structured diagnostic payload.
-        if (reason is null)
-            reason = string.Join(" ", tokens.Where(token => !token.Contains('=') &&
-                !token.Contains('_') && token.Any(char.IsLower)));
+        var reason = Field(tokens, "reason") ?? Field(tokens, "blocker") ?? string.Empty;
         reason = reason.Replace('_', ' ').Replace('-', ' ').Trim();
         return reason.Length == 0 ? phrase : $"{phrase}: {reason}";
     }
 
-    internal static string Line(OwnerConsoleActivityItem item) =>
-        $"{item.Timestamp.ToLocalTime():HH:mm:ss} {item.GoalPrefix}" +
-        (string.IsNullOrEmpty(item.GoalTitle) ? "" : $" {item.GoalTitle}") +
-        $" {item.Phrase}";
+    internal static string Line(OwnerConsoleActivityItem item)
+    {
+        // Reserve room for the event phrase in the single-line activity pane.
+        const int maxTitleLength = 40;
+        var title = item.GoalTitle.Length > maxTitleLength
+            ? item.GoalTitle[..(maxTitleLength - 1)] + "…" : item.GoalTitle;
+        return $"{item.Timestamp.ToLocalTime():HH:mm:ss} {item.GoalPrefix}" +
+            (string.IsNullOrEmpty(title) ? "" : $" {title}") + $" {item.Phrase}";
+    }
 
     private static bool PositiveCount(string detail, string name)
     {

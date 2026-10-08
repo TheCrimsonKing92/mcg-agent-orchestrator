@@ -15,7 +15,7 @@ public sealed class OwnerConsoleActivityPresentationTests
         // A non-local source offset also catches missing conversion on machines configured for UTC.
         var offset = TimeZoneInfo.Local.GetUtcOffset(instant) == TimeSpan.Zero ? TimeSpan.FromHours(9) : TimeSpan.Zero;
         var escalation = new OwnerConductEvent(instant.ToOffset(offset), "goal-escalation", "11111111-goal",
-            "GOAL_ESCALATED result=escalated reason=owner_review_required task=internal-id");
+            "ownerless-hold-stalled state=blocked heldForSeconds=30 blocker=owner review required");
         var passed = escalation with { Timestamp = escalation.Timestamp.AddSeconds(1), EventKind = "acceptance",
             Detail = "result=passed commit=internal-sha" };
         var diagnostic = escalation with { Timestamp = escalation.Timestamp.AddSeconds(2), EventKind = "state-log-divergence",
@@ -84,6 +84,59 @@ public sealed class OwnerConsoleActivityPresentationTests
         Assert.Equal(string.Empty, activity.GoalTitle);
         Assert.Equal(detail, activity.Detail);
         Assert.Equal($"{item.Timestamp.ToLocalTime():HH:mm:ss} unknown- {phrase}", OwnerConsoleActivityPresentation.Line(activity));
+    }
+
+    // Matches FormatOwnerReviewEscalation, including its multiline command payload.
+    private const string OwnerReviewDetail = "owner-review-hold goal=11111111 candidate=0123456789012345678901234567890123456789\n" +
+        "checks=owner approval\nchanged-protected-fields=conductor policy\nfingerprint=internal-fingerprint\n" +
+        "approve: .\\mcg-orchestrator.cmd approve-policy-change 11111111 0123456789012345678901234567890123456789 --text-file <reason-file>\n" +
+        "decline: cancel-goal 11111111 or abandon-goal 11111111";
+
+    [Theory]
+    [InlineData(OwnerReviewDetail, "needs your approval")]
+    [InlineData("steward-owner-question case=C trigger=internal-trigger question=Should we retry this task? evidence=[internal-evidence]", "needs your input")]
+    [InlineData("author-owner-question item=Goal:internal-goal reason=choose recovery question=Should we retry? recommendation=Retry with evidence", "needs your input")]
+    [InlineData("unrecognized-escalation raw payload with commands and evidence", "escalated")]
+    public async Task EscalationPayloadsStayInGoalDetail(string detail, string phrase)
+    {
+        var harness = new OwnerConsoleHarness();
+        harness.AddGoal("11111111-goal", "# Improve the owner console", Mcg.AgentOrchestrator.Core.AgentRole.Developer);
+        var item = new OwnerConductEvent(DateTimeOffset.UnixEpoch, "goal-escalation", "11111111-goal", detail);
+        var dialogs = new Dialogs();
+        var controller = new OwnerConsoleScreenController(harness.Questions, harness.Answers, dialogs,
+            harness.State, new Tail(detail), harness.Conductor, harness.DigestReport, harness.Digest, harness.Clock);
+        using IApplication app = Terminal.Gui.App.Application.Create();
+        using var view = new OwnerConsoleFullScreenView(app, controller, () => Task.CompletedTask);
+        var model = await Builder(harness).BuildAsync(new(harness.Clock.GetUtcNow(), null, [item], 0));
+        view.Render(model);
+
+        Assert.Equal($"{item.Timestamp.ToLocalTime():HH:mm:ss} 11111111 Improve the owner console {phrase}", Assert.Single(view.ActivityLines));
+        Assert.Equal(detail, Assert.Single(model.Activity).Detail);
+        await view.HandleKeyAsync(Key.Tab);
+        await view.HandleKeyAsync(Key.Enter);
+        Assert.Contains(detail, Assert.Single(dialogs.Texts));
+    }
+
+    [Theory]
+    [InlineData("goal-escalation", OwnerReviewDetail, "needs your approval")]
+    [InlineData("acceptance", "result=passed commit=internal-sha", "gate passed")]
+    public async Task LongGoalTitlesLeaveTheActivityPhraseVisible(string kind, string detail, string phrase)
+    {
+        var harness = new OwnerConsoleHarness();
+        var title = "Improve the owner console " + new string('x', 100);
+        harness.AddGoal("11111111-goal", "# " + title, Mcg.AgentOrchestrator.Core.AgentRole.Developer);
+        var item = new OwnerConductEvent(DateTimeOffset.UnixEpoch, kind, "11111111-goal", detail);
+        var controller = new OwnerConsoleScreenController(harness.Questions, harness.Answers, new Dialogs(),
+            harness.State, harness.Tail, harness.Conductor, harness.DigestReport, harness.Digest, harness.Clock);
+        using IApplication app = Terminal.Gui.App.Application.Create();
+        using var view = new OwnerConsoleFullScreenView(app, controller, () => Task.CompletedTask);
+        view.Render(await Builder(harness).BuildAsync(new(harness.Clock.GetUtcNow(), null, [item], 0)));
+
+        var line = Assert.Single(view.ActivityLines);
+        // The ACTIVITY frame has 118 text columns on a 120-column terminal.
+        Assert.Contains(phrase, line[..Math.Min(118, line.Length)]);
+        Assert.Contains("11111111 Improve the owner console", line);
+        Assert.Contains("…", line);
     }
 
     [Fact]
