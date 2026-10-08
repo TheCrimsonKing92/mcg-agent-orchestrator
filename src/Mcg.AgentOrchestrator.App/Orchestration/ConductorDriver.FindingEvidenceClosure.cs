@@ -60,9 +60,10 @@ internal sealed partial class ConductorDriver
         if (task.RequiredRole == AgentRole.Tester && openFindings.Count > 0 &&
             FindingEvidenceReceiptSelector.SuppliedReceiptsPassAtCandidate(receiptTask, candidateSha, receiptIds))
         {
-            return BuildPassingEvidenceOpenFindingDecision(
-                goal, task, candidateSha, receiptIds, openFindings,
-                diagnosis ?? FindingReceiptClosureDiagnosis.Evaluate(goal, receiptTask, candidateSha));
+            return PassingFindingEvidenceRouter.BuildDecision(
+                goal, task, FindUpstreamDeveloperTask(goal, task), candidateSha, receiptIds, openFindings,
+                diagnosis ?? FindingReceiptClosureDiagnosis.Evaluate(goal, receiptTask, candidateSha),
+                BuildFailedGoalAttemptIdentity);
         }
 
         return BuildCappedFindingEvidenceDeliveryRetry(goal, task, candidateSha, findings, receiptIds, summary);
