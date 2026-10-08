@@ -1211,7 +1211,7 @@ public sealed partial class TaskSpec
                 return true;
             }
 
-            return role is AgentRole.Planner or AgentRole.Researcher &&
+            return role is AgentRole.Planner or AgentRole.Researcher or AgentRole.Developer or AgentRole.Tester &&
                 WorkerResultBlockers.TryFindPremiseInvalidEvidence(verification, out _);
         }
     }

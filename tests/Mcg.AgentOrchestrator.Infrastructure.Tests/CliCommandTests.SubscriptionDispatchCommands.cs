@@ -1738,7 +1738,8 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
             _ => 8500);
         var output = CaptureConsole(() => ConsoleViews.PrintSubscriptionPlan(plan));
         Xunit.Assert.Contains("estPrompt=8500chars", output);
-        Xunit.Assert.Contains("budget=9000chars headroom=500chars", output);
+        var budget = AgentOrchestratorKernel.TaskBriefCharacterBudget(AgentRole.Developer, usesFileAccessContext: true);
+        Xunit.Assert.Contains($"budget={budget}chars headroom={budget - 8500}chars", output);
     }
 
 

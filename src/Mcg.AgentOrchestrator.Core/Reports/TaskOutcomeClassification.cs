@@ -7,7 +7,8 @@ public enum TaskOutcomeClass
     RealFailure,
     Environmental,
     ManufacturedFixed,
-    UnknownEra
+    UnknownEra,
+    Finding
 }
 
 public sealed record TaskOutcomeClassification(string? Rule, TaskOutcomeClass Class)
@@ -50,6 +51,7 @@ internal static class TaskOutcomeRules
     public static readonly TaskOutcomeRule SucceededWorkerResultFailingTests = new("succeeded-worker-result-failing-tests", TaskOutcomeClass.RealFailure);
     public static readonly TaskOutcomeRule SucceededWorkerResultUnstructuredFailingTests = new("succeeded-worker-result-unstructured-failing-tests", TaskOutcomeClass.UnknownEra);
     public static readonly TaskOutcomeRule IncompleteScopeDeclaration = new("incomplete-scope-declaration", TaskOutcomeClass.RealFailure);
+    public static readonly TaskOutcomeRule PremiseRefuted = new("premise-refuted", TaskOutcomeClass.Finding);
     public static readonly TaskOutcomeRule TesterWorkerResultBlocker = new("tester-worker-result-blocker", TaskOutcomeClass.RealFailure);
     public static readonly TaskOutcomeRule RealFailure = new("real-failure", TaskOutcomeClass.RealFailure);
 
@@ -97,6 +99,7 @@ internal static class TaskOutcomeRules
         SucceededWorkerResultFailingTests,
         SucceededWorkerResultUnstructuredFailingTests,
         IncompleteScopeDeclaration,
+        PremiseRefuted,
         TesterWorkerResultBlocker,
         RealFailure,
         ProviderUnknown,
@@ -132,6 +135,12 @@ public static class TaskOutcomeClassifier
     public static TaskOutcomeClassification Classify(WorkTaskStatus outcome, string? rule)
     {
         var normalizedRule = NormalizeRule(rule);
+        if (outcome is WorkTaskStatus.WaitingForHuman or WorkTaskStatus.Failed &&
+            normalizedRule == TaskOutcomeRules.PremiseRefuted.Token)
+        {
+            return new TaskOutcomeClassification(normalizedRule, TaskOutcomeClass.Finding);
+        }
+
         if (outcome == WorkTaskStatus.Completed)
         {
             return TaskOutcomeClassification.Success(normalizedRule);
@@ -173,7 +182,8 @@ public static class TaskOutcomeClassifier
             .FirstOrDefault(message => TryExtractRule(message) is not null || TryExtractClass(message) is not null);
         var rule = TryExtractRule(receipt);
         var recordedClass = TryExtractClass(receipt);
-        if ((outcome == WorkTaskStatus.Failed && recordedClass is not null) ||
+        if ((outcome == WorkTaskStatus.WaitingForHuman && recordedClass == TaskOutcomeClass.Finding) ||
+            (outcome == WorkTaskStatus.Failed && recordedClass is not null) ||
             (outcome == WorkTaskStatus.Completed && recordedClass == TaskOutcomeClass.ReconciledToSuccess))
         {
             return new TaskOutcomeClassification(rule, recordedClass!.Value);
@@ -251,6 +261,7 @@ public static class TaskOutcomeClassifier
             TaskOutcomeClass.Environmental => "environmental",
             TaskOutcomeClass.ManufacturedFixed => "manufactured-fixed",
             TaskOutcomeClass.UnknownEra => "unknown-era",
+            TaskOutcomeClass.Finding => "finding",
             _ => outcomeClass.ToString()
         };
 
@@ -264,6 +275,7 @@ public static class TaskOutcomeClassifier
             "environmental" => TaskOutcomeClass.Environmental,
             "manufactured-fixed" => TaskOutcomeClass.ManufacturedFixed,
             "unknown-era" => TaskOutcomeClass.UnknownEra,
+            "finding" => TaskOutcomeClass.Finding,
             _ => TaskOutcomeClass.UnknownEra
         };
     }

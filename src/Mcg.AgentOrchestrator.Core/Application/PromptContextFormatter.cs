@@ -50,7 +50,8 @@ internal static class PromptContextFormatter
         {
             AgentRole.Planner => 7000,
             AgentRole.Researcher => 8000,
-            AgentRole.Developer => 9000,
+            // Premise-invalid guidance adds 119 characters plus CRLF and 12 in the blocker role list.
+            AgentRole.Developer => 9133,
             AgentRole.Tester => 8500,
             AgentRole.Reviewer => 8000,
             _ => 7000

@@ -22,6 +22,7 @@ internal static partial class ConsoleViews
                 : record.DispatchLane;
             Console.WriteLine($"  {record.ProviderName}/{record.ModelName} lane={lane}: {record.Recommendation}");
             Console.WriteLine($"    completed={record.Completed} failed={record.Failed} " +
+                $"findings={record.Findings} " +
                 $"realFailed={record.RealFailures} environmentalFailed={record.EnvironmentalFailures} " +
                 $"manufacturedFixedFailed={record.ManufacturedFixedFailures} unknownEraFailed={record.UnknownEraFailures} " +
                 $"classMismatchFailed={record.ClassMismatchFailures} classMismatchRules={record.ClassMismatchRules} " +

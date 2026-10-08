@@ -961,6 +961,8 @@ public sealed class ModelExecutionTests
     [Xunit.Theory(DisplayName = "ExecuteAssignedTask_routes_structured_planning_premise_invalid_to_human_input")]
     [Xunit.InlineData(AgentRole.Planner)]
     [Xunit.InlineData(AgentRole.Researcher)]
+    [Xunit.InlineData(AgentRole.Developer)]
+    [Xunit.InlineData(AgentRole.Tester)]
     public async Task ExecuteAssignedTaskRoutesStructuredPlanningPremiseInvalidToHumanInput(AgentRole role)
     {
         var clock = new FakeClock();
@@ -990,6 +992,8 @@ public sealed class ModelExecutionTests
         var request = Assert.Single(kernel.GetPendingHumanInput(goal.Id));
         Assert.Equal(task.Id, request.TaskId);
         Assert.Contains("required API does not exist", request.Question, StringComparison.Ordinal);
+        Assert.StartsWith($"{role} reported premise-invalid:", request.Question, StringComparison.Ordinal);
+        Assert.Contains("Clarify, supersede, or abandon", request.Question, StringComparison.Ordinal);
         Assert.Equal(WorkTaskStatus.WaitingForHuman, task.Status);
         Assert.Equal(GoalStatus.WaitingForHuman, goal.Status);
         Assert.DoesNotContain(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted);
@@ -1243,4 +1247,3 @@ static void AddRetryNotes(AgentOrchestratorKernel kernel, GoalId goalId, TaskId 
         Assert.True(!prompt.Contains("diff-middle-omitted", StringComparison.Ordinal));
     }
 }
-

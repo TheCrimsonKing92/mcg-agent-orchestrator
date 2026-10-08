@@ -627,7 +627,9 @@ public static partial class DispatchFailureClassifier
                     evidenceSummary));
         }
 
-        if (WorkerResultBlockers.TryFindTesterWorkerResultBlocker(task, verification, out var testerBlocker))
+        if (WorkerResultBlockers.TryFindTesterWorkerResultBlocker(task, verification, out var testerBlocker) &&
+            !(verification.Succeeded && workerResultPresent &&
+              WorkerResultBlockers.TryFindPremiseInvalidEvidence(verification, out _)))
         {
             return BuildOutcome(
                 TaskOutcomeRules.TesterWorkerResultBlocker,
@@ -707,6 +709,27 @@ public static partial class DispatchFailureClassifier
                     null,
                     RecoveryRecommendation.OperatorNeeded,
                     $"Malformed WORKER_RESULT structured outcome: {outputContractDiagnostic}"));
+        }
+
+        if (task.RequiredRole is AgentRole.Developer or AgentRole.Tester &&
+            verification.Succeeded &&
+            workerResultPresent &&
+            WorkerResultBlockers.TryFindPremiseInvalidEvidence(verification, out var premiseEvidence))
+        {
+            return BuildOutcome(
+                TaskOutcomeRules.PremiseRefuted,
+                task,
+                verification,
+                workerResultPresent,
+                hasCommittedChanges,
+                new DispatchOutcome(
+                    DispatchOutcomeKind.UnknownFailure,
+                    exitCode,
+                    hasZeroByteOutput,
+                    null,
+                    null,
+                    RecoveryRecommendation.OperatorNeeded,
+                    $"{task.RequiredRole} refuted the goal premise: {premiseEvidence}"));
         }
 
         if (task.RequiredRole == AgentRole.Developer &&

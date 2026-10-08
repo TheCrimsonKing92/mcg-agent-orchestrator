@@ -25,7 +25,8 @@ public sealed record ModelOutcomeRecord(
     string? DispatchLane = null,
     int ClassMismatchFailures = 0,
     string ClassMismatchRules = "",
-    bool IsBound = true)
+    bool IsBound = true,
+    int Findings = 0)
 {
     public int NonRealFailures => EnvironmentalFailures + ManufacturedFixedFailures + UnknownEraFailures;
 }
@@ -63,7 +64,8 @@ public static class ModelOutcomeScorecard
         var qualified = rows
             .Where(row => !string.IsNullOrWhiteSpace(row.ProviderName))
             .Where(row => !string.IsNullOrWhiteSpace(row.ModelName))
-            .Where(row => row.Outcome is WorkTaskStatus.Completed or WorkTaskStatus.Failed)
+            .Where(row => row.Outcome is WorkTaskStatus.Completed or WorkTaskStatus.Failed ||
+                row.Outcome == WorkTaskStatus.WaitingForHuman && row.OutcomeClass == TaskOutcomeClass.Finding)
             .ToList();
 
         return qualified
@@ -99,8 +101,9 @@ public static class ModelOutcomeScorecard
                 weight: n - i))
             .ToList();
 
-        var completed = pairs.Count(p => p.row.IsCompleted);
-        var failed = pairs.Count(p => p.row.IsFailed);
+        var completed = pairs.Count(p => p.row.IsCompleted && p.row.OutcomeClass != TaskOutcomeClass.Finding);
+        var failed = pairs.Count(p => p.row.IsFailed && p.row.OutcomeClass != TaskOutcomeClass.Finding);
+        var findings = pairs.Count(p => p.row.OutcomeClass == TaskOutcomeClass.Finding);
         var adequate = pairs.Count(p => p.row.SelfRating == ModelFitHistory.Adequate);
         var overkill = pairs.Count(p => p.row.SelfRating == ModelFitHistory.Overkill);
         var underpowered = pairs.Count(p => p.row.SelfRating == ModelFitHistory.Underpowered);
@@ -120,7 +123,7 @@ public static class ModelOutcomeScorecard
 
         var totalWeight = pairs.Sum(p => p.weight);
         var weightedFailed = pairs.Where(p => p.row.IsFailed && p.row.OutcomeClass == TaskOutcomeClass.RealFailure).Sum(p => p.weight);
-        var weightedCompleted = pairs.Where(p => p.row.IsCompleted).Sum(p => p.weight);
+        var weightedCompleted = pairs.Where(p => p.row.IsCompleted && p.row.OutcomeClass != TaskOutcomeClass.Finding).Sum(p => p.weight);
         var weightedUnderpowered = pairs.Where(p => p.row.SelfRating == ModelFitHistory.Underpowered).Sum(p => p.weight);
 
         var (recommendation, reason) = BuildRecommendation(
@@ -144,7 +147,8 @@ public static class ModelOutcomeScorecard
             unknownEraFailures,
             dispatchLane,
             classMismatchRows.Count,
-            classMismatchRules);
+            classMismatchRules,
+            Findings: findings);
     }
 
     private static (ModelOutcomeRecommendation Recommendation, string Reason) BuildRecommendation(

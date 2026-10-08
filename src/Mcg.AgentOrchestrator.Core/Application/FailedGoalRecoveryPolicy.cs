@@ -437,6 +437,14 @@ public static class FailedGoalRecoveryPolicy
                 $"Task {Short(exited.TaskId)} has an exited process result that has not been applied.");
         }
 
+        var premiseFinding = facts.Tasks.FirstOrDefault(task => task.OutcomeClass == TaskOutcomeClass.Finding);
+        if (premiseFinding is not null)
+        {
+            return Decide(facts, premiseFinding, FailedGoalRecoveryAction.Escalate, 6,
+                "premise-refuted-awaiting-operator",
+                $"Task {Short(premiseFinding.TaskId)} refuted the goal premise; clarify, supersede, or abandon before retrying.");
+        }
+
         var inconclusiveTester = facts.Tasks.FirstOrDefault(task =>
             task.RequiredRole == AgentRole.Tester &&
             task.Status == WorkTaskStatus.Failed &&
