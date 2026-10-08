@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -33,6 +34,27 @@ internal sealed class SliceBatchParentExecutionGuard(
         }
 
         return $"Slice-batch child {goal.Id.Value[..8]} stream is complete and waits for composition into parent goal {goal.SliceBatchParentId.Value}.";
+    }
+
+    internal static bool AreAllChildrenStreamComplete(Goal parent, IReadOnlyCollection<Goal> children) =>
+        parent.SliceBatchParentId is null && children.Count > 0 &&
+        children.All(child => child.SliceBatchParentId == parent.Id &&
+            TryDescribeStreamCompleteHold(child) is not null);
+
+    internal static string? TryDescribeCompositionHold(Goal parent, StreamCompositionResult result)
+    {
+        var prefix = $"Slice-batch parent {parent.Id.Value[..8]} composition held:";
+        if (result.Ejection is { } ejection)
+        {
+            var paths = string.Join(", ", ejection.ConflictPaths.Order(StringComparer.Ordinal));
+            return $"{prefix} child {ejection.GoalId.Value[..8]} {ejection.Reason} on {paths}; {ejection.Detail}";
+        }
+        if (result.BuildCheck is { Passed: false } build)
+        {
+            var children = string.Join('+', result.ComposedChildren.Select(id => id.Value[..8]));
+            return $"{prefix} composed children {children} fail the build in project {build.FailingProject}; {build.OutputExcerpt}";
+        }
+        return null;
     }
 
     private HashSet<GoalId> LoadParentIds() => goalSource()
