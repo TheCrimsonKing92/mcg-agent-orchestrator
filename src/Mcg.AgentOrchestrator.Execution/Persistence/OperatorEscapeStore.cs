@@ -15,11 +15,22 @@ public sealed class SqliteOperatorEscapeStore(string databasePath)
     public const string DatabaseFileName = "operator-escapes.db";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly string _databasePath = Path.GetFullPath(databasePath);
+    private readonly bool _readOnly;
+
+    private SqliteOperatorEscapeStore(string databasePath, bool readOnly) : this(databasePath) =>
+        _readOnly = readOnly;
+
+    public static SqliteOperatorEscapeStore OpenReadOnly(string databasePath)
+    {
+        var store = new SqliteOperatorEscapeStore(databasePath, readOnly: true);
+        using var connection = store.OpenReadOnlyConnection();
+        return store;
+    }
 
     public bool HasRecordSource(string sourceIntentId)
     {
         if (!File.Exists(_databasePath)) return false;
-        using var connection = OpenReadOnly();
+        using var connection = OpenReadOnlyConnection();
         return HasSource(connection, sourceIntentId);
     }
 
@@ -53,7 +64,7 @@ public sealed class SqliteOperatorEscapeStore(string databasePath)
     public IReadOnlyList<OperatorEscape> List()
     {
         if (!File.Exists(_databasePath)) return [];
-        using var connection = OpenReadOnly();
+        using var connection = OpenReadOnlyConnection();
         using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT id, goal_id, reason, evidence_json, found_by_goal_id,
@@ -73,29 +84,69 @@ public sealed class SqliteOperatorEscapeStore(string databasePath)
 
     private SqliteConnection OpenWritable()
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(_databasePath)!);
-        var connection = new SqliteConnection(new SqliteConnectionStringBuilder
-        {
-            DataSource = _databasePath, Mode = SqliteOpenMode.ReadWriteCreate, Pooling = false
-        }.ToString());
-        connection.Open();
-        using var command = connection.CreateCommand();
-        command.CommandText = """
-            CREATE TABLE IF NOT EXISTS escapes (
-                id TEXT PRIMARY KEY, source_intent_id TEXT NOT NULL UNIQUE,
-                goal_id TEXT NOT NULL, reason TEXT NOT NULL, evidence_json TEXT NOT NULL,
-                found_by_goal_id TEXT, actor TEXT NOT NULL, actor_kind TEXT NOT NULL,
-                channel TEXT NOT NULL, recorded_at TEXT NOT NULL);
-            """;
-        command.ExecuteNonQuery();
-        return connection;
+        if (_readOnly)
+            throw new InvalidOperationException("Operator escapes store was opened read-only.");
+        Setup(_databasePath);
+        return OpenConnection(_databasePath, SqliteOpenMode.ReadWrite);
     }
 
-    private SqliteConnection OpenReadOnly()
+    public static void Setup(string databasePath)
+    {
+        var path = Path.GetFullPath(databasePath);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        using var connection = OpenConnection(path, SqliteOpenMode.ReadWriteCreate);
+        using var command = connection.CreateCommand();
+        command.CommandText = "BEGIN IMMEDIATE";
+        command.ExecuteNonQuery();
+        try
+        {
+            command.CommandText = """
+                CREATE TABLE IF NOT EXISTS escapes (
+                    id TEXT PRIMARY KEY, source_intent_id TEXT NOT NULL UNIQUE,
+                    goal_id TEXT NOT NULL, reason TEXT NOT NULL, evidence_json TEXT NOT NULL,
+                    found_by_goal_id TEXT, actor TEXT NOT NULL, actor_kind TEXT NOT NULL,
+                    channel TEXT NOT NULL, recorded_at TEXT NOT NULL);
+                """;
+            command.ExecuteNonQuery();
+            StoreSchemaVersions.UpgradeToCurrent(connection, StoreSchemaRegistry.OperatorEscapes);
+            command.CommandText = "COMMIT";
+            command.ExecuteNonQuery();
+        }
+        catch
+        {
+            command.CommandText = "ROLLBACK";
+            command.ExecuteNonQuery();
+            throw;
+        }
+    }
+
+    private SqliteConnection OpenReadOnlyConnection()
+    {
+        if (!File.Exists(_databasePath))
+            throw SchemaSetupRequired(StoreSchemaState.Missing);
+        var connection = OpenConnection(_databasePath, SqliteOpenMode.ReadOnly);
+        try
+        {
+            var state = StoreSchemaVersions.Verify(connection, StoreSchemaRegistry.OperatorEscapes);
+            if (state != StoreSchemaState.Current)
+                throw SchemaSetupRequired(state);
+            return connection;
+        }
+        catch
+        {
+            connection.Dispose();
+            throw;
+        }
+    }
+
+    private InvalidOperationException SchemaSetupRequired(StoreSchemaState state) =>
+        new($"Operator escapes store '{_databasePath}' schema is {state} (expected version {StoreSchemaRegistry.OperatorEscapes.CurrentVersion}); run setup.");
+
+    private static SqliteConnection OpenConnection(string path, SqliteOpenMode mode)
     {
         var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
-            DataSource = _databasePath, Mode = SqliteOpenMode.ReadOnly, Pooling = false
+            DataSource = path, Mode = mode, Pooling = false
         }.ToString());
         connection.Open();
         return connection;

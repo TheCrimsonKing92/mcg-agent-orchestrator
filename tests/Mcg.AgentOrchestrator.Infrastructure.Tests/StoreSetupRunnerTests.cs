@@ -26,15 +26,28 @@ public sealed class StoreSetupRunnerTests
 
         Assert.Equal(StoreSchemaRegistry.Inventory.Where(entry => entry.CurrentVersion.HasValue)
             .Select(entry => entry.StoreName), results.Select(result => result.StoreName));
-        var portfolio = Assert.Single(results);
+        var portfolio = Assert.Single(results, result => result.StoreName == "portfolio");
         Assert.Equal(StoreSchemaRegistry.Portfolio.StoreName, portfolio.StoreName);
         Assert.Equal(workspace.PortfolioStorePath, portfolio.DatabasePath);
         Assert.Equal(1, portfolio.Version);
         using var connection = Open(workspace.PortfolioStorePath, SqliteOpenMode.ReadOnly);
         Assert.Equal(1, StoreSchemaVersions.Read(connection, portfolio.StoreName));
         Assert.All(Directory.GetFiles(workspace.OrchestratorDirectory), path =>
-            Assert.Contains(Path.GetFileName(path), new[] { "portfolio.db", "portfolio.db-wal", "portfolio.db-shm" }));
+            Assert.Contains(Path.GetFileName(path), new[] { "portfolio.db", "portfolio.db-wal", "portfolio.db-shm",
+                "operator-lessons.db", "operator-escapes.db" }));
         Assert.Empty(await PortfolioStore.OpenReadOnly(workspace.PortfolioStorePath).ListProjectsAsync());
+        Assert.Equal(workspace.OperatorLessonsStorePath,
+            Assert.Single(results, result => result.StoreName == "operator-lessons").DatabasePath);
+        Assert.Equal(workspace.OperatorEscapesStorePath,
+            Assert.Single(results, result => result.StoreName == "operator-escapes").DatabasePath);
+        foreach (var result in results)
+        {
+            using var store = Open(result.DatabasePath, SqliteOpenMode.ReadOnly);
+            Assert.Equal(1, result.Version);
+            Assert.Equal(result.Version, StoreSchemaVersions.Read(store, result.StoreName));
+        }
+        Assert.Empty(SqliteOperatorLessonStore.OpenReadOnly(workspace.OperatorLessonsStorePath).List());
+        Assert.Empty(SqliteOperatorEscapeStore.OpenReadOnly(workspace.OperatorEscapesStorePath).List());
     }
 
     [Fact]
@@ -74,7 +87,8 @@ public sealed class StoreSetupRunnerTests
             Assert.Equal(1, command.ExecuteNonQuery());
         }
 
-        Assert.Equal(version, Assert.Single(StoreSetupRunner.Run(workspace.OrchestratorDirectory)).Version);
+        Assert.Equal(version, Assert.Single(StoreSetupRunner.Run(workspace.OrchestratorDirectory),
+            result => result.StoreName == "portfolio").Version);
         using var readBack = Open(workspace.PortfolioStorePath, SqliteOpenMode.ReadOnly);
         Assert.Equal(version, StoreSchemaVersions.Read(readBack, StoreSchemaRegistry.Portfolio.StoreName));
     }
@@ -101,7 +115,8 @@ public sealed class StoreSetupRunnerTests
         Assert.Contains("run setup", Assert.Throws<InvalidOperationException>(
             () => PortfolioStore.OpenReadOnly(workspace.PortfolioStorePath)).Message);
 
-        Assert.Equal(1, Assert.Single(StoreSetupRunner.Run(workspace.OrchestratorDirectory)).Version);
+        Assert.Equal(1, Assert.Single(StoreSetupRunner.Run(workspace.OrchestratorDirectory),
+            result => result.StoreName == "portfolio").Version);
         Assert.Empty(await PortfolioStore.OpenReadOnly(workspace.PortfolioStorePath).ListProjectsAsync());
     }
 

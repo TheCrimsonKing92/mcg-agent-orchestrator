@@ -13,7 +13,11 @@ public static class StoreSetupRunner
         new Dictionary<string, Registration>(StringComparer.Ordinal)
         {
             [StoreSchemaRegistry.Portfolio.StoreName] = new(PortfolioStore.Setup,
-                directory => Path.Combine(directory, StoreSchemaRegistry.Portfolio.Database))
+                directory => Path.Combine(directory, StoreSchemaRegistry.Portfolio.Database)),
+            [StoreSchemaRegistry.OperatorLessons.StoreName] = new(SqliteOperatorLessonStore.Setup,
+                directory => Path.Combine(directory, StoreSchemaRegistry.OperatorLessons.Database)),
+            [StoreSchemaRegistry.OperatorEscapes.StoreName] = new(SqliteOperatorEscapeStore.Setup,
+                directory => Path.Combine(directory, StoreSchemaRegistry.OperatorEscapes.Database))
         };
 
     public static IReadOnlyCollection<string> RegisteredStoreNames { get; } =

@@ -7,22 +7,33 @@ using Microsoft.Data.Sqlite;
 public sealed class SqliteOperatorLessonUntilGoalTests
 {
     [Fact]
-    public void LegacySchema_ReadsWithoutMigrationAndWriteAddsNullableColumn()
+    public void LegacySchema_RefusesReadUntilWriteAddsNullableColumnAndVersion()
     {
         using var fixture = new OperatorLessonHarness();
         CreateLegacyDatabase(fixture.Workspace.OperatorLessonsStorePath);
 
-        var old = Assert.Single(fixture.LessonStore.List());
-
-        Assert.Equal("legacy", old.Id);
-        Assert.Null(old.UntilGoalId);
-        Assert.DoesNotContain("untilGoalId", JsonSerializer.Serialize(old,
-            new JsonSerializerOptions(JsonSerializerDefaults.Web)), StringComparison.Ordinal);
+        var path = fixture.Workspace.OperatorLessonsStorePath;
+        var bytes = File.ReadAllBytes(path);
+        var modified = File.GetLastWriteTimeUtc(path);
+        Assert.Contains("run setup", Assert.Throws<InvalidOperationException>(() => fixture.LessonStore.List()).Message);
+        Assert.Equal(bytes, File.ReadAllBytes(path));
+        Assert.Equal(modified, File.GetLastWriteTimeUtc(path));
         Assert.False(HasUntilColumn(fixture.Workspace.OperatorLessonsStorePath));
         var goalId = Guid.NewGuid().ToString("N");
         OperatorLessonUntilGoalRetirementTests.Add(fixture, "new", goalId);
         Assert.True(HasUntilColumn(fixture.Workspace.OperatorLessonsStorePath));
-        Assert.Null(Assert.Single(fixture.LessonStore.List(), lesson => lesson.Id == "legacy").UntilGoalId);
+        var old = Assert.Single(fixture.LessonStore.List(), lesson => lesson.Id == "legacy");
+        Assert.Null(old.UntilGoalId);
+        Assert.DoesNotContain("untilGoalId", JsonSerializer.Serialize(old,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web)), StringComparison.Ordinal);
+        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = path, Mode = SqliteOpenMode.ReadOnly, Pooling = false
+        }.ToString()))
+        {
+            connection.Open();
+            Assert.Equal(1, StoreSchemaVersions.Read(connection, StoreSchemaRegistry.OperatorLessons.StoreName));
+        }
         Assert.Equal(goalId, Assert.Single(fixture.LessonStore.List(), lesson => lesson.Id == "new").UntilGoalId);
         Assert.False(fixture.LessonStore.TryAppendLesson(old, "legacy-source"));
         Assert.Equal(2, fixture.LessonStore.List().Count);

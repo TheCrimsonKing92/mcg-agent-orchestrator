@@ -54,6 +54,34 @@ public sealed class ConductorLessonSelectorTests
         Xunit.Assert.Equal("none", ConductorLessonSelector.Render(result));
         Xunit.Assert.Single(notes);
     }
+
+    [Xunit.Fact]
+    public void Unversioned_store_returns_empty_and_unreadable_note_without_writing()
+    {
+        using var store = new ConductorLessonTestStore();
+        store.Add("legacy", ["author"]);
+        using (var connection = new Microsoft.Data.Sqlite.SqliteConnection(new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder
+        {
+            DataSource = store.Path, Mode = Microsoft.Data.Sqlite.SqliteOpenMode.ReadWrite, Pooling = false
+        }.ToString()))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "DROP TABLE store_schema_versions";
+            command.ExecuteNonQuery();
+        }
+        var bytes = File.ReadAllBytes(store.Path);
+        var modified = File.GetLastWriteTimeUtc(store.Path);
+        var notes = new List<string>();
+
+        var result = new ConductorLessonSelector(store.Path, notes.Add).Select(["author"]);
+
+        Xunit.Assert.Empty(result.Lessons);
+        Xunit.Assert.Equal("none", ConductorLessonSelector.Render(result));
+        Xunit.Assert.Equal("operator lessons store unreadable: InvalidOperationException", Xunit.Assert.Single(notes));
+        Xunit.Assert.Equal(bytes, File.ReadAllBytes(store.Path));
+        Xunit.Assert.Equal(modified, File.GetLastWriteTimeUtc(store.Path));
+    }
 }
 
 internal sealed class ConductorLessonTestStore : IDisposable

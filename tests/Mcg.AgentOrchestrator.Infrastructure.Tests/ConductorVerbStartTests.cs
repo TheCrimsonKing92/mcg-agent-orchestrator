@@ -106,7 +106,7 @@ public sealed class ConductorVerbStartTests
             {
                 Assert.Equal(workspace.OrchestratorDirectory, directory);
                 var results = StoreSetupRunner.Run(directory);
-                var result = Assert.Single(results);
+                var result = Assert.Single(results, item => item.StoreName == "portfolio");
                 Assert.Equal(workspace.PortfolioStorePath, result.DatabasePath);
                 Assert.Equal(1, result.Version);
                 calls.Add("setup");

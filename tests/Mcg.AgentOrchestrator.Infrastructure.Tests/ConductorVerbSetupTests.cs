@@ -21,8 +21,12 @@ public sealed class ConductorVerbSetupTests
             output.GetStringBuilder().Clear();
             Assert.Equal(0, CliConductorCommand.Run(["conductor", "setup"], workspace,
                 launcher, new ConductorVerbStartTests.FixedProbe(owner), output: output, error: error));
-            Assert.Equal($"portfolio: version 1 ({workspace.PortfolioStorePath}){Environment.NewLine}", output.ToString());
+            Assert.Equal($"portfolio: version 1 ({workspace.PortfolioStorePath}){Environment.NewLine}" +
+                $"operator-lessons: version 1 ({workspace.OperatorLessonsStorePath}){Environment.NewLine}" +
+                $"operator-escapes: version 1 ({workspace.OperatorEscapesStorePath}){Environment.NewLine}", output.ToString());
             Assert.NotNull(PortfolioStore.OpenReadOnly(workspace.PortfolioStorePath));
+            Assert.NotNull(SqliteOperatorLessonStore.OpenReadOnly(workspace.OperatorLessonsStorePath));
+            Assert.NotNull(SqliteOperatorEscapeStore.OpenReadOnly(workspace.OperatorEscapesStorePath));
         }
         Assert.Empty(launcher.Requests);
         Assert.Equal("", error.ToString());
@@ -97,6 +101,8 @@ public sealed class ConductorVerbSetupTests
             Calls++;
             Assert.True(File.Exists(workspace.PortfolioStorePath));
             Assert.NotNull(PortfolioStore.OpenReadOnly(workspace.PortfolioStorePath));
+            Assert.NotNull(SqliteOperatorLessonStore.OpenReadOnly(workspace.OperatorLessonsStorePath));
+            Assert.NotNull(SqliteOperatorEscapeStore.OpenReadOnly(workspace.OperatorEscapesStorePath));
             return new(0, "{\"pid\":1234,\"stdoutPath\":\"stdout.log\"}", null);
         }
     }

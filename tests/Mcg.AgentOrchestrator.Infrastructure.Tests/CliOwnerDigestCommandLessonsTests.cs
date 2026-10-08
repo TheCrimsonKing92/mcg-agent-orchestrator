@@ -5,6 +5,30 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class CliOwnerDigestCommandLessonsTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void EmptyOrAbsentLessons_PreserveDigestOutputWithoutCreatingOrWriting(bool setup)
+    {
+        using var fixture = new ConductorVerbStartTests.Fixture();
+        var path = fixture.Workspace.OperatorLessonsStorePath;
+        Assert.False(File.Exists(path));
+        if (setup) SqliteOperatorLessonStore.Setup(path);
+        var bytes = setup ? File.ReadAllBytes(path) : null;
+        var modified = setup ? File.GetLastWriteTimeUtc(path) : (DateTime?)null;
+        using var output = new StringWriter();
+
+        CliOwnerDigestLessons.WriteText(output, fixture.Workspace, OwnerDigestTestFixture.Start, OwnerDigestTestFixture.End);
+
+        Assert.Equal(setup ? $"Lessons: recorded=0 retired=0{Environment.NewLine}" : "", output.ToString());
+        Assert.Equal(setup, File.Exists(path));
+        if (setup)
+        {
+            Assert.Equal(bytes, File.ReadAllBytes(path));
+            Assert.Equal(modified, File.GetLastWriteTimeUtc(path));
+        }
+    }
+
     [Fact]
     public async Task DigestCountsLessonsWithinWindowAndListsRecordedRules()
     {

@@ -17,6 +17,12 @@ public static class StoreSchemaRegistry
     public static StoreSchemaEntry Portfolio { get; } =
         new("portfolio", Persistence + "PortfolioStore.cs", "portfolio.db", "portfolio", 1);
 
+    public static StoreSchemaEntry OperatorLessons { get; } =
+        new("operator-lessons", Persistence + "OperatorLessonStore.cs", "operator-lessons.db", "backlog", 1);
+
+    public static StoreSchemaEntry OperatorEscapes { get; } =
+        new("operator-escapes", Persistence + "OperatorEscapeStore.cs", "operator-escapes.db", "backlog", 1);
+
     // Source fragments of one database are separate inventory entries, not separate databases.
     public static IReadOnlyList<StoreSchemaEntry> Inventory { get; } = Array.AsReadOnly<StoreSchemaEntry>(
     [
@@ -24,8 +30,8 @@ public static class StoreSchemaRegistry
         new("experiments", Persistence + "ExperimentStore.cs", "experiments.db", "experiment", null),
         new("backlog", Persistence + "BacklogStore.cs", "backlog.db", "backlog", null),
         new("operator-intents", Persistence + "OperatorIntentStore.cs", "operator-intents.db", "backlog", null),
-        new("operator-lessons", Persistence + "OperatorLessonStore.cs", "operator-lessons.db", "backlog", null),
-        new("operator-escapes", Persistence + "OperatorEscapeStore.cs", "operator-escapes.db", "backlog", null),
+        OperatorLessons,
+        OperatorEscapes,
         new("cohort-acceptance", Persistence + "CohortAcceptanceStore.cs", "cohort-acceptance.db", "cohort", null),
         new("cohort-attribution-retractions", Persistence + "CohortAcceptanceStore.AttributionRetractions.cs", "cohort-acceptance.db", "cohort", null),
         new("cohort-solo-inherited-receipts", Persistence + "CohortAcceptanceStore.SoloInheritedReceipts.cs", "cohort-acceptance.db", "cohort", null),

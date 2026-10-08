@@ -5,6 +5,32 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class CliLessonsCommandTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void EmptyOrAbsentStore_ListsEmptyTextAndJsonWithoutCreatingOrWriting(bool setup)
+    {
+        using var fixture = new OperatorLessonHarness();
+        var path = fixture.Workspace.OperatorLessonsStorePath;
+        Assert.False(File.Exists(path));
+        if (setup) SqliteOperatorLessonStore.Setup(path);
+        var bytes = setup ? File.ReadAllBytes(path) : null;
+        var modified = setup ? File.GetLastWriteTimeUtc(path) : (DateTime?)null;
+        using var text = new StringWriter();
+        using var json = new StringWriter();
+
+        Assert.Equal(0, CliLessonCommands.Run(["lessons"], fixture.Workspace, text));
+        Assert.Equal($"No lessons recorded.{Environment.NewLine}", text.ToString());
+        Assert.Equal(0, CliLessonCommands.Run(["lessons", "--json"], fixture.Workspace, json));
+        Assert.Equal($"[]{Environment.NewLine}", json.ToString());
+        Assert.Equal(setup, File.Exists(path));
+        if (setup)
+        {
+            Assert.Equal(bytes, File.ReadAllBytes(path));
+            Assert.Equal(modified, File.GetLastWriteTimeUtc(path));
+        }
+    }
+
     [Fact]
     public async Task RecordCommandQueuesTypedWorkspaceIntentWithoutWritingLesson()
     {

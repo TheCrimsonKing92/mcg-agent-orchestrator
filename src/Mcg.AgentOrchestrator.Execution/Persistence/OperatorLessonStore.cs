@@ -29,6 +29,17 @@ public sealed class SqliteOperatorLessonStore(string databasePath)
     public const string DatabaseFileName = "operator-lessons.db";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly string _databasePath = Path.GetFullPath(databasePath);
+    private readonly bool _readOnly;
+
+    private SqliteOperatorLessonStore(string databasePath, bool readOnly) : this(databasePath) =>
+        _readOnly = readOnly;
+
+    public static SqliteOperatorLessonStore OpenReadOnly(string databasePath)
+    {
+        var store = new SqliteOperatorLessonStore(databasePath, readOnly: true);
+        using var connection = store.OpenReadOnlyConnection();
+        return store;
+    }
 
     public bool HasRecordSource(string sourceIntentId) => HasStoredSource("lessons", sourceIntentId);
 
@@ -68,6 +79,7 @@ public sealed class SqliteOperatorLessonStore(string databasePath)
         IReadOnlyList<EvidenceManifestEntry> evidence, string actor,
         OperatorActorKind actorKind, string channel, DateTimeOffset at)
     {
+        EnsureWritable();
         if (!File.Exists(_databasePath)) return OperatorLessonRetireResult.UnknownLesson;
         using var connection = OpenWritable();
         using var transaction = connection.BeginTransaction();
@@ -105,13 +117,12 @@ public sealed class SqliteOperatorLessonStore(string databasePath)
     public IReadOnlyList<OperatorLesson> List(bool includeRetired = false, string? appliesTo = null)
     {
         if (!File.Exists(_databasePath)) return [];
-        using var connection = OpenReadOnly();
+        using var connection = OpenReadOnlyConnection();
         using var command = connection.CreateCommand();
-        var untilColumn = HasUntilGoalColumn(connection) ? "l.until_goal_id" : "NULL";
-        command.CommandText = $"""
+        command.CommandText = """
             SELECT l.id, l.situation, l.rule, l.applies_to_json, l.evidence_json,
                    l.actor, l.actor_kind, l.channel, l.recorded_at, l.goal_id,
-                   r.reason, r.actor, r.retired_at, r.evidence_json, {untilColumn}
+                   r.reason, r.actor, r.retired_at, r.evidence_json, l.until_goal_id
             FROM lessons l LEFT JOIN lesson_retirements r ON r.lesson_id=l.id
             ORDER BY l.recorded_at DESC, l.id
             """;
@@ -140,49 +151,90 @@ public sealed class SqliteOperatorLessonStore(string databasePath)
 
     private SqliteConnection OpenWritable()
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(_databasePath)!);
-        var connection = new SqliteConnection(new SqliteConnectionStringBuilder
-        {
-            DataSource = _databasePath, Mode = SqliteOpenMode.ReadWriteCreate, Pooling = false
-        }.ToString());
-        connection.Open();
-        using var transaction = connection.BeginTransaction();
-        using var command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText = """
-            CREATE TABLE IF NOT EXISTS lessons (
-                id TEXT PRIMARY KEY, source_intent_id TEXT NOT NULL UNIQUE,
-                situation TEXT NOT NULL, rule TEXT NOT NULL, applies_to_json TEXT NOT NULL,
-                evidence_json TEXT NOT NULL, actor TEXT NOT NULL, actor_kind TEXT NOT NULL,
-                channel TEXT NOT NULL, recorded_at TEXT NOT NULL, goal_id TEXT, until_goal_id TEXT);
-            CREATE TABLE IF NOT EXISTS lesson_retirements (
-                lesson_id TEXT PRIMARY KEY REFERENCES lessons(id), source_intent_id TEXT NOT NULL UNIQUE,
-                reason TEXT NOT NULL, evidence_json TEXT NOT NULL, actor TEXT NOT NULL,
-                actor_kind TEXT NOT NULL, channel TEXT NOT NULL, retired_at TEXT NOT NULL);
-            """;
-        command.ExecuteNonQuery();
-        if (!HasUntilGoalColumn(connection, transaction))
-        {
-            command.CommandText = "ALTER TABLE lessons ADD COLUMN until_goal_id TEXT";
-            command.ExecuteNonQuery();
-        }
-        transaction.Commit();
-        return connection;
+        EnsureWritable();
+        Setup(_databasePath);
+        return OpenConnection(_databasePath, SqliteOpenMode.ReadWrite);
     }
 
-    private static bool HasUntilGoalColumn(SqliteConnection connection, SqliteTransaction? transaction = null)
+    private void EnsureWritable()
+    {
+        if (_readOnly)
+            throw new InvalidOperationException("Operator lessons store was opened read-only.");
+    }
+
+    public static void Setup(string databasePath)
+    {
+        var path = Path.GetFullPath(databasePath);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        using var connection = OpenConnection(path, SqliteOpenMode.ReadWriteCreate);
+        using var command = connection.CreateCommand();
+        command.CommandText = "BEGIN IMMEDIATE";
+        command.ExecuteNonQuery();
+        try
+        {
+            command.CommandText = """
+                CREATE TABLE IF NOT EXISTS lessons (
+                    id TEXT PRIMARY KEY, source_intent_id TEXT NOT NULL UNIQUE,
+                    situation TEXT NOT NULL, rule TEXT NOT NULL, applies_to_json TEXT NOT NULL,
+                    evidence_json TEXT NOT NULL, actor TEXT NOT NULL, actor_kind TEXT NOT NULL,
+                    channel TEXT NOT NULL, recorded_at TEXT NOT NULL, goal_id TEXT, until_goal_id TEXT);
+                CREATE TABLE IF NOT EXISTS lesson_retirements (
+                    lesson_id TEXT PRIMARY KEY REFERENCES lessons(id), source_intent_id TEXT NOT NULL UNIQUE,
+                    reason TEXT NOT NULL, evidence_json TEXT NOT NULL, actor TEXT NOT NULL,
+                    actor_kind TEXT NOT NULL, channel TEXT NOT NULL, retired_at TEXT NOT NULL);
+                """;
+            command.ExecuteNonQuery();
+            if (!HasUntilGoalColumn(connection))
+            {
+                command.CommandText = "ALTER TABLE lessons ADD COLUMN until_goal_id TEXT";
+                command.ExecuteNonQuery();
+            }
+            StoreSchemaVersions.UpgradeToCurrent(connection, StoreSchemaRegistry.OperatorLessons);
+            command.CommandText = "COMMIT";
+            command.ExecuteNonQuery();
+        }
+        catch
+        {
+            command.CommandText = "ROLLBACK";
+            command.ExecuteNonQuery();
+            throw;
+        }
+    }
+
+    private static bool HasUntilGoalColumn(SqliteConnection connection)
     {
         using var command = connection.CreateCommand();
-        command.Transaction = transaction;
         command.CommandText = "SELECT COUNT(*) FROM pragma_table_info('lessons') WHERE name='until_goal_id'";
         return Convert.ToInt32(command.ExecuteScalar()) == 1;
     }
 
-    private SqliteConnection OpenReadOnly()
+    private SqliteConnection OpenReadOnlyConnection()
+    {
+        if (!File.Exists(_databasePath))
+            throw SchemaSetupRequired(StoreSchemaState.Missing);
+        var connection = OpenConnection(_databasePath, SqliteOpenMode.ReadOnly);
+        try
+        {
+            var state = StoreSchemaVersions.Verify(connection, StoreSchemaRegistry.OperatorLessons);
+            if (state != StoreSchemaState.Current)
+                throw SchemaSetupRequired(state);
+            return connection;
+        }
+        catch
+        {
+            connection.Dispose();
+            throw;
+        }
+    }
+
+    private InvalidOperationException SchemaSetupRequired(StoreSchemaState state) =>
+        new($"Operator lessons store '{_databasePath}' schema is {state} (expected version {StoreSchemaRegistry.OperatorLessons.CurrentVersion}); run setup.");
+
+    private static SqliteConnection OpenConnection(string path, SqliteOpenMode mode)
     {
         var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
-            DataSource = _databasePath, Mode = SqliteOpenMode.ReadOnly, Pooling = false
+            DataSource = path, Mode = mode, Pooling = false
         }.ToString());
         connection.Open();
         return connection;
@@ -191,7 +243,7 @@ public sealed class SqliteOperatorLessonStore(string databasePath)
     private bool HasStoredSource(string table, string sourceIntentId)
     {
         if (!File.Exists(_databasePath)) return false;
-        using var connection = OpenReadOnly();
+        using var connection = OpenReadOnlyConnection();
         return HasSource(connection, table, sourceIntentId);
     }
 
