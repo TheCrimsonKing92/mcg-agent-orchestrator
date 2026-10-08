@@ -195,9 +195,14 @@ internal sealed class RemoteFocusedEvidenceShadow : IAsyncDisposable
     {
         if (_closed) return;
         _closed = true;
+        Task cancellation = Task.CompletedTask;
         try
         {
-            if (_lifetime is { } lifetime) Observe(lifetime.CancelAsync());
+            if (_lifetime is { } lifetime)
+            {
+                cancellation = lifetime.CancelAsync();
+                Observe(cancellation);
+            }
             foreach (var run in _runs)
             {
                 var observation = run.Work is { IsCompletedSuccessfully: true } work
@@ -227,7 +232,9 @@ internal sealed class RemoteFocusedEvidenceShadow : IAsyncDisposable
         {
             try { _coordinator?.Dispose(); } catch (Exception) { }
             if (_lifetime is { } lifetime)
-                Observe(Task.WhenAll(_runs.Select(run => run.Work!)).ContinueWith(_ => lifetime.Dispose(), TaskScheduler.Default));
+                // Polling can finish before asynchronous callbacks; disposal must retain their registrations.
+                Observe(Task.WhenAll(_runs.Select(run => (Task)run.Work!).Append(cancellation))
+                    .ContinueWith(_ => lifetime.Dispose(), TaskScheduler.Default));
         }
     }
 
