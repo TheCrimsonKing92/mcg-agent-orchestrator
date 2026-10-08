@@ -228,10 +228,19 @@ private static bool HandleIdeate(CliExecutionContext context, IReadOnlyList<stri
 
 private const int PlanSampleCount = 3;
 
+internal static (string Direction, string Prompt) BuildPlanDecompositionInput(
+    CliExecutionContext context, IReadOnlyList<string> parts)
+{
+    const string usage = "plan <direction> [--slice-batch] [--confirm-plan] | plan --text-file <path|-> [--slice-batch] [--confirm-plan] (--brief-file is an alias; - reads stdin)";
+    var direction = ResolveTextArgumentAllowStandardInput(
+        context, parts, inlineIndex: 1, usage, "--brief-file", "--text-file");
+    return (direction, GoalDagDecompositionPlanner.BuildPrompt(
+        direction, HasCliConfirmation(parts, "--slice-batch")));
+}
+
 private static bool HandlePlan(CliExecutionContext context, IReadOnlyList<string> parts)
 {
-    CliArgumentParser.RequirePartCount(parts, 2, "plan <direction> [--slice-batch] [--confirm-plan]");
-    var direction = parts[1];
+    var (direction, decompositionPrompt) = BuildPlanDecompositionInput(context, parts);
     var confirmPlan = HasCliConfirmation(parts, "--confirm-plan");
     var sliceBatch = HasCliConfirmation(parts, "--slice-batch");
 
@@ -250,7 +259,7 @@ private static bool HandlePlan(CliExecutionContext context, IReadOnlyList<string
         var sampleKernel = new AgentOrchestratorKernel();
         var sampleTaskSpec = new TaskSpec(
             TaskId.New(),
-            GoalDagDecompositionPlanner.BuildPrompt(direction, sliceBatch),
+            decompositionPrompt,
             AgentRole.Planner,
             "Output only a fenced JSON array of nodes with id, objective, and dependsOn fields.");
         var sampleGoal = sampleKernel.CreateGoal(direction, [sampleTaskSpec]);

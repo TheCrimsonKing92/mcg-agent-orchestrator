@@ -39,8 +39,8 @@ internal static partial class ConsoleViews
         Console.WriteLine();
         if (plan.IsValid)
             Console.WriteLine(sliceBatch
-                ? "Confirm dormant intake: plan <direction> --slice-batch --confirm-plan"
-                : "Confirm: plan <direction> --confirm-plan");
+                ? "Confirm dormant intake: plan <direction> --slice-batch --confirm-plan | plan --text-file <path> --slice-batch --confirm-plan"
+                : "Confirm: plan <direction> --confirm-plan | plan --text-file <path> --confirm-plan");
         else
             Console.WriteLine("Fix the direction and re-run to preview before confirming.");
     }
