@@ -26,6 +26,7 @@ internal sealed class ConductEventLogWriter
     private readonly Action? _beforeAppendCommit;
     private readonly int _rotatedGenerationCount;
     private readonly string _requiredEventMutexName;
+    private readonly ChangeStreamWriter _changes;
     private readonly object _lock = new();
 
     public ConductEventLogWriter(
@@ -43,6 +44,8 @@ internal sealed class ConductEventLogWriter
         _beforeAppendCommit = beforeAppendCommit;
         _rotatedGenerationCount = Math.Max(0, rotatedGenerationCount);
         _requiredEventMutexName = RequiredEventMutexName(path);
+        _changes = new ChangeStreamWriter(Path.Combine(Path.GetDirectoryName(path) ?? ".", ChangeStreamWriter.FileName),
+            _maxBytes, _rotatedGenerationCount);
         MigrateLegacyPendingEvents();
     }
 
@@ -60,7 +63,9 @@ internal sealed class ConductEventLogWriter
                 _beforeAppendCommit?.Invoke();
                 RotateIfNeeded();
 
-                File.AppendAllText(_path, Serialize(eventKind, goalId, detail, timestamp));
+                var line = Serialize(eventKind, goalId, detail, timestamp);
+                File.AppendAllText(_path, line);
+                _changes.AppendConductLine(line);
             });
         }
     }
@@ -172,6 +177,7 @@ internal sealed class ConductEventLogWriter
 
             RotateIfNeeded();
             File.AppendAllText(_path, payload);
+            _changes.AppendConductLine(payload);
             File.Delete(pendingPath);
         }
     }
