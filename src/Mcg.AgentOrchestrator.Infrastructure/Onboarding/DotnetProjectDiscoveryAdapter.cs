@@ -12,7 +12,7 @@ public sealed class DotnetProjectDiscoveryAdapter : IProjectDiscoveryAdapter
     private const string Undetermined = "undetermined";
     private static readonly StringComparer PathComparer = OperatingSystem.IsWindows()
         ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
-    private static readonly string[] RunnerProperties = DotnetTestMarkers.RunnerProperties;
+    private static readonly IReadOnlyList<string> RunnerProperties = DotnetTestMarkers.RunnerProperties;
 
     public ProjectModel Discover(string repositoryRoot, IReadOnlyCollection<string>? excludedDirectoryNames = null,
         IUnitCommandMeasurer? measurer = null, UnitCommandKinds measuredKinds = UnitCommandKinds.All)

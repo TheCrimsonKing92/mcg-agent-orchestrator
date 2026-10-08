@@ -18,7 +18,7 @@ public sealed class ProjectDiscoverCliTests
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllText(path, "<Project />");
         }
-        var registry = new OrchestratorProjectRegistry(Path.Combine(workspaceFixture.Root, "registry"));
+        var registry = new OrchestratorProjectRegistry(Path.Combine(workspaceFixture.Root, "registry"), Path.Combine(workspaceFixture.Root, "data"));
         var workspace = OrchestratorWorkspace.ForDirectory(workspaceFixture.Root);
         var protectedPaths = SeedConfiguration(workspaceFixture.Root, workspace.WorkerProfilePath)
             .Concat(SeedConfiguration(sourceFixture.Root, Path.Combine(sourceFixture.Root, ".orchestrator", "worker-profiles.json")))
@@ -34,7 +34,8 @@ public sealed class ProjectDiscoverCliTests
             registry, workspaceFixture.Root, null, output);
 
         Assert.Equal(0, exit);
-        var modelDirectory = OrchestratorWorkspace.ForProject(Path.GetFileName(sourceFixture.Root), workspaceFixture.Root).OrchestratorDirectory;
+        var modelDirectory = OrchestratorWorkspace.ForProject(Path.GetFileName(sourceFixture.Root), sourceFixture.Root,
+            dataRootDirectory: registry.DataRootDirectory).OrchestratorDirectory;
         var modelPath = Path.Combine(modelDirectory, "project-model.json");
         Assert.True(File.Exists(modelPath));
         Assert.False(File.Exists(Path.Combine(workspace.OrchestratorDirectory, "project-model.json")));

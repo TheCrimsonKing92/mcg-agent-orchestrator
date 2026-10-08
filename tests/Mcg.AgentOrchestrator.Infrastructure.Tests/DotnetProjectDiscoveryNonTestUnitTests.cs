@@ -90,6 +90,12 @@ public sealed class DotnetProjectDiscoveryNonTestUnitTests
     [InlineData("<PropertyGroup><EnableMSTestRunner>true</EnableMSTestRunner></PropertyGroup>")]
     [InlineData("<ItemGroup><PackageReference Update=\"xunit\" /></ItemGroup>")]
     [InlineData("<Sdk Name=\"MSTest.Sdk\" Version=\"3.10.4\" />")]
+    [InlineData("<ItemGroup><PackageReference Include=\"MSTest\" /></ItemGroup>")]
+    [InlineData("<ItemGroup><PackageReference Include=\"TUnit\" /></ItemGroup>")]
+    [InlineData("<ItemGroup><PackageReference Include=\"TUnit.Core\" /></ItemGroup>")]
+    [InlineData("<PropertyGroup><istestproject>true</istestproject></PropertyGroup>")]
+    [InlineData("<PropertyGroup><enablemstestrunner>true</enablemstestrunner></PropertyGroup>")]
+    [InlineData("<ItemGroup><packagereference Include=\"xunit\" /></ItemGroup>")]
     public void PartialOrConflictingMarkersRemainUnknown(string declarations)
     {
         using var fixture = new ProjectOnboardingFixture("plain-library");

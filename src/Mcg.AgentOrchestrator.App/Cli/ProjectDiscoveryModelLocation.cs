@@ -6,7 +6,7 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 internal static class ProjectDiscoveryModelLocation
 {
     internal static string ResolveDirectory(
-        OrchestratorProject project, string? rootOverride, string defaultRootDirectory)
+        OrchestratorProject project, string? rootOverride, string defaultRootDirectory, string dataRootDirectory)
     {
         var workspace = project.ResolveWorkspace();
         if (workspace.IsProjectScoped || rootOverride is null)
@@ -18,9 +18,11 @@ internal static class ProjectDiscoveryModelLocation
             return workspace.OrchestratorDirectory;
 
         var name = Path.GetFileName(root);
-        if (string.IsNullOrEmpty(name) || name.Equals(OrchestratorWorkspace.DefaultProjectName, StringComparison.OrdinalIgnoreCase))
+        if (string.IsNullOrEmpty(name))
             throw new ArgumentException("Discovery root must have a directory name usable as a separate project workspace.", nameof(rootOverride));
 
-        return OrchestratorWorkspace.ForProject(name, defaultRootDirectory).OrchestratorDirectory;
+        // A repository directory is a filesystem identity, not a registered project name.
+        // Reuse the registered data root and projects folder, preserving the leaf verbatim.
+        return Path.Combine(OrchestratorDataRoot.FromDirectory(dataRootDirectory).ProjectsDirectory, name);
     }
 }

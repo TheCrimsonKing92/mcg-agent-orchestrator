@@ -5,16 +5,16 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 /// <summary>The test declarations in a project's own XML, independent of their reliability.</summary>
 internal static class DotnetTestMarkers
 {
-    internal static readonly string[] RunnerProperties =
-        ["UseMicrosoftTestingPlatformRunner", "EnableMSTestRunner", "EnableNUnitRunner", "IsTestingPlatformApplication"];
+    internal static IReadOnlyList<string> RunnerProperties { get; } = Array.AsReadOnly<string>(
+        ["UseMicrosoftTestingPlatformRunner", "EnableMSTestRunner", "EnableNUnitRunner", "IsTestingPlatformApplication"]);
 
     internal static bool IsMarkerFree(XDocument project) =>
         !project.Descendants().Any(element =>
-            element.Name.LocalName == "IsTestProject" ||
-            RunnerProperties.Contains(element.Name.LocalName, StringComparer.Ordinal) ||
-            element.Name.LocalName == "PackageReference" &&
+            element.Name.LocalName.Equals("IsTestProject", StringComparison.OrdinalIgnoreCase) ||
+            RunnerProperties.Contains(element.Name.LocalName, StringComparer.OrdinalIgnoreCase) ||
+            element.Name.LocalName.Equals("PackageReference", StringComparison.OrdinalIgnoreCase) &&
                 IsTestPackage(element.Attribute("Include")?.Value ?? element.Attribute("Update")?.Value ?? "") ||
-            element.Name.LocalName == "Sdk" && IsTestSdk(element.Attribute("Name")?.Value ?? "") ||
+            element.Name.LocalName.Equals("Sdk", StringComparison.OrdinalIgnoreCase) && IsTestSdk(element.Attribute("Name")?.Value ?? "") ||
             element.Attribute("Sdk") is { } sdk && sdk.Value.Split(';').Any(IsTestSdk));
 
     internal static string? FrameworkName(string package) => package.ToLowerInvariant() switch
@@ -36,7 +36,10 @@ internal static class DotnetTestMarkers
         package.Equals("NUnit3TestAdapter", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsTestPackage(string package) =>
-        FrameworkName(package) is not null || IsTestSdkPackage(package) || IsVstestAdapter(package);
+        FrameworkName(package) is not null || IsTestSdkPackage(package) || IsVstestAdapter(package) ||
+        package.Equals("MSTest", StringComparison.OrdinalIgnoreCase) ||
+        package.Equals("TUnit", StringComparison.OrdinalIgnoreCase) ||
+        package.Equals("TUnit.Core", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsTestSdk(string sdk) =>
         sdk.Trim().StartsWith("MSTest.Sdk", StringComparison.OrdinalIgnoreCase);

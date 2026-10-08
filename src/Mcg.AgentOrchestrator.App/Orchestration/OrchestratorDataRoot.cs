@@ -31,6 +31,8 @@ internal sealed class OrchestratorDataRoot
         (writeEnvironment ?? Environment.SetEnvironmentVariable)(EnvironmentVariable, root.RootDirectory);
     }
 
+    internal string ProjectsDirectory => Path.Combine(RootDirectory, "projects");
+
     internal string ProjectDirectory(string projectName) => Path.Combine(
-        RootDirectory, "projects", OrchestratorProjectSelection.NormalizeProjectName(projectName));
+        ProjectsDirectory, OrchestratorProjectSelection.NormalizeProjectName(projectName));
 }

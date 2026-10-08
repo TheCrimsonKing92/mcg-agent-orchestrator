@@ -14,7 +14,7 @@ public sealed class ProjectDiscoverUnregisteredRootTests
         using var home = new ProjectOnboardingFixture("solution");
         using var fixture = new ProjectOnboardingFixture("plain-library");
         var root = Path.Combine(fixture.Root, "sample-repo");
-        var registry = new OrchestratorProjectRegistry(Path.Combine(home.Root, "registry"));
+        var registry = new OrchestratorProjectRegistry(Path.Combine(home.Root, "registry"), Path.Combine(home.Root, ".orchestrator"));
         var workspace = OrchestratorWorkspace.ForDirectory(home.Root);
         Directory.CreateDirectory(workspace.OrchestratorDirectory);
         var topLevelModel = Path.Combine(workspace.OrchestratorDirectory, "project-model.json");
@@ -28,7 +28,8 @@ public sealed class ProjectDiscoverUnregisteredRootTests
             registry, home.Root, null, output));
 
         var modelPath = Path.Combine(home.Root, ".orchestrator", "projects", "sample-repo", "project-model.json");
-        Assert.Equal(Path.Combine(OrchestratorWorkspace.ForProject("sample-repo", home.Root).OrchestratorDirectory, "project-model.json"), modelPath);
+        Assert.Equal(Path.Combine(OrchestratorWorkspace.ForProject("sample-repo", root,
+            dataRootDirectory: registry.DataRootDirectory).OrchestratorDirectory, "project-model.json"), modelPath);
         Assert.True(File.Exists(modelPath));
         Assert.Equal($"Project model: {modelPath}{Environment.NewLine}", output.ToString());
         var model = ProjectModelJson.Deserialize(File.ReadAllText(modelPath));
@@ -55,7 +56,7 @@ public sealed class ProjectDiscoverUnregisteredRootTests
     public void OwnRootKeepsTopLevelWorkspace(bool explicitRoot)
     {
         using var home = new ProjectOnboardingFixture("solution");
-        var registry = new OrchestratorProjectRegistry(Path.Combine(home.Root, "registry"));
+        var registry = new OrchestratorProjectRegistry(Path.Combine(home.Root, "registry"), Path.Combine(home.Root, "data"));
         using var output = new StringWriter();
         string[] parts = explicitRoot
             ? ["project", "discover", "--root", Path.Combine(home.Root, ".") + Path.DirectorySeparatorChar]
@@ -70,49 +71,62 @@ public sealed class ProjectDiscoverUnregisteredRootTests
         Assert.False(Directory.Exists(Path.Combine(home.Root, ".orchestrator", "projects")));
     }
 
-    [Fact(DisplayName = "The reserved default directory name cannot redirect a foreign model to top-level state")]
-    public void ReservedDirectoryNameFailsWithoutWriting()
+    [Theory(DisplayName = "Repository leaf names are preserved without applying registered-name restrictions")]
+    [InlineData("default")]
+    [InlineData("Contoso.Api")]
+    [InlineData("Sample Repo")]
+    [InlineData("Échantillon")]
+    [InlineData("ARepositoryDirectoryWithMoreThanSixtyFourCharactersMustKeepItsOriginalName")]
+    public void RepositoryLeafIsPreserved(string name)
     {
         using var home = new ProjectOnboardingFixture("solution");
         using var fixture = new ProjectOnboardingFixture("plain-library");
-        var root = Path.Combine(fixture.Root, "default");
+        var root = Path.Combine(fixture.Root, name);
         Directory.Move(Path.Combine(fixture.Root, "sample-repo"), root);
-        var registry = new OrchestratorProjectRegistry(Path.Combine(home.Root, "registry"));
+        var registry = new OrchestratorProjectRegistry(Path.Combine(home.Root, "registry"), Path.Combine(home.Root, "data"));
         using var output = new StringWriter();
 
-        var error = Assert.Throws<ArgumentException>(() => ProjectCliCommand.Execute(
+        Assert.Equal(0, ProjectCliCommand.Execute(
             ["project", "discover", "--root", root], registry, home.Root, null, output));
 
-        Assert.Equal("rootOverride", error.ParamName);
-        Assert.Contains("directory name", error.Message);
+        var modelPath = Path.Combine(registry.DataRootDirectory, "projects", name, "project-model.json");
+        Assert.True(File.Exists(modelPath));
+        Assert.Equal($"Project model: {modelPath}{Environment.NewLine}", output.ToString());
+        Assert.Equal(2, ProjectModelJson.Deserialize(File.ReadAllText(modelPath)).Units.Count);
         Assert.False(Directory.Exists(OrchestratorWorkspace.ForDirectory(home.Root).OrchestratorDirectory));
-        Assert.Empty(output.ToString());
+        Assert.False(File.Exists(registry.RegistryPath));
     }
 
-    [Fact(DisplayName = "A filesystem root without a repository leaf fails before choosing an output directory")]
+    [Fact(DisplayName = "A filesystem root without a repository leaf fails before measurement or discovery")]
     public void DriveRootHasNoProjectIdentity()
     {
         using var home = new ProjectOnboardingFixture("solution");
-        var project = new OrchestratorProject(OrchestratorWorkspace.DefaultProjectName, home.Root);
+        var registry = new OrchestratorProjectRegistry(Path.Combine(home.Root, "registry"), Path.Combine(home.Root, "data"));
+        using var output = new StringWriter();
 
-        var error = Assert.Throws<ArgumentException>(() => ProjectDiscoveryModelLocation.ResolveDirectory(
-            project, Path.GetPathRoot(home.Root)!, home.Root));
+        var error = Assert.Throws<ArgumentException>(() => ProjectCliCommand.Execute(
+            ["project", "discover", "--root", Path.GetPathRoot(home.Root)!, "--measure", "all"],
+            registry, home.Root, null, output,
+            () => throw new InvalidOperationException("Invalid roots must fail before selecting a measurer.")));
 
         Assert.Equal("rootOverride", error.ParamName);
-        Assert.False(Directory.Exists(project.ResolveWorkspace().OrchestratorDirectory));
+        Assert.Contains("Discovery root", error.Message);
+        Assert.False(Directory.Exists(registry.DataRootDirectory));
+        Assert.False(Directory.Exists(OrchestratorWorkspace.ForDirectory(home.Root).OrchestratorDirectory));
+        Assert.Empty(output.ToString());
     }
 
     [Fact(DisplayName = "A missing foreign root fails without creating a project workspace")]
     public void MissingForeignRootCreatesNoProjectFolder()
     {
         using var home = new ProjectOnboardingFixture("solution");
-        var registry = new OrchestratorProjectRegistry(Path.Combine(home.Root, "registry"));
+        var registry = new OrchestratorProjectRegistry(Path.Combine(home.Root, "registry"), Path.Combine(home.Root, "data"));
         using var output = new StringWriter();
 
         Assert.Throws<DirectoryNotFoundException>(() => ProjectCliCommand.Execute(
             ["project", "discover", "--root", Path.Combine(home.Root, "missing-repo")], registry, home.Root, null, output));
 
-        Assert.False(Directory.Exists(OrchestratorWorkspace.ForProject("missing-repo", home.Root).OrchestratorDirectory));
+        Assert.False(Directory.Exists(Path.Combine(registry.DataRootDirectory, "projects", "missing-repo")));
         Assert.False(File.Exists(Path.Combine(OrchestratorWorkspace.ForDirectory(home.Root).OrchestratorDirectory, "project-model.json")));
         Assert.Empty(output.ToString());
     }
