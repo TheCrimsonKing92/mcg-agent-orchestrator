@@ -87,6 +87,10 @@ Pass `--simple` to create a single-Developer goal (equivalent to `simple-goal`).
 
 Before creation, `goal` with an inline objective, `--brief-file` or `--text-file` prints early brief diagnostics as `BRIEF-LINT <severity> <kind>: <message> remedy: <remedy>`, one line per finding. `revise <goal-id> --brief-file <path>` and `revise <goal-id> --text-file <path>` print the same diagnostics before recording the revision. Clean briefs add no output. The severity is `blocks-dispatch` for Git-directory references or unscoped skill definition filenames, `blocks-cli-start` for readiness high-risk words, or `advisory` for inline heading splits and missing test-removal declarations. These lines never block creation or revision and do not change exit codes; existing dispatch and start checks still apply. Diagnostics inspect the brief only, so later task text can introduce additional dispatch risks.
 
+### Goal dependencies
+
+`goal-depends <goal> --on <dependency>` records a hard dependency used by the conductor's dispatch-start gate. It does not interrupt workers already in flight. Use `goal-depends <goal> --remove <dependency>` to remove one link, or `goal-depends <goal> --clear` to remove all links. Supply exactly one of these flags; self-dependencies and cycles are rejected, as are removal of an absent link and clearing an empty dependency set.
+
 ## `author-draft`
 
 ```text
@@ -172,6 +176,7 @@ host-exclusions [--apply]
 provider-smoke [openai|anthropic|ollama] [--confirm-paid-smoke] [task-number]
 author-draft <backlog-id-prefix>
 goal <objective>
+goal-depends <goal> --on <dependency> | --remove <dependency> | --clear
 goals
 agents
 agent <role> <provider> <model> [name]
@@ -200,7 +205,7 @@ task-timeline <task-number>
 pending
 run <task-number> [--confirm-paid-api-run] [--confirm-large-paid-api-prompt]
 api-run <task-number> [--confirm-paid-api-run] [--confirm-large-paid-api-prompt]
-retry <task-number> <message>
+retry <task-number> <message> [--cause <cause>]
 dispatch <task-number> <worker-name> <command>
 worker-profiles
 worker-profile <name> <command-template>
@@ -224,6 +229,9 @@ verify <task-number> <command>
 verify-manual <task-number> <passed|failed> <note>
 verifications <task-number>
 operator-intent-status <intent-id> [--wait [seconds]]
+lessons [--applies-to <scope>] [--all] [--json]
+lesson record --situation <text> --rule <text> --evidence <reference> [--applies-to <scope>] [--actor-kind human|agent]
+criterion-evidence-map --goal <g> --criterion <brief-number> [--version <v>] <acceptance|operator> <required-scope> <finding-stable-id> <candidate-sha>
 progress <task-number> <running|completed|failed|cancelled> <message>
 ask <task-number> <question>
 ask-goal <question>
@@ -243,9 +251,40 @@ exit
 
 `advance` executes the top-priority next action only when it is safe and fully specified, such as starting or refreshing a recorded dispatch or delegating pending work; it stops before API-backed model execution so `run <task-number>` or `api-run <task-number>` remains an explicit operator choice. `advance-subscription` follows the same safety policy, but prepares a provider-mapped subscription worker dispatch instead of directly running an assigned OpenAI or Anthropic task; add `--confirm-subscription-advance` when deliberately using that path, and add `--confirm-large-paid-subscription-start` when the selected paid subscription prompt is large enough to require explicit cost confirmation. `delegate` reruns role-based assignment for pending tasks.
 
-`retry <task-number> <message>` reopens a failed, cancelled, or rework-needed task. The message is required so clearing execution or verification evidence has an explicit rework reason. Retry preserves prior execution and verification history, clears the latest verification gate, and moves assigned tasks back to `Assigned` so they can be run or dispatched again. Running tasks must be refreshed or cancelled before retrying, and tasks waiting for human input must be answered first.
+### Retry causes
 
-`acceptance` reports whether the goal is accepted, how many task gates have passed, pending human input count, open verification count, and concrete blockers with suggested commands. `evidence` rolls up execution, dispatch, process, verification, and pending-human-input evidence across every task so the goal can be audited from one command. `stages` maps each SDLC task to a readiness state such as `ReadyToRun`, `InProgress`, `NeedsVerification`, `VerificationFailed`, or `Verified`, with the next command for that stage. `gates` reports whether each task is accepted for completion. `verify-needed` lists only open verification work and prints a suggested command for each task that is not ready, missing verification, or has failed verification. A task gate passes only when the task is completed and its latest verification succeeded. A goal is marked `Completed` only after every task gate passes.
+`retry <task-number> <message> --cause <cause>` queues a retry of a failed, cancelled, or rework-needed task. The message is required so clearing execution or verification evidence has an explicit rework reason. An admitted retry preserves prior execution and verification history, clears the latest verification gate, and moves assigned tasks back to `Assigned` so they can be run or dispatched again. Running tasks must be refreshed or cancelled before retrying, and tasks waiting for human input must be answered first. Invalid causes are rejected with the valid cause names. Omitting `--cause` defaults to `Unknown`: when the conductor applies the intent, it parks the goal in `WaitingForHuman` for a required, non-dismissible cause clarification. Answer with a valid non-`Unknown` cause to resume the original retry automatically.
+
+Changed-context retries are admitted to `SameRole`. When admission prevents another attempt in the same unsuccessful context, the cause selects the following route:
+
+| Cause | Route | Evidence owner / action |
+|---|---|---|
+| `NewSourceFinding` | `UpstreamImplementation` | Developer |
+| `MainDriftConflict` | `UpstreamImplementation` | Developer |
+| `NewTestFinding` | `EvidenceLane` | Tester |
+| `CriterionEvidenceOwnerMismatch` | `EvidenceLane` | Tester |
+| `EnvironmentApparatusFailure` | `EnvironmentalHold` | Human recovery choice; supply environment recovery evidence |
+| `ProviderInterruption` | `EnvironmentalHold` | Human recovery choice; supply provider recovery evidence |
+| `ContractClarification` | `HumanClarification` | Human clarification |
+| `Unknown` | `HumanClarification` | Human clarification; operator retry intents require cause classification first |
+| `UnchangedContextRepeat` | `AcceptanceRegate` when no blocking findings remain | Human recovery choice before re-gating; otherwise blocking findings route to Tester, Developer, or human clarification |
+| `ProviderBudgetRecovery` | `AcceptanceRegate` when no blocking findings remain | Human recovery choice before re-gating; otherwise blocking findings route to Tester, Developer, or human clarification |
+
+Role routing requires an actionable target task; a missing or cancelled target opens a human recovery choice. `AcceptanceRegate` does not itself restore verification or mark work complete.
+
+### Acceptance and gate reads
+
+`acceptance <goal>` runs the full acceptance gate for a `Verified` goal and attempts to fast-forward the goal branch into `main`; it can change state and journals gate and landing evidence. It also prints an acceptance summary: accepted/not accepted, task counts, open verification, pending human input, and blockers with suggested actions. A passed gate is journaled before the pre-merge criterion-evidence check, so a passing receipt can still be followed by a blocked merge. Cleanup is deferred to the conductor sweep; criterion-evidence intents must be applied by a tick (or the offline intent applier) before merge. Use `gates <goal>` for a read-only task-gate report. `evidence` rolls up execution, dispatch, process, verification, and pending-human-input evidence across every task so the goal can be audited from one command. `stages` maps each SDLC task to a readiness state such as `ReadyToRun`, `InProgress`, `NeedsVerification`, `VerificationFailed`, or `Verified`, with the next command for that stage. `gates` reports whether each task is accepted for completion. `verify-needed` lists only open verification work and prints a suggested command for each task that is not ready, missing verification, or has failed verification. A task gate passes only when the task is completed and its latest verification succeeded. A goal is marked `Completed` only after every task gate passes.
+
+### Operator lessons
+
+`lessons [--applies-to <scope>]` lists active situation-to-rule lessons from the operator lesson store. Add `--all` to include retired lessons or `--json` for structured output. Record an evidence-backed lesson with `lesson record --situation "<situation>" --rule "<rule>" --evidence operator-evidence:<repo path> --actor-kind agent`; quote a reference containing spaces. Optional `--applies-to <scope>` tags can be repeated. Recording queues an operator intent for a conductor tick, prints its id for `operator-intent-status`, and warns when no conductor is active.
+
+### Criterion evidence mappings
+
+`criterion-evidence-map --goal <g> --criterion <brief-number> [--version <v>] <acceptance|operator> <required-scope> <finding-stable-id> <candidate-sha>` queues a candidate-bound ownership mapping for the conductor. `--criterion` uses the 1-based number in the brief, not a positional zero-based index or an obligation id. Copy stable identifiers from the hold's printed command verbatim; commands that take an `<obligation-id>` need that exact id. Before merge, mappings and evidence must match the tested candidate SHA; a stale binding can block merge even after the gate passes.
+
+### Human input
 
 `ask <task-number> <question>` opens a task-scoped human input request. `ask-goal <question>` opens a goal-scoped request when the orchestrator needs clarification that is not tied to one task. `input-needed` lists only pending human input for the current or selected goal, including task context when available, and prints the `answer <request-id> <answer>` command for each open request. `pending` keeps the broader all-goals pending-input view. Model-backed agents, foreground dispatches, and refreshed background dispatches can request operator input by emitting a line that starts with `HUMAN_INPUT:` followed by the exact question; the task and goal pause until the request is answered.
 
