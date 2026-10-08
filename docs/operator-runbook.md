@@ -89,6 +89,8 @@ You do **not** need `workspace create`, `subscription-dispatch`, `start-dispatch
 
 **Stop a loop deliberately** with `mcg-orchestrator.cmd conductor stop`. Check it with `mcg-orchestrator.cmd conductor status`; start it deliberately with `mcg-orchestrator.cmd conductor start` (`--clear-stop` clears a prior stop request). A `.conduct-stop` is a detach, not a drain: at the next stop check the loop starts no new dispatches, attempts to detach live workers, persists the detached state, and exits without waiting for those workers to finish. A successful detach leaves the task running for a successor to reconcile; if detachment fails, the fallback cancels the dispatch so it can be requeued. Prefer a quiet window with no live workers before a deliberate stop. Ctrl-C is not equivalent: the conduct-loop path has no `Console.CancelKeyPress` handler, so Ctrl-C terminates without the detach/checkpoint path.
 
+`mcg-orchestrator.cmd conductor setup` creates or upgrades every versioned registered store and prints its name, recorded version, and database path. It works with or without a running conductor and is safe to re-run. `conductor start` performs the same setup automatically before launching; a setup error prevents launch.
+
 ### Manual bounce fallback after loop-affecting code lands
 
 Use this procedure when self-relaunch is disabled, when activation reverts, or when the running supervisor predates the automatic activation implementation. Re-arm the landed code deliberately:

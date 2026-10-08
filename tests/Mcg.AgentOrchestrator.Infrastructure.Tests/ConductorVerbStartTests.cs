@@ -1,6 +1,9 @@
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.Infrastructure;
+using Microsoft.Data.Sqlite;
 
+// Parallel-safe: private workspace directories and injected process/lock/setup seams.
 public sealed class ConductorVerbStartTests
 {
     [Fact]
@@ -81,11 +84,75 @@ public sealed class ConductorVerbStartTests
         Assert.Single(launcher.Requests);
     }
 
-    internal sealed class RecordingLauncher : IConductorProcessLauncher
+    [Fact]
+    public void Start_EmptyWorkspace_CompletesSetupBeforeLaunch()
+    {
+        using var fixture = new Fixture();
+        var workspace = fixture.Workspace;
+        Assert.False(File.Exists(workspace.PortfolioStorePath));
+        var calls = new List<string>();
+        var launcher = new RecordingLauncher(() =>
+        {
+            calls.Add("launch");
+            Assert.True(File.Exists(workspace.PortfolioStorePath));
+            Assert.NotNull(PortfolioStore.OpenReadOnly(workspace.PortfolioStorePath));
+        });
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        Assert.Equal(0, CliConductorCommand.Run(["conductor", "start"], workspace,
+            launcher, new FixedProbe(null), output: output, error: error,
+            home: OrchestratorHome.Resolve(workspace.RootDirectory, _ => null), storeSetup: directory =>
+            {
+                Assert.Equal(workspace.OrchestratorDirectory, directory);
+                var results = StoreSetupRunner.Run(directory);
+                var result = Assert.Single(results);
+                Assert.Equal(workspace.PortfolioStorePath, result.DatabasePath);
+                Assert.Equal(1, result.Version);
+                calls.Add("setup");
+                return results;
+            }));
+
+        Assert.Equal(["setup", "launch"], calls);
+        Assert.Single(launcher.Requests);
+        Assert.Equal("", error.ToString());
+        Assert.DoesNotContain("portfolio:", output.ToString());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Start_SetupFails_ReportsErrorWithoutLaunching(bool sqlite)
+    {
+        using var fixture = new Fixture();
+        var calls = new List<string>();
+        var launcher = new RecordingLauncher(() => calls.Add("launch"));
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        Assert.Equal(1, CliConductorCommand.Run(["conductor", "start"], fixture.Workspace,
+            launcher, new FixedProbe(null), output: output, error: error,
+            home: OrchestratorHome.Resolve(fixture.Workspace.RootDirectory, _ => null), storeSetup: directory =>
+            {
+                Assert.Equal(fixture.Workspace.OrchestratorDirectory, directory);
+                calls.Add("setup");
+                if (sqlite)
+                    throw new SqliteException("setup failed", 11);
+                throw new InvalidOperationException("setup failed");
+            }));
+
+        Assert.Equal(["setup"], calls);
+        Assert.Empty(launcher.Requests);
+        Assert.Equal($"Error: setup failed{Environment.NewLine}", error.ToString());
+        Assert.Equal("", output.ToString());
+    }
+
+    internal sealed class RecordingLauncher(Action? onLaunch = null) : IConductorProcessLauncher
     {
         internal List<ConductorLaunchRequest> Requests { get; } = [];
         public ConductorLaunchResult Launch(ConductorLaunchRequest request)
         {
+            onLaunch?.Invoke();
             Requests.Add(request);
             return new(0, "{\"pid\":1234,\"stdoutPath\":\"stdout.log\"}", null);
         }
