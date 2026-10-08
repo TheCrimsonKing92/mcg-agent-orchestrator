@@ -16,7 +16,7 @@ public static partial class GoalWorktrees
 {
     // Reuse the landing classifier in a detached, disposable checkout; never integrate either ref.
     public static AdditiveConflictProbeResult ProbeAdditiveConflictMerge(
-        string executionDirectory, GoalId goalId, IReadOnlyCollection<string> frozenPaths)
+        string executionDirectory, GoalId goalId, IReadOnlyCollection<string> frozenPaths, string? trunkBranch = null)
     {
         string? branch = null, main = null, checkout = null;
         var outcome = AdditiveConflictProbeOutcome.Indeterminate;
@@ -26,7 +26,8 @@ public static partial class GoalWorktrees
             var worktree = TryResolve(executionDirectory, goalId);
             if (worktree is null) return new(null, null, outcome, "worktree-missing");
             branch = ResolveRequiredRef(worktree, "HEAD");
-            main = ResolveRequiredRef(executionDirectory, "main^{commit}");
+            var baseBranch = GetCurrentBranchName(executionDirectory) ?? TrunkBranchName.Resolve(trunkBranch);
+            main = ResolveRequiredRef(executionDirectory, $"{baseBranch}^{{commit}}");
             checkout = Path.Combine(OrchestratorTempRoot.GetPurposeDirectory("additive-conflict-probes"), Guid.NewGuid().ToString("N"));
             var added = RunAdditiveGit(executionDirectory, "worktree", "add", "--detach", "--quiet", checkout, branch);
             if (CompleteGit(added))
