@@ -18,16 +18,20 @@ public sealed class MergeTrainRedAttributionTests
         return Assert.Throws<Xunit.Sdk.TrueException>(() => Assert.True(false, message)).Message;
     }
 
-    [Fact]
-    public void GuardSubjects_OverrideGuardSourceOwnershipAndAttributeOneMember()
+    [Theory]
+    [InlineData(null)]
+    [InlineData("\n")]
+    [InlineData("\r\n")]
+    public void GuardSubjects_OverrideGuardSourceOwnershipAndAttributeOneMember(string? trailerNewLine)
     {
         using var fixture = new Fixture();
         fixture.Source("tests/First.cs", "DotnetBuildEnvironmentManagerStableSlotHolderLabelTests");
         // The replayed decision guard itself was owned by an innocent train member.
         fixture.Source("tests/Second.cs", "AcceptanceGateEngineSettingsTests", "WorkflowDecisionCoverageRatchetTests");
         var laneMessage = LaneMessage("Ns.DotnetBuildEnvironmentManagerStableSlotHolderLabelTests");
-        Assert.Contains("Expected: True", laneMessage, StringComparison.Ordinal);
-        Assert.Contains("Actual:   False", laneMessage, StringComparison.Ordinal);
+        // Keep the actual assertion output and cover explicit trailers independently of xunit's formatting.
+        if (trailerNewLine is not null)
+            laneMessage += trailerNewLine + "Expected: True" + trailerNewLine + "Actual:   False";
         var receipt = fixture.GuardReceipt(
             (LaneGuard, laneMessage),
             (DecisionGuard, "Unlisted undecided sites:\nFirst.cs : DeferredRun"));
