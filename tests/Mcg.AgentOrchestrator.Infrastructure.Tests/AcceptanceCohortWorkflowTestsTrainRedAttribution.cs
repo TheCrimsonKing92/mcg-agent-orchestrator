@@ -78,20 +78,27 @@ public sealed class AcceptanceCohortWorkflowTestsTrainRedAttribution : Acceptanc
             }, reason == "different-members" ? "OtherMemberTests.cs" : "OldestCulpritTests.cs");
             if (reason == "unreadable")
             {
-                // Evidence capture must be able to copy the file before attribution rejects it.
+                // Capture can copy malformed evidence, but the classifier refuses RED before bisection.
                 var malformed = Path.Combine(repo, "malformed.trx");
                 File.WriteAllText(malformed, "<TestRun");
                 Assert.Equal(AcceptanceTrxReadStatus.Unparseable, AcceptanceTrxFailureReader.Read(malformed).Status);
                 red = red with { TestResultPaths = [.. red.TestResultPaths!, malformed] };
+                Assert.Equal(AcceptanceCohortGateOutcome.InfrastructureFailure, ConductorDriver.ClassifyCohortVerification(red));
             }
-            return memberCount == 2 ? [red] : [red, Passing(repo)];
+            return memberCount == 2 || reason == "unreadable" ? [red] : [red, Passing(repo)];
         }, scenario =>
         {
-            Assert.Equal(memberCount == 2 ? 1 : 2, scenario.Verifier.RunCount);
+            Assert.Equal(memberCount == 2 || reason == "unreadable" ? 1 : 2, scenario.Verifier.RunCount);
             Assert.Empty(scenario.Driver.ReadTrainImplicatedMemberKeys());
             Assert.Empty(scenario.Driver.ReadSuppressedGroupedPairs());
             Assert.Empty(AttributionEvents(scenario));
-            if (memberCount == 3)
+            if (reason == "unreadable")
+            {
+                Assert.Equal(MergeTrainGateOutcome.InfrastructureFailure,
+                    Assert.IsType<MergeTrainReceipt>(scenario.Result.RecordedReceipt).Outcome);
+                Assert.Empty(scenario.Result.Ejections);
+            }
+            else if (memberCount == 3)
                 Assert.Equal(MergeTrainEjectionReason.RedNewestMember, Assert.Single(scenario.Result.Ejections).Reason);
         }, memberCount: memberCount);
     }
