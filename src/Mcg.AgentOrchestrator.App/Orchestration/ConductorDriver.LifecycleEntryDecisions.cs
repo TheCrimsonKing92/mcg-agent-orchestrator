@@ -12,9 +12,11 @@ internal sealed partial class ConductorDriver
         var facts = new LifecycleEntryFacts(state) { PolicyName = policy.Name, StateIsFailed = state == GoalLifecycleState.Failed };
         if (state is GoalLifecycleState.Created or GoalLifecycleState.WorkspaceReady or GoalLifecycleState.Dispatched)
             facts = facts with { SliceBatchParentHold = SliceBatchParentExecutionGuard?.TryDescribeHold(goal) ?? string.Empty };
+        else if (state is GoalLifecycleState.Verified or GoalLifecycleState.Verifying)
+            facts = facts with { StreamCompleteHold = global::Mcg.AgentOrchestrator.App.Orchestration.SliceBatchParentExecutionGuard.TryDescribeStreamCompleteHold(goal) ?? string.Empty };
 
         // Gather only inputs reached by the original cascade; later builders and policy lookups stay uncalled.
-        if (facts.SliceBatchParentHold.Length == 0 && facts.StateIsFailed != true)
+        if (facts.SliceBatchParentHold.Length == 0 && facts.StreamCompleteHold.Length == 0 && facts.StateIsFailed != true)
         {
             if (state == GoalLifecycleState.AwaitingClarification)
                 facts = facts with { AwaitingClarificationReason = _tryBuildAwaitingClarificationEscalationReason(goal) ?? string.Empty };

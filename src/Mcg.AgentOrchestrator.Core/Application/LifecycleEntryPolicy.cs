@@ -16,6 +16,7 @@ public sealed record LifecycleEntryFacts(GoalLifecycleState ResolvedState)
     public string TerminalEscalationReason { get; init; } = string.Empty;
     public string PolicyName { get; init; } = string.Empty;
     public string TransitionDecision { get; init; } = string.Empty;
+    public string StreamCompleteHold { get; init; } = string.Empty;
 
     public IReadOnlyList<PolicyDecisionFact> ToRecordedFacts() => Array.AsReadOnly<PolicyDecisionFact>(
     [
@@ -25,14 +26,17 @@ public sealed record LifecycleEntryFacts(GoalLifecycleState ResolvedState)
         new("awaiting-clarification-reason", AwaitingClarificationReason),
         new("terminal-escalation-reason", TerminalEscalationReason),
         new("policy-name", PolicyName),
-        new("transition-decision", TransitionDecision)
+        new("transition-decision", TransitionDecision),
+        .. StreamCompleteHold.Length > 0
+            ? new PolicyDecisionFact[] { new("stream-complete-hold", StreamCompleteHold) }
+            : []
     ]);
 
     public static LifecycleEntryFacts FromRecordedFacts(IReadOnlyList<PolicyDecisionFact> facts)
     {
         ArgumentNullException.ThrowIfNull(facts);
-        if (facts.Count != 7)
-            throw new InvalidOperationException("Lifecycle entry replay requires exactly seven named facts.");
+        if (facts.Count is not (7 or 8))
+            throw new InvalidOperationException("Lifecycle entry replay requires seven legacy facts or eight facts including a stream-complete hold.");
 
         var values = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var fact in facts)
@@ -58,6 +62,9 @@ public sealed record LifecycleEntryFacts(GoalLifecycleState ResolvedState)
         var transition = Read("transition-decision");
         if (transition is not ("" or "Auto" or "Escalate"))
             throw new InvalidOperationException("Invalid lifecycle entry transition-decision fact.");
+        var streamCompleteHold = facts.Count == 8 ? Read("stream-complete-hold") : string.Empty;
+        if (facts.Count == 8 && streamCompleteHold.Length == 0)
+            throw new InvalidOperationException("Invalid lifecycle entry stream-complete-hold fact.");
 
         return new(state)
         {
@@ -66,7 +73,8 @@ public sealed record LifecycleEntryFacts(GoalLifecycleState ResolvedState)
             AwaitingClarificationReason = Read("awaiting-clarification-reason"),
             TerminalEscalationReason = Read("terminal-escalation-reason"),
             PolicyName = Read("policy-name"),
-            TransitionDecision = transition
+            TransitionDecision = transition,
+            StreamCompleteHold = streamCompleteHold
         };
     }
 }
@@ -93,6 +101,8 @@ public static class LifecycleEntryPolicy
         ArgumentNullException.ThrowIfNull(facts);
         if (facts.SliceBatchParentHold.Length > 0)
             return new(LifecycleEntryAction.Hold, 1, "slice-batch-parent-hold", facts.SliceBatchParentHold, facts);
+        if (facts.StreamCompleteHold.Length > 0)
+            return new(LifecycleEntryAction.Hold, 1, "stream-complete-hold", facts.StreamCompleteHold, facts);
         if (facts.StateIsFailed == true)
             return new(LifecycleEntryAction.Proceed, 2, "failed-recovery", "Failed goal recovery owns this state.", facts);
         if (facts.ResolvedState == GoalLifecycleState.AwaitingClarification)

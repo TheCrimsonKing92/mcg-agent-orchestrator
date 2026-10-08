@@ -29,6 +29,7 @@ internal sealed partial class ConductorBatchLoop
                 !driver.HasRoutableRecordedCohortAttributionFailure(goal) &&
                 goal.Status is GoalStatus.Verified or GoalStatus.Verifying &&
                 AcceptancePrecheck.HasCompletedPassedVerificationForAllTasks(goal) &&
+                SliceBatchParentExecutionGuard.TryDescribeStreamCompleteHold(goal) is null &&
                 !ConductorDriver.HasPendingDeferredNoChangeEvidence(goal) &&
                 GetDependencyHoldReason(goal, completedGoals, escalatedGoals, kernel) is null &&
                 VerifiedAcceptanceEscalationDecision.TryHasUnresolvedPersistedVerifiedAcceptanceEscalation(goal, driver) == false)

@@ -9,10 +9,14 @@ public sealed class LifecycleEntryPolicyTests
     {
         AssertDecision(LifecycleEntryPolicy.Evaluate(facts), action, rung, evidence, reason);
         var recorded = facts.ToRecordedFacts();
-        Assert.Equal(7, recorded.Count);
-        Assert.Equal(new[] { "resolved-state", "slice-batch-parent-hold", "state-is-failed",
-            "awaiting-clarification-reason", "terminal-escalation-reason", "policy-name", "transition-decision" },
+        var expectedNames = new List<string> { "resolved-state", "slice-batch-parent-hold", "state-is-failed",
+            "awaiting-clarification-reason", "terminal-escalation-reason", "policy-name", "transition-decision" };
+        if (facts.StreamCompleteHold.Length > 0)
+            expectedNames.Add("stream-complete-hold");
+        Assert.Equal(expectedNames.Count, recorded.Count);
+        Assert.Equal(expectedNames,
             recorded.Select(fact => fact.Name));
+        Assert.Equal(facts, LifecycleEntryFacts.FromRecordedFacts(recorded));
         AssertDecision(LifecycleEntryPolicy.Evaluate(LifecycleEntryFacts.FromRecordedFacts(recorded)), action, rung, evidence, reason);
     }
 
@@ -24,6 +28,9 @@ public sealed class LifecycleEntryPolicyTests
         };
         const string hold = "Slice-batch parent abcdef12 owns child goals and does not execute worker tasks.";
         yield return [ready with { SliceBatchParentHold = hold }, LifecycleEntryAction.Hold, 1, "slice-batch-parent-hold", hold];
+        const string streamHold = "Child stream is complete and waits for parent abcdef12.";
+        yield return [ready with { ResolvedState = GoalLifecycleState.Verified, StreamCompleteHold = streamHold },
+            LifecycleEntryAction.Hold, 1, "stream-complete-hold", streamHold];
         yield return [ready with { ResolvedState = GoalLifecycleState.Failed, StateIsFailed = true },
             LifecycleEntryAction.Proceed, 2, "failed-recovery", "Failed goal recovery owns this state."];
         yield return [ready with { ResolvedState = GoalLifecycleState.AwaitingClarification, AwaitingClarificationReason = "injected clarification reason" },
@@ -62,6 +69,9 @@ public sealed class LifecycleEntryPolicyTests
     [Xunit.InlineData("boolean")]
     [Xunit.InlineData("transition")]
     [Xunit.InlineData("null-value")]
+    [Xunit.InlineData("empty-stream-hold")]
+    [Xunit.InlineData("unknown-eighth")]
+    [Xunit.InlineData("nine-facts")]
     public void Replay_RejectsMalformedFacts(string defect)
     {
         var facts = new LifecycleEntryFacts(GoalLifecycleState.Created).ToRecordedFacts().ToList();
@@ -74,8 +84,51 @@ public sealed class LifecycleEntryPolicyTests
             case "boolean": facts[2] = new("state-is-failed", "False"); break;
             case "transition": facts[6] = new("transition-decision", "Unknown"); break;
             case "null-value": facts[1] = new("slice-batch-parent-hold", null!); break;
+            case "empty-stream-hold": facts.Add(new("stream-complete-hold", "")); break;
+            case "unknown-eighth": facts.Add(new("unknown", "hold")); break;
+            case "nine-facts":
+                facts.Add(new("stream-complete-hold", "hold"));
+                facts.Add(new("unknown", ""));
+                break;
         }
         Assert.Throws<InvalidOperationException>(() => LifecycleEntryFacts.FromRecordedFacts(facts));
+    }
+
+    [Xunit.Fact]
+    public void Replay_LegacySevenFacts_HasNoStreamCompleteHold()
+    {
+        PolicyDecisionFact[] legacy =
+        [
+            new("resolved-state", "Verified"),
+            new("slice-batch-parent-hold", ""),
+            new("state-is-failed", "false"),
+            new("awaiting-clarification-reason", ""),
+            new("terminal-escalation-reason", ""),
+            new("policy-name", "Conservative"),
+            new("transition-decision", "Auto")
+        ];
+        var replayed = LifecycleEntryFacts.FromRecordedFacts(legacy);
+        Assert.Equal(string.Empty, replayed.StreamCompleteHold);
+        Assert.Equal(legacy, replayed.ToRecordedFacts());
+        Assert.Equal(LifecycleEntryAction.Proceed, LifecycleEntryPolicy.Evaluate(replayed).Action);
+    }
+
+    [Xunit.Fact]
+    public void Replay_StreamCompleteHold_RoundTripsEqualFacts()
+    {
+        var facts = new LifecycleEntryFacts(GoalLifecycleState.Verifying)
+        {
+            StateIsFailed = false, PolicyName = "Conservative",
+            StreamCompleteHold = "Child stream waits for parent abcdef12."
+        };
+        var recorded = facts.ToRecordedFacts();
+        Assert.Equal(8, recorded.Count);
+        Assert.Equal(new PolicyDecisionFact("stream-complete-hold", facts.StreamCompleteHold), recorded[^1]);
+        var replayed = LifecycleEntryFacts.FromRecordedFacts(recorded);
+        Assert.Equal(facts, replayed);
+        Assert.Equal(recorded, replayed.ToRecordedFacts());
+        AssertDecision(LifecycleEntryPolicy.Evaluate(replayed), LifecycleEntryAction.Hold,
+            1, "stream-complete-hold", facts.StreamCompleteHold);
     }
 
     [Xunit.Fact]
