@@ -1781,7 +1781,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
     public void GoalTerminalReconciliationEvidence_UsesResolvedScopedAttemptsRoot()
     {
         var root = CreateTempDirectory();
-        var workspace = OrchestratorWorkspace.ForProject("scoped", root, tenantName: "tenant-a");
+        var workspace = OrchestratorWorkspace.ForProject("scoped", root, tenantName: "tenant-a", dataRootDirectory: CreateTempDirectory());
         var goalId = GoalId.New();
         var attemptsRoot = Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts");
         var goalDirectory = Path.Combine(attemptsRoot, goalId.Value);

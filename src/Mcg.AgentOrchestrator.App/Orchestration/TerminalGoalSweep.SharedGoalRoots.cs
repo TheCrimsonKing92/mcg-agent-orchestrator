@@ -24,9 +24,9 @@ internal static partial class TerminalGoalSweep
             AddStateStores(paths, Path.Combine(repoRoot, ".orchestrator", "projects"));
             foreach (var project in (projectRegistry ?? OrchestratorProjectRegistry.CreateDefault()).ListProjects())
             {
-                var projectDirectory = OrchestratorWorkspace.ForProject(
-                    project.Name, project.RootDirectory).OrchestratorDirectory;
-                AddStateStores(paths, projectDirectory);
+                AddStateStores(paths, project.ResolveWorkspace().OrchestratorDirectory);
+                // Unrelocated legacy goals must still protect shared build roots.
+                AddStateStores(paths, OrchestratorWorkspace.LegacyProjectDirectory(project.RootDirectory, project.Name));
             }
             return paths.ToArray();
         }

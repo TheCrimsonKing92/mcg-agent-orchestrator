@@ -13,7 +13,8 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
     public async Task FactorySkipsNonHomeLandingWithoutFixtureOrRunnerButHomeStillRuns()
     {
         using var fixture = new CanaryTestFixture();
-        var workspace = OrchestratorWorkspace.ForProject("alpha", fixture.Root);
+        using var dataFixture = new CanaryTestFixture();
+        var workspace = OrchestratorWorkspace.ForProject("alpha", fixture.Root, dataRootDirectory: dataFixture.Root);
         // The factory writes to the selected project's store, not the fixture's default store.
         var projectEvents = new PostLandingCanaryEventStore(
             new SqliteRunEventStore(workspace.RunEventStorePath), workspace.RunEventStorePath);

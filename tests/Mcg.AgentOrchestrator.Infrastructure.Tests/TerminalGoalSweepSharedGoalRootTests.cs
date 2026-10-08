@@ -6,8 +6,10 @@ using Microsoft.Data.Sqlite;
 
 public sealed class TerminalGoalSweepSharedGoalRootTests
 {
-    [Fact]
-    public void Default_store_sweep_preserves_goal_held_by_registered_project_store()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Default_store_sweep_preserves_registered_project_goal(bool legacy)
     {
         var temp = Directory.CreateTempSubdirectory("shared-goal-root-").FullName;
         try
@@ -16,10 +18,12 @@ public sealed class TerminalGoalSweepSharedGoalRootTests
             var projectRoot = Path.Combine(temp, "project-repo");
             Directory.CreateDirectory(repoRoot);
             Directory.CreateDirectory(projectRoot);
-            var registry = new OrchestratorProjectRegistry(Path.Combine(temp, "registry"));
+            var registry = new OrchestratorProjectRegistry(Path.Combine(temp, "registry"), Path.Combine(temp, "data"));
             registry.CreateProject("other", projectRoot);
             var defaultDb = OrchestratorWorkspace.ForDirectory(repoRoot).SqliteStatePath;
-            var projectDb = OrchestratorWorkspace.ForProject("other", projectRoot).SqliteStatePath;
+            var projectDb = legacy
+                ? Path.Combine(OrchestratorWorkspace.LegacyProjectDirectory(projectRoot, "other"), "state.db")
+                : registry.GetRequiredProject("other").ResolveWorkspace().SqliteStatePath;
             StateDbMigrations.EnsureUpToDate(defaultDb);
             StateDbMigrations.EnsureUpToDate(projectDb);
 

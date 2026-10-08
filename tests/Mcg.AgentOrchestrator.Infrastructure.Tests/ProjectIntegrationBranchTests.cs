@@ -11,10 +11,10 @@ public sealed class ProjectIntegrationBranchTests : HostCapacityBoundTestBase
     [Fact]
     public void Registry_CustomBranch_RoundTripsIntoWorkspace()
     {
-        var registry = new OrchestratorProjectRegistry(CreateTempDirectory());
+        var registry = new OrchestratorProjectRegistry(CreateTempDirectory(), dataRootDirectory: CreateTempDirectory());
         var root = CreateTempDirectory();
         var created = registry.CreateProject("alpha", root, "master");
-        var restored = new OrchestratorProjectRegistry(registry.RegistryDirectory)
+        var restored = new OrchestratorProjectRegistry(registry.RegistryDirectory, registry.DataRootDirectory)
             .GetRequiredProject("alpha");
 
         Assert.Equal("master", created.IntegrationBranch);
@@ -29,7 +29,7 @@ public sealed class ProjectIntegrationBranchTests : HostCapacityBoundTestBase
     [InlineData("  ")]
     public void Registry_LegacyBranchField_DefaultsToMain(string? branch)
     {
-        var registry = new OrchestratorProjectRegistry(CreateTempDirectory());
+        var registry = new OrchestratorProjectRegistry(CreateTempDirectory(), dataRootDirectory: CreateTempDirectory());
         var entry = new Dictionary<string, string?>
         {
             ["Name"] = "legacy",
@@ -48,7 +48,7 @@ public sealed class ProjectIntegrationBranchTests : HostCapacityBoundTestBase
     [Fact]
     public void Registry_RepeatedCreation_PreservesBranchAndRejectsChangingIt()
     {
-        var registry = new OrchestratorProjectRegistry(CreateTempDirectory());
+        var registry = new OrchestratorProjectRegistry(CreateTempDirectory(), dataRootDirectory: CreateTempDirectory());
         var root = CreateTempDirectory();
         registry.CreateProject("alpha", root, "master");
         var before = File.ReadAllText(registry.RegistryPath);
@@ -62,7 +62,7 @@ public sealed class ProjectIntegrationBranchTests : HostCapacityBoundTestBase
     [Fact]
     public void Registry_CorruptBranch_FailsWithProjectIdentity()
     {
-        var registry = new OrchestratorProjectRegistry(CreateTempDirectory());
+        var registry = new OrchestratorProjectRegistry(CreateTempDirectory(), dataRootDirectory: CreateTempDirectory());
         File.WriteAllText(registry.RegistryPath, JsonSerializer.Serialize(new
         {
             Projects = new[] { new { Name = "broken", RootDirectory = CreateTempDirectory(), IntegrationBranch = "a b" } }
@@ -78,7 +78,7 @@ public sealed class ProjectIntegrationBranchTests : HostCapacityBoundTestBase
     [InlineData(true)]
     public void Create_CustomBranchFlag_IsPersistedAndShown(bool equalsForm)
     {
-        var registry = new OrchestratorProjectRegistry(CreateTempDirectory());
+        var registry = new OrchestratorProjectRegistry(CreateTempDirectory(), dataRootDirectory: CreateTempDirectory());
         var source = CreateTempDirectory();
         var root = CreateTempDirectory();
         var sourceWorkspace = OrchestratorWorkspace.ForDirectory(source);
@@ -92,7 +92,7 @@ public sealed class ProjectIntegrationBranchTests : HostCapacityBoundTestBase
         if (!equalsForm) parts.Add("master");
 
         CaptureConsole(() => Assert.Equal(0, ProjectCliCommand.Execute(parts, registry, source, null)));
-        var reopened = new OrchestratorProjectRegistry(registry.RegistryDirectory);
+        var reopened = new OrchestratorProjectRegistry(registry.RegistryDirectory, registry.DataRootDirectory);
         var output = CaptureConsole(() => Assert.Equal(0,
             ProjectCliCommand.Execute(["project", "show", "alpha"], reopened, source, null)));
         var defaultOutput = CaptureConsole(() => ProjectCliCommand.Execute(["project", "show", "default"], reopened, source, null));
@@ -110,7 +110,7 @@ public sealed class ProjectIntegrationBranchTests : HostCapacityBoundTestBase
     [InlineData("a\tb", true)]
     public void Create_InvalidBranchFlag_RejectsBeforeAnyMutation(string branch, bool equalsForm)
     {
-        var registry = new OrchestratorProjectRegistry(CreateTempDirectory());
+        var registry = new OrchestratorProjectRegistry(CreateTempDirectory(), dataRootDirectory: CreateTempDirectory());
         var source = CreateTempDirectory();
         var root = CreateTempDirectory();
         var parts = new List<string> { "project", "create", "alpha", "--root", root };

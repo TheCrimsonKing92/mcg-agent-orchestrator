@@ -10,6 +10,7 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrainConfiguredTrunk : Acc
     public void ExecuteMergeTrain_MasterOnlyRepository_AdvancesTestedCommit()
     {
         var repo = CreateSeededRepository();
+        var dataRoot = SharedTestSupport.CreateTempDirectory();
         try
         {
             RunGit(repo, "branch", "-M", "master");
@@ -50,7 +51,7 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrainConfiguredTrunk : Acc
             RunGit(repo, "checkout", "master");
             Assert.Equal(master, RunGitOutput(repo, "rev-parse", "master").Trim());
             Assert.NotEqual(master, commit);
-            var workspace = OrchestratorWorkspace.ForProject("alpha", repo, integrationBranch: "master");
+            var workspace = OrchestratorWorkspace.ForProject("alpha", repo, integrationBranch: "master", dataRootDirectory: dataRoot);
             var store = new MergeTrainAcceptanceStore(Path.Combine(workspace.OrchestratorDirectory, "merge-train-acceptance.db"));
             var identity = MergeTrainIdentity.Create(bindings, master, tree, "manifest-v1");
             var receipt = store.SaveGateReceipt(new MergeTrainReceipt("master-train-receipt", identity,
@@ -70,6 +71,7 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrainConfiguredTrunk : Acc
         finally
         {
             DeleteDirectory(repo);
+            SharedTestSupport.RemoveTempDirectory(dataRoot);
         }
     }
 }

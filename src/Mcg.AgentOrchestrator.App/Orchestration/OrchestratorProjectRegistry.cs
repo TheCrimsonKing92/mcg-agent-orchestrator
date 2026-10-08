@@ -11,28 +11,30 @@ public sealed class OrchestratorProjectRegistry
     private const string CurrentProjectFileName = "current-project.txt";
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
-    public OrchestratorProjectRegistry(string registryDirectory)
+    public OrchestratorProjectRegistry(string registryDirectory, string? dataRootDirectory = null)
     {
         RegistryDirectory = Path.GetFullPath(registryDirectory);
+        DataRootDirectory = dataRootDirectory is null
+            ? OrchestratorDataRoot.Resolve().RootDirectory
+            : Path.GetFullPath(dataRootDirectory);
     }
 
     public string RegistryDirectory { get; }
+    public string DataRootDirectory { get; }
     public string RegistryPath => Path.Combine(RegistryDirectory, RegistryFileName);
     public string CurrentProjectPath => Path.Combine(RegistryDirectory, CurrentProjectFileName);
 
-    public static OrchestratorProjectRegistry CreateDefault()
+    public static OrchestratorProjectRegistry CreateDefault(Func<string, string?>? readEnvironment = null)
     {
-        var configured = Environment.GetEnvironmentVariable(RegistryHomeEnvironmentVariable);
+        var configured = (readEnvironment ?? Environment.GetEnvironmentVariable)(RegistryHomeEnvironmentVariable);
+        var dataRoot = OrchestratorDataRoot.Resolve(readEnvironment).RootDirectory;
         if (!string.IsNullOrWhiteSpace(configured))
         {
-            return new OrchestratorProjectRegistry(configured);
+            return new OrchestratorProjectRegistry(configured, dataRoot);
         }
 
-        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        var root = string.IsNullOrWhiteSpace(localAppData)
-            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".mcg-agent-orchestrator")
-            : Path.Combine(localAppData, "Mcg.AgentOrchestrator");
-        return new OrchestratorProjectRegistry(Path.Combine(root, "projects"));
+        return new OrchestratorProjectRegistry(
+            Path.Combine(OrchestratorDataRoot.ResolveDefaultDirectory(), "projects"), dataRoot);
     }
 
     public IReadOnlyList<OrchestratorProject> ListProjects()
@@ -41,7 +43,8 @@ public sealed class OrchestratorProjectRegistry
         return file.Projects
             .Select(entry => new OrchestratorProject(entry.Name, Path.GetFullPath(entry.RootDirectory))
             {
-                IntegrationBranch = ResolveStoredBranch(entry)
+                IntegrationBranch = ResolveStoredBranch(entry),
+                DataRootDirectory = DataRootDirectory
             })
             .OrderBy(project => project.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -92,7 +95,8 @@ public sealed class OrchestratorProjectRegistry
         if (existing is null)
         {
             alreadyRegistered = false;
-            return new OrchestratorProject(normalizedName, root) { IntegrationBranch = branch };
+            return new OrchestratorProject(normalizedName, root)
+                { IntegrationBranch = branch, DataRootDirectory = DataRootDirectory };
         }
 
         var existingRoot = Path.GetFullPath(existing.RootDirectory);
@@ -110,7 +114,8 @@ public sealed class OrchestratorProjectRegistry
         }
 
         alreadyRegistered = true;
-        return new OrchestratorProject(existing.Name, existingRoot) { IntegrationBranch = existingBranch };
+        return new OrchestratorProject(existing.Name, existingRoot)
+            { IntegrationBranch = existingBranch, DataRootDirectory = DataRootDirectory };
     }
 
     public void SelectProject(string name)
