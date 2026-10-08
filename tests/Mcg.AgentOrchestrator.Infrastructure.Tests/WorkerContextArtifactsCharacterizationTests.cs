@@ -276,7 +276,19 @@ public sealed class WorkerContextArtifactsCharacterizationTests(Xunit.ITestOutpu
         Assert.Contains($"sha256={projectedArtifact.ContentHash}", projectedPrompt, StringComparison.Ordinal);
         Assert.Contains("validation=verified", projectedPrompt, StringComparison.Ordinal);
         Assert.DoesNotContain(sentinel, prompt, StringComparison.Ordinal);
-        Assert.DoesNotContain(sentinel, projectedOutput, StringComparison.Ordinal);
+        const int proseCap = 4000;
+        const string reportLabel = "Worker report (prose before WORKER_RESULT):";
+        var prose = stdout[..stdout.IndexOf("WORKER_RESULT:", StringComparison.Ordinal)].TrimEnd('\r', '\n');
+        var reportStart = projectedOutput.IndexOf(reportLabel, StringComparison.Ordinal);
+        Assert.True(reportStart >= 0, "The retry artifact must retain the bounded worker report.");
+        var resultStart = projectedOutput.IndexOf(Environment.NewLine + "WORKER_RESULT:", reportStart,
+            StringComparison.Ordinal);
+        Assert.True(resultStart > reportStart, "The worker report must precede the structured result.");
+        Assert.Equal(string.Join(Environment.NewLine,
+            reportLabel,
+            $"...[{prose.Length - proseCap} chars omitted from worker report prose; complete source remains at source_handle]...",
+            prose[^proseCap..]), projectedOutput[reportStart..resultStart]);
+        Assert.DoesNotContain(echoedBody, projectedOutput, StringComparison.Ordinal);
         Assert.Contains("tests: fail - retry assertion at tests/Feature.Tests/FeatureServiceTests.cs:51", projectedOutput, StringComparison.Ordinal);
         Assert.Contains("blockers: exact-blocker - src/Feature/FeatureService.cs:9 conflicts with retry criterion", projectedOutput, StringComparison.Ordinal);
         Assert.Contains($"source_handle={Path.GetFullPath(sourceOutputPath)}", projectedOutput, StringComparison.Ordinal);
