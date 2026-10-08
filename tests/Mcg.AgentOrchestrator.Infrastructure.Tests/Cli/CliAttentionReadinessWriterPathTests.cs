@@ -70,9 +70,10 @@ public sealed class CliAttentionReadinessWriterPathTests : CliTaskQueryTestSuppo
     }
 
     [Xunit.Theory]
+    [Xunit.InlineData("readiness")]
     [Xunit.InlineData("readiness", "abc10000")]
     [Xunit.InlineData("READINESS", "ABC10000")]
-    public async Task Readiness_Prefix_LeavesPendingOutboxAndStateUnchanged(params string[] args)
+    public async Task Readiness_LeavesPendingOutboxAndStateUnchanged(params string[] args)
     {
         var root = CreateTempDirectory();
         try
@@ -106,7 +107,7 @@ public sealed class CliAttentionReadinessWriterPathTests : CliTaskQueryTestSuppo
             await using var check = OpenStateConnection(workspace.SqliteStatePath);
             await check.OpenAsync();
             await using var query = check.CreateCommand();
-            query.CommandText = "SELECT COUNT(*) FROM state_outbox WHERE id = 'readiness-read-probe' AND payload_json = '{}' AND quarantined_at IS NULL";
+            query.CommandText = "SELECT COUNT(*) FROM state_outbox WHERE id = 'readiness-read-probe' AND payload_json = '{}' AND quarantined_at IS NULL AND processing_token IS NULL AND processing_started_at IS NULL";
             Xunit.Assert.Equal(1L, (long)(await query.ExecuteScalarAsync())!);
             Xunit.Assert.False(File.Exists(Path.Combine(workspace.OrchestratorDirectory, SqliteOperatorIntentStore.DatabaseFileName)));
         }
@@ -116,16 +117,129 @@ public sealed class CliAttentionReadinessWriterPathTests : CliTaskQueryTestSuppo
         }
     }
 
-    [Xunit.Fact]
-    public async Task Readiness_Prefix_SkipsStartupHydration()
+    [Xunit.Theory]
+    [Xunit.InlineData("readiness")]
+    [Xunit.InlineData("readiness", "abc10000")]
+    public async Task Readiness_SkipsStartupHydration(params string[] args)
     {
-        string[] args = ["readiness", "abc10000"];
         Xunit.Assert.True(CliReadOnlyCommandRunner.IsReadOnlyCommand(args));
         Xunit.Assert.Equal(CliCommandCapability.QueryOnly, CliCommandCapabilities.Classify(args));
         var repository = new ProbeStateRepository(new AgentOrchestratorKernel());
         var startup = await CliReadOnlyStartupHydration.PrepareStartupAsync(args, repository);
         Xunit.Assert.False(startup.Hydrated);
         Xunit.Assert.Equal(0, repository.FullLoadAttempts);
+    }
+
+    [Xunit.Fact]
+    public void Readiness_Help_DeclinesReadOnlyRoute()
+    {
+        string[] args = ["readiness", "--help"];
+        Xunit.Assert.True(CliCommandHelp.IsCommandSpecificHelp(args));
+        Xunit.Assert.False(CliReadinessQueryCommand.IsReadinessQueryCommand(args));
+        Xunit.Assert.False(CliReadOnlyCommandRunner.IsReadOnlyCommand(args));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false, false)]
+    [Xunit.InlineData(false, true)]
+    [Xunit.InlineData(true, false)]
+    public async Task Readiness_Bare_SelectsCreationOrderAndLoadsOnlySelectedGoal(
+        bool tiedCreationTimes, bool newestIsTerminal)
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var older = kernel.CreateGoal(new GoalId("abc10000aaaaaaaaaaaaaaaaaaaaaaaa"), "Older, updated last");
+            var newer = kernel.CreateGoal(new GoalId("abc20000aaaaaaaaaaaaaaaaaaaaaaaa"), "Newer, updated first");
+            var created = new DateTimeOffset(2026, 9, 24, 0, 0, 0, TimeSpan.Zero);
+            var snapshot = kernel.ExportSnapshot();
+            kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with
+            {
+                Goals = snapshot.Goals.Select(goal =>
+                {
+                    var isOlder = goal.Id == older.Id.Value;
+                    var creationTime = isOlder || tiedCreationTimes ? created : created.AddDays(1);
+                    var updateTime = created.AddDays(isOlder ? 3 : 2);
+                    var first = goal.Timeline[0];
+                    return goal with
+                    {
+                        Status = !isOlder && newestIsTerminal ? GoalStatus.Completed : goal.Status,
+                        CreatedAt = creationTime,
+                        Timeline = [first with { OccurredAt = creationTime },
+                            first with { OccurredAt = updateTime, Message = "Later update" }]
+                    };
+                }).ToArray()
+            });
+            var repository = new ProbeStateRepository(kernel) { ThrowOnOutbox = true };
+            // The repository enumerates by last update: the older goal comes first.
+            var metadata = await repository.ListGoalMetadataAsync();
+            Xunit.Assert.Equal(older.Id.Value, metadata[0].Id);
+            if (tiedCreationTimes)
+                Xunit.Assert.Equal(metadata[0].CreatedAt, metadata[1].CreatedAt);
+            else
+                Xunit.Assert.True(metadata[0].CreatedAt < metadata[1].CreatedAt);
+            Xunit.Assert.True(StringComparer.Ordinal.Compare(metadata[0].UpdatedAt, metadata[1].UpdatedAt) > 0);
+            var expected = tiedCreationTimes ? older.Id : newer.Id;
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = kernel.GetGoal(older.Id);
+            var output = CaptureConsole(() =>
+            {
+                Xunit.Assert.True(CliReadOnlyCommandRunner.TryExecute(
+                    ["readiness"], repository, OrchestratorWorkspace.ForDirectory(root),
+                    new InMemoryModelProviderRegistry([]), null, ref agents, ref profiles, ref currentGoal,
+                    out var changed));
+                Xunit.Assert.False(changed);
+            });
+
+            Xunit.Assert.Equal(expected, currentGoal!.Id);
+            Xunit.Assert.Contains("Goal readiness", output, StringComparison.Ordinal);
+            Xunit.Assert.Equal(2, repository.ListGoalMetadataCount); // Arrangement + command.
+            Xunit.Assert.Equal(1, repository.LoadGoalsCount);
+            Xunit.Assert.Equal(new[] { expected.Value }, repository.LoadedGoalIds);
+            Xunit.Assert.Equal(0, repository.FullLoadAttempts);
+            Xunit.Assert.Equal(0, repository.ListOutboxMessagesCount);
+            Xunit.Assert.Equal(0, repository.OutboxClaimAttempts);
+            Xunit.Assert.Equal(0, repository.MutationAttempts);
+            Xunit.Assert.Equal(0, repository.SaveAttempts);
+            Xunit.Assert.Equal(0, repository.MergeSaveAttempts);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public void Readiness_Bare_NoGoals_PreservesErrorWithoutHydrationOrWrites()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var repository = new ProbeStateRepository(new AgentOrchestratorKernel()) { ThrowOnOutbox = true };
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = null;
+            var error = Xunit.Assert.Throws<InvalidOperationException>(() =>
+                CliPersistentStateRunner.ExecuteCommand(["readiness"], repository,
+                    OrchestratorWorkspace.ForDirectory(root), ref agents,
+                    new InMemoryModelProviderRegistry([]), ref profiles, ref currentGoal));
+
+            Xunit.Assert.Equal("Create a goal first with: goal <objective>", error.Message);
+            Xunit.Assert.Equal(1, repository.ListGoalMetadataCount);
+            Xunit.Assert.Equal(0, repository.LoadGoalsCount);
+            Xunit.Assert.Equal(0, repository.FullLoadAttempts);
+            Xunit.Assert.Equal(0, repository.ListOutboxMessagesCount);
+            Xunit.Assert.Equal(0, repository.OutboxClaimAttempts);
+            Xunit.Assert.Equal(0, repository.MutationAttempts);
+            Xunit.Assert.Equal(0, repository.SaveAttempts);
+            Xunit.Assert.Equal(0, repository.MergeSaveAttempts);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     [Xunit.Theory]
