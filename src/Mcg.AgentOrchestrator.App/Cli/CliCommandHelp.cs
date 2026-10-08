@@ -5,7 +5,7 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 internal static class CliCommandHelp
 {
     public const string ConductUsage = "Usage: conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>] [--watch [--poll-seconds <n>]], or conduct --loop [--max-iterations <n>] [--max-duration <seconds>] [--watch|--daemon] [--poll-seconds <n>] [--unscoped-stall-ticks <n>]";
-    public const string GoalUsage = "Usage: goal <objective> [--pipeline <auto|scout|five-role|developer-reviewer|developer-only>] [--simple] [--from-backlog] [--run --confirm-batch-start] [--backlog-item <id-prefix> --backlog-coverage <full|slice>] [--request-key <key>] | goal --text-file <path> [--pipeline <auto|scout|five-role|developer-reviewer|developer-only>] [--request-key <key>] | goal --brief-file <path> [--pipeline <auto|scout|five-role|developer-reviewer|developer-only>] [--request-key <key>]";
+    public const string GoalUsage = "Usage: goal <objective> [--pipeline <auto|scout|five-role|developer-reviewer|developer-only>] [--epic <id-or-title>] [--simple] [--from-backlog] [--run --confirm-batch-start] [--backlog-item <id-prefix> --backlog-coverage <full|slice>] [--request-key <key>] | goal --text-file <path> [--pipeline <auto|scout|five-role|developer-reviewer|developer-only>] [--epic <id-or-title>] [--request-key <key>] | goal --brief-file <path> [--pipeline <auto|scout|five-role|developer-reviewer|developer-only>] [--epic <id-or-title>] [--request-key <key>]";
     public const string SimpleGoalUsage = "Usage: simple-goal <objective> [--dispatch --confirm-dispatch-start] [--backlog-item <id-prefix> --backlog-coverage <full|slice>] [--request-key <key>] | simple-goal --text-file <path> | simple-goal --brief-file <path>";
     public const string BacklogIntakeUsage = "Usage: backlog-intake [filter...] [--create-goal|--create-simple-goal] [--force-reclaim] [--pipeline <auto|scout|five-role|developer-reviewer|developer-only>] [--backlog-item <id-prefix> --backlog-coverage <full|slice>] [--request-key <key>]";
     public const string AcceptanceUsage = "Usage: acceptance [goal-id-prefix] [--skip-verify] [--keep-workspace] [--no-record] [--autonomy <policy>]";
@@ -46,7 +46,7 @@ internal static class CliCommandHelp
     public const string ReassignAgentUsage = "Usage: reassign-agent <task-number> <agent-id>|<goal-prefix> <task-number> <agent-id>|--goal <goal-prefix> <task-number> <agent-id>";
     public const string BacklogListUsage = "Usage: backlog-list [--all] [--limit <n>] [--status <value>] [--text <pattern>|--text=<leading-dash-pattern>]";
     public const string BacklogTriageUsage = "Usage: backlog-triage [--limit <n>] [--stale-days <n>]";
-    public const string BacklogAddUsage = "Usage: backlog-add <title> [body] [--depends-on <id-prefix>] [--no-similar] | backlog-add --title <title> [--text-file <path>|--body-file <path>] [--depends-on <id-prefix>] [--no-similar] | backlog-add <title> --text-file <path> [--depends-on <id-prefix>] [--no-similar] | backlog-add <title> --body-file <path> [--depends-on <id-prefix>] [--no-similar]";
+    public const string BacklogAddUsage = "Usage: backlog-add <title> [body] [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar] | backlog-add --title <title> [--text-file <path>|--body-file <path>] [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar] | backlog-add <title> --text-file <path> [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar] | backlog-add <title> --body-file <path> [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar]";
     public const string BacklogUpdateUsage = "Usage: backlog-update <id-prefix> [--title <text>] [--description <text> | --text-file <path> | --body-file <path>] [--priority <value>] [--tags <csv>] [--status <open|done|superseded>]";
     public const string BacklogShowUsage = "Usage: backlog-show <id-prefix>";
     public const string BacklogAnnotateUsage = "Usage: backlog-annotate <id-prefix> <note> | backlog-annotate <id-prefix> --text-file <path>";
@@ -123,7 +123,7 @@ internal static class CliCommandHelp
     private static readonly string[] GoalOwnFlags =
     [
         "--pipeline", "--simple", "--from-backlog", "--run", "--confirm-batch-start",
-        "--backlog-item", "--backlog-coverage", "--request-key", "--text-file", "--brief-file",
+        "--backlog-item", "--backlog-coverage", "--request-key", "--text-file", "--brief-file", "--epic",
         ..GoalRoleOverrideFlags,
         ..HelpFlags
     ];
@@ -391,7 +391,7 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry BacklogAdd = new(
         BacklogAddUsage,
         "Add a backlog item. Prints advisory similarity pointers unless suppressed.",
-        ["--title", "--text-file", "--body-file", "--depends-on", "--no-similar", "--help", "-h"]);
+        ["--title", "--text-file", "--body-file", "--depends-on", "--no-similar", "--epic", "--help", "-h"]);
 
     private static readonly CommandHelpEntry BacklogUpdate = new(
         BacklogUpdateUsage,
