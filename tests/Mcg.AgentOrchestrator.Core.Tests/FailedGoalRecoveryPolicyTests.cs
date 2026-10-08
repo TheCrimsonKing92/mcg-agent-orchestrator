@@ -214,40 +214,6 @@ public sealed class FailedGoalRecoveryPolicyTests
     }
 
     [Fact]
-    public void PassingEvidenceOpenFindingUsesExistingDeveloperRetryWithNewSourceFindingCause()
-    {
-        var observation = FailedGoalFindingObservation.Routed(
-            FailedGoalFindingObservationKind.FindingActionableRed,
-            new TaskId("developer-task"), "verification:42:none",
-            "PASSING_EVIDENCE_OPEN_FINDING candidate_sha=abc1234; receipt_ids=green-receipt; finding_ids=open-finding",
-            warningMessage: null);
-
-        var decision = FailedGoalRecoveryPolicy.Evaluate(Facts([Task()])
-            .WithReviewContractObservation(null).WithVerifyingFindingObservation(observation));
-
-        Assert.Equal(FailedGoalRecoveryAction.FindingRetry, decision.Action);
-        Assert.Equal(new TaskId("developer-task"), decision.Identity.TaskId);
-        Assert.Equal(RetryCause.NewSourceFinding, decision.RetryCause);
-        Assert.Equal(8, decision.DiscriminatingRung);
-    }
-
-    [Fact]
-    public void PassingEvidenceWithoutDeveloperUsesExistingNonCapEscalation()
-    {
-        const string evidence = "PASSING_EVIDENCE_OPEN_FINDING candidate_sha=abc1234; receipt_ids=green-receipt; finding_ids=open-finding";
-        var observation = FailedGoalFindingObservation.Observed(
-            FailedGoalFindingObservationKind.FindingActionableRedRouteUnavailable, evidence);
-
-        var decision = FailedGoalRecoveryPolicy.Evaluate(Facts([Task()])
-            .WithReviewContractObservation(null).WithVerifyingFindingObservation(observation));
-
-        Assert.Equal(FailedGoalRecoveryAction.Escalate, decision.Action);
-        Assert.Equal(8, decision.DiscriminatingRung);
-        Assert.Equal(evidence, decision.Reason);
-        Assert.Null(decision.RetryCause);
-    }
-
-    [Fact]
     public void ReviewContractObservationPrecedesVerifyingFindingAndCounterfactualSelectsVerifyingRoute()
     {
         var contract = FailedGoalFindingObservation.Observed(

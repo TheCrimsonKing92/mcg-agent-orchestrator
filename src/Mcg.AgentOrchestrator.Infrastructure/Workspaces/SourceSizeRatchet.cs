@@ -125,7 +125,9 @@ internal static class SourceSizeRatchet
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.ReviewRecovery.cs", 461),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.LandingCompletion.cs", 692),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.AcceptanceCohortExecution.cs", 641),
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FindingEvidenceRequests.cs", 918),
+            // Goal 5a07b0d6 retains three orchestration lines carrying reattached receipt ids to the
+            // closure-first route; the reused-green branch owns this delivery handoff, not receipt selection.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FindingEvidenceRequests.cs", 921),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FailedGoalRecovery.cs", 369),
             // Goal 4ff31b70 (ConductorDriver size relief) moved parallel acceptance members unchanged to this partial.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.ParallelAcceptance.cs", 627), // def5cd48: planner conflict probe and existing-policy escalation.
@@ -387,7 +389,9 @@ internal static class SourceSizeRatchet
             // the planner conflict probe and its wiring. Measured 15297 across the same 70 partial files after integrating both.
             // Goal 47f09f71 adds nine routing lines across the same partial files so preflight, cohort,
             // focused evidence and acceptance share the workspace manifest; no resolver behavior enters this class.
-            new SourceClassCeiling("ConductorDriver", 15306, 70),
+            // Goal 5a07b0d6 extracts receipt qualification and closure selection into FindingEvidenceReceiptSelector.
+            // Measured 15290 lines across the existing 70 partial files; no extra headroom.
+            new SourceClassCeiling("ConductorDriver", 15290, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
