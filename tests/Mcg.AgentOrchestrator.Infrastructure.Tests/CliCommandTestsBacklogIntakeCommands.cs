@@ -1567,6 +1567,7 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         // Parallel-safe: the SQLite store and kernel are scoped to this test's unique temp root.
         var root = CreateTempDirectory();
         var workspace = CreateRefinedWorkspace(root);
+        BacklogStore.Setup(workspace.BacklogStorePath);
 
         var output = ExecuteCliAndCapture(["backlog-list"], new AgentOrchestratorKernel(), workspace);
 

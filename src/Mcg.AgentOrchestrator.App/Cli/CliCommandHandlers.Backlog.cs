@@ -14,7 +14,7 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
             var limit = ParseOptionalLimit(parts);
             var status = GetFlagValue(parts, "--status");
             var text = GetFlagValue(parts, "--text");
-            var store = new BacklogStore(context.Workspace.BacklogStorePath);
+            var store = BacklogStore.OpenReadOnly(context.Workspace.BacklogStorePath);
             var filtersByListingStatus = IsBacklogListingStatus(status);
             var items = ApplyBacklogListFilters(
                 store.ListAsync(includeAll: true).GetAwaiter().GetResult(),
@@ -191,7 +191,7 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
         case "backlog-show":
         {
             CliArgumentParser.RequirePartCount(parts, 2, "backlog-show <id-prefix>");
-            var store = new BacklogStore(context.Workspace.BacklogStorePath);
+            var store = BacklogStore.OpenReadOnly(context.Workspace.BacklogStorePath);
             var item = store.GetByIdPrefixAsync(parts[1]).GetAwaiter().GetResult()
                 ?? throw new InvalidOperationException($"No backlog item found with id prefix '{parts[1]}'.");
             Console.WriteLine($"Id:      {item.Id}");

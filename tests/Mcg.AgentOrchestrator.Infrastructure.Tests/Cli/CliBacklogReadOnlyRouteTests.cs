@@ -184,4 +184,120 @@ public sealed class CliBacklogReadOnlyRouteTests : CliTaskQueryTestSupport
         _ = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
         return new(workspace, kernel, prerequisite, dependent);
     }
+
+    [Xunit.Fact]
+    public async Task ListAndShow_SetUpWorkspace_PrintUnchangedOutputWithoutWriting()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var seed = await CreateSeedAsync(root);
+            var bytes = File.ReadAllBytes(seed.Workspace.BacklogStorePath);
+
+            var listing = RunBacklogRead(["backlog-list"], seed.Workspace, seed.Kernel);
+            Xunit.Assert.Contains($"{seed.Prerequisite.Id} | status=", listing);
+            Xunit.Assert.Contains($"| goal={LinkedGoalId} | title=Quartz query prerequisite", listing);
+            Xunit.Assert.Contains($"{seed.Dependent.Id} | status=", listing);
+            Xunit.Assert.Contains("| title=Quartz query dependent", listing);
+            Xunit.Assert.Contains($"Backlog list: 2 item(s) from backlog store{Environment.NewLine}", listing);
+
+            var shown = RunBacklogRead(["backlog-show", seed.Prerequisite.Id[..8]], seed.Workspace, seed.Kernel);
+            Xunit.Assert.Contains($"Id:      {seed.Prerequisite.Id}{Environment.NewLine}", shown);
+            Xunit.Assert.Contains($"Title:   Quartz query prerequisite{Environment.NewLine}", shown);
+            Xunit.Assert.Contains($"Status:  Open{Environment.NewLine}", shown);
+            Xunit.Assert.Contains($"Created: {seed.Prerequisite.CreatedAt:O}{Environment.NewLine}", shown);
+            Xunit.Assert.Contains($"Updated: {seed.Prerequisite.UpdatedAt:O}{Environment.NewLine}", shown);
+            Xunit.Assert.Contains($"Owner:   {LinkedGoalId}{Environment.NewLine}", shown);
+            Xunit.Assert.Contains("authority=authoritative", shown);
+            Xunit.Assert.Contains($"Dependents:{Environment.NewLine}- {seed.Dependent.Id}{Environment.NewLine}", shown);
+            Xunit.Assert.Contains($"Read linked goal claims{Environment.NewLine}", shown);
+            Xunit.Assert.Equal(bytes, File.ReadAllBytes(seed.Workspace.BacklogStorePath));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("backlog-list", false)]
+    [Xunit.InlineData("backlog-list", true)]
+    [Xunit.InlineData("backlog-show", false)]
+    [Xunit.InlineData("backlog-show", true)]
+    public void ListAndShow_MissingOrUnversionedBacklog_FailWithoutCreatingTables(
+        string verb, bool legacy)
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+            if (legacy)
+            {
+                using var connection = new Microsoft.Data.Sqlite.SqliteConnection(new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder
+                {
+                    DataSource = workspace.BacklogStorePath,
+                    Mode = Microsoft.Data.Sqlite.SqliteOpenMode.ReadWriteCreate,
+                    Pooling = false
+                }.ToString());
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = "CREATE TABLE backlog (id TEXT PRIMARY KEY, title TEXT NOT NULL)";
+                command.ExecuteNonQuery();
+            }
+            var bytes = legacy ? File.ReadAllBytes(workspace.BacklogStorePath) : null;
+            var schema = legacy ? ReadBacklogSchema(workspace.BacklogStorePath) : null;
+            var args = verb == "backlog-list" ? new[] { verb } : new[] { verb, "legacy" };
+
+            var error = Xunit.Assert.Throws<InvalidOperationException>(() =>
+                RunBacklogRead(args, workspace, new AgentOrchestratorKernel()));
+
+            Xunit.Assert.Equal($"Backlog store '{workspace.BacklogStorePath}' schema is Missing (expected version 1); run setup.", error.Message);
+            if (legacy)
+            {
+                Xunit.Assert.Equal(bytes, File.ReadAllBytes(workspace.BacklogStorePath));
+                Xunit.Assert.Equal(schema, ReadBacklogSchema(workspace.BacklogStorePath));
+                Xunit.Assert.DoesNotContain(schema!, row => row.StartsWith("store_schema_versions:", StringComparison.Ordinal));
+                Xunit.Assert.DoesNotContain(schema!, row => row.StartsWith("backlog_notes:", StringComparison.Ordinal));
+            }
+            else
+                Xunit.Assert.False(File.Exists(workspace.BacklogStorePath));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static string RunBacklogRead(string[] args, OrchestratorWorkspace workspace, AgentOrchestratorKernel kernel)
+    {
+        var repository = new ProbeStateRepository(kernel) { ThrowOnOutbox = true };
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        var output = CaptureConsole(() =>
+        {
+            Xunit.Assert.True(CliReadOnlyCommandRunner.TryExecute(args, repository, workspace,
+                new InMemoryModelProviderRegistry([]), null, ref agents, ref profiles, ref currentGoal, out var changed));
+            Xunit.Assert.False(changed);
+        });
+        AssertNoWriterAccess(repository);
+        return output;
+    }
+
+    private static string[] ReadBacklogSchema(string path)
+    {
+        using var connection = new Microsoft.Data.Sqlite.SqliteConnection(new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder
+        {
+            DataSource = path, Mode = Microsoft.Data.Sqlite.SqliteOpenMode.ReadOnly, Pooling = false
+        }.ToString());
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT name || ':' || coalesce(sql, '') FROM sqlite_schema ORDER BY name";
+        using var reader = command.ExecuteReader();
+        var rows = new List<string>();
+        while (reader.Read())
+            rows.Add(reader.GetString(0));
+        return rows.ToArray();
+    }
 }

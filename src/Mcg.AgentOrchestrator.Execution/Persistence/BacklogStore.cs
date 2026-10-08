@@ -79,17 +79,48 @@ public sealed record BacklogUnsupersedeResult(bool Changed, BacklogItem Item);
 public sealed class BacklogStore
 {
     private readonly string _dbPath;
+    private readonly bool _readOnly;
 
-    public BacklogStore(string dbPath)
+    public BacklogStore(string dbPath) : this(dbPath, readOnly: false)
+    {
+        Setup(dbPath);
+    }
+
+    private BacklogStore(string dbPath, bool readOnly)
     {
         _dbPath = dbPath;
-        EnsureSchema();
+        _readOnly = readOnly;
     }
+
+    public static BacklogStore OpenReadOnly(string dbPath)
+    {
+        if (!File.Exists(dbPath))
+            throw SchemaSetupRequired(dbPath, StoreSchemaState.Missing);
+
+        var store = new BacklogStore(dbPath, readOnly: true);
+        using var conn = store.OpenConnection();
+        var state = StoreSchemaVersions.Verify(conn, StoreSchemaRegistry.Backlog);
+        if (state != StoreSchemaState.Current)
+            throw SchemaSetupRequired(dbPath, state);
+        return store;
+    }
+
+    private static InvalidOperationException SchemaSetupRequired(string dbPath, StoreSchemaState state) =>
+        new($"Backlog store '{dbPath}' schema is {state} (expected version {StoreSchemaRegistry.Backlog.CurrentVersion}); run setup.");
 
     // Pooling=False matches the loop critical-path stores: a POOLED connection can be returned to the
     // pool still holding a WAL read/lock slot, so a later writer meets "database is locked" that
     // busy_timeout cannot wait out. Without it a backlog write concurrent with a reader could fail.
-    private string ConnectionString => $"Data Source={_dbPath};Mode=ReadWriteCreate;Pooling=False;";
+    private string ConnectionString => CreateConnectionString(_dbPath, _readOnly);
+
+    private static string CreateConnectionString(string dbPath, bool readOnly) => readOnly
+        ? new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false
+        }.ToString()
+        : $"Data Source={dbPath};Mode=ReadWriteCreate;Pooling=False;";
 
     // Bounded retry on a transient SQLITE_BUSY/LOCKED: busy_timeout (30s) handles the simple lock-wait,
     // but the deadlock-avoidance path can still surface an immediate BUSY; this turns that into a brief
@@ -124,13 +155,13 @@ public sealed class BacklogStore
         return conn;
     }
 
-    private void EnsureSchema()
+    public static void Setup(string dbPath)
     {
-        var directory = Path.GetDirectoryName(_dbPath);
+        var directory = Path.GetDirectoryName(dbPath);
         if (!string.IsNullOrEmpty(directory))
             Directory.CreateDirectory(directory);
 
-        using var conn = new SqliteConnection(ConnectionString);
+        using var conn = new SqliteConnection(CreateConnectionString(dbPath, readOnly: false));
         conn.Open();
         RunNonQuery(conn, "PRAGMA journal_mode=WAL");
         RunNonQuery(conn, "PRAGMA busy_timeout=30000");
@@ -145,10 +176,6 @@ public sealed class BacklogStore
                 source_goal_id TEXT
             )
             """);
-        AddColumnIfMissing(conn, "backlog", "priority", "TEXT");
-        AddColumnIfMissing(conn, "backlog", "tags", "TEXT NOT NULL DEFAULT ''");
-        AddColumnIfMissing(conn, "backlog", "superseded_by", "TEXT");
-        AddColumnIfMissing(conn, "backlog", "superseded_at", "TEXT");
         RunNonQuery(conn, """
             CREATE TABLE IF NOT EXISTS backlog_notes (
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -195,6 +222,21 @@ public sealed class BacklogStore
             )
             """);
         RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS idx_backlog_history_item_created ON backlog_history(backlog_item_id, created_at, id)");
+        RunNonQuery(conn, "BEGIN IMMEDIATE");
+        try
+        {
+            AddColumnIfMissing(conn, "backlog", "priority", "TEXT");
+            AddColumnIfMissing(conn, "backlog", "tags", "TEXT NOT NULL DEFAULT ''");
+            AddColumnIfMissing(conn, "backlog", "superseded_by", "TEXT");
+            AddColumnIfMissing(conn, "backlog", "superseded_at", "TEXT");
+            StoreSchemaVersions.UpgradeToCurrent(conn, StoreSchemaRegistry.Backlog);
+            RunNonQuery(conn, "COMMIT");
+        }
+        catch
+        {
+            RunNonQuery(conn, "ROLLBACK");
+            throw;
+        }
     }
 
     public async Task<BacklogItem> AddAsync(

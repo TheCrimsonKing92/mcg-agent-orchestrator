@@ -14,6 +14,8 @@ public static class StoreSetupRunner
         {
             [StoreSchemaRegistry.Portfolio.StoreName] = new(PortfolioStore.Setup,
                 directory => Path.Combine(directory, StoreSchemaRegistry.Portfolio.Database)),
+            [StoreSchemaRegistry.Backlog.StoreName] = new(BacklogStore.Setup,
+                directory => Path.Combine(directory, StoreSchemaRegistry.Backlog.Database)),
             [StoreSchemaRegistry.OperatorLessons.StoreName] = new(SqliteOperatorLessonStore.Setup,
                 directory => Path.Combine(directory, StoreSchemaRegistry.OperatorLessons.Database)),
             [StoreSchemaRegistry.OperatorEscapes.StoreName] = new(SqliteOperatorEscapeStore.Setup,

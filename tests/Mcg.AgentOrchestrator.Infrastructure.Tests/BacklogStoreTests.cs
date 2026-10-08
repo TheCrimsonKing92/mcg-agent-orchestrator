@@ -3,6 +3,7 @@ using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.Core;
 using Microsoft.Data.Sqlite;
 
+// Parallel-safe: each case owns a unique database directory and disables connection pooling.
 public sealed class BacklogStoreTests
 {
     // ── Store round-trip ──────────────────────────────────────────────────────
@@ -556,6 +557,257 @@ public sealed class BacklogStoreTests
         var longTitle = "This is a very long title that definitely exceeds sixty characters in total length";
         var id = BacklogStore.SlugId(longTitle);
         Assert.True(id.Length <= 60);
+    }
+
+    [Xunit.Fact]
+    public void Setup_MissingPath_CreatesDatabaseAndRecordsVersion1()
+    {
+        var path = Path.Combine(TempDb(), "nested", "backlog.db");
+        Assert.False(Directory.Exists(Path.GetDirectoryName(path)));
+
+        BacklogStore.Setup(path);
+
+        Assert.True(File.Exists(path));
+        using var connection = OpenSetupDatabase(path);
+        Assert.Equal(1, StoreSchemaVersions.Read(connection, "backlog"));
+    }
+
+    [Xunit.Fact]
+    public void Setup_SecondRun_PreservesFileSchemaAndVersionRows()
+    {
+        var path = TempDb();
+        BacklogStore.Setup(path);
+        using (var connection = OpenSetupDatabase(path))
+            RunSetupSql(connection, "UPDATE store_schema_versions SET applied_at = 'original'");
+        var schema = ReadSetupRows(path, "SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name");
+        var versions = ReadSetupRows(path, "SELECT * FROM store_schema_versions ORDER BY store_name");
+        var bytes = File.ReadAllBytes(path);
+
+        BacklogStore.Setup(path);
+
+        Assert.Equal(bytes, File.ReadAllBytes(path));
+        Assert.Equal(schema, ReadSetupRows(path, "SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name"));
+        Assert.Equal(versions, ReadSetupRows(path, "SELECT * FROM store_schema_versions ORDER BY store_name"));
+    }
+
+    [Xunit.Fact]
+    public async Task Setup_LegacyConstructorDatabase_PreservesRowsAndAddsVersion()
+    {
+        var path = TempDb();
+        SetupLegacyBacklog(path);
+        using (var connection = OpenSetupDatabase(path))
+        {
+            Assert.Null(StoreSchemaVersions.Read(connection, "backlog"));
+            RunSetupSql(connection, """
+                INSERT INTO backlog (id, title, body, status, created_at, updated_at)
+                VALUES ('legacy', 'Existing item', 'Original body', 'Open',
+                        '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')
+                """);
+        }
+        var schema = ReadSetupRows(path, "SELECT type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name");
+
+        BacklogStore.Setup(path);
+
+        using var current = OpenSetupDatabase(path);
+        Assert.Equal(1, StoreSchemaVersions.Read(current, "backlog"));
+        Assert.Equal(schema, ReadSetupRows(path,
+            "SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE name <> 'store_schema_versions' ORDER BY type, name"));
+        var item = Assert.Single(await BacklogStore.OpenReadOnly(path).ListAsync());
+        Assert.Equal("legacy", item.Id);
+        Assert.Equal("Existing item", item.Title);
+        Assert.Equal("Original body", item.Body);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("missing-file", StoreSchemaState.Missing)]
+    [Xunit.InlineData("unversioned", StoreSchemaState.Missing)]
+    [Xunit.InlineData("missing-record", StoreSchemaState.Missing)]
+    [Xunit.InlineData("older", StoreSchemaState.Older)]
+    [Xunit.InlineData("newer", StoreSchemaState.Newer)]
+    public void OpenReadOnly_IncompatibleDatabase_RequiresSetupWithoutWriting(
+        string scenario, StoreSchemaState state)
+    {
+        var path = scenario == "missing-file" ? Path.Combine(TempDb(), "absent", "backlog.db") : TempDb();
+        if (scenario == "unversioned")
+            SetupLegacyBacklog(path);
+        else if (scenario != "missing-file")
+        {
+            BacklogStore.Setup(path);
+            using var connection = OpenSetupDatabase(path);
+            RunSetupSql(connection, scenario == "missing-record"
+                ? "DELETE FROM store_schema_versions WHERE store_name = 'backlog'"
+                : $"UPDATE store_schema_versions SET version = {(scenario == "older" ? 0 : 2)} WHERE store_name = 'backlog'");
+        }
+        var bytes = File.Exists(path) ? File.ReadAllBytes(path) : null;
+
+        var error = Assert.Throws<InvalidOperationException>(() => BacklogStore.OpenReadOnly(path));
+
+        Assert.Equal($"Backlog store '{path}' schema is {state} (expected version 1); run setup.", error.Message);
+        if (scenario == "missing-file")
+        {
+            Assert.False(File.Exists(path));
+            Assert.False(Directory.Exists(Path.GetDirectoryName(path)));
+        }
+        else
+            Assert.Equal(bytes, File.ReadAllBytes(path));
+    }
+
+    [Xunit.Fact]
+    public async Task OpenReadOnly_CurrentDatabase_PreservesItemsFileAndVersionRows()
+    {
+        var path = TempDb();
+        var writable = new BacklogStore(path);
+        var prerequisite = await writable.AddAsync("Prerequisite", "Body", "source-goal");
+        var dependent = await writable.AddAsync("Dependent");
+        await writable.AppendNoteAsync(prerequisite.Id, "Receipt");
+        await writable.LinkAsync(prerequisite.Id, dependent.Id, BacklogLinkKind.Related);
+        await writable.AddDependencyAsync(dependent.Id, new(prerequisite.Id, BacklogDependencyTargetKind.Backlog));
+        await writable.CloseAsync(dependent.Id);
+        var open = await writable.ListAsync();
+        var all = await writable.ListAsync(includeAll: true);
+        Assert.Single(open);
+        Assert.Equal(2, all.Count);
+        var expected = (await writable.GetByExactIdAsync(prerequisite.Id))!;
+        Assert.Single(expected.Notes);
+        Assert.Single(expected.Links);
+        Assert.Single(expected.Dependents);
+        var versions = ReadSetupRows(path, "SELECT * FROM store_schema_versions ORDER BY store_name");
+        var bytes = File.ReadAllBytes(path);
+
+        var readOnly = BacklogStore.OpenReadOnly(path);
+        Assert.Equal(open.Select(ItemSnapshot), (await readOnly.ListAsync()).Select(ItemSnapshot));
+        Assert.Equal(all.Select(ItemSnapshot), (await readOnly.ListAsync(includeAll: true)).Select(ItemSnapshot));
+        Assert.Equal(ItemSnapshot(expected), ItemSnapshot((await readOnly.GetByIdPrefixAsync(prerequisite.Id[..8]))!));
+        Assert.Equal(ItemSnapshot(expected), ItemSnapshot((await readOnly.GetByExactIdAsync(prerequisite.Id))!));
+        Assert.Equal(bytes, File.ReadAllBytes(path));
+        Assert.Equal(versions, ReadSetupRows(path, "SELECT * FROM store_schema_versions ORDER BY store_name"));
+    }
+
+    private static string ItemSnapshot(BacklogItem item) => System.Text.Json.JsonSerializer.Serialize(item);
+
+    private static SqliteConnection OpenSetupDatabase(string path)
+    {
+        var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = path, Mode = SqliteOpenMode.ReadWrite, Pooling = false
+        }.ToString());
+        connection.Open();
+        return connection;
+    }
+
+    private static string[] ReadSetupRows(string path, string sql)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = path, Mode = SqliteOpenMode.ReadOnly, Pooling = false
+        }.ToString());
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        using var reader = command.ExecuteReader();
+        var rows = new List<string>();
+        while (reader.Read())
+        {
+            var values = new object[reader.FieldCount];
+            reader.GetValues(values);
+            rows.Add(System.Text.Json.JsonSerializer.Serialize(values));
+        }
+        return rows.ToArray();
+    }
+
+    private static void RunSetupSql(SqliteConnection connection, string sql)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.ExecuteNonQuery();
+    }
+
+    // Frozen constructor schema from ec2374d4e2dcbf7e0dc65d54b5c7e8a68627210f.
+    private static void SetupLegacyBacklog(string dbPath)
+    {
+        var directory = Path.GetDirectoryName(dbPath);
+        if (!string.IsNullOrEmpty(directory))
+            Directory.CreateDirectory(directory);
+
+        using var conn = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath, Mode = SqliteOpenMode.ReadWriteCreate, Pooling = false }.ToString());
+        conn.Open();
+        RunSetupSql(conn, "PRAGMA journal_mode=WAL");
+        RunSetupSql(conn, "PRAGMA busy_timeout=30000");
+        RunSetupSql(conn, """
+            CREATE TABLE IF NOT EXISTS backlog (
+                id             TEXT PRIMARY KEY,
+                title          TEXT NOT NULL,
+                body           TEXT NOT NULL,
+                status         TEXT NOT NULL,
+                created_at     TEXT NOT NULL,
+                updated_at     TEXT NOT NULL,
+                source_goal_id TEXT
+            )
+            """);
+        AddLegacyColumnIfMissing(conn, "backlog", "priority", "TEXT");
+        AddLegacyColumnIfMissing(conn, "backlog", "tags", "TEXT NOT NULL DEFAULT ''");
+        AddLegacyColumnIfMissing(conn, "backlog", "superseded_by", "TEXT");
+        AddLegacyColumnIfMissing(conn, "backlog", "superseded_at", "TEXT");
+        RunSetupSql(conn, """
+            CREATE TABLE IF NOT EXISTS backlog_notes (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                backlog_item_id TEXT NOT NULL,
+                created_at      TEXT NOT NULL,
+                text            TEXT NOT NULL,
+                FOREIGN KEY(backlog_item_id) REFERENCES backlog(id) ON DELETE CASCADE
+            )
+            """);
+        RunSetupSql(conn, "CREATE INDEX IF NOT EXISTS idx_backlog_notes_item_created ON backlog_notes(backlog_item_id, created_at, id)");
+        RunSetupSql(conn, """
+            CREATE TABLE IF NOT EXISTS backlog_links (
+                item1_id     TEXT NOT NULL,
+                item2_id     TEXT NOT NULL,
+                kind         TEXT NOT NULL,
+                canonical_id TEXT,
+                created_at   TEXT NOT NULL,
+                PRIMARY KEY(item1_id, item2_id),
+                FOREIGN KEY(item1_id) REFERENCES backlog(id) ON DELETE CASCADE,
+                FOREIGN KEY(item2_id) REFERENCES backlog(id) ON DELETE CASCADE
+            )
+            """);
+        RunSetupSql(conn, "CREATE INDEX IF NOT EXISTS idx_backlog_links_item2 ON backlog_links(item2_id)");
+        RunSetupSql(conn, """
+            CREATE TABLE IF NOT EXISTS backlog_dependencies (
+                sequence          INTEGER PRIMARY KEY AUTOINCREMENT,
+                dependent_id      TEXT NOT NULL,
+                prerequisite_id   TEXT NOT NULL,
+                prerequisite_kind TEXT NOT NULL,
+                created_at        TEXT NOT NULL,
+                UNIQUE(dependent_id, prerequisite_id),
+                FOREIGN KEY(dependent_id) REFERENCES backlog(id) ON DELETE CASCADE
+            )
+            """);
+        RunSetupSql(conn, "CREATE INDEX IF NOT EXISTS idx_backlog_dependencies_prerequisite ON backlog_dependencies(prerequisite_id, prerequisite_kind)");
+        RunSetupSql(conn, """
+            CREATE TABLE IF NOT EXISTS backlog_history (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                backlog_item_id TEXT NOT NULL,
+                action          TEXT NOT NULL,
+                created_at      TEXT NOT NULL,
+                details         TEXT NOT NULL,
+                FOREIGN KEY(backlog_item_id) REFERENCES backlog(id) ON DELETE CASCADE
+            )
+            """);
+        RunSetupSql(conn, "CREATE INDEX IF NOT EXISTS idx_backlog_history_item_created ON backlog_history(backlog_item_id, created_at, id)");
+    }
+
+    private static void AddLegacyColumnIfMissing(SqliteConnection conn, string table, string column, string definition)
+    {
+        using var pragma = conn.CreateCommand();
+        pragma.CommandText = $"PRAGMA table_info({table})";
+        using var reader = pragma.ExecuteReader();
+        while (reader.Read())
+        {
+            if (reader.GetString(1).Equals(column, StringComparison.OrdinalIgnoreCase))
+                return;
+        }
+
+        RunSetupSql(conn, $"ALTER TABLE {table} ADD COLUMN {column} {definition}");
     }
 
     private static string TempDb() => Path.Combine(CreateTempDirectory(), "backlog.db");

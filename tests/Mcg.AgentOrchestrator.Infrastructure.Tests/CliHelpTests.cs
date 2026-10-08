@@ -403,7 +403,7 @@ public sealed class CliHelpTests
             {
                 Xunit.Assert.Equal(0, result.ExitCode);
                 Xunit.Assert.Contains("Backlog list: 0 item(s) from backlog store", result.StandardOutput);
-            });
+            }, setupBacklog: true);
 
         await AssertCliSkipsOrphanWorktreeCleanupAsync(
             ["backlog-add", "ACL reset budget", "Keep backlog commands isolated."],
@@ -539,6 +539,7 @@ public sealed class CliHelpTests
     {
         var root = CreateTempDirectory();
         var workspace = OrchestratorWorkspace.ForDirectory(root);
+        BacklogStore.Setup(workspace.BacklogStorePath);
         var kernel = new AgentOrchestratorKernel();
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var providers = new InMemoryModelProviderRegistry([]);
@@ -882,7 +883,8 @@ public sealed class CliHelpTests
     private static async Task AssertCliSkipsOrphanWorktreeCleanupAsync(
         string[] args,
         Action<(int ExitCode, string StandardOutput, string StandardError)> assertResult,
-        bool seedBacklogItem = false)
+        bool seedBacklogItem = false,
+        bool setupBacklog = false)
     {
         var root = CreateTempDirectory();
         string? backlogId = null;
@@ -890,6 +892,8 @@ public sealed class CliHelpTests
         {
             InitializeGitRepository(root);
             using var orphanLock = CreateLockedOrphanWorktree(root);
+            if (setupBacklog)
+                BacklogStore.Setup(OrchestratorWorkspace.ForDirectory(root).BacklogStorePath);
             if (seedBacklogItem)
             {
                 var workspace = OrchestratorWorkspace.ForDirectory(root);

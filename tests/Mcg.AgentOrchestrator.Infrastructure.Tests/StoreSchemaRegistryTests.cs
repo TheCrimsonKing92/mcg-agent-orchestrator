@@ -23,7 +23,7 @@ public sealed class StoreSchemaRegistryTests
             Assert.False(string.IsNullOrWhiteSpace(entry.Database));
             Assert.False(string.IsNullOrWhiteSpace(entry.Family));
         });
-        Assert.Equal(new[] { StoreSchemaRegistry.Portfolio, StoreSchemaRegistry.OperatorLessons,
+        Assert.Equal(new[] { StoreSchemaRegistry.Portfolio, StoreSchemaRegistry.Backlog, StoreSchemaRegistry.OperatorLessons,
             StoreSchemaRegistry.OperatorEscapes }, entries.Where(entry => entry.CurrentVersion.HasValue).ToArray());
     }
 

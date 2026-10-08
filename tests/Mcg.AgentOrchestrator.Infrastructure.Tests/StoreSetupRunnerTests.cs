@@ -30,12 +30,17 @@ public sealed class StoreSetupRunnerTests
         Assert.Equal(StoreSchemaRegistry.Portfolio.StoreName, portfolio.StoreName);
         Assert.Equal(workspace.PortfolioStorePath, portfolio.DatabasePath);
         Assert.Equal(1, portfolio.Version);
+        var backlog = Assert.Single(results, result => result.StoreName == "backlog");
+        Assert.Equal(workspace.BacklogStorePath, backlog.DatabasePath);
+        Assert.Equal(1, backlog.Version);
         using var connection = Open(workspace.PortfolioStorePath, SqliteOpenMode.ReadOnly);
         Assert.Equal(1, StoreSchemaVersions.Read(connection, portfolio.StoreName));
         Assert.All(Directory.GetFiles(workspace.OrchestratorDirectory), path =>
             Assert.Contains(Path.GetFileName(path), new[] { "portfolio.db", "portfolio.db-wal", "portfolio.db-shm",
+                "backlog.db", "backlog.db-wal", "backlog.db-shm",
                 "operator-lessons.db", "operator-escapes.db" }));
         Assert.Empty(await PortfolioStore.OpenReadOnly(workspace.PortfolioStorePath).ListProjectsAsync());
+        Assert.Empty(await BacklogStore.OpenReadOnly(workspace.BacklogStorePath).ListAsync());
         Assert.Equal(workspace.OperatorLessonsStorePath,
             Assert.Single(results, result => result.StoreName == "operator-lessons").DatabasePath);
         Assert.Equal(workspace.OperatorEscapesStorePath,
