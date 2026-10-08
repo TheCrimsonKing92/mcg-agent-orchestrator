@@ -26,20 +26,23 @@ internal sealed class SliceBatchParentExecutionGuard(
 
     internal static string? TryDescribeStreamCompleteHold(Goal goal)
     {
-        if (goal.SliceBatchParentId is null ||
-            goal.Status is not (GoalStatus.Verified or GoalStatus.Verifying) ||
-            !AcceptancePrecheck.HasCompletedPassedVerificationForAllTasks(goal))
+        if (!IsStreamComplete(goal))
         {
             return null;
         }
 
-        return $"Slice-batch child {goal.Id.Value[..8]} stream is complete and waits for composition into parent goal {goal.SliceBatchParentId.Value}.";
+        return $"Slice-batch child {goal.Id.Value[..8]} stream is complete and waits for composition into parent goal {goal.SliceBatchParentId!.Value}.";
     }
+
+    internal static bool IsStreamComplete(Goal goal) =>
+        goal.SliceBatchParentId is not null &&
+        goal.Status is GoalStatus.Verified or GoalStatus.Verifying &&
+        AcceptancePrecheck.HasCompletedPassedVerificationForAllTasks(goal);
 
     internal static bool AreAllChildrenStreamComplete(Goal parent, IReadOnlyCollection<Goal> children) =>
         parent.SliceBatchParentId is null && children.Count > 0 &&
         children.All(child => child.SliceBatchParentId == parent.Id &&
-            TryDescribeStreamCompleteHold(child) is not null);
+            IsStreamComplete(child));
 
     internal static string? TryDescribeCompositionHold(Goal parent, StreamCompositionResult result)
     {

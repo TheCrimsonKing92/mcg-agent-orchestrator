@@ -312,6 +312,7 @@ private static bool HandlePlan(CliExecutionContext context, IReadOnlyList<string
         context.CurrentGoal = parent;
         Console.WriteLine($"Created dormant slice-batch parent {parent.Id.Value}.");
 
+        var childIds = new Dictionary<string, GoalId>(StringComparer.OrdinalIgnoreCase);
         foreach (var node in dagPlan.Nodes)
         {
             var child = GoalLifecycleCommands.CreateDormantGoal(
@@ -322,6 +323,16 @@ private static bool HandlePlan(CliExecutionContext context, IReadOnlyList<string
                 context.Providers,
                 context.EventWriter,
                 parent.Id);
+            childIds[node.Id] = child.Id;
+        }
+
+        foreach (var node in dagPlan.Nodes)
+            foreach (var depId in node.DependsOn)
+                context.Kernel.SetGoalDependency(childIds[node.Id], childIds[depId]);
+
+        foreach (var node in dagPlan.Nodes)
+        {
+            var child = context.Kernel.GetGoal(childIds[node.Id]);
             GoalLifecycleCommands.ActivateSliceBatchChild(context.Kernel, context.Agents, child);
             Console.WriteLine(
                 $"Created and assigned slice-batch child {child.Id.Value} for plan node {node.Id}; it is dispatch-eligible.");

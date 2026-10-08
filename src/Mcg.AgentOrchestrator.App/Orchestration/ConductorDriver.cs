@@ -1017,7 +1017,7 @@ internal sealed partial class ConductorDriver
                     ? null
                     : GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktreePath);
             },
-            kernel.RecordGoalPolicyDecision);
+            kernel.RecordGoalPolicyDecision, new SliceBatchSiblingDependencyCoordinator(dir));
         SliceBatchParentExecutionGuard = new SliceBatchParentExecutionGuard(() => kernel.Goals);
         _isVerificationGateSatisfied = goal => kernel.BuildVerificationGate(goal.Id).IsSatisfied;
         _gateReadyCandidateProjector = GateReadyCandidateProjector.CreateForRepository(dir);

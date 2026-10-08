@@ -46,12 +46,12 @@ internal static class GoalDagDecompositionPlanner
           Scope confidence: precise
           Includes:
           - <repository-relative path>
-        - "dependsOn": an empty array
-        Rules: use 2-4 nodes, no dependency edges, and precise repository paths that do not overlap between nodes.
+        - "dependsOn": list that sibling's id in "dependsOn" whenever this node uses a symbol, API, path or contract that the sibling introduces. Use an empty array only for truly independent nodes.
+        Rules: use 2-4 nodes, no cycles or self-references, dependency ids must name other nodes in this list, and precise repository paths must not overlap between nodes.
         Direction: {{direction}}
         Example:
         ```json
-        [{"id":"g1","objective":"Implement model changes.\n\nTarget files/scopes:\nScope confidence: precise\nIncludes:\n- src/Product/Model.cs","dependsOn":[]},{"id":"g2","objective":"Implement CLI changes.\n\nTarget files/scopes:\nScope confidence: precise\nIncludes:\n- src/Product/Cli.cs","dependsOn":[]}]
+        [{"id":"g1","objective":"Introduce the Product model contract.\n\nTarget files/scopes:\nScope confidence: precise\nIncludes:\n- src/Product/Model.cs","dependsOn":[]},{"id":"g2","objective":"Implement CLI changes using the Product contract introduced by g1.\n\nTarget files/scopes:\nScope confidence: precise\nIncludes:\n- src/Product/Cli.cs","dependsOn":["g1"]}]
         ```
         """;
 
@@ -108,9 +108,13 @@ internal static class GoalDagDecompositionPlanner
         {
             foreach (var dependency in node.DependsOn)
             {
-                errors.Add($"Slice-batch node '{node.Id}' has forbidden dependency edge '{node.Id} -> {dependency}'.");
+                if (dependency.Equals(node.Id, StringComparison.OrdinalIgnoreCase) ||
+                    !plan.Nodes.Any(other => other.Id.Equals(dependency, StringComparison.OrdinalIgnoreCase)))
+                    errors.Add($"Slice-batch node '{node.Id}' has invalid dependency edge '{node.Id} -> {dependency}'.");
             }
         }
+
+        errors.AddRange(FindHiddenSiblingDependencies(plan));
 
         var scopes = new List<SliceBatchScope>();
         foreach (var node in plan.Nodes)
@@ -156,6 +160,73 @@ internal static class GoalDagDecompositionPlanner
         }
 
         return plan with { ValidationErrors = errors };
+    }
+
+    private static readonly string[] SiblingDependencyPhrases =
+    [
+        "in parallel with", "in parallel against", "built alongside", "at the same time as",
+        "codes against", "code against", "depends on", "introduced by", "provided by", "from the sibling"
+    ];
+
+    private static IEnumerable<string> FindHiddenSiblingDependencies(GoalDagPlan plan)
+    {
+        var texts = plan.Nodes.Select(node => (Node: node, Text: SplitScopeText(node.Objective))).ToArray();
+        foreach (var (node, text) in texts)
+        {
+            var siblings = texts.Where(other => !other.Node.Id.Equals(node.Id, StringComparison.OrdinalIgnoreCase)).ToArray();
+            var identifiedSibling = false;
+            foreach (var (sibling, siblingText) in siblings)
+            {
+                var matched = ContainsLiteral(text.OutsideIncludes, sibling.Id) ? sibling.Id :
+                    siblingText.Paths.FirstOrDefault(path => ContainsLiteral(text.OutsideIncludes, path));
+                if (matched is null)
+                    continue;
+                identifiedSibling = true;
+                if (!node.DependsOn.Contains(sibling.Id, StringComparer.OrdinalIgnoreCase))
+                    yield return $"Slice-batch node '{node.Id}' mentions '{matched}' from sibling '{sibling.Id}' without declaring dependsOn '{sibling.Id}'.";
+            }
+
+            // A phrase can describe consumption without giving the sibling's id or file path.
+            var phrase = SiblingDependencyPhrases.FirstOrDefault(value =>
+                text.OutsideIncludes.Contains(value, StringComparison.OrdinalIgnoreCase));
+            if (!identifiedSibling && phrase is not null && node.DependsOn.Count == 0)
+            {
+                var siblingName = siblings.Length == 1 ? siblings[0].Node.Id : "unidentified sibling";
+                yield return $"Slice-batch node '{node.Id}' mentions '{phrase}' from sibling '{siblingName}' without declaring dependsOn.";
+            }
+        }
+    }
+
+    private static bool ContainsLiteral(string text, string literal) =>
+        !string.IsNullOrWhiteSpace(literal) && Regex.IsMatch(text,
+            $@"(?<![\w/-]){Regex.Escape(literal.Replace('\\', '/'))}(?![\w/-])",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    private static (string OutsideIncludes, IReadOnlyList<string> Paths) SplitScopeText(string objective)
+    {
+        var outside = new List<string>();
+        var paths = new List<string>();
+        var inIncludes = false;
+        foreach (var line in objective.ReplaceLineEndings("\n").Split('\n'))
+        {
+            var trimmed = line.Trim();
+            if (trimmed.Equals(BacklogIntakePlanner.ScopeIncludesHeadingLine, StringComparison.Ordinal))
+            {
+                inIncludes = true;
+                continue;
+            }
+            if (inIncludes && (trimmed.StartsWith("- ", StringComparison.Ordinal) ||
+                               trimmed.StartsWith("* ", StringComparison.Ordinal)))
+            {
+                paths.Add(trimmed[2..].Trim().Trim('`').Replace('\\', '/'));
+                continue;
+            }
+            if (inIncludes && trimmed.Length == 0)
+                continue;
+            inIncludes = false;
+            outside.Add(line.Replace('\\', '/'));
+        }
+        return (string.Join('\n', outside), paths);
     }
 
     private static bool ContainsDeclarationLine(string objective, string declaration) =>

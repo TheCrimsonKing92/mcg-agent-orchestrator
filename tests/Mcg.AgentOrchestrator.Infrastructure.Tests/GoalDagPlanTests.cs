@@ -294,16 +294,16 @@ public sealed class GoalDagPlanTests
         Assert.Contains("found 1", exception.Message, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact(DisplayName = "Cli_Plan_SliceBatch_DependencyEdge_RejectedAtomically")]
-    public void CliPlanSliceBatchDependencyEdgeRejectedAtomically()
+    [Xunit.Fact]
+    public void CliPlanSliceBatchUnknownDependencyRejectedAtomically()
     {
         var json = SliceBatchJson(
             SliceObjective("g1", "src/FeatureA/A.cs"),
-            SliceObjective("g2", "src/FeatureB/B.cs", "g1"));
+            SliceObjective("g2", "src/FeatureB/B.cs", "missing"));
         var (exception, kernel) = ConfirmInvalidSliceBatch(json);
 
         Assert.Empty(kernel.Goals);
-        Assert.Contains("g2 -> g1", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("references unknown node 'missing'", exception.Message, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "Cli_Plan_SliceBatch_MissingScope_RejectedAtomically")]
