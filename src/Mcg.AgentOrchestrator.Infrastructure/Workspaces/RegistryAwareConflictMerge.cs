@@ -109,6 +109,10 @@ internal static class RegistryAwareConflictMerge
                 }
             }
         }
+        // Rendering uses base order; reordered layout anchors would attach sections to the wrong rows.
+        // Include array-start anchors so swapping whole collections also declines.
+        if (!layout.Order.Where(baseKeys.Contains).SequenceEqual(
+                baseOrder.Where(layout.Skeleton.ContainsKey), StringComparer.Ordinal)) return null;
         // A deleted layout anchor can move its closing section before the other side's additions.
         // Decline rather than emitting entries outside the array that owned them in the base.
         if (baseOrder.Any(key => !layout.Skeleton.ContainsKey(key) &&

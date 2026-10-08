@@ -206,6 +206,33 @@ public sealed class GoalWorktreeTestsRebaseRegistryAwareMerge
     [InlineData(false, false)]
     [InlineData(true, true)]
     [InlineData(false, true)]
+    public void ReorderedLayoutAnchors_WithOtherSideChange_Declines(bool mainLayout, bool swapArrays)
+    {
+        var baseline = Registry(Row(A, 10) + Row(B, 10) + Row(C, 10), ClassRow(10));
+        var layout = Registry(Row(C, 10) + Row(A, 10) + Row(B, 10), ClassRow(10));
+        if (swapArrays)
+        {
+            var sizeStart = baseline.IndexOf("    internal static SourceSizeCeiling[]", StringComparison.Ordinal);
+            var classStart = baseline.IndexOf("    internal static SourceClassCeiling[]", StringComparison.Ordinal);
+            var trailerStart = baseline.LastIndexOf("}\n", StringComparison.Ordinal);
+            layout = baseline[..sizeStart] + baseline[classStart..trailerStart] +
+                baseline[sizeStart..classStart] + baseline[trailerStart..];
+        }
+        layout = layout.Replace("// file header", "// changed header", StringComparison.Ordinal);
+        var other = Registry(Row(A, 10) + Row(B, 10) + Row(C, 12), ClassRow(10));
+        using var fixture = new AdditiveConflictGitFixture([
+            new(SourceSizeRatchet.SourcePath, baseline, mainLayout ? layout : other, mainLayout ? other : layout),
+            Guard(A), Guard(B), Guard(C)
+        ]);
+
+        AssertRefused(fixture, "non-empty-base");
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    [InlineData(false, true)]
     public void OneSidedNonEntryChange_MergesWithEntryChanges(bool mainLayout, bool trailer)
     {
         string ChangeLayout(string text) => trailer ? text + "// changed trailer\n"
