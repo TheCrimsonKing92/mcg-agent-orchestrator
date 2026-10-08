@@ -6,12 +6,13 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 internal static class CliStatusQueryCommand
 {
     internal static bool IsStatusQueryCommand(IReadOnlyList<string> args) =>
-        args.Count == 2 &&
+        (args.Count == 1 && args[0].Equals("status", StringComparison.OrdinalIgnoreCase)) ||
+        (args.Count == 2 &&
         (args[0].Equals("status", StringComparison.OrdinalIgnoreCase) ||
          args[0].Equals("monitor", StringComparison.OrdinalIgnoreCase)) &&
         !string.IsNullOrWhiteSpace(args[1]) &&
         !args[1].StartsWith("-", StringComparison.Ordinal) &&
-        !CliCommandHelp.IsCommandSpecificHelp(args);
+        !CliCommandHelp.IsCommandSpecificHelp(args));
 
     internal static void Execute(
         IReadOnlyList<string> args,
@@ -23,6 +24,9 @@ internal static class CliStatusQueryCommand
         ref WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal)
     {
+        if (args.Count == 1)
+            args = [args[0], CliCurrentGoalSelector.Select(stateQueries, currentGoal?.Id).Value];
+
         var matches = stateQueries.ListGoalIdStatusesAsync().GetAwaiter().GetResult()
             .Where(goal => goal.Id.StartsWith(args[1], StringComparison.OrdinalIgnoreCase))
             .ToArray();

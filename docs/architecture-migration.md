@@ -11,7 +11,7 @@ landed; remaining boundaries are recorded under [Status — 2026-10-07](#status-
 
 | Stage | Delivered architectural boundary | Status (2026-10-07) |
 |---|---|---|
-| Queries | Inspection uses a read capability, no writer/outbox draining, bounded goal reads and compatible CLI behavior | **Partial.** `task`/`tasks` first landed (`7c57509f`, `6497eb1c7`); `attention` bare/list/show and `next --full <goal>` moved at operator commit `45f739e42` (no recorded goal id). Read-route slices: `d0ffaaaf` (`4f32e6462`), `b0b43e54` (`4501fae7c`), `3404f2dd` (`d51f73a63`), `5d1aad98` (`4aa722028`), `64b8636e` (`cd63ec985`), goal-prefixed monitor `83ef284d` (`17629905c`), retention-plan/supervisor `fa7bcf2f` (`0a4c7c76d`), goal-diagnostics `d02cb662` (`7537e59d7`). Narrower loads/locks: `7b3d07c1` (`62a487709`), `3ee8f004` (`6af24985e`), `10abca19` (`d0318b464`), `d21e1885` (`22e29af4d`), `5dcd1653` (`b7b2658a2`), `8d69ea4c` (`6f03863dc`); query classification guard `72f7af67` (`0c4095428`). Prefixed and bare `readiness` are served read-only; bare readiness keeps the session current goal when its id is present in metadata, otherwise selects the newest-created goal with a stable enumeration-order tie-break, and loads only that goal. Only `readiness-repair` repairs readiness. Bare `status`, `next` without `--full`, other writer-path reads and startup hydration remain; source boundaries are cited below. |
+| Queries | Inspection uses a read capability, no writer/outbox draining, bounded goal reads and compatible CLI behavior | **Partial.** `task`/`tasks` first landed (`7c57509f`, `6497eb1c7`); `attention` bare/list/show and `next --full <goal>` moved at operator commit `45f739e42` (no recorded goal id). Read-route slices: `d0ffaaaf` (`4f32e6462`), `b0b43e54` (`4501fae7c`), `3404f2dd` (`d51f73a63`), `5d1aad98` (`4aa722028`), `64b8636e` (`cd63ec985`), goal-prefixed monitor `83ef284d` (`17629905c`), retention-plan/supervisor `fa7bcf2f` (`0a4c7c76d`), goal-diagnostics `d02cb662` (`7537e59d7`). Narrower loads/locks: `7b3d07c1` (`62a487709`), `3ee8f004` (`6af24985e`), `10abca19` (`d0318b464`), `d21e1885` (`22e29af4d`), `5dcd1653` (`b7b2658a2`), `8d69ea4c` (`6f03863dc`); query classification guard `72f7af67` (`0c4095428`). Prefixed and bare `readiness`, `status` and `next` are served read-only; bare forms share `CliCurrentGoalSelector`, keeping the session current goal when its id is present in metadata, otherwise selecting the newest-created goal (including terminal goals) with a stable enumeration-order tie-break, and loading only that goal. Bare `next` follows the prefix path's existing decline rules. Only `readiness-repair` repairs readiness. Tasks-only `status`, autonomy `next`, bare `monitor`, other writer-path reads and startup hydration remain; source boundaries are cited below. |
 | Transitions | Typed lifecycle commands, goal-version conflict handling, atomic state/outbox writes, truthful committed outcomes | **Done.** Unpark (`06b62ff8`, `ac09af58`) and recovery utility (`1426d14b`, `0bd22b45`) remain landed. Goal-scoped versioned lifecycle transitions, atomic effect intents and truthful outcomes landed through `63470c38` (`cfef3b639`), `940fd3c1` (`d561ef23f`), `2c8b46ab` (`10ef02c47`), `65ab075f` (`24f7c9db9`), `3e3c42d6` (`ce88622de`) and `5330f7f6` (`e7d02a758`). Only non-lifecycle verbs reach the untransacted fallback; source-backed residuals are listed below. |
 | Application | UI-free dispatch/advancement/task operations; dashboard and CLI adapt shared typed results | **Done.** `f5db9754` landed as `adb57a8f0` (2026-09-15): application-owned dispatch, advancement and task operations; old `GoalManagementCommandService.Dispatches.cs` deleted; `ApplicationBoundaryConventionTests` forbid forwarding back. |
 | Acceptance | Attempt identity/lifecycle/evidence belongs to an attempt owner; verifier composes separately owned build, invocation, scheduling and adjudication | **Partial.** Attempt ownership (`6032a3d4`, `209400a8b`) and verifier slices 1–7 remain landed. Build-phase owner: `1c226573` (`57cdd1c43`); TRX taxonomy relocation: `f67b2348` (`5b12c506a`); SDK console rule: `1e66a816` (`0c39b309b`). Failure-cause adjudication: `9797ec59` (`ef8e8b259`, `9263fd56d`); overlapped batch scheduler: `8071fdac` (`1e2c65b06`, `34c38a7b2`), integrated by `c2b8cbd36`. Invocation remains verifier-owned; the seven earlier slices and source trace are listed below. |
@@ -45,17 +45,17 @@ and `f392f031` have landed since the premise; `01e5271b` is in flight, with no l
 **Queries — partial.** `task`/`tasks` landed with `7c57509f` (`6497eb1c7`); `attention` bare/list/show and
 `next --full <goal>` moved at `45f739e42` (operator commit; no goal id recorded), as the predicates in
 `src/Mcg.AgentOrchestrator.App/Cli/CliAttentionQueryCommand.cs:8-13` and
-`src/Mcg.AgentOrchestrator.App/Cli/CliNextFullQueryCommand.cs:11-17` confirm. Since 10-03:
+`src/Mcg.AgentOrchestrator.App/Cli/CliNextFullQueryCommand.cs:11-23` confirm. Since 10-03:
 
 - Read-route slices: `d0ffaaaf` (`4f32e6462`), `b0b43e54` (`4501fae7c`), `3404f2dd` (`d51f73a63`),
   `5d1aad98` (`4aa722028`), `64b8636e` (`cd63ec985`). The route list is
   `src/Mcg.AgentOrchestrator.App/Cli/CliReadOnlyCommandRunner.cs:8-24`.
 - Goal-prefixed `monitor`: `83ef284d` (`17629905c`),
-  `src/Mcg.AgentOrchestrator.App/Cli/CliStatusQueryCommand.cs:8-14`;
+  `src/Mcg.AgentOrchestrator.App/Cli/CliStatusQueryCommand.cs:8-15`;
   `retention-plan`/`supervisor`: `fa7bcf2f` (`0a4c7c76d`),
   `src/Mcg.AgentOrchestrator.App/Cli/CliSingleGoalReportQueryCommand.cs:13-18`;
   `goal-diagnostics`: `d02cb662` (`7537e59d7`),
-  `src/Mcg.AgentOrchestrator.App/Cli/CliNextFullQueryCommand.cs:15-16`.
+  `src/Mcg.AgentOrchestrator.App/Cli/CliNextFullQueryCommand.cs:16-23`.
 - Narrower loads and locks: `7b3d07c1` (`62a487709`), `3ee8f004` (`6af24985e`), `10abca19` (`d0318b464`),
   `d21e1885` (`22e29af4d`), `5dcd1653` (`b7b2658a2`), `8d69ea4c` (`6f03863dc`).
   Query classification guard `72f7af67` (`0c4095428`) exposes `QueryOnlyVerbs` at
@@ -65,8 +65,15 @@ and `f392f031` have landed since the premise; `01e5271b` is in flight, with no l
   including terminal goals, with enumeration order breaking ties. It loads only that goal for the report
   (`src/Mcg.AgentOrchestrator.App/Cli/CliReadinessQueryCommand.cs`).
   `readiness-repair` is the only readiness form that repairs.
-- Remaining writer-path reads: bare `status` retains current-goal resolution; `next` without `--full` runs repairing sweeps
-  (`src/Mcg.AgentOrchestrator.App/Cli/CliCommandHandlers.Goals.cs:1063-1092,1327-1356`). Goal-prefixed
+- Bare `status` and bare `next` are served read-only through `CliCurrentGoalSelector`, sharing bare readiness's
+  session preference, newest-created ordering (including terminal goals) and stable enumeration-order tie-break.
+  They load only the selected goal and print the matching prefix form's output
+  (`src/Mcg.AgentOrchestrator.App/Cli/CliStatusQueryCommand.cs:8-49`,
+  `src/Mcg.AgentOrchestrator.App/Cli/CliNextFullQueryCommand.cs:11-76`). Bare `next` retains the prefix path's
+  declines for a missing items store, a missing selected goal, actionable sweep blockers or stale sweep attention.
+- Remaining writer-path reads: `status [goal] --tasks-only`, bare `monitor`, and `next <goal>` with
+  `--autonomy`/`--autonomy-policy`; declined prefix/bare `next` still falls back to repairing sweeps
+  (`src/Mcg.AgentOrchestrator.App/Cli/CliCommandHandlers.Goals.cs:1047-1076,1360-1401`). Goal-prefixed
   `goal-recovery`, `dogfood-eval` and `failure-triage`
   (`src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs:760-787`), and goal-prefixed
   `goal-timing` (`src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs:743-754`), are absent from the

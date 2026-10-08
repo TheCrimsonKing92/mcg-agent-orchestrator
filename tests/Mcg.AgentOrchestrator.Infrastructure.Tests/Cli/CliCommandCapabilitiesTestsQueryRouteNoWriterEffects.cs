@@ -14,7 +14,7 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteNoWriterEffects : CliTa
         {
             ["tasks"] = [["tasks"]],
             ["task"] = [["task", "abc10000"]],
-            ["status"] = [["status", "abc10000"]],
+            ["status"] = [["status", "abc10000"], ["status"]],
             ["readiness"] = [["readiness", "abc10000"], ["readiness"]],
             ["goals"] = [["goals"]],
             ["failure-clusters"] = [["failure-clusters"]],
@@ -29,7 +29,7 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteNoWriterEffects : CliTa
             ["backlog-similar"] = [["backlog-similar", "query"]],
             ["goal-events"] = [["goal-events", "abc10000"]],
             ["timeline"] = [["timeline", "abc10000"]],
-            ["next"] = [["next", "--full", "abc10000"], ["next", "abc10000"]]
+            ["next"] = [["next", "--full", "abc10000"], ["next", "abc10000"], ["next"]]
         };
 
     [Fact]
@@ -123,9 +123,9 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteNoWriterEffects : CliTa
             Goal? currentGoal = null;
             CaptureConsole(() =>
             {
-                // Bare status uses the writer scope and drains without opening a transaction.
+                // Tasks-only status uses the writer scope and drains without opening a transaction.
                 Assert.False(CliPersistentStateRunner.ExecuteCommand(
-                    ["status"], repository, workspace, ref agents, new InMemoryModelProviderRegistry([]),
+                    ["status", "abc10000", "--tasks-only"], repository, workspace, ref agents, new InMemoryModelProviderRegistry([]),
                     ref profiles, ref currentGoal));
             });
 
@@ -144,7 +144,12 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteNoWriterEffects : CliTa
     [Fact]
     public void WriterPathForms_Execution_ReadOnlyRunnerDeclines()
     {
-        string[][] forms = [["status"]];
+        string[][] forms =
+        [
+            ["status", "abc10000", "--tasks-only"],
+            ["status", "--tasks-only"],
+            ["next", "abc10000", "--autonomy", "conservative"]
+        ];
         foreach (var args in forms)
         {
             var root = CreateTempDirectory();

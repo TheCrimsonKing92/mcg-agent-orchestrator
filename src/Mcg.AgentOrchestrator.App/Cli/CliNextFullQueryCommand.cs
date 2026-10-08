@@ -9,8 +9,9 @@ internal static class CliNextFullQueryCommand
     private const string SweepBlockerPrefix = "terminal-sweep-blocker:";
 
     internal static bool IsNextPrefixQueryCommand(IReadOnlyList<string> args) =>
-        args.Count == 2 && args[0].Equals("next", StringComparison.OrdinalIgnoreCase) &&
-        !string.IsNullOrWhiteSpace(args[1]) && !args[1].StartsWith("-", StringComparison.Ordinal);
+        (args.Count == 1 && args[0].Equals("next", StringComparison.OrdinalIgnoreCase)) ||
+        (args.Count == 2 && args[0].Equals("next", StringComparison.OrdinalIgnoreCase) &&
+         !string.IsNullOrWhiteSpace(args[1]) && !args[1].StartsWith("-", StringComparison.Ordinal));
 
     internal static bool IsNextFullQueryCommand(IReadOnlyList<string> args) =>
         ((args.Count == 3 && args[0].Equals("next", StringComparison.OrdinalIgnoreCase) &&
@@ -32,6 +33,9 @@ internal static class CliNextFullQueryCommand
         ref Goal? currentGoal,
         IClock? diagnosticsClock = null)
     {
+        if (args.Count == 1)
+            args = [args[0], CliCurrentGoalSelector.Select(stateQueries, currentGoal?.Id).Value];
+
         var itemsDb = Path.Combine(workspace.OrchestratorDirectory, "collaboration-items.db");
         if (!File.Exists(itemsDb))
             return false;

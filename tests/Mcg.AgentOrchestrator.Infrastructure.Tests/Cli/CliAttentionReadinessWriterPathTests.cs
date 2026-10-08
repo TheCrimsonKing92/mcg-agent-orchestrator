@@ -130,6 +130,158 @@ public sealed class CliAttentionReadinessWriterPathTests : CliTaskQueryTestSuppo
         Xunit.Assert.Equal(0, repository.FullLoadAttempts);
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData("status")]
+    [Xunit.InlineData("next")]
+    [Xunit.InlineData("STATUS")]
+    [Xunit.InlineData("NEXT")]
+    public async Task StatusNextBare_SelectsReadOnlyRouteAndQueryOnly(string verb)
+    {
+        string[] args = [verb];
+        Xunit.Assert.True(CliReadOnlyCommandRunner.IsReadOnlyCommand(args));
+        Xunit.Assert.Equal(CliCommandCapability.QueryOnly, CliCommandCapabilities.Classify(args));
+        var repository = new ProbeStateRepository(new AgentOrchestratorKernel());
+        var startup = await CliReadOnlyStartupHydration.PrepareStartupAsync(args, repository);
+        Xunit.Assert.False(startup.Hydrated);
+        Xunit.Assert.Equal(0, repository.FullLoadAttempts);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("status", 0)]
+    [Xunit.InlineData("status", 1)]
+    [Xunit.InlineData("status", 2)]
+    [Xunit.InlineData("next", 0)]
+    [Xunit.InlineData("next", 1)]
+    [Xunit.InlineData("next", 2)]
+    public void StatusNextBare_SelectsCurrentGoalWithoutWritesAndMatchesPrefix(string verb, int session)
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            _ = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+            var kernel = new AgentOrchestratorKernel();
+            var older = kernel.CreateGoal(new GoalId("abc10000aaaaaaaaaaaaaaaaaaaaaaaa"), "Session goal");
+            var newer = kernel.CreateGoal(new GoalId("abc20000aaaaaaaaaaaaaaaaaaaaaaaa"), "Newest goal");
+            var created = new DateTimeOffset(2026, 9, 24, 0, 0, 0, TimeSpan.Zero);
+            var snapshot = kernel.ExportSnapshot();
+            kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with
+            {
+                Goals = snapshot.Goals.Select(goal =>
+                {
+                    var isOlder = goal.Id == older.Id.Value;
+                    var creationTime = created.AddDays(isOlder ? 0 : 1);
+                    return goal with
+                    {
+                        CreatedAt = creationTime,
+                        Timeline = [goal.Timeline[0] with { OccurredAt = creationTime },
+                            goal.Timeline[0] with
+                            {
+                                OccurredAt = created.AddDays(isOlder ? 3 : 2), Message = "Later update"
+                            }]
+                    };
+                }).ToArray()
+            });
+            var repository = new ProbeStateRepository(kernel) { ThrowOnOutbox = true };
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = session switch
+            {
+                1 => kernel.GetGoal(older.Id),
+                2 => new AgentOrchestratorKernel().CreateGoal(
+                    new GoalId("abc30000aaaaaaaaaaaaaaaaaaaaaaaa"), "Missing session goal"),
+                _ => null
+            };
+            var expected = session == 1 ? older.Id : newer.Id;
+            var before = JsonSerializer.Serialize(kernel.ExportSnapshot());
+
+            var output = CaptureConsole(() => Xunit.Assert.False(CliPersistentStateRunner.ExecuteCommand(
+                [verb], repository, workspace, ref agents, new InMemoryModelProviderRegistry([]),
+                ref profiles, ref currentGoal)));
+
+            Xunit.Assert.Equal(expected, currentGoal!.Id);
+            Xunit.Assert.Equal(1, repository.LoadGoalsCount);
+            Xunit.Assert.Equal(new[] { expected.Value }, repository.LoadedGoalIds);
+            AssertBareQueryHasNoWriterEffects(repository);
+            Xunit.Assert.Equal(before, JsonSerializer.Serialize(kernel.ExportSnapshot()));
+
+            var prefixRepository = new ProbeStateRepository(kernel) { ThrowOnOutbox = true };
+            Goal? prefixGoal = null;
+            var prefixOutput = CaptureConsole(() =>
+            {
+                Xunit.Assert.True(CliReadOnlyCommandRunner.TryExecute(
+                    [verb, expected.Value[..8]], prefixRepository, workspace,
+                    new InMemoryModelProviderRegistry([]), null, ref agents, ref profiles, ref prefixGoal,
+                    out var changed));
+                Xunit.Assert.False(changed);
+            });
+            Xunit.Assert.NotEmpty(output);
+            Xunit.Assert.Equal(prefixOutput, output);
+            AssertBareQueryHasNoWriterEffects(prefixRepository);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("status")]
+    [Xunit.InlineData("next")]
+    public void StatusNextBare_NoGoals_PreservesReadinessErrorWithoutDrain(string verb)
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            // No items store: next must select (and fail) before its prefix-path decline.
+            Xunit.Assert.False(File.Exists(Path.Combine(workspace.OrchestratorDirectory, "collaboration-items.db")));
+            var repository = new ProbeStateRepository(new AgentOrchestratorKernel()) { ThrowOnOutbox = true };
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = null;
+            var error = Xunit.Assert.Throws<InvalidOperationException>(() =>
+                CliPersistentStateRunner.ExecuteCommand([verb], repository, workspace, ref agents,
+                    new InMemoryModelProviderRegistry([]), ref profiles, ref currentGoal));
+
+            Xunit.Assert.Equal("Create a goal first with: goal <objective>", error.Message);
+            Xunit.Assert.Equal(1, repository.ListGoalMetadataCount);
+            Xunit.Assert.Equal(0, repository.LoadGoalsCount);
+            AssertBareQueryHasNoWriterEffects(repository);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("status", "--tasks-only")]
+    [Xunit.InlineData("status", "abc10000", "--tasks-only")]
+    [Xunit.InlineData("status", "--help")]
+    [Xunit.InlineData("status", "-h")]
+    [Xunit.InlineData("next", "abc10000", "--autonomy", "conservative")]
+    [Xunit.InlineData("next", "abc10000", "--autonomy-policy", "conservative")]
+    [Xunit.InlineData("next", "--help")]
+    [Xunit.InlineData("next", "-h")]
+    [Xunit.InlineData("monitor")]
+    [Xunit.InlineData("readiness-repair")]
+    public void StatusNextFlagsAndRepair_DeclineReadOnlyRoute(params string[] args) =>
+        Xunit.Assert.False(CliReadOnlyCommandRunner.IsReadOnlyCommand(args));
+
+    private static void AssertBareQueryHasNoWriterEffects(ProbeStateRepository repository)
+    {
+        Xunit.Assert.Equal(0, repository.FullLoadAttempts);
+        Xunit.Assert.Equal(0, repository.ListOutboxMessagesCount);
+        Xunit.Assert.Equal(0, repository.OutboxClaimAttempts);
+        Xunit.Assert.Equal(0, repository.MutationAttempts);
+        Xunit.Assert.Equal(0, repository.SaveAttempts);
+        Xunit.Assert.Equal(0, repository.MergeSaveAttempts);
+        Xunit.Assert.NotEmpty(repository.ObservedWriteOperationTags);
+        Xunit.Assert.All(repository.ObservedWriteOperationTags, tag => Xunit.Assert.Null(tag));
+        Xunit.Assert.Null(SqliteOrchestratorStateRepository.AmbientWriteOperationTag);
+    }
+
     [Xunit.Fact]
     public void Readiness_Help_DeclinesReadOnlyRoute()
     {

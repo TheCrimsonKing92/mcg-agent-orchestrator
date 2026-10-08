@@ -64,27 +64,7 @@ internal static class CliReadinessQueryCommand
         GoalId goalId;
         if (args.Count == 1)
         {
-            var candidates = stateRepository.ListGoalMetadataAsync(includeTerminalCreatedAt: true)
-                .GetAwaiter().GetResult()
-                .Select((goal, index) => (Goal: goal, Index: index))
-                .OrderByDescending(candidate => candidate.Goal.CreatedAt ?? DateTimeOffset.MinValue)
-                .ThenBy(candidate => candidate.Index)
-                .Select(candidate => candidate.Goal)
-                .ToList();
-            if (currentGoal is not null)
-            {
-                var currentGoalId = currentGoal.Id.Value;
-                var current = candidates.FirstOrDefault(goal =>
-                    goal.Id.Equals(currentGoalId, StringComparison.OrdinalIgnoreCase));
-                if (current is not null)
-                {
-                    candidates.Remove(current);
-                    candidates.Insert(0, current);
-                }
-            }
-            var latest = candidates.FirstOrDefault()
-                ?? throw new InvalidOperationException("Create a goal first with: goal <objective>");
-            goalId = new GoalId(latest.Id);
+            goalId = CliCurrentGoalSelector.Select(stateRepository, currentGoal?.Id);
         }
         else
         {
