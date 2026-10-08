@@ -120,6 +120,7 @@ var commandCapability = CliCommandCapabilities.Classify(startupArgs);
 var repoRoot = !string.IsNullOrWhiteSpace(executionDirectory)
     ? executionDirectory
     : OrchestratorWorkspace.ResolveRepoRoot(Environment.CurrentDirectory);
+OrchestratorHome.ExportForDescendants(repoRoot);
 var projectRegistry = OrchestratorProjectRegistry.CreateDefault();
 if (startupArgs.Count > 0 && startupArgs[0].Equals("project", StringComparison.OrdinalIgnoreCase))
 {
@@ -223,37 +224,17 @@ if (ConductorContinuitySupervisor.ShouldSupervise(
         var restageEnabled =
             !string.Equals(maxDurationRestage, "0", StringComparison.OrdinalIgnoreCase) &&
             !string.Equals(maxDurationRestage, "false", StringComparison.OrdinalIgnoreCase);
-        Func<CancellationToken, ConductorPreparedSuccessor>? stageSuccessor = null;
-        if (restageEnabled)
-        {
-            var repositoryRoot = workspace.ExecutionDirectory;
-            var repositoryBuildKey = Convert.ToHexString(
-                System.Security.Cryptography.SHA256.HashData(
-                    System.Text.Encoding.UTF8.GetBytes(Path.GetFullPath(repositoryRoot))))[..16];
-            var appOutputDirectory = Path.Combine(
-                OrchestratorTempRoot.GetPurposeDirectory("self-relaunch-build"),
-                repositoryBuildKey);
-            var stagingOptions = new ConductorSuccessorStagingOptions(
-                RepositoryRoot: repositoryRoot,
-                AppProjectPath: Path.Combine(repositoryRoot, "src", "Mcg.AgentOrchestrator.App", "Mcg.AgentOrchestrator.App.csproj"),
-                AppDllPath: Path.Combine(appOutputDirectory, "Mcg.AgentOrchestrator.App.dll"),
-                UpdateHeadMarkerScriptPath: Path.Combine(repositoryRoot, "scripts", "Update-AppDllGitHeadMarker.ps1"),
-                ResolveRunDirectoryScriptPath: Path.Combine(repositoryRoot, "scripts", "resolve-run-dir.ps1"),
-                StateStorePath: workspace.SqliteStatePath,
-                AgentCatalogPath: workspace.AgentCatalogPath,
-                WorkerProfilePath: workspace.WorkerProfilePath,
-                ModelFunctionCatalogPath: workspace.ModelFunctionCatalogPath,
-                DotnetPath: Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_DOTNET_PATH") ?? "dotnet",
-                PowerShellPath: "powershell")
-            {
-                LandingAppBuildStore = LandingAppBuildStore.ForRepository(repositoryRoot,
-                    Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_DOTNET_PATH"))
-            };
-            stageSuccessor = cancellationToken =>
-                ConductorSelfRelaunch.PrepareSuccessor(stagingOptions, cancellationToken);
-        }
-
         var conductEventLogWriter = new ConductEventLogWriter(workspace.ConductEventsLogPath);
+        var stageSuccessor = restageEnabled
+            ? ConductorSelfRelaunch.CreateSuccessorStagerForHome(
+                OrchestratorHome.ResolveForProcess(), workspace,
+                line =>
+                {
+                    Console.WriteLine(line);
+                    conductEventLogWriter.Append("loop-handoff", null, line);
+                })
+            : null;
+
         var supervisorSeam = new SystemConductorSupervisorHandoffSeam(
             Path.Combine(workspace.OrchestratorDirectory, "continuity"));
         var supervisor = new ConductorContinuitySupervisor(

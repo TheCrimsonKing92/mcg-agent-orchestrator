@@ -9,6 +9,43 @@ using Microsoft.Data.Sqlite;
 [Xunit.Collection(TestCollections.PostLandingCanary)]
 public sealed class PostLandingCanaryTests : CliCommandTestBase
 {
+    [Xunit.Fact]
+    public async Task FactorySkipsNonHomeLandingWithoutFixtureOrRunnerButHomeStillRuns()
+    {
+        using var fixture = new CanaryTestFixture();
+        var workspace = OrchestratorWorkspace.ForProject("alpha", fixture.Root);
+        // The factory writes to the selected project's store, not the fixture's default store.
+        var projectEvents = new PostLandingCanaryEventStore(
+            new SqliteRunEventStore(workspace.RunEventStorePath), workspace.RunEventStorePath);
+        var calls = 0;
+        var runner = new FakeRunner((_, _) =>
+        {
+            Interlocked.Increment(ref calls);
+            return Task.FromResult(PostLandingCanaryOutcome.Passed(1, "home canary receipt"));
+        });
+        var landing = new ConductorLandingReceipt("goal-home-test",
+            ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs"], "home-test-sha");
+        Assert.True(PostLandingCanaryTrigger.Evaluate(landing.ChangedFiles, []).ShouldRun);
+        Assert.False(Directory.Exists(Path.Combine(fixture.Root, "tests")));
+        var progress = new ConcurrentQueue<string>();
+        var notHome = PostLandingCanaryFactory.CreateDefault(workspace, progress.Enqueue,
+            OrchestratorHome.Resolve(fixture.Root + "-home", _ => null), runner);
+        Assert.Equal(PostLandingCanaryDisposition.NotTriggered, notHome.HandleLanding(landing));
+        Assert.Equal(PostLandingCanaryDisposition.NotTriggered, notHome.HandleLanding(landing with { LandingSha = "second-sha" }));
+        Assert.Equal(0, Volatile.Read(ref calls));
+        Assert.Empty(await projectEvents.ReadForLandingAsync(landing.LandingSha!));
+        Assert.Empty(progress);
+
+        var home = PostLandingCanaryFactory.CreateDefault(workspace, progress.Enqueue,
+            OrchestratorHome.Resolve(fixture.Root, _ => null), runner);
+        Assert.Equal(PostLandingCanaryDisposition.Passed,
+            await home.LaunchLandingAsync(landing).WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.Equal(1, Volatile.Read(ref calls));
+        Assert.Contains(await projectEvents.ReadForLandingAsync(landing.LandingSha!),
+            record => record.Kind == PostLandingCanaryEventKind.Passed);
+        Assert.Empty(await fixture.Events.ReadForLandingAsync(landing.LandingSha!));
+    }
+
     [Xunit.Fact(DisplayName = "Post-landing canary classifier covers every engine surface and ignores unrelated paths")]
     public void ClassifierCoversEveryEngineSurface()
     {
