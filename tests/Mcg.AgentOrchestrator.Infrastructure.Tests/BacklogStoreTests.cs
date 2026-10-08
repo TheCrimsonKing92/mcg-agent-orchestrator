@@ -590,6 +590,32 @@ public sealed class BacklogStoreTests
         Assert.Equal(versions, ReadSetupRows(path, "SELECT * FROM store_schema_versions ORDER BY store_name"));
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData(1)]
+    [Xunit.InlineData(2)]
+    public async Task WritableConstructor_CurrentOrNewerSchema_OpensWhileItemLeaseIsHeld(int version)
+    {
+        var path = TempDb();
+        var store = new BacklogStore(path);
+        var item = await store.AddAsync("Replacement source");
+        using (var connection = OpenSetupDatabase(path))
+            RunSetupSql(connection, $"UPDATE store_schema_versions SET version = {version}, applied_at = 'original' WHERE store_name = 'backlog'");
+        var versions = ReadSetupRows(path, "SELECT * FROM store_schema_versions ORDER BY store_name");
+
+        using var lease = store.TryAcquireOpenItemLease(item.Id, out var observedStatus);
+        Assert.NotNull(lease);
+        Assert.Equal(BacklogItemStatus.Open, observedStatus);
+
+        // The lease stays held across construction, as it does during goal-replace validation.
+        var reopened = new BacklogStore(path);
+        var fetched = await reopened.GetByExactIdAsync(item.Id);
+
+        Assert.NotNull(fetched);
+        Assert.Equal(item.Id, fetched.Id);
+        Assert.Equal(BacklogItemStatus.Open, fetched.Status);
+        Assert.Equal(versions, ReadSetupRows(path, "SELECT * FROM store_schema_versions ORDER BY store_name"));
+    }
+
     [Xunit.Fact]
     public async Task Setup_LegacyConstructorDatabase_PreservesRowsAndAddsVersion()
     {

@@ -222,6 +222,12 @@ public sealed class BacklogStore
             )
             """);
         RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS idx_backlog_history_item_created ON backlog_history(backlog_item_id, created_at, id)");
+        // Current stores can be opened while another connection holds an item mutation lease.
+        // Only an actual schema upgrade needs a write reservation; never downgrade a newer store.
+        var state = StoreSchemaVersions.Verify(conn, StoreSchemaRegistry.Backlog);
+        if (state is StoreSchemaState.Current or StoreSchemaState.Newer)
+            return;
+
         RunNonQuery(conn, "BEGIN IMMEDIATE");
         try
         {
@@ -234,7 +240,7 @@ public sealed class BacklogStore
         }
         catch
         {
-            RunNonQuery(conn, "ROLLBACK");
+            try { RunNonQuery(conn, "ROLLBACK"); } catch { }
             throw;
         }
     }
