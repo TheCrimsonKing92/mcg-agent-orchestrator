@@ -153,7 +153,7 @@ public sealed class WorkerDispatchTestsModelSelectionEnvMutation : WorkerDispatc
     kernel.ActivateGoal(goal.Id, agents);
     var workingDirectory = GoalWorktrees.Ensure(root, goal.Id);
 
-    var researchResults = WorkerProfileDispatcher.PrepareSubscriptionReadyTasks(
+    var researchResults = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
         kernel,
         goal,
         agents,
@@ -162,12 +162,13 @@ public sealed class WorkerDispatchTestsModelSelectionEnvMutation : WorkerDispatc
         workingDirectory,
         dispatchedAt,
         commandExists: RealClaudeLauncherExists,
-        sandboxOptions: DisabledSandbox);
+        sandboxOptions: DisabledSandbox,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli).Dispatches;
     Assert.Single(researchResults);
     Assert.Equal(AgentRole.Researcher, researchResults.Single().Task.RequiredRole);
     CompleteResearcherArtifact(kernel, goal);
 
-    var plannerResults = WorkerProfileDispatcher.PrepareSubscriptionReadyTasks(
+    var plannerResults = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
         kernel,
         goal,
         agents,
@@ -176,12 +177,13 @@ public sealed class WorkerDispatchTestsModelSelectionEnvMutation : WorkerDispatc
         workingDirectory,
         dispatchedAt.AddMinutes(1),
         commandExists: RealClaudeLauncherExists,
-        sandboxOptions: DisabledSandbox);
+        sandboxOptions: DisabledSandbox,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli).Dispatches;
     Assert.Single(plannerResults);
     Assert.Equal(AgentRole.Planner, plannerResults.Single().Task.RequiredRole);
     CompletePlannerArtifact(kernel, goal);
 
-    var downstreamResults = WorkerProfileDispatcher.PrepareSubscriptionReadyTasks(
+    var downstreamResults = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
         kernel,
         goal,
         agents,
@@ -190,7 +192,8 @@ public sealed class WorkerDispatchTestsModelSelectionEnvMutation : WorkerDispatc
         workingDirectory,
         dispatchedAt.AddMinutes(2),
         commandExists: RealClaudeLauncherExists,
-        sandboxOptions: DisabledSandbox);
+        sandboxOptions: DisabledSandbox,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli).Dispatches;
     var results = researchResults.Concat(plannerResults).Concat(downstreamResults).ToList();
 
     Assert.Equal(5, results.Count);
@@ -241,7 +244,7 @@ public sealed class WorkerDispatchTestsModelSelectionEnvMutation : WorkerDispatc
         WorkTaskStatus.Completed,
         "Developer completed in persisted state.");
 
-    var plan = SubscriptionPlanBuilder.Build(goal, agents, profiles);
+    var plan = SubscriptionPlanBuilder.Build(goal, agents, profiles, claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli, commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
     var readiness = DispatchReadinessEvaluator.EvaluateDispatchReadiness(goal, plan, DateTimeOffset.UtcNow);
     var batch = new GoalDispatchOperations().SubscriptionDispatchReadyBatch(
         kernel,
@@ -289,10 +292,11 @@ public sealed class WorkerDispatchTestsModelSelectionEnvMutation : WorkerDispatc
         workingDirectory,
         dispatchedAt,
         sandboxOptions: new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget),
-        commandExists: RealClaudeLauncherExists);
+        commandExists: RealClaudeLauncherExists,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli);
     Assert.True(preflight.Allowed, string.Join("\n", preflight.Findings));
 
-    var results = WorkerProfileDispatcher.PrepareSubscriptionReadyTasks(
+    var results = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
         kernel,
         goal,
         [agent],
@@ -301,7 +305,8 @@ public sealed class WorkerDispatchTestsModelSelectionEnvMutation : WorkerDispatc
         workingDirectory,
         dispatchedAt,
         commandExists: RealClaudeLauncherExists,
-        sandboxOptions: DisabledSandbox);
+        sandboxOptions: DisabledSandbox,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli).Dispatches;
 
     Assert.Single(results);
     var developer = goal.Tasks.Single();

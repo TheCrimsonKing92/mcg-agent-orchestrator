@@ -391,7 +391,9 @@ public sealed class WorkerDispatchTestsModelSelection : WorkerDispatchTestSuppor
         promptRoot,
         workingDirectory,
         dispatchedAt,
-        new DispatchModelOverride(profileName, modelName, null)));
+        new DispatchModelOverride(profileName, modelName, null),
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent));
 
     Assert.Equal(task.Id, ex.TaskId);
     Assert.False(Directory.Exists(promptRoot));
@@ -481,7 +483,9 @@ public sealed class WorkerDispatchTestsModelSelection : WorkerDispatchTestSuppor
         profiles,
         promptRoot,
         workingDirectory,
-        dispatchedAt);
+        dispatchedAt,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
     Assert.Equal("custom-codex", task.LastDispatch!.WorkerName);
     Assert.Contains($"--model '{AgentCatalog.StaleOpenAiCodexSubscriptionModelAlias}'", task.LastDispatch.Command, StringComparison.Ordinal);
@@ -585,7 +589,9 @@ public sealed class WorkerDispatchTestsModelSelection : WorkerDispatchTestSuppor
         WorkerProfileCatalog.Default(),
         promptRoot,
         workingDirectory,
-        dispatchedAt);
+        dispatchedAt,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
     var ex = Assert.ThrowsAny<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
@@ -595,7 +601,9 @@ public sealed class WorkerDispatchTestsModelSelection : WorkerDispatchTestSuppor
         WorkerProfileCatalog.Default(),
         promptRoot,
         workingDirectory,
-        dispatchedAt.AddMinutes(1)));
+        dispatchedAt.AddMinutes(1),
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent));
 
     Assert.Contains("status is Running", ex.Message, StringComparison.Ordinal);
     Assert.Equal(WorkTaskStatus.Running, task.Status);
@@ -667,7 +675,9 @@ public void WorkerProfileDispatcherRejectsVerifiedTaskDispatch()
         profiles,
         promptRoot,
         workingDirectory,
-        dispatchedAt);
+        dispatchedAt,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
     WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
         complexGoal,
@@ -676,7 +686,9 @@ public void WorkerProfileDispatcherRejectsVerifiedTaskDispatch()
         profiles,
         promptRoot,
         workingDirectory,
-        dispatchedAt);
+        dispatchedAt,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
     Assert.Contains("--model 'gpt-5-mini-codex'", simpleTask.LastDispatch!.Command, StringComparison.Ordinal);
     Assert.Contains("model_reasoning_effort='low'", simpleTask.LastDispatch.Command, StringComparison.Ordinal);
@@ -736,10 +748,10 @@ public void WorkerProfileDispatcherRejectsVerifiedTaskDispatch()
     var classTask = classGoal.Tasks.Single();
     kernel.RecordCriterionRetryFeedback(classGoal.Id, classTask.Id, ["The fix missed every call site in the persistence path."]);
 
-    WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, simpleGoal, simpleGoal.Tasks.Single(), [agent], profiles, promptRoot, workingDirectory, dispatchedAt);
-    WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, complexGoal, complexGoal.Tasks.Single(), [agent], profiles, promptRoot, workingDirectory, dispatchedAt);
-    WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, retryGoal, retryTask, [agent], profiles, promptRoot, workingDirectory, dispatchedAt);
-    WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, classGoal, classTask, [agent], profiles, promptRoot, workingDirectory, dispatchedAt);
+    WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, simpleGoal, simpleGoal.Tasks.Single(), [agent], profiles, promptRoot, workingDirectory, dispatchedAt, claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli, commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
+    WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, complexGoal, complexGoal.Tasks.Single(), [agent], profiles, promptRoot, workingDirectory, dispatchedAt, claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli, commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
+    WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, retryGoal, retryTask, [agent], profiles, promptRoot, workingDirectory, dispatchedAt, claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli, commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
+    WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, classGoal, classTask, [agent], profiles, promptRoot, workingDirectory, dispatchedAt, claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli, commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
     Assert.Equal("medium", simpleGoal.Tasks.Single().LastDispatch!.ReasoningEffort);
     Assert.Equal("base", simpleGoal.Tasks.Single().LastDispatch!.ReasoningEffortReason);
@@ -784,7 +796,9 @@ public void WorkerProfileDispatcherRejectsVerifiedTaskDispatch()
         WorkerProfileCatalog.Default(),
         Path.Combine(root, "prompts"),
         workingDirectory,
-        DateTimeOffset.Parse("2026-07-14T12:00:00Z"));
+        DateTimeOffset.Parse("2026-07-14T12:00:00Z"),
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
     var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
     var restoredTask = restored.GetGoal(goal.Id).Tasks.Single();
@@ -822,7 +836,9 @@ public void WorkerProfileDispatcherRejectsVerifiedTaskDispatch()
         WorkerProfileCatalog.Default(),
         promptRoot,
         workingDirectory,
-        DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+        DateTimeOffset.Parse("2026-06-02T12:00:00Z"),
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
     var provider = WorkerProviderCatalog.Default().ResolveProfile(task.LastDispatch!.WorkerName);
     Assert.Equal(ProviderKind.OpenAICodexLuna, provider.Identity.Kind);
@@ -856,7 +872,9 @@ public void WorkerProfileDispatcherRejectsVerifiedTaskDispatch()
 
         WorkerProfileDispatcher.PrepareSubscriptionTask(
             kernel, goal, task, agents, WorkerProfileCatalog.Default(),
-            Path.Combine(root, "prompts"), workingDirectory, DateTimeOffset.UtcNow, cascadeTesterCheapFirst: false);
+            Path.Combine(root, "prompts"), workingDirectory, DateTimeOffset.UtcNow, cascadeTesterCheapFirst: false,
+            claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+            commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
         Assert.Equal(AgentCatalog.OpenAiTerraSubscriptionModelAlias, task.LastDispatch!.ModelName);
         Assert.Equal(TaskComplexity.Complex, task.LastDispatch.TaskComplexity);
@@ -898,7 +916,9 @@ public void WorkerProfileDispatcherRejectsVerifiedTaskDispatch()
         WorkerProfileCatalog.Default(),
         promptRoot,
         workingDirectory,
-        DateTimeOffset.Parse("2026-07-29T12:00:00Z"));
+        DateTimeOffset.Parse("2026-07-29T12:00:00Z"),
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
     Assert.Equal("codex-cli", task.LastDispatch!.WorkerName);
     Assert.Equal("OpenAI", task.LastDispatch.ProviderName);
@@ -935,7 +955,9 @@ public void WorkerProfileDispatcherRejectsVerifiedTaskDispatch()
         WorkerProfileCatalog.Default(),
         promptRoot,
         workingDirectory,
-        DateTimeOffset.Parse("2026-07-17T12:00:00Z"));
+        DateTimeOffset.Parse("2026-07-17T12:00:00Z"),
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
     Assert.Equal("codex-cli", task.LastDispatch!.WorkerName);
     // Subscription launch profiles always pin the configured alias; complexity only changes API-side model/effort.
@@ -984,7 +1006,9 @@ public void WorkerProfileDispatcherRejectsVerifiedTaskDispatch()
         profiles,
         promptRoot,
         workingDirectory,
-        dispatchedAt);
+        dispatchedAt,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
     Assert.Contains("--model 'gpt-5-mini-codex'", task.LastDispatch!.Command, StringComparison.Ordinal);
     Assert.Contains("model_reasoning_effort='low'", task.LastDispatch.Command, StringComparison.Ordinal);
@@ -1019,7 +1043,9 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         WorkerProfileCatalog.Default(),
         Path.Combine(root, "prompts"),
         root,
-        DateTimeOffset.UtcNow));
+        DateTimeOffset.UtcNow,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent));
 
     Assert.Contains("already has passing verification", ex.Message, StringComparison.Ordinal);
     Assert.True(task.LastDispatch is null);
@@ -1060,7 +1086,9 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         profiles,
         promptRoot,
         workingDirectory,
-        dispatchedAt);
+        dispatchedAt,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
     Assert.Contains("--model 'gpt-5-mini-codex'", task.LastDispatch!.Command, StringComparison.Ordinal);
     Assert.Contains("--api-model 'gpt-5-mini'", task.LastDispatch.Command, StringComparison.Ordinal);
@@ -1279,7 +1307,8 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         workingDirectory,
         dispatchedAt,
         sandboxOptions: sandbox,
-        commandExists: RealClaudeLauncherExists);
+        commandExists: RealClaudeLauncherExists,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli);
 
     Assert.Equal(assignedAgent.Id, task.AssignedAgentId);
     Assert.Equal("claude-cli", task.LastDispatch!.WorkerName);
@@ -1309,7 +1338,8 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         [agent],
         WorkerProfileCatalog.Default(),
         sandboxOptions: sandbox,
-        commandExists: _ => true).Items.Single();
+        commandExists: _ => true,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli).Items.Single();
 
     Assert.True(agent.IsProviderRoutingConstrained);
     Assert.Equal("OpenAI", planItem.ProviderName);
@@ -1340,7 +1370,8 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         [agent],
         WorkerProfileCatalog.Default(),
         sandboxOptions: sandbox,
-        commandExists: _ => true).Items.Single();
+        commandExists: _ => true,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli).Items.Single();
 
     Assert.True(agent.IsProviderRoutingConstrained);
     Assert.Equal("Anthropic", planItem.ProviderName);
@@ -1366,7 +1397,7 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     var goal = kernel.CreateGoal("Dispatch an explicitly OpenAI-only planner", [task]);
     var profiles = WorkerProfileCatalog.Default();
     kernel.ActivateGoal(goal.Id, [agent]);
-    var planItem = SubscriptionPlanBuilder.Build(goal, [agent], profiles).Items.Single();
+    var planItem = SubscriptionPlanBuilder.Build(goal, [agent], profiles, claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli, commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent).Items.Single();
     var sandbox = new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
 
     WorkerProfileDispatcher.PrepareSubscriptionTask(
@@ -1378,7 +1409,9 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         promptRoot,
         workingDirectory,
         dispatchedAt,
-        sandboxOptions: sandbox);
+        sandboxOptions: sandbox,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
     var dispatch = task.LastDispatch!;
     var preflight = File.ReadAllText(Path.Combine(
@@ -1422,7 +1455,8 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         [repairedAgent],
         WorkerProfileCatalog.Default(),
         sandboxOptions: sandbox,
-        commandExists: _ => true).Items.Single();
+        commandExists: _ => true,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli).Items.Single();
 
     Assert.False(repairedAgent.IsProviderRoutingConstrained);
     Assert.Contains("1 built-in-compatible assignment(s) remain automatic", warning, StringComparison.Ordinal);
@@ -1524,7 +1558,8 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         workingDirectory,
         dispatchedAt,
         sandboxOptions: sandbox,
-        commandExists: RealClaudeLauncherExists);
+        commandExists: RealClaudeLauncherExists,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli);
 
     var preflight = File.ReadAllText(Path.Combine(workingDirectory, ".orchestrator-context", goal.Id.Value, "subscription-preflight.md"));
 
@@ -1561,7 +1596,8 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         workingDirectory,
         dispatchedAt,
         sandboxOptions: sandbox,
-        commandExists: _ => true);
+        commandExists: _ => true,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli);
 
     var preflight = File.ReadAllText(Path.Combine(workingDirectory, ".orchestrator-context", goal.Id.Value, "subscription-preflight.md"));
     Assert.Equal("codex-cli", task.LastDispatch!.WorkerName);
@@ -1620,7 +1656,9 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
             promptRoot,
             workingDirectory,
             dispatchedAt,
-            sandboxOptions: sandbox);
+            sandboxOptions: sandbox,
+            claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+            commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
         return task.LastDispatch!;
     }
@@ -1670,7 +1708,8 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         workingDirectory,
         dispatchedAt,
         sandboxOptions: sandbox,
-        commandExists: RealClaudeLauncherExists);
+        commandExists: RealClaudeLauncherExists,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli);
 
     var preflight = File.ReadAllText(Path.Combine(workingDirectory, ".orchestrator-context", goal.Id.Value, "subscription-preflight.md"));
     Assert.Equal("claude-cli", task.LastDispatch!.WorkerName);
@@ -1721,7 +1760,9 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         promptRoot,
         workingDirectory,
         dispatchedAt,
-        sandboxOptions: sandbox);
+        sandboxOptions: sandbox,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
     var preflight = File.ReadAllText(Path.Combine(workingDirectory, ".orchestrator-context", goal.Id.Value, "subscription-preflight.md"));
     Assert.Equal("codex-cli", task.LastDispatch!.WorkerName);
@@ -1765,7 +1806,9 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         goal,
         agents,
         profiles,
-        _ => WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(kernel, goal, task, agents));
+        _ => WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(kernel, goal, task, agents),
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
     var planItem = plan.Items.Single();
     var readiness = DispatchReadinessEvaluator.EvaluateDispatchReadiness(goal, plan, dispatchedAt);
     var sandbox = new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
@@ -1780,7 +1823,8 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         workingDirectory,
         dispatchedAt,
         sandboxOptions: sandbox,
-        commandExists: RealClaudeLauncherExists);
+        commandExists: RealClaudeLauncherExists,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli);
 
     Assert.IsType<DispatchReadinessReady>(readiness);
     Assert.True(planItem.CanPrepare);
@@ -1913,7 +1957,8 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         workingDirectory,
         dispatchedAt,
         sandboxOptions: sandbox,
-        commandExists: RealClaudeLauncherExists);
+        commandExists: RealClaudeLauncherExists,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli);
 
     var preflight = File.ReadAllText(Path.Combine(workingDirectory, ".orchestrator-context", goal.Id.Value, "subscription-preflight.md"));
     Assert.Equal("claude-cli", task.LastDispatch!.WorkerName);
@@ -1965,7 +2010,9 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         promptRoot,
         workingDirectory,
         dispatchedAt,
-        sandboxOptions: sandbox);
+        sandboxOptions: sandbox,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
     var preflight = File.ReadAllText(Path.Combine(workingDirectory, ".orchestrator-context", goal.Id.Value, "subscription-preflight.md"));
     Assert.Equal("codex-cli", task.LastDispatch!.WorkerName);
@@ -2001,7 +2048,9 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         promptRoot,
         workingDirectory,
         dispatchedAt,
-        sandboxOptions: sandbox);
+        sandboxOptions: sandbox,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
     var preflight = File.ReadAllText(Path.Combine(workingDirectory, ".orchestrator-context", goal.Id.Value, "subscription-preflight.md"));
     Assert.Equal("codex-cli", task.LastDispatch!.WorkerName);
@@ -2048,7 +2097,9 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         profiles,
         highRiskPromptRoot,
         highRiskWorkingDirectory,
-        dispatchedAt);
+        dispatchedAt,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
     WorkerProfileDispatcher.PrepareSubscriptionTask(
         normalKernel,
         normalGoal,
@@ -2057,7 +2108,9 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         profiles,
         normalPromptRoot,
         normalWorkingDirectory,
-        dispatchedAt);
+        dispatchedAt,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
     Assert.Equal("codex-cli", highRiskTask.LastDispatch!.WorkerName);
     Assert.Equal("xhigh", highRiskTask.LastDispatch.ReasoningEffort);
@@ -2100,7 +2153,9 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         WorkerProfileCatalog.Default(),
         workingDirectory,
         dispatchedAt,
-        profileOverride);
+        profileOverride,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
     WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
         goal,
@@ -2110,7 +2165,9 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         promptRoot,
         workingDirectory,
         dispatchedAt,
-        profileOverride);
+        profileOverride,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
     var provider = WorkerProviderCatalog.Default().ResolveProfile("codex-oss-cli");
     var sandboxProvider = BackgroundDispatchRunner.ResolveSandboxProvider(provider);
 
@@ -2161,7 +2218,9 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         WorkerProfileCatalog.Default(),
         promptRoot,
         workingDirectory,
-        dispatchedAt);
+        dispatchedAt,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
     // Subscription launch profiles always pin the configured alias; complexity only changes API-side model/effort.
     Assert.Contains($"--model '{AgentCatalog.OpenAiTerraSubscriptionModelAlias}'", developer.LastDispatch!.Command, StringComparison.Ordinal);
@@ -2206,7 +2265,9 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     var modelOverride = new DispatchModelOverride(null, "gpt-5.3-codex-spark", null);
 
     WorkerProfileDispatcher.PrepareSubscriptionTask(
-        kernel, goal, task, [agent], profiles, promptRoot, workingDirectory, dispatchedAt, modelOverride);
+        kernel, goal, task, [agent], profiles, promptRoot, workingDirectory, dispatchedAt, modelOverride,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
     Assert.Equal(TaskComplexity.Complex, task.LastDispatch!.TaskComplexity);
     Assert.Equal("OpenAI", task.LastDispatch.ProviderName);
@@ -2261,9 +2322,13 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     var modelOverride = new DispatchModelOverride("codex-cli", "gpt-5.3-codex-spark", null);
 
     var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
-        goal, task, [agent], profiles, workingDirectory, dispatchedAt, modelOverride);
+        goal, task, [agent], profiles, workingDirectory, dispatchedAt, modelOverride,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
     WorkerProfileDispatcher.PrepareSubscriptionTask(
-        kernel, goal, task, [agent], profiles, promptRoot, workingDirectory, dispatchedAt, modelOverride);
+        kernel, goal, task, [agent], profiles, promptRoot, workingDirectory, dispatchedAt, modelOverride,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
     Assert.True(preflight.Allowed);
     Assert.Contains(preflight.Findings, text => text.Equals("profile: codex-cli", StringComparison.Ordinal));
@@ -2302,7 +2367,9 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     var profileOverride = new DispatchModelOverride("alt-profile", null, null);
 
     WorkerProfileDispatcher.PrepareSubscriptionTask(
-        kernel, goal, task, [agent], profiles, promptRoot, workingDirectory, dispatchedAt, profileOverride);
+        kernel, goal, task, [agent], profiles, promptRoot, workingDirectory, dispatchedAt, profileOverride,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
     Assert.Equal("alt-profile", task.LastDispatch!.WorkerName);
 }
@@ -2333,7 +2400,9 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     var reasoningOverride = new DispatchModelOverride(null, null, "low");
 
     WorkerProfileDispatcher.PrepareSubscriptionTask(
-        kernel, goal, task, [agent], profiles, promptRoot, workingDirectory, dispatchedAt, reasoningOverride);
+        kernel, goal, task, [agent], profiles, promptRoot, workingDirectory, dispatchedAt, reasoningOverride,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
     Assert.Equal("low", task.LastDispatch!.ReasoningEffort);
     Assert.Contains("model_reasoning_effort='low'", task.LastDispatch.Command, StringComparison.Ordinal);
@@ -2364,7 +2433,9 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     ]);
 
     WorkerProfileDispatcher.PrepareSubscriptionTask(
-        kernel, goal, task, [agent], profiles, promptRoot, workingDirectory, dispatchedAt);
+        kernel, goal, task, [agent], profiles, promptRoot, workingDirectory, dispatchedAt,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
     Assert.Equal("codex-cli", task.LastDispatch!.WorkerName);
     Assert.Equal("OpenAI", task.LastDispatch.ProviderName);
@@ -2403,7 +2474,9 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     ]);
 
     WorkerProfileDispatcher.PrepareSubscriptionTask(
-        kernel, goal, task, [agent], profiles, promptRoot, workingDirectory, dispatchedAt);
+        kernel, goal, task, [agent], profiles, promptRoot, workingDirectory, dispatchedAt,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
     Assert.Equal(TaskComplexity.Complex, task.LastDispatch!.TaskComplexity);
     // Subscription launch profiles always pin the configured alias; complexity only changes API-side model/effort.
@@ -2445,7 +2518,9 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         promptRoot,
         workingDirectory,
         dispatchedAt,
-        sandboxOptions: sandbox);
+        sandboxOptions: sandbox,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
     Assert.Equal("claude-cli", task.LastDispatch!.WorkerName);
     Assert.Contains("claude -p --model 'claude-sonnet' --permission-mode 'bypassPermissions'", task.LastDispatch.Command, StringComparison.Ordinal);
@@ -2478,7 +2553,9 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         profiles,
         Path.Combine(root, "prompts"),
         root,
-        DateTimeOffset.UtcNow));
+        DateTimeOffset.UtcNow,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent));
 
     Assert.Contains("{subscriptionReasoningEffort}", ex.Message, StringComparison.Ordinal);
     Assert.True(task.LastDispatch is null);
@@ -2517,7 +2594,9 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         WorkerProfileCatalog.Default(),
         promptRoot,
         workingDirectory,
-        dispatchedAt);
+        dispatchedAt,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
     Assert.Equal("codex-cli", task.LastDispatch!.WorkerName);
     Assert.Contains($"--model '{AgentCatalog.OpenAiSubscriptionModelAlias}'", task.LastDispatch.Command, StringComparison.Ordinal);
@@ -2548,7 +2627,9 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         profiles,
         Path.Combine(root, "prompts"),
         root,
-        DateTimeOffset.UtcNow));
+        DateTimeOffset.UtcNow,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent));
 
     Assert.Contains("Subscription preflight failed", ex.Message, StringComparison.Ordinal);
     Assert.Contains("only echoes prompt path", ex.Message, StringComparison.Ordinal);
@@ -2580,7 +2661,9 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         profiles,
         Path.Combine(root, "prompts"),
         root,
-        DateTimeOffset.UtcNow));
+        DateTimeOffset.UtcNow,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent));
 
     Assert.Contains("{subscriptionModelName}", ex.Message, StringComparison.Ordinal);
     Assert.True(task.LastDispatch is null);
@@ -2611,7 +2694,9 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         profiles,
         Path.Combine(root, "prompts"),
         root,
-        DateTimeOffset.UtcNow));
+        DateTimeOffset.UtcNow,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent));
 
     Assert.Contains("Subscription preflight failed", ex.Message, StringComparison.Ordinal);
     Assert.Contains("not patch-capable", ex.Message, StringComparison.Ordinal);
@@ -2648,7 +2733,9 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         WorkerProfileCatalog.Default(),
         promptRoot,
         workingDirectory,
-        dispatchedAt);
+        dispatchedAt,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
     Assert.Equal(WorkTaskStatus.Running, task.Status);
     Assert.True(task.LastDispatch is not null);
@@ -2668,7 +2755,9 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         WorkerProfileCatalog.Default(),
         CreateTempDirectory(),
         Environment.CurrentDirectory,
-        DateTimeOffset.UtcNow));
+        DateTimeOffset.UtcNow,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent));
 
     var unsupported = new AgentDefinition(
         AgentId.New(),
@@ -2685,7 +2774,9 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         WorkerProfileCatalog.Default(),
         CreateTempDirectory(),
         Environment.CurrentDirectory,
-        DateTimeOffset.UtcNow));
+        DateTimeOffset.UtcNow,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent));
 }
 
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_writes_hash_bound_handoff_without_duplicate_payload")]
@@ -3004,7 +3095,9 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         WorkerProfileCatalog.Default(),
         promptRoot,
         workingDirectory,
-        DateTimeOffset.UtcNow);
+        DateTimeOffset.UtcNow,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
     var prompt = File.ReadAllText(result.PromptPath);
     Assert.True(currentTask.LastDispatch!.PromptCharacterCount <= PaidPromptThresholds.PromptThreshold(

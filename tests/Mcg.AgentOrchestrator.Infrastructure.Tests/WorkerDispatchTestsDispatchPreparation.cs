@@ -994,7 +994,8 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
             workspace.PromptDirectory,
             workingDirectory,
             firstAt,
-            commandExists: _ => true);
+            commandExists: _ => true,
+            claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli);
         var firstDispatch = Assert.Single(first.Dispatches);
         var firstFingerprint = Assert.IsType<RetryContextFingerprint>(firstDispatch.Task.LastDispatch!.RetryContextFingerprint);
         var firstAdmission = kernel.RecordPreparedRetryAdmission(
@@ -1114,7 +1115,8 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
             workspace.PromptDirectory,
             workingDirectory,
             firstAt,
-            commandExists: _ => true);
+            commandExists: _ => true,
+            claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli);
         var firstDispatch = Assert.Single(first.Dispatches).Task.LastDispatch!;
         var firstFingerprint = Assert.IsType<RetryContextFingerprint>(firstDispatch.RetryContextFingerprint);
         Assert.Equal(
@@ -1965,7 +1967,8 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
 
         _ = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
             kernel, goal, agents, profiles, Path.Combine(root, "prompts"), workingDirectory,
-            firstAt, commandExists: _ => true);
+            firstAt, commandExists: _ => true,
+            claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli);
         kernel.RecordDispatchResultCommit(goal.Id, planner.Id, "candidate-a");
         var priorDispatch = planner.LastDispatch!;
         kernel.ReportTaskProgress(goal.Id, planner.Id, WorkTaskStatus.Failed, "Candidate needs repair.");
@@ -1977,7 +1980,8 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
 
         var second = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
             kernel, goal, agents, profiles, Path.Combine(root, "prompts"), workingDirectory,
-            firstAt.AddMinutes(1), commandExists: _ => true);
+            firstAt.AddMinutes(1), commandExists: _ => true,
+            claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli);
         var dispatch = Assert.Single(second.Dispatches).Task.LastDispatch!;
         var expected = RetryContextFingerprintFactory.Build(
             goal,
@@ -4059,7 +4063,9 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         promptRoot,
         worktree,
         dispatchedAt,
-        sandboxOptions: DisabledSandbox);
+        sandboxOptions: DisabledSandbox,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
     var prompt = File.ReadAllText(result.PromptPath);
     Assert.Contains("## Reviewer Changed-File Scope", prompt, StringComparison.Ordinal);
@@ -4134,7 +4140,9 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         promptRoot,
         worktree,
         dispatchedAt,
-        sandboxOptions: DisabledSandbox);
+        sandboxOptions: DisabledSandbox,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
     var prompt = File.ReadAllText(result.PromptPath);
     Assert.Contains("Merge-tree status: conflicted against current main", prompt, StringComparison.Ordinal);
@@ -4328,7 +4336,9 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         promptRoot,
         root,
         DateTimeOffset.Parse("2026-07-15T18:54:00Z"),
-        sandboxOptions: DisabledSandbox));
+        sandboxOptions: DisabledSandbox,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent));
 
     Assert.Equal(WorkerProfileDispatcher.ReviewerScopeUnavailableErrorCode, ex.ErrorCode);
     Assert.Contains(ex.Findings, finding => finding.Contains("git ref 'main' could not be resolved", StringComparison.Ordinal));

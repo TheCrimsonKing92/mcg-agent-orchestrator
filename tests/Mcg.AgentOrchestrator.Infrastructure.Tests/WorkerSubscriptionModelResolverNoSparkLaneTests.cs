@@ -49,7 +49,8 @@ public sealed class WorkerSubscriptionModelResolverNoSparkLaneTests : WorkerDisp
             WorkerProfileDispatcher.PrepareSubscriptionTask(
                 kernel, goal, task, agents, WorkerProfileCatalog.Default(), Path.Combine(root, "prompts"),
                 workingDirectory, DateTimeOffset.Parse("2026-07-17T12:00:00Z"),
-                sandboxOptions: Sandbox, commandExists: _ => true);
+                sandboxOptions: Sandbox, commandExists: _ => true,
+                claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli);
 
             var dispatch = Assert.IsType<TaskDispatchRecord>(task.LastDispatch);
             Assert.Equal(mechanicalRetry ? TaskComplexity.Complex : TaskComplexity.Simple, dispatch.TaskComplexity);

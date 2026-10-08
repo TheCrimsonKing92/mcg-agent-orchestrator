@@ -28,7 +28,8 @@ public sealed class RetryAdmissionHoldAnswerDispatchTests : WorkerDispatchTestSu
             retryCause: RetryCause.ProviderInterruption);
         var first = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
             kernel, goal, agents, profiles, workspace.PromptDirectory, workingDirectory,
-            firstAt, commandExists: _ => true);
+            firstAt, commandExists: _ => true,
+            claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli);
         var firstDispatch = Xunit.Assert.Single(first.Dispatches);
         var fingerprint = Xunit.Assert.IsType<RetryContextFingerprint>(firstDispatch.Task.LastDispatch!.RetryContextFingerprint);
         var firstAdmission = kernel.RecordPreparedRetryAdmission(

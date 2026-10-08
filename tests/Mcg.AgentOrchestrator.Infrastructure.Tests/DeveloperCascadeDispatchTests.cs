@@ -270,7 +270,8 @@ public sealed class DeveloperCascadeDispatchTests : WorkerDispatchTestSupport
 
         internal void Prepare(WorkerProfileCatalog? profiles = null) => WorkerProfileDispatcher.PrepareSubscriptionTask(
             Kernel, Goal, Task, Agents, profiles ?? WorkerProfileCatalog.Default(), Workspace.PromptDirectory, WorkingDirectory,
-            At.AddMinutes(_round++ * 10), sandboxOptions: Sandbox, commandExists: _ => true);
+            At.AddMinutes(_round++ * 10), sandboxOptions: Sandbox, commandExists: _ => true,
+            claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli);
         internal void PrepareCheap() { Prepare(); Retry(RatchetRetry); Prepare(); }
         internal void Complete()
         {

@@ -65,7 +65,8 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
         worktree,
         DateTimeOffset.Parse("2026-06-26T12:00:00Z"),
         claudeAuthProbe: authProbe,
-        sandboxOptions: sandbox);
+        sandboxOptions: sandbox,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
     var findings = string.Join("\n", preflight.Findings);
     Assert.True(preflight.Allowed);
     Assert.Null(preflight.ErrorCode);
@@ -107,7 +108,8 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
         worktree,
         DateTimeOffset.Parse("2026-09-12T16:00:00Z"),
         claudeAuthProbe: authProbe,
-        sandboxOptions: sandbox);
+        sandboxOptions: sandbox,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
     var authFinding = preflight.Findings.Single(finding =>
         finding.StartsWith("auth: Claude CLI Low-IL auth preflight found no", StringComparison.Ordinal));
@@ -185,7 +187,8 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
         worktree,
         dispatchedAt,
         claudeAuthProbe: authProbe,
-        sandboxOptions: sandbox);
+        sandboxOptions: sandbox,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
     WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
         goal,
@@ -196,7 +199,8 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
         worktree,
         dispatchedAt,
         claudeAuthProbe: authProbe,
-        sandboxOptions: sandbox);
+        sandboxOptions: sandbox,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
     // The source the auth finding an operator reads names, and the source carried out of preflight, are
     // one resolution - not two computations that happen to agree on this machine.
@@ -279,7 +283,8 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
         worktree,
         DateTimeOffset.Parse("2026-09-12T16:00:00Z"),
         sandboxOptions: sandbox,
-        claudeAuthProbe: authProbe);
+        claudeAuthProbe: authProbe,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
     Assert.Single(batch.Dispatches);
     var dispatch = task.LastDispatch!;
@@ -315,7 +320,8 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
         worktree,
         DateTimeOffset.Parse("2026-07-09T00:08:59Z"),
         claudeAuthProbe: authProbe,
-        sandboxOptions: sandbox);
+        sandboxOptions: sandbox,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
     var findings = string.Join("\n", preflight.Findings);
     Assert.True(preflight.Allowed);
     Assert.Equal("claude-cli", preflight.ProfileName);
@@ -352,7 +358,8 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
         worktree,
         DateTimeOffset.Parse("2026-06-26T12:00:00Z"),
         claudeAuthProbe: authProbe,
-        sandboxOptions: sandbox);
+        sandboxOptions: sandbox,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
     WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
         goal,
@@ -363,7 +370,8 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
         worktree,
         DateTimeOffset.Parse("2026-06-26T12:00:00Z"),
         claudeAuthProbe: authProbe,
-        sandboxOptions: sandbox);
+        sandboxOptions: sandbox,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
     Assert.True(preflight.Allowed, string.Join("\n", preflight.Findings));
     Assert.Null(preflight.ErrorCode);
@@ -402,7 +410,8 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
         worktree,
         DateTimeOffset.Parse("2026-06-26T12:00:00Z"),
         claudeAuthProbe: authProbe,
-        sandboxOptions: sandbox);
+        sandboxOptions: sandbox,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
     WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
         goal,
@@ -413,7 +422,8 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
         worktree,
         DateTimeOffset.Parse("2026-06-26T12:00:00Z"),
         claudeAuthProbe: authProbe,
-        sandboxOptions: sandbox);
+        sandboxOptions: sandbox,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
     Assert.True(preflight.Allowed, string.Join("\n", preflight.Findings));
     Assert.Null(preflight.ErrorCode);
@@ -559,7 +569,8 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
         worktree,
         dispatchedAt,
         sandboxOptions: sandbox,
-        commandExists: _ => true);
+        commandExists: _ => true,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli);
 
     Assert.False(preflight.Allowed);
     Assert.Equal("blocked", preflight.CapabilityStatus);
@@ -1041,7 +1052,9 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
         WorkerProfileCatalog.Default(),
         promptRoot,
         workingDirectory,
-        dispatchedAt);
+        dispatchedAt,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
     Assert.Contains("--sandbox 'workspace-write'", developer.LastDispatch!.Command, StringComparison.Ordinal);
     Assert.True(!developer.LastDispatch.Command.Contains("read-only", StringComparison.Ordinal));
@@ -1161,8 +1174,8 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
         HasCliCredentialArtifact: false,
         CredentialArtifactPath: null);
 
-    WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, developerGoal, developerTask, [developerAgent], WorkerProfileCatalog.Default(), promptRoot, workingDirectory, dispatchedAt, claudeAuthProbe: authProbe);
-    WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, reviewerGoal, reviewerTask, [reviewerAgent], WorkerProfileCatalog.Default(), promptRoot, workingDirectory, dispatchedAt, claudeAuthProbe: authProbe);
+    WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, developerGoal, developerTask, [developerAgent], WorkerProfileCatalog.Default(), promptRoot, workingDirectory, dispatchedAt, claudeAuthProbe: authProbe, commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
+    WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, reviewerGoal, reviewerTask, [reviewerAgent], WorkerProfileCatalog.Default(), promptRoot, workingDirectory, dispatchedAt, claudeAuthProbe: authProbe, commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
     Assert.Contains("--permission-mode 'bypassPermissions'", developerTask.LastDispatch!.Command, StringComparison.Ordinal);
     Assert.Contains("--permission-mode 'dontAsk'", reviewerTask.LastDispatch!.Command, StringComparison.Ordinal);
@@ -1207,8 +1220,8 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
         HasCliCredentialArtifact: false,
         CredentialArtifactPath: null);
 
-    WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, researcherGoal, researcherTask, [researcherAgent], WorkerProfileCatalog.Default(), promptRoot, researcherWorkingDirectory, dispatchedAt, claudeAuthProbe: authProbe);
-    WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, developerGoal, developerTask, [developerAgent], WorkerProfileCatalog.Default(), promptRoot, developerWorkingDirectory, dispatchedAt, claudeAuthProbe: authProbe);
+    WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, researcherGoal, researcherTask, [researcherAgent], WorkerProfileCatalog.Default(), promptRoot, researcherWorkingDirectory, dispatchedAt, claudeAuthProbe: authProbe, commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
+    WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, developerGoal, developerTask, [developerAgent], WorkerProfileCatalog.Default(), promptRoot, developerWorkingDirectory, dispatchedAt, claudeAuthProbe: authProbe, commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
     Assert.Contains("--permission-mode 'dontAsk'", researcherTask.LastDispatch!.Command, StringComparison.Ordinal);
     Assert.Contains("--restricted", researcherTask.LastDispatch.Command, StringComparison.Ordinal);

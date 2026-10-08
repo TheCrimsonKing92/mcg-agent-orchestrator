@@ -50,7 +50,8 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
                 HasAnthropicApiKey: true,
                 HasCliCredentialArtifact: false,
                 CredentialArtifactPath: null),
-            sandboxOptions: DisabledSandbox));
+            sandboxOptions: DisabledSandbox,
+            commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent));
 
         Assert.Contains(sweep.Goals.Single().Repairs, repair => repair.Kind == "terminal-task-desync");
         Assert.Contains("Cancelled", refusal.Message, StringComparison.Ordinal);
@@ -114,7 +115,9 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
         worktree,
         DateTimeOffset.Parse("2026-06-26T12:00:00Z"),
         allowGitReference: true,
-        sandboxOptions: EnabledSandbox);
+        sandboxOptions: EnabledSandbox,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
     var findings = string.Join("\n", preflight.Findings);
     Assert.True(preflight.Allowed, findings);
@@ -152,7 +155,9 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
         WorkerProfileCatalog.Default(),
         worktree,
         DateTimeOffset.Parse("2026-07-02T19:00:00Z"),
-        sandboxOptions: sandbox);
+        sandboxOptions: sandbox,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
     Assert.True(preflight.Allowed, string.Join("\n", preflight.Findings));
     Assert.Contains(preflight.Findings, finding => finding.Contains("ready: profile, sandbox, worktree, and retry state passed deterministic preflight", StringComparison.Ordinal));
@@ -190,7 +195,9 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
         WorkerProfileCatalog.Default(),
         workingDirectory,
         DateTimeOffset.Parse("2026-06-13T12:00:00Z"),
-        sandboxOptions: sandbox);
+        sandboxOptions: sandbox,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
     var ex = Assert.ThrowsAny<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
         goal,
@@ -201,7 +208,8 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
         workingDirectory,
         DateTimeOffset.Parse("2026-06-13T12:00:00Z"),
         sandboxOptions: sandbox,
-        commandExists: _ => true));
+        commandExists: _ => true,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli));
 
     Assert.False(preflight.Allowed);
     Assert.Equal("blocked", preflight.CapabilityStatus);
@@ -242,7 +250,8 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
             workingDirectory,
             DateTimeOffset.Parse("2026-06-13T12:00:00Z"),
             sandboxOptions: DisabledSandbox,
-            commandExists: _ => true);
+            commandExists: _ => true,
+            claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli);
 
         Assert.False(preflight.Allowed);
         Assert.Contains(preflight.Findings, finding =>
@@ -287,7 +296,9 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
         WorkerProfileCatalog.Default(),
         workingDirectory,
         DateTimeOffset.Parse("2026-06-13T12:00:00Z"),
-        sandboxOptions: DisabledSandbox);
+        sandboxOptions: DisabledSandbox,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
     var ex = Assert.ThrowsAny<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
         goal,
@@ -297,7 +308,9 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
         promptRoot,
         workingDirectory,
         DateTimeOffset.Parse("2026-06-13T12:00:00Z"),
-        sandboxOptions: DisabledSandbox));
+        sandboxOptions: DisabledSandbox,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent));
 
     Assert.False(preflight.Allowed);
     Assert.Contains("missing required local skill", string.Join("\n", preflight.Findings), StringComparison.Ordinal);
@@ -346,7 +359,8 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
             workingDirectory,
             DateTimeOffset.Parse("2026-08-10T12:00:00Z"),
             sandboxOptions: sandbox,
-            commandExists: _ => true);
+            commandExists: _ => true,
+            claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli);
 
         Assert.Equal(expectedAllowed, preflight.Allowed);
         Assert.Equal("codex-cli", preflight.ProfileName);
@@ -383,7 +397,7 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
         Subscription: new SubscriptionLaunchProfile("codex-cli", AgentCatalog.OpenAiSubscriptionModelAlias, "low"));
     kernel.ActivateGoal(goal.Id, [agent]);
 
-    var results = WorkerProfileDispatcher.PrepareSubscriptionReadyTasks(
+    var results = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
         kernel,
         goal,
         [agent],
@@ -391,7 +405,9 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
         promptRoot,
         workingDirectory,
         DateTimeOffset.Parse("2026-06-13T12:00:00Z"),
-        sandboxOptions: DisabledSandbox);
+        sandboxOptions: DisabledSandbox,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent).Dispatches;
 
     Assert.Equal(1, results.Count);
     Assert.Equal(allowedTask.Id, results.Single().Task.Id);
@@ -872,7 +888,9 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
         Path.Combine(dispatchRoot, "prompts"),
         dispatchRoot,
         DateTimeOffset.UtcNow,
-        sandboxOptions: DisabledSandbox);
+        sandboxOptions: DisabledSandbox,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
     var preparedRisk = SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(goal, nextTask);
 
     Assert.True(nextTask.LastDispatch!.UsesComplexModel);
@@ -984,7 +1002,9 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
         promptRoot,
         workingDirectory,
         retryAttemptAt,
-        sandboxOptions: DisabledSandbox);
+        sandboxOptions: DisabledSandbox,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
     var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
         goal,
         task,
@@ -992,7 +1012,9 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
         profiles,
         workingDirectory,
         retryAttemptAt,
-        sandboxOptions: DisabledSandbox);
+        sandboxOptions: DisabledSandbox,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
     Assert.Equal(failureAt.AddMinutes(1), task.SubscriptionRetryAfter);
     Assert.False(item.CanPrepare);
@@ -1049,7 +1071,9 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
         promptRoot,
         workingDirectory,
         retryAttemptAt,
-        sandboxOptions: DisabledSandbox);
+        sandboxOptions: DisabledSandbox,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
     Assert.Equal(failureAt.AddMinutes(1), expiredRetryAfter);
     Assert.True(expiredRetryAfter < retryAttemptAt);
@@ -1374,7 +1398,7 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
     goal = kernel.GetGoal(goal.Id);
     developer = goal.Tasks.Single(candidate => candidate.Id == developer.Id);
 
-    var results = WorkerProfileDispatcher.PrepareSubscriptionReadyTasks(
+    var results = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
         kernel,
         goal,
         agents,
@@ -1382,7 +1406,9 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
         promptRoot,
         workingDirectory,
         failureAt.AddMinutes(30),
-        sandboxOptions: DisabledSandbox);
+        sandboxOptions: DisabledSandbox,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent).Dispatches;
 
     Assert.False(results.Any(result => result.Task.Id == developer.Id));
     Assert.Equal(WorkTaskStatus.Assigned, developer.Status);
@@ -1397,7 +1423,9 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
         promptRoot,
         workingDirectory,
         failureAt.AddMinutes(30),
-        sandboxOptions: DisabledSandbox));
+        sandboxOptions: DisabledSandbox,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent));
     Assert.Contains("Subscription preflight failed", ex.Message, StringComparison.Ordinal);
     Assert.Contains("subscription retry deferred until", ex.Message, StringComparison.Ordinal);
     Assert.Contains("source: verification history record 1 of 1", ex.Message, StringComparison.Ordinal);
@@ -1454,8 +1482,10 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
         WorkerProfileCatalog.Default(),
         workingDirectory,
         failureAt.AddMinutes(10),
-        sandboxOptions: DisabledSandbox);
-    var results = WorkerProfileDispatcher.PrepareSubscriptionReadyTasks(
+        sandboxOptions: DisabledSandbox,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
+    var results = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
         kernel,
         goal,
         agents,
@@ -1463,7 +1493,9 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
         promptRoot,
         workingDirectory,
         failureAt.AddMinutes(10),
-        sandboxOptions: DisabledSandbox);
+        sandboxOptions: DisabledSandbox,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent).Dispatches;
 
     Assert.False(sameProviderItem.CanPrepare);
     Assert.Equal(limitedTask.SubscriptionRetryAfter, sameProviderItem.RetryAfter);
@@ -1601,7 +1633,7 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
 
     var plan = SubscriptionPlanBuilder.Build(goal, agents, WorkerProfileCatalog.Default());
     var item = plan.Items.First(item => item.Role == AgentRole.Developer);
-    var results = WorkerProfileDispatcher.PrepareSubscriptionReadyTasks(
+    var results = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
         kernel,
         goal,
         agents,
@@ -1609,7 +1641,9 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
         promptRoot,
         workingDirectory,
         retryWindowPassed,
-        sandboxOptions: DisabledSandbox);
+        sandboxOptions: DisabledSandbox,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent).Dispatches;
 
     Assert.Equal(2, item.RecoverableSubscriptionLimitFailureCount);
     Assert.False(item.CanPrepare);
@@ -1626,7 +1660,9 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
         promptRoot,
         workingDirectory,
         retryWindowPassed,
-        sandboxOptions: DisabledSandbox));
+        sandboxOptions: DisabledSandbox,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent));
     Assert.Contains("Subscription preflight failed", ex.Message, StringComparison.Ordinal);
     Assert.Contains("repeated recoverable subscription limits require operator review", ex.Message, StringComparison.Ordinal);
 
@@ -1642,7 +1678,9 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
         promptRoot,
         workingDirectory,
         retryWindowPassed,
-        sandboxOptions: DisabledSandbox);
+        sandboxOptions: DisabledSandbox,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
     Assert.True(reviewedItem.CanPrepare);
     Assert.Equal(developer.Id, result.Task.Id);
@@ -1678,7 +1716,9 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
         promptRoot,
         workingDirectory,
         dispatchedAt,
-        sandboxOptions: DisabledSandbox));
+        sandboxOptions: DisabledSandbox,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent));
 
     Assert.Contains("Subscription preflight failed", ex.Message, StringComparison.Ordinal);
     Assert.Contains("goal workspace", ex.Message, StringComparison.Ordinal);
@@ -1718,7 +1758,9 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
         promptRoot,
         workingDirectory,
         dispatchedAt,
-        sandboxOptions: DisabledSandbox);
+        sandboxOptions: DisabledSandbox,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
     Assert.Equal(WorkTaskStatus.Running, task.Status);
     Assert.True(task.LastDispatch is not null);
@@ -1745,7 +1787,9 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
         WorkerProfileCatalog.Default(),
         worktree,
         dispatchedAt,
-        sandboxOptions: DisabledSandbox);
+        sandboxOptions: DisabledSandbox,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
     var ex = Assert.ThrowsAny<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
         goal,
@@ -1755,7 +1799,9 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
         promptRoot,
         worktree,
         dispatchedAt,
-        sandboxOptions: DisabledSandbox));
+        sandboxOptions: DisabledSandbox,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent));
 
     Assert.False(preflight.Allowed);
     Assert.True(preflight.Findings.Any(finding =>
@@ -1789,7 +1835,9 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
         WorkerProfileCatalog.Default(),
         worktree,
         dispatchedAt,
-        sandboxOptions: DisabledSandbox);
+        sandboxOptions: DisabledSandbox,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
     Assert.True(preflight.Allowed);
     Assert.Contains("ok: worktree clean before dispatch", preflight.Findings);
@@ -1814,13 +1862,17 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
     File.WriteAllText(cachePath, "cache");
 
     var cacheOnly = WorkerProfileDispatcher.PreflightSubscriptionTask(
-        goal, task, agents, WorkerProfileCatalog.Default(), worktree, dispatchedAt, sandboxOptions: DisabledSandbox);
+        goal, task, agents, WorkerProfileCatalog.Default(), worktree, dispatchedAt, sandboxOptions: DisabledSandbox,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
     Assert.True(cacheOnly.Allowed);
     File.WriteAllText(cachePath + ".source", "real work");
 
     var withSibling = WorkerProfileDispatcher.PreflightSubscriptionTask(
-        goal, task, agents, WorkerProfileCatalog.Default(), worktree, dispatchedAt, sandboxOptions: DisabledSandbox);
+        goal, task, agents, WorkerProfileCatalog.Default(), worktree, dispatchedAt, sandboxOptions: DisabledSandbox,
+        claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+        commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
     Assert.False(withSibling.Allowed);
     Assert.Contains(withSibling.Findings, finding =>
@@ -1866,7 +1918,9 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
             promptRoot,
             worktree,
             DateTimeOffset.Parse("2026-08-31T10:01:00Z"),
-            sandboxOptions: DisabledSandbox);
+            sandboxOptions: DisabledSandbox,
+            claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+            commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
         Assert.Null(task.AcceptedRetryFeedback);
         Assert.NotNull(task.LastDispatch);
@@ -1900,7 +1954,9 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
             promptRoot,
             worktree,
             DateTimeOffset.Parse("2026-08-31T10:01:00Z"),
-            sandboxOptions: DisabledSandbox);
+            sandboxOptions: DisabledSandbox,
+            claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+            commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
         var receipt = Assert.IsType<WorkerContextPackageReceipt>(prepared.Task.LastDispatch!.ContextPackageReceipt);
         var retryReceipt = Assert.IsType<WorkerRetryFeedbackPromptReceipt>(receipt.RetryFeedbackPromptReceipt);
@@ -1978,7 +2034,9 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
                 promptRoot,
                 worktree,
                 DateTimeOffset.Parse("2026-08-31T10:01:00Z"),
-                sandboxOptions: DisabledSandbox));
+                sandboxOptions: DisabledSandbox,
+                claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+                commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent));
 
         Assert.Equal(WorkerRetryFeedbackPromptGuard.ErrorCode, error.ErrorCode);
         Assert.Contains("authoritative current-round feedback does not match", error.Message, StringComparison.Ordinal);
@@ -2009,7 +2067,8 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
             effortOverride,
             allowGitReference: true,
             sandboxOptions: DisabledSandbox,
-            commandExists: RealClaudeLauncherExists);
+            commandExists: RealClaudeLauncherExists,
+            claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli);
         WorkerProfileDispatcher.PrepareSubscriptionTask(
             kernel,
             goal,
@@ -2064,7 +2123,8 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
             effortOverride,
             allowGitReference: true,
             sandboxOptions: DisabledSandbox,
-            commandExists: RealClaudeLauncherExists);
+            commandExists: RealClaudeLauncherExists,
+            claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli);
         var refusal = Assert.Throws<WorkerSubscriptionPreflightException>(() =>
             WorkerProfileDispatcher.PrepareSubscriptionTask(
                 kernel,
@@ -2078,7 +2138,8 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
                 effortOverride,
                 allowGitReference: true,
                 sandboxOptions: DisabledSandbox,
-                commandExists: RealClaudeLauncherExists));
+                commandExists: RealClaudeLauncherExists,
+                claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli));
 
         var findings = string.Join("\n", preflight.Findings);
         Assert.False(preflight.Allowed);
@@ -2118,7 +2179,8 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
             effortOverride,
             allowGitReference: true,
             sandboxOptions: DisabledSandbox,
-            commandExists: RealClaudeLauncherExists);
+            commandExists: RealClaudeLauncherExists,
+            claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli);
         WorkerProfileDispatcher.PrepareSubscriptionTask(
             kernel,
             goal,

@@ -1076,7 +1076,8 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
             DispatchTestProfiles(),
             worktree,
             clock.UtcNow,
-            commandExists: _ => true);
+            commandExists: _ => true,
+            claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli);
         Assert.True(developerPreflight.Allowed, string.Join(Environment.NewLine, developerPreflight.Findings));
         var preparedDeveloper = WorkerProfileDispatcher.PrepareTask(
             kernel,
@@ -1323,7 +1324,8 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
             Path.Combine(root, "prompts"),
             root,
             DateTimeOffset.UtcNow,
-            commandExists: _ => true);
+            commandExists: _ => true,
+            claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli);
 
         Assert.Empty(first.Dispatches);
         Assert.Contains(
@@ -1355,7 +1357,8 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
             Path.Combine(root, "prompts"),
             root,
             DateTimeOffset.UtcNow.AddMinutes(2),
-            commandExists: _ => true);
+            commandExists: _ => true,
+            claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli);
 
         Assert.Empty(second.Dispatches);
         Assert.Equal(WorkTaskStatus.Failed, researcher.Status);
@@ -1435,7 +1438,8 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
             Path.Combine(root, "prompts"),
             root,
             DateTimeOffset.UtcNow,
-            commandExists: _ => true);
+            commandExists: _ => true,
+            claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli);
 
         Assert.Empty(first.Dispatches);
         Assert.Equal(WorkTaskStatus.Assigned, planner.Status);
@@ -1462,7 +1466,8 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
             Path.Combine(root, "prompts"),
             root,
             DateTimeOffset.UtcNow.AddMinutes(2),
-            commandExists: _ => true);
+            commandExists: _ => true,
+            claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli);
 
         Assert.Empty(second.Dispatches);
         Assert.Equal(WorkTaskStatus.Failed, planner.Status);
@@ -1514,7 +1519,8 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
             DispatchTestProfiles(),
             root,
             DateTimeOffset.UtcNow,
-            commandExists: _ => true);
+            commandExists: _ => true,
+            claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli);
         Assert.False(blocked.Allowed);
         Assert.Equal(WorkerProfileDispatcher.MissingResearchArtifactErrorCode, blocked.ErrorCode);
         Assert.Contains(research.Id.Value, string.Join(Environment.NewLine, blocked.Findings), StringComparison.Ordinal);
