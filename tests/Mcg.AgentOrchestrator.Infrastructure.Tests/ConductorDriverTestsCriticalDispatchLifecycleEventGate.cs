@@ -222,6 +222,57 @@ public sealed class ConductorDriverTestsCriticalDispatchLifecycleEventGate
         Assert.Single(recorded.Calls);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CheckpointScopeTracksCommittedStateAndDiscardsRejectedEvents(bool commitFirst)
+    {
+        var (kernel, goal) = SimpleGoal();
+        var task = goal.Tasks.Single();
+        var inner = DispatchProxy.Create<IGoalLifecycleEventWriter, RecordingWriterProxy>();
+        var recorded = (RecordingWriterProxy)inner;
+        var gate = new CriticalDispatchLifecycleEventGate(inner);
+        kernel.SetEventWriter(gate);
+        var reject = !commitFirst;
+        var notifications = 0;
+        CriticalDispatchLifecycleCheckpoint? checkpoint = null;
+        checkpoint = CriticalDispatchLifecycleCheckpoint.Begin(gate, kernel, goal.Id,
+            (current, ids) =>
+            {
+                Assert.Same(kernel, current);
+                Assert.Equal(goal.Id, Assert.Single(ids));
+                Assert.Empty(recorded.Calls);
+                if (reject)
+                    throw new DispatchCheckpointConflictException("missing baseline");
+            },
+            id =>
+            {
+                Assert.Equal(goal.Id, id);
+                Assert.True(checkpoint!.HasCommitted);
+                Assert.Single(recorded.Calls); // Release precedes the success notification.
+                notifications++;
+            });
+        Assert.NotNull(checkpoint);
+        using (checkpoint)
+        {
+            Assert.False(checkpoint.HasCommitted);
+            DispatchTask(kernel, goal, task);
+            if (commitFirst)
+            {
+                checkpoint.BeforeWorkerStart(kernel, goal.Id, task.Id, DispatchRecordCheckpointPhase.BeforeProcessStart);
+                recorded.Calls.Clear();
+                reject = true;
+                gate.AppendTimelineEvent(goal.Timeline.Last() with { OccurredAt = goal.Timeline.Last().OccurredAt.AddTicks(1) });
+            }
+            var failure = Assert.Throws<DispatchRecordWriteException>(() => checkpoint.BeforeWorkerStart(
+                kernel, goal.Id, task.Id, DispatchRecordCheckpointPhase.BeforeProcessStart));
+            Assert.True(failure.PreservesAuthoritativeState);
+            Assert.Equal(commitFirst, checkpoint.HasCommitted);
+        }
+        Assert.Equal(commitFirst ? 1 : 0, notifications);
+        Assert.Empty(recorded.Calls); // Dispose cannot project a rejected dispatch.
+    }
+
     [Fact]
     public void EveryInterfaceMemberIncludingDefaultMethodsForwardsExactly()
     {
