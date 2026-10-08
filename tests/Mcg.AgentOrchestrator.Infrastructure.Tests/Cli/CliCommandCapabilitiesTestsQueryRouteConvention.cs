@@ -32,9 +32,7 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteConvention
         {
             ["monitor-goal"] = "Polling loop deferred until its reload and clock seam is decided.",
             ["owner-digest"] = "Served at startup before the persistent runner.",
-            ["context-usage"] = "Served at startup before the persistent runner.",
-            ["agent-list"] = "No handler; the dead registry entry belongs to separate cleanup.",
-            ["worker-profile-list"] = "No handler; the dead registry entry belongs to separate cleanup."
+            ["context-usage"] = "Served at startup before the persistent runner."
         };
 
     private static readonly (string[] Args, string Reason)[] WriterPathForms =
@@ -88,7 +86,7 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteConvention
     [Fact]
     public void Exemptions_BareForms_PinFiveReasonedQueryOnlyExceptions()
     {
-        string[] expected = ["monitor-goal", "owner-digest", "context-usage", "agent-list", "worker-profile-list"];
+        string[] expected = ["monitor-goal", "owner-digest", "context-usage"];
         var failures = new List<string>();
         foreach (var verb in expected)
         {

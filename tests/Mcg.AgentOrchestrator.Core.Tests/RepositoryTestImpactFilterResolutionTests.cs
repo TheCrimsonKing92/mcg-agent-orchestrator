@@ -57,7 +57,7 @@ public sealed class RepositoryTestImpactFilterResolutionTests
     [Xunit.Fact]
     public void DottedMultiClassFileUsesEveryDeclaredClass()
     {
-        // Mirrors CliCommandTests.GoalLifecycleCommands.cs, including its non-derivable classes.
+        // Exercises a dotted filename with multiple non-derivable classes.
         const string path =
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTests.GoalLifecycleCommands.cs";
         var reader = SourceDeclarationReader.ForFiles(
@@ -106,7 +106,6 @@ public sealed class RepositoryTestImpactFilterResolutionTests
             "FullyQualifiedName~CliCommandTestsGoalLifecycleCleanupHooks|" +
             "FullyQualifiedName~CliCommandTestsGoalLifecycleCleanupHooksAbandon|" +
             "FullyQualifiedName~CliCommandTestsGoalLifecycleCleanupHooksAcceptance|" +
-            "FullyQualifiedName~CliCommandTestsGoalLifecycleCommands|" +
             "FullyQualifiedName~CliCommandTestsGoalLifecycleCommandsCreation|" +
             "FullyQualifiedName~CliCommandTestsIsolatedBuildLeaseCommands",
             check.Command[^1]);

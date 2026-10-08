@@ -13,12 +13,10 @@ internal static class CliHandledVerbRegistry
         "add",
         "add-task",
         "agent",
-        "agent-list",
         "answer",
         "architecture",
         "ask",
         "ask-goal",
-        "autonomy-policies",
         "backlog-intake",
         "cancel",
         "create",
@@ -53,8 +51,7 @@ internal static class CliHandledVerbRegistry
         "test",
         "verify",
         "worker-dispatch",
-        "worker-profile",
-        "worker-profile-list"
+        "worker-profile"
     };
 
     internal static bool IsHandled(string verb) =>

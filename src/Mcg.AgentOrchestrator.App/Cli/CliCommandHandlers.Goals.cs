@@ -730,10 +730,6 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
         case "backlog-intake":
             return HandleBacklogIntake(context, parts);
 
-        case "autonomy-policies":
-            ConsoleViews.PrintAutonomyPolicies();
-            return false;
-
         case "cancel-goal":
             return ExecuteGoalCancelInMemory(context, PrepareGoalCancelCommand(parts));
 
