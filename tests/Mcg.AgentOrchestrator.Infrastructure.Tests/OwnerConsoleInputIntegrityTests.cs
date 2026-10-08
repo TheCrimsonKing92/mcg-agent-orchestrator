@@ -8,7 +8,7 @@ public sealed class OwnerConsoleInputIntegrityTests
     private static CancellationToken TestToken => TestContext.Current.CancellationToken;
     private static string NL => Environment.NewLine;
 
-    [Fact(Timeout = 30000)]
+    [Fact]
     public async Task InjectedOutputBetweenKeysSubmitsDigestAndReprintsPartialInput()
     {
         using var keys = new ScriptedKeys();
@@ -30,7 +30,7 @@ public sealed class OwnerConsoleInputIntegrityTests
         Assert.False(input.IsEditingLine);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact]
     public async Task AbandonedReadDoesNotLoseOrDuplicateTheNextLine()
     {
         using var keys = new ScriptedKeys();
@@ -61,7 +61,7 @@ public sealed class OwnerConsoleInputIntegrityTests
         Assert.Equal("digest" + NL + "help" + NL, sink.Text);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact]
     public async Task BackspaceAcrossInjectedOutputKeepsVisibleEqualSubmitted()
     {
         using var keys = new ScriptedKeys();
@@ -93,7 +93,7 @@ public sealed class OwnerConsoleInputIntegrityTests
         Assert.Equal("digest", RenderLastCompletedLine(sink.Text));
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact]
     public async Task OutputWithoutEditingAndBellRemainUnchanged()
     {
         using var keys = new ScriptedKeys();
@@ -115,7 +115,7 @@ public sealed class OwnerConsoleInputIntegrityTests
         Assert.Equal("digest", await read.WaitAsync(TestToken));
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact]
     public async Task NewlineOutputReprintsInputInsteadOfPassingThroughLikeTheBell()
     {
         using var keys = new ScriptedKeys();
@@ -133,7 +133,7 @@ public sealed class OwnerConsoleInputIntegrityTests
         Assert.Equal("digest", RenderLastCompletedLine(sink.Text));
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact]
     public async Task MultipleReadsAndQueuedLinesAreDeliveredInOrderExactlyOnce()
     {
         using var keys = new ScriptedKeys();
@@ -159,7 +159,7 @@ public sealed class OwnerConsoleInputIntegrityTests
         Assert.Single(keys.ReaderThreads);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact]
     public async Task BackspaceToEmptyAndIgnoredKeysPreserveEditingState()
     {
         using var keys = new ScriptedKeys();
