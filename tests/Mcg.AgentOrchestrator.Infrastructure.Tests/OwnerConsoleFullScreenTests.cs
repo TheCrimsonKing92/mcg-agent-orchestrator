@@ -80,7 +80,7 @@ public sealed class OwnerConsoleFullScreenTests
         await controller.RunCommandAsync("digest");
 
         Assert.Equal(0, harness.DigestReport.Calls);
-        Assert.Equal("Owner digest: landed=2 pending=1", Assert.Single(dialogs.Texts));
+        Assert.Equal("Owner digest: landed=2 pending=1" + Environment.NewLine, Assert.Single(dialogs.Texts));
         await controller.RunCommandAsync("metrics");
         Assert.Equal(1, harness.DigestReport.Calls);
         Assert.Contains("digest first", dialogs.Texts[1]);
