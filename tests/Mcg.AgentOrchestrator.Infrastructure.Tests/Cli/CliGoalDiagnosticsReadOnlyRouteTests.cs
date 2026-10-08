@@ -20,7 +20,8 @@ public sealed class CliGoalDiagnosticsReadOnlyRouteTests : CliTaskQueryTestSuppo
     [Xunit.InlineData(false, "failure-triage", "abc10000", "extra")]
     [Xunit.InlineData(false, "goal-timing", "abc10000", "extra")]
     [Xunit.InlineData(false, "dogfood-eval", "abc10000")]
-    [Xunit.InlineData(false, "readiness", "abc10000")]
+    [Xunit.InlineData(true, "readiness", "abc10000")]
+    [Xunit.InlineData(false, "readiness-repair", "abc10000")]
     [Xunit.InlineData(true, "next", "abc10000")]
     [Xunit.InlineData(false, "goal-recovery", "abc10000")]
     public void ExplicitPrefix_ClassifiesOnlySupportedForms(bool expected, params string[] args) =>

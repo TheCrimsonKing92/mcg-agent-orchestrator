@@ -17,7 +17,7 @@ internal static class CliCommandCapabilities
         "round-value",
         "architecture", "config", "agent-list", "worker-profile-list", "model-outcomes",
         "backlog-list", "backlog-show", "backlog-similar", "goal-events", "timeline",
-        "owner-digest", "context-usage", "next"
+        "owner-digest", "context-usage", "next", "readiness"
     };
 
     internal static IReadOnlySet<string> QueryOnlyVerbs => QueryCommands;

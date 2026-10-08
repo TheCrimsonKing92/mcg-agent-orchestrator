@@ -823,7 +823,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         var repository = new InMemoryTransactionalStateRepository(kernel);
         var changed = false;
         var output = CaptureConsole(() => changed = CliPersistentStateRunner.ExecuteCommand(
-            ["readiness", goal.Id.Value[..8]],
+            ["readiness-repair", goal.Id.Value[..8]],
             repository,
             workspace,
             ref agents,

@@ -73,7 +73,7 @@ public sealed class CliPlanReportReadOnlyRouteTests : CliTaskQueryTestSupport
     [Xunit.InlineData("goal-diagnostics", "abc10000", "extra")]
     [Xunit.InlineData("failure-triage", "abc10000", "extra")]
     [Xunit.InlineData("goal-timing", "abc10000", "extra")]
-    [Xunit.InlineData("readiness", "abc10000")]
+    [Xunit.InlineData("readiness-repair", "abc10000")]
     [Xunit.InlineData("goal-recovery", "abc10000")]
     public void OtherForms_KeepTheirExistingRoute(params string[] args)
     {

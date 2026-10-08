@@ -759,34 +759,8 @@ internal static partial class CliPersistentStateRunner
     internal static bool IsProvenanceCommand(IReadOnlyList<string> args) =>
         args.Count == 1 && args[0].Equals("provenance", StringComparison.OrdinalIgnoreCase);
 
-    internal static bool IsSingleGoalReportCommand(IReadOnlyList<string> args)
-    {
-        if (args.Count == 0)
-            return false;
-
-        return args[0].ToLowerInvariant() switch
-        {
-            "status" or
-            "monitor" or
-            "readiness" or
-            "goal-recovery" or
-            "dogfood-eval" or
-            "failure-triage" or
-            "retention-plan" or
-            "evidence" or
-            "goal-changes" or
-            "stages" or
-            "gates" or
-            "verify-needed" or
-            "input-needed" or
-            "goal-diagnostics" or
-            "next" or
-            "subscription-plan" or
-            "supervisor" or
-            "build-lease-cleanup" => true,
-            _ => false
-        };
-    }
+    internal static bool IsSingleGoalReportCommand(IReadOnlyList<string> args) =>
+        CliSingleGoalReportCommand.IsCommand(args);
 
     internal static bool IsGoalLifecycleDispositionCommand(IReadOnlyList<string> args)
     {
