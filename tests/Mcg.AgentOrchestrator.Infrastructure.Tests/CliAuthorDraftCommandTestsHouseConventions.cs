@@ -13,10 +13,10 @@ public sealed class CliAuthorDraftCommandTestsHouseConventions
     [Theory]
     [InlineData("\n")]
     [InlineData("\r\n")]
-    public void House_draft_without_planner_section_passes_all_seven_checks(string newline)
+    public void House_draft_without_planner_section_passes_all_eight_checks(string newline)
     {
         var checks = Run(HouseDraft.ReplaceLineEndings(newline));
-        Assert.Equal(new[] { "sections", "criteria-present", "owner-sentence", "premise-citations", "numbered-criteria", "developer-deferred-criterion", "build-item-count" },
+        Assert.Equal(new[] { "sections", "criteria-present", "owner-sentence", "premise-citations", "numbered-criteria", "developer-deferred-criterion", "build-item-count", "post-landing-criterion" },
             checks.Select(check => check.Name).ToArray());
         Assert.All(checks, check => Assert.True(check.Passed, check.Detail));
     }
