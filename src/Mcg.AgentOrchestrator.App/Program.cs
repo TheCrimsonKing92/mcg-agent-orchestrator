@@ -502,6 +502,8 @@ Console.WriteLine("Advanced/Internal (used by automation, tests, and advanced wo
 Console.WriteLine("  Inspection verbs folded into 'next --full': status, monitor, readiness, evidence, stages, gates,");
 Console.WriteLine("    verify-needed, input-needed, subscription-plan, model-outcomes, durations, dispatch-value, loop-health, failure-triage,");
 Console.WriteLine("    goal-recovery, supervisor, operator-inbox. All still work standalone.");
+Console.WriteLine("  readiness [goal-id]: diagnose terminal-goal sweep blockers and print start readiness.");
+Console.WriteLine("  readiness-repair [goal-id]: apply the terminal-goal sweep repairs, then print start readiness.");
 Console.WriteLine("  doctor, architecture, tenant, project");
 Console.WriteLine("  provider-smoke [openai|anthropic|ollama] [--confirm-paid-smoke] [task-number], provider-smoke all --confirm-all");
 Console.WriteLine("  prototype [objective]");

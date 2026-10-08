@@ -275,7 +275,8 @@ internal static class SourceSizeRatchet
             // must retain the single route-selection call so existing fallback semantics stay centralized.
             // Goal 28397f6a adds the store-only epic command routes; retain the runner's
             // shared dispatch seam and account for its two-line net increase.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 4874),
+            // Goal 4da02c2f extracted the single-goal report predicate to CliSingleGoalReportCommand.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 4848),
             // Goal 03aaf13e adds the explicit-root isolation fact at the verifier's existing execution-
             // environment seam; the production verifier remains at its prior ceiling.
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs", 1611),
@@ -395,7 +396,8 @@ internal static class SourceSizeRatchet
             // Goal d6033045 extracted the pre-admission receipt pass to PassedMergeTrainReceiptAdmission; goal 1d0f2317
             // adds one admission predicate to exclude stream-complete children before slot reservation. Measured 9255.
             new SourceClassCeiling("ConductorBatchLoop", 9272, 56), // def5cd48: revision ledger and planner conflict routing.
-            new SourceClassCeiling("CliPersistentStateRunner", 6043, 18),
+            // Goal 4da02c2f extracted the single-goal report predicate to CliSingleGoalReportCommand.
+            new SourceClassCeiling("CliPersistentStateRunner", 6017, 18),
         });
 
     internal static IReadOnlyList<SourceSizeViolation> EvaluateClasses(

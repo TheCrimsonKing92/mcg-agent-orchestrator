@@ -1079,6 +1079,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             return false;
 
         case "readiness":
+            return CliReadinessQueryCommand.Diagnose(parts, context);
+
+        case "readiness-repair":
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
             var readinessSweep = TerminalGoalSweep.Run(
                 context.Kernel,

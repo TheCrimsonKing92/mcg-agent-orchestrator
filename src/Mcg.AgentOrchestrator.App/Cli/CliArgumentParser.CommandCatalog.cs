@@ -39,6 +39,7 @@ internal static IReadOnlyList<string> RecognizedCommands { get; } =
     "project-add",
     "project-assign",
     "readiness",
+    "readiness-repair",
     "goal-recovery",
     "dogfood-eval",
     "dogfood-log",

@@ -247,7 +247,8 @@ acceptance suite output → git diff / commits in the worktree → verification 
 | `status <goal-prefix>` | objective + the task list with each task's status (`[Assigned]`/`[Completed]`/`[Failed]`/...) |
 | `task <goal-prefix> <n>` | one task's detail: assigned agent, dispatch command, exit code, and latest verification/failure preview; previews may be truncated |
 | `verifications <goal-prefix> <n>` | the task's stored verification history, including orchestrator-authored stdout/stderr such as planner-contract and acceptance state-guard diagnostics; use the printed artifact path when a long value is previewed |
-| `readiness <goal-prefix>` | **start blockers** — high-risk objective terms and ownership approval (run this first when a goal won't dispatch); runs a repairing terminal-goal sweep and can change state, as does `goal-recovery <goal-prefix>` |
+| `readiness <goal-prefix>` | **start blockers** — high-risk objective terms and ownership approval (run this first when a goal won't dispatch); read-only terminal-goal diagnosis reports pending repairs without applying them |
+| `readiness-repair [goal-prefix]` | apply the repairing terminal-goal sweep, surface attention, and print start blockers; can change state, as does `goal-recovery <goal-prefix>` |
 | `durations` | role/complexity runtime medians plus attempts-per-task; use it to spot slow lanes and retry redundancy before changing worker mix or loop policy |
 | `durations --by-model` | the same duration report sliced by model/provider; use it when a role looks slow but provider choice may be the real variable |
 
@@ -332,7 +333,7 @@ Known direct-command limitation: [acceptance](cli-reference.md#acceptance-and-ga
 
 | Symptom (in loop output or `status`) | Cause | First action |
 |---|---|---|
-| `escalated at WorkspaceReady - No tasks in ready batch` **but `status` shows tasks Assigned** | The goal's file scope touches a **high-risk ownership area** (`scripts/`/`.ps1`, `src/.../Infrastructure/`, build-system, config, skills) — under a non-Permissive policy these need operator approval. (Or a high-risk *objective term* like "production"/"auth".) | `readiness <goal>` to see the exact blocker; its repairing terminal-goal sweep can change state. Re-run the loop under `--policy Permissive` (auto-approves ownership). |
+| `escalated at WorkspaceReady - No tasks in ready batch` **but `status` shows tasks Assigned** | The goal's file scope touches a **high-risk ownership area** (`scripts/`/`.ps1`, `src/.../Infrastructure/`, build-system, config, skills) — under a non-Permissive policy these need operator approval. (Or a high-risk *objective term* like "production"/"auth".) | `readiness <goal>` to read the exact blocker; use `readiness-repair <goal>` to apply terminal-goal repairs. Re-run the loop under `--policy Permissive` (auto-approves ownership). |
 | `escalated at Failed - operator action required` | A task is in `Failed` status. | `status <goal>` to find the Failed task. If that role can repair the failure, `recover <goal> --text-file <path>` resets stuck/Failed/Cancelled tasks to dispatchable; re-run the loop. If that role cannot act on the missing work (e.g. a Tester/Reviewer on a Developer defect), route the upstream task with `adjudicate --goal <goal> <upstream-task-number> route --cause <cause> --text-file <path> --evidence <reference>`; name the Developer task for a source defect. This retries the named task and invalidates downstream evidence. |
 | `escalated at AwaitingClarification` | The spec-refiner asked questions. | `attention dismiss <goal>` (proceed with the brief) or answer them, then re-run. |
 | Workers repeatedly invent evidence for an infeasible acceptance criterion | The authoritative refined brief still requires the criterion; retry notes cannot change it. | During a quiet window, run `goal-amend <goal> --waive <criterion-number|exact-text> --reason-file <path> [--actor <name>]`. The durable waiver, reason, actor, and timestamp appear in subsequent briefs and goal events. |
@@ -718,4 +719,4 @@ For rare lifecycle/task desync repair, `scripts\Set-OrchestratorGoalStatus.ps1` 
 
 - `AGENTS.md` — output/diagnosis/spec discipline and architecture invariants (read after this).
 - `.agents/skills/orchestrator-worker-verification/SKILL.md` — how to verify a worker result before trusting it.
-- `next <goal> --full` — authoritative live goal inspection; `readiness <goal>` and `goal-recovery <goal>` also run repairing terminal-goal sweeps and can change state.
+- `next <goal> --full` — authoritative live goal inspection; `readiness <goal>` reads terminal-goal diagnosis and start blockers. `readiness-repair <goal>` and `goal-recovery <goal>` run repairing terminal-goal sweeps and can change state. Bare `readiness` diagnoses without applying repairs but retains writer-path current-goal resolution and outbox draining until that resolution has a read-only rule.

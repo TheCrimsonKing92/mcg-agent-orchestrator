@@ -1,8 +1,10 @@
+using Mcg.AgentOrchestrator.App.Application;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
+using System.Text.Json;
 
 [Xunit.Collection(CliTestCollections.ConsoleSerialized)]
 public sealed class CliAttentionReadinessWriterPathTests : CliTaskQueryTestSupport
@@ -11,8 +13,8 @@ public sealed class CliAttentionReadinessWriterPathTests : CliTaskQueryTestSuppo
     [Xunit.InlineData("attention", "answer", "abc10000", "id", "answer")]
     [Xunit.InlineData("attention", "dismiss", "abc10000")]
     [Xunit.InlineData("attention", "dismiss", "--item", "item-id")]
-    [Xunit.InlineData("readiness")]
-    [Xunit.InlineData("readiness", "abc10000")]
+    [Xunit.InlineData("readiness-repair")]
+    [Xunit.InlineData("readiness-repair", "abc10000")]
     public async Task MutatingFormsStayOnWriterPath(params string[] args)
     {
         Xunit.Assert.False(CliReadOnlyCommandRunner.IsReadOnlyCommand(args));
@@ -28,8 +30,8 @@ public sealed class CliAttentionReadinessWriterPathTests : CliTaskQueryTestSuppo
     [Xunit.InlineData("attention", "answer", "abc10000", "missing", "answer")]
     [Xunit.InlineData("attention", "dismiss", "abc10000")]
     [Xunit.InlineData("attention", "dismiss", "--item", "missing")]
-    [Xunit.InlineData("readiness")]
-    [Xunit.InlineData("readiness", "abc10000")]
+    [Xunit.InlineData("readiness-repair")]
+    [Xunit.InlineData("readiness-repair", "abc10000")]
     public async Task MutatingFormsExecuteWriterPathAndDrainOutbox(params string[] args)
     {
         var root = CreateTempDirectory();
@@ -65,6 +67,182 @@ public sealed class CliAttentionReadinessWriterPathTests : CliTaskQueryTestSuppo
         {
             Directory.Delete(root, recursive: true);
         }
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("readiness", "abc10000")]
+    [Xunit.InlineData("READINESS", "ABC10000")]
+    public async Task Readiness_Prefix_LeavesPendingOutboxAndStateUnchanged(params string[] args)
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal(new GoalId("abc10000aaaaaaaaaaaaaaaaaaaaaaaa"), "Readiness read probe",
+                [new TaskSpec(TaskId.New(), "Inspect readiness", AgentRole.Developer)]);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            Xunit.Assert.True(DispatchReadinessRules.HasAssignedDispatchCandidates(goal));
+            var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            await repository.SaveAsync(kernel);
+            await using (var connection = OpenStateConnection(workspace.SqliteStatePath))
+            {
+                await connection.OpenAsync();
+                await using var insert = connection.CreateCommand();
+                insert.CommandText = "INSERT INTO state_outbox (id, kind, payload_json, created_at) VALUES ('readiness-read-probe', $kind, '{}', $created)";
+                insert.Parameters.AddWithValue("$kind", GoalOperationJournal.AcceptanceRetryAuditOutboxKind);
+                insert.Parameters.AddWithValue("$created", "2026-09-24T00:00:00.0000000+00:00");
+                Xunit.Assert.Equal(1, await insert.ExecuteNonQueryAsync());
+            }
+            var before = JsonSerializer.Serialize((await repository.LoadAsync()).ExportSnapshot());
+
+            var result = await CliAttentionNextReadOnlyWriterHeldTests.RunQueryAsync(root, args);
+
+            Xunit.Assert.True(result.ExitCode == 0, result.Error);
+            Xunit.Assert.Contains("Goal readiness", result.Output, StringComparison.Ordinal);
+            Xunit.Assert.DoesNotContain("quarantined", result.Error, StringComparison.Ordinal);
+            Xunit.Assert.Equal(before, JsonSerializer.Serialize((await repository.LoadAsync()).ExportSnapshot()));
+            await using var check = OpenStateConnection(workspace.SqliteStatePath);
+            await check.OpenAsync();
+            await using var query = check.CreateCommand();
+            query.CommandText = "SELECT COUNT(*) FROM state_outbox WHERE id = 'readiness-read-probe' AND payload_json = '{}' AND quarantined_at IS NULL";
+            Xunit.Assert.Equal(1L, (long)(await query.ExecuteScalarAsync())!);
+            Xunit.Assert.False(File.Exists(Path.Combine(workspace.OrchestratorDirectory, SqliteOperatorIntentStore.DatabaseFileName)));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task Readiness_Prefix_SkipsStartupHydration()
+    {
+        string[] args = ["readiness", "abc10000"];
+        Xunit.Assert.True(CliReadOnlyCommandRunner.IsReadOnlyCommand(args));
+        Xunit.Assert.Equal(CliCommandCapability.QueryOnly, CliCommandCapabilities.Classify(args));
+        var repository = new ProbeStateRepository(new AgentOrchestratorKernel());
+        var startup = await CliReadOnlyStartupHydration.PrepareStartupAsync(args, repository);
+        Xunit.Assert.False(startup.Hydrated);
+        Xunit.Assert.Equal(0, repository.FullLoadAttempts);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("readiness", "abc10000", "extra")]
+    [Xunit.InlineData("readiness", "abc10000", "--repair")]
+    [Xunit.InlineData("readiness", "--unknown")]
+    [Xunit.InlineData("readiness", " ")]
+    public void Readiness_InvalidExplicitForm_FailsWithoutWriterEffects(params string[] args)
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var repository = new ProbeStateRepository(new AgentOrchestratorKernel()) { ThrowOnOutbox = true };
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = null;
+            Xunit.Assert.True(CliReadOnlyCommandRunner.IsReadOnlyCommand(args));
+            Xunit.Assert.Equal(CliCommandCapability.QueryOnly, CliCommandCapabilities.Classify(args));
+            var error = Xunit.Assert.Throws<ArgumentException>(() =>
+                CliPersistentStateRunner.ExecuteCommand(args, repository, workspace, ref agents,
+                    new InMemoryModelProviderRegistry([]), ref profiles, ref currentGoal));
+            Xunit.Assert.Contains("Usage: readiness", error.Message, StringComparison.Ordinal);
+            Xunit.Assert.Equal(0, repository.FullLoadAttempts);
+            Xunit.Assert.Equal(0, repository.LoadGoalsCount);
+            Xunit.Assert.Equal(0, repository.ListGoalMetadataCount);
+            Xunit.Assert.Equal(0, repository.ListOutboxMessagesCount);
+            Xunit.Assert.Equal(0, repository.OutboxClaimAttempts);
+            Xunit.Assert.Equal(0, repository.MutationAttempts);
+            Xunit.Assert.Equal(0, repository.SaveAttempts);
+            Xunit.Assert.Equal(0, repository.MergeSaveAttempts);
+            Xunit.Assert.Empty(repository.ObservedWriteOperationTags);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task Readiness_SupersededBranch_ReportsRepairWithoutApplyingIt()
+    {
+        var root = CreateTempDirectory();
+        GoalId? cleanupGoalId = null;
+        try
+        {
+            RunGit(root, "init", "-b", "main");
+            RunGit(root, "config", "user.email", "tests@example.com");
+            RunGit(root, "config", "user.name", "CLI Tests");
+            File.WriteAllText(Path.Combine(root, "seed.txt"), "seed");
+            RunGit(root, "add", "-A");
+            RunGit(root, "commit", "-m", "Seed");
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Superseded readiness branch");
+            cleanupGoalId = goal.Id;
+            var worktree = GoalWorktrees.Ensure(root, goal.Id);
+            File.WriteAllText(Path.Combine(worktree, "equivalent.txt"), "already upstream");
+            RunGit(worktree, "add", "equivalent.txt");
+            RunGit(worktree, "commit", "-m", "Goal work");
+            File.WriteAllText(Path.Combine(root, "equivalent.txt"), "already upstream");
+            RunGit(root, "add", "equivalent.txt");
+            RunGit(root, "commit", "-m", "Equivalent work landed by another goal");
+            var snapshot = kernel.ExportSnapshot();
+            kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with
+            {
+                Goals = snapshot.Goals.Select(item => item.Id == goal.Id.Value
+                    ? item with { Status = GoalStatus.Completed } : item).ToArray()
+            });
+            Xunit.Assert.False(GoalWorktrees.IsBranchMergedIntoCurrent(root, goal.Id));
+            Xunit.Assert.Contains(TerminalGoalSweep.Diagnose(kernel, root, goal.Id).Blockers,
+                blocker => blocker.Kind == "completed-branch-superseded");
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+            var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            await repository.SaveAsync(kernel);
+            var before = JsonSerializer.Serialize(kernel.ExportSnapshot());
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = null;
+            var output = CaptureConsole(() =>
+            {
+                Xunit.Assert.True(CliReadOnlyCommandRunner.TryExecute(
+                    ["readiness", goal.Id.Value[..8]], repository, workspace,
+                    new InMemoryModelProviderRegistry([]), null, ref agents, ref profiles, ref currentGoal,
+                    out var changed));
+                Xunit.Assert.False(changed);
+            });
+
+            Xunit.Assert.Contains("SWEEP_BLOCKER", output, StringComparison.Ordinal);
+            Xunit.Assert.Contains("kind=completed-branch-superseded", output, StringComparison.Ordinal);
+            Xunit.Assert.Contains("retirement required", output, StringComparison.Ordinal);
+            Xunit.Assert.Contains("Goal readiness", output, StringComparison.Ordinal);
+            Xunit.Assert.DoesNotContain("SWEEP_REPAIR", output, StringComparison.Ordinal);
+            Xunit.Assert.Equal(before, JsonSerializer.Serialize((await repository.LoadAsync()).ExportSnapshot()));
+            Xunit.Assert.Equal(before, JsonSerializer.Serialize(kernel.ExportSnapshot()));
+            Xunit.Assert.Equal(JsonSerializer.Serialize(kernel.GetGoal(goal.Id)), JsonSerializer.Serialize(currentGoal));
+            Xunit.Assert.Equal(worktree, GoalWorktrees.TryResolve(root, goal.Id));
+            Xunit.Assert.False(string.IsNullOrWhiteSpace(RunGit(root, "branch", "--list", GoalWorktrees.BranchName(goal.Id))));
+            Xunit.Assert.False(GoalOperationJournal.HasRetiredTerminalDisposition(GoalOperationJournal.Read(root, goal.Id)));
+        }
+        finally
+        {
+            if (cleanupGoalId is not null)
+                GoalWorktrees.Remove(root, cleanupGoalId);
+            foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+                File.SetAttributes(file, File.GetAttributes(file) & ~FileAttributes.ReadOnly);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static string RunGit(string workingDirectory, params string[] arguments)
+    {
+        var result = GitCli.Run(workingDirectory, arguments);
+        if (result.DrainTimedOut)
+            throw new InvalidOperationException($"git output incomplete: {result}");
+        Xunit.Assert.True(result.Succeeded, $"git {string.Join(' ', arguments)}: {result.Error}");
+        return result.Output;
     }
 
     private static SqliteConnection OpenStateConnection(string path) =>
