@@ -117,7 +117,7 @@ public sealed class GoalObjectivePlannerDurationTests
             ref currentGoal));
 
         Xunit.Assert.Contains("since 2026-06-19T12:20:00.0000000+00:00", windowedOutput);
-        Xunit.Assert.Contains("attempts=5 attemptsPerTask=1.7", windowedOutput);
+        Xunit.Assert.Contains("attempts=5 findings=0 attemptsPerTask=1.7", windowedOutput);
     }
 
     [Xunit.Fact(DisplayName = "SimpleGoal_preflight_uses_history_estimate_without_starting_paid_worker")]
