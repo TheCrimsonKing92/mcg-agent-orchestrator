@@ -39,7 +39,7 @@ public sealed class ProjectDiscoverCliTests
         var model = ProjectModelJson.Deserialize(File.ReadAllText(modelPath));
         Assert.Equal(".", model.RepositoryRoot);
         Assert.Equal(2, model.Units.Count);
-        Assert.Equal(6, model.OwnerQuestions.Count);
+        Assert.Equal(8, model.OwnerQuestions.Count);
         var lines = output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
         Assert.Equal($"Project model: {modelPath}", lines[0]);
         Assert.Equal(model.OwnerQuestions.Select(question => $"Owner question: {question.Question}"), lines.Skip(1));
@@ -124,6 +124,97 @@ public sealed class ProjectDiscoverCliTests
         Assert.Throws<ArgumentException>(() => ProjectCliCommand.Execute(["project", "discover", "--root"],
             registry, fixture.Root, null, output));
         Assert.False(File.Exists(Path.Combine(OrchestratorWorkspace.ForDirectory(fixture.Root).OrchestratorDirectory, "project-model.json")));
+    }
+
+    [Fact]
+    public void MeasureOptionWritesFactsAndPrintsNewQuestionsEndToEnd()
+    {
+        using var fixture = new ProjectOnboardingFixture("no-solution");
+        var registry = new OrchestratorProjectRegistry(Path.Combine(fixture.Root, "registry"));
+        var fake = new RecordingUnitCommandMeasurer();
+        var creations = 0;
+        using var output = new StringWriter();
+        Assert.Equal(0, ProjectCliCommand.Execute(["project", "discover", "--measure", "all"],
+            registry, fixture.Root, null, output, () => { creations++; return fake; }));
+        Assert.Equal(1, creations);
+        var modelPath = Path.Combine(OrchestratorWorkspace.ForDirectory(fixture.Root).OrchestratorDirectory, "project-model.json");
+        var model = ProjectModelJson.Deserialize(File.ReadAllText(modelPath));
+        Assert.Equal(2, model.SchemaVersion);
+        Assert.Equal(2, model.Commands.Count);
+        Assert.Single(model.EnvironmentNeeds);
+        Assert.Equal(2, model.Measurements.Count);
+        Assert.Equal(2, fake.Calls.Count);
+        Assert.All(model.Measurements, unit => Assert.Equal(12.5, unit.BuildSeconds!.Value));
+        Assert.Contains(model.OwnerQuestions, question => question.FactKey.StartsWith("commands/", StringComparison.Ordinal));
+        Assert.Contains(model.OwnerQuestions, question => question.FactKey == "environment/dotnet-sdk");
+        Assert.Equal(model.OwnerQuestions.Select(question => $"Owner question: {question.Question}"),
+            output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries).Skip(1));
+    }
+
+    [Fact]
+    public void DiscoveryWithoutMeasureNeverConstructsMeasurer()
+    {
+        using var fixture = new ProjectOnboardingFixture("solution");
+        var registry = new OrchestratorProjectRegistry(Path.Combine(fixture.Root, "registry"));
+        using var output = new StringWriter();
+        Assert.Equal(0, ProjectCliCommand.Execute(["project", "discover"], registry, fixture.Root, null,
+            output, () => throw new InvalidOperationException("Unexpected measurer construction")));
+        var path = Path.Combine(OrchestratorWorkspace.ForDirectory(fixture.Root).OrchestratorDirectory, "project-model.json");
+        Assert.Empty(ProjectModelJson.Deserialize(File.ReadAllText(path)).Measurements);
+    }
+
+    [Theory]
+    [InlineData("--measure")]
+    [InlineData("--measure", "fast")]
+    [InlineData("--measure", "--root")]
+    [InlineData("--measure=")]
+    [InlineData("--measure=fast")]
+    [InlineData("--unknown", "all")]
+    [InlineData("--root")]
+    public void InvalidDiscoveryOptionsShowUsageBeforeWriting(params string[] options)
+    {
+        using var fixture = new ProjectOnboardingFixture("solution");
+        var registry = new OrchestratorProjectRegistry(Path.Combine(fixture.Root, "registry"));
+        using var output = new StringWriter();
+        var exception = Assert.Throws<ArgumentException>(() => ProjectCliCommand.Execute(["project", "discover", .. options],
+            registry, fixture.Root, null, output, () => throw new InvalidOperationException("Unexpected measurer construction")));
+        Assert.Equal("Usage: project discover [name] [--root <path>] [--measure build|test|all]", exception.Message);
+        Assert.False(File.Exists(Path.Combine(OrchestratorWorkspace.ForDirectory(fixture.Root).OrchestratorDirectory, "project-model.json")));
+        Assert.Empty(output.ToString());
+    }
+
+    [Theory]
+    [InlineData("build", UnitCommandKinds.Build, 3)]
+    [InlineData("TEST", UnitCommandKinds.Test, 2)]
+    [InlineData("all", UnitCommandKinds.All, 5)]
+    public void MeasureEqualsOptionPassesRequestedKinds(string value, UnitCommandKinds kinds, int count)
+    {
+        using var fixture = new ProjectOnboardingFixture("solution");
+        var registry = new OrchestratorProjectRegistry(Path.Combine(fixture.Root, "registry"));
+        var fake = new RecordingUnitCommandMeasurer();
+        using var output = new StringWriter();
+        Assert.Equal(0, ProjectCliCommand.Execute(["project", "discover", "--measure=" + value],
+            registry, fixture.Root, null, output, () => fake));
+        Assert.Equal(count, fake.Calls.Count);
+        Assert.All(fake.Calls, call => Assert.True(kinds.HasFlag(call.Kind)));
+    }
+
+    [Fact]
+    public void MeasurerExceptionLeavesPreviousSnapshotIntact()
+    {
+        using var fixture = new ProjectOnboardingFixture("solution");
+        var registry = new OrchestratorProjectRegistry(Path.Combine(fixture.Root, "registry"));
+        var workspace = OrchestratorWorkspace.ForDirectory(fixture.Root);
+        Directory.CreateDirectory(workspace.OrchestratorDirectory);
+        var path = Path.Combine(workspace.OrchestratorDirectory, "project-model.json");
+        File.WriteAllText(path, "previous snapshot");
+        var fake = new RecordingUnitCommandMeasurer { Result = (_, _) => throw new InvalidOperationException("fixture exception") };
+        using var output = new StringWriter();
+        Assert.Throws<InvalidOperationException>(() => ProjectCliCommand.Execute(["project", "discover", "--measure", "all"],
+            registry, fixture.Root, null, output, () => fake));
+        Assert.Equal("previous snapshot", File.ReadAllText(path));
+        Assert.Empty(output.ToString());
+        Assert.Empty(Directory.GetFiles(workspace.OrchestratorDirectory, ".project-model-*.tmp"));
     }
 
     private static string[] SeedConfiguration(string root, string workerProfilePath)
