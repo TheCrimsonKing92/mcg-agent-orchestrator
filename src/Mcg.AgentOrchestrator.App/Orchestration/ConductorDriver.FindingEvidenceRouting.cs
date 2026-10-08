@@ -644,30 +644,6 @@ internal sealed partial class ConductorDriver
         goal.Tasks.TakeWhile(task => task.Id != requestingTask.Id)
             .LastOrDefault(task => task.RequiredRole == AgentRole.Developer);
 
-    private static FailedGoalFindingObservation BuildPassingEvidenceOpenFindingDecision(
-        Goal goal,
-        TaskSpec requestingTask,
-        string candidateSha,
-        IReadOnlyList<string> receiptIds,
-        IReadOnlyList<ReviewFinding> findings)
-    {
-        var developer = FindUpstreamDeveloperTask(goal, requestingTask);
-        var message = $"PASSING_EVIDENCE_OPEN_FINDING candidate_sha={candidateSha}; " +
-            $"receipt_ids={string.Join(',', receiptIds.Distinct(StringComparer.Ordinal))}; " +
-            $"finding_ids={string.Join(',', findings.Select(finding => finding.StableId).Distinct(StringComparer.Ordinal))}. " +
-            "The accepted passing evidence did not close the finding; the remedy is Developer-owned source or test code. ";
-        return developer is null
-            ? FailedGoalFindingObservation.Observed(
-                FailedGoalFindingObservationKind.FindingActionableRedRouteUnavailable,
-                message + "No upstream Developer task exists. No Tester delivery was recorded.")
-            : FailedGoalFindingObservation.Routed(
-                FailedGoalFindingObservationKind.FindingActionableRed,
-                developer.Id,
-                BuildFailedGoalAttemptIdentity(developer),
-                message + "Repair the open findings before downstream verification. No Tester delivery was recorded.",
-                null);
-    }
-
     private static string FormatActionableCandidateRedMessage(
         string candidateSha,
         string receiptId,
