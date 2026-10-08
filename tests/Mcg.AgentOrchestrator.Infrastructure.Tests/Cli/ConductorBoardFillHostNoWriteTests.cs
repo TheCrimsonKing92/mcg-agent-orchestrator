@@ -64,7 +64,7 @@ public sealed class ConductorBoardFillHostNoWriteTests : CliTaskQueryTestSupport
             var round = Assert.Single(drafts.ReadAll());
             Assert.Equal("draft", round.Outcome);
             Assert.All(round.Checks, check => Assert.True(check.Passed, check.Detail));
-            Assert.Equal(7, round.Checks.Count);
+            Assert.Single(round.Checks, check => check.Name == "post-landing-criterion");
             Assert.True(File.Exists(round.DraftPath));
             Assert.True(File.Exists(round.ReceiptPath));
             Assert.Equal(1, calls);

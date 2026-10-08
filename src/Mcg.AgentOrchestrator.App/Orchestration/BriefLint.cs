@@ -26,10 +26,10 @@ public static partial class BriefLint
         var findings = new List<(int Offset, BriefLintFinding Finding)>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        void Add(string kind, BriefLintSeverity severity, int offset, int length, string remedy)
+        void Add(string kind, BriefLintSeverity severity, int offset, int length, string remedy, bool deduplicate = true)
         {
             var matched = text.Substring(offset, length);
-            if (seen.Add($"{kind}:{matched}"))
+            if (!deduplicate || seen.Add($"{kind}:{matched}"))
                 findings.Add((offset, new(kind, severity,
                     $"Matched \"{Whitespace().Replace(matched, " ")}\" near \"{Context(text, offset, length)}\".", remedy)));
         }
@@ -43,6 +43,25 @@ public static partial class BriefLint
         if (skillOffset >= 0)
             Add("skill-definition-file", BriefLintSeverity.BlocksDispatch, skillOffset, "SKILL.md".Length,
                 "Include the exact .agents/skills path when a repository skill is the intended target.");
+
+        var inAcceptanceCriteria = false;
+        var lineOffset = 0;
+        foreach (var line in text.Split('\n'))
+        {
+            var heading = SectionHeading().Match(line);
+            if (heading.Success)
+                inAcceptanceCriteria = heading.Groups[1].Value == "##" &&
+                    heading.Groups[2].Value.Trim().StartsWith("Acceptance criteria", StringComparison.OrdinalIgnoreCase);
+            else if (inAcceptanceCriteria && NumberedLine().IsMatch(line))
+            {
+                var match = PostLandingPhrase().Match(line);
+                if (match.Success)
+                    Add("post-landing-criterion", BriefLintSeverity.BlocksDispatch,
+                        lineOffset + match.Index, match.Length,
+                        "Move the step into prose outside the numbered acceptance criteria.", deduplicate: false);
+            }
+            lineOffset += line.Length + 1;
+        }
 
         var tokens = GoalReadinessPreflight.EnumerateTokens(text).ToArray();
         foreach (var word in GoalReadinessPreflight.FindHighRiskSignals(text))
@@ -86,6 +105,15 @@ public static partial class BriefLint
         return (start > 0 ? "…" : "") + Whitespace().Replace(text[start..end], " ") +
             (end < text.Length ? "…" : "");
     }
+
+    [GeneratedRegex(@"after this goal lands|after the goal lands|after landing|post-landing|once this goal has landed|once the goal has landed", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    internal static partial Regex PostLandingPhrase();
+
+    [GeneratedRegex(@"^\s*(#{1,2})[ \t]+(.+)$", RegexOptions.CultureInvariant)]
+    private static partial Regex SectionHeading();
+
+    [GeneratedRegex(@"^\s*\d+[.)]\s", RegexOptions.CultureInvariant)]
+    private static partial Regex NumberedLine();
 
     [GeneratedRegex(@"^\s*- test-removal:", RegexOptions.Multiline | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex TestRemovalBullet();

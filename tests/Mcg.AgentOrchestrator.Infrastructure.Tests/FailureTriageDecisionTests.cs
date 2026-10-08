@@ -269,6 +269,85 @@ public sealed class FailureTriageDecisionTests : WorkerDispatchTestSupport
         Assert.Equal(RetryCause.ProviderInterruption, AutomaticWorkerRetryCause.Resolve(task, outcome));
     }
 
+    [Xunit.Fact(DisplayName = "Tester evidence added after a source finding preserves the source retry cause")]
+    public void TesterEvidenceAddedAfterSourceFindingPreservesSourceRetryCause()
+    {
+        var (kernel, goal, task, _) = CreateActiveGoal("Mixed finding retry cause", AgentRole.Tester);
+        var sourceFinding = CreateRetryFinding(FindingCategory.SpecCompliance);
+        RecordRetryFindings(kernel, goal, task, sourceFinding);
+        Assert.Equal(RetryCause.NewSourceFinding, AutomaticWorkerRetryCause.Resolve(task));
+
+        RecordRetryFindings(kernel, goal, task, sourceFinding, CreateRetryFinding(FindingCategory.TestEvidence));
+
+        Assert.Equal(RetryCause.NewSourceFinding, AutomaticWorkerRetryCause.Resolve(task, RealFailureOutcome()));
+        Assert.Equal(RetryCause.NewSourceFinding, AutomaticWorkerRetryCause.Resolve(task));
+    }
+
+    [Xunit.Fact(DisplayName = "Tester evidence alone retains the test retry cause")]
+    public void TesterEvidenceAloneRetainsTestRetryCause()
+    {
+        var (kernel, goal, task, _) = CreateActiveGoal("Tester finding retry cause", AgentRole.Tester);
+        RecordRetryFindings(kernel, goal, task, CreateRetryFinding(FindingCategory.TestEvidence));
+
+        Assert.Equal(RetryCause.NewTestFinding, AutomaticWorkerRetryCause.Resolve(task, RealFailureOutcome()));
+        Assert.Equal(RetryCause.NewTestFinding, AutomaticWorkerRetryCause.Resolve(task));
+    }
+
+    [Xunit.Theory(DisplayName = "Operator and specification findings retain precedence over Developer findings")]
+    [Xunit.InlineData(FindingCategory.OperatorOwned)]
+    [Xunit.InlineData(FindingCategory.SpecDefect)]
+    public void ContractFindingsRetainPrecedenceOverDeveloperFindings(FindingCategory category)
+    {
+        var (kernel, goal, task, _) = CreateActiveGoal("Contract finding retry cause", AgentRole.Tester);
+        RecordRetryFindings(kernel, goal, task,
+            CreateRetryFinding(FindingCategory.SpecCompliance),
+            CreateRetryFinding(category),
+            CreateRetryFinding(FindingCategory.TestEvidence));
+
+        Assert.Equal(RetryCause.ContractClarification, AutomaticWorkerRetryCause.Resolve(task, RealFailureOutcome()));
+        Assert.Equal(RetryCause.ContractClarification, AutomaticWorkerRetryCause.Resolve(task));
+    }
+
+    [Xunit.Theory(DisplayName = "Finding ranking preserves Developer coverage and uncategorized fallback")]
+    [Xunit.InlineData(FindingCategory.Correctness, FindingCategory.TestEvidence, RetryCause.NewSourceFinding)]
+    [Xunit.InlineData(FindingCategory.CodeQuality, FindingCategory.TestEvidence, RetryCause.NewSourceFinding)]
+    [Xunit.InlineData(FindingCategory.TestCoverage, FindingCategory.TestEvidence, RetryCause.NewTestFinding)]
+    [Xunit.InlineData(FindingCategory.TestCoverage, FindingCategory.SpecCompliance, RetryCause.NewTestFinding)]
+    [Xunit.InlineData(FindingCategory.AcceptanceOwned, FindingCategory.SpecCompliance, RetryCause.NewSourceFinding)]
+    [Xunit.InlineData(FindingCategory.Unspecified, FindingCategory.TestEvidence, RetryCause.NewTestFinding)]
+    public void FindingRankingPreservesCoverageAndFallback(
+        FindingCategory first, FindingCategory second, RetryCause expected)
+    {
+        var (kernel, goal, task, _) = CreateActiveGoal("Finding ranking edge cases", AgentRole.Tester);
+        RecordRetryFindings(kernel, goal, task, CreateRetryFinding(first), CreateRetryFinding(second));
+
+        Assert.Equal(expected, AutomaticWorkerRetryCause.Resolve(task, RealFailureOutcome()));
+        Assert.Equal(expected, AutomaticWorkerRetryCause.Resolve(task));
+    }
+
+    private static ReviewFinding CreateRetryFinding(FindingCategory category) => new(
+        Guid.NewGuid().ToString("N"),
+        ReviewFindingState.Open,
+        new ReviewFindingLocation("src/Example.cs", "retry classification"),
+        "Blocking retry finding",
+        FindingSeverity.Blocking,
+        category);
+
+    private static void RecordRetryFindings(
+        AgentOrchestratorKernel kernel, Goal goal, TaskSpec task, params ReviewFinding[] findings) =>
+        kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+            "worker verification",
+            "C:\\repo",
+            1,
+            "Verification failed",
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            MergedReviewFindings: findings));
+
+    private static DispatchOutcome RealFailureOutcome() => new(
+        DispatchOutcomeKind.UnknownFailure, 1, false, null, null,
+        RecoveryRecommendation.AutoRetry, "Recorded blocking findings", OutcomeClass: TaskOutcomeClass.RealFailure);
+
     private static (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Task, IReadOnlyList<AgentDefinition> Agents)
         CreateActiveGoal(string objective, AgentRole role = AgentRole.Developer)
     {

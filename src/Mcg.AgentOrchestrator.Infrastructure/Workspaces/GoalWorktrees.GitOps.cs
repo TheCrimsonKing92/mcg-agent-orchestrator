@@ -5,7 +5,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public static partial class GoalWorktrees
 {
-    public static bool HasChangesAgainstMain(string executionDirectory, GoalId goalId)
+    public static bool HasChangesAgainstMain(string executionDirectory, GoalId goalId, string? trunkBranch = null)
     {
         var worktree = TryResolve(executionDirectory, goalId);
         if (worktree is null)
@@ -13,7 +13,7 @@ public static partial class GoalWorktrees
             return false;
         }
 
-        var baseBranch = GetCurrentBranchName(executionDirectory) ?? "main";
+        var baseBranch = GetCurrentBranchName(executionDirectory) ?? TrunkBranchName.Resolve(trunkBranch);
         var result = GitCli.Run(worktree, "diff", "--name-only", $"{baseBranch}...HEAD");
         return result.ExitCode == 0 && !string.IsNullOrWhiteSpace(result.Output);
     }
@@ -32,7 +32,7 @@ public static partial class GoalWorktrees
         return !GitCli.IsWorktreeDirty(worktree);
     }
 
-    public static string? TryGetBranchDiff(string executionDirectory, GoalId goalId)
+    public static string? TryGetBranchDiff(string executionDirectory, GoalId goalId, string? trunkBranch = null)
     {
         var worktreePath = TryResolve(executionDirectory, goalId);
         if (worktreePath is null)
@@ -40,8 +40,9 @@ public static partial class GoalWorktrees
             return null;
         }
 
-        var statResult = GitCli.Run(worktreePath, "diff", "--stat", "main...HEAD");
-        var patchResult = GitCli.Run(worktreePath, "diff", "main...HEAD");
+        var range = $"{TrunkBranchName.Resolve(trunkBranch)}...HEAD";
+        var statResult = GitCli.Run(worktreePath, "diff", "--stat", range);
+        var patchResult = GitCli.Run(worktreePath, "diff", range);
 
         if (statResult.ExitCode != 0 && patchResult.ExitCode != 0)
         {
@@ -225,12 +226,12 @@ public static partial class GoalWorktrees
             : materialized;
     }
 
-    public static GoalWorktreeRebaseResult TryRebaseOntoMain(string executionDirectory, GoalId goalId, AdditiveConflictMergeOptions? additiveMerge = null)
+    public static GoalWorktreeRebaseResult TryRebaseOntoMain(string executionDirectory, GoalId goalId, AdditiveConflictMergeOptions? additiveMerge = null, string? trunkBranch = null)
     {
         RequireGitWorkTree(executionDirectory);
 
         var branch = BranchName(goalId);
-        var baseBranch = GetCurrentBranchName(executionDirectory) ?? "main";
+        var baseBranch = GetCurrentBranchName(executionDirectory) ?? TrunkBranchName.Resolve(trunkBranch);
         if (!BranchExists(executionDirectory, branch))
         {
             return new GoalWorktreeRebaseResult(

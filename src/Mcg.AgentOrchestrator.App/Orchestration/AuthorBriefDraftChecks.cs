@@ -61,6 +61,9 @@ internal static class AuthorBriefDraftChecks
             criterion.TrimEnd().EndsWith("Developer owns; Acceptance executes. TEST-VERIFIABLE.", StringComparison.Ordinal));
         var buildItemCount = SectionText("What to build").ReplaceLineEndings("\n").Split('\n')
             .Count(line => Regex.IsMatch(line.TrimStart(), @"^\d+\.", RegexOptions.CultureInvariant));
+        var postLandingCriteria = criteria.Select((criterion, index) =>
+                (Index: index + 1, Match: BriefLint.PostLandingPhrase().Match(criterion)))
+            .Where(criterion => criterion.Match.Success).ToArray();
         return
         [
             new("sections", missing.Length == 0, missing.Length == 0 ? "All four sections present." : $"Missing headings: {string.Join(", ", missing)}"),
@@ -72,7 +75,12 @@ internal static class AuthorBriefDraftChecks
             new("developer-deferred-criterion", criteria.Count == 0 || developerDeferred, criteria.Count == 0 ?
                 "No declared criteria; criteria-present reports the absence." : developerDeferred ? "Developer deferred-tests criterion present." :
                 $"Observed {criteria.Count} declared criteria; none contains tests: deferred - and ends with Developer owns; Acceptance executes. TEST-VERIFIABLE."),
-            new("build-item-count", buildItemCount <= 4, $"Observed {buildItemCount} numbered build items; maximum is 4.")
+            new("build-item-count", buildItemCount <= 4, $"Observed {buildItemCount} numbered build items; maximum is 4."),
+            new("post-landing-criterion", postLandingCriteria.Length == 0, postLandingCriteria.Length == 0 ?
+                "No declared criterion describes a post-landing step." :
+                string.Join(" | ", postLandingCriteria.Select(criterion =>
+                    $"criterion {criterion.Index} matched \"{criterion.Match.Value}\"")) +
+                ". Move the step into prose outside the numbered acceptance criteria.")
         ];
 
         string SectionText(string name)

@@ -18,6 +18,7 @@ internal static class AuthorBriefDraftPrompt
         ## Acceptance criteria
         ## Scope
         Number acceptance criteria `1.`, `2.` and so on, with no bulleted criteria and no nested bullets.
+        A step that happens after the goal lands belongs in prose outside the numbered criteria, never as a numbered criterion.
         End EVERY acceptance criterion with an owner sentence of the form "X owns; Y executes."
         followed by TEST-VERIFIABLE or REAL-WORLD-DEPENDENT.
         The owner sentence is the last sentence of its criterion and is exactly one of these four lines, copied character for character with nothing after it:

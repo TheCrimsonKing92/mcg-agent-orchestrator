@@ -1,7 +1,64 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
 
+// Parallel-safe: lint operates only on the supplied text.
 public sealed class BriefLintTests
 {
+    public static IEnumerable<object[]> PostLandingPhrases()
+    {
+        yield return ["After this goal lands"];
+        yield return ["after the goal lands"];
+        yield return ["after landing"];
+        yield return ["POST-LANDING"];
+        yield return ["once this goal has landed"];
+        yield return ["once the goal has landed"];
+    }
+
+    [Xunit.Theory]
+    [Xunit.MemberData(nameof(PostLandingPhrases))]
+    public void NumberedAcceptanceCriterionBlocksDispatchForEachPostLandingPhrase(string phrase)
+    {
+        var finding = Xunit.Assert.Single(BriefLint.Lint($"## Acceptance criteria\n1. {phrase}, record the result."));
+        Xunit.Assert.Equal("post-landing-criterion", finding.Kind);
+        Xunit.Assert.Equal("blocks-dispatch", finding.SeverityToken);
+        Xunit.Assert.Contains($"\"{phrase}\"", finding.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("prose outside the numbered acceptance criteria", finding.Remedy, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain('\n', finding.Message);
+    }
+
+    [Xunit.Theory]
+    [Xunit.MemberData(nameof(PostLandingPhrases))]
+    public void PostLandingPhraseOutsideNumberedAcceptanceLineDoesNotBlockDispatch(string phrase)
+    {
+        string[] briefs =
+        [
+            $"## What to build\n1. {phrase}, record the result.\n## Acceptance criteria\n1. The receipt exists.",
+            $"## Acceptance criteria\n1. The receipt exists.\n## Scope\n{phrase}, record the result.",
+            $"## Acceptance criteria\n{phrase}, record the result.\n1. The receipt exists.",
+            $"## Acceptance criteria\n1. The receipt exists.\n   {phrase}, record the result."
+        ];
+        foreach (var brief in briefs)
+            Xunit.Assert.DoesNotContain(BriefLint.Lint(brief), finding => finding.Kind == "post-landing-criterion");
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("\n", ".")]
+    [Xunit.InlineData("\r\n", ")")]
+    public void RepeatedCriteriaProduceOneFindingPerLineAndStopAtNextSection(string newline, string ordinal)
+    {
+        var brief = string.Join(newline,
+            "## ACCEPTANCE CRITERIA", $"  1{ordinal} After landing, record the result.",
+            $"  2{ordinal} After landing, then once the goal has landed, record another result.",
+            "## What to build", $"3{ordinal} After landing, record a follow-up.");
+        var findings = BriefLint.Lint(brief);
+        Xunit.Assert.Equal(2, findings.Count);
+        Xunit.Assert.All(findings, finding =>
+        {
+            Xunit.Assert.Equal("post-landing-criterion", finding.Kind);
+            Xunit.Assert.Equal("blocks-dispatch", finding.SeverityToken);
+            Xunit.Assert.StartsWith("Matched \"After landing\"", finding.Message, StringComparison.Ordinal);
+        });
+    }
+
     public static IEnumerable<object[]> SingleTrapBriefs()
     {
         yield return ["Create the .git-keep marker.", "git-directory-reference", "blocks-dispatch"];

@@ -154,7 +154,8 @@ var workspace = activeProject.Name.Equals(OrchestratorWorkspace.DefaultProjectNa
     : OrchestratorWorkspace.ForProject(
         activeProject.Name,
         activeProject.RootDirectory,
-        tenantName: tenantSelection.TenantName);
+        tenantName: tenantSelection.TenantName,
+        integrationBranch: activeProject.IntegrationBranch);
 try
 {
     if (CliCommandHelp.TryPrintStartupHelp(startupArgs))

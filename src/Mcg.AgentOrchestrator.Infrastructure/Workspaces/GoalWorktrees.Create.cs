@@ -9,13 +9,14 @@ public static partial class GoalWorktrees
     public static string Ensure(
         string executionDirectory,
         GoalId goalId,
-        GoalWorktreeCleanupHooks? cleanupHooks = null)
+        GoalWorktreeCleanupHooks? cleanupHooks = null,
+        string? trunkBranch = null)
     {
         cleanupHooks ??= new GoalWorktreeCleanupHooks();
         var existing = TryResolve(executionDirectory, goalId);
         if (existing is not null)
         {
-            FastForwardToBaseIfStale(executionDirectory, existing);
+            FastForwardToBaseIfStale(executionDirectory, existing, trunkBranch);
             return existing;
         }
 
@@ -37,7 +38,7 @@ public static partial class GoalWorktrees
             throw new InvalidOperationException($"Failed to create goal workspace at '{path}': {result.Error}");
         }
 
-        FastForwardToBaseIfStale(executionDirectory, path);
+        FastForwardToBaseIfStale(executionDirectory, path, trunkBranch);
         return path;
     }
 
@@ -47,7 +48,7 @@ public static partial class GoalWorktrees
     // fast-forwards: a branch that has diverged (its own commits ahead of base) or a dirty worktree is
     // left untouched, because that is real in-progress work reconciled by TryRebaseOntoMain/acceptance,
     // not here. Best-effort: never blocks dispatch.
-    private static void FastForwardToBaseIfStale(string executionDirectory, string worktreePath)
+    private static void FastForwardToBaseIfStale(string executionDirectory, string worktreePath, string? trunkBranch)
     {
         try
         {
@@ -56,7 +57,7 @@ public static partial class GoalWorktrees
                 return;
             }
 
-            var baseBranch = GetCurrentBranchName(executionDirectory) ?? "main";
+            var baseBranch = GetCurrentBranchName(executionDirectory) ?? TrunkBranchName.Resolve(trunkBranch);
             // --ff-only fast-forwards when the branch is strictly behind base, is a no-op when already
             // up to date, and fails harmlessly (branch left as-is) when the branch has diverged with
             // its own commits — exactly the "only advance undriven branches" semantics we want.
