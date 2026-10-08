@@ -390,6 +390,251 @@ public sealed class GoalDagPlanTests
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
+    [Xunit.Theory]
+    [Xunit.InlineData(false, false)]
+    [Xunit.InlineData(false, true)]
+    [Xunit.InlineData(true, false)]
+    [Xunit.InlineData(true, true)]
+    public void FileDirection_MatchesPositionalPlan(bool sliceBatch, bool confirm)
+    {
+        const string direction = "Implement data model then service layer.\r\nPreserve café input.";
+        var path = Path.Combine(CreateTempDirectory(), "direction brief.md");
+        File.WriteAllText(path, direction, new System.Text.UTF8Encoding(false));
+        string[] flags = [.. sliceBatch ? new[] { "--slice-batch" } : Array.Empty<string>(),
+            .. confirm ? new[] { "--confirm-plan" } : Array.Empty<string>()];
+        var baseline = RunPlan(["plan", direction, .. flags], sliceBatch);
+        AssertPlannerDirection(baseline.prompt, direction, sliceBatch);
+
+        foreach (var fileFlag in new[] { "--text-file", "--brief-file" })
+        {
+            foreach (var flagsFirst in new[] { false, true })
+            {
+                string[] parts = flagsFirst
+                    ? ["plan", .. flags, fileFlag, path]
+                    : ["plan", fileFlag, path, .. flags];
+                var actual = RunPlan(parts, sliceBatch);
+                AssertPlannerDirection(actual.prompt, direction, sliceBatch);
+                Assert.Equal(PlanPreview(baseline.output), PlanPreview(actual.output));
+                Assert.Equal(GoalObjectives(baseline.kernel), GoalObjectives(actual.kernel));
+                Assert.Contains($"for direction: {direction}", actual.output);
+                if (!confirm)
+                {
+                    Assert.Empty(actual.kernel.Goals);
+                }
+                else if (sliceBatch)
+                {
+                    Assert.Equal(4, actual.kernel.Goals.Count);
+                    Assert.Equal(direction, actual.kernel.Goals.Single(g => g.SliceBatchParentId is null).Objective);
+                }
+                else
+                {
+                    Assert.Equal(2, actual.kernel.Goals.Count);
+                    var model = actual.kernel.Goals.Single(g => g.Objective == "Implement the data model");
+                    var service = actual.kernel.Goals.Single(g => g.Objective == "Implement the service layer");
+                    Assert.Equal(model.Id, Assert.Single(service.DependsOn));
+                }
+            }
+        }
+    }
+
+    [Xunit.Fact]
+    public void StandardInput_Redirected_PreservesDirection()
+    {
+        const string direction = "Implement three independent feature slices.\r\nKeep café and trailing spaces.  ";
+        using var input = new StringReader(direction);
+        var result = RunPlan(["plan", "--text-file", "-", "--slice-batch"], true, input, true);
+
+        AssertPlannerDirection(result.prompt, direction, true);
+        Assert.Contains($"for direction: {direction}", result.output);
+        Assert.Empty(result.kernel.Goals);
+    }
+
+    [Xunit.Fact]
+    public void StandardInput_NotRedirected_RejectsWithoutReading()
+    {
+        using var input = new FailOnReadTextReader();
+        var exception = AssertPlanFails<InvalidOperationException>(
+            ["plan", "--text-file", "-", "--slice-batch", "--confirm-plan"], input, false);
+
+        Assert.Equal("Standard input is not redirected; pipe content or provide a file.", exception.Message);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("--text-file")]
+    [Xunit.InlineData("--brief-file")]
+    public void InlineAndFile_RejectsBeforeCreatingGoals(string fileFlag)
+    {
+        var exception = AssertPlanFails<ArgumentException>(
+            ["plan", "Implement feature slices", fileFlag, "unused.md", "--slice-batch", "--confirm-plan"]);
+
+        Assert.Equal($"Provide either inline text or {fileFlag} <path>, not both.", exception.Message);
+    }
+
+    [Xunit.Fact]
+    public void TwoFileFlags_RejectsBeforeCreatingGoals()
+    {
+        var exception = AssertPlanFails<ArgumentException>(
+            ["plan", "--text-file", "unused.md", "--brief-file", "unused.md", "--confirm-plan"]);
+
+        Assert.Equal("Provide only one text file option: --brief-file, --text-file.", exception.Message);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("--text-file")]
+    [Xunit.InlineData("--brief-file")]
+    public void MissingFile_RejectsBeforeCreatingGoals(string fileFlag)
+    {
+        var path = Path.Combine(CreateTempDirectory(), "missing.md");
+        var exception = AssertPlanFails<InvalidOperationException>(
+            ["plan", fileFlag, path, "--slice-batch", "--confirm-plan"]);
+
+        Assert.Equal($"{fileFlag} not found: {path}", exception.Message);
+    }
+
+    [Xunit.Fact]
+    public void LongFileDirection_ReachesPlannerWithoutTruncation()
+    {
+        var direction = LongDirection();
+        var path = Path.Combine(CreateTempDirectory(), "long brief.md");
+        File.WriteAllText(path, direction, new System.Text.UTF8Encoding(false));
+        string[] parts = ["plan", "--text-file", path, "--slice-batch"];
+        var plannerInput = BuildPlanInput(parts);
+        var result = RunPlan(parts, true);
+
+        Assert.True(direction.Length > 8191);
+        Assert.Equal(direction, plannerInput.Direction);
+        Assert.Equal(GoalDagDecompositionPlanner.BuildPrompt(direction, true), plannerInput.Prompt);
+        AssertPlannerDirection(plannerInput.Prompt, direction, true);
+        Assert.Contains($"for direction: {direction}", result.output);
+        Assert.Contains("Dormant slice-batch intake preview", result.output);
+        Assert.Empty(result.kernel.Goals);
+    }
+
+    [Xunit.Fact]
+    public void LongPositionalDirection_PreservesExistingPreview()
+    {
+        var direction = LongDirection();
+        string[] parts = ["plan", direction, "--slice-batch"];
+        var plannerInput = BuildPlanInput(parts);
+        var result = RunPlan(parts, true);
+
+        Assert.Equal(direction, plannerInput.Direction);
+        Assert.Equal(GoalDagDecompositionPlanner.BuildPrompt(direction, true), plannerInput.Prompt);
+        AssertPlannerDirection(plannerInput.Prompt, direction, true);
+        Assert.Contains($"for direction: {direction}", result.output);
+        Assert.Contains("Dormant slice-batch intake preview", result.output);
+        Assert.Empty(result.kernel.Goals);
+    }
+
+    [Xunit.Fact]
+    public void MissingDirection_UsageShowsFileForm()
+    {
+        var exception = AssertPlanFails<ArgumentException>(["plan"]);
+
+        Assert.Contains("plan <direction>", exception.Message);
+        Assert.Contains("plan --text-file <path|->", exception.Message);
+        Assert.Contains("--brief-file is an alias", exception.Message);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void Preview_ConfirmHintShowsFileAndPositionalForms(bool sliceBatch)
+    {
+        string[] parts = sliceBatch
+            ? ["plan", "Implement feature slices", "--slice-batch"]
+            : ["plan", "Implement model then service"];
+        var result = RunPlan(parts, sliceBatch);
+        var flags = sliceBatch ? "--slice-batch --confirm-plan" : "--confirm-plan";
+
+        Assert.Contains($"plan <direction> {flags}", result.output);
+        Assert.Contains($"plan --text-file <path> {flags}", result.output);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("plan --text-file brief.md --slice-batch --confirm-plan")]
+    [Xunit.InlineData("plan --slice-batch --confirm-plan --text-file brief.md")]
+    [Xunit.InlineData("plan --brief-file - --confirm-plan --slice-batch")]
+    public void FileFlags_ParsingPreservesValuesAndFlagOrder(string command)
+    {
+        var expected = command.Split(' ');
+
+        Assert.Equal(expected, CliArgumentParser.NormalizeArgs(expected).ToArray());
+        Assert.Equal(expected, CliArgumentParser.SplitCommand(command).ToArray());
+    }
+
+    private static string LongDirection() => string.Concat(
+        Enumerable.Range(0, 500).Select(index => $"{index:D4}:abcdefghijklmno"));
+
+    private static (string Direction, string Prompt) BuildPlanInput(string[] parts)
+    {
+        var (kernel, workspace, agents, providers) = BuildSliceBatchTestContext(ThreeSliceBatchJson);
+        var context = new CliExecutionContext(
+            kernel, workspace, providers, agents, WorkerProfileCatalog.Default(), currentGoal: null);
+        return CliCommandHandlers.BuildPlanDecompositionInput(
+            context, CliArgumentParser.NormalizeArgs(parts));
+    }
+
+    private static string[] GoalObjectives(AgentOrchestratorKernel kernel) =>
+        kernel.Goals.Select(g => g.Objective).OrderBy(value => value, StringComparer.Ordinal).ToArray();
+
+    private static string PlanPreview(string output)
+    {
+        var end = output.IndexOf("Created ", StringComparison.Ordinal);
+        return end < 0 ? output : output[..end];
+    }
+
+    private static void AssertPlannerDirection(string prompt, string direction, bool sliceBatch)
+    {
+        Assert.Contains(GoalDagDecompositionPlanner.BuildPrompt(direction, sliceBatch), prompt);
+        const string marker = "Direction: ";
+        var markerIndex = prompt.IndexOf(marker, StringComparison.Ordinal);
+        Assert.True(markerIndex >= 0, "Planner request must contain the direction marker.");
+        var start = markerIndex + marker.Length;
+        var end = prompt.IndexOf("\nExample:", start, StringComparison.Ordinal);
+        Assert.True(end >= start, "Planner request must contain the example after the direction.");
+        if (prompt[end - 1] == '\r')
+            end--;
+        Assert.Equal(direction, prompt[start..end]);
+    }
+
+    private static (AgentOrchestratorKernel kernel, string output, string prompt) RunPlan(
+        string[] parts, bool sliceBatch, TextReader? standardInput = null, bool? redirected = null)
+    {
+        var provider = new FakeSmokeProvider(sliceBatch ? ThreeSliceBatchJson : TwoNodeJson, providerName: "Fake");
+        var (kernel, workspace, agents, providers) = sliceBatch
+            ? BuildSliceBatchTestContext(ThreeSliceBatchJson, provider)
+            : BuildTestContext(TwoNodeJson, provider);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            parts, kernel, workspace, ref agents, providers, ref profiles, ref currentGoal,
+            standardInput: standardInput, isStandardInputRedirected: redirected));
+        Assert.NotNull(provider.LastRequest);
+        var prompt = string.Join('\n', provider.LastRequest.Messages.Select(message => message.Content));
+        return (kernel, output, prompt);
+    }
+
+    private static T AssertPlanFails<T>(
+        string[] parts, TextReader? standardInput = null, bool? redirected = null) where T : Exception
+    {
+        var provider = new FakeSmokeProvider(ThreeSliceBatchJson, providerName: "Fake");
+        var (kernel, workspace, agents, providers) = BuildSliceBatchTestContext(ThreeSliceBatchJson, provider);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        var exception = Assert.Throws<T>(() => CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            parts, kernel, workspace, ref agents, providers, ref profiles, ref currentGoal,
+            standardInput: standardInput, isStandardInputRedirected: redirected)));
+        Assert.Empty(kernel.Goals);
+        Assert.Null(provider.LastRequest);
+        return exception;
+    }
+
+    private sealed class FailOnReadTextReader : TextReader
+    {
+        public override string ReadToEnd() => throw new InvalidOperationException("Unexpected stdin read.");
+    }
+
     private const string TwoNodeJson = """
         ```json
         [{"id":"g1","objective":"Implement the data model","dependsOn":[]},{"id":"g2","objective":"Implement the service layer","dependsOn":["g1"]}]
@@ -430,7 +675,7 @@ public sealed class GoalDagPlanTests
 
     private static (AgentOrchestratorKernel kernel, OrchestratorWorkspace workspace,
         IReadOnlyList<AgentDefinition> agents, IModelProviderRegistry providers)
-        BuildTestContext(string plannerOutput)
+        BuildTestContext(string plannerOutput, FakeSmokeProvider? plannerProvider = null)
     {
         var root = CreateTempDirectory();
         var workspace = OrchestratorWorkspace.ForDirectory(root);
@@ -451,7 +696,7 @@ public sealed class GoalDagPlanTests
             ExecutionPolicy: AgentExecutionPolicy.ApiOnly);
 
         IReadOnlyList<AgentDefinition> agents = [plannerAgent, developerAgent];
-        var provider = new FakeSmokeProvider(plannerOutput, providerName: "Fake");
+        var provider = plannerProvider ?? new FakeSmokeProvider(plannerOutput, providerName: "Fake");
         IModelProviderRegistry providers = new InMemoryModelProviderRegistry([provider]);
 
         return (kernel, workspace, agents, providers);
@@ -459,9 +704,9 @@ public sealed class GoalDagPlanTests
 
     private static (AgentOrchestratorKernel kernel, OrchestratorWorkspace workspace,
         IReadOnlyList<AgentDefinition> agents, IModelProviderRegistry providers)
-        BuildSliceBatchTestContext(string plannerOutput)
+        BuildSliceBatchTestContext(string plannerOutput, FakeSmokeProvider? plannerProvider = null)
     {
-        var context = BuildTestContext(plannerOutput);
+        var context = BuildTestContext(plannerOutput, plannerProvider);
         ModelFunctionCatalogStore.Save(context.workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
             new ModelFunctionBinding(
                 ModelFunctionPurposes.SpecRefiner,

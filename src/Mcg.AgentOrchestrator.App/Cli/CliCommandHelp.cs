@@ -682,7 +682,7 @@ internal static class CliCommandHelp
             ["lifecycle-goal"] = LifecycleGoalFlags(),
             ["goal-depends"] = Flags("--clear", "--on", "--remove"),
             ["goal-plan"] = Flags("--backlog-coverage", "--create-goals", "--create-simple-goals"),
-            ["plan"] = Flags("--confirm-plan", "--slice-batch"),
+            ["plan"] = Flags("--brief-file", "--confirm-plan", "--slice-batch", "--text-file"),
             ["ideate"] = Flags("--append-backlog"),
             ["intent-template"] = Flags("--create-goal", "--create-simple-goal"),
             ["goal-mark-landed"] = Flags("--confirm-goal-mark-landed", "--force"),
