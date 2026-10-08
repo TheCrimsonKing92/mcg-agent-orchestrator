@@ -912,6 +912,35 @@ public sealed class MtpTestRunnerScriptTests
         Xunit.Assert.DoesNotContain("MISSING APPHOST", result.Stdout, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact]
+    public void No_build_closure_Passes_source_bin_root_to_test_process()
+    {
+        using var sandbox = ScriptSandbox.Create("success");
+        sandbox.CreateManagedAssemblyPlaceholder();
+
+        var result = sandbox.RunPartition("GoalWorktree", dotnetPath: sandbox.RunnerPath,
+            runnerOverride: false, inheritedBuildOutputRoot: "caller-sentinel");
+
+        Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
+        Assert.Equal(Path.Combine(sandbox.Root, "bin"),
+            File.ReadAllText(sandbox.ArgumentLog + ".build-output-root").TrimEnd('\r', '\n'));
+        var launchedAssembly = File.ReadAllLines(sandbox.ArgumentLog)[0];
+        Assert.Contains(Path.DirectorySeparatorChar + ".c" + Path.DirectorySeparatorChar,
+            launchedAssembly, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void In_place_runner_Leaves_build_output_root_unset()
+    {
+        using var sandbox = ScriptSandbox.Create("success");
+
+        var result = sandbox.RunPartition("GoalWorktree", inheritedBuildOutputRoot: "caller-sentinel");
+
+        Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
+        Assert.Equal("<unset>",
+            File.ReadAllText(sandbox.ArgumentLog + ".build-output-root").TrimEnd('\r', '\n'));
+    }
+
     [Xunit.Fact(DisplayName = "MTP_no_build_requires_a_matching_build_receipt_before_launch")]
     public void MtpNoBuildRequiresMatchingBuildReceiptBeforeLaunch()
     {
@@ -2070,6 +2099,8 @@ public sealed class MtpTestRunnerScriptTests
                     exit 0
                 }
                 $Arguments | Set-Content -LiteralPath '{{escapedArgumentLog}}'
+                $buildOutputRoot = if (Test-Path Env:MCG_TEST_BUILD_OUTPUT_ROOT) { $env:MCG_TEST_BUILD_OUTPUT_ROOT } else { '<unset>' }
+                $buildOutputRoot | Set-Content -LiteralPath '{{escapedArgumentLog}}.build-output-root'
                 Write-Output 'stub stdout'
                 Write-Output "stub temp=$env:TEMP tmp=$env:TMP tmpdir=$env:TMPDIR"
                 Write-Output "stub hook=$env:DOTNET_STARTUP_HOOKS"
@@ -2230,7 +2261,8 @@ public sealed class MtpTestRunnerScriptTests
             string? dotnetPath = null,
             bool runnerOverride = true,
             string? resultsRoot = null,
-            int testHostTimeoutSeconds = 780)
+            int testHostTimeoutSeconds = 780,
+            string? inheritedBuildOutputRoot = null)
         {
             var startInfo = PartitionStartInfo(
                 partition,
@@ -2239,6 +2271,8 @@ public sealed class MtpTestRunnerScriptTests
                 runnerOverride,
                 resultsRoot,
                 testHostTimeoutSeconds);
+            if (inheritedBuildOutputRoot is not null)
+                startInfo.Environment[TestBuildOutputLocator.BuildOutputRootVariable] = inheritedBuildOutputRoot;
             return Run(startInfo);
         }
 

@@ -60,8 +60,11 @@ internal sealed class ConductorSelfRelaunchSharedAppPayloadSource(
             && directory.Parent.Parent?.Name == "bin")
             return Path.Combine(repositoryRoot, "src", projectName, "bin", configuration, directory.Name);
 
+        var location = TestBuildOutputLocator.Locate(projectName, configuration, testAssemblyDirectory);
+        if (location.Directory is { } outputDirectory) return outputDirectory;
         throw new SharedAppPayloadApparatusException(
-            $"unrecognized test assembly output layout directory={testAssemblyDirectory} configuration={configuration}");
+            $"unrecognized test assembly output layout directory={testAssemblyDirectory} configuration={configuration}"
+            + $" tried={string.Join("; ", location.TriedPaths)}");
     }
 
     private static IReadOnlyList<ProjectSource> ReadProjectClosure(
