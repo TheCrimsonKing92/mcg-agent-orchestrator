@@ -119,7 +119,62 @@ internal static class CliOwnerDigestCommand
 
     internal static OwnerDigestResult Read(OrchestratorWorkspace workspace, IClock clock,
         DateTimeOffset? since = null, DateTimeOffset? until = null)
-        => Read(workspace, clock, out _, since, until);
+    {
+        if (!File.Exists(workspace.SqliteStatePath))
+            throw new FileNotFoundException("State database is missing.", workspace.SqliteStatePath);
+        var end = (until ?? clock.UtcNow).ToUniversalTime();
+        var start = (since ?? end.AddHours(-24)).ToUniversalTime();
+        var landings = ReadLandings(workspace.GoalLifecycleEventsDirectory, out var malformed);
+        var landedAt = landings.ToDictionary(pair => pair.Key, pair => pair.Value.LandedAt!.Value,
+            StringComparer.OrdinalIgnoreCase);
+        var inputs = new OwnerDigestTimelineReader().Read(workspace.SqliteStatePath, landedAt, start, end)
+            .ToDictionary(input => input.GoalId, StringComparer.OrdinalIgnoreCase);
+        foreach (var (id, landing) in landings)
+            inputs[id] = inputs.TryGetValue(id, out var existing)
+                ? existing with { LandedAt = landing.LandedAt, LandingSha = landing.LandingSha }
+                : landing;
+        var receipts = ReadCanaryReceipts(workspace.RunEventStorePath);
+        var escapes = new SqliteOperatorEscapeStore(workspace.OperatorEscapesStorePath).List()
+            .Select(r => new OwnerDigestEscapeRecord(r.GoalId, r.FoundByGoalId, r.RecordedAt, r.Reason)).ToArray();
+        return OwnerDigestReport.Build(inputs.Values.ToArray(), receipts, clock, start, end, malformed, escapes);
+    }
+
+    private static Dictionary<string, OwnerDigestGoalInput> ReadLandings(string directory, out int malformed)
+    {
+        var inputs = new Dictionary<string, OwnerDigestGoalInput>(StringComparer.OrdinalIgnoreCase);
+        malformed = 0;
+        if (!Directory.Exists(directory)) return inputs;
+        foreach (var file in Directory.EnumerateFiles(directory, "*.jsonl"))
+        {
+            foreach (var line in File.ReadLines(file))
+            {
+                try
+                {
+                    using var document = JsonDocument.Parse(line);
+                    var root = document.RootElement;
+                    if (!root.TryGetProperty("eventType", out var kind) || kind.GetString() != "GoalLanded")
+                        continue;
+                    var id = root.GetProperty("goalId").GetString()!;
+                    var at = root.GetProperty("timestamp").GetDateTimeOffset();
+                    var sha = root.TryGetProperty("mainSha", out var mainSha) ? mainSha.GetString() : null;
+                    if (inputs.TryGetValue(id, out var existing))
+                    {
+                        if (existing.LandedAt is null || at < existing.LandedAt)
+                            inputs[id] = existing with { LandedAt = at, LandingSha = sha };
+                        else if (existing.LandingSha is null && sha is not null)
+                            inputs[id] = existing with { LandingSha = sha };
+                    }
+                    else
+                        inputs[id] = new OwnerDigestGoalInput(id, at, sha, []);
+                }
+                catch (JsonException) { malformed++; }
+                catch (FormatException) { malformed++; }
+                catch (KeyNotFoundException) { malformed++; }
+                catch (InvalidOperationException) { malformed++; }
+            }
+        }
+        return inputs;
+    }
 
     internal static OwnerDigestResult Read(OrchestratorWorkspace workspace, IClock clock,
         out IReadOnlyList<Goal> goals, DateTimeOffset? since = null, DateTimeOffset? until = null)
