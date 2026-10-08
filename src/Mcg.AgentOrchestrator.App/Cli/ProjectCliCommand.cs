@@ -11,7 +11,8 @@ internal static class ProjectCliCommand
         IReadOnlyList<string> parts,
         OrchestratorProjectRegistry registry,
         string defaultRootDirectory,
-        string? activeProjectOverride)
+        string? activeProjectOverride,
+        TextWriter? discoveryOutput = null)
     {
         var subcommand = parts.Count > 1 ? parts[1].ToLowerInvariant() : "show";
         switch (subcommand)
@@ -32,9 +33,52 @@ internal static class ProjectCliCommand
                 PrintShow(parts, registry, defaultRootDirectory, activeProjectOverride);
                 return 0;
 
+            case "discover":
+                Discover(parts, registry, defaultRootDirectory, activeProjectOverride, discoveryOutput ?? Console.Out);
+                return 0;
+
             default:
-                throw new ArgumentException("Usage: project list|show [name]|create <name> --root <path> [--integration-branch <name>]|select <name>");
+                throw new ArgumentException("Usage: project list|show [name]|discover [name] [--root <path>]|create <name> --root <path> [--integration-branch <name>]|select <name>");
         }
+    }
+
+    private static void Discover(
+        IReadOnlyList<string> parts,
+        OrchestratorProjectRegistry registry,
+        string defaultRootDirectory,
+        string? activeProjectOverride,
+        TextWriter output)
+    {
+        var rootOverride = GetFlagValue(parts, "--root");
+        if (rootOverride is not null && string.IsNullOrWhiteSpace(rootOverride))
+            throw new ArgumentException("Usage: project discover [name] [--root <path>]");
+
+        var name = parts.Count > 2 && !parts[2].StartsWith("--", StringComparison.Ordinal)
+            ? OrchestratorProjectSelection.NormalizeProjectName(parts[2]) : null;
+        var project = name is null ? registry.ResolveActiveProject(defaultRootDirectory, activeProjectOverride)
+            : name.Equals(OrchestratorWorkspace.DefaultProjectName, StringComparison.OrdinalIgnoreCase)
+                ? new OrchestratorProject(OrchestratorWorkspace.DefaultProjectName, Path.GetFullPath(defaultRootDirectory))
+                : registry.GetRequiredProject(name);
+        IProjectDiscoveryAdapter adapter = new DotnetProjectDiscoveryAdapter();
+        var model = adapter.Discover(rootOverride ?? project.RootDirectory);
+        var workspaceDirectory = project.ResolveWorkspace().OrchestratorDirectory;
+        Directory.CreateDirectory(workspaceDirectory);
+        var modelPath = Path.Combine(workspaceDirectory, "project-model.json");
+        var temporaryPath = Path.Combine(workspaceDirectory, $".project-model-{Guid.NewGuid():N}.tmp");
+        try
+        {
+            File.WriteAllText(temporaryPath, ProjectModelJson.Serialize(model));
+            File.Move(temporaryPath, modelPath, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath))
+                File.Delete(temporaryPath);
+        }
+
+        output.WriteLine($"Project model: {modelPath}");
+        foreach (var question in model.OwnerQuestions)
+            output.WriteLine($"Owner question: {question.Question}");
     }
 
     private static void PrintList(
