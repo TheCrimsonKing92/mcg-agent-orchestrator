@@ -77,6 +77,7 @@ internal sealed partial class ConductorDriver
         var groups = new List<FindingEvidenceRequestGroup>();
         var normalizationRefused = false;
         var reusedGreenReceipt = false;
+        var reattachedReceiptIds = new List<string>();
         var findingEvidenceEngineSettings = _getFindingEvidenceEngineSettings(goal);
         var executionBasisIdentity = BuildFindingEvidenceExecutionBasisIdentity(findingEvidenceEngineSettings);
         foreach (var finding in requestingFindings)
@@ -136,6 +137,7 @@ internal sealed partial class ConductorDriver
                         coverageReceipts,
                         identity,
                         coverageReason);
+                    reattachedReceiptIds.AddRange(coverageReceipts.Select(receipt => receipt.ReceiptId));
                     continue;
                 }
 
@@ -180,7 +182,8 @@ internal sealed partial class ConductorDriver
         if (groups.Count == 0 && reusedGreenReceipt)
         {
             decision = BuildReceiptClosureOrDeliveryRetry(
-                goal, requestingTask, telemetryCandidateSha, requestingFindings, [],
+                goal, requestingTask, telemetryCandidateSha, requestingFindings,
+                reattachedReceiptIds.Distinct(StringComparer.Ordinal).ToArray(),
                 "Previously executed green evidence still matches the candidate and normalized request; its receipt was reattached without rerunning tests.");
             return true;
         }

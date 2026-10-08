@@ -50,7 +50,34 @@ internal sealed partial class ConductorDriver
             }
         }
 
+        var receiptTask = (_cohortKernel ?? _conductorTickKernel)?.GetTask(goal.Id, task.Id) ?? task;
+        var openFindings = ReviewFindings.GetOpenBlockingFindings(
+            receiptTask.LastVerification?.MergedReviewFindings ?? findings,
+            goal.EffectiveAcceptanceCriteriaCorrections);
+        if (task.RequiredRole == AgentRole.Tester && openFindings.Count > 0 &&
+            SuppliedReceiptsPassAtCandidate(receiptTask, candidateSha, receiptIds))
+        {
+            return BuildPassingEvidenceOpenFindingDecision(
+                goal, task, candidateSha, receiptIds, openFindings);
+        }
+
         return BuildCappedFindingEvidenceDeliveryRetry(goal, task, candidateSha, findings, receiptIds, summary);
+    }
+
+    private static bool SuppliedReceiptsPassAtCandidate(
+        TaskSpec task, string candidateSha, IReadOnlyList<string> receiptIds)
+    {
+        if (receiptIds.Count == 0 || !ConductorGitRevisionReader.IsValid(candidateSha)) return false;
+        var receipts = task.VerificationHistory.SelectMany(record => record.FindingEvidenceReceipts ?? []).ToArray();
+        return receiptIds.All(id =>
+        {
+            if (string.IsNullOrWhiteSpace(id)) return false;
+            var receipt = receipts.LastOrDefault(candidate =>
+                string.Equals(candidate.ReceiptId, id, StringComparison.Ordinal));
+            return receipt is { Accepted: true, Passed: true } &&
+                ConductorGitRevisionReader.IsValid(receipt.CandidateSha) &&
+                string.Equals(receipt.CandidateSha.Trim(), candidateSha.Trim(), StringComparison.OrdinalIgnoreCase);
+        });
     }
 
     private static bool TrySelectReceiptClosableFindings(
