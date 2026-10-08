@@ -291,6 +291,8 @@ internal sealed partial class ConductorDriver
         _cohortKernel = kernel;
         ConfigureCandidateIdentity(kernel, workspace.ConductEventsLogPath);
         _cohortWorkspace = workspace;
+        _runDeveloperCompletionStructuralPreflight = path =>
+            DeveloperCompletionStructuralPreflight.Evaluate(path, workspace.ProjectHomeDirectoryOrNull);
         _cohortAcceptanceVerifier = acceptanceVerifier;
         _cohortEventWriter = eventWriter;
         var dispatchRunner = OperatorCancelAwareDispatchRunner.ForWorkspace(workspace);
@@ -638,6 +640,7 @@ internal sealed partial class ConductorDriver
                     workspace.ConductEventsLogPath);
                 var executionOptions = attemptOptions with
                 {
+                    ProjectHomeDirectory = workspace.ProjectHomeDirectoryOrNull,
                     ProgressSink = progress => AppendGateProgressEvent(gateProgressEventWriter, goal.Id, progress),
                     RemoteLaneEventSink = detail => AppendRemoteLaneEvent(gateProgressEventWriter, goal.Id.Value[..8], detail),
                     CancellationProbe = cancellationProbeState.ShouldCancel,
@@ -792,7 +795,7 @@ internal sealed partial class ConductorDriver
                 acceptanceVerifier, worktreePath, goal.Id, request,
                 stableSlotLease?.Environment.BuildPermitIndex, stableSlotLease,
                 runBaselineArm, cancellationToken, negativeControl, revertPaths, mutation,
-                NegativeControlRevertSetResolver.Resolve(goal));
+                NegativeControlRevertSetResolver.Resolve(goal), workspace.ProjectHomeDirectoryOrNull);
             if (result.Passed)
             {
                 GoalOperationJournal.Completed(dir, goal, "conductor:finding-evidence", result.Summary);
@@ -1020,7 +1023,7 @@ internal sealed partial class ConductorDriver
         _gateReadyCandidateProjector = GateReadyCandidateProjector.CreateForRepository(dir);
         _getPreReviewEvidenceContext = goal => BuildPreReviewEvidenceContext(goal, dir);
         _getFindingEvidenceEngineSettings = goal => AcceptanceGateEngineSettings.Load(
-            GoalWorktrees.TryResolve(dir, goal.Id) ?? dir);
+            GoalWorktrees.TryResolve(dir, goal.Id) ?? dir, workspace.ProjectHomeDirectoryOrNull);
         _resolveFindingEvidenceSiblingClasses = (goal, project, requestedClass) =>
             FocusedEvidenceSiblingClassResolver.ResolveSiblingTestClassNames(
                 GoalWorktrees.TryResolve(dir, goal.Id) ?? dir,

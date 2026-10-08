@@ -132,7 +132,8 @@ public sealed partial class GoalAcceptanceVerifier
             return await scopedVerifier.RunStructuralCoverageForTests(worktreePath, goalId, changedFiles,
                 ownerApprovalSatisfied, completedChecks, cancellationToken).ConfigureAwait(false);
         }
-        var plan = CreateEffectiveGatePlan(worktreePath, changedFiles, EngineSettings);
+        var plan = CreateEffectiveGatePlan(worktreePath, changedFiles, EngineSettings,
+            (_executionContext as AcceptanceRunExecutionOwner)?.ProjectHomeDirectory);
         var preparation = await PrepareStructuralCoverageCheckAsync(plan.Checks, plan.InfrastructureTestLanes,
             worktreePath, goalId, null, null, null, LoadSanctionedTestRemovals(worktreePath),
             plan.Manifest.Checks, EngineSettings, ownerApprovalSatisfied, cancellationToken).ConfigureAwait(false);

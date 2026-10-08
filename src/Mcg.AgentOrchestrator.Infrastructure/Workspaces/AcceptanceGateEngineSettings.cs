@@ -20,9 +20,9 @@ internal sealed class AcceptanceGateEngineSettings
     public int PartitionVerdictFullRerunEveryN { get; init; } = DefaultPartitionVerdictFullRerunEveryN;
     public long OutputCaptureLimitBytes { get; init; } = DefaultOutputCaptureLimitBytes;
 
-    public static AcceptanceGateEngineSettings Load(string worktreePath)
+    public static AcceptanceGateEngineSettings Load(string worktreePath, string? projectHomeDirectory = null)
     {
-        var manifestPath = ResolveManifestPath(worktreePath);
+        var manifestPath = AcceptanceManifestLocator.Resolve(worktreePath, projectHomeDirectory);
         if (!File.Exists(manifestPath))
         {
             return new AcceptanceGateEngineSettings();
@@ -153,14 +153,6 @@ internal sealed class AcceptanceGateEngineSettings
         {
             invocation.Validate();
         }
-    }
-
-    private static string ResolveManifestPath(string worktreePath)
-    {
-        var trackedPath = Path.Combine(worktreePath, "config", "acceptance-manifest.json");
-        return File.Exists(trackedPath)
-            ? trackedPath
-            : Path.Combine(worktreePath, ".orchestrator", "acceptance-manifest.json");
     }
 
     private static string NormalizePath(string path) => path.Replace('\\', '/').TrimStart('/');

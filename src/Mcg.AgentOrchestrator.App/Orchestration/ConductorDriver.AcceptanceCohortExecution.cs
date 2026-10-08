@@ -397,7 +397,8 @@ internal sealed partial class ConductorDriver
         if (RunAcceptanceCohortSourceSizePreflight(integration.Path, identity, store) is { } sourceSizeReceipt) return sourceSizeReceipt;
         var gateProgressEventWriter = new ConductEventLogWriter(
             workspace.ConductEventsLogPath);
-        var executionOptions = CreateCohortGateExecutionOptions(gateProgressEventWriter, identity, bindings);
+        var executionOptions = CreateCohortGateExecutionOptions(gateProgressEventWriter, identity, bindings,
+            workspace.ProjectHomeDirectoryOrNull);
 
         var gateClock = Stopwatch.StartNew();
         AcceptanceCohortGateClassification? classification = null;

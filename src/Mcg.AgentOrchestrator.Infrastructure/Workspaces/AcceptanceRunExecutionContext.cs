@@ -69,7 +69,8 @@ public sealed record AcceptanceRunExecutionOptions(
     string? GateRunIdentity = null,
     Action<string>? RemoteLaneEventSink = null,
     bool CohortRemoteLanes = false,
-    AcceptanceFollowerPinnedBase? PinnedBase = null);
+    AcceptanceFollowerPinnedBase? PinnedBase = null,
+    string? ProjectHomeDirectory = null);
 
 public sealed record AcceptanceOwnerProtectedCohortMember(GoalId GoalId, string CandidateSha);
 
@@ -117,6 +118,7 @@ internal abstract class AcceptanceRunExecutionOwner : IAcceptanceRunExecutionCon
 
     public string RunId { get; }
     internal string? GateRunIdentity => _options.GateRunIdentity;
+    internal string? ProjectHomeDirectory => _options.ProjectHomeDirectory;
     internal bool CohortRemoteLanes => _options.CohortRemoteLanes;
     public string ResultsPrefix { get; }
     public string ApparatusReceiptPath { get; }
@@ -521,7 +523,7 @@ public static partial class AcceptanceExecutionOwners
             options,
             resultsPrefix,
             attemptId,
-            AcceptanceGateEngineSettings.Load(worktreePath),
+            AcceptanceGateEngineSettings.Load(worktreePath, options.ProjectHomeDirectory),
             identityResolvers);
     }
 
@@ -531,7 +533,8 @@ public static partial class AcceptanceExecutionOwners
         int? stableSlotIndex,
         CancellationToken cancellationToken,
         AcceptanceGateEngineSettings settings,
-        AcceptanceAttemptIdentityResolvers identityResolvers)
+        AcceptanceAttemptIdentityResolvers identityResolvers,
+        string? projectHomeDirectory = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(worktreePath);
         ArgumentNullException.ThrowIfNull(settings);
@@ -542,7 +545,8 @@ public static partial class AcceptanceExecutionOwners
         var resultsPrefix = publishResultsPrefix
             ? Path.GetFullPath(inheritedResultsPrefix!)
             : GoalAcceptanceVerifier.ResolveOwnerResultsPrefix(worktreePath, goalId, "gate");
-        var options = new AcceptanceRunExecutionOptions(ResultsPrefix: resultsPrefix);
+        var options = new AcceptanceRunExecutionOptions(ResultsPrefix: resultsPrefix,
+            ProjectHomeDirectory: projectHomeDirectory);
         var attemptId = Path.GetFileName(
             resultsPrefix.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
         return CreateAttemptCore(
@@ -624,7 +628,7 @@ public static partial class AcceptanceExecutionOwners
                 GoalAcceptanceVerifier.ResolveGitScalarForExecutionOwner(worktreePath, "rev-parse", "HEAD") ?? "unavailable",
                 resultsPrefix,
                 stableSlotIndex),
-            AcceptanceGateEngineSettings.Load(worktreePath),
+            AcceptanceGateEngineSettings.Load(worktreePath, options.ProjectHomeDirectory),
             cancellationToken,
             options);
     }

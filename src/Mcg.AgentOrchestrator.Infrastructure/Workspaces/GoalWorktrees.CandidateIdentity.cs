@@ -53,7 +53,8 @@ public static partial class GoalWorktrees
                 return Fail("patch-id-malformed", out failureReason);
             if (!TryHashBaseClosure(worktreePath, baseSha, changedFiles, out var closureHash, out failureReason))
                 return false;
-            var manifest = (manifestIdentity ?? GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity)(
+            var manifest = (manifestIdentity ?? ((path, files) =>
+                GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(path, files)))(
                 worktreePath, changedFiles);
             if (string.IsNullOrWhiteSpace(manifest))
                 return Fail("manifest-unavailable", out failureReason);

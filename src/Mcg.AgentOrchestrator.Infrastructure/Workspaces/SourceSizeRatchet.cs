@@ -117,7 +117,9 @@ internal static class SourceSizeRatchet
             // Goal 868fd04a (backlog c758b2c3) moved review-contract and verifying-finding recovery unchanged to its partial.
             // Goal 6f38e132 (backlog 6d658f46) moved pre-review evidence unchanged to its partial.
             // Goal 0079c3a4 moved dispatch-start effects into DispatchStartExecutor.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 1799),
+            // Goal 47f09f71 adds three lines to pass workspace project-home context at the existing
+            // preflight and acceptance orchestration seams; manifest resolution stays in AcceptanceManifestLocator.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 1802),
             // Goal 0e30d5e9 extracted impact-plan mapping to PreReviewEvidenceContextBuilder.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.PreReviewEvidence.cs", 480),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.ReviewRecovery.cs", 461),
@@ -383,7 +385,9 @@ internal static class SourceSizeRatchet
             // PassedMergeTrainReceiptSelector. Measured 15271 after integrating both; no extra headroom.
             // Goal 1f4782de extracted train RED classification into MergeTrainRedAttribution; goal def5cd48 adds
             // the planner conflict probe and its wiring. Measured 15297 across the same 70 partial files after integrating both.
-            new SourceClassCeiling("ConductorDriver", 15297, 70),
+            // Goal 47f09f71 adds nine routing lines across the same partial files so preflight, cohort,
+            // focused evidence and acceptance share the workspace manifest; no resolver behavior enters this class.
+            new SourceClassCeiling("ConductorDriver", 15306, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.

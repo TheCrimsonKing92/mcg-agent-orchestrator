@@ -11,7 +11,7 @@ internal sealed partial class ConductorDriver
     internal static string TrainGateRunIdentity(IEnumerable<string> memberGoalIds) =>
         $"train:{string.Join('+', memberGoalIds.Order(StringComparer.Ordinal))}";
 
-    private static AcceptanceRunExecutionOptions CreateCohortAttributionExecutionOptions(
+    private AcceptanceRunExecutionOptions CreateCohortAttributionExecutionOptions(
         ConductEventLogWriter writer,
         AcceptanceCohortIdentity identity,
         AcceptanceCohortMemberBinding member) =>
@@ -23,7 +23,8 @@ internal sealed partial class ConductorDriver
                 $"members={string.Join(',', identity.Members.Select(binding => binding.GoalId.Value[..8]))} scope=attribution";
             TryAppendGateProgressEvent(writer, goalId, detail);
         }, RemoteLaneEventSink: detail => AppendRemoteLaneEvent(writer, member.GoalId.Value[..8], detail),
-            GateRunIdentity: CohortGateRunIdentity(identity.Members.Select(binding => binding.GoalId.Value)));
+            GateRunIdentity: CohortGateRunIdentity(identity.Members.Select(binding => binding.GoalId.Value)),
+            ProjectHomeDirectory: _cohortWorkspace?.ProjectHomeDirectoryOrNull);
 
     private static void AppendCohortAttributionStartEvent(
         ConductEventLogWriter writer,
@@ -74,7 +75,7 @@ internal sealed partial class ConductorDriver
                 AppendRemoteLaneEvent(writer, members.Count == 1 ? members[0].GoalId.Value[..8] : null, detail);
             }
             catch (Exception) { /* Event-log setup is observational. */ }
-        }, GateRunIdentity: trainKey);
+        }, GateRunIdentity: trainKey, ProjectHomeDirectory: workspace.ProjectHomeDirectoryOrNull);
     }
 
     private static void TryAppendGateProgressEvent(

@@ -112,7 +112,8 @@ internal sealed partial class ConductorStewardHost
             enabled: !string.Equals(enabledSetting, "false", StringComparison.OrdinalIgnoreCase) &&
                      enabledSetting != "0",
             deterministicRoute: new ConductorStewardDeterministicRoute(
-                new GitConductorStewardTrackedFileLister(), new ManifestConductorStewardLaneSubstringResolver()),
+                new GitConductorStewardTrackedFileLister(),
+                new ManifestConductorStewardLaneSubstringResolver(workspace.ProjectHomeDirectoryOrNull)),
             caseDSources: caseDSources);
     }
 

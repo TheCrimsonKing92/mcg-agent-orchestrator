@@ -42,14 +42,16 @@ internal static class AcceptanceExecutionRunner
         DotnetBuildEnvironmentLease? stableSlotLease,
         bool runBaselineArm,
         CancellationToken cancellationToken,
-        FindingEvidenceNegativeControl? negativeControl = null, IReadOnlyList<string>? revertPaths = null, FindingEvidenceMutation? mutation = null, IReadOnlyList<string>? declaredPaths = null)
+        FindingEvidenceNegativeControl? negativeControl = null, IReadOnlyList<string>? revertPaths = null, FindingEvidenceMutation? mutation = null, IReadOnlyList<string>? declaredPaths = null,
+        string? projectHomeDirectory = null)
     {
         ArgumentNullException.ThrowIfNull(verifier);
         var executionOwner = AcceptanceExecutionOwners.CreateFocusedVerification(
             worktreePath,
             goalId,
             stableSlotIndex,
-            cancellationToken);
+            cancellationToken,
+            new AcceptanceRunExecutionOptions(ProjectHomeDirectory: projectHomeDirectory));
         return AcceptanceExecutionOwnerLifetime.Run(
             executionOwner,
             () => (negativeControl is { } mode

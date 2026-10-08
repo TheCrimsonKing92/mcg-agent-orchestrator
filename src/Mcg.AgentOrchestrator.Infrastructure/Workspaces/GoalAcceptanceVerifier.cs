@@ -323,9 +323,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     internal const int MaxFailureAttributionFocusedEvidenceIdentities = FocusedEvidenceShortTimeoutTargetLimit;
     public const string AcceptanceAttemptTrxPrefixVariable = "MCG_ACCEPTANCE_GATE_ATTEMPT_TRX_PREFIX";
 
-    public static StartupContract ValidateStartupContract(string repositoryRoot)
+    public static StartupContract ValidateStartupContract(string repositoryRoot, string? projectHomeDirectory = null)
     {
-        var manifest = AcceptanceManifest.Load(repositoryRoot, changedFiles: null);
+        var manifest = AcceptanceManifest.Load(repositoryRoot, changedFiles: null, projectHomeDirectory);
         if (manifest.Checks.Count == 0)
         {
             throw new InvalidOperationException("Acceptance manifest loaded without any checks.");
@@ -348,7 +348,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             }
         }
 
-        var laneNames = AcceptanceGateEngineSettings.Load(repositoryRoot)
+        var laneNames = AcceptanceGateEngineSettings.Load(repositoryRoot, projectHomeDirectory)
             .InfrastructureTestLanes
             .Select(lane => lane.Name)
             .ToArray();
@@ -508,21 +508,23 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         _executionContext?.Settings ?? new AcceptanceGateEngineSettings();
     public static string ComputeEffectiveAcceptancePlanIdentity(
         string worktreePath,
-        IReadOnlyList<string>? changedFiles = null)
+        IReadOnlyList<string>? changedFiles = null,
+        string? projectHomeDirectory = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(worktreePath);
-        var engineSettings = AcceptanceGateEngineSettings.Load(worktreePath);
-        var plan = CreateEffectiveGatePlan(worktreePath, changedFiles, engineSettings);
+        var engineSettings = AcceptanceGateEngineSettings.Load(worktreePath, projectHomeDirectory);
+        var plan = CreateEffectiveGatePlan(worktreePath, changedFiles, engineSettings, projectHomeDirectory);
         return ComputeEffectiveAcceptanceManifestIdentity(plan.Checks, engineSettings);
     }
 
     internal static IReadOnlyList<AcceptanceManifestCheck> BuildEffectiveAcceptanceChecksForTests(
         string worktreePath,
-        IReadOnlyList<string>? changedFiles = null)
+        IReadOnlyList<string>? changedFiles = null,
+        string? projectHomeDirectory = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(worktreePath);
-        var engineSettings = AcceptanceGateEngineSettings.Load(worktreePath);
-        return CreateEffectiveGatePlan(worktreePath, changedFiles, engineSettings).Checks;
+        var engineSettings = AcceptanceGateEngineSettings.Load(worktreePath, projectHomeDirectory);
+        return CreateEffectiveGatePlan(worktreePath, changedFiles, engineSettings, projectHomeDirectory).Checks;
     }
 
     internal static IReadOnlyList<AcceptanceManifestCheck> MapRequiredPolicyChecksForTests(
@@ -535,9 +537,10 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         IReadOnlyList<string>? changedFiles = null,
         int? stableSlotIndex = null,
         DotnetBuildEnvironmentLease? stableSlotLease = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? projectHomeDirectory = null)
     {
-        var engineSettings = AcceptanceGateEngineSettings.Load(worktreePath);
+        var engineSettings = AcceptanceGateEngineSettings.Load(worktreePath, projectHomeDirectory);
         var executionOwner = AcceptanceExecutionOwners.CreateAttemptForVerifierCompatibility(
             worktreePath,
             goalId,
@@ -547,7 +550,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             new AcceptanceAttemptIdentityResolvers(
                 path => _testOverrides.ResolvePartitionVerdictCandidateTreeShaForTests?.Invoke(path),
                 path => _testOverrides.ResolvePartitionVerdictMainShaForTests?.Invoke(path),
-                path => _testOverrides.ResolvePartitionVerdictVerifyingCommitShaForTests?.Invoke(path)));
+                path => _testOverrides.ResolvePartitionVerdictVerifyingCommitShaForTests?.Invoke(path)),
+            projectHomeDirectory);
         await using (executionOwner.ConfigureAwait(false))
         {
             return await RunOwnedAsync(
@@ -623,7 +627,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var shardConcurrencyBudget = Math.Min(
             engineSettings.MaxConcurrentShards,
             shardCoreBudget);
-        var effectivePlan = CreateEffectiveGatePlan(worktreePath, changedFiles, engineSettings);
+        var effectivePlan = CreateEffectiveGatePlan(worktreePath, changedFiles, engineSettings,
+            executionOwner.ProjectHomeDirectory);
         if (effectivePlan.UndeclaredTestProjects.Count > 0)
         {
             var message = "Structural coverage requires every discovered test project to be declared by a dotnet-test check in config/acceptance-manifest.json:" +
@@ -1824,9 +1829,10 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static EffectiveGatePlan CreateEffectiveGatePlan(
         string worktreePath,
         IReadOnlyList<string>? changedFiles,
-        AcceptanceGateEngineSettings engineSettings)
+        AcceptanceGateEngineSettings engineSettings,
+        string? projectHomeDirectory = null)
     {
-        var manifest = AcceptanceManifest.Load(worktreePath, changedFiles);
+        var manifest = AcceptanceManifest.Load(worktreePath, changedFiles, projectHomeDirectory);
         var dotnetShardDisposition = ClassifyDotnetShardDisposition(changedFiles);
         var policyShardPlan = BuildPolicyShardPlan(changedFiles, null,
             CandidateTreeProbe.ForRepositoryRoot(worktreePath), manifest.Checks.Select(check => check.Project).OfType<string>());
@@ -4874,9 +4880,10 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         public IReadOnlyList<AcceptanceManifestCheck> Checks { get; init; } = [AcceptanceManifestCheck.DefaultDotnetTest];
         public IReadOnlyList<string> ForbiddenChangedPathGlobs { get; init; } = [];
 
-        public static AcceptanceManifest Load(string worktreePath, IReadOnlyList<string>? changedFiles)
+        public static AcceptanceManifest Load(string worktreePath, IReadOnlyList<string>? changedFiles,
+            string? projectHomeDirectory = null)
         {
-            var path = ResolveManifestPath(worktreePath);
+            var path = AcceptanceManifestLocator.Resolve(worktreePath, projectHomeDirectory);
             if (!File.Exists(path))
             {
                 return changedFiles is null
@@ -4931,16 +4938,6 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             };
         }
 
-        private static string ResolveManifestPath(string worktreePath)
-        {
-            var trackedPath = Path.Combine(worktreePath, "config", "acceptance-manifest.json");
-            if (File.Exists(trackedPath))
-            {
-                return trackedPath;
-            }
-
-            return Path.Combine(worktreePath, ".orchestrator", "acceptance-manifest.json");
-        }
     }
 
     private static readonly JsonSerializerOptions CriteriaJsonOptions = new()
