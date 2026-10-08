@@ -99,6 +99,40 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteNoWriterEffects : CliTa
             Assert.Equal(0, repository.SaveAttempts);
             Assert.Equal(0, repository.MergeSaveAttempts);
             Assert.Equal(0, repository.FullLoadAttempts);
+            Assert.All(repository.ObservedWriteOperationTags, tag => Assert.True(tag is null,
+                $"{verb}: read-only execution of '{string.Join(" ", args)}' observed write tag '{tag}'."));
+            Assert.Null(SqliteOrchestratorStateRepository.AmbientWriteOperationTag);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void WriterPathForm_PersistentRunner_ObservesCliWriteOperationTag()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var repository = new ProbeStateRepository(CreateSeed(workspace));
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = null;
+            CaptureConsole(() =>
+            {
+                // Bare status uses the writer scope and drains without opening a transaction.
+                Assert.False(CliPersistentStateRunner.ExecuteCommand(
+                    ["status"], repository, workspace, ref agents, new InMemoryModelProviderRegistry([]),
+                    ref profiles, ref currentGoal));
+            });
+
+            Assert.True(repository.ListOutboxMessagesCount >= 1);
+            Assert.Equal(0, repository.MutationAttempts);
+            Assert.Contains(repository.ObservedWriteOperationTags,
+                tag => tag is not null && tag.StartsWith("cli:", StringComparison.Ordinal));
+            Assert.Null(SqliteOrchestratorStateRepository.AmbientWriteOperationTag);
         }
         finally
         {
