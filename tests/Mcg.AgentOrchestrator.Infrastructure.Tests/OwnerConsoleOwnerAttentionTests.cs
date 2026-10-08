@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.App.OwnerConsole;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
 using Terminal.Gui.Input;
 
 // Parallel-safe: all observations, dialogs and clocks belong to the scene.
@@ -8,27 +9,84 @@ public sealed class OwnerConsoleOwnerAttentionTests
     [Fact]
     public async Task OnlyTheLiveOwnerRoutedItemRaisesAttentionAndRemovalResolvesIt()
     {
-        using var scene = new OwnerConsoleActivityOutcomeTests.Scene();
-        scene.AddGoals();
-        var time = scene.Harness.Clock.GetUtcNow();
-        OwnerConductEvent[] events = [
-            new(time.AddSeconds(-3), "author", "11111111", "kind=answer question=Which implementation?"),
-            new(time.AddSeconds(-2), "goal-lifecycle", "11111111", "HumanInputReceived"),
-            new(time.AddSeconds(-1), "goal-escalation", "22222222", "author-owner-question question=Pick a lane?"),
-            new(time, "goal-escalation", "33333333", "steward-owner-question question=Ship now? evidence=proof")];
-        scene.Harness.Questions.Items.Add(new("q3", "33333333", OwnerQuestionKind.StewardHold, "Ship now?\nThe risks are recorded."));
-        await scene.Render(events);
-        var needs = Assert.Single(scene.View.ActivityLines, line => line.Contains("Needs you:"));
-        Assert.Contains("Needs you: 33333333 Ship now?", needs);
-        Assert.DoesNotContain("The risks", needs);
-        Assert.DoesNotContain(scene.View.ActivityLines, line => line.Contains("Resolved:"));
-        Assert.Single(scene.Controller.Model!.Decisions);
+        var root = SharedTestSupport.CreateTempDirectory();
+        try
+        {
+            using var scene = new OwnerConsoleActivityOutcomeTests.Scene(questions: harness =>
+                new OwnerQuestionReadModel(harness.State, root));
+            scene.AddGoals();
+            var time = scene.Harness.Clock.GetUtcNow();
+            var kernel = scene.Harness.Kernel;
+            var clarification = kernel.RequestHumanInput(new("11111111"), null, "Which implementation?");
+            kernel.SubmitHumanInput(clarification.Id, "Use the existing seam.");
+            kernel.ObserveGoalHold(new("22222222"), "author-owner-question", "question=Pick a lane?",
+                time, TimeSpan.MaxValue, "q2");
+            kernel.ObserveGoalHold(new("33333333"), "steward-owner-question",
+                "question=Ship now?\nThe risks are recorded. evidence=[proof]", time, TimeSpan.MaxValue, "q3");
+            var snapshot = await new OwnerQuestionReadModel(scene.Harness.State, root).ReadAsync(CancellationToken.None);
+            Assert.True(clarification.IsCompleted);
+            Assert.Equal("author-owner-question", kernel.GetGoal(new("22222222")).CurrentHold!.State);
+            Assert.Equal(kernel.GetGoal(new("33333333")).CurrentHold!.Identity, Assert.Single(snapshot.Live).ItemId);
+            OwnerConductEvent[] events = [
+                new(time.AddSeconds(-3), "author", "11111111", "kind=answer question=Which implementation?"),
+                new(time.AddSeconds(-2), "goal-lifecycle", "11111111", "HumanInputReceived"),
+                new(time.AddSeconds(-1), "goal-escalation", "22222222", "author-owner-question question=Pick a lane?"),
+                new(time, "goal-escalation", "33333333", "steward-owner-question question=Ship now? evidence=proof")];
+            await scene.Render(events);
+            var needs = Assert.Single(scene.View.ActivityLines, line => line.Contains("Needs you:"));
+            Assert.Contains("Needs you: 33333333 Ship now?", needs);
+            Assert.DoesNotContain("The risks", needs);
+            Assert.DoesNotContain(scene.View.ActivityLines, line => line.Contains("Resolved:"));
+            Assert.Single(scene.Controller.Model!.Decisions);
+            var escalation = Assert.Single(scene.Controller.Model.Activity, item => item.Kind == "goal-escalation");
+            Assert.Contains("22222222 question sent to the operator: Pick a lane?", escalation.Phrase);
+            await scene.Controller.ShowActivityMeaningAsync(escalation);
+            Assert.Contains("Do you need to act: No.", scene.Dialogs.Messages[^1].Text);
 
-        scene.Harness.Questions.Items.Clear();
-        await scene.Render(events.Append(new(time.AddSeconds(1), "goal-lifecycle", "33333333", "HumanInputReceived")).ToArray());
-        Assert.Contains("Resolved: 33333333 Ship now?", Assert.Single(scene.View.ActivityLines, line => line.Contains("Resolved:")));
-        await scene.Render(events);
-        Assert.Single(scene.View.ActivityLines, line => line.Contains("Resolved:"));
+            kernel.ClearGoalHold(new("33333333"));
+            await scene.Render(events.Append(new(time.AddSeconds(1), "goal-lifecycle", "33333333", "HumanInputReceived")).ToArray());
+            Assert.Contains("Resolved: 33333333 Ship now?", Assert.Single(scene.View.ActivityLines, line => line.Contains("Resolved:")));
+            await scene.Render(events);
+            Assert.Single(scene.View.ActivityLines, line => line.Contains("Resolved:"));
+            Assert.Empty(scene.Controller.Model!.Decisions);
+        }
+        finally { SharedTestSupport.RemoveTempDirectory(root); }
+    }
+
+    [Fact]
+    public async Task LiveClarificationsUseDecisionsMembershipWithoutAnOperatorCompletionMarker()
+    {
+        var root = SharedTestSupport.CreateTempDirectory();
+        try
+        {
+            using var scene = new OwnerConsoleActivityOutcomeTests.Scene(questions: harness =>
+                new OwnerQuestionReadModel(harness.State, root));
+            scene.AddGoals();
+            var request = scene.Harness.Kernel.RequestHumanInput(new("11111111"), null, "Which implementation?");
+            var clarification = await CollaborationItemStore.ForDirectory(root).RaiseAsync(
+                CollaborationItemType.Clarification, "22222222", "Choose scope", "Question: Which scope?",
+                "spec-clarification:owner-attention");
+
+            // Live membership is the operator's routing fact, including both clarification sources.
+            // No Author event, operator-turn marker or elapsed-time condition is necessary.
+            await scene.Render([]);
+            var model = scene.Controller.Model!;
+            Assert.Equal(2, model.Decisions.Length);
+            Assert.Equal(new[] { request.Id.Value, clarification.Id }.Order(), model.Decisions.Select(item => item.Id).Order());
+            Assert.Equal(2, scene.View.ActivityLines.Count(line => line.Contains("Needs you:")));
+            Assert.Contains(scene.View.ActivityLines, line => line.Contains("Needs you: 11111111 Which implementation?"));
+            Assert.Contains(scene.View.ActivityLines, line => line.Contains("Needs you: 22222222 Which scope?"));
+            foreach (var item in model.Activity)
+            {
+                var decision = Assert.Single(model.Decisions, row => row.Id == item.OwnerQuestionId);
+                await scene.Controller.ShowActivityMeaningAsync(item);
+                var text = scene.Dialogs.Messages[^1].Text;
+                Assert.Contains("still waiting on you", text);
+                Assert.Contains("Do you need to act: Yes.", text);
+                Assert.Contains($"DECISIONS row [{decision.Number}] {decision.GoalPrefix} {decision.Kind}", text);
+            }
+        }
+        finally { SharedTestSupport.RemoveTempDirectory(root); }
     }
 
     [Fact]

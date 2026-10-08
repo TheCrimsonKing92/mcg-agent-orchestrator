@@ -156,10 +156,12 @@ public sealed class OwnerConsoleActivityOutcomeTests
         internal readonly OwnerConsoleViewModelBuilder Builder;
         internal readonly OwnerConsoleScreenController Controller;
         internal readonly OwnerConsoleFullScreenView View;
-        internal Scene(IGoalEventTail? tail = null, Func<OwnerConductEvent, OwnerActivityTestEvidence?>? evidence = null)
+        internal Scene(IGoalEventTail? tail = null, Func<OwnerConductEvent, OwnerActivityTestEvidence?>? evidence = null,
+            Func<OwnerConsoleHarness, IOwnerQuestionSource>? questions = null)
         {
-            Builder = new(Harness.State, Harness.Questions, Harness.Liveness, new Epics(), Harness.Clock, evidence);
-            Controller = new(Harness.Questions, Harness.Answers, Dialogs, Harness.State, tail ?? Harness.Tail,
+            var source = questions?.Invoke(Harness) ?? Harness.Questions;
+            Builder = new(Harness.State, source, Harness.Liveness, new Epics(), Harness.Clock, evidence);
+            Controller = new(source, Harness.Answers, Dialogs, Harness.State, tail ?? Harness.Tail,
                 Harness.Conductor, Harness.DigestReport, Harness.Digest, Harness.Clock);
             View = new(App, Controller, () => Task.CompletedTask);
         }
