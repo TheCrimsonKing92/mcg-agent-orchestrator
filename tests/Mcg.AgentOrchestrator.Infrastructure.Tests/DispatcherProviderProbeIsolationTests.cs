@@ -97,7 +97,7 @@ public sealed class DispatcherProviderProbeIsolationTests
     public void NestedArgumentsAndLiteralFormsKeepCallBoundaries()
         => VerifySource(""""
             WorkerProfileDispatcher.PrepareSubscriptionTask(
-                Build(new[] { Nested(")", @"quotes "" )"), '(', $"value {Nested("inside")}", """raw )""") }),
+                Build(new[] { Nested(")", @"quotes "" )"), '(', $"value {Nested("inside")}", """raw )""" }),
                 claudeAuthProbe: () => Create(Nested()),
                 commandExists: name => { return Present(name); });
             WorkerProfileDispatcher.PreflightSubscriptionTask(
