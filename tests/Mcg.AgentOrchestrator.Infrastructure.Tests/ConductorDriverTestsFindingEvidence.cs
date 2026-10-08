@@ -675,7 +675,7 @@ public sealed partial class ConductorDriverTestsFindingEvidence
     }
 
     [Xunit.Fact]
-    public void TesterStructuredRequestReceivesFindingBoundReceiptInRetryContext()
+    public void TesterPassingRequestRoutesDeveloperWithFindingBoundReceipt()
     {
         var (kernel, goal) = SoftwareGoal();
         var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
@@ -708,6 +708,7 @@ public sealed partial class ConductorDriverTestsFindingEvidence
                 "test", "C:\\tmp", 1, output, "", DateTimeOffset.UtcNow, WorkerResultPresent: true));
 
         var focusedRuns = 0;
+        var retries = new List<(TaskId TaskId, RetryCause Cause, string Message)>();
         var driver = MakeDriver(
             getPreReviewEvidenceContext: _ => NoPreReviewContext("abc1234"),
             runFocusedEvidence: (_, request) =>
@@ -715,8 +716,11 @@ public sealed partial class ConductorDriverTestsFindingEvidence
                 focusedRuns++;
                 return new FocusedEvidenceRunResult(request, true, true, "tester requested evidence passed", []);
             },
-            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
-                kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind),
+            retryTaskWithCause: (goalId, taskId, message, roundKind, cause) =>
+            {
+                retries.Add((taskId, cause, message));
+                return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind, retryCause: cause);
+            },
             recordFindingEvidenceRequest: (goalId, taskId, message) =>
                 kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
             recordFindingEvidenceRun: (goalId, taskId, message) =>
@@ -724,10 +728,25 @@ public sealed partial class ConductorDriverTestsFindingEvidence
             recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
                 kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt));
 
-        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
         Assert.Equal(1, focusedRuns);
-        Assert.Equal(WorkTaskStatus.Assigned, tester.Status);
+        Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
+        var retry = Assert.Single(retries);
+        Assert.Equal(developer.Id, retry.TaskId);
+        Assert.Equal(RetryCause.NewSourceFinding, retry.Cause);
+        Assert.Equal(WorkTaskStatus.Assigned, developer.Status);
+        var receipt = Assert.Single(tester.VerificationHistory.Last().FindingEvidenceReceipts!);
+        Assert.True(receipt.Accepted && receipt.Passed);
+        Assert.Equal("abc1234", receipt.CandidateSha);
+        Assert.Contains(receipt.ReceiptId, retry.Message, StringComparison.Ordinal);
+        Assert.Contains("tester-evidence", retry.Message, StringComparison.Ordinal);
+        Assert.Contains("abc1234", retry.Message, StringComparison.Ordinal);
+        Assert.Contains("passing evidence did not close", retry.Message, StringComparison.Ordinal);
+        Assert.Equal(0, FindingEvidenceExecutionClassifier.CountEvidenceDeliveryRetries(
+            goal.Timeline, tester.Id, "abc1234", "tester-evidence"));
+        Assert.DoesNotContain(goal.Timeline, evt =>
+            evt.Message.Contains("retry cap reached", StringComparison.OrdinalIgnoreCase));
         var testerBrief = kernel.BuildTaskBrief(goal.Id, tester.Id).Content;
         Assert.Contains("evidence_receipt:", testerBrief, StringComparison.Ordinal);
         Assert.Contains("tester requested evidence passed", testerBrief, StringComparison.Ordinal);
@@ -757,6 +776,7 @@ public sealed partial class ConductorDriverTestsFindingEvidence
             evt.Message.Contains("finding_id=tester-evidence", StringComparison.Ordinal));
         var recorded = tester.VerificationHistory.Last().MergedReviewFindings!.Single(item => item.StableId == "tester-evidence");
         Assert.True(recorded.EvidenceOutcome?.Honoured);
+        Assert.Equal(ReviewFindingState.Open, recorded.State);
     }
 
     [Xunit.Theory]

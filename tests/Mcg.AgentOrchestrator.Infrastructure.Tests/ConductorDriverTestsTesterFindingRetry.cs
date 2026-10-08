@@ -60,11 +60,9 @@ public sealed class ConductorDriverTestsTesterFindingRetry
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
-        // The scheduled execution is the next proof-producing action; the Developer is not paid for
-        // a round on a candidate that nobody has measured yet.
+        // Measure the pending request before routing the surviving finding to the Developer.
         Assert.Equal(1, harness.FocusedRuns);
-        Assert.Equal(tester.Id, harness.RetriedTaskId);
-        Assert.NotEqual(developer.Id, harness.RetriedTaskId);
+        AssertPassingEvidenceRoutesDeveloper(goal, developer, tester, harness);
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
         Assert.Contains(goal.Timeline, evt =>
             evt.TaskId == tester.Id &&
@@ -136,8 +134,7 @@ public sealed class ConductorDriverTestsTesterFindingRetry
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
         Assert.Equal(1, harness.FocusedRuns);
-        Assert.Equal(tester.Id, harness.RetriedTaskId);
-        Assert.NotEqual(developer.Id, harness.RetriedTaskId);
+        AssertPassingEvidenceRoutesDeveloper(goal, developer, tester, harness);
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
     }
 
@@ -201,10 +198,10 @@ public sealed class ConductorDriverTestsTesterFindingRetry
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
-        // The Developer's retry was consumed and produced no commit, so the candidate is settled and
-        // the pending request is measurable now.
+        // The no-commit retry settled the candidate. Its passing evidence leaves the finding open,
+        // so the Developer must repair it before downstream verification.
         Assert.Equal(1, harness.FocusedRuns);
-        Assert.Equal(tester.Id, harness.RetriedTaskId);
+        AssertPassingEvidenceRoutesDeveloper(goal, developer, tester, harness);
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
     }
 
@@ -379,8 +376,13 @@ public sealed class ConductorDriverTestsTesterFindingRetry
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
         Assert.Equal(1, harness.FocusedRuns);
-        Assert.Equal(tester.Id, harness.RetriedTaskId);
-        Assert.NotEqual(developer.Id, harness.RetriedTaskId);
+        if (requestingRole == AgentRole.Tester)
+            AssertPassingEvidenceRoutesDeveloper(goal, developer, tester, harness);
+        else
+        {
+            Assert.Equal(tester.Id, harness.RetriedTaskId);
+            Assert.NotEqual(developer.Id, harness.RetriedTaskId);
+        }
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
     }
 
@@ -406,11 +408,33 @@ public sealed class ConductorDriverTestsTesterFindingRetry
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
     }
 
+    private static void AssertPassingEvidenceRoutesDeveloper(
+        Goal goal, TaskSpec developer, TaskSpec tester, RetryHarness harness)
+    {
+        Assert.Equal(developer.Id, harness.RetriedTaskId);
+        Assert.Equal(RetryCause.NewSourceFinding, harness.RetriedCause);
+        var verification = tester.VerificationHistory.Last();
+        var receipt = verification.FindingEvidenceReceipts!.Last();
+        Assert.True(receipt.Accepted && receipt.Passed);
+        Assert.Equal(CandidateSha, receipt.CandidateSha);
+        Assert.Contains(receipt.ReceiptId, harness.RetryMessage!, StringComparison.Ordinal);
+        Assert.Contains(CandidateSha, harness.RetryMessage!, StringComparison.Ordinal);
+        Assert.Contains("passing evidence did not close", harness.RetryMessage!, StringComparison.Ordinal);
+        var finding = Assert.Single(verification.MergedReviewFindings!);
+        Assert.Equal(ReviewFindingState.Open, finding.State);
+        Assert.Contains(finding.StableId, harness.RetryMessage!, StringComparison.Ordinal);
+        Assert.Equal(0, FindingEvidenceExecutionClassifier.CountEvidenceDeliveryRetries(
+            goal.Timeline, tester.Id, CandidateSha, finding.StableId));
+        Assert.Null(harness.Escalation);
+    }
+
     private sealed class RetryHarness(AgentOrchestratorKernel kernel)
     {
         public int FocusedRuns { get; private set; }
 
         public TaskId? RetriedTaskId { get; private set; }
+
+        public RetryCause? RetriedCause { get; private set; }
 
         public string? RetryMessage { get; private set; }
 
@@ -431,11 +455,12 @@ public sealed class ConductorDriverTestsTesterFindingRetry
                         : DualArmFindingEvidence(request, baselineDisposition, CandidateSha);
                 },
                 dispatchAndStart: _ => DispatchStartOutcome.Started(),
-                retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+                retryTaskWithCause: (goalId, taskId, message, roundKind, cause) =>
                 {
                     RetriedTaskId = taskId;
+                    RetriedCause = cause;
                     RetryMessage = message;
-                    return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind);
+                    return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind, retryCause: cause);
                 },
                 writeEscalation: (_, _, message) => Escalation = message,
                 recordFindingEvidenceRequest: (goalId, taskId, message) =>
