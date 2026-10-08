@@ -66,7 +66,7 @@ internal static class EpicProgressReadModel
     {
         if (!File.Exists(workspace.PortfolioStorePath))
             return [];
-        var store = new PortfolioStore(workspace.PortfolioStorePath);
+        var store = PortfolioStore.OpenReadOnly(workspace.PortfolioStorePath);
         return Load(workspace, store, store.ListEpicsAsync().GetAwaiter().GetResult());
     }
 
@@ -91,7 +91,7 @@ internal static class EpicProgressReadModel
     {
         if (!File.Exists(workspace.PortfolioStorePath))
             throw new InvalidOperationException($"Epic '{reference}' was not found.");
-        var store = new PortfolioStore(workspace.PortfolioStorePath);
+        var store = PortfolioStore.OpenReadOnly(workspace.PortfolioStorePath);
         var epic = store.ResolveEpicAsync(reference).GetAwaiter().GetResult()
             ?? throw new InvalidOperationException($"Epic '{reference}' was not found.");
         return (store, epic);

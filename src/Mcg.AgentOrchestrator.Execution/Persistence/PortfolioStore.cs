@@ -89,21 +89,42 @@ public sealed class PortfolioStore
     private readonly string _dbPath;
     private readonly bool _readOnly;
 
-    public PortfolioStore(string dbPath) : this(dbPath, false) { }
+    public PortfolioStore(string dbPath) : this(dbPath, readOnly: false)
+    {
+        Setup(dbPath);
+    }
 
     private PortfolioStore(string dbPath, bool readOnly)
     {
         _dbPath = dbPath;
         _readOnly = readOnly;
-        if (!readOnly) EnsureSchema();
     }
 
-    public static PortfolioStore OpenReadOnly(string dbPath) => new(dbPath, true);
-
-    private string ConnectionString => new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder
+    public static PortfolioStore OpenReadOnly(string dbPath)
     {
-        DataSource = _dbPath, Mode = _readOnly ? SqliteOpenMode.ReadOnly : SqliteOpenMode.ReadWriteCreate, Pooling = false
-    }.ToString();
+        if (!File.Exists(dbPath))
+            throw SchemaSetupRequired(dbPath, StoreSchemaState.Missing);
+
+        var store = new PortfolioStore(dbPath, readOnly: true);
+        using var conn = store.OpenConnection();
+        var state = StoreSchemaVersions.Verify(conn, StoreSchemaRegistry.Portfolio);
+        if (state != StoreSchemaState.Current)
+            throw SchemaSetupRequired(dbPath, state);
+        return store;
+    }
+
+    private static InvalidOperationException SchemaSetupRequired(string dbPath, StoreSchemaState state) =>
+        new($"Portfolio store '{dbPath}' schema is {state} (expected version {StoreSchemaRegistry.Portfolio.CurrentVersion}); run setup.");
+
+    private string ConnectionString => CreateConnectionString(_dbPath, _readOnly);
+
+    private static string CreateConnectionString(string dbPath, bool readOnly) =>
+        new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = readOnly ? SqliteOpenMode.ReadOnly : SqliteOpenMode.ReadWriteCreate,
+            Pooling = false
+        }.ToString();
 
     public async Task<PortfolioProject> AddProjectAsync(
         string title,
@@ -558,13 +579,13 @@ public sealed class PortfolioStore
         }, cancellationToken);
     }
 
-    private void EnsureSchema()
+    public static void Setup(string dbPath)
     {
-        var directory = Path.GetDirectoryName(_dbPath);
+        var directory = Path.GetDirectoryName(dbPath);
         if (!string.IsNullOrEmpty(directory))
             Directory.CreateDirectory(directory);
 
-        using var conn = new SqliteConnection(ConnectionString);
+        using var conn = new SqliteConnection(CreateConnectionString(dbPath, readOnly: false));
         conn.Open();
         RunNonQuery(conn, "PRAGMA journal_mode=WAL");
         RunNonQuery(conn, "PRAGMA busy_timeout=30000");
@@ -642,6 +663,7 @@ public sealed class PortfolioStore
             }
             if (!hasDescription)
                 RunNonQuery(conn, "ALTER TABLE epics ADD COLUMN description TEXT NULL");
+            StoreSchemaVersions.UpgradeToCurrent(conn, StoreSchemaRegistry.Portfolio);
             RunNonQuery(conn, "COMMIT");
         }
         catch

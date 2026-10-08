@@ -2,12 +2,44 @@ using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Microsoft.Data.Sqlite;
 using Xunit;
 
 // Parallel-safe: each test owns its stores and console capture; ordering uses status groups, never elapsed time.
 public sealed class CliCommandTestsEpicProgressViews : CliTaskQueryTestSupport, IDisposable
 {
     private readonly string root = CreateTempDirectory();
+
+    [Theory]
+    [InlineData("epic-list")]
+    [InlineData("epic-show", "Board")]
+    [InlineData("goals", "--epic", "Board")]
+    public void ProgressViews_UnversionedPortfolio_RequireSetupWithoutChangingFile(params string[] args)
+    {
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var store = new PortfolioStore(workspace.PortfolioStorePath);
+        store.AddEpicAsync("Board").GetAwaiter().GetResult();
+        using (var conn = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = workspace.PortfolioStorePath, Mode = SqliteOpenMode.ReadWrite, Pooling = false
+        }.ToString()))
+        {
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "DROP TABLE store_schema_versions";
+            cmd.ExecuteNonQuery();
+        }
+        var bytes = File.ReadAllBytes(workspace.PortfolioStorePath);
+        var modified = File.GetLastWriteTimeUtc(workspace.PortfolioStorePath);
+        var probe = new ProbeStateRepository(new AgentOrchestratorKernel());
+
+        var error = Assert.Throws<InvalidOperationException>(() => Execute(args, workspace, probe));
+
+        Assert.Contains("run setup", error.Message);
+        Assert.Equal(bytes, File.ReadAllBytes(workspace.PortfolioStorePath));
+        Assert.Equal(modified, File.GetLastWriteTimeUtc(workspace.PortfolioStorePath));
+        AssertNoKernelAccess(probe);
+    }
 
     [Theory]
     [InlineData("epic-list")]
