@@ -323,6 +323,14 @@ For worker logs, use the same bounded helper instead of ad hoc `.orchestrator` P
 
 ---
 
+### Remote lane offer policy
+
+During an acceptance gate, `REMOTE_LANE_POLICY` reports each eligible lane's `decision=offer|keep-local` and `reason`. `L`/`Ln` are the local duration estimate in seconds and sample count, `R`/`Rn` the remote estimate and accepted sample count, and `F` the expected local finish in seconds. Every line includes `Fn`, the consecutive remote failure count for that lane/filter binding. A `remote-failing` line also includes `Fage`, the newest counted failure's age in hours to one decimal place (negative if its timestamp is ahead of the decision clock).
+
+Rules run in this order: `short` keeps lanes under 60 seconds local; `remote-failing` keeps a lane local after at least **3** consecutive failures while the newest is less than **6 hours** old; otherwise `remote-slower` keeps it local when the remote estimate exceeds `F`, and `fits` offers it. At exactly 6 hours or later, the normal duration rules apply again, allowing a probe. A failed probe restarts the 6-hour hold; an accepted probe clears the count. Keeping a lane local does not extend the hold.
+
+The count comes from the last 500 ledger lines in append order: `remote-red`, `late-after-fallback`, `trx-incomplete`, `lease-expired`, `lane-timeout`, and `unexpected-not-executed` count since the latest `accepted` record. `not-eligible-exclusive-resource`, `shadow-skipped-no-executor`, `cancelled-after-grace`, and unknown outcomes neither count nor reset the streak. Remote duration estimates still use accepted runs only.
+
 ## 5. Stuck-goal playbook (symptom → first command)
 
 This is the most important section. Match the **observable symptom** to its cause and first command.
