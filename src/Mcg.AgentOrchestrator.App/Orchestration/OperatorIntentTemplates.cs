@@ -23,7 +23,7 @@ internal static class OperatorIntentTemplates
             "feature",
             "Implement a product or workflow feature.",
             [
-                "Identify source, API/CLI/dashboard, and test surfaces before editing.",
+                "Identify source, API/CLI, and test surfaces before editing.",
                 "Split independent file scopes into separate tasks; serialize shared files.",
                 "Prefer deterministic planners, brokers, or DTO mappers over prompt-only behavior."
             ],
@@ -34,7 +34,7 @@ internal static class OperatorIntentTemplates
             ],
             [
                 "Run focused tests for changed surfaces.",
-                "Broaden to dashboard/API/worker slices when shared contracts change.",
+                "Broaden to API/worker slices when shared contracts change.",
                 "Reviewer verifies source diff, generated artifacts, and backlog/log updates."
             ],
             [

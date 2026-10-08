@@ -442,12 +442,6 @@ internal static class RepoProcessCliCommand
             return "conduct-loop";
         }
 
-        if (ContainsOrdinalIgnoreCase(command, "serve-dashboard") ||
-            ContainsOrdinalIgnoreCase(command, "-dashboard"))
-        {
-            return "dashboard";
-        }
-
         return "app-host";
     }
 

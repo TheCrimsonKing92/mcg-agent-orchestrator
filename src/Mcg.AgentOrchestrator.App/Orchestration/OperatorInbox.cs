@@ -1483,7 +1483,7 @@ internal static class OperatorInbox
     {
         // inbox-specific label for running dispatches
         TaskAttentionKind.RunningDispatch => "Running worker",
-        _ => DashboardDisplayNames.Display(kind)
+        _ => OperatorDisplayNames.Display(kind)
     };
 
     private static IReadOnlyList<OperatorInboxAcknowledgement> LoadAcknowledgements(OrchestratorWorkspace workspace)
