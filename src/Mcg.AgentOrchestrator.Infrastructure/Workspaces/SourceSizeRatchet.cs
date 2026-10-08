@@ -328,7 +328,10 @@ internal static class SourceSizeRatchet
             // Raised for goal 52590d3e: the finding-evidence owner now carries both recorded incident shapes,
             // invalid-normalization suppression, ownership separation, and new-SHA/resolution controls.
             // Goal aab291fd extracted manifest-declared project resolution controls to their own partial.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsFindingEvidence.cs", 2658),
+            // Raised from 2658 to 2675 for goal 5a07b0d6: the updated Tester receipt integration test
+            // keeps Developer routing, NewSourceFinding, zero delivery retries, and finding-bound
+            // brief evidence assertions together; extracting only the added assertions splits that contract.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsFindingEvidence.cs", 2675),
             // Goal 1a43cb08 adds clause-boundary, broker-validation, and split-coverage regression facts.
             // Goal d62efe7a freezes the 36-class premise list so unrelated test inventory cannot change the split test.
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsPreReviewEvidence.cs", 1503),
