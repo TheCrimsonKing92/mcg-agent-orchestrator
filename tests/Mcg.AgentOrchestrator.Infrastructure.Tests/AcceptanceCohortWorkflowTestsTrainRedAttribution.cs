@@ -321,11 +321,12 @@ public sealed class AcceptanceCohortWorkflowTestsTrainRedAttribution : Acceptanc
             "Ns.AcceptanceGateEngineSettingsTests.AcceptanceGateEngineDisabledCollectionsSpanningLanesShareAnExclusiveResource",
             "Ns.WorkflowDecisionCoverageRatchetTests.EveryUndecidedSite_IsAllowListedByFileAndMember");
         var document = XDocument.Load(red.TestResultPaths![0]);
+        var laneMessage = "Disabled collection 'DotnetBuildEnvironmentManagerStaticHooks' spans acceptance lanes " +
+            "[Remainder, Dotnet build slots] without a shared exclusive resource key. " +
+            $"Mapped classes: [{testClass} -> Remainder, DotnetBuildEnvironmentManagerTests -> Dotnet build slots].";
         var messages = new[]
         {
-            "Disabled collection 'DotnetBuildEnvironmentManagerStaticHooks' spans acceptance lanes " +
-            "[Remainder, Dotnet build slots] without a shared exclusive resource key. " +
-            $"Mapped classes: [{testClass} -> Remainder, DotnetBuildEnvironmentManagerTests -> Dotnet build slots].",
+            Assert.Throws<Xunit.Sdk.TrueException>(() => Assert.True(false, laneMessage)).Message,
             $"Unlisted undecided sites:\n{sourceFile} : DeferredRun"
         };
         foreach (var (result, message) in document.Descendants().Where(element => element.Name.LocalName == "UnitTestResult").Zip(messages))

@@ -122,7 +122,9 @@ internal static class MergeTrainRedAttribution
         {
             // The receipt lists unchanged collection peers as context. Only mappings to
             // the catch-all Remainder lane identify the missing explicit lane membership.
-            var mappings = Regex.Match(message,
+            // Xunit appends Expected/Actual lines to the guard's assertion message.
+            var firstLine = message.Split('\n', 2)[0].TrimEnd('\r');
+            var mappings = Regex.Match(firstLine,
                 @"^Disabled collection '[^']+' spans acceptance lanes \[[^\]]+\] without a shared exclusive resource key\. Mapped classes: \[(?<mappings>[^\]]+)\]\.$");
             if (!mappings.Success) return [];
             var subjects = new List<string>();

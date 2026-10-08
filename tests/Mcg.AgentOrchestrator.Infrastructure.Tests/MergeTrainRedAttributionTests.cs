@@ -10,10 +10,13 @@ public sealed class MergeTrainRedAttributionTests
     private const string LaneGuard = "AcceptanceGateEngineSettingsTests.AcceptanceGateEngineDisabledCollectionsSpanningLanesShareAnExclusiveResource";
     private const string DecisionGuard = "WorkflowDecisionCoverageRatchetTests.EveryUndecidedSite_IsAllowListedByFileAndMember";
 
-    private static string LaneMessage(string subject) =>
-        "Disabled collection 'DotnetBuildEnvironmentManagerStaticHooks' spans acceptance lanes " +
-        "[Remainder, Dotnet build slots] without a shared exclusive resource key. " +
-        $"Mapped classes: [{subject} -> Remainder, DotnetBuildEnvironmentManagerTests -> Dotnet build slots].";
+    private static string LaneMessage(string subject)
+    {
+        var message = "Disabled collection 'DotnetBuildEnvironmentManagerStaticHooks' spans acceptance lanes " +
+            "[Remainder, Dotnet build slots] without a shared exclusive resource key. " +
+            $"Mapped classes: [{subject} -> Remainder, DotnetBuildEnvironmentManagerTests -> Dotnet build slots].";
+        return Assert.Throws<Xunit.Sdk.TrueException>(() => Assert.True(false, message)).Message;
+    }
 
     [Fact]
     public void GuardSubjects_OverrideGuardSourceOwnershipAndAttributeOneMember()
@@ -22,8 +25,11 @@ public sealed class MergeTrainRedAttributionTests
         fixture.Source("tests/First.cs", "DotnetBuildEnvironmentManagerStableSlotHolderLabelTests");
         // The replayed decision guard itself was owned by an innocent train member.
         fixture.Source("tests/Second.cs", "AcceptanceGateEngineSettingsTests", "WorkflowDecisionCoverageRatchetTests");
+        var laneMessage = LaneMessage("Ns.DotnetBuildEnvironmentManagerStableSlotHolderLabelTests");
+        Assert.Contains("Expected: True", laneMessage, StringComparison.Ordinal);
+        Assert.Contains("Actual:   False", laneMessage, StringComparison.Ordinal);
         var receipt = fixture.GuardReceipt(
-            (LaneGuard, LaneMessage("Ns.DotnetBuildEnvironmentManagerStableSlotHolderLabelTests")),
+            (LaneGuard, laneMessage),
             (DecisionGuard, "Unlisted undecided sites:\nFirst.cs : DeferredRun"));
         Assert.Same(fixture.Members[0], MergeTrainRedAttribution.TryAttribute(
             receipt, fixture.Root, fixture.Members, out var subjects));
@@ -50,6 +56,9 @@ public sealed class MergeTrainRedAttributionTests
         using var fixture = new Fixture();
         fixture.Source("tests/First.cs", "FirstTests");
         fixture.Source("tests/Second.cs", "SecondTests", "AcceptanceGateEngineSettingsTests", "WorkflowDecisionCoverageRatchetTests");
+        // Ensure refusal below is caused by the evidence, not by an unparsed xunit trailer.
+        Assert.Same(fixture.Members[0], MergeTrainRedAttribution.TryAttribute(
+            fixture.GuardReceipt((LaneGuard, LaneMessage("Ns.FirstTests"))), fixture.Root, fixture.Members));
         var subject = scenario == "missing" ? (file ? "Missing.cs" : "Ns.MissingTests") :
             file ? "First.cs" : "Ns.FirstTests";
         var message = file ? "Unlisted undecided sites:\n" + subject + " : DeferredRun" : LaneMessage(subject);
