@@ -301,7 +301,7 @@ internal sealed partial class ConductorBatchLoop
                 driver, policy, state.CohortEligible, state.ProductionCandidates, state.Results, tick, changedGoalLines);
         }
         (state.CohortEligible, state.ProductionCandidates) = LandPassedMergeTrainReceiptsBeforeAdmission(
-            driver, policy, state.CohortEligible, state.ProductionCandidates, state.Results, tick, changedGoalLines);
+            driver, policy, state.CohortEligible, state.ProductionCandidates, scopedGoals, state.Results, tick, changedGoalLines);
         CarryFollowerGateReceipts(state, driver, policy, tick, changedGoalLines);
         state.OldestWaiterObservation = suppressNewAcceptanceAdmission
             ? new ParallelAcceptanceOldestWaiterObservation(null, 0)

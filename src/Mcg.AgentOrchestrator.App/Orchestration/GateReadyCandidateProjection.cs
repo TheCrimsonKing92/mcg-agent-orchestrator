@@ -18,7 +18,8 @@ internal enum GateReadyCandidateExclusionReason
     MergeConflict,
     MergeIndeterminate,
     ApparatusHold,
-    OwnerReviewHold
+    OwnerReviewHold,
+    PassedTrainReceiptHeld
 }
 
 internal enum GateReadyVerificationState
