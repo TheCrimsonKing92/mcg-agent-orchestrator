@@ -28,7 +28,7 @@ internal sealed class OwnerConsoleActivityLoader(string conductPath, string life
                     lifecycle.Count == 0 ? null : lifecycle.Min(item => item.Timestamp), clock, token);
                 var recent = history.Recent.ToList();
                 token.ThrowIfCancellationRequested();
-                foreach (var item in lifecycle) OwnerConsoleStartupActivity.Append(recent, item);
+                foreach (var item in lifecycle) OwnerConsoleStartupActivity.Append(recent, item, OwnerConsoleStartupActivity.MaxRawEvents);
                 token.ThrowIfCancellationRequested();
                 return Task.FromResult(new OwnerConsoleActivityLoad(recent, history.LastActivity ?? Events.LastActivity, history.LandedToday));
             }

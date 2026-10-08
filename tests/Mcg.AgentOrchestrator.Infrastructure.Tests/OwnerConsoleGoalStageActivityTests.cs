@@ -139,7 +139,7 @@ public sealed class OwnerConsoleGoalStageActivityTests
 
     [Theory]
     [InlineData("result=started", null)]
-    [InlineData("result=failed", "Console stages: failed its tests (the test machine had a problem); needs you")]
+    [InlineData("result=failed", "Console stages: failed its tests (the failure reason has not been recorded); awaiting the conductor's next step")]
     [InlineData("result=passed", "Console stages: passed its tests, landing next")]
     public void GateTransitions_RenderPlainPhrases(string detail, string? phrase)
     {
@@ -154,7 +154,7 @@ public sealed class OwnerConsoleGoalStageActivityTests
         var recent = Enumerable.Range(1, OwnerConsoleStartupActivity.MaxRawEvents)
             .Select(index => new OwnerConductEvent(time.AddSeconds(index), "acceptance", "11111111", "result=passed")).ToList();
         var newest = recent[^1];
-        OwnerConsoleStartupActivity.Append(recent, new(time, "goal-lifecycle", "11111111", "TaskDispatched role=Developer"));
+        OwnerConsoleStartupActivity.Append(recent, new(time, "goal-lifecycle", "11111111", "TaskDispatched role=Developer"), OwnerConsoleStartupActivity.MaxRawEvents);
         Assert.Equal(OwnerConsoleStartupActivity.MaxRawEvents, recent.Count);
         Assert.Contains(newest, recent);
         Assert.DoesNotContain(recent, item => item.Timestamp == time);

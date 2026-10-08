@@ -57,6 +57,36 @@ public sealed class OwnerConsoleActivityOutcomeTests
     }
 
     [Fact]
+    public async Task RealSingleGoalFailureShowsTheCheckAndDeveloperReturn()
+    {
+        using var scene = new Scene();
+        scene.AddGoals();
+        var time = scene.Harness.Clock.GetUtcNow();
+        await scene.Render([
+            new(time, "acceptance", "11111111", "ACCEPTANCE goal=11111111 result=failed checks=Build_main"),
+            new(time.AddSeconds(1), "goal-lifecycle", "11111111", "TaskDispatched role=Developer")]);
+        Assert.Contains($"{time.ToLocalTime():HH:mm:ss} Search: failed its tests (the check Build main failed); sent back to the Developer",
+            scene.View.ActivityLines);
+        Assert.Contains($"{time.AddSeconds(1).ToLocalTime():HH:mm:ss} Developer started on Search", scene.View.ActivityLines);
+    }
+
+    [Theory]
+    [InlineData("acceptance", "ACCEPTANCE result=passed", "passed its tests, landing next")]
+    [InlineData("goal-lifecycle", "TaskFailed role=Reviewer outcome=finding", "a problem needs correction")]
+    [InlineData("goal-stalled", "GOAL_STALLED repeatedForSeconds=300 blocker=waiting_for_approval", "waiting for your approval")]
+    [InlineData("acceptance-cohort", "ACCEPTANCE_COHORT members=11111111,22222222 outcome=failed attribution=FirstMemberFailed", ": failed (its own checks failed)")]
+    public async Task LongTitlesKeepTheOutcomeVisibleInTheActivityPane(string kind, string detail, string outcome)
+    {
+        using var scene = new Scene();
+        scene.Harness.AddGoal("11111111", "Search " + new string('x', 150), AgentRole.Developer);
+        scene.Harness.AddGoal("22222222", "Export " + new string('y', 150), AgentRole.Developer);
+        await scene.Render([new(scene.Harness.Clock.GetUtcNow(), kind, "11111111", detail)]);
+        var line = Assert.Single(scene.View.ActivityLines);
+        Assert.Contains(outcome, line[..Math.Min(118, line.Length)]);
+        Assert.Contains("…", line);
+    }
+
+    [Fact]
     public async Task EnterExplainsTheSelectedPaneLineWithFourParts()
     {
         using var scene = new Scene();

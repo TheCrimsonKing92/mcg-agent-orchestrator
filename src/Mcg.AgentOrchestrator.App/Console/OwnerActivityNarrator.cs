@@ -14,7 +14,7 @@ internal static class OwnerActivityNarrator
         "author" => Field(item, "kind") == "ask-owner",
         "acceptance" or "acceptance-cohort" or "canary-gate" or "loop-relaunch" or "loop-handoff" or
             "loop-start" or "loop-stop" or "goal-escalation" or "goal-stalled" or "train-receipt-released" or
-            "owner-question-resolved" or "owner-hold-cleared" => true,
+            "owner-question-resolved" or "owner-hold-cleared" or "admission" or "infrastructure-deferral" => true,
         _ => false
     };
 
@@ -149,10 +149,11 @@ internal static class OwnerActivityNarrator
         }
         return result.OrderByDescending(item => item.Timestamp).Take(OwnerConsoleViewModelBuilder.MaxActivityItems).ToArray();
 
-        string Name(string? id) => Words(title(id), Prefix(id).Length == 0 ? "This work" : Prefix(id));
+        string FullName(string? id) => Words(title(id), Prefix(id).Length == 0 ? "This work" : Prefix(id));
+        string Name(string? id) => ShortTitle(FullName(id), 40);
         void Add(OwnerConductEvent source, string sentence, string why, string next, string act = "No. You can let the conductor continue.") =>
             result.Add(new(source.Timestamp, source.EventKind, act.StartsWith("Yes", StringComparison.Ordinal) ? "decision" : "outcome",
-                Prefix(source.GoalId), source.Detail, Name(source.GoalId), sentence, why, next, act));
+                Prefix(source.GoalId), source.Detail, FullName(source.GoalId), sentence, why, next, act));
         void Resolve(OwnerConductEvent source)
         {
             var key = Prefix(source.GoalId);
@@ -178,31 +179,50 @@ internal static class OwnerActivityNarrator
         void TestResult(OwnerConductEvent source, string?[] ids, bool joint)
         {
             var passed = Field(source, "outcome") == "passed" || Field(source, "verdict") == "passed";
-            var label = joint ? "Joint test run for " + string.Join(", ", ids.Select(Name)) : Name(source.GoalId);
+            var label = joint ? "Joint test run for " + string.Join(", ", ids.Select(id => ShortTitle(FullName(id), Math.Max(8, 40 / ids.Length)))) : Name(source.GoalId);
             if (passed) { Add(source, label + ": passed", "The joint checks passed.", "The conductor will land the work."); return; }
             var follow = ordered.Skip(Array.IndexOf(ordered, source) + 1).TakeWhile(value =>
-                !(value.EventKind == source.EventKind && Members(value).Length > 1 && Field(value, "outcome") is "failed" or "passed"))
-                .Where(value => ids.Any(id => Prefix(id) == Prefix(value.GoalId)) &&
-                    (value.EventKind == source.EventKind || value.EventKind == "goal-escalation")).ToArray();
+                !(joint ? value.EventKind == source.EventKind && Members(value).Length > 1 &&
+                    Field(value, "outcome") is "failed" or "passed" :
+                    value.EventKind == "acceptance" && Prefix(value.GoalId) == Prefix(source.GoalId) &&
+                    Field(value, "result") is "failed" or "passed" or "blocked"))
+                .Where(value => ids.Any(id => Prefix(id) == Prefix(value.GoalId))).ToArray();
             var facts = evidence?.Invoke(source);
             var attributed = Field(source, "attribution") is "FirstMemberFailed" or "SecondMemberFailed" or "BothMembersFailed" || facts?.OwnTest == true;
-            var next = follow.Any(value => Field(value, "result") == "escalated" || value.EventKind == "goal-escalation") ? "needs you" :
-                follow.Any(value => Field(value, "result") is "held" or "retrying") || Field(source, "result") == "retrying" ? "retrying automatically" :
-                attributed || Field(source, "next") == "developer" ? "sent back to the Developer" : "needs you";
+            var ownerQuestion = follow.Any(value => value.EventKind == "goal-escalation" &&
+                Head(value) != "ownerless-hold-stalled" || value.EventKind == "author" && Field(value, "kind") == "ask-owner");
+            var developer = follow.Any(value => value.EventKind == "goal-lifecycle" &&
+                (Head(value) == "TaskDispatched" && Role(value) == "Developer" || Head(value) == "TaskFailed" && Field(value, "outcome") == "finding"));
+            var next = ownerQuestion || follow.Any(value => Field(value, "result") == "escalated") ? "needs you" :
+                developer ? "sent back to the Developer" :
+                follow.Any(value => Field(value, "result") is "held" or "retrying" or "started" ||
+                    value.EventKind == "infrastructure-deferral") || Field(source, "result") == "retrying" ? "retrying automatically" :
+                attributed || Field(source, "next") == "developer" ? "sent back to the Developer" :
+                "awaiting the conductor's next step";
             var partitions = Field(source, "partitions");
             var interaction = Field(source, "outcome") == "interaction-only" || Field(source, "attribution") == "InteractionOnly";
             var unrelated = !interaction && (Field(source, "reason")?.Contains("flak", StringComparison.OrdinalIgnoreCase) == true ||
                 partitions is not null && partitions.Split(',').All(value => value.EndsWith(":Passed", StringComparison.OrdinalIgnoreCase)));
             var test = Field(source, "tests") ?? facts?.Tests.FirstOrDefault();
             var own = attributed;
-            var reason = interaction ? "the changes failed when tested together" : unrelated ? "an unrelated flaky test failed" : own && test is not null ?
-                "its own new test " + Words(test, "check") + " failed" : "the test machine had a problem";
+            var checks = Field(source, "checks") ?? facts?.Checks.FirstOrDefault();
+            var reason = interaction ? "the changes failed when tested together" : unrelated ? "an unrelated flaky test failed" : own ?
+                test is not null ? "its own new test " + Words(test, "check") + " failed" : "its own checks failed" :
+                Field(source, "type") == "timeout" ? "the test run timed out" : Field(source, "stage") switch
+                {
+                    "rebase" => "the changes could not be updated to main",
+                    "merge" => "the changes could not be added to main",
+                    "source-size-preflight" => "a source file exceeded its size limit",
+                    _ => checks is not null ? "the check " + Words(checks.Replace('_', ' '), "verification") + " failed" :
+                        "the failure reason has not been recorded"
+                };
             var sentence = label + (joint ? ": failed (" : ": failed its tests (") + reason + "); " + next;
             var why = reason + ".";
             if (joint && test is not null && !own) why += " Failed test: " + Words(test, "the recorded check") + ".";
             if (facts?.Checks.Count > 0) why += " Failed check: " + Words(facts.Checks[0], "the recorded check") + ".";
-            Add(source, sentence, why, next + ".", next == "needs you" ?
-                "Yes. Review the failed check and answer the question in DECISIONS." : "No. The conductor is handling the next step.");
+            Add(source, sentence, why, next + ".", ownerQuestion ?
+                "Yes. Review the failed check and answer the question in DECISIONS." : next == "needs you" ?
+                "Yes. Review the failed check and conductor status." : "No. The conductor is handling the next step.");
         }
     }
 
@@ -216,6 +236,7 @@ internal static class OwnerActivityNarrator
     };
 
     internal static string Line(OwnerConsoleActivityItem item) => $"{item.Timestamp.ToLocalTime():HH:mm:ss} {item.Phrase}";
+    private static string ShortTitle(string title, int limit) => title.Length <= limit ? title : title[..(limit - 1)] + "…";
     internal static string Explain(OwnerConsoleActivityItem item) => string.Join("\n", [
         "What happened: " + Line(item), "Why: " + item.Why, "What happens next: " + item.Next,
         "Do you need to act: " + item.Act]);

@@ -71,8 +71,8 @@ public sealed class OwnerConsoleActivityPresentationTests
 
     [Theory]
     [InlineData("author", "kind=ask-owner item=internal-id", "Needs you: Review the blocked work and choose how to proceed.")]
-    [InlineData("acceptance", "result=failed code=1", "unknown-: failed its tests (the test machine had a problem); needs you")]
-    [InlineData("acceptance", "result=blocked reason=missing_evidence", "unknown-: failed its tests (the test machine had a problem); needs you")]
+    [InlineData("acceptance", "result=failed code=1", "unknown-: failed its tests (the failure reason has not been recorded); awaiting the conductor's next step")]
+    [InlineData("acceptance", "result=blocked reason=missing_evidence", "unknown-: failed its tests (the failure reason has not been recorded); awaiting the conductor's next step")]
     [InlineData("goal-escalation", "ownerless-hold-stalled state=blocked heldForSeconds=30 blocker=waiting for owner approval", "Waiting: unknown- has been held 0 min: waiting for your approval")]
     public async Task StructuredEventsRenderPlainPhrasesWithoutRawFields(string kind, string detail, string phrase)
     {
@@ -133,9 +133,8 @@ public sealed class OwnerConsoleActivityPresentationTests
         view.Render(await Builder(harness).BuildAsync(new(harness.Clock.GetUtcNow(), null, [item], 0)));
 
         var line = Assert.Single(view.ActivityLines);
-        Assert.Contains(phrase, line);
-        if (kind == "acceptance") Assert.Contains(title, line);
-        Assert.DoesNotContain("…", line);
+        Assert.Contains(phrase, line[..Math.Min(118, line.Length)]);
+        if (kind == "acceptance") Assert.Contains("…", line);
     }
 
     [Fact]

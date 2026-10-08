@@ -61,14 +61,14 @@ internal static class OwnerConsoleFullScreenHost
                         last = item.Timestamp;
                         if (OwnerActivityNarrator.IsLanding(item) &&
                             TimeZoneInfo.ConvertTime(item.Timestamp, clock.LocalTimeZone).Date == landingDate && countedLandings.Add(item)) landings++;
-                        OwnerConsoleStartupActivity.Append(recent, item);
+                        OwnerConsoleStartupActivity.Append(recent, item, OwnerConsoleStartupActivity.MaxRawEvents);
                     }
                     var inputs = new OwnerConsoleViewInputs(opened, last, recent.ToArray(), landings);
                     await refreshOperation.RunAsync("refresh after conductor event", async stepToken =>
                     {
                         var board = await builder.BuildBoardAsync(stepToken);
                         boardIds = board.Board.Select(row => row.GoalId).ToArray();
-                        foreach (var lifecycle in activityLoader.ReadNew(boardIds)) OwnerConsoleStartupActivity.Append(recent, builder.EnrichEvent(lifecycle));
+                        foreach (var lifecycle in activityLoader.ReadNew(boardIds)) OwnerConsoleStartupActivity.Append(recent, builder.EnrichEvent(lifecycle), OwnerConsoleStartupActivity.MaxRawEvents);
                         var (decisions, hidden) = await builder.ReadDecisionsAsync(stepToken);
                         var model = builder.WithActivity(board with { Decisions = decisions,
                             Status = board.Status with { LiveDecisions = decisions.Length, HiddenQuestions = hidden } },

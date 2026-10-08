@@ -40,7 +40,9 @@ public sealed class OwnerActivityNarratorTests
         { "goal-lifecycle", "TaskCompleted role=Tester" },
         { "goal-lifecycle", "TaskFailed role=Reviewer finding=cohort-tick" },
         { "goal-lifecycle", "HumanInputReceived" },
-        { "goal-lifecycle", "HumanInputSuperseded" }
+        { "goal-lifecycle", "HumanInputSuperseded" },
+        { "admission", "ADMISSION result=held reason=acceptance-engine-circuit" },
+        { "infrastructure-deferral", "ACCEPTANCE_INFRASTRUCTURE_DEFERRED reason=baseline-unavailable" }
     };
 
     [Theory]
@@ -113,7 +115,7 @@ public sealed class OwnerActivityNarratorTests
         var lines = OwnerActivityNarrator.Narrate([
             new(DateTimeOffset.UnixEpoch, "acceptance-cohort", null,
                 "ACCEPTANCE_COHORT members=11111111,22222222 outcome=interaction-only attribution=InteractionOnly partitions=11111111:Passed,22222222:Passed")], _ => "Search");
-        Assert.Equal("Joint test run for Search, Search: failed (the changes failed when tested together); needs you", Assert.Single(lines).Phrase);
+        Assert.Equal("Joint test run for Search, Search: failed (the changes failed when tested together); awaiting the conductor's next step", Assert.Single(lines).Phrase);
     }
 
     [Fact]
@@ -191,7 +193,8 @@ public sealed class OwnerActivityNarratorTests
     {
         var time = DateTimeOffset.UnixEpoch;
         var lines = OwnerActivityNarrator.Narrate([
-            new(time, "acceptance", "11111111", "result=failed next=developer"),
+            new(time, "acceptance", "11111111", "ACCEPTANCE goal=11111111 slot=slot-0 result=failed attempt=A1 tick=4"),
+            new(time.AddMilliseconds(1), "goal-lifecycle", "11111111", "TaskDispatched role=Developer"),
             new(time.AddSeconds(1), "loop-relaunch", "11111111", "LOOP_RELAUNCH_NOT_REQUIRED"),
             new(time.AddSeconds(2), "canary-gate", null, "CANARY_GATE result=failed")], _ => "Search",
             _ => new(["NewTests.Behavior"], ["Build main"], true));
@@ -209,6 +212,64 @@ public sealed class OwnerActivityNarratorTests
             landing, landing,
             landing with { Timestamp = now.AddHours(-3), GoalId = "22222222" },
             new(now, "acceptance", "33333333", "result=passed")], clock));
+    }
+
+    [Theory]
+    [InlineData("goal-lifecycle", "TaskDispatched role=Developer", "sent back to the Developer")]
+    [InlineData("acceptance", "ACCEPTANCE goal=11111111 slot=slot-0 result=started attempt=A2 tick=5", "retrying automatically")]
+    [InlineData("admission", "ADMISSION tick=5 result=held reason=acceptance-engine-circuit goal=11111111", "retrying automatically")]
+    [InlineData("goal-escalation", "steward-owner-question question=How should we repair this?", "needs you")]
+    public void RealAcceptanceFailureUsesTheGoalsFollowingDecision(string kind, string detail, string next)
+    {
+        var time = DateTimeOffset.UnixEpoch;
+        var lines = OwnerActivityNarrator.Narrate([
+            new(time, "acceptance", "11111111", "ACCEPTANCE goal=11111111 slot=slot-0 result=failed attempt=A1 tick=4"),
+            new(time.AddSeconds(1), kind, "11111111-full", detail)], _ => "Search");
+        var failure = Assert.Single(lines, line => line.Kind == "acceptance" && line.Phrase.Contains("failed"));
+        Assert.Equal("Search: failed its tests (the failure reason has not been recorded); " + next, failure.Phrase);
+        Assert.DoesNotContain("machine", failure.Why);
+        Assert.Equal(next + ".", failure.Next);
+        Assert.Equal(kind == "goal-escalation", failure.Act.Contains("DECISIONS", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("checks=Build_main", "the check Build main failed")]
+    [InlineData("stage=rebase checks=rebase", "the changes could not be updated to main")]
+    [InlineData("stage=merge checks=merge", "the changes could not be added to main")]
+    [InlineData("stage=source-size-preflight checks=source-size", "a source file exceeded its size limit")]
+    [InlineData("type=timeout checks=Build_main", "the test run timed out")]
+    public void RealAcceptanceFailureUsesRecordedCheckStageAndType(string fields, string reason)
+    {
+        var time = DateTimeOffset.UnixEpoch;
+        var lines = OwnerActivityNarrator.Narrate([
+            new(time, "acceptance", "11111111", "ACCEPTANCE goal=11111111 result=failed " + fields),
+            new(time.AddSeconds(1), "goal-lifecycle", "11111111", "TaskDispatched role=Developer")], _ => "Search");
+        Assert.Equal("Search: failed its tests (" + reason + "); sent back to the Developer",
+            Assert.Single(lines, line => line.Kind == "acceptance").Phrase);
+    }
+
+    [Fact]
+    public void FailureDoesNotBorrowAnotherGoalsOrALaterRunsNextStep()
+    {
+        var time = DateTimeOffset.UnixEpoch;
+        var lines = OwnerActivityNarrator.Narrate([
+            new(time, "acceptance", "11111111", "ACCEPTANCE result=failed attempt=A1 tick=4"),
+            new(time.AddSeconds(1), "goal-lifecycle", "22222222", "TaskDispatched role=Developer"),
+            new(time.AddSeconds(2), "acceptance", "11111111", "ACCEPTANCE result=passed attempt=A2 tick=5"),
+            new(time.AddSeconds(3), "goal-escalation", "11111111", "steward-owner-question question=Approve?")], _ => "Search");
+        var failure = Assert.Single(lines, line => line.Kind == "acceptance" && line.Phrase.Contains("failed"));
+        Assert.EndsWith("; awaiting the conductor's next step", failure.Phrase);
+        Assert.DoesNotContain("DECISIONS", failure.Act);
+    }
+
+    [Fact]
+    public void AttributedJointFailureWithoutTestNamesDoesNotClaimAMachineFault()
+    {
+        var lines = OwnerActivityNarrator.Narrate([
+            new(DateTimeOffset.UnixEpoch, "acceptance-cohort", null,
+                "ACCEPTANCE_COHORT members=11111111,22222222 outcome=failed attribution=FirstMemberFailed")], _ => "Search");
+        Assert.Equal("Joint test run for Search, Search: failed (its own checks failed); sent back to the Developer",
+            Assert.Single(lines).Phrase);
     }
 
     private sealed class ZoneClock : TimeProvider

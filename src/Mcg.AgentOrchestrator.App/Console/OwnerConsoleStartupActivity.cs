@@ -9,7 +9,7 @@ internal static class OwnerConsoleStartupActivity
     internal const int MaxRawEvents = OwnerConsoleViewModelBuilder.MaxActivityItems * 10;
     internal static bool IsOperatorEvent(OwnerConductEvent item) => OwnerActivityNarrator.Maps(item);
     internal static IReadOnlyList<OwnerConductEvent> ReadRecent(string path, CancellationToken token = default) =>
-        ReadHistory(path, null, TimeProvider.System, token).Recent;
+        ReadHistory(path, null, TimeProvider.System, token).Recent.TakeLast(OwnerConsoleViewModelBuilder.MaxActivityItems).ToArray();
 
     internal static OwnerConsoleActivityLoad ReadHistory(string path, DateTimeOffset? horizon, TimeProvider clock,
         CancellationToken token = default)
@@ -91,11 +91,12 @@ internal static class OwnerConsoleStartupActivity
         if (line.Count > 0) { line.Reverse(); yield return Encoding.UTF8.GetString(line.ToArray()).TrimEnd('\r').TrimStart('\uFEFF'); }
     }
 
-    internal static void Append(List<OwnerConductEvent> recent, OwnerConductEvent item)
+    internal static void Append(List<OwnerConductEvent> recent, OwnerConductEvent item,
+        int limit = OwnerConsoleViewModelBuilder.MaxActivityItems)
     {
         if (!IsOperatorEvent(item) || recent.Contains(item)) return;
         recent.Add(item);
-        if (recent.Count > MaxRawEvents)
+        while (recent.Count > limit)
         {
             var oldest = recent.Min(value => value.Timestamp);
             recent.RemoveAt(recent.FindIndex(value => value.Timestamp == oldest));
