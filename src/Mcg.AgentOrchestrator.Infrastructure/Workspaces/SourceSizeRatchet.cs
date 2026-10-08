@@ -380,7 +380,9 @@ internal static class SourceSizeRatchet
             // Goal b67746ef adds 24 lines to return recorded cohort/train verdicts and preserve failed
             // gate-only train receipts; goal d6033045 extracted passed-train receipt selection to
             // PassedMergeTrainReceiptSelector. Measured 15271 after integrating both; no extra headroom.
-            new SourceClassCeiling("ConductorDriver", 15271, 70),
+            // Goal 1f4782de extracted train RED classification into MergeTrainRedAttribution.
+            // Measured 15261 across the same 70 partial files; lowered after extraction.
+            new SourceClassCeiling("ConductorDriver", 15261, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.

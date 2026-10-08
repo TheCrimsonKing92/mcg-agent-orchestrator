@@ -17,23 +17,10 @@ internal sealed partial class ConductorDriver
         return pairs;
     }
 
-    private static bool IsGenuineTrainRed(MergeTrainReceipt receipt, MergeTrainMemberBinding? attributed = null)
-    {
-        if (receipt.Outcome != MergeTrainGateOutcome.Failed) return false;
-        if (receipt.FailedChecks.Contains(SourceSizeRatchetPreflight.CheckName, StringComparer.Ordinal))
-            return true;
-
-        // An absent apparatus signature alone is not failure evidence. Require a fatal test
-        // result; unreadable/missing TRX and all-apparatus failures cannot implicate a tree.
-        var failures = MergeTrainRedAttribution.ReadFatalFailures(receipt.GateTestResultPaths);
-        return failures.Count != 0 &&
-            (!failures.Any(MergeTrainRedAttribution.IsMessageSubjectGuard) || attributed is not null);
-    }
-
     private void RecordTrainImplicatedMember(
         MergeTrainMemberBinding dropped, MergeTrainReceipt redReceipt, IReadOnlyList<string> subjects)
     {
-        if (!IsGenuineTrainRed(redReceipt, subjects.Count == 0 ? null : dropped)) return;
+        if (!MergeTrainRedAttribution.IsGenuineTrainRed(redReceipt, subjects.Count == 0 ? null : dropped)) return;
         _mergeTrainAcceptanceStore!.RecordTrainImplicatedCandidate(
             dropped.GoalId, dropped.CandidateRevision, redReceipt.Identity.Value,
             redReceipt.Identity.ObservedMainRevision);
@@ -55,7 +42,7 @@ internal sealed partial class ConductorDriver
         MergeTrainReceipt receipt,
         MergeTrainMemberBinding? attributed)
     {
-        if (members.Count != 2 || !IsGenuineTrainRed(receipt, attributed)) return;
+        if (members.Count != 2 || !MergeTrainRedAttribution.IsGenuineTrainRed(receipt, attributed)) return;
         var first = selection.Members.Single(member => member.GoalId == members[0].GoalId);
         var second = selection.Members.Single(member => member.GoalId == members[1].GoalId);
         // The existing fingerprint is ordered. Persist both orientations so a reordered

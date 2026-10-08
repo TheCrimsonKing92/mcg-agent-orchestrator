@@ -7,6 +7,19 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 // Attribution describes only declared test-source ownership, never a guessed cause.
 internal static class MergeTrainRedAttribution
 {
+    internal static bool IsGenuineTrainRed(MergeTrainReceipt receipt, MergeTrainMemberBinding? attributed = null)
+    {
+        if (receipt.Outcome != MergeTrainGateOutcome.Failed) return false;
+        if (receipt.FailedChecks.Contains(SourceSizeRatchetPreflight.CheckName, StringComparer.Ordinal))
+            return true;
+
+        // An absent apparatus signature alone is not failure evidence. Require a fatal test
+        // result; unreadable/missing TRX and all-apparatus failures cannot implicate a tree.
+        var failures = ReadFatalFailures(receipt.GateTestResultPaths);
+        return failures.Count != 0 &&
+            (!failures.Any(IsMessageSubjectGuard) || attributed is not null);
+    }
+
     internal static IReadOnlyList<AcceptanceTrxFailure> ReadFatalFailures(IReadOnlyList<string> paths) =>
         FatalFailures(paths.Select(AcceptanceTrxFailureReader.Read));
 
