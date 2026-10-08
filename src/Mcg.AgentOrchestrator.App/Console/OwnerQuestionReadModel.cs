@@ -6,30 +6,67 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 internal sealed class OwnerQuestionReadModel(
     IOrchestratorStateQueries state, string orchestratorDirectory) : IOwnerQuestionSource
 {
+    private readonly Dictionary<string, string> _terminalUpdatedAt = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, QuestionCandidate> _terminalHolds = new(StringComparer.OrdinalIgnoreCase);
+
     public async Task<IReadOnlyList<OwnerQuestion>> ListOpenAsync(CancellationToken cancellationToken) =>
         (await ReadAsync(cancellationToken)).Live;
 
-    public async Task<OwnerQuestionSnapshot> ReadAsync(CancellationToken cancellationToken)
+    public async Task<OwnerQuestionSnapshot> ReadAsync(CancellationToken cancellationToken) =>
+        await ReadAsync(await state.ListGoalMetadataAsync(cancellationToken), cancellationToken);
+
+    internal async Task<OwnerQuestionSnapshot> ReadAsync(
+        IReadOnlyList<GoalSummary> metadata, CancellationToken cancellationToken)
     {
-        var metadata = await state.ListGoalMetadataAsync(cancellationToken);
-        var ids = metadata.Select(item => new GoalId(item.Id)).ToArray();
+        var terminal = metadata.Where(item => IsTerminal(item.Status)).ToArray();
+        var ids = metadata.Where(item => !IsTerminal(item.Status)).Select(item => new GoalId(item.Id)).ToArray();
+        var requests = await state.ListOpenHumanInputRequestsAsync(cancellationToken);
+        var terminalIds = terminal.Select(item => item.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var id in _terminalUpdatedAt.Keys.Where(id => !terminalIds.Contains(id)).ToArray())
+            _terminalUpdatedAt.Remove(id);
+        foreach (var id in _terminalHolds.Keys.Where(id => !terminalIds.Contains(id)).ToArray())
+            _terminalHolds.Remove(id);
+        var changedTerminalIds = terminal.Where(item =>
+                !_terminalUpdatedAt.TryGetValue(item.Id, out var updatedAt) || updatedAt != item.UpdatedAt)
+            .Select(item => item.Id)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (changedTerminalIds.Count > 0)
+        {
+            // Unchanged terminal goals reuse the session cache; changed rows replace even removed holds.
+            var holds = await state.ListTerminalOwnerQuestionHoldsAsync(
+                changedTerminalIds.Select(id => new GoalId(id)).ToArray(), cancellationToken);
+            foreach (var id in changedTerminalIds) _terminalHolds.Remove(id);
+            foreach (var hold in holds.Where(hold => changedTerminalIds.Contains(hold.GoalId)))
+                _terminalHolds[hold.GoalId] = new QuestionCandidate(new OwnerQuestion(hold.Identity, hold.GoalId,
+                    OwnerQuestionKind.StewardHold, StewardQuestionText(hold.Blocker)), hold.StartedAt);
+            foreach (var item in terminal.Where(item => changedTerminalIds.Contains(item.Id)))
+                _terminalUpdatedAt[item.Id] = item.UpdatedAt;
+        }
         var kernel = ids.Length == 0 ? new AgentOrchestratorKernel() :
             await state.LoadGoalsAsync(ids, cancellationToken);
-        var goals = kernel.Goals.ToDictionary(goal => goal.Id.Value, goal => goal.Status,
+        var loadedIds = ids.Select(id => id.Value).ToHashSet(StringComparer.Ordinal);
+        var loadedGoals = kernel.Goals.Where(goal => loadedIds.Contains(goal.Id.Value)).ToArray();
+        var goals = loadedGoals.ToDictionary(goal => goal.Id.Value, goal => goal.Status,
             StringComparer.OrdinalIgnoreCase);
+        foreach (var item in terminal) goals[item.Id] = Enum.Parse<GoalStatus>(item.Status, ignoreCase: true);
         var candidates = new List<QuestionCandidate>();
-        foreach (var request in kernel.HumanInputRequests.Where(item => !item.IsCompleted))
-            candidates.Add(new QuestionCandidate(new OwnerQuestion(request.Id.Value, request.GoalId.Value,
-                OwnerQuestionKind.HumanInput, request.Question,
-                ProposedDefault: request.SuggestedDefaultAnswer), request.RequestedAt,
-                HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind)));
-        foreach (var goal in kernel.Goals)
+        // The hydrated kernel owns request repair/sweeping for non-terminal goals. Detached rows
+        // supply terminal and orphan requests, while retaining main's stable request order and ties.
+        var detached = requests.Where(request => !loadedIds.Contains(request.GoalId)).ToArray();
+        var detachedKernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([], detached));
+        var open = kernel.HumanInputRequests.Where(request => !request.IsCompleted && loadedIds.Contains(request.GoalId.Value))
+            .Concat(detachedKernel.HumanInputRequests.Where(request => !request.IsCompleted))
+            .Select(RequestCandidate).ToDictionary(candidate => candidate.Question.ItemId, StringComparer.Ordinal);
+        var ordered = requests.Select(request => request.Id).Concat(open.Keys).Distinct(StringComparer.Ordinal);
+        candidates.AddRange(ordered.Where(open.ContainsKey).Select(id => open[id]));
+        foreach (var goal in loadedGoals)
         {
             if (goal.CurrentHold is { } hold &&
                 hold.State.Equals("steward-owner-question", StringComparison.OrdinalIgnoreCase))
                 candidates.Add(new QuestionCandidate(new OwnerQuestion(hold.Identity, goal.Id.Value,
                     OwnerQuestionKind.StewardHold, StewardQuestionText(hold.Blocker)), hold.StartedAt));
         }
+        candidates.AddRange(_terminalHolds.Values);
         var path = Path.Combine(orchestratorDirectory, "collaboration-items.db");
         if (File.Exists(path))
         {
@@ -79,6 +116,15 @@ internal sealed class OwnerQuestionReadModel(
 
     private sealed record QuestionCandidate(
         OwnerQuestion Question, DateTimeOffset CreatedAt, bool BlocksActiveWork = true);
+
+    private static bool IsTerminal(string status) =>
+        Enum.TryParse<GoalStatus>(status, ignoreCase: true, out var parsed) &&
+        parsed is GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Superseded;
+
+    private static QuestionCandidate RequestCandidate(HumanInputRequest request) =>
+        new(new OwnerQuestion(request.Id.Value, request.GoalId.Value, OwnerQuestionKind.HumanInput,
+            request.Question, ProposedDefault: request.SuggestedDefaultAnswer), request.RequestedAt,
+            HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind));
 
     internal static string? Field(string body, string label)
     {

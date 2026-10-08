@@ -16,7 +16,9 @@ public sealed class ChaosGatePreflightDirtyWorktreeTests : ChaosGateTestBase
             "Run dotnet test to verify the implementation.", AgentRole.Developer);
 
         var result = WorkerProfileDispatcher.PreflightSubscriptionTask(
-            goal, task, agents, WorkerProfileCatalog.Default(), worktree, DispatchedAt);
+            goal, task, agents, WorkerProfileCatalog.Default(), worktree, DispatchedAt,
+            claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+            commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
 
         Assert.False(result.Allowed);
         var findings = string.Join("\n", result.Findings);

@@ -16,6 +16,13 @@ public abstract class CliTaskQueryTestSupport
     {
         private readonly AgentOrchestratorKernel _kernel = Clone(kernel);
 
+        public Task<IReadOnlyList<HumanInputRequestSnapshot>> ListOpenHumanInputRequestsAsync(
+            CancellationToken cancellationToken = default) => Task.FromResult(OpenRequests(_kernel));
+
+        public Task<IReadOnlyList<TerminalOwnerQuestionHold>> ListTerminalOwnerQuestionHoldsAsync(
+            IReadOnlyCollection<GoalId> goalIds,
+            CancellationToken cancellationToken = default) => Task.FromResult(TerminalHolds(_kernel, goalIds));
+
         public Task<AgentOrchestratorKernel> LoadGoalsAsync(
             IReadOnlyCollection<GoalId> goalIds,
             CancellationToken cancellationToken = default) =>
@@ -30,6 +37,13 @@ public abstract class CliTaskQueryTestSupport
     {
         private readonly AgentOrchestratorKernel _kernel = Clone(kernel);
         private readonly Dictionary<string, OrchestratorStateOutboxMessage> _outbox = new(StringComparer.Ordinal);
+
+        public Task<IReadOnlyList<HumanInputRequestSnapshot>> ListOpenHumanInputRequestsAsync(
+            CancellationToken cancellationToken = default) => Task.FromResult(OpenRequests(_kernel));
+
+        public Task<IReadOnlyList<TerminalOwnerQuestionHold>> ListTerminalOwnerQuestionHoldsAsync(
+            IReadOnlyCollection<GoalId> goalIds,
+            CancellationToken cancellationToken = default) => Task.FromResult(TerminalHolds(_kernel, goalIds));
 
         public bool ThrowOnOutbox { get; init; }
 
@@ -232,6 +246,17 @@ public abstract class CliTaskQueryTestSupport
                 CreatedAt: goal.Timeline.FirstOrDefault()?.OccurredAt))
             .OrderByDescending(goal => goal.UpdatedAt, StringComparer.Ordinal)
             .ToArray();
+
+    private static IReadOnlyList<HumanInputRequestSnapshot> OpenRequests(AgentOrchestratorKernel kernel) =>
+        kernel.ExportSnapshot().HumanInputRequests.Where(request => !request.IsCompleted).ToArray();
+
+    private static IReadOnlyList<TerminalOwnerQuestionHold> TerminalHolds(
+        AgentOrchestratorKernel kernel, IReadOnlyCollection<GoalId> goalIds) =>
+        kernel.Goals.Where(goal => goalIds.Contains(goal.Id) &&
+            goal.Status is GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Superseded &&
+            goal.CurrentHold?.State.Equals("steward-owner-question", StringComparison.OrdinalIgnoreCase) == true)
+            .Select(goal => new TerminalOwnerQuestionHold(goal.Id.Value, goal.CurrentHold!.Identity,
+                goal.CurrentHold.State, goal.CurrentHold.Blocker, goal.CurrentHold.StartedAt)).ToArray();
 
     private static AgentOrchestratorKernel Clone(AgentOrchestratorKernel kernel) =>
         AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());

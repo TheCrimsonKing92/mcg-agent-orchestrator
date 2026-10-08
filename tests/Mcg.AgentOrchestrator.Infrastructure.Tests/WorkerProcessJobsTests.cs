@@ -3127,7 +3127,7 @@ public sealed class WorkerProcessJobsTests : IDisposable
                 "if (!WorkerProcessJobs.TryRegister(",
             [Path.Combine("src", "Mcg.AgentOrchestrator.Infrastructure", "Workspaces", "LocalProcessVerifier.cs")] =
                 "WorkerProcessJobs.StartRegisteredOwnedRedirectedOrThrow(",
-            [Path.Combine("src", "Mcg.AgentOrchestrator.Infrastructure", "Workspaces", "GoalAcceptanceVerifier.ProcessRunner.cs")] =
+            [Path.Combine("src", "Mcg.AgentOrchestrator.Infrastructure", "Workspaces", "AcceptanceCheckProcessInvoker.cs")] =
                 "WorkerProcessJobs.StartRegisteredOwnedOrThrow(",
             [Path.Combine("src", "Mcg.AgentOrchestrator.App", "Orchestration", "PostLandingCanaryRunner.cs")] =
                 "WorkerProcessJobs.StartRegisteredOrThrow("
@@ -3144,7 +3144,7 @@ public sealed class WorkerProcessJobsTests : IDisposable
             "src",
             "Mcg.AgentOrchestrator.Infrastructure",
             "Workspaces",
-            "GoalAcceptanceVerifier.ProcessRunner.cs"));
+            "AcceptanceCheckProcessInvoker.cs"));
         var registrationIndex = acceptanceSource.IndexOf(
             "process = StartAcceptanceProcess(",
             StringComparison.Ordinal);

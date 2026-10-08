@@ -17,7 +17,8 @@ public sealed class OwnerConsoleBoardTests
 
         Assert.Contains("console", CliArgumentParser.RecognizedCommands);
         Assert.Contains(harness.Output.Text.Split(Environment.NewLine),
-            line => line.StartsWith("conductor: running | active goals: 2 | owner questions: 0", StringComparison.Ordinal));
+            line => line.StartsWith(ConsoleAnnouncementFormatter.Format(harness.Clock,
+                "conductor: running | active goals: 2 | owner questions: 0"), StringComparison.Ordinal));
         Assert.Contains("11111111 | Build search | Active | Developer", harness.Output.Text);
         Assert.Contains("22222222 | Review search | Active | Reviewer", harness.Output.Text);
     }

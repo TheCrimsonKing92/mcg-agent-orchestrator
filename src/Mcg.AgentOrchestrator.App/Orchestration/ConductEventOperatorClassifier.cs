@@ -19,6 +19,8 @@ internal static class ConductEventOperatorClassifier
 
         return eventKind switch
         {
+            "train-receipt-held" when StartsWithToken("TRAIN_RECEIPT_HELD") => Decision,
+            "train-receipt-released" when StartsWithToken("TRAIN_RECEIPT_RELEASED") => Decision,
             "rebase-automerge" when StartsWithToken("REBASE_CONFLICT_AUTOMERGE") && HasToken("result=merged") && !HasToken("result=refused") => Outcome,
             "rebase-automerge" when StartsWithToken("REBASE_CONFLICT_AUTOMERGE") && HasToken("result=refused") && !HasToken("result=merged") => Decision,
             "cohort-attribution-retracted" when StartsWithToken("COHORT_ATTRIBUTION_RETRACTED") => Decision,

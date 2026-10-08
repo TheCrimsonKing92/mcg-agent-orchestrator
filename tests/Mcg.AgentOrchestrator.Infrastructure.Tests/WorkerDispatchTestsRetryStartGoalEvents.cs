@@ -36,7 +36,8 @@ public sealed class WorkerDispatchTestsRetryStartGoalEvents : WorkerDispatchTest
         kernel.RetryTask(goal.Id, planner.Id, "First paid retry context.", retryCause: RetryCause.ProviderInterruption);
         var first = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
             kernel, goal, agents, profiles, workspace.PromptDirectory, workingDirectory,
-            firstAt, commandExists: _ => true);
+            firstAt, commandExists: _ => true,
+            claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli);
         var firstDispatch = Assert.Single(first.Dispatches).Task.LastDispatch!;
         Assert.Equal(RetryAdmissionDecision.Allowed, kernel.RecordPreparedRetryAdmission(
             goal.Id, planner.Id, Assert.IsType<RetryContextFingerprint>(firstDispatch.RetryContextFingerprint),
@@ -166,7 +167,8 @@ public sealed class WorkerDispatchTestsRetryStartGoalEvents : WorkerDispatchTest
         kernel.RetryTask(goal.Id, planner.Id, retryMessage, retryCause: RetryCause.ProviderInterruption);
         var first = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
             kernel, goal, agents, profiles, workspace.PromptDirectory, workingDirectory,
-            firstAt, commandExists: _ => true);
+            firstAt, commandExists: _ => true,
+            claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli);
         var dispatch = Assert.Single(first.Dispatches).Task.LastDispatch!;
         Assert.Equal(RetryAdmissionDecision.Allowed, kernel.RecordPreparedRetryAdmission(
             goal.Id, planner.Id, Assert.IsType<RetryContextFingerprint>(dispatch.RetryContextFingerprint),

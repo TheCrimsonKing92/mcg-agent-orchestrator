@@ -30,12 +30,10 @@ internal static class SdlcRolePromptRequirements
         "- Exit 0 with no relevant source change, or only generated or scratch noise, is not a pass.";
     private const string ReviewerPassConditionRule =
         "- Pass only when a relevant source change exists, the claims match the diff, and nothing unrelated changed.";
-    // Goal 79061df4 adds one attestation line; preserve existing budget headroom.
-    // Goal 6552eebc adds the accepted policy-file clause; raise overflowing budgets by exactly its length.
-    // Goal c1c8e4d3 adds four inline Reviewer rules; preserve existing budget headroom.
-    internal static readonly int ReviewerComplexRequirementsMaxChars = 4961 + SelfCheckAttestation.Length + 2 + NegativeControlPolicyFileClause.Length + ReviewerWorkerClaimsRule.Length + 2 + ReviewerNonexistentClaimRule.Length + 2 + ReviewerSourceChangeRule.Length + 2 + ReviewerPassConditionRule.Length + 2;
-    internal static readonly int ReviewerCompactRequirementsMaxChars = 3870 + SelfCheckAttestation.Length + 2 + NegativeControlPolicyFileClause.Length + ReviewerWorkerClaimsRule.Length + 2 + ReviewerNonexistentClaimRule.Length + 2 + ReviewerSourceChangeRule.Length + 2 + ReviewerPassConditionRule.Length + 2;
-    internal static readonly int TesterCompactRequirementsMaxChars = 3590 + SelfCheckAttestation.Length + 2 + NegativeControlPolicyFileClause.Length;
+    // Literal caps preserve current headroom; GuidanceTextBudgetTests owns the normalized text budgets.
+    internal const int ReviewerComplexRequirementsMaxChars = 5723;
+    internal const int ReviewerCompactRequirementsMaxChars = 4632;
+    internal const int TesterCompactRequirementsMaxChars = 3882;
 
     private const string ReviewerExhaustiveFindingsContract =
         "- Every `needs-work` verdict must inspect the complete candidate diff supplied for the current round and enumerate every blocking finding; never stop after the first. Put each in verdict prose and one semicolon-delimited `blockers` token (no literal semicolons), with file:line, severity `blocking` from `blocking|advisory`, and a violated acceptance criterion ID/label or clear quote/paraphrase. For deletions cite an old/new diff line; for file-wide defects, the defining line. Deduplicate only the same defect identity (stable_id preferred; otherwise normalized file/region+criterion+meaning), union criterion references, retain the most precise current anchor, and never merge by shared file, criterion, or cause. Order by violated criterion index, normalized file path, line/region, then stable_id; `blockers` uses that order. End needs-work verdict prose with this exact standalone line immediately before WORKER_RESULT: `no other blocking findings exist in this diff`. Keep it outside `blockers`.";

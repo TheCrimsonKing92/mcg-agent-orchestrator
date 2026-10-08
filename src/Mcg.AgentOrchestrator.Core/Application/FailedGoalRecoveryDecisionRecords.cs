@@ -26,6 +26,30 @@ public static class FailedGoalRecoveryDecisionRecords
     public static PolicyDecisionRecord ReconcileBeforeFailureHandling(FailedGoalRecoveryIdentity identity, string reason) =>
         FromDriver(identity, FailedGoalRecoveryAction.Hold, DriverRungBlockStart + 3, "reconcile-before-failure-handling", reason);
 
+    public static PolicyDecisionRecord BuildLogUnavailable(FailedGoalRecoveryIdentity identity, string reason) =>
+        FromDriver(identity, FailedGoalRecoveryAction.Escalate, DriverRungBlockStart + 4, "build-log-unavailable", reason);
+
+    public static PolicyDecisionRecord WorktreeUnavailable(FailedGoalRecoveryIdentity identity, string reason) =>
+        FromDriver(identity, FailedGoalRecoveryAction.Escalate, DriverRungBlockStart + 5, "worktree-unavailable", reason);
+
+    public static PolicyDecisionRecord WorktreeInspectionUnavailable(FailedGoalRecoveryIdentity identity, string reason) =>
+        FromDriver(identity, FailedGoalRecoveryAction.Escalate, DriverRungBlockStart + 6, "worktree-inspection-unavailable", reason);
+
+    public static PolicyDecisionRecord CheckpointCommitFailed(FailedGoalRecoveryIdentity identity, string reason) =>
+        FromDriver(identity, FailedGoalRecoveryAction.Escalate, DriverRungBlockStart + 7, "checkpoint-commit-failed", reason);
+
+    public static PolicyDecisionRecord CheckpointDirtyAfterCommit(FailedGoalRecoveryIdentity identity, string reason) =>
+        FromDriver(identity, FailedGoalRecoveryAction.Escalate, DriverRungBlockStart + 8, "checkpoint-dirty-after-commit", reason);
+
+    public static PolicyDecisionRecord BuildCheckRecoveryExhausted(FailedGoalRecoveryIdentity identity, string reason) =>
+        FromDriver(identity, FailedGoalRecoveryAction.Escalate, DriverRungBlockStart + 9, "build-check-recovery-exhausted", reason);
+
+    public static PolicyDecisionRecord BuildCheckRetryFailed(FailedGoalRecoveryIdentity identity, string reason) =>
+        FromDriver(identity, FailedGoalRecoveryAction.Escalate, DriverRungBlockStart + 10, "build-check-retry-failed", reason);
+
+    public static PolicyDecisionRecord BuildCheckRetryApplied(FailedGoalRecoveryIdentity identity, string reason) =>
+        FromDriver(identity, FailedGoalRecoveryAction.Hold, DriverRungBlockStart + 11, "build-check-retry-applied", reason);
+
     private static PolicyDecisionRecord FromDriver(
         FailedGoalRecoveryIdentity identity, FailedGoalRecoveryAction action, int rung, string evidence, string reason) =>
         new(StageName, action.ToString(), rung, evidence, reason, Facts(identity));

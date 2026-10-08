@@ -5,11 +5,18 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
+internal sealed record ConductorGroupedGateOutcome(string Verdict, string ReceiptId);
+
 internal static class ConductorGroupedGateAttemptHost
 {
     internal static int Run(string metadataPath) => Run(metadataPath, RunGateBody, RedirectConsole);
 
     internal static int Run(string metadataPath, Action<ConductorGroupedGateAttempt> gateBody,
+        Func<TextWriter, TextWriter, IDisposable> redirectConsole)
+        => Run(metadataPath, attempt => { gateBody(attempt); return null; }, redirectConsole);
+
+    internal static int Run(string metadataPath,
+        Func<ConductorGroupedGateAttempt, ConductorGroupedGateOutcome?> gateBody,
         Func<TextWriter, TextWriter, IDisposable> redirectConsole)
     {
         var processError = Console.Error;
@@ -35,9 +42,14 @@ internal static class ConductorGroupedGateAttemptHost
             if (claimed is not null)
             {
                 attempt = claimed;
-                gateBody(attempt);
+                var outcome = gateBody(attempt);
                 File.WriteAllText(attempt.ResultPath,
-                    JsonSerializer.Serialize(new { attempt.IdentityValue, Status = "completed" }));
+                    outcome is null
+                        ? JsonSerializer.Serialize(new { attempt.IdentityValue, Status = "completed" })
+                        : JsonSerializer.Serialize(new
+                        {
+                            attempt.IdentityValue, Status = "completed", outcome.Verdict, outcome.ReceiptId
+                        }));
                 File.WriteAllText(attempt.ExitCodePath, "0");
             }
         }
@@ -70,7 +82,7 @@ internal static class ConductorGroupedGateAttemptHost
         }
     }
 
-    private static void RunGateBody(ConductorGroupedGateAttempt attempt)
+    private static ConductorGroupedGateOutcome? RunGateBody(ConductorGroupedGateAttempt attempt)
     {
         var workspace = OrchestratorWorkspace.ForDirectory(
             attempt.ExecutionDirectory, attempt.ExecutionDirectory);
@@ -88,7 +100,7 @@ internal static class ConductorGroupedGateAttemptHost
             NullOperatorChannel.Instance, providers,
             cleanupHooks: WorktreeCleanupContext.Load(
                 attentionStoreDirectory: workspace.OrchestratorDirectory).Hooks);
-        driver.RunGroupedGateAttemptBody(attempt);
+        return driver.RunGroupedGateAttemptBody(attempt);
     }
 
     private static StreamWriter OpenWriter(string path) => new(new FileStream(path,

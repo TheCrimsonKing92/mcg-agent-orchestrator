@@ -1482,7 +1482,11 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         return cmd.ExecuteNonQuery() == 1;
     }
 
-    public async Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default)
+    public Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default) =>
+        ListGoalMetadataAsync(includeTerminalCreatedAt: false, cancellationToken);
+
+    public async Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(
+        bool includeTerminalCreatedAt, CancellationToken cancellationToken = default)
     {
         await using var conn = OpenConnection();
         var results = new List<GoalSummary>();
@@ -1494,16 +1498,19 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
                 status,
                 objective,
                 updated_at,
-                (
+                CASE WHEN {MetadataNonTerminalPredicate()} THEN (
                     SELECT json_extract(evt.value, '$.OccurredAt')
                     FROM json_each(goals.snapshot_json, '$.Timeline') AS evt
                     ORDER BY CAST(evt.key AS INTEGER) ASC
                     LIMIT 1
-                ) AS created_at,
+                ) WHEN $include_terminal_created_at = 1
+                    THEN json_extract(goals.snapshot_json, '$.Timeline[0].OccurredAt')
+                END AS created_at,
                 {ActiveWithFailedTaskConditionSql()}
             FROM goals
             ORDER BY updated_at DESC
             """;
+        cmd.Parameters.AddWithValue("$include_terminal_created_at", includeTerminalCreatedAt ? 1 : 0);
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
 
         while (await reader.ReadAsync(cancellationToken))
@@ -1521,6 +1528,9 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
 
         return results;
     }
+
+    private static string MetadataNonTerminalPredicate() =>
+        $"status NOT IN ('{GoalStatus.Completed}', '{GoalStatus.Cancelled}', '{GoalStatus.Superseded}')";
 
     public async Task<IReadOnlyList<GoalSummary>> ListGoalIdStatusesAsync(CancellationToken cancellationToken = default)
     {
@@ -1704,6 +1714,55 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             ELSE NULL
         END AS condition
         """;
+
+    public async Task<IReadOnlyList<TerminalOwnerQuestionHold>> ListTerminalOwnerQuestionHoldsAsync(
+        IReadOnlyCollection<GoalId> goalIds,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(goalIds);
+        if (goalIds.Count == 0) return [];
+
+        await using var conn = OpenConnection();
+        await using var cmd = conn.CreateCommand();
+        var parameterNames = goalIds.Select((_, index) => $"$goal_id{index}").ToArray();
+        cmd.CommandText = $"""
+            SELECT id, json_extract(snapshot_json, '$.CurrentHold.Identity'),
+                json_extract(snapshot_json, '$.CurrentHold.State'),
+                json_extract(snapshot_json, '$.CurrentHold.Blocker'),
+                json_extract(snapshot_json, '$.CurrentHold.StartedAt')
+            FROM goals
+            WHERE id IN ({string.Join(", ", parameterNames)})
+                AND status COLLATE NOCASE IN ('Completed', 'Cancelled', 'Superseded')
+                AND json_valid(snapshot_json)
+                AND json_extract(snapshot_json, '$.CurrentHold.State') COLLATE NOCASE = 'steward-owner-question'
+            """;
+        var index = 0;
+        foreach (var goalId in goalIds)
+            cmd.Parameters.AddWithValue(parameterNames[index++], goalId.Value);
+        var results = new List<TerminalOwnerQuestionHold>();
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+            results.Add(new TerminalOwnerQuestionHold(reader.GetString(0), reader.GetString(1),
+                reader.GetString(2), reader.GetString(3), DateTimeOffset.Parse(reader.GetString(4),
+                    System.Globalization.CultureInfo.InvariantCulture)));
+        return results;
+    }
+
+    public async Task<IReadOnlyList<HumanInputRequestSnapshot>> ListOpenHumanInputRequestsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        await using var conn = OpenConnection();
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT snapshot_json FROM human_input_requests";
+        var results = new List<HumanInputRequestSnapshot>();
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var snapshot = JsonSerializer.Deserialize<HumanInputRequestSnapshot>(reader.GetString(0), SerializerOptions);
+            if (snapshot is { IsCompleted: false }) results.Add(snapshot);
+        }
+        return results;
+    }
 
     public async Task<IReadOnlyList<GoalId>> ListGoalIdsWithCompletedHumanInputAsync(
         IReadOnlyCollection<GoalId> goalIds,

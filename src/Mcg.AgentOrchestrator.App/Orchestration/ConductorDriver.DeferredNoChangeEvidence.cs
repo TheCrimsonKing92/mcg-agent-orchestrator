@@ -25,15 +25,8 @@ internal sealed partial class ConductorDriver
         if (!DeferredNoChangeOutcome.TryParse(developer.LastVerification.StandardError, out var outcome))
             throw new InvalidDataException("Deferred no-change completion lost its candidate-bound outcome.");
 
-        var prior = DeferredNoChangeEvidenceIndexLines.Latest(goal, developer.Id, outcome.CandidateSha);
-        if (prior is { Outcome: "green" })
-        {
-            if (prior.NotRun.Count == 0 && prior.Selections.Count == outcome.TestClasses.Count &&
-                outcome.TestClasses.All(name => prior.Selections.Any(selection =>
-                    selection.EndsWith(":" + name, StringComparison.OrdinalIgnoreCase))))
-                return false;
-            throw new InvalidDataException("Deferred no-change green receipt does not cover its declared classes.");
-        }
+        var prior = DeferredNoChangeEvidenceIndexLines.Latest(goal, developer.Id, outcome.CandidateSha, outcome.TestClasses);
+        if (prior is { Outcome: "green" }) return false;
         if (prior is { Outcome: "red" or "unusable" })
         {
             result = Escalate(goal, goalPrefix, policy, fromState,
@@ -76,7 +69,12 @@ internal sealed partial class ConductorDriver
         if (prior is { Outcome: "started" } &&
             (!prior.Selections.SequenceEqual(selectionNames, StringComparer.OrdinalIgnoreCase) ||
              !prior.NotRun.SequenceEqual(notRun, StringComparer.OrdinalIgnoreCase)))
-            throw new InvalidDataException("Deferred no-change selection changed during its candidate evidence run.");
+        {
+            result = Escalate(goal, goalPrefix, policy, fromState,
+                $"DEFERRED_NO_CHANGE_SELECTION_CHANGED task={developer.Id.Value} candidate_sha={outcome.CandidateSha}; " +
+                "Deferred no-change selection changed during its candidate evidence run.");
+            return true;
+        }
 
         var identity = FindingEvidenceExecutionClassifier.BuildRequestIdentity(
             new FindingEvidenceRequest(distinct));
@@ -93,7 +91,7 @@ internal sealed partial class ConductorDriver
             _recordFindingEvidenceRequest(goal.Id, tester.Id,
                 DeferredNoChangeEvidenceIndexLines.FormatMarker(new DeferredNoChangeEvidenceEntry(
                     "started", developer.Id, outcome.CandidateSha, receiptId,
-                    selectionNames, notRun, null, [])));
+                    selectionNames, notRun, null, [], Declared: outcome.TestClasses)));
 
         var requestContext = new ConductorFocusedEvidenceRequestContext(
             "deferred-no-change",
@@ -149,7 +147,7 @@ internal sealed partial class ConductorDriver
             _recordFindingEvidenceRun(goal.Id, tester.Id,
                 DeferredNoChangeEvidenceIndexLines.FormatMarker(new DeferredNoChangeEvidenceEntry(
                     verdict, developer.Id, outcome.CandidateSha, receiptId,
-                    selectionNames, notRun, resultPath, failures)));
+                    selectionNames, notRun, resultPath, failures, Declared: outcome.TestClasses)));
     }
 
     private bool RetryDeveloperForDeferredNoChange(

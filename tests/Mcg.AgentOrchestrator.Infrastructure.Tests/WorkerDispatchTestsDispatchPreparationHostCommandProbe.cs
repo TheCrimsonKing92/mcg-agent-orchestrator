@@ -79,7 +79,8 @@ public sealed class WorkerDispatchTestsDispatchPreparationHostCommandProbe : Wor
             workingDirectory,
             firstAt,
             commandExists: preparationProbe,
-            sandboxOptions: DisabledSandbox);
+            sandboxOptions: DisabledSandbox,
+            claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli);
         var firstDispatch = Assert.Single(first.Dispatches);
         var firstFingerprint = Assert.IsType<RetryContextFingerprint>(firstDispatch.Task.LastDispatch!.RetryContextFingerprint);
         var firstAdmission = kernel.RecordPreparedRetryAdmission(

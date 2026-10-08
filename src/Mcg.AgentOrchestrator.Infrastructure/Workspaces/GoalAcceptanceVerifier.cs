@@ -1275,18 +1275,12 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var shardCoreBudget =
             _testOverrides.ResolveShardCoreBudgetForTests?.Invoke() ?? Math.Max(1, Environment.ProcessorCount / 2);
         var shardConcurrencyBudget = Math.Min(EngineSettings.MaxConcurrentShards, shardCoreBudget);
-        var batch = await RunCheckBatchAsync(
-            focusedChecks,
-            cacheContext: null,
-            worktreePath,
-            goalId,
-            stableSlotIndex,
-            stableSlotLease,
-            dotnetTestBuildPhase,
-            shardConcurrencyBudget,
-            cancellationToken,
-            continueAfterFailure,
-            executionOwner).ConfigureAwait(false);
+        await using var shadow = RemoteFocusedEvidenceShadow.Start(
+            _testOverrides, _timeProvider, worktreePath, focusedChecks, goalId, executionOwner, cancellationToken);
+        var batch = await RunCheckBatchAsync(focusedChecks, cacheContext: null, worktreePath, goalId,
+            stableSlotIndex, stableSlotLease, dotnetTestBuildPhase, shardConcurrencyBudget,
+            cancellationToken, continueAfterFailure, executionOwner).ConfigureAwait(false);
+        await shadow.CompleteAsync(batch.Results).ConfigureAwait(false);
         return batch.Results;
     }
 

@@ -55,8 +55,8 @@ public sealed class PrerequisiteEvidenceBriefTests
         var brief = context.Kernel.BuildTaskBrief(context.Goal.Id, context.Developer.Id).Content;
 
         Assert.DoesNotContain("## Answered Prerequisite Evidence", brief, StringComparison.Ordinal);
-        Assert.DoesNotContain(request.Id.Value, brief, StringComparison.Ordinal);
-        Assert.DoesNotContain(ReceiptPath, brief, StringComparison.Ordinal);
+        Assert.Contains("Which lane should the planner assume?", brief, StringComparison.Ordinal);
+        Assert.Contains(ReceiptPath, brief, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "PrerequisiteEvidence_answered_request_on_another_goal_never_crosses_over")]

@@ -10,9 +10,28 @@ public interface IOrchestratorStateQueries
 
     Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>Optionally includes creation times for terminal goals; the default listing skips their snapshot JSON.</summary>
+    Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(
+        bool includeTerminalCreatedAt, CancellationToken cancellationToken = default) =>
+        ListGoalMetadataAsync(cancellationToken);
+
+    /// <summary>Reads open request snapshots without loading goal snapshots, including orphan requests.</summary>
+    Task<IReadOnlyList<HumanInputRequestSnapshot>> ListOpenHumanInputRequestsAsync(
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This repository does not support request-only human-input queries.");
+
+    /// <summary>Projects steward questions for the specified terminal goals without loading snapshots into a kernel.</summary>
+    Task<IReadOnlyList<TerminalOwnerQuestionHold>> ListTerminalOwnerQuestionHoldsAsync(
+        IReadOnlyCollection<GoalId> goalIds,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This repository does not support terminal owner-question hold queries.");
+
     Task<IReadOnlyList<GoalSummary>> ListGoalIdStatusesAsync(CancellationToken cancellationToken = default) =>
         ListGoalMetadataAsync(cancellationToken);
 }
+
+public sealed record TerminalOwnerQuestionHold(
+    string GoalId, string Identity, string State, string Blocker, DateTimeOffset StartedAt);
 
 public interface IOrchestratorStateRepository : IOrchestratorStateQueries
 {

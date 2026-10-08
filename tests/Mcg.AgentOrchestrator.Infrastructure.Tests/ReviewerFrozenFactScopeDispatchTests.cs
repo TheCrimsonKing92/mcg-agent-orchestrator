@@ -37,7 +37,9 @@ public sealed class ReviewerFrozenFactScopeDispatchTests : WorkerDispatchTestSup
         var promptRoot = Path.Combine(root, "prompts");
         var result = WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, goal, reviewer, [agent], DispatchTestProfiles(),
             promptRoot, worktree, Timestamp,
-            sandboxOptions: new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget));
+            sandboxOptions: new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget),
+            claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
+            commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent);
         var prompt = File.ReadAllText(result.PromptPath);
         Assert.Contains("## Changed existing tests", prompt);
         Assert.Contains($"- FrozenTests.Edited ({path}:1-1) changed: frozen-class violation {request.Id.Value}", prompt);

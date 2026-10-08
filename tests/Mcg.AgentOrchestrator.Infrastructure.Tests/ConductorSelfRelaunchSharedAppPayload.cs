@@ -1,5 +1,4 @@
 using System.Security.Cryptography;
-using Mcg.AgentOrchestrator.App.Orchestration;
 
 internal static class ConductorSelfRelaunchSharedAppPayload
 {
@@ -50,20 +49,9 @@ internal static class ConductorSelfRelaunchSharedAppPayload
         var repositoryRoot = InfrastructureTestSupport.FindRepositoryRoot();
         var directory = Path.Combine(Path.GetTempPath(), $"mcg-self-relaunch-payload-{Guid.NewGuid():N}");
         Directory.CreateDirectory(directory);
-        var project = Path.Combine(repositoryRoot, "src", "Mcg.AgentOrchestrator.App", "Mcg.AgentOrchestrator.App.csproj");
-        var dotnet = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_DOTNET_PATH") ?? "dotnet";
         try
         {
-            var build = ConductorSelfRelaunch.RunProcessForTests(
-                dotnet,
-                ["build", project, "--nologo", "--output", directory, "-v", "quiet", "-clp:ErrorsOnly"],
-                repositoryRoot,
-                TimeSpan.FromMinutes(3));
-            if (build.ExitCode != 0 || build.TimedOut)
-            {
-                throw new InvalidOperationException(
-                    $"Shared App payload build failed exit={build.ExitCode} timedOut={build.TimedOut}: {build.Stderr}");
-            }
+            ConductorSelfRelaunchSharedAppPayloadSource.ForTestAssembly(repositoryRoot).AssembleInto(directory);
 
             foreach (var file in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories))
             {

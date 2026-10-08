@@ -126,7 +126,7 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
             return NormalizeCommandWithValueFlags(args, "--title");
         }
 
-        return NormalizeTargetTextCommandWithFileFlags(args, 1, "--body-file", "--text-file");
+        return NormalizeTargetTextCommandWithFileFlags(args, 1, "--body-file", "--text-file", "--epic");
     }
 
     if (command.Equals("backlog-update", StringComparison.OrdinalIgnoreCase))
@@ -432,7 +432,7 @@ private static IReadOnlyList<string> NormalizeTargetTextCommandWithFileFlags(str
         return args;
     }
 
-    var flagIndex = Array.FindIndex(args, textStartIndex, arg => fileFlags.Any(flag => arg.Equals(flag, StringComparison.OrdinalIgnoreCase)));
+    var flagIndex = Array.FindIndex(args, textStartIndex, arg => fileFlags.Any(flag => arg.Equals(flag, StringComparison.OrdinalIgnoreCase) || flag == "--epic" && arg.StartsWith("--epic=", StringComparison.OrdinalIgnoreCase)));
     if (flagIndex < 0)
     {
         return [.. args.Take(textStartIndex), string.Join(' ', args.Skip(textStartIndex))];

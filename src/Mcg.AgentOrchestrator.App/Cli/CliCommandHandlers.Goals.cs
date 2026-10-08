@@ -386,6 +386,13 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             return false;
 
         case "goal":
+            if (EpicAtCreation.HasArgument(parts) &&
+                (HasCliConfirmation(parts, "--simple") || HasCliConfirmation(parts, "--run") || HasCliConfirmation(parts, "--from-backlog")))
+            {
+                throw new ArgumentException("--epic is supported only by goal <objective>, goal --text-file <path> and goal --brief-file <path>; it cannot be combined with --simple, --run or --from-backlog.");
+            }
+            var requestedEpic = EpicAtCreation.ResolveRequested(context.Workspace,
+                EpicAtCreation.HasArgument(parts) ? GetFlagValue(parts, "--epic") ?? "" : null);
             var goalPipelineRequest = ResolveGoalIntakePipelineRequest(parts);
             // --simple: delegate to simple-goal (1 Developer task)
             if (HasCliConfirmation(parts, "--simple"))
@@ -424,6 +431,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 PrintBriefLintAdvisory(runObjective);
                 var runSourceBacklogLink = ResolveSourceBacklogItemLink(context, parts, runObjective);
                 PrintClosedSourceBacklogWarning(runSourceBacklogLink);
+                var runEpicId = EpicAtCreation.ResolveGoalEpic(context.Workspace, null, runSourceBacklogLink?.Item.Id);
                 context.ReportGoalCreationProgress();
                 context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateGoal(
                     context.Kernel,
@@ -435,6 +443,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     context.RefinementCollaborationItemRaise);
                 ApplySourceBacklogItemLink(context, context.CurrentGoal, runSourceBacklogLink);
                 context.FinalizeGoalCreation(context.CurrentGoal);
+                EpicAtCreation.AssignAfterCommit(context.Workspace, PortfolioMemberKind.Goal, context.CurrentGoal.Id.Value, runEpicId);
                 ConsoleViews.PrintGoal(context.CurrentGoal);
                 var runParts = new List<string> { "run-goal", context.CurrentGoal.Id.Value[..8] };
                 AppendGoalAliasFlags(parts, runParts, includeRoleAgentFlags: false, "--run", "--brief-file", "--text-file", "--pipeline");
@@ -450,6 +459,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             PrintBriefLintAdvisory(goalObjective);
             var goalSourceBacklogLink = ResolveSourceBacklogItemLink(context, parts, goalObjective);
             PrintClosedSourceBacklogWarning(goalSourceBacklogLink);
+            var goalEpicId = EpicAtCreation.ResolveGoalEpic(context.Workspace, requestedEpic, goalSourceBacklogLink?.Item.Id);
             context.ReportGoalCreationProgress();
             context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateGoal(
                 context.Kernel,
@@ -461,6 +471,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.RefinementCollaborationItemRaise);
             ApplySourceBacklogItemLink(context, context.CurrentGoal, goalSourceBacklogLink);
             context.FinalizeGoalCreation(context.CurrentGoal);
+            EpicAtCreation.AssignAfterCommit(context.Workspace, PortfolioMemberKind.Goal, context.CurrentGoal.Id.Value, goalEpicId);
             ConsoleViews.PrintGoal(context.CurrentGoal);
             return true;
 
@@ -473,6 +484,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             PrintScopeCollisionAdvisory(context, simpleObjective);
             var simpleSourceBacklogLink = ResolveSourceBacklogItemLink(context, parts, simpleObjective);
             PrintClosedSourceBacklogWarning(simpleSourceBacklogLink);
+            var simpleEpicId = EpicAtCreation.ResolveGoalEpic(context.Workspace, null, simpleSourceBacklogLink?.Item.Id);
             context.ReportGoalCreationProgress();
             var simpleAgents = ApplyRoleAgentOverrides(parts, context.Agents);
             context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
@@ -492,6 +504,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     "simple-goal --dispatch requires --confirm-dispatch-start as the certainty signal.");
             }
             context.FinalizeGoalCreation(context.CurrentGoal);
+            EpicAtCreation.AssignAfterCommit(context.Workspace, PortfolioMemberKind.Goal, context.CurrentGoal.Id.Value, simpleEpicId);
             ConsoleViews.PrintGoal(context.CurrentGoal);
             if (HasCliConfirmation(parts, "--dispatch"))
             {
@@ -965,6 +978,11 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 return false;
             }
 
+            if (EpicProgressReadModel.IsEpicGoalsListing(parts))
+            {
+                ConsoleViews.PrintGoals(EpicProgressReadModel.ListMemberGoals(context.Workspace, GetFlagValue(parts, "--epic")));
+                return false;
+            }
             ConsoleViews.PrintGoals(context.Kernel);
             ConsoleViews.PrintCleanupDebtWarning(GoalWorktrees.ListCleanupDebt(
                 context.Workspace.ExecutionDirectory,

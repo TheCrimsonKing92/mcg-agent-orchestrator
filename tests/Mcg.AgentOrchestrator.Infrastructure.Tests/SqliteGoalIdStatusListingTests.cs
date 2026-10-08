@@ -29,7 +29,7 @@ public sealed class SqliteGoalIdStatusListingTests
             }
 
             // Negative control: the old listing still reaches the corrupted Timeline.
-            await Assert.ThrowsAsync<SqliteException>(() => repository.ListGoalMetadataAsync());
+            await Assert.ThrowsAsync<SqliteException>(() => repository.ListGoalMetadataAsync(includeTerminalCreatedAt: true));
             IOrchestratorStateQueries queries = SqliteOrchestratorStateRepository.OpenReadOnly(db);
             var actual = await queries.ListGoalIdStatusesAsync();
 
@@ -85,7 +85,7 @@ public sealed class SqliteGoalIdStatusListingTests
 
             Assert.Equal(3, expected.Count);
             Assert.Single(expected, summary => summary.Condition == GoalLifecycle.ActiveWithFailedTaskCondition);
-            Assert.Equal(expected, await repository.ListGoalMetadataAsync());
+            Assert.Equal(expected, await repository.ListGoalMetadataAsync(includeTerminalCreatedAt: true));
         }
         finally
         {

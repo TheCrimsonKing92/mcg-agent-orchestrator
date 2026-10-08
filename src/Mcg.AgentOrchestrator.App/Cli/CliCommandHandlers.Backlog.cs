@@ -104,6 +104,8 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
 
         case "backlog-add":
         {
+            var requestedEpic = EpicAtCreation.ResolveRequested(context.Workspace,
+                EpicAtCreation.HasArgument(parts) ? GetFlagValue(parts, "--epic") ?? "" : null);
             var titleFlagCount = parts.Count(part => part.Equals("--title", StringComparison.OrdinalIgnoreCase));
             var hasPositionalTitle = parts.Count > 1 && !parts[1].StartsWith("--", StringComparison.Ordinal);
             if (titleFlagCount > 1)
@@ -147,6 +149,7 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
                     .GetAwaiter()
                     .GetResult();
             Console.WriteLine($"Added: [{item.Id}] {item.Title}");
+            EpicAtCreation.AssignAfterCommit(context.Workspace, PortfolioMemberKind.BacklogItem, item.Id, requestedEpic?.Id);
             if (!parts.Any(part => part.Equals("--no-similar", StringComparison.OrdinalIgnoreCase)))
             {
                 try

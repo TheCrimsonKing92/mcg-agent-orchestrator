@@ -70,6 +70,21 @@ internal sealed class OwnerConsoleHarness
             Calls.Add("goals");
             return Task.FromResult(kernel);
         }
+
+        public Task<IReadOnlyList<HumanInputRequestSnapshot>> ListOpenHumanInputRequestsAsync(
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<HumanInputRequestSnapshot>>(kernel.ExportSnapshot().HumanInputRequests
+                .Where(request => !request.IsCompleted).ToArray());
+
+        public Task<IReadOnlyList<TerminalOwnerQuestionHold>> ListTerminalOwnerQuestionHoldsAsync(
+            IReadOnlyCollection<GoalId> goalIds,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<TerminalOwnerQuestionHold>>(kernel.Goals.Where(goal =>
+                goalIds.Contains(goal.Id) &&
+                goal.Status is GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Superseded &&
+                goal.CurrentHold?.State.Equals("steward-owner-question", StringComparison.OrdinalIgnoreCase) == true)
+                .Select(goal => new TerminalOwnerQuestionHold(goal.Id.Value, goal.CurrentHold!.Identity,
+                    goal.CurrentHold.State, goal.CurrentHold.Blocker, goal.CurrentHold.StartedAt)).ToArray());
     }
 
     internal sealed class FakeQuestions : IOwnerQuestionSource

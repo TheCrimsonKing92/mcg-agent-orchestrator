@@ -59,6 +59,7 @@ internal sealed partial class ConductorDriver
         var originalBindings = selection.BindMembers();
         var attemptId = $"merge-train-attempt-{Guid.NewGuid():N}";
         var allEjections = new List<MergeTrainEjection>();
+        MergeTrainReceipt? lastRecordedReceipt = null;
         var selectedGoalIds = selection.Members.Select(member => member.GoalId.Value)
             .ToHashSet(StringComparer.Ordinal);
         var trainKey = TrainGateRunIdentity(selectedGoalIds);
@@ -258,6 +259,7 @@ internal sealed partial class ConductorDriver
                 }
             }
 
+            lastRecordedReceipt = receipt;
             if (receipt.Outcome == MergeTrainGateOutcome.Passed)
             {
                 if (redDropped is not null && redReceipt is not null)
@@ -344,7 +346,8 @@ internal sealed partial class ConductorDriver
                 if (attributed is not null)
                     RecordTrainImplicatedMember(attributed, receipt);
                 RecordTrainRedPair(selection, members, receipt);
-                return Fallback($"outcome={receipt.Outcome} attempts={attempt + 1} fallback=ordinary");
+                var detail = $"outcome={receipt.Outcome} attempts={attempt + 1} fallback=ordinary";
+                return Fallback(detail);
             }
 
             // Keep the bounded bisection; absent source attribution, retain drop-newest.
@@ -370,7 +373,7 @@ internal sealed partial class ConductorDriver
             Receipt: null,
             new Dictionary<string, ConductorAdvanceResult>(StringComparer.Ordinal),
             allEjections,
-            detail);
+            detail) { RecordedReceipt = lastRecordedReceipt };
 
         Dictionary<string, ConductorAdvanceResult> Hold(IReadOnlyList<Goal> goals, string detail) =>
             goals.ToDictionary(
@@ -387,7 +390,7 @@ internal sealed partial class ConductorDriver
             var detail = FormatCohortGateInFlightDetail(run, _utcNow());
             return new ConductorMergeTrainRunResult(null,
                 Hold(selection.Members.Select(member => goalsById[member.GoalId]).ToArray(), detail),
-                allEjections, detail);
+                allEjections, detail) { RecordedReceipt = lastRecordedReceipt };
         }
     }
 
@@ -395,7 +398,11 @@ internal sealed partial class ConductorDriver
         FindLandablePassedMergeTrainSelections(
             IReadOnlyList<ConductorSpeculativeAcceptanceCandidate> candidates,
             IReadOnlySet<string> ineligibleGoalIds,
-            Action<MergeTrainReceipt, string> onStale)
+            Action<MergeTrainReceipt, string> onStale,
+            Action<MergeTrainReceipt, PassedMergeTrainReceiptHolds.Observation>? onBlocked = null,
+            IReadOnlyList<Goal>? observationGoals = null,
+            IReadOnlySet<GoalId>? receiptObservationGoalIds = null,
+            Func<Goal, (string? BranchHeadSha, string? MainHeadSha)>? resolveReceiptHeads = null)
     {
         if (_runMergeTrainOverride is not null || _mergeTrainAcceptanceStore is null ||
             _cohortWorkspace is null || _cohortAcceptanceVerifier is null)
@@ -403,60 +410,12 @@ internal sealed partial class ConductorDriver
             return [];
         }
 
-        var ready = candidates
-            .Where(candidate => candidate.ProjectionResult is GateReadyCandidateProjectionResult.Ready)
-            .ToDictionary(candidate => candidate.GoalId,
-                candidate => ((GateReadyCandidateProjectionResult.Ready)candidate.ProjectionResult).Projection);
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        var suppressed = ReadSuppressedCohortPairs();
-        var selections = new List<(ConductorMergeTrainSelection, MergeTrainReceipt)>();
-        foreach (var candidate in candidates)
-        {
-            if (!ready.TryGetValue(candidate.GoalId, out var first))
-            {
-                continue;
-            }
-            foreach (var receipt in _mergeTrainAcceptanceStore.ReadPassedReceiptsForGoal(candidate.GoalId))
-            {
-                if (!seen.Add(receipt.ReceiptId) ||
-                    receipt.Identity.Members.Count < ConductorMergeTrainSelector.MinimumCompositionMembers ||
-                    receipt.Identity.Members.Any(member =>
-                        ineligibleGoalIds.Contains(member.GoalId.Value) || !ready.ContainsKey(member.GoalId)))
-                {
-                    continue;
-                }
-                if (!string.Equals(receipt.Identity.ObservedMainRevision, first.MainRevision,
-                        StringComparison.Ordinal))
-                {
-                    onStale(receipt, "main");
-                    continue;
-                }
-                var movedMember = receipt.Identity.Members.FirstOrDefault(member =>
-                    !string.Equals(member.CandidateRevision, ready[member.GoalId].CandidateRevision,
-                        StringComparison.Ordinal));
-                if (movedMember is not null)
-                {
-                    onStale(receipt, $"member:{movedMember.GoalId.Value[..8]}");
-                    continue;
-                }
-                var members = receipt.Identity.Members.Select(member => ready[member.GoalId]).ToArray();
-                if (members.SelectMany((member, index) => members.Skip(index + 1).Select(peer =>
-                        ConductorAcceptanceCohortSelector.PairFingerprint(member, peer)))
-                    .Any(suppressed.Contains))
-                {
-                    continue;
-                }
-                var selection = new ConductorMergeTrainSelection(members);
-                if (!HasCurrentPassedMergeTrainIdentity(selection, receipt))
-                {
-                    continue;
-                }
-                selections.Add((selection, receipt));
-                // Landing this train moves main; every other receipt must be checked next tick.
-                return selections;
-            }
-        }
-        return selections;
+        return PassedMergeTrainReceiptSelector.Find(
+            candidates, ineligibleGoalIds, onStale, onBlocked, observationGoals,
+            receiptObservationGoalIds, resolveReceiptHeads ?? _resolveAcceptanceHeads,
+            (_cohortKernel ?? _conductorTickKernel)?.Goals,
+            _mergeTrainAcceptanceStore.ReadPassedReceiptsForGoal, ReadSuppressedCohortPairs,
+            HasCurrentPassedMergeTrainIdentity);
     }
 
     private bool HasCurrentPassedMergeTrainIdentity(

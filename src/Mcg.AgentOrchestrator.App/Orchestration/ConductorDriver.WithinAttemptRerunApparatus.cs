@@ -18,13 +18,18 @@ internal sealed partial class ConductorDriver
             var partitions = acceptance.RequiredUnmetCriteria
                 .Where(check => check.WithinAttemptRerun is not null)
                 .Select(check => $"{check.Name} ({check.WithinAttemptRerun!.FailedPredicate})");
-            return Escalate(
-                goal, goalPrefix, policy, GoalLifecycleState.Verified,
+            var result = Escalate(goal, goalPrefix, policy, GoalLifecycleState.Verified,
                 $"{WithinAttemptRerunApparatusClassifier.BoundExhaustedToken}: " +
                 $"apparatus regate budget {bound.RegateCount}/{bound.RegateCap} exhausted for " +
                 $"{string.Join(", ", partitions)}; each in-attempt rerun passed. " +
                 "This is an infrastructure failure, not a criteria failure. " +
                 "Repair the apparatus or confirm acceptance-retry; no worker was reopened.");
+            var escalated = (ConductorAdvanceOutcome.Escalated)result.Outcome;
+            return result with { Outcome = escalated with {
+                Decision = AcceptanceApparatusDispositionPolicy.BoundExhausted(
+                    goal.Id.Value, AcceptanceApparatusDisposition.WithinAttemptRerunBoundExhausted, escalated.Reason,
+                    bound.EvidenceKind, bound.RegateCount, bound.RegateCap, bound.TestIdentities,
+                    acceptance.BranchHeadSha, acceptance.MainHeadSha).ToRecord() } };
         }
 
         if (disposition is not ApparatusRedDisposition.Regate regate)
@@ -48,13 +53,12 @@ internal sealed partial class ConductorDriver
             $"{string.Join(", ", regate.TestIdentities)}: the in-attempt rerun passed. " +
             $"Regating on the next conduct tick ({regate.RegateOrdinal}/{regate.RegateCap}); " +
             "no worker was reopened.";
-        return MakeResult(
-            goal.Id.Value, goalPrefix, policy,
-            new ConductorAdvanceOutcome.Held(
-                GoalLifecycleState.Verified,
-                reason,
-                StableIdentity:
-                    $"acceptance-apparatus-rerun-pass:{branchHeadSha ?? "unknown"}:" +
-                    $"{mainHeadSha ?? "unknown"}:{regate.RegateOrdinal}"));
+        return MakeResult(goal.Id.Value, goalPrefix, policy,
+            new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, reason,
+                StableIdentity: $"acceptance-apparatus-rerun-pass:{branchHeadSha ?? "unknown"}:" + $"{mainHeadSha ?? "unknown"}:{regate.RegateOrdinal}")
+            { Decision = AcceptanceApparatusDispositionPolicy.RegateHold(
+                    goal.Id.Value, AcceptanceApparatusDisposition.WithinAttemptRerunRegateHold, reason, branchHeadSha, mainHeadSha,
+                    regate.EvidenceKind, regate.RegateOrdinal, regate.RegateCap, regate.TestIdentities).ToRecord()
+            });
     }
 }

@@ -381,6 +381,7 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
                 continue;
             }
             ValidateBacklogPromotionPrerequisites(context, batchBacklogItem);
+            var batchEpicId = EpicAtCreation.ResolveGoalEpic(context.Workspace, null, batchBacklogItem.Id);
 
             var batchReservation = ReserveBacklogIntake(context, batchItem, forceReclaim);
             if (batchReservation.Kind != BacklogIntakeReservationKind.Acquired)
@@ -401,6 +402,7 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
 
             context.CurrentGoal = batchGoal;
             PersistBacklogIntakeGoal(context, batchItem, batchGoal);
+            EpicAtCreation.AssignAfterCommit(context.Workspace, PortfolioMemberKind.Goal, batchGoal.Id.Value, batchEpicId);
             created++;
             Console.WriteLine(createSimpleGoal
                 ? $"Created simple goal from backlog slice '{batchItem.Heading}'."
@@ -493,6 +495,7 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
         return false;
     }
     ValidateBacklogPromotionPrerequisites(context, sourceBacklogItem);
+    var sourceEpicId = EpicAtCreation.ResolveGoalEpic(context.Workspace, null, sourceBacklogItem.Id);
 
     var reservation = ReserveBacklogIntake(context, item, forceReclaim);
     if (reservation.Kind != BacklogIntakeReservationKind.Acquired)
@@ -520,6 +523,7 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
     }
 
     PersistBacklogIntakeGoal(context, item, context.CurrentGoal);
+    EpicAtCreation.AssignAfterCommit(context.Workspace, PortfolioMemberKind.Goal, context.CurrentGoal.Id.Value, sourceEpicId);
     Console.WriteLine(createSimpleGoal ? "Created simple goal from backlog slice." : "Created goal from backlog slice.");
     if (goalObjectivePlan is not null)
     {

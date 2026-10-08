@@ -5,7 +5,7 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 internal static class CliCommandHelp
 {
     public const string ConductUsage = "Usage: conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>] [--watch [--poll-seconds <n>]], or conduct --loop [--max-iterations <n>] [--max-duration <seconds>] [--watch|--daemon] [--poll-seconds <n>] [--unscoped-stall-ticks <n>]";
-    public const string GoalUsage = "Usage: goal <objective> [--pipeline <auto|scout|five-role|developer-reviewer|developer-only>] [--simple] [--from-backlog] [--run --confirm-batch-start] [--backlog-item <id-prefix> --backlog-coverage <full|slice>] [--request-key <key>] | goal --text-file <path> [--pipeline <auto|scout|five-role|developer-reviewer|developer-only>] [--request-key <key>] | goal --brief-file <path> [--pipeline <auto|scout|five-role|developer-reviewer|developer-only>] [--request-key <key>]";
+    public const string GoalUsage = "Usage: goal <objective> [--pipeline <auto|scout|five-role|developer-reviewer|developer-only>] [--epic <id-or-title>] [--simple] [--from-backlog] [--run --confirm-batch-start] [--backlog-item <id-prefix> --backlog-coverage <full|slice>] [--request-key <key>] | goal --text-file <path> [--pipeline <auto|scout|five-role|developer-reviewer|developer-only>] [--epic <id-or-title>] [--request-key <key>] | goal --brief-file <path> [--pipeline <auto|scout|five-role|developer-reviewer|developer-only>] [--epic <id-or-title>] [--request-key <key>]";
     public const string SimpleGoalUsage = "Usage: simple-goal <objective> [--dispatch --confirm-dispatch-start] [--backlog-item <id-prefix> --backlog-coverage <full|slice>] [--request-key <key>] | simple-goal --text-file <path> | simple-goal --brief-file <path>";
     public const string BacklogIntakeUsage = "Usage: backlog-intake [filter...] [--create-goal|--create-simple-goal] [--force-reclaim] [--pipeline <auto|scout|five-role|developer-reviewer|developer-only>] [--backlog-item <id-prefix> --backlog-coverage <full|slice>] [--request-key <key>]";
     public const string AcceptanceUsage = "Usage: acceptance [goal-id-prefix] [--skip-verify] [--keep-workspace] [--no-record] [--autonomy <policy>]";
@@ -46,7 +46,7 @@ internal static class CliCommandHelp
     public const string ReassignAgentUsage = "Usage: reassign-agent <task-number> <agent-id>|<goal-prefix> <task-number> <agent-id>|--goal <goal-prefix> <task-number> <agent-id>";
     public const string BacklogListUsage = "Usage: backlog-list [--all] [--limit <n>] [--status <value>] [--text <pattern>|--text=<leading-dash-pattern>]";
     public const string BacklogTriageUsage = "Usage: backlog-triage [--limit <n>] [--stale-days <n>]";
-    public const string BacklogAddUsage = "Usage: backlog-add <title> [body] [--depends-on <id-prefix>] [--no-similar] | backlog-add --title <title> [--text-file <path>|--body-file <path>] [--depends-on <id-prefix>] [--no-similar] | backlog-add <title> --text-file <path> [--depends-on <id-prefix>] [--no-similar] | backlog-add <title> --body-file <path> [--depends-on <id-prefix>] [--no-similar]";
+    public const string BacklogAddUsage = "Usage: backlog-add <title> [body] [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar] | backlog-add --title <title> [--text-file <path>|--body-file <path>] [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar] | backlog-add <title> --text-file <path> [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar] | backlog-add <title> --body-file <path> [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar]";
     public const string BacklogUpdateUsage = "Usage: backlog-update <id-prefix> [--title <text>] [--description <text> | --text-file <path> | --body-file <path>] [--priority <value>] [--tags <csv>] [--status <open|done|superseded>]";
     public const string BacklogShowUsage = "Usage: backlog-show <id-prefix>";
     public const string BacklogAnnotateUsage = "Usage: backlog-annotate <id-prefix> <note> | backlog-annotate <id-prefix> --text-file <path>";
@@ -84,7 +84,7 @@ internal static class CliCommandHelp
     public const string LaneReuseShadowUsage = "Usage: lane-reuse-shadow [--since <ISO-8601>] [--until <ISO-8601>] [--json]";
     public const string RemoteExecutorsUsage = "Usage: remote-executors [--since <ISO-8601>] [--last <N>] [--json]";
     public const string RemoteLaneSelfTestUsage = "Usage: remote-lane-selftest --executor <id> [--timeout-minutes <n>]";
-    public const string RoundValueUsage = "Usage: round-value [--since <ISO-8601-with-offset>] [--until <ISO-8601-with-offset>] [--json] [--by-skill] [--baseline-since <ISO-8601-with-offset> --baseline-until <ISO-8601-with-offset>]";
+    public const string RoundValueUsage = "Usage: round-value [--since <ISO-8601-with-offset>] [--until <ISO-8601-with-offset>] [--json] [--by-skill] [--by-check] [--baseline-since <ISO-8601-with-offset> --baseline-until <ISO-8601-with-offset>]";
     public const string LessonUsage = "Usage: lesson record --situation <text> --rule <text> --evidence <ref>... [--applies-to <tag>...] [--goal <goal-prefix>] [--until-goal <goal-prefix>] [--actor-kind human|agent] | lesson retire <lesson-id> --reason <text> [--evidence <ref>...]";
     public const string LessonsUsage = "Usage: lessons [--all] [--applies-to <tag>] [--json]";
     public const string EscapeUsage = "Usage: escape record --goal <landed-goal-prefix> --reason <text> --evidence <ref>... [--found-by-goal <goal-prefix>] [--actor-kind human|agent]";
@@ -123,7 +123,7 @@ internal static class CliCommandHelp
     private static readonly string[] GoalOwnFlags =
     [
         "--pipeline", "--simple", "--from-backlog", "--run", "--confirm-batch-start",
-        "--backlog-item", "--backlog-coverage", "--request-key", "--text-file", "--brief-file",
+        "--backlog-item", "--backlog-coverage", "--request-key", "--text-file", "--brief-file", "--epic",
         ..GoalRoleOverrideFlags,
         ..HelpFlags
     ];
@@ -208,6 +208,11 @@ internal static class CliCommandHelp
         GoalBoardUsage,
         "Show the read-only operational goal board for takeover and loop supervision.",
         ["--board", "--limit", "--all", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry Goals = new(
+        "Usage: goals [--epic <id-or-title>]",
+        "List goals, optionally restricted to members of an epic.",
+        ["--epic", "--help", "-h"]);
 
     private static readonly CommandHelpEntry AddTask = new(
         AddTaskUsage,
@@ -386,7 +391,7 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry BacklogAdd = new(
         BacklogAddUsage,
         "Add a backlog item. Prints advisory similarity pointers unless suppressed.",
-        ["--title", "--text-file", "--body-file", "--depends-on", "--no-similar", "--help", "-h"]);
+        ["--title", "--text-file", "--body-file", "--depends-on", "--no-similar", "--epic", "--help", "-h"]);
 
     private static readonly CommandHelpEntry BacklogUpdate = new(
         BacklogUpdateUsage,
@@ -450,7 +455,7 @@ internal static class CliCommandHelp
 
     private static readonly CommandHelpEntry EpicShow = new(
         EpicShowUsage,
-        "Show an epic's description, members and rollup.",
+        "Show an epic's description, members and progress rollup, followed by goal status, last update and title; in-flight goals come first.",
         ["--help", "-h"]);
 
     private static readonly CommandHelpEntry EpicRename = new(
@@ -475,7 +480,7 @@ internal static class CliCommandHelp
 
     private static readonly CommandHelpEntry EpicList = new(
         EpicListUsage,
-        "List epics with membership and state rollups.",
+        "List epics with every goal status bucket and open/done backlog counts; newest is the latest member-goal metadata update (UpdatedAt).",
         ["--help", "-h"]);
 
     private static readonly CommandHelpEntry EpicMembers = new(
@@ -585,7 +590,7 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry RoundValue = new(
         RoundValueUsage,
         "Report productive, expected overhead and wasted rounds by terminal goal cohort; default window is 7 days.",
-        ["--since", "--until", "--json", "--by-skill", "--baseline-since", "--baseline-until", "--help", "-h"]);
+        ["--since", "--until", "--json", "--by-skill", "--by-check", "--baseline-since", "--baseline-until", "--help", "-h"]);
 
     private static readonly CommandHelpEntry Lesson = new(
         LessonUsage,
@@ -739,7 +744,7 @@ internal static class CliCommandHelp
         {
             "--text", "--request-key", "--brief-file", "--text-file", "--ids-file", "--pipeline",
             "--backlog-item", "--backlog-coverage", "--ideation", "--researcher", "--planner",
-            "--developer", "--tester", "--reviewer", "--wait"
+            "--developer", "--tester", "--reviewer", "--wait", "--epic"
         };
 
     public static bool TryPrintStartupHelp(IReadOnlyList<string> args)
@@ -773,7 +778,7 @@ internal static class CliCommandHelp
         Console.WriteLine("  author-draft      Draft a checked goal brief from a backlog item.");
         Console.WriteLine("  goal-intake-status Poll keyed goal creation status.");
         Console.WriteLine("  goal-replace      Replace an eligible terminal source-linked goal.");
-        Console.WriteLine("  goals             List goals.");
+        Console.WriteLine("  goals             List goals [--epic <id-or-title>].");
         Console.WriteLine("  status            Show goal or orchestrator status.");
         Console.WriteLine("  attention         List or answer operator attention items.");
         Console.WriteLine("  backlog-list      List backlog items.");
@@ -930,6 +935,12 @@ internal static class CliCommandHelp
         if (IsGoalsSubscribeHelpTarget(args))
         {
             entry = GoalsSubscribe;
+            return true;
+        }
+
+        if (args[0].Equals("goals", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = Goals;
             return true;
         }
 

@@ -43,7 +43,7 @@ internal static class OwnerConsoleVerb
                 .RunAsync(cancellationToken);
             return 0;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or TimeoutException)
         {
             System.Console.Error.WriteLine($"Error: {ex.Message}");
             return 1;
@@ -52,6 +52,15 @@ internal static class OwnerConsoleVerb
 
     private sealed class EmptyStateQueries : IOrchestratorStateQueries
     {
+        public Task<IReadOnlyList<Mcg.AgentOrchestrator.Core.HumanInputRequestSnapshot>> ListOpenHumanInputRequestsAsync(
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<Mcg.AgentOrchestrator.Core.HumanInputRequestSnapshot>>([]);
+
+        public Task<IReadOnlyList<TerminalOwnerQuestionHold>> ListTerminalOwnerQuestionHoldsAsync(
+            IReadOnlyCollection<Mcg.AgentOrchestrator.Core.GoalId> goalIds,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<TerminalOwnerQuestionHold>>([]);
+
         public Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<GoalSummary>>([]);
 

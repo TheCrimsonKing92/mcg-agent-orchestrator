@@ -23,7 +23,11 @@ internal sealed record ConductorMergeTrainRunResult(
     MergeTrainReceipt? Receipt,
     IReadOnlyDictionary<string, ConductorAdvanceResult> MemberResults,
     IReadOnlyList<MergeTrainEjection> Ejections,
-    string Detail);
+    string Detail)
+{
+    // The last recorded gate receipt is separate from the passed receipt eligible for landing.
+    internal MergeTrainReceipt? RecordedReceipt { get; init; } = Receipt;
+}
 
 internal static class ConductorMergeTrainSelector
 {

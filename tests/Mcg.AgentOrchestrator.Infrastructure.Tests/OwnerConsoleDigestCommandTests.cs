@@ -5,10 +5,13 @@ public sealed class OwnerConsoleDigestCommandTests
     {
         var harness = new OwnerConsoleHarness();
 
-        await harness.Session().HandleCommandAsync("digest", CancellationToken.None);
+        await harness.Session().HandleCommandAsync("metrics", CancellationToken.None);
 
         Assert.Equal(1, harness.DigestReport.Calls);
         var lines = harness.Output.Text.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        // This fact checks report content/order; OwnerConsoleTimeLabelTests checks its time prefix.
+        lines[0] = lines[0].Replace(FormattableString.Invariant($"[{harness.Clock.GetLocalNow():HH:mm:ss}] "),
+            string.Empty, StringComparison.Ordinal);
         Assert.Equal(new[] { "digest first", "digest second", "digest third" }, lines);
     }
 

@@ -8,7 +8,8 @@ public sealed record DeferredNoChangeEvidenceEntry(
     IReadOnlyList<string> Selections,
     IReadOnlyList<string> NotRun,
     string? ResultPath,
-    IReadOnlyList<string> FailingTests);
+    IReadOnlyList<string> FailingTests,
+    IReadOnlyList<string>? Declared = null);
 
 public static class DeferredNoChangeEvidenceIndexLines
 {
@@ -22,10 +23,15 @@ public static class DeferredNoChangeEvidenceIndexLines
             $"candidate_sha={entry.CandidateSha}; receipt_id={entry.ReceiptId}; " +
             $"selections={Encode(entry.Selections)}; not_run={Encode(entry.NotRun)}; " +
             $"result_path={Uri.EscapeDataString(entry.ResultPath ?? "none")}; " +
-            $"failing_tests={Encode(entry.FailingTests)}";
+            $"failing_tests={Encode(entry.FailingTests)}" +
+            (entry.Declared is null ? string.Empty : $"; declared={Encode(entry.Declared)}");
     }
 
     public static DeferredNoChangeEvidenceEntry? Latest(Goal goal, TaskId developerTaskId, string candidateSha)
+        => Latest(goal, developerTaskId, candidateSha, null);
+
+    public static DeferredNoChangeEvidenceEntry? Latest(
+        Goal goal, TaskId developerTaskId, string candidateSha, IReadOnlyList<string>? declaredClasses)
     {
         foreach (var evt in goal.Timeline.Reverse())
         {
@@ -47,11 +53,24 @@ public static class DeferredNoChangeEvidenceIndexLines
                     : [];
             fields.TryGetValue("receipt_id", out var receipt);
             fields.TryGetValue("result_path", out var path);
-            return new DeferredNoChangeEvidenceEntry(
+            var entry = new DeferredNoChangeEvidenceEntry(
                 outcome, developerTaskId, sha, receipt ?? "none", Values(fields, "selections"),
                 Values(fields, "not_run"), path == "none" ? null : Uri.UnescapeDataString(path ?? string.Empty),
-                Values(fields, "failing_tests"));
+                Values(fields, "failing_tests"), fields.ContainsKey("declared") ? Values(fields, "declared") : null);
+            if (declaredClasses is null || MatchesDeclaration(entry, declaredClasses)) return entry;
         }
         return null;
+    }
+
+    private static bool MatchesDeclaration(DeferredNoChangeEvidenceEntry entry, IReadOnlyList<string> declaredClasses)
+    {
+        static HashSet<string> ClassSet(IEnumerable<string> names) => names.Select(name => name.Trim())
+            .Where(name => name.Length > 0).ToHashSet(StringComparer.Ordinal);
+        var declared = ClassSet(declaredClasses);
+        // Preserve the coverage comparison for legacy lines that have no recorded declaration.
+        return entry.Declared is not null
+            ? ClassSet(entry.Declared).SetEquals(declared)
+            : entry.Selections.Count == declared.Count && declared.All(name => entry.Selections.Any(selection =>
+                selection.EndsWith(":" + name, StringComparison.OrdinalIgnoreCase)));
     }
 }

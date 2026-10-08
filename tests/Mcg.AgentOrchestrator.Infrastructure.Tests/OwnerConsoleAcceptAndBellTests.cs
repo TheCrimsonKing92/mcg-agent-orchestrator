@@ -11,7 +11,7 @@ public sealed class OwnerConsoleAcceptAndBellTests
         var session = harness.Session();
 
         await session.StartAsync(null, CancellationToken.None);
-        Assert.StartsWith("Owner digest: landed=2", harness.Output.Text);
+        Assert.StartsWith(ConsoleAnnouncementFormatter.Format(harness.Clock, "Owner digest: landed=2"), harness.Output.Text);
         Assert.Empty(harness.Answers.Calls);
         harness.Questions.Items.Add(new OwnerQuestion("wait-1", goal.Id.Value,
             OwnerQuestionKind.HumanInput, "Ship it?", ProposedDefault: "ship it"));

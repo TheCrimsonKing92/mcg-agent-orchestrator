@@ -5,7 +5,7 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static partial class ConsoleViews
 {
-    public static void PrintEpicRollups(IReadOnlyList<PortfolioEpicRollup> rollups)
+    public static void PrintEpicRollups(IReadOnlyList<EpicProgressRollup> rollups)
     {
         if (rollups.Count == 0)
         {
@@ -17,13 +17,13 @@ internal static partial class ConsoleViews
             Console.WriteLine(FormatEpicRollupLine(row));
     }
 
-    internal static string FormatEpicRollupLine(PortfolioEpicRollup row)
+    internal static string FormatEpicRollupLine(EpicProgressRollup row)
     {
         var project = row.Project is null ? "unassigned" : $"{row.Project.Title} ({ShortId(row.Project.Id)})";
-        return $"{row.Epic.Title} ({ShortId(row.Epic.Id)}) project={project} goals={row.GoalCount} backlog={row.BacklogItemCount} active={row.ActiveCount} verified={row.VerifiedCount} parked={row.ParkedCount} landed={row.LandedCount} newest={FormatTimestamp(row.NewestTransitionAt)}";
+        return $"{row.Epic.Title} ({ShortId(row.Epic.Id)}) project={project} goals={row.GoalCount} backlog={row.BacklogItemCount} active={row.ActiveCount} verified={row.VerifiedCount} parked={row.ParkedCount} landed={row.LandedCount} newest={FormatTimestamp(row.NewestUpdatedAt)} verifying={row.VerifyingCount} failed={row.FailedCount} closed={row.ClosedCount} missing={row.MissingCount} backlog-open={row.BacklogOpenCount} backlog-done={row.BacklogDoneCount}";
     }
 
-    public static void PrintEpicShow(PortfolioEpicRollup row, IReadOnlyList<PortfolioEpicMember> members)
+    public static void PrintEpicShow(EpicProgressRollup row)
     {
         Console.WriteLine($"Epic: {row.Epic.Title}");
         Console.WriteLine($"Id: {row.Epic.Id}");
@@ -37,8 +37,11 @@ internal static partial class ConsoleViews
             while (reader.ReadLine() is { } line)
                 Console.WriteLine($"  {line}");
         }
-        PrintEpicMembers(row.Epic, members);
+        PrintEpicMembers(row.Epic, row.Members);
         Console.WriteLine(FormatEpicRollupLine(row));
+        Console.WriteLine("Member goals:");
+        foreach (var member in row.MemberGoals)
+            Console.WriteLine($"  - {ShortId(member.Id)} {member.Status} updated={FormatTimestamp(member.UpdatedAt)} {member.Title}");
     }
 
     public static void PrintEpicMembers(PortfolioEpic epic, IReadOnlyList<PortfolioEpicMember> members)

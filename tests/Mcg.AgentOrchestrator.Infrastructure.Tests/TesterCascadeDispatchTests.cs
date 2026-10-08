@@ -219,7 +219,8 @@ public sealed class TesterCascadeDispatchTests : WorkerDispatchTestSupport
                 f.Kernel.RetryTask(goal.Id, task.Id, "Mechanical recheck.", RetryCause.NewSourceFinding, retryRoundKind: RetryRoundKind.Mechanical);
             var workingDirectory = GoalWorktrees.Ensure(f.Root, goal.Id);
             WorkerProfileDispatcher.PrepareSubscriptionTask(f.Kernel, goal, task, [agent], WorkerProfileCatalog.Default(),
-                f.Workspace.PromptDirectory, workingDirectory, f.At, sandboxOptions: Sandbox, commandExists: _ => true);
+                f.Workspace.PromptDirectory, workingDirectory, f.At, sandboxOptions: Sandbox, commandExists: _ => true,
+                claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli);
             var dispatch = task.LastDispatch!;
             Assert.Equal(role == AgentRole.Tester ? agent.Subscription!.WorkerProfileName : agent.Subscription!.WorkerProfileName, dispatch.WorkerName);
             Assert.Equal(role == AgentRole.Tester ? agent.Subscription!.ModelAlias : agent.Subscription!.ModelAlias, dispatch.ModelName);
@@ -290,7 +291,8 @@ public sealed class TesterCascadeDispatchTests : WorkerDispatchTestSupport
 
         internal void Prepare(WorkerProfileCatalog? profiles = null) => WorkerProfileDispatcher.PrepareSubscriptionTask(
             Kernel, Goal, Task, Agents, profiles ?? WorkerProfileCatalog.Default(), Workspace.PromptDirectory, WorkingDirectory,
-            At.AddMinutes(_round++ * 10), sandboxOptions: Sandbox, commandExists: _ => true);
+            At.AddMinutes(_round++ * 10), sandboxOptions: Sandbox, commandExists: _ => true,
+            claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli);
         internal void Verify(string output, int exit = 0, string? rule = null) => Kernel.RecordTaskVerification(Goal.Id, Task.Id,
             new TaskVerificationRecord("verify", Root, exit, output, "", At.AddMinutes(_round * 10 - 5), CompletionVerdictRule: rule));
         internal void Fail(string message) => Kernel.ReportTaskProgress(Goal.Id, Task.Id, WorkTaskStatus.Failed, message);
