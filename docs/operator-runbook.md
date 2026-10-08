@@ -649,6 +649,22 @@ Intervention kinds are `config-flag`, `policy`, `brief-or-prompt-change`, `model
 
 Apply or revert the intervention manually, then record the result once with `experiment-decide <experiment> --outcome <confirmed|refuted|inconclusive> --evidence <reference> --action <text>`. Both evidence and action are required. A decided outcome cannot be replaced, and showing never changes it. These verbs write only the experiment store and read goal state without taking a writer transaction. Delete a scratch spec after add; its durable copy is in the experiment store. Recording the brief-preamble trial is a post-landing Operator step.
 
+### Provider profiles, dispatch sandboxes, and goal worktrees
+
+These operating details and validation receipts were moved from AGENTS.md. Dated validation describes the recorded check; verify current profiles before dispatch.
+
+Task descriptions also drive complexity classification: start inspection work with `Summarize `/`Report `/`Inspect ` and avoid risk keywords (auth, migration, rollback) unless the task genuinely carries that risk.
+
+Goals that touch files should get an isolated workspace: `workspace create` adds a git worktree under `.orchestrator-worktrees/<goal-prefix>` on branch `goal/<goal-prefix>`, and dispatches/verifications for that goal then run there instead of the shared repository root. `acceptance` fast-forwards the goal branch automatically when possible and prints the manual merge command otherwise; `workspace remove` cleans up after merge. Worktrees contain committed files only - uncommitted config does not ride along.
+
+Anthropic subscription work goes through the `claude-cli` profile (claude CLI in print mode), validated end-to-end 2026-06-10. Two requirements: the model must be a valid claude CLI name (full ids like `claude-sonnet-4-6` or CLI aliases `sonnet`/`haiku`/`opus`; the old default `claude-sonnet` is rejected with exit 1), and the command must carry a permission mode — without one, print-mode claude denies every file edit, replies BLOCKED, and still exits 0, which the exit-code auto-pass records as a completed task. The default profile carries both, profile repair upgrades stale saved catalogs, and the patch-capability gate refuses Developer dispatch through permission-less claude templates. Claude resolves relative paths from the dispatch working directory correctly (no absolute-path requirement like qwen).
+
+OpenAI subscription work goes through the `codex-cli` profile. On a ChatGPT account, codex accepts only `gpt-5.5`; `gpt-5.3-codex` and `gpt-5.5-codex` are rejected with 400 (validated 2026-06-11). Built-in defaults use gpt-5.5 and stale saved catalogs repair on load. There is no CLI surface for a custom subscription alias — `agent <role> <provider> <model>` reapplies the built-in default; hand-edit the workspace `agents.json` if a custom alias is needed.
+
+Dispatch sandboxes resolve by task role (2026-06-11): the templates carry `{sandboxMode}`/`{permissionMode}` placeholders, and Developer/Tester dispatches expand to codex `workspace-write` / claude `bypassPermissions` while Planner/Researcher/Reviewer expand to `read-only` / `plan`. Non-implementation roles cannot modify the worktree; their prompt requirements state this too. (Enforced in code/tests; first live pipeline validation still pending.)
+
+Local-model file work uses `qwen-code-cli` as the harness (how) against LlamaCpp `llama-server` at `http://127.0.0.1:8080/v1` (what). The profile takes `{openaiBaseUrl}` / `{openaiApiKey}` from the selected provider, `{approvalMode}` from the role (`yolo` for Developer/Tester, `plan` for read-only roles including Ideation), and `--bare` so the startup prompt fits a 16k server context (default qwen-code at repo root is ~25728 tokens and 400s). Thinking must be disabled via the repo's `.qwen/settings.json` (`generationConfig.reasoning: false` per model). Task briefs should state absolute target paths because qwen-code's write tool rejects relative paths. qwen-code rewrites `.qwen/settings.json` at exit with its startup view — never hand-edit that file while a qwen process is running. Start the backend with `.\scripts\Start-LlamaServer.ps1` (do not pass `-ot` through `Invoke-RepoScript.ps1`; `;` splits the tensor override). Default context is 16384.
+
 ### Changing which model a role uses
 
 `agent <role> <provider> <model> [name]` replaces the role's primary agent. `agent-add <role> <provider> <model> [name]` adds a second entry at `route=alternate` with a derived id, leaving the primary in place — that is the right verb when you want one goal's task moved to a different model via `reassign-agent` without switching the whole role.
@@ -707,11 +723,49 @@ For rare lifecycle/task desync repair, `scripts\Set-OrchestratorGoalStatus.ps1` 
   ### Managed test filter syntax
 
   `Invoke-TestSummary.ps1 -Filter` accepts a bounded Boolean grammar: `FullyQualifiedName~Class`, `FullyQualifiedName!~Class`, `Name~Method`, `Name!~Method`, and `Category!=Trait`. Use `|` only for positive alternatives of the same predicate kind, use `&` between representable clauses of different kinds or exclusions, and use parentheses for grouping; `&` binds more tightly than `|`. Current manifest filters that refine one class alternative with a nested class exclusion are also supported. Expressions a single managed-runner invocation cannot represent—such as `FullyQualifiedName~A|Name~B`, `FullyQualifiedName~A&FullyQualifiedName~B`, or a negative predicate under `|`—terminate before build, discovery, or execution with `MTP test filter '<expression>' is unsupported: <specific construct> Supported syntax: ...`; no TRX is produced. `Name` matches the method symbol. Display text shown by a test framework is not a method symbol, so `DisplayName` is rejected; use `Name` or `FullyQualifiedName` rather than copying display text from test output.
-- **Provider requirements:** `claude-cli` needs a valid model id (`claude-sonnet-4-6`/`sonnet`/`haiku`/`opus`) **and** a permission mode (the default profile carries both). `codex-cli` on a ChatGPT account accepts `gpt-5.5`. API runs (`run`/`api-run`) have **no file access** — embed needed data in the task description.
+- **Provider requirements:** `claude-cli` needs a valid model id (`claude-sonnet-4-6`/`sonnet`/`haiku`/`opus`) **and** a permission mode (the default profile carries both). `codex-cli` on a ChatGPT account accepts `gpt-5.5`. API runs (`run`/`api-run`) have **no file access** — embed needed data in the task description, and route file-touching work through subscription dispatches.
 - **The brief is the unverified root of trust.** The gates verify "output matched the spec," never "was the spec right." A sloppy brief lands a plausible-but-wrong implementation on green tests. Specify external contracts (happy *and* unhappy path), observable success, ownership/lifecycle, and the verification class before dispatch.
 - **Shared-service changes ripple to integration tests.** A brief that changes a widely-consumed service (the failure classifier, the binding resolver, a kernel API) must require the worker to find that service's consumers (a call-site / reverse-dependency search) and run the **dependent integration tests** (e.g. `RunGoalService_*`) in self-verify — not just the changed file's own unit tests. Otherwise the ripple is caught only by the full-suite acceptance gate, costing a Developer-retry cycle. Observed 2026-06-25: two lanes changing `DispatchFailureClassifier` and the binding resolver both escalated at acceptance on `RunGoalService_*` because their briefs scoped self-verify too narrowly.
 - **Reproduce before you theorize.** When an external CLI/model/tool fails, run the smallest reproducing command before concluding a cause.
 - **Retire terminal ghosts durably.** `goal-mark-landed` now writes a retired terminal disposition after out-of-band landing, and terminal sweeps suppress standing retired dispositions. Once 4f970f1d lands, `abandon-goal` will do the same for abandoned goals; until then, treat abandon retirement as in progress rather than guaranteed.
+
+### Manual verbs and subscription execution checks
+
+- **Build/test processes:** `Directory.Build.props` (`UseSharedCompilation=false`) + `Directory.Build.rsp` (`-nodeReuse:false`) disable the Roslyn/MSBuild build servers REPO-WIDE and prevent the old CS2012 lock-holding daemons.
+- At a landing, the conductor records the dogfood entry in `.orchestrator/dogfood-log.db`; you still close the finished backlog item (`backlog-close`) and add newly discovered ones (`backlog-add`).
+
+**Manual lower-level verbs (fallback / granular control only — prefer `conduct --loop`):** `subscription-dispatch <n>` → `start-dispatch <n> --confirm-dispatch-start` (the cost guard blocks ONLY on an *anomalous* prompt — disproportionate to task complexity, ≥2× the per-complexity ceiling, or batch total ≥2× the batch ceiling; routine/legitimately-large Complex briefs proceed silently, so `--confirm-large-paid-subscription-start` is needed only when a genuinely bloated prompt trips it) → wait on the printed pid → `refresh-dispatch <n>` → operator gate → `accept`. `acceptance`/`accept` fast-forwards only when main has not advanced mid-goal; otherwise run the printed merge on a scratch verification branch first, then land on `main` only once the evidence is acceptable. Direct `acceptance` also has a known state-guard caveat; follow the runbook's stuck-goal guidance before invoking or retrying it. ApiOnly tasks (e.g. the local Reviewer) run via `run <n>` with no file access — output reflects prompt text, not branch state; close HUMAN_INPUT with `answer <request-id> --text-file <path>`, then `verify-manual <n> passed --text-file <path>`. To put an operator note into an undispatched task's brief, use `progress <n> running --text-file <path>` → `progress <n> failed --text-file <path>` → `retry <n> --text-file <path>`.
+
+When the task involves subscription/dogfood execution:
+
+- Verify worker profiles before starting subscription tasks.
+- Treat `Write-Output {promptPath}` profiles as echo-only, not real execution.
+- After dispatch, confirm evidence, process logs, exit code, and verification records; never trust task status alone.
+- When credits are constrained, inspect existing continuations/evidence/logs and cancel stale work before starting new agents.
+
+### Guidance receipts
+
+Historical examples moved from worker guidance are retained here under their source topics.
+
+**Dispositive decisions — outcomes chosen after discriminating evidence was discarded upstream:** Five instances of this shipped in a single day.
+
+**Architecture & Design Discipline — modeling a judge as a worker role:** It was first hacked in as `AgentRole.Judge` and immediately required an `AgentRoles.Worker` exclusion set everywhere roles are enumerated; that churn was the tell.
+
+**Architecture & Design Discipline — registry ownership:** `config/acceptance-manifest.json` is the worked example: it names every test class in literal lane-filter strings, and `AcceptanceGateEngineSettingsTests` restates the whole manifest again as a hardcoded census of lane names and durations. On 2026-08-14 three goals blocked on that one file, two of them within ten minutes of a single landing — and the landing that caused both was a **deletion** goal, not a decomposition one: removing dead production code removed its test classes, which required editing lane filters. Any goal that adds, removes, renames, or relocates a test touches it. Sequencing the decomposition goals against each other did not help, because the collision arrived from a third goal nobody had sequenced against.
+
+**Architecture & Design Discipline — control signals:** (Scar: backlog `0624e65d`.)
+
+**Architecture & Design Discipline — serial fraction:** Receipt (2026-08-13): the acceptance gate ran 17 shards in 798s wall, but its longest single shard was 473s and its shortest 28s — a 17x spread, so 473s is the floor at any width, and the two slowest were slow because they were *serialized by collection attributes*, not because they were large. Splitting those files would have bought nothing; making them hermetic is the only thing that moves the floor. Measure before prescribing: that spread was invisible until per-shard elapsed times were read out of the event stream.
+
+**Specification Discipline — observable integration:** (the Discord listener that deleted its own forum post compiled and passed fake-API tests; the gateway built but never hosted; `postResult` left optional so the operator saw nothing)
+
+**Specification Discipline — external contracts:** (Discord interaction-ack semantics were unspecified → improvised wrongly.)
+
+**Diagnosis Discipline — empirical reproduction:** A web search said `gpt-5.3-codex-spark` was "exec-restricted on ChatGPT accounts" and the outcome scorecard rated it Avoid (0 completed / 2 failed); both were misleading. A single ~17-second `codex exec --model gpt-5.3-codex-spark ... </dev/null` proved spark works fine and isolated the real bug: the judge runner never closed the child's stdin, so codex blocked forever on "Reading additional input from stdin…" → 180s timeout. One empirical test turned "unsalvageable" into a two-line fix (`RedirectStandardInput=true` + `StandardInput.Close()`).
+
+**Diagnosis Discipline — ambient causes:** Worked example: a Tester's test command returned exit 124 and it was blamed on resource pressure; the worker `.err.log` proved a codex ~124-second tool-call timeout killed a build+test run bundled into one command — a specific, fixable mechanism, not an ambient condition.
+
+**Safety — firewall:** (root cause and one-time setup: DOGFOOD_LOG 2026-06-11 firewall entry)
 
 ---
 
