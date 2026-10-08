@@ -38,7 +38,7 @@ internal static class CliTaskQueryCommand
         // Preserve the dispatcher's validation order: help is handled first, then invalid flags
         // fail before any goal resolution or repository read.
         CliCommandHelp.ThrowIfInvalidFlags(args);
-        var metadata = stateQueries.ListGoalMetadataAsync().GetAwaiter().GetResult();
+        var metadata = stateQueries.ListGoalMetadataAsync(includeTerminalCreatedAt: true).GetAwaiter().GetResult();
         var target = ResolveTarget(args, stateQueries, metadata, currentGoal);
         ExecuteAgainstKernelAndCommitCurrentGoal(
             target.DispatchArgs,

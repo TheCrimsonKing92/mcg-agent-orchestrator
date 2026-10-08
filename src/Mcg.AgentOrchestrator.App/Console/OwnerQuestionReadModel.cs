@@ -12,9 +12,12 @@ internal sealed class OwnerQuestionReadModel(
     public async Task<IReadOnlyList<OwnerQuestion>> ListOpenAsync(CancellationToken cancellationToken) =>
         (await ReadAsync(cancellationToken)).Live;
 
-    public async Task<OwnerQuestionSnapshot> ReadAsync(CancellationToken cancellationToken)
+    public async Task<OwnerQuestionSnapshot> ReadAsync(CancellationToken cancellationToken) =>
+        await ReadAsync(await state.ListGoalMetadataAsync(cancellationToken), cancellationToken);
+
+    internal async Task<OwnerQuestionSnapshot> ReadAsync(
+        IReadOnlyList<GoalSummary> metadata, CancellationToken cancellationToken)
     {
-        var metadata = await state.ListGoalMetadataAsync(cancellationToken);
         var terminal = metadata.Where(item => IsTerminal(item.Status)).ToArray();
         var ids = metadata.Where(item => !IsTerminal(item.Status)).Select(item => new GoalId(item.Id)).ToArray();
         var requests = await state.ListOpenHumanInputRequestsAsync(cancellationToken);
