@@ -29,12 +29,14 @@ public sealed class OwnerConsoleFullScreenPaneTests
         Assert.Contains(selected.Id.Value, detail.Text);
         Assert.Contains("Second goal", detail.Text);
         Assert.Contains(selected.Status.ToString(), detail.Text);
-        Assert.Contains("stage: Tester", detail.Text);
-        Assert.Contains("newest event for " + selected.Id.Value, detail.Text);
-        Assert.Equal((selected.Id.Value, 15), Assert.Single(tail.Calls));
+        Assert.Contains("Stage: Tester", detail.Text);
+        Assert.Contains("Recent events: none", detail.Text);
+        Assert.DoesNotContain("newest event for " + selected.Id.Value, detail.Text);
+        Assert.Equal((selected.Id.Value, 10), Assert.Single(tail.Calls));
 
         await controller.RunCommandAsync(":goal " + selected.Id.Value);
-        Assert.Equal(detail.Text, dialogs.Texts[1].Text);
+        Assert.Contains("newest event for " + selected.Id.Value, dialogs.Texts[1].Text);
+        Assert.Equal((selected.Id.Value, 15), tail.Calls[1]);
         await view.HandleKeyAsync(Key.CursorUp);
         Assert.Equal("11111111-first", view.SelectedGoalId);
         Assert.Empty(harness.Answers.Calls);

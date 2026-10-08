@@ -1,0 +1,190 @@
+using System.Text.Json;
+using Mcg.AgentOrchestrator.App.OwnerConsole;
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
+using Terminal.Gui.App;
+
+// Parallel-safe: lifecycle files belong to a unique temporary directory; GUI instances are headless.
+public sealed class OwnerConsoleGoalStageActivityTests
+{
+    [Fact]
+    public async Task LifecycleAndConductEvents_ShowFourTransitionsAndHideNoise()
+    {
+        var harness = new OwnerConsoleHarness();
+        var goal = harness.Kernel.CreateGoal(new GoalId("11111111-stage"), "# Console stages",
+            [new(TaskId.New(), "Build", AgentRole.Developer), new(TaskId.New(), "Test", AgentRole.Tester)]);
+        harness.Kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var directory = Path.Combine(Path.GetTempPath(), "owner-lifecycle-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var time = DateTimeOffset.UnixEpoch;
+            var file = Path.Combine(directory, goal.Id.Value + ".jsonl");
+            File.WriteAllLines(file,
+            [
+                Lifecycle(time, "TaskDispatched", goal.Tasks[0].Id.Value),
+                Lifecycle(time.AddSeconds(1), "FindingEvidenceRequestRecorded", goal.Tasks[1].Id.Value)
+            ]);
+            var tail = new OwnerGoalLifecycleTail(directory);
+            var events = tail.ReadNew([goal.Id.Value]).ToList();
+            Assert.Equal(2, events.Count);
+            events.AddRange([
+                new(time.AddSeconds(2), "acceptance", "11111111", "ACCEPTANCE goal=11111111 result=passed"),
+                new(time.AddSeconds(3), "loop-relaunch", goal.Id.Value, "LOOP_RELAUNCH_SCHEDULED goal=" + goal.Id.Value),
+                new(time.AddSeconds(4), "goal", goal.Id.Value, "GOAL result=held reason=waiting"),
+                new(time.AddSeconds(5), "gate-progress", goal.Id.Value, "heartbeat"),
+                new(time.AddSeconds(6), "EVIDENCE_START", goal.Id.Value, "evidence"),
+                new(time.AddSeconds(7), "sweep-owned-root-observed", goal.Id.Value, "observed")
+            ]);
+            using var app = Terminal.Gui.App.Application.Create();
+            using var view = View(app, harness);
+            view.Render(await Builder(harness).BuildAsync(new(time, time, events, 0)));
+
+            Assert.Equal(new[]
+            {
+                $"{time.AddSeconds(3).ToLocalTime():HH:mm:ss} 11111111 Console stages landed",
+                $"{time.AddSeconds(2).ToLocalTime():HH:mm:ss} 11111111 Console stages gate passed",
+                $"{time.AddSeconds(1).ToLocalTime():HH:mm:ss} 11111111 Console stages Tester finished: finding raised",
+                $"{time.ToLocalTime():HH:mm:ss} 11111111 Console stages Developer started"
+            }, view.ActivityLines);
+
+            Assert.Empty(tail.ReadNew([goal.Id.Value]));
+            File.AppendAllText(file, Lifecycle(time.AddSeconds(8), "TaskCompleted", goal.Tasks[0].Id.Value) + "\n");
+            var increment = Assert.Single(tail.ReadNew([goal.Id.Value]));
+            Assert.Equal(time.AddSeconds(8), increment.Timestamp);
+            Assert.Empty(tail.ReadNew([goal.Id.Value]));
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+
+    [Fact]
+    public async Task RelaunchEvents_RenderLandingRestartAndFailureInWords()
+    {
+        var harness = new OwnerConsoleHarness();
+        harness.AddGoal("11111111-stage", "Console stages", AgentRole.Developer);
+        var time = DateTimeOffset.UnixEpoch;
+        OwnerConductEvent[] events =
+        [
+            new(time, "loop-relaunch", "11111111-stage", "LOOP_RELAUNCH_SCHEDULED goal=11111111-stage"),
+            new(time.AddSeconds(1), "loop-handoff", null, "ACTIVATION_ADOPTED reason=none"),
+            new(time.AddSeconds(2), "loop-handoff", null, "LOOP_HANDOFF_FAILED phase=restart reason=publish_failed")
+        ];
+        using var app = Terminal.Gui.App.Application.Create();
+        using var view = View(app, harness);
+        view.Render(await Builder(harness).BuildAsync(new(time, time, events, 0)));
+        Assert.Equal(new[]
+        {
+            $"{time.AddSeconds(2).ToLocalTime():HH:mm:ss} conductor restart failed: publish failed",
+            $"{time.AddSeconds(1).ToLocalTime():HH:mm:ss} conductor restarted on the new build",
+            $"{time.ToLocalTime():HH:mm:ss} 11111111 Console stages landed"
+        }, view.ActivityLines);
+        Assert.DoesNotContain(view.ActivityLines, line => line.Contains("handoff completed", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("TaskCompleted", "Reviewer finished: passed")]
+    [InlineData("TaskFailed", "Reviewer finished: failed")]
+    public void RoleFinishes_RenderOutcomeWithoutPayload(string type, string phrase)
+    {
+        var line = JsonSerializer.Serialize(new { timestamp = DateTimeOffset.UnixEpoch, eventType = type,
+            taskId = "task1", role = "Reviewer", message = "{raw JSON}" });
+        Assert.True(OwnerGoalLifecycleEvent.TryParse(line, "11111111", out var item));
+        Assert.Equal(phrase, OwnerConsoleActivityPresentation.Phrase(item!, OwnerConsoleActivityPresentation.Classify(item!)!));
+    }
+
+    [Theory]
+    [InlineData("result=started", "gate started")]
+    [InlineData("result=failed", "gate failed")]
+    [InlineData("result=passed", "gate passed")]
+    public void GateTransitions_RenderPlainPhrases(string detail, string phrase)
+    {
+        var item = new OwnerConductEvent(DateTimeOffset.UnixEpoch, "acceptance", "11111111", detail);
+        var tag = OwnerConsoleActivityPresentation.Classify(item);
+        Assert.NotNull(tag);
+        Assert.Equal(phrase, OwnerConsoleActivityPresentation.Phrase(item, tag));
+    }
+
+    [Fact]
+    public void StartupMerge_KeepsNewestEventsAcrossHistorySources()
+    {
+        var time = DateTimeOffset.UnixEpoch;
+        var recent = Enumerable.Range(1, OwnerConsoleViewModelBuilder.MaxActivityItems)
+            .Select(index => new OwnerConductEvent(time.AddSeconds(index), "acceptance", "11111111", "result=passed")).ToList();
+        var newest = recent[^1];
+        OwnerConsoleStartupActivity.Append(recent, new(time, "goal-lifecycle", "11111111", "TaskDispatched role=Developer"));
+        Assert.Equal(OwnerConsoleViewModelBuilder.MaxActivityItems, recent.Count);
+        Assert.Contains(newest, recent);
+        Assert.DoesNotContain(recent, item => item.Timestamp == time);
+    }
+
+    [Fact]
+    public async Task ActivityLoader_MergesHistoryAndPreservesLiveConductOffset()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "owner-loader-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var time = DateTimeOffset.UnixEpoch;
+            var path = Path.Combine(directory, "conduct.jsonl");
+            var history = new OwnerConductEvent(time, "acceptance", "11111111", "result=passed");
+            string Conduct(OwnerConductEvent item) => JsonSerializer.Serialize(new
+                { timestamp = item.Timestamp, eventKind = item.EventKind, goalId = item.GoalId, detail = item.Detail });
+            File.WriteAllText(path, Conduct(history) + "\n");
+            File.WriteAllText(Path.Combine(directory, "11111111.jsonl"), Lifecycle(time, "TaskDispatched", "task1") + "\n");
+            await using var loader = new OwnerConsoleActivityLoader(path, directory, TimeProvider.System);
+            var loaded = await loader.LoadAsync(["11111111"], TestContext.Current.CancellationToken);
+            Assert.Equal(2, loaded.Recent.Count);
+            Assert.Contains(history, loaded.Recent);
+            Assert.Contains(loaded.Recent, item => item.EventKind == "goal-lifecycle");
+            Assert.Equal(time, loaded.LastActivity);
+            Assert.Empty(loader.ReadNew(["11111111"]));
+            var live = history with { Timestamp = time.AddSeconds(1), Detail = "result=failed" };
+            File.AppendAllText(path, Conduct(live) + "\n");
+            Assert.NotNull(loader.Events);
+            Assert.Equal(live, await loader.Events.ReadAsync(TestContext.Current.CancellationToken));
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+
+    [Fact]
+    public void IncrementalTail_RetainsTornLinesResetsAndDropsRemovedGoals()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "owner-torn-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var file = Path.Combine(directory, "11111111.jsonl");
+            var line = Lifecycle(DateTimeOffset.UnixEpoch, "TaskCompleted", "task1");
+            var tail = new OwnerGoalLifecycleTail(directory);
+            Assert.Empty(tail.ReadNew(["11111111"]));
+            File.WriteAllText(file, "malformed\n" + line[..20]);
+            Assert.Empty(tail.ReadNew(["11111111"]));
+            File.AppendAllText(file, line[20..] + "\n");
+            Assert.Single(tail.ReadNew(["11111111"]));
+            Assert.Empty(tail.ReadNew(["11111111"]));
+            File.WriteAllText(file, Lifecycle(DateTimeOffset.UnixEpoch, "TaskFailed", "t") + "\n");
+            Assert.Contains("TaskFailed", Assert.Single(tail.ReadNew(["11111111"])).Detail);
+            Assert.Empty(tail.ReadNew([]));
+            Assert.Single(tail.ReadNew(["11111111"]));
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+
+    private static string Lifecycle(DateTimeOffset time, string type, string task) => JsonSerializer.Serialize(new
+        { timestamp = time, eventType = type, taskId = task, message = "{raw JSON and commands}" });
+    private static OwnerConsoleViewModelBuilder Builder(OwnerConsoleHarness harness) =>
+        new(harness.State, harness.Questions, harness.Liveness, new Epics(), harness.Clock);
+    private static OwnerConsoleFullScreenView View(IApplication app, OwnerConsoleHarness harness) => new(app,
+        new(harness.Questions, harness.Answers, new Dialogs(), harness.State, harness.Tail,
+            harness.Conductor, harness.DigestReport, harness.Digest, harness.Clock), () => Task.CompletedTask);
+    private sealed class Epics : IOwnerGoalEpicLookup
+    {
+        public Task<string> GetTitleAsync(string id, CancellationToken token) => Task.FromResult(string.Empty);
+    }
+    private sealed class Dialogs : IOwnerConsoleDialogs
+    {
+        public Task ShowTextAsync(string title, string text) => throw new InvalidOperationException();
+        public Task<bool> ConfirmAsync(string title, string text) => throw new InvalidOperationException();
+        public Task<string?> PromptTextAsync(string title, string text) => throw new InvalidOperationException();
+    }
+}

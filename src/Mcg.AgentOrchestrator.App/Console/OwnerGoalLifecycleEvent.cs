@@ -1,0 +1,40 @@
+using System.Text.Json;
+using Mcg.AgentOrchestrator.Core;
+
+namespace Mcg.AgentOrchestrator.App.OwnerConsole;
+
+// Only structural fields cross into presentation; free-form messages may contain JSON or commands.
+internal static class OwnerGoalLifecycleEvent
+{
+    internal static bool TryParse(string line, string goalId, out OwnerConductEvent? item)
+    {
+        item = null;
+        try
+        {
+            using var document = JsonDocument.Parse(line.TrimStart('\uFEFF'));
+            var root = document.RootElement;
+            var timestamp = root.TryGetProperty("timestamp", out var time) ? time : root.GetProperty("occurredAt");
+            var kind = root.GetProperty("eventType").GetString();
+            if (string.IsNullOrEmpty(kind) || !kind.All(char.IsLetter)) return false;
+            var detail = kind;
+            if (root.TryGetProperty("taskId", out var task) && task.GetString() is { } taskId)
+                detail += " task=" + taskId;
+            if (root.TryGetProperty("role", out var role) && Enum.TryParse<AgentRole>(role.GetString(), out var parsedRole))
+                detail += " role=" + parsedRole;
+            item = new(timestamp.GetDateTimeOffset(), "goal-lifecycle", goalId, detail);
+            return true;
+        }
+        catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException or FormatException)
+        { return false; }
+    }
+
+    internal static OwnerConductEvent WithRole(OwnerConductEvent item, IReadOnlyDictionary<string, AgentRole> roles)
+    {
+        if (item.EventKind != "goal-lifecycle") return item;
+        var tokens = item.Detail.Split(' ');
+        if (tokens.Any(token => token.StartsWith("role=", StringComparison.Ordinal))) return item;
+        var taskId = tokens.FirstOrDefault(token => token.StartsWith("task=", StringComparison.Ordinal))?[5..];
+        return taskId is not null && roles.TryGetValue(taskId, out var role)
+            ? item with { Detail = item.Detail + " role=" + role } : item;
+    }
+}

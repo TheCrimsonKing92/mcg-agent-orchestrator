@@ -51,7 +51,7 @@ public sealed class OwnerConsoleActivityPresentationTests
             Assert.Equal(2, view.ActivityLines.Count);
             await view.HandleKeyAsync(Key.Tab);
             await view.HandleKeyAsync(Key.Enter);
-            Assert.Contains(escalation.Detail, Assert.Single(dialogs.Texts));
+            Assert.DoesNotContain(escalation.Detail, Assert.Single(dialogs.Texts));
         }
         finally { File.Delete(path); }
     }
@@ -114,7 +114,7 @@ public sealed class OwnerConsoleActivityPresentationTests
         Assert.Equal(detail, Assert.Single(model.Activity).Detail);
         await view.HandleKeyAsync(Key.Tab);
         await view.HandleKeyAsync(Key.Enter);
-        Assert.Contains(detail, Assert.Single(dialogs.Texts));
+        Assert.DoesNotContain(detail, Assert.Single(dialogs.Texts));
     }
 
     [Theory]

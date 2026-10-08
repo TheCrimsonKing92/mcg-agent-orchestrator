@@ -100,6 +100,8 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
             _controller.Apply(model);
             RenderStatus();
             var decisionRows = model.Decisions.Select(item => $"[{item.Number}] {item.GoalPrefix} {item.Kind}: {item.Summary}").ToArray();
+            _emptyDecisions.Text = model.DecisionsState is { Loading: true } ? "loading..." :
+                model.DecisionsState?.Error is { } error ? "DECISIONS unavailable: " + error : "Nothing needs you right now.";
             _emptyDecisions.Visible = decisionRows.Length == 0;
             DecisionLines = _emptyDecisions.Visible ? [_emptyDecisions.Text] : decisionRows;
             _decisions.SetSource(new ObservableCollection<string>(decisionRows));
@@ -142,7 +144,10 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         var selected = _activity.SelectedItem;
         var selectedLine = selected is { } index && index >= 0 && index < ActivityLines.Count
             ? ActivityLines[index] : null;
-        ActivityLines = _notices.Concat(_controller.Model?.Activity.Select(OwnerConsoleActivityPresentation.Line) ?? [])
+        var state = _controller.Model?.ActivityState;
+        IEnumerable<string> pane = state is { Loading: true } ? ["loading..."] : state?.Error is { } error
+            ? ["ACTIVITY unavailable: " + error] : _controller.Model?.Activity.Select(OwnerConsoleActivityPresentation.Line) ?? [];
+        ActivityLines = _notices.Concat(pane)
             .Take(OwnerConsoleViewModelBuilder.MaxActivityItems).ToArray();
         _activity.SetSource(new ObservableCollection<string>(ActivityLines));
         var preserved = selectedLine is null ? -1 : Array.IndexOf(ActivityLines.ToArray(), selectedLine);

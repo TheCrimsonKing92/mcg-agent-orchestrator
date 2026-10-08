@@ -54,7 +54,7 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     {
         var output = new OwnerConsoleCapturedOutput();
         if (!await RunDependencyAsync("goal detail", stepToken =>
-            OwnerConsoleGoalDetail.ComposeAsync(state, tail, goalId, output, stepToken), operation, cancellationToken)) return;
+            OwnerConsoleGoalDetailFormatter.ComposeAsync(state, tail, goalId, output, stepToken), operation, cancellationToken)) return;
         cancellationToken.ThrowIfCancellationRequested();
         await dialogs.ShowTextAsync("Goal", output.Text);
     }
