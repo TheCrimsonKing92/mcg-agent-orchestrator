@@ -19,6 +19,9 @@ public sealed record BriefLintFinding(string Kind, BriefLintSeverity Severity, s
 /// <summary>Pure early warnings about brief text; findings never authorize or block execution.</summary>
 public static partial class BriefLint
 {
+    internal const string PreChangeFailureRemedy =
+        "Make the pre-change half a Reviewer reading, or a committed negative-control test that runs on the candidate.";
+
     public static IReadOnlyList<BriefLintFinding> Lint(string briefText)
     {
         ArgumentNullException.ThrowIfNull(briefText);
@@ -59,6 +62,13 @@ public static partial class BriefLint
                     Add("post-landing-criterion", BriefLintSeverity.BlocksDispatch,
                         lineOffset + match.Index, match.Length,
                         "Move the step into prose outside the numbered acceptance criteria.", deduplicate: false);
+                var preChange = PreChangeFailureCriterion().Match(line);
+                if (preChange.Success)
+                {
+                    var anchor = preChange.Groups["anchor"];
+                    Add("pre-change-failure-criterion", BriefLintSeverity.BlocksDispatch,
+                        lineOffset + anchor.Index, anchor.Length, PreChangeFailureRemedy, deduplicate: false);
+                }
             }
             lineOffset += line.Length + 1;
         }
@@ -109,11 +119,17 @@ public static partial class BriefLint
     [GeneratedRegex(@"after this goal lands|after the goal lands|after landing|post-landing|once this goal has landed|once the goal has landed", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     internal static partial Regex PostLandingPhrase();
 
+    [GeneratedRegex(@"\b(?<path>(?<directory>src/(?:[A-Za-z0-9_.-]+/)+)(?<class>[A-Z]\w*)\.[A-Za-z_]\w*\.cs)\b[^\r\n]{0,40}?(?i:\b(?:new file|newly added|new|added|create|creates|created)\b)", RegexOptions.CultureInvariant)]
+    internal static partial Regex NewPartialFilePath();
+
+    [GeneratedRegex(@"^(?=.*\b(?:fail|fails|failing|red)\b)(?=.*\b(?:Acceptance\s+(?:executes|runs)|assigned\s+to\s+Acceptance)\b)(?!.*\bnegative[ -]control\b.*\bcandidate\b)(?!.*\bcandidate\b.*\bnegative[ -]control\b).*?\b(?<anchor>pre-change(?![-\w])|prechange(?![-\w])|before the change|prior code|prior implementation|old code|unchanged code)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Singleline)]
+    internal static partial Regex PreChangeFailureCriterion();
+
     [GeneratedRegex(@"^\s*(#{1,2})[ \t]+(.+)$", RegexOptions.CultureInvariant)]
     private static partial Regex SectionHeading();
 
-    [GeneratedRegex(@"^\s*\d+[.)]\s", RegexOptions.CultureInvariant)]
-    private static partial Regex NumberedLine();
+    [GeneratedRegex(@"^\s*(?<number>\d+)[.)]\s", RegexOptions.CultureInvariant)]
+    internal static partial Regex NumberedLine();
 
     [GeneratedRegex(@"^\s*- test-removal:", RegexOptions.Multiline | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex TestRemovalBullet();

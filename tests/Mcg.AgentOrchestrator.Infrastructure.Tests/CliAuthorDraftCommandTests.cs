@@ -41,7 +41,7 @@ public sealed class CliAuthorDraftCommandTests
         Assert.Equal(fixture.Item.Id, root.GetProperty("backlogItemId").GetString());
         Assert.Equal(Fixture.MainSha, root.GetProperty("mainHead").GetString());
         Assert.Equal(0, root.GetProperty("exitCode").GetInt32());
-        Assert.Equal(new[] { "sections", "criteria-present", "owner-sentence", "premise-citations", "numbered-criteria", "developer-deferred-criterion", "build-item-count", "post-landing-criterion" },
+        Assert.Equal(new[] { "sections", "criteria-present", "owner-sentence", "premise-citations", "numbered-criteria", "developer-deferred-criterion", "build-item-count", "post-landing-criterion", "new-partial-file", "pre-change-failure-criterion" },
             root.GetProperty("checks").EnumerateArray().Select(check => check.GetProperty("name").GetString()).ToArray());
         Assert.All(root.GetProperty("checks").EnumerateArray(), check => Assert.True(check.GetProperty("passed").GetBoolean()));
         Assert.Contains($"goal --brief-file \"{draft}\" --backlog-item {fixture.Item.Id} --backlog-coverage full",
@@ -78,7 +78,7 @@ public sealed class CliAuthorDraftCommandTests
 
         Assert.Equal(markdown, File.ReadAllText(Assert.Single(Directory.GetFiles(fixture.Drafts, "*.md"))));
         using var receipt = fixture.Receipt();
-        Assert.Equal(8, receipt.RootElement.GetProperty("checks").GetArrayLength());
+        Assert.Equal(10, receipt.RootElement.GetProperty("checks").GetArrayLength());
         var failed = Assert.Single(receipt.RootElement.GetProperty("checks").EnumerateArray()
             .Where(check => !check.GetProperty("passed").GetBoolean()));
         Assert.Equal(checkName, failed.GetProperty("name").GetString());
@@ -193,7 +193,7 @@ public sealed class CliAuthorDraftCommandTests
 
         Assert.Equal(markdown, File.ReadAllText(Assert.Single(Directory.GetFiles(fixture.Drafts, "*.md"))));
         using var receipt = fixture.Receipt();
-        Assert.Equal(8, receipt.RootElement.GetProperty("checks").GetArrayLength());
+        Assert.Equal(10, receipt.RootElement.GetProperty("checks").GetArrayLength());
         var failed = Assert.Single(receipt.RootElement.GetProperty("checks").EnumerateArray()
             .Where(check => !check.GetProperty("passed").GetBoolean()));
         Assert.Equal("premise-citations", failed.GetProperty("name").GetString());
@@ -217,7 +217,7 @@ public sealed class CliAuthorDraftCommandTests
 
         Assert.Equal(markdown, File.ReadAllText(Assert.Single(Directory.GetFiles(fixture.Drafts, "*.md"))));
         using var receipt = fixture.Receipt();
-        Assert.Equal(8, receipt.RootElement.GetProperty("checks").GetArrayLength());
+        Assert.Equal(10, receipt.RootElement.GetProperty("checks").GetArrayLength());
         Assert.All(receipt.RootElement.GetProperty("checks").EnumerateArray(),
             check => Assert.True(check.GetProperty("passed").GetBoolean()));
         Assert.Empty(fixture.Error.ToString());

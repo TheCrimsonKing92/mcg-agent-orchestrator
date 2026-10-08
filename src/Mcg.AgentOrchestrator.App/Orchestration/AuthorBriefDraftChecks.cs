@@ -64,6 +64,20 @@ internal static class AuthorBriefDraftChecks
         var postLandingCriteria = criteria.Select((criterion, index) =>
                 (Index: index + 1, Match: BriefLint.PostLandingPhrase().Match(criterion)))
             .Where(criterion => criterion.Match.Success).ToArray();
+        var newPartialFiles = markdown.ReplaceLineEndings("\n").Split('\n')
+            .SelectMany(line => BriefLint.NewPartialFilePath().Matches(line).Cast<Match>())
+            .Select(match => (Path: match.Groups["path"].Value,
+                Sibling: match.Groups["directory"].Value + match.Groups["class"].Value + ".cs"))
+            .Distinct()
+            .Where(file => repository.TrackedLineCount(mainHead, file.Path) is null &&
+                repository.TrackedLineCount(mainHead, file.Sibling) is not null)
+            .Select(file => file.Path).ToArray();
+        var preChangeCriteria = UnfencedLines(SectionText("Acceptance criteria"))
+            .Where(line => BriefLint.NumberedLine().IsMatch(line.Text))
+            .Select(line =>
+                (Index: BriefLint.NumberedLine().Match(line.Text).Groups["number"].Value,
+                    Match: BriefLint.PreChangeFailureCriterion().Match(line.Text)))
+            .Where(criterion => criterion.Match.Success).ToArray();
         return
         [
             new("sections", missing.Length == 0, missing.Length == 0 ? "All four sections present." : $"Missing headings: {string.Join(", ", missing)}"),
@@ -80,7 +94,16 @@ internal static class AuthorBriefDraftChecks
                 "No declared criterion describes a post-landing step." :
                 string.Join(" | ", postLandingCriteria.Select(criterion =>
                     $"criterion {criterion.Index} matched \"{criterion.Match.Value}\"")) +
-                ". Move the step into prose outside the numbered acceptance criteria.")
+                ". Move the step into prose outside the numbered acceptance criteria."),
+            new("new-partial-file", newPartialFiles.Length == 0, newPartialFiles.Length == 0 ?
+                "No draft path names a new partial file of an existing class." :
+                string.Join(", ", newPartialFiles) +
+                ". Extract a separately named type in its own file instead of adding a new partial file of an existing class."),
+            new("pre-change-failure-criterion", preChangeCriteria.Length == 0, preChangeCriteria.Length == 0 ?
+                "No declared criterion demands a pre-change failure with Acceptance executing." :
+                string.Join(" | ", preChangeCriteria.Select(criterion =>
+                    $"criterion {criterion.Index} matched \"{criterion.Match.Groups["anchor"].Value}\"")) +
+                ". " + BriefLint.PreChangeFailureRemedy)
         ];
 
         string SectionText(string name)
