@@ -9,7 +9,7 @@ using static ConductorDriverTests;
 public sealed class ConductorDriverTestsGreenTesterFindingDelivery
 {
     [Fact]
-    public void GreenDeveloperFindingRunsQueuedRequestAndRoutesDeveloper()
+    public void GreenDeveloperFindingRunsQueuedRequestAndRoutesTester()
     {
         const string candidateSha = "abc1234";
         var root = ConductorDriverTests.CreateTempDirectory();
@@ -71,12 +71,13 @@ public sealed class ConductorDriverTestsGreenTesterFindingDelivery
 
             Assert.Equal(2, requests.Count);
             Assert.Contains(requests, request => request.Contains("Core.Tests:GoalLifecycleTests", StringComparison.Ordinal));
-            Assert.Equal([developer.Id], retried);
-            Assert.Contains("passing evidence did not close", Assert.Single(messages), StringComparison.Ordinal);
+            Assert.Equal([tester.Id], retried);
+            Assert.Contains("route=tester", Assert.Single(messages), StringComparison.Ordinal);
+            Assert.Contains(FindingReceiptClosureDiagnosis.FindingCategoryNotTestEvidence, Assert.Single(messages), StringComparison.Ordinal);
             Assert.Contains(candidateSha, Assert.Single(messages), StringComparison.Ordinal);
             Assert.Contains("green-first", Assert.Single(messages), StringComparison.Ordinal);
             Assert.Contains("green-second", Assert.Single(messages), StringComparison.Ordinal);
-            Assert.DoesNotContain(tester.Id, retried);
+            Assert.DoesNotContain(developer.Id, retried);
             Assert.Equal(0, FindingEvidenceExecutionClassifier.CountEvidenceDeliveryRetries(
                 goal.Timeline, tester.Id, candidateSha, "green-first"));
         }

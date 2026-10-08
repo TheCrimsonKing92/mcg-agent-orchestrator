@@ -675,7 +675,7 @@ public sealed partial class ConductorDriverTestsFindingEvidence
     }
 
     [Xunit.Fact]
-    public void TesterPassingRequestRoutesDeveloperWithFindingBoundReceipt()
+    public void TesterPassingRequestRoutesTesterWithFindingBoundReceipt()
     {
         var (kernel, goal) = SoftwareGoal();
         var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
@@ -733,16 +733,17 @@ public sealed partial class ConductorDriverTestsFindingEvidence
         Assert.Equal(1, focusedRuns);
         Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
         var retry = Assert.Single(retries);
-        Assert.Equal(developer.Id, retry.TaskId);
-        Assert.Equal(RetryCause.NewSourceFinding, retry.Cause);
-        Assert.Equal(WorkTaskStatus.Assigned, developer.Status);
+        Assert.Equal(tester.Id, retry.TaskId);
+        Assert.Equal(RetryCause.CriterionEvidenceOwnerMismatch, retry.Cause);
+        Assert.Equal(WorkTaskStatus.Assigned, tester.Status);
         var receipt = Assert.Single(tester.VerificationHistory.Last().FindingEvidenceReceipts!);
         Assert.True(receipt.Accepted && receipt.Passed);
         Assert.Equal("abc1234", receipt.CandidateSha);
         Assert.Contains(receipt.ReceiptId, retry.Message, StringComparison.Ordinal);
         Assert.Contains("tester-evidence", retry.Message, StringComparison.Ordinal);
         Assert.Contains("abc1234", retry.Message, StringComparison.Ordinal);
-        Assert.Contains("passing evidence did not close", retry.Message, StringComparison.Ordinal);
+        Assert.Contains("route=tester", retry.Message, StringComparison.Ordinal);
+        Assert.Contains(FindingReceiptClosureDiagnosis.VerificationNotSucceeded, retry.Message, StringComparison.Ordinal);
         Assert.Equal(0, FindingEvidenceExecutionClassifier.CountEvidenceDeliveryRetries(
             goal.Timeline, tester.Id, "abc1234", "tester-evidence"));
         Assert.DoesNotContain(goal.Timeline, evt =>
