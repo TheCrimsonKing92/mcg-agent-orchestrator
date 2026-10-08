@@ -1,4 +1,5 @@
 using System.Xml.Linq;
+using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
@@ -8,6 +9,111 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // Each case owns its git repository, worktrees, database and cleanup hooks; no timers or shared state.
 public sealed class AcceptanceCohortWorkflowTestsTrainRedAttribution : AcceptanceCohortWorkflowTests
 {
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void GuardSubjects_ImplicateRevisionBeforeRemainderAndEmitOneEvent(bool remainderPasses)
+    {
+        WithTrain(repo => [GuardRed(repo, "guards.trx", "Ns.OldestCulpritTests", "OldestCulpritTests.cs"),
+            remainderPasses ? Passing(repo) : GuardRed(repo, "retry.trx", "Ns.MissingTests", "Missing.cs")], scenario =>
+        {
+            Assert.Equal(2, scenario.Verifier.RunCount);
+            AssertAttributedDrop(scenario, 0);
+            var keys = scenario.Driver.ReadTrainImplicatedMemberKeys();
+            Assert.Equal(Key(scenario, 0), Assert.Single(keys));
+            Assert.Empty(scenario.Driver.ReadSuppressedGroupedPairs());
+            var candidates = scenario.Selection.Members.Select(Candidate).ToArray();
+            Assert.NotNull(ConductorMergeTrainSelector.Select(candidates));
+            Assert.Null(ConductorMergeTrainSelector.Select(candidates, trainImplicatedMemberKeys: keys));
+            foreach (var pair in new[] { candidates.Take(2).ToArray(), candidates.Take(2).Reverse().ToArray() })
+            {
+                Assert.NotNull(ConductorAcceptanceCohortSelector.Select(pair).Selection);
+                Assert.Null(ConductorAcceptanceCohortSelector.Select(pair, trainImplicatedMemberKeys: keys).Selection);
+            }
+
+            var attribution = Assert.Single(AttributionEvents(scenario));
+            Assert.Equal(scenario.Goals[0].Id.Value, attribution.GoalId);
+            var trainId = attribution.Detail.Split(' ').Single(token => token.StartsWith("train=", StringComparison.Ordinal))[6..];
+            var store = new MergeTrainAcceptanceStore(Path.Combine(scenario.Repo, ".orchestrator", "merge-train-acceptance.db"));
+            var failed = Assert.IsType<MergeTrainReceipt>(store.TryReadReceipt(trainId));
+            Assert.Equal(MergeTrainGateOutcome.Failed, failed.Outcome);
+            Assert.Equal(scenario.Goals.Select(goal => goal.Id), failed.Identity.Members.Select(member => member.GoalId));
+            Assert.Equal(trainId, failed.Identity.Value);
+            Assert.Contains($"member={scenario.Goals[0].Id.Value}", attribution.Detail, StringComparison.Ordinal);
+            Assert.Contains($"candidate_revision={scenario.Selection.Members[0].CandidateRevision}", attribution.Detail, StringComparison.Ordinal);
+            Assert.Contains("subjects=Ns.OldestCulpritTests,OldestCulpritTests.cs", attribution.Detail, StringComparison.Ordinal);
+
+            var old = scenario.Selection.Members[0];
+            _ = CreateWorktreeCandidate(scenario.Repo, old.GoalId, old.LandingPaths[0],
+                "namespace Ns; public class OldestCulpritTests { } // revised");
+            var moved = Assert.IsType<GateReadyCandidateProjectionResult.Ready>(
+                scenario.Driver.ProjectGateReadyCandidate(scenario.Goals[0], ConductorAutonomyPolicy.Permissive)).Projection;
+            Assert.NotEqual(old.CandidateRevision, moved.CandidateRevision);
+            candidates[0] = Candidate(moved);
+            Assert.Equal(moved.GoalId, ConductorMergeTrainSelector.Select(candidates,
+                trainImplicatedMemberKeys: keys)!.Members[0].GoalId);
+            Assert.Contains(ConductorAcceptanceCohortSelector.Select(candidates.Take(2).ToArray(),
+                trainImplicatedMemberKeys: keys).Selection!.Members, member => member.GoalId == moved.GoalId);
+        });
+    }
+
+    [Theory]
+    [InlineData("missing", 2)]
+    [InlineData("shared", 2)]
+    [InlineData("different-members", 2)]
+    [InlineData("unreadable", 2)]
+    [InlineData("missing", 3)]
+    [InlineData("shared", 3)]
+    [InlineData("different-members", 3)]
+    [InlineData("unreadable", 3)]
+    public void GuardSubjects_AmbiguityRecordsNoImplicationSuppressionOrEvent(string reason, int memberCount)
+    {
+        WithTrain(repo =>
+        {
+            var red = GuardRed(repo, "guards.trx", reason switch
+            {
+                "missing" => "Ns.MissingTests",
+                "shared" => "Ns.SharedTests",
+                _ => "Ns.OldestCulpritTests"
+            }, reason == "different-members" ? "OtherMemberTests.cs" : "OldestCulpritTests.cs");
+            if (reason == "unreadable")
+            {
+                // Capture can copy malformed evidence, but the classifier refuses RED before bisection.
+                var malformed = Path.Combine(repo, "malformed.trx");
+                File.WriteAllText(malformed, "<TestRun");
+                Assert.Equal(AcceptanceTrxReadStatus.Unparseable, AcceptanceTrxFailureReader.Read(malformed).Status);
+                red = red with { TestResultPaths = [.. red.TestResultPaths!, malformed] };
+                Assert.Equal(AcceptanceCohortGateOutcome.InfrastructureFailure, ConductorDriver.ClassifyCohortVerification(red));
+            }
+            return memberCount == 2 || reason == "unreadable" ? [red] : [red, Passing(repo)];
+        }, scenario =>
+        {
+            Assert.Equal(memberCount == 2 || reason == "unreadable" ? 1 : 2, scenario.Verifier.RunCount);
+            Assert.Empty(scenario.Driver.ReadTrainImplicatedMemberKeys());
+            Assert.Empty(scenario.Driver.ReadSuppressedGroupedPairs());
+            Assert.Empty(AttributionEvents(scenario));
+            if (reason == "unreadable")
+            {
+                Assert.Equal(MergeTrainGateOutcome.InfrastructureFailure,
+                    Assert.IsType<MergeTrainReceipt>(scenario.Result.RecordedReceipt).Outcome);
+                Assert.Empty(scenario.Result.Ejections);
+            }
+            else if (memberCount == 3)
+                Assert.Equal(MergeTrainEjectionReason.RedNewestMember, Assert.Single(scenario.Result.Ejections).Reason);
+        }, memberCount: memberCount);
+    }
+
+    private static ConductEventRecord[] AttributionEvents(Scenario scenario)
+    {
+        var log = OrchestratorWorkspace.ForDirectory(scenario.Repo).ConductEventsLogPath;
+        return File.Exists(log) ? File.ReadAllLines(log)
+            .Select(line => JsonSerializer.Deserialize<ConductEventRecord>(line, new JsonSerializerOptions(JsonSerializerDefaults.Web))!)
+            .Where(record => record.EventKind == "train-attribution").ToArray() : [];
+    }
+
+    private static ConductorSpeculativeAcceptanceCandidate Candidate(GateReadyCandidateProjection projection) =>
+        new(projection.GoalId, new GateReadyCandidateProjectionResult.Ready(projection));
+
     [Theory]
     [InlineData(0)]
     [InlineData(1)]
@@ -162,8 +268,10 @@ public sealed class AcceptanceCohortWorkflowTestsTrainRedAttribution : Acceptanc
                 });
                 var className = Identity(index).Split('.')[1];
                 var shared = index < 2 ? "public partial class SharedTests { }" : string.Empty;
+                var guards = index == 1
+                    ? "public class AcceptanceGateEngineSettingsTests { } public class WorkflowDecisionCoverageRatchetTests { }" : string.Empty;
                 _ = CreateWorktreeCandidate(repo, goal.Id, Paths[index],
-                    $"namespace Ns; public class {className} {{ }} {shared}");
+                    $"namespace Ns; public class {className} {{ }} {shared} {guards}");
                 return goal;
             }).ToArray();
             var verifier = new SequenceAcceptanceVerifier(results(repo));
@@ -206,6 +314,29 @@ public sealed class AcceptanceCohortWorkflowTestsTrainRedAttribution : Acceptanc
 
     private static AcceptanceVerificationResult Passing(string repo) => new(true, false, 0, null,
         Checks: [new AcceptanceCheckResult("remainder", true, 0, null)], TestResultPaths: [WritePassingTrx(repo, "pass.trx")]);
+
+    private static AcceptanceVerificationResult GuardRed(string repo, string file, string testClass, string sourceFile)
+    {
+        var red = Red(repo, file,
+            "Ns.AcceptanceGateEngineSettingsTests.AcceptanceGateEngineDisabledCollectionsSpanningLanesShareAnExclusiveResource",
+            "Ns.WorkflowDecisionCoverageRatchetTests.EveryUndecidedSite_IsAllowListedByFileAndMember");
+        var document = XDocument.Load(red.TestResultPaths![0]);
+        var laneMessage = "Disabled collection 'DotnetBuildEnvironmentManagerStaticHooks' spans acceptance lanes " +
+            "[Remainder, Dotnet build slots] without a shared exclusive resource key. " +
+            $"Mapped classes: [{testClass} -> Remainder, DotnetBuildEnvironmentManagerTests -> Dotnet build slots].";
+        var messages = new[]
+        {
+            Assert.Throws<Xunit.Sdk.TrueException>(() => Assert.True(false, laneMessage)).Message,
+            $"Unlisted undecided sites:\n{sourceFile} : DeferredRun"
+        };
+        foreach (var (result, message) in document.Descendants().Where(element => element.Name.LocalName == "UnitTestResult").Zip(messages))
+        {
+            var ns = result.Name.Namespace;
+            result.Add(new XElement(ns + "Output", new XElement(ns + "ErrorInfo", new XElement(ns + "Message", message))));
+        }
+        document.Save(red.TestResultPaths[0]);
+        return red;
+    }
 
     private static string Identity(int member) => member switch
     {
