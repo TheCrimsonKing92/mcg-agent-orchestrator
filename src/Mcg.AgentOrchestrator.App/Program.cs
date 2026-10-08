@@ -495,7 +495,7 @@ Console.WriteLine("  stop <goal-id> <reason>|--text-file <path> --as cancel|park
 Console.WriteLine("    Stop a goal using the specified disposal mode.");
 Console.WriteLine("  config <agents|profiles|policy|doctor>");
 Console.WriteLine("    View configuration: agents=agent catalog, profiles=worker profiles, policy=autonomy policies, doctor=health check.");
-Console.WriteLine("  project list|show [name]|create <name> --root <path>|select <name>");
+Console.WriteLine("  project list|show [name]|discover [name] [--root <path>]|create <name> --root <path>|select <name>");
 Console.WriteLine("    Manage global project registry and active project selection.");
 Console.WriteLine();
 Console.WriteLine("Advanced/Internal (used by automation, tests, and advanced workflows):");

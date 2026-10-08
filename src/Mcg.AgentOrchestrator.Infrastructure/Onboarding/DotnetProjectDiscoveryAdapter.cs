@@ -15,14 +15,16 @@ public sealed class DotnetProjectDiscoveryAdapter : IProjectDiscoveryAdapter
     private static readonly string[] RunnerProperties =
         ["UseMicrosoftTestingPlatformRunner", "EnableMSTestRunner", "EnableNUnitRunner", "IsTestingPlatformApplication"];
 
-    public ProjectModel Discover(string repositoryRoot)
+    public ProjectModel Discover(string repositoryRoot, IReadOnlyCollection<string>? excludedDirectoryNames = null)
     {
         var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryRoot));
         if (!Directory.Exists(root))
             throw new DirectoryNotFoundException($"Repository root does not exist: {root}");
 
         var questions = new List<ProjectOwnerQuestion>();
-        var files = EnumerateFiles(root).Order(StringComparer.Ordinal).ToArray();
+        var exclusions = new HashSet<string>(excludedDirectoryNames ?? [], StringComparer.OrdinalIgnoreCase);
+        exclusions.UnionWith(["bin", "obj", ".git"]);
+        var files = EnumerateFiles(root, exclusions).Order(StringComparer.Ordinal).ToArray();
         var solutions = files.Where(file => Path.GetDirectoryName(file) == root &&
             Path.GetExtension(file).ToLowerInvariant() is ".sln" or ".slnx").ToArray();
         var listed = new Dictionary<string, (string Name, FactSource Source)>(PathComparer);
@@ -101,8 +103,10 @@ public sealed class DotnetProjectDiscoveryAdapter : IProjectDiscoveryAdapter
             }
         }
 
-        return new ProjectModel(1, root, units,
+        // Paths in the snapshot are relative to its logical root, independent of the discovery host.
+        return new ProjectModel(1, ".", units,
             dependencies.GroupBy(edge => (edge.FromUnit, edge.ToUnit))
+                // Preserve the weakest declaration and its owner question rather than hiding uncertainty.
                 .Select(group => group.OrderByDescending(edge => edge.Confidence).First())
                 .OrderBy(edge => edge.FromUnit, StringComparer.Ordinal).ThenBy(edge => edge.ToUnit, StringComparer.Ordinal).ToArray(),
             setups, questions.DistinctBy(question => question.FactKey)
@@ -222,7 +226,7 @@ public sealed class DotnetProjectDiscoveryAdapter : IProjectDiscoveryAdapter
             for (var index = 0; index < lines.Length; index++)
             {
                 var match = Regex.Match(lines[index], "^\\s*Project\\(\"[^\"]+\"\\)\\s*=\\s*\"([^\"]+)\",\\s*\"([^\"]+)\"");
-                if (match.Success && IsProjectFile(match.Groups[2].Value))
+                if (match.Success)
                     Add(match.Groups[2].Value, match.Groups[1].Value, new FactSource(Relative(root, solution), index + 1));
             }
         }
@@ -231,7 +235,12 @@ public sealed class DotnetProjectDiscoveryAdapter : IProjectDiscoveryAdapter
         void Add(string path, string? name, FactSource source)
         {
             if (!IsProjectFile(path))
+            {
+                if (Path.GetExtension(path).EndsWith("proj", StringComparison.OrdinalIgnoreCase))
+                    Ask($"solutions/{Relative(root, solution)}/{path}",
+                        "This project type is unsupported by this discovery adapter; confirm its unit and dependencies.", source, questions);
                 return;
+            }
             var resolved = ResolveProjectPath(root, Path.GetDirectoryName(solution)!, path);
             if (resolved is null)
                 Ask($"solutions/{Relative(root, solution)}/{path}", "Confirm this unresolved solution project path; it was not read.", source, questions);
@@ -283,19 +292,18 @@ public sealed class DotnetProjectDiscoveryAdapter : IProjectDiscoveryAdapter
         }
     }
 
-    private static IEnumerable<string> EnumerateFiles(string root)
+    private static IEnumerable<string> EnumerateFiles(string root, HashSet<string> exclusions)
     {
         foreach (var file in Directory.EnumerateFiles(root))
-            if ((File.GetAttributes(file) & FileAttributes.ReparsePoint) == 0)
+            if ((IsProjectFile(file) || Path.GetExtension(file).ToLowerInvariant() is ".sln" or ".slnx") &&
+                (File.GetAttributes(file) & FileAttributes.ReparsePoint) == 0)
                 yield return file;
         foreach (var directory in Directory.EnumerateDirectories(root))
         {
-            var name = Path.GetFileName(directory).ToLowerInvariant();
-            if (name is "bin" or "obj" or ".git" or ".scratch" or ".orchestrator" or
-                ".orchestrator-worktrees" or ".orchestrator-context" or ".orchestrator-prototype" or "testresults" or "playwright-report" ||
+            if (exclusions.Contains(Path.GetFileName(directory)) ||
                 (File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
                 continue;
-            foreach (var file in EnumerateFiles(directory))
+            foreach (var file in EnumerateFiles(directory, exclusions))
                 yield return file;
         }
     }
@@ -341,7 +349,7 @@ public sealed class DotnetProjectDiscoveryAdapter : IProjectDiscoveryAdapter
     private static bool IsReliable(XElement element, string value) =>
         !value.Contains("$(", StringComparison.Ordinal) && !value.Contains("@(", StringComparison.Ordinal) &&
         !element.AncestorsAndSelf().Any(ancestor => ancestor.Attribute("Condition") is not null ||
-            ancestor.Name.LocalName is "Choose" or "When" or "Otherwise");
+            ancestor.Name.LocalName is "Choose" or "When" or "Otherwise" or "Target");
 
     private static ProjectFact<T> Fact<T>(T value, FactConfidence confidence, FactSource source,
         string key, string reason, List<ProjectOwnerQuestion> questions)

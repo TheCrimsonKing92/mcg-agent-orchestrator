@@ -12,6 +12,12 @@ public sealed class ProjectDiscoverCliTests
     {
         using var workspaceFixture = new ProjectOnboardingFixture("solution");
         using var sourceFixture = new ProjectOnboardingFixture("no-solution");
+        foreach (var directory in RepositorySourceInventory.ExcludedDirectoryNames)
+        {
+            var path = Path.Combine(sourceFixture.Root, directory, "Noise.csproj");
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, "<Project />");
+        }
         var registry = new OrchestratorProjectRegistry(Path.Combine(workspaceFixture.Root, "registry"));
         var workspace = OrchestratorWorkspace.ForDirectory(workspaceFixture.Root);
         var protectedPaths = SeedConfiguration(workspaceFixture.Root, workspace.WorkerProfilePath)
@@ -31,7 +37,7 @@ public sealed class ProjectDiscoverCliTests
         var modelPath = Path.Combine(workspace.OrchestratorDirectory, "project-model.json");
         Assert.True(File.Exists(modelPath));
         var model = ProjectModelJson.Deserialize(File.ReadAllText(modelPath));
-        Assert.Equal(Path.GetFullPath(sourceFixture.Root), model.RepositoryRoot);
+        Assert.Equal(".", model.RepositoryRoot);
         Assert.Equal(2, model.Units.Count);
         Assert.Equal(6, model.OwnerQuestions.Count);
         var lines = output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
@@ -66,7 +72,7 @@ public sealed class ProjectDiscoverCliTests
 
         Assert.Equal(0, ProjectCliCommand.Execute(["project", "discover"], registry, defaultFixture.Root, null, output));
         var model = ProjectModelJson.Deserialize(File.ReadAllText(modelPath));
-        Assert.Equal(Path.GetFullPath(selectedFixture.Root), model.RepositoryRoot);
+        Assert.Equal(".", model.RepositoryRoot);
         Assert.Equal(3, model.Units.Count);
         Assert.Empty(model.OwnerQuestions);
         Assert.Equal(selection, File.ReadAllBytes(registry.CurrentProjectPath));
@@ -85,7 +91,10 @@ public sealed class ProjectDiscoverCliTests
         Assert.Equal(0, ProjectCliCommand.Execute(["project", "discover", "sample", "--root=" + defaultFixture.Root],
             registry, defaultFixture.Root, null, output));
         var modelPath = Path.Combine(registry.GetRequiredProject("sample").ResolveWorkspace().OrchestratorDirectory, "project-model.json");
-        Assert.Equal(Path.GetFullPath(defaultFixture.Root), ProjectModelJson.Deserialize(File.ReadAllText(modelPath)).RepositoryRoot);
+        var model = ProjectModelJson.Deserialize(File.ReadAllText(modelPath));
+        Assert.Equal(".", model.RepositoryRoot);
+        Assert.Equal(new[] { "src/Loose.Library/Loose.Library.csproj", "tests/Loose.UndeterminedTests/Loose.UndeterminedTests.csproj" },
+            model.Units.Select(unit => unit.Id));
     }
 
     [Fact(DisplayName = "A missing source root leaves the existing model intact")]

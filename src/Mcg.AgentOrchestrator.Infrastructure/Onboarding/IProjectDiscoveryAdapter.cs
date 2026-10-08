@@ -4,5 +4,5 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public interface IProjectDiscoveryAdapter
 {
-    ProjectModel Discover(string repositoryRoot);
+    ProjectModel Discover(string repositoryRoot, IReadOnlyCollection<string>? excludedDirectoryNames = null);
 }

@@ -60,7 +60,7 @@ internal static class ProjectCliCommand
                 ? new OrchestratorProject(OrchestratorWorkspace.DefaultProjectName, Path.GetFullPath(defaultRootDirectory))
                 : registry.GetRequiredProject(name);
         IProjectDiscoveryAdapter adapter = new DotnetProjectDiscoveryAdapter();
-        var model = adapter.Discover(rootOverride ?? project.RootDirectory);
+        var model = adapter.Discover(rootOverride ?? project.RootDirectory, RepositorySourceInventory.ExcludedDirectoryNames);
         var workspaceDirectory = project.ResolveWorkspace().OrchestratorDirectory;
         Directory.CreateDirectory(workspaceDirectory);
         var modelPath = Path.Combine(workspaceDirectory, "project-model.json");

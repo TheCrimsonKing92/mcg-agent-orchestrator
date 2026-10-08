@@ -45,6 +45,7 @@ public sealed class DotnetProjectDiscoveryAdapterTests
             AssertSource(fixture.Root, setup.Runner.Source);
         });
         Assert.Empty(model.OwnerQuestions);
+        Assert.Equal(".", model.RepositoryRoot);
         Assert.Equal(ProjectModelJson.Serialize(model), ProjectModelJson.Serialize(adapter.Discover(fixture.Root)));
     }
 
@@ -182,7 +183,7 @@ public sealed class DotnetProjectDiscoveryAdapterTests
     public void GeneratedProjectsAreSkipped()
     {
         using var fixture = new ProjectOnboardingFixture("solution");
-        foreach (var directory in new[] { "bin", "obj", ".git", ".scratch", ".orchestrator-prototype" })
+        foreach (var directory in new[] { "bin", "obj", ".git" })
         {
             Directory.CreateDirectory(Path.Combine(fixture.Root, directory));
             File.WriteAllText(Path.Combine(fixture.Root, directory, "Noise.csproj"), "<Project />");
@@ -192,11 +193,111 @@ public sealed class DotnetProjectDiscoveryAdapterTests
         Assert.Empty(model.OwnerQuestions);
     }
 
+    [Fact(DisplayName = "The caller supplies repository-specific directory exclusions")]
+    public void CallerExclusionsAreApplied()
+    {
+        using var fixture = new ProjectOnboardingFixture("solution");
+        var directory = Path.Combine(fixture.Root, "owner-cache");
+        Directory.CreateDirectory(directory);
+        File.WriteAllText(Path.Combine(directory, "Noise.csproj"), "<Project />");
+        IProjectDiscoveryAdapter adapter = new DotnetProjectDiscoveryAdapter();
+
+        Assert.Contains(adapter.Discover(fixture.Root).Units, unit => unit.Id == "owner-cache/Noise.csproj");
+        var model = adapter.Discover(fixture.Root, ["OWNER-CACHE"]);
+        Assert.Equal(3, model.Units.Count);
+        Assert.Empty(model.OwnerQuestions);
+    }
+
+    [Fact(DisplayName = "Missing test declarations remain unknown rather than guessing a library")]
+    public void MissingTestStatusIsReferredToOwner()
+    {
+        using var fixture = new ProjectOnboardingFixture("solution");
+        File.WriteAllText(Path.Combine(fixture.Root, Library), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+        var model = new DotnetProjectDiscoveryAdapter().Discover(fixture.Root);
+        var unit = model.Units.Single(unit => unit.Id == Library);
+        Assert.Null(unit.IsTest.Value);
+        Assert.Equal(FactConfidence.Low, unit.IsTest.Confidence);
+        Assert.Contains(model.OwnerQuestions, question => question.FactKey == $"units/{Library}/isTest");
+        var setup = model.TestSetups.Single(setup => setup.UnitId == Library);
+        Assert.Equal("undetermined", setup.Framework.Value);
+        Assert.Equal("undetermined", setup.Runner.Value);
+        Assert.Contains(model.OwnerQuestions, question => question.FactKey == $"tests/{Library}/framework");
+        Assert.Contains(model.OwnerQuestions, question => question.FactKey == $"tests/{Library}/runner");
+    }
+
+    [Fact(DisplayName = "Duplicate references preserve uncertainty and the uncertain declaration source")]
+    public void DuplicateReferencesRetainWeakestConfidence()
+    {
+        using var fixture = new ProjectOnboardingFixture("solution");
+        var path = Path.Combine(fixture.Root, Vstest);
+        File.WriteAllText(path, File.ReadAllText(path).Replace("</Project>",
+            $"<ItemGroup><ProjectReference Include=\"../../{Library}\" Condition=\"'$(IncludeLibrary)' == 'true'\" /></ItemGroup></Project>",
+            StringComparison.Ordinal));
+        var model = new DotnetProjectDiscoveryAdapter().Discover(fixture.Root);
+        var edge = Assert.Single(model.Dependencies.Where(edge => edge.FromUnit == Vstest));
+        Assert.Equal(Library, edge.ToUnit);
+        Assert.Equal(FactConfidence.Low, edge.Confidence);
+        Assert.Contains("Condition=", File.ReadAllLines(path)[edge.Source.Line!.Value - 1]);
+        var question = Assert.Single(model.OwnerQuestions.Where(question => question.FactKey == $"dependencies/{Vstest}/{Library}"));
+        Assert.Equal(edge.Source, question.Source);
+    }
+
+    [Theory(DisplayName = "Unsupported solution project types are referred to the owner")]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void UnsupportedSolutionMemberProducesQuestion(bool xmlSolution)
+    {
+        using var fixture = new ProjectOnboardingFixture("solution");
+        var solution = xmlSolution ? "Sample.slnx" : "Sample.sln";
+        if (xmlSolution)
+        {
+            File.Delete(Path.Combine(fixture.Root, "Sample.sln"));
+            File.WriteAllText(Path.Combine(fixture.Root, solution),
+                $"<Solution><Project Path=\"{Library}\" /><Project Path=\"{Vstest}\" /><Project Path=\"{Mtp}\" /><Project Path=\"Database.sqlproj\" /></Solution>");
+        }
+        else
+        {
+            File.AppendAllText(Path.Combine(fixture.Root, solution),
+                "\nProject(\"{00000000-0000-0000-0000-000000000000}\") = \"Database\", \"Database.sqlproj\", \"{11111111-1111-1111-1111-111111111111}\"\nEndProject\n");
+        }
+        var model = new DotnetProjectDiscoveryAdapter().Discover(fixture.Root);
+        Assert.Equal(3, model.Units.Count);
+        var question = Assert.Single(model.OwnerQuestions);
+        Assert.Equal($"solutions/{solution}/Database.sqlproj", question.FactKey);
+        AssertSource(fixture.Root, question.Source);
+    }
+
+    [Fact(DisplayName = "Runner declarations inside targets remain uncertain until the target is evaluated")]
+    public void TargetRunnerRemainsUndetermined()
+    {
+        using var fixture = new ProjectOnboardingFixture("solution");
+        var path = Path.Combine(fixture.Root, Mtp);
+        File.WriteAllText(path, File.ReadAllText(path).Replace(
+            "<UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>", "", StringComparison.Ordinal)
+            .Replace("</Project>", "<Target Name=\"SelectRunner\"><PropertyGroup><UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner></PropertyGroup></Target></Project>", StringComparison.Ordinal));
+        var model = new DotnetProjectDiscoveryAdapter().Discover(fixture.Root);
+        var runner = model.TestSetups.Single(setup => setup.UnitId == Mtp).Runner;
+        Assert.Equal("undetermined", runner.Value);
+        Assert.Equal(FactConfidence.Low, runner.Confidence);
+        Assert.Contains(model.OwnerQuestions, question => question.FactKey == $"tests/{Mtp}/runner");
+    }
+
     [Fact(DisplayName = "A missing repository root fails loudly")]
     public void MissingRootIsRejected()
     {
         using var fixture = new ProjectOnboardingFixture("solution");
         Assert.Throws<DirectoryNotFoundException>(() => new DotnetProjectDiscoveryAdapter().Discover(Path.Combine(fixture.Root, "missing")));
+    }
+
+    [Fact(DisplayName = "The same repository contents produce identical models on different host paths")]
+    public void DiscoverySnapshotIsIndependentOfHostPath()
+    {
+        using var first = new ProjectOnboardingFixture("solution");
+        using var second = new ProjectOnboardingFixture("solution");
+        Assert.NotEqual(first.Root, second.Root);
+        var adapter = new DotnetProjectDiscoveryAdapter();
+        Assert.Equal(ProjectModelJson.Serialize(adapter.Discover(first.Root)),
+            ProjectModelJson.Serialize(adapter.Discover(second.Root)));
     }
 
     private static void AssertSource(string root, FactSource source)
