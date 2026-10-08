@@ -484,6 +484,9 @@ public sealed class SqliteOperatorIntentStore : IOperatorIntentStore
                     Pooling = false, DefaultTimeout = 1
                 }.ToString());
                 conn.Open();
+                // Acquire the WAL exclusively without joining its shared-memory index.
+                // Concurrent transitions otherwise can leave an orphaned -shm file.
+                RunNonQuery(conn, "PRAGMA locking_mode=EXCLUSIVE");
                 using var cmd = conn.CreateCommand();
                 cmd.CommandText = "PRAGMA journal_mode=DELETE";
                 var mode = cmd.ExecuteScalar() as string;

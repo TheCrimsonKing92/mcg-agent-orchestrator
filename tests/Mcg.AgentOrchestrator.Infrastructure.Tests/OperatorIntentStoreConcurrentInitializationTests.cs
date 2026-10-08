@@ -171,6 +171,8 @@ public sealed class OperatorIntentStoreConcurrentInitializationTests
 
             await InitializeTogether(databasePath, Path.Combine(root, "logs"), setupOnly: true);
 
+            Xunit.Assert.Equal(new[] { SqliteOperatorIntentStore.DatabaseFileName },
+                Directory.GetFiles(root).Select(Path.GetFileName).ToArray());
             Xunit.Assert.Equal(before, Snapshot(databasePath));
             Xunit.Assert.Equal((byte)1, File.ReadAllBytes(databasePath)[18]);
             Xunit.Assert.Equal((byte)1, File.ReadAllBytes(databasePath)[19]);
@@ -183,6 +185,12 @@ public sealed class OperatorIntentStoreConcurrentInitializationTests
             Xunit.Assert.Equal(new[] { SqliteOperatorIntentStore.DatabaseFileName },
                 Directory.GetFiles(root).Select(Path.GetFileName).ToArray());
             Xunit.Assert.False(Directory.Exists(wakeDirectory));
+
+            // The conversion connection must release its exclusive lock on disposal.
+            var nextIntent = intent with { Id = "next-intent", IdempotencyKey = "next-key" };
+            Xunit.Assert.Equal(nextIntent.Id, (await writer.EnqueueAsync(nextIntent)).Id);
+            Xunit.Assert.Equal(System.Text.Json.JsonSerializer.Serialize(nextIntent),
+                System.Text.Json.JsonSerializer.Serialize(await reader.GetAsync(nextIntent.Id)));
         }
         finally
         {
