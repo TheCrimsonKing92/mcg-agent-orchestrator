@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Mcg.AgentOrchestrator.App.Orchestration;
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
@@ -13,7 +14,8 @@ internal sealed class OwnerConsoleSession(
     IOwnerConsoleOutput output,
     TimeProvider clock,
     IOwnerConsoleConductor? conductor = null,
-    IOwnerConsoleDigestReport? digestReport = null)
+    IOwnerConsoleDigestReport? digestReport = null,
+    ChangeStreamFileReader? changes = null)
 {
     private readonly OwnerConsoleControlCommands _control = new(conductor, digestReport, output, clock);
     private readonly Dictionary<string, int> _numbers = new(StringComparer.OrdinalIgnoreCase);
@@ -23,10 +25,13 @@ internal sealed class OwnerConsoleSession(
     private int _nextNumber = 1;
     private bool _bell = true;
     private DateTimeOffset? _lastConductEvent;
+    private long _coveredSequence;
+    private readonly Dictionary<string, OwnerGoalCard> _board = new(StringComparer.OrdinalIgnoreCase);
 
     internal async Task StartAsync(DateTimeOffset? lastActivity, CancellationToken cancellationToken)
     {
         _lastConductEvent = lastActivity;
+        _coveredSequence = changes?.Reanchor() ?? 0;
         foreach (var line in digest.ReadSummaryLines().Take(5))
             Announce(line);
         var metadata = await RefreshQuestionsAsync(cancellationToken);
@@ -38,9 +43,66 @@ internal sealed class OwnerConsoleSession(
     internal async Task HandleEventAsync(OwnerConductEvent item, CancellationToken cancellationToken)
     {
         _lastConductEvent = item.Timestamp;
+        if (changes is not null)
+        {
+            await ApplyChangesAsync(cancellationToken);
+            return;
+        }
         var metadata = await RefreshQuestionsAsync(cancellationToken);
         if (item.EventKind is "watch-transition" or "acceptance" or "loop-relaunch" or "goal-escalation")
             await PrintBoardAsync(metadata, cancellationToken);
+    }
+
+    private async Task ApplyChangesAsync(CancellationToken cancellationToken)
+    {
+        var records = changes!.ReadAvailable(out var discontinuity);
+        if (discontinuity is not null)
+        {
+            await RefreshAllAsync(cancellationToken);
+            return;
+        }
+        foreach (var record in records)
+        {
+            if (record.Sequence <= _coveredSequence) continue;
+            if (record.ChangeKind == ChangeStreamRecord.OwnerDecisionRaised)
+                await RefreshQuestionsAsync(cancellationToken);
+            else
+            {
+                var id = record.GoalId;
+                if (id.Length != 32)
+                {
+                    var matches = _board.Keys.Where(key => key.StartsWith(id, StringComparison.OrdinalIgnoreCase)).ToArray();
+                    if (matches.Length != 1)
+                    {
+                        await RefreshAllAsync(cancellationToken);
+                        return;
+                    }
+                    id = matches[0];
+                }
+                var kernel = await state.LoadGoalsAsync([new GoalId(id)], cancellationToken);
+                var goal = kernel.Goals.SingleOrDefault(goal => goal.Id.Value.Equals(id, StringComparison.OrdinalIgnoreCase));
+                if (goal is null || !IsActive(goal.Status))
+                {
+                    _board.Remove(id);
+                    Announce($"{id[..Math.Min(8, id.Length)]} | removed from board");
+                }
+                else
+                {
+                    var card = ToCard(goal);
+                    _board[id] = card;
+                    PrintBoardRow(card);
+                }
+            }
+            _coveredSequence = record.Sequence;
+        }
+    }
+
+    private async Task RefreshAllAsync(CancellationToken cancellationToken)
+    {
+        var anchor = changes!.Reanchor();
+        var metadata = await RefreshQuestionsAsync(cancellationToken);
+        await PrintBoardAsync(metadata, cancellationToken);
+        _coveredSequence = anchor;
     }
 
     internal async Task<bool> HandleCommandAsync(string raw, CancellationToken cancellationToken)
@@ -163,10 +225,15 @@ internal sealed class OwnerConsoleSession(
     private async Task PrintBoardAsync(IReadOnlyList<GoalSummary>? metadata, CancellationToken cancellationToken)
     {
         var goals = await LoadActiveAsync(metadata, cancellationToken);
+        _board.Clear();
+        foreach (var goal in goals) _board[goal.Id] = goal;
         Announce($"board | active goals: {goals.Count} | owner questions: {_open.Count}");
         foreach (var goal in goals)
-            output.WriteLine($"{goal.Id[..Math.Min(8, goal.Id.Length)]} | {goal.Title.Replace('\r', ' ').Replace('\n', ' ')} | {goal.State} | {goal.CurrentRole?.ToString() ?? "-"} | {Age(goal.LastEvent)}");
+            PrintBoardRow(goal);
     }
+
+    private void PrintBoardRow(OwnerGoalCard goal) =>
+        output.WriteLine($"{goal.Id[..Math.Min(8, goal.Id.Length)]} | {goal.Title.Replace('\r', ' ').Replace('\n', ' ')} | {goal.State} | {goal.CurrentRole?.ToString() ?? "-"} | {Age(goal.LastEvent)}");
 
     private async Task PrintGoalAsync(string prefix, CancellationToken cancellationToken)
     {
@@ -189,12 +256,14 @@ internal sealed class OwnerConsoleSession(
             .Select(item => new GoalId(item.Id)).ToArray();
         if (ids.Length == 0) return [];
         var kernel = await state.LoadGoalsAsync(ids, cancellationToken);
-        return kernel.Goals.Where(goal => IsActive(goal.Status)).Select(goal =>
-        {
-            var task = goal.Tasks.FirstOrDefault(item => item.Status != WorkTaskStatus.Completed) ?? goal.Tasks.LastOrDefault();
-            return new OwnerGoalCard(goal.Id.Value, OwnerGoalTitle.From(goal.Objective), goal.Status, task?.RequiredRole,
-                goal.Timeline.OrderByDescending(item => item.OccurredAt).FirstOrDefault()?.OccurredAt);
-        }).ToArray();
+        return kernel.Goals.Where(goal => IsActive(goal.Status)).Select(ToCard).ToArray();
+    }
+
+    private static OwnerGoalCard ToCard(Goal goal)
+    {
+        var task = goal.Tasks.FirstOrDefault(item => item.Status != WorkTaskStatus.Completed) ?? goal.Tasks.LastOrDefault();
+        return new OwnerGoalCard(goal.Id.Value, OwnerGoalTitle.From(goal.Objective), goal.Status, task?.RequiredRole,
+            goal.Timeline.OrderByDescending(item => item.OccurredAt).FirstOrDefault()?.OccurredAt);
     }
 
     private static bool IsActive(GoalStatus status) => status is not

@@ -29,6 +29,8 @@ internal static class OwnerConsoleVerb
                 ? SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath)
                 : new EmptyStateQueries();
             var source = new ConductEventFileSource(workspace.ConductEventsLogPath, clock);
+            var changes = new ChangeStreamFileReader(Path.Combine(
+                Path.GetDirectoryName(workspace.ConductEventsLogPath) ?? ".", ChangeStreamWriter.FileName));
             var session = new OwnerConsoleSession(
                 state,
                 new OwnerQuestionReadModel(state, workspace.OrchestratorDirectory),
@@ -38,7 +40,7 @@ internal static class OwnerConsoleVerb
                 new GoalEventFileTail(workspace.GoalLifecycleEventsDirectory),
                 new SystemConsoleOutput(), clock,
                 new CliConductorConsoleAdapter(workspace),
-                new CliOwnerDigestConsoleAdapter(workspace));
+                new CliOwnerDigestConsoleAdapter(workspace), changes);
             await new OwnerConsoleLoop(session, new SystemConsoleInput(), source, clock)
                 .RunAsync(cancellationToken);
             return 0;
