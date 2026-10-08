@@ -7,20 +7,13 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed partial class ConductorDriver
 {
     private const int MaxWorkerBuildCheckRecoveries = 2;
-    private const string BuildSlotLockTimeout = "Timed out waiting for build lease execution lock";
-    private const string BuildSlotLockTimeoutBlock =
-        "build-slot lock timeout: the build check never ran because the build-slot lock timed out.";
     private Func<GoalId, TaskId, string, TaskSpec>? _workerBuildRecoveryRetry;
     private Func<GoalId, string> _workerBuildArtifactsPath =
         goalId => DotnetBuildEnvironmentManager.GoalArtifactsPath(goalId);
 
     private ConductorAdvanceResult? TryRecoverFailedWorkerBuildCheck(
-        Goal goal,
-        string goalPrefix,
-        ConductorAutonomyPolicy policy,
-        GoalLifecycleState state,
-        FailedGoalRecoveryDecision decision,
-        IReadOnlyList<FailedGoalPendingNote> pendingNotes)
+        Goal goal, string goalPrefix, ConductorAutonomyPolicy policy, GoalLifecycleState state,
+        FailedGoalRecoveryDecision decision, IReadOnlyList<FailedGoalPendingNote> pendingNotes)
     {
         var task = goal.Tasks.FirstOrDefault(candidate =>
             (candidate.Id == decision.Identity.TaskId ||
@@ -34,76 +27,83 @@ internal sealed partial class ConductorDriver
                     DispatchFailureClassifier.Classify(candidate, verification).ClassifierReceipt),
                 DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed,
                 StringComparison.Ordinal));
-        if (task is null)
-            return null;
-
+        if (task is null) return null;
         var errors = WorkerBuildLogErrorReader.ReadNewest(_workerBuildArtifactsPath(goal.Id));
         var lockTimeout = errors is null && IsBuildSlotLockTimeout(task.LastVerification!);
         if (errors is null && !lockTimeout)
         {
             ApplyPendingFailedGoalNotes(goal, pendingNotes);
-            return Escalate(goal, goalPrefix, policy, state, decision.Reason);
+            var escalated = Escalate(goal, goalPrefix, policy, state, decision.Reason);
+            return escalated with { Outcome = ((ConductorAdvanceOutcome.Escalated)escalated.Outcome) with {
+                Decision = FailedGoalRecoveryDecisionRecords.BuildLogUnavailable(decision.Identity, decision.Reason) } };
         }
-
         _beforeFailedGoalRecoveryEffect?.Invoke(goal, decision);
         if (!IsFailedGoalRecoveryContextCurrent(goal, policy, state, decision, out var staleReason))
         {
             ApplyPendingFailedGoalNotes(goal, pendingNotes);
             return MakeResult(goal.Id.Value, goalPrefix, policy,
-                new ConductorAdvanceOutcome.Held(state, staleReason));
+                new ConductorAdvanceOutcome.Held(state, staleReason) {
+                    Decision = FailedGoalRecoveryDecisionRecords.StaleRecoveryFacts(decision.Identity, staleReason) });
         }
         ApplyPendingFailedGoalNotes(goal, pendingNotes);
-
-        var errorBlock = errors?.Format(20) ?? BuildSlotLockTimeoutBlock;
+        var errorBlock = WorkerBuildCheckRecoveryText.ErrorBlock(errors?.Format(20));
         var worktreePath = _executionDirectory is null ? null : GoalWorktrees.TryResolve(_executionDirectory, goal.Id);
         if (worktreePath is null)
-            return Escalate(goal, goalPrefix, policy, state,
-                $"{decision.Reason}{Environment.NewLine}checkpoint commit failed: goal worktree unavailable.{Environment.NewLine}{errorBlock}");
-
+        {
+            var reason = WorkerBuildCheckRecoveryText.EscalationReason(decision.Reason, "checkpoint commit failed: goal worktree unavailable.", errorBlock);
+            var escalated = Escalate(goal, goalPrefix, policy, state, reason);
+            return escalated with { Outcome = ((ConductorAdvanceOutcome.Escalated)escalated.Outcome) with {
+                Decision = FailedGoalRecoveryDecisionRecords.WorktreeUnavailable(decision.Identity, reason) } };
+        }
         var committer = new DispatchWorktreeCommitter();
         var dispatchedAt = task.LastDispatch?.DispatchedAt ?? DateTimeOffset.MinValue;
         if (!committer.TryInspectGoalWorktree(worktreePath, goal.Id, dispatchedAt, out var worktree, forceRefresh: true))
-            return Escalate(goal, goalPrefix, policy, state,
-                $"{decision.Reason}{Environment.NewLine}checkpoint commit failed: goal worktree inspection unavailable.{Environment.NewLine}{errorBlock}");
-
+        {
+            var reason = WorkerBuildCheckRecoveryText.EscalationReason(decision.Reason, "checkpoint commit failed: goal worktree inspection unavailable.", errorBlock);
+            var escalated = Escalate(goal, goalPrefix, policy, state, reason);
+            return escalated with { Outcome = ((ConductorAdvanceOutcome.Escalated)escalated.Outcome) with {
+                Decision = FailedGoalRecoveryDecisionRecords.WorktreeInspectionUnavailable(decision.Identity, reason) } };
+        }
         var exhausted = task.WorkerBuildCheckRecoveryCount >= MaxWorkerBuildCheckRecoveries;
-        var subject = exhausted
-            ? $"checkpoint: worker-build-check-failed exhausted 2/2 for task {task.Id.Value}"
-            : $"checkpoint: worker-build-check-failed recovery {task.WorkerBuildCheckRecoveryCount + 1}/2 for task {task.Id.Value}";
+        var subject = WorkerBuildCheckRecoveryText.CheckpointSubject(exhausted, task.WorkerBuildCheckRecoveryCount, task.Id.Value);
         var checkpoint = worktree.Head;
         var committed = false;
         if (!worktree.IsClean)
         {
             var commit = committer.TryCommitWorktreeEdits(worktreePath, subject, worktree.DirtyPaths);
             if (!commit.Succeeded)
-                return Escalate(goal, goalPrefix, policy, state,
-                    $"{decision.Reason}{Environment.NewLine}checkpoint commit failed: {commit.Diagnostic}{Environment.NewLine}{errorBlock}");
+            {
+                var reason = WorkerBuildCheckRecoveryText.EscalationReason(decision.Reason, $"checkpoint commit failed: {commit.Diagnostic}", errorBlock);
+                var escalated = Escalate(goal, goalPrefix, policy, state, reason);
+                return escalated with { Outcome = ((ConductorAdvanceOutcome.Escalated)escalated.Outcome) with {
+                    Decision = FailedGoalRecoveryDecisionRecords.CheckpointCommitFailed(decision.Identity, reason) } };
+            }
             if (!committer.TryInspectGoalWorktree(worktreePath, goal.Id, dispatchedAt, out var after, forceRefresh: true) || !after.IsClean)
-                return Escalate(goal, goalPrefix, policy, state,
-                    $"{decision.Reason}{Environment.NewLine}checkpoint commit failed: worktree remained dirty after commit.{Environment.NewLine}{errorBlock}");
+            {
+                var reason = WorkerBuildCheckRecoveryText.EscalationReason(decision.Reason, "checkpoint commit failed: worktree remained dirty after commit.", errorBlock);
+                var escalated = Escalate(goal, goalPrefix, policy, state, reason);
+                return escalated with { Outcome = ((ConductorAdvanceOutcome.Escalated)escalated.Outcome) with {
+                    Decision = FailedGoalRecoveryDecisionRecords.CheckpointDirtyAfterCommit(decision.Identity, reason) } };
+            }
             checkpoint = after.Head;
             committed = true;
         }
 
         if (exhausted || _workerBuildRecoveryRetry is null)
-            return Escalate(goal, goalPrefix, policy, state,
-                $"{decision.Reason}{Environment.NewLine}checkpoint commit: {checkpoint}{Environment.NewLine}{errorBlock}");
-
-        var feedback = $"worker-build-check-failed automatic recovery {task.WorkerBuildCheckRecoveryCount + 1}/2:" +
-            Environment.NewLine + (committed ? $"checkpoint commit {checkpoint}" :
-                $"no uncommitted changes were found; goal branch HEAD {checkpoint}") +
-            Environment.NewLine + (lockTimeout
-                ? BuildSlotLockTimeoutBlock + Environment.NewLine + "Rerun scripts/Invoke-WorkerBuildCheck.ps1 after the last edit."
-                : "Fix only what the build reports below, and run scripts/Invoke-WorkerBuildCheck.ps1 after the last edit." +
-                    Environment.NewLine + errors!.Format(50));
-        try
         {
-            _workerBuildRecoveryRetry(goal.Id, task.Id, feedback);
+            var reason = WorkerBuildCheckRecoveryText.EscalationReason(decision.Reason, $"checkpoint commit: {checkpoint}", errorBlock);
+            var escalated = Escalate(goal, goalPrefix, policy, state, reason);
+            return escalated with { Outcome = ((ConductorAdvanceOutcome.Escalated)escalated.Outcome) with {
+                Decision = FailedGoalRecoveryDecisionRecords.BuildCheckRecoveryExhausted(decision.Identity, reason) } };
         }
+        var feedback = WorkerBuildCheckRecoveryText.RetryFeedback(task.WorkerBuildCheckRecoveryCount, committed, checkpoint, lockTimeout ? null : errors!.Format(50));
+        try { _workerBuildRecoveryRetry(goal.Id, task.Id, feedback); }
         catch (InvalidOperationException ex)
         {
-            return Escalate(goal, goalPrefix, policy, state,
-                $"{decision.Reason}{Environment.NewLine}automatic retry failed: {ex.Message}{Environment.NewLine}checkpoint commit: {checkpoint}{Environment.NewLine}{errorBlock}");
+            var reason = WorkerBuildCheckRecoveryText.EscalationReason(decision.Reason, $"automatic retry failed: {ex.Message}{Environment.NewLine}checkpoint commit: {checkpoint}", errorBlock);
+            var escalated = Escalate(goal, goalPrefix, policy, state, reason);
+            return escalated with { Outcome = ((ConductorAdvanceOutcome.Escalated)escalated.Outcome) with {
+                Decision = FailedGoalRecoveryDecisionRecords.BuildCheckRetryFailed(decision.Identity, reason) } };
         }
 
         var refreshedGoal = GetCurrentGoal(goal);
@@ -112,15 +112,15 @@ internal sealed partial class ConductorDriver
             refreshedGoal.Tasks.Any(candidate => candidate.LastProcess is { IsRunning: true }))
             return MakeResult(refreshedGoal.Id.Value, goalPrefix, policy,
                 new ConductorAdvanceOutcome.Held(
-                    GoalLifecycle.ResolveState(refreshedGoal, GetFacts(refreshedGoal)),
-                    "Worker build check retry was applied; dispatch start awaits a fresh lifecycle observation."));
+                    GoalLifecycle.ResolveState(refreshedGoal, GetFacts(refreshedGoal)), WorkerBuildCheckRecoveryText.RetryAppliedHeld) {
+                    Decision = FailedGoalRecoveryDecisionRecords.BuildCheckRetryApplied(decision.Identity, WorkerBuildCheckRecoveryText.RetryAppliedHeld) });
         return ExecuteDispatchAndStart(refreshedGoal, goalPrefix, policy, GoalLifecycleState.WorkspaceReady);
     }
 
     private static bool IsBuildSlotLockTimeout(TaskVerificationRecord verification)
     {
         var output = verification.StandardError + Environment.NewLine + verification.StandardOutput;
-        return output.Contains(BuildSlotLockTimeout, StringComparison.Ordinal) &&
+        return output.Contains(WorkerBuildCheckRecoveryText.BuildSlotLockTimeout, StringComparison.Ordinal) &&
             !output.Split('\n').Any(WorkerBuildLogErrorReader.IsCompilerDiagnostic);
     }
 }
