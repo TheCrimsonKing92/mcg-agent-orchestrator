@@ -28,6 +28,17 @@ public sealed class AuthorBriefDraftPromptTests
         Assert.True(numberingIndex >= 0, "The criterion-numbering guidance must be present.");
         Assert.Equal(1, lines.Count(line => line == postLandingRule));
         Assert.Equal(postLandingRule, lines[numberingIndex + 1]);
+        const string partialRule = "A new class goes in a separately named type in its own file, never in a new partial file of an existing class.";
+        const string preChangeRule = "A criterion that needs a test to fail against the pre-change code is never assigned to Acceptance, because focused evidence runs only on the candidate; the pre-change half belongs to a Reviewer reading or to a committed negative-control test that runs on the candidate.";
+        Assert.Equal(1, lines.Count(line => line == partialRule));
+        Assert.Equal(partialRule, lines[numberingIndex + 2]);
+        Assert.Equal(1, lines.Count(line => line == preChangeRule));
+        Assert.Equal(preChangeRule, lines[numberingIndex + 3]);
+        Assert.DoesNotContain(BriefLint.Lint(prompt), finding => finding.Kind == "pre-change-failure-criterion");
+        var shapeChecks = AuthorBriefDraftChecks.Run(prompt, CliAuthorDraftCommandTests.Fixture.MainSha, fixture.Repository)
+            .Where(check => check.Name is "new-partial-file" or "pre-change-failure-criterion").ToArray();
+        Assert.Equal(2, shapeChecks.Length);
+        Assert.All(shapeChecks, check => Assert.True(check.Passed, check.Detail));
         Assert.Contains(fixture.Item.Title, prompt);
         Assert.Contains(fixture.Item.Body, prompt);
         Assert.Contains("Inspect the owning seam", prompt);

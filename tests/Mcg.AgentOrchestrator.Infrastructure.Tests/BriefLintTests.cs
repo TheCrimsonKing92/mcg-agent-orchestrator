@@ -3,6 +3,63 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 // Parallel-safe: lint operates only on the supplied text.
 public sealed class BriefLintTests
 {
+    public static IEnumerable<object[]> PreChangeFailureCriteria()
+    {
+        foreach (var anchor in new[] { "pre-change", "prechange", "before the change", "prior code",
+                     "prior implementation", "old code", "unchanged code" })
+        foreach (var failure in new[] { "fail", "fails", "failing", "red" })
+        foreach (var executor in new[] { "Acceptance executes", "Acceptance runs", "assigned to Acceptance" })
+            yield return [$"The test must be {failure} against {anchor}. Developer owns; {executor}. TEST-VERIFIABLE.", anchor];
+    }
+
+    public static IEnumerable<object[]> AllowedPreChangeBriefs()
+    {
+        const string demand = "The test fails against pre-change code. Developer owns; Acceptance executes. TEST-VERIFIABLE.";
+        yield return [$"## Acceptance criteria\n1. {demand.Replace("Acceptance executes", "Reviewer executes")}"];
+        yield return [$"## What to build\n1. {demand}\n## Acceptance criteria\n1. The receipt exists."];
+        yield return [$"## Acceptance criteria\n1. The receipt exists.\n## Scope\n{demand}"];
+        yield return [$"## Acceptance criteria\n{demand}\n1. The receipt exists."];
+        yield return ["## Acceptance criteria\n1. A committed negative-control test runs on the candidate and fails against old code. Developer owns; Acceptance executes. TEST-VERIFIABLE."];
+        yield return ["## Acceptance criteria\n1. On the candidate, a committed negative control test is red for prior code. Developer owns; Acceptance runs. TEST-VERIFIABLE."];
+        yield return ["## Acceptance criteria\n1. Returns a failing pre-change-failure-criterion check. Developer owns; Acceptance executes. TEST-VERIFIABLE."];
+        yield return ["## Acceptance criteria\n1. A criterion that needs a test to fail against the pre-change code is never assigned to Acceptance, because focused evidence runs only on the candidate; the pre-change half belongs to a Reviewer reading or to a committed negative-control test that runs on the candidate."];
+        yield return ["## Acceptance criteria\n1. The test fails against pre-change code; Acceptance reads the receipt, Reviewer executes."];
+        yield return ["## Acceptance criteria\n1. The test passes against pre-change code. Acceptance executes."];
+        yield return ["## Acceptance criteria\n1. The test fails against candidate code. Acceptance executes."];
+    }
+
+    [Theory]
+    [MemberData(nameof(PreChangeFailureCriteria))]
+    public void Numbered_pre_change_failure_Blocks_dispatch(string criterion, string anchor)
+    {
+        var finding = Assert.Single(BriefLint.Lint($"## Acceptance criteria\n1. {criterion}"));
+        Assert.Equal("pre-change-failure-criterion", finding.Kind);
+        Assert.Equal("blocks-dispatch", finding.SeverityToken);
+        Assert.Contains($"\"{anchor}\"", finding.Message, StringComparison.Ordinal);
+        Assert.Equal("Make the pre-change half a Reviewer reading, or a committed negative-control test that runs on the candidate.", finding.Remedy);
+    }
+
+    [Theory]
+    [MemberData(nameof(AllowedPreChangeBriefs))]
+    public void Allowed_pre_change_wording_Does_not_block_dispatch(string brief) =>
+        Assert.DoesNotContain(BriefLint.Lint(brief), finding => finding.Kind == "pre-change-failure-criterion");
+
+    [Theory]
+    [InlineData("\n", ".")]
+    [InlineData("\r\n", ")")]
+    public void Repeated_pre_change_demands_Report_each_numbered_line(string newline, string ordinal)
+    {
+        const string criterion = "The test is RED for OLD CODE. ACCEPTANCE RUNS.";
+        var findings = BriefLint.Lint(string.Join(newline, "## ACCEPTANCE CRITERIA",
+            $"1{ordinal} {criterion}", $"2{ordinal} {criterion}", "## Scope", $"3{ordinal} {criterion}"));
+        Assert.Equal(2, findings.Count);
+        Assert.All(findings, finding =>
+        {
+            Assert.Equal("pre-change-failure-criterion", finding.Kind);
+            Assert.Contains("\"OLD CODE\"", finding.Message, StringComparison.Ordinal);
+        });
+    }
+
     public static IEnumerable<object[]> PostLandingPhrases()
     {
         yield return ["After this goal lands"];

@@ -16,7 +16,7 @@ public sealed class CliAuthorDraftCommandTestsHouseConventions
     public void House_draft_without_planner_section_passes_all_eight_checks(string newline)
     {
         var checks = Run(HouseDraft.ReplaceLineEndings(newline));
-        Assert.Equal(new[] { "sections", "criteria-present", "owner-sentence", "premise-citations", "numbered-criteria", "developer-deferred-criterion", "build-item-count", "post-landing-criterion" },
+        Assert.Equal(new[] { "sections", "criteria-present", "owner-sentence", "premise-citations", "numbered-criteria", "developer-deferred-criterion", "build-item-count", "post-landing-criterion", "new-partial-file", "pre-change-failure-criterion" },
             checks.Select(check => check.Name).ToArray());
         Assert.All(checks, check => Assert.True(check.Passed, check.Detail));
     }
