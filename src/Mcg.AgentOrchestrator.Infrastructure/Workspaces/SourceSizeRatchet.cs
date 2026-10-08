@@ -387,8 +387,9 @@ internal static class SourceSizeRatchet
             new SourceClassCeiling("CliCommandHandlers", 12223, 30),
             new SourceClassCeiling("GoalAcceptanceVerifier", 9064, 32),
             new SourceClassCeiling("AgentOrchestratorKernel", 9506, 27),
-            // Goal d6033045 extracted the pre-admission receipt pass to PassedMergeTrainReceiptAdmission.
-            new SourceClassCeiling("ConductorBatchLoop", 9254, 56),
+            // Goal d6033045 extracted the pre-admission receipt pass to PassedMergeTrainReceiptAdmission; goal 1d0f2317
+            // adds one admission predicate to exclude stream-complete children before slot reservation. Measured 9255.
+            new SourceClassCeiling("ConductorBatchLoop", 9255, 56),
             new SourceClassCeiling("CliPersistentStateRunner", 6043, 18),
         });
 
