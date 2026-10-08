@@ -21,10 +21,12 @@ internal static class CliRoundValueQueryCommand
         DateTimeOffset? baselineUntil = null;
         var json = false;
         var bySkill = false;
+        var byCheck = false;
         for (var i = 1; i < args.Count; i++)
         {
             if (args[i] == "--json") { json = true; continue; }
             if (args[i] == "--by-skill") { bySkill = true; continue; }
+            if (args[i] == "--by-check") { byCheck = true; continue; }
             if (args[i] is not ("--since" or "--until" or "--baseline-since" or "--baseline-until") ||
                 i + 1 == args.Count) { Invalid(); return; }
             var flag = args[i++];
@@ -44,10 +46,19 @@ internal static class CliRoundValueQueryCommand
         var metadata = queries.ListGoalMetadataAsync().GetAwaiter().GetResult();
         var goals = metadata.Count == 0 ? [] : queries.LoadGoalsAsync(
             metadata.Select(g => new GoalId(g.Id)).ToArray()).GetAwaiter().GetResult().Goals;
-        if (bySkill)
+        if (bySkill || byCheck)
         {
-            WriteSkills(RoundValueSkillSlice.Build(goals, since.Value, until,
-                CliOwnerDigestRetryIntents.Read(workspace, until)), json);
+            var sliceIntents = CliOwnerDigestRetryIntents.Read(workspace, until);
+            var skills = bySkill ? RoundValueSkillSlice.Build(goals, since.Value, until, sliceIntents) : null;
+            var checks = byCheck ? RoundValueCheckSlice.Build(goals, since.Value, until, sliceIntents) : null;
+            if (json && skills is not null && checks is not null)
+                Console.WriteLine(JsonSerializer.Serialize(new { bySkill = skills, byCheck = checks },
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+            else
+            {
+                if (skills is not null) WriteSkills(skills, json);
+                if (checks is not null) WriteChecks(checks, json);
+            }
             return;
         }
         var intents = CliOwnerDigestRetryIntents.Read(workspace,
@@ -132,6 +143,23 @@ internal static class CliRoundValueQueryCommand
         foreach (var row in slice.Rows)
             Console.WriteLine(FormattableString.Invariant($"{row.Skill} | {row.Selected} | {row.Read} | {row.Claimed} | {row.Productive} | {row.Overhead} | {row.Wasted}"));
         Console.WriteLine(FormattableString.Invariant($"Read unavailable | {slice.ReadUnavailable}"));
+    }
+
+    private static void WriteChecks(RoundValueCheckSlice slice, bool json)
+    {
+        if (json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(slice, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+            return;
+        }
+        Console.WriteLine(FormattableString.Invariant($"Round value by check [{slice.Since:O}, {slice.Until:O}) | cohort = landed or lost goals whose last round is in the window"));
+        Console.WriteLine("Check | Rounds | Productive | Overhead | Wasted | Goals landed | Goals lost | Outcome classes");
+        foreach (var row in slice.Rows)
+        {
+            var outcomes = row.OutcomeClasses.Count == 0 ? "none" : string.Join(",", row.OutcomeClasses
+                .Select(o => FormattableString.Invariant($"{o.OutcomeClass}={o.Rounds}")));
+            Console.WriteLine(FormattableString.Invariant($"{row.Check} | {row.Rounds} | {row.Productive} | {row.Overhead} | {row.Wasted} | {row.GoalsLanded} | {row.GoalsLost} | {outcomes}"));
+        }
     }
 
     private static bool TryTimestamp(string text, out DateTimeOffset at)

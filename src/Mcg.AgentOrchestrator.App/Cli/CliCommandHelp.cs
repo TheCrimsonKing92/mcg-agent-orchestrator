@@ -84,7 +84,7 @@ internal static class CliCommandHelp
     public const string LaneReuseShadowUsage = "Usage: lane-reuse-shadow [--since <ISO-8601>] [--until <ISO-8601>] [--json]";
     public const string RemoteExecutorsUsage = "Usage: remote-executors [--since <ISO-8601>] [--last <N>] [--json]";
     public const string RemoteLaneSelfTestUsage = "Usage: remote-lane-selftest --executor <id> [--timeout-minutes <n>]";
-    public const string RoundValueUsage = "Usage: round-value [--since <ISO-8601-with-offset>] [--until <ISO-8601-with-offset>] [--json] [--by-skill] [--baseline-since <ISO-8601-with-offset> --baseline-until <ISO-8601-with-offset>]";
+    public const string RoundValueUsage = "Usage: round-value [--since <ISO-8601-with-offset>] [--until <ISO-8601-with-offset>] [--json] [--by-skill] [--by-check] [--baseline-since <ISO-8601-with-offset> --baseline-until <ISO-8601-with-offset>]";
     public const string LessonUsage = "Usage: lesson record --situation <text> --rule <text> --evidence <ref>... [--applies-to <tag>...] [--goal <goal-prefix>] [--until-goal <goal-prefix>] [--actor-kind human|agent] | lesson retire <lesson-id> --reason <text> [--evidence <ref>...]";
     public const string LessonsUsage = "Usage: lessons [--all] [--applies-to <tag>] [--json]";
     public const string EscapeUsage = "Usage: escape record --goal <landed-goal-prefix> --reason <text> --evidence <ref>... [--found-by-goal <goal-prefix>] [--actor-kind human|agent]";
@@ -585,7 +585,7 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry RoundValue = new(
         RoundValueUsage,
         "Report productive, expected overhead and wasted rounds by terminal goal cohort; default window is 7 days.",
-        ["--since", "--until", "--json", "--by-skill", "--baseline-since", "--baseline-until", "--help", "-h"]);
+        ["--since", "--until", "--json", "--by-skill", "--by-check", "--baseline-since", "--baseline-until", "--help", "-h"]);
 
     private static readonly CommandHelpEntry Lesson = new(
         LessonUsage,
