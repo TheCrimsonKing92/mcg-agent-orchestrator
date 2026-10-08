@@ -1,34 +1,43 @@
 using Mcg.AgentOrchestrator.Infrastructure;
-using Mcg.AgentOrchestrator.App.Orchestration;
 using Terminal.Gui.App;
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 internal static class OwnerConsoleFullScreenHost
 {
+    // Shared startup seam: headless views use the same log-to-model path as the production host.
+    internal static async Task<(OwnerConsoleViewModel Model, List<OwnerConductEvent> Recent)> BuildInitialViewModelAsync(
+        OwnerConsoleViewModelBuilder builder, string conductLogPath, DateTimeOffset opened,
+        DateTimeOffset? last, CancellationToken token)
+    {
+        var recent = OwnerConsoleStartupActivity.ReadRecent(conductLogPath).ToList();
+        var model = await builder.BuildAsync(new(opened, last, recent, 0), token);
+        return (model, recent);
+    }
+
     internal static async Task<int> RunAsync(OrchestratorWorkspace workspace, CancellationToken cancellationToken)
     {
         var clock = TimeProvider.System;
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var token = linked.Token;
-        ConductEventFileSource? events = null;
+        IConductEventSource? events = null;
         using var rebuild = new SemaphoreSlim(1, 1);
         using IApplication app = Terminal.Gui.App.Application.Create();
         OwnerConsoleFullScreenView? view = null;
         Task? reader = null;
         try
         {
-            events = new ConductEventFileSource(workspace.ConductEventsLogPath, clock);
+            events = new OwnerConsoleStartupEventSource(workspace.ConductEventsLogPath, clock);
             IOrchestratorStateQueries state = File.Exists(workspace.SqliteStatePath)
                 ? SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath) : new EmptyOwnerConsoleStateQueries();
             var questions = new SerializedOwnerQuestionSource(new OwnerQuestionReadModel(state, workspace.OrchestratorDirectory));
             var builder = new OwnerConsoleViewModelBuilder(state, questions,
                 new ConductorLeaseLiveness(workspace.OrchestratorDirectory), new PortfolioGoalEpicLookup(workspace.PortfolioStorePath), clock);
             var opened = clock.GetUtcNow();
-            var recent = new List<OwnerConductEvent>();
             var last = events.LastActivity;
             var landings = 0;
-            var initial = await Task.Run(() => builder.BuildAsync(new(opened, last, [], 0), token), token)
+            var (initial, recent) = await Task.Run(() => BuildInitialViewModelAsync(
+                builder, workspace.ConductEventsLogPath, opened, last, token), token)
                 .WaitAsync(OwnerConsoleLoopOptions.Default.OperationBound, clock, token);
             app.Init();
             var controller = new OwnerConsoleScreenController(questions, new AttentionAnswerHandlerAdapter(workspace),
@@ -48,11 +57,7 @@ internal static class OwnerConsoleFullScreenHost
                     {
                         last = item.Timestamp;
                         if (OwnerConsoleViewModelBuilder.IsLanding(item)) landings++;
-                        if (ConductEventOperatorClassifier.Classify(item.EventKind, item.Detail) is not null)
-                        {
-                            recent.Add(item);
-                            if (recent.Count > OwnerConsoleViewModelBuilder.MaxActivityItems) recent.RemoveAt(0);
-                        }
+                        OwnerConsoleStartupActivity.Append(recent, item);
                     }
                     var inputs = new OwnerConsoleViewInputs(opened, last, recent.ToArray(), landings);
                     await refreshOperation.RunAsync("refresh after conductor event", async stepToken =>

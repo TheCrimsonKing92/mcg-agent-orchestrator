@@ -34,8 +34,8 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
             foreach (var goal in kernel.Goals.Where(goal => ids.Contains(goal.Id) && IsActive(goal.Status)))
                 board.Add(new(Prefix(goal.Id.Value), await epics.GetTitleAsync(goal.Id.Value, cancellationToken),
                     OwnerGoalTitle.From(goal.Objective), goal.Status.ToString(),
-                    goal.Tasks.FirstOrDefault(task => task.Status != WorkTaskStatus.Completed)?.RequiredRole.ToString() ?? "-",
-                    Age(goal.Timeline.OrderByDescending(item => item.OccurredAt).FirstOrDefault()?.OccurredAt)));
+                    OwnerConsoleGoalDetail.Stage(goal),
+                    Age(goal.Timeline.OrderByDescending(item => item.OccurredAt).FirstOrDefault()?.OccurredAt), goal.Id.Value));
         }
         var activity = inputs.RecentEvents.OrderByDescending(item => item.Timestamp)
             .Select(item => (Item: item, Tag: ConductEventOperatorClassifier.Classify(item.EventKind, item.Detail)))

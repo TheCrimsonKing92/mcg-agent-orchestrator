@@ -1,4 +1,3 @@
-using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
@@ -40,13 +39,25 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
         else if (character is 'a' or 'r') await AnswerAsync(character == 'a', operation, cancellationToken);
         else if (character == ':')
         {
-            var command = await dialogs.PromptTextAsync("Command", "conductor start|stop|status | digest | metrics | bell on|off | goal <id>");
+            var command = await dialogs.PromptTextAsync("Command", OwnerConsoleKeyHints.CommandPrompt);
             if (command is not null) await RunCommandAsync(command, operation, cancellationToken);
         }
         else if (character == 'q') QuitRequested = true;
     }
 
     private OwnerConsoleDecision? Selected() => Model?.Decisions.FirstOrDefault(item => item.Id == SelectedDecisionId);
+
+    internal Task ShowHelpAsync() => dialogs.ShowTextAsync("Help", OwnerConsoleKeyHints.HelpText);
+
+    internal async Task ShowGoalDetailAsync(string goalId, OwnerConsoleScreenOperation? operation = null,
+        CancellationToken cancellationToken = default)
+    {
+        var output = new OwnerConsoleCapturedOutput();
+        if (!await RunDependencyAsync("goal detail", stepToken =>
+            OwnerConsoleGoalDetail.ComposeAsync(state, tail, goalId, output, stepToken), operation, cancellationToken)) return;
+        cancellationToken.ThrowIfCancellationRequested();
+        await dialogs.ShowTextAsync("Goal", output.Text);
+    }
 
     private async Task AnswerAsync(bool accept, OwnerConsoleScreenOperation? operation, CancellationToken cancellationToken)
     {
@@ -121,15 +132,7 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
                     break;
                 case "goal":
                     if (parts.Length != 2) { output.WriteLine("usage: goal <id-prefix>"); break; }
-                    var matches = (await state.ListGoalMetadataAsync(stepToken))
-                        .Where(item => item.Id.StartsWith(parts[1], StringComparison.OrdinalIgnoreCase)).ToArray();
-                    if (matches.Length != 1)
-                    { output.WriteLine(matches.Length == 0 ? $"no goal matches '{parts[1]}'" : "ambiguous goal"); break; }
-                    var kernel = await state.LoadGoalsAsync([new GoalId(matches[0].Id)], stepToken);
-                    var goal = kernel.Goals.SingleOrDefault(item => item.Id.Value == matches[0].Id);
-                    if (goal is null) { output.WriteLine("goal state unavailable"); break; }
-                    output.WriteLine($"{goal.Id.Value} | {OwnerGoalTitle.From(goal.Objective)} | {goal.Status}");
-                    foreach (var item in tail.ReadLast(goal.Id.Value, 15)) output.WriteLine(item);
+                    await OwnerConsoleGoalDetail.ComposeAsync(state, tail, parts[1], output, stepToken);
                     break;
                 default: output.WriteLine("unknown command"); break;
             }

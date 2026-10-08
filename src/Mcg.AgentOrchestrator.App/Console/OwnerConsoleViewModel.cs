@@ -17,7 +17,7 @@ internal sealed record OwnerConsoleDecision(string Id, int Number, string GoalId
 }
 
 internal sealed record OwnerConsoleBoardRow(string GoalPrefix, string Epic, string Title,
-    string State, string Stage, TimeSpan? Age);
+    string State, string Stage, TimeSpan? Age, string GoalId);
 
 internal sealed record OwnerConsoleActivityItem(DateTimeOffset Timestamp, string Kind, string Tag,
     string GoalPrefix, string Detail);
