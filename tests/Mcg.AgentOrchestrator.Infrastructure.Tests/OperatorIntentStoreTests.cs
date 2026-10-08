@@ -605,8 +605,10 @@ public sealed class OperatorIntentStoreTests
         }
     }
 
-    [Xunit.Fact]
-    public async Task OpenExisting_CurrentSchema_ReadsIntentsWithoutChangingFilesOrCreatingWakeDirectory()
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public async Task OpenExisting_CurrentSchema_ReadsIntentsWithoutChangingFilesOrCreatingWakeDirectory(bool existingWal)
     {
         var root = CreateTempDirectory();
         try
@@ -618,7 +620,22 @@ public sealed class OperatorIntentStoreTests
             var claimed = await writer.EnqueueAsync(CreateRetryIntent("goal-two", "task-two", "claimed", "claimed-key"));
             claimed = (await writer.ClaimNextAsync("goal-two", "owner"))!;
             var expectedSummaries = await writer.ListActionableSummariesAsync(["goal-one", "goal-two"]);
+            if (existingWal)
+            {
+                using (var connection = writer.OpenConnection())
+                {
+                    using var command = connection.CreateCommand();
+                    command.CommandText = "PRAGMA journal_mode=WAL";
+                    Xunit.Assert.Equal("wal", command.ExecuteScalar());
+                }
+                Xunit.Assert.Equal((byte)2, File.ReadAllBytes(dbPath)[18]);
+                SqliteOperatorIntentStore.Setup(dbPath);
+            }
+            Xunit.Assert.Equal((byte)1, File.ReadAllBytes(dbPath)[18]);
+            Xunit.Assert.Equal((byte)1, File.ReadAllBytes(dbPath)[19]);
             var before = SnapshotFiles(root);
+            SqliteOperatorIntentStore.Setup(dbPath);
+            Xunit.Assert.Equal(before, SnapshotFiles(root));
             var wakeDirectory = Path.Combine(root, "reader-wakes");
 
             var reader = SqliteOperatorIntentStore.OpenExisting(root, wakeDirectory);
@@ -631,6 +648,8 @@ public sealed class OperatorIntentStoreTests
                 Xunit.Assert.Single(await reader.ListForGoalAsync("goal-two"))));
             Xunit.Assert.False(Directory.Exists(wakeDirectory));
             Xunit.Assert.Equal(before, SnapshotFiles(root));
+            Xunit.Assert.Equal(new[] { SqliteOperatorIntentStore.DatabaseFileName },
+                Directory.GetFiles(root).Select(Path.GetFileName).ToArray());
         }
         finally
         {

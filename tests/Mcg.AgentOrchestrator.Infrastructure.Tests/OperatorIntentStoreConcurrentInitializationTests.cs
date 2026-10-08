@@ -49,8 +49,10 @@ public sealed class OperatorIntentStoreConcurrentInitializationTests
         }
     }
 
-    [Xunit.Fact]
-    public async Task OperatorIntentStore_older_store_without_actor_kind_gains_column_once_and_rows_default_to_human()
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public async Task OperatorIntentStore_older_store_without_actor_kind_gains_column_once_and_rows_default_to_human(bool existingWal)
     {
         var root = CreateTempDirectory();
         try
@@ -93,11 +95,15 @@ public sealed class OperatorIntentStoreConcurrentInitializationTests
                         '2026-09-26T00:00:00.0000000+00:00', 'Claimed', 'owner-2',
                         '2026-09-26T01:00:00.0000000+00:00', NULL, NULL)
                     """);
+                if (existingWal)
+                    Execute(connection, "PRAGMA journal_mode=WAL");
             }
 
             Xunit.Assert.Empty(ReadActorKindColumns(databasePath));
             await InitializeTogether(databasePath, Path.Combine(root, "logs"), setupOnly: true);
 
+            Xunit.Assert.Equal((byte)1, File.ReadAllBytes(databasePath)[18]);
+            Xunit.Assert.Equal((byte)1, File.ReadAllBytes(databasePath)[19]);
             Xunit.Assert.Equal("TEXT", Xunit.Assert.Single(ReadActorKindColumns(databasePath)));
             var store = SqliteOperatorIntentStore.OpenExisting(root, Path.Combine(root, "reader-wakes"));
             var intent = Xunit.Assert.Single(await store.ListForGoalAsync("goal-1"));
@@ -139,6 +145,44 @@ public sealed class OperatorIntentStoreConcurrentInitializationTests
             var before = Snapshot(databasePath);
             SqliteOperatorIntentStore.Setup(databasePath);
             Xunit.Assert.Equal(before, Snapshot(databasePath));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task Setup_ConcurrentCurrentWalStore_PreservesRowsAndVersionAndAllowsSidecarFreeReads()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var databasePath = Path.Combine(root, SqliteOperatorIntentStore.DatabaseFileName);
+            SqliteOperatorIntentStore.Setup(databasePath);
+            var writer = SqliteOperatorIntentStore.ForDirectories(root, Path.Combine(root, "writer-wakes"));
+            var intent = await writer.EnqueueAsync(new OperatorIntentRecord(
+                "intent", "key", "retry", "goal", "task", "{}", ["payload.txt"],
+                "operator", "cli", "test-assurance", DateTimeOffset.Parse("2026-09-25T00:00:00Z")));
+            using (var connection = Open(databasePath))
+                Execute(connection, "PRAGMA journal_mode=WAL");
+            Xunit.Assert.Equal((byte)2, File.ReadAllBytes(databasePath)[18]);
+            var before = Snapshot(databasePath);
+
+            await InitializeTogether(databasePath, Path.Combine(root, "logs"), setupOnly: true);
+
+            Xunit.Assert.Equal(before, Snapshot(databasePath));
+            Xunit.Assert.Equal((byte)1, File.ReadAllBytes(databasePath)[18]);
+            Xunit.Assert.Equal((byte)1, File.ReadAllBytes(databasePath)[19]);
+            var bytes = File.ReadAllBytes(databasePath);
+            var wakeDirectory = Path.Combine(root, "reader-wakes");
+            var reader = SqliteOperatorIntentStore.OpenExisting(root, wakeDirectory);
+            Xunit.Assert.Equal(System.Text.Json.JsonSerializer.Serialize(intent),
+                System.Text.Json.JsonSerializer.Serialize(await reader.GetAsync(intent.Id)));
+            Xunit.Assert.Equal(bytes, File.ReadAllBytes(databasePath));
+            Xunit.Assert.Equal(new[] { SqliteOperatorIntentStore.DatabaseFileName },
+                Directory.GetFiles(root).Select(Path.GetFileName).ToArray());
+            Xunit.Assert.False(Directory.Exists(wakeDirectory));
         }
         finally
         {
