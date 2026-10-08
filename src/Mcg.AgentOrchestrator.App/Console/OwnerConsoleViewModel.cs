@@ -20,7 +20,7 @@ internal sealed record OwnerConsoleBoardRow(string GoalPrefix, string Epic, stri
     string State, string Stage, TimeSpan? Age, string GoalId);
 
 internal sealed record OwnerConsoleActivityItem(DateTimeOffset Timestamp, string Kind, string Tag,
-    string GoalPrefix, string Detail);
+    string GoalPrefix, string Detail, string GoalTitle = "", string Phrase = "");
 
 internal sealed record OwnerConsoleViewInputs(DateTimeOffset OpenedAt, DateTimeOffset? LastConductEvent,
     IReadOnlyList<OwnerConductEvent> RecentEvents, int LandingsSinceOpen);

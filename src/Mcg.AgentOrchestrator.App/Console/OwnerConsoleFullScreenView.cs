@@ -140,11 +140,14 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     private void RenderActivity()
     {
         var selected = _activity.SelectedItem;
-        ActivityLines = _notices.Concat(_controller.Model?.Activity.Select(item =>
-            $"{item.Timestamp:HH:mm:ss} {item.Tag} {item.GoalPrefix} {item.Kind}: {item.Detail}") ?? [])
+        var selectedLine = selected is { } index && index >= 0 && index < ActivityLines.Count
+            ? ActivityLines[index] : null;
+        ActivityLines = _notices.Concat(_controller.Model?.Activity.Select(OwnerConsoleActivityPresentation.Line) ?? [])
             .Take(OwnerConsoleViewModelBuilder.MaxActivityItems).ToArray();
         _activity.SetSource(new ObservableCollection<string>(ActivityLines));
-        _activity.SelectedItem = ActivityLines.Count == 0 ? null : Math.Clamp(selected ?? 0, 0, ActivityLines.Count - 1);
+        var preserved = selectedLine is null ? -1 : Array.IndexOf(ActivityLines.ToArray(), selectedLine);
+        _activity.SelectedItem = ActivityLines.Count == 0 ? null :
+            preserved >= 0 ? preserved : Math.Clamp(selected ?? 0, 0, ActivityLines.Count - 1);
     }
 
     private async void OnKeyDown(object? sender, Key key)

@@ -6,7 +6,7 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 internal static class OwnerConsoleStartupActivity
 {
     internal static bool IsOperatorEvent(OwnerConductEvent item) =>
-        ConductEventOperatorClassifier.Classify(item.EventKind, item.Detail) is not null;
+        OwnerConsoleActivityPresentation.Classify(item) is not null;
 
     internal static IReadOnlyList<OwnerConductEvent> ReadRecent(string path)
     {

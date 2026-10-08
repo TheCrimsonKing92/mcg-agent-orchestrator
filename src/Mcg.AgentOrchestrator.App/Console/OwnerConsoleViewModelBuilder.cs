@@ -38,10 +38,12 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
                     Age(goal.Timeline.OrderByDescending(item => item.OccurredAt).FirstOrDefault()?.OccurredAt), goal.Id.Value));
         }
         var activity = inputs.RecentEvents.OrderByDescending(item => item.Timestamp)
-            .Select(item => (Item: item, Tag: ConductEventOperatorClassifier.Classify(item.EventKind, item.Detail)))
+            .Select(item => (Item: item, Tag: OwnerConsoleActivityPresentation.Classify(item)))
             .Where(pair => pair.Tag is not null).Take(MaxActivityItems)
             .Select(pair => new OwnerConsoleActivityItem(pair.Item.Timestamp, pair.Item.EventKind, pair.Tag!,
-                Prefix(pair.Item.GoalId ?? string.Empty), pair.Item.Detail)).ToImmutableArray();
+                Prefix(pair.Item.GoalId ?? string.Empty), pair.Item.Detail,
+                OwnerGoalTitle.From(metadata.FirstOrDefault(goal => goal.Id == pair.Item.GoalId)?.Objective),
+                OwnerConsoleActivityPresentation.Phrase(pair.Item, pair.Tag!))).ToImmutableArray();
         return new(new(liveness.IsRunning(), board.Count, decisions.Length, snapshot.Hidden.Count,
             Age(inputs.LastConductEvent), inputs.LandingsSinceOpen), decisions, board.ToImmutable(), activity);
     }
