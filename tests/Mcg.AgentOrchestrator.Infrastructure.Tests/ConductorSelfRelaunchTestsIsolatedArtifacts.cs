@@ -12,23 +12,28 @@ public sealed class ConductorSelfRelaunchTestsIsolatedArtifacts
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void Build_command_uses_unique_sibling_roots_adjacent_to_output(bool trailingSeparator)
+    public void Build_command_reuses_source_cache_outside_successor_output(bool trailingSeparator)
     {
         using var fixture = new BuildFixture();
         var output = fixture.OutputDirectory + (trailingSeparator ? Path.DirectorySeparatorChar.ToString() : "");
         var first = ConductorSelfRelaunch.CreateAppBuildCommand(fixture.ProjectPath, output);
-        var second = ConductorSelfRelaunch.CreateAppBuildCommand(fixture.ProjectPath, output);
+        var second = ConductorSelfRelaunch.CreateAppBuildCommand(fixture.ProjectPath, output + "-next");
+        using var otherTree = new BuildFixture();
+        var other = ConductorSelfRelaunch.CreateAppBuildCommand(otherTree.ProjectPath, output);
 
-        Assert.NotEqual(first.IsolatedArtifactsRoot, second.IsolatedArtifactsRoot);
+        Assert.Equal(first.IsolatedArtifactsRoot, second.IsolatedArtifactsRoot);
+        Assert.NotEqual(first.IsolatedArtifactsRoot, other.IsolatedArtifactsRoot);
         foreach (var command in new[] { first, second })
         {
-            Assert.Equal(Path.GetDirectoryName(fixture.OutputDirectory), Path.GetDirectoryName(command.IsolatedArtifactsRoot));
+            Assert.True(Path.IsPathRooted(command.IsolatedArtifactsRoot));
+            Assert.Equal("..", Path.GetRelativePath(fixture.OutputDirectory, command.IsolatedArtifactsRoot)
+                .Split(Path.DirectorySeparatorChar)[0]);
             Assert.False(Directory.Exists(command.IsolatedArtifactsRoot));
             var property = Assert.Single(command.Arguments.Where(arg => arg.StartsWith(IsolationProperty, StringComparison.Ordinal)));
             Assert.Equal(IsolationProperty + command.IsolatedArtifactsRoot, property);
             Assert.Equal(new[]
             {
-                "build", fixture.ProjectPath, "--nologo", "--output", output,
+                "build", fixture.ProjectPath, "--nologo", "--output", command == first ? output : output + "-next",
                 property, "-v", "quiet", "-clp:ErrorsOnly"
             }, command.Arguments);
         }
@@ -45,10 +50,12 @@ public sealed class ConductorSelfRelaunchTestsIsolatedArtifacts
         var output = Path.Combine(OrchestratorTempRoot.GetRoot(tempParent), "tmp", "landing-app-build",
             new string('a', 16), new string('b', 40) + ".partial-" + new string('c', 32));
         var command = ConductorSelfRelaunch.CreateAppBuildCommand("App.csproj", output);
-        var intermediate = Path.Combine(command.IsolatedArtifactsRoot, "obj", longestProject,
+        var modeledCache = Path.Combine(OrchestratorTempRoot.GetRoot(tempParent), "tmp", "relaunch-build",
+            Path.GetFileName(command.IsolatedArtifactsRoot));
+        var intermediate = Path.Combine(modeledCache, "obj", longestProject,
             "Debug", longestProject + ".GeneratedMSBuildEditorConfig.editorconfig");
         Assert.True(intermediate.Length <= 259, $"Windows intermediate path exceeds MAX_PATH: {intermediate}");
-        Assert.StartsWith("r", Path.GetFileName(command.IsolatedArtifactsRoot));
+        Assert.Equal(16, Path.GetFileName(command.IsolatedArtifactsRoot).Length);
     }
 
     [Fact(Skip = "CS2012 negative control requires Windows mandatory exclusive file sharing.", SkipUnless = nameof(IsWindows))]
@@ -90,7 +97,7 @@ public sealed class ConductorSelfRelaunchTestsIsolatedArtifacts
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void Store_build_removes_isolated_artifacts_on_success_and_failure(bool compileError)
+    public void Store_build_retains_only_cache_intermediates_on_success_and_failure(bool compileError)
     {
         using var fixture = new BuildFixture(compileError);
         var result = ConductorSelfRelaunch.RunAppBuildProcess("dotnet",
@@ -107,10 +114,85 @@ public sealed class ConductorSelfRelaunchTestsIsolatedArtifacts
             Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
             Assert.True(File.Exists(Path.Combine(fixture.OutputDirectory, BuildFixture.ProjectName + ".dll")));
         }
-        // A surviving sibling catches missing finally cleanup; no in-tree obj catches missing isolation.
+        var command = ConductorSelfRelaunch.CreateAppBuildCommand(fixture.ProjectPath, fixture.OutputDirectory);
+        // Retry correction retains the cache; it must stay outside the successor and store retention.
+        Assert.True(Directory.Exists(Path.Combine(command.IsolatedArtifactsRoot, "obj")));
         Assert.Equal(new[] { fixture.OutputDirectory }, Directory.GetDirectories(fixture.BuildParent));
         Assert.False(Directory.Exists(Path.Combine(fixture.ProjectDirectory, "obj")));
         AssertNoIntermediates(fixture.OutputDirectory);
+    }
+
+    [Fact]
+    public void Store_build_reuses_compilation_for_a_new_successor_output()
+    {
+        using var fixture = new BuildFixture();
+        var first = ConductorSelfRelaunch.RunAppBuildProcess("dotnet",
+            new(fixture.Root, fixture.OutputDirectory, BuildTimeout), CancellationToken.None);
+        Assert.False(first.TimedOut, first.Stdout + first.Stderr);
+        Assert.True(first.ExitCode == 0, first.Stdout + first.Stderr);
+        var command = ConductorSelfRelaunch.CreateAppBuildCommand(fixture.ProjectPath, fixture.OutputDirectory);
+        var intermediate = Assert.Single(Directory.GetFiles(Path.Combine(command.IsolatedArtifactsRoot, "obj"),
+            BuildFixture.ProjectName + ".dll", SearchOption.AllDirectories)
+            .Where(path => Path.GetFileName(Path.GetDirectoryName(path)) is not "ref" and not "refint"));
+        // Deny a compiler write while allowing MSBuild to read/copy the cached assembly.
+        using var heldIntermediate = new FileStream(intermediate, FileMode.Open, FileAccess.Read, FileShare.Read);
+        File.WriteAllText(Path.Combine(command.IsolatedArtifactsRoot, "output", "stale-payload.txt"), "old build");
+        var nextOutput = Path.Combine(fixture.BuildParent, "next-output");
+        var second = ConductorSelfRelaunch.RunAppBuildProcess("dotnet",
+            new(fixture.Root, nextOutput, BuildTimeout), CancellationToken.None);
+        Assert.False(second.TimedOut, second.Stdout + second.Stderr);
+        Assert.True(second.ExitCode == 0, second.Stdout + second.Stderr);
+        Assert.False(File.Exists(Path.Combine(nextOutput, "stale-payload.txt")));
+        Assert.Equal(File.ReadAllBytes(Path.Combine(fixture.OutputDirectory, BuildFixture.ProjectName + ".dll")),
+            File.ReadAllBytes(Path.Combine(nextOutput, BuildFixture.ProjectName + ".dll")));
+        AssertNoIntermediates(nextOutput);
+    }
+
+    [Fact]
+    public void Store_build_lock_wait_preserves_timeout_and_cancellation()
+    {
+        using var fixture = new BuildFixture();
+        var command = ConductorSelfRelaunch.CreateAppBuildCommand(fixture.ProjectPath, fixture.OutputDirectory);
+        Directory.CreateDirectory(command.IsolatedArtifactsRoot);
+        using var heldLock = File.Open(Path.Combine(command.IsolatedArtifactsRoot, "build.lock"),
+            FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        // An unavailable executable proves neither call starts the compiler while the cache is owned.
+        var timedOut = ConductorSelfRelaunch.RunAppBuildProcess("missing-dotnet-executable",
+            new(fixture.Root, fixture.OutputDirectory, TimeSpan.FromMilliseconds(50)), CancellationToken.None);
+        Assert.True(timedOut.TimedOut);
+        Assert.Equal(-1, timedOut.ExitCode);
+        Assert.Contains("waiting for isolated App build cache", timedOut.Stderr);
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        Assert.Throws<OperationCanceledException>(() => ConductorSelfRelaunch.RunAppBuildProcess(
+            "missing-dotnet-executable", new(fixture.Root, fixture.OutputDirectory, BuildTimeout), cancellation.Token));
+    }
+
+    [Fact]
+    public void Store_build_failure_does_not_copy_stale_cached_output_and_can_recover()
+    {
+        using var fixture = new BuildFixture();
+        var first = ConductorSelfRelaunch.RunAppBuildProcess("dotnet",
+            new(fixture.Root, fixture.OutputDirectory, BuildTimeout), CancellationToken.None);
+        Assert.True(first.ExitCode == 0, first.Stdout + first.Stderr);
+        var source = Path.Combine(fixture.ProjectDirectory, "Class.cs");
+        File.WriteAllText(source, "public class Sample : MissingType { }");
+        var nextOutput = Path.Combine(fixture.BuildParent, "next-output");
+        Directory.CreateDirectory(nextOutput);
+        var failed = ConductorSelfRelaunch.RunAppBuildProcess("dotnet",
+            new(fixture.Root, nextOutput, BuildTimeout), CancellationToken.None);
+        Assert.False(failed.TimedOut, failed.Stdout + failed.Stderr);
+        Assert.NotEqual(0, failed.ExitCode);
+        Assert.Contains("CS0246", failed.Stdout + failed.Stderr);
+        Assert.Empty(Directory.GetFiles(nextOutput, "*", SearchOption.AllDirectories));
+        File.WriteAllText(source, "public class ChangedSample { }");
+        var recovered = ConductorSelfRelaunch.RunAppBuildProcess("dotnet",
+            new(fixture.Root, nextOutput, BuildTimeout), CancellationToken.None);
+        Assert.False(recovered.TimedOut, recovered.Stdout + recovered.Stderr);
+        Assert.True(recovered.ExitCode == 0, recovered.Stdout + recovered.Stderr);
+        Assert.NotEqual(Convert.ToBase64String(File.ReadAllBytes(Path.Combine(fixture.OutputDirectory, BuildFixture.ProjectName + ".dll"))),
+            Convert.ToBase64String(File.ReadAllBytes(Path.Combine(nextOutput, BuildFixture.ProjectName + ".dll"))));
+        AssertNoIntermediates(nextOutput);
     }
 
     private static void AssertNoIntermediates(string outputDirectory)
@@ -152,6 +234,11 @@ public sealed class ConductorSelfRelaunchTestsIsolatedArtifacts
                 : "public class Sample { }");
         }
 
-        public void Dispose() => Directory.Delete(Root, recursive: true);
+        public void Dispose()
+        {
+            var cacheRoot = ConductorSelfRelaunch.CreateAppBuildCommand(ProjectPath, OutputDirectory).IsolatedArtifactsRoot;
+            if (Directory.Exists(cacheRoot)) Directory.Delete(cacheRoot, recursive: true);
+            Directory.Delete(Root, recursive: true);
+        }
     }
 }
