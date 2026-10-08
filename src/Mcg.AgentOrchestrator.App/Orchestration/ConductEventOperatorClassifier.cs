@@ -7,7 +7,7 @@ internal static class ConductEventOperatorClassifier
 
     internal static string? Classify(string eventKind, string detail)
     {
-        if (eventKind is "goal-escalation" or "goal-stalled" or "worker-capacity-stalled")
+        if (eventKind is "goal-escalation" or "goal-stalled" or "worker-capacity-stalled" or "experiment-reading-due")
         {
             return Decision;
         }

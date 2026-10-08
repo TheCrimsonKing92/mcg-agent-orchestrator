@@ -106,6 +106,17 @@ public sealed class ExperimentStore
         return records;
     }
 
+    public async Task<IReadOnlyList<ExperimentRecord>> ListOpenAsync(CancellationToken cancellationToken = default)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT * FROM experiments WHERE outcome='open' ORDER BY created_at, id";
+        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var records = new List<ExperimentRecord>();
+        while (await reader.ReadAsync(cancellationToken)) records.Add(Read(reader));
+        return records;
+    }
+
     public async Task DecideAsync(string id, ExperimentOutcomeState outcome, string evidence, string action,
         CancellationToken cancellationToken = default)
     {

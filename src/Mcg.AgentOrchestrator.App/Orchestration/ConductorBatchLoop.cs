@@ -1448,6 +1448,7 @@ internal sealed partial class ConductorBatchLoop
             }
             goalWalkClock.Stop();
             ObserveWorkerCapacityTick(kernel, effectiveGoalStallThreshold);
+            ConductorExperimentWatch.For(this, _workspace, CurrentConductEventLogWriter.Value ?? _conductEventLogWriter)?.ObserveTick(_utcNow());
             driver.PhaseTimingSink = previousPhaseTimingSink;
             foreach (var line in perGoalPhaseTimingLines)
             {

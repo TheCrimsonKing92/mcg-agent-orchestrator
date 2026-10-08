@@ -410,7 +410,9 @@ internal static class SourceSizeRatchet
             new SourceClassCeiling("AgentOrchestratorKernel", 9319, 27),
             // Goal d6033045 extracted the pre-admission receipt pass to PassedMergeTrainReceiptAdmission; goal 1d0f2317
             // adds one admission predicate to exclude stream-complete children before slot reservation. Measured 9255.
-            new SourceClassCeiling("ConductorBatchLoop", 9272, 56), // def5cd48: revision ledger and planner conflict routing.
+            // Goal 679eee57 adds the required one-line tick call to the separately owned ConductorExperimentWatch.
+            // Experiment evaluation and notification behavior remain in that type; measured 9273 across 56 files, no extra headroom.
+            new SourceClassCeiling("ConductorBatchLoop", 9273, 56), // def5cd48: revision ledger and planner conflict routing.
             // Goal 4da02c2f extracted the single-goal report predicate to CliSingleGoalReportCommand.
             new SourceClassCeiling("CliPersistentStateRunner", 6017, 18),
         });
