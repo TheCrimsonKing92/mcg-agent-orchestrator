@@ -254,31 +254,33 @@ private static bool HandlePlan(CliExecutionContext context, IReadOnlyList<string
     ConsoleViews.PrintGoalObjectivePlan(objPlan);
 
     Console.WriteLine($"Running planner decomposition ({PlanSampleCount} samples)...");
-    var sampleTasks = Enumerable.Range(0, PlanSampleCount).Select(_ =>
+    var catalog = ModelFunctionCatalogStore.Load(context.Workspace.ModelFunctionCatalogPath);
+    var processRunner = PlanDecompositionSampleRound.ProcessRunner;
+    var standardInput = PlanDecompositionSampleRound.StandardInput(direction, decompositionPrompt);
+    var runStamp = DateTimeOffset.UtcNow;
+    var rawDirectory = Path.Combine(context.Workspace.OrchestratorDirectory, "plan-samples");
+    var candidates = new List<GoalDagPlan>();
+    for (var sampleNumber = 1; sampleNumber <= PlanSampleCount; sampleNumber++)
     {
-        var sampleKernel = new AgentOrchestratorKernel();
-        var sampleTaskSpec = new TaskSpec(
-            TaskId.New(),
-            decompositionPrompt,
-            AgentRole.Planner,
-            "Output only a fenced JSON array of nodes with id, objective, and dependsOn fields.");
-        var sampleGoal = sampleKernel.CreateGoal(direction, [sampleTaskSpec]);
-        sampleKernel.ActivateGoal(sampleGoal.Id, context.Agents);
-        var sampleRunner = new AgentTaskRunner(sampleKernel, context.Agents, context.Providers, preservePrimaryContext: true);
-        return sampleRunner.RunAsync(sampleGoal.Id, sampleTaskSpec.Id)
-            .ContinueWith(__ =>
-                {
-                    var candidate = GoalDagDecompositionPlanner.Parse(
-                        direction,
-                        sampleTaskSpec.LastExecution?.Output ?? string.Empty);
-                    return sliceBatch
-                        ? GoalDagDecompositionPlanner.ValidateSliceBatch(candidate)
-                        : candidate;
-                },
-                TaskScheduler.Default);
-    }).ToArray();
+        var sample = PlanDecompositionSampleRound.RunAsync(
+            standardInput, context.Workspace.ExecutionDirectory, catalog, processRunner).GetAwaiter().GetResult();
+        var output = sample is PlanDecompositionSampleResult.Succeeded success ? success.StandardOutput : string.Empty;
+        var candidate = GoalDagDecompositionPlanner.Parse(direction, output);
+        var noFence = candidate.ValidationErrors.Count == 1 &&
+            candidate.ValidationErrors[0] == "Worker output did not contain a fenced JSON block.";
+        if (sample is PlanDecompositionSampleResult.Failed || noFence)
+        {
+            var failure = sample as PlanDecompositionSampleResult.Failed;
+            var raw = PlanDecompositionSampleRound.SaveRawOutput(
+                rawDirectory, runStamp, sampleNumber, failure?.RawOutput ?? output);
+            var reason = failure is null
+                ? "no fenced JSON block"
+                : $"exit {failure.ExitCode?.ToString() ?? "none"}: {failure.StandardErrorTail}";
+            Console.WriteLine($"Sample {sampleNumber}: {reason} (raw output: {raw.Path ?? $"unsaved ({raw.Error})"})");
+        }
+        candidates.Add(sliceBatch ? GoalDagDecompositionPlanner.ValidateSliceBatch(candidate) : candidate);
+    }
 
-    var candidates = Task.WhenAll(sampleTasks).GetAwaiter().GetResult();
     var dagPlan = GoalDagDecompositionPlanner.SelectBestOfN(candidates);
     ConsoleViews.PrintGoalDagPlan(dagPlan, sliceBatch);
 
