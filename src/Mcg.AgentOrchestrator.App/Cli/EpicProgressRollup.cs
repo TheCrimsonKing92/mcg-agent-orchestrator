@@ -19,4 +19,8 @@ internal sealed record EpicProgressRollup(
     int ClosedCount,
     int MissingCount,
     int BacklogOpenCount,
-    int BacklogDoneCount);
+    int BacklogDoneCount,
+    int? WindowCreatedCount = null,
+    int? WindowTransitionedCount = null,
+    int? WindowFailedCount = null,
+    int? WindowLandedCount = null);

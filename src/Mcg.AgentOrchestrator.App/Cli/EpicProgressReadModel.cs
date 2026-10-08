@@ -1,4 +1,5 @@
 using System.Globalization;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -24,7 +25,8 @@ internal static class EpicProgressReadModel
         IReadOnlyList<PortfolioProject> projects,
         IReadOnlyList<PortfolioEpicMember> members,
         IReadOnlyList<GoalSummary> goals,
-        IReadOnlyList<BacklogItem> backlog)
+        IReadOnlyList<BacklogItem> backlog,
+        DateTimeOffset? since = null)
     {
         var projectsById = projects.ToDictionary(project => project.Id, StringComparer.Ordinal);
         var goalsById = goals.ToDictionary(goal => goal.Id, StringComparer.Ordinal);
@@ -51,7 +53,11 @@ internal static class EpicProgressReadModel
                 memberGoals.Select(member => member.UpdatedAt).Max(),
                 counts[EpicProgressBucket.Verifying].Count(), counts[EpicProgressBucket.Failed].Count(),
                 counts[EpicProgressBucket.Closed].Count(), counts[EpicProgressBucket.Missing].Count(),
-                backlogMembers.Length - done, done);
+                backlogMembers.Length - done, done,
+                since is null ? null : memberGoals.Count(member => member.CreatedAt >= since),
+                since is null ? null : memberGoals.Count(member => member.UpdatedAt >= since),
+                since is null ? null : memberGoals.Count(member => member.Bucket == EpicProgressBucket.Failed && member.UpdatedAt >= since),
+                since is null ? null : memberGoals.Count(member => member.Bucket == EpicProgressBucket.Landed && member.UpdatedAt >= since));
         }).OrderBy(row => row.Project?.Title ?? "~")
             .ThenBy(row => row.Epic.Title, StringComparer.OrdinalIgnoreCase).ToArray();
     }
@@ -62,12 +68,12 @@ internal static class EpicProgressReadModel
         && args.Skip(1).Any(arg => arg.Equals("--epic", StringComparison.OrdinalIgnoreCase)
             || arg.StartsWith("--epic=", StringComparison.OrdinalIgnoreCase));
 
-    internal static IReadOnlyList<EpicProgressRollup> Load(OrchestratorWorkspace workspace)
+    internal static IReadOnlyList<EpicProgressRollup> Load(OrchestratorWorkspace workspace, DateTimeOffset? since = null)
     {
         if (!File.Exists(workspace.PortfolioStorePath))
             return [];
         var store = PortfolioStore.OpenReadOnly(workspace.PortfolioStorePath);
-        return Load(workspace, store, store.ListEpicsAsync().GetAwaiter().GetResult());
+        return Load(workspace, store, store.ListEpicsAsync().GetAwaiter().GetResult(), since);
     }
 
     internal static EpicProgressRollup LoadEpic(OrchestratorWorkspace workspace, string reference)
@@ -98,21 +104,24 @@ internal static class EpicProgressReadModel
     }
 
     private static IReadOnlyList<EpicProgressRollup> Load(
-        OrchestratorWorkspace workspace, PortfolioStore store, IReadOnlyList<PortfolioEpic> epics)
+        OrchestratorWorkspace workspace, PortfolioStore store, IReadOnlyList<PortfolioEpic> epics,
+        DateTimeOffset? since = null)
     {
         var projects = store.ListProjectsAsync().GetAwaiter().GetResult();
         var members = epics.SelectMany(epic => store.ListEpicMembersAsync(epic.Id).GetAwaiter().GetResult()).ToArray();
-        IReadOnlyList<BacklogItem> backlog = File.Exists(workspace.BacklogStorePath)
-            ? new BacklogStore(workspace.BacklogStorePath).ListAsync(includeAll: true).GetAwaiter().GetResult()
-            : [];
-        return Build(epics, projects, members, LoadGoalMetadata(workspace), backlog);
+        var backlog = BoardFillBacklogSnapshot.Read(workspace.BacklogStorePath);
+        return Build(epics, projects, members, LoadGoalMetadata(workspace, includeTerminalCreatedAt: since is not null), backlog, since);
     }
 
-    private static IReadOnlyList<GoalSummary> LoadGoalMetadata(OrchestratorWorkspace workspace) =>
-        File.Exists(workspace.SqliteStatePath)
-            ? SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath)
-                .ListGoalMetadataAsync().GetAwaiter().GetResult()
-            : [];
+    private static IReadOnlyList<GoalSummary> LoadGoalMetadata(OrchestratorWorkspace workspace, bool includeTerminalCreatedAt = false)
+    {
+        if (!File.Exists(workspace.SqliteStatePath))
+            return [];
+        var repository = SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath);
+        return (includeTerminalCreatedAt
+            ? repository.ListGoalMetadataAsync(includeTerminalCreatedAt: true)
+            : repository.ListGoalMetadataAsync()).GetAwaiter().GetResult();
+    }
 
     private static EpicProgressMemberGoal ToMember(string id, GoalSummary? goal)
     {
@@ -124,7 +133,7 @@ internal static class EpicProgressReadModel
             ? timestamp : (DateTimeOffset?)null;
         using var reader = new StringReader(goal.Objective);
         var title = reader.ReadLine() ?? string.Empty;
-        return new(id, bucket, goal.Status, updated, title.Length > 100 ? title[..100] : title);
+        return new(id, bucket, goal.Status, updated, title.Length > 100 ? title[..100] : title, goal.CreatedAt);
     }
 
     private static int GroupOf(EpicProgressBucket bucket) => bucket switch

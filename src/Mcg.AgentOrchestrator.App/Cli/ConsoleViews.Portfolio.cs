@@ -5,8 +5,10 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static partial class ConsoleViews
 {
-    public static void PrintEpicRollups(IReadOnlyList<EpicProgressRollup> rollups)
+    public static void PrintEpicRollups(IReadOnlyList<EpicProgressRollup> rollups, DateTimeOffset? since = null)
     {
+        if (since is not null)
+            Console.WriteLine($"Window since {since.Value.UtcDateTime:O} (UTC)");
         if (rollups.Count == 0)
         {
             Console.WriteLine("No epics.");
@@ -20,7 +22,9 @@ internal static partial class ConsoleViews
     internal static string FormatEpicRollupLine(EpicProgressRollup row)
     {
         var project = row.Project is null ? "unassigned" : $"{row.Project.Title} ({ShortId(row.Project.Id)})";
-        return $"{row.Epic.Title} ({ShortId(row.Epic.Id)}) project={project} goals={row.GoalCount} backlog={row.BacklogItemCount} active={row.ActiveCount} verified={row.VerifiedCount} parked={row.ParkedCount} landed={row.LandedCount} newest={FormatTimestamp(row.NewestUpdatedAt)} verifying={row.VerifyingCount} failed={row.FailedCount} closed={row.ClosedCount} missing={row.MissingCount} backlog-open={row.BacklogOpenCount} backlog-done={row.BacklogDoneCount}";
+        var window = row.WindowCreatedCount is null ? string.Empty
+            : $" window-created={row.WindowCreatedCount} window-transitioned={row.WindowTransitionedCount} window-failed={row.WindowFailedCount} window-landed={row.WindowLandedCount}";
+        return $"{row.Epic.Title} ({ShortId(row.Epic.Id)}) project={project} goals={row.GoalCount} backlog={row.BacklogItemCount} active={row.ActiveCount} verified={row.VerifiedCount} parked={row.ParkedCount} landed={row.LandedCount} newest={FormatTimestamp(row.NewestUpdatedAt)} verifying={row.VerifyingCount} failed={row.FailedCount} closed={row.ClosedCount} missing={row.MissingCount} backlog-open={row.BacklogOpenCount} backlog-done={row.BacklogDoneCount}{window}";
     }
 
     public static void PrintEpicShow(EpicProgressRollup row)

@@ -636,7 +636,7 @@ internal static partial class CliCommandHandlers
 
             case "durations":
             {
-                var since = ParseDurationsSince(GetFlagValue(parts, "--since"));
+                var since = CliSinceArgument.ParseOptional(GetFlagValue(parts, "--since"));
                 ConsoleViews.PrintTaskDurationStats(
                     context.Kernel.BuildTaskDurationStats(HasCliConfirmation(parts, "--by-model"), since),
                     since,
@@ -646,7 +646,7 @@ internal static partial class CliCommandHandlers
 
             case "dispatch-value":
             {
-                var since = ParseDurationsSince(GetFlagValue(parts, "--since"));
+                var since = CliSinceArgument.ParseOptional(GetFlagValue(parts, "--since"));
                 ConsoleViews.PrintDispatchValueReport(context.Kernel.BuildDispatchValueReport(since));
                 return false;
             }
@@ -1326,32 +1326,6 @@ internal static partial class CliCommandHandlers
 
     private static bool GitCommitShaExists(string executionDirectory, string sha) =>
         GitCli.Run(executionDirectory, "cat-file", "-e", $"{sha}^{{commit}}").Succeeded;
-
-    private static DateTimeOffset? ParseDurationsSince(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return null;
-        }
-
-        if (value.EndsWith("d", StringComparison.OrdinalIgnoreCase) &&
-            int.TryParse(value[..^1], NumberStyles.None, CultureInfo.InvariantCulture, out var days) &&
-            days > 0)
-        {
-            return DateTimeOffset.UtcNow.AddDays(-days);
-        }
-
-        if (DateTimeOffset.TryParse(
-            value,
-            CultureInfo.InvariantCulture,
-            DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
-            out var parsed))
-        {
-            return parsed;
-        }
-
-        throw new ArgumentException("Invalid --since value. Use an ISO date/time or a positive Nd value such as 14d.");
-    }
 
     private static void RunStableSlotDotnet(IReadOnlyList<string> parts, CliExecutionContext context)
     {

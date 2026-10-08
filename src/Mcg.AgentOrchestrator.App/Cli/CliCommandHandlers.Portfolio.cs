@@ -190,7 +190,15 @@ private static bool? TryExecutePortfolioCommand(string command, IReadOnlyList<st
 
         case "epic-list":
         {
-            ConsoleViews.PrintEpicRollups(EpicProgressReadModel.Load(context.Workspace));
+            DateTimeOffset? since = null;
+            if (parts.Any(part => part.Equals("--since", StringComparison.OrdinalIgnoreCase)
+                || part.StartsWith("--since=", StringComparison.OrdinalIgnoreCase)))
+            {
+                if (!CliSinceArgument.TryParse(GetFlagValue(parts, "--since"), DateTimeOffset.UtcNow, out var cutoff))
+                    throw new ArgumentException(CliCommandHelp.EpicListUsage);
+                since = cutoff;
+            }
+            ConsoleViews.PrintEpicRollups(EpicProgressReadModel.Load(context.Workspace, since), since);
             return false;
         }
 

@@ -67,7 +67,7 @@ internal static class CliCommandHelp
     public const string EpicDescribeUsage = "Usage: epic-describe <epic> <text> | epic-describe <epic> --text-file <path>";
     public const string EpicAssignUsage = "Usage: epic-assign <goal-or-backlog-id> <epic>";
     public const string EpicAssignManyUsage = "Usage: epic-assign-many <epic> [<id>...] [--ids-file <path>] [--dry-run]";
-    public const string EpicListUsage = "Usage: epic-list";
+    public const string EpicListUsage = "Usage: epic-list [--since <Nh|Nd|timestamp>]";
     public const string EpicMembersUsage = "Usage: epic-members <epic>";
     public const string EpicSuggestUsage = "Usage: epic-suggest | epic-suggestions";
     public const string ProjectAddUsage = "Usage: project-add <title> | project-add --text-file <path>";
@@ -490,8 +490,8 @@ internal static class CliCommandHelp
 
     private static readonly CommandHelpEntry EpicList = new(
         EpicListUsage,
-        "List epics with every goal status bucket and open/done backlog counts; newest is the latest member-goal metadata update (UpdatedAt).",
-        ["--help", "-h"]);
+        "List epics with every goal status bucket and open/done backlog counts; newest is the latest member-goal metadata update (UpdatedAt). Use --since with positive Nh or Nd durations (24h, 7d) or an absolute timestamp to show window counts. window-landed uses the goal update time until a landed-at timestamp exists.",
+        ["--since", "--help", "-h"]);
 
     private static readonly CommandHelpEntry EpicMembers = new(
         EpicMembersUsage,
@@ -754,7 +754,7 @@ internal static class CliCommandHelp
         {
             "--text", "--request-key", "--brief-file", "--text-file", "--ids-file", "--pipeline",
             "--backlog-item", "--backlog-coverage", "--ideation", "--researcher", "--planner",
-            "--developer", "--tester", "--reviewer", "--wait", "--epic"
+            "--developer", "--tester", "--reviewer", "--wait", "--epic", "--since"
         };
 
     public static bool TryPrintStartupHelp(IReadOnlyList<string> args)
