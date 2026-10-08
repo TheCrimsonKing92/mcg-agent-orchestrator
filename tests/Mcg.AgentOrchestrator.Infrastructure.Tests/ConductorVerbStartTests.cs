@@ -11,7 +11,8 @@ public sealed class ConductorVerbStartTests
         using var output = new StringWriter();
         using var error = new StringWriter();
         var exit = CliConductorCommand.Run(["conductor", "start"], fixture.Workspace,
-            launcher, new FixedProbe(null), output: output, error: error);
+            launcher, new FixedProbe(null), output: output, error: error,
+            home: OrchestratorHome.Resolve(fixture.Workspace.RootDirectory, _ => null));
         Assert.Equal(0, exit);
         var request = Assert.Single(launcher.Requests);
         Assert.Equal("pwsh", request.FileName);
@@ -28,6 +29,29 @@ public sealed class ConductorVerbStartTests
         Assert.Equal("", error.ToString());
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void StartUsesHomeLauncherAndPreservesProjectSelection(bool projectScoped)
+    {
+        using var fixture = new Fixture();
+        var home = OrchestratorHome.Resolve(fixture.Workspace.RootDirectory + "-home", _ => null);
+        var workspace = projectScoped
+            ? OrchestratorWorkspace.ForProject("alpha", fixture.Workspace.RootDirectory)
+            : fixture.Workspace;
+        var launcher = new RecordingLauncher();
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        Assert.Equal(0, CliConductorCommand.Run(["conductor", "start"], workspace,
+            launcher, new FixedProbe(null), output: output, error: error, home: home));
+        var request = Assert.Single(launcher.Requests);
+        Assert.Equal(Path.Combine(home.RootDirectory, "scripts", "Start-OrchestratorCommand.ps1"),
+            request.Arguments[4]);
+        Assert.Equal(workspace.ExecutionDirectory, request.WorkingDirectory);
+        Assert.Equal(projectScoped ? ["--project=alpha"] : Array.Empty<string>(),
+            request.Arguments.Where(arg => arg.StartsWith("--project", StringComparison.Ordinal)).ToArray());
+    }
+
     [Fact]
     public void ActiveOwnerAndStopFileRefuseThenClearStopAllowsOneLaunch()
     {
@@ -35,7 +59,8 @@ public sealed class ConductorVerbStartTests
         var launcher = new RecordingLauncher();
         using var error = new StringWriter();
         Assert.NotEqual(0, CliConductorCommand.Run(["conductor", "start"], fixture.Workspace,
-            launcher, new FixedProbe(9876), error: error));
+            launcher, new FixedProbe(9876), error: error,
+            home: OrchestratorHome.Resolve(fixture.Workspace.RootDirectory, _ => null)));
         Assert.Contains("9876", error.ToString());
         Assert.Empty(launcher.Requests);
 
@@ -43,13 +68,15 @@ public sealed class ConductorVerbStartTests
         File.WriteAllText(stopFile, "");
         error.GetStringBuilder().Clear();
         Assert.NotEqual(0, CliConductorCommand.Run(["conductor", "start"], fixture.Workspace,
-            launcher, new FixedProbe(null), error: error));
+            launcher, new FixedProbe(null), error: error,
+            home: OrchestratorHome.Resolve(fixture.Workspace.RootDirectory, _ => null)));
         Assert.Contains(stopFile, error.ToString());
         Assert.True(File.Exists(stopFile));
         Assert.Empty(launcher.Requests);
 
         Assert.Equal(0, CliConductorCommand.Run(["conductor", "start", "--clear-stop"], fixture.Workspace,
-            launcher, new FixedProbe(null), error: error));
+            launcher, new FixedProbe(null), error: error,
+            home: OrchestratorHome.Resolve(fixture.Workspace.RootDirectory, _ => null)));
         Assert.False(File.Exists(stopFile));
         Assert.Single(launcher.Requests);
     }

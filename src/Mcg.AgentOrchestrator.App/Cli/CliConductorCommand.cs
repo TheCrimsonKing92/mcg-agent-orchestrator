@@ -15,7 +15,8 @@ internal static class CliConductorCommand
         IConductorProcessLauncher? launcher = null, IConductorLockProbe? lockProbe = null,
         Func<DateTimeOffset>? bootTime = null, Func<string?>? mainCommit = null,
         TextWriter? output = null, TextWriter? error = null,
-        Func<OrchestratorWorkspace, ITransactionalOrchestratorStateRepository>? stateRepository = null)
+        Func<OrchestratorWorkspace, ITransactionalOrchestratorStateRepository>? stateRepository = null,
+        OrchestratorHome? home = null)
     {
         output ??= Console.Out;
         error ??= Console.Error;
@@ -36,7 +37,8 @@ internal static class CliConductorCommand
                 case "apply-intents" when args.Count == 3:
                     return ApplyIntents(args, workspace, owner, stateRepository, output, error);
                 case "start":
-                    return Start(workspace, owner, args.Count == 3, launcher ?? new SystemConductorProcessLauncher(), output, error);
+                    return Start(workspace, owner, args.Count == 3, launcher ?? new SystemConductorProcessLauncher(),
+                        output, error, home ?? OrchestratorHome.ResolveForProcess());
                 case "status":
                     CliConductorStatusReader.Print(workspace, owner,
                         (bootTime ?? (() => DateTimeOffset.UtcNow - TimeSpan.FromMilliseconds(Environment.TickCount64)))(), output,
@@ -137,7 +139,7 @@ internal static class CliConductorCommand
     }
 
     private static int Start(OrchestratorWorkspace workspace, int? owner, bool clearStop,
-        IConductorProcessLauncher launcher, TextWriter output, TextWriter error)
+        IConductorProcessLauncher launcher, TextWriter output, TextWriter error, OrchestratorHome home)
     {
         if (owner is not null)
         {
@@ -154,11 +156,14 @@ internal static class CliConductorCommand
             }
             File.Delete(stopFile);
         }
-        var request = new ConductorLaunchRequest("pwsh",
-            ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-                Path.Combine(workspace.ExecutionDirectory, "scripts", "Start-OrchestratorCommand.ps1"),
+        List<string> launchArguments = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                Path.Combine(home.RootDirectory, "scripts", "Start-OrchestratorCommand.ps1"),
                 "-Name", "conduct-loop-daemon", "conduct", "--loop", "--daemon", "--watch",
-                "--poll-seconds", "120", "--max-duration", "43200"],
+                "--poll-seconds", "120", "--max-duration", "43200"];
+        if (workspace.IsProjectScoped)
+            launchArguments.Add($"--project={workspace.ProjectName}");
+        var request = new ConductorLaunchRequest("pwsh",
+            launchArguments,
             workspace.ExecutionDirectory,
             new Dictionary<string, string> { ["MCG_DISPATCH_MAX_RUNTIME_MIN"] = "120" },
             [CliProtectedProcessEnvironment.ProtectedPidVariable,

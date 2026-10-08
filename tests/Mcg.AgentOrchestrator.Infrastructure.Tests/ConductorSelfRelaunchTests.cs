@@ -5,6 +5,76 @@ using Mcg.AgentOrchestrator.Infrastructure;
 [Xunit.Collection(TestCollections.ProcessSpawning)]
 public sealed class ConductorSelfRelaunchTests
 {
+    [Xunit.Fact]
+    public void HomeStagingPreservesProjectScriptsBuildKeyAndWorkspaceStores()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "self-relaunch-home");
+        var workspace = OrchestratorWorkspace.ForProject("alpha", root);
+        var home = OrchestratorHome.Resolve(root, _ => null);
+        var staging = Assert.IsType<ConductorSuccessorStagingOptions>(home.CreateSuccessorStagingOptions(workspace));
+        Assert.Equal(root, staging.RepositoryRoot);
+        Assert.Equal(Path.Combine(root, "src", "Mcg.AgentOrchestrator.App", "Mcg.AgentOrchestrator.App.csproj"),
+            staging.AppProjectPath);
+        Assert.Equal(Path.Combine(root, "scripts", "Update-AppDllGitHeadMarker.ps1"), staging.UpdateHeadMarkerScriptPath);
+        Assert.Equal(Path.Combine(root, "scripts", "resolve-run-dir.ps1"), staging.ResolveRunDirectoryScriptPath);
+        var buildKey = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(Path.GetFullPath(root))))[..16];
+        Assert.Equal(Path.Combine(OrchestratorTempRoot.GetPurposeDirectory("self-relaunch-build"),
+            buildKey, "Mcg.AgentOrchestrator.App.dll"), staging.AppDllPath);
+        Assert.Equal(workspace.SqliteStatePath, staging.StateStorePath);
+        Assert.Equal(workspace.AgentCatalogPath, staging.AgentCatalogPath);
+        Assert.Equal(workspace.WorkerProfilePath, staging.WorkerProfilePath);
+        Assert.Equal(workspace.ModelFunctionCatalogPath, staging.ModelFunctionCatalogPath);
+        Assert.NotNull(staging.LandingAppBuildStore);
+        Assert.NotNull(ConductorSelfRelaunch.CreateForHome(home, workspace, Options(root).HandoffOptions,
+            line => throw new Xunit.Sdk.XunitException(line)));
+        Assert.NotNull(ConductorSelfRelaunch.CreateSuccessorStagerForHome(home, workspace,
+            line => throw new Xunit.Sdk.XunitException(line)));
+    }
+
+    [Xunit.Fact]
+    public void NonHomeDisablesBothRelaunchAndSupervisorStagingWithSkipRecords()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "self-relaunch-home");
+        var home = OrchestratorHome.Resolve(root, _ => null);
+        var workspace = OrchestratorWorkspace.ForProject("alpha", root + "-target");
+        var relaunchRecords = new List<string>();
+        var stagingRecords = new List<string>();
+        var buildsBefore = ConductorSelfRelaunch.AppBuildInvocationCount;
+        Assert.Null(home.CreateSuccessorStagingOptions(workspace));
+        Assert.Null(ConductorSelfRelaunch.CreateForHome(home, workspace,
+            Options(workspace.ExecutionDirectory).HandoffOptions, relaunchRecords.Add));
+        Assert.Null(ConductorSelfRelaunch.CreateSuccessorStagerForHome(home, workspace, stagingRecords.Add));
+        foreach (var records in new[] { relaunchRecords, stagingRecords })
+        {
+            var record = Assert.Single(records);
+            Assert.Contains("LOOP_HANDOFF_SKIPPED reason=target-not-home", record);
+            Assert.Contains($"target={workspace.ExecutionDirectory}", record);
+            Assert.Contains($"home={home.RootDirectory}", record);
+        }
+        Assert.Equal(buildsBefore, ConductorSelfRelaunch.AppBuildInvocationCount);
+    }
+
+    [Xunit.Fact]
+    public void BothProductionCallSitesUseHomeStagingAndDisableDelegationForNonHome()
+    {
+        var root = HomeStagingSourceRoot();
+        var goals = File.ReadAllText(Path.Combine(root, "src", "Mcg.AgentOrchestrator.App", "Cli", "CliCommandHandlers.Goals.cs"));
+        var program = File.ReadAllText(Path.Combine(root, "src", "Mcg.AgentOrchestrator.App", "Program.cs"));
+        Assert.Contains("ConductorSelfRelaunch.CreateForHome(", goals);
+        Assert.Contains("selfRelaunch: selfRelaunch is null ? null : delegateSelfRelaunchToSupervisor", goals);
+        Assert.Contains("ConductorSelfRelaunch.CreateSuccessorStagerForHome(", program);
+        Assert.Contains("stageSuccessor: stageSuccessor", program);
+        Assert.DoesNotContain("\"Update-AppDllGitHeadMarker.ps1\"", goals);
+        Assert.DoesNotContain("\"Update-AppDllGitHeadMarker.ps1\"", program);
+    }
+
+    private static string HomeStagingSourceRoot(
+        [System.Runtime.CompilerServices.CallerFilePath] string sourceFile = "") =>
+        VerifiedRepositoryRoot.TryGetVerifiedRoot(out var verifiedRoot)
+            ? verifiedRoot
+            : Path.GetFullPath(Path.Combine(Path.GetDirectoryName(sourceFile)!, "..", ".."));
+
     [Xunit.Fact(DisplayName = "ConductorSelfRelaunch_real_binary_build_self_check_and_handoff")]
     public void RealBinaryBuildSelfCheckAndHandoff()
     {

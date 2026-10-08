@@ -780,14 +780,29 @@ internal static class PostLandingCanaryFactory
 {
     internal static PostLandingCanaryCoordinator CreateDefault(
         OrchestratorWorkspace workspace,
-        Action<string>? progress = null)
+        Action<string>? progress = null) =>
+        CreateDefault(workspace, progress, OrchestratorHome.ResolveForProcess());
+
+    internal static PostLandingCanaryCoordinator CreateDefault(
+        OrchestratorWorkspace workspace,
+        Action<string>? progress,
+        OrchestratorHome home,
+        IPostLandingCanaryRunner? runner = null)
     {
         var events = CreateEventStore(workspace, ensureSchema: true);
         var operatorItems = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
         var circuit = CreateCircuit(workspace, events, operatorItems, progress);
+        var configuration = PostLandingCanaryConfiguration.Load(AppContext.BaseDirectory);
+        if (!home.IsHome(workspace))
+        {
+            return new PostLandingCanaryCoordinator(
+                configuration with { Enabled = false }, new NotHomeRunner(),
+                events, circuit, operatorItems, progress: progress);
+        }
+
         var coordinator = new PostLandingCanaryCoordinator(
-            PostLandingCanaryConfiguration.Load(AppContext.BaseDirectory),
-            new PostLandingCanaryRunner(
+            configuration,
+            runner ?? new PostLandingCanaryRunner(
                 workspace.ExecutionDirectory,
                 Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_DOTNET_PATH"),
                 logDirectory: workspace.LogDirectory,
@@ -800,6 +815,13 @@ internal static class PostLandingCanaryFactory
             progress: progress);
         coordinator.ResumePending();
         return coordinator;
+    }
+
+    private sealed class NotHomeRunner : IPostLandingCanaryRunner
+    {
+        public Task<PostLandingCanaryOutcome> RunAsync(
+            PostLandingCanaryRequest request, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("A non-home target cannot run the orchestrator canary.");
     }
 
     internal static AcceptanceEngineCircuitBreaker CreateCircuit(OrchestratorWorkspace workspace)

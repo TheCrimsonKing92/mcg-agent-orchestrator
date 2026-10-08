@@ -1599,30 +1599,14 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     ReacquireCurrentLease: context.ReacquireConductLoopLease,
                     StopFailedSuccessor: ConductorLoopHandoff.StopFailedSuccessor);
                 var handoff = ConductorLoopHandoff.Create(handoffOptions);
-                var repositoryRoot = context.Workspace.ExecutionDirectory;
-                var repositoryBuildKey = Convert.ToHexString(
-                    System.Security.Cryptography.SHA256.HashData(
-                        System.Text.Encoding.UTF8.GetBytes(Path.GetFullPath(repositoryRoot))))[..16];
-                var appOutputDirectory = Path.Combine(
-                    OrchestratorTempRoot.GetPurposeDirectory("self-relaunch-build"),
-                    repositoryBuildKey);
-                var selfRelaunch = ConductorSelfRelaunch.Create(new ConductorSelfRelaunchOptions(
-                    RepositoryRoot: repositoryRoot,
-                    AppProjectPath: Path.Combine(repositoryRoot, "src", "Mcg.AgentOrchestrator.App", "Mcg.AgentOrchestrator.App.csproj"),
-                    AppDllPath: Path.Combine(appOutputDirectory, "Mcg.AgentOrchestrator.App.dll"),
-                    UpdateHeadMarkerScriptPath: Path.Combine(repositoryRoot, "scripts", "Update-AppDllGitHeadMarker.ps1"),
-                    ResolveRunDirectoryScriptPath: Path.Combine(repositoryRoot, "scripts", "resolve-run-dir.ps1"),
-                    StateStorePath: context.Workspace.SqliteStatePath,
-                    AgentCatalogPath: context.Workspace.AgentCatalogPath,
-                    WorkerProfilePath: context.Workspace.WorkerProfilePath,
-                    ModelFunctionCatalogPath: context.Workspace.ModelFunctionCatalogPath,
-                    DotnetPath: Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_DOTNET_PATH") ?? "dotnet",
-                    PowerShellPath: "powershell",
-                    HandoffOptions: handoffOptions)
-                {
-                    LandingAppBuildStore = LandingAppBuildStore.ForRepository(repositoryRoot,
-                        Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_DOTNET_PATH"))
-                });
+                var selfRelaunch = ConductorSelfRelaunch.CreateForHome(
+                    OrchestratorHome.ResolveForProcess(), context.Workspace, handoffOptions,
+                    line =>
+                    {
+                        Console.WriteLine(line);
+                        new ConductEventLogWriter(context.Workspace.ConductEventsLogPath)
+                            .Append("loop-handoff", null, line);
+                    });
 
                 // Reconcile finished dispatches (read exit files, record results, advance tasks) at the
                 // start of every tick. Without this the loop holds a goal at Running forever — the worker
@@ -1874,7 +1858,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         operatorIntents: operatorIntents,
                         progressiveReviewGlances: ProgressiveReviewGlanceCoordinator.CreateDefault(context.Workspace, context.WorkerProfiles),
                         progressiveReviewSteering: ProgressiveReviewSteeringCoordinator.CreateDefault(context.Workspace, context.Agents, context.WorkerProfiles, context.Providers),
-                        selfRelaunch: delegateSelfRelaunchToSupervisor
+                        selfRelaunch: selfRelaunch is null ? null : delegateSelfRelaunchToSupervisor
                                 ? ConductorSelfRelaunch.CreateSupervisorDelegated()
                                 : selfRelaunch,
                         selfRelaunchEnabled: ConductorBatchLoop.ResolveSelfRelaunchEnabled(
