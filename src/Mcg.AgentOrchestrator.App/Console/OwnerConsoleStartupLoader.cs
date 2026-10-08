@@ -25,6 +25,7 @@ internal sealed class OwnerConsoleStartupLoader(OwnerConsoleViewModelBuilder bui
         OwnerConsoleViewInputs inputs, Action<OwnerConsoleActivityLoad> activityLoaded, CancellationToken token)
     {
         var sync = new object();
+        OwnerConsoleViewInputs? loadedInputs = null;
         void Update(Func<OwnerConsoleViewModel, OwnerConsoleViewModel> change)
         {
             dispatch(() =>
@@ -39,8 +40,12 @@ internal sealed class OwnerConsoleStartupLoader(OwnerConsoleViewModelBuilder bui
             try
             {
                 var (rows, hidden) = await LoadBoundedAsync(builder.ReadDecisionsAsync, "questions", token);
-                Update(current => current with { Decisions = rows, DecisionsState = null,
-                    Status = current.Status with { LiveDecisions = rows.Length, HiddenQuestions = hidden } });
+                Update(current =>
+                {
+                    var updated = current with { Decisions = rows, DecisionsState = null,
+                        Status = current.Status with { LiveDecisions = rows.Length, HiddenQuestions = hidden } };
+                    return loadedInputs is null ? updated : builder.WithActivity(updated, loadedInputs);
+                });
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { }
             catch (Exception ex) { Update(current => current with { DecisionsState = new(Error: ex.Message) }); }
@@ -53,8 +58,11 @@ internal sealed class OwnerConsoleStartupLoader(OwnerConsoleViewModelBuilder bui
                     model.Board.Select(row => row.GoalId).ToArray(), step), "activity", token);
                 token.ThrowIfCancellationRequested();
                 activityLoaded(loaded);
-                Update(current => builder.WithActivity(current, inputs with
-                    { RecentEvents = loaded.Recent, LastConductEvent = loaded.LastActivity, LandedToday = loaded.LandedToday }) with { ActivityState = null });
+                Update(current =>
+                {
+                    loadedInputs = inputs with { RecentEvents = loaded.Recent, LastConductEvent = loaded.LastActivity, LandedToday = loaded.LandedToday };
+                    return builder.WithActivity(current, loadedInputs) with { ActivityState = null };
+                });
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { }
             catch (Exception ex) { Update(current => current with { ActivityState = new(Error: ex.Message) }); }

@@ -33,6 +33,9 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     private bool _acting;
     private OwnerConsolePane _focusedPane = OwnerConsolePane.Decisions;
     private int _selectedBoardIndex = -1;
+    private int _activityWidth;
+    private int _boardTitleWidth;
+    private IReadOnlyList<string> _fullActivityLines = [];
     private View? _commandReturnFocus;
     private bool ActionRunning => _acting || _operation.IsRunning;
 
@@ -89,6 +92,15 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         _decisions.HasFocusChanged += (_, _) => PaneFocusChanged(_decisions, OwnerConsolePane.Decisions);
         _board.HasFocusChanged += (_, _) => PaneFocusChanged(_board, OwnerConsolePane.Board);
         _activity.HasFocusChanged += (_, _) => PaneFocusChanged(_activity, OwnerConsolePane.Activity);
+        _activity.ViewportChanged += (_, _) => Fit(_activity.Viewport.Width, _boardTitleWidth);
+        _board.ViewportChanged += (_, _) => Fit(_activityWidth, 0);
+        _decisions.ViewportChanged += (_, _) =>
+        {
+            if (_rendering) return;
+            _rendering = true;
+            try { RenderDecisions(); }
+            finally { _rendering = false; }
+        };
         RenderHints();
         _keyboard = app.Initialized ? app.Keyboard : null;
         if (_keyboard is not null) _keyboard.KeyDown += OnKeyDown;
@@ -108,22 +120,43 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         {
             _controller.Apply(model);
             RenderStatus();
-            var decisionRows = model.Decisions.Select(item => $"[{item.Number}] {item.GoalPrefix} {item.Kind}: {item.Summary}").ToArray();
-            _emptyDecisions.Text = model.DecisionsState is { Loading: true } ? "loading..." :
-                model.DecisionsState?.Error is { } error ? "DECISIONS unavailable: " + error : "Nothing needs you right now.";
-            _emptyDecisions.Visible = decisionRows.Length == 0;
-            DecisionLines = _emptyDecisions.Visible ? [_emptyDecisions.Text] : decisionRows;
-            _decisions.SetSource(new ObservableCollection<string>(decisionRows));
-            _decisions.SelectedItem = _controller.SelectedIndex < 0 ? null : _controller.SelectedIndex;
-            BoardTable.Rows.Clear();
-            foreach (var row in model.Board) BoardTable.Rows.Add(row.GoalPrefix, row.Epic, row.Title, row.State, row.Stage, Age(row.Age));
-            _board.Update();
+            RenderDecisions();
+            RenderBoard();
             var index = Array.FindIndex(model.Board.ToArray(), row => row.GoalId == SelectedGoalId);
             SelectBoard(index < 0 ? _selectedBoardIndex : index);
             RenderActivity();
             RenderHints();
         }
         finally { _rendering = false; }
+    }
+
+    internal void Fit(int activityWidth, int boardTitleWidth)
+    {
+        if (_rendering) return;
+        _activityWidth = activityWidth;
+        _boardTitleWidth = boardTitleWidth;
+        _rendering = true;
+        try { RenderActivity(); RenderBoard(); }
+        finally { _rendering = false; }
+    }
+
+    private void RenderBoard()
+    {
+        if (_controller.Model is not { } model) return;
+        OwnerConsoleBoardRenderer.Render(BoardTable, _board, model.Board, _board.Viewport.Width, _boardTitleWidth);
+    }
+
+    private void RenderDecisions()
+    {
+        if (_controller.Model is not { } model) return;
+        var rows = model.Decisions.Select(item => OwnerConsoleLineFitter.Fit(
+            $"[{item.Number}] {item.GoalPrefix} {item.Kind}: {item.Summary}", [item.Summary], _decisions.Viewport.Width)).ToArray();
+        _emptyDecisions.Text = model.DecisionsState is { Loading: true } ? "loading..." :
+            model.DecisionsState?.Error is { } error ? "DECISIONS unavailable: " + error : "Nothing needs you right now.";
+        _emptyDecisions.Visible = rows.Length == 0;
+        DecisionLines = _emptyDecisions.Visible ? [_emptyDecisions.Text] : rows;
+        _decisions.SetSource(new ObservableCollection<string>(rows));
+        _decisions.SelectedItem = _controller.SelectedIndex < 0 ? null : _controller.SelectedIndex;
     }
 
     internal void SetWorking(string source, string? label)
@@ -151,15 +184,18 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     private void RenderActivity()
     {
         var selected = _activity.SelectedItem;
-        var selectedLine = selected is { } index && index >= 0 && index < ActivityLines.Count
-            ? ActivityLines[index] : null;
+        var selectedLine = selected is { } index && index >= 0 && index < _fullActivityLines.Count
+            ? _fullActivityLines[index] : null;
         var state = _controller.Model?.ActivityState;
         IEnumerable<string> pane = state is { Loading: true } ? ["loading..."] : state?.Error is { } error
             ? ["ACTIVITY unavailable: " + error] : _controller.Model?.Activity.Select(OwnerActivityNarrator.Line) ?? [];
-        ActivityLines = _notices.Concat(pane)
+        _fullActivityLines = _notices.Concat(pane)
             .Take(OwnerConsoleViewModelBuilder.MaxActivityItems).ToArray();
+        ActivityLines = _fullActivityLines.Select((line, row) => OwnerConsoleLineFitter.Fit(line,
+            row >= _notices.Count && state is null && _controller.Model is { } model && row - _notices.Count < model.Activity.Length
+                ? model.Activity[row - _notices.Count].Titles ?? [] : [], _activityWidth)).ToArray();
         _activity.SetSource(new ObservableCollection<string>(ActivityLines));
-        var preserved = selectedLine is null ? -1 : Array.IndexOf(ActivityLines.ToArray(), selectedLine);
+        var preserved = selectedLine is null ? -1 : Array.IndexOf(_fullActivityLines.ToArray(), selectedLine);
         _activity.SelectedItem = ActivityLines.Count == 0 ? null :
             preserved >= 0 ? preserved : Math.Clamp(selected ?? 0, 0, ActivityLines.Count - 1);
     }
@@ -230,6 +266,22 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
             return;
         }
         var pane = FocusedPane;
+        var count = pane == OwnerConsolePane.Activity ? ActivityLines.Count : pane == OwnerConsolePane.Board ?
+            _controller.Model?.Board.Length ?? 0 : _controller.Model?.Decisions.Length ?? 0;
+        var current = pane == OwnerConsolePane.Activity ? _activity.SelectedItem ?? 0 : pane == OwnerConsolePane.Board ?
+            _selectedBoardIndex : _controller.SelectedIndex;
+        var pageHeight = PaneView(pane).Viewport.Height;
+        if (pane == OwnerConsolePane.Board) pageHeight -= 1 + (_board.Style.ShowHorizontalHeaderOverline ? 1 : 0) +
+            (_board.Style.ShowHorizontalHeaderUnderline ? 1 : 0);
+        if (OwnerConsolePaneNavigator.Target(key, current, count, pageHeight) is { } target)
+        {
+            key.Handled = true;
+            if (ActionRunning || target < 0) return;
+            if (pane == OwnerConsolePane.Board) SelectBoard(target);
+            else if (pane == OwnerConsolePane.Activity) { _activity.SelectedItem = target; _activity.EnsureSelectedItemVisible(); }
+            else { _controller.SelectIndex(target); _decisions.SelectedItem = target; _decisions.EnsureSelectedItemVisible(); }
+            return;
+        }
         if (key == Key.CursorUp || key == Key.CursorDown)
         {
             key.Handled = true;
@@ -264,7 +316,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
             else if (pane == OwnerConsolePane.Activity && _controller.Model?.ActivityState is null &&
                 _activity.SelectedItem is { } selected && selected >= _notices.Count &&
                 selected - _notices.Count < _controller.Model!.Activity.Length)
-                await ActAsync(_ => _controller.ShowActivityMeaningAsync(_controller.Model.Activity[selected - _notices.Count]));
+                await ActAsync(ct => _controller.ShowActivityMeaningAsync(_controller.Model.Activity[selected - _notices.Count], _operation, ct));
             return;
         }
         if (character is 'a' or 'r')

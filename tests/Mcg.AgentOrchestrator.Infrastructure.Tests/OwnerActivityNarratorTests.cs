@@ -58,6 +58,15 @@ public sealed class OwnerActivityNarratorTests
         if (detail.Contains("ACTIVATION_ADOPTED") || kind == "canary-gate" && detail.Contains("result=passed")) Assert.Empty(lines);
     }
 
+    [Theory]
+    [InlineData("cohort-tick", "joint run-step")]
+    [InlineData("receipt-missing", "waiting for verification to finish")]
+    [InlineData("The cohort receipt is missing for Search.\nDiagnostic details", "The cohort receipt is missing for Search.")]
+    public void WaitingOnTranslatesCategoryTokensAndPreservesRecordedReasonSentences(string blocker, string expected)
+    {
+        Assert.Equal(expected, OwnerActivityNarrator.WaitingOn(blocker));
+    }
+
     [Fact]
     public void ARealRestartDoesNotAddStopOrStartLines()
     {
@@ -104,9 +113,10 @@ public sealed class OwnerActivityNarratorTests
         var lines = OwnerActivityNarrator.Narrate([
             new(time, "loop-relaunch", "11111111", "LOOP_RELAUNCH_SCHEDULED"),
             new(time.AddSeconds(1), "goal-escalation", "11111111", "steward-owner-question question=Keep the sticky ticket handoff?" )],
-            _ => "The train receipt hold across ticks");
+            _ => "The train receipt hold across ticks", attention: [new(new("q1", "11111111", OwnerQuestionKind.HumanInput,
+                "Keep the sticky ticket handoff?"), time.AddSeconds(1))]);
         Assert.Contains(lines, line => line.Phrase == "Landed: The train proof hold across steps (11111111)");
-        Assert.Contains(lines, line => line.Phrase == "Needs you: Keep the persistent issue switch?");
+        Assert.Contains(lines, line => line.Phrase == "Needs you: 11111111 Keep the persistent issue switch?");
     }
 
     [Fact]
@@ -125,8 +135,9 @@ public sealed class OwnerActivityNarratorTests
         var lines = OwnerActivityNarrator.Narrate([
             new(time, "goal-escalation", "11111111", "steward-owner-question question=Keep the ticket direction?"),
             new(time.AddSeconds(1), "goal-lifecycle", "11111111", "HumanInputReceived"),
-            new(time.AddSeconds(2), "owner-question-resolved", "11111111", "question=Keep the ticket direction?")], _ => "Search");
-        Assert.Single(lines, line => line.Phrase == "Resolved: Keep the issue direction?");
+            new(time.AddSeconds(2), "owner-question-resolved", "11111111", "question=Keep the ticket direction?")], _ => "Search",
+            attention: [new(new("q1", "11111111", OwnerQuestionKind.HumanInput, "Keep the ticket direction?"), time, time.AddSeconds(1))]);
+        Assert.Single(lines, line => line.Phrase == "Resolved: 11111111 Keep the issue direction?");
         Assert.Equal(2, lines.Count);
     }
 
@@ -178,7 +189,7 @@ public sealed class OwnerActivityNarratorTests
 
     [Theory]
     [InlineData("held", "retrying automatically")]
-    [InlineData("escalated", "needs you")]
+    [InlineData("escalated", "awaiting the conductor's next step")]
     public void JointFailureUsesTheObservedNextStep(string follow, string expected)
     {
         var time = DateTimeOffset.UnixEpoch;
@@ -224,7 +235,8 @@ public sealed class OwnerActivityNarratorTests
         var time = DateTimeOffset.UnixEpoch;
         var lines = OwnerActivityNarrator.Narrate([
             new(time, "acceptance", "11111111", "ACCEPTANCE goal=11111111 slot=slot-0 result=failed attempt=A1 tick=4"),
-            new(time.AddSeconds(1), kind, "11111111-full", detail)], _ => "Search");
+            new(time.AddSeconds(1), kind, "11111111-full", detail)], _ => "Search", attention: kind == "goal-escalation" ?
+                [new(new("q1", "11111111-full", OwnerQuestionKind.StewardHold, "How should we repair this?"), time.AddSeconds(1))] : []);
         var failure = Assert.Single(lines, line => line.Kind == "acceptance" && line.Phrase.Contains("failed"));
         Assert.Equal("Search: failed its tests (the failure reason has not been recorded); " + next, failure.Phrase);
         Assert.DoesNotContain("machine", failure.Why);

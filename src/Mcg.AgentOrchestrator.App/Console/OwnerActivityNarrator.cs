@@ -6,10 +6,15 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 // A pure chronological fold: the sentence and its explanation are one owner outcome.
 internal static class OwnerActivityNarrator
 {
+    internal const string JumpKeyHint = "Home/End first/last  PgUp/PgDn page";
+    internal static IReadOnlyList<string> JumpKeyHelp => [
+        "Home/End: Select the first/last row in DECISIONS, BOARD or ACTIVITY.",
+        "PgUp/PgDn: Move the selection one visible page up/down in DECISIONS, BOARD or ACTIVITY."];
+
     internal static bool Maps(OwnerConductEvent item) => item.EventKind switch
     {
         "goal-lifecycle" => Head(item) is "TaskDispatched" or "TaskCompleted" or "TaskFailed" or
-            "HumanInputReceived" or "HumanInputSuperseded",
+            "HumanInputReceived" or "HumanInputSuperseded" || Field(item, "resolution-verb") is not null,
         "state-log-divergence" => Positive(item, "lost") || Positive(item, "repeated"),
         "author" => Field(item, "kind") == "ask-owner",
         "acceptance" or "acceptance-cohort" or "canary-gate" or "loop-relaunch" or "loop-handoff" or
@@ -26,12 +31,11 @@ internal static class OwnerActivityNarrator
             clock.GetLocalNow().Date).Distinct().Count();
 
     internal static IReadOnlyList<OwnerConsoleActivityItem> Narrate(IEnumerable<OwnerConductEvent> events,
-        Func<string?, string> title, Func<OwnerConductEvent, OwnerActivityTestEvidence?>? evidence = null)
+        Func<string?, string> title, Func<OwnerConductEvent, OwnerActivityTestEvidence?>? evidence = null,
+        IReadOnlyList<OwnerAttentionObservation>? attention = null)
     {
         var ordered = events.Where(Maps).Distinct().OrderBy(item => item.Timestamp).ToArray();
         var result = new List<OwnerConsoleActivityItem>();
-        var questions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        var resolved = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var held = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var landed = new HashSet<OwnerConductEvent>();
         var mostRecentLanding = "recent work";
@@ -60,30 +64,32 @@ internal static class OwnerActivityNarrator
                 mostRecentLanding = string.Join(", ", goals.Select(Name));
                 Add(item, (goals.Length > 1 ? "Landed together: " : "Landed: ") +
                     string.Join(", ", goals.Select(id => $"{Name(id)} ({Prefix(id)})")),
-                    "The work passed its checks and was added to main.", "The conductor will continue with the remaining work.");
+                    "The work passed its checks and was added to main.", "The conductor will continue with the remaining work.",
+                    titles: goals.Select(FullName).ToArray());
                 continue;
             }
             switch (item.EventKind)
             {
                 case "goal-lifecycle":
-                    if (head is "HumanInputReceived" or "HumanInputSuperseded") Resolve(item);
-                    else if (DetailPhrase(item, name) is { } stage)
-                        Add(item, stage, head == "TaskFailed" ? Field(item, "outcome") == "finding" ?
+                    if (DetailPhrase(item, name) is { } stage)
+                        Add(item, stage, FailureReason(item) is { } rejection ? "plan rejected: " + rejection : head == "TaskFailed" ? Field(item, "outcome") == "finding" ?
                             "The worker reported a blocking finding." : "The worker could not finish its task." :
                             "The work reached this stage.", head == "TaskFailed" ? Field(item, "outcome") == "finding" ?
                             "The Developer will address the finding." : "The conductor will retry the worker or request help." : "Work continues through the remaining checks.");
                     break;
-                case "owner-question-resolved": Resolve(item); break;
+                case "owner-question-resolved": break; // Only removal from the live read model resolves owner attention.
                 case "author":
                 case "goal-escalation":
                     if (head == "ownerless-hold-stalled") { if (!held.Contains(prefix)) Stall(item); break; }
-                    var question = Words(Field(item, "question"), head == "owner-review-hold" ?
-                        "Approve the completed work?" : "Review the blocked work and choose how to proceed.");
-                    if (questions.GetValueOrDefault(prefix) == question) break;
-                    questions[prefix] = question;
-                    resolved.Remove(prefix);
-                    Add(item, "Needs you: " + question, "The conductor needs an owner decision before continuing.",
-                        "Work waits for your answer.", "Yes. Open the question in DECISIONS and answer it.");
+                    var question = OwnerHoldReason.FirstLine(Field(item, "question"));
+                    if (attention?.Any(entry => Prefix(entry.Question.GoalId) == prefix && question is not null &&
+                        OwnerHoldReason.FirstLine(entry.Question.Text) == question) == true) break;
+                    var subject = FailureReason(item) is { } plan ? "plan rejected: " + plan :
+                        question is not null ? Words(question, "") : head == "owner-review-hold" ? "approval of the completed work" :
+                        Words(OwnerHoldReason.Read(Field(item, "reason")), "the conductor reported a hold on " + name);
+                    Add(item, prefix + (head == "author-owner-question" || item.EventKind == "author" ?
+                        " question sent to the operator: " : " escalated: ") + subject, subject,
+                        "The conductor or operator will handle the next step.");
                     break;
                 case "goal-stalled": Stall(item); break;
                 case "acceptance":
@@ -142,28 +148,38 @@ internal static class OwnerActivityNarrator
                     stopped = false;
                     break;
                 case "state-log-divergence":
-                    Add(item, "Needs you: Review the goal's incomplete history.", "Some recorded progress is missing or repeated.",
-                        "The goal waits for its history to be checked.", "Yes. Review the goal detail and ask the operator to repair its history.");
+                    Add(item, prefix + " history needs review: " + name, "Some recorded progress is missing or repeated.",
+                        "The operator can check the goal's history.");
                     break;
             }
         }
-        return result.OrderByDescending(item => item.Timestamp).Take(OwnerConsoleViewModelBuilder.MaxActivityItems).ToArray();
+        foreach (var entry in attention ?? [])
+        {
+            var question = Words(OwnerHoldReason.FirstLine(entry.Question.Text), "the recorded owner question");
+            var source = new OwnerConductEvent(entry.FirstSeen, "owner-question", entry.Question.GoalId, "");
+            Add(source, "Needs you: " + Prefix(entry.Question.GoalId) + " " + question,
+                question, "Work waits for your answer.");
+            var resolution = OwnerActivityProgress.Resolution(entry, ordered);
+            result[^1] = result[^1] with { Tag = "decision", Subject = question, OwnerQuestionId = entry.Question.ItemId,
+                Resolution = resolution };
+            if (entry.ResolvedAt is { } resolvedAt)
+            {
+                Add(source with { Timestamp = resolvedAt, EventKind = "owner-question-resolved" },
+                    "Resolved: " + Prefix(entry.Question.GoalId) + " " + question, question, "The conductor can continue.");
+                result[^1] = result[^1] with { Subject = question, OwnerQuestionId = entry.Question.ItemId, Resolution = resolution };
+            }
+        }
+        return result.OrderByDescending(item => item.Timestamp).ThenByDescending(item => item.Kind == "owner-question-resolved")
+            .Take(OwnerConsoleViewModelBuilder.MaxActivityItems).ToArray();
 
         string FullName(string? id) => Words(title(id), Prefix(id).Length == 0 ? "This work" : Prefix(id));
-        string Name(string? id) => ShortTitle(FullName(id), 40);
-        void Add(OwnerConductEvent source, string sentence, string why, string next, string act = "No. You can let the conductor continue.") =>
-            result.Add(new(source.Timestamp, source.EventKind, act.StartsWith("Yes", StringComparison.Ordinal) ? "decision" : "outcome",
-                Prefix(source.GoalId), source.Detail, FullName(source.GoalId), sentence, why, next, act));
-        void Resolve(OwnerConductEvent source)
+        string Name(string? id) => FullName(id);
+        void Add(OwnerConductEvent source, string sentence, string why, string next, string act = "No. You can let the conductor continue.",
+            IReadOnlyList<string>? titles = null)
         {
-            var key = Prefix(source.GoalId);
-            var sourceQuestion = Field(source, "question");
-            if (!questions.ContainsKey(key) && resolved.ContainsKey(key) &&
-                (sourceQuestion is null || Words(sourceQuestion, "") == resolved[key])) return;
-            var question = Words(sourceQuestion, questions.GetValueOrDefault(key) ?? "The earlier owner question.");
-            questions.Remove(key);
-            resolved[key] = question;
-            Add(source, "Resolved: " + question, "The question was answered or cleared.", "The conductor can continue.");
+            result.Add(new(source.Timestamp, source.EventKind, "outcome", Prefix(source.GoalId), source.Detail,
+                FullName(source.GoalId), sentence, why, next, act, why, Resolution: OwnerActivityProgress.RetryAfter(source, ordered),
+                Titles: titles ?? Members(source).Append(source.GoalId).Select(FullName).Distinct().ToArray()));
         }
         void Stall(OwnerConductEvent source)
         {
@@ -172,14 +188,15 @@ internal static class OwnerActivityNarrator
             var seconds = Field(source, "repeatedForSeconds") ?? Field(source, "heldForSeconds");
             var minutes = double.TryParse(seconds, NumberStyles.Float, CultureInfo.InvariantCulture, out var duration)
                 ? Math.Max(0, (int)(duration / 60)) : 0;
-            Add(source, $"Waiting: {Name(source.GoalId)} has been held {minutes} min: {Blocker(Field(source, "blocker"))}",
-                "The conductor reported that the work is held.", "Work resumes when the blocker clears.",
+            var blocker = WaitingOn(Field(source, "blocker"));
+            Add(source, $"Waiting: {Name(source.GoalId)} has been held {minutes} min: {blocker}",
+                blocker, "Work resumes when the blocker clears.",
                 "Check DECISIONS for an owner question; otherwise the conductor will retry when it can.");
         }
         void TestResult(OwnerConductEvent source, string?[] ids, bool joint)
         {
             var passed = Field(source, "outcome") == "passed" || Field(source, "verdict") == "passed";
-            var label = joint ? "Joint test run for " + string.Join(", ", ids.Select(id => ShortTitle(FullName(id), Math.Max(8, 40 / ids.Length)))) : Name(source.GoalId);
+            var label = joint ? "Joint test run for " + string.Join(", ", ids.Select(FullName)) : Name(source.GoalId);
             if (passed) { Add(source, label + ": passed", "The joint checks passed.", "The conductor will land the work."); return; }
             var follow = ordered.Skip(Array.IndexOf(ordered, source) + 1).TakeWhile(value =>
                 !(joint ? value.EventKind == source.EventKind && Members(value).Length > 1 &&
@@ -189,11 +206,11 @@ internal static class OwnerActivityNarrator
                 .Where(value => ids.Any(id => Prefix(id) == Prefix(value.GoalId))).ToArray();
             var facts = evidence?.Invoke(source);
             var attributed = Field(source, "attribution") is "FirstMemberFailed" or "SecondMemberFailed" or "BothMembersFailed" || facts?.OwnTest == true;
-            var ownerQuestion = follow.Any(value => value.EventKind == "goal-escalation" &&
-                Head(value) != "ownerless-hold-stalled" || value.EventKind == "author" && Field(value, "kind") == "ask-owner");
+            var ownerQuestion = attention?.Any(entry => entry.ResolvedAt is null &&
+                ids.Any(id => Prefix(id) == Prefix(entry.Question.GoalId))) == true;
             var developer = follow.Any(value => value.EventKind == "goal-lifecycle" &&
                 (Head(value) == "TaskDispatched" && Role(value) == "Developer" || Head(value) == "TaskFailed" && Field(value, "outcome") == "finding"));
-            var next = ownerQuestion || follow.Any(value => Field(value, "result") == "escalated") ? "needs you" :
+            var next = ownerQuestion ? "needs you" :
                 developer ? "sent back to the Developer" :
                 follow.Any(value => Field(value, "result") is "held" or "retrying" or "started" ||
                     value.EventKind == "infrastructure-deferral") || Field(source, "result") == "retrying" ? "retrying automatically" :
@@ -206,7 +223,7 @@ internal static class OwnerActivityNarrator
             var test = Field(source, "tests") ?? facts?.Tests.FirstOrDefault();
             var own = attributed;
             var checks = Field(source, "checks") ?? facts?.Checks.FirstOrDefault();
-            var reason = interaction ? "the changes failed when tested together" : unrelated ? "an unrelated flaky test failed" : own ?
+            var reason = !string.IsNullOrWhiteSpace(facts?.FirstFailure) ? facts.FirstFailure : interaction ? "the changes failed when tested together" : unrelated ? "an unrelated flaky test failed" : own ?
                 test is not null ? "its own new test " + Words(test, "check") + " failed" : "its own checks failed" :
                 Field(source, "type") == "timeout" ? "the test run timed out" : Field(source, "stage") switch
                 {
@@ -214,6 +231,7 @@ internal static class OwnerActivityNarrator
                     "merge" => "the changes could not be added to main",
                     "source-size-preflight" => "a source file exceeded its size limit",
                     _ => checks is not null ? "the check " + Words(checks.Replace('_', ' '), "verification") + " failed" :
+                        test is not null ? Words(test, "") + " failed" : FailureReason(source) is { } rejection ? "plan rejected: " + rejection :
                         "the failure reason has not been recorded"
                 };
             var sentence = label + (joint ? ": failed (" : ": failed its tests (") + reason + "); " + next;
@@ -230,16 +248,77 @@ internal static class OwnerActivityNarrator
     {
         "TaskDispatched" => $"{Role(item)} started on {title}",
         "TaskCompleted" => $"{Role(item)} passed {title}",
-        "TaskFailed" => $"{Role(item)} sent {title} back: " + (Field(item, "outcome") == "finding" ?
+        "TaskFailed" => $"{Role(item)} sent {title} back: " + (FailureReason(item) is { } rejected ? "plan rejected: " + rejected : Field(item, "outcome") == "finding" ?
             "a problem needs correction" : "the worker could not finish"),
         _ => null
     };
 
-    internal static string Line(OwnerConsoleActivityItem item) => $"{item.Timestamp.ToLocalTime():HH:mm:ss} {item.Phrase}";
-    private static string ShortTitle(string title, int limit) => title.Length <= limit ? title : title[..(limit - 1)] + "…";
-    internal static string Explain(OwnerConsoleActivityItem item) => string.Join("\n", [
-        "What happened: " + Line(item), "Why: " + item.Why, "What happens next: " + item.Next,
-        "Do you need to act: " + item.Act]);
+    internal static string? StagePhrase(OwnerConductEvent item) => Head(item) switch
+    {
+        "TaskDispatched" => Role(item) + " started",
+        "TaskCompleted" => Role(item) + " passed",
+        "TaskFailed" => Role(item) + " sent back: " + (FailureReason(item) is { } reason ? "plan rejected: " + reason :
+            Field(item, "outcome") == "finding" ? "a problem needs correction" : "the worker could not finish"),
+        _ => null
+    };
+
+    internal static string Line(OwnerConsoleActivityItem item) => $"{item.Timestamp.ToLocalTime():HH:mm:ss} " +
+        (item.GoalPrefix.Length > 0 && !item.Phrase.Contains(item.GoalPrefix, StringComparison.OrdinalIgnoreCase)
+            ? item.GoalPrefix + " " : "") + item.Phrase;
+
+    internal static string Explain(OwnerConsoleActivityItem item, IReadOnlyList<OwnerConsoleDecision>? decisions = null)
+    {
+        // Match the exact item; another question on the same goal never makes this event actionable.
+        var decision = item.OwnerQuestionId is null ? null : decisions?.FirstOrDefault(value =>
+            value.Id == item.OwnerQuestionId && value.GoalPrefix.Equals(item.GoalPrefix, StringComparison.OrdinalIgnoreCase) &&
+            Words(OwnerHoldReason.FirstLine(value.FullText), "") == item.Subject);
+        var goal = item.GoalPrefix.Length == 0 ? "Conductor" : item.GoalPrefix;
+        var resolution = decision is not null ? "still waiting on you" : item.Resolution is { } resolved ?
+            resolved.AutomaticRetry ? $"retried automatically at {resolved.At.ToLocalTime():HH:mm:ss}" :
+                $"resolved at {resolved.At.ToLocalTime():HH:mm:ss}" + (resolved.Actor is { } actor ? " by " + ResolutionActor(actor) :
+                    "; no longer listed in DECISIONS (the resolving actor was not recorded)") :
+            item.OwnerQuestionId is not null ? "no longer listed in DECISIONS" : "no owner question is listed in DECISIONS for this event";
+        var act = decision is not null ? $"Yes. {goal}: open DECISIONS row [{decision.Number}] {decision.GoalPrefix} {decision.Kind}: {decision.Summary}" :
+            $"No. {goal}: {resolution}.";
+        var happened = Line(item);
+        if (item.GoalTitle.Length > 0 && !happened.Contains(item.GoalTitle, StringComparison.Ordinal))
+            happened += " (" + item.GoalTitle + ")";
+        var next = decision is not null ? "Work waits for your answer." : item.Resolution?.AutomaticRetry == true ?
+            "The conductor resumed this work." : item.OwnerQuestionId is not null ?
+            "This question no longer requires an owner answer." : item.Next;
+        return string.Join("\n", ["What happened: " + happened,
+            "Why: " + goal + " " + (item.Subject ?? item.Why),
+            "What happens next: " + goal + " " + resolution + ". " + next,
+            "Do you need to act: " + act]);
+    }
+
+    private static string? FailureReason(OwnerConductEvent item)
+    {
+        var reason = Field(item, "rejection") ?? OwnerPlanRejectionReason.Read(item.Detail);
+        if (reason is null) return null;
+        var citation = Regex.Match(reason, @"target citation '([^']+)' does not exist");
+        return citation.Success ? "cited a file that does not exist: " + citation.Groups[1].Value : reason;
+    }
+
+    private static string ResolutionActor(string actor) => actor.ToLowerInvariant() switch
+    {
+        "author" => "the Author",
+        "conductor" => "the conductor",
+        "operator" or "owner" or "owner-console" or "miles" => "the operator",
+        _ => actor
+    };
+
+    internal static string WaitingOn(string? value)
+    {
+        // Known category-only blockers have friendly labels; recorded sentences retain their subject.
+        if (value?.StartsWith("waiting_for_approval", StringComparison.OrdinalIgnoreCase) == true)
+            return "waiting for your approval";
+        var reason = OwnerHoldReason.Read(value);
+        if (reason is null) return "a blocker needs review";
+        if (reason.Contains(' ') || reason.Contains('?')) return reason;
+        var category = Blocker(reason);
+        return category == "a blocker needs review" ? Words(reason.Replace('_', ' '), category) : category;
+    }
 
     internal static string Blocker(string? value) => value?.ToLowerInvariant() switch
     {
@@ -289,4 +368,5 @@ internal static class OwnerActivityNarrator
     }
 }
 
-internal sealed record OwnerActivityTestEvidence(IReadOnlyList<string> Tests, IReadOnlyList<string> Checks, bool OwnTest = false);
+internal sealed record OwnerActivityTestEvidence(IReadOnlyList<string> Tests, IReadOnlyList<string> Checks, bool OwnTest = false,
+    string? FirstFailure = null);

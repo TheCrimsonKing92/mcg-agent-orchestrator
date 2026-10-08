@@ -51,8 +51,7 @@ public sealed class OwnerConsoleViewModelBuilderTests
         Assert.Equal(["q1", "q2"], model.Decisions.Select(item => item.Id));
         Assert.Equal(new OwnerConsoleDecision("q1", 1, "111111111111", "11111111", OwnerQuestionKind.HumanInput,
             "Ship it?", "  Ship   it?\r\nExplain the risks.", "portfolio", "high", "ship"), model.Decisions[0]);
-        Assert.Equal(OwnerConsoleViewModelBuilder.SummaryMaxLength, model.Decisions[1].Summary.Length);
-        Assert.EndsWith("…", model.Decisions[1].Summary);
+        Assert.Equal(new string('x', 200), model.Decisions[1].Summary);
         Assert.Equal(new string('x', 200), model.Decisions[1].FullText);
         harness.Questions.Items.Reverse();
         var reordered = await builder.BuildAsync(Inputs(harness));

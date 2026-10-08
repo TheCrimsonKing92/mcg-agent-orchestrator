@@ -22,7 +22,9 @@ internal sealed record OwnerConsoleBoardRow(string GoalPrefix, string Epic, stri
 
 internal sealed record OwnerConsoleActivityItem(DateTimeOffset Timestamp, string Kind, string Tag,
     string GoalPrefix, string Detail, string GoalTitle = "", string Phrase = "",
-    string Why = "The reason was not recorded.", string Next = "Work continues.", string Act = "No action is needed.");
+    string Why = "The reason was not recorded.", string Next = "Work continues.", string Act = "No action is needed.",
+    string? Subject = null, string? OwnerQuestionId = null, OwnerActivityResolution? Resolution = null,
+    IReadOnlyList<string>? Titles = null);
 
 internal sealed record OwnerConsoleViewInputs(DateTimeOffset OpenedAt, DateTimeOffset? LastConductEvent,
     IReadOnlyList<OwnerConductEvent> RecentEvents, int LandedToday);

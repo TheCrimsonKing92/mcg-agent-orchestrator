@@ -34,9 +34,11 @@ internal static class OwnerConsoleFullScreenHost
             IOrchestratorStateQueries state = File.Exists(workspace.SqliteStatePath)
                 ? SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath) : new EmptyOwnerConsoleStateQueries();
             var questions = new SerializedOwnerQuestionSource(new OwnerQuestionReadModel(state, workspace.OrchestratorDirectory));
+            var cohortEvidence = new OwnerActivityEvidenceReader(Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db"));
+            var gateEvidence = new OwnerGateFailureEvidence(workspace.OrchestratorDirectory);
             var builder = new OwnerConsoleViewModelBuilder(state, questions,
                 new ConductorLeaseLiveness(workspace.OrchestratorDirectory), new PortfolioGoalEpicLookup(workspace.PortfolioStorePath), clock,
-                new OwnerActivityEvidenceReader(Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db")).Read);
+                item => cohortEvidence.Read(item) ?? gateEvidence.Read(item));
             var opened = clock.GetUtcNow();
             DateTimeOffset? last = null;
             var landings = 0;

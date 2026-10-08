@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
@@ -28,6 +29,21 @@ internal static class OwnerGoalLifecycleEvent
                 (message.GetString()!.StartsWith("Tester WORKER_RESULT rejected: merged structured finding state still has open blocking stable_id(s):", StringComparison.Ordinal) ||
                  message.GetString()!.StartsWith("Reviewer WORKER_RESULT verdict rejected: merged structured finding state still has open blocking stable_id(s):", StringComparison.Ordinal)))
                 detail += " outcome=finding";
+            if (kind == "TaskFailed" && root.TryGetProperty("message", out var rejected) &&
+                rejected.ValueKind == JsonValueKind.String && OwnerPlanRejectionReason.Read(rejected.GetString()) is { } reason)
+                detail += " rejection=" + reason.Replace('=', ':');
+            if (root.TryGetProperty("operatorIntentApplied", out var applied) && applied.ValueKind == JsonValueKind.Object &&
+                applied.TryGetProperty("verb", out var verb) && verb.GetString() is "answer" or "retry" or "adjudicate")
+            {
+                detail += " resolution-verb=" + verb.GetString();
+                if (applied.TryGetProperty("actor", out var actor) && actor.GetString() is { } actorText &&
+                    Regex.IsMatch(actorText, @"^[\w-]+$")) detail += " resolution-actor=" + actorText;
+                if (root.TryGetProperty("message", out var answer) && answer.ValueKind == JsonValueKind.String)
+                {
+                    var target = Regex.Match(answer.GetString()!, @"(?:^|\s)target=([\w-]+:[\w-]+)");
+                    if (target.Success) detail += " answer-target=" + target.Groups[1].Value;
+                }
+            }
             item = new(timestamp.GetDateTimeOffset(), "goal-lifecycle", goalId, detail);
             return true;
         }
@@ -42,6 +58,6 @@ internal static class OwnerGoalLifecycleEvent
         if (tokens.Any(token => token.StartsWith("role=", StringComparison.Ordinal))) return item;
         var taskId = tokens.FirstOrDefault(token => token.StartsWith("task=", StringComparison.Ordinal))?[5..];
         return taskId is not null && roles.TryGetValue(taskId, out var role)
-            ? item with { Detail = item.Detail + " role=" + role } : item;
+            ? item with { Detail = tokens[0] + " role=" + role + " " + item.Detail[(item.Detail.IndexOf(' ') + 1)..] } : item;
     }
 }

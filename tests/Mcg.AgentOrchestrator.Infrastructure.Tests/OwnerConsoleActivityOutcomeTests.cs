@@ -45,13 +45,16 @@ public sealed class OwnerConsoleActivityOutcomeTests
         using var scene = new Scene();
         scene.AddGoals();
         var time = scene.Harness.Clock.GetUtcNow();
+        scene.Harness.Questions.Items.Add(new("q1", "11111111", OwnerQuestionKind.HumanInput, "Keep this direction?"));
+        await scene.Render([]);
+        scene.Harness.Questions.Items.Clear();
         await scene.Render([
             new(time, "goal-escalation", "11111111", "steward-owner-question question=Keep this direction?"),
             new(time.AddSeconds(1), "goal-lifecycle", "11111111", "HumanInputReceived"),
             new(time.AddSeconds(2), "goal-stalled", "11111111", "GOAL_STALLED owner=none repeatedForSeconds=300 blocker=waiting_for_approval"),
             new(time.AddSeconds(2), "goal-escalation", "11111111", "ownerless-hold-stalled heldForSeconds=300 blocker=waiting_for_approval"),
             new(time.AddSeconds(3), "train-receipt-released", "11111111", "result=released")]);
-        Assert.Equal(new[] { "Needs you: Keep this direction?", "Resolved: Keep this direction?",
+        Assert.Equal(new[] { "Needs you: 11111111 Keep this direction?", "Resolved: 11111111 Keep this direction?",
             "Waiting: Search has been held 5 min: waiting for your approval", "Moving again: Search" },
             scene.Controller.Model!.Activity.Reverse().Select(item => item.Phrase));
     }
@@ -65,9 +68,9 @@ public sealed class OwnerConsoleActivityOutcomeTests
         await scene.Render([
             new(time, "acceptance", "11111111", "ACCEPTANCE goal=11111111 result=failed checks=Build_main"),
             new(time.AddSeconds(1), "goal-lifecycle", "11111111", "TaskDispatched role=Developer")]);
-        Assert.Contains($"{time.ToLocalTime():HH:mm:ss} Search: failed its tests (the check Build main failed); sent back to the Developer",
+        Assert.Contains($"{time.ToLocalTime():HH:mm:ss} 11111111 Search: failed its tests (the check Build main failed); sent back to the Developer",
             scene.View.ActivityLines);
-        Assert.Contains($"{time.AddSeconds(1).ToLocalTime():HH:mm:ss} Developer started on Search", scene.View.ActivityLines);
+        Assert.Contains($"{time.AddSeconds(1).ToLocalTime():HH:mm:ss} 11111111 Developer started on Search", scene.View.ActivityLines);
     }
 
     [Theory]
@@ -81,6 +84,7 @@ public sealed class OwnerConsoleActivityOutcomeTests
         scene.Harness.AddGoal("11111111", "Search " + new string('x', 150), AgentRole.Developer);
         scene.Harness.AddGoal("22222222", "Export " + new string('y', 150), AgentRole.Developer);
         await scene.Render([new(scene.Harness.Clock.GetUtcNow(), kind, "11111111", detail)]);
+        scene.View.Fit(118, 40);
         var line = Assert.Single(scene.View.ActivityLines);
         Assert.Contains(outcome, line[..Math.Min(118, line.Length)]);
         Assert.Contains("…", line);
@@ -140,7 +144,7 @@ public sealed class OwnerConsoleActivityOutcomeTests
         scene.Harness.Questions.Items.Clear();
         scene.Harness.Kernel.ReplaceWithSnapshot(snapshot);
         await scene.Render(events);
-        Assert.Contains(scene.Controller.Model!.Activity, item => item.Phrase == "Resolved: Continue?");
+        Assert.Contains(scene.Controller.Model!.Activity, item => item.Phrase == "Resolved: 11111111 Continue?");
         Assert.Contains(scene.Controller.Model.Activity, item => item.Phrase == "Moving again: Search");
     }
 
@@ -152,9 +156,9 @@ public sealed class OwnerConsoleActivityOutcomeTests
         internal readonly OwnerConsoleViewModelBuilder Builder;
         internal readonly OwnerConsoleScreenController Controller;
         internal readonly OwnerConsoleFullScreenView View;
-        internal Scene(IGoalEventTail? tail = null)
+        internal Scene(IGoalEventTail? tail = null, Func<OwnerConductEvent, OwnerActivityTestEvidence?>? evidence = null)
         {
-            Builder = new(Harness.State, Harness.Questions, Harness.Liveness, new Epics(), Harness.Clock);
+            Builder = new(Harness.State, Harness.Questions, Harness.Liveness, new Epics(), Harness.Clock, evidence);
             Controller = new(Harness.Questions, Harness.Answers, Dialogs, Harness.State, tail ?? Harness.Tail,
                 Harness.Conductor, Harness.DigestReport, Harness.Digest, Harness.Clock);
             View = new(App, Controller, () => Task.CompletedTask);
