@@ -21,7 +21,8 @@ public sealed class GoalLifecycleTests
             new TaskSpec(TaskId.New(), "Implement the feature", AgentRole.Developer),
             new TaskSpec(TaskId.New(), reviewDescription, AgentRole.Reviewer)
         ]);
-        var parent = kernel.CreateGoal("Coordinate streams", []);
+        var parent = kernel.CreateGoal("Coordinate streams",
+            [new TaskSpec(TaskId.New(), "Coordinate stream integration", AgentRole.Developer)]);
         var child = kernel.CreateGoal(objective,
         [
             new TaskSpec(TaskId.New(), "Implement the feature", AgentRole.Developer),
@@ -45,7 +46,8 @@ public sealed class GoalLifecycleTests
     public void ActivateGoal_SingleAvailableReviewer_FallsBackForChild(bool includeBusy)
     {
         var kernel = new AgentOrchestratorKernel(new FakeClock());
-        var parent = kernel.CreateGoal("Coordinate streams", []);
+        var parent = kernel.CreateGoal("Coordinate streams",
+            [new TaskSpec(TaskId.New(), "Coordinate stream integration", AgentRole.Developer)]);
         var child = kernel.CreateGoal("Ship a feature",
             [new TaskSpec(TaskId.New(), "Review the diff", AgentRole.Reviewer)], parent.Id);
         var available = TestAgent("available", "Reviewer", AgentRole.Reviewer);
@@ -62,7 +64,8 @@ public sealed class GoalLifecycleTests
     public void ActivateGoal_NoAvailableReviewer_LeavesChildTaskPending()
     {
         var kernel = new AgentOrchestratorKernel(new FakeClock());
-        var parent = kernel.CreateGoal("Coordinate streams", []);
+        var parent = kernel.CreateGoal("Coordinate streams",
+            [new TaskSpec(TaskId.New(), "Coordinate stream integration", AgentRole.Developer)]);
         var child = kernel.CreateGoal("Ship a feature",
             [new TaskSpec(TaskId.New(), "Review the diff", AgentRole.Reviewer)], parent.Id);
         var busy = TestAgent("busy", "Busy Reviewer", AgentRole.Reviewer) with { Status = AgentStatus.Busy };
@@ -78,9 +81,12 @@ public sealed class GoalLifecycleTests
     public void AddTask_SliceChild_UsesOtherReviewerAndSameDeveloper()
     {
         var kernel = new AgentOrchestratorKernel(new FakeClock());
-        var parent = kernel.CreateGoal("Coordinate streams", []);
-        var ordinary = kernel.CreateGoal("Ship a feature", []);
-        var child = kernel.CreateGoal("Ship a feature", [], parent.Id);
+        var parent = kernel.CreateGoal("Coordinate streams",
+            [new TaskSpec(TaskId.New(), "Coordinate stream integration", AgentRole.Developer)]);
+        var ordinary = kernel.CreateGoal("Ship a feature",
+            [new TaskSpec(TaskId.New(), "Implement the initial feature", AgentRole.Developer)]);
+        var child = kernel.CreateGoal("Ship a feature",
+            [new TaskSpec(TaskId.New(), "Implement the initial feature", AgentRole.Developer)], parent.Id);
         var developer = TestAgent("developer", "Developer", AgentRole.Developer);
         var reviewer = TestAgent("reviewer", "Reviewer", AgentRole.Reviewer);
         var streamReviewer = TestAgent("stream-reviewer", "Stream Reviewer", AgentRole.Reviewer);
@@ -108,7 +114,8 @@ public sealed class GoalLifecycleTests
     {
         var kernel = new AgentOrchestratorKernel(new FakeClock());
         var objective = "Implement comprehensive distributed architecture";
-        var parent = kernel.CreateGoal("Coordinate streams", []);
+        var parent = kernel.CreateGoal("Coordinate streams",
+            [new TaskSpec(TaskId.New(), "Coordinate stream integration", AgentRole.Developer)]);
         var ordinary = kernel.CreateGoal(objective,
             [new TaskSpec(TaskId.New(), reviewDescription, AgentRole.Reviewer)]);
         var child = kernel.CreateGoal(objective,
