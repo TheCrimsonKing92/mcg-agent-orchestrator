@@ -9,6 +9,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorDriver
 {
+    private const int CohortStableSlotRoundCount = 3;
     private sealed class TransferableCohortWorkspace(AcceptanceCohortWorkspace workspace) : IDisposable
     {
         private AcceptanceCohortWorkspace? _workspace = workspace;
@@ -221,13 +222,9 @@ internal sealed partial class ConductorDriver
                     run);
             }
 
-            receipt = ExecuteAcceptanceCohortGate(
-                integration,
-                identity,
-                bindings,
-                pairFingerprint,
-                cancellationToken,
-                onGateAdmitted);
+            receipt = ExecuteAcceptanceCohortGate(integration, identity, bindings,
+                pairFingerprint, cancellationToken, onGateAdmitted);
+            if (receipt is null) return CohortStableSlotAcquisitionRounds.DeferredRun(goals, policy, identity.Value);
         }
 
         try
@@ -384,7 +381,7 @@ internal sealed partial class ConductorDriver
                 $"detail={BoundCohortDetail(detail)}");
     }
 
-    private AcceptanceCohortReceipt ExecuteAcceptanceCohortGate(
+    private AcceptanceCohortReceipt? ExecuteAcceptanceCohortGate(
         AcceptanceCohortWorkspace integration,
         AcceptanceCohortIdentity identity,
         IReadOnlyList<AcceptanceCohortMemberBinding> bindings,
@@ -414,9 +411,9 @@ internal sealed partial class ConductorDriver
         var gateExecutionComplete = false;
         try
         {
-            stableSlotLease = _parallelAcceptanceAttemptCoordinator.AcquireCohortStableSlotLease(
-                identity.Value,
-                cancellationToken);
+            stableSlotLease = _parallelAcceptanceAttemptCoordinator.AcquireCohortStableSlotLeaseInRounds(
+                identity.Value, CohortStableSlotAcquisitionRounds.HolderLabel(bindings), CohortStableSlotRoundCount, cancellationToken);
+            if (stableSlotLease is null) return null;
             onGateAdmitted?.Invoke();
             var verification = AcceptanceExecutionRunner.RunAttempt(
                 verifier,

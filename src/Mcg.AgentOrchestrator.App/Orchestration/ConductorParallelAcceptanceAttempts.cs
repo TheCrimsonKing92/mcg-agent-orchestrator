@@ -380,6 +380,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
     private readonly DotnetBuildStorageRoot? _buildStorageRoot;
     private readonly int _conductorGenerationId;
     private readonly Func<string, TimeSpan, IDisposable?> _tryAcquireAttemptWriterLease;
+    private readonly Func<string, string, CancellationToken, DotnetBuildEnvironmentLease> _acquireCohortStableSlotRound;
+    private readonly Func<TimeSpan, CancellationToken, Task>? _cohortStableSlotRoundDelay;
 
     internal ConductorParallelAcceptanceAttemptCoordinator(
         string rootDirectory,
@@ -406,7 +408,9 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         // Each conductor renewal is a fresh child process, so the loop pid is a sound generation
         // identity and the driver needs no threading change to supply one.
         int? conductorGenerationId = null,
-        Func<string, TimeSpan, IDisposable?>? tryAcquireAttemptWriterLease = null)
+        Func<string, TimeSpan, IDisposable?>? tryAcquireAttemptWriterLease = null,
+        Func<string, string, CancellationToken, DotnetBuildEnvironmentLease>? acquireCohortStableSlotRound = null,
+        Func<TimeSpan, CancellationToken, Task>? cohortStableSlotRoundDelay = null)
     {
         if (runInline && attemptCompletionGateForTests is not null)
         {
@@ -431,6 +435,9 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         _resultPublishedForTests = resultPublishedForTests;
         _attemptWriterLeaseAcquiringForTests = attemptWriterLeaseAcquiringForTests;
         _acquireStableSlotLease = acquireStableSlotLease ?? AcquireAttemptStableSlotLease;
+        _acquireCohortStableSlotRound = acquireCohortStableSlotRound ??
+            ((identity, label, token) => AcquireCohortStableSlotLease(identity, token, holderLabel: label));
+        _cohortStableSlotRoundDelay = cohortStableSlotRoundDelay;
         _attemptLogWriters = attemptLogWriters;
         _conductEventLogWriter = conductEventLogWriter;
         // Only an explicit operation setting crosses the hermetic child boundary.
@@ -541,18 +548,25 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
     internal DotnetBuildEnvironmentLease AcquireCohortStableSlotLease(
         string cohortId,
         CancellationToken cancellationToken = default,
-        TimeSpan? timeout = null)
+        TimeSpan? timeout = null,
+        string? holderLabel = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(cohortId);
         var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
             timeout ?? DotnetBuildEnvironmentManager.DefaultSlotBusyPollTimeout,
             cancellationToken: cancellationToken,
             slotCount: DotnetBuildEnvironmentManager.StableSlotCount,
-            storageRoot: _buildStorageRoot);
+            storageRoot: _buildStorageRoot,
+            holderLabel: holderLabel);
         Console.WriteLine(
             $"ACCEPTANCE_LEASE_ACQUIRE cohort={cohortId} permit=acceptance-{lease.Environment.BuildPermitIndex?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"} holderPid={Environment.ProcessId}");
         return lease;
     }
+
+    internal DotnetBuildEnvironmentLease? AcquireCohortStableSlotLeaseInRounds(
+        string cohortId, string holderLabel, int roundCount, CancellationToken cancellationToken) =>
+        new CohortStableSlotAcquisitionRounds(roundCount, _cohortStableSlotRoundDelay).Acquire(
+            cohortId, token => _acquireCohortStableSlotRound(cohortId, holderLabel, token), cancellationToken);
 
     internal ConductorParallelAcceptanceAttemptDecision EvaluateFocusedEvidence(
         ConductorParallelAcceptanceCandidate candidate,
@@ -1488,7 +1502,10 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         var environment = DotnetBuildEnvironmentManager.CreateAttempt(
             candidate.Goal.Id,
             $"{purpose}-{attempt.AttemptId}",
-            storageRoot: _buildStorageRoot);
+            storageRoot: _buildStorageRoot) with
+        {
+            HolderLabel = $"{purpose}:goal-{candidate.Goal.Id.Value[..8]}:attempt-{attempt.AttemptId}"
+        };
         var acquisition = DotnetBuildEnvironmentManager.TryAcquireFirstAvailableBuildPermitOwned(
             environment,
             new AcceptanceAttemptArtifactCustodyContext(

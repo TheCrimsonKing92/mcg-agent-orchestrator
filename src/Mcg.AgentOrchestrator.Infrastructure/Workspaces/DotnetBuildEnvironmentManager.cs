@@ -20,6 +20,7 @@ public sealed record DotnetBuildEnvironment(
     int? BuildPermitIndex = null)
 {
     internal IOwnedRunRootRegistrar? OwnedRootRegistrar { get; init; }
+    public string? HolderLabel { get; init; }
 
     internal DotnetBuildEnvironment DeriveArtifactsPath(string artifactsPath)
     {
@@ -65,7 +66,10 @@ public sealed record DotnetBuildStableSlotWait(
     string? UnavailableProcessName = null,
     ProcessInspectionStatus? UnavailableStatus = null,
     int? NativeError = null,
-    string? FailureOperation = null);
+    string? FailureOperation = null)
+{
+    public string? HolderLabel { get; init; }
+}
 
 internal sealed record DotnetBuildServerShutdownOutcome(
     bool Exited,
@@ -342,9 +346,10 @@ public static class DotnetBuildEnvironmentManager
         Action<DotnetBuildStableSlotWait>? onWait = null,
         CancellationToken cancellationToken = default,
         int slotCount = StableSlotCount,
-        DotnetBuildStorageRoot? storageRoot = null)
+        DotnetBuildStorageRoot? storageRoot = null,
+        string? holderLabel = null)
     {
-        return TryAcquireFirstAvailableStableSlotExecutionLock(timeout, onWait, cancellationToken, slotCount, storageRoot: storageRoot) switch
+        return TryAcquireFirstAvailableStableSlotExecutionLock(timeout, onWait, cancellationToken, slotCount, storageRoot: storageRoot, holderLabel: holderLabel) switch
         {
             DotnetBuildLeaseAcquisition.Acquired acquired => acquired.Lease,
             DotnetBuildLeaseAcquisition.SlotsBusy busy => throw new DotnetBuildSlotsBusyException(busy),
@@ -360,7 +365,8 @@ public static class DotnetBuildEnvironmentManager
         int slotCount = StableSlotCount,
         TimeProvider? timeProvider = null,
         Action<TimeSpan>? sleep = null,
-        DotnetBuildStorageRoot? storageRoot = null)
+        DotnetBuildStorageRoot? storageRoot = null,
+        string? holderLabel = null)
     {
         storageRoot ??= CaptureStorageRoot();
         ValidateRequestedSlotCount(slotCount);
@@ -378,7 +384,7 @@ public static class DotnetBuildEnvironmentManager
             for (var offset = 0; offset < slotCount; offset++)
             {
                 var slot = (scanStart + offset) % slotCount;
-                var environment = CreateStableSlotEnvironment(slot, storageRoot);
+                var environment = CreateStableSlotEnvironment(slot, storageRoot) with { HolderLabel = holderLabel };
                 if (IsSlotArtifactsBusy(environment, processSnapshot))
                 {
                     continue;
@@ -417,7 +423,7 @@ public static class DotnetBuildEnvironmentManager
             var remaining = timeoutAt - now;
             var pollDelay = remaining < SlotBusyPollDelay ? remaining : SlotBusyPollDelay;
 
-            var target = CreateStableSlotEnvironment(leastRecentlyLeased.SlotIndex, storageRoot);
+            var target = CreateStableSlotEnvironment(leastRecentlyLeased.SlotIndex, storageRoot) with { HolderLabel = holderLabel };
             if (IsSlotArtifactsBusy(target, processSnapshot))
             {
                 delay(pollDelay);
@@ -1498,7 +1504,7 @@ public static class DotnetBuildEnvironmentManager
             unavailable?.Name,
             unavailable?.Status ?? snapshot.Failure?.Status,
             snapshot.Failure?.NativeError,
-            snapshot.Failure?.Operation);
+            snapshot.Failure?.Operation) { HolderLabel = held ? metadata?.HolderLabel : null };
     }
 
     private static bool IsExecutionLockHeld(string path)
@@ -1517,10 +1523,15 @@ public static class DotnetBuildEnvironmentManager
         }
     }
 
-    private static string FormatBusySlots(IReadOnlyList<DotnetBuildStableSlotWait> busySlots) =>
+    internal static string FormatBusySlots(IReadOnlyList<DotnetBuildStableSlotWait> busySlots) =>
         busySlots.Count == 0 ? "none" : string.Join(
             "|",
             busySlots.Select(FormatBusySlot));
+
+    private static string FormatHolderLabel(string? label) => string.IsNullOrWhiteSpace(label)
+        ? "unknown"
+        : new string(label.Select(character => char.IsAsciiLetterOrDigit(character) || "._:+-".Contains(character)
+            ? character : '_').ToArray());
 
     private static string FormatBusySlot(DotnetBuildStableSlotWait slot)
     {
@@ -1546,7 +1557,7 @@ public static class DotnetBuildEnvironmentManager
             value += $":operation-{slot.FailureOperation}";
         }
 
-        return value;
+        return value + $":holder-{FormatHolderLabel(slot.HolderLabel)}";
     }
 
     private static bool TryOpenLeaseExecutionLock(
@@ -2648,7 +2659,8 @@ public static class DotnetBuildEnvironmentManager
             environment.ArtifactsPath,
             Environment.ProcessId,
             Environment.MachineName,
-            DateTimeOffset.UtcNow);
+            DateTimeOffset.UtcNow,
+            environment.HolderLabel);
         var serialized = JsonSerializer.Serialize(metadata, JsonOptions);
         stream.SetLength(0);
         stream.Position = 0;
@@ -2854,7 +2866,8 @@ public static class DotnetBuildEnvironmentManager
         string? ArtifactsPath,
         int OwnerProcessId,
         string? MachineName,
-        DateTimeOffset AcquiredAt);
+        DateTimeOffset AcquiredAt,
+        string? HolderLabel = null);
 
     private sealed record LandingTestFixtureMarker(
         int Version,
