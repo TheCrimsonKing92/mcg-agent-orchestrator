@@ -10,6 +10,11 @@ public interface IOrchestratorStateQueries
 
     Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>Optionally includes creation times for terminal goals; the default listing skips their snapshot JSON.</summary>
+    Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(
+        bool includeTerminalCreatedAt, CancellationToken cancellationToken = default) =>
+        ListGoalMetadataAsync(cancellationToken);
+
     /// <summary>Reads open request snapshots without loading goal snapshots, including orphan requests.</summary>
     Task<IReadOnlyList<HumanInputRequestSnapshot>> ListOpenHumanInputRequestsAsync(
         CancellationToken cancellationToken = default) =>

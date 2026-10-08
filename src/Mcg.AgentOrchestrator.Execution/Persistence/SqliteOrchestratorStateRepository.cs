@@ -1482,7 +1482,11 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         return cmd.ExecuteNonQuery() == 1;
     }
 
-    public async Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default)
+    public Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default) =>
+        ListGoalMetadataAsync(includeTerminalCreatedAt: false, cancellationToken);
+
+    public async Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(
+        bool includeTerminalCreatedAt, CancellationToken cancellationToken = default)
     {
         await using var conn = OpenConnection();
         var results = new List<GoalSummary>();
@@ -1494,16 +1498,19 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
                 status,
                 objective,
                 updated_at,
-                (
+                CASE WHEN {MetadataNonTerminalPredicate()} THEN (
                     SELECT json_extract(evt.value, '$.OccurredAt')
                     FROM json_each(goals.snapshot_json, '$.Timeline') AS evt
                     ORDER BY CAST(evt.key AS INTEGER) ASC
                     LIMIT 1
-                ) AS created_at,
+                ) WHEN $include_terminal_created_at = 1
+                    THEN json_extract(goals.snapshot_json, '$.Timeline[0].OccurredAt')
+                END AS created_at,
                 {ActiveWithFailedTaskConditionSql()}
             FROM goals
             ORDER BY updated_at DESC
             """;
+        cmd.Parameters.AddWithValue("$include_terminal_created_at", includeTerminalCreatedAt ? 1 : 0);
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
 
         while (await reader.ReadAsync(cancellationToken))
@@ -1521,6 +1528,9 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
 
         return results;
     }
+
+    private static string MetadataNonTerminalPredicate() =>
+        $"status NOT IN ('{GoalStatus.Completed}', '{GoalStatus.Cancelled}', '{GoalStatus.Superseded}')";
 
     public async Task<IReadOnlyList<GoalSummary>> ListGoalIdStatusesAsync(CancellationToken cancellationToken = default)
     {

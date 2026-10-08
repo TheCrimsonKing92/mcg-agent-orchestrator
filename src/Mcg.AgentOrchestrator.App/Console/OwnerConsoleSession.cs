@@ -29,22 +29,22 @@ internal sealed class OwnerConsoleSession(
         _lastConductEvent = lastActivity;
         foreach (var line in digest.ReadSummaryLines().Take(5))
             output.WriteLine(line);
-        await RefreshQuestionsAsync(cancellationToken);
-        await PrintHeaderAsync(cancellationToken);
+        var metadata = await RefreshQuestionsAsync(cancellationToken);
+        await PrintHeaderAsync(metadata, cancellationToken);
         output.WriteLine("Type help for commands.");
     }
 
     internal async Task HandleEventAsync(OwnerConductEvent item, CancellationToken cancellationToken)
     {
         _lastConductEvent = item.Timestamp;
-        await RefreshQuestionsAsync(cancellationToken);
+        var metadata = await RefreshQuestionsAsync(cancellationToken);
         if (item.EventKind is "watch-transition" or "acceptance" or "loop-relaunch" or "goal-escalation")
-            await PrintBoardAsync(cancellationToken);
+            await PrintBoardAsync(metadata, cancellationToken);
     }
 
     internal async Task<bool> HandleCommandAsync(string raw, CancellationToken cancellationToken)
     {
-        await RefreshQuestionsAsync(cancellationToken);
+        var metadata = await RefreshQuestionsAsync(cancellationToken);
         var line = raw.TrimEnd('\r').Trim();
         if (line.Length == 0) return true;
         var parts = line.Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
@@ -57,7 +57,7 @@ internal sealed class OwnerConsoleSession(
                 output.WriteLine("conductor start [--clear-stop] | conductor stop [--yes] | conductor status");
                 output.WriteLine("digest");
                 break;
-            case "board": await PrintBoardAsync(cancellationToken); break;
+            case "board": await PrintBoardAsync(metadata, cancellationToken); break;
             case "conductor": _control.HandleConductor(line); break;
             case "digest": _control.HandleDigest(line); break;
             case "goal":
@@ -107,9 +107,17 @@ internal sealed class OwnerConsoleSession(
         { output.WriteLine($"error: {ex.Message}"); await RefreshQuestionsAsync(cancellationToken); }
     }
 
-    private async Task RefreshQuestionsAsync(CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<GoalSummary>?> RefreshQuestionsAsync(CancellationToken cancellationToken)
     {
-        var snapshot = await questions.ReadAsync(cancellationToken);
+        IReadOnlyList<GoalSummary>? metadata = null;
+        OwnerQuestionSnapshot snapshot;
+        if (questions is OwnerQuestionReadModel model)
+        {
+            metadata = await state.ListGoalMetadataAsync(cancellationToken);
+            snapshot = await model.ReadAsync(metadata, cancellationToken);
+        }
+        else
+            snapshot = await questions.ReadAsync(cancellationToken);
         var current = snapshot.Live;
         _hiddenCount = snapshot.Hidden.Count;
         var ids = current.Select(item => item.ItemId).ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -121,6 +129,7 @@ internal sealed class OwnerConsoleSession(
             { number = _nextNumber++; _numbers.Add(question.ItemId, number); PrintQuestion(number, question); }
             if (!_retired.Contains(number)) _open[number] = question;
         }
+        return metadata;
     }
 
     private void PrintQuestion(int number, OwnerQuestion question)
@@ -138,17 +147,17 @@ internal sealed class OwnerConsoleSession(
         output.WriteLine($"[{number}] {question.GoalId[..Math.Min(8, question.GoalId.Length)]} {question.Text}{(fields.Any() ? " | " + string.Join(" | ", fields) : "")}{stewardGuidance}");
     }
 
-    private async Task PrintHeaderAsync(CancellationToken cancellationToken)
+    private async Task PrintHeaderAsync(IReadOnlyList<GoalSummary>? metadata, CancellationToken cancellationToken)
     {
-        var goals = await LoadActiveAsync(cancellationToken);
+        var goals = await LoadActiveAsync(metadata, cancellationToken);
         var age = _lastConductEvent is null ? "unknown" : Age(_lastConductEvent.Value);
         var hidden = _hiddenCount > 0 ? $" | hidden: {_hiddenCount}" : string.Empty;
         output.WriteLine($"conductor: {(liveness.IsRunning() ? "running" : "stopped")} | active goals: {goals.Count} | owner questions: {_open.Count}{hidden} | last event: {age}");
     }
 
-    private async Task PrintBoardAsync(CancellationToken cancellationToken)
+    private async Task PrintBoardAsync(IReadOnlyList<GoalSummary>? metadata, CancellationToken cancellationToken)
     {
-        var goals = await LoadActiveAsync(cancellationToken);
+        var goals = await LoadActiveAsync(metadata, cancellationToken);
         output.WriteLine($"board | active goals: {goals.Count} | owner questions: {_open.Count}");
         foreach (var goal in goals)
             output.WriteLine($"{goal.Id[..Math.Min(8, goal.Id.Length)]} | {goal.Title.Replace('\r', ' ').Replace('\n', ' ')} | {goal.State} | {goal.CurrentRole?.ToString() ?? "-"} | {Age(goal.LastEvent)}");
@@ -167,9 +176,10 @@ internal sealed class OwnerConsoleSession(
         foreach (var line in eventTail.ReadLast(goal.Id.Value, 15)) output.WriteLine(line);
     }
 
-    private async Task<IReadOnlyList<OwnerGoalCard>> LoadActiveAsync(CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<OwnerGoalCard>> LoadActiveAsync(
+        IReadOnlyList<GoalSummary>? metadata, CancellationToken cancellationToken)
     {
-        var metadata = await state.ListGoalMetadataAsync(cancellationToken);
+        metadata ??= await state.ListGoalMetadataAsync(cancellationToken);
         var ids = metadata.Where(item => Enum.TryParse<GoalStatus>(item.Status, true, out var status) && IsActive(status))
             .Select(item => new GoalId(item.Id)).ToArray();
         if (ids.Length == 0) return [];
