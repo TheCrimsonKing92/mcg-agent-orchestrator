@@ -76,13 +76,13 @@ public sealed class OwnerConsoleLoopResponsivenessTests
         var run = harness.RunAsync();
         await harness.Steps.Commands.Reader.ReadAsync(TestToken);
         harness.Clock.Advance(TimeSpan.FromSeconds(2) + TimeSpan.FromTicks(1));
-        await harness.Output.WaitForLineAsync("working: slow ...");
+        await harness.Output.WaitForLineAsync("[00:05:00] working: slow ...");
         harness.Clock.Advance(TimeSpan.FromSeconds(2));
         release.SetResult();
         harness.Input.Send("quit");
         await run;
 
-        Assert.Equal(new[] { "working: slow ..." }, harness.Output.Lines);
+        Assert.Equal(new[] { "[00:05:00] working: slow ..." }, harness.Output.Lines);
     }
 
     [Fact]
@@ -101,9 +101,9 @@ public sealed class OwnerConsoleLoopResponsivenessTests
         {
             await harness.Steps.Commands.Reader.ReadAsync(TestToken);
             harness.Clock.Advance(TimeSpan.FromSeconds(2) + TimeSpan.FromTicks(1));
-            await harness.Output.WaitForLineAsync("working: slow ...");
+            await harness.Output.WaitForLineAsync("[00:05:00] working: slow ...");
             harness.Clock.Advance(TimeSpan.FromSeconds(28));
-            await harness.Output.WaitForLineAsync("slow did not finish within 30s; the console is still running");
+            await harness.Output.WaitForLineAsync("[00:05:00] slow did not finish within 30s; the console is still running");
             harness.Input.Send("help");
             Assert.Equal("help", await harness.Steps.Commands.Reader.ReadAsync(TestToken));
         }
@@ -111,7 +111,7 @@ public sealed class OwnerConsoleLoopResponsivenessTests
         harness.Input.Send("quit");
         await run;
 
-        Assert.Single(harness.Output.Lines, line => line == "working: slow ...");
+        Assert.Single(harness.Output.Lines, line => line == "[00:05:00] working: slow ...");
     }
 
     [Fact]
@@ -132,7 +132,7 @@ public sealed class OwnerConsoleLoopResponsivenessTests
         var run = harness.RunAsync();
         await harness.Steps.Commands.Reader.ReadAsync(TestToken);
         harness.Clock.Advance(TimeSpan.FromSeconds(30));
-        await harness.Output.WaitForLineAsync("slow did not finish within 30s; the console is still running");
+        await harness.Output.WaitForLineAsync("[00:05:00] slow did not finish within 30s; the console is still running");
         harness.Input.Send("help");
         Assert.Equal("help", await harness.Steps.Commands.Reader.ReadAsync(TestToken));
         release.SetResult();
@@ -140,7 +140,7 @@ public sealed class OwnerConsoleLoopResponsivenessTests
         harness.Input.Send("quit");
         await run;
 
-        Assert.DoesNotContain("slow was abandoned", harness.Output.Lines);
+        Assert.DoesNotContain("[00:05:00] slow was abandoned", harness.Output.Lines);
     }
 
     [Fact]
@@ -154,14 +154,14 @@ public sealed class OwnerConsoleLoopResponsivenessTests
         var run = harness.RunAsync();
         await harness.Steps.Commands.Reader.ReadAsync(TestToken);
         harness.Clock.Advance(TimeSpan.FromSeconds(30));
-        await harness.Output.WaitForLineAsync("slow did not finish within 30s; the console is still running");
-        await harness.Output.WaitForLineAsync("slow was abandoned");
+        await harness.Output.WaitForLineAsync("[00:05:00] slow did not finish within 30s; the console is still running");
+        await harness.Output.WaitForLineAsync("[00:05:00] slow was abandoned");
         harness.Input.Send("help");
         Assert.Equal("help", await harness.Steps.Commands.Reader.ReadAsync(TestToken));
         harness.Input.Send("quit");
         await run;
 
-        Assert.Single(harness.Output.Lines, line => line == "slow was abandoned");
+        Assert.Single(harness.Output.Lines, line => line == "[00:05:00] slow was abandoned");
     }
 
     [Fact]
@@ -177,7 +177,7 @@ public sealed class OwnerConsoleLoopResponsivenessTests
         await harness.Events.WaitForReadAsync(3);
         harness.Clock.Advance(TimeSpan.FromSeconds(30));
         await harness.Output.WaitForLineAsync(
-            "refresh after conductor event did not finish within 30s; the console is still running");
+            "[00:05:00] refresh did not finish within 30s");
         harness.Input.Send("help");
         Assert.Equal("help", await harness.Steps.Commands.Reader.ReadAsync(TestToken));
         Assert.Equal(1, harness.Steps.EventCount);
@@ -186,7 +186,7 @@ public sealed class OwnerConsoleLoopResponsivenessTests
         harness.Input.Send("quit");
         await run;
 
-        Assert.Single(harness.Output.Lines, line => line == "working: refresh after conductor event ...");
+        Assert.Single(harness.Output.Lines, line => line == "[00:05:00] refresh did not finish within 30s");
     }
 
     [Theory]
@@ -203,14 +203,14 @@ public sealed class OwnerConsoleLoopResponsivenessTests
         };
         harness.Input.Send("boom");
         var run = harness.RunAsync();
-        await harness.Output.WaitForLineAsync("error: kaboom");
+        await harness.Output.WaitForLineAsync("[00:05:00] error: kaboom");
         Assert.Equal("boom", await harness.Steps.Commands.Reader.ReadAsync(TestToken));
         harness.Input.Send("help");
         Assert.Equal("help", await harness.Steps.Commands.Reader.ReadAsync(TestToken));
         harness.Input.Send("quit");
         await run;
 
-        Assert.Equal(new[] { "error: kaboom" }, harness.Output.Lines);
+        Assert.Equal(new[] { "[00:05:00] error: kaboom" }, harness.Output.Lines);
     }
 
     [Fact]
@@ -220,13 +220,13 @@ public sealed class OwnerConsoleLoopResponsivenessTests
         harness.Steps.OnEvent = _ => Task.FromException(new IOException("refresh failed"));
         harness.Events.Send(1);
         var run = harness.RunAsync();
-        await harness.Output.WaitForLineAsync("error: refresh failed");
+        await harness.Output.WaitForLineAsync("[00:05:00] refresh error: refresh failed");
         harness.Input.Send("help");
         Assert.Equal("help", await harness.Steps.Commands.Reader.ReadAsync(TestToken));
         harness.Input.Send("quit");
         await run;
 
-        Assert.Equal(new[] { "error: refresh failed" }, harness.Output.Lines);
+        Assert.Equal(new[] { "[00:05:00] refresh error: refresh failed" }, harness.Output.Lines);
     }
 
     [Fact]
@@ -235,13 +235,13 @@ public sealed class OwnerConsoleLoopResponsivenessTests
         var harness = new Harness();
         harness.Steps.OnStart = () => Task.FromException(new InvalidOperationException("startup failed"));
         var run = harness.RunAsync();
-        await harness.Output.WaitForLineAsync("error: startup failed");
+        await harness.Output.WaitForLineAsync("[00:05:00] error: startup failed");
         harness.Input.Send("help");
         Assert.Equal("help", await harness.Steps.Commands.Reader.ReadAsync(TestToken));
         harness.Input.Send(null);
         await run;
 
-        Assert.Equal(new[] { "error: startup failed" }, harness.Output.Lines);
+        Assert.Equal(new[] { "[00:05:00] error: startup failed" }, harness.Output.Lines);
     }
 
     [Fact]
@@ -254,15 +254,15 @@ public sealed class OwnerConsoleLoopResponsivenessTests
         var run = harness.RunAsync();
         await harness.Steps.Commands.Reader.ReadAsync(TestToken);
         harness.Clock.Advance(TimeSpan.FromSeconds(30));
-        await harness.Output.WaitForLineAsync("slow did not finish within 30s; the console is still running");
+        await harness.Output.WaitForLineAsync("[00:05:00] slow did not finish within 30s; the console is still running");
         result.SetException(new IOException("late failure"));
-        await harness.Output.WaitForLineAsync("error: late failure");
+        await harness.Output.WaitForLineAsync("[00:05:00] error: late failure");
         harness.Input.Send("help");
         Assert.Equal("help", await harness.Steps.Commands.Reader.ReadAsync(TestToken));
         harness.Input.Send("quit");
         await run;
 
-        Assert.Single(harness.Output.Lines, line => line == "error: late failure");
+        Assert.Single(harness.Output.Lines, line => line == "[00:05:00] error: late failure");
     }
 
     [Fact]
@@ -296,7 +296,7 @@ public sealed class OwnerConsoleLoopResponsivenessTests
         harness.Events.ThrowSynchronously = synchronous;
         var pollBound = TimeSpan.FromMilliseconds(250);
         var run = harness.RunAsync(pollBound);
-        await harness.Output.WaitForLineAsync("error: event read failed");
+        await harness.Output.WaitForLineAsync("[00:05:00] error: event read failed");
 
         harness.Input.Send("help");
         Assert.Equal("help", await harness.Steps.Commands.Reader.ReadAsync(TestToken));
@@ -304,14 +304,14 @@ public sealed class OwnerConsoleLoopResponsivenessTests
         Assert.Single(harness.Output.Lines);
 
         harness.Clock.Advance(pollBound);
-        await harness.Output.WaitForLineAsync("error: event read failed");
+        await harness.Output.WaitForLineAsync("[00:05:00] error: event read failed");
         Assert.Equal(2, harness.Events.ReadCount);
         harness.Input.Send("quit");
         Assert.Equal("quit", await harness.Steps.Commands.Reader.ReadAsync(TestToken));
         await run;
 
         Assert.Equal(2, harness.Output.Lines.Count);
-        Assert.All(harness.Output.Lines, line => Assert.Equal("error: event read failed", line));
+        Assert.All(harness.Output.Lines, line => Assert.Equal("[00:05:00] error: event read failed", line));
         Assert.Equal(0, harness.Steps.EventCount);
     }
 
@@ -333,12 +333,12 @@ public sealed class OwnerConsoleLoopResponsivenessTests
         var pollBound = TimeSpan.FromMilliseconds(250);
         var run = harness.RunAsync(pollBound);
         Assert.Equal("slow", await harness.Steps.Commands.Reader.ReadAsync(TestToken));
-        await harness.Output.WaitForLineAsync("error: event read failed");
+        await harness.Output.WaitForLineAsync("[00:05:00] error: event read failed");
         Assert.Equal(1, harness.Events.ReadCount);
         Assert.Single(harness.Output.Lines);
 
         harness.Clock.Advance(pollBound);
-        await harness.Output.WaitForLineAsync("error: event read failed");
+        await harness.Output.WaitForLineAsync("[00:05:00] error: event read failed");
         release.SetResult();
         harness.Input.Send("help");
         Assert.Equal("help", await harness.Steps.Commands.Reader.ReadAsync(TestToken));
@@ -348,7 +348,7 @@ public sealed class OwnerConsoleLoopResponsivenessTests
 
         Assert.Equal(2, harness.Events.ReadCount);
         Assert.Equal(2, harness.Output.Lines.Count);
-        Assert.All(harness.Output.Lines, line => Assert.Equal("error: event read failed", line));
+        Assert.All(harness.Output.Lines, line => Assert.Equal("[00:05:00] error: event read failed", line));
         Assert.Equal(0, harness.Steps.EventCount);
     }
 
@@ -356,7 +356,7 @@ public sealed class OwnerConsoleLoopResponsivenessTests
 
     private sealed class Harness
     {
-        internal ManualStewardTimeProvider Clock { get; } = new();
+        internal OwnerConsoleTestClock Clock { get; } = new();
         internal FakeInput Input { get; } = new();
         internal FakeEvents Events { get; } = new();
         internal FakeSteps Steps { get; } = new();

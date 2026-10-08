@@ -15,7 +15,7 @@ internal sealed class OwnerConsoleSession(
     IOwnerConsoleConductor? conductor = null,
     IOwnerConsoleDigestReport? digestReport = null)
 {
-    private readonly OwnerConsoleControlCommands _control = new(conductor, digestReport, output);
+    private readonly OwnerConsoleControlCommands _control = new(conductor, digestReport, output, clock);
     private readonly Dictionary<string, int> _numbers = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<int, OwnerQuestion> _open = [];
     private readonly HashSet<int> _retired = [];
@@ -28,10 +28,11 @@ internal sealed class OwnerConsoleSession(
     {
         _lastConductEvent = lastActivity;
         foreach (var line in digest.ReadSummaryLines().Take(5))
-            output.WriteLine(line);
+            Announce(line);
         var metadata = await RefreshQuestionsAsync(cancellationToken);
         await PrintHeaderAsync(metadata, cancellationToken);
-        output.WriteLine("Type help for commands.");
+        await PrintBoardAsync(metadata, cancellationToken);
+        Announce("Type help for commands.");
     }
 
     internal async Task HandleEventAsync(OwnerConductEvent item, CancellationToken cancellationToken)
@@ -53,28 +54,32 @@ internal sealed class OwnerConsoleSession(
         {
             case "quit": return false;
             case "help":
-                output.WriteLine("board | goal <id-prefix> | answer <n> <text> | accept <n> | bell on|off | help | quit");
+                Announce("board | goal <id-prefix> | answer <n> <text> | accept <n> | bell on|off | help | quit");
                 output.WriteLine("conductor start [--clear-stop] | conductor stop [--yes] | conductor status");
-                output.WriteLine("digest");
+                output.WriteLine("digest | metrics | board");
                 break;
             case "board": await PrintBoardAsync(metadata, cancellationToken); break;
             case "conductor": _control.HandleConductor(line); break;
-            case "digest": _control.HandleDigest(line); break;
+            case "digest":
+                if (parts.Length != 1) Announce("usage: digest");
+                else await PrintDigestAsync(metadata, cancellationToken);
+                break;
+            case "metrics": _control.HandleMetrics(line); break;
             case "goal":
-                if (parts.Length < 2) output.WriteLine("usage: goal <id-prefix>");
+                if (parts.Length < 2) Announce("usage: goal <id-prefix>");
                 else await PrintGoalAsync(parts[1], cancellationToken);
                 break;
             case "bell":
-                if (parts.Length < 2 || parts[1] is not ("on" or "off")) output.WriteLine("usage: bell on|off");
-                else { _bell = parts[1] == "on"; output.WriteLine($"bell {parts[1]}"); }
+                if (parts.Length < 2 || parts[1] is not ("on" or "off")) Announce("usage: bell on|off");
+                else { _bell = parts[1] == "on"; Announce($"bell {parts[1]}"); }
                 break;
             case "answer":
             case "accept":
                 if (parts.Length < 2 || !int.TryParse(parts[1], out var number) || number < 1)
-                { output.WriteLine($"usage: {command} <n>{(command == "answer" ? " <text>" : "")}"); break; }
+                { Announce($"usage: {command} <n>{(command == "answer" ? " <text>" : "")}"); break; }
                 await SubmitAsync(command, number, parts.Length == 3 ? parts[2] : null, cancellationToken);
                 break;
-            default: output.WriteLine("unknown command; type help"); break;
+            default: Announce("unknown command; type help"); break;
         }
         return true;
     }
@@ -83,28 +88,28 @@ internal sealed class OwnerConsoleSession(
     {
         if (!_open.TryGetValue(number, out var question))
         {
-            output.WriteLine(_retired.Contains(number) ? $"question {number} is no longer open" : $"no question {number}");
+            Announce(_retired.Contains(number) ? $"question {number} is no longer open" : $"no question {number}");
             return;
         }
         if (question.Kind == OwnerQuestionKind.StewardHold)
-        { output.WriteLine($"Steward questions are answered through goal verbs for now; use the CLI retry/adjudicate commands for goal {question.GoalId}."); return; }
+        { Announce($"Steward questions are answered through goal verbs for now; use the CLI retry/adjudicate commands for goal {question.GoalId}."); return; }
         if (command == "accept")
         {
             text = question.ProposedDefault;
-            if (string.IsNullOrWhiteSpace(text)) { output.WriteLine($"question {number} has no proposed default"); return; }
+            if (string.IsNullOrWhiteSpace(text)) { Announce($"question {number} has no proposed default"); return; }
         }
         if (string.IsNullOrWhiteSpace(text) || text.StartsWith("--", StringComparison.Ordinal))
-        { output.WriteLine("usage: answer <n> <text> (text cannot start with --)"); return; }
+        { Announce("usage: answer <n> <text> (text cannot start with --)"); return; }
         try
         {
             answers.Submit(question, text);
             await RefreshQuestionsAsync(cancellationToken);
-            output.WriteLine(_open.ContainsKey(number)
+            Announce(_open.ContainsKey(number)
                 ? $"question {number} is still open; answer was not accepted"
                 : $"answered question {number}");
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or KeyNotFoundException)
-        { output.WriteLine($"error: {ex.Message}"); await RefreshQuestionsAsync(cancellationToken); }
+        { Announce($"error: {ex.Message}"); await RefreshQuestionsAsync(cancellationToken); }
     }
 
     private async Task<IReadOnlyList<GoalSummary>?> RefreshQuestionsAsync(CancellationToken cancellationToken)
@@ -144,7 +149,7 @@ internal sealed class OwnerConsoleSession(
         var stewardGuidance = question.Kind == OwnerQuestionKind.StewardHold
             ? $" | view only | CLI: mcg-orchestrator.cmd retry --goal {question.GoalId} <task-number> <message> or mcg-orchestrator.cmd adjudicate --goal {question.GoalId} <task-number> <close|reopen-regate|route> --text-file <path> --evidence <ref>"
             : string.Empty;
-        output.WriteLine($"[{number}] {question.GoalId[..Math.Min(8, question.GoalId.Length)]} {question.Text}{(fields.Any() ? " | " + string.Join(" | ", fields) : "")}{stewardGuidance}");
+        Announce($"[{number}] {question.GoalId[..Math.Min(8, question.GoalId.Length)]} {question.Text}{(fields.Any() ? " | " + string.Join(" | ", fields) : "")}{stewardGuidance}");
     }
 
     private async Task PrintHeaderAsync(IReadOnlyList<GoalSummary>? metadata, CancellationToken cancellationToken)
@@ -152,13 +157,13 @@ internal sealed class OwnerConsoleSession(
         var goals = await LoadActiveAsync(metadata, cancellationToken);
         var age = _lastConductEvent is null ? "unknown" : Age(_lastConductEvent.Value);
         var hidden = _hiddenCount > 0 ? $" | hidden: {_hiddenCount}" : string.Empty;
-        output.WriteLine($"conductor: {(liveness.IsRunning() ? "running" : "stopped")} | active goals: {goals.Count} | owner questions: {_open.Count}{hidden} | last event: {age}");
+        Announce($"conductor: {(liveness.IsRunning() ? "running" : "stopped")} | active goals: {goals.Count} | owner questions: {_open.Count}{hidden} | last event: {age}");
     }
 
     private async Task PrintBoardAsync(IReadOnlyList<GoalSummary>? metadata, CancellationToken cancellationToken)
     {
         var goals = await LoadActiveAsync(metadata, cancellationToken);
-        output.WriteLine($"board | active goals: {goals.Count} | owner questions: {_open.Count}");
+        Announce($"board | active goals: {goals.Count} | owner questions: {_open.Count}");
         foreach (var goal in goals)
             output.WriteLine($"{goal.Id[..Math.Min(8, goal.Id.Length)]} | {goal.Title.Replace('\r', ' ').Replace('\n', ' ')} | {goal.State} | {goal.CurrentRole?.ToString() ?? "-"} | {Age(goal.LastEvent)}");
     }
@@ -167,12 +172,12 @@ internal sealed class OwnerConsoleSession(
     {
         var metadata = await state.ListGoalMetadataAsync(cancellationToken);
         var matches = metadata.Where(item => item.Id.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)).ToArray();
-        if (matches.Length == 0) { output.WriteLine($"no goal matches '{prefix}'"); return; }
-        if (matches.Length > 1) { output.WriteLine($"ambiguous goal: {string.Join(", ", matches.Select(item => item.Id[..8]))}"); return; }
+        if (matches.Length == 0) { Announce($"no goal matches '{prefix}'"); return; }
+        if (matches.Length > 1) { Announce($"ambiguous goal: {string.Join(", ", matches.Select(item => item.Id[..8]))}"); return; }
         var kernel = await state.LoadGoalsAsync([new GoalId(matches[0].Id)], cancellationToken);
         var goal = kernel.Goals.SingleOrDefault();
-        if (goal is null) { output.WriteLine("goal state unavailable"); return; }
-        output.WriteLine($"{goal.Id.Value} | {OwnerGoalTitle.From(goal.Objective)} | {goal.Status}");
+        if (goal is null) { Announce("goal state unavailable"); return; }
+        Announce($"{goal.Id.Value} | {OwnerGoalTitle.From(goal.Objective)} | {goal.Status}");
         foreach (var line in eventTail.ReadLast(goal.Id.Value, 15)) output.WriteLine(line);
     }
 
@@ -194,6 +199,15 @@ internal sealed class OwnerConsoleSession(
 
     private static bool IsActive(GoalStatus status) => status is not
         (GoalStatus.Parked or GoalStatus.Completed or GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded);
+
+    private void Announce(string line) => output.WriteLine(ConsoleAnnouncementFormatter.Format(clock, line));
+
+    private async Task PrintDigestAsync(IReadOnlyList<GoalSummary>? metadata, CancellationToken cancellationToken)
+    {
+        foreach (var line in digest.ReadSummaryLines().Take(5)) Announce(line);
+        await PrintHeaderAsync(metadata, cancellationToken);
+        await PrintBoardAsync(metadata, cancellationToken);
+    }
 
     private string Age(DateTimeOffset? timestamp)
     {

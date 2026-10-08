@@ -29,7 +29,7 @@ public sealed class OwnerConsoleGoalTitleTests
         await harness.Session().HandleCommandAsync("goal 33333333", CancellationToken.None);
 
         var header = Assert.Single(harness.Output.Text.Split(Environment.NewLine),
-            line => line.StartsWith(GoalId, StringComparison.Ordinal));
+            line => line.StartsWith(ConsoleAnnouncementFormatter.Format(harness.Clock, GoalId), StringComparison.Ordinal));
         Assert.Contains("Short heading", header);
         Assert.DoesNotContain("Distinctive brief body", harness.Output.Text);
     }

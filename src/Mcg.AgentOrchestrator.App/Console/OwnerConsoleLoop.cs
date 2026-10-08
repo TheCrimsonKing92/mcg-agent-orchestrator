@@ -23,6 +23,7 @@ internal sealed class OwnerConsoleLoop(
     OwnerConsoleLoopOptions? options = null)
 {
     private readonly OwnerConsoleLoopOptions _options = options ?? OwnerConsoleLoopOptions.Default;
+    private readonly RefreshNoticePolicy _refreshNotices = new();
     internal bool EventSourceAbandoned { get; private set; }
 
     internal OwnerConsoleLoop(OwnerConsoleSession session, IOwnerConsoleInput input,
@@ -146,7 +147,8 @@ internal sealed class OwnerConsoleLoop(
             var stepCancellation = CancellationTokenSource.CreateLinkedTokenSource(token);
             using var timers = CancellationTokenSource.CreateLinkedTokenSource(token);
             // Arm timers before invoking the step, including in fake-time tests.
-            var busy = Task.Delay(_options.BusyNoticeAfter, clock, timers.Token);
+            var busy = RefreshNoticePolicy.ShouldAnnounceBusy(isRefresh)
+                ? Task.Delay(_options.BusyNoticeAfter, clock, timers.Token) : null;
             var bound = Task.Delay(_options.OperationBound, clock, timers.Token);
             Task<bool>? operation = null;
             var detached = false;
@@ -160,18 +162,19 @@ internal sealed class OwnerConsoleLoop(
                 while (!operation.IsCompleted)
                 {
                     token.ThrowIfCancellationRequested();
-                    if (!busyPrinted && busy.IsCompleted)
+                    if (!busyPrinted && busy is { IsCompleted: true })
                     {
-                        output.WriteLine($"working: {label} ...");
+                        Announce($"working: {label} ...");
                         busyPrinted = true;
                     }
                     if (bound.IsCompleted)
                     {
-                        output.WriteLine($"{label} did not finish within {_options.OperationBound.TotalSeconds:0.###}s; the console is still running");
+                        Announce(isRefresh ? _refreshNotices.TimedOut(_options.OperationBound) :
+                            $"{label} did not finish within {_options.OperationBound.TotalSeconds:0.###}s; the console is still running");
                         detached = true;
                         try { stepCancellation.Cancel(); }
-                        catch (Exception ex) { ReportError(ex); }
-                        var observer = ObserveLateStepAsync(label, operation, stepCancellation);
+                        catch (Exception ex) { ReportStepError(ex, isRefresh); }
+                        var observer = ObserveLateStepAsync(label, operation, stepCancellation, isRefresh);
                         lateSteps.Add(observer);
                         if (isRefresh) unfinishedRefresh = observer;
                         return null;
@@ -187,7 +190,7 @@ internal sealed class OwnerConsoleLoop(
                         }
                     }
                     var waits = new List<Task> { operation, bound };
-                    if (!busyPrinted) waits.Add(busy);
+                    if (!busyPrinted && busy is not null) waits.Add(busy);
                     if (collectEvents) waits.Add(eventTask!);
                     await Task.WhenAny(waits).WaitAsync(token);
                 }
@@ -199,25 +202,27 @@ internal sealed class OwnerConsoleLoop(
                     if (!await CollectEventAsync()) break;
                     eventTask = ReadEventAsync();
                 }
-                return await operation;
+                var result = await operation;
+                if (isRefresh) Announce(_refreshNotices.Succeeded());
+                return result;
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
                 if (operation is not null)
                 {
                     detached = true;
-                    lateSteps.Add(ObserveLateStepAsync(label, operation, stepCancellation));
+                    lateSteps.Add(ObserveLateStepAsync(label, operation, stepCancellation, isRefresh));
                 }
                 throw;
             }
             catch (OperationCanceledException)
             {
-                output.WriteLine($"{label} was abandoned");
+                Announce(isRefresh ? _refreshNotices.Failed("refresh was abandoned") : $"{label} was abandoned");
                 return null;
             }
             catch (Exception ex)
             {
-                ReportError(ex);
+                ReportStepError(ex, isRefresh);
                 return null;
             }
             finally
@@ -227,17 +232,35 @@ internal sealed class OwnerConsoleLoop(
             }
         }
 
-        async Task ObserveLateStepAsync(string label, Task<bool> operation, CancellationTokenSource source)
+        async Task ObserveLateStepAsync(string label, Task<bool> operation, CancellationTokenSource source, bool isRefresh)
         {
-            try { await operation; } // Successful steps print their own answers, including late ones.
-            catch (OperationCanceledException) { output.WriteLine($"{label} was abandoned"); }
-            catch (Exception ex) { ReportError(ex); }
+            try
+            {
+                await operation; // Successful steps print their own answers, including late ones.
+                if (isRefresh) Announce(_refreshNotices.Succeeded());
+            }
+            catch (OperationCanceledException)
+            { Announce(isRefresh ? _refreshNotices.Failed("refresh was abandoned") : $"{label} was abandoned"); }
+            catch (Exception ex) { ReportStepError(ex, isRefresh); }
             finally { source.Dispose(); }
         }
     }
 
-    private void ReportError(Exception ex) => output.WriteLine(
-        $"error: {ex.GetBaseException().Message.Replace('\r', ' ').Replace('\n', ' ')}");
+    private void Announce(string? line)
+    {
+        if (line is not null) output.WriteLine(ConsoleAnnouncementFormatter.Format(clock, line));
+    }
+
+    private void ReportStepError(Exception ex, bool isRefresh)
+    {
+        if (isRefresh) Announce(_refreshNotices.Failed(ErrorMessage(ex)));
+        else ReportError(ex);
+    }
+
+    private void ReportError(Exception ex) => Announce($"error: {ErrorMessage(ex)}");
+
+    private static string ErrorMessage(Exception ex) =>
+        ex.GetBaseException().Message.Replace('\r', ' ').Replace('\n', ' ');
 
     private static bool PrintsBoard(string kind) =>
         kind is "watch-transition" or "acceptance" or "loop-relaunch" or "goal-escalation";
