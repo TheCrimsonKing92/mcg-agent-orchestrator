@@ -12,11 +12,33 @@ internal sealed partial record ConductorSuccessorStagingOptions
     internal LandingAppBuildStore? LandingAppBuildStore { get; init; }
 }
 
+internal sealed record AppBuildCommand(IReadOnlyList<string> Arguments, string IsolatedArtifactsRoot);
+
 internal static partial class ConductorSelfRelaunch
 {
     private static int _appBuildInvocationCount;
 
     internal static int AppBuildInvocationCount => Volatile.Read(ref _appBuildInvocationCount);
+
+    internal static AppBuildCommand CreateAppBuildCommand(string appProjectPath, string outputDirectory)
+    {
+        var outputPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(outputDirectory));
+        // Keep the sibling short for Windows intermediate-file path budgets and outside store retention.
+        var isolatedArtifactsRoot = Path.Combine(Path.GetDirectoryName(outputPath)!, "r" + Guid.NewGuid().ToString("N")[..16]);
+        return new(
+            [
+                "build",
+                appProjectPath,
+                "--nologo",
+                "--output",
+                outputDirectory,
+                $"-p:McgIsolatedArtifactsPath={isolatedArtifactsRoot}",
+                "-v",
+                "quiet",
+                "-clp:ErrorsOnly"
+            ],
+            isolatedArtifactsRoot);
+    }
 
     private static CapturedProcessResult ProduceBuildOutput(
         ConductorSuccessorStagingOptions options,
@@ -28,21 +50,18 @@ internal static partial class ConductorSelfRelaunch
         if (options.PrebuiltAppOutputDirectory is null)
         {
             Interlocked.Increment(ref _appBuildInvocationCount);
-            return RunProcess(
-                options.DotnetPath,
-                [
-                    "build",
-                    options.AppProjectPath,
-                    "--nologo",
-                    "--output",
-                    buildOutputDirectory,
-                    "-v",
-                    "quiet",
-                    "-clp:ErrorsOnly"
-                ],
-                options.RepositoryRoot,
-                buildTimeout,
-                cancellationToken);
+            var command = CreateAppBuildCommand(options.AppProjectPath, buildOutputDirectory);
+            try
+            {
+                return RunProcess(options.DotnetPath, command.Arguments,
+                    options.RepositoryRoot, buildTimeout, cancellationToken);
+            }
+            finally
+            {
+                try { Directory.Delete(command.IsolatedArtifactsRoot, recursive: true); }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+            }
         }
 
         var source = options.PrebuiltAppOutputDirectory;
@@ -80,17 +99,20 @@ internal static partial class ConductorSelfRelaunch
     internal static LandingAppBuildResult RunAppBuildProcess(
         string dotnetPath, LandingAppBuildRequest request, CancellationToken cancellationToken)
     {
-        var result = RunProcess(dotnetPath,
-            [
-                "build",
-                Path.Combine(request.SourceRoot, "src", "Mcg.AgentOrchestrator.App", "Mcg.AgentOrchestrator.App.csproj"),
-                "--nologo",
-                "--output",
-                request.OutputDirectory,
-                "-v",
-                "quiet",
-                "-clp:ErrorsOnly"
-            ], request.SourceRoot, request.Timeout, cancellationToken);
-        return new(result.ExitCode, result.Stdout, result.Stderr, result.TimedOut);
+        var command = CreateAppBuildCommand(
+            Path.Combine(request.SourceRoot, "src", "Mcg.AgentOrchestrator.App", "Mcg.AgentOrchestrator.App.csproj"),
+            request.OutputDirectory);
+        try
+        {
+            var result = RunProcess(dotnetPath, command.Arguments,
+                request.SourceRoot, request.Timeout, cancellationToken);
+            return new(result.ExitCode, result.Stdout, result.Stderr, result.TimedOut);
+        }
+        finally
+        {
+            try { Directory.Delete(command.IsolatedArtifactsRoot, recursive: true); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
     }
 }
