@@ -203,7 +203,7 @@ public sealed partial class ConductorDriverTestsFindingEvidence
             "finding-evidence-suppressed",
             kernel.BuildTaskBrief(goal.Id, developer.Id).Content,
             StringComparison.Ordinal);
-        Assert.Equal("Finding evidence suppressed", DashboardDisplayNames.Display(ProgressKind.FindingEvidenceSuppressed));
+        Assert.Equal("Finding evidence suppressed", OperatorDisplayNames.Display(ProgressKind.FindingEvidenceSuppressed));
     }
 
     [Xunit.Fact]

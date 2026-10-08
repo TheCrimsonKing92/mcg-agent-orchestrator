@@ -27,7 +27,7 @@ public static class TaskComplexityEstimator
 
     private static readonly string[] SurfaceSignals =
     [
-        "api", "cli", "dashboard", "provider", "subscription",
+        "api", "cli", "provider", "subscription",
         "worker", "persistence", "state", "tests", "docs"
     ];
 
