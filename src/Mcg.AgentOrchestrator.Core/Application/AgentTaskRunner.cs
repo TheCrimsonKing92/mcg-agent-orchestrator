@@ -7,19 +7,22 @@ public sealed class AgentTaskRunner
     private readonly IModelProviderRegistry _providers;
     private readonly IClock _clock;
     private readonly Func<GoalId, string?>? _goalDiffProvider;
+    private readonly bool _preservePrimaryContext;
 
     public AgentTaskRunner(
         AgentOrchestratorKernel kernel,
         IReadOnlyList<AgentDefinition> agents,
         IModelProviderRegistry providers,
         IClock? clock = null,
-        Func<GoalId, string?>? goalDiffProvider = null)
+        Func<GoalId, string?>? goalDiffProvider = null,
+        bool preservePrimaryContext = false)
     {
         _kernel = kernel;
         _agents = agents;
         _providers = providers;
         _clock = clock ?? new SystemClock();
         _goalDiffProvider = goalDiffProvider;
+        _preservePrimaryContext = preservePrimaryContext;
     }
 
     public async Task<AgentTaskRunResult> RunAsync(GoalId goalId, TaskId taskId, CancellationToken cancellationToken = default)
@@ -82,7 +85,8 @@ public sealed class AgentTaskRunner
             complexity,
             [new ProgressEvent(goal.Id, task.Id, ProgressKind.TaskStarted, startMessage, _clock.UtcNow)],
             workspaceDiff,
-            matchedPractices);
+            matchedPractices,
+            preservePrimaryContext: _preservePrimaryContext);
         _kernel.ReportWorkerTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, startMessage);
 
         ModelResponse response;
@@ -331,7 +335,8 @@ public sealed class AgentTaskRunner
         TaskComplexity complexity,
         IReadOnlyList<ProgressEvent>? pendingTimelineEvents = null,
         string? workspaceDiff = null,
-        IReadOnlyList<EngineeringPracticeMatch>? matchedPractices = null)
+        IReadOnlyList<EngineeringPracticeMatch>? matchedPractices = null,
+        bool preservePrimaryContext = false)
     {
         var isLocal = LocalModelPromptOptimizer.IsLocalProvider(resolvedModel);
 
@@ -373,8 +378,8 @@ public sealed class AgentTaskRunner
             : $"{Environment.NewLine}{practiceSection}";
 
         var userPrompt =
-            $"Goal: {PromptContextFormatter.TrimPrimaryContextBlock(goal.Objective, complexity)}{Environment.NewLine}" +
-            $"Task: {PromptContextFormatter.TrimPrimaryContextBlock(task.Description, complexity)}{Environment.NewLine}" +
+            $"Goal: {(preservePrimaryContext ? goal.Objective : PromptContextFormatter.TrimPrimaryContextBlock(goal.Objective, complexity))}{Environment.NewLine}" +
+            $"Task: {(preservePrimaryContext ? task.Description : PromptContextFormatter.TrimPrimaryContextBlock(task.Description, complexity))}{Environment.NewLine}" +
             $"Task role: {task.RequiredRole}{Environment.NewLine}" +
             $"Current task status: {task.Status}{Environment.NewLine}" +
             $"Verification plan: {FormatVerificationPlan(task.VerificationPlan, complexity)}{Environment.NewLine}" +

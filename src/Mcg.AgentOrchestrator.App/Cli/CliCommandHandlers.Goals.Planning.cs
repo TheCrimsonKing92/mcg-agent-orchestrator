@@ -264,7 +264,7 @@ private static bool HandlePlan(CliExecutionContext context, IReadOnlyList<string
             "Output only a fenced JSON array of nodes with id, objective, and dependsOn fields.");
         var sampleGoal = sampleKernel.CreateGoal(direction, [sampleTaskSpec]);
         sampleKernel.ActivateGoal(sampleGoal.Id, context.Agents);
-        var sampleRunner = new AgentTaskRunner(sampleKernel, context.Agents, context.Providers);
+        var sampleRunner = new AgentTaskRunner(sampleKernel, context.Agents, context.Providers, preservePrimaryContext: true);
         return sampleRunner.RunAsync(sampleGoal.Id, sampleTaskSpec.Id)
             .ContinueWith(__ =>
                 {

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
@@ -510,6 +511,81 @@ public sealed class GoalDagPlanTests
         Assert.Empty(result.kernel.Goals);
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void Plan_LongFileDirection_DeliversWholeBlocksToAllSamples(bool sliceBatch)
+    {
+        var direction = LongDirection() + "\nScope: preserve the middle constraints.\nTail: Ω";
+        Assert.True(direction.Length > 10_000);
+        var path = Path.Combine(CreateTempDirectory(), "full direction.md");
+        File.WriteAllText(path, direction, new System.Text.UTF8Encoding(false));
+        string[] parts = sliceBatch
+            ? ["plan", "--text-file", path, "--slice-batch"]
+            : ["plan", "--text-file", path];
+
+        var result = RunPlan(parts, sliceBatch);
+
+        Assert.Equal(3, result.requests.Count);
+        Assert.All(result.requests, request =>
+        {
+            var userMessage = Assert.Single(request.Messages, message => message.Role == "user");
+            Assert.StartsWith(
+                $"Goal: {direction}{Environment.NewLine}" +
+                $"Task: {GoalDagDecompositionPlanner.BuildPrompt(direction, sliceBatch)}{Environment.NewLine}" +
+                "Task role: Planner", userMessage.Content);
+            AssertPlannerDirection(userMessage.Content, direction, sliceBatch);
+            Assert.DoesNotContain("[truncated", userMessage.Content);
+        });
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public async Task Runner_DefaultOption_PreservesExistingPrimaryContextLimits(bool complex)
+    {
+        var objective = "Goal start: " + LongDirection() + ": goal end";
+        var description = (complex
+            ? "Design and implement full implementation with architecture and integration: "
+            : "Report the existing labels: ") + LongDirection() + ": task end";
+
+        async Task<(string Prompt, TaskComplexity Complexity)> Run(bool explicitDefault)
+        {
+            var provider = new RecordingProvider("OK");
+            var (kernel, _, agents, providers) = BuildTestContext("OK", provider);
+            var task = new TaskSpec(TaskId.New(), description, AgentRole.Planner, "Return the report.");
+            var goal = kernel.CreateGoal(objective, [task]);
+            kernel.ActivateGoal(goal.Id, agents);
+            var runner = explicitDefault
+                ? new AgentTaskRunner(kernel, agents, providers, preservePrimaryContext: false)
+                : new AgentTaskRunner(kernel, agents, providers);
+
+            await runner.RunAsync(goal.Id, task.Id);
+
+            var request = Assert.Single(provider.Requests);
+            var userMessage = Assert.Single(request.Messages, message => message.Role == "user");
+            Assert.NotNull(task.LastExecution);
+            Assert.NotNull(task.LastExecution.TaskComplexity);
+            return (userMessage.Content, task.LastExecution.TaskComplexity.Value);
+        }
+
+        var defaultRun = await Run(explicitDefault: false);
+        var explicitRun = await Run(explicitDefault: true);
+        Assert.Equal(complex ? TaskComplexity.Complex : TaskComplexity.Simple, defaultRun.Complexity);
+        Assert.Equal(defaultRun.Complexity, explicitRun.Complexity);
+        Assert.Equal(defaultRun.Prompt, explicitRun.Prompt);
+        var (head, tail) = defaultRun.Complexity == TaskComplexity.Complex ? (1600, 800) : (800, 400);
+        string ExpectedBlock(string text) => text[..head] +
+            $"{Environment.NewLine}...[truncated {text.Length - head - tail} chars for prompt budget]...{Environment.NewLine}" +
+            text[^tail..];
+        Assert.StartsWith(
+            $"Goal: {ExpectedBlock(objective)}{Environment.NewLine}" +
+            $"Task: {ExpectedBlock(description)}{Environment.NewLine}" +
+            "Task role: Planner", defaultRun.Prompt);
+        Assert.DoesNotContain(objective, defaultRun.Prompt);
+        Assert.DoesNotContain(description, defaultRun.Prompt);
+    }
+
     [Xunit.Fact]
     public void LongPositionalDirection_PreservesExistingPreview()
     {
@@ -598,10 +674,10 @@ public sealed class GoalDagPlanTests
         Assert.Equal(direction, prompt[start..end]);
     }
 
-    private static (AgentOrchestratorKernel kernel, string output, string prompt) RunPlan(
+    private static (AgentOrchestratorKernel kernel, string output, string prompt, IReadOnlyList<ModelRequest> requests) RunPlan(
         string[] parts, bool sliceBatch, TextReader? standardInput = null, bool? redirected = null)
     {
-        var provider = new FakeSmokeProvider(sliceBatch ? ThreeSliceBatchJson : TwoNodeJson, providerName: "Fake");
+        var provider = new RecordingProvider(sliceBatch ? ThreeSliceBatchJson : TwoNodeJson);
         var (kernel, workspace, agents, providers) = sliceBatch
             ? BuildSliceBatchTestContext(ThreeSliceBatchJson, provider)
             : BuildTestContext(TwoNodeJson, provider);
@@ -610,9 +686,10 @@ public sealed class GoalDagPlanTests
         var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
             parts, kernel, workspace, ref agents, providers, ref profiles, ref currentGoal,
             standardInput: standardInput, isStandardInputRedirected: redirected));
-        Assert.NotNull(provider.LastRequest);
-        var prompt = string.Join('\n', provider.LastRequest.Messages.Select(message => message.Content));
-        return (kernel, output, prompt);
+        var requests = provider.Requests.ToArray();
+        Assert.NotEmpty(requests);
+        var prompt = string.Join('\n', requests[^1].Messages.Select(message => message.Content));
+        return (kernel, output, prompt, requests);
     }
 
     private static T AssertPlanFails<T>(
@@ -675,7 +752,7 @@ public sealed class GoalDagPlanTests
 
     private static (AgentOrchestratorKernel kernel, OrchestratorWorkspace workspace,
         IReadOnlyList<AgentDefinition> agents, IModelProviderRegistry providers)
-        BuildTestContext(string plannerOutput, FakeSmokeProvider? plannerProvider = null)
+        BuildTestContext(string plannerOutput, IModelProvider? plannerProvider = null)
     {
         var root = CreateTempDirectory();
         var workspace = OrchestratorWorkspace.ForDirectory(root);
@@ -704,7 +781,7 @@ public sealed class GoalDagPlanTests
 
     private static (AgentOrchestratorKernel kernel, OrchestratorWorkspace workspace,
         IReadOnlyList<AgentDefinition> agents, IModelProviderRegistry providers)
-        BuildSliceBatchTestContext(string plannerOutput, FakeSmokeProvider? plannerProvider = null)
+        BuildSliceBatchTestContext(string plannerOutput, IModelProvider? plannerProvider = null)
     {
         var context = BuildTestContext(plannerOutput, plannerProvider);
         ModelFunctionCatalogStore.Save(context.workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
@@ -716,4 +793,17 @@ public sealed class GoalDagPlanTests
         return context;
     }
 
+    private sealed class RecordingProvider(string text) : IModelProvider
+    {
+        private readonly FakeSmokeProvider _inner = new(text, providerName: "Fake");
+
+        public string ProviderName => _inner.ProviderName;
+        public ConcurrentQueue<ModelRequest> Requests { get; } = new();
+
+        public Task<ModelResponse> CompleteAsync(ModelRequest request, CancellationToken cancellationToken)
+        {
+            Requests.Enqueue(request);
+            return _inner.CompleteAsync(request, cancellationToken);
+        }
+    }
 }
