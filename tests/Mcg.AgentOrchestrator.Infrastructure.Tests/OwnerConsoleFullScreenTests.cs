@@ -70,12 +70,20 @@ public sealed class OwnerConsoleFullScreenTests
         Assert.Equal(string.Empty, harness.Output.Text);
     }
 
-    [Fact]
-    public async Task DigestUsesSummaryAndMetricsUsesReport()
+    [Theory]
+    [InlineData(0, "[00:05:00] digest first")]
+    [InlineData(-6, "[18:05:00] digest first")]
+    public async Task DigestUsesSummaryAndMetricsUsesReport(int offsetHours, string expectedFirstLine)
     {
         var harness = Harness();
         var dialogs = new Dialogs();
-        var controller = Controller(harness, dialogs);
+        var clock = new OwnerConsoleTestClock
+        {
+            Zone = TimeZoneInfo.CreateCustomTimeZone("metrics-test", TimeSpan.FromHours(offsetHours),
+                "Metrics test", "Metrics test")
+        };
+        var controller = new OwnerConsoleScreenController(harness.Questions, harness.Answers, dialogs,
+            harness.State, harness.Tail, harness.Conductor, harness.DigestReport, harness.Digest, clock);
 
         await controller.RunCommandAsync("digest");
 
@@ -83,8 +91,8 @@ public sealed class OwnerConsoleFullScreenTests
         Assert.Equal("Owner digest: landed=2 pending=1" + Environment.NewLine, Assert.Single(dialogs.Texts));
         await controller.RunCommandAsync("metrics");
         Assert.Equal(1, harness.DigestReport.Calls);
-        Assert.Contains("digest first", dialogs.Texts[1]);
-        Assert.Contains("[00:05:00]", dialogs.Texts[1]);
+        Assert.Equal(new[] { expectedFirstLine, "digest second", "digest third" },
+            dialogs.Texts[1].Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
     }
 
     [Fact]
