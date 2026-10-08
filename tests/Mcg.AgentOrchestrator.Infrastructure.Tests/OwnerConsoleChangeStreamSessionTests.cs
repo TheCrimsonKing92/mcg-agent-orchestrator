@@ -122,6 +122,84 @@ public sealed class OwnerConsoleChangeStreamSessionTests : IDisposable
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Event_FailedGoalLoadResynchronizesConsumedBatchThenResumesIncrementally(bool cancelled)
+    {
+        var session = await Start();
+        Write("goal", FirstId);
+        Write("goal", SecondId);
+        Write("goal", FirstId); // Consumed by the reader but never applied after the failure.
+        _state.OnLoad = ids =>
+        {
+            if (ids.Single().Value != SecondId) return;
+            _state.OnLoad = null;
+            if (cancelled) throw new OperationCanceledException();
+            throw new InvalidOperationException("goal load failed");
+        };
+        if (cancelled)
+            await Assert.ThrowsAsync<OperationCanceledException>(() => Wake(session));
+        else
+            await Assert.ThrowsAsync<InvalidOperationException>(() => Wake(session));
+        Assert.Equal(new[] { FirstId, SecondId }, _state.Loads.Select(ids => Assert.Single(ids)));
+        Assert.Equal(0, _state.MetadataReads);
+        Assert.Equal(0, _questions.Reads);
+
+        await AssertRecoveryThenIncremental(session);
+    }
+
+    [Fact]
+    public async Task Event_FailedQuestionReadResynchronizesConsumedBatchThenResumesIncrementally()
+    {
+        var session = await Start();
+        Write("goal", FirstId);
+        Write("goal-escalation", FirstId);
+        Write("goal", SecondId);
+        _questions.OnRead = () =>
+        {
+            _questions.OnRead = null;
+            throw new InvalidOperationException("question read failed");
+        };
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Wake(session));
+        Assert.Equal(FirstId, Assert.Single(Assert.Single(_state.Loads)));
+        Assert.Equal(1, _questions.Reads);
+        Assert.Equal(0, _state.MetadataReads);
+
+        await AssertRecoveryThenIncremental(session);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Event_FailedFullRefreshDoesNotCommitReanchorThenResumesIncrementally(bool failBoardLoad)
+    {
+        var session = await Start();
+        AppendRaw(Record(1));
+        AppendRaw(Record(3)); // Reader gap forces a full refresh that re-anchors before loading state.
+        if (failBoardLoad)
+            _state.OnLoad = _ =>
+            {
+                _state.OnLoad = null;
+                throw new InvalidOperationException("board load failed");
+            };
+        else
+            _state.OnMetadataRead = () =>
+            {
+                _state.OnMetadataRead = null;
+                throw new InvalidOperationException("metadata read failed");
+            };
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Wake(session));
+        Assert.Equal(1, _state.MetadataReads);
+        Assert.Equal(1, _questions.Reads);
+        if (failBoardLoad)
+            Assert.Equal(new[] { FirstId, SecondId }, Assert.Single(_state.Loads));
+        else
+            Assert.Empty(_state.Loads);
+
+        await AssertRecoveryThenIncremental(session);
+    }
+
+    [Theory]
     [InlineData(ChangeStreamFileReader.Gap)]
     [InlineData(ChangeStreamFileReader.Rotation)]
     [InlineData(ChangeStreamFileReader.UnknownSchema)]
@@ -181,6 +259,25 @@ public sealed class OwnerConsoleChangeStreamSessionTests : IDisposable
 
     private OwnerConsoleSession Session(ChangeStreamFileReader reader) => new(_state, _questions,
         _harness.Answers, _harness.Liveness, _harness.Digest, _harness.Tail, _harness.Output, _harness.Clock, changes: reader);
+    private async Task AssertRecoveryThenIncremental(OwnerConsoleSession session)
+    {
+        ResetCounts();
+        AppendRaw(Record(4)); // Contiguous to the reader, ahead of the session's successfully applied sequence.
+        var outputStart = _harness.Output.Text.Length;
+        await Wake(session);
+        Assert.Equal(1, _state.MetadataReads);
+        Assert.Equal(1, _questions.Reads);
+        Assert.Equal(new[] { FirstId, SecondId }, Assert.Single(_state.Loads));
+        Assert.Contains("board | active goals: 2", _harness.Output.Text[outputStart..]);
+
+        ResetCounts();
+        AppendRaw(Record(5));
+        await Wake(session);
+        Assert.Equal(FirstId, Assert.Single(Assert.Single(_state.Loads)));
+        Assert.Equal(0, _state.MetadataReads);
+        Assert.Equal(0, _questions.Reads);
+    }
+
     private async Task<OwnerConsoleSession> Start()
     {
         var session = Session(new ChangeStreamFileReader(Log));
@@ -207,6 +304,7 @@ public sealed class OwnerConsoleChangeStreamSessionTests : IDisposable
     {
         internal int MetadataReads;
         internal Action? OnMetadataRead;
+        internal Action<IReadOnlyCollection<GoalId>>? OnLoad;
         internal readonly List<string[]> Loads = [];
         public Task<IReadOnlyList<GoalSummary>> ListGoalMetadataAsync(CancellationToken cancellationToken = default)
         {
@@ -219,6 +317,7 @@ public sealed class OwnerConsoleChangeStreamSessionTests : IDisposable
             CancellationToken cancellationToken = default)
         {
             Loads.Add(ids.Select(id => id.Value).ToArray());
+            OnLoad?.Invoke(ids);
             return Task.FromResult(kernel); // Deliberately includes other goals: assert session filtering.
         }
         public Task<IReadOnlyList<HumanInputRequestSnapshot>> ListOpenHumanInputRequestsAsync(
@@ -231,10 +330,12 @@ public sealed class OwnerConsoleChangeStreamSessionTests : IDisposable
     private sealed class CountingQuestions : IOwnerQuestionSource
     {
         internal int Reads;
+        internal Action? OnRead;
         internal readonly List<OwnerQuestion> Items = [];
         public Task<IReadOnlyList<OwnerQuestion>> ListOpenAsync(CancellationToken cancellationToken)
         {
             Reads++;
+            OnRead?.Invoke();
             return Task.FromResult<IReadOnlyList<OwnerQuestion>>(Items.ToArray());
         }
     }

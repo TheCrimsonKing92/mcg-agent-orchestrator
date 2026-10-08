@@ -64,6 +64,13 @@ internal sealed class OwnerConsoleSession(
         foreach (var record in records)
         {
             if (record.Sequence <= _coveredSequence) continue;
+            // The reader consumes the batch before state reads complete. A failed read can
+            // leave session coverage behind even when the reader sees contiguous sequences.
+            if (record.Sequence > _coveredSequence + 1)
+            {
+                await RefreshAllAsync(cancellationToken);
+                return;
+            }
             if (record.ChangeKind == ChangeStreamRecord.OwnerDecisionRaised)
                 await RefreshQuestionsAsync(cancellationToken);
             else
