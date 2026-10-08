@@ -32,35 +32,43 @@ public static partial class GoalWorktrees
             try
             {
                 if (TryPrepareAdditiveMerge(worktreePath, oldHead, integratedMain, options.FrozenPaths,
-                        out var resolved, out var mergeFiles, out hunks, out reason))
+                        out var resolved, out var registryPlans, out var mergeFiles, out hunks, out reason))
                 {
                     files = mergeFiles;
                     foreach (var (path, bytes) in resolved)
                         File.WriteAllBytes(Path.Combine(worktreePath, path), bytes);
-                    var add = RunAdditiveGit(worktreePath, ["add", "--", .. files]);
-                    reason = "stage-failed";
-                    var unmerged = RunAdditiveGit(worktreePath, "ls-files", "--unmerged", "-z");
-                    if (CompleteGit(add) && CompleteGit(unmerged) && unmerged.Output.Length == 0)
+                    reason = RegistryAwareConflictMerge.SameKeyConflict;
+                    if (RegistryAwareConflictMerge.WritePlans(worktreePath, registryPlans))
                     {
-                        reason = "commit-failed";
-                        var commit = RunAdditiveGit(worktreePath, "-c", "user.name=mcg-orchestrator",
-                            "-c", "user.email=mcg-orchestrator@localhost", "-c", "commit.gpgSign=false",
-                            "commit", "-m", $"Integrate main into {branch} (additive conflict auto-merge)");
-                        if (CompleteGit(commit))
+                        var add = RunAdditiveGit(worktreePath, ["add", "--", .. files]);
+                        reason = "stage-failed";
+                        var unmerged = RunAdditiveGit(worktreePath, "ls-files", "--unmerged", "-z");
+                        if (CompleteGit(add) && CompleteGit(unmerged) && unmerged.Output.Length == 0)
                         {
-                            reason = "merge-commit-unverified";
-                            var parents = RunAdditiveGit(worktreePath, "rev-list", "--parents", "-n", "1", "HEAD");
-                            var ids = parents.Output.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                            if (CompleteGit(parents) && ids.Length == 3 && ids[1] == oldHead && ids[2] == integratedMain)
+                            reason = RegistryAwareConflictMerge.CeilingBelowMeasured;
+                            if (registryPlans.Count == 0 || !RegistryAwareConflictMerge.HasCeilingBelowMeasured(worktreePath))
                             {
-                                mergeSha = ids[0];
-                                reason = "materialization-failed";
-                                var materialized = ValidatePostRebaseMaterialization(worktreePath, branch, baseBranch, goalId);
-                                if (materialized.Status == GoalWorktreeRebaseStatus.Rebased)
+                                reason = "commit-failed";
+                                var commit = RunAdditiveGit(worktreePath, "-c", "user.name=mcg-orchestrator",
+                                    "-c", "user.email=mcg-orchestrator@localhost", "-c", "commit.gpgSign=false",
+                                    "commit", "-m", $"Integrate main into {branch} (additive conflict auto-merge)");
+                                if (CompleteGit(commit))
                                 {
-                                    SourceSizeRatchetRetightener.RetightenAndCommit(worktreePath, integratedMain, Prefix(goalId));
-                                    if (IsAdditiveCheckoutClean(worktreePath, branch, ResolveRequiredRef(worktreePath, "HEAD")))
-                                        result = materialized with { Detail = "additive-conflict-auto-merge" };
+                                    reason = "merge-commit-unverified";
+                                    var parents = RunAdditiveGit(worktreePath, "rev-list", "--parents", "-n", "1", "HEAD");
+                                    var ids = parents.Output.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                                    if (CompleteGit(parents) && ids.Length == 3 && ids[1] == oldHead && ids[2] == integratedMain)
+                                    {
+                                        mergeSha = ids[0];
+                                        reason = "materialization-failed";
+                                        var materialized = ValidatePostRebaseMaterialization(worktreePath, branch, baseBranch, goalId);
+                                        if (materialized.Status == GoalWorktreeRebaseStatus.Rebased)
+                                        {
+                                            SourceSizeRatchetRetightener.RetightenAndCommit(worktreePath, integratedMain, Prefix(goalId));
+                                            if (IsAdditiveCheckoutClean(worktreePath, branch, ResolveRequiredRef(worktreePath, "HEAD")))
+                                                result = materialized with { Detail = "additive-conflict-auto-merge" };
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -116,9 +124,11 @@ public static partial class GoalWorktrees
 
     private static bool TryPrepareAdditiveMerge(
         string path, string oldHead, string integratedMain, IReadOnlyCollection<string> frozenPaths,
-        out Dictionary<string, byte[]> resolved, out string[] files, out int hunks, out string reason)
+        out Dictionary<string, byte[]> resolved, out List<RegistryAwareConflictMerge.Plan> registryPlans,
+        out string[] files, out int hunks, out string reason)
     {
         resolved = new(StringComparer.Ordinal);
+        registryPlans = [];
         files = [];
         hunks = 0;
         reason = "merge-failed";
@@ -160,6 +170,21 @@ public static partial class GoalWorktrees
             var numstat = RunAdditiveGit(path, "diff", "--numstat", oldHead, integratedMain, "--", file);
             if (!CompleteGit(numstat) || numstat.Output.StartsWith("-\t-\t", StringComparison.Ordinal)) return false;
             var bytes = File.ReadAllBytes(Path.Combine(path, file));
+            if (RegistryAwareConflictMerge.IsRegistry(file))
+            {
+                var baseline = RunAdditiveGit(path, "show", $"{bases[0]}:{file}");
+                var main = RunAdditiveGit(path, "show", $"{integratedMain}:{file}");
+                var goal = RunAdditiveGit(path, "show", $"{oldHead}:{file}");
+                if (!CompleteGit(baseline) || !CompleteGit(main) || !CompleteGit(goal)) return false;
+                var plan = RegistryAwareConflictMerge.TryPlan(file, baseline.Output, main.Output, goal.Output, bytes, out reason);
+                if (reason != "none") { hunks += RegistryAwareConflictMerge.CountHunks(bytes); return false; }
+                if (plan is not null)
+                {
+                    hunks += RegistryAwareConflictMerge.CountHunks(bytes);
+                    registryPlans.Add(plan);
+                    continue;
+                }
+            }
             if (!TryResolveAdditiveHunks(bytes, out var kept, out var count, out reason))
             {
                 hunks += count;
