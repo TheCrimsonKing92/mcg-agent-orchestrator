@@ -12,10 +12,12 @@ internal static class RegistryAwareConflictMerge
 {
     internal const string SameKeyConflict = "registry-same-key-conflict";
     internal const string CeilingBelowMeasured = "registry-ceiling-below-measured";
+    internal const string VerificationUnavailable = "registry-verification-unavailable";
     private static readonly UTF8Encoding Utf8 = new(false, true);
     private sealed record RegistryStrategy(Regex RowPattern, Func<Match, string> Key,
         Func<SyntaxNode, IEnumerable<int>> EntryStarts, Func<string, bool> IsEntryCollection,
-        Func<Entry, bool> CanRemeasure);
+        Func<Entry, bool> CanRemeasure, Func<string, string, int?> Measure,
+        Func<string, string?> Validate);
 
     private static readonly IReadOnlyDictionary<string, RegistryStrategy> Registries = new Dictionary<string, RegistryStrategy>(StringComparer.Ordinal)
     {
@@ -26,7 +28,10 @@ internal static class RegistryAwareConflictMerge
             syntax => syntax.DescendantNodes().OfType<ObjectCreationExpressionSyntax>()
                 .Where(node => node.Type.ToString() is "SourceSizeCeiling" or "SourceClassCeiling").Select(node => node.SpanStart),
             type => type.Contains("SourceSizeCeiling", StringComparison.Ordinal) || type.Contains("SourceClassCeiling", StringComparison.Ordinal),
-            entry => entry.Key.StartsWith("SourceSizeCeiling:", StringComparison.Ordinal))
+            entry => entry.Key.StartsWith("SourceSizeCeiling:", StringComparison.Ordinal),
+            (root, relative) => SourceSizeRatchet.Evaluate(root,
+                [new SourceSizeCeiling(relative, -1)]).Single().ActualLineCount,
+            ValidateRatchet)
     };
 
     internal sealed record Entry(string Key, string Identity, string[] Comments, string Row, bool Remeasure = false)
@@ -104,6 +109,11 @@ internal static class RegistryAwareConflictMerge
                 }
             }
         }
+        // A deleted layout anchor can move its closing section before the other side's additions.
+        // Decline rather than emitting entries outside the array that owned them in the base.
+        if (baseOrder.Any(key => !layout.Skeleton.ContainsKey(key) &&
+                (baseline.Skeleton.GetValueOrDefault(key, "").Length > 0 || additions.ContainsKey(key))))
+            return null;
         // Map a chosen side's non-entry text to base anchors, including text following additions.
         var sections = new Dictionary<string, string>(StringComparer.Ordinal);
         var preceding = "";
@@ -194,8 +204,7 @@ internal static class RegistryAwareConflictMerge
         foreach (var plan in plans) Write(root, plan, Render(plan, _ => null, false)!);
         foreach (var plan in plans)
         {
-            var rendered = Render(plan, relative => SourceSizeRatchet.Evaluate(root,
-                [new SourceSizeCeiling(relative, -1)]).Single().ActualLineCount, true);
+            var rendered = Render(plan, relative => Registries[plan.Path].Measure(root, relative), true);
             if (rendered is null) return false;
             Write(root, plan, rendered);
         }
@@ -239,10 +248,23 @@ internal static class RegistryAwareConflictMerge
             .. Utf8.GetBytes(result.ToString().ReplaceLineEndings(plan.LineEnding))];
     }
 
-    internal static bool HasCeilingBelowMeasured(string root)
+    internal static bool TryValidatePlans(string root, IReadOnlyList<Plan> plans, out string reason)
+    {
+        foreach (var plan in plans)
+        {
+            var failure = Registries[plan.Path].Validate(root);
+            if (failure is not null) { reason = failure; return false; }
+        }
+        reason = "none";
+        return true;
+    }
+
+    private static string? ValidateRatchet(string root)
     {
         var ceilings = SourceSizeRatchetPreflight.TryReadAuthority(root);
-        return ceilings is null || SourceSizeRatchet.Evaluate(root, ceilings).Any(violation => violation.ActualLineCount is not null);
+        if (ceilings is null) return VerificationUnavailable;
+        return SourceSizeRatchet.Evaluate(root, ceilings).Any(violation => violation.ActualLineCount is not null)
+            ? CeilingBelowMeasured : null;
     }
 
     internal static int CountHunks(byte[] bytes) => Regex.Matches(Utf8.GetString(bytes), "^<{7,} ", RegexOptions.Multiline).Count;

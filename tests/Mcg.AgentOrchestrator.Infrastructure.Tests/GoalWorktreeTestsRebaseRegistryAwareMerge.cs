@@ -181,6 +181,64 @@ public sealed class GoalWorktreeTestsRebaseRegistryAwareMerge
         AssertRefused(fixture, "non-empty-base");
     }
 
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    [InlineData(false, true)]
+    public void DeletedLayoutBoundary_WithOtherSideAddition_Declines(bool mainLayout, bool classArray)
+    {
+        var baseline = classArray ? Registry(Row(A, 10), ClassRow(10)) : Registry(Row(A, 10) + Row(B, 10));
+        var layout = Registry(Row(A, 11)).Replace("// file header", "// changed header", StringComparison.Ordinal);
+        var other = classArray
+            ? Registry(Row(A, 12), ClassRow(10) + "        new SourceClassCeiling(\"Other\", 10, 1),\n")
+            : Registry(Row(A, 12) + Row(B, 10) + Row(C, 10));
+        using var fixture = new AdditiveConflictGitFixture([
+            new(SourceSizeRatchet.SourcePath, baseline, mainLayout ? layout : other, mainLayout ? other : layout),
+            Guard(A), Guard(B), Guard(C)
+        ]);
+
+        AssertRefused(fixture, "non-empty-base");
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    [InlineData(false, true)]
+    public void OneSidedNonEntryChange_MergesWithEntryChanges(bool mainLayout, bool trailer)
+    {
+        string ChangeLayout(string text) => trailer ? text + "// changed trailer\n"
+            : text.Replace("// file header", "// changed header", StringComparison.Ordinal);
+        var baseline = Registry(Row(A, 10) + Row(B, 10));
+        var main = Registry(Row(A, 11, "main A") + Row(B, 10));
+        var goal = Registry(Row(A, 10) + Row(B, 12, "goal B"));
+        using var fixture = new AdditiveConflictGitFixture([
+            new(SourceSizeRatchet.SourcePath, baseline, mainLayout ? ChangeLayout(main) : main,
+                mainLayout ? goal : ChangeLayout(goal)), Guard(A), Guard(B)
+        ]);
+        var events = new List<string>();
+
+        var result = GoalWorktrees.TryRebaseOntoMain(fixture.Repository, fixture.GoalId, new([], events.Add));
+
+        AssertMerged(fixture, result, events);
+        Assert.Equal(ChangeLayout(Registry(Row(A, 11, "main A") + Row(B, 12, "goal B"))),
+            fixture.Read(SourceSizeRatchet.SourcePath));
+    }
+
+    [Fact]
+    public void NoSizeRows_RefusesWithUnavailableEvidenceReasonAndRestoresBranch()
+    {
+        const string other = "        new SourceClassCeiling(\"Other\", 10, 1),\n";
+        using var fixture = new AdditiveConflictGitFixture([
+            new(SourceSizeRatchet.SourcePath, Registry("", ClassRow(10) + other),
+                Registry("", ClassRow(11) + other),
+                Registry("", ClassRow(10) + other.Replace(", 10,", ", 12,", StringComparison.Ordinal)))
+        ]);
+
+        AssertRefused(fixture, "registry-verification-unavailable");
+    }
+
     private static ConflictFile Guard(string path) => new(path, GuardedText, GuardedText, GuardedText);
 
     private static string Row(string path, int ceiling, params string[] comments) =>

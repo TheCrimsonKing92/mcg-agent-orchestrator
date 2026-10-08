@@ -45,8 +45,7 @@ public static partial class GoalWorktrees
                         var unmerged = RunAdditiveGit(worktreePath, "ls-files", "--unmerged", "-z");
                         if (CompleteGit(add) && CompleteGit(unmerged) && unmerged.Output.Length == 0)
                         {
-                            reason = RegistryAwareConflictMerge.CeilingBelowMeasured;
-                            if (registryPlans.Count == 0 || !RegistryAwareConflictMerge.HasCeilingBelowMeasured(worktreePath))
+                            if (RegistryAwareConflictMerge.TryValidatePlans(worktreePath, registryPlans, out reason))
                             {
                                 reason = "commit-failed";
                                 var commit = RunAdditiveGit(worktreePath, "-c", "user.name=mcg-orchestrator",
