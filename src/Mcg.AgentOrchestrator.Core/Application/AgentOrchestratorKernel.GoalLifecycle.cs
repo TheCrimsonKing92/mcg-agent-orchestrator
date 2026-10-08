@@ -250,23 +250,6 @@ public sealed partial class AgentOrchestratorKernel
         IReadOnlyList<AgentDefinition> availableAgents,
         bool isSliceBatchChild)
     {
-        var baseline = SelectEligibleAgentForTask(task, goalObjective, availableAgents);
-        if (!isSliceBatchChild || task.RequiredRole != AgentRole.Reviewer || baseline is null)
-        {
-            return baseline;
-        }
-
-        return SelectEligibleAgentForTask(
-            task,
-            goalObjective,
-            availableAgents.Where(candidate => candidate.Id != baseline.Id).ToArray()) ?? baseline;
-    }
-
-    private static AgentDefinition? SelectEligibleAgentForTask(
-        TaskSpec task,
-        string goalObjective,
-        IReadOnlyList<AgentDefinition> availableAgents)
-    {
         var eligible = availableAgents
             .Where(candidate => candidate.Status == AgentStatus.Available && candidate.Role == task.RequiredRole)
             .ToList();
@@ -278,26 +261,22 @@ public sealed partial class AgentOrchestratorKernel
 
         var complexity = TaskComplexityEstimator.Estimate(task.Description, goalObjective, task.RequiredRole);
 
-        if (complexity == TaskComplexity.Simple)
-        {
-            var local = eligible.FirstOrDefault(candidate =>
-                candidate.Model.SubscriptionMode == SubscriptionMode.LocalBridge);
-            if (local is not null)
+        AgentDefinition? SelectPreferredAgent(IEnumerable<AgentDefinition> candidates) =>
+            candidates.FirstOrDefault(candidate => complexity switch
             {
-                return local;
-            }
-        }
-        else if (complexity == TaskComplexity.Complex)
+                TaskComplexity.Simple => candidate.Model.SubscriptionMode == SubscriptionMode.LocalBridge,
+                TaskComplexity.Complex => candidate.Model.SubscriptionMode != SubscriptionMode.LocalBridge,
+                _ => true
+            });
+
+        var baseline = SelectPreferredAgent(eligible) ?? eligible[0];
+        if (!isSliceBatchChild || task.RequiredRole != AgentRole.Reviewer)
         {
-            var paid = eligible.FirstOrDefault(candidate =>
-                candidate.Model.SubscriptionMode != SubscriptionMode.LocalBridge);
-            if (paid is not null)
-            {
-                return paid;
-            }
+            return baseline;
         }
 
-        return eligible[0];
+        var remaining = eligible.Where(candidate => candidate.Id != baseline.Id).ToArray();
+        return SelectPreferredAgent(remaining) ?? remaining.FirstOrDefault() ?? baseline;
     }
 
     public TaskSpec SetTaskVerificationPlan(GoalId goalId, TaskId taskId, string verificationPlan)
