@@ -5,8 +5,20 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource questions, IOwnerAnswerSubmitter answers,
     IOwnerConsoleDialogs dialogs, IOrchestratorStateQueries state, IGoalEventTail tail,
     IOwnerConsoleConductor conductor, IOwnerConsoleDigestReport digest,
-    IOwnerDigestSummary summary, TimeProvider clock)
+    IOwnerDigestSummary summary, TimeProvider clock, IOwnerConsoleEpicSource? epics = null)
 {
+    internal event Action? ModelApplied;
+
+    internal async Task<OwnerConsoleEpicViewModel> LoadEpicViewAsync(OwnerConsoleEpicWindow window,
+        string? detailId, CancellationToken cancellationToken)
+    {
+        var since = OwnerConsoleEpicViewModel.Cutoff(window, clock.GetUtcNow());
+        var rows = epics is null ? [] : await epics.LoadAsync(since, cancellationToken).ConfigureAwait(false);
+        var row = rows.FirstOrDefault(item => item.Epic.Id == detailId);
+        var detail = row is null ? null : await OwnerConsoleEpicViewModel.DetailAsync(row, since, state, cancellationToken).ConfigureAwait(false);
+        return new(window, since, rows, detail);
+    }
+
     internal OwnerConsoleViewModel? Model { get; private set; }
     internal string? SelectedDecisionId { get; private set; }
     internal bool BellEnabled { get; private set; } = true;
@@ -23,6 +35,7 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
         if (!model.Decisions.Any(item => item.Id == SelectedDecisionId))
             SelectedDecisionId = model.Decisions.Length == 0 ? null :
                 model.Decisions[Math.Clamp(oldIndex, 0, model.Decisions.Length - 1)].Id;
+        ModelApplied?.Invoke();
     }
 
     internal void SelectIndex(int index)

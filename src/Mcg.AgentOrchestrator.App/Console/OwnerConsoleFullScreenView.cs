@@ -21,6 +21,9 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     private readonly ListView _activity = new() { Width = Dim.Fill(), Height = Dim.Fill() };
     private readonly TextField _command = new() { Y = Pos.AnchorEnd(1), Width = Dim.Fill(), Height = 1 };
     private readonly Label _hints = new() { Y = Pos.AnchorEnd(2), Width = Dim.Fill(), Height = 1 };
+    private readonly Label _epicHint = new() { Y = Pos.AnchorEnd(2), Text = OwnerConsoleEpicFormatter.KeyHint, Height = 1 };
+    internal OwnerConsoleEpicDialog EpicView { get; }
+    internal string EpicHintText => _epicHint.Text;
     private readonly Dictionary<string, string> _working = new();
     private readonly List<string> _notices = [];
     private readonly OwnerConsoleScreenOperation _operation;
@@ -68,7 +71,11 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         _board.Style.AlwaysShowHeaders = true;
         _board.Style.ShowHeaders = true;
         _board.FullRowSelect = true;
-        Window.Add(_status, decisions, board, activity, _hints, _command);
+        _epicHint.Width = OwnerConsoleEpicFormatter.KeyHint.Length;
+        _epicHint.X = Pos.AnchorEnd(OwnerConsoleEpicFormatter.KeyHint.Length);
+        _hints.Width = Dim.Fill(OwnerConsoleEpicFormatter.KeyHint.Length + 2);
+        EpicView = new(controller, Invoke, token);
+        Window.Add(_status, decisions, board, activity, _hints, _epicHint, _command, EpicView);
         _decisions.ValueChanged += (_, _) =>
         {
             if (!_rendering && _decisions.SelectedItem is { } index) _controller.SelectIndex(index);
@@ -166,6 +173,11 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     // The production keyboard callback and headless tests use this same routing path.
     internal async Task HandleKeyAsync(Key key)
     {
+        if (EpicView.IsOpen)
+        {
+            if (await EpicView.HandleKeyAsync(key)) FocusPane(EpicView.ReturnPane);
+            return;
+        }
         if (_editingCommand || _command.HasFocus)
         {
             if (key == Key.Esc) { key.Handled = true; FinishCommand(); return; }
@@ -173,6 +185,11 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
             key.Handled = true;
             var line = _command.Text;
             FinishCommand();
+            if (line.Trim().TrimStart(':').Trim().Equals("epics", StringComparison.OrdinalIgnoreCase))
+            {
+                await EpicView.OpenAsync(FocusedPane);
+                return;
+            }
             await ActAsync(ct => _controller.RunCommandAsync(line, _operation, ct));
             return;
         }
@@ -202,6 +219,12 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         {
             key.Handled = true;
             if (!ActionRunning) await ActAsync(_ => _controller.ShowHelpAsync());
+            return;
+        }
+        if (character == 'e')
+        {
+            key.Handled = true;
+            if (!ActionRunning) await EpicView.OpenAsync(FocusedPane);
             return;
         }
         var pane = FocusedPane;

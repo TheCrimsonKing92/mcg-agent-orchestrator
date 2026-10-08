@@ -94,7 +94,7 @@ internal static class OwnerConsoleFullScreenHost
                 var controller = new OwnerConsoleScreenController(questions, new AttentionAnswerHandlerAdapter(workspace),
                     new TerminalGuiOwnerConsoleDialogs(app, token), state, new GoalEventFileTail(workspace.GoalLifecycleEventsDirectory),
                     new CliConductorConsoleAdapter(workspace), new CliOwnerDigestConsoleAdapter(workspace),
-                    new OwnerDigestSummaryAdapter(workspace), clock);
+                    new OwnerDigestSummaryAdapter(workspace), clock, new WorkspaceEpicProgressSource(workspace));
                 view = new(app, controller, () => RefreshAsync(), token);
                 boardIds = board.Board.Select(row => row.GoalId).ToArray();
                 view.Render(board);
