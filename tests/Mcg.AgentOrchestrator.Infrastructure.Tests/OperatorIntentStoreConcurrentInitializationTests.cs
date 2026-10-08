@@ -15,6 +15,8 @@ public sealed class OperatorIntentStoreConcurrentInitializationTests
 
             var columns = ReadActorKindColumns(databasePath);
             Xunit.Assert.Equal("TEXT", Xunit.Assert.Single(columns));
+            using var connection = Open(databasePath);
+            Xunit.Assert.Equal(1, StoreSchemaVersions.Read(connection, StoreSchemaRegistry.OperatorIntents.StoreName));
         }
         finally
         {
@@ -78,24 +80,65 @@ public sealed class OperatorIntentStoreConcurrentInitializationTests
                     """);
                 Execute(connection, """
                     INSERT INTO operator_intents (
-                        id, idempotency_key, verb, goal_id, payload_json,
+                        id, idempotency_key, verb, goal_id, task_id, payload_json,
                         payload_file_references_json, actor, channel,
-                        authentication_assurance, created_at, status)
+                        authentication_assurance, created_at, status, claim_owner, claimed_at, completed_at, outcome)
                     VALUES (
-                        'intent-1', 'key-1', 'progress', 'goal-1', '{}',
-                        '[]', 'operator', 'test', 'test-assurance',
-                        '2026-09-25T00:00:00.0000000+00:00', 'Pending')
+                        'intent-1', 'key-1', 'progress', 'goal-1', 'task-1', '{"message":"first"}',
+                        '["first.txt"]', 'operator', 'test', 'test-assurance',
+                        '2026-09-25T00:00:00.0000000+00:00', 'Applied', 'owner-1',
+                        '2026-09-25T01:00:00.0000000+00:00', '2026-09-25T02:00:00.0000000+00:00', 'first outcome'),
+                        ('intent-2', 'key-2', 'retry', 'goal-2', 'task-2', '{"message":"second"}',
+                        '["second.txt"]', 'another-operator', 'cli', 'another-assurance',
+                        '2026-09-26T00:00:00.0000000+00:00', 'Claimed', 'owner-2',
+                        '2026-09-26T01:00:00.0000000+00:00', NULL, NULL)
                     """);
             }
 
             Xunit.Assert.Empty(ReadActorKindColumns(databasePath));
-            await InitializeTogether(databasePath, Path.Combine(root, "logs"));
+            await InitializeTogether(databasePath, Path.Combine(root, "logs"), setupOnly: true);
 
             Xunit.Assert.Equal("TEXT", Xunit.Assert.Single(ReadActorKindColumns(databasePath)));
-            var store = new SqliteOperatorIntentStore(databasePath, Path.Combine(root, "logs"));
+            var store = SqliteOperatorIntentStore.OpenExisting(root, Path.Combine(root, "reader-wakes"));
             var intent = Xunit.Assert.Single(await store.ListForGoalAsync("goal-1"));
             Xunit.Assert.Equal("intent-1", intent.Id);
+            Xunit.Assert.Equal("key-1", intent.IdempotencyKey);
+            Xunit.Assert.Equal("progress", intent.Verb);
+            Xunit.Assert.Equal("goal-1", intent.GoalId);
+            Xunit.Assert.Equal("task-1", intent.TaskId);
+            Xunit.Assert.Equal("{\"message\":\"first\"}", intent.PayloadJson);
+            Xunit.Assert.Equal(new[] { "first.txt" }, intent.PayloadFileReferences);
+            Xunit.Assert.Equal("operator", intent.Actor);
+            Xunit.Assert.Equal("test", intent.Channel);
+            Xunit.Assert.Equal("test-assurance", intent.AuthenticationAssurance);
+            Xunit.Assert.Equal(DateTimeOffset.Parse("2026-09-25T00:00:00Z"), intent.CreatedAt);
+            Xunit.Assert.Equal(OperatorIntentStatus.Applied, intent.Status);
+            Xunit.Assert.Equal("owner-1", intent.ClaimOwner);
+            Xunit.Assert.Equal(DateTimeOffset.Parse("2026-09-25T01:00:00Z"), intent.ClaimedAt);
+            Xunit.Assert.Equal(DateTimeOffset.Parse("2026-09-25T02:00:00Z"), intent.CompletedAt);
+            Xunit.Assert.Equal("first outcome", intent.Outcome);
             Xunit.Assert.Equal(OperatorActorKind.Human, intent.ActorKind);
+            var second = Xunit.Assert.Single(await store.ListForGoalAsync("goal-2"));
+            Xunit.Assert.Equal("intent-2", second.Id);
+            Xunit.Assert.Equal("key-2", second.IdempotencyKey);
+            Xunit.Assert.Equal("retry", second.Verb);
+            Xunit.Assert.Equal("goal-2", second.GoalId);
+            Xunit.Assert.Equal("task-2", second.TaskId);
+            Xunit.Assert.Equal("{\"message\":\"second\"}", second.PayloadJson);
+            Xunit.Assert.Equal(new[] { "second.txt" }, second.PayloadFileReferences);
+            Xunit.Assert.Equal("another-operator", second.Actor);
+            Xunit.Assert.Equal("cli", second.Channel);
+            Xunit.Assert.Equal("another-assurance", second.AuthenticationAssurance);
+            Xunit.Assert.Equal(DateTimeOffset.Parse("2026-09-26T00:00:00Z"), second.CreatedAt);
+            Xunit.Assert.Equal(OperatorIntentStatus.Claimed, second.Status);
+            Xunit.Assert.Equal("owner-2", second.ClaimOwner);
+            Xunit.Assert.Equal(DateTimeOffset.Parse("2026-09-26T01:00:00Z"), second.ClaimedAt);
+            Xunit.Assert.Null(second.CompletedAt);
+            Xunit.Assert.Null(second.Outcome);
+            Xunit.Assert.Equal(OperatorActorKind.Human, second.ActorKind);
+            var before = Snapshot(databasePath);
+            SqliteOperatorIntentStore.Setup(databasePath);
+            Xunit.Assert.Equal(before, Snapshot(databasePath));
         }
         finally
         {
@@ -103,14 +146,65 @@ public sealed class OperatorIntentStoreConcurrentInitializationTests
         }
     }
 
-    private static async Task InitializeTogether(string databasePath, string wakeDirectory)
+    [Xunit.Fact]
+    public void Setup_NewerVersion_PreservesSchemaRowsAndVersion()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var databasePath = Path.Combine(root, SqliteOperatorIntentStore.DatabaseFileName);
+            SqliteOperatorIntentStore.Setup(databasePath);
+            using (var connection = Open(databasePath))
+                Execute(connection, "UPDATE store_schema_versions SET version = 2, applied_at = 'original'");
+            var before = Snapshot(databasePath);
+
+            SqliteOperatorIntentStore.Setup(databasePath);
+
+            Xunit.Assert.Equal(before, Snapshot(databasePath));
+            using var readBack = Open(databasePath);
+            Xunit.Assert.Equal(2, StoreSchemaVersions.Read(readBack, StoreSchemaRegistry.OperatorIntents.StoreName));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static string[] Snapshot(string databasePath)
+    {
+        using var connection = Open(databasePath);
+        var rows = new List<string>();
+        foreach (var sql in new[]
+        {
+            "SELECT * FROM sqlite_schema ORDER BY type, name",
+            "SELECT * FROM store_schema_versions ORDER BY store_name",
+            "SELECT * FROM operator_intents ORDER BY id"
+        })
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText = sql;
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                var values = new object[reader.FieldCount];
+                reader.GetValues(values);
+                rows.Add(System.Text.Json.JsonSerializer.Serialize(values));
+            }
+        }
+        return rows.ToArray();
+    }
+
+    private static async Task InitializeTogether(string databasePath, string wakeDirectory, bool setupOnly = false)
     {
         using var gate = new Barrier(3);
         Task StartInitializer() => Task.Factory.StartNew(
             () =>
             {
                 gate.SignalAndWait();
-                _ = new SqliteOperatorIntentStore(databasePath, wakeDirectory);
+                if (setupOnly)
+                    SqliteOperatorIntentStore.Setup(databasePath);
+                else
+                    _ = new SqliteOperatorIntentStore(databasePath, wakeDirectory);
             },
             CancellationToken.None,
             TaskCreationOptions.LongRunning,

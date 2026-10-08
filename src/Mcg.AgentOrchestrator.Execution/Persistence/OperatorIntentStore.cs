@@ -110,25 +110,50 @@ public sealed class SqliteOperatorIntentStore : IOperatorIntentStore
         _readOnly = readOnly;
         if (!readOnly)
         {
-            EnsureSchema();
+            Setup(_dbPath);
+            Directory.CreateDirectory(_wakeDirectory);
         }
     }
 
     public static SqliteOperatorIntentStore ForDirectories(string orchestratorDirectory, string logDirectory) =>
         new(Path.Combine(orchestratorDirectory, DatabaseFileName), logDirectory);
 
-    public static SqliteOperatorIntentStore OpenExisting(string orchestratorDirectory, string logDirectory) =>
-        new(Path.Combine(orchestratorDirectory, DatabaseFileName), logDirectory, readOnly: true);
+    public static SqliteOperatorIntentStore OpenExisting(string orchestratorDirectory, string logDirectory)
+    {
+        var dbPath = Path.GetFullPath(Path.Combine(orchestratorDirectory, DatabaseFileName));
+        if (!File.Exists(dbPath))
+            throw SchemaSetupRequired(dbPath, StoreSchemaState.Missing);
+
+        var store = new SqliteOperatorIntentStore(dbPath, logDirectory, readOnly: true);
+        using var conn = store.OpenConnection();
+        var state = StoreSchemaVersions.Verify(conn, StoreSchemaRegistry.OperatorIntents);
+        if (state != StoreSchemaState.Current)
+            throw SchemaSetupRequired(dbPath, state);
+        return store;
+    }
+
+    private static InvalidOperationException SchemaSetupRequired(string dbPath, StoreSchemaState state) =>
+        new($"Operator intents store '{dbPath}' schema is {state} (expected version {StoreSchemaRegistry.OperatorIntents.CurrentVersion}); run setup.");
 
     private string ConnectionString =>
-        // ReadWrite opens only an existing database while still allowing SQLite to recreate
-        // WAL shared-memory state. The public read surface never issues mutations or schema DDL.
-        $"Data Source={_dbPath};Mode={(_readOnly ? "ReadWrite" : "ReadWriteCreate")};Pooling=False;";
+        new SqliteConnectionStringBuilder
+        {
+            DataSource = _dbPath,
+            Mode = _readOnly ? SqliteOpenMode.ReadOnly : SqliteOpenMode.ReadWriteCreate,
+            Pooling = false
+        }.ToString();
+
+    private void EnsureWritable()
+    {
+        if (_readOnly)
+            throw new InvalidOperationException("Operator intents store is read-only.");
+    }
 
     public async Task<OperatorIntentRecord> EnqueueAsync(
         OperatorIntentRecord intent,
         CancellationToken cancellationToken = default)
     {
+        EnsureWritable();
         ValidateNewIntent(intent);
         await using var conn = OpenConnection();
         await using var tx = conn.BeginTransaction();
@@ -181,6 +206,7 @@ public sealed class SqliteOperatorIntentStore : IOperatorIntentStore
         string claimOwner,
         CancellationToken cancellationToken)
     {
+        EnsureWritable();
         ArgumentException.ThrowIfNullOrWhiteSpace(goalId);
         ArgumentException.ThrowIfNullOrWhiteSpace(claimOwner);
 
@@ -228,6 +254,7 @@ public sealed class SqliteOperatorIntentStore : IOperatorIntentStore
         DateTimeOffset completedAt,
         CancellationToken cancellationToken = default)
     {
+        EnsureWritable();
         if (status is not (OperatorIntentStatus.Applied or OperatorIntentStatus.Rejected))
         {
             throw new ArgumentOutOfRangeException(nameof(status), status, "An operator intent outcome must be Applied or Rejected.");
@@ -366,6 +393,7 @@ public sealed class SqliteOperatorIntentStore : IOperatorIntentStore
 
     public void AcknowledgeWake(string intentId)
     {
+        EnsureWritable();
         var wakePath = GetWakePath(intentId);
         if (File.Exists(wakePath))
         {
@@ -380,24 +408,35 @@ public sealed class SqliteOperatorIntentStore : IOperatorIntentStore
         }
     }
 
-    private SqliteConnection OpenConnection()
+    internal SqliteConnection OpenConnection()
     {
         var conn = new SqliteConnection(ConnectionString);
         conn.Open();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "PRAGMA busy_timeout=30000";
-        cmd.ExecuteNonQuery();
+        if (!_readOnly)
+            RunNonQuery(conn, "PRAGMA busy_timeout=30000");
         return conn;
     }
 
-    private void EnsureSchema()
+    public static void Setup(string dbPath)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(_dbPath)!);
-        Directory.CreateDirectory(_wakeDirectory);
-        using var conn = OpenConnection();
+        dbPath = Path.GetFullPath(dbPath);
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        using var conn = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath, Mode = SqliteOpenMode.ReadWriteCreate, Pooling = false
+        }.ToString());
+        conn.Open();
+        RunNonQuery(conn, "PRAGMA busy_timeout=30000");
         RunNonQuery(conn, "PRAGMA journal_mode=WAL");
         RunNonQuery(conn, "PRAGMA synchronous=NORMAL");
-        RunNonQuery(conn, """
+        var state = StoreSchemaVersions.Verify(conn, StoreSchemaRegistry.OperatorIntents);
+        if (state is StoreSchemaState.Current or StoreSchemaState.Newer)
+            return;
+
+        RunNonQuery(conn, "BEGIN IMMEDIATE");
+        try
+        {
+            RunNonQuery(conn, """
             CREATE TABLE IF NOT EXISTS operator_intents (
                 id                            TEXT PRIMARY KEY,
                 idempotency_key               TEXT NOT NULL UNIQUE,
@@ -418,8 +457,16 @@ public sealed class SqliteOperatorIntentStore : IOperatorIntentStore
                 actor_kind                    TEXT
             )
             """);
-        AddColumnIfMissing(conn, "operator_intents", "actor_kind", "TEXT");
-        RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS idx_operator_intents_actionable ON operator_intents(goal_id, status, created_at, id)");
+            AddColumnIfMissing(conn, "operator_intents", "actor_kind", "TEXT");
+            RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS idx_operator_intents_actionable ON operator_intents(goal_id, status, created_at, id)");
+            StoreSchemaVersions.UpgradeToCurrent(conn, StoreSchemaRegistry.OperatorIntents);
+            RunNonQuery(conn, "COMMIT");
+        }
+        catch
+        {
+            try { RunNonQuery(conn, "ROLLBACK"); } catch { }
+            throw;
+        }
     }
 
     private async Task<OperatorIntentRecord?> ReadNextActionableAsync(

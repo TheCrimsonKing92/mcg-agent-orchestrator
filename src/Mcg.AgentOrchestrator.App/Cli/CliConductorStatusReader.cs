@@ -166,6 +166,10 @@ internal static class CliConductorStatusReader
                 output.WriteLine($"  {id} | intents={summary?.Count ?? 0} | latest={latest}{hint}");
             }
         }
+        catch (InvalidOperationException ex)
+        {
+            output.WriteLine($"Pending operator intents: unavailable (setup required: {ex.Message})");
+        }
         catch (Exception ex) when (ex is SqliteException or IOException or UnauthorizedAccessException)
         {
             output.WriteLine("Pending operator intents: unavailable");
