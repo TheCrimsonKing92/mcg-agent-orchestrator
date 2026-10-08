@@ -1536,7 +1536,7 @@ public static class DotnetBuildEnvironmentManager
     private static string FormatBusySlot(DotnetBuildStableSlotWait slot)
     {
         var value =
-            $"slot-{slot.SlotIndex}:pid-{slot.OwnerProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}:holder-{FormatHolderLabel(slot.HolderLabel)}";
+            $"slot-{slot.SlotIndex}:pid-{slot.OwnerProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}";
         if (slot.UnavailableProcessId.HasValue)
         {
             value += $":unavailable-pid-{slot.UnavailableProcessId.Value}:name-{slot.UnavailableProcessName ?? "unknown"}";
@@ -1557,7 +1557,7 @@ public static class DotnetBuildEnvironmentManager
             value += $":operation-{slot.FailureOperation}";
         }
 
-        return value;
+        return value + $":holder-{FormatHolderLabel(slot.HolderLabel)}";
     }
 
     private static bool TryOpenLeaseExecutionLock(

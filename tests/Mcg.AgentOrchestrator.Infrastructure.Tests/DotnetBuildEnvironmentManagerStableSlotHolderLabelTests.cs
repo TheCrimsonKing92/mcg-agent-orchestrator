@@ -100,6 +100,30 @@ public sealed class DotnetBuildEnvironmentManagerStableSlotHolderLabelTests : Do
         Assert.Equal("slot-0:pid-123:holder-cohort-gate:goal-a_SLOTS_BUSY_x_y_extra|slot-1:pid-unknown:holder-unknown", text);
     }
 
+    [Theory]
+    [InlineData(null, "unknown")]
+    [InlineData("cohort-gate:goal-aaaaaaaa+bbbbbbbb", "cohort-gate:goal-aaaaaaaa+bbbbbbbb")]
+    public void HolderDiagnosticsPreserveNativeFailureFields(string? holderLabel, string expectedLabel)
+    {
+        var text = DotnetBuildEnvironmentManager.FormatBusySlots(
+            [new(0, null, UnavailableStatus: ProcessInspectionStatus.NativeFailure,
+                NativeError: 24, FailureOperation: "CreateToolhelp32Snapshot") { HolderLabel = holderLabel }]);
+
+        Assert.Equal("slot-0:pid-unknown:status-NativeFailure:native-error-24:" +
+            $"operation-CreateToolhelp32Snapshot:holder-{expectedLabel}", text);
+    }
+
+    [Fact]
+    public void HolderDiagnosticsPreserveUnavailableProcessFields()
+    {
+        var text = DotnetBuildEnvironmentManager.FormatBusySlots(
+            [new(0, 123, 456, "dotnet", ProcessInspectionStatus.AccessDenied, 5, "OpenProcess")
+                { HolderLabel = "parallel-acceptance:goal-aaaaaaaa:attempt-bbbbbbbb" }]);
+
+        Assert.Equal("slot-0:pid-123:unavailable-pid-456:name-dotnet:status-AccessDenied:" +
+            "native-error-5:operation-OpenProcess:holder-parallel-acceptance:goal-aaaaaaaa:attempt-bbbbbbbb", text);
+    }
+
     private static string? ReadLabel(DotnetBuildEnvironment environment)
     {
         using var document = JsonDocument.Parse(File.ReadAllText(environment.ExecutionLockPath + ".owner.json"));
