@@ -17,12 +17,9 @@ internal static class ConductorDependencyHoldEvaluator
         foreach (var depId in goal.DependsOn)
         {
             var producer = kernel.Goals.FirstOrDefault(candidate => candidate.Id == depId);
-            if (producer is not null && SliceBatchSiblingDependencyCoordinator.IsSiblingEdge(goal, producer))
+            if (producer is not null && SliceBatchSiblingDependencyCoordinator.IsSatisfiedSibling(goal, producer))
             {
-                if (SliceBatchSiblingDependencyCoordinator.IsSatisfiedSibling(goal, producer))
-                    continue;
-                requiresPerson = producer.Status is GoalStatus.Parked or GoalStatus.WaitingForHuman;
-                return SliceBatchSiblingDependencyCoordinator.DescribeHold(producer);
+                continue;
             }
 
             if (completedGoals.Contains(depId.Value) ||

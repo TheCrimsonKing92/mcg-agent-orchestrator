@@ -187,6 +187,67 @@ public sealed class SliceBatchExecutionTests
         finally { Directory.Delete(workspace.RootDirectory, recursive: true); }
     }
 
+    [Xunit.Fact]
+    public void DependencyHold_FailedSibling_EscalatesWithoutDispatch()
+    {
+        var (kernel, workspace, agents, providers) = CreateContext(SiblingPlan("Consume g1's contract.", true));
+        try
+        {
+            var parent = CreateBatch(kernel, workspace, agents, providers);
+            var children = kernel.Goals.Where(goal => goal.SliceBatchParentId == parent.Id).ToArray();
+            var producerId = children[0].Id;
+            var consumerId = children[1].Id;
+            var snapshot = kernel.ExportSnapshot();
+            kernel.ReplaceWithSnapshot(snapshot with
+            {
+                Goals = snapshot.Goals.Select(goal => goal.Id == producerId.Value
+                    ? goal with { Status = GoalStatus.Failed }
+                    : goal).ToArray()
+            });
+            kernel.MarkKnownDependencyGoalStatuses([
+                new KeyValuePair<GoalId, string>(producerId, GoalStatus.Failed.ToString())
+            ]);
+            var producer = kernel.GetGoal(producerId);
+            var consumer = kernel.GetGoal(consumerId);
+            Xunit.Assert.True(SliceBatchSiblingDependencyCoordinator.IsSiblingEdge(consumer, producer));
+            Xunit.Assert.False(SliceBatchParentExecutionGuard.IsStreamComplete(producer));
+            var expected = $"dependency-terminal-without-landing: {producerId.Value[..8]} state=Failed";
+            var reason = ConductorDependencyHoldEvaluator.Evaluate(consumer, [], [], kernel, out var requiresPerson);
+            Xunit.Assert.Equal(expected, reason);
+            Xunit.Assert.True(requiresPerson);
+
+            var dispatches = new List<GoalId>();
+            CaptureConsole(() =>
+            {
+                var summary = new ConductorBatchLoop().Run(kernel, CreateDriver(kernel, [], dispatches),
+                    ConductorAutonomyPolicy.Conservative, Path.Combine(workspace.RootDirectory, "stop.txt"),
+                    maxIterations: 1, onlyGoalId: consumerId.Value);
+                Xunit.Assert.Equal(1, summary.Escalated);
+            });
+            Xunit.Assert.Empty(dispatches);
+            Xunit.Assert.Contains(kernel.GetGoal(consumerId).Timeline, item =>
+                item.Message.Contains(expected, StringComparison.Ordinal));
+        }
+        finally { Directory.Delete(workspace.RootDirectory, recursive: true); }
+    }
+
+    [Xunit.Fact]
+    public void DependencyHold_EscalatedSibling_RequiresPerson()
+    {
+        var (kernel, workspace, agents, providers) = CreateContext(SiblingPlan("Consume g1's contract.", true));
+        try
+        {
+            var parent = CreateBatch(kernel, workspace, agents, providers);
+            var children = kernel.Goals.Where(goal => goal.SliceBatchParentId == parent.Id).ToArray();
+            Xunit.Assert.False(SliceBatchParentExecutionGuard.IsStreamComplete(children[0]));
+            var reason = ConductorDependencyHoldEvaluator.Evaluate(children[1], [],
+                [children[0].Id.Value], kernel, out var requiresPerson);
+            Xunit.Assert.Equal($"dependency escalated: {children[0].Id.Value[..8]}", reason);
+            Xunit.Assert.True(requiresPerson);
+        }
+        finally { Directory.Delete(workspace.RootDirectory, recursive: true); }
+    }
+
     private static void RunConsumerTick(AgentOrchestratorKernel kernel, ConductorDriver driver,
         Goal consumer, string root) => CaptureConsole(() =>
         new ConductorBatchLoop().Run(kernel, driver, ConductorAutonomyPolicy.Conservative,
