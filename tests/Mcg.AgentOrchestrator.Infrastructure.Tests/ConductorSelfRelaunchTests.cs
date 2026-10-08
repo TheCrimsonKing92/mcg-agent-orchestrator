@@ -536,7 +536,8 @@ public sealed class ConductorSelfRelaunchTests
                 DotnetPath: Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_DOTNET_PATH") ?? "dotnet",
                 PowerShellPath: "powershell",
                 HandoffOptions: handoffOptions,
-                BuildTimeout: TimeSpan.FromMinutes(3),
+                // Build duration is not part of the verdict; a hung build is caught by the lane timeout.
+                BuildTimeout: usePrebuiltPayload ? TimeSpan.FromMinutes(3) : default,
                 SelfCheckTimeout: TimeSpan.FromSeconds(30));
             IReadOnlyDictionary<string, string>? sharedPayloadHashes = null;
             if (usePrebuiltPayload)
