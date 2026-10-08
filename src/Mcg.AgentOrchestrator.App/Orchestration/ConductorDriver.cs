@@ -635,7 +635,7 @@ internal sealed partial class ConductorDriver
             try
             {
                 var gateProgressEventWriter = new ConductEventLogWriter(
-                    Path.Combine(dir, ".orchestrator", "logs", ConductEventLogWriter.CurrentFileName));
+                    workspace.ConductEventsLogPath);
                 var executionOptions = attemptOptions with
                 {
                     ProgressSink = progress => AppendGateProgressEvent(gateProgressEventWriter, goal.Id, progress),

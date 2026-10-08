@@ -396,7 +396,7 @@ internal sealed partial class ConductorDriver
         var workspace = _cohortWorkspace ?? throw new InvalidOperationException("Production acceptance cohort workspace is unavailable.");
         if (RunAcceptanceCohortSourceSizePreflight(integration.Path, identity, store) is { } sourceSizeReceipt) return sourceSizeReceipt;
         var gateProgressEventWriter = new ConductEventLogWriter(
-            Path.Combine(workspace.ExecutionDirectory, ".orchestrator", "logs", ConductEventLogWriter.CurrentFileName));
+            workspace.ConductEventsLogPath);
         var executionOptions = CreateCohortGateExecutionOptions(gateProgressEventWriter, identity, bindings);
 
         var gateClock = Stopwatch.StartNew();
