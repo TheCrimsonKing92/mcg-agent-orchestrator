@@ -77,7 +77,13 @@ public sealed class AcceptanceCohortWorkflowTestsTrainRedAttribution : Acceptanc
                 _ => "Ns.OldestCulpritTests"
             }, reason == "different-members" ? "OtherMemberTests.cs" : "OldestCulpritTests.cs");
             if (reason == "unreadable")
-                red = red with { TestResultPaths = [.. red.TestResultPaths!, Path.Combine(repo, "missing.trx")] };
+            {
+                // Evidence capture must be able to copy the file before attribution rejects it.
+                var malformed = Path.Combine(repo, "malformed.trx");
+                File.WriteAllText(malformed, "<TestRun");
+                Assert.Equal(AcceptanceTrxReadStatus.Unparseable, AcceptanceTrxFailureReader.Read(malformed).Status);
+                red = red with { TestResultPaths = [.. red.TestResultPaths!, malformed] };
+            }
             return memberCount == 2 ? [red] : [red, Passing(repo)];
         }, scenario =>
         {
