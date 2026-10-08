@@ -3,6 +3,134 @@ using Mcg.AgentOrchestrator.Core;
 
 public sealed class GoalLifecycleTests
 {
+    [Xunit.Theory]
+    [Xunit.InlineData(TaskComplexity.Simple, "Ship a focused feature", "Review the diff and evidence")]
+    [Xunit.InlineData(TaskComplexity.Complex,
+        "Implement comprehensive distributed architecture with end-to-end integration",
+        "Review comprehensive production distributed architecture with end-to-end integration")]
+    public void ActivateGoal_SliceChild_UsesOtherReviewerAndSameDeveloper(
+        TaskComplexity complexity, string objective, string reviewDescription)
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var developer = TestAgent("developer", "Developer", AgentRole.Developer);
+        var reviewer = TestAgent("reviewer", "Reviewer", AgentRole.Reviewer);
+        var streamReviewer = TestAgent("stream-reviewer", "Stream Reviewer", AgentRole.Reviewer);
+        AgentDefinition[] agents = [developer, reviewer, streamReviewer];
+        var ordinary = kernel.CreateGoal(objective,
+        [
+            new TaskSpec(TaskId.New(), "Implement the feature", AgentRole.Developer),
+            new TaskSpec(TaskId.New(), reviewDescription, AgentRole.Reviewer)
+        ]);
+        var parent = kernel.CreateGoal("Coordinate streams", []);
+        var child = kernel.CreateGoal(objective,
+        [
+            new TaskSpec(TaskId.New(), "Implement the feature", AgentRole.Developer),
+            new TaskSpec(TaskId.New(), reviewDescription, AgentRole.Reviewer)
+        ], parent.Id);
+        Assert.Equal(complexity, TaskComplexityEstimator.Estimate(reviewDescription, objective, AgentRole.Reviewer));
+
+        kernel.ActivateGoal(ordinary.Id, agents);
+        kernel.ActivateGoal(child.Id, agents);
+
+        Assert.Equal(reviewer.Id, ordinary.Tasks[1].AssignedAgentId);
+        Assert.Equal(streamReviewer.Id, child.Tasks[1].AssignedAgentId);
+        Assert.Equal(developer.Id, ordinary.Tasks[0].AssignedAgentId);
+        Assert.Equal(ordinary.Tasks[0].AssignedAgentId, child.Tasks[0].AssignedAgentId);
+        Assert.All(child.Tasks, task => Assert.Equal(WorkTaskStatus.Assigned, task.Status));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void ActivateGoal_SingleAvailableReviewer_FallsBackForChild(bool includeBusy)
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var parent = kernel.CreateGoal("Coordinate streams", []);
+        var child = kernel.CreateGoal("Ship a feature",
+            [new TaskSpec(TaskId.New(), "Review the diff", AgentRole.Reviewer)], parent.Id);
+        var available = TestAgent("available", "Reviewer", AgentRole.Reviewer);
+        var busy = TestAgent("busy", "Busy Reviewer", AgentRole.Reviewer) with { Status = AgentStatus.Busy };
+        AgentDefinition[] agents = includeBusy ? [busy, available] : [available];
+
+        kernel.ActivateGoal(child.Id, agents);
+
+        Assert.Equal(available.Id, child.Tasks[0].AssignedAgentId);
+        Assert.Equal(WorkTaskStatus.Assigned, child.Tasks[0].Status);
+    }
+
+    [Xunit.Fact]
+    public void ActivateGoal_NoAvailableReviewer_LeavesChildTaskPending()
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var parent = kernel.CreateGoal("Coordinate streams", []);
+        var child = kernel.CreateGoal("Ship a feature",
+            [new TaskSpec(TaskId.New(), "Review the diff", AgentRole.Reviewer)], parent.Id);
+        var busy = TestAgent("busy", "Busy Reviewer", AgentRole.Reviewer) with { Status = AgentStatus.Busy };
+
+        var plan = kernel.ActivateGoal(child.Id, [busy]);
+
+        Assert.Empty(plan.Assignments);
+        Assert.Null(child.Tasks[0].AssignedAgentId);
+        Assert.Equal(WorkTaskStatus.Pending, child.Tasks[0].Status);
+    }
+
+    [Xunit.Fact]
+    public void AddTask_SliceChild_UsesOtherReviewerAndSameDeveloper()
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var parent = kernel.CreateGoal("Coordinate streams", []);
+        var ordinary = kernel.CreateGoal("Ship a feature", []);
+        var child = kernel.CreateGoal("Ship a feature", [], parent.Id);
+        var developer = TestAgent("developer", "Developer", AgentRole.Developer);
+        var reviewer = TestAgent("reviewer", "Reviewer", AgentRole.Reviewer);
+        var streamReviewer = TestAgent("stream-reviewer", "Stream Reviewer", AgentRole.Reviewer);
+        AgentDefinition[] agents = [developer, reviewer, streamReviewer];
+        kernel.ActivateGoal(child.Id, agents);
+
+        var ordinaryReview = kernel.AddTask(ordinary.Id, AgentRole.Reviewer, "Review the diff", agents);
+        var childReview = kernel.AddTask(child.Id, AgentRole.Reviewer, "Review the diff", agents);
+        var ordinaryDeveloper = kernel.AddTask(ordinary.Id, AgentRole.Developer, "Implement the feature", agents);
+        var childDeveloper = kernel.AddTask(child.Id, AgentRole.Developer, "Implement the feature", agents);
+
+        Assert.Equal(reviewer.Id, ordinaryReview.AssignedAgentId);
+        Assert.Equal(streamReviewer.Id, childReview.AssignedAgentId);
+        Assert.Equal(WorkTaskStatus.Assigned, childReview.Status);
+        Assert.Equal(developer.Id, ordinaryDeveloper.AssignedAgentId);
+        Assert.Equal(ordinaryDeveloper.AssignedAgentId, childDeveloper.AssignedAgentId);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(TaskComplexity.Simple, "Review the diff", true)]
+    [Xunit.InlineData(TaskComplexity.Complex,
+        "Review comprehensive production distributed architecture with end-to-end integration", false)]
+    public void ActivateGoal_MixedReviewerRoster_ReusesPreferenceAfterExclusion(
+        TaskComplexity complexity, string reviewDescription, bool prefersLocal)
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var objective = "Implement comprehensive distributed architecture";
+        var parent = kernel.CreateGoal("Coordinate streams", []);
+        var ordinary = kernel.CreateGoal(objective,
+            [new TaskSpec(TaskId.New(), reviewDescription, AgentRole.Reviewer)]);
+        var child = kernel.CreateGoal(objective,
+            [new TaskSpec(TaskId.New(), reviewDescription, AgentRole.Reviewer)], parent.Id);
+        var paid = TestAgent("paid", "Paid", AgentRole.Reviewer);
+        var local = paid with
+        {
+            Id = new AgentId("local"), Name = "Local",
+            Model = paid.Model with { SubscriptionMode = SubscriptionMode.LocalBridge }
+        };
+        var secondPaid = paid with { Id = new AgentId("second-paid"), Name = "Second Paid" };
+        var secondLocal = local with { Id = new AgentId("second-local"), Name = "Second Local" };
+        AgentDefinition[] agents = [paid, local, secondPaid, secondLocal];
+        Assert.Equal(complexity, TaskComplexityEstimator.Estimate(reviewDescription, objective, AgentRole.Reviewer));
+
+        kernel.ActivateGoal(ordinary.Id, agents);
+        kernel.ActivateGoal(child.Id, agents);
+
+        Assert.Equal(prefersLocal ? local.Id : paid.Id, ordinary.Tasks[0].AssignedAgentId);
+        Assert.Equal(prefersLocal ? secondLocal.Id : secondPaid.Id, child.Tasks[0].AssignedAgentId);
+    }
+
     [Xunit.Fact]
     public void RefreshParkedGoal_AllowsPromotionWithOpenProspectiveAcceptanceEvidence()
     {
@@ -2473,4 +2601,3 @@ static AgentDefinition TestAgent(string id, string name, AgentRole role) =>
     Assert.Equal(WorkTaskStatus.WaitingForHuman, restoredGoal.Tasks.First(item => item.Id == task.Id).Status);
 }
 }
-

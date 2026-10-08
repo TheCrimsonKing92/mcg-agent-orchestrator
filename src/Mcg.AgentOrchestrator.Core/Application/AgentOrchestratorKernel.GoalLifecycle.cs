@@ -67,7 +67,7 @@ public sealed partial class AgentOrchestratorKernel
 
         foreach (var task in goal.Tasks.Where(task => task.Status == WorkTaskStatus.Pending))
         {
-            var agent = SelectAgentForTask(task, goal.Objective, availableAgents);
+            var agent = SelectAgentForTask(task, goal.Objective, availableAgents, goal.SliceBatchParentId is not null);
 
             if (agent is null)
             {
@@ -229,7 +229,7 @@ public sealed partial class AgentOrchestratorKernel
 
         if (availableAgents is not null)
         {
-            var agent = SelectAgentForTask(task, goal.Objective, availableAgents);
+            var agent = SelectAgentForTask(task, goal.Objective, availableAgents, goal.SliceBatchParentId is not null);
 
             if (agent is not null)
             {
@@ -245,6 +245,24 @@ public sealed partial class AgentOrchestratorKernel
     // Selects the most cost-effective agent for a task:
     // Simple tasks prefer local (LocalBridge) agents; Complex tasks prefer capable paid agents.
     private static AgentDefinition? SelectAgentForTask(
+        TaskSpec task,
+        string goalObjective,
+        IReadOnlyList<AgentDefinition> availableAgents,
+        bool isSliceBatchChild)
+    {
+        var baseline = SelectEligibleAgentForTask(task, goalObjective, availableAgents);
+        if (!isSliceBatchChild || task.RequiredRole != AgentRole.Reviewer || baseline is null)
+        {
+            return baseline;
+        }
+
+        return SelectEligibleAgentForTask(
+            task,
+            goalObjective,
+            availableAgents.Where(candidate => candidate.Id != baseline.Id).ToArray()) ?? baseline;
+    }
+
+    private static AgentDefinition? SelectEligibleAgentForTask(
         TaskSpec task,
         string goalObjective,
         IReadOnlyList<AgentDefinition> availableAgents)

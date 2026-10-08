@@ -306,7 +306,7 @@ private static bool HandlePlan(CliExecutionContext context, IReadOnlyList<string
             var child = GoalLifecycleCommands.CreateDormantGoal(
                 context.Kernel,
                 node.Objective,
-                GoalIntakePipeline.DeveloperOnly,
+                GoalIntakePipeline.DeveloperStreamReviewer,
                 context.Workspace,
                 context.Providers,
                 context.EventWriter,

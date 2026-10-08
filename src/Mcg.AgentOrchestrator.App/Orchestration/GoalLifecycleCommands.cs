@@ -112,7 +112,7 @@ internal static class GoalLifecycleCommands
             $"Requested workflow='{requestedPlan.PipelineDecision.Workflow}', " +
             $"selectionSource='{requestedPlan.PipelineDecision.SelectionSource}', " +
             $"orderedRoles=[{FormatRoles(requestedRoles)}]; " +
-            $"persisted workflow='{DescribePipeline(persistedRoles)}', " +
+            $"persisted workflow='{DescribePipeline(persistedRoles, persistedGoal)}', " +
             $"selectionSource='{persistedSelectionSource}', " +
             $"orderedRoles=[{FormatRoles(persistedRoles)}]. Existing goal was not reused.");
     }
@@ -235,11 +235,7 @@ internal static class GoalLifecycleCommands
 
     private static string ResolvePersistedPipelineSelectionSource(Goal goal)
     {
-        var message = goal.Timeline
-            .LastOrDefault(evt =>
-                evt.Kind == ProgressKind.GoalPolicyDecision &&
-                evt.Message.StartsWith("Intake pipeline decision (", StringComparison.Ordinal))
-            ?.Message;
+        var message = GetRecordedPipelineDecisionMessage(goal);
         if (message?.StartsWith("Intake pipeline decision (override):", StringComparison.Ordinal) == true)
         {
             return "explicitly-required";
@@ -253,7 +249,13 @@ internal static class GoalLifecycleCommands
         return "unrecorded";
     }
 
-    private static string DescribePipeline(IReadOnlyList<AgentRole> roles)
+    private static string? GetRecordedPipelineDecisionMessage(Goal goal) => goal.Timeline
+        .LastOrDefault(evt =>
+            evt.Kind == ProgressKind.GoalPolicyDecision &&
+            evt.Message.StartsWith("Intake pipeline decision (", StringComparison.Ordinal))
+        ?.Message;
+
+    private static string DescribePipeline(IReadOnlyList<AgentRole> roles, Goal goal)
     {
         if (roles.SequenceEqual([AgentRole.Developer]))
         {
@@ -262,6 +264,12 @@ internal static class GoalLifecycleCommands
 
         if (roles.SequenceEqual([AgentRole.Developer, AgentRole.Reviewer]))
         {
+            var decision = GetRecordedPipelineDecisionMessage(goal);
+            if (decision?.StartsWith("Intake pipeline decision (override): developer-stream-reviewer;", StringComparison.Ordinal) == true)
+            {
+                return "developer-stream-reviewer";
+            }
+
             return "developer-reviewer";
         }
 
@@ -293,5 +301,4 @@ internal static class GoalLifecycleCommands
         }
     }
 }
-
 

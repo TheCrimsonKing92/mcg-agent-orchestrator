@@ -8,6 +8,42 @@ using System.Text.Json;
 public sealed class SliceBatchExecutionTests
 {
     [Xunit.Fact]
+    public void Plan_TwoSlices_RecordsStreamReviewPipelineOnlyForChildren()
+    {
+        var (kernel, workspace, agents, providers) = CreateContext(TwoSliceBatchJson);
+        var parent = CreateBatch(kernel, workspace, agents, providers);
+        var children = kernel.Goals.Where(goal => goal.SliceBatchParentId == parent.Id).ToArray();
+
+        Xunit.Assert.Equal(2, children.Length);
+        Xunit.Assert.Equal([AgentRole.Developer, AgentRole.Reviewer],
+            parent.Tasks.Select(task => task.RequiredRole));
+        Xunit.Assert.Contains(parent.Timeline, item =>
+            item.Kind == ProgressKind.GoalPolicyDecision &&
+            item.Message.StartsWith("Intake pipeline decision (override): developer-reviewer;", StringComparison.Ordinal));
+        Xunit.Assert.All(children, child =>
+        {
+            Xunit.Assert.Equal([AgentRole.Developer, AgentRole.Reviewer],
+                child.Tasks.Select(task => task.RequiredRole));
+            Xunit.Assert.Contains(child.Timeline, item =>
+                item.Kind == ProgressKind.GoalPolicyDecision &&
+                item.Message.StartsWith("Intake pipeline decision (override): developer-stream-reviewer;", StringComparison.Ordinal));
+            Xunit.Assert.All(child.Tasks, task => Xunit.Assert.Equal(WorkTaskStatus.Assigned, task.Status));
+        });
+
+        var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+        var requested = GoalObjectivePlanner.Build("Implement src/Other.cs.", GoalIntakePipeline.FiveRole);
+        Xunit.Assert.All(restored.Goals.Where(goal => goal.SliceBatchParentId == parent.Id), child =>
+        {
+            var mismatch = Xunit.Assert.Throws<InvalidOperationException>(() =>
+                GoalLifecycleCommands.EnsureRequestedPipelineMatchesPersistedGoal(requested, child));
+            Xunit.Assert.Contains("persisted workflow='developer-stream-reviewer'", mismatch.Message, StringComparison.Ordinal);
+        });
+        var parentMismatch = Xunit.Assert.Throws<InvalidOperationException>(() =>
+            GoalLifecycleCommands.EnsureRequestedPipelineMatchesPersistedGoal(requested, restored.GetGoal(parent.Id)));
+        Xunit.Assert.Contains("persisted workflow='developer-reviewer'", parentMismatch.Message, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
     public void PlanCreatesDispatchableChildrenAndNonExecutingParent()
     {
         var (kernel, workspace, agents, providers) = CreateContext(DisjointSliceBatchJson);
@@ -219,7 +255,12 @@ public sealed class SliceBatchExecutionTests
             AgentRole.Developer,
             new ModelProfile("Fake", "fake-dev-model", ModelCapability.Text, SubscriptionMode.ApiKey),
             ExecutionPolicy: AgentExecutionPolicy.ApiOnly);
-        IReadOnlyList<AgentDefinition> agents = [planner, developer];
+        var reviewer = new AgentDefinition(
+            AgentId.New(), "Test-Reviewer", AgentRole.Reviewer,
+            new ModelProfile("Fake", "fake-review-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.ApiOnly);
+        var streamReviewer = reviewer with { Id = AgentId.New(), Name = "Test-Stream-Reviewer" };
+        IReadOnlyList<AgentDefinition> agents = [planner, developer, reviewer, streamReviewer];
         IModelProviderRegistry providers = new InMemoryModelProviderRegistry([
             new FakeSmokeProvider(plannerOutput, providerName: "Fake")
         ]);
@@ -231,6 +272,12 @@ public sealed class SliceBatchExecutionTests
         ]));
         return (kernel, workspace, agents, providers);
     }
+
+    private const string TwoSliceBatchJson = """
+        ```json
+        [{"id":"g1","objective":"Implement feature A.\n\nTarget files/scopes:\nScope confidence: precise\nIncludes:\n- src/FeatureA/A.cs","dependsOn":[]},{"id":"g2","objective":"Implement feature B.\n\nTarget files/scopes:\nScope confidence: precise\nIncludes:\n- src/FeatureB/B.cs","dependsOn":[]}]
+        ```
+        """;
 
     internal const string DisjointSliceBatchJson = """
         ```json
