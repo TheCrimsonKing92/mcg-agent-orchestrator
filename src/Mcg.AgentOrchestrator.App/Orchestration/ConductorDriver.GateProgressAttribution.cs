@@ -45,8 +45,7 @@ internal sealed partial class ConductorDriver
         string trainKey)
     {
         var workspace = _cohortWorkspace ?? throw new InvalidOperationException("Production acceptance cohort workspace is unavailable.");
-        var logPath = Path.Combine(
-            workspace.ExecutionDirectory, ".orchestrator", "logs", ConductEventLogWriter.CurrentFileName);
+        var logPath = workspace.ConductEventsLogPath;
         ConductEventLogWriter? writer = null;
         var memberIds = string.Join(',', members.Select(member => member.GoalId.Value[..8]));
         var trainId = identity.Value[..Math.Min(MergeTrainIdentity.Version.Length + 9, identity.Value.Length)];

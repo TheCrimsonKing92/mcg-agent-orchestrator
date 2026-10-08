@@ -69,7 +69,7 @@ internal static class GoalArtifactRetentionPlanner
         var buildLease = DotnetBuildEnvironmentManager.InspectGoalLease(goal.Id, buildStorageRoot);
         var contextPath = Path.Combine(workspace.ExecutionDirectory, ".orchestrator-context", goal.Id.Value);
         var journal = GoalOperationJournal.Read(workspace.ExecutionDirectory, goal.Id);
-        var transcriptPath = Path.Combine(workspace.ExecutionDirectory, ".orchestrator", "transcripts", $"{goalPrefix}.md");
+        var transcriptPath = Path.Combine(workspace.OrchestratorDirectory, "transcripts", $"{goalPrefix}.md");
         var acceptanceEvidencePath = Path.Combine(
             workspace.OrchestratorDirectory,
             "acceptance-gate-attempts",

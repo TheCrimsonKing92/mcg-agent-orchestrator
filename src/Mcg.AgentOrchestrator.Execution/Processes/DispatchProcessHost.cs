@@ -1046,34 +1046,8 @@ public static class DispatchProcessHost
     // sandbox scratch without dirtying the goal branch. Idempotent.
     private static void ExcludeSandboxFromGit(string worktree)
     {
-        try
-        {
-            var pathResult = GitCli.Run(worktree, "rev-parse", "--git-path", "info/exclude");
-            if (!pathResult.Succeeded || string.IsNullOrWhiteSpace(pathResult.Output))
-            {
-                return;
-            }
-
-            var excludeRaw = pathResult.Output.Trim();
-            var excludePath = Path.IsPathRooted(excludeRaw)
-                ? excludeRaw
-                : Path.GetFullPath(Path.Combine(worktree, excludeRaw));
-            Directory.CreateDirectory(Path.GetDirectoryName(excludePath)!);
-
-            var existing = File.Exists(excludePath) ? File.ReadAllText(excludePath) : string.Empty;
-            if (existing.Contains(".mcg-sandbox", StringComparison.Ordinal))
-            {
-                return;
-            }
-
-            var prefix = existing.Length > 0 && !existing.EndsWith('\n') ? "\n" : string.Empty;
-            File.AppendAllText(excludePath, prefix + ".mcg-sandbox/\n");
-        }
-        catch
-        {
-            // Best-effort: if git ignores fail to write, the worktree inspection will simply see the
-            // scratch dir; the commit recovery still excludes it via pathspec.
-        }
+        LocalGitExclude.TryAppendEntries(worktree, [".mcg-sandbox/"],
+            (existing, _) => existing.Contains(".mcg-sandbox", StringComparison.Ordinal));
     }
 
     internal static IWorkerIntegrityLabeler? IntegrityLabelerOverrideForTests;

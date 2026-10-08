@@ -1514,6 +1514,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
 
             if (HasCliConfirmation(parts, "--loop"))
             {
+                ConductorTargetGitExclude.Apply(context.Workspace, Console.WriteLine);
                 var supervisedChild = HasCliConfirmation(parts, ConductorContinuitySupervisor.ChildFlag);
                 var continuityExitArtifactPath = GetFlagValue(parts, ConductorContinuitySupervisor.ExitArtifactFlag);
                 var loopPolicyName = GetFlagValue(parts, "--policy");
