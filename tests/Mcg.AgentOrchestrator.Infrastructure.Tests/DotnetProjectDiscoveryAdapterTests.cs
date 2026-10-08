@@ -210,21 +210,19 @@ public sealed class DotnetProjectDiscoveryAdapterTests
         Assert.Empty(model.OwnerQuestions);
     }
 
-    [Fact(DisplayName = "Missing test declarations remain unknown rather than guessing a library")]
-    public void MissingTestStatusIsReferredToOwner()
+    [Fact(DisplayName = "A project with no test declarations is confidently a non-test unit")]
+    public void MissingTestMarkersEstablishNonTestUnit()
     {
         using var fixture = new ProjectOnboardingFixture("solution");
         File.WriteAllText(Path.Combine(fixture.Root, Library), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
         var model = new DotnetProjectDiscoveryAdapter().Discover(fixture.Root);
         var unit = model.Units.Single(unit => unit.Id == Library);
-        Assert.Null(unit.IsTest.Value);
-        Assert.Equal(FactConfidence.Low, unit.IsTest.Confidence);
-        Assert.Contains(model.OwnerQuestions, question => question.FactKey == $"units/{Library}/isTest");
-        var setup = model.TestSetups.Single(setup => setup.UnitId == Library);
-        Assert.Equal("undetermined", setup.Framework.Value);
-        Assert.Equal("undetermined", setup.Runner.Value);
-        Assert.Contains(model.OwnerQuestions, question => question.FactKey == $"tests/{Library}/framework");
-        Assert.Contains(model.OwnerQuestions, question => question.FactKey == $"tests/{Library}/runner");
+        Assert.False(unit.IsTest.Value);
+        Assert.Equal(FactConfidence.High, unit.IsTest.Confidence);
+        Assert.Equal(new FactSource(Library, 1), unit.IsTest.Source);
+        Assert.DoesNotContain(model.TestSetups, setup => setup.UnitId == Library);
+        Assert.DoesNotContain(model.OwnerQuestions, question => question.FactKey == $"units/{Library}/isTest" ||
+            question.FactKey == $"tests/{Library}/framework" || question.FactKey == $"tests/{Library}/runner");
     }
 
     [Fact(DisplayName = "Duplicate references preserve uncertainty and the uncertain declaration source")]

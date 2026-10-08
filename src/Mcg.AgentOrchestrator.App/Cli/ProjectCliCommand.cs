@@ -66,7 +66,7 @@ internal static class ProjectCliCommand
             : measurerFactory() ?? throw new InvalidOperationException("The measurement factory returned no measurer.");
         var model = adapter.Discover(rootOverride ?? project.RootDirectory, RepositorySourceInventory.ExcludedDirectoryNames,
             measurer, measuredKinds ?? UnitCommandKinds.None);
-        var workspaceDirectory = project.ResolveWorkspace().OrchestratorDirectory;
+        var workspaceDirectory = ProjectDiscoveryModelLocation.ResolveDirectory(project, rootOverride, defaultRootDirectory);
         Directory.CreateDirectory(workspaceDirectory);
         var modelPath = Path.Combine(workspaceDirectory, "project-model.json");
         var temporaryPath = Path.Combine(workspaceDirectory, $".project-model-{Guid.NewGuid():N}.tmp");

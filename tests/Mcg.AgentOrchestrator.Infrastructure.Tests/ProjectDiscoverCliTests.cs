@@ -34,8 +34,10 @@ public sealed class ProjectDiscoverCliTests
             registry, workspaceFixture.Root, null, output);
 
         Assert.Equal(0, exit);
-        var modelPath = Path.Combine(workspace.OrchestratorDirectory, "project-model.json");
+        var modelDirectory = OrchestratorWorkspace.ForProject(Path.GetFileName(sourceFixture.Root), workspaceFixture.Root).OrchestratorDirectory;
+        var modelPath = Path.Combine(modelDirectory, "project-model.json");
         Assert.True(File.Exists(modelPath));
+        Assert.False(File.Exists(Path.Combine(workspace.OrchestratorDirectory, "project-model.json")));
         var model = ProjectModelJson.Deserialize(File.ReadAllText(modelPath));
         Assert.Equal(".", model.RepositoryRoot);
         Assert.Equal(2, model.Units.Count);
@@ -52,7 +54,7 @@ public sealed class ProjectDiscoverCliTests
             Directory.GetFiles(sourceFixture.Root, "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal));
         foreach (var (path, bytes) in sourceFiles)
             Assert.Equal(bytes, File.ReadAllBytes(path));
-        Assert.Empty(Directory.GetFiles(workspace.OrchestratorDirectory, ".project-model-*.tmp"));
+        Assert.Empty(Directory.GetFiles(modelDirectory, ".project-model-*.tmp"));
     }
 
     [Fact(DisplayName = "Discovery defaults to the selected project and overwrites its previous snapshot")]

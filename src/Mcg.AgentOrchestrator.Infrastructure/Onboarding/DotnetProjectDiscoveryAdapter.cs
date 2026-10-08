@@ -12,8 +12,7 @@ public sealed class DotnetProjectDiscoveryAdapter : IProjectDiscoveryAdapter
     private const string Undetermined = "undetermined";
     private static readonly StringComparer PathComparer = OperatingSystem.IsWindows()
         ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
-    private static readonly string[] RunnerProperties =
-        ["UseMicrosoftTestingPlatformRunner", "EnableMSTestRunner", "EnableNUnitRunner", "IsTestingPlatformApplication"];
+    private static readonly string[] RunnerProperties = DotnetTestMarkers.RunnerProperties;
 
     public ProjectModel Discover(string repositoryRoot, IReadOnlyCollection<string>? excludedDirectoryNames = null,
         IUnitCommandMeasurer? measurer = null, UnitCommandKinds measuredKinds = UnitCommandKinds.All)
@@ -80,7 +79,9 @@ public sealed class DotnetProjectDiscoveryAdapter : IProjectDiscoveryAdapter
             if (document?.Root?.Attribute("Sdk") is { } sdk && sdk.Value.StartsWith("MSTest.Sdk", StringComparison.OrdinalIgnoreCase))
                 packages.Add(Evidence(root, project, document.Root, "package", "MSTest.TestFramework"));
 
-            var testStatus = DiscoverTestStatus(id, properties, packages, source, questions);
+            var testStatus = document is not null && DotnetTestMarkers.IsMarkerFree(document)
+                ? new ProjectFact<bool?>(false, new FactSource(id, 1), FactConfidence.High)
+                : DiscoverTestStatus(id, properties, packages, source, questions);
             units.Add(new ProjectUnit(id, name, location, testStatus));
             if (testStatus.Value != false)
             {
@@ -125,7 +126,7 @@ public sealed class DotnetProjectDiscoveryAdapter : IProjectDiscoveryAdapter
     {
         var status = properties.Where(property => property.Name == "IsTestProject").ToArray();
         var testPackages = packages.Where(package => FrameworkName(package.Value) is not null ||
-            package.Value.Equals("Microsoft.NET.Test.Sdk", StringComparison.OrdinalIgnoreCase)).ToArray();
+            DotnetTestMarkers.IsTestSdkPackage(package.Value)).ToArray();
         if (status.Length == 1 && status[0].Reliable && bool.TryParse(status[0].Value, out var isTest) &&
             (isTest || testPackages.Length == 0))
             return new ProjectFact<bool?>(isTest, status[0].Source, FactConfidence.High);
@@ -154,10 +155,8 @@ public sealed class DotnetProjectDiscoveryAdapter : IProjectDiscoveryAdapter
         var runnerFlags = properties.Where(property => RunnerProperties.Contains(property.Name, StringComparer.Ordinal)).ToArray();
         var mtpPackages = packages.Where(package => package.Value.StartsWith("xunit.v3.mtp-", StringComparison.OrdinalIgnoreCase) ||
             package.Value.StartsWith("xunit.v3.core.mtp-", StringComparison.OrdinalIgnoreCase)).ToArray();
-        var sdk = packages.FirstOrDefault(package => package.Value.Equals("Microsoft.NET.Test.Sdk", StringComparison.OrdinalIgnoreCase));
-        var vstestAdapter = packages.FirstOrDefault(package => package.Value.Equals("xunit.runner.visualstudio", StringComparison.OrdinalIgnoreCase) ||
-            package.Value.Equals("MSTest.TestAdapter", StringComparison.OrdinalIgnoreCase) ||
-            package.Value.Equals("NUnit3TestAdapter", StringComparison.OrdinalIgnoreCase));
+        var sdk = packages.FirstOrDefault(package => DotnetTestMarkers.IsTestSdkPackage(package.Value));
+        var vstestAdapter = packages.FirstOrDefault(package => DotnetTestMarkers.IsVstestAdapter(package.Value));
         string? runner = null;
         var source = runnerFlags.FirstOrDefault()?.Source ?? mtpPackages.FirstOrDefault()?.Source ?? sdk?.Source ?? fallback;
         var flagsReliable = runnerFlags.All(flag => flag.Reliable && bool.TryParse(flag.Value, out _));
@@ -191,15 +190,7 @@ public sealed class DotnetProjectDiscoveryAdapter : IProjectDiscoveryAdapter
                 "Which test runner does this unit use? Declarations are missing, conditional, or conflicting; confirm the runner.", questions);
     }
 
-    private static string? FrameworkName(string package) => package.ToLowerInvariant() switch
-    {
-        "xunit" or "xunit.v3" or "xunit.v3.core" => "xUnit",
-        "nunit" => "NUnit",
-        "mstest.testframework" => "MSTest",
-        var name when name.StartsWith("xunit.v3.mtp-", StringComparison.Ordinal) ||
-            name.StartsWith("xunit.v3.core.mtp-", StringComparison.Ordinal) => "xUnit",
-        _ => null
-    };
+    private static string? FrameworkName(string package) => DotnetTestMarkers.FrameworkName(package);
 
     private static IEnumerable<(string Path, string Name, FactSource Source)> ReadSolution(
         string root, string solution, List<ProjectOwnerQuestion> questions)
