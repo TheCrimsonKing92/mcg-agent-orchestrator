@@ -161,13 +161,14 @@ public sealed class ConductorDriverTestsGreenTesterReceiptClosure
     }
 
     [Theory]
-    [InlineData("deferred - new test code is required", FindingEvidenceOutcomeReason.VacuousEvidence)]
-    [InlineData("inconclusive - negative control needs new test code", FindingEvidenceOutcomeReason.ValidEvidence)]
+    [InlineData("none", FindingEvidenceOutcomeReason.VacuousEvidence)]
+    [InlineData("exact-blocker - negative control needs new test code", FindingEvidenceOutcomeReason.ValidEvidence)]
     public void PassingReceiptWithOpenTestEvidenceRoutesDeveloperOnFirstDelivery(
-        string tests, FindingEvidenceOutcomeReason outcomeReason)
+        string blockers, FindingEvidenceOutcomeReason outcomeReason)
     {
         using var fixture = new ClosureFixture(outcomeReason: outcomeReason);
-        fixture.Report([FirstEvidenceFinding()], tests: tests);
+        // Inconclusive execution selects transient recovery before any finding-evidence run.
+        fixture.Report([FirstEvidenceFinding()], blockers: blockers, tests: "deferred - new test code is required");
         fixture.AdvanceToDecision();
 
         Assert.Single(fixture.Requests);
@@ -186,7 +187,7 @@ public sealed class ConductorDriverTestsGreenTesterReceiptClosure
     public void PassingReceiptWithoutUpstreamDeveloperEscalatesWithEvidenceIdentities()
     {
         using var fixture = new ClosureFixture(includeDeveloper: false);
-        fixture.Report([FirstEvidenceFinding()], tests: "inconclusive - new test code is required");
+        fixture.Report([FirstEvidenceFinding()], blockers: "exact-blocker - new test code is required");
         fixture.AdvanceToDecision();
 
         Assert.Single(fixture.Requests);
@@ -207,13 +208,13 @@ public sealed class ConductorDriverTestsGreenTesterReceiptClosure
     public void ReattachedPassingReceiptWithOpenFindingRoutesDeveloperWithoutAnotherRun()
     {
         using var fixture = new ClosureFixture();
-        fixture.Report([FirstEvidenceFinding()], tests: "inconclusive - new test code is required");
+        fixture.Report([FirstEvidenceFinding()], blockers: "exact-blocker - new test code is required");
         fixture.AdvanceToDecision();
         AssertDeveloperRetry(fixture);
         var receiptId = Assert.Single(fixture.Requester.VerificationHistory.Last().FindingEvidenceReceipts!).ReceiptId;
 
         fixture.CompleteDeveloper();
-        fixture.Report([FirstEvidenceFinding()], tests: "inconclusive - new test code is still required");
+        fixture.Report([FirstEvidenceFinding()], blockers: "exact-blocker - new test code is still required");
         fixture.AdvanceToDecision();
 
         Assert.Single(fixture.Requests);
