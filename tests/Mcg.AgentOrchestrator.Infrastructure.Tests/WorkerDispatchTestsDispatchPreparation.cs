@@ -1052,7 +1052,8 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
             checkpointBeforeWorkerStart: (_, _, _, _) => checkpointCalls++,
             runner: new BackgroundDispatchRunner(disableProcessStart: true),
             sandboxOptions: DisabledSandbox,
-            commandExists: _ => true);
+            commandExists: _ => true,
+            claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli);
 
         Assert.Empty(result.Processes.Tasks);
         // The pre-admission checkpoint preserves current-tick state even when the reservation
@@ -1256,7 +1257,9 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
                     {
                         recordedDurableBaselines.Add(snapshot);
                         tickBaselines[snapshot.Id] = snapshot;
-                    }));
+                    },
+                    commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent,
+                    claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli));
 
             Assert.Null(exception);
             Assert.Equal(1, processStartCalls);

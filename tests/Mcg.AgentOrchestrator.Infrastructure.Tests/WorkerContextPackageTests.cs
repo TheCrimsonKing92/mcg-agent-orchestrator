@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Reflection;
 using System.Text;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -391,7 +392,18 @@ public sealed class WorkerContextPackageTests(Xunit.ITestOutputHelper output)
 
     private static string ResolveRealProcessShardProbeAssembly(IReadOnlyList<string>? candidates = null)
     {
-        var candidatePaths = (candidates ?? BuildRealProcessShardProbeAssemblyCandidates())
+        if (candidates is null)
+        {
+            var configuration = typeof(WorkerContextPackageTests).Assembly
+                .GetCustomAttribute<AssemblyConfigurationAttribute>()!
+                .Configuration;
+            var assemblyName = RealProcessShardProbeProjectName + ".dll";
+            var location = TestBuildOutputLocator.Locate(
+                RealProcessShardProbeProjectName, configuration, requiredFileName: assemblyName);
+            candidates = BuildRealProcessShardProbeAssemblyCandidates()
+                .Concat(location.TriedPaths.Select(path => Path.Combine(path, assemblyName))).ToArray();
+        }
+        var candidatePaths = candidates
             .Select(Path.GetFullPath)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();

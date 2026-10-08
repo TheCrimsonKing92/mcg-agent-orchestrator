@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.ComponentModel;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.App.Orchestration;
@@ -2848,14 +2849,13 @@ public sealed class WorkerProcessJobsTests : IDisposable
                 probeAssemblyName));
         }
 
-        if (parentDirectory?.Parent is { } projectOutputRoot)
-        {
-            candidates.Add(Path.Combine(
-                projectOutputRoot.FullName,
-                "Mcg.AgentOrchestrator.IsolatedDotnetProbe",
-                assemblyDirectory.Name,
-                probeAssemblyName));
-        }
+        var configuration = typeof(WorkerProcessJobsTests).Assembly
+            .GetCustomAttribute<AssemblyConfigurationAttribute>()!
+            .Configuration;
+        var location = TestBuildOutputLocator.Locate(
+            "Mcg.AgentOrchestrator.IsolatedDotnetProbe", configuration,
+            assemblyDirectory.FullName, probeAssemblyName);
+        candidates.AddRange(location.TriedPaths.Select(path => Path.Combine(path, probeAssemblyName)));
 
         var probeAssembly = candidates.FirstOrDefault(File.Exists);
         Assert.False(

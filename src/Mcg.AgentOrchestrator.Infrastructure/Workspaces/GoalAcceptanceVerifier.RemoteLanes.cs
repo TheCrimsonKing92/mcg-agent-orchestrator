@@ -82,17 +82,21 @@ public sealed partial class GoalAcceptanceVerifier
         if (identity is null || ShardPermitLaneClass != GateShardLaneClass.Gate) return null;
         var lanes = effectiveChecks.Where(check => TryGetInfrastructurePartitionId(check, out _, out _)).ToArray();
         configuration = configuration.ResolveLanes(lanes.Select(check => check.Name));
-        var history = ReadRemoteLaneOfferHistory(_testOverrides.RemoteLaneOfferHistoryPathForTests ??
-            RemoteExecutorHealthLedger.ResolveStorePath(worktreePath));
+        var historyPath = _testOverrides.RemoteLaneOfferHistoryPathForTests ?? RemoteExecutorHealthLedger.ResolveStorePath(worktreePath);
+        var history = ReadRemoteLaneOfferHistory(historyPath);
+        var failures = new RemoteLaneFailureHistory().Read(historyPath);
+        var clock = _testOverrides.RemoteLaneTimeProviderForTests ?? _timeProvider;
+        var decisionTime = clock.GetUtcNow();
         var inputs = lanes.ToDictionary(check => check.Name, check =>
         {
             var local = AcceptanceLaneDurationStore.ResolveObservedSeconds(check);
             TryGetInfrastructurePartitionId(check, out _, out var filter);
             history.TryGetValue((check.Name, ShortHash(filter)), out var remote);
+            failures.TryGetValue((check.Name, ShortHash(filter)), out var streak);
             return new RemoteLaneOfferInputs(check.Name, local.MedianSeconds, local.Samples,
-                check.EstimatedSerialSeconds, remote?.MedianSeconds, remote?.Samples ?? 0, 0);
+                check.EstimatedSerialSeconds, remote?.MedianSeconds, remote?.Samples ?? 0, 0,
+                streak?.Count ?? 0, streak?.NewestFailureAt, decisionTime);
         }, StringComparer.Ordinal);
-        var clock = _testOverrides.RemoteLaneTimeProviderForTests ?? _timeProvider;
         IRemoteLaneExecutor executor = _testOverrides.RemoteLaneExecutorForTests ??
             (configuration.Executors.Any(entry => entry.Transport == "ssh")
                 ? new SshRemoteLaneExecutor(configuration, worktreePath, _executionContext?.ResultsPrefix, clock,
@@ -174,7 +178,7 @@ public sealed partial class GoalAcceptanceVerifier
                 var decision = RemoteLaneOfferPolicy.Decide(inputs[lane] with { ExpectedLocalFinishSeconds = _finish.Value });
                 _decisions.Add(lane, decision);
                 report(string.Create(CultureInfo.InvariantCulture,
-                    $"REMOTE_LANE_POLICY lane=\"{lane}\" decision={(decision.Offer ? "offer" : "keep-local")} reason={decision.Reason} L={decision.LocalSeconds:0.###} Ln={decision.Inputs.LocalSamples} R={decision.RemoteSeconds:0.###} Rn={decision.Inputs.RemoteSamples} F={_finish.Value:0.###}"));
+                    $"REMOTE_LANE_POLICY lane=\"{lane}\" decision={(decision.Offer ? "offer" : "keep-local")} reason={decision.Reason} L={decision.LocalSeconds:0.###} Ln={decision.Inputs.LocalSamples} R={decision.RemoteSeconds:0.###} Rn={decision.Inputs.RemoteSamples} F={_finish.Value:0.###}") + RemoteLaneOfferPolicy.FailureFields(decision));
                 return decision;
             }
         }

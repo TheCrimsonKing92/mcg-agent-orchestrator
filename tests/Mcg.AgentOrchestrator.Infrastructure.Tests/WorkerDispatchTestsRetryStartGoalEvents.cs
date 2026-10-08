@@ -95,7 +95,9 @@ public sealed class WorkerDispatchTestsRetryStartGoalEvents : WorkerDispatchTest
                     checkpoints.Add(phase);
                     repository.SaveAsync(checkpointKernel).GetAwaiter().GetResult();
                 },
-                runner: runner, sandboxOptions: DisabledSandbox, plannerSampleCount: 1);
+                runner: runner, sandboxOptions: DisabledSandbox, plannerSampleCount: 1,
+                commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent,
+                claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli);
 
             Assert.Single(result.Dispatches);
             Assert.Single(result.Processes.Tasks);
@@ -191,7 +193,9 @@ public sealed class WorkerDispatchTestsRetryStartGoalEvents : WorkerDispatchTest
                 repository.SaveAsync(checkpointKernel).GetAwaiter().GetResult(),
             runner: new BackgroundDispatchRunner(disableProcessStart: true,
                 startProcess: _ => throw new InvalidOperationException("Denied retry must not spawn a process.")),
-            sandboxOptions: DisabledSandbox);
+            sandboxOptions: DisabledSandbox,
+            commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent,
+            claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli);
 
         Assert.Empty(result.Processes.Tasks);
         var stored = repository.LoadAsync().GetAwaiter().GetResult().GetGoal(goal.Id);

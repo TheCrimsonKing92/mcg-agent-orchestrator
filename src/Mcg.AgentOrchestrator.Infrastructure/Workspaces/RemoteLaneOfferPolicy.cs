@@ -1,8 +1,11 @@
+using System.Globalization;
+
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal sealed record RemoteLaneOfferInputs(string LaneName, double? LocalMedianSeconds,
     int LocalSamples, double ManifestEstimateSeconds, double? RemoteMedianSeconds,
-    int RemoteSamples, double ExpectedLocalFinishSeconds);
+    int RemoteSamples, double ExpectedLocalFinishSeconds, int ConsecutiveRemoteFailures = 0,
+    DateTimeOffset? NewestRemoteFailureAt = null, DateTimeOffset DecisionTime = default);
 
 internal sealed record RemoteLaneOfferDecision(bool Offer, string Reason, double LocalSeconds,
     double RemoteSeconds, RemoteLaneOfferInputs Inputs);
@@ -14,6 +17,8 @@ internal static class RemoteLaneOfferPolicy
     internal const double ShortLaneSeconds = 60;
     internal const double PriorRemoteMultiplier = 2;
     internal const double PriorRemoteOverheadSeconds = 15;
+    internal const int FailingThreshold = 3;
+    internal static readonly TimeSpan FailingHold = TimeSpan.FromHours(6);
 
     internal static double ResolveLocalSeconds(double? median, int samples, double manifestEstimate)
     {
@@ -34,7 +39,16 @@ internal static class RemoteLaneOfferPolicy
             double.IsFinite(observed) && observed > 0
             ? observed : PriorRemoteMultiplier * local + PriorRemoteOverheadSeconds;
         var reason = local < ShortLaneSeconds ? "short" :
+            inputs.ConsecutiveRemoteFailures >= FailingThreshold && inputs.NewestRemoteFailureAt is { } newest &&
+            inputs.DecisionTime - newest < FailingHold ? "remote-failing" :
             remote > inputs.ExpectedLocalFinishSeconds ? "remote-slower" : "fits";
         return new(reason == "fits", reason, local, remote, inputs);
     }
+
+    internal static string FailureFields(RemoteLaneOfferDecision decision) =>
+        string.Create(CultureInfo.InvariantCulture, $" Fn={decision.Inputs.ConsecutiveRemoteFailures}") +
+        (decision.Reason == "remote-failing"
+            ? string.Create(CultureInfo.InvariantCulture,
+                $" Fage={(decision.Inputs.DecisionTime - decision.Inputs.NewestRemoteFailureAt!.Value).TotalHours:0.0}")
+            : "");
 }

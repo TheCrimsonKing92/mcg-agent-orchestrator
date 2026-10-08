@@ -2144,7 +2144,8 @@ function New-MtpProcessStartInfo {
     param(
         [Parameter(Mandatory = $true)][string]$Executable,
         [Parameter(Mandatory = $true)][string[]]$Arguments,
-        [string]$StartupHookPath
+        [string]$StartupHookPath,
+        [string]$BuildOutputRoot
     )
 
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
@@ -2196,6 +2197,9 @@ function New-MtpProcessStartInfo {
         else {
             $existingHooks + [System.IO.Path]::PathSeparator + $StartupHookPath
         }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($BuildOutputRoot)) {
+        $startInfo.EnvironmentVariables['MCG_TEST_BUILD_OUTPUT_ROOT'] = $BuildOutputRoot
     }
     return $startInfo
 }
@@ -2313,6 +2317,7 @@ function Invoke-MtpAppHost {
         [Parameter(Mandatory = $true)][string[]]$Arguments,
         [Parameter(Mandatory = $true)][string]$OutputLog,
         [string]$StartupHookPath,
+        [string]$BuildOutputRoot,
         [switch]$AllowBreakaway,
         [ValidateRange(1, 86400)][int]$TestHostTimeoutSeconds = 780,
         [pscustomobject]$TimeoutPolicy
@@ -2339,7 +2344,7 @@ function Invoke-MtpAppHost {
             $ownedJob = [McgMtpOwnedJob]::new($AllowBreakaway.IsPresent)
         }
         $process = [System.Diagnostics.Process]::new()
-        $process.StartInfo = New-MtpProcessStartInfo -Executable $Executable -Arguments $Arguments -StartupHookPath $StartupHookPath
+        $process.StartInfo = New-MtpProcessStartInfo -Executable $Executable -Arguments $Arguments -StartupHookPath $StartupHookPath -BuildOutputRoot $BuildOutputRoot
         $capture.Attach($process)
         if (-not [McgMtpSuppressedProcessStart]::Start($process)) {
             throw "Process.Start returned false for '$Executable'."
@@ -2675,6 +2680,7 @@ function Invoke-MtpTestRun {
     $expectedTrxPaths = [System.Collections.Generic.List[string]]::new()
     $executedTestNames = [System.Collections.Generic.List[string]]::new()
     $buildSelections = [System.Collections.Generic.List[object]]::new()
+    $buildOutputRoots = @{}
     $lastOwnedProcessId = $null
     $lastRunnerExitCode = $null
     $allExitsConfirmed = $true
@@ -2708,6 +2714,8 @@ function Invoke-MtpTestRun {
                 try {
                     $buildSelection = Select-MtpVerifiedBuildOutput -RepositoryRoot $RepositoryRoot -Invocation $project -Configuration $Configuration -DotnetPath $DotnetPath -RunDirectory $runDirectory
                     Copy-MtpStableNoBuildClosure -SourceDirectory $buildSelection.Directory -PublishedDirectory $publishedDirectory -ManagedAssemblyLeaf "$projectName.dll" -ProjectName $projectName
+                    $buildOutputRoots[[string]$project.project] = [System.IO.Path]::GetFullPath(
+                        [System.IO.Path]::Combine($buildSelection.Directory, '..', '..'))
                     $closureMarker = Get-Content -LiteralPath (Join-Path $publishedDirectory $script:MtpClosureMarkerName) -Raw | ConvertFrom-Json
                     $launchedAssembly = Join-Path $publishedDirectory "$projectName.dll"
                     $buildSelections.Add([pscustomobject]@{
@@ -2782,7 +2790,7 @@ function Invoke-MtpTestRun {
                 if ($usesManagedAssembly) {
                     $arguments = @($executable) + @($arguments)
                 }
-                $run = Invoke-MtpAppHost -Executable $executable -Arguments $arguments -OutputLog $outputLog -StartupHookPath $startupHookPath -AllowBreakaway:$AllowBreakaway -TestHostTimeoutSeconds $TestHostTimeoutSeconds -TimeoutPolicy $timeoutPolicy
+                $run = Invoke-MtpAppHost -Executable $executable -Arguments $arguments -OutputLog $outputLog -StartupHookPath $startupHookPath -BuildOutputRoot $buildOutputRoots[[string]$project.project] -AllowBreakaway:$AllowBreakaway -TestHostTimeoutSeconds $TestHostTimeoutSeconds -TimeoutPolicy $timeoutPolicy
                 $lastOwnedProcessId = $run.OwnedProcessId
                 $lastRunnerExitCode = $run.ExitCode
                 $allExitsConfirmed = $allExitsConfirmed -and [bool]$run.ExitConfirmed

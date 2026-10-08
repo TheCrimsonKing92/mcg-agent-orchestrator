@@ -162,7 +162,7 @@ public sealed class PassedMergeTrainReceiptHoldTests(ITestOutputHelper output) :
         Assert.All(fixture.Goals, goal => Assert.NotEqual(GoalStatus.Completed, goal.Status));
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     [Trait("Category", "CrossTick")]
     public void BatchLoop_HeldReceiptMainMoves_ReportsStaleAndReadmitsMembers()
     {

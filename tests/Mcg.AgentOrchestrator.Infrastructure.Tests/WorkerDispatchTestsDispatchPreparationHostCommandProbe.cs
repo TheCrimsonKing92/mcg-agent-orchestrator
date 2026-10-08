@@ -137,7 +137,8 @@ public sealed class WorkerDispatchTestsDispatchPreparationHostCommandProbe : Wor
             checkpointBeforeWorkerStart: (_, _, _, _) => checkpointCalls++,
             runner: new BackgroundDispatchRunner(disableProcessStart: true),
             sandboxOptions: DisabledSandbox,
-            commandExists: startProbe);
+            commandExists: startProbe,
+            claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli);
 
         Assert.Empty(result.Processes.Tasks);
         Assert.Equal(1, checkpointCalls);
