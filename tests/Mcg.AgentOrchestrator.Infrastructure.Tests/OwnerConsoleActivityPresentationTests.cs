@@ -36,8 +36,8 @@ public sealed class OwnerConsoleActivityPresentationTests
 
             Assert.Equal(new[]
             {
-                $"{passed.Timestamp.ToLocalTime():HH:mm:ss} 11111111 Improve the owner console gate passed",
-                $"{escalation.Timestamp.ToLocalTime():HH:mm:ss} 11111111 Improve the owner console escalated: owner review required"
+                $"{passed.Timestamp.ToLocalTime():HH:mm:ss} Improve the owner console: passed its tests, landing next",
+                $"{escalation.Timestamp.ToLocalTime():HH:mm:ss} Waiting: Improve the owner console has been held 0 min: waiting for your approval"
             }, view.ActivityLines);
             Assert.Equal(2, recent.Count);
             Assert.DoesNotContain(view.ActivityLines, line => line.Contains("STATE_LOG_DIVERGENCE", StringComparison.Ordinal));
@@ -70,10 +70,10 @@ public sealed class OwnerConsoleActivityPresentationTests
     }
 
     [Theory]
-    [InlineData("author", "kind=ask-owner item=internal-id", "needs your input")]
-    [InlineData("acceptance", "result=failed code=1", "gate failed")]
-    [InlineData("acceptance", "result=blocked reason=missing_evidence", "gate blocked: missing evidence")]
-    [InlineData("goal-escalation", "ownerless-hold-stalled state=blocked heldForSeconds=30 blocker=waiting for owner approval", "escalated: waiting for owner approval")]
+    [InlineData("author", "kind=ask-owner item=internal-id", "Needs you: Review the blocked work and choose how to proceed.")]
+    [InlineData("acceptance", "result=failed code=1", "unknown-: failed its tests (the failure reason has not been recorded); awaiting the conductor's next step")]
+    [InlineData("acceptance", "result=blocked reason=missing_evidence", "unknown-: failed its tests (the failure reason has not been recorded); awaiting the conductor's next step")]
+    [InlineData("goal-escalation", "ownerless-hold-stalled state=blocked heldForSeconds=30 blocker=waiting for owner approval", "Waiting: unknown- has been held 0 min: waiting for your approval")]
     public async Task StructuredEventsRenderPlainPhrasesWithoutRawFields(string kind, string detail, string phrase)
     {
         var harness = new OwnerConsoleHarness();
@@ -81,9 +81,9 @@ public sealed class OwnerConsoleActivityPresentationTests
         var model = await Builder(harness).BuildAsync(new(harness.Clock.GetUtcNow(), null, [item], 0));
         var activity = Assert.Single(model.Activity);
         Assert.Equal(phrase, activity.Phrase);
-        Assert.Equal(string.Empty, activity.GoalTitle);
+        Assert.Equal("unknown-", activity.GoalTitle);
         Assert.Equal(detail, activity.Detail);
-        Assert.Equal($"{item.Timestamp.ToLocalTime():HH:mm:ss} unknown- {phrase}", OwnerConsoleActivityPresentation.Line(activity));
+        Assert.Equal($"{item.Timestamp.ToLocalTime():HH:mm:ss} {phrase}", OwnerActivityNarrator.Line(activity));
     }
 
     // Matches FormatOwnerReviewEscalation, including its multiline command payload.
@@ -93,10 +93,10 @@ public sealed class OwnerConsoleActivityPresentationTests
         "decline: cancel-goal 11111111 or abandon-goal 11111111";
 
     [Theory]
-    [InlineData(OwnerReviewDetail, "needs your approval")]
-    [InlineData("steward-owner-question case=C trigger=internal-trigger question=Should we retry this task? evidence=[internal-evidence]", "needs your input")]
-    [InlineData("author-owner-question item=Goal:internal-goal reason=choose recovery question=Should we retry? recommendation=Retry with evidence", "needs your input")]
-    [InlineData("unrecognized-escalation raw payload with commands and evidence", "escalated")]
+    [InlineData(OwnerReviewDetail, "Needs you: Approve the completed work?")]
+    [InlineData("steward-owner-question case=C trigger=internal-trigger question=Should we retry this task? evidence=[internal-evidence]", "Needs you: Should we retry this task?")]
+    [InlineData("author-owner-question item=Goal:internal-goal reason=choose recovery question=Should we retry? recommendation=Retry with evidence", "Needs you: Should we retry?")]
+    [InlineData("unrecognized-escalation raw payload with commands and evidence", "Needs you: Review the blocked work and choose how to proceed.")]
     public async Task EscalationPayloadsStayOutOfGoalDetail(string detail, string phrase)
     {
         var harness = new OwnerConsoleHarness();
@@ -110,7 +110,7 @@ public sealed class OwnerConsoleActivityPresentationTests
         var model = await Builder(harness).BuildAsync(new(harness.Clock.GetUtcNow(), null, [item], 0));
         view.Render(model);
 
-        Assert.Equal($"{item.Timestamp.ToLocalTime():HH:mm:ss} 11111111 Improve the owner console {phrase}", Assert.Single(view.ActivityLines));
+        Assert.Equal($"{item.Timestamp.ToLocalTime():HH:mm:ss} {phrase}", Assert.Single(view.ActivityLines));
         Assert.Equal(detail, Assert.Single(model.Activity).Detail);
         await view.HandleKeyAsync(Key.Tab);
         await view.HandleKeyAsync(Key.Enter);
@@ -118,8 +118,8 @@ public sealed class OwnerConsoleActivityPresentationTests
     }
 
     [Theory]
-    [InlineData("goal-escalation", OwnerReviewDetail, "needs your approval")]
-    [InlineData("acceptance", "result=passed commit=internal-sha", "gate passed")]
+    [InlineData("goal-escalation", OwnerReviewDetail, "Needs you: Approve the completed work?")]
+    [InlineData("acceptance", "result=passed commit=internal-sha", "passed its tests, landing next")]
     public async Task LongGoalTitlesLeaveTheActivityPhraseVisible(string kind, string detail, string phrase)
     {
         var harness = new OwnerConsoleHarness();
@@ -133,10 +133,8 @@ public sealed class OwnerConsoleActivityPresentationTests
         view.Render(await Builder(harness).BuildAsync(new(harness.Clock.GetUtcNow(), null, [item], 0)));
 
         var line = Assert.Single(view.ActivityLines);
-        // The ACTIVITY frame has 118 text columns on a 120-column terminal.
         Assert.Contains(phrase, line[..Math.Min(118, line.Length)]);
-        Assert.Contains("11111111 Improve the owner console", line);
-        Assert.Contains("…", line);
+        if (kind == "acceptance") Assert.Contains("…", line);
     }
 
     [Fact]

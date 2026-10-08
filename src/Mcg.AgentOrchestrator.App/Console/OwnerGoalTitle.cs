@@ -2,6 +2,9 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 internal static class OwnerGoalTitle
 {
+    internal static string Full(string? objective) => (objective ?? "").Split(['\r', '\n'])
+        .Select(line => line.Trim().TrimStart('#').Trim()).FirstOrDefault(line => line.Length > 0) ?? "";
+
     internal static string From(string? objective)
     {
         if (string.IsNullOrWhiteSpace(objective)) return string.Empty;

@@ -33,7 +33,7 @@ public sealed class OwnerConsoleFullScreenPaneTests
         Assert.Contains("Role: Tester", detail.Text);
         Assert.Contains("Recent events: none", detail.Text);
         Assert.DoesNotContain("newest event for " + selected.Id.Value, detail.Text);
-        Assert.Equal((selected.Id.Value, 10), Assert.Single(tail.Calls));
+        Assert.Equal((selected.Id.Value, 100), Assert.Single(tail.Calls));
 
         await controller.RunCommandAsync(":goal " + selected.Id.Value);
         Assert.Contains("newest event for " + selected.Id.Value, dialogs.Texts[1].Text);
@@ -123,7 +123,7 @@ public sealed class OwnerConsoleFullScreenPaneTests
         Assert.Equal("Enter goal detail" + common, view.HintText);
         await view.HandleKeyAsync(Key.Tab);
         Assert.Equal(OwnerConsolePane.Activity, view.FocusedPane);
-        Assert.Equal("Up/Down scroll" + common, view.HintText);
+        Assert.Equal("Up/Down scroll  Enter what this means" + common, view.HintText);
         await view.HandleKeyAsync(Key.Tab);
         Assert.Equal(OwnerConsolePane.Decisions, view.FocusedPane);
         Assert.Equal("Enter detail  a accept default  r answer" + common, view.HintText);

@@ -11,6 +11,8 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     internal string? SelectedDecisionId { get; private set; }
     internal bool BellEnabled { get; private set; } = true;
     internal bool QuitRequested { get; private set; }
+    internal Task ShowActivityMeaningAsync(OwnerConsoleActivityItem item) =>
+        dialogs.ShowTextAsync("What this means", OwnerActivityNarrator.Explain(item));
     internal int SelectedIndex => Model is null ? -1 :
         Array.FindIndex(Model.Decisions.ToArray(), item => item.Id == SelectedDecisionId);
 
