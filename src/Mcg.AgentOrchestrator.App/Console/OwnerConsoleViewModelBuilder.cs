@@ -11,11 +11,23 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
     internal const int MaxActivityItems = 100;
     internal const int SummaryMaxLength = 120;
     private readonly Dictionary<string, int> _numbers = new(StringComparer.OrdinalIgnoreCase);
+    private IReadOnlyList<GoalSummary> _metadata = [];
+    private IReadOnlyDictionary<string, AgentRole> _roles = new Dictionary<string, AgentRole>();
 
     internal async Task<OwnerConsoleViewModel> BuildAsync(OwnerConsoleViewInputs inputs,
         CancellationToken cancellationToken = default)
     {
+        var (decisions, hidden) = await ReadDecisionsAsync(cancellationToken);
+        var model = await BuildBoardAsync(cancellationToken);
+        return WithActivity(model with { Decisions = decisions, Status = model.Status with
+            { LiveDecisions = decisions.Length, HiddenQuestions = hidden } }, inputs);
+    }
+
+    internal async Task<(ImmutableArray<OwnerConsoleDecision> Decisions, int Hidden)> ReadDecisionsAsync(
+        CancellationToken cancellationToken)
+    {
         var snapshot = await questions.ReadAsync(cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         var decisions = snapshot.Live.Select(question =>
         {
             if (!_numbers.TryGetValue(question.ItemId, out var number))
@@ -24,28 +36,55 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
                 question.Kind, Summary(question.Text), question.Text, question.BlastRadius,
                 question.Confidence, question.ProposedDefault);
         }).ToImmutableArray();
+        return (decisions, snapshot.Hidden.Count);
+    }
+
+    internal async Task<OwnerConsoleViewModel> BuildBoardAsync(CancellationToken cancellationToken = default)
+    {
         var metadata = await state.ListGoalMetadataAsync(cancellationToken);
+        _metadata = metadata;
         var ids = metadata.Where(item => Enum.TryParse<GoalStatus>(item.Status, true, out var status) && IsActive(status))
             .Select(item => new GoalId(item.Id)).ToArray();
         var board = ImmutableArray.CreateBuilder<OwnerConsoleBoardRow>();
         if (ids.Length > 0)
         {
             var kernel = await state.LoadGoalsAsync(ids, cancellationToken);
+            // Retain roles for the tail's final read after a goal leaves the board.
+            var roles = new Dictionary<string, AgentRole>(_roles);
+            foreach (var task in kernel.Goals.Where(goal => ids.Contains(goal.Id)).SelectMany(goal => goal.Tasks))
+                roles[task.Id.Value] = task.RequiredRole;
+            _roles = roles;
             foreach (var goal in kernel.Goals.Where(goal => ids.Contains(goal.Id) && IsActive(goal.Status)))
                 board.Add(new(Prefix(goal.Id.Value), await epics.GetTitleAsync(goal.Id.Value, cancellationToken),
                     OwnerGoalTitle.From(goal.Objective), goal.Status.ToString(),
                     OwnerConsoleGoalDetail.Stage(goal),
                     Age(goal.Timeline.OrderByDescending(item => item.OccurredAt).FirstOrDefault()?.OccurredAt), goal.Id.Value));
         }
+        return new(new(liveness.IsRunning(), board.Count, 0, 0, null, 0), [], board.ToImmutable(), []);
+    }
+
+    internal OwnerConsoleViewModel WithActivity(OwnerConsoleViewModel model, OwnerConsoleViewInputs inputs)
+    {
         var activity = inputs.RecentEvents.OrderByDescending(item => item.Timestamp)
+            .Select(item => OwnerGoalLifecycleEvent.WithRole(item, _roles))
             .Select(item => (Item: item, Tag: OwnerConsoleActivityPresentation.Classify(item)))
             .Where(pair => pair.Tag is not null).Take(MaxActivityItems)
             .Select(pair => new OwnerConsoleActivityItem(pair.Item.Timestamp, pair.Item.EventKind, pair.Tag!,
                 Prefix(pair.Item.GoalId ?? string.Empty), pair.Item.Detail,
-                OwnerGoalTitle.From(metadata.FirstOrDefault(goal => goal.Id == pair.Item.GoalId)?.Objective),
+                Title(pair.Item.GoalId),
                 OwnerConsoleActivityPresentation.Phrase(pair.Item, pair.Tag!))).ToImmutableArray();
-        return new(new(liveness.IsRunning(), board.Count, decisions.Length, snapshot.Hidden.Count,
-            Age(inputs.LastConductEvent), inputs.LandingsSinceOpen), decisions, board.ToImmutable(), activity);
+        return model with { Activity = activity, Status = model.Status with
+            { LastEventAge = Age(inputs.LastConductEvent), LandingsSinceOpen = inputs.LandingsSinceOpen } };
+    }
+
+    internal OwnerConductEvent EnrichEvent(OwnerConductEvent item) => OwnerGoalLifecycleEvent.WithRole(item, _roles);
+
+    private string Title(string? id)
+    {
+        if (string.IsNullOrEmpty(id)) return string.Empty;
+        var exact = _metadata.FirstOrDefault(goal => goal.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
+        var matches = _metadata.Where(goal => goal.Id.StartsWith(id, StringComparison.OrdinalIgnoreCase)).ToArray();
+        return OwnerGoalTitle.From((exact ?? (matches.Length == 1 ? matches[0] : null))?.Objective);
     }
 
     internal static bool IsLanding(OwnerConductEvent item) => item.EventKind == "acceptance" &&

@@ -51,7 +51,7 @@ public sealed class OwnerConsoleActivityPresentationTests
             Assert.Equal(2, view.ActivityLines.Count);
             await view.HandleKeyAsync(Key.Tab);
             await view.HandleKeyAsync(Key.Enter);
-            Assert.Contains(escalation.Detail, Assert.Single(dialogs.Texts));
+            Assert.DoesNotContain(escalation.Detail, Assert.Single(dialogs.Texts));
         }
         finally { File.Delete(path); }
     }
@@ -97,7 +97,7 @@ public sealed class OwnerConsoleActivityPresentationTests
     [InlineData("steward-owner-question case=C trigger=internal-trigger question=Should we retry this task? evidence=[internal-evidence]", "needs your input")]
     [InlineData("author-owner-question item=Goal:internal-goal reason=choose recovery question=Should we retry? recommendation=Retry with evidence", "needs your input")]
     [InlineData("unrecognized-escalation raw payload with commands and evidence", "escalated")]
-    public async Task EscalationPayloadsStayInGoalDetail(string detail, string phrase)
+    public async Task EscalationPayloadsStayOutOfGoalDetail(string detail, string phrase)
     {
         var harness = new OwnerConsoleHarness();
         harness.AddGoal("11111111-goal", "# Improve the owner console", Mcg.AgentOrchestrator.Core.AgentRole.Developer);
@@ -114,7 +114,7 @@ public sealed class OwnerConsoleActivityPresentationTests
         Assert.Equal(detail, Assert.Single(model.Activity).Detail);
         await view.HandleKeyAsync(Key.Tab);
         await view.HandleKeyAsync(Key.Enter);
-        Assert.Contains(detail, Assert.Single(dialogs.Texts));
+        Assert.DoesNotContain(detail, Assert.Single(dialogs.Texts));
     }
 
     [Theory]

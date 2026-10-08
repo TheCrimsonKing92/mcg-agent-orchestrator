@@ -7,6 +7,17 @@ internal static class OwnerConsoleActivityPresentation
 {
     internal static string? Classify(OwnerConductEvent item)
     {
+        if (item.EventKind == "goal-lifecycle")
+            return item.Detail.Split(' ')[0] is "TaskDispatched" or "TaskCompleted" or "TaskFailed"
+                ? ConductEventOperatorClassifier.Outcome : null;
+        if (item.EventKind is "acceptance" or "canary-gate" &&
+            item.Detail.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Contains("result=started"))
+            return ConductEventOperatorClassifier.Outcome;
+        if (item.EventKind == "loop-relaunch" && item.GoalId is not null &&
+            item.Detail.StartsWith("LOOP_RELAUNCH_NOT_REQUIRED", StringComparison.Ordinal))
+            return ConductEventOperatorClassifier.Outcome;
+        if (item.EventKind == "loop-handoff" && item.Detail.StartsWith("LOOP_HANDOFF_FAILED", StringComparison.Ordinal))
+            return ConductEventOperatorClassifier.Decision;
         var tag = ConductEventOperatorClassifier.Classify(item.EventKind, item.Detail);
         if (tag is null) return null;
         if (item.EventKind == "state-log-divergence")
@@ -22,6 +33,24 @@ internal static class OwnerConsoleActivityPresentation
     {
         var tokens = item.Detail.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
         bool Has(string value) => tokens.Contains(value, StringComparer.Ordinal);
+        if (item.EventKind == "goal-lifecycle")
+        {
+            var role = Field(tokens, "role") ?? "task";
+            return tokens.FirstOrDefault() switch
+            {
+                "TaskDispatched" or "TaskProcessStarted" => $"{role} started",
+                "TaskCompleted" => $"{role} finished: passed",
+                "TaskVerified" => $"{role} verification recorded",
+                "TaskFailed" => $"{role} finished: " + (Has("outcome=finding") ? "finding raised" : "failed"),
+                "FindingEvidenceRequestRecorded" => "finding evidence request recorded",
+                "GoalLanded" => "landed",
+                _ => System.Text.RegularExpressions.Regex.Replace(tokens.FirstOrDefault() ?? "event", "(?<=[a-z])(?=[A-Z])", " ").ToLowerInvariant()
+            };
+        }
+        if (item.EventKind == "loop-relaunch") return "landed";
+        if (item.EventKind == "loop-handoff" && Has("ACTIVATION_ADOPTED")) return "conductor restarted on the new build";
+        if (item.EventKind == "loop-handoff" && Has("LOOP_HANDOFF_FAILED"))
+            return "conductor restart failed: " + (Field(tokens, "reason") ?? Field(tokens, "phase") ?? "unknown").Replace('_', ' ').Replace('-', ' ');
         // These emitters carry commands, questions and evidence for the detail dialog.
         // The activity line describes the owner's next action without copying that payload.
         if (item.EventKind == "goal-escalation")
@@ -38,7 +67,7 @@ internal static class OwnerConsoleActivityPresentation
             "goal-escalation" => "escalated",
             "goal-stalled" => "goal stalled",
             "worker-capacity-stalled" => "waiting for worker capacity",
-            "acceptance" or "canary-gate" => Has("result=passed") ? "gate passed" :
+            "acceptance" or "canary-gate" => Has("result=started") ? "gate started" : Has("result=passed") ? "gate passed" :
                 Has("result=blocked") ? "gate blocked" : "gate failed",
             "acceptance-cohort" => Has("outcome=failed") ? "group gate failed" : "group gate completed",
             "author" => Has("kind=ask-owner") ? "needs your input" : "author could not complete",
@@ -52,8 +81,7 @@ internal static class OwnerConsoleActivityPresentation
             "test-impact-degraded" => "test selection reduced",
             "test-impact-headroom-low" => "test capacity running low",
             "sweep-blocker" => "cleanup blocked",
-            "loop-handoff" => tag == ConductEventOperatorClassifier.Decision ? "conductor handoff needs attention" : "conductor handoff completed",
-            "loop-relaunch" => "conductor restart scheduled",
+            "loop-handoff" => "conductor handoff needs attention",
             "judge-panel" => "review completed",
             "failure-clusters" => "failure summary updated",
             "board-fill-draft" => "new work proposed",
@@ -71,7 +99,7 @@ internal static class OwnerConsoleActivityPresentation
         const int maxTitleLength = 40;
         var title = item.GoalTitle.Length > maxTitleLength
             ? item.GoalTitle[..(maxTitleLength - 1)] + "…" : item.GoalTitle;
-        return $"{item.Timestamp.ToLocalTime():HH:mm:ss} {item.GoalPrefix}" +
+        return $"{item.Timestamp.ToLocalTime():HH:mm:ss}" + (string.IsNullOrEmpty(item.GoalPrefix) ? "" : $" {item.GoalPrefix}") +
             (string.IsNullOrEmpty(title) ? "" : $" {title}") + $" {item.Phrase}";
     }
 
