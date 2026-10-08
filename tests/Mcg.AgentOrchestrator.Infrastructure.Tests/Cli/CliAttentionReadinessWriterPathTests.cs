@@ -192,6 +192,7 @@ public sealed class CliAttentionReadinessWriterPathTests : CliTaskQueryTestSuppo
                     new GoalId("abc30000aaaaaaaaaaaaaaaaaaaaaaaa"), "Missing session goal"),
                 _ => null
             };
+            var initialSessionGoal = currentGoal;
             var expected = session == 1 ? older.Id : newer.Id;
             var before = JsonSerializer.Serialize(kernel.ExportSnapshot());
 
@@ -205,19 +206,35 @@ public sealed class CliAttentionReadinessWriterPathTests : CliTaskQueryTestSuppo
             AssertBareQueryHasNoWriterEffects(repository);
             Xunit.Assert.Equal(before, JsonSerializer.Serialize(kernel.ExportSnapshot()));
 
-            var prefixRepository = new ProbeStateRepository(kernel) { ThrowOnOutbox = true };
-            Goal? prefixGoal = null;
-            var prefixOutput = CaptureConsole(() =>
-            {
-                Xunit.Assert.True(CliReadOnlyCommandRunner.TryExecute(
-                    [verb, expected.Value[..8]], prefixRepository, workspace,
-                    new InMemoryModelProviderRegistry([]), null, ref agents, ref profiles, ref prefixGoal,
-                    out var changed));
-                Xunit.Assert.False(changed);
-            });
             Xunit.Assert.NotEmpty(output);
-            Xunit.Assert.Equal(prefixOutput, output);
-            AssertBareQueryHasNoWriterEffects(prefixRepository);
+
+            // Compare at one sample time: next includes the disposition's fresh timestamp.
+            // Keep the persistent-runner invocation above to cover its outbox/write boundary.
+            var clock = new FixedClock(created.AddDays(4));
+            var bareOutput = ReadOutput([verb], initialSessionGoal);
+            var prefixOutput = ReadOutput([verb, expected.Value[..8]], null);
+            Xunit.Assert.NotEmpty(bareOutput);
+            Xunit.Assert.Equal(prefixOutput, bareOutput);
+            if (verb == "next")
+                Xunit.Assert.Contains($"fresh='{clock.UtcNow:u}'", bareOutput);
+            Xunit.Assert.Equal(before, JsonSerializer.Serialize(kernel.ExportSnapshot()));
+
+            string ReadOutput(string[] command, Goal? selectedGoal)
+            {
+                var queryRepository = new ProbeStateRepository(kernel) { ThrowOnOutbox = true };
+                var queryOutput = CaptureConsole(() =>
+                {
+                    Xunit.Assert.True(CliReadOnlyCommandRunner.TryExecute(
+                        command, queryRepository, workspace, new InMemoryModelProviderRegistry([]), null,
+                        ref agents, ref profiles, ref selectedGoal, out var changed, clock));
+                    Xunit.Assert.False(changed);
+                });
+                Xunit.Assert.Equal(expected, selectedGoal!.Id);
+                Xunit.Assert.Equal(1, queryRepository.LoadGoalsCount);
+                Xunit.Assert.Equal(new[] { expected.Value }, queryRepository.LoadedGoalIds);
+                AssertBareQueryHasNoWriterEffects(queryRepository);
+                return queryOutput;
+            }
         }
         finally
         {
@@ -268,6 +285,11 @@ public sealed class CliAttentionReadinessWriterPathTests : CliTaskQueryTestSuppo
     [Xunit.InlineData("readiness-repair")]
     public void StatusNextFlagsAndRepair_DeclineReadOnlyRoute(params string[] args) =>
         Xunit.Assert.False(CliReadOnlyCommandRunner.IsReadOnlyCommand(args));
+
+    private sealed class FixedClock(DateTimeOffset now) : IClock
+    {
+        public DateTimeOffset UtcNow => now;
+    }
 
     private static void AssertBareQueryHasNoWriterEffects(ProbeStateRepository repository)
     {

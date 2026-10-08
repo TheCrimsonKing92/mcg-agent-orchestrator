@@ -73,7 +73,7 @@ and `f392f031` have landed since the premise; `01e5271b` is in flight, with no l
   declines for a missing items store, a missing selected goal, actionable sweep blockers or stale sweep attention.
 - Remaining writer-path reads: `status [goal] --tasks-only`, bare `monitor`, and `next <goal>` with
   `--autonomy`/`--autonomy-policy`; declined prefix/bare `next` still falls back to repairing sweeps
-  (`src/Mcg.AgentOrchestrator.App/Cli/CliCommandHandlers.Goals.cs:1047-1076,1360-1401`). Goal-prefixed
+  (`src/Mcg.AgentOrchestrator.App/Cli/CliCommandHandlers.Goals.cs:1043-1072,1356-1398`). Goal-prefixed
   `goal-recovery`, `dogfood-eval` and `failure-triage`
   (`src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs:760-787`), and goal-prefixed
   `goal-timing` (`src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs:743-754`), are absent from the

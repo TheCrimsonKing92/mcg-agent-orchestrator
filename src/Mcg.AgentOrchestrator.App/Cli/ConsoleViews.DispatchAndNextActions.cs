@@ -77,7 +77,8 @@ public static void PrintNextActions(
     IReadOnlyList<AgentDefinition>? agents = null,
     GoalHealthReport? health = null,
     GoalOperatorDisposition? conductorDisposition = null,
-    Func<ProcessCommandLineSnapshot>? processSnapshotFactory = null)
+    Func<ProcessCommandLineSnapshot>? processSnapshotFactory = null,
+    IClock? diagnosticsClock = null)
 {
     var processInspection = new ProcessInspectionSnapshotScope(
         processSnapshotFactory ?? ProcessCommandLines.SnapshotOperation);
@@ -89,7 +90,7 @@ public static void PrintNextActions(
     }
 
     var verificationSatisfied = goal.Tasks.Count > 0 && goal.Tasks.All(task => task.LastVerification?.Succeeded == true);
-    var operatorDisposition = conductorDisposition ?? new GoalOperatorDispositionSurface().Evaluate(
+    var operatorDisposition = conductorDisposition ?? new GoalOperatorDispositionSurface(diagnosticsClock).Evaluate(
         goal,
         pendingHumanInputCount: 0,
         verificationSatisfied,
