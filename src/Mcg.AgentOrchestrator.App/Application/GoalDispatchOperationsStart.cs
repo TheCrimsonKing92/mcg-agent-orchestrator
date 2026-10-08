@@ -30,7 +30,8 @@ internal sealed partial class GoalDispatchOperations
         IReadOnlySet<TaskId>? excludedTaskIds = null,
         bool? cascadeTesterCheapFirst = null,
         string? cascadeCheapModelAlias = null, bool? cascadeMechanicalReworkCheap = null,
-        Func<string, bool>? commandExists = null)
+        Func<string, bool>? commandExists = null,
+        Func<ClaudeCliAuthState>? claudeAuthProbe = null)
     {
         ReconcileExitedAssignedProcessRecords(kernel, goal);
         goal = kernel.GetGoal(goal.Id);
@@ -50,6 +51,7 @@ internal sealed partial class GoalDispatchOperations
             DateTimeOffset.UtcNow,
             safeBatch.TaskIds,
             commandExists: commandExists,
+            claudeAuthProbe: claudeAuthProbe,
             reviewAutoRetryStopRound: ResolveReviewAutoRetryStopRound(workspace, reviewAutoRetryStopRound, conductorPolicy),
             citedPriorEvidenceResolver: CreateCitedPriorEvidenceResolver(workspace),
             sandboxOptions: sandboxOptions,

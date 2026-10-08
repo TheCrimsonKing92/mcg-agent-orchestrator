@@ -55,7 +55,9 @@ public sealed class RetryAdmissionHoldAnswerDispatchTests : WorkerDispatchTestSu
             kernel, workspace, goal, agents, profiles,
             checkpointBeforeWorkerStart: (_, _, _, _) => { },
             runner: new BackgroundDispatchRunner(disableProcessStart: true),
-            sandboxOptions: sandbox);
+            sandboxOptions: sandbox,
+            commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent,
+            claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli);
         Xunit.Assert.Empty(firstTick.Processes.Tasks);
         var heldTask = kernel.GetTask(goal.Id, planner.Id);
         var prevented = Xunit.Assert.Single(heldTask.RetryAdmissionHistory,
@@ -79,7 +81,9 @@ public sealed class RetryAdmissionHoldAnswerDispatchTests : WorkerDispatchTestSu
                 if (phase == DispatchRecordCheckpointPhase.BeforeProcessStart) processStartCheckpoints++;
             },
             runner: new BackgroundDispatchRunner(disableProcessStart: true),
-            sandboxOptions: sandbox));
+            sandboxOptions: sandbox,
+            commandExists: DispatcherProviderProbeFakes.ProviderCommandsPresent,
+            claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli));
 
         Xunit.Assert.Contains("Background dispatch process start is disabled", startRefusal.Message);
         Xunit.Assert.True(processStartCheckpoints > 0);
