@@ -9,6 +9,7 @@ internal static class PartitionVerdictMissReasons
     internal const string ClosureHashUnavailable = "closure-hash-unavailable";
     internal const string NoGreenVerdictForClosure = "no-green-verdict-for-closure";
     internal const string NoGreenVerdictForIdenticalTree = "no-green-verdict-for-identical-tree";
+    internal const string NoGreenVerdictForWholeProjectClosure = "no-green-verdict-for-whole-project-closure";
     internal const string IdenticalTreeClosureHashMismatch = "identical-tree-closure-hash-mismatch";
     internal const string MissingStructuralCoverageEvidence = "missing-structural-coverage-evidence";
 }
