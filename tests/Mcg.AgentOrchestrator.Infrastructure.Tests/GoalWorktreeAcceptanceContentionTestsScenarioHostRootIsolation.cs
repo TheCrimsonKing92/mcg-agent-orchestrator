@@ -1,7 +1,7 @@
 using Mcg.AgentOrchestrator.Infrastructure;
 
 [Xunit.Collection(TestCollections.DotnetBuildSlots)]
-public sealed class ScenarioHostRootIsolationTests : GoalAcceptanceVerifierDotnetBuildSlotTests
+public sealed class GoalWorktreeAcceptanceContentionTestsScenarioHostRootIsolation : GoalAcceptanceVerifierDotnetBuildSlotTests
 {
     [Xunit.Theory]
     [Xunit.InlineData(false)]
