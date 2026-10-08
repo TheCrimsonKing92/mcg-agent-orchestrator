@@ -50,6 +50,18 @@ public static class FailedGoalRecoveryDecisionRecords
     public static PolicyDecisionRecord BuildCheckRetryApplied(FailedGoalRecoveryIdentity identity, string reason) =>
         FromDriver(identity, FailedGoalRecoveryAction.Hold, DriverRungBlockStart + 11, "build-check-retry-applied", reason);
 
+    public static PolicyDecisionRecord TimedOutRerunObservationEscalated(FailedGoalRecoveryIdentity identity, string reason) =>
+        FromDriver(identity, FailedGoalRecoveryAction.Escalate, DriverRungBlockStart + 12, "timed-out-rerun-observation-escalated", reason);
+
+    public static PolicyDecisionRecord TimedOutRerunRetryAuthorityChanged(FailedGoalRecoveryIdentity identity, string reason) =>
+        FromDriver(identity, FailedGoalRecoveryAction.Hold, DriverRungBlockStart + 13, "timed-out-rerun-retry-authority-changed", reason);
+
+    public static PolicyDecisionRecord TimedOutRoundUnchanged(FailedGoalRecoveryIdentity identity, string reason) =>
+        FromDriver(identity, FailedGoalRecoveryAction.Escalate, DriverRungBlockStart + 14, "timed-out-round-unchanged", reason);
+
+    public static PolicyDecisionRecord TimedOutRerunEvidencePending(FailedGoalRecoveryIdentity identity, string reason) =>
+        FromDriver(identity, FailedGoalRecoveryAction.Hold, DriverRungBlockStart + 15, "timed-out-rerun-evidence-pending", reason);
+
     private static PolicyDecisionRecord FromDriver(
         FailedGoalRecoveryIdentity identity, FailedGoalRecoveryAction action, int rung, string evidence, string reason) =>
         new(StageName, action.ToString(), rung, evidence, reason, Facts(identity));

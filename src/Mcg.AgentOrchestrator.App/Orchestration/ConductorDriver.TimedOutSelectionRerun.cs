@@ -1,14 +1,14 @@
 using System.Collections.Immutable;
-using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
+using static Mcg.AgentOrchestrator.App.Orchestration.TimedOutSelectionRerunMapping;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorDriver
 {
-    private sealed record TimedOutRoundReceipt(TaskSpec Owner, ReviewFinding Finding,
+    internal sealed record TimedOutRoundReceipt(TaskSpec Owner, ReviewFinding Finding,
         FindingEvidenceReceipt Receipt, FocusedEvidenceRunResult Evidence);
 
     private FailedGoalTimedOutSelectionFacts? BuildTimedOutSelectionFacts(Goal goal, TaskSpec task)
@@ -79,8 +79,9 @@ internal sealed partial class ConductorDriver
             if (evidence is null || AllRoundChecks(evidence).Any(check => !check.Passed &&
                 CheckClassification(check) == FailedGoalTimedOutSelectionRerunRule.TimedOutClassification)) return null;
             if (!IsFailedGoalRecoveryContextCurrent(goal, policy, state, resume, out var staleReason))
-                return MakeResult(goal.Id.Value, prefix, policy, new ConductorAdvanceOutcome.Held(state, staleReason));
-            return RetryTesterAfterTimedOutRerun(goal, prefix, policy, state, task.TaskId);
+                return MakeResult(goal.Id.Value, prefix, policy, new ConductorAdvanceOutcome.Held(state, staleReason)
+                { Decision = FailedGoalRecoveryDecisionRecords.StaleRecoveryFacts(resume.Identity, staleReason) });
+            return RetryTesterAfterTimedOutRerun(goal, prefix, policy, state, task.TaskId, resume.Identity);
         }
         var batch = CreateFindingEvidenceBatchId(candidateSha!, reason, reason, rerun.Key);
         var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [], candidateSha, null);
@@ -108,15 +109,16 @@ internal sealed partial class ConductorDriver
         var tester = goal.Tasks.Single(task => task.Id == decision.Identity.TaskId);
         var rounds = TesterInconclusiveRoundInputsReader.Read(goal, tester);
         var sources = rounds is null ? null : ReadTimedOutRoundReceipts(goal, tester, rounds);
-        if (sources is null || !TryMapTimedOutSelections(sources, rerun, out var selections))
+        if (sources is null || !TryMapTimedOutSelections(sources, rerun, FormatFindingEvidenceSelection, out var selections))
         {
             ApplyPendingFailedGoalNotes(goal, pendingNotes);
             _recordTaskNote(goal.Id, tester.Id,
                 $"{FailedGoalTimedOutSelectionRerunRule.ReasonSlug}; declined: current receipts or exact selection mapping unavailable.");
-            return EscalateUnchangedTimedOutRound(goal, goalPrefix, policy, state, tester, rounds);
+            return EscalateUnchangedTimedOutRound(goal, goalPrefix, policy, state, tester, rounds, decision.Identity);
         }
         if (!IsFailedGoalRecoveryContextCurrent(goal, policy, state, decision, out var staleReason))
-            return MakeResult(goal.Id.Value, goalPrefix, policy, new ConductorAdvanceOutcome.Held(state, staleReason));
+            return MakeResult(goal.Id.Value, goalPrefix, policy, new ConductorAdvanceOutcome.Held(state, staleReason)
+            { Decision = FailedGoalRecoveryDecisionRecords.StaleRecoveryFacts(decision.Identity, staleReason) });
         ApplyPendingFailedGoalNotes(goal, pendingNotes);
         var reason = FailedGoalTimedOutSelectionRerunRule.ReasonSlug;
         var candidateSha = sources[0].Receipt.CandidateSha;
@@ -142,8 +144,13 @@ internal sealed partial class ConductorDriver
         if (!complete)
         {
             if (observation.Kind == FailedGoalFindingObservationKind.FindingOperatorEvidenceRequired)
-                return Escalate(goal, goalPrefix, policy, state, observation.Evidence);
-            return MakeResult(goal.Id.Value, goalPrefix, policy, FocusedEvidencePendingHeld(state, observation, kind));
+            {
+                var escalated = Escalate(goal, goalPrefix, policy, state, observation.Evidence);
+                return escalated with { Outcome = ((ConductorAdvanceOutcome.Escalated)escalated.Outcome) with
+                { Decision = FailedGoalRecoveryDecisionRecords.TimedOutRerunObservationEscalated(decision.Identity, observation.Evidence) } };
+            }
+            return MakeResult(goal.Id.Value, goalPrefix, policy, FocusedEvidencePendingHeld(state, observation, kind) with
+            { Decision = FailedGoalRecoveryDecisionRecords.TimedOutRerunEvidencePending(decision.Identity, observation.Evidence) });
         }
         var receiptId = CreateFindingEvidenceReceiptId(candidateSha, reason, rerun.Key);
         var receipt = new FindingEvidenceReceipt(receiptId, candidateSha, typedRequest, evidence.Accepted,
@@ -161,55 +168,34 @@ internal sealed partial class ConductorDriver
         _recordFindingEvidenceRun(goal.Id, tester.Id,
             $"{reason}; phase=receipt; key={rerun.Key}; receipt_id={receiptId}; outcome={(timedOut ? "timed-out" : evidence.Passed ? "passed" : "failed")}");
         _focusedEvidenceAttemptCoordinator.MarkReconciled(attempt);
-        if (timedOut) return EscalateUnchangedTimedOutRound(GetCurrentGoal(goal), goalPrefix, policy, state, tester, rounds);
-        return RetryTesterAfterTimedOutRerun(goal, goalPrefix, policy, state, tester.Id);
+        if (timedOut) return EscalateUnchangedTimedOutRound(GetCurrentGoal(goal), goalPrefix, policy, state, tester, rounds, decision.Identity);
+        return RetryTesterAfterTimedOutRerun(goal, goalPrefix, policy, state, tester.Id, decision.Identity);
     }
 
     private ConductorAdvanceResult RetryTesterAfterTimedOutRerun(Goal goal, string goalPrefix,
-        ConductorAutonomyPolicy policy, GoalLifecycleState state, TaskId testerId)
+        ConductorAutonomyPolicy policy, GoalLifecycleState state, TaskId testerId, FailedGoalRecoveryIdentity identity)
     {
         _retryTask(goal.Id, testerId, FailedGoalTimedOutSelectionRerunRule.ReasonSlug,
             null, RetryCause.EnvironmentApparatusFailure);
         var refreshed = GetCurrentGoal(goal);
         if (refreshed.Tasks.Single(task => task.Id == testerId).Status is not (WorkTaskStatus.Assigned or WorkTaskStatus.Pending) ||
             refreshed.Tasks.Any(task => task.LastProcess is { IsRunning: true }))
+        {
+            const string reason = "Timeout rerun retry changed dispatch authority; re-observe on next tick.";
             return MakeResult(goal.Id.Value, goalPrefix, policy,
-                new ConductorAdvanceOutcome.Held(state, "Timeout rerun retry changed dispatch authority; re-observe on next tick."));
+                new ConductorAdvanceOutcome.Held(state, reason)
+                { Decision = FailedGoalRecoveryDecisionRecords.TimedOutRerunRetryAuthorityChanged(identity, reason) });
+        }
         return ExecuteDispatchAndStart(refreshed, goalPrefix, policy, GoalLifecycleState.WorkspaceReady);
     }
 
-    private static bool TryMapTimedOutSelections(TimedOutRoundReceipt[] sources,
-        FailedGoalTimedOutSelectionRerun rerun, out FindingEvidenceSelection[] selections)
-    {
-        var mapped = new List<FindingEvidenceSelection>();
-        foreach (var slug in rerun.Selections)
-        {
-            var matches = new List<FindingEvidenceSelection>();
-            foreach (var source in sources)
-            foreach (var target in source.Evidence.Coverage?.TargetToChecks ?? [])
-            {
-                if (!target.CheckNames.Any(name => Regex.Replace(name.ToLowerInvariant(), "[^a-z0-9]+", "-").Trim('-') == slug))
-                    continue;
-                matches.AddRange(source.Receipt.Request.Selections.Where(selection =>
-                    string.Equals(FormatFindingEvidenceSelection(selection), target.Target, StringComparison.OrdinalIgnoreCase)));
-            }
-            var exact = matches.DistinctBy(FormatFindingEvidenceSelection).ToArray();
-            if (exact.Length == 0) { selections = []; return false; }
-            mapped.AddRange(exact);
-        }
-        selections = mapped.DistinctBy(FormatFindingEvidenceSelection)
-            .OrderBy(FormatFindingEvidenceSelection, StringComparer.Ordinal).ToArray();
-        return selections.Length > 0;
-    }
-
     private ConductorAdvanceResult EscalateUnchangedTimedOutRound(Goal goal, string prefix,
-        ConductorAutonomyPolicy policy, GoalLifecycleState state, TaskSpec tester, FailedGoalInconclusiveRoundPair? rounds) =>
-        Escalate(goal, prefix, policy, state,
-            $"Tester task {ShortTaskId(tester.Id)} stayed verification-inconclusive on unchanged inputs; operator action required. {rounds?.DescribeUnchanged(DispatchFailureClassifier.Classify(tester, tester.LastVerification!).EvidenceSummary)}");
-
-    private static IReadOnlyList<AcceptanceCheckResult> AllRoundChecks(FocusedEvidenceRunResult evidence) =>
-        evidence.Checks.Concat((evidence.Arms ?? []).SelectMany(arm => arm.Checks)).ToArray();
-
-    private static string? CheckClassification(AcceptanceCheckResult check) =>
-        check.FailureClassification;
+        ConductorAutonomyPolicy policy, GoalLifecycleState state, TaskSpec tester, FailedGoalInconclusiveRoundPair? rounds,
+        FailedGoalRecoveryIdentity identity)
+    {
+        var reason = $"Tester task {ShortTaskId(tester.Id)} stayed verification-inconclusive on unchanged inputs; operator action required. {rounds?.DescribeUnchanged(DispatchFailureClassifier.Classify(tester, tester.LastVerification!).EvidenceSummary)}";
+        var escalated = Escalate(goal, prefix, policy, state, reason);
+        return escalated with { Outcome = ((ConductorAdvanceOutcome.Escalated)escalated.Outcome) with
+        { Decision = FailedGoalRecoveryDecisionRecords.TimedOutRoundUnchanged(identity, reason) } };
+    }
 }
