@@ -151,6 +151,7 @@ public sealed record OrchestratorWorkspace(
     public string OperatorEscapesStorePath => Path.Combine(OrchestratorDirectory, SqliteOperatorEscapeStore.DatabaseFileName);
 
     public string PortfolioStorePath => Path.Combine(OrchestratorDirectory, "portfolio.db");
+    public string ExperimentStorePath => Path.Combine(OrchestratorDirectory, "experiments.db");
 
     public string DogfoodLogStorePath => Path.Combine(OrchestratorDirectory, "dogfood-log.db");
 

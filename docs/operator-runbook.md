@@ -610,6 +610,7 @@ Durable state lives in stores, never in `.scratch`.
 | `.orchestrator/backlog.db` | the backlog (use `backlog-list`/`backlog-add`/`backlog-show`/`backlog-close`; this is the source of truth, not `BACKLOG.md`) |
 | `.orchestrator/dogfood-log.db` | dogfood goal-boundary evidence (use `dogfood-log list`/`dogfood-log add`; this is the source of truth, not `DOGFOOD_LOG.md`) |
 | `.orchestrator/collaboration-items.db` | clarifications / operator-input items |
+| `.orchestrator/experiments.db` | pre-registered experiment specs and single-shot outcomes (`experiment-add`, `experiment-show`, `experiment-decide`) |
 | `.orchestrator/agents.json` | the agent catalog (which model each role uses) — see the roster-change caveat below |
 | `.orchestrator/logs/conduct-events.log` | canonical structured conduct event stream (JSON lines with `eventKind`; stable path, rotated by size; listen from the current end) |
 | `.orchestrator/logs/`, `.orchestrator/prompts/` | per-dispatch worker logs (`*.out.log`/`*.err.log`/`*.exit.txt`) and the rendered worker prompts |
@@ -617,6 +618,31 @@ Durable state lives in stores, never in `.scratch`.
 | `.orchestrator-context/<goal-id>` | worker context artifacts for a goal |
 
 `--text-file` is the uniform throwaway vehicle to pass long text past the command-length cap for `retry`, `note`, `progress`, `verify-manual`, `adjudicate`, `recover`, `answer`, and `add-task`. `goal --brief-file <path>` and `backlog-add --body-file <path>` are the preferred command-specific forms, with `--text-file` aliases still accepted by current CLI help. The durable copy becomes the goal objective, task note, verification receipt, answer, or backlog item, so **delete the scratch input** afterward.
+
+### Experiments
+
+Register a trial with `experiment-add --spec <path>`; it prints a stable id, also usable by unique prefix. The JSON spec has this shape:
+
+```json
+{
+  "hypothesis": "A shorter brief reduces rounds per landing",
+  "intervention": { "kind": "brief-or-prompt-change", "description": "Remove the repeated preamble manually" },
+  "baseline": { "kind": "before-after-window", "since": "2026-10-01T00:00:00Z", "until": "2026-10-02T00:00:00Z" },
+  "metrics": ["rounds-per-landing", "landings-per-hour"],
+  "guardrail": { "metric": "productive-rounds", "breachIf": { "metric": "productive-rounds", "op": "<", "changePercent": -10 } },
+  "stopRule": { "count": 5, "unit": "goals" },
+  "decisionRule": {
+    "keepIf": [{ "metric": "rounds-per-landing", "op": "<=", "changePercent": -10 }],
+    "revertIf": [{ "metric": "rounds-per-landing", "op": ">", "changePercent": 10 }]
+  }
+}
+```
+
+Intervention kinds are `config-flag`, `policy`, `brief-or-prompt-change`, `model-swap`, and `evidence-only-code-spike`. Baselines are `before-after-window`, `alternating-gates` (with window bounds), or `twin-goal` (with `twinGoalId`). Optional `epicId` must resolve in the portfolio. The metric menu is `rounds-per-landing`, `productive-rounds`, `expected-overhead-rounds`, `wasted-rounds`, and `landings-per-hour`; select one to three distinct metrics and one different guardrail metric. Stop units are only counted `gates`, `goals`, or `ticks`, with a positive count.
+
+`experiment-show <experiment> [--as-of <timestamp-with-offset>]` prints the spec, stop progress, a fresh `reading: keep|revert|inconclusive`, and a separate stored `outcome:`. A before/after reading compares the baseline window with baseline end to show time. Round metrics retain RoundValueReport's terminal-goal cohort by final dispatch time; landings per hour counts completed goals' earliest `GoalLanded` events in each half-open window divided by its declared duration. Keep and revert rules each require all conditions; conditions compare percentage change `(comparison - baseline) / baseline * 100` with `<`, `<=`, `>`, or `>=`. Conflicting rules, missing data or a zero baseline yield inconclusive. A breached guardrail prevents keep; revert still requires the revert rule. Landings per hour with no landings or zero duration is unavailable. Alternating-gates and twin-goal readings, and gate/tick progress, are explicitly unavailable in this slice. Goals progress counts terminal goals by final dispatch from comparison start (or creation when no window is recorded).
+
+Apply or revert the intervention manually, then record the result once with `experiment-decide <experiment> --outcome <confirmed|refuted|inconclusive> --evidence <reference> --action <text>`. Both evidence and action are required. A decided outcome cannot be replaced, and showing never changes it. These verbs write only the experiment store and read goal state without taking a writer transaction. Delete a scratch spec after add; its durable copy is in the experiment store. Recording the brief-preamble trial is a post-landing Operator step.
 
 ### Changing which model a role uses
 

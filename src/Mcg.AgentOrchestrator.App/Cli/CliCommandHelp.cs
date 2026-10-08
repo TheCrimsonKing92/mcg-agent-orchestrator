@@ -60,6 +60,9 @@ internal static class CliCommandHelp
     public const string BacklogSimilarUsage = "Usage: backlog-similar <query text> [--limit <n>] [--status <value>] [--excerpt] | backlog-similar --id <backlog-id> [--limit <n>] [--status <value>] [--excerpt]";
     public const string EpicAddUsage = "Usage: epic-add <title> [description] | epic-add --title <title> [--body-file <path>|--text-file <path>] | epic-add --text-file <path>";
     public const string EpicShowUsage = "Usage: epic-show <epic>";
+    public const string ExperimentAddUsage = "Usage: experiment-add --spec <path>";
+    public const string ExperimentShowUsage = "Usage: experiment-show <experiment> [--as-of <timestamp-with-offset>]";
+    public const string ExperimentDecideUsage = "Usage: experiment-decide <experiment> --outcome <confirmed|refuted|inconclusive> --evidence <reference> --action <text>";
     public const string EpicRenameUsage = "Usage: epic-rename <epic> <new-title>";
     public const string EpicDescribeUsage = "Usage: epic-describe <epic> <text> | epic-describe <epic> --text-file <path>";
     public const string EpicAssignUsage = "Usage: epic-assign <goal-or-backlog-id> <epic>";
@@ -447,6 +450,13 @@ internal static class CliCommandHelp
         BacklogViewUsage,
         "Render all backlog items as markdown.",
         ["--help", "-h"]);
+
+    private static readonly CommandHelpEntry ExperimentAdd = new(
+        ExperimentAddUsage, "Register an experiment from a JSON spec; interventions remain manual.", ["--spec", "--help", "-h"]);
+    private static readonly CommandHelpEntry ExperimentShow = new(
+        ExperimentShowUsage, "Show an experiment, a freshly computed reading, and its separate stored outcome.", ["--as-of", "--help", "-h"]);
+    private static readonly CommandHelpEntry ExperimentDecide = new(
+        ExperimentDecideUsage, "Record evidence and action once on an open experiment.", ["--outcome", "--evidence", "--action", "--help", "-h"]);
 
     private static readonly CommandHelpEntry EpicAdd = new(
         EpicAddUsage,
@@ -1296,6 +1306,9 @@ internal static class CliCommandHelp
             return true;
         }
 
+        if (args[0].Equals("experiment-add", StringComparison.OrdinalIgnoreCase)) { entry = ExperimentAdd; return true; }
+        if (args[0].Equals("experiment-show", StringComparison.OrdinalIgnoreCase)) { entry = ExperimentShow; return true; }
+        if (args[0].Equals("experiment-decide", StringComparison.OrdinalIgnoreCase)) { entry = ExperimentDecide; return true; }
         if (args[0].Equals("epic-add", StringComparison.OrdinalIgnoreCase))
         {
             entry = EpicAdd;
