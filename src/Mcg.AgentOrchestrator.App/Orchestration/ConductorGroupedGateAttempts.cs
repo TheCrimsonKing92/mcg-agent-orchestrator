@@ -333,6 +333,25 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException) { }
     }
 
+    internal static bool IsSlotsBusyDeferral(ConductorGroupedGateAttempt attempt)
+    {
+        if (attempt.Kind != "cohort") return false;
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(attempt.ResultPath));
+            var root = document.RootElement;
+            return root.GetProperty("IdentityValue").GetString() == attempt.IdentityValue &&
+                root.GetProperty("Status").GetString() == "completed" &&
+                root.GetProperty("Verdict").GetString() == CohortStableSlotAcquisitionRounds.DeferredVerdict &&
+                root.GetProperty("ReceiptId").GetString() == "";
+        }
+        catch (Exception exception) when (exception is JsonException or IOException or
+            UnauthorizedAccessException or InvalidOperationException or KeyNotFoundException)
+        {
+            return false;
+        }
+    }
+
     private static (string Text, bool Completed, string Verdict, string? Receipt) DescribeChildResult(string path)
     {
         if (!File.Exists(path)) return ("result=none", false, "unknown", null);
@@ -355,6 +374,7 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
                 var recordedValue = recordedVerdict.GetString();
                 if (string.Equals(recordedValue, "passed", StringComparison.OrdinalIgnoreCase)) verdict = "passed";
                 else if (string.Equals(recordedValue, "failed", StringComparison.OrdinalIgnoreCase)) verdict = "failed";
+                else if (recordedValue == CohortStableSlotAcquisitionRounds.DeferredVerdict) verdict = recordedValue;
             }
             var receipt = completed && root.TryGetProperty("ReceiptId", out var recordedReceipt) &&
                 recordedReceipt.ValueKind == JsonValueKind.String

@@ -41,7 +41,7 @@ internal sealed partial class ConductorDriver
             var difference = coordinator.IdentityDifference(attempt, kind, members, mainRevision, treeRevision);
             if (attempt.ReconciledAt is not null)
             {
-                if (difference is null && !receiptExists &&
+                if (difference is null && !receiptExists && !ConductorGroupedGateAttemptCoordinator.IsSlotsBusyDeferral(attempt) &&
                     !string.IsNullOrWhiteSpace(attempt.Detail) &&
                     !attempt.Detail.StartsWith("refused:", StringComparison.Ordinal))
                     return (null, true);
@@ -56,7 +56,7 @@ internal sealed partial class ConductorDriver
                 if (!alive)
                 {
                     CompleteOwnedRunForAttempt(attempt);
-                    if (difference is null && !receiptExists) return (null, true);
+                    if (difference is null && !receiptExists && !ConductorGroupedGateAttemptCoordinator.IsSlotsBusyDeferral(attempt)) return (null, true);
                     continue;
                 }
             }
@@ -83,7 +83,7 @@ internal sealed partial class ConductorDriver
             {
                 coordinator.Reconcile(attempt, "child-result-published");
                 CompleteOwnedRunForAttempt(attempt);
-                if (difference is null && !receiptExists) return (null, true);
+                if (difference is null && !receiptExists && !ConductorGroupedGateAttemptCoordinator.IsSlotsBusyDeferral(attempt)) return (null, true);
                 continue;
             }
 
@@ -283,7 +283,7 @@ internal sealed partial class ConductorDriver
             var receipt = ExecuteAcceptanceCohortGate(integration, identity, bindings,
                 ConductorAcceptanceCohortSelector.PairFingerprint(members[0], members[1]),
                 CancellationToken.None, null);
-            return ToGroupedGateOutcome(receipt.Outcome, receipt.ReceiptId);
+            return receipt is null ? CohortStableSlotAcquisitionRounds.DeferredGroupedOutcome : ToGroupedGateOutcome(receipt.Outcome, receipt.ReceiptId);
         }
         else if (attempt.Kind == "train")
         {

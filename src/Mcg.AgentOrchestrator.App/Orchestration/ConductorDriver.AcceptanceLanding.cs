@@ -371,8 +371,8 @@ internal sealed partial class ConductorDriver
         IGoalAcceptanceVerifier acceptanceVerifier,
         IReadOnlyList<AgentDefinition> agents,
         WorkerProfileCatalog profiles,
-        ConductorParallelAcceptanceAttemptCoordinator parallelAcceptanceAttemptCoordinator)
-        : this(kernel, workspace, acceptanceVerifier, agents, profiles)
+        ConductorParallelAcceptanceAttemptCoordinator parallelAcceptanceAttemptCoordinator, GoalWorktreeCleanupHooks? cleanupHooks = null)
+        : this(kernel, workspace, acceptanceVerifier, agents, profiles, cleanupHooks: cleanupHooks)
     {
         _parallelAcceptanceAttemptCoordinator = parallelAcceptanceAttemptCoordinator;
     }
