@@ -91,6 +91,7 @@ public sealed class GoalDagPlanTests
     public void Cli_Plan_Preview_ShowsNodesWithoutCreatingGoals()
     {
         var (kernel, workspace, agents, providers) = BuildTestContext(TwoNodeJson);
+        using var samples = PlanSampleProviderBridge.Use(providers);
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
 
@@ -114,6 +115,7 @@ public sealed class GoalDagPlanTests
     public void Cli_Plan_ConfirmPlan_TwoNodeChain_CreatesGoalsWithDependency()
     {
         var (kernel, workspace, agents, providers) = BuildTestContext(TwoNodeJson);
+        using var samples = PlanSampleProviderBridge.Use(providers);
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
 
@@ -144,6 +146,7 @@ public sealed class GoalDagPlanTests
             ```
             """;
         var (kernel, workspace, agents, providers) = BuildTestContext(cycleJson);
+        using var samples = PlanSampleProviderBridge.Use(providers);
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
 
@@ -165,6 +168,7 @@ public sealed class GoalDagPlanTests
     public void CliPlanSliceBatchConfirmCreatesDormantParentAndActiveChildren()
     {
         var (kernel, workspace, agents, providers) = BuildSliceBatchTestContext(ThreeSliceBatchJson);
+        using var samples = PlanSampleProviderBridge.Use(providers);
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
 
@@ -233,6 +237,7 @@ public sealed class GoalDagPlanTests
     public void CliPlanSliceBatchWithoutDeveloperRejectsAtomically()
     {
         var (kernel, workspace, configuredAgents, providers) = BuildSliceBatchTestContext(ThreeSliceBatchJson);
+        using var samples = PlanSampleProviderBridge.Use(providers);
         IReadOnlyList<AgentDefinition> agents = configuredAgents
             .Where(agent => agent.Role != AgentRole.Developer)
             .ToArray();
@@ -258,6 +263,7 @@ public sealed class GoalDagPlanTests
     public void CliPlanSliceBatchPreviewIsDormantAndDoesNotMutate()
     {
         var (kernel, workspace, configuredAgents, providers) = BuildSliceBatchTestContext(ThreeSliceBatchJson);
+        using var samples = PlanSampleProviderBridge.Use(providers);
         IReadOnlyList<AgentDefinition> agents = configuredAgents
             .Where(agent => agent.Role != AgentRole.Developer)
             .ToArray();
@@ -681,6 +687,7 @@ public sealed class GoalDagPlanTests
         var (kernel, workspace, agents, providers) = sliceBatch
             ? BuildSliceBatchTestContext(ThreeSliceBatchJson, provider)
             : BuildTestContext(TwoNodeJson, provider);
+        using var samples = PlanSampleProviderBridge.Use(providers);
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
         var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
@@ -697,6 +704,7 @@ public sealed class GoalDagPlanTests
     {
         var provider = new FakeSmokeProvider(ThreeSliceBatchJson, providerName: "Fake");
         var (kernel, workspace, agents, providers) = BuildSliceBatchTestContext(ThreeSliceBatchJson, provider);
+        using var samples = PlanSampleProviderBridge.Use(providers);
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
         var exception = Assert.Throws<T>(() => CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
@@ -727,6 +735,7 @@ public sealed class GoalDagPlanTests
     private static (InvalidOperationException exception, AgentOrchestratorKernel kernel) ConfirmInvalidSliceBatch(string plannerOutput)
     {
         var (kernel, workspace, agents, providers) = BuildSliceBatchTestContext(plannerOutput);
+        using var samples = PlanSampleProviderBridge.Use(providers);
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
         var exception = Assert.Throws<InvalidOperationException>(() =>
