@@ -4,6 +4,164 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class PriorWorkerResultProjectionTests
 {
     private const string FixtureName = "8257cb24-ba064746-20260924003957.out.txt";
+    private const string DeveloperResult = "WORKER_RESULT:\n" +
+        "files: src/Feature.cs\ncommands: worker build check\n" +
+        "tests: deferred - FeatureTests\ncommit: none\nblockers: none\n" +
+        "model_fit: OpenAI/test - adequate - fixture\nskills: none\nconfidence: high\n" +
+        "END_WORKER_RESULT";
+
+    [Fact]
+    public void ParsedReport_PrecedingProse_PreservesOrderAndStructuredFields()
+    {
+        const string prose = "Implemented the feature.\n| Fact | Source |\n| F1 | src/Feature.cs:9 |";
+        var output = prose + "\n" + DeveloperResult;
+
+        var projection = Project(output);
+        var blockOnly = Project(DeveloperResult);
+
+        Assert.Equal(WorkerVerificationEvidence.ContextProjectionValidation.Parsed, projection.Validation);
+        Assert.Equal("parsed", projection.ValidationReceiptValue);
+        Assert.Equal(ExpectedReceipt(output, "validation=parsed") + Environment.NewLine +
+            "Worker report (prose before WORKER_RESULT):" + Environment.NewLine +
+            prose + Environment.NewLine + StructuredResult(), projection.Content);
+        var blockStart = projection.Content.IndexOf("\nWORKER_RESULT:", StringComparison.Ordinal) + 1;
+        Assert.Equal(StructuredResult(), projection.Content[blockStart..]);
+        Assert.Equal(ExpectedReceipt(DeveloperResult, "validation=parsed") + Environment.NewLine +
+            StructuredResult(), blockOnly.Content);
+    }
+
+    [Theory]
+    [InlineData(3999)]
+    [InlineData(4000)]
+    [InlineData(4001)]
+    [InlineData(8123)]
+    public void ParsedReport_ProseAtCap_KeepsExactTailAndOmissionCount(int proseLength)
+    {
+        const int cap = 4000;
+        const string sentinel = "HEAD_ONLY_SENTINEL";
+        var prose = sentinel + new string('p', proseLength - sentinel.Length - 4) + "TAIL";
+        var output = prose + "\r\n\r\n" + DeveloperResult;
+        var kept = prose.Length > cap ? prose[^cap..] : prose;
+        var omission = prose.Length > cap
+            ? $"...[{prose.Length - cap} chars omitted from worker report prose; complete source remains at source_handle]..." + Environment.NewLine
+            : string.Empty;
+
+        var projection = Project(output);
+
+        Assert.Equal(WorkerVerificationEvidence.ContextProjectionValidation.Parsed, projection.Validation);
+        Assert.Equal(ExpectedReceipt(output, "validation=parsed") + Environment.NewLine +
+            "Worker report (prose before WORKER_RESULT):" + Environment.NewLine +
+            omission + kept + Environment.NewLine + StructuredResult(), projection.Content);
+        if (proseLength >= cap + sentinel.Length)
+            Assert.DoesNotContain(sentinel, projection.Content, StringComparison.Ordinal);
+        Assert.True(kept.Length <= cap);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(" \t\r\n\r\n")]
+    public void ParsedReport_AbsentProse_KeepsExistingProjection(string prefix)
+    {
+        var output = prefix + DeveloperResult;
+
+        Assert.Equal(ExpectedReceipt(output, "validation=parsed") + Environment.NewLine +
+            StructuredResult(), Project(output).Content);
+    }
+
+    [Fact]
+    public void MalformedReport_PrecedingAndFollowingProse_KeepsExistingProjection()
+    {
+        var malformed = DeveloperResult.Replace("skills: none\n", string.Empty, StringComparison.Ordinal);
+        var output = "Report before\n\n" + malformed + "\n\nReport after";
+
+        var projection = Project(output);
+
+        Assert.Equal(WorkerVerificationEvidence.ContextProjectionValidation.Malformed, projection.Validation);
+        Assert.Equal(ExpectedReceipt(output, "validation=malformed; problem_excerpt=missing field(s): skills.") +
+            Environment.NewLine + "Report before" + Environment.NewLine + malformed +
+            Environment.NewLine + "Report after", projection.Content);
+    }
+
+    [Fact]
+    public void NonAuthoritativeReport_PreviewOnly_KeepsExistingProjection()
+    {
+        var task = new TaskSpec(new TaskId("prior-developer"), "Prior Developer", AgentRole.Developer);
+        var verification = new TaskVerificationRecord("test", @"C:\tmp", 0,
+            "Preview only", string.Empty, DateTimeOffset.Parse("2026-01-01T00:00:00Z"),
+            FullStandardOutputUnavailableReason: "legacy-snapshot-authoritative-output-unavailable");
+        var expectedContext = string.Join(Environment.NewLine,
+            "[legacy verification context]",
+            "authoritative: false",
+            "unavailable-reason: legacy-snapshot-authoritative-output-unavailable",
+            "The complete historical stdout was never retained with an integrity digest. " +
+            "The bounded preview below is context only and must not be treated as authoritative evidence.",
+            string.Empty,
+            "Preview only");
+
+        var projection = WorkerVerificationEvidence.ProjectStandardOutputForContextWithValidation(task, verification);
+
+        Assert.Equal(WorkerVerificationEvidence.ContextProjectionValidation.NonAuthoritative, projection.Validation);
+        Assert.Equal(ExpectedReceipt(expectedContext,
+            "validation=non-authoritative; problem_excerpt=legacy-snapshot-authoritative-output-unavailable") +
+            Environment.NewLine + expectedContext, projection.Content);
+    }
+
+    [Fact]
+    public void PriorTaskEvidence_DeveloperCitationTable_PreservesAllNineRows()
+    {
+        // Parallel-safe: all repository and context artifacts belong to this unique root.
+        var root = Path.Combine(Path.GetTempPath(), $"prior-task-prose-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var git = InfrastructureTestSupport.RunGitProbe(root, ["init"]);
+            Assert.True(git.Succeeded, $"git init failed: {git}");
+            var kernel = new AgentOrchestratorKernel();
+            var developer = new TaskSpec(TaskId.New(), "Developer citation report", AgentRole.Developer);
+            var tester = new TaskSpec(TaskId.New(), "Inspect Developer citations", AgentRole.Tester);
+            var goal = kernel.CreateGoal("Carry Developer prose into prior task evidence", [developer, tester]);
+            var rows = Enumerable.Range(1, 9)
+                .Select(index => $"| R{index} | src/Feature{index}.cs:{index * 10} | Verified fact {index} |")
+                .ToArray();
+            var prose = "Implemented the scoped slice.\n\n| Fact | Source | Evidence |\n| --- | --- | --- |\n" +
+                string.Join('\n', rows);
+            var stdout = prose + "\n" + DeveloperResult;
+            kernel.RecordTaskVerification(goal.Id, developer.Id, new TaskVerificationRecord(
+                "codex worker", root, 0, stdout, string.Empty,
+                DateTimeOffset.Parse("2026-01-01T00:00:00Z"),
+                WorkerResultPresent: true, FullStandardOutput: stdout));
+            kernel.ReportTaskProgress(goal.Id, developer.Id, WorkTaskStatus.Completed, "Implementation complete.");
+            goal = kernel.GetGoal(goal.Id);
+            var prior = goal.Tasks.Single(task => task.Id == developer.Id);
+            Assert.Equal(WorkTaskStatus.Completed, prior.Status);
+            Assert.Equal(stdout, prior.LastVerification!.AuthoritativeStandardOutput);
+
+            var contextDirectory = WorkerContextArtifacts.Write(goal, tester, root, ["profile valid"]);
+            var evidence = File.ReadAllText(Path.Combine(contextDirectory, "prior-task-evidence.md"));
+
+            Assert.Contains("## Developer: Developer citation report", evidence, StringComparison.Ordinal);
+            Assert.Contains("### Stdout", evidence, StringComparison.Ordinal);
+            Assert.Contains("Worker report (prose before WORKER_RESULT):", evidence, StringComparison.Ordinal);
+            foreach (var row in rows)
+                Assert.Contains(row, evidence, StringComparison.Ordinal);
+            Assert.Contains(prose, evidence, StringComparison.Ordinal);
+            Assert.Contains(StructuredResult(), evidence, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static string StructuredResult() => DeveloperResult.Replace("\n", Environment.NewLine, StringComparison.Ordinal);
+
+    private static string ExpectedReceipt(string output, string validation)
+    {
+        var bytes = System.Text.Encoding.UTF8.GetBytes(output);
+        return "Artifact receipt: purpose=prior-worker-output; stable_id=prior/prior-developer/verification-output; " +
+            $"source_handle=host-captured-authoritative-output; chars={output.Length}; bytes={bytes.Length}; " +
+            $"sha256={WorkerContextArtifact.Hash(bytes)}; {validation}";
+    }
 
     [Fact]
     public void HistoricalDeveloperAuditKeepsAllFiftyFourEntries()
@@ -133,7 +291,7 @@ public sealed class PriorWorkerResultProjectionTests
 
     private static WorkerVerificationEvidence.ContextProjection Project(string output)
     {
-        var task = new TaskSpec(TaskId.New(), "Prior Developer", AgentRole.Developer);
+        var task = new TaskSpec(new TaskId("prior-developer"), "Prior Developer", AgentRole.Developer);
         var verification = new TaskVerificationRecord("test", @"C:\tmp", 0,
             output, string.Empty, DateTimeOffset.UtcNow, FullStandardOutput: output);
         return WorkerVerificationEvidence.ProjectStandardOutputForContextWithValidation(task, verification);
