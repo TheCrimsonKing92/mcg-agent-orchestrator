@@ -7,6 +7,35 @@ using Xunit;
 public sealed class ExperimentStoreTests
 {
     [Fact]
+    public void ListOpen_ExcludesDecidedRecordsAndPreservesOrderAndDatabaseBytes()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "experiment-open-list-" + Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var path = Path.Combine(root, "experiments.db");
+            var store = new ExperimentStore(path);
+            Assert.Empty(store.ListOpenAsync().GetAwaiter().GetResult());
+            var spec = new ExperimentSpec("Trial", new(ExperimentInterventionKind.Policy, "Measure a policy"),
+                new(ExperimentBaselineKind.TwinGoal, TwinGoalId: "twin"), ["rounds-per-landing"],
+                new("productive-rounds", new("productive-rounds", "<", -10)), new(1, ExperimentStopUnit.Goals),
+                new([new("rounds-per-landing", "<", 0)], [new("rounds-per-landing", ">", 0)]));
+            var records = Enumerable.Range(0, 3).Select(i => store.AddAsync(spec with
+                { Hypothesis = $"Trial {i}" }).GetAwaiter().GetResult()).ToArray();
+            store.DecideAsync(records[1].Id, ExperimentOutcomeState.Confirmed, "receipt:open-list", "Keep").GetAwaiter().GetResult();
+            var before = File.ReadAllBytes(path);
+            var open = store.ListOpenAsync().GetAwaiter().GetResult();
+            Assert.Equal(before, File.ReadAllBytes(path));
+            var expected = new[] { records[0], records[2] }.OrderBy(record => record.CreatedAt)
+                .ThenBy(record => record.Id, StringComparer.Ordinal).ToArray();
+            Assert.Equal(expected.Select(record => record.Id), open.Select(record => record.Id));
+            Assert.All(open, record => Assert.Equal(ExperimentOutcomeState.Open, record.Outcome));
+            Assert.Equal(JsonSerializer.Serialize(expected, ExperimentStore.JsonOptions), JsonSerializer.Serialize(open, ExperimentStore.JsonOptions));
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
     public async Task ListAll_ReturnsEveryFullRecordInCreationThenIdOrderWithoutWriting()
     {
         var root = Path.Combine(Path.GetTempPath(), "experiment-list-" + Guid.NewGuid().ToString("n"));

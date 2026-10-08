@@ -78,16 +78,9 @@ internal static class CliExperimentCommands
         if (options.TryGetValue("--as-of", out var textAsOf) && !TryExperimentTimestamp(textAsOf, out asOf))
             throw new ArgumentException("as-of: timestamp must include an offset.");
         WriteExperimentRecord(record);
-        IReadOnlyCollection<Goal> goals = [];
-        if (File.Exists(context.Workspace.SqliteStatePath))
-        {
-            var queries = SqliteOrchestratorStateRepository.OpenReadOnly(context.Workspace.SqliteStatePath);
-            var metadata = queries.ListGoalMetadataAsync().GetAwaiter().GetResult();
-            if (metadata.Count > 0)
-                goals = queries.LoadGoalsAsync(metadata.Select(g => new GoalId(g.Id)).ToArray()).GetAwaiter().GetResult().Goals;
-        }
-        ExperimentReading.Write(record, goals, ReadExperimentLandings(context.Workspace.GoalLifecycleEventsDirectory),
-            CliOwnerDigestRetryIntents.Read(context.Workspace, asOf), asOf);
+        var goals = ExperimentGoals.Read(context.Workspace.SqliteStatePath);
+        ExperimentReading.Render(ExperimentReading.Evaluate(record, goals, ExperimentLandingTimes.Read(context.Workspace.GoalLifecycleEventsDirectory),
+            CliOwnerDigestRetryIntents.Read(context.Workspace, asOf), asOf));
         Console.WriteLine($"outcome: {ExperimentReading.Name(record.Outcome)}");
         var overlaps = ExperimentOverlap.Find(record, store.ListAllAsync().GetAwaiter().GetResult());
         if (overlaps.Count == 0) Console.WriteLine("overlaps: none");
@@ -188,24 +181,4 @@ internal static class CliExperimentCommands
         Console.WriteLine($"decided at: {record.Decision?.DecidedAt:O}");
     }
 
-    private static IReadOnlyDictionary<string, DateTimeOffset> ReadExperimentLandings(string directory)
-    {
-        var result = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
-        if (!Directory.Exists(directory)) return result;
-        foreach (var path in Directory.EnumerateFiles(directory, "*.jsonl"))
-        foreach (var line in File.ReadLines(path))
-        {
-            try
-            {
-                using var document = JsonDocument.Parse(line);
-                var root = document.RootElement;
-                if (!root.TryGetProperty("eventType", out var kind) || kind.GetString() != "GoalLanded") continue;
-                var id = root.GetProperty("goalId").GetString();
-                var at = root.GetProperty("timestamp").GetDateTimeOffset();
-                if (id is not null && (!result.TryGetValue(id, out var previous) || at < previous)) result[id] = at;
-            }
-            catch (Exception error) when (error is JsonException or KeyNotFoundException or InvalidOperationException or FormatException) { }
-        }
-        return result;
-    }
 }
