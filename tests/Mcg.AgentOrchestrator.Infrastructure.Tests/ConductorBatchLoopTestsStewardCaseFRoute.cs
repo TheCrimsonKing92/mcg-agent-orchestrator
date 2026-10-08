@@ -53,6 +53,10 @@ public sealed class ConductorBatchLoopTestsStewardCaseFRoute : ConductorBatchLoo
         harness.Host.ServiceTick(harness.Kernel);
 
         harness.CompleteDeveloper(harness.Developer);
+        harness.Kernel.RetryTask(harness.Goal.Id, harness.BlockerTask.Id,
+            "Recheck the same candidate after the Developer correction.",
+            RetryCause.ContractClarification, invalidateDownstream: false);
+        Assert.Equal(WorkTaskStatus.Assigned, harness.BlockerTask.Status);
         harness.RecordBlocker();
         harness.Clock.Advance();
         harness.Kernel.SupersedeHumanInput(harness.Goal.Id, harness.Request.Id,
