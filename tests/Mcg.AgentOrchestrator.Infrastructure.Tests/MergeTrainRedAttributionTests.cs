@@ -7,6 +7,101 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // Each case owns its source tree and TRX artifacts; no repository or shared state is mutated.
 public sealed class MergeTrainRedAttributionTests
 {
+    private const string LaneGuard = "AcceptanceGateEngineSettingsTests.AcceptanceGateEngineDisabledCollectionsSpanningLanesShareAnExclusiveResource";
+    private const string DecisionGuard = "WorkflowDecisionCoverageRatchetTests.EveryUndecidedSite_IsAllowListedByFileAndMember";
+
+    private static string LaneMessage(string subject) =>
+        "Disabled collection 'DotnetBuildEnvironmentManagerStaticHooks' spans acceptance lanes " +
+        "[Remainder, Dotnet build slots] without a shared exclusive resource key. " +
+        $"Mapped classes: [{subject} -> Remainder, DotnetBuildEnvironmentManagerTests -> Dotnet build slots].";
+
+    [Fact]
+    public void GuardSubjects_OverrideGuardSourceOwnershipAndAttributeOneMember()
+    {
+        using var fixture = new Fixture();
+        fixture.Source("tests/First.cs", "DotnetBuildEnvironmentManagerStableSlotHolderLabelTests");
+        // The replayed decision guard itself was owned by an innocent train member.
+        fixture.Source("tests/Second.cs", "AcceptanceGateEngineSettingsTests", "WorkflowDecisionCoverageRatchetTests");
+        var receipt = fixture.GuardReceipt(
+            (LaneGuard, LaneMessage("Ns.DotnetBuildEnvironmentManagerStableSlotHolderLabelTests")),
+            (DecisionGuard, "Unlisted undecided sites:\nFirst.cs : DeferredRun"));
+        Assert.Same(fixture.Members[0], MergeTrainRedAttribution.TryAttribute(
+            receipt, fixture.Root, fixture.Members, out var subjects));
+        Assert.Equal(new[] { "First.cs", "Ns.DotnetBuildEnvironmentManagerStableSlotHolderLabelTests" }, subjects);
+    }
+
+    [Theory]
+    [InlineData(false, "missing")]
+    [InlineData(true, "missing")]
+    [InlineData(false, "shared")]
+    [InlineData(true, "shared")]
+    [InlineData(false, "different-members")]
+    [InlineData(true, "different-members")]
+    [InlineData(false, "malformed-message")]
+    [InlineData(true, "malformed-message")]
+    [InlineData(false, "missing-trx")]
+    [InlineData(true, "missing-trx")]
+    [InlineData(false, "unreadable-trx")]
+    [InlineData(true, "unreadable-trx")]
+    [InlineData(false, "apparatus")]
+    [InlineData(true, "apparatus")]
+    public void GuardSubjects_IncompleteOrAmbiguousEvidenceRefusesAttribution(bool file, string scenario)
+    {
+        using var fixture = new Fixture();
+        fixture.Source("tests/First.cs", "FirstTests");
+        fixture.Source("tests/Second.cs", "SecondTests", "AcceptanceGateEngineSettingsTests", "WorkflowDecisionCoverageRatchetTests");
+        var subject = scenario == "missing" ? (file ? "Missing.cs" : "Ns.MissingTests") :
+            file ? "First.cs" : "Ns.FirstTests";
+        var message = file ? "Unlisted undecided sites:\n" + subject + " : DeferredRun" : LaneMessage(subject);
+        if (scenario == "different-members")
+            message = file ? message + "\nSecond.cs : Other" :
+                LaneMessage("Ns.FirstTests -> Remainder, Ns.SecondTests");
+        if (scenario == "malformed-message") message = "Unknown guard failure involving " + subject;
+        if (scenario == "apparatus") message = "DotnetBuildSlotsBusyException: Stable dotnet build slots busy\n" + message;
+        var receipt = fixture.GuardReceipt((file ? DecisionGuard : LaneGuard, message));
+        var members = scenario == "shared"
+            ? new[] { fixture.Members[0], fixture.Members[1] with { LandingPaths = ["tests/First.cs", "tests/Second.cs"] } }
+            : fixture.Members;
+        if (scenario == "missing-trx")
+            receipt = receipt with { GateTestResultPaths = [.. receipt.GateTestResultPaths, Path.Combine(fixture.Root, "missing.trx")] };
+        using var lockedFile = scenario == "unreadable-trx"
+            ? new FileStream(receipt.GateTestResultPaths[0], FileMode.Open, FileAccess.ReadWrite, FileShare.None) : null;
+        Assert.Null(MergeTrainRedAttribution.TryAttribute(receipt, fixture.Root, members, out var subjects));
+        Assert.Empty(subjects);
+    }
+
+    [Fact]
+    public void GuardAndOrdinaryFailures_DivergentOwnersRefuseAttribution()
+    {
+        using var fixture = new Fixture();
+        fixture.Source("tests/First.cs", "FirstTests");
+        fixture.Source("tests/Second.cs", "SecondTests");
+        var receipt = fixture.GuardReceipt((DecisionGuard, "Unlisted undecided sites:\nFirst.cs : DeferredRun"),
+            ("Ns.SecondTests.Fails", "ordinary failure"));
+        Assert.Null(MergeTrainRedAttribution.TryAttribute(receipt, fixture.Root, fixture.Members));
+    }
+
+    [Fact]
+    public void FileSubject_DuplicateBasenamesAcrossMembersRefuseAttribution()
+    {
+        using var fixture = new Fixture();
+        var members = new[] { fixture.Members[0], fixture.Members[1] with { LandingPaths = ["src/First.cs"] } };
+        Assert.Null(MergeTrainRedAttribution.TryAttribute(fixture.GuardReceipt(
+            (DecisionGuard, "Unlisted undecided sites:\nFirst.cs : DeferredRun")), fixture.Root, members));
+        Assert.Same(members[0], MergeTrainRedAttribution.TryAttribute(fixture.GuardReceipt(
+            (DecisionGuard, "Unlisted undecided sites:\ntests/First.cs : DeferredRun")), fixture.Root, members));
+    }
+
+    [Fact]
+    public void UnrecognizedTest_WithGuardShapedMessageUsesItsOwnSource()
+    {
+        using var fixture = new Fixture();
+        fixture.Source("tests/First.cs", "FirstTests");
+        fixture.Source("tests/Second.cs", "SecondTests");
+        Assert.Same(fixture.Members[1], MergeTrainRedAttribution.TryAttribute(fixture.GuardReceipt(
+            ("Ns.SecondTests.Fails", "Unlisted undecided sites:\nFirst.cs : DeferredRun")), fixture.Root, fixture.Members));
+    }
+
     [Theory]
     [InlineData("unresolved")]
     [InlineData("unchanged")]
@@ -157,6 +252,16 @@ public sealed class MergeTrainRedAttributionTests
             var identity = MergeTrainIdentity.Create(Members, new string('c', 40), new string('d', 40), "manifest");
             return new MergeTrainReceipt("red", identity, MergeTrainGateOutcome.Failed,
                 DateTimeOffset.UnixEpoch, 0, ["gate"], 1, [trx]);
+        }
+
+        internal MergeTrainReceipt GuardReceipt(params (string Name, string Message)[] failures)
+        {
+            var receipt = Receipt(failures.Select(failure => failure.Name).ToArray());
+            var document = XDocument.Load(receipt.GateTestResultPaths[0]);
+            foreach (var (result, failure) in document.Descendants("UnitTestResult").Zip(failures))
+                result.Add(new XElement("Output", new XElement("ErrorInfo", new XElement("Message", failure.Message))));
+            document.Save(receipt.GateTestResultPaths[0]);
+            return receipt;
         }
 
         internal void RewriteOutcome(MergeTrainReceipt receipt, string outcome)

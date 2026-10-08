@@ -84,6 +84,7 @@ internal sealed partial class ConductorDriver
         var admitted = false;
         MergeTrainMemberBinding? redDropped = null;
         MergeTrainReceipt? redReceipt = null;
+        IReadOnlyList<string> redSubjects = [];
 
         for (var attempt = 0; attempt <= 1; attempt++)
         {
@@ -263,7 +264,7 @@ internal sealed partial class ConductorDriver
             if (receipt.Outcome == MergeTrainGateOutcome.Passed)
             {
                 if (redDropped is not null && redReceipt is not null)
-                    RecordTrainImplicatedMember(redDropped, redReceipt);
+                    RecordTrainImplicatedMember(redDropped, redReceipt, redSubjects);
                 if (gateOnly)
                 {
                     return new ConductorMergeTrainRunResult(receipt,
@@ -338,14 +339,18 @@ internal sealed partial class ConductorDriver
                     $"outcome=passed attempts={attempt + 1} landings={goals.Length} receipt={receipt.ReceiptId}");
             }
 
-            var attributed = IsGenuineTrainRed(receipt)
-                ? MergeTrainRedAttribution.TryAttribute(receipt, workspace.Path, members)
-                : null;
+            var attributed = MergeTrainRedAttribution.TryAttribute(receipt, workspace.Path, members, out var subjects);
+            var messageSubjectFailure = MergeTrainRedAttribution.ReadFatalFailures(receipt.GateTestResultPaths)
+                .Any(MergeTrainRedAttribution.IsMessageSubjectGuard);
+            // Positive subject ownership already proves this member's RED; do not wait for
+            // the remainder to pass before excluding the unchanged revision.
+            if (messageSubjectFailure && attributed is not null)
+                RecordTrainImplicatedMember(attributed, receipt, subjects);
             if (receipt.Outcome != MergeTrainGateOutcome.Failed || members.Count == 2 || attempt == 1)
             {
-                if (attributed is not null)
-                    RecordTrainImplicatedMember(attributed, receipt);
-                RecordTrainRedPair(selection, members, receipt);
+                if (!messageSubjectFailure && attributed is not null)
+                    RecordTrainImplicatedMember(attributed, receipt, subjects);
+                RecordTrainRedPair(selection, members, receipt, attributed);
                 var detail = $"outcome={receipt.Outcome} attempts={attempt + 1} fallback=ordinary";
                 return Fallback(detail);
             }
@@ -353,8 +358,9 @@ internal sealed partial class ConductorDriver
             // Keep the bounded bisection; absent source attribution, retain drop-newest.
             // The dropped member remains absent from MemberResults for its later solo gate.
             var dropped = attributed ?? members[^1];
-            redDropped = dropped;
+            redDropped = messageSubjectFailure ? null : dropped;
             redReceipt = receipt;
+            redSubjects = subjects;
             var ejection = new MergeTrainEjection(
                 dropped.GoalId,
                 attributed is null ? MergeTrainEjectionReason.RedNewestMember : MergeTrainEjectionReason.RedAttributedMember,
