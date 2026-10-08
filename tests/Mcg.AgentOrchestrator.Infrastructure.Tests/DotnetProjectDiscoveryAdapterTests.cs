@@ -75,6 +75,8 @@ public sealed class DotnetProjectDiscoveryAdapterTests
         AssertSource(fixture.Root, setup.Runner.Source);
         expectedKeys.Add($"tests/{setup.UnitId}/framework");
         expectedKeys.Add($"tests/{setup.UnitId}/runner");
+        expectedKeys.Add($"commands/{setup.UnitId}/test");
+        expectedKeys.Add("environment/dotnet-sdk");
         Assert.Equal(expectedKeys.Order(StringComparer.Ordinal), model.OwnerQuestions.Select(question => question.FactKey));
         Assert.All(model.OwnerQuestions, question => AssertSource(fixture.Root, question.Source));
     }

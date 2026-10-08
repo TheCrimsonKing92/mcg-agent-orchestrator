@@ -12,7 +12,14 @@ public static class ProjectModelJson
 
     public static string Serialize(ProjectModel model) => JsonSerializer.Serialize(model, Options);
 
-    public static ProjectModel Deserialize(string json) =>
-        JsonSerializer.Deserialize<ProjectModel>(json, Options)
-        ?? throw new JsonException("A project model cannot be null.");
+    public static ProjectModel Deserialize(string json)
+    {
+        var model = JsonSerializer.Deserialize<ProjectModel>(json, Options)
+            ?? throw new JsonException("A project model cannot be null.");
+        if (model.SchemaVersion != ProjectModel.CurrentSchemaVersion || model.Units is null ||
+            model.Dependencies is null || model.TestSetups is null || model.OwnerQuestions is null ||
+            model.Commands is null || model.EnvironmentNeeds is null || model.Measurements is null)
+            throw new JsonException("A project model requires schema version 2 and all snapshot lists.");
+        return model;
+    }
 }

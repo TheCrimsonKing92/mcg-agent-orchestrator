@@ -7,12 +7,14 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static class ProjectCliCommand
 {
+    private const string DiscoverUsage = "Usage: project discover [name] [--root <path>] [--measure build|test|all]";
     public static int Execute(
         IReadOnlyList<string> parts,
         OrchestratorProjectRegistry registry,
         string defaultRootDirectory,
         string? activeProjectOverride,
-        TextWriter? discoveryOutput = null)
+        TextWriter? discoveryOutput = null,
+        Func<IUnitCommandMeasurer>? measurerFactory = null)
     {
         var subcommand = parts.Count > 1 ? parts[1].ToLowerInvariant() : "show";
         switch (subcommand)
@@ -34,11 +36,11 @@ internal static class ProjectCliCommand
                 return 0;
 
             case "discover":
-                Discover(parts, registry, defaultRootDirectory, activeProjectOverride, discoveryOutput ?? Console.Out);
+                Discover(parts, registry, defaultRootDirectory, activeProjectOverride, discoveryOutput ?? Console.Out, measurerFactory);
                 return 0;
 
             default:
-                throw new ArgumentException("Usage: project list|show [name]|discover [name] [--root <path>]|create <name> --root <path> [--integration-branch <name>]|select <name>");
+                throw new ArgumentException("Usage: project list|show [name]|discover [name] [--root <path>] [--measure build|test|all]|create <name> --root <path> [--integration-branch <name>]|select <name>");
         }
     }
 
@@ -47,11 +49,10 @@ internal static class ProjectCliCommand
         OrchestratorProjectRegistry registry,
         string defaultRootDirectory,
         string? activeProjectOverride,
-        TextWriter output)
+        TextWriter output,
+        Func<IUnitCommandMeasurer>? measurerFactory)
     {
-        var rootOverride = GetFlagValue(parts, "--root");
-        if (rootOverride is not null && string.IsNullOrWhiteSpace(rootOverride))
-            throw new ArgumentException("Usage: project discover [name] [--root <path>]");
+        var (rootOverride, measuredKinds) = ParseDiscoveryOptions(parts);
 
         var name = parts.Count > 2 && !parts[2].StartsWith("--", StringComparison.Ordinal)
             ? OrchestratorProjectSelection.NormalizeProjectName(parts[2]) : null;
@@ -60,7 +61,10 @@ internal static class ProjectCliCommand
                 ? new OrchestratorProject(OrchestratorWorkspace.DefaultProjectName, Path.GetFullPath(defaultRootDirectory))
                 : registry.GetRequiredProject(name);
         IProjectDiscoveryAdapter adapter = new DotnetProjectDiscoveryAdapter();
-        var model = adapter.Discover(rootOverride ?? project.RootDirectory, RepositorySourceInventory.ExcludedDirectoryNames);
+        var measurer = measuredKinds is null ? null : measurerFactory is null ? new ProcessUnitCommandMeasurer()
+            : measurerFactory() ?? throw new InvalidOperationException("The measurement factory returned no measurer.");
+        var model = adapter.Discover(rootOverride ?? project.RootDirectory, RepositorySourceInventory.ExcludedDirectoryNames,
+            measurer, measuredKinds ?? UnitCommandKinds.None);
         var workspaceDirectory = project.ResolveWorkspace().OrchestratorDirectory;
         Directory.CreateDirectory(workspaceDirectory);
         var modelPath = Path.Combine(workspaceDirectory, "project-model.json");
@@ -79,6 +83,41 @@ internal static class ProjectCliCommand
         output.WriteLine($"Project model: {modelPath}");
         foreach (var question in model.OwnerQuestions)
             output.WriteLine($"Owner question: {question.Question}");
+    }
+
+    private static (string? Root, UnitCommandKinds? Kinds) ParseDiscoveryOptions(IReadOnlyList<string> parts)
+    {
+        string? root = null;
+        UnitCommandKinds? kinds = null;
+        var index = parts.Count > 2 && !parts[2].StartsWith("--", StringComparison.Ordinal) ? 3 : 2;
+        for (; index < parts.Count; index++)
+        {
+            var option = parts[index];
+            var equals = option.IndexOf('=');
+            var flag = equals < 0 ? option : option[..equals];
+            if (!flag.Equals("--root", StringComparison.OrdinalIgnoreCase) && !flag.Equals("--measure", StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException(DiscoverUsage);
+            var value = equals >= 0 ? option[(equals + 1)..] : ++index < parts.Count ? parts[index] : null;
+            if (string.IsNullOrWhiteSpace(value) || value.StartsWith("--", StringComparison.Ordinal))
+                throw new ArgumentException(DiscoverUsage);
+            if (flag.Equals("--root", StringComparison.OrdinalIgnoreCase))
+            {
+                if (root is not null) throw new ArgumentException(DiscoverUsage);
+                root = value;
+            }
+            else
+            {
+                if (kinds is not null) throw new ArgumentException(DiscoverUsage);
+                kinds = value.ToLowerInvariant() switch
+                {
+                    "build" => UnitCommandKinds.Build,
+                    "test" => UnitCommandKinds.Test,
+                    "all" => UnitCommandKinds.All,
+                    _ => throw new ArgumentException(DiscoverUsage)
+                };
+            }
+        }
+        return (root, kinds);
     }
 
     private static void PrintList(

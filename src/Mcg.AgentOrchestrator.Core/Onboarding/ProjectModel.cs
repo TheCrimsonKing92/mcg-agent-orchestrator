@@ -8,4 +8,10 @@ public sealed record ProjectModel(
     IReadOnlyList<ProjectUnit> Units,
     IReadOnlyList<UnitDependency> Dependencies,
     IReadOnlyList<UnitTestSetup> TestSetups,
-    IReadOnlyList<ProjectOwnerQuestion> OwnerQuestions);
+    IReadOnlyList<ProjectOwnerQuestion> OwnerQuestions,
+    IReadOnlyList<UnitCommands> Commands,
+    IReadOnlyList<EnvironmentNeed> EnvironmentNeeds,
+    IReadOnlyList<UnitMeasurement> Measurements)
+{
+    public const int CurrentSchemaVersion = 2;
+}

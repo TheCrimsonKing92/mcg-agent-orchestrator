@@ -6,7 +6,7 @@ using System.Xml.Linq;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-/// <summary>Reads declarations only. It never evaluates MSBuild, restores packages, or runs tools.</summary>
+/// <summary>Reads declarations; executes learned commands only with an explicitly supplied measurer.</summary>
 public sealed class DotnetProjectDiscoveryAdapter : IProjectDiscoveryAdapter
 {
     private const string Undetermined = "undetermined";
@@ -15,7 +15,8 @@ public sealed class DotnetProjectDiscoveryAdapter : IProjectDiscoveryAdapter
     private static readonly string[] RunnerProperties =
         ["UseMicrosoftTestingPlatformRunner", "EnableMSTestRunner", "EnableNUnitRunner", "IsTestingPlatformApplication"];
 
-    public ProjectModel Discover(string repositoryRoot, IReadOnlyCollection<string>? excludedDirectoryNames = null)
+    public ProjectModel Discover(string repositoryRoot, IReadOnlyCollection<string>? excludedDirectoryNames = null,
+        IUnitCommandMeasurer? measurer = null, UnitCommandKinds measuredKinds = UnitCommandKinds.All)
     {
         var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryRoot));
         if (!Directory.Exists(root))
@@ -40,6 +41,7 @@ public sealed class DotnetProjectDiscoveryAdapter : IProjectDiscoveryAdapter
         var units = new List<ProjectUnit>();
         var dependencies = new List<UnitDependency>();
         var setups = new List<UnitTestSetup>();
+        var commands = new List<UnitCommands>();
         var globalRunner = ReadGlobalRunner(root, questions);
         foreach (var project in projects)
         {
@@ -87,6 +89,9 @@ public sealed class DotnetProjectDiscoveryAdapter : IProjectDiscoveryAdapter
                     DiscoverRunner(id, properties, packages, globalRunner, source, questions)));
             }
 
+            commands.Add(DotnetUnitCommandDeriver.Derive(id, document, testStatus,
+                setups.LastOrDefault(setup => setup.UnitId == id)?.Runner, questions));
+
             foreach (var reference in document?.Descendants().Where(element =>
                 element.Name.LocalName == "ProjectReference") ?? [])
             {
@@ -103,14 +108,16 @@ public sealed class DotnetProjectDiscoveryAdapter : IProjectDiscoveryAdapter
             }
         }
 
+        var environment = DotnetEnvironmentNeedReader.Read(root, commands, questions);
+        var measurements = UnitMeasurementCollector.Collect(root, commands, measurer, measuredKinds, questions);
         // Paths in the snapshot are relative to its logical root, independent of the discovery host.
-        return new ProjectModel(1, ".", units,
+        return new ProjectModel(ProjectModel.CurrentSchemaVersion, ".", units,
             dependencies.GroupBy(edge => (edge.FromUnit, edge.ToUnit))
                 // Preserve the weakest declaration and its owner question rather than hiding uncertainty.
                 .Select(group => group.OrderByDescending(edge => edge.Confidence).First())
                 .OrderBy(edge => edge.FromUnit, StringComparer.Ordinal).ThenBy(edge => edge.ToUnit, StringComparer.Ordinal).ToArray(),
             setups, questions.DistinctBy(question => question.FactKey)
-                .OrderBy(question => question.FactKey, StringComparer.Ordinal).ToArray());
+                .OrderBy(question => question.FactKey, StringComparer.Ordinal).ToArray(), commands, environment, measurements);
     }
 
     private static ProjectFact<bool?> DiscoverTestStatus(string id, Declaration[] properties,
@@ -324,7 +331,7 @@ public sealed class DotnetProjectDiscoveryAdapter : IProjectDiscoveryAdapter
         }
     }
 
-    private static bool IsSafePath(string root, string path)
+    internal static bool IsSafePath(string root, string path)
     {
         var relative = Relative(root, path);
         if (relative == ".." || relative.StartsWith("../", StringComparison.Ordinal) || Path.IsPathRooted(relative))
@@ -351,7 +358,7 @@ public sealed class DotnetProjectDiscoveryAdapter : IProjectDiscoveryAdapter
         !element.AncestorsAndSelf().Any(ancestor => ancestor.Attribute("Condition") is not null ||
             ancestor.Name.LocalName is "Choose" or "When" or "Otherwise" or "Target");
 
-    private static ProjectFact<T> Fact<T>(T value, FactConfidence confidence, FactSource source,
+    internal static ProjectFact<T> Fact<T>(T value, FactConfidence confidence, FactSource source,
         string key, string reason, List<ProjectOwnerQuestion> questions)
     {
         if (confidence != FactConfidence.High)
@@ -359,7 +366,7 @@ public sealed class DotnetProjectDiscoveryAdapter : IProjectDiscoveryAdapter
         return new ProjectFact<T>(value, source, confidence);
     }
 
-    private static void Ask(string key, string reason, FactSource source, List<ProjectOwnerQuestion> questions) =>
+    internal static void Ask(string key, string reason, FactSource source, List<ProjectOwnerQuestion> questions) =>
         questions.Add(new ProjectOwnerQuestion(key, $"{key}: {reason}", source));
 
     private sealed record Declaration(string Name, string Value, FactSource Source, bool Reliable);
