@@ -77,7 +77,7 @@ public sealed class OwnerConsoleQuestionPushTests
         await session.HandleCommandAsync("answer 1 yes", CancellationToken.None);
 
         Assert.Equal([("clarification-1", "maybe"), ("clarification-1", "yes")], harness.Answers.Calls);
-        Assert.Contains("question 1 is still open", harness.Output.Text);
+        Assert.Contains("Answer queued for question 1", harness.Output.Text);
         Assert.DoesNotContain("answered question 1", harness.Output.Text);
     }
 

@@ -15,8 +15,11 @@ internal sealed class OwnerConsoleSession(
     TimeProvider clock,
     IOwnerConsoleConductor? conductor = null,
     IOwnerConsoleDigestReport? digestReport = null,
-    ChangeStreamFileReader? changes = null)
+    ChangeStreamFileReader? changes = null,
+    AnswerIntentStatusTracker? answerTracking = null) : IDisposable
 {
+    private readonly AnswerIntentStatusTracker _answerTracking = answerTracking ?? new(answers.ReadStatusAsync, clock);
+    public void Dispose() => _answerTracking.Dispose();
     private readonly OwnerConsoleControlCommands _control = new(conductor, digestReport, output, clock);
     private readonly Dictionary<string, int> _numbers = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<int, OwnerQuestion> _open = [];
@@ -171,11 +174,11 @@ internal sealed class OwnerConsoleSession(
         { Announce("usage: answer <n> <text> (text cannot start with --)"); return; }
         try
         {
-            answers.Submit(question, text);
+            var submission = answers.Submit(question, text);
+            var prefix = question.GoalId[..Math.Min(8, question.GoalId.Length)];
+            Announce(AnswerIntentStatusTracker.Queued(number, prefix));
+            _answerTracking.Track(submission.IntentId, number, prefix, Announce);
             await RefreshQuestionsAsync(cancellationToken);
-            Announce(_open.ContainsKey(number)
-                ? $"question {number} is still open; answer was not accepted"
-                : $"answered question {number}");
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or KeyNotFoundException)
         { Announce($"error: {ex.Message}"); await RefreshQuestionsAsync(cancellationToken); }
