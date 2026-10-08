@@ -22,9 +22,12 @@ internal sealed class ConductorStewardDeterministicRoute(
             ConductorStewardTriggerKind.DeveloperGateReopenNoCommit or
             ConductorStewardTriggerKind.DeveloperReviewerFindingNoCommit)
             return null;
-        var text = trigger.Kind == ConductorStewardTriggerKind.AcceptanceCollectionGuardClass
-            ? BuildCollectionText(trigger, worktree)
-            : BuildPlannerText(trigger, worktree);
+        var text = trigger.Kind switch
+        {
+            ConductorStewardTriggerKind.ReviewerOrTesterBlockerWithAnswer => BuildAnsweredBlockerText(trigger),
+            ConductorStewardTriggerKind.AcceptanceCollectionGuardClass => BuildCollectionText(trigger, worktree),
+            _ => BuildPlannerText(trigger, worktree)
+        };
         if (string.IsNullOrWhiteSpace(text)) return null;
         return JsonSerializer.Serialize(new
         {
@@ -36,6 +39,15 @@ internal sealed class ConductorStewardDeterministicRoute(
             instruction = text,
             evidenceReferences = Array.Empty<string>()
         });
+    }
+
+    private static string? BuildAnsweredBlockerText(ConductorStewardTrigger trigger)
+    {
+        var blocker = trigger.EvidenceReferences.FirstOrDefault(reference => reference.StartsWith("blocker=", StringComparison.Ordinal))?["blocker=".Length..];
+        var answer = trigger.EvidenceReferences.FirstOrDefault(reference => reference.StartsWith("clarification-answer=", StringComparison.Ordinal))?["clarification-answer=".Length..];
+        if (string.IsNullOrWhiteSpace(blocker) || string.IsNullOrWhiteSpace(answer)) return null;
+        return $"Resolve the Reviewer/Tester blocker on candidate {trigger.CandidateSha}: {blocker}\n" +
+               $"Apply this authoritative clarification answer:\n{answer}\nRecheck the affected acceptance criteria.";
     }
 
     private string? BuildPlannerText(ConductorStewardTrigger trigger, string worktree)

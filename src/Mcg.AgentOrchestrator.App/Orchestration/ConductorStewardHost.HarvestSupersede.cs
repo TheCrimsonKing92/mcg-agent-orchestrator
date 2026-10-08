@@ -10,8 +10,9 @@ internal sealed partial class ConductorStewardHost
                 item.Identity == trigger.Identity && item.OccurredAt == trigger.OccurredAt))
             return true;
 
-        // Case C is anchored to an acceptance failure, not to the task's dispatch start.
-        if (trigger.Kind == ConductorStewardTriggerKind.AcceptanceCollectionGuardClass)
+        // C is anchored to acceptance; F to the answered blocker. Re-detection above checks currency.
+        if (trigger.Kind is ConductorStewardTriggerKind.AcceptanceCollectionGuardClass or
+            ConductorStewardTriggerKind.ReviewerOrTesterBlockerWithAnswer)
             return false;
 
         var task = goal.Tasks.FirstOrDefault(item => item.Id.Value == trigger.TaskId);

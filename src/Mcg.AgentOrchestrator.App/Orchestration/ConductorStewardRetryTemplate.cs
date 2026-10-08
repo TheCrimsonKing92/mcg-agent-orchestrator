@@ -17,6 +17,8 @@ internal static class ConductorStewardRetryTemplate
         frame.AppendLine().AppendLine("Decision procedure:");
         frame.AppendLine(trigger.Kind switch
         {
+            ConductorStewardTriggerKind.ReviewerOrTesterBlockerWithAnswer =>
+                "Apply the answered clarification verbatim to the Developer change on this candidate; resolve the named Reviewer/Tester blocker and recheck the affected criteria.",
             ConductorStewardTriggerKind.DeveloperGateReopenNoCommit =>
                 "Diagnose the gate evidence on the unchanged candidate; only a case D close or owner question is allowed.",
             ConductorStewardTriggerKind.DeveloperNoChangeWithConfirmedRed =>

@@ -22,6 +22,7 @@ internal sealed partial class ConductorStewardHost
     private Task<string>? _round;
     private ConductorStewardStoredTrigger? _running;
     private long? _claimedGoalVersion;
+    private AgentOrchestratorKernel? _kernel;
     private readonly JsonSerializerOptions _json = new(JsonSerializerDefaults.Web);
 
     internal ConductorStewardHost(
@@ -91,11 +92,14 @@ internal sealed partial class ConductorStewardHost
     {
         var enabledSetting = Environment.GetEnvironmentVariable(EnabledEnvironmentVariable);
         var caseDSources = ConductorStewardCaseDSources.CreateDefault(workspace);
-        return new ConductorStewardHost(
+        ConductorStewardHost? host = null;
+        host = new ConductorStewardHost(
             new ConductorStewardTriggerStore(Path.Combine(workspace.OrchestratorDirectory, "steward-triggers.db")),
             new ConductorStewardTriggerDetector(
                 (goal, className) => CandidateAddedClassCollection(workspace, goal, className),
-                goal => ConductorStewardAcceptanceTrxResolver.Resolve(workspace.OrchestratorDirectory, goal), caseDSources),
+                goal => ConductorStewardAcceptanceTrxResolver.Resolve(workspace.OrchestratorDirectory, goal), caseDSources,
+                new ConductorStewardAnsweredBlockerDetector(goal =>
+                    host?._kernel?.HumanInputRequests.Where(request => request.GoalId == goal.Id).ToArray() ?? [])),
             new ClaudeConductorStewardModelRound(Path.Combine(workspace.OrchestratorDirectory, "steward-rounds"),
                 lessons: new ConductorLessonSelector(workspace.OperatorLessonsStorePath,
                     message => new ConductEventLogWriter(workspace.ConductEventsLogPath)
@@ -115,10 +119,12 @@ internal sealed partial class ConductorStewardHost
                 new GitConductorStewardTrackedFileLister(),
                 new ManifestConductorStewardLaneSubstringResolver(workspace.ProjectHomeDirectoryOrNull)),
             caseDSources: caseDSources);
+        return host;
     }
 
     internal IReadOnlySet<GoalId> ServiceTick(AgentOrchestratorKernel kernel, string? onlyGoalId = null)
     {
+        _kernel = kernel;
         if (!Enabled) return new HashSet<GoalId>();
         var changed = new HashSet<GoalId>();
         var now = _utcNow();

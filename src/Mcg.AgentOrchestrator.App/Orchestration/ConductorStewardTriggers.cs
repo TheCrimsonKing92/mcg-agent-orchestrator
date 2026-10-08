@@ -10,7 +10,8 @@ internal enum ConductorStewardTriggerKind
     PlannerOutputContractRejected,
     AcceptanceCollectionGuardClass,
     DeveloperGateReopenNoCommit,
-    DeveloperReviewerFindingNoCommit
+    DeveloperReviewerFindingNoCommit,
+    ReviewerOrTesterBlockerWithAnswer
 }
 
 internal sealed record ConductorStewardTrigger(
@@ -30,6 +31,7 @@ internal sealed record ConductorStewardTrigger(
         ConductorStewardTriggerKind.PlannerOutputContractRejected => "B",
         ConductorStewardTriggerKind.DeveloperGateReopenNoCommit => "D",
         ConductorStewardTriggerKind.DeveloperReviewerFindingNoCommit => "E",
+        ConductorStewardTriggerKind.ReviewerOrTesterBlockerWithAnswer => "F",
         _ => "C"
     };
 
@@ -40,7 +42,8 @@ internal sealed record ConductorStewardTrigger(
 internal sealed partial class ConductorStewardTriggerDetector(
     Func<Goal, string, string?>? candidateAddedClassCollection = null,
     Func<Goal, IReadOnlyList<string>>? acceptanceTrxPaths = null,
-    ConductorStewardCaseDSources? caseDSources = null)
+    ConductorStewardCaseDSources? caseDSources = null,
+    ConductorStewardAnsweredBlockerDetector? answeredBlockers = null)
 {
     private const string GuardName = "AcceptanceGateEngine_disabled_collections_spanning_lanes_share_an_exclusive_resource";
     private static readonly Regex OffendingClass = new(
@@ -131,6 +134,7 @@ internal sealed partial class ConductorStewardTriggerDetector(
         }
         DetectCaseD(goal, needsInspection, result);
         DetectCaseE(goal, needsInspection, result);
+        if (answeredBlockers is not null) result.AddRange(answeredBlockers.Detect(goal, needsInspection));
         return result;
     }
 
