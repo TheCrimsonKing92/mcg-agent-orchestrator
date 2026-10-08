@@ -31,10 +31,6 @@ public sealed class ConductorBoardFillHostNoWriteTests : CliTaskQueryTestSupport
             var repository = new Repository();
             var markdown = """
                 # Read-only draft
-                ## Planner output format, read this first
-
-                Begin each mapping line with the bare criterion number and a period, exactly `N. maps to <subject>. disposition=planned; plan=<text>` (the semicolon after the disposition value is required). Only `planned` and `undecidable` are accepted. The literal text `disposition=` must appear only on mapping lines. Only mapping lines may begin with a digit and a period. Cite files by full repository-relative path that exists at HEAD, or mark them as new; never cite a wildcard pattern. Do not use the words placeholder, TBD or TODO. The text after plan= must be a non-empty one-sentence summary on the same line; detail bullets may follow but must not begin with a digit and a period.
-
                 ## Measured premise
                 Main HEAD: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
                 The receipt seam exists at `docs/role-capability-matrix.md:1`.
@@ -68,7 +64,7 @@ public sealed class ConductorBoardFillHostNoWriteTests : CliTaskQueryTestSupport
             var round = Assert.Single(drafts.ReadAll());
             Assert.Equal("draft", round.Outcome);
             Assert.All(round.Checks, check => Assert.True(check.Passed, check.Detail));
-            Assert.Equal(8, round.Checks.Count);
+            Assert.Equal(7, round.Checks.Count);
             Assert.True(File.Exists(round.DraftPath));
             Assert.True(File.Exists(round.ReceiptPath));
             Assert.Equal(1, calls);

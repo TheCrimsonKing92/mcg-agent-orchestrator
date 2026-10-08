@@ -52,10 +52,6 @@ internal static class AuthorBriefDraftChecks
                     citationFailures.Add($"{token}: line is outside file (line count {count})");
             }
         }
-        var plannerFormat = markdown.ReplaceLineEndings("\n").Contains(
-            AuthorBriefDraftPrompt.PlannerFormatSection.ReplaceLineEndings("\n"), StringComparison.Ordinal);
-        var plannerHeading = headings.FirstOrDefault(heading => heading.Groups[1].Value.Trim()
-            .Equals("Planner output format, read this first", StringComparison.OrdinalIgnoreCase));
         var bulletedLines = UnfencedLines(SectionText("Acceptance criteria"))
             .Select(line => line.Text)
             .Where(line => line.StartsWith("- ", StringComparison.Ordinal) || line.StartsWith("* ", StringComparison.Ordinal))
@@ -71,8 +67,6 @@ internal static class AuthorBriefDraftChecks
             new("criteria-present", criteria.Count > 0, criteria.Count > 0 ? $"{criteria.Count} declared criteria." : "Acceptance criteria contains no declared criteria."),
             new("owner-sentence", ownerFailures.Length == 0, ownerFailures.Length == 0 ? "Every declared criterion has an owner sentence and verification class." : $"Missing owner sentence: {string.Join(" | ", ownerFailures)}"),
             new("premise-citations", citationFailures.Count == 0, citationFailures.Count == 0 ? "All premise file citations resolve at main HEAD." : string.Join(" | ", citationFailures)),
-            new("planner-format", plannerFormat, plannerFormat ? "Planner format section present verbatim." :
-                $"Observed Planner heading: {plannerHeading?.Groups[1].Value.Trim() ?? "none"}; required section was not present verbatim."),
             new("numbered-criteria", numberedCriteria, criteria.Count == 0 ? "No declared criteria; criteria-present reports the absence." :
                 numberedCriteria ? "No bulleted criteria outside fenced code blocks." : $"Observed bulleted lines: {string.Join(" | ", bulletedLines)}"),
             new("developer-deferred-criterion", criteria.Count == 0 || developerDeferred, criteria.Count == 0 ?
