@@ -511,7 +511,7 @@ Console.WriteLine("  operator-listen");
 Console.WriteLine("  simple-goal <objective>, goal-plan [heading-filter] [--create-goals|--create-simple-goals] [--backlog-coverage full|slice]");
 Console.WriteLine("  backlog-intake [heading-filter] [--create-goal [--pipeline auto|scout|five-role|developer-reviewer|developer-only]|--create-simple-goal] [--backlog-coverage full|slice] [--force-reclaim]");
 Console.WriteLine("  intent-template [template request] [--create-goal|--create-simple-goal]");
-Console.WriteLine("  goals, agents, autonomy-policies");
+Console.WriteLine("  goals, agents");
 Console.WriteLine("  agent <role> <provider> <model> [name] [--complex-model <model>] (replace role)");
 Console.WriteLine("  agent-add <role> <provider> <model> [name] [--complex-model <model>] (add/replace id)");
 Console.WriteLine("  reassign-agent <task-number> <agent-id> (persist exact task agent assignment)");

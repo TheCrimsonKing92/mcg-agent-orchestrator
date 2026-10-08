@@ -70,7 +70,7 @@ dotnet build "$APP_PROJECT" --nologo -v quiet -clp:ErrorsOnly >"$BUILD_LOG" 2>&1
     rm -rf "$LOCK_DIR" 2>/dev/null || true
     trap - EXIT
     if grep -qiE "(CS2012|MSB3021|cannot open.*for writing|process cannot access|being used by another process)" "$BUILD_LOG" 2>/dev/null; then
-        echo "ERROR: build failed: App.dll is locked by a running orchestrator instance (serve-dashboard?); stop it and retry" >&2
+        echo "ERROR: build failed: App.dll is locked by a running orchestrator instance; stop it and retry" >&2
     else
         cat "$BUILD_LOG" >&2
         echo "ERROR: dotnet build failed" >&2
