@@ -242,6 +242,27 @@ public sealed partial class AgentOrchestratorKernel
         return task;
     }
 
+    public TaskSpec AddSliceBatchParentFixUpTask(GoalId parentId, string findings)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(findings);
+        var parent = GetGoal(parentId);
+        if (parent.SliceBatchParentId is not null ||
+            !_goals.Values.Any(goal => goal.SliceBatchParentId == parentId))
+        {
+            throw new InvalidOperationException($"Goal '{parentId.Value}' is not a slice-batch parent.");
+        }
+
+        if (parent.Tasks.Any(task =>
+                task.RequiredRole == AgentRole.Developer &&
+                task.Description.StartsWith("Fix-up:", StringComparison.Ordinal) &&
+                task.Status is not (WorkTaskStatus.Completed or WorkTaskStatus.Failed or WorkTaskStatus.Cancelled)))
+        {
+            throw new InvalidOperationException($"Slice-batch parent '{parentId.Value}' already has an open fix-up task.");
+        }
+
+        return AddTask(parentId, AgentRole.Developer, $"Fix-up: {findings.Trim()}");
+    }
+
     // Selects the most cost-effective agent for a task:
     // Simple tasks prefer local (LocalBridge) agents; Complex tasks prefer capable paid agents.
     private static AgentDefinition? SelectAgentForTask(

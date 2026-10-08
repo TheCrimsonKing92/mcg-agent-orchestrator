@@ -22,7 +22,8 @@ internal enum GoalIntakePipeline
     DeveloperReviewer,
     FiveRole,
     Scout,
-    DeveloperStreamReviewer
+    DeveloperStreamReviewer,
+    WholeGoalReview
 }
 
 internal enum GoalIntakePipelineRequest
@@ -101,6 +102,7 @@ internal sealed record GoalIntakePipelineDecision(
         GoalIntakePipeline.DeveloperOnly => "developer-only",
         GoalIntakePipeline.DeveloperReviewer => "developer-reviewer",
         GoalIntakePipeline.DeveloperStreamReviewer => "developer-stream-reviewer",
+        GoalIntakePipeline.WholeGoalReview => "whole-goal-review",
         GoalIntakePipeline.FiveRole => "five-role",
         GoalIntakePipeline.Scout => "scout",
         _ => Pipeline.ToString()
@@ -551,6 +553,14 @@ internal static class GoalObjectivePlanner
             ];
         }
 
+        if (pipeline == GoalIntakePipeline.WholeGoalReview)
+        {
+            return
+            [
+                new GoalObjectiveTaskBoundary(1, AgentRole.Reviewer, "Review the composed whole goal against all acceptance criteria using each stream's review receipt.", "read-only", "Review must mention residual risk and acceptance readiness.")
+            ];
+        }
+
         if (pipeline == GoalIntakePipeline.Scout)
         {
             return
@@ -611,6 +621,7 @@ internal static class GoalObjectivePlanner
             GoalIntakePipeline.DeveloperOnly => "Developer-only",
             GoalIntakePipeline.DeveloperReviewer => "Developer+Reviewer",
             GoalIntakePipeline.DeveloperStreamReviewer => "Developer+stream-Reviewer",
+            GoalIntakePipeline.WholeGoalReview => "Whole-Goal Reviewer",
             GoalIntakePipeline.FiveRole => "five-role",
             GoalIntakePipeline.Scout => "scout",
             _ => pipeline.ToString()

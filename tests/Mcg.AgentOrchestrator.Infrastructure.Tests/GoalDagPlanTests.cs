@@ -179,7 +179,7 @@ public sealed class GoalDagPlanTests
         Assert.Equal(4, kernel.Goals.Count);
         var parent = Assert.Single(kernel.Goals.Where(goal => goal.SliceBatchParentId is null));
         Assert.Equal(parent.Id, currentGoal!.Id);
-        Assert.Equal([AgentRole.Developer, AgentRole.Reviewer], parent.Tasks.Select(task => task.RequiredRole));
+        Assert.Equal([AgentRole.Reviewer], parent.Tasks.Select(task => task.RequiredRole));
 
         var children = kernel.Goals.Where(goal => goal.SliceBatchParentId == parent.Id).ToArray();
         Assert.Equal(3, children.Length);
