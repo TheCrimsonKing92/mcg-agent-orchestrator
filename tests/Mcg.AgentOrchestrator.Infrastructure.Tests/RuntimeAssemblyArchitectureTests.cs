@@ -57,6 +57,7 @@ public sealed class RuntimeAssemblyArchitectureTests
         new("Mcg.AgentOrchestrator.Infrastructure.DotnetBuildEnvironmentManager", "Build-server shutdown", "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetBuildEnvironmentManager.cs:596"),
         new("Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier", "Git scalar reads", "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs:6470"),
         new("Mcg.AgentOrchestrator.Infrastructure.GoalWorktrees", "Build-server shutdown and direct git", "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalWorktrees.GitOps.cs:372"),
+        new("Mcg.AgentOrchestrator.Infrastructure.ProcessUnitCommandMeasurer", "Explicit project discover --measure dotnet child behind IUnitCommandMeasurer", "src/Mcg.AgentOrchestrator.Infrastructure/Onboarding/ProcessUnitCommandMeasurer.cs:37"),
         new("Mcg.AgentOrchestrator.Infrastructure.WindowsSandboxAclHelper", "icacls sandbox reset", "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalWorktrees.cs:247")
     ];
 
