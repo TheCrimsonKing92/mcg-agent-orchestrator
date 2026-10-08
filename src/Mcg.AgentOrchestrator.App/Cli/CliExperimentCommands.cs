@@ -48,7 +48,11 @@ internal static class CliExperimentCommands
                 if (epic is null) throw new InvalidOperationException($"epicId: epic '{spec.EpicId}' was not found.");
                 spec = spec with { EpicId = epic.Id };
             }
-            var added = new ExperimentStore(context.Workspace.ExperimentStorePath).AddAsync(spec).GetAwaiter().GetResult();
+            var experimentStore = new ExperimentStore(context.Workspace.ExperimentStorePath);
+            var prior = experimentStore.ListAllAsync().GetAwaiter().GetResult();
+            var added = experimentStore.AddAsync(spec).GetAwaiter().GetResult();
+            foreach (var overlap in ExperimentOverlap.Find(added, prior))
+                Console.WriteLine($"overlap: {overlap.Other.Id} shared: {string.Join(", ", overlap.SharedMetrics)} hypothesis: {overlap.Other.Spec.Hypothesis.ReplaceLineEndings(" ")}");
             Console.WriteLine($"experiment: {added.Id}");
             return false;
         }
@@ -85,6 +89,17 @@ internal static class CliExperimentCommands
         ExperimentReading.Write(record, goals, ReadExperimentLandings(context.Workspace.GoalLifecycleEventsDirectory),
             CliOwnerDigestRetryIntents.Read(context.Workspace, asOf), asOf);
         Console.WriteLine($"outcome: {ExperimentReading.Name(record.Outcome)}");
+        var overlaps = ExperimentOverlap.Find(record, store.ListAllAsync().GetAwaiter().GetResult());
+        if (overlaps.Count == 0) Console.WriteLine("overlaps: none");
+        else
+        {
+            Console.WriteLine("overlaps:");
+            foreach (var overlap in overlaps)
+            {
+                var state = overlap.Other.Decision is { } decision ? $"decided at {decision.DecidedAt:O}" : "open";
+                Console.WriteLine($"  {overlap.Other.Id} {state} shared: {string.Join(", ", overlap.SharedMetrics)}");
+            }
+        }
         return false;
     }
 

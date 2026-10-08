@@ -451,10 +451,12 @@ internal static class CliCommandHelp
         "Render all backlog items as markdown.",
         ["--help", "-h"]);
 
+    private const string ExperimentOverlapHelp = "Overlap means an exact shared metric across metrics plus guardrail and intersecting active windows, from baseline end (or creation) to decided-at (or open-ended). Boundary touches and empty or inverted windows do not overlap. Overlap only warns and never refuses an add or changes an outcome.";
+
     private static readonly CommandHelpEntry ExperimentAdd = new(
-        ExperimentAddUsage, "Register an experiment from a JSON spec; interventions remain manual.", ["--spec", "--help", "-h"]);
+        ExperimentAddUsage, "Register an experiment from a JSON spec; interventions remain manual. Prints overlap: warnings before the new id. " + ExperimentOverlapHelp, ["--spec", "--help", "-h"]);
     private static readonly CommandHelpEntry ExperimentShow = new(
-        ExperimentShowUsage, "Show an experiment, a freshly computed reading, and its separate stored outcome.", ["--as-of", "--help", "-h"]);
+        ExperimentShowUsage, "Show an experiment, a freshly computed reading, and its separate stored outcome; append overlaps: entries or overlaps: none. " + ExperimentOverlapHelp, ["--as-of", "--help", "-h"]);
     private static readonly CommandHelpEntry ExperimentDecide = new(
         ExperimentDecideUsage, "Record evidence and action once on an open experiment.", ["--outcome", "--evidence", "--action", "--help", "-h"]);
 

@@ -1,10 +1,64 @@
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Microsoft.Data.Sqlite;
 using Xunit;
 
 // Parallel-safe: each case owns its SQLite database.
 public sealed class ExperimentStoreTests
 {
+    [Fact]
+    public async Task ListAll_ReturnsEveryFullRecordInCreationThenIdOrderWithoutWriting()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "experiment-list-" + Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var path = Path.Combine(root, "experiments.db");
+            var store = new ExperimentStore(path);
+            var emptyBefore = File.ReadAllBytes(path);
+            Assert.Empty(await store.ListAllAsync());
+            Assert.Equal(emptyBefore, File.ReadAllBytes(path));
+            var spec = new ExperimentSpec("Measure a manual policy",
+                new(ExperimentInterventionKind.Policy, "Change the brief"),
+                new(ExperimentBaselineKind.TwinGoal, TwinGoalId: "twin"), ["rounds-per-landing"],
+                new("productive-rounds", new("productive-rounds", "<", -10)), new(1, ExperimentStopUnit.Goals),
+                new([new("rounds-per-landing", "<", 0)], [new("rounds-per-landing", ">", 0)]));
+            var late = await store.AddAsync(spec with { Hypothesis = "Later experiment", EpicId = "epic-id" });
+            var firstTie = await store.AddAsync(spec with { Hypothesis = "First tied experiment" });
+            var secondTie = await store.AddAsync(spec with { Hypothesis = "Second tied experiment" });
+            await store.DecideAsync(firstTie.Id, ExperimentOutcomeState.Refuted, "receipt:list", "Revert");
+            // Fix creation timestamps to prove ordering even when insertion order differs and dates tie.
+            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+                { DataSource = path, Pooling = false }.ToString()))
+            {
+                await connection.OpenAsync();
+                using var command = connection.CreateCommand();
+                command.CommandText = "UPDATE experiments SET created_at=CASE WHEN id=$late THEN $later ELSE $earlier END";
+                command.Parameters.AddWithValue("$late", late.Id);
+                command.Parameters.AddWithValue("$later", "2026-10-02T00:00:00.0000000+00:00");
+                command.Parameters.AddWithValue("$earlier", "2026-10-01T00:00:00.0000000+00:00");
+                await command.ExecuteNonQueryAsync();
+            }
+            var before = File.ReadAllBytes(path);
+            var listed = await store.ListAllAsync();
+            Assert.Equal(before, File.ReadAllBytes(path));
+            var tiedIds = new[] { firstTie.Id, secondTie.Id }.OrderBy(id => id, StringComparer.Ordinal).ToArray();
+            Assert.Equal(new[] { tiedIds[0], tiedIds[1], late.Id }, listed.Select(record => record.Id));
+            Assert.Equal(3, listed.Count);
+            foreach (var record in listed)
+            {
+                var resolved = await store.ResolveAsync(record.Id);
+                Assert.Equal(JsonSerializer.Serialize(resolved, ExperimentStore.JsonOptions),
+                    JsonSerializer.Serialize(record, ExperimentStore.JsonOptions));
+            }
+            var decided = Assert.Single(listed.Where(record => record.Id == firstTie.Id));
+            Assert.Equal(ExperimentOutcomeState.Refuted, decided.Outcome);
+            Assert.Equal("receipt:list", decided.Decision!.Evidence);
+            Assert.Equal("epic-id", listed[2].Spec.EpicId);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
     [Fact]
     public async Task FullRecord_RoundTripsEveryFieldAndDecidedOutcome()
     {
