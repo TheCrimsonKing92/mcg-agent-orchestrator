@@ -129,9 +129,9 @@ public static class GoalDependencyPlanner
             return true;
         }
 
-        if (Mentions(targetText, "dashboard", "subscription consumers") && Mentions(sourceText, "operator inbox"))
+        if (Mentions(targetText, "subscription consumers") && Mentions(sourceText, "operator inbox"))
         {
-            reason = "dashboard subscription consumers need operator inbox concepts";
+            reason = "subscription consumers need operator inbox concepts";
             return true;
         }
 

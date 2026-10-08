@@ -298,12 +298,6 @@ internal sealed class SqliteWriteTelemetry
             return "loop";
         }
 
-        if (commandLine.Contains("prototype-ui", StringComparison.OrdinalIgnoreCase) ||
-            commandLine.Contains("dashboard", StringComparison.OrdinalIgnoreCase))
-        {
-            return "dashboard";
-        }
-
         return "cli";
     }
 

@@ -130,7 +130,7 @@ public static class BacklogIntakePlanner
     {
         var roles = new List<AgentRole> { AgentRole.Researcher, AgentRole.Planner };
 
-        if (ContainsAny(text, "add", "implement", "command", "dashboard", "worker", "workflow", "broker", "supervisor", "rollback", "recovery"))
+        if (ContainsAny(text, "add", "implement", "command", "worker", "workflow", "broker", "supervisor", "rollback", "recovery"))
         {
             roles.Add(AgentRole.Developer);
         }
@@ -158,7 +158,7 @@ public static class BacklogIntakePlanner
             risks.Add("concurrency");
         }
 
-        if (ContainsAny(text, "dashboard", "operator", "inbox"))
+        if (ContainsAny(text, "operator", "inbox"))
         {
             risks.Add("operator-ux");
         }
@@ -169,11 +169,6 @@ public static class BacklogIntakePlanner
     private static List<string> InferVerification(string text)
     {
         var checks = new List<string> { "Focused unit tests for changed planner/command/mapper behavior." };
-        if (ContainsAny(text, "dashboard", "operator inbox", "work-summary"))
-        {
-            checks.Add("Dashboard rendering/API DTO test for visible operator evidence.");
-        }
-
         if (ContainsAny(text, "subscription", "worker", "dispatch", "preflight"))
         {
             checks.Add("Worker dispatch/preflight test with no paid worker start.");
