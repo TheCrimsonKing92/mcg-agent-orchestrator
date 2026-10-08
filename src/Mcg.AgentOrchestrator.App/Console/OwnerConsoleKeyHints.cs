@@ -45,6 +45,8 @@ internal static class OwnerConsoleKeyHints
         ": (any pane): Open the command line.",
         "?: Open this help dialog (any pane).",
         "q: Quit the console (any pane).",
-        "Esc: Cancel command entry or close a dialog."
+        "Esc: Cancel command entry or close a dialog.",
+        "e: Open the epic view (any pane).",
+        ":epics: Open the epic view (same as e)."
     }.Concat(Commands.Select(item => $":{item.Command}: {item.Description}")));
 }
