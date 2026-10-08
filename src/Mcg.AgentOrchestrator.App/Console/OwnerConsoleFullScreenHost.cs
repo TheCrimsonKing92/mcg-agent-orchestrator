@@ -11,8 +11,9 @@ internal static class OwnerConsoleFullScreenHost
         OwnerConsoleViewModelBuilder builder, string conductLogPath, DateTimeOffset opened,
         DateTimeOffset? last, CancellationToken token)
     {
-        var recent = OwnerConsoleStartupActivity.ReadRecent(conductLogPath).ToList();
-        var model = await builder.BuildAsync(new(opened, last, recent, 0), token);
+        var history = OwnerConsoleStartupActivity.ReadHistory(conductLogPath, null, TimeProvider.System, token);
+        var recent = history.Recent.ToList();
+        var model = await builder.BuildAsync(new(opened, last, recent, history.LandedToday), token);
         return (model, recent);
     }
 
@@ -34,10 +35,13 @@ internal static class OwnerConsoleFullScreenHost
                 ? SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath) : new EmptyOwnerConsoleStateQueries();
             var questions = new SerializedOwnerQuestionSource(new OwnerQuestionReadModel(state, workspace.OrchestratorDirectory));
             var builder = new OwnerConsoleViewModelBuilder(state, questions,
-                new ConductorLeaseLiveness(workspace.OrchestratorDirectory), new PortfolioGoalEpicLookup(workspace.PortfolioStorePath), clock);
+                new ConductorLeaseLiveness(workspace.OrchestratorDirectory), new PortfolioGoalEpicLookup(workspace.PortfolioStorePath), clock,
+                new OwnerActivityEvidenceReader(Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db")).Read);
             var opened = clock.GetUtcNow();
             DateTimeOffset? last = null;
             var landings = 0;
+            var landingDate = clock.GetLocalNow().Date;
+            var countedLandings = new HashSet<OwnerConductEvent>();
             var recent = new List<OwnerConductEvent>();
             IReadOnlyCollection<string> boardIds = [];
             activityLoader = new(workspace.ConductEventsLogPath, workspace.GoalLifecycleEventsDirectory, clock);
@@ -50,10 +54,13 @@ internal static class OwnerConsoleFullScreenHost
                 await rebuild.WaitAsync(token);
                 try
                 {
+                    if (clock.GetLocalNow().Date != landingDate)
+                    { landingDate = clock.GetLocalNow().Date; landings = 0; countedLandings.Clear(); }
                     if (item is not null)
                     {
                         last = item.Timestamp;
-                        if (OwnerConsoleViewModelBuilder.IsLanding(item)) landings++;
+                        if (OwnerActivityNarrator.IsLanding(item) &&
+                            TimeZoneInfo.ConvertTime(item.Timestamp, clock.LocalTimeZone).Date == landingDate && countedLandings.Add(item)) landings++;
                         OwnerConsoleStartupActivity.Append(recent, item);
                     }
                     var inputs = new OwnerConsoleViewInputs(opened, last, recent.ToArray(), landings);
@@ -96,6 +103,8 @@ internal static class OwnerConsoleFullScreenHost
                 {
                     recent = loaded.Recent.Select(builder.EnrichEvent).ToList();
                     last = loaded.LastActivity;
+                    landings = loaded.LandedToday;
+                    foreach (var landing in loaded.Recent.Where(OwnerActivityNarrator.IsLanding)) countedLandings.Add(landing);
                 }, token);
             }
             catch { rebuild.Release(); throw; }

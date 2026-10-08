@@ -54,7 +54,7 @@ internal sealed class OwnerConsoleStartupLoader(OwnerConsoleViewModelBuilder bui
                 token.ThrowIfCancellationRequested();
                 activityLoaded(loaded);
                 Update(current => builder.WithActivity(current, inputs with
-                    { RecentEvents = loaded.Recent, LastConductEvent = loaded.LastActivity }) with { ActivityState = null });
+                    { RecentEvents = loaded.Recent, LastConductEvent = loaded.LastActivity, LandedToday = loaded.LandedToday }) with { ActivityState = null });
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { }
             catch (Exception ex) { Update(current => current with { ActivityState = new(Error: ex.Message) }); }

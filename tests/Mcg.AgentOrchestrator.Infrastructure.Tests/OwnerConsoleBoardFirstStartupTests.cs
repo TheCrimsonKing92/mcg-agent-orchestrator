@@ -43,7 +43,7 @@ public sealed class OwnerConsoleBoardFirstStartupTests
             await fill.WaitAsync(TestContext.Current.CancellationToken);
         }
         Assert.Equal("[1] 11111111 HumanInput: Ship?", Assert.Single(view.DecisionLines));
-        Assert.Equal($"{DateTimeOffset.UnixEpoch.ToLocalTime():HH:mm:ss} 11111111 Board first gate passed", Assert.Single(view.ActivityLines));
+        Assert.Equal($"{DateTimeOffset.UnixEpoch.ToLocalTime():HH:mm:ss} Board first: passed its tests, landing next", Assert.Single(view.ActivityLines));
         Assert.Single(view.BoardTable.Rows.Cast<System.Data.DataRow>());
     }
 

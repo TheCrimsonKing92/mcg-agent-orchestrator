@@ -135,7 +135,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     {
         if (_controller.Model is not { } model) return;
         var status = model.Status;
-        _status.Text = $"conductor: {(status.ConductorRunning ? "running" : "stopped")} | active: {status.ActiveGoals} | decisions: {status.LiveDecisions} | hidden: {status.HiddenQuestions} | last event: {Age(status.LastEventAge)} | landings: {status.LandingsSinceOpen} | bell: {(_controller.BellEnabled ? "on" : "off")}";
+        _status.Text = $"conductor: {(status.ConductorRunning ? "running" : "stopped")} | active: {status.ActiveGoals} | decisions: {status.LiveDecisions} | last event: {Age(status.LastEventAge)} | landed today: {status.LandedToday} | bell: {(_controller.BellEnabled ? "on" : "off")}";
         if (_working.Count > 0) _status.Text += $" | working: {string.Join(", ", _working.Values)}";
     }
 
@@ -146,7 +146,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
             ? ActivityLines[index] : null;
         var state = _controller.Model?.ActivityState;
         IEnumerable<string> pane = state is { Loading: true } ? ["loading..."] : state?.Error is { } error
-            ? ["ACTIVITY unavailable: " + error] : _controller.Model?.Activity.Select(OwnerConsoleActivityPresentation.Line) ?? [];
+            ? ["ACTIVITY unavailable: " + error] : _controller.Model?.Activity.Select(OwnerActivityNarrator.Line) ?? [];
         ActivityLines = _notices.Concat(pane)
             .Take(OwnerConsoleViewModelBuilder.MaxActivityItems).ToArray();
         _activity.SetSource(new ObservableCollection<string>(ActivityLines));
@@ -236,6 +236,10 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
                 await ActAsync(ct => _controller.ShowGoalDetailAsync(goalId, _operation, ct));
             else if (pane == OwnerConsolePane.Decisions && _controller.SelectedIndex >= 0)
                 await ActAsync(ct => _controller.HandleKeyAsync(ConsoleKey.Enter, operation: _operation, cancellationToken: ct));
+            else if (pane == OwnerConsolePane.Activity && _controller.Model?.ActivityState is null &&
+                _activity.SelectedItem is { } selected && selected >= _notices.Count &&
+                selected - _notices.Count < _controller.Model!.Activity.Length)
+                await ActAsync(_ => _controller.ShowActivityMeaningAsync(_controller.Model.Activity[selected - _notices.Count]));
             return;
         }
         if (character is 'a' or 'r')

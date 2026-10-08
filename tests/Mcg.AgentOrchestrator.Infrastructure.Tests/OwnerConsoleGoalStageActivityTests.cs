@@ -44,10 +44,10 @@ public sealed class OwnerConsoleGoalStageActivityTests
 
             Assert.Equal(new[]
             {
-                $"{time.AddSeconds(3).ToLocalTime():HH:mm:ss} 11111111 Console stages landed",
-                $"{time.AddSeconds(2).ToLocalTime():HH:mm:ss} 11111111 Console stages gate passed",
-                $"{time.AddSeconds(1).ToLocalTime():HH:mm:ss} 11111111 Console stages Tester finished: finding raised",
-                $"{time.ToLocalTime():HH:mm:ss} 11111111 Console stages Developer started"
+                $"{time.AddSeconds(3).ToLocalTime():HH:mm:ss} Landed: Console stages (11111111)",
+                $"{time.AddSeconds(2).ToLocalTime():HH:mm:ss} Console stages: passed its tests, landing next",
+                $"{time.AddSeconds(1).ToLocalTime():HH:mm:ss} Tester sent Console stages back: a problem needs correction",
+                $"{time.ToLocalTime():HH:mm:ss} Developer started on Console stages"
             }, view.ActivityLines);
 
             Assert.Empty(tail.ReadNew([goal.Id.Value]));
@@ -69,29 +69,28 @@ public sealed class OwnerConsoleGoalStageActivityTests
         [
             new(time, "loop-relaunch", "11111111-stage", "LOOP_RELAUNCH_SCHEDULED goal=11111111-stage"),
             new(time.AddSeconds(1), "loop-handoff", null, "ACTIVATION_ADOPTED reason=none"),
-            new(time.AddSeconds(2), "loop-handoff", null, "LOOP_HANDOFF_FAILED phase=restart reason=publish_failed")
+            new(time.AddSeconds(2), "loop-handoff", null, "LOOP_HANDOFF_FAILED phase=restart continuing=true reason=publish_failed")
         ];
         using var app = Terminal.Gui.App.Application.Create();
         using var view = View(app, harness);
         view.Render(await Builder(harness).BuildAsync(new(time, time, events, 0)));
         Assert.Equal(new[]
         {
-            $"{time.AddSeconds(2).ToLocalTime():HH:mm:ss} conductor restart failed: publish failed",
-            $"{time.AddSeconds(1).ToLocalTime():HH:mm:ss} conductor restarted on the new build",
-            $"{time.ToLocalTime():HH:mm:ss} 11111111 Console stages landed"
+            $"{time.AddSeconds(2).ToLocalTime():HH:mm:ss} Conductor could not switch to the new code; still running the previous version (the new version could not be built)",
+            $"{time.ToLocalTime():HH:mm:ss} Landed: Console stages (11111111)"
         }, view.ActivityLines);
         Assert.DoesNotContain(view.ActivityLines, line => line.Contains("handoff completed", StringComparison.Ordinal));
     }
 
     [Theory]
-    [InlineData("TaskCompleted", "Reviewer finished: passed")]
-    [InlineData("TaskFailed", "Reviewer finished: failed")]
+    [InlineData("TaskCompleted", "Reviewer passed Console stages")]
+    [InlineData("TaskFailed", "Reviewer sent Console stages back: the worker could not finish")]
     public void RoleFinishes_RenderOutcomeWithoutPayload(string type, string phrase)
     {
         var line = JsonSerializer.Serialize(new { timestamp = DateTimeOffset.UnixEpoch, eventType = type,
             taskId = "task1", role = "Reviewer", message = "{raw JSON}" });
         Assert.True(OwnerGoalLifecycleEvent.TryParse(line, "11111111", out var item));
-        Assert.Equal(phrase, OwnerConsoleActivityPresentation.Phrase(item!, OwnerConsoleActivityPresentation.Classify(item!)!));
+        Assert.Equal(phrase, OwnerActivityNarrator.DetailPhrase(item!, "Console stages"));
     }
 
     [Fact]
@@ -101,8 +100,8 @@ public sealed class OwnerConsoleGoalStageActivityTests
             eventType = "FindingEvidenceRequestRecorded", role = "Developer",
             message = "finding-evidence disposition=evidence-only-round-accepted; finding_id=finding1" });
         Assert.True(OwnerGoalLifecycleEvent.TryParse(line, "11111111", out var item));
-        Assert.Null(OwnerConsoleActivityPresentation.Classify(item!));
-        Assert.Equal("finding evidence request recorded", OwnerConsoleActivityPresentation.Phrase(item!, ""));
+        Assert.False(OwnerActivityNarrator.Maps(item!));
+        Assert.Null(OwnerActivityNarrator.DetailPhrase(item!, "Console stages"));
     }
 
     [Fact]
@@ -132,33 +131,31 @@ public sealed class OwnerConsoleGoalStageActivityTests
             using var app = Terminal.Gui.App.Application.Create();
             using var view = View(app, harness);
             view.Render(builder.WithActivity(board, new(DateTimeOffset.UnixEpoch, null, [final], 0)));
-            Assert.Contains("Reviewer finished: passed", Assert.Single(view.ActivityLines));
+            Assert.Contains("Reviewer passed Departing goal", Assert.Single(view.ActivityLines));
             Assert.Empty(tail.ReadNew([]));
         }
         finally { Directory.Delete(directory, true); }
     }
 
     [Theory]
-    [InlineData("result=started", "gate started")]
-    [InlineData("result=failed", "gate failed")]
-    [InlineData("result=passed", "gate passed")]
-    public void GateTransitions_RenderPlainPhrases(string detail, string phrase)
+    [InlineData("result=started", null)]
+    [InlineData("result=failed", "Console stages: failed its tests (the test machine had a problem); needs you")]
+    [InlineData("result=passed", "Console stages: passed its tests, landing next")]
+    public void GateTransitions_RenderPlainPhrases(string detail, string? phrase)
     {
         var item = new OwnerConductEvent(DateTimeOffset.UnixEpoch, "acceptance", "11111111", detail);
-        var tag = OwnerConsoleActivityPresentation.Classify(item);
-        Assert.NotNull(tag);
-        Assert.Equal(phrase, OwnerConsoleActivityPresentation.Phrase(item, tag));
+        Assert.Equal(phrase, OwnerActivityNarrator.Narrate([item], _ => "Console stages").SingleOrDefault()?.Phrase);
     }
 
     [Fact]
     public void StartupMerge_KeepsNewestEventsAcrossHistorySources()
     {
         var time = DateTimeOffset.UnixEpoch;
-        var recent = Enumerable.Range(1, OwnerConsoleViewModelBuilder.MaxActivityItems)
+        var recent = Enumerable.Range(1, OwnerConsoleStartupActivity.MaxRawEvents)
             .Select(index => new OwnerConductEvent(time.AddSeconds(index), "acceptance", "11111111", "result=passed")).ToList();
         var newest = recent[^1];
         OwnerConsoleStartupActivity.Append(recent, new(time, "goal-lifecycle", "11111111", "TaskDispatched role=Developer"));
-        Assert.Equal(OwnerConsoleViewModelBuilder.MaxActivityItems, recent.Count);
+        Assert.Equal(OwnerConsoleStartupActivity.MaxRawEvents, recent.Count);
         Assert.Contains(newest, recent);
         Assert.DoesNotContain(recent, item => item.Timestamp == time);
     }

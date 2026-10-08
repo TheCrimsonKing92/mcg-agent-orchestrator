@@ -5,7 +5,7 @@ internal interface IOwnerConsoleActivityLoader
     Task<OwnerConsoleActivityLoad> LoadAsync(IReadOnlyCollection<string> boardGoalIds, CancellationToken token);
 }
 
-internal sealed record OwnerConsoleActivityLoad(IReadOnlyList<OwnerConductEvent> Recent, DateTimeOffset? LastActivity);
+internal sealed record OwnerConsoleActivityLoad(IReadOnlyList<OwnerConductEvent> Recent, DateTimeOffset? LastActivity, int LandedToday = 0);
 
 internal sealed class OwnerConsoleActivityLoader(string conductPath, string lifecycleDirectory, TimeProvider clock)
     : IOwnerConsoleActivityLoader, IAsyncDisposable
@@ -23,11 +23,14 @@ internal sealed class OwnerConsoleActivityLoader(string conductPath, string life
                 token.ThrowIfCancellationRequested();
                 // Capture the live offset before scanning history so startup never opens a gap.
                 Events ??= new OwnerConsoleStartupEventSource(conductPath, clock);
-                var recent = OwnerConsoleStartupActivity.ReadRecent(conductPath, token).ToList();
+                var lifecycle = _lifecycle.ReadNew(boardGoalIds, token);
+                var history = OwnerConsoleStartupActivity.ReadHistory(conductPath,
+                    lifecycle.Count == 0 ? null : lifecycle.Min(item => item.Timestamp), clock, token);
+                var recent = history.Recent.ToList();
                 token.ThrowIfCancellationRequested();
-                foreach (var item in _lifecycle.ReadNew(boardGoalIds, token)) OwnerConsoleStartupActivity.Append(recent, item);
+                foreach (var item in lifecycle) OwnerConsoleStartupActivity.Append(recent, item);
                 token.ThrowIfCancellationRequested();
-                return Task.FromResult(new OwnerConsoleActivityLoad(recent, Events.LastActivity));
+                return Task.FromResult(new OwnerConsoleActivityLoad(recent, history.LastActivity ?? Events.LastActivity, history.LandedToday));
             }
             catch (OperationCanceledException)
             {

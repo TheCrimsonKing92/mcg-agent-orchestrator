@@ -123,7 +123,7 @@ public sealed class OwnerConsoleFullScreenPaneTests
         Assert.Equal("Enter goal detail" + common, view.HintText);
         await view.HandleKeyAsync(Key.Tab);
         Assert.Equal(OwnerConsolePane.Activity, view.FocusedPane);
-        Assert.Equal("Up/Down scroll" + common, view.HintText);
+        Assert.Equal("Up/Down scroll  Enter what this means" + common, view.HintText);
         await view.HandleKeyAsync(Key.Tab);
         Assert.Equal(OwnerConsolePane.Decisions, view.FocusedPane);
         Assert.Equal("Enter detail  a accept default  r answer" + common, view.HintText);

@@ -30,7 +30,7 @@ internal static class OwnerConsoleKeyHints
     {
         OwnerConsolePane.Decisions => "Enter detail  a accept default  r answer",
         OwnerConsolePane.Board => "Enter goal detail",
-        OwnerConsolePane.Activity => "Up/Down scroll",
+        OwnerConsolePane.Activity => "Up/Down scroll  Enter what this means",
         _ => throw new ArgumentOutOfRangeException(nameof(pane))
     }) + "  Tab next pane  : command  ? help  q quit";
 
@@ -39,7 +39,7 @@ internal static class OwnerConsoleKeyHints
         "Tab: Next pane (DECISIONS, BOARD, ACTIVITY).",
         "Up: Select the previous row in DECISIONS or BOARD; scroll ACTIVITY up.",
         "Down: Select the next row in DECISIONS or BOARD; scroll ACTIVITY down.",
-        "Enter: Open detail in DECISIONS or BOARD; submit a command or activate a dialog button.",
+        "Enter: Open detail in DECISIONS or BOARD, or What this means in ACTIVITY; submit a command or activate a dialog button.",
         "a: Accept the selected default in DECISIONS after confirmation.",
         "r: Answer the selected decision in DECISIONS.",
         ": (any pane): Open the command line.",
