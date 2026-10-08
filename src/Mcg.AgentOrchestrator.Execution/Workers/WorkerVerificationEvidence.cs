@@ -8,6 +8,7 @@ internal static class WorkerVerificationEvidence
     private const string LegacySnapshotUnavailableReason = "legacy-snapshot-authoritative-output-unavailable";
     private const int MalformedOutputExcerptMaxChars = 4000;
     private const int StructuredFieldMaxChars = 4000;
+    private const int WorkerReportProseMaxChars = 4000;
     private const int LocatedWorkerResultMaxChars = 20000;
 
     internal sealed record ContextOutput(
@@ -182,9 +183,24 @@ internal static class WorkerVerificationEvidence
             : ContextProjectionValidation.Malformed;
         var lines = new List<string>
         {
-            $"{receiptPrefix}; {validationReceipt}",
-            "WORKER_RESULT:"
+            $"{receiptPrefix}; {validationReceipt}"
         };
+        if (validation == ContextProjectionValidation.Parsed &&
+            TryLocateWorkerResultBlock(output, out var blockStart, out _))
+        {
+            var prose = output[..blockStart].TrimEnd('\r', '\n');
+            if (!string.IsNullOrWhiteSpace(prose))
+            {
+                lines.Add("Worker report (prose before WORKER_RESULT):");
+                if (prose.Length > WorkerReportProseMaxChars)
+                {
+                    lines.Add($"...[{prose.Length - WorkerReportProseMaxChars} chars omitted from worker report prose; complete source remains at source_handle]...");
+                    prose = prose[^WorkerReportProseMaxChars..];
+                }
+                lines.Add(prose);
+            }
+        }
+        lines.Add("WORKER_RESULT:");
         lines.AddRange(orderedFields.Select(key => ProjectStructuredField(key, parsed.Fields[key])));
         lines.Add("END_WORKER_RESULT");
         return new ContextProjection(string.Join(Environment.NewLine, lines), validation);
@@ -221,6 +237,25 @@ internal static class WorkerVerificationEvidence
 
     private static string BoundOutsideWorkerResult(string output)
     {
+        if (!TryLocateWorkerResultBlock(output, out var blockStart, out var blockEnd))
+            return BoundHeadAndTail(output, MalformedOutputExcerptMaxChars);
+
+        var block = output[blockStart..blockEnd];
+        if (block.Length > LocatedWorkerResultMaxChars)
+        {
+            var bytes = Encoding.UTF8.GetBytes(block);
+            block = $"[oversized WORKER_RESULT block omitted; chars={block.Length}; bytes={bytes.Length}; " +
+                $"sha256={WorkerContextArtifact.Hash(bytes)}; complete source remains at source_handle]";
+        }
+        var before = BoundHeadAndTail(output[..blockStart], MalformedOutputExcerptMaxChars / 2);
+        var after = BoundHeadAndTail(output[blockEnd..], MalformedOutputExcerptMaxChars / 2);
+        return string.Join(Environment.NewLine, new[] { before, block, after }.Where(part => part.Length > 0));
+    }
+
+    private static bool TryLocateWorkerResultBlock(string output, out int blockStart, out int blockEnd)
+    {
+        blockStart = 0;
+        blockEnd = output.Length;
         var lines = output.Split('\n');
         var lineStart = 0;
         var openers = new List<(int Line, int Start)>();
@@ -231,7 +266,7 @@ internal static class WorkerVerificationEvidence
             lineStart += lines[i].Length + 1;
         }
         if (openers.Count == 0)
-            return BoundHeadAndTail(output, MalformedOutputExcerptMaxChars);
+            return false;
 
         var selected = openers.Count - 1;
         for (var i = selected; i >= 0; i--)
@@ -242,10 +277,9 @@ internal static class WorkerVerificationEvidence
             selected = i;
             break;
         }
-        var blockStart = openers[selected].Start;
+        blockStart = openers[selected].Start;
 
         lineStart = 0;
-        var blockEnd = output.Length;
         var fallbackEnd = output.Length;
         var insideBlock = false;
         var foundEndMarker = false;
@@ -267,16 +301,7 @@ internal static class WorkerVerificationEvidence
         if (!foundEndMarker)
             blockEnd = fallbackEnd;
 
-        var block = output[blockStart..blockEnd];
-        if (block.Length > LocatedWorkerResultMaxChars)
-        {
-            var bytes = Encoding.UTF8.GetBytes(block);
-            block = $"[oversized WORKER_RESULT block omitted; chars={block.Length}; bytes={bytes.Length}; " +
-                $"sha256={WorkerContextArtifact.Hash(bytes)}; complete source remains at source_handle]";
-        }
-        var before = BoundHeadAndTail(output[..blockStart], MalformedOutputExcerptMaxChars / 2);
-        var after = BoundHeadAndTail(output[blockEnd..], MalformedOutputExcerptMaxChars / 2);
-        return string.Join(Environment.NewLine, new[] { before, block, after }.Where(part => part.Length > 0));
+        return true;
     }
 
     public static bool TryRecoverLegacySnapshotStandardOutput(
