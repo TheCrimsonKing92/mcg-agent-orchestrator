@@ -54,7 +54,17 @@ internal static class MergeTrainRedAttribution
     {
         failingSubjects = [];
         if (receipt.Outcome != MergeTrainGateOutcome.Failed) return null;
-        var results = receipt.GateTestResultPaths.Select(AcceptanceTrxFailureReader.Read).ToArray();
+        return TryAttribute(receipt.GateTestResultPaths, workspacePath, members, out failingSubjects);
+    }
+
+    internal static MergeTrainMemberBinding? TryAttribute(
+        IReadOnlyList<string> resultPaths,
+        string workspacePath,
+        IReadOnlyList<MergeTrainMemberBinding> members,
+        out IReadOnlyList<string> failingSubjects)
+    {
+        failingSubjects = [];
+        var results = resultPaths.Select(AcceptanceTrxFailureReader.Read).ToArray();
         // Missing evidence may hide another owner's failure; never attribute a partial read.
         if (results.Any(result => result.Status != AcceptanceTrxReadStatus.Readable)) return null;
         var failures = FatalFailures(results);

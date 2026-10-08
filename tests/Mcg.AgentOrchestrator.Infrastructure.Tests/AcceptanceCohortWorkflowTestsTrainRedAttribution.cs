@@ -10,6 +10,118 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class AcceptanceCohortWorkflowTestsTrainRedAttribution : AcceptanceCohortWorkflowTests
 {
     [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    public void OwnedTimeout_SavesFailedReceiptAndImplicatesItsMember(int culprit)
+    {
+        WithTrain(repo => [TimeoutOnlyRed(repo, "timeout.trx", Identity(culprit))], scenario =>
+        {
+            var receipt = Assert.IsType<MergeTrainReceipt>(scenario.Result.RecordedReceipt);
+            Assert.Equal(MergeTrainGateOutcome.Failed, receipt.Outcome);
+            Assert.Equal(new[] { "train" }, receipt.FailedChecks);
+            Assert.Equal(1, receipt.GateExitCode);
+            Assert.Single(receipt.GateTestResultPaths);
+            Assert.False(receipt.ValidForLanding);
+            var culpritWorktree = Assert.IsType<string>(GoalWorktrees.TryResolve(scenario.Repo, scenario.Goals[culprit].Id));
+            Assert.Equal(scenario.Selection.Members[culprit].GoalId,
+                MergeTrainRedAttribution.TryAttribute(receipt, culpritWorktree,
+                    scenario.Selection.BindMembers())?.GoalId);
+            Assert.Equal(Key(scenario, culprit), Assert.Single(scenario.Driver.ReadTrainImplicatedMemberKeys()));
+            Assert.Equal(1, scenario.Verifier.RunCount);
+            AssertPairSuppressed(scenario, 0, 1);
+        }, memberCount: 2, gateOnly: false);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void OwnedTimeout_EjectsCulpritAndLandsPassingRemainder(int culprit)
+    {
+        WithTrain(repo => [TimeoutOnlyRed(repo, "timeout.trx", Identity(culprit)), Passing(repo)], scenario =>
+        {
+            AssertAttributedDrop(scenario, culprit);
+            Assert.Equal(2, scenario.Verifier.RunCount);
+            Assert.Equal(Paths, scenario.Verifier.ChangedFiles[0]);
+            var remaining = scenario.Selection.Members.Where((_, index) => index != culprit).ToArray();
+            Assert.Equal(remaining.SelectMany(member => member.LandingPaths), scenario.Verifier.ChangedFiles[1]);
+            var passed = Assert.IsType<MergeTrainReceipt>(scenario.Result.Receipt);
+            Assert.Equal(MergeTrainGateOutcome.Passed, passed.Outcome);
+            Assert.Equal(remaining.Select(member => member.GoalId), passed.Identity.Members.Select(member => member.GoalId));
+            Assert.Equal(remaining.Select(member => member.GoalId.Value).Order(), scenario.Result.MemberResults.Keys.Order());
+            Assert.Equal(Key(scenario, culprit), Assert.Single(scenario.Driver.ReadTrainImplicatedMemberKeys()));
+            AssertLandedFiles(scenario, culprit);
+        }, gateOnly: false);
+    }
+
+    [Theory]
+    [InlineData("unowned")]
+    [InlineData("shared")]
+    [InlineData("unparseable")]
+    [InlineData("apparatus")]
+    [InlineData("other-reason")]
+    public void IneligibleTimeout_SavesInfrastructureReceiptWithoutImplication(string reason)
+    {
+        WithTrain(repo =>
+        {
+            var red = TimeoutOnlyRed(repo, "timeout.trx", reason switch
+            {
+                "unowned" => "Ns.UnchangedTests.Fails",
+                "shared" => "Ns.SharedTests.Fails",
+                _ => Identity(0)
+            });
+            if (reason == "unparseable")
+            {
+                var malformed = Path.Combine(repo, "malformed.trx");
+                File.WriteAllText(malformed, "<TestRun");
+                red = red with { TestResultPaths = [.. red.TestResultPaths!, malformed] };
+            }
+            if (reason == "apparatus")
+            {
+                var path = red.TestResultPaths![0];
+                var document = XDocument.Load(path);
+                var row = document.Descendants().Single(element => element.Name.LocalName == "UnitTestResult");
+                var ns = row.Name.Namespace;
+                row.Add(new XElement(ns + "Output", new XElement(ns + "ErrorInfo",
+                    new XElement(ns + "Message", "DotnetBuildSlotsBusyException: Stable dotnet build slots busy"))));
+                document.Save(path);
+            }
+            if (reason == "other-reason") red = red with { ExitCode = null };
+            Assert.Equal(reason == "other-reason" ? AcceptanceCohortInfrastructureReasonCodes.ExitCodeMissing :
+                AcceptanceCohortInfrastructureReasonCodes.TrxEvidenceIncoherent,
+                ConductorDriver.ClassifyCohortVerificationResult(red).InfrastructureReasonCode);
+            return [red];
+        }, scenario =>
+        {
+            Assert.Equal(MergeTrainGateOutcome.InfrastructureFailure,
+                Assert.IsType<MergeTrainReceipt>(scenario.Result.RecordedReceipt).Outcome);
+            Assert.Equal(1, scenario.Verifier.RunCount);
+            Assert.Empty(scenario.Result.Ejections);
+            Assert.Empty(scenario.Driver.ReadTrainImplicatedMemberKeys());
+            Assert.Empty(scenario.Driver.ReadSuppressedGroupedPairs());
+        }, memberCount: 2);
+    }
+
+    [Fact]
+    public void OwnedTimeout_CohortAndFollowerClassifierStillReturnsInfrastructure()
+    {
+        WithTrain(repo => [TimeoutOnlyRed(repo, "timeout.trx", Identity(0))], scenario =>
+        {
+            var receipt = Assert.IsType<MergeTrainReceipt>(scenario.Result.RecordedReceipt);
+            Assert.Equal(MergeTrainGateOutcome.Failed, receipt.Outcome);
+            var verification = new AcceptanceVerificationResult(false, false, 1, "train failed",
+                Checks: [new AcceptanceCheckResult("train", false, 1, "train failed")],
+                TestResultPaths: receipt.GateTestResultPaths);
+            // Both cohort and follower gates call this shared classifier, outside train receipt resolution.
+            Assert.Equal(AcceptanceCohortGateOutcome.InfrastructureFailure,
+                ConductorDriver.ClassifyCohortVerification(verification));
+            var classified = ConductorDriver.ClassifyCohortVerificationResult(verification);
+            Assert.Equal(AcceptanceCohortGateOutcome.InfrastructureFailure, classified.Outcome);
+            Assert.Equal(AcceptanceCohortInfrastructureReasonCodes.TrxEvidenceIncoherent, classified.InfrastructureReasonCode);
+        }, memberCount: 2);
+    }
+
+    [Theory]
     [InlineData(true)]
     [InlineData(false)]
     public void GuardSubjects_ImplicateRevisionBeforeRemainderAndEmitOneEvent(bool remainderPasses)
@@ -314,6 +426,25 @@ public sealed class AcceptanceCohortWorkflowTestsTrainRedAttribution : Acceptanc
 
     private static AcceptanceVerificationResult Passing(string repo) => new(true, false, 0, null,
         Checks: [new AcceptanceCheckResult("remainder", true, 0, null)], TestResultPaths: [WritePassingTrx(repo, "pass.trx")]);
+
+    private static AcceptanceVerificationResult TimeoutOnlyRed(string repo, string file, params string[] identities)
+    {
+        var result = Red(repo, file, identities);
+        var path = result.TestResultPaths![0];
+        var document = XDocument.Load(path);
+        foreach (var row in document.Descendants().Where(element => element.Name.LocalName == "UnitTestResult"))
+            row.SetAttributeValue("outcome", "Timeout");
+        var counters = document.Descendants().Single(element => element.Name.LocalName == "Counters");
+        counters.SetAttributeValue("failed", 0);
+        counters.SetAttributeValue("timeout", identities.Length);
+        document.Save(path);
+        Assert.All(AcceptanceTrxFailureReader.Read(path).Failures, failure => Assert.Equal("Timeout", failure.Outcome));
+        Assert.False(AcceptanceCohortGateEvidence.HasCoherentTrxEvidence([path]));
+        var classified = ConductorDriver.ClassifyCohortVerificationResult(result);
+        Assert.Equal(AcceptanceCohortGateOutcome.InfrastructureFailure, classified.Outcome);
+        Assert.Equal(AcceptanceCohortInfrastructureReasonCodes.TrxEvidenceIncoherent, classified.InfrastructureReasonCode);
+        return result;
+    }
 
     private static AcceptanceVerificationResult GuardRed(string repo, string file, string testClass, string sourceFile)
     {

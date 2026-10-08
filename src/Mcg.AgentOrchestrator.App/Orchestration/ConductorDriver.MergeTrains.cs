@@ -224,13 +224,9 @@ internal sealed partial class ConductorDriver
                             stableSlotLease,
                             executionOwner).GetAwaiter().GetResult());
                     clock.Stop();
-                    var cohortOutcome = ClassifyCohortVerification(verification);
-                    var outcome = cohortOutcome switch
-                    {
-                        AcceptanceCohortGateOutcome.Passed => MergeTrainGateOutcome.Passed,
-                        AcceptanceCohortGateOutcome.Failed => MergeTrainGateOutcome.Failed,
-                        _ => MergeTrainGateOutcome.InfrastructureFailure
-                    };
+                    var resultPaths = NormalizeCohortTestResultPaths(verification.TestResultPaths);
+                    var outcome = MergeTrainTimeoutAttribution.ResolveGateOutcome(
+                        ClassifyCohortVerificationResult(verification), resultPaths, workspace.Path, members);
                     receipt = _mergeTrainAcceptanceStore.SaveGateReceipt(new MergeTrainReceipt(
                         $"merge-train-receipt-{identity.Value[(MergeTrainIdentity.Version.Length + 1)..]}",
                         identity,
@@ -240,7 +236,7 @@ internal sealed partial class ConductorDriver
                         verification.Checks?.Where(check => !check.Passed && !check.Advisory)
                             .Select(check => check.Name).ToArray() ?? [],
                         verification.ExitCode,
-                        NormalizeCohortTestResultPaths(verification.TestResultPaths),
+                        resultPaths,
                         ValidForLanding: outcome == MergeTrainGateOutcome.Passed));
                 }
                 catch (Exception ex) when (ex is AcceptanceInfrastructureDeferredException or
