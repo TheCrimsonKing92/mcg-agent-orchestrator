@@ -166,6 +166,7 @@ public sealed class SliceBatchExecutionTests
         IReadOnlyList<AgentDefinition> agents,
         IModelProviderRegistry providers)
     {
+        using var samples = PlanSampleProviderBridge.Use(providers);
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
 
