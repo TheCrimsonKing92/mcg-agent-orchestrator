@@ -12,21 +12,25 @@ internal static class OwnerConsoleGoalDetailFormatter
         var goal = kernel.Goals.SingleOrDefault(goal => goal.Id.Value == id);
         if (goal is null) { output.WriteLine("goal state unavailable"); return; }
         output.WriteLine("Goal: " + Plain(goal.Id.Value));
-        output.WriteLine("Title: " + Plain(OwnerGoalTitle.From(goal.Objective)));
+        var title = OwnerGoalTitle.Full(goal.Objective);
+        output.WriteLine("Title: " + Plain(title));
         output.WriteLine("Status: " + goal.Status);
         output.WriteLine("Stage: " + GoalLifecycle.ResolveState(goal, new(IsBlocked: goal.CurrentHold is not null)));
         output.WriteLine("Role: " + OwnerConsoleGoalDetail.Stage(goal));
         output.WriteLine("Tasks:");
         foreach (var task in goal.Tasks) output.WriteLine($"  {task.RequiredRole}: {task.Status}");
         if (goal.CurrentHold is { } hold)
-            output.WriteLine("Hold: " + Plain((hold.State + ": " + hold.Blocker).Split(" evidence=[", 2)[0]).Replace('_', ' ').Replace('-', ' '));
+            output.WriteLine("Waiting on: " + OwnerActivityNarrator.Blocker(hold.Blocker));
         var roles = goal.Tasks.ToDictionary(task => task.Id.Value, task => task.RequiredRole);
-        var events = tail.ReadLast(id, 10).TakeLast(10)
+        var events = tail.ReadLast(id, 100)
             .Select(line => OwnerGoalLifecycleEvent.TryParse(line, id, out var item) ? item : null)
             .Where(item => item is not null).Select(item => OwnerGoalLifecycleEvent.WithRole(item!, roles)).ToArray();
-        output.WriteLine(events.Length == 0 ? "Recent events: none" : "Recent events:");
+        var lines = new List<(DateTimeOffset Time, string Phrase)>();
         foreach (var item in events)
-            output.WriteLine($"  {item.Timestamp.ToLocalTime():HH:mm:ss} {OwnerConsoleActivityPresentation.Phrase(item, OwnerConsoleActivityPresentation.Classify(item) ?? "")}");
+            if (OwnerActivityNarrator.DetailPhrase(item, title) is { } phrase &&
+                (lines.Count == 0 || lines[^1].Phrase != phrase)) lines.Add((item.Timestamp, phrase));
+        output.WriteLine(lines.Count == 0 ? "Recent events: none" : "Recent events:");
+        foreach (var line in lines.TakeLast(10)) output.WriteLine($"  {line.Time.ToLocalTime():HH:mm:ss} {Plain(line.Phrase)}");
     }
 
     private static string Plain(string text) => text.Replace('{', ' ').Replace('}', ' ').Replace('\r', ' ').Replace('\n', ' ');

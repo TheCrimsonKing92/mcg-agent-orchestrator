@@ -48,11 +48,10 @@ public sealed class OwnerConsoleGoalDetailFormatterTests
         Assert.Contains("Role: Developer", text);
         var lines = text.Split(Environment.NewLine);
         foreach (var task in goal.Tasks) Assert.Single(lines, line => line == $"  {task.RequiredRole}: {task.Status}");
-        Assert.Contains("Hold: owner review hold: waiting for approval", text);
-        Assert.Equal(10, tail.Count);
-        Assert.Equal(10, lines.Count(line => line.EndsWith("Developer started", StringComparison.Ordinal)));
-        Assert.Contains($"  {time.AddSeconds(2).ToLocalTime():HH:mm:ss} Developer started", text);
-        Assert.Contains($"  {time.AddSeconds(11).ToLocalTime():HH:mm:ss} Developer started", text);
+        Assert.Contains("Waiting on: waiting for your approval", text);
+        Assert.Equal(100, tail.Count);
+        Assert.Single(lines, line => line.EndsWith("Developer started on Readable detail", StringComparison.Ordinal));
+        Assert.Contains($"  {time.ToLocalTime():HH:mm:ss} Developer started on Readable detail", text);
         Assert.DoesNotContain("{", text);
         Assert.DoesNotContain("}", text);
         Assert.DoesNotContain("\"eventKind\"", text);
@@ -87,7 +86,7 @@ public sealed class OwnerConsoleGoalDetailFormatterTests
         var output = new OwnerConsoleHarness.FakeOutput();
         await OwnerConsoleGoalDetailFormatter.ComposeAsync(harness.State, new Tail([line]), goal.Id.Value,
             output, TestContext.Current.CancellationToken);
-        Assert.Contains($"{time.ToLocalTime():HH:mm:ss} Tester verification recorded", output.Text);
+        Assert.Contains("Recent events: none", output.Text);
         Assert.DoesNotContain("finished: passed", output.Text);
         Assert.DoesNotContain(message, output.Text);
     }
