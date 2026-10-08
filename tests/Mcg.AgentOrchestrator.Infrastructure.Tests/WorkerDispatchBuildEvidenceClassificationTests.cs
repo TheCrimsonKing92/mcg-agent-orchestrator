@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Mcg.AgentOrchestrator.App.Orchestration;
 
 public sealed class WorkerDispatchBuildEvidenceClassificationTests : WorkerDispatchTestSupport
 {
@@ -174,15 +175,157 @@ public sealed class WorkerDispatchBuildEvidenceClassificationTests : WorkerDispa
     public void BuildCommandUsesSanctionedScriptAndProjects()
     {
         var repositoryRoot = InfrastructureTestSupport.FindRepositoryRoot();
+        var scriptPath = OrchestratorBuildEvidenceCheck.ResolveScriptPath(_ => repositoryRoot);
         var projects = new[] { "src/Feature/Feature.csproj", "tests/Feature.Tests/Feature.Tests.csproj" };
 
-        var command = OrchestratorBuildEvidenceCheck.BuildCommand(projects);
+        var command = OrchestratorBuildEvidenceCheck.BuildCommand(scriptPath, projects);
 
-        Xunit.Assert.True(File.Exists(Path.Combine(repositoryRoot, OrchestratorBuildEvidenceCheck.ScriptRelativePath)));
-        Xunit.Assert.Contains("./scripts/Invoke-WorkerBuildCheck.ps1", command, StringComparison.Ordinal);
-        foreach (var project in projects)
+        Xunit.Assert.NotNull(scriptPath);
+        Xunit.Assert.True(Path.IsPathFullyQualified(scriptPath));
+        Xunit.Assert.True(File.Exists(scriptPath));
+        Xunit.Assert.Equal($"& '{scriptPath.Replace("'", "''")}' '{projects[0]}' '{projects[1]}'", command);
+        Xunit.Assert.Equal(
+            OrchestratorBuildEvidenceCheck.BuildCommand(OrchestratorBuildEvidenceCheck.ResolveScriptPath(), projects),
+            OrchestratorBuildEvidenceCheck.BuildCommand(projects));
+    }
+
+    [Xunit.Fact]
+    public void HomeEnvironmentVariableMatchesOrchestratorHomeContract()
+    {
+        Xunit.Assert.Equal(OrchestratorHome.EnvironmentVariable, OrchestratorBuildEvidenceCheck.HomeEnvironmentVariable);
+    }
+
+    [Xunit.Fact]
+    public void FormatScriptInvocationQuotesRootedHomePath()
+    {
+        var home = Path.Combine(CreateTempDirectory(), "o'home");
+        var scriptPath = OrchestratorBuildEvidenceCheck.ResolveScriptPath(name =>
         {
-            Xunit.Assert.Contains($"'{project}'", command, StringComparison.Ordinal);
+            Xunit.Assert.Equal(OrchestratorHome.EnvironmentVariable, name);
+            return " " + home + " ";
+        });
+        var expectedPath = Path.Combine(home, "scripts", "Invoke-WorkerBuildCheck.ps1");
+
+        Xunit.Assert.Equal(expectedPath, scriptPath);
+        Xunit.Assert.True(Path.IsPathFullyQualified(scriptPath!));
+        Xunit.Assert.Equal($"& '{expectedPath.Replace("'", "''")}'", OrchestratorBuildEvidenceCheck.FormatScriptInvocation(scriptPath));
+        Xunit.Assert.Equal(
+            $"& '{expectedPath.Replace("'", "''")}' 'src/o''project/Feature.csproj'",
+            OrchestratorBuildEvidenceCheck.BuildCommand(scriptPath, ["src/o'project/Feature.csproj"]));
+    }
+
+    [Xunit.Fact]
+    public void ScriptsLessWorktreeTargetsHomeScriptAndKeepsWorktreeCwd()
+    {
+        var worktree = CreateTempDirectory();
+        AddCompiledFeature(worktree);
+        Xunit.Assert.False(Directory.Exists(Path.Combine(worktree, "scripts")));
+        var home = InfrastructureTestSupport.FindRepositoryRoot();
+        var scriptPath = OrchestratorBuildEvidenceCheck.ResolveScriptPath(_ => home);
+        Xunit.Assert.True(File.Exists(scriptPath));
+        WorkerProcessRunRequest? launched = null;
+        OrchestratorBuildCheckResult? runResult = null;
+
+        var resolution = OrchestratorBuildEvidenceCheck.Resolve(
+            worktree, AgentRole.Developer, ["src/Feature/Feature.cs"], [],
+            failedWorkerBuildCheck: false,
+            workerBuildReceipt: () => new(false, "receipt-missing"),
+            request => runResult = OrchestratorBuildEvidenceCheck.Run(request, _ => home, candidate =>
+            {
+                launched = candidate;
+                return new(0, "PASS build: 0 errors (Invoke-WorkerBuildCheck) projects=1", string.Empty);
+            }));
+
+        // Reverting the path base to WorktreeRoot skips this launcher and produces MissingEvidence.
+        Xunit.Assert.NotNull(runResult);
+        Xunit.Assert.True(runResult.Ran, runResult.Output);
+        Xunit.Assert.NotNull(launched);
+        Xunit.Assert.Equal(worktree, launched.WorkingDirectory);
+        Xunit.Assert.Equal(TimeSpan.FromMinutes(7), launched.Timeout);
+        Xunit.Assert.Equal(
+            $"& '{scriptPath!.Replace("'", "''")}' 'src/Feature/Feature.csproj'", launched.Command);
+        Xunit.Assert.False(resolution.MissingEvidence, resolution.Diagnostic);
+        Xunit.Assert.False(resolution.FailsRound, resolution.Diagnostic);
+    }
+
+    [Xunit.Fact]
+    public void OwnRepositoryRootResolvesCheckedInScript()
+    {
+        var root = InfrastructureTestSupport.FindRepositoryRoot();
+        var scriptPath = OrchestratorBuildEvidenceCheck.ResolveScriptPath(_ => root);
+        Xunit.Assert.True(File.Exists(scriptPath));
+        WorkerProcessRunRequest? launched = null;
+        var request = new OrchestratorBuildCheckRequest(root, ["src/Feature/Feature.csproj"], TimeSpan.FromMinutes(1));
+
+        var result = OrchestratorBuildEvidenceCheck.Run(request, _ => root, candidate =>
+        {
+            launched = candidate;
+            return new(0, "PASS build: 0 errors", string.Empty);
+        });
+
+        Xunit.Assert.True(result.Ran, result.Output);
+        Xunit.Assert.NotNull(launched);
+        Xunit.Assert.Equal(root, launched.WorkingDirectory);
+        Xunit.Assert.Equal(OrchestratorBuildEvidenceCheck.BuildCommand(scriptPath, request.Projects), launched.Command);
+    }
+
+    [Xunit.Fact]
+    public void MissingHomeScriptReportsResolvedAbsolutePath()
+    {
+        var home = CreateTempDirectory();
+        var worktree = InfrastructureTestSupport.FindRepositoryRoot();
+        Xunit.Assert.True(File.Exists(Path.Combine(worktree, OrchestratorBuildEvidenceCheck.ScriptRelativePath)));
+        var scriptPath = OrchestratorBuildEvidenceCheck.ResolveScriptPath(_ => home);
+        Xunit.Assert.False(File.Exists(scriptPath));
+
+        var result = OrchestratorBuildEvidenceCheck.Run(
+            new(worktree, ["src/Feature/Feature.csproj"], TimeSpan.FromMinutes(1)), _ => home,
+            _ => throw new InvalidOperationException("Missing home script must not launch the worktree copy."));
+
+        Xunit.Assert.False(result.Ran);
+        Xunit.Assert.Equal(-1, result.ExitCode);
+        Xunit.Assert.Equal($"Build evidence script not found: {scriptPath}", result.Output);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(null)]
+    [Xunit.InlineData("")]
+    [Xunit.InlineData("  ")]
+    public void UnresolvedHomeReportsNotFoundWithoutLaunching(string? home)
+    {
+        Xunit.Assert.Null(OrchestratorBuildEvidenceCheck.ResolveScriptPath(_ => home));
+        var result = OrchestratorBuildEvidenceCheck.Run(
+            new(InfrastructureTestSupport.FindRepositoryRoot(), ["src/Feature/Feature.csproj"], TimeSpan.FromMinutes(1)),
+            _ => home,
+            _ => throw new InvalidOperationException("Unresolved home must not launch a build."));
+
+        Xunit.Assert.False(result.Ran);
+        Xunit.Assert.Equal(-1, result.ExitCode);
+        Xunit.Assert.Equal(
+            $"Build evidence script not found: orchestrator home unresolved ({OrchestratorHome.EnvironmentVariable} unset)",
+            result.Output);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(AgentRole.Developer)]
+    [Xunit.InlineData(AgentRole.Tester)]
+    public void DotnetBriefSitesNameSharedResolverInvocation(AgentRole role)
+    {
+        var worktree = CreateTempDirectory();
+        AddCompiledFeature(worktree);
+        Xunit.Assert.False(Directory.Exists(Path.Combine(worktree, "scripts")));
+        var task = new TaskSpec(TaskId.New(), "Implement the .NET change.", role);
+        var goal = new AgentOrchestratorKernel().CreateGoal("Build from orchestrator home", [task]);
+        var contextDirectory = WorkerContextArtifacts.Write(goal, task, worktree);
+        var invocation = OrchestratorBuildEvidenceCheck.FormatScriptInvocation(OrchestratorBuildEvidenceCheck.ResolveScriptPath());
+
+        foreach (var artifact in new[] { "current-task.md", "deterministic-verification.md" })
+        {
+            var text = File.ReadAllText(Path.Combine(contextDirectory, artifact));
+            Xunit.Assert.Contains(invocation + " <project.csproj> [project.csproj...]", text, StringComparison.Ordinal);
+            Xunit.Assert.Contains($"Compiling every changed project is required through `{invocation}`", text, StringComparison.Ordinal);
+            Xunit.Assert.Contains("from your worktree root", text, StringComparison.Ordinal);
+            Xunit.Assert.DoesNotContain(@".\scripts\Invoke-WorkerBuildCheck.ps1", text, StringComparison.Ordinal);
         }
     }
 

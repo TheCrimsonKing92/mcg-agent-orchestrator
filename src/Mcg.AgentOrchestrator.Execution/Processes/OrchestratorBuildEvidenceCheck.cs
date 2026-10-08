@@ -50,6 +50,8 @@ internal sealed record OrchestratorBuildEvidenceResolution(
 public static class OrchestratorBuildEvidenceCheck
 {
     internal const string ScriptRelativePath = "scripts/Invoke-WorkerBuildCheck.ps1";
+    // Published by the App's OrchestratorHome accessor before command dispatch.
+    internal const string HomeEnvironmentVariable = "MCG_ORCHESTRATOR_HOME";
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(7);
 
     internal static OrchestratorBuildEvidenceResolution Resolve(
@@ -107,32 +109,55 @@ public static class OrchestratorBuildEvidenceCheck
             Diagnostic: $"worker_build_receipt={receipt.Reason}; build_evidence_producer=orchestrator; {projectsDiagnostic}; {boundedOutput}".Trim());
     }
 
-    public static string BuildCommand(IReadOnlyList<string> projects)
+    public static string? ResolveScriptPath(Func<string, string?>? readEnvironment = null)
     {
-        var arguments = string.Join(" ", projects.Select(project => $"'{EscapeSingleQuoted(project)}'"));
-        return $"& './{ScriptRelativePath}' {arguments}".TrimEnd();
+        var home = (readEnvironment ?? Environment.GetEnvironmentVariable)(HomeEnvironmentVariable)?.Trim();
+        return string.IsNullOrEmpty(home)
+            ? null
+            : Path.GetFullPath(Path.Combine(home, ScriptRelativePath.Replace('/', Path.DirectorySeparatorChar)));
     }
 
-    public static OrchestratorBuildCheckResult RunDefault(OrchestratorBuildCheckRequest request)
+    public static string FormatScriptInvocation(string? scriptPath) =>
+        scriptPath is null
+            ? $"[Invoke-WorkerBuildCheck.ps1 unavailable: orchestrator home unresolved ({HomeEnvironmentVariable} unset)]"
+            : $"& '{EscapeSingleQuoted(scriptPath)}'";
+
+    public static string BuildCommand(IReadOnlyList<string> projects) =>
+        BuildCommand(ResolveScriptPath(), projects);
+
+    internal static string BuildCommand(string? scriptPath, IReadOnlyList<string> projects)
     {
-        var scriptPath = Path.Combine(
-            request.WorktreeRoot,
-            ScriptRelativePath.Replace('/', Path.DirectorySeparatorChar));
+        var arguments = string.Join(" ", projects.Select(project => $"'{EscapeSingleQuoted(project)}'"));
+        return $"{FormatScriptInvocation(scriptPath)} {arguments}".TrimEnd();
+    }
+
+    public static OrchestratorBuildCheckResult RunDefault(OrchestratorBuildCheckRequest request) =>
+        Run(request, Environment.GetEnvironmentVariable,
+            launchRequest => Task.Run(() => WorkerProcessRunner.RunBufferedAsync(launchRequest, CancellationToken.None))
+                .GetAwaiter().GetResult());
+
+    internal static OrchestratorBuildCheckResult Run(
+        OrchestratorBuildCheckRequest request,
+        Func<string, string?> readEnvironment,
+        Func<WorkerProcessRunRequest, WorkerProcessRunResult> launch)
+    {
+        var scriptPath = ResolveScriptPath(readEnvironment);
+        if (scriptPath is null)
+        {
+            return new(false, -1, $"Build evidence script not found: orchestrator home unresolved ({HomeEnvironmentVariable} unset)");
+        }
+
         if (!File.Exists(scriptPath))
         {
-            return new(false, -1, $"Build evidence script not found: {ScriptRelativePath}");
+            return new(false, -1, $"Build evidence script not found: {scriptPath}");
         }
 
         try
         {
-            var result = Task.Run(() => WorkerProcessRunner.RunBufferedAsync(
-                    new WorkerProcessRunRequest(
-                        BuildCommand(request.Projects),
-                        request.WorktreeRoot,
-                        Timeout: request.Timeout),
-                    CancellationToken.None))
-                .GetAwaiter()
-                .GetResult();
+            var result = launch(new WorkerProcessRunRequest(
+                BuildCommand(scriptPath, request.Projects),
+                request.WorktreeRoot,
+                Timeout: request.Timeout));
             return ClassifyOutput(result.ExitCode, CombineOutput(result.StandardOutput, result.StandardError));
         }
         catch (OperationCanceledException)

@@ -18,7 +18,9 @@ public sealed class WorkerContextArtifactsVerificationTests
         var descriptionIndex = currentTask.IndexOf("## Description", StringComparison.Ordinal);
         Xunit.Assert.True(verificationIndex >= 0);
         Xunit.Assert.True(verificationIndex < descriptionIndex);
-        Xunit.Assert.Contains(".\\scripts\\Invoke-WorkerBuildCheck.ps1 <project.csproj> [project.csproj...]", currentTask);
+        var invocation = OrchestratorBuildEvidenceCheck.FormatScriptInvocation(OrchestratorBuildEvidenceCheck.ResolveScriptPath());
+        Xunit.Assert.Contains(invocation + " <project.csproj> [project.csproj...]", currentTask);
+        Xunit.Assert.DoesNotContain(@".\scripts\Invoke-WorkerBuildCheck.ps1", currentTask);
         Xunit.Assert.Contains("for every project whose sources you changed", currentTask);
         Xunit.Assert.Contains("tests: pass - build: 0 errors (Invoke-WorkerBuildCheck)", currentTask);
         Xunit.Assert.DoesNotContain("tests: build: 0 errors (Invoke-WorkerBuildCheck)", currentTask);

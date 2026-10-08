@@ -52,7 +52,9 @@ public sealed class WorkerBuildGuidanceContractTests
 
         var guidance = Assert.IsType<string>(method.Invoke(null, [task, repositoryRoot, false]));
 
-        Assert.Contains(@".\scripts\Invoke-WorkerBuildCheck.ps1", guidance, StringComparison.Ordinal);
+        var invocation = OrchestratorBuildEvidenceCheck.FormatScriptInvocation(OrchestratorBuildEvidenceCheck.ResolveScriptPath());
+        Assert.Contains(invocation + " <project.csproj> [project.csproj...]", guidance, StringComparison.Ordinal);
+        Assert.DoesNotContain(@".\scripts\Invoke-WorkerBuildCheck.ps1", guidance, StringComparison.Ordinal);
         Assert.Contains("only sanctioned worker-side .NET build check", guidance, StringComparison.Ordinal);
         Assert.DoesNotMatch(
             new Regex(@"(?im)^\s*-\s+(?:run|use|build)\s+`(?:\.\\)?dotnet build\b", RegexOptions.CultureInvariant),

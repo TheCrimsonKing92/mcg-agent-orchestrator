@@ -2999,9 +2999,11 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Contains(".orchestrator-handoff.md", digest, StringComparison.Ordinal);
     Assert.True(File.Exists(FindRepositoryFile("scripts", "Invoke-WorkerBuildCheck.ps1")));
     Assert.Contains("## Worker Build Check", deterministic, StringComparison.Ordinal);
-    Assert.Contains(".\\scripts\\Invoke-WorkerBuildCheck.ps1 <project.csproj> [project.csproj...]", deterministic, StringComparison.Ordinal);
+    var buildInvocation = OrchestratorBuildEvidenceCheck.FormatScriptInvocation(OrchestratorBuildEvidenceCheck.ResolveScriptPath());
+    Assert.Contains(buildInvocation + " <project.csproj> [project.csproj...]", deterministic, StringComparison.Ordinal);
+    Assert.DoesNotContain(@".\scripts\Invoke-WorkerBuildCheck.ps1", deterministic, StringComparison.Ordinal);
     Assert.Contains("does not run tests or spawn testhost", deterministic, StringComparison.Ordinal);
-    Assert.Contains("Compiling every changed project is required through `.\\scripts\\Invoke-WorkerBuildCheck.ps1`", deterministic, StringComparison.Ordinal);
+    Assert.Contains($"Compiling every changed project is required through `{buildInvocation}`", deterministic, StringComparison.Ordinal);
     Assert.Contains("subscription workers must not run raw `dotnet test`, `.\\scripts\\Invoke-IsolatedDotnet.ps1`, or any other worker-side test execution", deterministic, StringComparison.Ordinal);
     Assert.DoesNotContain("raw `dotnet build`", deterministic, StringComparison.Ordinal);
     Assert.Contains("tests: pass - build: 0 errors (Invoke-WorkerBuildCheck)", deterministic, StringComparison.Ordinal);
@@ -3026,9 +3028,10 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Contains("Git Status", diffSummary, StringComparison.Ordinal);
     var currentTaskText = File.ReadAllText(Path.Combine(contextDirectory, "current-task.md"));
     Assert.Contains("Run worker dispatch tests.", currentTaskText, StringComparison.Ordinal);
-    Assert.Contains(".\\scripts\\Invoke-WorkerBuildCheck.ps1 <project.csproj> [project.csproj...]", currentTaskText, StringComparison.Ordinal);
+    Assert.Contains(buildInvocation + " <project.csproj> [project.csproj...]", currentTaskText, StringComparison.Ordinal);
+    Assert.DoesNotContain(@".\scripts\Invoke-WorkerBuildCheck.ps1", currentTaskText, StringComparison.Ordinal);
     Assert.Contains("tests: pass - build: 0 errors (Invoke-WorkerBuildCheck)", currentTaskText, StringComparison.Ordinal);
-    Assert.Contains("Compiling every changed project is required through `.\\scripts\\Invoke-WorkerBuildCheck.ps1`", currentTaskText, StringComparison.Ordinal);
+    Assert.Contains($"Compiling every changed project is required through `{buildInvocation}`", currentTaskText, StringComparison.Ordinal);
     Assert.Contains("Do not run raw `dotnet test`, `.\\scripts\\Invoke-IsolatedDotnet.ps1`, or any other worker-side test execution", currentTaskText, StringComparison.Ordinal);
     Assert.DoesNotContain("raw `dotnet build`", currentTaskText, StringComparison.Ordinal);
     Assert.Contains("skills: <selected skills used or none>", currentTaskText, StringComparison.Ordinal);

@@ -195,10 +195,12 @@ public sealed class ToolchainDetectionTests
         var verification = File.ReadAllText(Path.Combine(contextDir, "deterministic-verification.md"));
 
         Xunit.Assert.Contains("## Worker Build Check", verification, StringComparison.Ordinal);
-        Xunit.Assert.Contains(".\\scripts\\Invoke-WorkerBuildCheck.ps1 <project.csproj> [project.csproj...]", verification, StringComparison.Ordinal);
+        var invocation = OrchestratorBuildEvidenceCheck.FormatScriptInvocation(OrchestratorBuildEvidenceCheck.ResolveScriptPath());
+        Xunit.Assert.Contains(invocation + " <project.csproj> [project.csproj...]", verification, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain(@".\scripts\Invoke-WorkerBuildCheck.ps1", verification, StringComparison.Ordinal);
         Xunit.Assert.Contains("for every project whose sources they changed", verification, StringComparison.Ordinal);
         Xunit.Assert.Contains("tests: pass - build: 0 errors (Invoke-WorkerBuildCheck)", verification, StringComparison.Ordinal);
-        Xunit.Assert.Contains("Compiling every changed project is required through `.\\scripts\\Invoke-WorkerBuildCheck.ps1`", verification, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"Compiling every changed project is required through `{invocation}`", verification, StringComparison.Ordinal);
         Xunit.Assert.Contains("subscription workers must not run raw `dotnet test`", verification, StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain("raw `dotnet build`", verification, StringComparison.Ordinal);
         Xunit.Assert.Contains("does not run tests or spawn testhost", verification, StringComparison.Ordinal);
