@@ -73,6 +73,13 @@ internal static class CliOwnerDigestCommand
         writer.WriteLine($"Totals: landed={digest.Totals.LandedGoals} interventions={digest.Totals.Interventions.Total} H/A/O={digest.Totals.Interventions.Human}/{digest.Totals.Interventions.Agent}/{digest.Totals.Interventions.Other} mean={digest.Totals.MeanInterventionsPerLanding?.ToString("0.###", CultureInfo.InvariantCulture) ?? "n/a"} correct={digest.Totals.CorrectLandings} escapes={digest.Totals.Escapes} pending={digest.Totals.Pending} correct-rate={digest.Totals.CorrectLandingRate?.ToString("0.###", CultureInfo.InvariantCulture) ?? "n/a"} tail-median-h={digest.Totals.TailMedianHours?.ToString("0.###", CultureInfo.InvariantCulture) ?? "unknown"} tail-p90-h={digest.Totals.TailP90Hours?.ToString("0.###", CultureInfo.InvariantCulture) ?? "unknown"} tail-known={digest.Totals.KnownTailCount} tail-unknown={digest.Totals.UnknownTailCount} mechanical-h={digest.Totals.MechanicalHours.Total:0.###} H/A/O={digest.Totals.MechanicalHours.Human:0.###}/{digest.Totals.MechanicalHours.Agent:0.###}/{digest.Totals.MechanicalHours.Other:0.###} unresolved-h={digest.Totals.UnresolvedHoldHours:0.###}");
         WriteEscapes(writer, digest);
         writer.WriteLine($"Non-landed goals with interventions in window: {digest.NonLandedGoalsWithInterventions}");
+        writer.WriteLine("Latest decisions:");
+        foreach (var decision in digest.LatestDecisions.Entries)
+        {
+            var evidence = Regex.Replace(decision.Evidence, @"\s+", " ").Trim();
+            writer.WriteLine($"{GoalPrefix(decision.GoalId)} | {decision.Stage} | rung {decision.Rung} | {(evidence.Length == 0 ? "-" : evidence)}");
+        }
+        writer.WriteLine($"none={digest.LatestDecisions.None}");
     }
 
     private static void WriteEscapes(TextWriter writer, OwnerDigestResult digest)

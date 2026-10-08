@@ -15,7 +15,7 @@ landed; remaining boundaries are recorded under [Status — 2026-10-07](#status-
 | Transitions | Typed lifecycle commands, goal-version conflict handling, atomic state/outbox writes, truthful committed outcomes | **Done.** Unpark (`06b62ff8`, `ac09af58`) and recovery utility (`1426d14b`, `0bd22b45`) remain landed. Goal-scoped versioned lifecycle transitions, atomic effect intents and truthful outcomes landed through `63470c38` (`cfef3b639`), `940fd3c1` (`d561ef23f`), `2c8b46ab` (`10ef02c47`), `65ab075f` (`24f7c9db9`), `3e3c42d6` (`ce88622de`) and `5330f7f6` (`e7d02a758`). Only non-lifecycle verbs reach the untransacted fallback; source-backed residuals are listed below. |
 | Application | UI-free dispatch/advancement/task operations; dashboard and CLI adapt shared typed results | **Done.** `f5db9754` landed as `adb57a8f0` (2026-09-15): application-owned dispatch, advancement and task operations; old `GoalManagementCommandService.Dispatches.cs` deleted; `ApplicationBoundaryConventionTests` forbid forwarding back. |
 | Acceptance | Attempt identity/lifecycle/evidence belongs to an attempt owner; verifier composes separately owned build, invocation, scheduling and adjudication | **Partial.** Attempt ownership (`6032a3d4`, `209400a8b`) and verifier slices 1–7 remain landed. Build-phase owner: `1c226573` (`57cdd1c43`); TRX taxonomy relocation: `f67b2348` (`5b12c506a`); SDK console rule: `1e66a816` (`0c39b309b`). Failure-cause adjudication: `9797ec59` (`ef8e8b259`, `9263fd56d`); overlapped batch scheduler: `8071fdac` (`1e2c65b06`, `34c38a7b2`), integrated by `c2b8cbd36`. Invocation remains verifier-owned; the seven earlier slices and source trace are listed below. |
-| Workflow decisions | Conductor policy produces typed, attributed decisions; effect execution and completion are separately owned | **Partial.** Failed lifecycle remains policy-owned (`42115646`, `615030e56`). Operator-intent timeline payloads: `e389f7df` (`f50d4a5ee`); atomic `adjudicate` intent on DecisionSpine: `798f1c58` (`4f0f434a9`). Typed lifecycle-entry/Created decisions: `59512480` (`73e153cee`), `d73cb74d` (`1f8207289`); dispatch: `0b8e1941` (`18438ee33`); Verifying/Verified: `daa8eae4` (`47aa7c412`), `5d686b62` (`322cead17`); landing: `12e75ca8` (`0c65e9755`), `4a2b4c38` (`a2fd2b0a9`). Effect executors: dispatch `0079c3a4` (`234750bc7`, `9fe747d2f`), Verifying `94e59ca0` (`798ffca37`, integrated by `82e60f0e1`), alongside LandingExecutor. Created and gate-start effects remain inline, and several holds lack attributed policy decisions; source locations are listed below. |
+| Workflow decisions | Conductor policy produces typed, attributed decisions; effect execution and completion are separately owned | **Partial, with stage contract enforced.** Slices 1–6 and subsequent landings are credited in the execution record below. Created, dispatch, Verifying, gate-start and landing effects have executors; Deferred/Started dispatch and unchanged-candidate holds carry decisions. The stage convention test pins two remaining exceptions against the repository ratchet. Owner digest now reads latest decisions in text and JSON; the remaining attribution inventory is listed below. |
 | Hosts | Independently publishable headless runtime and optional dashboard; explicit composition and compatible entry points | **Done.** Host separation landed (`ac61f820`, `cc9167aec`); the browser dashboard was then removed (`6bae4427`, `849f62765`; `12f07e75`, `062ad484b`; `de510074`, `7a7d0a543`), including its acceptance smoke (`bee9a71f`, `655d95c4f`). |
 | Persistent operation | Queryable runtime generation/readiness/ownership, safe update/child adoption and offline recovery | **Partial.** Generation status (`f77f5f6c`, `56afd4c2f`; rotated-log reading `b3a6634f`, `19a6532a6`), successor gate adoption (`f47113b2`, `5e0581b51`), main-health pauses (`01ce50dd`, `4975e8165`), gate host-health signals (`68456acf`, `c258b316b`) and off-tick retention (`6c201067`, `b705ddaca`) remain landed. Fenced offline applier: `ae7d1201` (`cd94682bb`, `4a3f63fa4`); conductor apply-intents: `7a4bef78` (`0b0367c64`); adoption census: `83e5fc4f` (`dc497bac2`); recorded worker ownership transfer: `b8e8c3cb` (`46291ab44`). Identity-unproven workers still defer adoption; source is cited below. |
 | Evidence/economics | Reconciled transition → execution → acceptance → integration → activation receipts, measured coverage and matched provider trials | **Ongoing.** Hermes identity `bbf6fe7c` (`a24b9c41`); source inventory `76443477` (`cd90a071`) cut estimated prompt tokens 29.6%. Typed worker context (`29423867`, main merge `1fcb834df`), focused-evidence/receipt reuse (`29e8cbeb`, main merge `46167d98b`) and per-tick scan reductions (`1711c156`, main merge `6bda15bec`) remain landed. New evidence slices: `b1eac418` (`c41858e0a`), `e93305a0` (`6aa714c9b`), `e5eb3946` (`4a7d0bb9f`), `34a11d50` (`9e0ccb38e`), `38cacc86` (`8cabd4572`); Planner contract diagnostics `f392f031` (`83d13e567`, integrated by `4ed565b10`). No matched efficiency trial was located in this source/history trace. |
@@ -129,32 +129,46 @@ Remaining ownership boundary: invocation still belongs to `partial class GoalAcc
 (`src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.ProcessRunner.cs:6-8`), despite
 the landed argument-construction and process-runner decomposition slices. Acceptance remains partial.
 
-**Workflow decisions — partial.** Failed lifecycle remains policy-owned (`42115646`, `615030e56`). Landed:
+**Workflow decisions — partial, with stage contract enforced.** Failed lifecycle remains policy-owned
+(`42115646`, `615030e56`). Credits below resolve at HEAD `f3d3e5921`; each landing commit's subject
+names its goal. Landed:
 
 - Operator-intent timeline payloads: `e389f7df` (`f50d4a5ee`); atomic `adjudicate` intent on DecisionSpine:
   `798f1c58` (`4f0f434a9`).
-- Typed lifecycle entry and Created: `59512480` (`73e153cee`), `d73cb74d` (`1f8207289`);
-  dispatch: `0b8e1941` (`18438ee33`); Verifying and Verified: `daa8eae4` (`47aa7c412`),
-  `5d686b62` (`322cead17`); landing: `12e75ca8` (`0c65e9755`), `4a2b4c38` (`a2fd2b0a9`).
+- Slice 1, dispatch admission: `59512480` (`73e153cee`); slice 2, dispatch start:
+  `0b8e1941` (`18438ee33`); slice 3, lifecycle entry and Created: `d73cb74d` (`1f8207289`).
+- Slice 4, Verifying: `daa8eae4` (`47aa7c412`); slice 5, Verified: `5d686b62` (`322cead17`);
+  slice 6a, post-gate landing: `12e75ca8` (`0c65e9755`); slice 6b, LandingExecutor:
+  `4a2b4c38` (`a2fd2b0a9`).
 - Effect executors: `DispatchStartExecutor`, `0079c3a4` (`234750bc7`, `9fe747d2f`), at
   `src/Mcg.AgentOrchestrator.App/Orchestration/DispatchStartExecutor.cs`;
   `VerifyingAttemptExecutor`, `94e59ca0` (`798ffca37`, integrated by `82e60f0e1`), at
   `src/Mcg.AgentOrchestrator.App/Orchestration/VerifyingAttemptExecutor.cs`, alongside `LandingExecutor`.
-- Landing adoption is measured: `LandingDecisionEngine.Decide` is called by
-  `src/Mcg.AgentOrchestrator.Core/Application/LandingPolicy.cs:124`, and `LandingPolicy.Evaluate` by
-  `src/Mcg.AgentOrchestrator.App/Orchestration/LandingExecutor.cs:97`.
-- Remaining: Created's workspace effect runs inline before policy evaluation
-  (`src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.LifecycleEntryDecisions.cs:47-64`);
-  Verified gate start and its deferral translation run inline
-  (`src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.AcceptanceLanding.cs:78-112`).
-  The Deferred dispatch hold carries no decision
-  (`src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs:1739-1743`), and the Started decision is
-  evaluated only as a guard, not attached to the executed outcome
-  (`src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs:1746-1753`).
-  The unchanged-candidate hold bypasses policy
-  (`src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.UnchangedCandidate.cs:99-103`), as do the
-  pre-review evidence holds
-  (`src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.PreReviewEvidence.cs:198,211,229`).
+- Created workspace effects: `8a020715` (`db4631c77`),
+  `src/Mcg.AgentOrchestrator.App/Orchestration/CreatedWorkspaceExecutor.cs`;
+  Verified gate start: `b8c58c33` (`7c39a7fb4`),
+  `src/Mcg.AgentOrchestrator.App/Orchestration/VerifiedGateStartExecutor.cs`.
+- Deferred/Started dispatch decisions: `e61c95e5` (`68e436aa6`); unchanged-candidate hold:
+  `33e0fc70` (`7b39436d3`); acceptance apparatus dispositions: `a7107c18` (`35765fbbc`);
+  failed-goal recovery: `7898249d` (`b4102d48d`); worker build-check outcomes:
+  `acdb93fd` (`e2071251a`); timed-out selection: `b29d93fd` (`6a2ad9431`).
+- Repository attribution ratchet: `56614dde` (`d36c6edbf`),
+  `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkflowDecisionCoverageRatchetTests.cs`.
+  The stage contract in `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkflowDecisionStageConventionTests.cs`
+  now covers the four named stage executors plus landing completion's escalation factory, with
+  reasoned, sorted exceptions, per-member site counts, stale-entry checks and fixture negative controls.
+- Latest-decision reader: `src/Mcg.AgentOrchestrator.Core/Reports/LatestPolicyDecisionReader.cs`.
+  `src/Mcg.AgentOrchestrator.Core/Reports/OwnerDigestReport.cs` applies the digest window;
+  `src/Mcg.AgentOrchestrator.App/Cli/CliOwnerDigestCommand.cs` exposes **Latest decisions** in text
+  and JSON, retaining the latest decided tick when a later tick has no decision.
+- Remaining: failed-dispatch recovery in `ConductorDriver.cs::ExecuteDispatchAndStart` still
+  delegates without a decision, and `ConductorDriver.LandingCompletion.cs::Escalate` still leaves
+  attribution to callers (both under `src/Mcg.AgentOrchestrator.App/Orchestration`). These are the
+  two pinned stage exceptions. Pre-review evidence **escalations** in
+  `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.PreReviewEvidence.cs::TryRunPreReviewEvidenceStage`
+  still lack decisions; its pending holds use `PreReviewEvidenceHold`. The repository ratchet's
+  `AllowList` is the complete remaining member inventory; shrink it entry by entry, together with
+  stage exceptions when applicable. Latest decisions on `monitor-goal` and `attention` remain follow-up surfaces.
 
 Conductor decomposition landed without establishing those policy outcomes:
 

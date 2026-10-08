@@ -36,12 +36,23 @@ public sealed record OwnerDigestTotals(
     double? TailP90Hours, int KnownTailCount, int UnknownTailCount,
     OwnerDigestHours MechanicalHours, double UnresolvedHoldHours);
 
+public sealed record OwnerDigestLatestDecision(
+    string GoalId, string Stage, string Action, int Rung, string Evidence,
+    DateTimeOffset OccurredAt);
+
+public sealed record OwnerDigestLatestDecisions(
+    IReadOnlyList<OwnerDigestLatestDecision> Entries, int None);
+
 public sealed record OwnerDigestResult(
     DateTimeOffset Since, DateTimeOffset Until, string Reverts,
     IReadOnlyList<OwnerDigestGoalRow> Goals, OwnerDigestTotals Totals,
     int NonLandedGoalsWithInterventions, int MalformedLifecycleLines = 0,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    IReadOnlyList<OwnerDigestEscapeRecord>? Escapes = null);
+    IReadOnlyList<OwnerDigestEscapeRecord>? Escapes = null)
+{
+    [JsonPropertyOrder(1)]
+    public OwnerDigestLatestDecisions LatestDecisions { get; init; } = new([], 0);
+}
 
 public static class OwnerDigestReport
 {
@@ -88,8 +99,26 @@ public static class OwnerDigestReport
             correct + escapes == 0 ? null : (double)correct / (correct + escapes),
             Percentile(tails, .5), Percentile(tails, .9), tails.Length,
             rows.Length - tails.Length, hourTotals, rows.Sum(r => r.UnresolvedHoldHours));
+        var latestDecisions = new List<OwnerDigestLatestDecision>();
+        var noDecision = 0;
+        foreach (var goal in goals)
+        {
+            var window = goal.Timeline.Where(e => e.OccurredAt >= start && e.OccurredAt < end).ToArray();
+            if (window.Length == 0) continue;
+            if (LatestPolicyDecisionReader.Read(window) is not { } decision)
+            {
+                noDecision++;
+                continue;
+            }
+            latestDecisions.Add(new(goal.GoalId, decision.Stage, decision.Action, decision.Rung,
+                decision.DiscriminatingEvidence, decision.OccurredAt));
+        }
         return new OwnerDigestResult(start, end, "not tracked", rows, totals,
-            nonLanded, malformedLifecycleLines, records.Length == 0 ? null : records);
+            nonLanded, malformedLifecycleLines, records.Length == 0 ? null : records)
+        {
+            LatestDecisions = new(latestDecisions.OrderByDescending(d => d.OccurredAt)
+                .ThenBy(d => d.GoalId, StringComparer.Ordinal).ToArray(), noDecision)
+        };
     }
 
     private static OwnerDigestGoalRow BuildRow(
