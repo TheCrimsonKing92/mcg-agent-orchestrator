@@ -97,7 +97,7 @@ public sealed class OwnerConsoleActivityPresentationTests
     [InlineData("steward-owner-question case=C trigger=internal-trigger question=Should we retry this task? evidence=[internal-evidence]", "needs your input")]
     [InlineData("author-owner-question item=Goal:internal-goal reason=choose recovery question=Should we retry? recommendation=Retry with evidence", "needs your input")]
     [InlineData("unrecognized-escalation raw payload with commands and evidence", "escalated")]
-    public async Task EscalationPayloadsStayInGoalDetail(string detail, string phrase)
+    public async Task EscalationPayloadsStayOutOfGoalDetail(string detail, string phrase)
     {
         var harness = new OwnerConsoleHarness();
         harness.AddGoal("11111111-goal", "# Improve the owner console", Mcg.AgentOrchestrator.Core.AgentRole.Developer);

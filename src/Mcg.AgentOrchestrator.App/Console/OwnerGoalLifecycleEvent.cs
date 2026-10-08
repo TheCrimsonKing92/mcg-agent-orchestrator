@@ -21,6 +21,13 @@ internal static class OwnerGoalLifecycleEvent
                 detail += " task=" + taskId;
             if (root.TryGetProperty("role", out var role) && Enum.TryParse<AgentRole>(role.GetString(), out var parsedRole))
                 detail += " role=" + parsedRole;
+            // The writer has no structured outcome field. Recognize only the kernel's
+            // explicit blocking-finding marker; never copy arbitrary message payloads.
+            if (kind == "TaskFailed" && root.TryGetProperty("message", out var message) &&
+                message.ValueKind == JsonValueKind.String &&
+                (message.GetString()!.StartsWith("Tester WORKER_RESULT rejected: merged structured finding state still has open blocking stable_id(s):", StringComparison.Ordinal) ||
+                 message.GetString()!.StartsWith("Reviewer WORKER_RESULT verdict rejected: merged structured finding state still has open blocking stable_id(s):", StringComparison.Ordinal)))
+                detail += " outcome=finding";
             item = new(timestamp.GetDateTimeOffset(), "goal-lifecycle", goalId, detail);
             return true;
         }

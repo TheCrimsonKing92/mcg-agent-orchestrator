@@ -44,7 +44,7 @@ public sealed class OwnerConsoleGoalDetailFormatterTests
         Assert.Contains("Goal: " + goal.Id.Value, text);
         Assert.Contains("Title: Readable detail", text);
         Assert.Contains("Status: " + goal.Status, text);
-        Assert.Contains("Stage: Developer", text);
+        Assert.Contains("Stage: Blocked", text);
         Assert.Contains("Role: Developer", text);
         var lines = text.Split(Environment.NewLine);
         foreach (var task in goal.Tasks) Assert.Single(lines, line => line == $"  {task.RequiredRole}: {task.Status}");
@@ -71,6 +71,25 @@ public sealed class OwnerConsoleGoalDetailFormatterTests
         Assert.Contains("Recent events: none", output.Text);
         Assert.DoesNotContain("{", output.Text);
         Assert.DoesNotContain("legacy", output.Text);
+    }
+
+    [Theory]
+    [InlineData("Verification passed (0): verify")]
+    [InlineData("Verification failed (1): verify")]
+    [InlineData("Dispatch execution failed (1): worker")]
+    public async Task VerificationRecord_UsesNeutralPhraseRatherThanClaimingTaskPassed(string message)
+    {
+        var harness = new OwnerConsoleHarness();
+        var goal = harness.AddGoal("11111111", "Verification outcome", AgentRole.Tester);
+        var time = DateTimeOffset.UnixEpoch;
+        var line = JsonSerializer.Serialize(new { timestamp = time, eventType = "TaskVerified",
+            taskId = goal.Tasks.Single().Id.Value, message });
+        var output = new OwnerConsoleHarness.FakeOutput();
+        await OwnerConsoleGoalDetailFormatter.ComposeAsync(harness.State, new Tail([line]), goal.Id.Value,
+            output, TestContext.Current.CancellationToken);
+        Assert.Contains($"{time.ToLocalTime():HH:mm:ss} Tester verification recorded", output.Text);
+        Assert.DoesNotContain("finished: passed", output.Text);
+        Assert.DoesNotContain(message, output.Text);
     }
 
     private sealed class Tail(string[] lines) : IGoalEventTail

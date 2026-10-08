@@ -8,12 +8,17 @@ internal sealed class OwnerGoalLifecycleTail(string directory)
     private const int InitialWindow = 64 * 1024;
     private readonly Dictionary<string, Cursor> _cursors = new(StringComparer.Ordinal);
 
-    internal IReadOnlyList<OwnerConductEvent> ReadNew(IReadOnlyCollection<string> goalIds)
+    internal void Reset() => _cursors.Clear();
+
+    internal IReadOnlyList<OwnerConductEvent> ReadNew(IReadOnlyCollection<string> goalIds, CancellationToken token = default)
     {
-        foreach (var id in _cursors.Keys.Except(goalIds).ToArray()) _cursors.Remove(id);
+        // Drain known goals once more before eviction: completion may remove a board
+        // row in the same refresh that writes its final role-finish event.
+        var departing = _cursors.Keys.Except(goalIds).ToArray();
         var result = new List<OwnerConductEvent>();
-        foreach (var id in goalIds)
+        foreach (var id in goalIds.Concat(departing).Distinct())
         {
+            token.ThrowIfCancellationRequested();
             // Board metadata supplies ids, but never allow an id to escape the events directory.
             if (id.IndexOfAny(['/', '\\']) >= 0 || id is "." or "..") continue;
             var path = Path.Combine(directory, id + ".jsonl");
@@ -32,6 +37,7 @@ internal sealed class OwnerGoalLifecycleTail(string directory)
                 var buffer = new byte[8192];
                 while (remaining > 0)
                 {
+                    token.ThrowIfCancellationRequested();
                     var read = stream.Read(buffer, 0, (int)Math.Min(remaining, buffer.Length));
                     if (read == 0) break;
                     remaining -= read;
@@ -50,6 +56,7 @@ internal sealed class OwnerGoalLifecycleTail(string directory)
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { _cursors.Remove(id); }
         }
+        foreach (var id in departing) _cursors.Remove(id);
         return result;
     }
 

@@ -23,7 +23,9 @@ public sealed class OwnerConsoleGoalStageActivityTests
             File.WriteAllLines(file,
             [
                 Lifecycle(time, "TaskDispatched", goal.Tasks[0].Id.Value),
-                Lifecycle(time.AddSeconds(1), "FindingEvidenceRequestRecorded", goal.Tasks[1].Id.Value)
+                JsonSerializer.Serialize(new { timestamp = time.AddSeconds(1), eventType = "TaskFailed",
+                    taskId = goal.Tasks[1].Id.Value,
+                    message = "Tester WORKER_RESULT rejected: merged structured finding state still has open blocking stable_id(s): finding1; automatic ownership routing required." })
             ]);
             var tail = new OwnerGoalLifecycleTail(directory);
             var events = tail.ReadNew([goal.Id.Value]).ToList();
@@ -90,6 +92,50 @@ public sealed class OwnerConsoleGoalStageActivityTests
             taskId = "task1", role = "Reviewer", message = "{raw JSON}" });
         Assert.True(OwnerGoalLifecycleEvent.TryParse(line, "11111111", out var item));
         Assert.Equal(phrase, OwnerConsoleActivityPresentation.Phrase(item!, OwnerConsoleActivityPresentation.Classify(item!)!));
+    }
+
+    [Fact]
+    public void EvidenceRoutingRecords_DoNotAnnounceRoleCompletion()
+    {
+        var line = JsonSerializer.Serialize(new { timestamp = DateTimeOffset.UnixEpoch,
+            eventType = "FindingEvidenceRequestRecorded", role = "Developer",
+            message = "finding-evidence disposition=evidence-only-round-accepted; finding_id=finding1" });
+        Assert.True(OwnerGoalLifecycleEvent.TryParse(line, "11111111", out var item));
+        Assert.Null(OwnerConsoleActivityPresentation.Classify(item!));
+        Assert.Equal("finding evidence request recorded", OwnerConsoleActivityPresentation.Phrase(item!, ""));
+    }
+
+    [Fact]
+    public async Task DepartingGoal_DrainsFinalRoleFinishBeforeCursorEviction()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "owner-departing-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var harness = new OwnerConsoleHarness();
+            var goal = harness.AddGoal("11111111", "Departing goal", AgentRole.Reviewer);
+            var builder = Builder(harness);
+            await builder.BuildBoardAsync();
+            var task = goal.Tasks.Single();
+            var file = Path.Combine(directory, "11111111.jsonl");
+            var tail = new OwnerGoalLifecycleTail(directory);
+            File.WriteAllText(file, Lifecycle(DateTimeOffset.UnixEpoch, "TaskDispatched", task.Id.Value) + "\n");
+            Assert.Single(tail.ReadNew([goal.Id.Value]));
+            harness.Kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "passed");
+            var snapshot = harness.Kernel.ExportSnapshot();
+            harness.Kernel.ReplaceWithSnapshot(snapshot with { Goals = snapshot.Goals.Select(item =>
+                item with { Status = GoalStatus.Completed }).ToArray() });
+            var board = await builder.BuildBoardAsync();
+            Assert.Empty(board.Board);
+            File.AppendAllText(file, Lifecycle(DateTimeOffset.UnixEpoch.AddSeconds(1), "TaskCompleted", task.Id.Value) + "\n");
+            var final = Assert.Single(tail.ReadNew([]));
+            using var app = Terminal.Gui.App.Application.Create();
+            using var view = View(app, harness);
+            view.Render(builder.WithActivity(board, new(DateTimeOffset.UnixEpoch, null, [final], 0)));
+            Assert.Contains("Reviewer finished: passed", Assert.Single(view.ActivityLines));
+            Assert.Empty(tail.ReadNew([]));
+        }
+        finally { Directory.Delete(directory, true); }
     }
 
     [Theory]

@@ -8,7 +8,7 @@ internal static class OwnerConsoleStartupActivity
     internal static bool IsOperatorEvent(OwnerConductEvent item) =>
         OwnerConsoleActivityPresentation.Classify(item) is not null;
 
-    internal static IReadOnlyList<OwnerConductEvent> ReadRecent(string path)
+    internal static IReadOnlyList<OwnerConductEvent> ReadRecent(string path, CancellationToken token = default)
     {
         try
         {
@@ -21,6 +21,7 @@ internal static class OwnerConsoleStartupActivity
             long sequence = 0;
             while (remaining > 0)
             {
+                token.ThrowIfCancellationRequested();
                 var read = stream.Read(buffer, 0, (int)Math.Min(buffer.Length, remaining));
                 if (read == 0) break;
                 for (var index = 0; index < read; index++)

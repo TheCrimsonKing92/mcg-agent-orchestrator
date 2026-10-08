@@ -14,7 +14,7 @@ internal static class OwnerConsoleGoalDetailFormatter
         output.WriteLine("Goal: " + Plain(goal.Id.Value));
         output.WriteLine("Title: " + Plain(OwnerGoalTitle.From(goal.Objective)));
         output.WriteLine("Status: " + goal.Status);
-        output.WriteLine("Stage: " + OwnerConsoleGoalDetail.Stage(goal));
+        output.WriteLine("Stage: " + GoalLifecycle.ResolveState(goal, new(IsBlocked: goal.CurrentHold is not null)));
         output.WriteLine("Role: " + OwnerConsoleGoalDetail.Stage(goal));
         output.WriteLine("Tasks:");
         foreach (var task in goal.Tasks) output.WriteLine($"  {task.RequiredRole}: {task.Status}");

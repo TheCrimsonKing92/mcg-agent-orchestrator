@@ -27,6 +27,7 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
         CancellationToken cancellationToken)
     {
         var snapshot = await questions.ReadAsync(cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         var decisions = snapshot.Live.Select(question =>
         {
             if (!_numbers.TryGetValue(question.ItemId, out var number))
@@ -48,15 +49,17 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
         if (ids.Length > 0)
         {
             var kernel = await state.LoadGoalsAsync(ids, cancellationToken);
-            _roles = kernel.Goals.Where(goal => ids.Contains(goal.Id)).SelectMany(goal => goal.Tasks)
-                .GroupBy(task => task.Id.Value).ToDictionary(group => group.Key, group => group.First().RequiredRole);
+            // Retain roles for the tail's final read after a goal leaves the board.
+            var roles = new Dictionary<string, AgentRole>(_roles);
+            foreach (var task in kernel.Goals.Where(goal => ids.Contains(goal.Id)).SelectMany(goal => goal.Tasks))
+                roles[task.Id.Value] = task.RequiredRole;
+            _roles = roles;
             foreach (var goal in kernel.Goals.Where(goal => ids.Contains(goal.Id) && IsActive(goal.Status)))
                 board.Add(new(Prefix(goal.Id.Value), await epics.GetTitleAsync(goal.Id.Value, cancellationToken),
                     OwnerGoalTitle.From(goal.Objective), goal.Status.ToString(),
                     OwnerConsoleGoalDetail.Stage(goal),
                     Age(goal.Timeline.OrderByDescending(item => item.OccurredAt).FirstOrDefault()?.OccurredAt), goal.Id.Value));
         }
-        else _roles = new Dictionary<string, AgentRole>();
         return new(new(liveness.IsRunning(), board.Count, 0, 0, null, 0), [], board.ToImmutable(), []);
     }
 

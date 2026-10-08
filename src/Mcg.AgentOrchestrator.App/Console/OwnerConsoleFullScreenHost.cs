@@ -5,7 +5,8 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 internal static class OwnerConsoleFullScreenHost
 {
-    // Shared startup seam: headless views use the same log-to-model path as the production host.
+    // Eager history/model helper retained for callers that need a complete snapshot.
+    // Production progressive startup uses OwnerConsoleStartupLoader.FillAsync.
     internal static async Task<(OwnerConsoleViewModel Model, List<OwnerConductEvent> Recent)> BuildInitialViewModelAsync(
         OwnerConsoleViewModelBuilder builder, string conductLogPath, DateTimeOffset opened,
         DateTimeOffset? last, CancellationToken token)
@@ -75,25 +76,27 @@ internal static class OwnerConsoleFullScreenHost
                 finally { rebuild.Release(); }
             }
 
-            await rebuild.WaitAsync(token);
+            rebuild.Wait(token);
             try
             {
-                var startup = new OwnerConsoleStartupLoader(builder, activityLoader, action => app.Invoke(action));
-                fill = await Task.Run(() => startup.StartAsync(board =>
-                {
-                    app.Init();
-                    var controller = new OwnerConsoleScreenController(questions, new AttentionAnswerHandlerAdapter(workspace),
-                        new TerminalGuiOwnerConsoleDialogs(app, token), state, new GoalEventFileTail(workspace.GoalLifecycleEventsDirectory),
-                        new CliConductorConsoleAdapter(workspace), new CliOwnerDigestConsoleAdapter(workspace),
-                        new OwnerDigestSummaryAdapter(workspace), clock);
-                    view = new(app, controller, () => RefreshAsync(), token);
-                    boardIds = board.Board.Select(row => row.GoalId).ToArray();
-                    view.Render(board);
-                }, model => view!.Render(model), new(opened, last, [], 0), loaded =>
+                // Keep Init, initial Render and Run on this host thread. Metadata is
+                // read on the pool before GUI initialization, with the existing bound.
+                var board = OwnerConsoleStartupLoader.LoadingBoard(Task.Run(() => builder.BuildBoardAsync(token), token)
+                    .WaitAsync(OwnerConsoleLoopOptions.Default.OperationBound, clock, token).GetAwaiter().GetResult());
+                app.Init();
+                var controller = new OwnerConsoleScreenController(questions, new AttentionAnswerHandlerAdapter(workspace),
+                    new TerminalGuiOwnerConsoleDialogs(app, token), state, new GoalEventFileTail(workspace.GoalLifecycleEventsDirectory),
+                    new CliConductorConsoleAdapter(workspace), new CliOwnerDigestConsoleAdapter(workspace),
+                    new OwnerDigestSummaryAdapter(workspace), clock);
+                view = new(app, controller, () => RefreshAsync(), token);
+                boardIds = board.Board.Select(row => row.GoalId).ToArray();
+                view.Render(board);
+                var startup = new OwnerConsoleStartupLoader(builder, activityLoader, action => app.Invoke(action), clock);
+                fill = startup.FillAsync(board, model => view.Render(model), new(opened, last, [], 0), loaded =>
                 {
                     recent = loaded.Recent.Select(builder.EnrichEvent).ToList();
                     last = loaded.LastActivity;
-                }, token), token).WaitAsync(OwnerConsoleLoopOptions.Default.OperationBound, clock, token);
+                }, token);
             }
             catch { rebuild.Release(); throw; }
             using var stop = token.Register(() => app.Invoke(() =>

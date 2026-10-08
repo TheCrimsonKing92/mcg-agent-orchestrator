@@ -73,6 +73,59 @@ public sealed class OwnerConsoleBoardFirstStartupTests
         Assert.DoesNotContain("loading...", view.ActivityLines);
     }
 
+    [Fact]
+    public async Task HungSources_TimeoutIntoPaneErrorsAndReleaseStartup()
+    {
+        var harness = new OwnerConsoleHarness();
+        harness.AddGoal("11111111-first", "Board survives timeout", AgentRole.Developer);
+        var questions = new GatedQuestions();
+        var activity = new GatedActivity();
+        var clock = new PaneClock();
+        using var app = Terminal.Gui.App.Application.Create();
+        using var view = View(app, harness);
+        var startup = new OwnerConsoleStartupLoader(Builder(harness, questions), activity,
+            action => action(), clock);
+        var fill = await startup.StartAsync(view.Render, view.Render, new(harness.Clock.GetUtcNow(), null, [], 0),
+            _ => throw new InvalidOperationException("A timed-out activity load must not publish"), TestContext.Current.CancellationToken);
+        try
+        {
+            await questions.Entered.Task.WaitAsync(TestContext.Current.CancellationToken);
+            await activity.Entered.Task.WaitAsync(TestContext.Current.CancellationToken);
+            await clock.BothTimersCreated.Task.WaitAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(["loading..."], view.DecisionLines);
+            Assert.Equal(["loading..."], view.ActivityLines);
+
+            // Fire virtual deadlines explicitly; wall-clock elapsed time is never an assertion.
+            clock.Advance(OwnerConsoleLoopOptions.Default.OperationBound);
+            await fill.WaitAsync(TestContext.Current.CancellationToken);
+            Assert.Equal("Board survives timeout", Assert.Single(view.BoardTable.Rows.Cast<System.Data.DataRow>())["TITLE"]);
+            Assert.Equal("DECISIONS unavailable: questions did not finish within 30s; the console is still running", Assert.Single(view.DecisionLines));
+            Assert.Equal("ACTIVITY unavailable: activity did not finish within 30s; the console is still running", Assert.Single(view.ActivityLines));
+            Assert.True(questions.Token.IsCancellationRequested);
+            Assert.True(activity.Token.IsCancellationRequested);
+        }
+        finally
+        {
+            questions.Release.TrySetResult([]);
+            activity.Release.TrySetResult(new([], null));
+            await fill.WaitAsync(TestContext.Current.CancellationToken);
+        }
+    }
+
+    private sealed class PaneClock : TimeProvider
+    {
+        private readonly ManualStewardTimeProvider _timers = new();
+        private int _created;
+        internal readonly TaskCompletionSource BothTimersCreated = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            var timer = _timers.CreateTimer(callback, state, dueTime, period);
+            if (Interlocked.Increment(ref _created) == 2) BothTimersCreated.TrySetResult();
+            return timer;
+        }
+        internal void Advance(TimeSpan by) => _timers.Advance(by);
+    }
+
     private static OwnerConsoleViewModelBuilder Builder(OwnerConsoleHarness harness, IOwnerQuestionSource questions) =>
         new(harness.State, questions, harness.Liveness, new Epics(), harness.Clock);
     private static OwnerConsoleFullScreenView View(IApplication app, OwnerConsoleHarness harness) => new(app,
@@ -83,16 +136,18 @@ public sealed class OwnerConsoleBoardFirstStartupTests
         internal readonly TaskCompletionSource Entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal readonly TaskCompletionSource Rendered = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal readonly TaskCompletionSource<IReadOnlyList<OwnerQuestion>> Release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal CancellationToken Token;
         public async Task<IReadOnlyList<OwnerQuestion>> ListOpenAsync(CancellationToken token)
-        { Entered.TrySetResult(); return await Release.Task.WaitAsync(token); }
+        { Token = token; Entered.TrySetResult(); return await Release.Task.WaitAsync(token); }
     }
     private sealed class GatedActivity : IOwnerConsoleActivityLoader
     {
         internal readonly TaskCompletionSource Entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal readonly TaskCompletionSource<OwnerConsoleActivityLoad> Release = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal IReadOnlyCollection<string> GoalIds = [];
+        internal CancellationToken Token;
         public async Task<OwnerConsoleActivityLoad> LoadAsync(IReadOnlyCollection<string> ids, CancellationToken token)
-        { GoalIds = ids; Entered.TrySetResult(); return await Release.Task.WaitAsync(token); }
+        { Token = token; GoalIds = ids; Entered.TrySetResult(); return await Release.Task.WaitAsync(token); }
     }
     private sealed class Epics : IOwnerGoalEpicLookup
     {

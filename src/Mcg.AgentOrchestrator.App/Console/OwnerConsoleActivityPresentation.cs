@@ -8,7 +8,7 @@ internal static class OwnerConsoleActivityPresentation
     internal static string? Classify(OwnerConductEvent item)
     {
         if (item.EventKind == "goal-lifecycle")
-            return item.Detail.Split(' ')[0] is "TaskDispatched" or "TaskCompleted" or "TaskFailed" or "FindingEvidenceRequestRecorded"
+            return item.Detail.Split(' ')[0] is "TaskDispatched" or "TaskCompleted" or "TaskFailed"
                 ? ConductEventOperatorClassifier.Outcome : null;
         if (item.EventKind is "acceptance" or "canary-gate" &&
             item.Detail.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Contains("result=started"))
@@ -39,9 +39,10 @@ internal static class OwnerConsoleActivityPresentation
             return tokens.FirstOrDefault() switch
             {
                 "TaskDispatched" or "TaskProcessStarted" => $"{role} started",
-                "TaskCompleted" or "TaskVerified" => $"{role} finished: passed",
-                "TaskFailed" => $"{role} finished: failed",
-                "FindingEvidenceRequestRecorded" => $"{role} finished: finding raised",
+                "TaskCompleted" => $"{role} finished: passed",
+                "TaskVerified" => $"{role} verification recorded",
+                "TaskFailed" => $"{role} finished: " + (Has("outcome=finding") ? "finding raised" : "failed"),
+                "FindingEvidenceRequestRecorded" => "finding evidence request recorded",
                 "GoalLanded" => "landed",
                 _ => System.Text.RegularExpressions.Regex.Replace(tokens.FirstOrDefault() ?? "event", "(?<=[a-z])(?=[A-Z])", " ").ToLowerInvariant()
             };

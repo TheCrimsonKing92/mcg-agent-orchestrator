@@ -29,7 +29,8 @@ public sealed class OwnerConsoleFullScreenPaneTests
         Assert.Contains(selected.Id.Value, detail.Text);
         Assert.Contains("Second goal", detail.Text);
         Assert.Contains(selected.Status.ToString(), detail.Text);
-        Assert.Contains("Stage: Tester", detail.Text);
+        Assert.Contains("Stage: Created", detail.Text);
+        Assert.Contains("Role: Tester", detail.Text);
         Assert.Contains("Recent events: none", detail.Text);
         Assert.DoesNotContain("newest event for " + selected.Id.Value, detail.Text);
         Assert.Equal((selected.Id.Value, 10), Assert.Single(tail.Calls));
