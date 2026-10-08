@@ -33,7 +33,7 @@ public static bool Execute(IReadOnlyList<string> parts, CliExecutionContext cont
         return false;
     }
 
-    var handled =
+    var handled = CliExperimentCommands.TryExecute(command, parts, context) ??
         TryExecuteOwnerDigestCommand(command, parts, context) ??
         TryExecuteFundamentalsAlias(command, parts, context) ??
         TryExecuteFlakeCensusCommand(command, parts, context) ??
