@@ -24,7 +24,9 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     private readonly OwnerConsoleScreenOperation _operation;
     private bool _rendering;
     private bool _editingCommand;
+    private bool _acting;
     private View? _commandReturnFocus;
+    private bool ActionRunning => _acting || _operation.IsRunning;
 
     internal Window Window { get; } = new() { Title = "Owner console", Width = Dim.Fill(), Height = Dim.Fill() };
     internal DataTable BoardTable { get; } = CreateBoardTable();
@@ -128,14 +130,14 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         if (_editingCommand || _command.HasFocus)
         {
             if (key == Key.Esc) { key.Handled = true; FinishCommand(); return; }
-            if (key != Key.Enter || _operation.IsRunning) return;
+            if (key != Key.Enter || ActionRunning) return;
             key.Handled = true;
             var line = _command.Text;
             FinishCommand();
-            await ActAsync(line, ct => _controller.RunCommandAsync(line, ct));
+            await ActAsync(ct => _controller.RunCommandAsync(line, _operation, ct));
             return;
         }
-        if (key.AsRune.Value == ':' && !_operation.IsRunning)
+        if (key.AsRune.Value == ':' && !ActionRunning)
         {
             key.Handled = true;
             _commandReturnFocus = _decisions.HasFocus ? _decisions : _board.HasFocus ? _board : _activity;
@@ -150,19 +152,18 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         key.Handled = true;
         if (character == 'q')
         {
-            await _controller.HandleKeyAsync(0, 'q', _token);
+            await _controller.HandleKeyAsync(0, 'q', cancellationToken: _token);
             _app.RequestStop(Window);
             return;
         }
         if (mapped is ConsoleKey.UpArrow or ConsoleKey.DownArrow)
         {
-            await _controller.HandleKeyAsync(mapped, character, _token);
+            await _controller.HandleKeyAsync(mapped, character, cancellationToken: _token);
             _decisions.SelectedItem = _controller.SelectedIndex < 0 ? null : _controller.SelectedIndex;
             return;
         }
-        if (_operation.IsRunning) return;
-        await ActAsync(character == 'a' ? "accept default" : character == 'r' ? "answer" : "decision detail",
-            ct => _controller.HandleKeyAsync(mapped, character, ct));
+        if (ActionRunning) return;
+        await ActAsync(ct => _controller.HandleKeyAsync(mapped, character, _operation, ct));
     }
 
     private void FinishCommand()
@@ -172,10 +173,16 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         (_commandReturnFocus ?? _decisions).SetFocus();
     }
 
-    private async Task ActAsync(string label, Func<CancellationToken, Task> action)
+    private async Task ActAsync(Func<CancellationToken, Task> action)
     {
-        if (await _operation.RunAsync(label, action, _token) && !_token.IsCancellationRequested)
-            await _refresh();
+        // Modal waits belong to the owner; only the controller's dependency work is bounded.
+        _acting = true;
+        try
+        {
+            await action(_token);
+            if (!_token.IsCancellationRequested) await _refresh();
+        }
+        finally { _acting = false; }
     }
 
     internal void FocusDecisions() => _decisions.SetFocus();

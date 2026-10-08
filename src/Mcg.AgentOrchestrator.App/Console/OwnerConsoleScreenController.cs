@@ -30,24 +30,25 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
             SelectedDecisionId = Model.Decisions[Math.Clamp(index, 0, Model.Decisions.Length - 1)].Id;
     }
 
-    internal async Task HandleKeyAsync(ConsoleKey key, char character = '\0', CancellationToken cancellationToken = default)
+    internal async Task HandleKeyAsync(ConsoleKey key, char character = '\0', OwnerConsoleScreenOperation? operation = null,
+        CancellationToken cancellationToken = default)
     {
         if (key == ConsoleKey.UpArrow) SelectIndex(SelectedIndex - 1);
         else if (key == ConsoleKey.DownArrow) SelectIndex(SelectedIndex + 1);
         else if (key == ConsoleKey.Enter && Selected() is { } detail)
             await dialogs.ShowTextAsync("Decision", $"{detail.GoalId} | {detail.Kind}\n{detail.FullText}\nblast radius: {detail.BlastRadius}\nconfidence: {detail.Confidence}\ndefault: {detail.ProposedDefault}");
-        else if (character is 'a' or 'r') await AnswerAsync(character == 'a', cancellationToken);
+        else if (character is 'a' or 'r') await AnswerAsync(character == 'a', operation, cancellationToken);
         else if (character == ':')
         {
             var command = await dialogs.PromptTextAsync("Command", "conductor start|stop|status | digest | metrics | bell on|off | goal <id>");
-            if (command is not null) await RunCommandAsync(command, cancellationToken);
+            if (command is not null) await RunCommandAsync(command, operation, cancellationToken);
         }
         else if (character == 'q') QuitRequested = true;
     }
 
     private OwnerConsoleDecision? Selected() => Model?.Decisions.FirstOrDefault(item => item.Id == SelectedDecisionId);
 
-    private async Task AnswerAsync(bool accept, CancellationToken cancellationToken)
+    private async Task AnswerAsync(bool accept, OwnerConsoleScreenOperation? operation, CancellationToken cancellationToken)
     {
         var decision = Selected();
         if (decision is null) return;
@@ -68,24 +69,31 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
         if (text is null) return;
         if (string.IsNullOrWhiteSpace(text) || text.StartsWith("--", StringComparison.Ordinal))
         { await dialogs.ShowTextAsync("Answer", "Answer cannot be empty or start with --"); return; }
-        try
+        var title = "Answer";
+        var message = string.Empty;
+        if (!await RunDependencyAsync(accept ? "accept default" : "answer", async stepToken =>
         {
-            var live = (await questions.ReadAsync(cancellationToken)).Live.FirstOrDefault(item => item.ItemId == decision.Id);
-            if (live is null)
-            { await dialogs.ShowTextAsync("Decision", $"question {decision.Number} is no longer open"); return; }
-            if (live != decision.ToQuestion())
-            { await dialogs.ShowTextAsync("Decision", "Question changed; review it again before answering."); return; }
-            cancellationToken.ThrowIfCancellationRequested();
-            answers.Submit(live, text);
-            var stillOpen = (await questions.ReadAsync(cancellationToken)).Live.Any(item => item.ItemId == decision.Id);
-            await dialogs.ShowTextAsync("Answer", stillOpen ? $"question {decision.Number} is still open; answer was not accepted" : $"answered question {decision.Number}");
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-        catch (Exception ex)
-        { await dialogs.ShowTextAsync("Answer", $"error: {ex.Message}"); }
+            try
+            {
+                var live = (await questions.ReadAsync(stepToken)).Live.FirstOrDefault(item => item.ItemId == decision.Id);
+                if (live is null)
+                { title = "Decision"; message = $"question {decision.Number} is no longer open"; return; }
+                if (live != decision.ToQuestion())
+                { title = "Decision"; message = "Question changed; review it again before answering."; return; }
+                stepToken.ThrowIfCancellationRequested();
+                answers.Submit(live, text);
+                var stillOpen = (await questions.ReadAsync(stepToken)).Live.Any(item => item.ItemId == decision.Id);
+                message = stillOpen ? $"question {decision.Number} is still open; answer was not accepted" : $"answered question {decision.Number}";
+            }
+            catch (OperationCanceledException) when (stepToken.IsCancellationRequested) { throw; }
+            catch (Exception ex) { message = $"error: {ex.Message}"; }
+        }, operation, cancellationToken)) return;
+        cancellationToken.ThrowIfCancellationRequested();
+        await dialogs.ShowTextAsync(title, message);
     }
 
-    internal async Task RunCommandAsync(string raw, CancellationToken cancellationToken = default)
+    internal async Task RunCommandAsync(string raw, OwnerConsoleScreenOperation? operation = null,
+        CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var line = raw.Trim().TrimStart(':').Trim();
@@ -93,32 +101,46 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
         if (parts.Length == 0) return;
         var output = new OwnerConsoleCapturedOutput();
         var control = new OwnerConsoleControlCommands(conductor, digest, output, clock);
-        switch (parts[0].ToLowerInvariant())
-        {
-            case "conductor": control.HandleConductor(line); break;
-            case "digest":
-                if (parts.Length != 1) output.WriteLine("usage: digest");
-                else foreach (var item in summary.ReadSummaryLines().Take(5)) output.WriteLine(item);
-                break;
-            case "metrics": control.HandleMetrics(line); break;
-            case "bell":
-                if (parts.Length != 2 || parts[1] is not ("on" or "off")) output.WriteLine("usage: bell on|off");
-                else { BellEnabled = parts[1] == "on"; output.WriteLine($"bell {parts[1]}"); }
-                break;
-            case "goal":
-                if (parts.Length != 2) { output.WriteLine("usage: goal <id-prefix>"); break; }
-                var matches = (await state.ListGoalMetadataAsync(cancellationToken))
-                    .Where(item => item.Id.StartsWith(parts[1], StringComparison.OrdinalIgnoreCase)).ToArray();
-                if (matches.Length != 1)
-                { output.WriteLine(matches.Length == 0 ? $"no goal matches '{parts[1]}'" : "ambiguous goal"); break; }
-                var kernel = await state.LoadGoalsAsync([new GoalId(matches[0].Id)], cancellationToken);
-                var goal = kernel.Goals.SingleOrDefault(item => item.Id.Value == matches[0].Id);
-                if (goal is null) { output.WriteLine("goal state unavailable"); break; }
-                output.WriteLine($"{goal.Id.Value} | {OwnerGoalTitle.From(goal.Objective)} | {goal.Status}");
-                foreach (var item in tail.ReadLast(goal.Id.Value, 15)) output.WriteLine(item);
-                break;
-            default: output.WriteLine("unknown command"); break;
-        }
+        if (!await RunDependencyAsync(line, ExecuteAsync, operation, cancellationToken)) return;
+        cancellationToken.ThrowIfCancellationRequested();
         await dialogs.ShowTextAsync("Command result", output.Text);
+
+        async Task ExecuteAsync(CancellationToken stepToken)
+        {
+            switch (parts[0].ToLowerInvariant())
+            {
+                case "conductor": control.HandleConductor(line); break;
+                case "digest":
+                    if (parts.Length != 1) output.WriteLine("usage: digest");
+                    else foreach (var item in summary.ReadSummaryLines().Take(5)) output.WriteLine(item);
+                    break;
+                case "metrics": control.HandleMetrics(line); break;
+                case "bell":
+                    if (parts.Length != 2 || parts[1] is not ("on" or "off")) output.WriteLine("usage: bell on|off");
+                    else { BellEnabled = parts[1] == "on"; output.WriteLine($"bell {parts[1]}"); }
+                    break;
+                case "goal":
+                    if (parts.Length != 2) { output.WriteLine("usage: goal <id-prefix>"); break; }
+                    var matches = (await state.ListGoalMetadataAsync(stepToken))
+                        .Where(item => item.Id.StartsWith(parts[1], StringComparison.OrdinalIgnoreCase)).ToArray();
+                    if (matches.Length != 1)
+                    { output.WriteLine(matches.Length == 0 ? $"no goal matches '{parts[1]}'" : "ambiguous goal"); break; }
+                    var kernel = await state.LoadGoalsAsync([new GoalId(matches[0].Id)], stepToken);
+                    var goal = kernel.Goals.SingleOrDefault(item => item.Id.Value == matches[0].Id);
+                    if (goal is null) { output.WriteLine("goal state unavailable"); break; }
+                    output.WriteLine($"{goal.Id.Value} | {OwnerGoalTitle.From(goal.Objective)} | {goal.Status}");
+                    foreach (var item in tail.ReadLast(goal.Id.Value, 15)) output.WriteLine(item);
+                    break;
+                default: output.WriteLine("unknown command"); break;
+            }
+        }
+    }
+
+    private static async Task<bool> RunDependencyAsync(string label, Func<CancellationToken, Task> action,
+        OwnerConsoleScreenOperation? operation, CancellationToken cancellationToken)
+    {
+        if (operation is not null) return await operation.RunAsync(label, action, cancellationToken);
+        await action(cancellationToken);
+        return true;
     }
 }

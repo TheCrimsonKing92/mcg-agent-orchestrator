@@ -49,6 +49,107 @@ public sealed class OwnerConsoleFullScreenTests
         Assert.Equal(confirmed ? [("q1", "ship")] : Array.Empty<(string, string)>(), harness.Answers.Calls);
     }
 
+    [Theory]
+    [InlineData('a', true, "ship")]
+    [InlineData('a', false, null)]
+    [InlineData('r', true, "owner answer")]
+    public async Task OwnerThinkTimePastBoundPreservesConfirmationAndAnswer(char key, bool confirmed, string? expected)
+    {
+        var harness = Harness();
+        var clock = new ManualStewardTimeProvider();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var dialogs = new Dialogs
+        {
+            Confirmed = confirmed, Input = "owner answer", HoldResponse = release.Task,
+            OnConfirm = () => entered.TrySetResult(), OnPrompt = () => entered.TrySetResult()
+        };
+        var controller = Controller(harness, dialogs);
+        var refreshCalls = 0;
+        using IApplication app = Terminal.Gui.App.Application.Create();
+        using var view = new OwnerConsoleFullScreenView(app, controller,
+            () => { refreshCalls++; return Task.CompletedTask; }, clock: clock);
+        view.Render(await Model(harness));
+        var action = view.HandleKeyAsync(new Key(key));
+        try
+        {
+            await entered.Task.WaitAsync(TestContext.Current.CancellationToken);
+            clock.Advance(OwnerConsoleLoopOptions.Default.BusyNoticeAfter);
+            Assert.DoesNotContain("working:", view.StatusText);
+            clock.Advance(OwnerConsoleLoopOptions.Default.OperationBound);
+
+            Assert.False(clock.TimerCreated.Task.IsCompleted); // No dependency timer includes owner think time.
+            Assert.Empty(view.Notices);
+            Assert.Empty(harness.Answers.Calls);
+            Assert.Equal(0, refreshCalls);
+            Assert.False(action.IsCompleted);
+        }
+        finally { release.TrySetResult(); await action; }
+
+        Assert.Equal(expected is null ? Array.Empty<(string, string)>() : [("q1", expected)], harness.Answers.Calls);
+        Assert.Equal(key == 'a' ? 1 : 0, dialogs.ConfirmCalls);
+        Assert.Equal(1, refreshCalls);
+        Assert.DoesNotContain("working:", view.StatusText);
+        Assert.Empty(view.Notices);
+    }
+
+    [Fact]
+    public async Task DetailReadingPastBoundNeverStartsDependencyTimers()
+    {
+        var harness = Harness();
+        var clock = new ManualStewardTimeProvider();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var dialogs = new Dialogs { OnText = () => entered.TrySetResult(), HoldText = release.Task };
+        using IApplication app = Terminal.Gui.App.Application.Create();
+        using var view = new OwnerConsoleFullScreenView(app, Controller(harness, dialogs),
+            () => Task.CompletedTask, clock: clock);
+        view.Render(await Model(harness));
+        view.FocusDecisions();
+        var action = view.HandleKeyAsync(Key.Enter);
+        try
+        {
+            await entered.Task.WaitAsync(TestContext.Current.CancellationToken);
+            clock.Advance(OwnerConsoleLoopOptions.Default.OperationBound);
+
+            Assert.False(clock.TimerCreated.Task.IsCompleted);
+            Assert.DoesNotContain("working:", view.StatusText);
+            Assert.Empty(view.Notices);
+            Assert.False(action.IsCompleted);
+            Assert.Contains("Ship?\nFull context", Assert.Single(dialogs.Texts));
+        }
+        finally { release.TrySetResult(); await action; }
+    }
+
+    [Fact]
+    public async Task CommandResultDialogRunsAfterTheBoundedDependencyCompletes()
+    {
+        var harness = Harness();
+        var clock = new ManualStewardTimeProvider();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var dialogs = new Dialogs { OnText = () => entered.TrySetResult(), HoldText = release.Task };
+        var working = new List<string?>();
+        var reports = new List<string>();
+        var operation = new OwnerConsoleScreenOperation(clock, working.Add, reports.Add);
+        var action = Controller(harness, dialogs).RunCommandAsync("conductor status", operation,
+            TestContext.Current.CancellationToken);
+        try
+        {
+            await entered.Task.WaitAsync(TestContext.Current.CancellationToken);
+            Assert.False(operation.IsRunning);
+            Assert.True(operation.Completion.IsCompletedSuccessfully);
+            clock.Advance(OwnerConsoleLoopOptions.Default.OperationBound);
+
+            Assert.False(action.IsCompleted);
+            Assert.DoesNotContain(working, label => label is not null);
+            Assert.Empty(reports);
+            Assert.Contains("conductor output 1", Assert.Single(dialogs.Texts));
+            Assert.Equal(string.Empty, harness.Output.Text);
+        }
+        finally { release.TrySetResult(); await action; }
+    }
+
     [Fact]
     public async Task ColonConductorStatusShowsResultInDialogWithoutScrollingOutput()
     {
@@ -255,12 +356,23 @@ public sealed class OwnerConsoleFullScreenTests
         internal string? ConfirmationText;
         internal string? Input;
         internal Action? OnConfirm;
+        internal Action? OnPrompt;
         internal Action? OnText;
+        internal Task? HoldResponse;
         internal Task? HoldText;
         internal readonly List<string> Texts = [];
-        public Task<bool> ConfirmAsync(string title, string text)
-        { ConfirmCalls++; ConfirmationText = text; OnConfirm?.Invoke(); return Task.FromResult(Confirmed); }
-        public Task<string?> PromptTextAsync(string title, string text) => Task.FromResult(Input);
+        public async Task<bool> ConfirmAsync(string title, string text)
+        {
+            ConfirmCalls++; ConfirmationText = text; OnConfirm?.Invoke();
+            if (HoldResponse is not null) await HoldResponse;
+            return Confirmed;
+        }
+        public async Task<string?> PromptTextAsync(string title, string text)
+        {
+            OnPrompt?.Invoke();
+            if (HoldResponse is not null) await HoldResponse;
+            return Input;
+        }
         public Task ShowTextAsync(string title, string text)
         { Texts.Add(text); OnText?.Invoke(); return HoldText ?? Task.CompletedTask; }
     }
