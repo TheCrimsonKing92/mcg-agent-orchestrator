@@ -46,7 +46,10 @@ public sealed class MergeTrainTimeoutAttributionTests
         Assert.Equal(passed + failed, (int)counters.Attribute("executed")!);
         Assert.Equal(failed, (int)counters.Attribute("failed")!);
         Assert.Equal(timeouts, (int)counters.Attribute("timeout")!);
-        Assert.All(AcceptanceTrxFailureReader.Read(path).Failures, failure => Assert.Equal("Failed", failure.Outcome));
+        var nonPassingRows = AcceptanceTrxFailureReader.Read(path).Failures;
+        Assert.Equal(timeouts + failed + skipped, nonPassingRows.Count);
+        Assert.Equal(timeouts + failed, nonPassingRows.Count(row => row.Outcome == "Failed"));
+        Assert.Equal(skipped, nonPassingRows.Count(row => row.Outcome == "NotExecuted"));
         Assert.False(AcceptanceCohortGateEvidence.HasCoherentTrxEvidence([path]));
         var paths = new[] { path, fixture.Trx("legacy.trx", ("Ns.FirstTests.Other", "Failed", null)) };
         Assert.Same(fixture.Members[0], MergeTrainTimeoutAttribution.TryAttribute(paths, fixture.Root, fixture.Members));
