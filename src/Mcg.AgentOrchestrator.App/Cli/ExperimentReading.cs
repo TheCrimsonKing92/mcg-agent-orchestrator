@@ -1,12 +1,31 @@
 using System.Globalization;
+using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
+internal sealed record ExperimentMetricReading(string Metric, double? Before, double? After);
+
+internal sealed record ExperimentReadingResult(int? ObservedCount, ExperimentStopRule StopRule,
+    bool StopRuleMet, IReadOnlyList<ExperimentMetricReading> Metrics, string Verdict, string Reason,
+    bool GuardrailBreached);
+
+internal static class ExperimentGoals
+{
+    internal static IReadOnlyCollection<Goal> Read(string statePath)
+    {
+        if (!File.Exists(statePath)) return [];
+        var queries = SqliteOrchestratorStateRepository.OpenReadOnly(statePath);
+        var metadata = queries.ListGoalMetadataAsync().GetAwaiter().GetResult();
+        return metadata.Count == 0 ? [] : queries.LoadGoalsAsync(
+            metadata.Select(goal => new GoalId(goal.Id)).ToArray()).GetAwaiter().GetResult().Goals;
+    }
+}
+
 internal static class ExperimentReading
 {
-    internal static void Write(ExperimentRecord record, IReadOnlyCollection<Goal> goals,
+    internal static ExperimentReadingResult Evaluate(ExperimentRecord record, IReadOnlyCollection<Goal> goals,
         IReadOnlyDictionary<string, DateTimeOffset> landings, IReadOnlyCollection<AppliedRetryIntent> intents,
         DateTimeOffset asOf)
     {
@@ -18,13 +37,11 @@ internal static class ExperimentReading
                 g.Tasks.SelectMany(t => t.DispatchHistory).Select(d => (DateTimeOffset?)d.DispatchedAt)
                     .Max() is { } at && at >= start && at < asOf)
             : (int?)null;
-        var progress = observed is { } count ? $"{count} of {spec.StopRule.Count}" : $"unavailable of {spec.StopRule.Count}";
-        var met = observed is { } n ? n >= spec.StopRule.Count ? "met" : "not met" : "progress unavailable";
-        Console.WriteLine($"stop rule: {progress} {Name(spec.StopRule.Unit)} ({met})");
+        var stopRuleMet = observed is { } n && n >= spec.StopRule.Count;
         if (spec.Baseline.Kind != ExperimentBaselineKind.BeforeAfterWindow)
         {
-            Console.WriteLine($"reading: unavailable (baseline kind {Name(spec.Baseline.Kind)} not computable in this slice)");
-            return;
+            return new(observed, spec.StopRule, stopRuleMet, [], "unavailable",
+                $"baseline kind {Name(spec.Baseline.Kind)} not computable in this slice", false);
         }
 
         var since = spec.Baseline.Since!.Value;
@@ -34,13 +51,13 @@ internal static class ExperimentReading
         var values = ExperimentMetrics.Menu.ToDictionary(metric => metric, metric => (
             Before: Value(metric, baseline, goals, landings, since, until),
             After: Value(metric, comparison, goals, landings, until, asOf)));
-        foreach (var metric in spec.Metrics.Append(spec.Guardrail.Metric))
+        var metrics = spec.Metrics.Append(spec.Guardrail.Metric).Select(metric =>
         {
             var value = values[metric];
-            Console.WriteLine($"{metric.Replace('-', ' ')}: baseline={Format(value.Before)} comparison={Format(value.After)}");
-        }
+            return new ExperimentMetricReading(metric, value.Before, value.After);
+        }).ToArray();
 
-        bool? Evaluate(ExperimentCondition condition)
+        bool? EvaluateCondition(ExperimentCondition condition)
         {
             var (before, after) = values[condition.Metric];
             if (before is null or 0 || after is null) return null;
@@ -53,15 +70,15 @@ internal static class ExperimentReading
             };
         }
 
-        var keep = spec.DecisionRule.KeepIf.Select(Evaluate).ToArray();
-        var revert = spec.DecisionRule.RevertIf.Select(Evaluate).ToArray();
-        var guardrail = Evaluate(spec.Guardrail.BreachIf);
+        var keep = spec.DecisionRule.KeepIf.Select(EvaluateCondition).ToArray();
+        var revert = spec.DecisionRule.RevertIf.Select(EvaluateCondition).ToArray();
+        var guardrail = EvaluateCondition(spec.Guardrail.BreachIf);
         if (keep.Contains(null) || revert.Contains(null) || guardrail is null)
         {
             var missing = spec.DecisionRule.KeepIf.Concat(spec.DecisionRule.RevertIf)
-                .Append(spec.Guardrail.BreachIf).Where(c => Evaluate(c) is null).Select(c => c.Metric).Distinct();
-            Console.WriteLine($"reading: inconclusive (unavailable comparison or zero baseline: {string.Join(", ", missing)})");
-            return;
+                .Append(spec.Guardrail.BreachIf).Where(c => EvaluateCondition(c) is null).Select(c => c.Metric).Distinct();
+            return new(observed, spec.StopRule, stopRuleMet, metrics, "inconclusive",
+                $"unavailable comparison or zero baseline: {string.Join(", ", missing)}", guardrail == true);
         }
         var keepHolds = keep.All(v => v == true);
         var revertHolds = revert.All(v => v == true);
@@ -73,7 +90,17 @@ internal static class ExperimentReading
             var value = values[spec.Guardrail.Metric];
             reason += $"; guardrail breached: {spec.Guardrail.Metric} baseline={Format(value.Before)} comparison={Format(value.After)}";
         }
-        Console.WriteLine($"reading: {verdict} ({reason})");
+        return new(observed, spec.StopRule, stopRuleMet, metrics, verdict, reason, guardrail == true);
+    }
+
+    internal static void Render(ExperimentReadingResult result)
+    {
+        var progress = result.ObservedCount is { } count ? $"{count} of {result.StopRule.Count}" : $"unavailable of {result.StopRule.Count}";
+        var met = result.ObservedCount is not null ? result.StopRuleMet ? "met" : "not met" : "progress unavailable";
+        Console.WriteLine($"stop rule: {progress} {Name(result.StopRule.Unit)} ({met})");
+        foreach (var metric in result.Metrics)
+            Console.WriteLine($"{metric.Metric.Replace('-', ' ')}: baseline={Format(metric.Before)} comparison={Format(metric.After)}");
+        Console.WriteLine($"reading: {result.Verdict} ({result.Reason})");
     }
 
     private static double? Value(string metric, RoundValueTotals? totals, IReadOnlyCollection<Goal> goals,
@@ -98,4 +125,28 @@ internal static class ExperimentReading
 
     internal static string Name<T>(T value) where T : Enum => System.Text.Json.JsonNamingPolicy.KebabCaseLower.ConvertName(value.ToString());
     private static string Format(double? value) => value?.ToString("G17", CultureInfo.InvariantCulture) ?? "unavailable";
+}
+
+internal static class ExperimentLandingTimes
+{
+    internal static IReadOnlyDictionary<string, DateTimeOffset> Read(string directory)
+    {
+        var result = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+        if (!Directory.Exists(directory)) return result;
+        foreach (var path in Directory.EnumerateFiles(directory, "*.jsonl"))
+        foreach (var line in File.ReadLines(path))
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(line);
+                var root = document.RootElement;
+                if (!root.TryGetProperty("eventType", out var kind) || kind.GetString() != "GoalLanded") continue;
+                var id = root.GetProperty("goalId").GetString();
+                var at = root.GetProperty("timestamp").GetDateTimeOffset();
+                if (id is not null && (!result.TryGetValue(id, out var previous) || at < previous)) result[id] = at;
+            }
+            catch (Exception error) when (error is JsonException or KeyNotFoundException or InvalidOperationException or FormatException) { }
+        }
+        return result;
+    }
 }
