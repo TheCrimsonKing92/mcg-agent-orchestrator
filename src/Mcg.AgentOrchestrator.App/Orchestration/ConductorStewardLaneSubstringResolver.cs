@@ -7,11 +7,12 @@ internal interface IConductorStewardLaneSubstringResolver
     string? RequiredSubstring(string worktree, string collection);
 }
 
-internal sealed class ManifestConductorStewardLaneSubstringResolver : IConductorStewardLaneSubstringResolver
+internal sealed class ManifestConductorStewardLaneSubstringResolver(string? projectHomeDirectory = null)
+    : IConductorStewardLaneSubstringResolver
 {
     public string? RequiredSubstring(string worktree, string collection)
     {
-        var lanes = AcceptanceGateEngineSettings.Load(worktree).InfrastructureTestLanes;
+        var lanes = AcceptanceGateEngineSettings.Load(worktree, projectHomeDirectory).InfrastructureTestLanes;
         var siblings = AcceptanceTestClassSourceScanner.Scan(worktree)
             .Where(item => item.Collection == collection).Select(item => item.FullName).ToArray();
         var lane = lanes.SingleOrDefault(item => item.OwnedCollections.Contains(collection, StringComparer.Ordinal))

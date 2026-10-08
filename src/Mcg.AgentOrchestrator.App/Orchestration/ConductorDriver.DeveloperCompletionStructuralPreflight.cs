@@ -10,7 +10,7 @@ internal sealed partial class ConductorDriver
     private static readonly TimeSpan DefaultDeveloperCompletionStructuralPreflightBound = TimeSpan.FromSeconds(10);
 
     private Func<string, DeveloperCompletionStructuralFindings> _runDeveloperCompletionStructuralPreflight =
-        DeveloperCompletionStructuralPreflight.Evaluate;
+        path => DeveloperCompletionStructuralPreflight.Evaluate(path);
     private Func<GoalId, TaskId, string, RetryRoundKind?, RetryCause, TaskSpec>? _retryDeveloperAfterStructuralPreflight;
     private TimeSpan _developerCompletionStructuralPreflightBound =
         DefaultDeveloperCompletionStructuralPreflightBound;

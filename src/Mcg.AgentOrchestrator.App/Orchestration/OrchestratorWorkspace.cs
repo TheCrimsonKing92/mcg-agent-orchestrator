@@ -20,6 +20,7 @@ public sealed record OrchestratorWorkspace(
     string TranscriptPath)
 {
     public const string DefaultProjectName = "default";
+    public string? ProjectHomeDirectoryOrNull => IsProjectScoped ? OrchestratorDirectory : null;
     public string IntegrationBranch { get; init; } = TrunkBranchName.Default;
     public const string DefaultTenantName = "default";
     public const string ContinuationStoreFileName = "continuation-watches.json";

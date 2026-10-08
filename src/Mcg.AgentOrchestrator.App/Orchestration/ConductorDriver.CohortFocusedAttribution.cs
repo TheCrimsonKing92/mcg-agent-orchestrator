@@ -157,7 +157,8 @@ internal sealed partial class ConductorDriver
                 ? source(identity.Value, cancellationToken)
                 : driver._parallelAcceptanceAttemptCoordinator.AcquireCohortStableSlotLease(identity.Value, cancellationToken);
             var result = AcceptanceExecutionRunner.RunFocusedVerification(verifier, partition.Path, member.GoalId,
-                selection.Request, lease.Environment.BuildPermitIndex, lease, runBaselineArm: false, cancellationToken);
+                selection.Request, lease.Environment.BuildPermitIndex, lease, runBaselineArm: false, cancellationToken,
+                projectHomeDirectory: workspace.ProjectHomeDirectoryOrNull);
             partition.AssertGoalBranchesUnchanged();
             return ConductorAcceptanceCohortFocusedAttribution.Interpret(result, selection) with
             {

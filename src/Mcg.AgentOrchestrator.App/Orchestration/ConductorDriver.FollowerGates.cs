@@ -149,7 +149,8 @@ internal sealed partial class ConductorDriver
             try { AppendRemoteLaneEvent(new ConductEventLogWriter(logPath), binding.FollowerGoalId.Value, detail); }
             catch (Exception) { /* Progress is observational. */ }
         }, GateRunIdentity: FollowerGateRunKey(attempt),
-            PinnedBase: new(binding.BaseMainRevision, binding.LeaderCandidateRevision, binding.LeaderCandidateTree));
+            PinnedBase: new(binding.BaseMainRevision, binding.LeaderCandidateRevision, binding.LeaderCandidateTree),
+            ProjectHomeDirectory: _cohortWorkspace?.ProjectHomeDirectoryOrNull);
     }
 
     internal (bool Known, string? Difference) InspectRestoredFollowerGateIdentity(ConductorGroupedGateAttempt attempt)

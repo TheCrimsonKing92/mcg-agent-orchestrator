@@ -4,7 +4,8 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal static class DeveloperCompletionStructuralPreflight
 {
-    internal static DeveloperCompletionStructuralFindings Evaluate(string worktreePath)
+    internal static DeveloperCompletionStructuralFindings Evaluate(string worktreePath,
+        string? projectHomeDirectory = null)
     {
         var ratchet = SourceSizeRatchetPreflight.Evaluate(worktreePath);
         if (ratchet.HasBlockingViolation)
@@ -14,7 +15,7 @@ internal static class DeveloperCompletionStructuralPreflight
 
         try
         {
-            _ = AcceptanceGateEngineSettings.Load(worktreePath);
+            _ = AcceptanceGateEngineSettings.Load(worktreePath, projectHomeDirectory);
         }
         catch (InvalidDataException exception)
         {

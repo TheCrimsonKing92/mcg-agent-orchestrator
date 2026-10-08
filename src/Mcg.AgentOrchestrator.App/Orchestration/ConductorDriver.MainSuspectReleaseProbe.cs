@@ -44,7 +44,8 @@ internal sealed partial class ConductorDriver
                     ? source($"main-suspect-release:{tip}", cancellationToken)
                     : driver._parallelAcceptanceAttemptCoordinator.AcquireCohortStableSlotLease($"main-suspect-release:{tip}", cancellationToken);
                 var result = AcceptanceExecutionRunner.RunFocusedVerification(verifier, checkout, goalId: null,
-                    selection.Request, lease.Environment.BuildPermitIndex, lease, runBaselineArm: false, cancellationToken);
+                    selection.Request, lease.Environment.BuildPermitIndex, lease, runBaselineArm: false, cancellationToken,
+                    projectHomeDirectory: workspace.ProjectHomeDirectoryOrNull);
                 var interpreted = ConductorAcceptanceCohortFocusedAttribution.Interpret(result, selection);
                 // TRX paths identify the actual focused execution, even after checkout cleanup.
                 receipt = interpreted.TestResultPaths.FirstOrDefault() ?? receipt;
