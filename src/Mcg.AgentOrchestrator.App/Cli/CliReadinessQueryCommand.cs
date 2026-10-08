@@ -39,10 +39,10 @@ internal static class CliReadinessQueryCommand
         return false;
     }
 
-    // Bare readiness retains current-goal resolution on the writer path. Invalid
-    // explicit forms stay here so usage errors cannot drain the outbox.
+    // Bare readiness resolves the current goal from metadata. Invalid explicit
+    // forms stay here so usage errors cannot drain the outbox.
     internal static bool IsReadinessQueryCommand(IReadOnlyList<string> args) =>
-        args.Count > 1 &&
+        args.Count > 0 &&
         args[0].Equals("readiness", StringComparison.OrdinalIgnoreCase) &&
         !CliCommandHelp.IsCommandSpecificHelp(args);
 
@@ -56,20 +56,36 @@ internal static class CliReadinessQueryCommand
         ref WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal)
     {
-        if (args.Count != 2 || string.IsNullOrWhiteSpace(args[1]) ||
-            args[1].StartsWith("-", StringComparison.Ordinal))
+        if (args.Count > 2 || (args.Count == 2 &&
+            (string.IsNullOrWhiteSpace(args[1]) || args[1].StartsWith("-", StringComparison.Ordinal))))
             throw new ArgumentException("Usage: readiness [goal-id]");
         CliCommandHelp.ThrowIfInvalidFlags(args);
 
-        var matches = stateRepository.ListGoalIdStatusesAsync().GetAwaiter().GetResult()
-            .Where(goal => goal.Id.StartsWith(args[1], StringComparison.OrdinalIgnoreCase))
-            .ToArray();
-        var goalId = matches.Length switch
+        GoalId goalId;
+        if (args.Count == 1)
         {
-            1 => new GoalId(matches[0].Id),
-            0 => throw new KeyNotFoundException($"Goal '{args[1]}' was not found."),
-            _ => throw new InvalidOperationException($"Goal prefix '{args[1]}' is ambiguous.")
-        };
+            var latest = stateRepository.ListGoalMetadataAsync(includeTerminalCreatedAt: true)
+                .GetAwaiter().GetResult()
+                .Select((goal, index) => (Goal: goal, Index: index))
+                .OrderByDescending(candidate => candidate.Goal.CreatedAt ?? DateTimeOffset.MinValue)
+                .ThenBy(candidate => candidate.Index)
+                .Select(candidate => candidate.Goal)
+                .FirstOrDefault()
+                ?? throw new InvalidOperationException("Create a goal first with: goal <objective>");
+            goalId = new GoalId(latest.Id);
+        }
+        else
+        {
+            var matches = stateRepository.ListGoalIdStatusesAsync().GetAwaiter().GetResult()
+                .Where(goal => goal.Id.StartsWith(args[1], StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            goalId = matches.Length switch
+            {
+                1 => new GoalId(matches[0].Id),
+                0 => throw new KeyNotFoundException($"Goal '{args[1]}' was not found."),
+                _ => throw new InvalidOperationException($"Goal prefix '{args[1]}' is ambiguous.")
+            };
+        }
         var kernel = stateRepository.LoadGoalsAsync([goalId]).GetAwaiter().GetResult();
         var goal = kernel.Goals.SingleOrDefault(candidate => candidate.Id == goalId)
             ?? throw new KeyNotFoundException($"Goal '{goalId.Value}' was not found.");

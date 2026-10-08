@@ -10,7 +10,7 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteConvention
             ["tasks"] = [["tasks"]],
             ["task"] = [["task", "abc10000"]],
             ["status"] = [["status", "abc10000"]],
-            ["readiness"] = [["readiness", "abc10000"]],
+            ["readiness"] = [["readiness", "abc10000"], ["readiness"]],
             ["goals"] = [["goals"]],
             ["failure-clusters"] = [["failure-clusters"]],
             ["lane-reuse-shadow"] = [["lane-reuse-shadow"]],
@@ -39,8 +39,7 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteConvention
 
     private static readonly (string[] Args, string Reason)[] WriterPathForms =
     [
-        (["status"], "Only status with a single goal prefix is routed read-only."),
-        (["readiness"], "Only readiness with a goal prefix is routed read-only until current-goal resolution lands.")
+        (["status"], "Only status with a single goal prefix is routed read-only.")
     ];
 
     [Fact]
@@ -137,7 +136,7 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteConvention
                 failures.Add($"{form}: writer-path form must retain QueryOnly composition.");
         }
 
-        string[][] required = [["status"], ["readiness"]];
+        string[][] required = [["status"]];
         foreach (var args in required)
         {
             if (!WriterPathForms.Any(form => form.Args.SequenceEqual(args, StringComparer.OrdinalIgnoreCase)))

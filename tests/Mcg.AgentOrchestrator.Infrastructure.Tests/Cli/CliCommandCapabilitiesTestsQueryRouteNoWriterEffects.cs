@@ -15,7 +15,7 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteNoWriterEffects : CliTa
             ["tasks"] = [["tasks"]],
             ["task"] = [["task", "abc10000"]],
             ["status"] = [["status", "abc10000"]],
-            ["readiness"] = [["readiness", "abc10000"]],
+            ["readiness"] = [["readiness", "abc10000"], ["readiness"]],
             ["goals"] = [["goals"]],
             ["failure-clusters"] = [["failure-clusters"]],
             ["lane-reuse-shadow"] = [["lane-reuse-shadow"]],
@@ -144,7 +144,7 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteNoWriterEffects : CliTa
     [Fact]
     public void WriterPathForms_Execution_ReadOnlyRunnerDeclines()
     {
-        string[][] forms = [["status"], ["readiness"]];
+        string[][] forms = [["status"]];
         foreach (var args in forms)
         {
             var root = CreateTempDirectory();
