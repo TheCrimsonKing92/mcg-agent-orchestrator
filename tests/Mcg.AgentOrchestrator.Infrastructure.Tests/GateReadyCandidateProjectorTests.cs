@@ -221,6 +221,23 @@ public sealed class GateReadyCandidateProjectorTests
             GateReadyCandidateExclusionReason.MergeConflict);
     }
 
+    [Fact]
+    public void MergeConflict_CarriesExactReportedPathsInOrderAndCopiesThem()
+    {
+        var paths = new List<string> { "src/B.cs", "src/a.cs" };
+        var projector = new GateReadyCandidateProjector(
+            _ => new(BranchRevision, MainRevision),
+            _ => new(true, ["src/Mcg.AgentOrchestrator.Core/Feature.cs"]),
+            (_, _, _) => new(false, paths));
+
+        var exclusion = Assert.IsType<GateReadyCandidateProjectionResult.Excluded>(projector.Project(ReadyInput()));
+        paths.Clear();
+
+        Assert.Equal(GateReadyCandidateExclusionReason.MergeConflict, exclusion.Reason);
+        Assert.Equal(new[] { "src/B.cs", "src/a.cs" }, exclusion.ConflictPaths);
+        Assert.Throws<NotSupportedException>(() => ((IList<string>)exclusion.ConflictPaths).Clear());
+    }
+
     [Theory]
     [InlineData("revision")]
     [InlineData("scope")]
@@ -291,10 +308,12 @@ public sealed class GateReadyCandidateProjectorTests
 
     private static void AssertExcluded(
         GateReadyCandidateProjectionResult result,
-        GateReadyCandidateExclusionReason expected) =>
-        Assert.Equal(
-            expected,
-            Assert.IsType<GateReadyCandidateProjectionResult.Excluded>(result).Reason);
+        GateReadyCandidateExclusionReason expected)
+    {
+        var exclusion = Assert.IsType<GateReadyCandidateProjectionResult.Excluded>(result);
+        Assert.Equal(expected, exclusion.Reason);
+        Assert.Empty(exclusion.ConflictPaths);
+    }
 
     private static bool ContainsGoalState(Type type, HashSet<Type> visited)
     {

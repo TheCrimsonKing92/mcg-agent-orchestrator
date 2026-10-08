@@ -79,6 +79,38 @@ public sealed class ConductorBatchLoopTestsSpeculativeCohortPlanReceipt : Conduc
             gateReadyCandidateProjector: projector);
     }
 
+    [Fact]
+    public void ConflictPaths_DoNotChangePlanReceiptAndResolvableConflictStaysExcluded()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(kernel, "Resolvable planner conflict");
+        var writes = 0;
+        var projector = new GateReadyCandidateProjector(
+            _ => new(new string('b', 40), new string('a', 40)),
+            _ => new(true, ["src/Mcg.AgentOrchestrator.Core/Feature.cs"]),
+            (_, _, _) => new(false, ["src/ExactConflict.cs"]));
+        var driver = MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            runAcceptanceWithSlot: (_, _) => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
+            classifyRisk: _ => ChangeRiskTier.DocsOnly, isVerificationGateSatisfied: _ => true,
+            gateReadyCandidateProjector: projector, writeEscalation: (_, _, _) => writes++);
+        Assert.True(driver.ParallelAcceptanceEnabled);
+        var probes = 0;
+        driver.PreLandingMergeConflictProbe = _ =>
+        {
+            probes++;
+            return new(new string('b', 40), new string('a', 40), AdditiveConflictProbeOutcome.Resolvable, "none");
+        };
+        using var occupancy = GateLoadContextProbe.PushLiveGateOccupantProbe(() =>
+            [new GateLoadContextProbe.LiveGateOccupant(4101, "cccccccccccccccccccccccccccccccc", 0, TimeSpan.Zero)]);
+
+        var receipt = TickReceipt(kernel, driver, ConductorAutonomyPolicy.Conservative with { AcceptanceWidth = 1 });
+
+        Assert.Contains($"{goal.Id.Value[..8]}:MergeConflict", receipt, StringComparison.Ordinal);
+        Assert.DoesNotContain("src/ExactConflict.cs", receipt, StringComparison.Ordinal);
+        Assert.Equal(1, probes);
+        Assert.Equal(0, writes);
+    }
+
     private static string TickReceipt(
         AgentOrchestratorKernel kernel, ConductorDriver driver, ConductorAutonomyPolicy policy)
     {

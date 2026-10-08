@@ -45,7 +45,7 @@ internal sealed class GateReadyCandidateProjector
                     ResolveWorktree(goalId),
                     mainRevision,
                     branchRevision);
-                return new GateReadyMergeTreeObservation(status.IsClean);
+                return new GateReadyMergeTreeObservation(status.IsClean, status.ConflictPaths);
             });
     }
 
@@ -122,7 +122,10 @@ internal sealed class GateReadyCandidateProjector
         }
         if (!mergeTree.IsClean)
         {
-            return Excluded(GateReadyCandidateExclusionReason.MergeConflict);
+            return new GateReadyCandidateProjectionResult.Excluded(GateReadyCandidateExclusionReason.MergeConflict)
+            {
+                ConflictPaths = Array.AsReadOnly((mergeTree.ConflictPaths ?? []).ToArray())
+            };
         }
 
         if (!TryReadRevisions(input.GoalId, out var finalRevisions))

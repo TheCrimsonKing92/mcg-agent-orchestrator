@@ -11,6 +11,218 @@ using Microsoft.Data.Sqlite;
 [Xunit.Collection(TestCollections.DotnetBuildSlots)]
 public sealed class ConductorBatchLoopTestsSetAsideReadmit : ConductorBatchLoopTests
 {
+    [Fact]
+    public void PlannerConflict_EscalatesAtOccupiedWidthAndUsesExistingSetAsideRecheck()
+    {
+        var harness = new PlannerConflictHarness();
+        var first = CreateVerifiedSimpleGoal(harness.Kernel, "In-flight first member");
+        var second = CreateVerifiedSimpleGoal(harness.Kernel, "In-flight second member");
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Assert.True(harness.Driver.TryRegisterCohortGateRunForTests(
+            new ConductorAcceptanceCohortSelection([PlannerReady(first.Id), PlannerReady(second.Id)], []), completion));
+        Assert.Equal(1, harness.Driver.GetActiveAcceptanceCohortCapacity().ActiveRootCount);
+        using var occupancy = PlannerOccupiedWidth();
+
+        var summary = harness.Run(2);
+
+        var write = Assert.Single(harness.Writes);
+        Assert.Equal(harness.Goal.Id, write.GoalId);
+        Assert.Equal(GoalLifecycleState.Verified, write.State);
+        Assert.StartsWith("pre-landing rebase conflict", write.Reason);
+        Assert.Contains("src/B.cs, src/a.cs", write.Reason, StringComparison.Ordinal);
+        Assert.Equal(1, summary.Escalated);
+        Assert.True(harness.Rechecks > 0); // Only the PreLandingRebaseConflict set-aside invokes this seam.
+        Assert.Equal(1, harness.Probes);
+        Assert.Equal(GoalLifecycleState.Verified, GoalLifecycle.ResolveState(harness.Goal, harness.Driver.GetFacts(harness.Goal)));
+    }
+
+    [Fact]
+    public void PlannerConflict_ConsecutiveTicksWriteOnceAndCleanRecheckReadmits()
+    {
+        var harness = new PlannerConflictHarness();
+        harness.Recheck = () =>
+        {
+            if (harness.Rechecks >= 2) harness.Conflicts = false;
+            return !harness.Conflicts;
+        };
+        using var occupancy = PlannerOccupiedWidth();
+
+        harness.Run(3);
+
+        Assert.Single(harness.Writes);
+        Assert.Equal(1, harness.Probes);
+        Assert.Equal(2, harness.Rechecks); // The set-aside stops rechecking after the clean observation.
+        Assert.True(harness.CleanMergeReads > 0); // Admission projects the goal again after self-clear.
+        Assert.Contains(harness.Goal.Timeline, item => item.Kind == ProgressKind.GoalPolicyDecision &&
+            item.Message.StartsWith("Landing escalation self-cleared", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(false, false, 1)]
+    [InlineData(true, false, 2)]
+    [InlineData(false, true, 2)]
+    public void PlannerConflict_SelfClearDeduplicatesSamePairButAllowsChangedRevision(bool changeMain, bool changeBranch, int expectedWrites)
+    {
+        var harness = new PlannerConflictHarness();
+        harness.Recheck = () =>
+        {
+            if (changeMain) harness.MainRevision = new string('c', 40);
+            if (changeBranch) harness.BranchRevision = new string('d', 40);
+            return true;
+        };
+        using var occupancy = PlannerOccupiedWidth();
+
+        harness.Run(2);
+
+        Assert.Equal(expectedWrites, harness.Writes.Count);
+        Assert.True(harness.Rechecks > 0);
+        Assert.Contains(harness.Goal.Timeline, item => item.Message.StartsWith("Landing escalation self-cleared", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("clean")]
+    [InlineData("resolvable")]
+    [InlineData("indeterminate")]
+    [InlineData("stale")]
+    [InlineData("probe-indeterminate")]
+    [InlineData("probe-throws")]
+    public void PlannerConflict_NegativeControlsDoNotWriteOrSetAside(string control)
+    {
+        var harness = new PlannerConflictHarness(control);
+        using var occupancy = PlannerOccupiedWidth();
+
+        harness.Run(2);
+
+        Assert.Empty(harness.Writes);
+        Assert.Equal(0, harness.Rechecks);
+        Assert.Equal(control is "resolvable" or "probe-indeterminate" or "probe-throws" ? 2 : 0, harness.Probes);
+    }
+
+    [Fact]
+    public void PlannerConflict_InFlightMemberNeverProbesOrEscalates()
+    {
+        var harness = new PlannerConflictHarness();
+        var other = CreateVerifiedSimpleGoal(harness.Kernel, "Other in-flight member");
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Assert.True(harness.Driver.TryRegisterCohortGateRunForTests(
+            new ConductorAcceptanceCohortSelection([PlannerReady(harness.Goal.Id), PlannerReady(other.Id)], []), completion));
+        using var occupancy = PlannerOccupiedWidth();
+
+        harness.Run(1);
+
+        Assert.True(harness.MergeReads > 0); // A real MergeConflict exclusion was projected for the member.
+        Assert.Empty(harness.Writes);
+        Assert.Equal(0, harness.Probes);
+        Assert.Equal(0, harness.Rechecks);
+    }
+
+    [Fact]
+    public void PlannerConflict_NonVerifiedGoalAndOtherExclusionsNeverProbe()
+    {
+        var harness = new PlannerConflictHarness();
+        var unverified = GoalLifecycleCommands.CreateAndActivateSimpleGoal(harness.Kernel, DefaultAgents(), "Unverified");
+        var conflict = new GateReadyCandidateProjectionResult.Excluded(GateReadyCandidateExclusionReason.MergeConflict)
+            { ConflictPaths = ["src/B.cs"] };
+
+        Assert.Null(harness.Driver.TryEscalatePreLandingMergeConflict(unverified,
+            ConductorAutonomyPolicy.Conservative, conflict, _ => false, out _));
+        foreach (var reason in Enum.GetValues<GateReadyCandidateExclusionReason>().Where(reason => reason != GateReadyCandidateExclusionReason.MergeConflict))
+            Assert.Null(harness.Driver.TryEscalatePreLandingMergeConflict(harness.Goal,
+                ConductorAutonomyPolicy.Conservative, new(reason) { ConflictPaths = ["src/B.cs"] }, _ => false, out _));
+
+        Assert.Empty(harness.Writes);
+        Assert.Equal(0, harness.Probes);
+    }
+
+    [Fact]
+    public void PlannerConflict_WriteFailureIsRetriedWithoutRecordingDedupOrSetAside()
+    {
+        var harness = new PlannerConflictHarness("write-throws");
+        using var occupancy = PlannerOccupiedWidth();
+
+        harness.Run(2);
+
+        Assert.Equal(2, harness.WriteAttempts);
+        Assert.Empty(harness.Writes);
+        Assert.Equal(0, harness.Rechecks);
+        Assert.Equal(2, harness.Probes);
+    }
+
+    private static IDisposable PlannerOccupiedWidth() => GateLoadContextProbe.PushLiveGateOccupantProbe(() =>
+        [new GateLoadContextProbe.LiveGateOccupant(4101, "cccccccccccccccccccccccccccccccc", 0, TimeSpan.Zero)]);
+
+    private static GateReadyCandidateProjection PlannerReady(GoalId id) =>
+        new(id, GoalLifecycleState.Verified, GateReadyVerificationState.Satisfied, ChangeRiskTier.DocsOnly,
+            ConductorTransitionDecision.Auto, [$"src/{id.Value}.cs"], [$"production:{id.Value}"],
+            new(new string('b', 40), new string('a', 40), GateReadyMergeStatus.Clean, GateReadyMergeReason.NoConflictsDetected));
+
+    private sealed class PlannerConflictHarness
+    {
+        internal readonly AgentOrchestratorKernel Kernel = new();
+        internal readonly Goal Goal;
+        internal readonly ConductorDriver Driver;
+        internal readonly List<(GoalId GoalId, GoalLifecycleState State, string Reason)> Writes = [];
+        internal string MainRevision = new('a', 40);
+        internal string BranchRevision = new('b', 40);
+        internal bool Conflicts = true;
+        internal int Probes, Rechecks, MergeReads, CleanMergeReads, WriteAttempts;
+        internal Func<bool> Recheck = () => false;
+
+        internal PlannerConflictHarness(string control = "conflict")
+        {
+            Goal = CreateVerifiedSimpleGoal(Kernel, "Planner conflict candidate");
+            var revisions = 0;
+            var projector = new GateReadyCandidateProjector(
+                _ => new(BranchRevision, control == "stale" && ++revisions % 2 == 0 ? new string('e', 40) : MainRevision),
+                id => new(true, [$"src/Mcg.AgentOrchestrator.Core/{id.Value}.cs"]),
+                (_, _, _) =>
+                {
+                    MergeReads++;
+                    if (control == "indeterminate") throw new InvalidOperationException("merge-tree unavailable");
+                    var clean = control is "clean" or "stale" || !Conflicts;
+                    if (clean) CleanMergeReads++;
+                    return new(clean, ["src/B.cs", "src/a.cs"]);
+                });
+            Driver = MakeDriver(
+                getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                runAcceptanceWithSlot: (_, _) => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
+                classifyRisk: _ => ChangeRiskTier.DocsOnly,
+                isVerificationGateSatisfied: _ => true,
+                getLandingFileScopes: goal => [$"src/Mcg.AgentOrchestrator.Core/{goal.Id.Value}.cs"],
+                gateReadyCandidateProjector: projector,
+                writeEscalation: (goal, state, reason) =>
+                {
+                    WriteAttempts++;
+                    if (control == "write-throws") throw new IOException("write failed");
+                    Writes.Add((goal.Id, state, reason));
+                },
+                recheckPreLandingRebaseConflict: _ =>
+                {
+                    Rechecks++;
+                    var clean = Recheck();
+                    return new(clean, clean ? "MergeTreeClean" : "MergeTreeConflict", "test observation",
+                        $"branch={BranchRevision};main={MainRevision}");
+                });
+            Assert.True(Driver.ParallelAcceptanceEnabled);
+            Driver.PreLandingMergeConflictProbe = _ =>
+            {
+                Probes++;
+                if (control == "probe-throws") throw new IOException("probe failed");
+                return new(BranchRevision, MainRevision, control switch
+                {
+                    "resolvable" => AdditiveConflictProbeOutcome.Resolvable,
+                    "probe-indeterminate" => AdditiveConflictProbeOutcome.Indeterminate,
+                    _ => AdditiveConflictProbeOutcome.Unresolvable
+                }, "test probe");
+            };
+        }
+
+        internal BatchLoopSummary Run(int ticks) => new ConductorBatchLoop().Run(
+            Kernel, Driver, ConductorAutonomyPolicy.Conservative with { AcceptanceWidth = 1 }, NoStopPath(),
+            maxIterations: ticks, watchInterval: TimeSpan.FromMilliseconds(1), sleepFunc: _ => false,
+            keepAliveWhenIdle: true);
+    }
+
     public ConductorBatchLoopTestsSetAsideReadmit(ITestOutputHelper output)
         : base(output)
     {

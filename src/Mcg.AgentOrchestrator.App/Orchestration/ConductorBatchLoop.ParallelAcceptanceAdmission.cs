@@ -6,6 +6,8 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorBatchLoop
 {
+    private readonly PreLandingMergeConflictEscalationLedger _preLandingMergeConflictLedger = new();
+
     private ParallelAcceptanceBatchState BeginParallelAcceptanceBatch(
         IReadOnlyList<Goal> eligible,
         AgentOrchestratorKernel kernel,
@@ -291,6 +293,21 @@ internal sealed partial class ConductorBatchLoop
             .ToArray();
         state.ProductionCandidates = ExcludeGroupedAcceptanceCandidatesWithNonAcceptanceObligations(
             speculativeCandidates, state.CohortEligible, state.LiveAttemptGoalIds, activeCohortMemberGoalIds);
+        foreach (var goal in state.CohortEligible.ToArray())
+        {
+            if (state.Results.ContainsKey(goal.Id.Value) ||
+                speculativeCandidates.First(candidate => candidate.GoalId == goal.Id).ProjectionResult is not
+                    GateReadyCandidateProjectionResult.Excluded { Reason: GateReadyCandidateExclusionReason.MergeConflict } exclusion)
+                continue;
+            var result = driver.TryEscalatePreLandingMergeConflict(goal, policy, exclusion,
+                fingerprint => _preLandingMergeConflictLedger.IsEscalated(goal.Id.Value, fingerprint), out var revisionFingerprint);
+            if (result is null) continue;
+            state.Results[goal.Id.Value] = new ParallelLandingOutcome(result, null);
+            _preLandingMergeConflictLedger.Record(goal.Id.Value, revisionFingerprint!);
+            state.CohortEligible = state.CohortEligible.Where(candidate => candidate.Id != goal.Id).ToArray();
+            RecordParallelAcceptanceProgress(
+                $"ADMISSION tick={tick} result=escalated reason=pre-landing-merge-conflict goal={goal.Id.Value[..8]}", changedGoalLines);
+        }
         var trainAdmission = DecideLiveAcceptanceAdmission(state.AcceptanceCensus, state.ConfiguredAcceptanceWidth);
         if (!suppressNewAcceptanceAdmission &&
             driver.AcceptanceCohortsEnabled &&

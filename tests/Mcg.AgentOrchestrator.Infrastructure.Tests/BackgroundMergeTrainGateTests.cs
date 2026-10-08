@@ -3,9 +3,62 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
+using System.Text.Json;
 
 public sealed class BackgroundMergeTrainGateTests : AcceptanceCohortWorkflowTests
 {
+    [Fact]
+    public void PlannerConflict_EscalatesWhileAnotherTrainOccupiesAcceptanceWidth()
+    {
+        var (repo, kernel, goals) = CreateReadyTrain();
+        var cleanup = CreateIsolatedCleanupContext(repo);
+        try
+        {
+            const string conflictPath = "src/Mcg.AgentOrchestrator.Core/PlannerConflict.cs";
+            var fullPath = Path.Combine(repo, conflictPath);
+            Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+            File.WriteAllText(fullPath, "baseline\n");
+            RunGit(repo, "add", conflictPath);
+            RunGit(repo, "commit", "-m", "Conflict baseline");
+            var excluded = CreateCompletedGoal(kernel, "Verified conflict outside the active train", repo);
+            _ = CreateWorktreeCandidate(repo, excluded.Id, conflictPath, "goal change\n");
+            File.WriteAllText(fullPath, "main change\n");
+            RunGit(repo, "add", conflictPath);
+            RunGit(repo, "commit", "-m", "Main conflicting change");
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var verifier = new BackgroundGateStartHarness.ScriptedAcceptanceVerifier(
+                new AcceptanceVerificationResult(true, false, 0, null));
+            var driver = new ConductorDriver(kernel, workspace, verifier,
+                AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(), cleanupHooks: cleanup.Hooks);
+            var starts = new BackgroundGateStartHarness();
+            starts.Capture(driver);
+            var policy = ConductorAutonomyPolicy.Permissive with { AcceptanceWidth = 1 };
+            var train = driver.RunMergeTrain(ProjectTrainSelection(driver, goals), goals, policy, runGateInBackground: true);
+            Assert.Contains("outcome=inflight", train.Detail, StringComparison.Ordinal);
+            Assert.Equal(1, starts.PendingCount);
+            Assert.Equal(1, driver.GetActiveAcceptanceCohortCapacity().ActiveRootCount);
+            Assert.DoesNotContain(excluded.Id.Value, driver.GetActiveCohortGateMemberGoalIds());
+            var projection = Assert.IsType<GateReadyCandidateProjectionResult.Excluded>(driver.ProjectGateReadyCandidate(excluded, policy));
+            Assert.Equal(GateReadyCandidateExclusionReason.MergeConflict, projection.Reason);
+            Assert.Equal(new[] { conflictPath }, projection.ConflictPaths);
+
+            var summary = new ConductorBatchLoop().Run(kernel, driver, policy,
+                Path.Combine(repo, "stop-does-not-exist"), maxIterations: 1);
+
+            using var store = JsonDocument.Parse(File.ReadAllText(Path.Combine(workspace.OrchestratorDirectory, "landing-escalations.json")));
+            var escalation = Assert.Single(store.RootElement.GetProperty("items").EnumerateArray(),
+                item => item.GetProperty("goalId").GetString() == excluded.Id.Value);
+            var reason = escalation.GetProperty("reason").GetString()!;
+            Assert.StartsWith("pre-landing rebase conflict", reason);
+            Assert.Contains(conflictPath, reason, StringComparison.Ordinal);
+            Assert.Equal(1, summary.Escalated);
+            Assert.Equal(0, verifier.RunCount);
+            Assert.Equal(1, starts.PendingCount);
+            Assert.Equal(GoalLifecycleState.Verified, GoalLifecycle.ResolveState(excluded, driver.GetFacts(excluded)));
+        }
+        finally { DeleteDirectory(repo); }
+    }
+
     [Fact]
     public void FaultedBackgroundTrain_DoesNotEnterCohortFaultDrain()
     {

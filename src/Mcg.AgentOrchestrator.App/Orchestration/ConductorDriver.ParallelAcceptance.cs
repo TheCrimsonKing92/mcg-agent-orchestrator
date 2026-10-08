@@ -13,6 +13,41 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorDriver
 {
+    internal Func<Goal, AdditiveConflictProbeResult> PreLandingMergeConflictProbe { get; set; } =
+        _ => new(null, null, AdditiveConflictProbeOutcome.Indeterminate, "not-configured");
+
+    internal ConductorAdvanceResult? TryEscalatePreLandingMergeConflict(
+        Goal goal, ConductorAutonomyPolicy policy, GateReadyCandidateProjectionResult.Excluded exclusion,
+        Func<string, bool> alreadyEscalatedAt, out string? revisionFingerprint)
+    {
+        revisionFingerprint = null;
+        if (exclusion.Reason != GateReadyCandidateExclusionReason.MergeConflict || exclusion.ConflictPaths.Count == 0)
+            return null;
+        try
+        {
+            if (GoalLifecycle.ResolveState(goal, GetFacts(goal)) != GoalLifecycleState.Verified) return null;
+            var probe = PreLandingMergeConflictProbe(goal);
+            if (probe.Outcome == AdditiveConflictProbeOutcome.Indeterminate)
+                Console.WriteLine($"PRE_LANDING_CONFLICT_PROBE goal={goal.Id.Value[..8]} result=indeterminate reason={probe.Reason}");
+            if (probe.Outcome != AdditiveConflictProbeOutcome.Unresolvable ||
+                !ConductorGitRevisionReader.TryNormalize(probe.BranchRevision, out var branch) ||
+                !ConductorGitRevisionReader.TryNormalize(probe.MainRevision, out var main))
+                return null;
+            var fingerprint = new GateReadyCandidateRevisionPair(branch, main).Fingerprint;
+            if (alreadyEscalatedAt(fingerprint)) return null;
+            var result = CreateLandingRebaseOutcome(goal, goal.Id.Value[..8], policy, "pre-landing", true,
+                new GoalWorktreeRebaseResult(GoalWorktreeRebaseStatus.Conflict, GoalWorktrees.BranchName(goal.Id),
+                    probe.Reason, exclusion.ConflictPaths.ToArray(), "workspace rebase"), out _);
+            if (result is not null) revisionFingerprint = fingerprint;
+            return result;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"PRE_LANDING_CONFLICT_PROBE goal={goal.Id.Value[..8]} result=indeterminate reason={ex.Message}");
+            return null;
+        }
+    }
+
     private sealed record VerifyingFindingTrigger(
         TaskSpec TriggeringTask,
         string Finding,

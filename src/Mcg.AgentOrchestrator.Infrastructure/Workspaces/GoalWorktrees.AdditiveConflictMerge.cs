@@ -7,8 +7,66 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 /// <summary>Per-integration authorization and evidence sink supplied by the conductor.</summary>
 public sealed record AdditiveConflictMergeOptions(IReadOnlyCollection<string> FrozenPaths, Action<string> RecordEvent);
 
+public enum AdditiveConflictProbeOutcome { Resolvable, Unresolvable, Indeterminate }
+
+public sealed record AdditiveConflictProbeResult(
+    string? BranchRevision, string? MainRevision, AdditiveConflictProbeOutcome Outcome, string Reason);
+
 public static partial class GoalWorktrees
 {
+    // Reuse the landing classifier in a detached, disposable checkout; never integrate either ref.
+    public static AdditiveConflictProbeResult ProbeAdditiveConflictMerge(
+        string executionDirectory, GoalId goalId, IReadOnlyCollection<string> frozenPaths)
+    {
+        string? branch = null, main = null, checkout = null;
+        var outcome = AdditiveConflictProbeOutcome.Indeterminate;
+        var reason = "probe-unavailable";
+        try
+        {
+            var worktree = TryResolve(executionDirectory, goalId);
+            if (worktree is null) return new(null, null, outcome, "worktree-missing");
+            branch = ResolveRequiredRef(worktree, "HEAD");
+            main = ResolveRequiredRef(executionDirectory, "main^{commit}");
+            checkout = Path.Combine(OrchestratorTempRoot.GetPurposeDirectory("additive-conflict-probes"), Guid.NewGuid().ToString("N"));
+            var added = RunAdditiveGit(executionDirectory, "worktree", "add", "--detach", "--quiet", checkout, branch);
+            if (CompleteGit(added))
+            {
+                var prepared = TryPrepareAdditiveMerge(checkout, branch, main, frozenPaths,
+                    out _, out _, out var files, out _, out reason, out var observationFailed);
+                outcome = prepared || reason == "merge-clean" ? AdditiveConflictProbeOutcome.Resolvable
+                    : files.Length > 0 && !observationFailed ? AdditiveConflictProbeOutcome.Unresolvable
+                    : AdditiveConflictProbeOutcome.Indeterminate;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or DecoderFallbackException or InvalidOperationException)
+        {
+            outcome = AdditiveConflictProbeOutcome.Indeterminate;
+            reason = ex.Message;
+        }
+        finally
+        {
+            if (checkout is not null)
+            {
+                try
+                {
+                    _ = RunAdditiveGit(checkout, "merge", "--abort");
+                    var removed = RunAdditiveGit(executionDirectory, "worktree", "remove", "--force", checkout);
+                    if (!CompleteGit(removed))
+                    {
+                        outcome = AdditiveConflictProbeOutcome.Indeterminate;
+                        reason = "probe-cleanup-failed";
+                    }
+                }
+                catch (Exception ex)
+                {
+                    outcome = AdditiveConflictProbeOutcome.Indeterminate;
+                    reason = $"probe-cleanup-failed: {ex.Message}";
+                }
+            }
+        }
+        return new(branch, main, outcome, reason);
+    }
+
     private static GoalWorktreeRebaseResult? TryMergeAdditiveConflict(
         string worktreePath, string branch, string baseBranch, GoalId goalId, string integratedMain,
         string[] rebaseConflictFiles, AdditiveConflictMergeOptions options)
@@ -32,7 +90,7 @@ public static partial class GoalWorktrees
             try
             {
                 if (TryPrepareAdditiveMerge(worktreePath, oldHead, integratedMain, options.FrozenPaths,
-                        out var resolved, out var registryPlans, out var mergeFiles, out hunks, out reason))
+                        out var resolved, out var registryPlans, out var mergeFiles, out hunks, out reason, out _))
                 {
                     files = mergeFiles;
                     foreach (var (path, bytes) in resolved)
@@ -124,8 +182,9 @@ public static partial class GoalWorktrees
     private static bool TryPrepareAdditiveMerge(
         string path, string oldHead, string integratedMain, IReadOnlyCollection<string> frozenPaths,
         out Dictionary<string, byte[]> resolved, out List<RegistryAwareConflictMerge.Plan> registryPlans,
-        out string[] files, out int hunks, out string reason)
+        out string[] files, out int hunks, out string reason, out bool observationFailed)
     {
+        observationFailed = false;
         resolved = new(StringComparer.Ordinal);
         registryPlans = [];
         files = [];
@@ -150,13 +209,15 @@ public static partial class GoalWorktrees
 
         var mergeBase = RunAdditiveGit(path, "merge-base", "--all", oldHead, integratedMain);
         var bases = mergeBase.Output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
-        if (!CompleteGit(mergeBase) || bases.Length != 1) { reason = "ambiguous-merge-base"; return false; }
+        if (!CompleteGit(mergeBase) || bases.Length != 1)
+        { observationFailed = !CompleteGit(mergeBase); reason = "ambiguous-merge-base"; return false; }
         // UU alone can also describe a conflict at a renamed destination. Both sides must modify
         // the existing path, with no rename involving it, and all index modes must agree above.
         foreach (var side in new[] { oldHead, integratedMain })
         {
             var diff = RunAdditiveGit(path, "diff", "--name-status", "-z", "--find-renames", bases[0], side, "--");
-            if (!CompleteGit(diff) || !AreAdditivePathsContentChanges(diff.Output, files)) return false;
+            if (!CompleteGit(diff)) { observationFailed = true; return false; }
+            if (!AreAdditivePathsContentChanges(diff.Output, files)) return false;
         }
         foreach (var file in files)
         {
@@ -167,14 +228,15 @@ public static partial class GoalWorktrees
             if (frozenPaths.Any(frozen => frozen.Replace('\\', '/').Equals(file, StringComparison.OrdinalIgnoreCase))) return false;
             reason = "not-content-conflict";
             var numstat = RunAdditiveGit(path, "diff", "--numstat", oldHead, integratedMain, "--", file);
-            if (!CompleteGit(numstat) || numstat.Output.StartsWith("-\t-\t", StringComparison.Ordinal)) return false;
+            if (!CompleteGit(numstat)) { observationFailed = true; return false; }
+            if (numstat.Output.StartsWith("-\t-\t", StringComparison.Ordinal)) return false;
             var bytes = File.ReadAllBytes(Path.Combine(path, file));
             if (RegistryAwareConflictMerge.IsRegistry(file))
             {
                 var baseline = RunAdditiveGit(path, "show", $"{bases[0]}:{file}");
                 var main = RunAdditiveGit(path, "show", $"{integratedMain}:{file}");
                 var goal = RunAdditiveGit(path, "show", $"{oldHead}:{file}");
-                if (!CompleteGit(baseline) || !CompleteGit(main) || !CompleteGit(goal)) return false;
+                if (!CompleteGit(baseline) || !CompleteGit(main) || !CompleteGit(goal)) { observationFailed = true; return false; }
                 var plan = RegistryAwareConflictMerge.TryPlan(file, baseline.Output, main.Output, goal.Output, bytes, out reason);
                 if (reason != "none") { hunks += RegistryAwareConflictMerge.CountHunks(bytes); return false; }
                 if (plan is not null)

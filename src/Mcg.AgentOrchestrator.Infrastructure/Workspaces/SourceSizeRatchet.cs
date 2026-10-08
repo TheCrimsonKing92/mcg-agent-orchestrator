@@ -126,7 +126,7 @@ internal static class SourceSizeRatchet
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FindingEvidenceRequests.cs", 918),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FailedGoalRecovery.cs", 369),
             // Goal 4ff31b70 (ConductorDriver size relief) moved parallel acceptance members unchanged to this partial.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.ParallelAcceptance.cs", 593),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.ParallelAcceptance.cs", 627), // def5cd48: planner conflict probe and existing-policy escalation.
             // Goal 4ff31b70 (ConductorDriver size relief) moved dispatch diagnostics unchanged to this partial.
             // Goal 0079c3a4 moved dispatch-start effects into DispatchStartExecutor.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.DispatchDiagnostics.cs", 378),
@@ -168,7 +168,7 @@ internal static class SourceSizeRatchet
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.ParallelAcceptanceCompletion.cs", 465),
             // Goal 6e664238 conduct-event partial measured at 260 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.ConductEvents.cs", 260),
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.ParallelAcceptanceAdmission.cs", 793),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.ParallelAcceptanceAdmission.cs", 799), // def5cd48: conflict escalation before width admission.
             // Raised for goal 18afe5f2: missing-build-evidence rejection and commit suppression
             // must run where parsed worker results and authoritative changed paths meet. Raised again
             // for goal 0d39b5a3, which adds the narrow Planner sample launch and completion-selection
@@ -380,9 +380,9 @@ internal static class SourceSizeRatchet
             // Goal b67746ef adds 24 lines to return recorded cohort/train verdicts and preserve failed
             // gate-only train receipts; goal d6033045 extracted passed-train receipt selection to
             // PassedMergeTrainReceiptSelector. Measured 15271 after integrating both; no extra headroom.
-            // Goal 1f4782de extracted train RED classification into MergeTrainRedAttribution.
-            // Measured 15261 across the same 70 partial files; lowered after extraction.
-            new SourceClassCeiling("ConductorDriver", 15261, 70),
+            // Goal 1f4782de extracted train RED classification into MergeTrainRedAttribution; goal def5cd48 adds
+            // the planner conflict probe and its wiring. Measured 15297 across the same 70 partial files after integrating both.
+            new SourceClassCeiling("ConductorDriver", 15297, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
@@ -391,7 +391,7 @@ internal static class SourceSizeRatchet
             new SourceClassCeiling("AgentOrchestratorKernel", 9506, 27),
             // Goal d6033045 extracted the pre-admission receipt pass to PassedMergeTrainReceiptAdmission; goal 1d0f2317
             // adds one admission predicate to exclude stream-complete children before slot reservation. Measured 9255.
-            new SourceClassCeiling("ConductorBatchLoop", 9255, 56),
+            new SourceClassCeiling("ConductorBatchLoop", 9272, 56), // def5cd48: revision ledger and planner conflict routing.
             new SourceClassCeiling("CliPersistentStateRunner", 6043, 18),
         });
 

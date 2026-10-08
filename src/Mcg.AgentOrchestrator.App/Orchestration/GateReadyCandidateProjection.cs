@@ -56,7 +56,7 @@ internal sealed record GateReadyLandingScopeObservation(
     IReadOnlyList<string> Files,
     string? FailureReason = null);
 
-internal sealed record GateReadyMergeTreeObservation(bool IsClean);
+internal sealed record GateReadyMergeTreeObservation(bool IsClean, IReadOnlyList<string>? ConflictPaths = null);
 
 internal sealed record GateReadyMergeEvidence(
     string BranchRevision,
@@ -74,7 +74,10 @@ internal abstract record GateReadyCandidateProjectionResult
         : GateReadyCandidateProjectionResult;
 
     internal sealed record Excluded(GateReadyCandidateExclusionReason Reason)
-        : GateReadyCandidateProjectionResult;
+        : GateReadyCandidateProjectionResult
+    {
+        public IReadOnlyList<string> ConflictPaths { get; init; } = Array.Empty<string>();
+    }
 }
 
 internal sealed class GateReadyCandidateProjection : IEquatable<GateReadyCandidateProjection>

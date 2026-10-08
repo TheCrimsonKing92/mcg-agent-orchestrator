@@ -4,6 +4,35 @@ using static AdditiveConflictGitFixture;
 // Parallel-safe: each fact owns an isolated real git repository and worktree.
 public sealed class GoalWorktreeTestsRebaseAdditiveConflictMerge
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AdditiveProbe_UsesLandingClassifierWithoutChangingRefsOrLeavingWorktrees(bool overlappingEdit)
+    {
+        using var fixture = overlappingEdit
+            ? new AdditiveConflictGitFixture([new(WidgetPath, "class Old {}\n", "class Main {}\n", "class Goal {}\n")])
+            : new AdditiveConflictGitFixture();
+        // The planner probe targets main; the shared fixture otherwise inherits init.defaultBranch.
+        Git(fixture.Repository, "branch", "-M", "main");
+        Assert.Equal(fixture.MainHead, Git(fixture.Repository, "rev-parse", "refs/heads/main").Trim());
+        var before = Git(fixture.Repository, "worktree", "list", "--porcelain");
+        var mainStatus = Git(fixture.Repository, "status", "--porcelain=v1", "--untracked-files=all");
+        var mergeTree = new Mcg.AgentOrchestrator.Infrastructure.WorkerGitContext()
+            .ReadReviewerMergeTreeStatus(fixture.Worktree, fixture.MainHead, fixture.OriginalHead);
+        Assert.False(mergeTree.IsClean);
+        Assert.Equal(new[] { WidgetPath }, mergeTree.ConflictPaths);
+
+        var probe = GoalWorktrees.ProbeAdditiveConflictMerge(fixture.Repository, fixture.GoalId, []);
+
+        Assert.Equal(overlappingEdit ? AdditiveConflictProbeOutcome.Unresolvable : AdditiveConflictProbeOutcome.Resolvable, probe.Outcome);
+        Assert.Equal(fixture.OriginalHead, probe.BranchRevision);
+        Assert.Equal(fixture.MainHead, probe.MainRevision);
+        fixture.AssertRestored();
+        Assert.Equal(fixture.MainHead, Git(fixture.Repository, "rev-parse", "HEAD").Trim());
+        Assert.Equal(mainStatus, Git(fixture.Repository, "status", "--porcelain=v1", "--untracked-files=all"));
+        Assert.Equal(before, Git(fixture.Repository, "worktree", "list", "--porcelain"));
+    }
+
     [Fact]
     public void UntrackedWorkerResult_MergesAdditiveConflictAndPreservesArtifact()
     {
