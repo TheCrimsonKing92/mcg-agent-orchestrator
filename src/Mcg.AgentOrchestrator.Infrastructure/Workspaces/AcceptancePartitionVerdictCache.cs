@@ -124,6 +124,7 @@ internal sealed partial class AcceptancePartitionVerdictCache
     private readonly Func<IReadOnlyList<TempRootApparatusLossReceiptV1>> _resolveApparatusLossReceipts;
     private readonly Func<AcceptanceManifestCheck, string?> _resolveClosureHash;
     private readonly AcceptanceClosureVerdictIndex _closureIndex;
+    private readonly AcceptanceWholeProjectClosureReuse _wholeProjectClosureReuse;
     private readonly HashSet<string> _identicalTreeCheckIdentities;
     private readonly ConcurrentDictionary<string, Lazy<string?>> _closureHashes = new(StringComparer.OrdinalIgnoreCase);
     private AcceptanceSharedApparatusInvalidation? _sharedApparatusInvalidation;
@@ -167,6 +168,7 @@ internal sealed partial class AcceptancePartitionVerdictCache
         _resolveApparatusLossReceipts = resolveApparatusLossReceipts;
         _resolveClosureHash = resolveClosureHash;
         _closureIndex = closureIndex;
+        _wholeProjectClosureReuse = new AcceptanceWholeProjectClosureReuse(closureIndex);
         _identicalTreeCheckIdentities = identicalTreeCheckIdentities;
     }
 
@@ -272,8 +274,8 @@ internal sealed partial class AcceptancePartitionVerdictCache
 
     internal AcceptanceCheckResult? TryReuse(AcceptanceManifestCheck check)
     {
-        if (TryBuildIdenticalTreeKey(check, out var identicalTreeId, out _, out var identicalTreeKey))
-            return TryReuseIdenticalTree(check, identicalTreeId, identicalTreeKey);
+        if (TryBuildIdenticalTreeKey(check, out var identicalTreeId, out var identity, out var identicalTreeKey))
+            return TryReuseIdenticalTree(check, identicalTreeId, identity, identicalTreeKey);
         if (!TryBuildCacheKey(check, out var partitionId, out var filterHash, out var cacheKey))
         {
             RecordMiss(check.Name, PartitionVerdictMissReasons.CacheKeyUnavailable,
@@ -780,6 +782,7 @@ internal sealed partial class AcceptancePartitionVerdictCache
                      !string.IsNullOrWhiteSpace(record.ClosureHash) &&
                      !retriedPartitionIds.Contains(record.PartitionId)))
             _closureIndex.AppendGreen(ManifestIdentity, record.PartitionFilterHash, record.ClosureHash!, record.AttemptId, record.TestResultPaths);
+        _wholeProjectClosureReuse.AppendGreen(ManifestIdentity, _freshRecords, retriedPartitionIds);
         Console.WriteLine($"PARTITION_VERDICT_CACHE {receipt}");
         Console.Out.Flush();
         TestReuseShadow?.Complete();
@@ -806,7 +809,7 @@ internal sealed partial class AcceptancePartitionVerdictCache
             check.Project ?? check.Name,
             _ => new Lazy<string?>(() => _resolveClosureHash(check), LazyThreadSafetyMode.ExecutionAndPublication)).Value;
 
-    private AcceptanceCheckResult? TryReuseIdenticalTree(AcceptanceManifestCheck check, string partitionId, string cacheKey)
+    private AcceptanceCheckResult? TryReuseIdenticalTree(AcceptanceManifestCheck check, string partitionId, string identity, string cacheKey)
     {
         if (ForceFullRerun)
         {
@@ -820,12 +823,26 @@ internal sealed partial class AcceptancePartitionVerdictCache
             return null;
         }
         var cached = LatestGreenVerdict(_journal, GoalId, cacheKey);
+        var reuseRule = "identical-tree";
         if (cached is null)
         {
-            RecordMiss(partitionId, PartitionVerdictMissReasons.NoGreenVerdictForIdenticalTree, closureHash);
-            return null;
+            if (!AcceptanceWholeProjectClosureReuse.AppliesTo(partitionId))
+            {
+                RecordMiss(partitionId, PartitionVerdictMissReasons.NoGreenVerdictForIdenticalTree, closureHash);
+                return null;
+            }
+            if (_wholeProjectClosureReuse.FindGreen(ManifestIdentity, identity, closureHash) is not { } contentVerdict)
+            {
+                RecordMiss(partitionId, PartitionVerdictMissReasons.NoGreenVerdictForWholeProjectClosure, closureHash);
+                return null;
+            }
+            cached = new PartitionVerdictRecord(
+                GoalId, contentVerdict.SourceAttemptId, CandidateTreeSha, MainSha, identity,
+                partitionId, cacheKey, true, "GREEN", contentVerdict.TestResultPaths,
+                contentVerdict.RecordedAt, closureHash, IdenticalTree: true);
+            reuseRule = "closure";
         }
-        if (!string.Equals(cached.ClosureHash, closureHash, StringComparison.Ordinal))
+        else if (!string.Equals(cached.ClosureHash, closureHash, StringComparison.Ordinal))
         {
             RecordMiss(partitionId, PartitionVerdictMissReasons.IdenticalTreeClosureHashMismatch, closureHash);
             return null;
@@ -835,10 +852,10 @@ internal sealed partial class AcceptancePartitionVerdictCache
             RecordMiss(partitionId, PartitionVerdictMissReasons.MissingStructuralCoverageEvidence, closureHash);
             return null;
         }
-        RecordReuse(new PartitionVerdictReuseReceipt(partitionId, cached.AttemptId, cacheKey, "identical-tree", closureHash));
+        RecordReuse(new PartitionVerdictReuseReceipt(partitionId, cached.AttemptId, cacheKey, reuseRule, closureHash));
         return new AcceptanceCheckResult(check.Name, true, 0, null,
             ResultSummary: $"partition-verdict-cache reused source_attempt_id={cached.AttemptId} cache_key={cacheKey} " +
-                $"reuse_rule=identical-tree closure_hash={closureHash}",
+                $"reuse_rule={reuseRule} closure_hash={closureHash}",
             TestResultPaths: cached.TestResultPaths, TestResultAttemptId: cached.AttemptId,
             TestResultIsExplicitCrossAttemptReuse: true);
     }

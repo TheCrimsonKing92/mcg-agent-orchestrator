@@ -33,13 +33,13 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsIdenticalTreeReuse
             AssertReuse(root, second, "attempt-two", "attempt-one", DeterministicProjects);
             Assert.Equal(Git(root, "rev-parse", "HEAD^{tree}"), Summary(root, "attempt-two").BranchHeadSha);
             Assert.Equal(Git(root, "rev-parse", "main"), Summary(root, "attempt-two").MainHeadSha);
-            AssertNoIdenticalTreeIndexEntries(root);
+            AssertOnlyCoreWholeProjectIndexEntries(root);
         }
         finally { DeleteDirectoryWithRetry(root); }
     }
 
     [Fact]
-    public async Task DifferentTree_RerunsEvenWhenEarlierClosureContentReturns()
+    public async Task DifferentTree_RestoredClosureReusesCoreWhileOtherWholeProjectsRun()
     {
         var root = CreateFixture();
         try
@@ -65,10 +65,20 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsIdenticalTreeReuse
             Assert.Equal(originalClosure, AcceptanceLaneClosureHasher.TryCompute(root, TestCheck("core tests", CoreProject)));
             var restored = await Gate(root, "attempt-restored");
             AssertPassed(restored);
-            AssertFreshGreens(root, restored, "attempt-restored");
+            AssertFreshGreens(root, restored, "attempt-restored", [CliProject, OwnerProject]);
+            AssertLaunch(restored, CoreProject, 0);
+            var reused = Assert.Single(restored.Result.Checks, check => check.Name == "core tests");
+            Assert.True(reused.TestResultIsExplicitCrossAttemptReuse);
+            Assert.Equal("attempt-one", reused.TestResultAttemptId);
+            Assert.Contains("source_attempt_id=attempt-one", reused.ResultSummary, StringComparison.Ordinal);
+            Assert.Contains($"reuse_rule=closure closure_hash={originalClosure}", reused.ResultSummary, StringComparison.Ordinal);
+            Assert.Contains("{partition_id=core-tests,source_attempt_id=attempt-one,", restored.Detail, StringComparison.Ordinal);
+            Assert.Contains($"reuse_rule=closure,closure_hash={originalClosure}}}", restored.Detail, StringComparison.Ordinal);
+            Assert.DoesNotContain(Verdicts(root, "attempt-restored"), row => row.PartitionId == "core-tests");
             Assert.DoesNotContain("reuse_rule=identical-tree", restored.Detail, StringComparison.Ordinal);
-            Assert.Contains("missed_lane=core-tests:no-green-verdict-for-identical-tree", restored.Detail, StringComparison.Ordinal);
-            AssertNoIdenticalTreeIndexEntries(root);
+            Assert.Contains("missed_lane=cli-tests:no-green-verdict-for-identical-tree", restored.Detail, StringComparison.Ordinal);
+            Assert.Contains("missed_lane=acceptance-execution-owner-tests:no-green-verdict-for-identical-tree", restored.Detail, StringComparison.Ordinal);
+            AssertOnlyCoreWholeProjectIndexEntries(root);
         }
         finally { DeleteDirectoryWithRetry(root); }
     }
@@ -174,9 +184,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsIdenticalTreeReuse
         return new(result, launches.ToArray(), detail);
     }
 
-    private static void AssertFreshGreens(string root, GateRun run, string attemptId)
+    private static void AssertFreshGreens(string root, GateRun run, string attemptId, string[]? projects = null)
     {
-        foreach (var project in DeterministicProjects)
+        foreach (var project in projects ?? DeterministicProjects)
         {
             AssertLaunch(run, project, 1);
             var check = TestCheck(DeterministicNames[Array.IndexOf(DeterministicProjects, project)], project);
@@ -232,10 +242,20 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsIdenticalTreeReuse
             .Where(row => row.GetProperty("operation").GetString() == "acceptance:partition-verdict" &&
                 row.GetProperty("partitionAttemptId").GetString() == attemptId).ToArray();
 
-    private static void AssertNoIdenticalTreeIndexEntries(string root)
+    private static void AssertOnlyCoreWholeProjectIndexEntries(string root)
     {
         var path = Path.Combine(root, ".orchestrator", "acceptance-closure-verdicts.jsonl");
-        if (File.Exists(path)) Assert.DoesNotContain("check-identity-", File.ReadAllText(path), StringComparison.Ordinal);
+        Assert.True(File.Exists(path));
+        var entries = File.ReadAllLines(path)
+            .Select(line => JsonSerializer.Deserialize<AcceptanceClosureVerdictRecord>(line,
+                new JsonSerializerOptions(JsonSerializerDefaults.Web))!).ToArray();
+        foreach (var project in DeterministicProjects)
+        {
+            var check = TestCheck(DeterministicNames[Array.IndexOf(DeterministicProjects, project)], project);
+            Assert.True(AcceptanceIdenticalTreeReuseRule.TryGetCheckIdentity(check, out var identity));
+            if (project == CoreProject) Assert.Contains(entries, entry => entry.PartitionFilterHash == identity);
+            else Assert.DoesNotContain(entries, entry => entry.PartitionFilterHash == identity);
+        }
     }
 
     private static Check TestCheck(string name, string project) => new()
