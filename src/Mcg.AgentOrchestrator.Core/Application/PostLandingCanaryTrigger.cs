@@ -96,6 +96,7 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/RemoteLaneCoordinator",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/RemoteLaneExecutor",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/RemoteLaneExecutorConfiguration",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/RemoteLaneFailureHistory",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/RemoteLaneOfferPolicy",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/SourceSizeRatchetPreflight",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/SshRemoteLaneExecutor",

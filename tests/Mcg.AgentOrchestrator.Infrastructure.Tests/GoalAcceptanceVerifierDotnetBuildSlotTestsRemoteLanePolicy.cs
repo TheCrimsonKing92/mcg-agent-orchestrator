@@ -23,15 +23,41 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLanePolicy :
         Assert.Equal(2, scenario.SlotChecks);
         Assert.Equal(new[]
         {
-            $"REMOTE_LANE_POLICY lane=\"{Lane(0)}\" decision=keep-local reason=short L=45 Ln=3 R=105 Rn=0 F=300",
-            $"REMOTE_LANE_POLICY lane=\"{Lane(1)}\" decision=keep-local reason=remote-slower L=300 Ln=3 R=700 Rn=3 F=300",
-            $"REMOTE_LANE_POLICY lane=\"{Lane(2)}\" decision=offer reason=fits L=200 Ln=3 R=250 Rn=3 F=300"
+            $"REMOTE_LANE_POLICY lane=\"{Lane(0)}\" decision=keep-local reason=short L=45 Ln=3 R=105 Rn=0 F=300 Fn=0",
+            $"REMOTE_LANE_POLICY lane=\"{Lane(1)}\" decision=keep-local reason=remote-slower L=300 Ln=3 R=700 Rn=3 F=300 Fn=0",
+            $"REMOTE_LANE_POLICY lane=\"{Lane(2)}\" decision=offer reason=fits L=200 Ln=3 R=250 Rn=3 F=300 Fn=0"
         }, scenario.Progress.Where(line => line.StartsWith("REMOTE_LANE_POLICY ")).Order(StringComparer.Ordinal).ToArray());
         var rows = RemoteExecutorHealthLedger.ReadAll(scenario.History);
         Assert.Equal(7, rows.Count);
         Assert.Equal(3, rows.Count(row => row.Lane == Lane(1))); // History only: no keep-local outcome.
         Assert.DoesNotContain(rows, row => row.Lane == Lane(0));
         Assert.Equal(RemoteLaneOutcomeCode.Accepted, Assert.Single(rows, row => row.Lane == Lane(2) && row.GateAttemptId != "seed-attempt").Outcome);
+    }
+
+    [Xunit.Fact]
+    public async Task RecentFailures_RunLocallyWhileHealthyLaneIsOffered()
+    {
+        using var scenario = CreateScenario([120, 120, 120]);
+        var binding = new RemoteLaneBinding("seed-executor", Lane(0), "commit", "tree", "main",
+            GoalAcceptanceVerifier.ShortHash(Filter(0)), "manifest");
+        for (var index = 0; index < 3; index++)
+            RemoteExecutorHealthLedger.Append(scenario.History,
+                new(scenario.Clock.GetUtcNow().AddHours(-1), binding.ExecutorId, "seed-attempt", Lane(0),
+                    RemoteLaneOutcomeCode.RemoteRed, null, binding, null));
+        RemoteLaneOfferSeeding.SeedRemote(scenario.History, Lane(1), Filter(1), 100);
+
+        var result = await scenario.RunAsync();
+
+        Assert.True(result.Passed, JsonSerializer.Serialize(result.Checks));
+        Assert.Equal(Lane(1), Assert.Single(scenario.Fake.Requests).Lane);
+        Assert.Equal(new[] { 0, 2 }, scenario.LocalStarts.Order().ToArray());
+        Assert.Equal(new[]
+        {
+            $"REMOTE_LANE_POLICY lane=\"{Lane(0)}\" decision=keep-local reason=remote-failing L=120 Ln=3 R=255 Rn=0 F=120 Fn=3 Fage=1.0",
+            $"REMOTE_LANE_POLICY lane=\"{Lane(1)}\" decision=offer reason=fits L=120 Ln=3 R=100 Rn=3 F=120 Fn=0",
+            $"REMOTE_LANE_POLICY lane=\"{Lane(2)}\" decision=keep-local reason=remote-slower L=120 Ln=3 R=255 Rn=0 F=120 Fn=0"
+        }, scenario.Progress.Where(line => line.StartsWith("REMOTE_LANE_POLICY ")).Order(StringComparer.Ordinal).ToArray());
+        Assert.Equal(3, RemoteExecutorHealthLedger.ReadAll(scenario.History).Count(row => row.Lane == Lane(0)));
     }
 
     [Xunit.Fact]
