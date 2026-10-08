@@ -27,7 +27,14 @@ public sealed class ConductorDriverTestsTimedOutRerunDecision
         }
         var contextReads = 0;
         var runs = scenario.RunRequests.Count;
+        string? actualVersion = null;
         var driver = MakeDriver(
+            getFacts: goal =>
+            {
+                // Recovery snapshots this version before task-fact enumeration reads context and appends another note.
+                actualVersion = ContextVersion(goal);
+                return GoalLifecycleFacts.None;
+            },
             getPreReviewEvidenceContext: _ =>
             {
                 contextReads++;
@@ -42,7 +49,7 @@ public sealed class ConductorDriverTestsTimedOutRerunDecision
 
         var record = AssertDecision(held.Decision, "Hold", 101, "stale-recovery-facts", held.Reason, scenario);
         var expectedVersion = Assert.Single(record.Facts, fact => fact.Name == "contextVersion").Value;
-        var actualVersion = ContextVersion(scenario.Goal);
+        Assert.NotNull(actualVersion);
         Assert.NotEqual(expectedVersion, actualVersion);
         // Reason templates transcribed from main 147a5f08d, including the timed-out policy reason.
         var expectedReason = $"{Reason}: rerun {Selection} once for {Scenario.Candidate.Canonical}. " +
