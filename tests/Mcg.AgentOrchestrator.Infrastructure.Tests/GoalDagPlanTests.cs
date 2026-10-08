@@ -193,8 +193,8 @@ public sealed class GoalDagPlanTests
         Assert.All(children, child =>
         {
             Assert.Equal(GoalStatus.Active, child.Status);
-            var task = Assert.Single(child.Tasks);
-            Assert.Equal(AgentRole.Developer, task.RequiredRole);
+            Assert.Equal([AgentRole.Developer, AgentRole.Reviewer], child.Tasks.Select(task => task.RequiredRole));
+            var task = Assert.Single(child.Tasks.Where(task => task.RequiredRole == AgentRole.Developer));
             Assert.NotNull(task.AssignedAgentId);
         });
 
@@ -205,7 +205,7 @@ public sealed class GoalDagPlanTests
 
         var intents = children.Select(child =>
         {
-            var task = Assert.Single(child.Tasks);
+            var task = Assert.Single(child.Tasks.Where(task => task.RequiredRole == AgentRole.Developer));
             var scope = GoalFileScopeInference.ForScheduling(child, task);
             Assert.Equal(RepositoryScopeConfidence.Precise, scope.Confidence);
             return new ParallelExecutionIntent(

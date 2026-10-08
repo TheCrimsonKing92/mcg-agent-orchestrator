@@ -67,7 +67,7 @@ public sealed partial class AgentOrchestratorKernel
 
         foreach (var task in goal.Tasks.Where(task => task.Status == WorkTaskStatus.Pending))
         {
-            var agent = SelectAgentForTask(task, goal.Objective, availableAgents);
+            var agent = SelectAgentForTask(task, goal.Objective, availableAgents, goal.SliceBatchParentId is not null);
 
             if (agent is null)
             {
@@ -229,7 +229,7 @@ public sealed partial class AgentOrchestratorKernel
 
         if (availableAgents is not null)
         {
-            var agent = SelectAgentForTask(task, goal.Objective, availableAgents);
+            var agent = SelectAgentForTask(task, goal.Objective, availableAgents, goal.SliceBatchParentId is not null);
 
             if (agent is not null)
             {
@@ -247,7 +247,8 @@ public sealed partial class AgentOrchestratorKernel
     private static AgentDefinition? SelectAgentForTask(
         TaskSpec task,
         string goalObjective,
-        IReadOnlyList<AgentDefinition> availableAgents)
+        IReadOnlyList<AgentDefinition> availableAgents,
+        bool isSliceBatchChild)
     {
         var eligible = availableAgents
             .Where(candidate => candidate.Status == AgentStatus.Available && candidate.Role == task.RequiredRole)
@@ -260,26 +261,22 @@ public sealed partial class AgentOrchestratorKernel
 
         var complexity = TaskComplexityEstimator.Estimate(task.Description, goalObjective, task.RequiredRole);
 
-        if (complexity == TaskComplexity.Simple)
-        {
-            var local = eligible.FirstOrDefault(candidate =>
-                candidate.Model.SubscriptionMode == SubscriptionMode.LocalBridge);
-            if (local is not null)
+        AgentDefinition? SelectPreferredAgent(IEnumerable<AgentDefinition> candidates) =>
+            candidates.FirstOrDefault(candidate => complexity switch
             {
-                return local;
-            }
-        }
-        else if (complexity == TaskComplexity.Complex)
+                TaskComplexity.Simple => candidate.Model.SubscriptionMode == SubscriptionMode.LocalBridge,
+                TaskComplexity.Complex => candidate.Model.SubscriptionMode != SubscriptionMode.LocalBridge,
+                _ => true
+            });
+
+        var baseline = SelectPreferredAgent(eligible) ?? eligible[0];
+        if (!isSliceBatchChild || task.RequiredRole != AgentRole.Reviewer)
         {
-            var paid = eligible.FirstOrDefault(candidate =>
-                candidate.Model.SubscriptionMode != SubscriptionMode.LocalBridge);
-            if (paid is not null)
-            {
-                return paid;
-            }
+            return baseline;
         }
 
-        return eligible[0];
+        var remaining = eligible.Where(candidate => candidate.Id != baseline.Id).ToArray();
+        return SelectPreferredAgent(remaining) ?? remaining.FirstOrDefault() ?? baseline;
     }
 
     public TaskSpec SetTaskVerificationPlan(GoalId goalId, TaskId taskId, string verificationPlan)

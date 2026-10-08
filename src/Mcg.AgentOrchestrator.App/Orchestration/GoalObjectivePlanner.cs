@@ -21,7 +21,8 @@ internal enum GoalIntakePipeline
     DeveloperOnly,
     DeveloperReviewer,
     FiveRole,
-    Scout
+    Scout,
+    DeveloperStreamReviewer
 }
 
 internal enum GoalIntakePipelineRequest
@@ -99,6 +100,7 @@ internal sealed record GoalIntakePipelineDecision(
     {
         GoalIntakePipeline.DeveloperOnly => "developer-only",
         GoalIntakePipeline.DeveloperReviewer => "developer-reviewer",
+        GoalIntakePipeline.DeveloperStreamReviewer => "developer-stream-reviewer",
         GoalIntakePipeline.FiveRole => "five-role",
         GoalIntakePipeline.Scout => "scout",
         _ => Pipeline.ToString()
@@ -540,6 +542,15 @@ internal static class GoalObjectivePlanner
             ];
         }
 
+        if (pipeline == GoalIntakePipeline.DeveloperStreamReviewer)
+        {
+            return
+            [
+                new GoalObjectiveTaskBoundary(1, AgentRole.Developer, complexity == TaskComplexity.Complex ? "Implement the scoped slice and keep changes narrow." : "Implement the focused change.", "workspace-write", verification[0]),
+                new GoalObjectiveTaskBoundary(2, AgentRole.Reviewer, "Review a single stream's diff, tests, and worker evidence before acceptance.", "read-only", "Review must mention residual risk and acceptance readiness.")
+            ];
+        }
+
         if (pipeline == GoalIntakePipeline.Scout)
         {
             return
@@ -599,6 +610,7 @@ internal static class GoalObjectivePlanner
         {
             GoalIntakePipeline.DeveloperOnly => "Developer-only",
             GoalIntakePipeline.DeveloperReviewer => "Developer+Reviewer",
+            GoalIntakePipeline.DeveloperStreamReviewer => "Developer+stream-Reviewer",
             GoalIntakePipeline.FiveRole => "five-role",
             GoalIntakePipeline.Scout => "scout",
             _ => pipeline.ToString()
