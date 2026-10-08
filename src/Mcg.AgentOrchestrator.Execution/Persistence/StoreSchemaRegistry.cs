@@ -21,6 +21,7 @@ public static class StoreSchemaRegistry
     public static IReadOnlyList<StoreSchemaEntry> Inventory { get; } = Array.AsReadOnly<StoreSchemaEntry>(
     [
         Portfolio,
+        new("experiments", Persistence + "ExperimentStore.cs", "experiments.db", "experiment", null),
         new("backlog", Persistence + "BacklogStore.cs", "backlog.db", "backlog", null),
         new("operator-intents", Persistence + "OperatorIntentStore.cs", "operator-intents.db", "backlog", null),
         new("operator-lessons", Persistence + "OperatorLessonStore.cs", "operator-lessons.db", "backlog", null),
