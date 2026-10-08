@@ -183,7 +183,7 @@ public sealed class CliAttentionReadinessWriterPathTests : CliTaskQueryTestSuppo
             var expected = tiedCreationTimes ? older.Id : newer.Id;
             IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
             var profiles = WorkerProfileCatalog.Default();
-            Goal? currentGoal = kernel.GetGoal(older.Id);
+            Goal? currentGoal = null;
             var output = CaptureConsole(() =>
             {
                 Xunit.Assert.True(CliReadOnlyCommandRunner.TryExecute(
@@ -204,6 +204,69 @@ public sealed class CliAttentionReadinessWriterPathTests : CliTaskQueryTestSuppo
             Xunit.Assert.Equal(0, repository.MutationAttempts);
             Xunit.Assert.Equal(0, repository.SaveAttempts);
             Xunit.Assert.Equal(0, repository.MergeSaveAttempts);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(true)]
+    [Xunit.InlineData(false)]
+    public void Readiness_Bare_PreservesSessionGoalWhenPresentOtherwiseSelectsNewest(bool sessionGoalExists)
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var older = kernel.CreateGoal(new GoalId("abc10000aaaaaaaaaaaaaaaaaaaaaaaa"), "Selected session goal");
+            var newer = kernel.CreateGoal(new GoalId("abc20000aaaaaaaaaaaaaaaaaaaaaaaa"), "Newest goal");
+            var created = new DateTimeOffset(2026, 9, 24, 0, 0, 0, TimeSpan.Zero);
+            var snapshot = kernel.ExportSnapshot();
+            kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with
+            {
+                Goals = snapshot.Goals.Select(goal =>
+                {
+                    var creationTime = created.AddDays(goal.Id == older.Id.Value ? 0 : 1);
+                    return goal with
+                    {
+                        CreatedAt = creationTime,
+                        Timeline = [goal.Timeline[0] with { OccurredAt = creationTime }]
+                    };
+                }).ToArray()
+            });
+            var repository = new ProbeStateRepository(kernel) { ThrowOnOutbox = true };
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = sessionGoalExists
+                ? kernel.GetGoal(older.Id)
+                : new AgentOrchestratorKernel().CreateGoal(
+                    new GoalId("abc30000aaaaaaaaaaaaaaaaaaaaaaaa"), "Missing session goal");
+            var expected = sessionGoalExists ? older.Id : newer.Id;
+            var before = JsonSerializer.Serialize(kernel.ExportSnapshot());
+
+            var output = CaptureConsole(() =>
+            {
+                Xunit.Assert.True(CliReadOnlyCommandRunner.TryExecute(
+                    ["readiness"], repository, OrchestratorWorkspace.ForDirectory(root),
+                    new InMemoryModelProviderRegistry([]), null, ref agents, ref profiles, ref currentGoal,
+                    out var changed));
+                Xunit.Assert.False(changed);
+            });
+
+            Xunit.Assert.Equal(expected, currentGoal!.Id);
+            Xunit.Assert.Contains($"Goal readiness {expected.Value[..8]}", output, StringComparison.Ordinal);
+            Xunit.Assert.Equal(1, repository.ListGoalMetadataCount);
+            Xunit.Assert.Equal(1, repository.LoadGoalsCount);
+            Xunit.Assert.Equal(new[] { expected.Value }, repository.LoadedGoalIds);
+            Xunit.Assert.Equal(0, repository.FullLoadAttempts);
+            Xunit.Assert.Equal(0, repository.ListOutboxMessagesCount);
+            Xunit.Assert.Equal(0, repository.OutboxClaimAttempts);
+            Xunit.Assert.Equal(0, repository.MutationAttempts);
+            Xunit.Assert.Equal(0, repository.SaveAttempts);
+            Xunit.Assert.Equal(0, repository.MergeSaveAttempts);
+            Xunit.Assert.Equal(before, JsonSerializer.Serialize(kernel.ExportSnapshot()));
         }
         finally
         {
