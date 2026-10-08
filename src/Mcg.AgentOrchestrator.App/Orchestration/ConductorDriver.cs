@@ -311,7 +311,8 @@ internal sealed partial class ConductorDriver
         };
         _mergeTrainAcceptanceStore = new MergeTrainAcceptanceStore(
             Path.Combine(workspace.OrchestratorDirectory, "merge-train-acceptance.db"));
-        kernel.SetEventWriter(eventWriter);
+        var dispatchLifecycleGate = new CriticalDispatchLifecycleEventGate(eventWriter);
+        kernel.SetEventWriter(dispatchLifecycleGate);
         _tryBuildAwaitingClarificationEscalationReason = goal =>
             GoalRefinementGate.TryBuildAwaitingClarificationEscalationReason(workspace, goal, eventWriter, out var reason)
                 ? reason
@@ -419,6 +420,8 @@ internal sealed partial class ConductorDriver
             var goalSnapshotBeforeDispatch = kernel.ExportGoalSnapshot(goal.Id);
             var criticalCheckpointPersisted = false;
             SubscriptionStartResult result;
+            using var dispatchEventHold = persistCriticalDispatchStart is null
+                ? null : dispatchLifecycleGate.Hold(goal.Id, kernel);
             try
             {
                 result = new GoalDispatchOperations().StartSubscriptionReadyTasks(
@@ -433,13 +436,16 @@ internal sealed partial class ConductorDriver
                         ? null
                         : (checkpointKernel, goalId, taskId, checkpointPhase) =>
                         {
-                            ConductorBatchLoop.PersistCriticalDispatchStartOrThrow(
-                                persistCriticalDispatchStart,
-                                checkpointKernel,
-                                goalId,
-                                taskId,
-                                checkpointPhase);
-                            criticalCheckpointPersisted = true;
+                            dispatchLifecycleGate.CommitCheckpoint(goalId, () =>
+                            {
+                                ConductorBatchLoop.PersistCriticalDispatchStartOrThrow(
+                                    persistCriticalDispatchStart,
+                                    checkpointKernel,
+                                    goalId,
+                                    taskId,
+                                    checkpointPhase);
+                                criticalCheckpointPersisted = true;
+                            });
                             DispatchRecordWriteSucceededSink?.Invoke(goalId);
                     },
                     readCurrentInterruptedDispatchState: readCurrentInterruptedDispatchState,
@@ -498,6 +504,8 @@ internal sealed partial class ConductorDriver
             }
             GoalOperationJournal.Begin(dir, goal, "conductor:dispatch-start", "Starting recorded dispatch.");
             ProcessBatchExecutionResult result;
+            using var dispatchEventHold = persistCriticalDispatchStart is null
+                ? null : dispatchLifecycleGate.Hold(goal.Id, kernel);
             try
             {
                 result = new GoalDispatchOperations().StartDispatches(
@@ -508,12 +516,13 @@ internal sealed partial class ConductorDriver
                         ? null
                         : (checkpointKernel, goalId, taskId, checkpointPhase) =>
                         {
-                            ConductorBatchLoop.PersistCriticalDispatchStartOrThrow(
-                                persistCriticalDispatchStart,
-                                checkpointKernel,
-                                goalId,
-                                taskId,
-                                checkpointPhase);
+                            dispatchLifecycleGate.CommitCheckpoint(goalId, () =>
+                                ConductorBatchLoop.PersistCriticalDispatchStartOrThrow(
+                                    persistCriticalDispatchStart,
+                                    checkpointKernel,
+                                    goalId,
+                                    taskId,
+                                    checkpointPhase));
                             DispatchRecordWriteSucceededSink?.Invoke(goalId);
                         },
                     readCurrentInterruptedDispatchState: readCurrentInterruptedDispatchState,
