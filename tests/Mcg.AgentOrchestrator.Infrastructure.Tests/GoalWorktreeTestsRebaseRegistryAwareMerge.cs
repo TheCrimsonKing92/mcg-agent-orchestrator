@@ -217,6 +217,9 @@ public sealed class GoalWorktreeTestsRebaseRegistryAwareMerge
             var trailerStart = baseline.LastIndexOf("}\n", StringComparison.Ordinal);
             layout = baseline[..sizeStart] + baseline[classStart..trailerStart] +
                 baseline[sizeStart..classStart] + baseline[trailerStart..];
+            // Moving whole arrays can merge cleanly; overlap the other side's C change
+            // so the real rebase invokes the registry layout guard in both orientations.
+            layout = layout.Replace(Row(C, 10), Row(C, 11), StringComparison.Ordinal);
         }
         layout = layout.Replace("// file header", "// changed header", StringComparison.Ordinal);
         var other = Registry(Row(A, 10) + Row(B, 10) + Row(C, 12), ClassRow(10));
