@@ -386,13 +386,13 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             return false;
 
         case "goal":
-            if (HasCliConfirmation(parts, "--epic") &&
+            if (EpicAtCreation.HasArgument(parts) &&
                 (HasCliConfirmation(parts, "--simple") || HasCliConfirmation(parts, "--run") || HasCliConfirmation(parts, "--from-backlog")))
             {
                 throw new ArgumentException("--epic is supported only by goal <objective>, goal --text-file <path> and goal --brief-file <path>; it cannot be combined with --simple, --run or --from-backlog.");
             }
             var requestedEpic = EpicAtCreation.ResolveRequested(context.Workspace,
-                HasCliConfirmation(parts, "--epic") ? GetFlagValue(parts, "--epic") ?? "" : null);
+                EpicAtCreation.HasArgument(parts) ? GetFlagValue(parts, "--epic") ?? "" : null);
             var goalPipelineRequest = ResolveGoalIntakePipelineRequest(parts);
             // --simple: delegate to simple-goal (1 Developer task)
             if (HasCliConfirmation(parts, "--simple"))

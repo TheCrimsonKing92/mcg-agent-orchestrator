@@ -105,7 +105,7 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
         case "backlog-add":
         {
             var requestedEpic = EpicAtCreation.ResolveRequested(context.Workspace,
-                HasCliConfirmation(parts, "--epic") ? GetFlagValue(parts, "--epic") ?? "" : null);
+                EpicAtCreation.HasArgument(parts) ? GetFlagValue(parts, "--epic") ?? "" : null);
             var titleFlagCount = parts.Count(part => part.Equals("--title", StringComparison.OrdinalIgnoreCase));
             var hasPositionalTitle = parts.Count > 1 && !parts[1].StartsWith("--", StringComparison.Ordinal);
             if (titleFlagCount > 1)
