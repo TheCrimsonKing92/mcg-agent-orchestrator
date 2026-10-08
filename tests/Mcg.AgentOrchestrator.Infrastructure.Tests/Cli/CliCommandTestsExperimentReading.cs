@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -11,6 +12,82 @@ public sealed class CliCommandTestsExperimentReading
     private static readonly DateTimeOffset Since = DateTimeOffset.Parse("2026-10-01T00:00:00Z", CultureInfo.InvariantCulture);
     private static readonly DateTimeOffset Until = Since.AddDays(1);
     private static readonly DateTimeOffset AsOf = Since.AddDays(2);
+
+    [Theory]
+    [InlineData("keep")]
+    [InlineData("breach")]
+    [InlineData("missing")]
+    [InlineData("unsupported")]
+    public void Show_ReadingBlockIsUnchanged(string scenario)
+    {
+        CliCommandTestsExperiments.WithWorkspace(workspace =>
+        {
+            var kernel = Seed(workspace);
+            var spec = CliCommandTestsExperiments.Spec();
+            if (scenario == "breach") spec = spec with { Guardrail = new("productive-rounds", new("productive-rounds", ">", 20)) };
+            if (scenario == "unsupported") spec = spec with
+            {
+                Baseline = new(ExperimentBaselineKind.TwinGoal, TwinGoalId: "twin"), StopRule = new(4, ExperimentStopUnit.Ticks)
+            };
+            var record = CliCommandTestsExperiments.Add(workspace, spec);
+            var output = Show(workspace, record.Id, scenario == "missing" ? Until : AsOf);
+            string Format(double? value) => value?.ToString("G17", CultureInfo.InvariantCulture) ?? "unavailable";
+            var baseline = RoundValueReport.Build(kernel.Goals, Since, Until).Window;
+            var comparison = RoundValueReport.Build(kernel.Goals, Until, AsOf).Window;
+            var lines = new List<string>();
+            if (scenario == "unsupported")
+            {
+                lines.Add("stop rule: unavailable of 4 ticks (progress unavailable)");
+                lines.Add("reading: unavailable (baseline kind twin-goal not computable in this slice)");
+            }
+            else
+            {
+                var missing = scenario == "missing";
+                lines.Add(missing ? "stop rule: 0 of 2 goals (not met)" : "stop rule: 2 of 2 goals (met)");
+                lines.Add($"rounds per landing: baseline={Format(baseline.RoundsPerLanding)} comparison={Format(missing ? null : comparison.RoundsPerLanding)}");
+                lines.Add($"landings per hour: baseline={Format(1.0 / 24)} comparison={Format(missing ? null : 2.0 / 24)}");
+                lines.Add($"productive rounds: baseline={Format(baseline.Productive)} comparison={Format(missing ? null : comparison.Productive)}");
+                lines.Add(scenario switch
+                {
+                    "missing" => "reading: inconclusive (unavailable comparison or zero baseline: rounds-per-landing, productive-rounds)",
+                    "breach" => $"reading: inconclusive (pre-registered rules evaluated; guardrail breached: productive-rounds baseline={Format(baseline.Productive)} comparison={Format(comparison.Productive)})",
+                    _ => "reading: keep (pre-registered rules evaluated)"
+                });
+            }
+            lines.Add("outcome: open");
+            lines.Add("overlaps: none");
+            var expected = string.Join(Environment.NewLine, lines) + Environment.NewLine;
+            var start = output.IndexOf("stop rule: ", StringComparison.Ordinal);
+            Assert.True(start >= 0, output);
+            Assert.Equal(System.Text.Encoding.UTF8.GetBytes(expected), System.Text.Encoding.UTF8.GetBytes(output[start..]));
+        });
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Evaluate_MissingDecisionMetricStillReportsGuardrailBreach(bool missingKeep)
+    {
+        CliCommandTestsExperiments.WithWorkspace(workspace =>
+        {
+            var kernel = Seed(workspace);
+            var spec = CliCommandTestsExperiments.Spec() with
+            {
+                DecisionRule = new([new(missingKeep ? "landings-per-hour" : "rounds-per-landing", "<", 0)],
+                    [new(missingKeep ? "rounds-per-landing" : "landings-per-hour", ">", 0)]),
+                Guardrail = new("productive-rounds", new("productive-rounds", ">", 20))
+            };
+            var record = CliCommandTestsExperiments.Add(workspace, spec);
+            ExperimentReadingResult? result = null;
+            var output = AsyncLocalConsoleRouter.Capture(() => result = ExperimentReading.Evaluate(record, kernel.Goals,
+                new Dictionary<string, DateTimeOffset>(), [], AsOf));
+            Assert.Empty(output);
+            Assert.NotNull(result);
+            Assert.True(result.GuardrailBreached);
+            Assert.Equal("inconclusive", result.Verdict);
+            Assert.Equal("unavailable comparison or zero baseline: landings-per-hour", result.Reason);
+        });
+    }
 
     [Theory]
     [InlineData(-10, 10, 0, "keep")]
