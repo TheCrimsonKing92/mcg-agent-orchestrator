@@ -157,7 +157,7 @@ internal static partial class LandingExecutor
         }
 
         var evidenceCandidateSha = ResolveRef(executionDirectory, goalBranch);
-        var boundMainRevision = ResolveRef(executionDirectory, "main");
+        var boundMainRevision = ResolveRef(executionDirectory, workspace.IntegrationBranch);
         var evidenceDiagnostic = AcceptanceCriterionEvidence.RebindRecordFromPassedCandidateAndDescribeOutstanding(
             goal,
             evidenceCandidateSha,
@@ -331,7 +331,7 @@ internal static partial class LandingExecutor
                 false, $"Parked on {IntegrationBranchName}: {reason}");
         }
 
-        var mainWrite = UpdateRef(executionDirectory, "main", candidateRevision!, boundMainRevision);
+        var mainWrite = UpdateRef(executionDirectory, workspace.IntegrationBranch, candidateRevision!, boundMainRevision);
         if (mainWrite.ExitCode != 0)
         {
             var rollback = UpdateRef(executionDirectory, IntegrationBranchName, previousIntegrationRevision, candidateRevision!);
@@ -401,7 +401,7 @@ internal static partial class LandingExecutor
                 "merge-base",
                 "--is-ancestor",
                 landingRevision,
-                "main");
+                workspace.IntegrationBranch);
         }
         catch (Exception exception)
         {
@@ -492,7 +492,7 @@ internal static partial class LandingExecutor
             return null;
         }
 
-        var currentMain = ResolveRef(workspace.ExecutionDirectory, "main");
+        var currentMain = ResolveRef(workspace.ExecutionDirectory, workspace.IntegrationBranch);
         var reachability = RunGit(
             workspace.ExecutionDirectory,
             "merge-base",
@@ -671,7 +671,7 @@ internal static partial class LandingExecutor
                 $"Landing held at mutation boundary: {blockReason}");
         }
 
-        var liveMain = GoalWorktrees.ResolveRequiredRef(executionDirectory, "refs/heads/main");
+        var liveMain = GoalWorktrees.ResolveRequiredRef(executionDirectory, $"refs/heads/{workspace.IntegrationBranch}");
         if (!liveMain.Equals(receipt.Identity.ObservedMainRevision, StringComparison.Ordinal))
         {
             return new AcceptanceCohortLandingResult(
@@ -825,7 +825,7 @@ internal static partial class LandingExecutor
         var advanceMain = RunGit(
             executionDirectory,
             "update-ref",
-            "refs/heads/main",
+            $"refs/heads/{workspace.IntegrationBranch}",
             commit,
             receipt.Identity.ObservedMainRevision);
         if (advanceMain.ExitCode != 0)

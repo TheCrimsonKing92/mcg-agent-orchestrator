@@ -126,7 +126,7 @@ internal static class CliConductorCommand
     {
         try
         {
-            var result = GitCli.Run(workspace.ExecutionDirectory, "rev-parse", "--verify", "--quiet", "refs/heads/main");
+            var result = GitCli.Run(workspace.ExecutionDirectory, "rev-parse", "--verify", "--quiet", $"refs/heads/{workspace.IntegrationBranch}");
             if (!result.Succeeded || result.DrainTimedOut) return null;
             var commit = result.Output.Trim();
             return commit.Length == 0 ? null : commit;

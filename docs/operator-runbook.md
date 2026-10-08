@@ -602,6 +602,8 @@ The script is idempotent, matches only `MCG-testhost-slot*`, and writes every re
 
 ## 7. State & store map
 
+For a project whose trunk has another name, register it with `project create <name> --root <path> --integration-branch master`. `project show <name>` displays the integration branch. Older registrations and the default workspace use `main`. This first slice configures workspace fallback/diff and landing refs; acceptance and other conductor paths still require the follow-up branch-setting slices before end-to-end operation on such a repository.
+
 Durable state lives in stores, never in `.scratch`.
 
 | Location | What |

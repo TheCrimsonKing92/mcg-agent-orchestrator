@@ -1,4 +1,6 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -37,31 +39,42 @@ public sealed class OrchestratorProjectRegistry
     {
         var file = LoadFile();
         return file.Projects
-            .Select(entry => new OrchestratorProject(entry.Name, Path.GetFullPath(entry.RootDirectory)))
+            .Select(entry => new OrchestratorProject(entry.Name, Path.GetFullPath(entry.RootDirectory))
+            {
+                IntegrationBranch = ResolveStoredBranch(entry)
+            })
             .OrderBy(project => project.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
 
-    public OrchestratorProject CreateProject(string name, string rootDirectory)
+    public OrchestratorProject CreateProject(string name, string rootDirectory, string? integrationBranch = null)
     {
-        var project = ResolveProjectForCreation(name, rootDirectory, out var alreadyRegistered);
+        var project = ResolveProjectForCreation(name, rootDirectory, integrationBranch, out var alreadyRegistered);
         if (alreadyRegistered)
         {
             return project;
         }
 
         var file = LoadFile();
-        var entry = new ProjectEntry(project.Name, project.RootDirectory);
+        var entry = new ProjectEntry(project.Name, project.RootDirectory) { IntegrationBranch = integrationBranch };
         file.Projects.Add(entry);
         SaveFile(file);
-        return new OrchestratorProject(entry.Name, entry.RootDirectory);
+        return project;
     }
 
     public OrchestratorProject ResolveProjectForCreation(
         string name,
         string rootDirectory,
+        out bool alreadyRegistered) =>
+        ResolveProjectForCreation(name, rootDirectory, null, out alreadyRegistered);
+
+    public OrchestratorProject ResolveProjectForCreation(
+        string name,
+        string rootDirectory,
+        string? integrationBranch,
         out bool alreadyRegistered)
     {
+        var branch = integrationBranch is null ? TrunkBranchName.Default : TrunkBranchName.Validate(integrationBranch);
         var normalizedName = OrchestratorProjectSelection.NormalizeProjectName(name);
         if (normalizedName.Equals(OrchestratorWorkspace.DefaultProjectName, StringComparison.OrdinalIgnoreCase))
         {
@@ -79,7 +92,7 @@ public sealed class OrchestratorProjectRegistry
         if (existing is null)
         {
             alreadyRegistered = false;
-            return new OrchestratorProject(normalizedName, root);
+            return new OrchestratorProject(normalizedName, root) { IntegrationBranch = branch };
         }
 
         var existingRoot = Path.GetFullPath(existing.RootDirectory);
@@ -89,8 +102,15 @@ public sealed class OrchestratorProjectRegistry
                 $"Project '{normalizedName}' is already registered at '{existingRoot}' and cannot be repointed to '{root}'.");
         }
 
+        var existingBranch = ResolveStoredBranch(existing);
+        if (integrationBranch is not null && !string.Equals(existingBranch, branch, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Project '{normalizedName}' is already registered with integration branch '{existingBranch}' and cannot be changed to '{branch}'.");
+        }
+
         alreadyRegistered = true;
-        return new OrchestratorProject(existing.Name, existingRoot);
+        return new OrchestratorProject(existing.Name, existingRoot) { IntegrationBranch = existingBranch };
     }
 
     public void SelectProject(string name)
@@ -156,6 +176,18 @@ public sealed class OrchestratorProjectRegistry
         return match;
     }
 
+    private static string ResolveStoredBranch(ProjectEntry entry)
+    {
+        try
+        {
+            return TrunkBranchName.Resolve(entry.IntegrationBranch);
+        }
+        catch (ArgumentException ex)
+        {
+            throw new InvalidOperationException($"Project '{entry.Name}' has an invalid integration branch.", ex);
+        }
+    }
+
     private RegistryFile LoadFile()
     {
         if (!File.Exists(RegistryPath))
@@ -208,5 +240,7 @@ public sealed class OrchestratorProjectRegistry
 
         public string Name { get; set; }
         public string RootDirectory { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? IntegrationBranch { get; set; }
     }
 }

@@ -38,7 +38,7 @@ internal static partial class LandingExecutor
                 AcceptanceCohortLandingOutcome.RetryableHold,
                 $"Merge train landing held at mutation boundary: {blockReason}");
         }
-        var liveMain = GoalWorktrees.ResolveRequiredRef(executionDirectory, "refs/heads/main");
+        var liveMain = GoalWorktrees.ResolveRequiredRef(executionDirectory, $"refs/heads/{workspace.IntegrationBranch}");
         if (!liveMain.Equals(receipt.Identity.ObservedMainRevision, StringComparison.Ordinal))
         {
             return new AcceptanceCohortLandingResult(
@@ -180,7 +180,7 @@ internal static partial class LandingExecutor
                 $"Merge train integration ref update failed: {integrationUpdate.Error}");
         }
 
-        var mainUpdate = RunGit(executionDirectory, "update-ref", "refs/heads/main", commit, receipt.Identity.ObservedMainRevision);
+        var mainUpdate = RunGit(executionDirectory, "update-ref", $"refs/heads/{workspace.IntegrationBranch}", commit, receipt.Identity.ObservedMainRevision);
         if (mainUpdate.ExitCode != 0)
         {
             _ = priorIntegrationRevision is null

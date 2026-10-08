@@ -155,7 +155,7 @@ public bool RunInjectedAcceptanceVerifierInCurrentProcess { get; init; }
 
     public ICliGoalWorktreeService Worktrees
     {
-        get => worktrees ?? new DefaultCliGoalWorktreeService(CleanupContext);
+        get => worktrees ?? new DefaultCliGoalWorktreeService(CleanupContext, Workspace.IntegrationBranch);
         init => worktrees = value;
     }
 
@@ -351,18 +351,20 @@ internal interface ICliGoalWorktreeService
 
 internal sealed class DefaultCliGoalWorktreeService : ICliGoalWorktreeService
 {
+    private readonly string trunkBranch;
     private readonly GoalWorktreeCleanupHooks cleanupHooks;
 
-    public DefaultCliGoalWorktreeService(WorktreeCleanupContext cleanupContext)
+    public DefaultCliGoalWorktreeService(WorktreeCleanupContext cleanupContext, string? integrationBranch = null)
     {
         ArgumentNullException.ThrowIfNull(cleanupContext);
         cleanupHooks = cleanupContext.Hooks;
+        trunkBranch = TrunkBranchName.Resolve(integrationBranch);
     }
 
     public string BranchName(GoalId goalId) => GoalWorktrees.BranchName(goalId);
 
     public string Ensure(string executionDirectory, GoalId goalId) =>
-        GoalWorktrees.Ensure(executionDirectory, goalId, cleanupHooks);
+        GoalWorktrees.Ensure(executionDirectory, goalId, cleanupHooks, trunkBranch);
 
     public string? TryResolve(string executionDirectory, GoalId goalId) => GoalWorktrees.TryResolve(executionDirectory, goalId);
 
@@ -393,7 +395,7 @@ internal sealed class DefaultCliGoalWorktreeService : ICliGoalWorktreeService
         GoalWorktrees.TryFastForwardMerge(executionDirectory, goalId, mutationBlocker);
 
     public GoalWorktreeRebaseResult TryRebaseOntoMain(string executionDirectory, GoalId goalId) =>
-        GoalWorktrees.TryRebaseOntoMain(executionDirectory, goalId);
+        GoalWorktrees.TryRebaseOntoMain(executionDirectory, goalId, trunkBranch: trunkBranch);
 
     public bool NeedsRebaseOntoMain(string executionDirectory, GoalId goalId) =>
         GitCli.Run(executionDirectory, "merge-base", "--is-ancestor", "HEAD", BranchName(goalId)).ExitCode != 0;
@@ -401,7 +403,7 @@ internal sealed class DefaultCliGoalWorktreeService : ICliGoalWorktreeService
     public bool IsWorktreeClean(string executionDirectory, GoalId goalId) => GoalWorktrees.IsWorktreeClean(executionDirectory, goalId);
 
     public bool HasChangesAgainstMain(string executionDirectory, GoalId goalId) =>
-        GoalWorktrees.HasChangesAgainstMain(executionDirectory, goalId);
+        GoalWorktrees.HasChangesAgainstMain(executionDirectory, goalId, trunkBranch);
 
     public string ResolveHead(string worktreePath)
     {

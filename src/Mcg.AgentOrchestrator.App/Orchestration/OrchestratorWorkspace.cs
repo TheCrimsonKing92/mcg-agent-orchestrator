@@ -20,6 +20,7 @@ public sealed record OrchestratorWorkspace(
     string TranscriptPath)
 {
     public const string DefaultProjectName = "default";
+    public string IntegrationBranch { get; init; } = TrunkBranchName.Default;
     public const string DefaultTenantName = "default";
     public const string ContinuationStoreFileName = "continuation-watches.json";
     public const string RepoRootEnvironmentVariable = "MCG_ORCHESTRATOR_REPOSITORY_ROOT";
@@ -82,12 +83,16 @@ public sealed record OrchestratorWorkspace(
         string projectName,
         string rootDirectory,
         string? executionDirectory = null,
-        string? tenantName = null)
+        string? tenantName = null,
+        string? integrationBranch = null)
     {
         var normalizedProject = OrchestratorProjectSelection.NormalizeProjectName(projectName);
         if (normalizedProject.Equals(DefaultProjectName, StringComparison.OrdinalIgnoreCase))
         {
-            return ForDirectory(rootDirectory, executionDirectory, tenantName);
+            return ForDirectory(rootDirectory, executionDirectory, tenantName) with
+            {
+                IntegrationBranch = TrunkBranchName.Resolve(integrationBranch)
+            };
         }
 
         var root = Path.GetFullPath(rootDirectory);
@@ -102,7 +107,7 @@ public sealed record OrchestratorWorkspace(
             normalizedProject,
             true,
             normalizedTenant,
-            isTenantScoped);
+            isTenantScoped) with { IntegrationBranch = TrunkBranchName.Resolve(integrationBranch) };
     }
 
     private static string ResolveOrchestratorDirectory(string root, string? projectName, string tenantName)

@@ -33,7 +33,7 @@ internal static class ProjectCliCommand
                 return 0;
 
             default:
-                throw new ArgumentException("Usage: project list|show [name]|create <name> --root <path>|select <name>");
+                throw new ArgumentException("Usage: project list|show [name]|create <name> --root <path> [--integration-branch <name>]|select <name>");
         }
     }
 
@@ -65,19 +65,32 @@ internal static class ProjectCliCommand
     {
         if (parts.Count < 5)
         {
-            throw new ArgumentException("Usage: project create <name> --root <path>");
+            throw new ArgumentException("Usage: project create <name> --root <path> [--integration-branch <name>]");
         }
 
         var root = GetFlagValue(parts, "--root");
         if (string.IsNullOrWhiteSpace(root))
         {
-            throw new ArgumentException("Usage: project create <name> --root <path>");
+            throw new ArgumentException("Usage: project create <name> --root <path> [--integration-branch <name>]");
+        }
+
+        var integrationBranch = GetFlagValue(parts, "--integration-branch");
+        if (integrationBranch is not null)
+        {
+            try
+            {
+                TrunkBranchName.Validate(integrationBranch);
+            }
+            catch (ArgumentException)
+            {
+                throw new ArgumentException("Usage: project create <name> --root <path> [--integration-branch <name>]");
+            }
         }
 
         var alreadyRegistered = false;
         var project = RunCreateStep(
             "project validation",
-            () => registry.ResolveProjectForCreation(parts[2], root, out alreadyRegistered));
+            () => registry.ResolveProjectForCreation(parts[2], root, integrationBranch, out alreadyRegistered));
         if (alreadyRegistered)
         {
             Console.WriteLine($"Project already exists: {project.Name}");
@@ -151,7 +164,7 @@ internal static class ProjectCliCommand
             }
         }
 
-        RunCreateStep("registry registration", () => registry.CreateProject(project.Name, project.RootDirectory));
+        RunCreateStep("registry registration", () => registry.CreateProject(project.Name, project.RootDirectory, integrationBranch));
         Console.WriteLine($"Project created: {project.Name}");
         Console.WriteLine($"Root: {project.RootDirectory}");
         Console.WriteLine($"Workspace: {workspace.OrchestratorDirectory}");
@@ -414,6 +427,7 @@ internal static class ProjectCliCommand
         var active = registry.ResolveActiveProject(defaultRootDirectory, activeProjectOverride);
         var workspace = project.ResolveWorkspace();
         Console.WriteLine($"Project: {project.Name}");
+        Console.WriteLine($"Integration branch: {project.IntegrationBranch}");
         Console.WriteLine($"Active: {project.Name.Equals(active.Name, StringComparison.OrdinalIgnoreCase)}");
         Console.WriteLine($"Root: {project.RootDirectory}");
         Console.WriteLine($"Workspace: {workspace.OrchestratorDirectory}");

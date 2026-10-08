@@ -398,7 +398,7 @@ internal sealed partial class ConductorDriver
             GoalOperationJournal.Begin(dir, goal, "conductor:workspace-create", GoalWorktrees.BranchName(goal.Id));
             // Worktree-add retry clears an orphan directory; that deletion, its warning sink and
             // lock-holder discovery must use the same cleanup owner as conductor cleanup below.
-            var path = GoalWorktrees.Ensure(dir, goal.Id, _cohortCleanupHooks);
+            var path = GoalWorktrees.Ensure(dir, goal.Id, _cohortCleanupHooks, workspace.IntegrationBranch);
             GoalOperationJournal.Completed(dir, goal, "conductor:workspace-create", path);
             worktreeSnapshot[goal.Id] = path;
             RefreshJournal(goal.Id);
@@ -862,7 +862,7 @@ internal sealed partial class ConductorDriver
         _integrateMainBeforeReadOnlyDispatch = (goal, role) =>
             IntegrateMainBeforeReadOnlyDispatch(dir, goal, role);
         _recordPreDispatchIntegrationReceipt = new PreDispatchIntegrationReceiptRecorder(kernel).Record;
-        _rebaseOntoMain = goal => GoalWorktrees.TryRebaseOntoMain(dir, goal.Id, CreateAdditiveConflictMergeOptions(kernel, goal, workspace.ConductEventsLogPath));
+        _rebaseOntoMain = goal => GoalWorktrees.TryRebaseOntoMain(dir, goal.Id, CreateAdditiveConflictMergeOptions(kernel, goal, workspace.ConductEventsLogPath), workspace.IntegrationBranch);
         PreLandingMergeConflictProbe = goal => GoalWorktrees.ProbeAdditiveConflictMerge(dir, goal.Id, CreateAdditiveConflictMergeOptions(kernel, goal, workspace.ConductEventsLogPath).FrozenPaths);
         _recheckPreLandingRebaseConflict = goal =>
         {
