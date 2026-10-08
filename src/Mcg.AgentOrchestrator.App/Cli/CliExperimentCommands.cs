@@ -5,11 +5,14 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
-internal static partial class CliCommandHandlers
+internal static class CliExperimentCommands
 {
-    private static bool? TryExecuteExperimentCommand(string command, IReadOnlyList<string> parts, CliExecutionContext context)
+    internal static bool IsCommand(string command) =>
+        command.ToLowerInvariant() is "experiment-add" or "experiment-show" or "experiment-decide";
+
+    internal static bool? TryExecute(string command, IReadOnlyList<string> parts, CliExecutionContext context)
     {
-        if (command is not ("experiment-add" or "experiment-show" or "experiment-decide")) return null;
+        if (!IsCommand(command)) return null;
         var options = ExperimentOptions(parts, command == "experiment-add" ? 1 : 2);
         if (command == "experiment-add")
         {
