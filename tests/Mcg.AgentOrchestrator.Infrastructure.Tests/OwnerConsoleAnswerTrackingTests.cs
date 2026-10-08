@@ -25,7 +25,7 @@ public sealed class OwnerConsoleAnswerTrackingTests
         var dialogs = new Dialogs();
         using var controller = new OwnerConsoleScreenController(harness.Questions, answers, dialogs,
             harness.State, harness.Tail, harness.Conductor, harness.DigestReport, harness.Digest,
-            clock, tracker);
+            clock, answerTracking: tracker);
         using IApplication app = Application.Create();
         using var view = new OwnerConsoleFullScreenView(app, controller, () => Task.CompletedTask, clock: clock);
         view.Render(await new OwnerConsoleViewModelBuilder(harness.State, harness.Questions,
