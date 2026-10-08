@@ -3,6 +3,7 @@ using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Microsoft.Data.Sqlite;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
@@ -16,7 +17,8 @@ internal static class CliConductorCommand
         Func<DateTimeOffset>? bootTime = null, Func<string?>? mainCommit = null,
         TextWriter? output = null, TextWriter? error = null,
         Func<OrchestratorWorkspace, ITransactionalOrchestratorStateRepository>? stateRepository = null,
-        OrchestratorHome? home = null)
+        OrchestratorHome? home = null,
+        Func<string, IReadOnlyList<StoreSetupResult>>? storeSetup = null)
     {
         output ??= Console.Out;
         error ??= Console.Error;
@@ -31,6 +33,15 @@ internal static class CliConductorCommand
         }
         try
         {
+            storeSetup ??= StoreSetupRunner.Run;
+            if (args[1].Equals("setup", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!TryRunStoreSetup(workspace, storeSetup, error, out var results))
+                    return 1;
+                foreach (var result in results)
+                    output.WriteLine($"{result.StoreName}: version {result.Version} ({result.DatabasePath})");
+                return 0;
+            }
             var owner = lockProbe.ActiveOwnerPid(workspace);
             switch (args[1].ToLowerInvariant())
             {
@@ -38,7 +49,7 @@ internal static class CliConductorCommand
                     return ApplyIntents(args, workspace, owner, stateRepository, output, error);
                 case "start":
                     return Start(workspace, owner, args.Count == 3, launcher ?? new SystemConductorProcessLauncher(),
-                        output, error, home ?? OrchestratorHome.ResolveForProcess());
+                        output, error, home ?? OrchestratorHome.ResolveForProcess(), storeSetup);
                 case "status":
                     CliConductorStatusReader.Print(workspace, owner,
                         (bootTime ?? (() => DateTimeOffset.UtcNow - TimeSpan.FromMilliseconds(Environment.TickCount64)))(), output,
@@ -65,6 +76,23 @@ internal static class CliConductorCommand
         {
             error.WriteLine($"Error: {ex.Message}");
             return 1;
+        }
+    }
+
+    private static bool TryRunStoreSetup(OrchestratorWorkspace workspace,
+        Func<string, IReadOnlyList<StoreSetupResult>> storeSetup, TextWriter error,
+        out IReadOnlyList<StoreSetupResult> results)
+    {
+        try
+        {
+            results = storeSetup(workspace.OrchestratorDirectory);
+            return true;
+        }
+        catch (Exception ex) when (ex is SqliteException or IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            error.WriteLine($"Error: {ex.Message}");
+            results = Array.Empty<StoreSetupResult>();
+            return false;
         }
     }
 
@@ -139,7 +167,8 @@ internal static class CliConductorCommand
     }
 
     private static int Start(OrchestratorWorkspace workspace, int? owner, bool clearStop,
-        IConductorProcessLauncher launcher, TextWriter output, TextWriter error, OrchestratorHome home)
+        IConductorProcessLauncher launcher, TextWriter output, TextWriter error, OrchestratorHome home,
+        Func<string, IReadOnlyList<StoreSetupResult>> storeSetup)
     {
         if (owner is not null)
         {
@@ -156,6 +185,8 @@ internal static class CliConductorCommand
             }
             File.Delete(stopFile);
         }
+        if (!TryRunStoreSetup(workspace, storeSetup, error, out _))
+            return 1;
         List<string> launchArguments = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                 Path.Combine(home.RootDirectory, "scripts", "Start-OrchestratorCommand.ps1"),
                 "-Name", "conduct-loop-daemon", "conduct", "--loop", "--daemon", "--watch",
