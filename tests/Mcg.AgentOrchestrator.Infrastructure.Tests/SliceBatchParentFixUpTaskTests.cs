@@ -74,7 +74,8 @@ public sealed class SliceBatchParentFixUpTaskTests
     private static Goal CreateParent(AgentOrchestratorKernel kernel)
     {
         var parent = kernel.CreateGoal("Whole goal.", [new TaskSpec(TaskId.New(), "Review whole goal.", AgentRole.Reviewer)]);
-        kernel.CreateGoal("Child stream.", [], parent.Id);
+        kernel.CreateGoal("Child stream.",
+            [new TaskSpec(TaskId.New(), "Implement stream.", AgentRole.Developer)], parent.Id);
         return parent;
     }
 }

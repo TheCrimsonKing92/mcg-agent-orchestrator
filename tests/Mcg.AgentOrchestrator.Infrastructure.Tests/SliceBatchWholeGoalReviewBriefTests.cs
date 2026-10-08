@@ -50,7 +50,8 @@ public sealed class SliceBatchWholeGoalReviewBriefTests
     {
         var kernel = new AgentOrchestratorKernel(new FixedClock());
         var parent = CreateParent(kernel);
-        var noReviewer = kernel.CreateGoal("Child without Reviewer.", [], parent.Id);
+        var noReviewer = kernel.CreateGoal("Child without Reviewer.",
+            [new TaskSpec(TaskId.New(), "Implement stream.", AgentRole.Developer)], parent.Id);
         var noEvidence = kernel.CreateGoal("Child without evidence.",
             [new TaskSpec(TaskId.New(), "Review stream.", AgentRole.Reviewer)], parent.Id);
 
