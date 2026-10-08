@@ -72,15 +72,25 @@ internal static class MergeTrainTimeoutAttribution
                 counts[outcome] = counts.GetValueOrDefault(outcome) + 1;
             }
             var executed = rows.Length - counts.GetValueOrDefault("NotExecuted");
-            return executed > 0 && Matches("total", rows.Length) && Matches("executed", executed) &&
-                Matches("passed", counts.GetValueOrDefault("Passed")) && Matches("failed", counts.GetValueOrDefault("Failed")) &&
-                MatchesOptional("timeout", counts.GetValueOrDefault("Timeout")) &&
-                MatchesOptional("error", counts.GetValueOrDefault("Error")) &&
-                MatchesOptional("aborted", counts.GetValueOrDefault("Aborted"));
+            if (executed == 0 || !Matches("total", rows.Length) ||
+                !Matches("passed", counts.GetValueOrDefault("Passed")) ||
+                !MatchesOptional("error", counts.GetValueOrDefault("Error")) ||
+                !MatchesOptional("aborted", counts.GetValueOrDefault("Aborted"))) return false;
 
-            bool Matches(string name, int expected) => int.TryParse(
+            var failed = counts.GetValueOrDefault("Failed");
+            if (Matches("executed", executed) && Matches("failed", failed) &&
+                MatchesOptional("timeout", counts.GetValueOrDefault("Timeout"))) return true;
+
+            // MTP TrxReport writes timeouts as Failed rows, but excludes them from both
+            // failed and executed counters. A timeout-only report legitimately executed zero.
+            return counts.GetValueOrDefault("Timeout") == 0 && TryRead("timeout", out var timeout) &&
+                timeout > 0 && timeout <= failed && Matches("failed", failed - timeout) &&
+                Matches("executed", executed - timeout);
+
+            bool TryRead(string name, out int actual) => int.TryParse(
                 counters.Attributes().FirstOrDefault(attribute => attribute.Name.LocalName.Equals(name, StringComparison.OrdinalIgnoreCase))?.Value,
-                NumberStyles.None, CultureInfo.InvariantCulture, out var actual) && actual == expected;
+                NumberStyles.None, CultureInfo.InvariantCulture, out actual);
+            bool Matches(string name, int expected) => TryRead(name, out var actual) && actual == expected;
             bool MatchesOptional(string name, int expected) =>
                 !counters.Attributes().Any(attribute => attribute.Name.LocalName.Equals(name, StringComparison.OrdinalIgnoreCase)) || Matches(name, expected);
         }
