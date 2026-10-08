@@ -109,10 +109,16 @@ public sealed class MergeTrainTimeoutAttributionTests
                             new XElement(Fixture.Ns + "Output", new XElement(Fixture.Ns + "ErrorInfo",
                                 new XElement(Fixture.Ns + "StackTrace", apparatus))));
                     else if (scenario == "missing-counters") counters.Remove();
-                    else if (scenario == "wrong-namespace") document.Root!.Name = "TestRun";
+                    else if (scenario == "wrong-namespace")
+                    {
+                        document.Root!.SetAttributeValue("xmlns", null);
+                        document.Root.Name = "TestRun";
+                    }
                     else counters.SetAttributeValue(scenario == "fatal-counter-mismatch" ? "timeout" : "executed",
                         scenario == "counter-malformed" ? "bad" : "2");
                     document.Save(path);
+                    if (scenario == "wrong-namespace")
+                        Assert.Equal(XNamespace.None + "TestRun", XDocument.Load(path).Root!.Name);
                     break;
             }
             Assert.Null(MergeTrainTimeoutAttribution.TryAttribute(paths, fixture.Root, members));
