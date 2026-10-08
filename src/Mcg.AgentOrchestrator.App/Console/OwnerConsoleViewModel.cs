@@ -8,7 +8,7 @@ internal sealed record OwnerConsoleViewModel(
     OwnerConsolePaneState? DecisionsState = null, OwnerConsolePaneState? ActivityState = null);
 
 internal sealed record OwnerConsoleStatus(bool ConductorRunning, int ActiveGoals, int LiveDecisions,
-    int HiddenQuestions, TimeSpan? LastEventAge, int LandingsSinceOpen);
+    int HiddenQuestions, TimeSpan? LastEventAge, int LandedToday);
 
 internal sealed record OwnerConsoleDecision(string Id, int Number, string GoalId, string GoalPrefix,
     OwnerQuestionKind Kind, string Summary, string FullText, string? BlastRadius,
@@ -21,7 +21,8 @@ internal sealed record OwnerConsoleBoardRow(string GoalPrefix, string Epic, stri
     string State, string Stage, TimeSpan? Age, string GoalId);
 
 internal sealed record OwnerConsoleActivityItem(DateTimeOffset Timestamp, string Kind, string Tag,
-    string GoalPrefix, string Detail, string GoalTitle = "", string Phrase = "");
+    string GoalPrefix, string Detail, string GoalTitle = "", string Phrase = "",
+    string Why = "The reason was not recorded.", string Next = "Work continues.", string Act = "No action is needed.");
 
 internal sealed record OwnerConsoleViewInputs(DateTimeOffset OpenedAt, DateTimeOffset? LastConductEvent,
-    IReadOnlyList<OwnerConductEvent> RecentEvents, int LandingsSinceOpen);
+    IReadOnlyList<OwnerConductEvent> RecentEvents, int LandedToday);

@@ -13,15 +13,18 @@ internal sealed partial class ConductorDriver
         IReadOnlyList<string> receiptIds,
         string summary)
     {
+        FindingReceiptClosureDiagnosis? diagnosis = null;
         if (task.RequiredRole == AgentRole.Tester &&
             (_cohortKernel ?? _conductorTickKernel) is { } kernel)
         {
             var currentTask = kernel.GetTask(goal.Id, task.Id);
-            if (FindingEvidenceReceiptSelector.TrySelectReceiptClosableFindings(goal, currentTask, candidateSha, out var closable) &&
-                !kernel.HumanInputRequests.Any(request =>
+            diagnosis = FindingReceiptClosureDiagnosis.Evaluate(goal, currentTask, candidateSha,
+                kernel.HumanInputRequests.Any(request =>
                     request.GoalId == goal.Id && request.TaskId == task.Id &&
-                    !request.IsCompleted && HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind)))
+                    !request.IsCompleted && HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind)));
+            if (diagnosis.IsClosable)
             {
+                var closable = diagnosis.ClosableFindings;
                 var prior = currentTask.LastVerification!;
                 var reviewedSha = prior.ReviewedCommit!.Trim();
                 var resolved = closable.ToDictionary(pair => pair.Finding.StableId, pair =>
@@ -57,8 +60,10 @@ internal sealed partial class ConductorDriver
         if (task.RequiredRole == AgentRole.Tester && openFindings.Count > 0 &&
             FindingEvidenceReceiptSelector.SuppliedReceiptsPassAtCandidate(receiptTask, candidateSha, receiptIds))
         {
-            return BuildPassingEvidenceOpenFindingDecision(
-                goal, task, candidateSha, receiptIds, openFindings);
+            return PassingFindingEvidenceRouter.BuildDecision(
+                goal, task, FindUpstreamDeveloperTask(goal, task), candidateSha, receiptIds, openFindings,
+                diagnosis ?? FindingReceiptClosureDiagnosis.Evaluate(goal, receiptTask, candidateSha),
+                BuildFailedGoalAttemptIdentity);
         }
 
         return BuildCappedFindingEvidenceDeliveryRetry(goal, task, candidateSha, findings, receiptIds, summary);

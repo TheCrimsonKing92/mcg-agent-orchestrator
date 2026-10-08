@@ -28,31 +28,31 @@ public sealed class ConductorDriverTestsGreenTesterReceiptClosure
     }
 
     [Fact]
-    public void AdditionalCoverageFindingRoutesDeveloper()
+    public void AdditionalCoverageFindingRoutesTester()
     {
         using var fixture = new ClosureFixture();
         fixture.Report([FirstEvidenceFinding(), AdditionalFinding(FindingCategory.TestCoverage)]);
         fixture.AdvanceToDecision();
-        AssertDeveloperRetry(fixture);
+        AssertTesterClosureRoute(fixture, FindingReceiptClosureDiagnosis.FindingCategoryNotTestEvidence);
         Assert.Equal(2, fixture.Requester.VerificationHistory.Last().MergedReviewFindings!.Count);
     }
 
     [Fact]
-    public void AdditionalCorrectnessFindingRoutesDeveloper()
+    public void AdditionalCorrectnessFindingRoutesTester()
     {
         using var fixture = new ClosureFixture();
         fixture.Report([FirstEvidenceFinding(), AdditionalFinding(FindingCategory.Correctness)]);
         fixture.AdvanceToDecision();
-        AssertDeveloperRetry(fixture);
+        AssertTesterClosureRoute(fixture, FindingReceiptClosureDiagnosis.FindingCategoryNotTestEvidence);
     }
 
     [Fact]
-    public void NonValidOutcomeRoutesDeveloperWithPassingReceipt()
+    public void NonValidOutcomeRoutesTesterWithPassingReceipt()
     {
         using var fixture = new ClosureFixture(outcomeReason: FindingEvidenceOutcomeReason.VacuousEvidence);
         fixture.Report([FirstEvidenceFinding()]);
         fixture.AdvanceToDecision();
-        AssertDeveloperRetry(fixture);
+        AssertTesterClosureRoute(fixture, FindingReceiptClosureDiagnosis.EvidenceOutcomeInvalid);
         var verification = fixture.Requester.VerificationHistory.Last();
         var finding = Assert.Single(verification.MergedReviewFindings!);
         Assert.Equal(FindingEvidenceOutcomeReason.VacuousEvidence, finding.EvidenceOutcome!.ResultReason);
@@ -60,40 +60,40 @@ public sealed class ConductorDriverTestsGreenTesterReceiptClosure
     }
 
     [Fact]
-    public void DifferentReviewedCandidateRoutesDeveloperWithCurrentReceipt()
+    public void DifferentReviewedCandidateRoutesTesterWithCurrentReceipt()
     {
         using var fixture = new ClosureFixture();
         fixture.Report([FirstEvidenceFinding()], reviewedSha: "def5678abcdef1234abcdef1234abcdef1234abcd12");
         fixture.AdvanceToDecision();
-        AssertDeveloperRetry(fixture);
+        AssertTesterClosureRoute(fixture, FindingReceiptClosureDiagnosis.ReviewedCommitDiffers);
         Assert.Equal(CandidateSha, Assert.Single(fixture.Requester.VerificationHistory.Last().FindingEvidenceReceipts!).CandidateSha);
     }
 
     [Fact]
-    public void ReportedWorkerBlockerRoutesDeveloperWithPassingReceipt()
+    public void ReportedWorkerBlockerRoutesTesterWithPassingReceipt()
     {
         using var fixture = new ClosureFixture();
         fixture.Report([FirstEvidenceFinding()], blockers: "exact-blocker - missing prerequisite");
         fixture.AdvanceToDecision();
-        AssertDeveloperRetry(fixture);
+        AssertTesterClosureRoute(fixture, FindingReceiptClosureDiagnosis.WorkerBlockersReported);
     }
 
     [Fact]
-    public void ReportedFailingTestsRouteDeveloperWithPassingReceipt()
+    public void ReportedFailingTestsRouteTesterWithPassingReceipt()
     {
         using var fixture = new ClosureFixture();
         fixture.Report([FirstEvidenceFinding()], tests: "fail - ClosureTests.RejectsCandidate");
         fixture.AdvanceToDecision();
-        AssertDeveloperRetry(fixture);
+        AssertTesterClosureRoute(fixture, FindingReceiptClosureDiagnosis.FailingTestsReported);
     }
 
     [Fact]
-    public void MissingReviewedCandidateRoutesDeveloperWithCurrentReceipt()
+    public void MissingReviewedCandidateRoutesTesterWithCurrentReceipt()
     {
         using var fixture = new ClosureFixture();
         fixture.Report([FirstEvidenceFinding()], reviewedSha: null);
         fixture.AdvanceToDecision();
-        AssertDeveloperRetry(fixture);
+        AssertTesterClosureRoute(fixture, FindingReceiptClosureDiagnosis.ReviewedCommitMissing);
     }
 
     [Fact]
@@ -110,19 +110,18 @@ public sealed class ConductorDriverTestsGreenTesterReceiptClosure
     public void ReattachedGreenReceiptsCloseTesterWithoutAnotherRunOrRetry()
     {
         using var fixture = new ClosureFixture();
-        // The first round routes the Developer because its separate blocker prevents closure.
+        // The first round returns the passing receipts to the Tester because its blocker prevents closure.
         fixture.Report(TwoEvidenceFindings(), blockers: "exact-blocker - prerequisite not ready");
         fixture.AdvanceToDecision();
-        AssertDeveloperRetry(fixture);
-        // Developer retry clears downstream LastVerification; receipts remain in history.
+        AssertTesterClosureRoute(fixture, FindingReceiptClosureDiagnosis.WorkerBlockersReported);
+        // Tester retry clears LastVerification; receipts remain in history.
         var receiptIds = fixture.Requester.VerificationHistory.Last().FindingEvidenceReceipts!
             .Select(receipt => receipt.ReceiptId).Order(StringComparer.Ordinal).ToArray();
 
-        fixture.CompleteDeveloper();
         fixture.Report(TwoEvidenceFindings());
         fixture.AdvanceToDecision();
 
-        Assert.Equal([fixture.Developer!.Id], fixture.Retried);
+        Assert.Equal([fixture.Requester.Id], fixture.Retried);
         Assert.Equal(2, fixture.Requests.Count);
         AssertClosed(fixture.Goal, fixture.Requester, "receipt-first", "receipt-second");
         Assert.Equal(receiptIds, fixture.Requester.LastVerification!.FindingEvidenceReceipts!
@@ -163,7 +162,7 @@ public sealed class ConductorDriverTestsGreenTesterReceiptClosure
     [Theory]
     [InlineData("none", FindingEvidenceOutcomeReason.VacuousEvidence)]
     [InlineData("exact-blocker - negative control needs new test code", FindingEvidenceOutcomeReason.ValidEvidence)]
-    public void PassingReceiptWithOpenTestEvidenceRoutesDeveloperOnFirstDelivery(
+    public void PassingReceiptWithOpenTestEvidenceRoutesTesterOnFirstDelivery(
         string blockers, FindingEvidenceOutcomeReason outcomeReason)
     {
         using var fixture = new ClosureFixture(outcomeReason: outcomeReason);
@@ -176,7 +175,7 @@ public sealed class ConductorDriverTestsGreenTesterReceiptClosure
         Assert.True(receipt.Accepted);
         Assert.True(receipt.Passed);
         Assert.Equal(CandidateSha, receipt.CandidateSha);
-        AssertDeveloperRetry(fixture);
+        AssertTesterClosureRoute(fixture, blockers == "none" ? FindingReceiptClosureDiagnosis.EvidenceOutcomeInvalid : FindingReceiptClosureDiagnosis.WorkerBlockersReported);
         Assert.Contains(receipt.ReceiptId, Assert.Single(fixture.RetryMessages), StringComparison.Ordinal);
         Assert.Contains("receipt-first", Assert.Single(fixture.RetryMessages), StringComparison.Ordinal);
         fixture.AdvanceOnce();
@@ -184,46 +183,51 @@ public sealed class ConductorDriverTestsGreenTesterReceiptClosure
     }
 
     [Fact]
-    public void PassingReceiptWithoutUpstreamDeveloperEscalatesWithEvidenceIdentities()
+    public void TesterReRaiseWithoutUpstreamDeveloperEscalatesWithEvidenceIdentities()
     {
         using var fixture = new ClosureFixture(includeDeveloper: false);
         fixture.Report([FirstEvidenceFinding()], blockers: "exact-blocker - new test code is required");
         fixture.AdvanceToDecision();
 
         Assert.Single(fixture.Requests);
-        var receipt = Assert.Single(fixture.Requester.LastVerification!.FindingEvidenceReceipts!);
+        var receipt = Assert.Single(fixture.Requester.VerificationHistory.Last().FindingEvidenceReceipts!);
         Assert.True(receipt.Accepted && receipt.Passed);
         Assert.Equal(ReviewFindingState.Open,
-            Assert.Single(fixture.Requester.LastVerification.MergedReviewFindings!).State);
-        Assert.Empty(fixture.Retried);
+            Assert.Single(fixture.Requester.VerificationHistory.Last().MergedReviewFindings!).State);
+        AssertTesterClosureRoute(fixture, FindingReceiptClosureDiagnosis.WorkerBlockersReported);
+        fixture.Report([FirstEvidenceFinding()], blockers: "exact-blocker - new test code is still required");
+        fixture.AdvanceToDecision();
+        Assert.Equal([fixture.Requester.Id], fixture.Retried);
         var escalation = Assert.Single(fixture.Escalations);
         Assert.Contains(CandidateSha, escalation, StringComparison.Ordinal);
         Assert.Contains(receipt.ReceiptId, escalation, StringComparison.Ordinal);
         Assert.Contains("receipt-first", escalation, StringComparison.Ordinal);
         Assert.Contains("no upstream Developer", escalation, StringComparison.OrdinalIgnoreCase);
-        AssertNoTesterDelivery(fixture);
+        Assert.Contains(FindingReceiptClosureDiagnosis.WorkerBlockersReported, escalation, StringComparison.Ordinal);
+        AssertNoEvidenceDeliveryRetries(fixture);
     }
 
     [Fact]
-    public void ReattachedPassingReceiptWithOpenFindingRoutesDeveloperWithoutAnotherRun()
+    public void ReRaiseRoutesDeveloperWithReattachedReceipt()
     {
         using var fixture = new ClosureFixture();
         fixture.Report([FirstEvidenceFinding()], blockers: "exact-blocker - new test code is required");
         fixture.AdvanceToDecision();
-        AssertDeveloperRetry(fixture);
+        AssertTesterClosureRoute(fixture, FindingReceiptClosureDiagnosis.WorkerBlockersReported);
         var receiptId = Assert.Single(fixture.Requester.VerificationHistory.Last().FindingEvidenceReceipts!).ReceiptId;
 
-        fixture.CompleteDeveloper();
         fixture.Report([FirstEvidenceFinding()], blockers: "exact-blocker - new test code is still required");
         fixture.AdvanceToDecision();
 
         Assert.Single(fixture.Requests);
-        Assert.Equal([fixture.Developer!.Id, fixture.Developer.Id], fixture.Retried);
-        Assert.All(fixture.RetryCauses, cause => Assert.Equal(RetryCause.NewSourceFinding, cause));
+        Assert.Equal([fixture.Requester.Id, fixture.Developer!.Id], fixture.Retried);
+        Assert.Equal([RetryCause.CriterionEvidenceOwnerMismatch, RetryCause.NewSourceFinding], fixture.RetryCauses);
+        Assert.Contains("route=developer", fixture.RetryMessages.Last(), StringComparison.Ordinal);
+        Assert.Contains(FindingReceiptClosureDiagnosis.WorkerBlockersReported, fixture.RetryMessages.Last(), StringComparison.Ordinal);
         Assert.Contains(receiptId, fixture.RetryMessages.Last(), StringComparison.Ordinal);
         Assert.Contains(fixture.Goal.Timeline, item =>
             item.Message.Contains("disposition=reused-covered-green", StringComparison.Ordinal));
-        AssertNoTesterDelivery(fixture);
+        AssertNoEvidenceDeliveryRetries(fixture);
     }
 
     [Theory]
@@ -276,28 +280,29 @@ public sealed class ConductorDriverTestsGreenTesterReceiptClosure
         Assert.NotEqual(WorkTaskStatus.Completed, fixture.Requester.Status);
     }
 
-    private static void AssertDeveloperRetry(ClosureFixture fixture)
+    private static void AssertTesterClosureRoute(ClosureFixture fixture, string code)
     {
-        Assert.Equal([fixture.Developer!.Id], fixture.Retried);
-        Assert.Equal(RetryCause.NewSourceFinding, Assert.Single(fixture.RetryCauses));
+        Assert.Equal([fixture.Requester.Id], fixture.Retried);
+        Assert.Equal(RetryCause.CriterionEvidenceOwnerMismatch, Assert.Single(fixture.RetryCauses));
         var message = Assert.Single(fixture.RetryMessages);
         Assert.Contains(CandidateSha, message, StringComparison.Ordinal);
-        Assert.Contains("passing evidence did not close", message, StringComparison.Ordinal);
-        Assert.Contains("Developer-owned source or test code", message, StringComparison.Ordinal);
+        Assert.Contains("route=tester", message, StringComparison.Ordinal);
+        Assert.Contains(code, message, StringComparison.Ordinal);
+        Assert.Contains("Resolve each finding they satisfy", message, StringComparison.Ordinal);
         Assert.Empty(fixture.Escalations);
-        AssertNoTesterDelivery(fixture);
+        AssertNoEvidenceDeliveryRetries(fixture);
         Assert.DoesNotContain(fixture.Goal.Timeline, item =>
             item.Message.StartsWith("FINDING_RECEIPT_CLOSURE", StringComparison.Ordinal));
         Assert.Contains(fixture.Requester.VerificationHistory.Last().MergedReviewFindings!, finding =>
             finding.State == ReviewFindingState.Open && finding.Severity != FindingSeverity.Advisory);
     }
 
-    private static void AssertNoTesterDelivery(ClosureFixture fixture)
+    private static void AssertNoEvidenceDeliveryRetries(ClosureFixture fixture)
     {
         Assert.All(fixture.Requester.VerificationHistory.Last().MergedReviewFindings!, finding =>
             Assert.Equal(0, FindingEvidenceExecutionClassifier.CountEvidenceDeliveryRetries(
                 fixture.Goal.Timeline, fixture.Requester.Id, CandidateSha, finding.StableId)));
-        Assert.DoesNotContain(fixture.Requester.Id, fixture.Retried);
+
         Assert.DoesNotContain(fixture.RetryMessages, message =>
             message.StartsWith("finding evidence-on-demand:", StringComparison.Ordinal));
         Assert.DoesNotContain(fixture.Escalations, message =>
@@ -337,7 +342,7 @@ public sealed class ConductorDriverTestsGreenTesterReceiptClosure
             $"receipts={string.Join(',', expectedReceipts)} candidate={CandidateSha}; no worker dispatched", note.Message);
     }
 
-    private sealed class ClosureFixture : IDisposable
+    internal sealed class ClosureFixture : IDisposable
     {
         private readonly string _root = ConductorDriverTests.CreateTempDirectory();
         private readonly ConductorDriver _driver;
@@ -351,6 +356,7 @@ public sealed class ConductorDriverTestsGreenTesterReceiptClosure
         public List<RetryCause> RetryCauses { get; } = [];
         public List<string> Escalations { get; } = [];
         public List<string> Requests { get; } = [];
+        public FindingReceiptClosureDiagnosis? ReceiptDiagnosis { get; private set; }
 
         public ClosureFixture(AgentRole role = AgentRole.Tester, FindingEvidenceOutcomeReason? outcomeReason = null,
             bool includeDeveloper = true, string? evidenceFailure = null)
@@ -376,6 +382,8 @@ public sealed class ConductorDriverTestsGreenTesterReceiptClosure
                 runFocusedEvidence: evidenceFailure == "executor-unavailable" ? null : (_, request) =>
                 {
                     Requests.Add(request);
+                    if (evidenceFailure == "candidate-red")
+                        return CandidateRedFindingEvidence(request, CandidateSha);
                     if (evidenceFailure is "rejected" or "apparatus-failed")
                         return new FocusedEvidenceRunResult(request,
                             Accepted: evidenceFailure != "rejected", Passed: false,
@@ -404,8 +412,11 @@ public sealed class ConductorDriverTestsGreenTesterReceiptClosure
                 recordFindingEvidenceRequest: (goalId, taskId, message) =>
                     Kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
                 recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
+                {
                     Kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId,
-                        outcomeReason is null ? outcome : outcome with { ResultReason = outcomeReason }, receipt));
+                        outcomeReason is null ? outcome : outcome with { ResultReason = outcomeReason }, receipt);
+                    ReceiptDiagnosis = FindingReceiptClosureDiagnosis.Evaluate(Goal, Requester, CandidateSha);
+                });
         }
 
         public void CompleteDeveloper() => PassVerification(Kernel, Goal, Developer!, hasCommittedChanges: true);
