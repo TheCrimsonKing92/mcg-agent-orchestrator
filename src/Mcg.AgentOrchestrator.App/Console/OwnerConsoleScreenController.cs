@@ -5,7 +5,8 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource questions, IOwnerAnswerSubmitter answers,
     IOwnerConsoleDialogs dialogs, IOrchestratorStateQueries state, IGoalEventTail tail,
-    IOwnerConsoleConductor conductor, IOwnerConsoleDigestReport digest)
+    IOwnerConsoleConductor conductor, IOwnerConsoleDigestReport digest,
+    IOwnerDigestSummary summary, TimeProvider clock)
 {
     internal OwnerConsoleViewModel? Model { get; private set; }
     internal string? SelectedDecisionId { get; private set; }
@@ -38,7 +39,7 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
         else if (character is 'a' or 'r') await AnswerAsync(character == 'a', cancellationToken);
         else if (character == ':')
         {
-            var command = await dialogs.PromptTextAsync("Command", "conductor start|stop|status | digest | bell on|off | goal <id>");
+            var command = await dialogs.PromptTextAsync("Command", "conductor start|stop|status | digest | metrics | bell on|off | goal <id>");
             if (command is not null) await RunCommandAsync(command, cancellationToken);
         }
         else if (character == 'q') QuitRequested = true;
@@ -74,25 +75,32 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
             { await dialogs.ShowTextAsync("Decision", $"question {decision.Number} is no longer open"); return; }
             if (live != decision.ToQuestion())
             { await dialogs.ShowTextAsync("Decision", "Question changed; review it again before answering."); return; }
+            cancellationToken.ThrowIfCancellationRequested();
             answers.Submit(live, text);
             var stillOpen = (await questions.ReadAsync(cancellationToken)).Live.Any(item => item.ItemId == decision.Id);
             await dialogs.ShowTextAsync("Answer", stillOpen ? $"question {decision.Number} is still open; answer was not accepted" : $"answered question {decision.Number}");
         }
-        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or KeyNotFoundException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (Exception ex)
         { await dialogs.ShowTextAsync("Answer", $"error: {ex.Message}"); }
     }
 
     internal async Task RunCommandAsync(string raw, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var line = raw.Trim().TrimStart(':').Trim();
         var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         if (parts.Length == 0) return;
         var output = new OwnerConsoleCapturedOutput();
-        var control = new OwnerConsoleControlCommands(conductor, digest, output);
+        var control = new OwnerConsoleControlCommands(conductor, digest, output, clock);
         switch (parts[0].ToLowerInvariant())
         {
             case "conductor": control.HandleConductor(line); break;
-            case "digest": control.HandleDigest(line); break;
+            case "digest":
+                if (parts.Length != 1) output.WriteLine("usage: digest");
+                else foreach (var item in summary.ReadSummaryLines().Take(5)) output.WriteLine(item);
+                break;
+            case "metrics": control.HandleMetrics(line); break;
             case "bell":
                 if (parts.Length != 2 || parts[1] is not ("on" or "off")) output.WriteLine("usage: bell on|off");
                 else { BellEnabled = parts[1] == "on"; output.WriteLine($"bell {parts[1]}"); }

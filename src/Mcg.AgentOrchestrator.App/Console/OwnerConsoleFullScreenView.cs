@@ -19,21 +19,31 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     private readonly TableView _board = new() { Width = Dim.Fill(), Height = Dim.Fill() };
     private readonly ListView _activity = new() { Width = Dim.Fill(), Height = Dim.Fill() };
     private readonly TextField _command = new() { Y = Pos.AnchorEnd(1), Width = Dim.Fill(), Height = 1 };
+    private readonly Dictionary<string, string> _working = new();
+    private readonly List<string> _notices = [];
+    private readonly OwnerConsoleScreenOperation _operation;
     private bool _rendering;
-    private bool _busy;
     private bool _editingCommand;
     private View? _commandReturnFocus;
 
     internal Window Window { get; } = new() { Title = "Owner console", Width = Dim.Fill(), Height = Dim.Fill() };
     internal DataTable BoardTable { get; } = CreateBoardTable();
+    internal string StatusText => _status.Text;
+    internal IReadOnlyList<string> Notices => _notices;
+    internal TextField CommandLine => _command;
+    internal TableView BoardPane => _board;
 
     internal OwnerConsoleFullScreenView(IApplication app, OwnerConsoleScreenController controller,
-        Func<Task> refresh, CancellationToken token = default)
+        Func<Task> refresh, CancellationToken token = default, TimeProvider? clock = null,
+        OwnerConsoleLoopOptions? options = null)
     {
         _app = app;
         _controller = controller;
         _refresh = refresh;
         _token = token;
+        _operation = new(clock ?? TimeProvider.System,
+            label => Invoke(() => { if (!_token.IsCancellationRequested) SetWorking("command", label); }),
+            message => Invoke(() => { if (!_token.IsCancellationRequested) ShowRefreshFailure(message); }), options);
         var decisions = new FrameView { Title = "DECISIONS", Y = 1, Width = Dim.Fill(), Height = Dim.Percent(25) };
         var board = new FrameView { Title = "BOARD", Y = Pos.Bottom(decisions), Width = Dim.Fill(), Height = Dim.Percent(40) };
         var activity = new FrameView { Title = "ACTIVITY", Y = Pos.Bottom(board), Width = Dim.Fill(), Height = Dim.Fill(2) };
@@ -66,34 +76,66 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         try
         {
             _controller.Apply(model);
-            var status = model.Status;
-            _status.Text = $"conductor: {(status.ConductorRunning ? "running" : "stopped")} | active: {status.ActiveGoals} | decisions: {status.LiveDecisions} | hidden: {status.HiddenQuestions} | last event: {Age(status.LastEventAge)} | landings: {status.LandingsSinceOpen} | bell: {(_controller.BellEnabled ? "on" : "off")}";
+            RenderStatus();
             _decisions.SetSource(new ObservableCollection<string>(model.Decisions.Select(item => $"[{item.Number}] {item.GoalPrefix} {item.Kind}: {item.Summary}")));
             _decisions.SelectedItem = _controller.SelectedIndex < 0 ? null : _controller.SelectedIndex;
             BoardTable.Rows.Clear();
             foreach (var row in model.Board) BoardTable.Rows.Add(row.GoalPrefix, row.Epic, row.Title, row.State, row.Stage, Age(row.Age));
             _board.Update();
-            _activity.SetSource(new ObservableCollection<string>(model.Activity.Select(item => $"{item.Timestamp:HH:mm:ss} {item.Tag} {item.GoalPrefix} {item.Kind}: {item.Detail}")));
+            RenderActivity();
         }
         finally { _rendering = false; }
     }
 
-    internal void ShowRefreshFailure(string message) => _status.Text = $"refresh failed: {message}";
+    internal void SetWorking(string source, string? label)
+    {
+        if (label is null) _working.Remove(source);
+        else _working[source] = label;
+        RenderStatus();
+    }
+
+    internal void ShowRefreshFailure(string message)
+    {
+        _notices.Insert(0, message);
+        if (_notices.Count > OwnerConsoleViewModelBuilder.MaxActivityItems) _notices.RemoveAt(_notices.Count - 1);
+        RenderActivity();
+    }
+
+    private void RenderStatus()
+    {
+        if (_controller.Model is not { } model) return;
+        var status = model.Status;
+        _status.Text = $"conductor: {(status.ConductorRunning ? "running" : "stopped")} | active: {status.ActiveGoals} | decisions: {status.LiveDecisions} | hidden: {status.HiddenQuestions} | last event: {Age(status.LastEventAge)} | landings: {status.LandingsSinceOpen} | bell: {(_controller.BellEnabled ? "on" : "off")}";
+        if (_working.Count > 0) _status.Text += $" | working: {string.Join(", ", _working.Values)}";
+    }
+
+    private void RenderActivity() => _activity.SetSource(new ObservableCollection<string>(
+        _notices.Concat(_controller.Model?.Activity.Select(item =>
+            $"{item.Timestamp:HH:mm:ss} {item.Tag} {item.GoalPrefix} {item.Kind}: {item.Detail}") ?? [])
+            .Take(OwnerConsoleViewModelBuilder.MaxActivityItems)));
 
     private async void OnKeyDown(object? sender, Key key)
     {
         if (_app.TopRunnableView != Window) return;
+        try { await HandleKeyAsync(key); }
+        catch (OperationCanceledException) when (_token.IsCancellationRequested) { }
+        catch (Exception ex) { ShowRefreshFailure($"key action failed: {ex.Message}"); }
+    }
+
+    // The production keyboard callback and headless tests use this same routing path.
+    internal async Task HandleKeyAsync(Key key)
+    {
         if (_editingCommand || _command.HasFocus)
         {
             if (key == Key.Esc) { key.Handled = true; FinishCommand(); return; }
-            if (key != Key.Enter || _busy) return;
+            if (key != Key.Enter || _operation.IsRunning) return;
             key.Handled = true;
             var line = _command.Text;
             FinishCommand();
-            await ActAsync(() => _controller.RunCommandAsync(line, _token));
+            await ActAsync(line, ct => _controller.RunCommandAsync(line, ct));
             return;
         }
-        if (key.AsRune.Value == ':' && !_busy)
+        if (key.AsRune.Value == ':' && !_operation.IsRunning)
         {
             key.Handled = true;
             _commandReturnFocus = _decisions.HasFocus ? _decisions : _board.HasFocus ? _board : _activity;
@@ -112,8 +154,15 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
             _app.RequestStop(Window);
             return;
         }
-        if (_busy) return;
-        await ActAsync(() => _controller.HandleKeyAsync(mapped, character, _token));
+        if (mapped is ConsoleKey.UpArrow or ConsoleKey.DownArrow)
+        {
+            await _controller.HandleKeyAsync(mapped, character, _token);
+            _decisions.SelectedItem = _controller.SelectedIndex < 0 ? null : _controller.SelectedIndex;
+            return;
+        }
+        if (_operation.IsRunning) return;
+        await ActAsync(character == 'a' ? "accept default" : character == 'r' ? "answer" : "decision detail",
+            ct => _controller.HandleKeyAsync(mapped, character, ct));
     }
 
     private void FinishCommand()
@@ -123,19 +172,18 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         (_commandReturnFocus ?? _decisions).SetFocus();
     }
 
-    private async Task ActAsync(Func<Task> action)
+    private async Task ActAsync(string label, Func<CancellationToken, Task> action)
     {
-        _busy = true;
-        try
-        {
-            await action();
-            if (_controller.QuitRequested) _app.Invoke(() => _app.RequestStop(Window));
-            else await _refresh();
-        }
-        catch (OperationCanceledException) when (_token.IsCancellationRequested) { }
-        catch (Exception ex) when (ex is IOException or InvalidOperationException or ArgumentException)
-        { _app.Invoke(() => ShowRefreshFailure(ex.Message)); }
-        finally { _busy = false; }
+        if (await _operation.RunAsync(label, action, _token) && !_token.IsCancellationRequested)
+            await _refresh();
+    }
+
+    internal void FocusDecisions() => _decisions.SetFocus();
+
+    private void Invoke(Action action)
+    {
+        if (_app.Initialized) _app.Invoke(action);
+        else action();
     }
 
     private static string Age(TimeSpan? span) => span is null ? "unknown" :

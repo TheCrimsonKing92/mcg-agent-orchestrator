@@ -6,6 +6,22 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class OwnerConsoleViewModelBuilderTests
 {
     [Fact]
+    public async Task EmptyWorkspaceBuildsWithTheRealQuestionReadModel()
+    {
+        var harness = new OwnerConsoleHarness();
+        var state = new EmptyOwnerConsoleStateQueries();
+        var directory = Path.Combine(Path.GetTempPath(), "owner-console-absent-" + Guid.NewGuid().ToString("N"));
+        var builder = new OwnerConsoleViewModelBuilder(state, new OwnerQuestionReadModel(state, directory),
+            harness.Liveness, new Epics(), harness.Clock);
+
+        var model = await builder.BuildAsync(Inputs(harness));
+
+        Assert.Empty(model.Decisions);
+        Assert.Empty(model.Board);
+        Assert.Equal(0, model.Status.HiddenQuestions);
+    }
+
+    [Fact]
     public async Task StatusIncludesLivenessCountsEventAgeAndSessionLandings()
     {
         var harness = new OwnerConsoleHarness();

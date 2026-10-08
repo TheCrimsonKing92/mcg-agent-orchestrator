@@ -21,19 +21,23 @@ internal static class OwnerConsoleFullScreenHost
             events = new ConductEventFileSource(workspace.ConductEventsLogPath, clock);
             IOrchestratorStateQueries state = File.Exists(workspace.SqliteStatePath)
                 ? SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath) : new EmptyOwnerConsoleStateQueries();
-            var questions = new OwnerQuestionReadModel(state, workspace.OrchestratorDirectory);
+            var questions = new SerializedOwnerQuestionSource(new OwnerQuestionReadModel(state, workspace.OrchestratorDirectory));
             var builder = new OwnerConsoleViewModelBuilder(state, questions,
                 new ConductorLeaseLiveness(workspace.OrchestratorDirectory), new PortfolioGoalEpicLookup(workspace.PortfolioStorePath), clock);
             var opened = clock.GetUtcNow();
             var recent = new List<OwnerConductEvent>();
             var last = events.LastActivity;
             var landings = 0;
-            var initial = await builder.BuildAsync(new(opened, last, [], 0), token)
+            var initial = await Task.Run(() => builder.BuildAsync(new(opened, last, [], 0), token), token)
                 .WaitAsync(OwnerConsoleLoopOptions.Default.OperationBound, clock, token);
             app.Init();
             var controller = new OwnerConsoleScreenController(questions, new AttentionAnswerHandlerAdapter(workspace),
                 new TerminalGuiOwnerConsoleDialogs(app, token), state, new GoalEventFileTail(workspace.GoalLifecycleEventsDirectory),
-                new CliConductorConsoleAdapter(workspace), new CliOwnerDigestConsoleAdapter(workspace));
+                new CliConductorConsoleAdapter(workspace), new CliOwnerDigestConsoleAdapter(workspace),
+                new OwnerDigestSummaryAdapter(workspace), clock);
+            var refreshOperation = new OwnerConsoleScreenOperation(clock,
+                label => app.Invoke(() => { if (!token.IsCancellationRequested) view!.SetWorking("refresh", label); }),
+                message => app.Invoke(() => { if (!token.IsCancellationRequested) view!.ShowRefreshFailure(message); }));
 
             async Task RefreshAsync(OwnerConductEvent? item = null)
             {
@@ -50,11 +54,16 @@ internal static class OwnerConsoleFullScreenHost
                             if (recent.Count > OwnerConsoleViewModelBuilder.MaxActivityItems) recent.RemoveAt(0);
                         }
                     }
-                    var model = await builder.BuildAsync(new(opened, last, recent.ToArray(), landings), token)
-                        .WaitAsync(OwnerConsoleLoopOptions.Default.OperationBound, clock, token);
-                    app.Invoke(() => { if (!token.IsCancellationRequested) view!.Render(model); });
+                    var inputs = new OwnerConsoleViewInputs(opened, last, recent.ToArray(), landings);
+                    await refreshOperation.RunAsync("refresh after conductor event", async stepToken =>
+                    {
+                        var model = await builder.BuildAsync(inputs, stepToken);
+                        stepToken.ThrowIfCancellationRequested();
+                        app.Invoke(() => { if (!token.IsCancellationRequested) view!.Render(model); });
+                    }, token);
                 }
-                catch (Exception ex) when (ex is IOException or InvalidOperationException or TimeoutException)
+                catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+                catch (Exception ex)
                 { app.Invoke(() => view!.ShowRefreshFailure(ex.Message)); }
                 finally { rebuild.Release(); }
             }
@@ -66,21 +75,14 @@ internal static class OwnerConsoleFullScreenHost
                 app.RequestStop();
                 app.RequestStop(view.Window);
             }));
-            reader = Task.Run(async () =>
-            {
-                try
-                {
-                    while (!token.IsCancellationRequested) await RefreshAsync(await events.ReadAsync(token));
-                }
-                catch (OperationCanceledException) when (token.IsCancellationRequested) { }
-                catch (Exception ex) when (ex is IOException or InvalidOperationException)
-                { app.Invoke(() => view.ShowRefreshFailure(ex.Message)); }
-            }, token);
+            reader = Task.Run(() => new OwnerConsoleEventPump(events, clock,
+                message => app.Invoke(() => { if (!token.IsCancellationRequested) view.ShowRefreshFailure(message); }))
+                .RunAsync(item => RefreshAsync(item), token), token);
             app.Run(view.Window);
             return 0;
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { return 0; }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or TimeoutException)
+        catch (Exception ex)
         {
             // The application has restored the terminal before reporting startup failure.
             app.Dispose();
