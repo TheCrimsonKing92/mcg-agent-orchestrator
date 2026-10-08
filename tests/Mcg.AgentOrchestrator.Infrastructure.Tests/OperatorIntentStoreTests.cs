@@ -580,6 +580,8 @@ public sealed class OperatorIntentStoreTests
                 using var command = connection.CreateCommand();
                 command.CommandText = "CREATE TABLE operator_intents (id TEXT PRIMARY KEY)";
                 command.ExecuteNonQuery();
+                command.CommandText = "PRAGMA journal_mode=WAL";
+                command.ExecuteNonQuery();
                 if (schema != "unversioned")
                 {
                     StoreSchemaVersions.UpgradeToCurrent(connection, StoreSchemaRegistry.OperatorIntents);
@@ -589,7 +591,7 @@ public sealed class OperatorIntentStoreTests
                     command.ExecuteNonQuery();
                 }
             }
-            var before = SnapshotFiles(root);
+            var before = SnapshotDatabaseFiles(root);
             var wakeDirectory = Path.Combine(root, "reader-wakes");
 
             var error = Xunit.Assert.Throws<InvalidOperationException>(() =>
@@ -597,7 +599,7 @@ public sealed class OperatorIntentStoreTests
 
             Xunit.Assert.Equal($"Operator intents store '{dbPath}' schema is {expected} (expected version 1); run setup.", error.Message);
             Xunit.Assert.False(Directory.Exists(wakeDirectory));
-            Xunit.Assert.Equal(before, SnapshotFiles(root));
+            Xunit.Assert.Equal(before, SnapshotDatabaseFiles(root));
         }
         finally
         {
@@ -608,7 +610,7 @@ public sealed class OperatorIntentStoreTests
     [Xunit.Theory]
     [Xunit.InlineData(false)]
     [Xunit.InlineData(true)]
-    public async Task OpenExisting_CurrentSchema_ReadsIntentsWithoutChangingFilesOrCreatingWakeDirectory(bool existingWal)
+    public async Task OpenExisting_CurrentSchema_ReadsIntentsWithoutChangingDatabaseOrCreatingWakeDirectory(bool existingWal)
     {
         var root = CreateTempDirectory();
         try
@@ -620,22 +622,20 @@ public sealed class OperatorIntentStoreTests
             var claimed = await writer.EnqueueAsync(CreateRetryIntent("goal-two", "task-two", "claimed", "claimed-key"));
             claimed = (await writer.ClaimNextAsync("goal-two", "owner"))!;
             var expectedSummaries = await writer.ListActionableSummariesAsync(["goal-one", "goal-two"]);
-            if (existingWal)
+            using (var connection = writer.OpenConnection())
             {
-                using (var connection = writer.OpenConnection())
-                {
-                    using var command = connection.CreateCommand();
-                    command.CommandText = "PRAGMA journal_mode=WAL";
-                    Xunit.Assert.Equal("wal", command.ExecuteScalar());
-                }
-                Xunit.Assert.Equal((byte)2, File.ReadAllBytes(dbPath)[18]);
-                SqliteOperatorIntentStore.Setup(dbPath);
+                using var command = connection.CreateCommand();
+                command.CommandText = existingWal ? "PRAGMA journal_mode=WAL" : "PRAGMA journal_mode=DELETE";
+                Xunit.Assert.Equal(existingWal ? "wal" : "delete", command.ExecuteScalar());
             }
-            Xunit.Assert.Equal((byte)1, File.ReadAllBytes(dbPath)[18]);
-            Xunit.Assert.Equal((byte)1, File.ReadAllBytes(dbPath)[19]);
-            var before = SnapshotFiles(root);
             SqliteOperatorIntentStore.Setup(dbPath);
-            Xunit.Assert.Equal(before, SnapshotFiles(root));
+            Xunit.Assert.Equal((byte)2, File.ReadAllBytes(dbPath)[18]);
+            Xunit.Assert.Equal((byte)2, File.ReadAllBytes(dbPath)[19]);
+            var before = SnapshotDatabaseFiles(root);
+            var versionsBefore = SnapshotSchemaVersions(dbPath);
+            SqliteOperatorIntentStore.Setup(dbPath);
+            Xunit.Assert.Equal(before, SnapshotDatabaseFiles(root));
+            Xunit.Assert.Equal(versionsBefore, SnapshotSchemaVersions(dbPath));
             var wakeDirectory = Path.Combine(root, "reader-wakes");
 
             var reader = SqliteOperatorIntentStore.OpenExisting(root, wakeDirectory);
@@ -647,9 +647,8 @@ public sealed class OperatorIntentStoreTests
             Xunit.Assert.Equal(JsonSerializer.Serialize(claimed), JsonSerializer.Serialize(
                 Xunit.Assert.Single(await reader.ListForGoalAsync("goal-two"))));
             Xunit.Assert.False(Directory.Exists(wakeDirectory));
-            Xunit.Assert.Equal(before, SnapshotFiles(root));
-            Xunit.Assert.Equal(new[] { SqliteOperatorIntentStore.DatabaseFileName },
-                Directory.GetFiles(root).Select(Path.GetFileName).ToArray());
+            Xunit.Assert.Equal(before, SnapshotDatabaseFiles(root));
+            Xunit.Assert.Equal(versionsBefore, SnapshotSchemaVersions(dbPath));
         }
         finally
         {
@@ -693,9 +692,30 @@ public sealed class OperatorIntentStoreTests
         }
     }
 
-    private static string[] SnapshotFiles(string directory) =>
-        Directory.GetFiles(directory).Order(StringComparer.Ordinal)
+    // SQLite may create or touch WAL sidecars even on a read-only connection.
+    private static string[] SnapshotDatabaseFiles(string directory) =>
+        Directory.GetFiles(directory, "*.db").Order(StringComparer.Ordinal)
             .Select(path => $"{Path.GetFileName(path)}:{Convert.ToHexString(File.ReadAllBytes(path))}").ToArray();
+
+    private static string SnapshotSchemaVersions(string dbPath)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath, Mode = SqliteOpenMode.ReadOnly, Pooling = false
+        }.ToString());
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT store_name, version, applied_at FROM store_schema_versions ORDER BY store_name";
+        using var reader = command.ExecuteReader();
+        var rows = new List<object[]>();
+        while (reader.Read())
+        {
+            var values = new object[reader.FieldCount];
+            reader.GetValues(values);
+            rows.Add(values);
+        }
+        return JsonSerializer.Serialize(rows);
+    }
 
     private static OperatorIntentRecord CreateRetryIntent(
         string goalId,

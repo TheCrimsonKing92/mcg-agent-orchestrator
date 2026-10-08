@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using Microsoft.Data.Sqlite;
@@ -422,7 +421,6 @@ public sealed class SqliteOperatorIntentStore : IOperatorIntentStore
     {
         dbPath = Path.GetFullPath(dbPath);
         Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
-        EnsureRollbackJournal(dbPath);
         using var conn = new SqliteConnection(new SqliteConnectionStringBuilder
         {
             DataSource = dbPath, Mode = SqliteOpenMode.ReadWriteCreate, Pooling = false
@@ -430,7 +428,12 @@ public sealed class SqliteOperatorIntentStore : IOperatorIntentStore
         conn.Open();
         RunNonQuery(conn, "PRAGMA busy_timeout=30000");
         var state = StoreSchemaVersions.Verify(conn, StoreSchemaRegistry.OperatorIntents);
-        if (state is StoreSchemaState.Current or StoreSchemaState.Newer)
+        if (state == StoreSchemaState.Newer)
+            return;
+
+        RunNonQuery(conn, "PRAGMA journal_mode=WAL");
+        RunNonQuery(conn, "PRAGMA synchronous=NORMAL");
+        if (state == StoreSchemaState.Current)
             return;
 
         RunNonQuery(conn, "BEGIN IMMEDIATE");
@@ -466,39 +469,6 @@ public sealed class SqliteOperatorIntentStore : IOperatorIntentStore
         {
             try { RunNonQuery(conn, "ROLLBACK"); } catch { }
             throw;
-        }
-    }
-
-    private static void EnsureRollbackJournal(string dbPath)
-    {
-        // WAL readers can create -wal/-shm even with Mode=ReadOnly. Convert during
-        // writable setup so readers need neither filesystem writes nor immutable reads.
-        var elapsed = Stopwatch.StartNew();
-        while (true)
-        {
-            try
-            {
-                using var conn = new SqliteConnection(new SqliteConnectionStringBuilder
-                {
-                    DataSource = dbPath, Mode = SqliteOpenMode.ReadWriteCreate,
-                    Pooling = false, DefaultTimeout = 1
-                }.ToString());
-                conn.Open();
-                // Acquire the WAL exclusively without joining its shared-memory index.
-                // Concurrent transitions otherwise can leave an orphaned -shm file.
-                RunNonQuery(conn, "PRAGMA locking_mode=EXCLUSIVE");
-                using var cmd = conn.CreateCommand();
-                cmd.CommandText = "PRAGMA journal_mode=DELETE";
-                var mode = cmd.ExecuteScalar() as string;
-                if (!string.Equals(mode, "delete", StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidOperationException($"Operator intents store '{dbPath}' journal mode is '{mode}'; setup requires DELETE.");
-                return;
-            }
-            catch (SqliteException ex) when (ex.SqliteErrorCode is 5 or 6 && elapsed.Elapsed < TimeSpan.FromSeconds(30))
-            {
-                // Dispose the connection before retrying a journal-mode transition.
-                Thread.Sleep(Random.Shared.Next(10, 51));
-            }
         }
     }
 

@@ -102,8 +102,8 @@ public sealed class OperatorIntentStoreConcurrentInitializationTests
             Xunit.Assert.Empty(ReadActorKindColumns(databasePath));
             await InitializeTogether(databasePath, Path.Combine(root, "logs"), setupOnly: true);
 
-            Xunit.Assert.Equal((byte)1, File.ReadAllBytes(databasePath)[18]);
-            Xunit.Assert.Equal((byte)1, File.ReadAllBytes(databasePath)[19]);
+            Xunit.Assert.Equal((byte)2, File.ReadAllBytes(databasePath)[18]);
+            Xunit.Assert.Equal((byte)2, File.ReadAllBytes(databasePath)[19]);
             Xunit.Assert.Equal("TEXT", Xunit.Assert.Single(ReadActorKindColumns(databasePath)));
             var store = SqliteOperatorIntentStore.OpenExisting(root, Path.Combine(root, "reader-wakes"));
             var intent = Xunit.Assert.Single(await store.ListForGoalAsync("goal-1"));
@@ -153,7 +153,7 @@ public sealed class OperatorIntentStoreConcurrentInitializationTests
     }
 
     [Xunit.Fact]
-    public async Task Setup_ConcurrentCurrentWalStore_PreservesRowsAndVersionAndAllowsSidecarFreeReads()
+    public async Task Setup_ConcurrentCurrentWalStore_PreservesWalRowsAndVersionAndAllowsReadOnlyReads()
     {
         var root = CreateTempDirectory();
         try
@@ -171,22 +171,19 @@ public sealed class OperatorIntentStoreConcurrentInitializationTests
 
             await InitializeTogether(databasePath, Path.Combine(root, "logs"), setupOnly: true);
 
-            Xunit.Assert.Equal(new[] { SqliteOperatorIntentStore.DatabaseFileName },
-                Directory.GetFiles(root).Select(Path.GetFileName).ToArray());
             Xunit.Assert.Equal(before, Snapshot(databasePath));
-            Xunit.Assert.Equal((byte)1, File.ReadAllBytes(databasePath)[18]);
-            Xunit.Assert.Equal((byte)1, File.ReadAllBytes(databasePath)[19]);
+            Xunit.Assert.Equal((byte)2, File.ReadAllBytes(databasePath)[18]);
+            Xunit.Assert.Equal((byte)2, File.ReadAllBytes(databasePath)[19]);
             var bytes = File.ReadAllBytes(databasePath);
             var wakeDirectory = Path.Combine(root, "reader-wakes");
             var reader = SqliteOperatorIntentStore.OpenExisting(root, wakeDirectory);
             Xunit.Assert.Equal(System.Text.Json.JsonSerializer.Serialize(intent),
                 System.Text.Json.JsonSerializer.Serialize(await reader.GetAsync(intent.Id)));
             Xunit.Assert.Equal(bytes, File.ReadAllBytes(databasePath));
-            Xunit.Assert.Equal(new[] { SqliteOperatorIntentStore.DatabaseFileName },
-                Directory.GetFiles(root).Select(Path.GetFileName).ToArray());
+            Xunit.Assert.Equal(before, Snapshot(databasePath));
             Xunit.Assert.False(Directory.Exists(wakeDirectory));
 
-            // The conversion connection must release its exclusive lock on disposal.
+            // A reader must also observe intents submitted after it was opened.
             var nextIntent = intent with { Id = "next-intent", IdempotencyKey = "next-key" };
             Xunit.Assert.Equal(nextIntent.Id, (await writer.EnqueueAsync(nextIntent)).Id);
             Xunit.Assert.Equal(System.Text.Json.JsonSerializer.Serialize(nextIntent),
@@ -207,12 +204,17 @@ public sealed class OperatorIntentStoreConcurrentInitializationTests
             var databasePath = Path.Combine(root, SqliteOperatorIntentStore.DatabaseFileName);
             SqliteOperatorIntentStore.Setup(databasePath);
             using (var connection = Open(databasePath))
+            {
                 Execute(connection, "UPDATE store_schema_versions SET version = 2, applied_at = 'original'");
+                Execute(connection, "PRAGMA journal_mode=WAL");
+            }
             var before = Snapshot(databasePath);
+            var bytes = File.ReadAllBytes(databasePath);
 
             SqliteOperatorIntentStore.Setup(databasePath);
 
             Xunit.Assert.Equal(before, Snapshot(databasePath));
+            Xunit.Assert.Equal(bytes, File.ReadAllBytes(databasePath));
             using var readBack = Open(databasePath);
             Xunit.Assert.Equal(2, StoreSchemaVersions.Read(readBack, StoreSchemaRegistry.OperatorIntents.StoreName));
         }

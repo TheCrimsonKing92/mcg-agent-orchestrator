@@ -38,7 +38,7 @@ public sealed class StoreSetupRunnerTests
         Assert.All(Directory.GetFiles(workspace.OrchestratorDirectory), path =>
             Assert.Contains(Path.GetFileName(path), new[] { "portfolio.db", "portfolio.db-wal", "portfolio.db-shm",
                 "backlog.db", "backlog.db-wal", "backlog.db-shm",
-                "operator-intents.db",
+                "operator-intents.db", "operator-intents.db-wal", "operator-intents.db-shm",
                 "operator-lessons.db", "operator-escapes.db" }));
         Assert.Empty(await PortfolioStore.OpenReadOnly(workspace.PortfolioStorePath).ListProjectsAsync());
         Assert.Empty(await BacklogStore.OpenReadOnly(workspace.BacklogStorePath).ListAsync());
@@ -47,9 +47,8 @@ public sealed class StoreSetupRunnerTests
         Assert.Equal(1, intents.Version);
         Assert.Empty(await SqliteOperatorIntentStore.OpenExisting(workspace.OrchestratorDirectory, workspace.LogDirectory)
             .ListActionableGoalIdsAsync());
-        Assert.False(File.Exists(intents.DatabasePath + "-wal"));
-        Assert.False(File.Exists(intents.DatabasePath + "-shm"));
-        Assert.False(File.Exists(intents.DatabasePath + "-journal"));
+        Assert.Equal((byte)2, File.ReadAllBytes(intents.DatabasePath)[18]);
+        Assert.Equal((byte)2, File.ReadAllBytes(intents.DatabasePath)[19]);
         Assert.Equal(workspace.OperatorLessonsStorePath,
             Assert.Single(results, result => result.StoreName == "operator-lessons").DatabasePath);
         Assert.Equal(workspace.OperatorEscapesStorePath,
