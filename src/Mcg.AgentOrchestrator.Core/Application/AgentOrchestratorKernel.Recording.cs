@@ -260,21 +260,20 @@ public sealed partial class AgentOrchestratorKernel
             }
         }
         if (verification.WorkerResultPresent &&
-            task.RequiredRole is AgentRole.Planner or AgentRole.Researcher &&
+            PremiseInvalidClarification.CanRoute(task.RequiredRole, outcome.OutcomeClass == TaskOutcomeClass.Finding) &&
             WorkerResultBlockers.TryFindPremiseInvalidEvidence(verification, out var premiseEvidence))
         {
-            var question =
-                $"{task.RequiredRole} reported premise-invalid: {premiseEvidence}. " +
-                "Clarify, supersede, or abandon the goal before Developer dispatch.";
+            if (task.RequiredRole is AgentRole.Developer or AgentRole.Tester &&
+                !string.IsNullOrWhiteSpace(outcome.ClassifierReceipt))
+            {
+                Append(goal, taskId, ProgressKind.TaskNote, outcome.ClassifierReceipt);
+            }
+            var clarification = PremiseInvalidClarification.Create(task, premiseEvidence);
             RequestHumanInputDeduplicated(
                 goal.Id,
                 task.Id,
-                question,
-                blockerFingerprint: HumanInputRequest.BuildWorkerResultBlockerFingerprint(
-                    task.Id,
-                    task.RequiredRole,
-                    question,
-                    premiseEvidence),
+                clarification.Question,
+                blockerFingerprint: clarification.BlockerFingerprint,
                 completedRound: completedRound,
                 workerResultLogReference: verification.StandardOutputPath);
             return;

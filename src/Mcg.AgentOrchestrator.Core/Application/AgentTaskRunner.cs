@@ -174,22 +174,20 @@ public sealed class AgentTaskRunner
             }
         }
 
+        var implementationPremiseRefuted = task.RequiredRole is AgentRole.Developer or AgentRole.Tester &&
+            DispatchFailureClassifier.Classify(task, new TaskVerificationRecord(
+                "api-run", string.Empty, 0, output, string.Empty, execution.CompletedAt,
+                WorkerResultPresent: hasCompleteWorkerResult)).OutcomeClass == TaskOutcomeClass.Finding;
         if (hasCompleteWorkerResult &&
-            task.RequiredRole is AgentRole.Planner or AgentRole.Researcher &&
+            PremiseInvalidClarification.CanRoute(task.RequiredRole, implementationPremiseRefuted) &&
             WorkerResultBlockers.TryFindPremiseInvalidEvidence(output, out var premiseEvidence))
         {
-            var question =
-                $"{task.RequiredRole} reported premise-invalid: {premiseEvidence}. " +
-                "Clarify, supersede, or abandon the goal before Developer dispatch.";
+            var clarification = PremiseInvalidClarification.Create(task, premiseEvidence);
             _kernel.RequestHumanInputDeduplicated(
                 goal.Id,
                 task.Id,
-                question,
-                blockerFingerprint: HumanInputRequest.BuildWorkerResultBlockerFingerprint(
-                    task.Id,
-                    task.RequiredRole,
-                    question,
-                    premiseEvidence),
+                clarification.Question,
+                blockerFingerprint: clarification.BlockerFingerprint,
                 completedRound: completedRound,
                 workerResultLogReference: workerResultReference);
             return new AgentTaskRunResult(goal, task, execution);

@@ -140,6 +140,17 @@ public sealed class AgentOutputDirectivesTests
     [Xunit.Fact(DisplayName = "Role_requirements_define_canonical_inconclusive_and_premise_invalid_results")]
     public void RoleRequirementsDefineCanonicalInconclusiveAndPremiseInvalidResults()
     {
+        foreach (var role in new[] { AgentRole.Developer, AgentRole.Tester })
+        {
+            foreach (var complexity in new[] { TaskComplexity.Simple, TaskComplexity.Complex })
+            {
+                Assert.Contains("blockers: premise-invalid - <fact and evidence>",
+                    SdlcRolePromptRequirements.BuildPlainText(role, complexity), StringComparison.Ordinal);
+            }
+            var directive = string.Join("\n", AgentOutputDirectives.WorkerResultTemplateLinesForRole(role));
+            Assert.DoesNotContain("Planner/Researcher only", directive, StringComparison.Ordinal);
+            Assert.Contains("Planner/Researcher/Developer/Tester", directive, StringComparison.Ordinal);
+        }
         Assert.Contains(
             "tests: inconclusive - <current-round evidence>",
             SdlcRolePromptRequirements.BuildPlainText(AgentRole.Tester),

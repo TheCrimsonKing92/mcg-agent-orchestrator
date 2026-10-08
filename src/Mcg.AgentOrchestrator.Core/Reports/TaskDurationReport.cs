@@ -14,7 +14,8 @@ public sealed record TaskDurationObservation(
     int RealFailureAttemptCount,
     int EnvironmentalFailureAttemptCount,
     int ManufacturedFixedFailureAttemptCount,
-    int UnknownEraFailureAttemptCount);
+    int UnknownEraFailureAttemptCount,
+    int FindingAttemptCount = 0);
 
 public sealed record TaskDurationStatsRecord(
     AgentRole Role,
@@ -35,7 +36,8 @@ public sealed record TaskDurationStatsRecord(
     double RealFailureRate = 0.0,
     double EnvironmentalFailureRate = 0.0,
     double ManufacturedFixedFailureRate = 0.0,
-    double UnknownEraFailureRate = 0.0)
+    double UnknownEraFailureRate = 0.0,
+    int FindingAttemptCount = 0)
 {
     public double AttemptsPerTask => TaskCount > 0 ? (double)AttemptCount / TaskCount : 0.0;
 
@@ -53,7 +55,8 @@ public sealed record TaskDurationTrendRecord(
     int AttemptCount,
     int FailedAttemptCount,
     double AttemptsPerTask,
-    double FailureRate);
+    double FailureRate,
+    int FindingAttemptCount = 0);
 
 public static class TaskDurationReport
 {
@@ -82,7 +85,7 @@ public static class TaskDurationReport
                     .Distinct()
                     .Count();
                 var attemptCount = attempts.Count;
-                var failedAttemptCount = attempts.Count(attempt => !attempt.Succeeded);
+                var failedAttemptCount = attempts.Count(attempt => !attempt.Succeeded && attempt.OutcomeClass != TaskOutcomeClass.Finding);
 
                 return new TaskDurationTrendRecord(
                     group.Key,
@@ -90,7 +93,8 @@ public static class TaskDurationReport
                     attemptCount,
                     failedAttemptCount,
                     taskCount > 0 ? (double)attemptCount / taskCount : 0.0,
-                    attemptCount > 0 ? (double)failedAttemptCount / attemptCount : 0.0);
+                    attemptCount > 0 ? (double)failedAttemptCount / attemptCount : 0.0,
+                    attempts.Count(attempt => attempt.OutcomeClass == TaskOutcomeClass.Finding));
             })
             .ToList();
     }
@@ -117,7 +121,7 @@ public static class TaskDurationReport
                     .Where(attempt => attempt.Succeeded)
                     .LastOrDefault();
                 var failedAttempts = attempts
-                    .Where(attempt => attempt.OutcomeClass != TaskOutcomeClass.Success)
+                    .Where(attempt => attempt.OutcomeClass is not (TaskOutcomeClass.Success or TaskOutcomeClass.Finding))
                     .ToList();
 
                 return new TaskDurationObservation(
@@ -134,7 +138,8 @@ public static class TaskDurationReport
                     failedAttempts.Count(attempt => attempt.OutcomeClass == TaskOutcomeClass.RealFailure),
                     failedAttempts.Count(attempt => attempt.OutcomeClass == TaskOutcomeClass.Environmental),
                     failedAttempts.Count(attempt => attempt.OutcomeClass == TaskOutcomeClass.ManufacturedFixed),
-                    failedAttempts.Count(attempt => attempt.OutcomeClass == TaskOutcomeClass.UnknownEra));
+                    failedAttempts.Count(attempt => attempt.OutcomeClass == TaskOutcomeClass.UnknownEra),
+                    attempts.Count(attempt => attempt.OutcomeClass == TaskOutcomeClass.Finding));
             })
             .ToList();
     }
@@ -222,7 +227,8 @@ public static class TaskDurationReport
                     attempts > 0 ? (double)realFailures / attempts : 0.0,
                     attempts > 0 ? (double)environmentalFailures / attempts : 0.0,
                     attempts > 0 ? (double)manufacturedFailures / attempts : 0.0,
-                    attempts > 0 ? (double)unknownEraFailures / attempts : 0.0);
+                    attempts > 0 ? (double)unknownEraFailures / attempts : 0.0,
+                    items.Sum(item => item.FindingAttemptCount));
             })
             .ToList();
     }
@@ -272,13 +278,16 @@ public static class TaskDurationReport
         foreach (var attempt in attempts.Where(attempt => since is null || attempt.DispatchAt >= since.Value))
         {
             var start = ResolveAttemptStart(task, attempt, dispatchTimes);
-            var succeeded = attempt.Verification?.Succeeded is true;
-            var outcomeClass = succeeded
+            var recordedClass = ResolveAttemptOutcomeClass(goal, task, attempt);
+            var succeeded = attempt.Verification?.Succeeded is true && recordedClass != TaskOutcomeClass.Finding;
+            var outcomeClass = recordedClass == TaskOutcomeClass.Finding
+                ? TaskOutcomeClass.Finding
+                : succeeded
                 ? TaskOutcomeClass.Success
-                : ResolveAttemptOutcomeClass(goal, task, attempt);
+                : recordedClass;
             var legitimateRuntime = succeeded ? PositiveDuration(attempt.End, start) : (TimeSpan?)null;
             var overhead = TimeSpan.Zero;
-            if (!succeeded)
+            if (!succeeded && outcomeClass != TaskOutcomeClass.Finding)
             {
                 overhead += PositiveDuration(attempt.End, start);
                 if (attempt.NextDispatchAt is not null)

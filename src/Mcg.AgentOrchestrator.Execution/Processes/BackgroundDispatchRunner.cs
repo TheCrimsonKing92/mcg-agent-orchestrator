@@ -1665,8 +1665,15 @@ public sealed partial class BackgroundDispatchRunner
                     (fullStandardOutput.Content is not null && TryAcceptDeferredNoChange(
                         kernel.GetGoal(goalId), task, worktreeEvidence, authoritativeStandardOutput,
                         decisionStandardError, ref standardErrorDiagnostic));
+                // A typed premise stop awaits clarification, so it need not manufacture a change.
+                // Preserve failed exits and let the dispatch classifier retain fault precedence.
+                var hasPremiseInvalidStop = exitCode == 0 && workerResultPresent &&
+                    task.RequiredRole is AgentRole.Developer or AgentRole.Tester &&
+                    fullStandardOutput.Content is not null &&
+                    WorkerResultBlockers.TryFindPremiseInvalidEvidence(authoritativeStandardOutput, out _);
                 var requiresCommitEvidence =
                     !successfulChildWithoutUsableWorkerResult &&
+                    !hasPremiseInvalidStop &&
                     _completionClassifier.RequiresPostDispatchCommitEvidence(task, hasVerificationOnlyTesterCompletion) &&
                     ((roleStillRequiresChangeEvidence && !allowsNoChangeCompletion) ||
                       (!verificationRecognized &&

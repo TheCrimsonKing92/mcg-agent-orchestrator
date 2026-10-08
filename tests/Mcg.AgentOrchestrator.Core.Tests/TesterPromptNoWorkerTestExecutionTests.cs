@@ -88,12 +88,13 @@ public sealed class TesterPromptNoWorkerTestExecutionTests
                 includeHighRiskContract.Value);
     }
 
-    // Verbatim literals from the pre-change role lists, including expanded constant values.
+    // Literal role baselines, including the Developer premise-invalid contract and expanded constants.
     private static string[] BaselineLines(AgentRole role, bool compact) => (role, compact) switch
     {
         (AgentRole.Developer, false) =>
         [
             "## Developer Requirements",
+            "- If repository evidence disproves the goal premise, stop and report `blockers: premise-invalid - <fact and evidence>`.",
             "- First honor eligible typed convergence for this candidate: return fresh passed focused receipts; clean worktree, no replay or invented edits.",
             "- No edits: start `NO_CHANGE:` line with reason; report `tests: deferred` naming test classes for conductor.",
             "- Format: `tests: deferred - ClassA, ClassB` or backticked names.",
@@ -107,6 +108,7 @@ public sealed class TesterPromptNoWorkerTestExecutionTests
         (AgentRole.Developer, true) =>
         [
             "## Developer Requirements",
+            "- If repository evidence disproves the goal premise, stop and report `blockers: premise-invalid - <fact and evidence>`.",
             "- No edits: start `NO_CHANGE:` line with reason; report `tests: deferred` naming test classes for conductor.",
             "- Format: `tests: deferred - ClassA, ClassB` or backticked names.",
             "- Before WORKER_RESULT, for each criterion naming Developer as owner, open the test written/changed for it: its assertion must check the specific named outcome, not a weaker property, and fail on pre-change code. If both hold, report proven with the test in criteria_self_check; else strengthen it or report unmet and set assigned_scope_complete: false.",

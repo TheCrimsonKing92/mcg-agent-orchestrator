@@ -388,7 +388,8 @@ internal static class SourceSizeRatchet
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
             new SourceClassCeiling("CliCommandHandlers", 12223, 30),
             new SourceClassCeiling("GoalAcceptanceVerifier", 9064, 32),
-            new SourceClassCeiling("AgentOrchestratorKernel", 9506, 27),
+            // Goal d647b5f3 extracts premise-invalid clarification construction to PremiseInvalidClarification.
+            new SourceClassCeiling("AgentOrchestratorKernel", 9505, 27),
             // Goal d6033045 extracted the pre-admission receipt pass to PassedMergeTrainReceiptAdmission; goal 1d0f2317
             // adds one admission predicate to exclude stream-complete children before slot reservation. Measured 9255.
             new SourceClassCeiling("ConductorBatchLoop", 9272, 56), // def5cd48: revision ledger and planner conflict routing.

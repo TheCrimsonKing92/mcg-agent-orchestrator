@@ -3,6 +3,24 @@ using Mcg.AgentOrchestrator.Core;
 
 public sealed class TaskVerificationTests
 {
+    [Xunit.Theory]
+    [Xunit.InlineData(AgentRole.Developer)]
+    [Xunit.InlineData(AgentRole.Tester)]
+    public void PremiseEvidenceSurvivesVerificationHistoryCap(AgentRole role)
+    {
+        var task = new TaskSpec(TaskId.New(), "Inspect", role);
+        var evidence = new TaskVerificationRecord("inspect", "C:\\repo", 0,
+            "WORKER_RESULT:\nblockers: premise-invalid - API absent; src/Api.cs\nEND_WORKER_RESULT",
+            "", DateTimeOffset.Parse("2026-09-21T12:00:00Z"), WorkerResultPresent: true);
+        task.RecordVerification(evidence);
+        for (var index = 1; index <= TaskSpec.VerificationHistoryLimit + 5; index++)
+        {
+            task.RecordVerification(evidence with { WorkerResultPresent = false, StandardOutput = "plain output",
+                CompletedAt = evidence.CompletedAt.AddMinutes(index) });
+        }
+        var restored = TaskSpec.FromSnapshot(task.ToSnapshot());
+        Assert.Contains(restored.VerificationHistory, item => item.StandardOutput == evidence.StandardOutput);
+    }
     [Xunit.Fact(DisplayName = "Task_dispatch_snapshot_round_trips_review_retry_cap_receipt")]
     public void TaskDispatchSnapshotRoundTripsReviewRetryCapReceipt()
     {

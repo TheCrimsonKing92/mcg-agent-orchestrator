@@ -32,6 +32,7 @@ internal static partial class ConsoleViews
                 : FormatInsufficient(record.TaskCount);
             Console.WriteLine(
                 $"  {record.Scope}: tasks={record.TaskCount} attempts={record.AttemptCount} " +
+                $"findings={record.FindingAttemptCount} " +
                 $"attemptsPerTask={record.AttemptsPerTask:0.0} " +
                 $"legit median={medianRuntime} p90={p90Runtime} " +
                 $"overhead median={medianOverhead} " +
@@ -48,6 +49,7 @@ internal static partial class ConsoleViews
             {
                 Console.WriteLine(
                     $"  {row.Day:yyyy-MM-dd}: tasks={row.TaskCount} attempts={row.AttemptCount} " +
+                    $"findings={row.FindingAttemptCount} " +
                     $"attemptsPerTask={row.AttemptsPerTask:0.0} failureRate={row.FailureRate:P0}");
             }
         }

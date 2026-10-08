@@ -92,6 +92,7 @@ internal static class SdlcRolePromptRequirements
             AgentRole.Developer =>
             [
                 "## Developer Requirements",
+                "- If repository evidence disproves the goal premise, stop and report `blockers: premise-invalid - <fact and evidence>`.",
                 "- First honor eligible typed convergence for this candidate: return fresh passed focused receipts; clean worktree, no replay or invented edits.",
                 "- No edits: start `NO_CHANGE:` line with reason; report `tests: deferred` naming test classes for conductor.",
                 DeveloperDeferredTestsExactForm,
@@ -105,6 +106,7 @@ internal static class SdlcRolePromptRequirements
             AgentRole.Tester =>
             [
                 "## Tester Requirements",
+                "- If repository evidence disproves the goal premise, stop and report `blockers: premise-invalid - <fact and evidence>`.",
                 NegativeControlApplicabilityRule,
                 NegativeControlRequestRule,
                 TesterReceiptFirstContract,
@@ -271,6 +273,7 @@ internal static class SdlcRolePromptRequirements
             AgentRole.Developer =>
             [
                 "## Developer Requirements",
+                "- If repository evidence disproves the goal premise, stop and report `blockers: premise-invalid - <fact and evidence>`.",
                 "- No edits: start `NO_CHANGE:` line with reason; report `tests: deferred` naming test classes for conductor.",
                 DeveloperDeferredTestsExactForm,
                 DeveloperSelfCheckProcedure,
@@ -283,6 +286,7 @@ internal static class SdlcRolePromptRequirements
             AgentRole.Tester =>
             [
                 "## Tester Requirements",
+                "- If repository evidence disproves the goal premise, stop and report `blockers: premise-invalid - <fact and evidence>`.",
                 NegativeControlApplicabilityRule,
                 NegativeControlRequestRule,
                 TesterCompactReceiptFirstContract,

@@ -2991,6 +2991,8 @@ public sealed class DispatchExecutionTests
     [Xunit.Theory(DisplayName = "RecordDispatchExecutionResult_routes_Planner_or_Researcher_premise_invalid_to_clarification")]
     [Xunit.InlineData(AgentRole.Planner)]
     [Xunit.InlineData(AgentRole.Researcher)]
+    [Xunit.InlineData(AgentRole.Developer)]
+    [Xunit.InlineData(AgentRole.Tester)]
     public void RecordDispatchExecutionResultRoutesPremiseInvalidToClarification(AgentRole role)
     {
         var clock = new FakeClock();
@@ -3023,6 +3025,8 @@ public sealed class DispatchExecutionTests
         Assert.Equal(WorkTaskStatus.WaitingForHuman, task.Status);
         Assert.Equal(GoalStatus.WaitingForHuman, goal.Status);
         Assert.Contains("required API was removed", request.Question, StringComparison.Ordinal);
+        Assert.StartsWith($"{role} reported premise-invalid:", request.Question, StringComparison.Ordinal);
+        Assert.Contains("Clarify, supersede, or abandon", request.Question, StringComparison.Ordinal);
         Assert.Single(task.VerificationHistory);
         Assert.DoesNotContain(goal.Timeline, evt =>
             evt.TaskId == task.Id && (evt.Kind is ProgressKind.TaskFailed or ProgressKind.TaskCompleted));
@@ -3519,4 +3523,3 @@ private static string StructuredReviewerResult(
     Assert.Equal(GoalStatus.Verified, goal.Status);
 }
 }
-

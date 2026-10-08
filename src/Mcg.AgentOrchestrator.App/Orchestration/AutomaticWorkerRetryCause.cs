@@ -24,6 +24,11 @@ internal static class AutomaticWorkerRetryCause
             return null;
         }
 
+        if (outcome.OutcomeClass == TaskOutcomeClass.Finding)
+        {
+            return null;
+        }
+
         if (TaskOutcomeClassifier.IsIncompleteScopeDeclaration(
             TaskOutcomeClassifier.TryExtractRule(
                 outcome.ClassifierReceipt)))

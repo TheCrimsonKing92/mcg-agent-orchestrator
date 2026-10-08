@@ -28,18 +28,18 @@ public sealed class GuidanceTextBudgetTests
         new("requirements/Researcher/Simple", 1370, () => Requirements(AgentRole.Researcher, TaskComplexity.Simple)),
         // Researcher Complex requirements are loaded in every complex Researcher brief.
         new("requirements/Researcher/Complex", 1949, () => Requirements(AgentRole.Researcher, TaskComplexity.Complex)),
-        // Developer Auto requirements are loaded in every Developer brief with automatic complexity.
-        new("requirements/Developer/Auto", 963, () => Requirements(AgentRole.Developer, TaskComplexity.Auto)),
-        // Developer Simple requirements are loaded in every simple Developer brief.
-        new("requirements/Developer/Simple", 963, () => Requirements(AgentRole.Developer, TaskComplexity.Simple)),
-        // Developer Complex requirements are loaded in every complex Developer brief.
-        new("requirements/Developer/Complex", 1016, () => Requirements(AgentRole.Developer, TaskComplexity.Complex)),
-        // Tester Auto requirements are loaded in every Tester brief with automatic complexity.
-        new("requirements/Tester/Auto", 3401, () => Requirements(AgentRole.Tester, TaskComplexity.Auto)),
-        // Tester Simple requirements are loaded in every simple Tester brief.
-        new("requirements/Tester/Simple", 3401, () => Requirements(AgentRole.Tester, TaskComplexity.Simple)),
-        // Tester Complex requirements are loaded in every complex Tester brief.
-        new("requirements/Tester/Complex", 5553, () => Requirements(AgentRole.Tester, TaskComplexity.Complex)),
+        // Developer Auto requirements add the evidence-bound premise-invalid stop instruction (120 chars).
+        new("requirements/Developer/Auto", 1083, () => Requirements(AgentRole.Developer, TaskComplexity.Auto)),
+        // Developer Simple requirements add the evidence-bound premise-invalid stop instruction (120 chars).
+        new("requirements/Developer/Simple", 1083, () => Requirements(AgentRole.Developer, TaskComplexity.Simple)),
+        // Developer Complex requirements add the evidence-bound premise-invalid stop instruction (120 chars).
+        new("requirements/Developer/Complex", 1136, () => Requirements(AgentRole.Developer, TaskComplexity.Complex)),
+        // Tester Auto requirements add the evidence-bound premise-invalid stop instruction (120 chars).
+        new("requirements/Tester/Auto", 3521, () => Requirements(AgentRole.Tester, TaskComplexity.Auto)),
+        // Tester Simple requirements add the evidence-bound premise-invalid stop instruction (120 chars).
+        new("requirements/Tester/Simple", 3521, () => Requirements(AgentRole.Tester, TaskComplexity.Simple)),
+        // Tester Complex requirements add the evidence-bound premise-invalid stop instruction (120 chars).
+        new("requirements/Tester/Complex", 5673, () => Requirements(AgentRole.Tester, TaskComplexity.Complex)),
         // Reviewer Auto requirements are loaded in every Reviewer brief with automatic complexity.
         new("requirements/Reviewer/Auto", 4601, () => Requirements(AgentRole.Reviewer, TaskComplexity.Auto)),
         // Reviewer Simple requirements are loaded in every simple Reviewer brief.

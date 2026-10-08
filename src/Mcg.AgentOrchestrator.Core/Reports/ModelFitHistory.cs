@@ -36,8 +36,7 @@ public static class ModelFitHistory
 
     public static ModelFitHistoryRow? TryCreateRow(Goal goal, TaskSpec task)
     {
-        if (task.LastDispatch is not { ProviderName: { Length: > 0 } providerName, ModelName: { Length: > 0 } modelName } dispatch ||
-            task.Status is not (WorkTaskStatus.Completed or WorkTaskStatus.Failed))
+        if (task.LastDispatch is not { ProviderName: { Length: > 0 } providerName, ModelName: { Length: > 0 } modelName } dispatch)
         {
             return null;
         }
@@ -49,6 +48,12 @@ public static class ModelFitHistory
             task.Id,
             task.Status,
             task.Status == WorkTaskStatus.Failed ? null : task.LastVerification?.CompletedAt);
+
+        if (task.Status is not (WorkTaskStatus.Completed or WorkTaskStatus.Failed) &&
+            !(task.Status == WorkTaskStatus.WaitingForHuman && outcome.Class == TaskOutcomeClass.Finding))
+        {
+            return null;
+        }
 
         return new ModelFitHistoryRow(
             goal.Id.Value,
