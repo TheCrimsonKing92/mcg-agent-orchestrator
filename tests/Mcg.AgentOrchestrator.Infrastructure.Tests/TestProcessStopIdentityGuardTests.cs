@@ -15,14 +15,13 @@ public sealed class TestProcessStopIdentityGuardTests
         "HermesAcpTrialTests.cs::ProcessLauncherInventoriesAndKillsOwnedChild",
         "GoalWorktreeTestsSqliteTooling.cs::KillOwnedProcessForTestCleanup",
         "ProcessTreeGuiSuppressionTestsBelowNormalInheritance.cs::CheckInheritance",
-        "RealWorkerProcessGuardTests.cs::TryKillDispatchHost",
         "WorkerProcessJobsTests.cs::WorkerProcessJobsNonWindowsRegistrationFailureDisposesStartedProcess",
         "WorkerDispatchTestsWorkerResultClassification.cs::BackgroundDispatchRunnerRegistrationFailureStopsBeforeProcessReceipt",
         "Fixtures/ConsoleIoProbe/BelowNormalGrandchildProbe.cs::Run",
         "Fixtures/ConsoleIoProbe/StartupPipeProbe.cs::Launch"
     };
 
-    private const int MaximumExistingExceptions = 15;
+    private const int MaximumExistingExceptions = 14;
     private static readonly Regex MemberStart = new(
         @"(?m)^\s*(?:public|private|internal|protected)\s+(?:static\s+)?(?:async\s+)?[\w<>,?\[\].]+\s+(?<name>\w+)\s*\(",
         RegexOptions.Compiled);
