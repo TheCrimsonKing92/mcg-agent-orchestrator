@@ -15,6 +15,7 @@ internal sealed partial class ConductorBoardFillHost
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly Func<string?> _mainHead;
     private readonly Func<string?> _staleMainHead;
+    private readonly Func<IReadOnlyList<string>>? _preferredOrder;
     private readonly BoardFillTrackedEditsHold _trackedEditsHold;
     private readonly IBoardFillPremiseVerifier? _verifier;
     private readonly CancellationTokenSource _shutdown = new();
@@ -24,6 +25,7 @@ internal sealed partial class ConductorBoardFillHost
     private bool _recovered;
     // In memory only; a process restart clears the hold.
     private string? _heldMainHead;
+    private string? _lastPlanReadFailure;
     internal Task? CurrentRound => _round;
 
     // Drafting is read-only; optional filing delegates all goal mutations to the CLI intake seam.
@@ -34,7 +36,7 @@ internal sealed partial class ConductorBoardFillHost
         Func<ConductorAutonomyPolicy> policy, ConductEventLogWriter events, Func<DateTimeOffset>? utcNow = null,
         IBoardFillPremiseVerifier? verifier = null, BoardFillFilingSeams? filing = null,
         Func<string?>? mainHead = null, Func<(bool Clean, AuthorDraftTrackedEdits? Edits)>? trackedEdits = null,
-        Func<string?>? staleMainHead = null)
+        Func<string?>? staleMainHead = null, Func<IReadOnlyList<string>>? preferredOrder = null)
     {
         _store = store;
         _draft = draft;
@@ -47,6 +49,7 @@ internal sealed partial class ConductorBoardFillHost
         _filingSeams = filing;
         _mainHead = mainHead ?? (() => null);
         _staleMainHead = staleMainHead ?? _mainHead;
+        _preferredOrder = preferredOrder;
         _trackedEditsHold = new(store, events, trackedEdits ?? (() => (false, null)));
     }
 
@@ -86,12 +89,31 @@ internal sealed partial class ConductorBoardFillHost
         try { observedMain = _staleMainHead(); }
         catch { observedMain = null; }
         var items = ConductorTickStepLedger.CountBacklogRows(_backlog());
+        var preferredOrder = ReadPreferredOrder(now);
         var item = BoardFillReadyItemSelector.Select(items, kernel.Goals.ToArray(), _store.AlreadyDrafted(items, observedMain),
-            ConductorTickStepLedger.CountReadinessEvaluations(_readiness(kernel, items)), _store.ReadAll());
+            ConductorTickStepLedger.CountReadinessEvaluations(_readiness(kernel, items)), _store.ReadAll(), preferredOrder);
         if (item is null) return;
         _running = _store.Begin(item, now);
         // Only immutable identity crosses the thread boundary; the model never reads the live kernel.
         _round = Task.Run(() => RunRoundAsync(item.Id));
+    }
+
+    private IReadOnlyList<string> ReadPreferredOrder(DateTimeOffset now)
+    {
+        try
+        {
+            var order = _preferredOrder?.Invoke() ?? [];
+            _lastPlanReadFailure = null;
+            return order;
+        }
+        catch (Exception exception)
+        {
+            var detail = $"BOARD_FILL_PLAN_READ_FAILED reason={exception.GetType().Name}: {exception.Message}"
+                .Replace('\r', ' ').Replace('\n', ' ');
+            if (detail != _lastPlanReadFailure && _events.AppendRequired("board-fill-draft", null, detail, now))
+                _lastPlanReadFailure = detail;
+            return [];
+        }
     }
 
     private bool Harvest(DateTimeOffset now)

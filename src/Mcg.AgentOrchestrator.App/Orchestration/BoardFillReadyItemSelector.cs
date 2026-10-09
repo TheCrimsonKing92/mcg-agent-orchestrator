@@ -21,8 +21,14 @@ internal static class BoardFillReadyItemSelector
 
     internal static BacklogItem? Select(IReadOnlyList<BacklogItem> items, IReadOnlyList<Goal> goals,
         IReadOnlySet<string> alreadyDrafted, Func<BacklogItem, BacklogReadiness> readiness,
-        IReadOnlyList<BoardFillDraftRound>? rounds = null) =>
-        items.Where(item => item.Status == BacklogItemStatus.Open &&
+        IReadOnlyList<BoardFillDraftRound>? rounds = null, IReadOnlyList<string>? preferredOrder = null)
+    {
+        var ranks = new Dictionary<string, int>(StringComparer.Ordinal);
+        if (preferredOrder is not null)
+            for (var index = 0; index < preferredOrder.Count; index++)
+                ranks.TryAdd(preferredOrder[index], index);
+
+        return items.Where(item => item.Status == BacklogItemStatus.Open &&
             !alreadyDrafted.Contains(item.Id) &&
             (rounds is null || rounds.Count(round => round.BacklogItemId == item.Id &&
                 BoardFillFailureKind.CountsTowardItem(round) && round.ChangeStamp >= ChangeStamp(item)) < MaxFailedRoundsPerChange) &&
@@ -30,9 +36,11 @@ internal static class BoardFillReadyItemSelector
             !IsOwnerGated(item))
         .Select(item => (Item: item, Ready: readiness(item)))
         .Where(candidate => candidate.Ready.Eligible)
-        .OrderByDescending(candidate => !string.IsNullOrWhiteSpace(candidate.Item.Priority))
+        .OrderBy(candidate => ranks.GetValueOrDefault(candidate.Item.Id, int.MaxValue))
+        .ThenByDescending(candidate => !string.IsNullOrWhiteSpace(candidate.Item.Priority))
         .ThenByDescending(candidate => candidate.Ready.HasLandedDependency)
         .ThenByDescending(candidate => candidate.Item.UpdatedAt)
         .ThenBy(candidate => candidate.Item.Id, StringComparer.Ordinal)
         .Select(candidate => candidate.Item).FirstOrDefault();
+    }
 }

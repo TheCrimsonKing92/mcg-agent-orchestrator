@@ -7,12 +7,13 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed partial class ConductorBoardFillHost
 {
     internal static ConductorBoardFillHost CreateDefault(OrchestratorWorkspace workspace,
-        Func<ConductorAutonomyPolicy> policy, Func<string?>? mainHead = null) => new(
+        Func<ConductorAutonomyPolicy> policy, Func<string?>? mainHead = null,
+        Func<string, CancellationToken, AuthorBriefDraftOutcome>? draft = null) => new(
         new(ConductorBoardFillDraftStore.DefaultPath(workspace)),
-        (id, token) => AuthorBriefDraftService.Run(id, workspace,
+        draft ?? ((id, token) => AuthorBriefDraftService.Run(id, workspace,
             new(WorkerProcessRunner.RunBufferedAsync, new GitAuthorBriefDraftRepository(workspace.ExecutionDirectory, workspace.IntegrationBranch),
                 ModelFunctionCatalogStore.Load(workspace.ModelFunctionCatalogPath)),
-            TextWriter.Null, TextWriter.Null, token, "board-fill-drafts", includeBoardFillMetadata: true),
+            TextWriter.Null, TextWriter.Null, token, "board-fill-drafts", includeBoardFillMetadata: true)),
         () => BoardFillBacklogSnapshot.Read(workspace.BacklogStorePath),
         (kernel, items) =>
         {
@@ -36,7 +37,8 @@ internal sealed partial class ConductorBoardFillHost
             new GitAuthorBriefDraftRepository(workspace.ExecutionDirectory, workspace.IntegrationBranch), workspace.ExecutionDirectory),
         filing: CreateFilingSeams(workspace), mainHead: mainHead,
         trackedEdits: () => GitTrackedEditsProbe.Probe(workspace.ExecutionDirectory),
-        staleMainHead: mainHead ?? (() => BoardFillStaleItemRule.ReadMainHead(workspace.ExecutionDirectory, workspace.IntegrationBranch)));
+        staleMainHead: mainHead ?? (() => BoardFillStaleItemRule.ReadMainHead(workspace.ExecutionDirectory, workspace.IntegrationBranch)),
+        preferredOrder: () => EpicPlanReadySliceSelector.Read(workspace));
 
     private static BoardFillFilingSeams CreateFilingSeams(OrchestratorWorkspace workspace)
     {
