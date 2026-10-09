@@ -16,10 +16,12 @@ public static class ProjectModelJson
     {
         var model = JsonSerializer.Deserialize<ProjectModel>(json, Options)
             ?? throw new JsonException("A project model cannot be null.");
+        if (model.SchemaVersion == 2)
+            model = model with { SchemaVersion = ProjectModel.CurrentSchemaVersion, Hazards = [] };
         if (model.SchemaVersion != ProjectModel.CurrentSchemaVersion || model.Units is null ||
             model.Dependencies is null || model.TestSetups is null || model.OwnerQuestions is null ||
-            model.Commands is null || model.EnvironmentNeeds is null || model.Measurements is null)
-            throw new JsonException("A project model requires schema version 2 and all snapshot lists.");
+            model.Commands is null || model.EnvironmentNeeds is null || model.Measurements is null || model.Hazards is null)
+            throw new JsonException($"A project model requires schema version {ProjectModel.CurrentSchemaVersion} and all snapshot lists.");
         return model;
     }
 }

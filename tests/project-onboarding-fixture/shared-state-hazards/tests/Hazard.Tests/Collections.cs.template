@@ -1,0 +1,7 @@
+using Xunit;
+[CollectionDefinition("LiteralSerial", DisableParallelization = true)]
+public sealed class LiteralCollection;
+[CollectionDefinition(HazardNames.Shared, DisableParallelization = true)]
+public sealed class ConstantCollection;
+[CollectionDefinition("ParallelOnly", DisableParallelization = false)]
+public sealed class ParallelCollection;

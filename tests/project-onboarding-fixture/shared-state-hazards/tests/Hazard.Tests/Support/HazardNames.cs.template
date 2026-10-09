@@ -1,0 +1,4 @@
+public static class HazardNames
+{
+    public const string Shared = "SharedDatabase";
+}

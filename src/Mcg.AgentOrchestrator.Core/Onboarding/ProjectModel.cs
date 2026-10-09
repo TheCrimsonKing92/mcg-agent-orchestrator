@@ -11,7 +11,8 @@ public sealed record ProjectModel(
     IReadOnlyList<ProjectOwnerQuestion> OwnerQuestions,
     IReadOnlyList<UnitCommands> Commands,
     IReadOnlyList<EnvironmentNeed> EnvironmentNeeds,
-    IReadOnlyList<UnitMeasurement> Measurements)
+    IReadOnlyList<UnitMeasurement> Measurements,
+    IReadOnlyList<SharedStateHazard> Hazards)
 {
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
 }

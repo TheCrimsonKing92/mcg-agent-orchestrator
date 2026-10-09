@@ -21,7 +21,7 @@ public sealed class ProjectModelJsonRoundTripTests
                     new("undetermined", source, FactConfidence.Low))],
             [new EnvironmentNeed("dotnet-sdk", new("10.0.100", source, FactConfidence.Medium))],
             [new UnitMeasurement("library", new(1.25, measured, FactConfidence.High), null),
-                new UnitMeasurement("tests", null, new(2.5, measured, FactConfidence.Low))]);
+                new UnitMeasurement("tests", null, new(2.5, measured, FactConfidence.Low))], []);
 
         var json = ProjectModelJson.Serialize(model);
         var restored = ProjectModelJson.Deserialize(json);
@@ -31,7 +31,7 @@ public sealed class ProjectModelJsonRoundTripTests
         Assert.Equal(model.Dependencies[0], Assert.Single(restored.Dependencies));
         Assert.Equal(model.TestSetups[0], Assert.Single(restored.TestSetups));
         Assert.Equal(model.OwnerQuestions[0], Assert.Single(restored.OwnerQuestions));
-        Assert.Equal(2, restored.SchemaVersion);
+        Assert.Equal(3, restored.SchemaVersion);
         Assert.Equal(model.Commands, restored.Commands);
         Assert.Equal(model.EnvironmentNeeds, restored.EnvironmentNeeds);
         Assert.Equal(model.Measurements, restored.Measurements);
