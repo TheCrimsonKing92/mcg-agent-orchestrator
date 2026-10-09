@@ -113,7 +113,7 @@ internal static class EpicProgressReadModel
         return Build(epics, projects, members, LoadGoalMetadata(workspace, includeTerminalCreatedAt: since is not null), backlog, since);
     }
 
-    private static IReadOnlyList<GoalSummary> LoadGoalMetadata(OrchestratorWorkspace workspace, bool includeTerminalCreatedAt = false)
+    internal static IReadOnlyList<GoalSummary> LoadGoalMetadata(OrchestratorWorkspace workspace, bool includeTerminalCreatedAt = false)
     {
         if (!File.Exists(workspace.SqliteStatePath))
             return [];

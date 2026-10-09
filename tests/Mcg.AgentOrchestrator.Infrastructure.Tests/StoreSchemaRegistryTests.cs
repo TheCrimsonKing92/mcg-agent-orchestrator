@@ -47,8 +47,9 @@ public sealed class StoreSchemaRegistryTests
     [Theory]
     [InlineData(null, StoreSchemaState.Missing)]
     [InlineData(0, StoreSchemaState.Older)]
-    [InlineData(1, StoreSchemaState.Current)]
-    [InlineData(2, StoreSchemaState.Newer)]
+    [InlineData(1, StoreSchemaState.Older)]
+    [InlineData(2, StoreSchemaState.Current)]
+    [InlineData(3, StoreSchemaState.Newer)]
     public void Verify_RecordedVersion_ClassifiesWithoutChangingRecord(int? version, StoreSchemaState expected)
     {
         using var conn = OpenMemory();

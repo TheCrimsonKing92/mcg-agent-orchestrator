@@ -653,16 +653,49 @@ public sealed class PortfolioStore
         RunNonQuery(conn, "BEGIN IMMEDIATE");
         try
         {
+            RunNonQuery(conn, """
+                CREATE TABLE IF NOT EXISTS epic_plan_items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    epic_id TEXT NOT NULL REFERENCES epics(id) ON DELETE CASCADE,
+                    position INTEGER NOT NULL CHECK(position > 0),
+                    kind TEXT NOT NULL CHECK(kind IN ('slice', 'step')),
+                    backlog_item_id TEXT NULL,
+                    text TEXT NULL,
+                    done INTEGER NOT NULL DEFAULT 0 CHECK(done IN (0, 1)),
+                    created_at TEXT NOT NULL,
+                    created_by TEXT NOT NULL,
+                    CHECK((kind = 'slice' AND backlog_item_id IS NOT NULL AND text IS NULL AND done = 0)
+                       OR (kind = 'step' AND backlog_item_id IS NULL AND text IS NOT NULL))
+                )
+                """);
+            RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS idx_epic_plan_items_epic ON epic_plan_items(epic_id, position)");
+            RunNonQuery(conn, "CREATE UNIQUE INDEX IF NOT EXISTS ux_epic_plan_items_slice ON epic_plan_items(epic_id, backlog_item_id) WHERE backlog_item_id IS NOT NULL");
+            RunNonQuery(conn, """
+                CREATE TABLE IF NOT EXISTS epic_decisions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    epic_id TEXT NOT NULL REFERENCES epics(id) ON DELETE CASCADE,
+                    decided_at TEXT NOT NULL,
+                    text TEXT NOT NULL,
+                    decided_by TEXT NULL
+                )
+                """);
+            RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS idx_epic_decisions_epic ON epic_decisions(epic_id)");
             var hasDescription = false;
+            var hasBar = false;
             using (var cmd = conn.CreateCommand())
             {
                 cmd.CommandText = "PRAGMA table_info(epics)";
                 using var reader = cmd.ExecuteReader();
                 while (reader.Read())
+                {
                     hasDescription |= reader.GetString(1).Equals("description", StringComparison.OrdinalIgnoreCase);
+                    hasBar |= reader.GetString(1).Equals("bar", StringComparison.OrdinalIgnoreCase);
+                }
             }
             if (!hasDescription)
                 RunNonQuery(conn, "ALTER TABLE epics ADD COLUMN description TEXT NULL");
+            if (!hasBar)
+                RunNonQuery(conn, "ALTER TABLE epics ADD COLUMN bar TEXT NULL");
             StoreSchemaVersions.UpgradeToCurrent(conn, StoreSchemaRegistry.Portfolio);
             RunNonQuery(conn, "COMMIT");
         }

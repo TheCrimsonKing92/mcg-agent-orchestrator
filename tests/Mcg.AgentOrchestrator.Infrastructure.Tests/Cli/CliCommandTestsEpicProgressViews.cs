@@ -63,7 +63,8 @@ public sealed class CliCommandTestsEpicProgressViews : CliTaskQueryTestSupport, 
         var output = Execute(["epic-list"], workspace, probe);
 
         Assert.Equal($"Board ({epic.Id[..8]}) project=unassigned goals=12 backlog=4 active=3 verified=1 parked=1 landed=1 newest={newest:O}"
-            + $" verifying=1 failed=2 closed=2 missing=1 backlog-open=2 backlog-done=2{Environment.NewLine}", output);
+            + $" verifying=1 failed=2 closed=2 missing=1 backlog-open=2 backlog-done=2{Environment.NewLine}"
+            + $"  0 of 0 slices landed; next: no plan{Environment.NewLine}", output);
         AssertUnchanged(workspace, before, probe);
         Assert.Equal(16, store.ListEpicMembersAsync(epic.Id).GetAwaiter().GetResult().Count);
     }

@@ -5,7 +5,8 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static partial class ConsoleViews
 {
-    public static void PrintEpicRollups(IReadOnlyList<EpicProgressRollup> rollups, DateTimeOffset? since = null)
+    public static void PrintEpicRollups(IReadOnlyList<EpicProgressRollup> rollups, DateTimeOffset? since = null,
+        IReadOnlyDictionary<string, string>? summaries = null)
     {
         if (since is not null)
             Console.WriteLine($"Window since {since.Value.UtcDateTime:O} (UTC)");
@@ -16,7 +17,11 @@ internal static partial class ConsoleViews
         }
 
         foreach (var row in rollups)
+        {
             Console.WriteLine(FormatEpicRollupLine(row));
+            if (summaries?.TryGetValue(row.Epic.Id, out var summary) == true)
+                Console.WriteLine($"  {summary}");
+        }
     }
 
     internal static string FormatEpicRollupLine(EpicProgressRollup row)
@@ -27,7 +32,7 @@ internal static partial class ConsoleViews
         return $"{row.Epic.Title} ({ShortId(row.Epic.Id)}) project={project} goals={row.GoalCount} backlog={row.BacklogItemCount} active={row.ActiveCount} verified={row.VerifiedCount} parked={row.ParkedCount} landed={row.LandedCount} newest={FormatTimestamp(row.NewestUpdatedAt)} verifying={row.VerifyingCount} failed={row.FailedCount} closed={row.ClosedCount} missing={row.MissingCount} backlog-open={row.BacklogOpenCount} backlog-done={row.BacklogDoneCount}{window}";
     }
 
-    public static void PrintEpicShow(EpicProgressRollup row)
+    public static void PrintEpicShow(EpicProgressRollup row, string? summary = null)
     {
         Console.WriteLine($"Epic: {row.Epic.Title}");
         Console.WriteLine($"Id: {row.Epic.Id}");
@@ -43,6 +48,7 @@ internal static partial class ConsoleViews
         }
         PrintEpicMembers(row.Epic, row.Members);
         Console.WriteLine(FormatEpicRollupLine(row));
+        if (summary is not null) Console.WriteLine($"  {summary}");
         Console.WriteLine("Member goals:");
         foreach (var member in row.MemberGoals)
             Console.WriteLine($"  - {ShortId(member.Id)} {member.Status} updated={FormatTimestamp(member.UpdatedAt)} {member.Title}");
