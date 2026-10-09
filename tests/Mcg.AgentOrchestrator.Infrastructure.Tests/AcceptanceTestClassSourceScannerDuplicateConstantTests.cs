@@ -43,11 +43,11 @@ public sealed class AcceptanceTestClassSourceScannerDuplicateConstantTests
                 OwnedCollections = lane.Name == "Process spawning" ? ["SAME"] : []
             }).ToArray();
         var singleLanes = AcceptanceLaneMembership.ResolveOwnedCollections(lanes, tree.Root);
-        var singleInventory = AcceptanceTestInventorySource.Read(tree.Root, EmptyMainMetadata);
+        var singleInventory = AcceptanceTestInventorySource.Read(tree.Root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, EmptyMainMetadata);
 
         tree.Write("Cli/Helper.cs", Helper("SAME"));
         var duplicateLanes = AcceptanceLaneMembership.ResolveOwnedCollections(lanes, tree.Root);
-        var duplicateInventory = AcceptanceTestInventorySource.Read(tree.Root, EmptyMainMetadata);
+        var duplicateInventory = AcceptanceTestInventorySource.Read(tree.Root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, EmptyMainMetadata);
 
         Xunit.Assert.Equal("Process spawning", Xunit.Assert.Single(
             AcceptanceLaneMembership.LanesIncluding(singleLanes, "SampleTests")).Name);

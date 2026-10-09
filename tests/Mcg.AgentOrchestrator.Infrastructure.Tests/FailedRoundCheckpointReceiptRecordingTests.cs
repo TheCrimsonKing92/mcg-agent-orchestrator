@@ -38,7 +38,7 @@ public sealed class FailedRoundCheckpointReceiptRecordingTests
         Assert.NotEmpty(FailedRoundCheckpointFixture.Git(f.Worktree, "status", "--short"));
         f.Retry();
         Assert.False(new Mcg.AgentOrchestrator.App.Orchestration.FailedRoundCheckpointPreDispatch(
-            f.Kernel, f.Repository).IntegrateMainBeforeDeveloperDispatch(f.Goal).CanDispatch);
+            f.Kernel, f.Repository, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default).IntegrateMainBeforeDeveloperDispatch(f.Goal).CanDispatch);
         Assert.Equal(before, FailedRoundCheckpointFixture.Git(f.Worktree, "rev-parse", "HEAD"));
     }
 
@@ -97,7 +97,7 @@ public sealed class FailedRoundCheckpointReceiptRecordingTests
         Assert.Null(worker.LastDispatch);
         var goal = restored.GetGoal(f.Goal.Id);
         Assert.True(new Mcg.AgentOrchestrator.App.Orchestration.FailedRoundCheckpointPreDispatch(
-            restored, f.Repository).IntegrateMainBeforeDeveloperDispatch(goal).CanDispatch);
+            restored, f.Repository, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default).IntegrateMainBeforeDeveloperDispatch(goal).CanDispatch);
         var sha = FailedRoundCheckpointFixture.Git(f.Worktree, "rev-parse", "HEAD");
         var persisted = Restore(restored).GetTask(f.Goal.Id, f.Worker.Id);
         Assert.Null(persisted.LastDispatch);
@@ -128,7 +128,7 @@ public sealed class FailedRoundCheckpointReceiptRecordingTests
         Assert.Equal(original.DirtyPaths, task.LastDispatch.FailedRoundCheckpointReceipt.DirtyPaths);
         loaded.RetryTask(f.Goal.Id, f.Worker.Id, "Resume preserved edits.", RetryCause.EnvironmentApparatusFailure);
         Assert.True(new Mcg.AgentOrchestrator.App.Orchestration.FailedRoundCheckpointPreDispatch(
-            loaded, f.Repository).IntegrateMainBeforeDeveloperDispatch(loaded.GetGoal(f.Goal.Id)).CanDispatch);
+            loaded, f.Repository, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default).IntegrateMainBeforeDeveloperDispatch(loaded.GetGoal(f.Goal.Id)).CanDispatch);
         await repository.SaveAsync(loaded);
         var reloaded = await new SqliteOrchestratorStateRepository(f.StateDatabase).LoadGoalsAsync([f.Goal.Id]);
         var dispatch = Assert.Single(reloaded.GetTask(f.Goal.Id, f.Worker.Id).DispatchHistory);

@@ -10,7 +10,7 @@ internal sealed partial class ConductorBoardFillHost
         Func<ConductorAutonomyPolicy> policy, Func<string?>? mainHead = null) => new(
         new(ConductorBoardFillDraftStore.DefaultPath(workspace)),
         (id, token) => AuthorBriefDraftService.Run(id, workspace,
-            new(WorkerProcessRunner.RunBufferedAsync, new GitAuthorBriefDraftRepository(workspace.ExecutionDirectory),
+            new(WorkerProcessRunner.RunBufferedAsync, new GitAuthorBriefDraftRepository(workspace.ExecutionDirectory, workspace.IntegrationBranch),
                 ModelFunctionCatalogStore.Load(workspace.ModelFunctionCatalogPath)),
             TextWriter.Null, TextWriter.Null, token, "board-fill-drafts"),
         () => BoardFillBacklogSnapshot.Read(workspace.BacklogStorePath),
@@ -33,7 +33,7 @@ internal sealed partial class ConductorBoardFillHost
                 goal => LandingState(workspace, goal));
         }, policy, new(workspace.ConductEventsLogPath), verifier: new BoardFillPremiseVerifier(
             () => ModelFunctionCatalogStore.Load(workspace.ModelFunctionCatalogPath),
-            new GitAuthorBriefDraftRepository(workspace.ExecutionDirectory), workspace.ExecutionDirectory),
+            new GitAuthorBriefDraftRepository(workspace.ExecutionDirectory, workspace.IntegrationBranch), workspace.ExecutionDirectory),
         filing: CreateFilingSeams(workspace), mainHead: mainHead);
 
     private static BoardFillFilingSeams CreateFilingSeams(OrchestratorWorkspace workspace)
@@ -41,7 +41,7 @@ internal sealed partial class ConductorBoardFillHost
         var intake = new BoardFillCliGoalIntake(workspace);
         return new(intake, intake.ReadBoard, () =>
         {
-            var result = GitCli.Run(workspace.ExecutionDirectory, "rev-parse", "--verify", "main^{commit}");
+            var result = GitCli.Run(workspace.ExecutionDirectory, "rev-parse", "--verify", $"{workspace.IntegrationBranch}^{{commit}}");
             return result.Succeeded ? result.Output.Trim() : null;
         });
     }

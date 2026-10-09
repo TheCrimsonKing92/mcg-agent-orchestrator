@@ -178,7 +178,7 @@ public abstract class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             .Select(goal =>
             {
                 var worktree = Assert.IsType<string>(GoalWorktrees.TryResolve(driver.ExecutionDirectory, goal.Id));
-                var revisions = ConductorGitRevisionReader.ReadRequiredPair(worktree);
+                var revisions = ConductorGitRevisionReader.ReadRequiredPair(worktree, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
                 Assert.False(string.IsNullOrWhiteSpace(revisions.BranchRevision));
                 Assert.False(string.IsNullOrWhiteSpace(revisions.MainRevision));
                 var result = driver.ProjectGateReadyCandidate(goal, ConductorAutonomyPolicy.Permissive);

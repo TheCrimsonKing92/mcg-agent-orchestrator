@@ -417,7 +417,7 @@ internal sealed partial class ConductorDriver
             receiptObservationGoalIds, resolveReceiptHeads ?? _resolveAcceptanceHeads,
             (_cohortKernel ?? _conductorTickKernel)?.Goals,
             _mergeTrainAcceptanceStore.ReadPassedReceiptsForGoal, ReadSuppressedCohortPairs,
-            HasCurrentPassedMergeTrainIdentity);
+            HasCurrentPassedMergeTrainIdentity, _integrationBranch);
     }
 
     private bool HasCurrentPassedMergeTrainIdentity(

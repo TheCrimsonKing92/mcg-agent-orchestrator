@@ -61,6 +61,7 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
         context.Kernel,
         goal,
         context.Workspace.ExecutionDirectory,
+        context.Workspace.IntegrationBranch,
         includeCleanupBackoff: false,
         processSnapshotFactory: processInspection.Get);
     var worktreeBlocksDiagnosis = worktreeRecovery.WorktreeDirty == true ||

@@ -63,7 +63,7 @@ public sealed partial class GoalAcceptanceVerifier
             stableSlotLease);
         var projects = new List<StructuralCoverageProject>();
         IReadOnlyList<AcceptanceCheckResult>? completedChecks = null;
-        var deletedTestFileSource = new DeletedTestFileDiffSource(_testOverrides.ResolveDeletedTestFilesForTests);
+        var deletedTestFileSource = new DeletedTestFileDiffSource(_testOverrides.ResolveDeletedTestFilesForTests, IntegrationBranch);
         foreach (var broadCheck in broadChecks)
         {
             if (ClassifyRemovedTestProject(worktreePath, mainWorktreePath, broadCheck.Project!,
@@ -124,6 +124,7 @@ public sealed partial class GoalAcceptanceVerifier
                 AcceptanceContainedGenerationBaseline.PrepareAsync(
                     worktreePath,
                     goalId?.Value ?? "operator",
+                    IntegrationBranch,
                     (path, sha, token) => PrepareBaselineAsync(
                         path,
                         $"contained-coverage-baseline-{sha[..Math.Min(8, sha.Length)]}",

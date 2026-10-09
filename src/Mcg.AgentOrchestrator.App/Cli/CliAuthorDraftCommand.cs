@@ -11,7 +11,7 @@ internal static class CliAuthorDraftCommand
 
     internal static int Run(IReadOnlyList<string> args, OrchestratorWorkspace workspace) =>
         Run(args, workspace, new(WorkerProcessRunner.RunBufferedAsync,
-            new GitAuthorBriefDraftRepository(workspace.ExecutionDirectory),
+            new GitAuthorBriefDraftRepository(workspace.ExecutionDirectory, workspace.IntegrationBranch),
             ModelFunctionCatalogStore.Load(workspace.ModelFunctionCatalogPath)), Console.Out, Console.Error);
 
     internal static int Run(IReadOnlyList<string> args, OrchestratorWorkspace workspace,

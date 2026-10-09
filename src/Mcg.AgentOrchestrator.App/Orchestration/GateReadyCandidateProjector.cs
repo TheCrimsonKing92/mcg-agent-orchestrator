@@ -20,7 +20,7 @@ internal sealed class GateReadyCandidateProjector
         _readMergeTree = readMergeTree ?? throw new ArgumentNullException(nameof(readMergeTree));
     }
 
-    internal static GateReadyCandidateProjector CreateForRepository(string executionDirectory)
+    internal static GateReadyCandidateProjector CreateForRepository(string executionDirectory, string integrationBranch)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(executionDirectory);
 
@@ -30,7 +30,7 @@ internal sealed class GateReadyCandidateProjector
                 $"Goal {goalId.Value[..8]} has no registered worktree.");
 
         return new GateReadyCandidateProjector(
-            goalId => ConductorGitRevisionReader.ReadRequiredPair(ResolveWorktree(goalId)),
+            goalId => ConductorGitRevisionReader.ReadRequiredPair(ResolveWorktree(goalId), integrationBranch),
             goalId =>
             {
                 var result = GoalWorktrees.ResolveChangedFilesAgainstHead(executionDirectory, goalId);

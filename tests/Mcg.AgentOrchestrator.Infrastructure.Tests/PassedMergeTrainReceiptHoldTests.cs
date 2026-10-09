@@ -369,7 +369,7 @@ public sealed class PassedMergeTrainReceiptHoldTests(ITestOutputHelper output) :
                 heads ?? (goal => (Revisions[goal.Id], MainRevision)), Goals,
                 receipts ?? (_ => [Receipt]), () => new HashSet<string>(),
                 (selection, receipt) => selection.Members.Select(member => member.GoalId)
-                    .SequenceEqual(receipt.Identity.Members.Select(member => member.GoalId)));
+                    .SequenceEqual(receipt.Identity.Members.Select(member => member.GoalId)), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
 
         internal MemoryTick Tick(int tick)
         {

@@ -288,6 +288,8 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
                 try
                 {
                     var executionOptions = new AcceptanceRunExecutionOptions(
+                        IntegrationBranch: context.Workspace.IntegrationBranch,
+                        ProjectHomeDirectory: context.Workspace.ProjectHomeDirectoryOrNull,
                         ProgressSink: progress => AppendConductEvent(
                             context,
                             "gate-progress",
@@ -543,7 +545,7 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
             PassingGateReceiptRecorded: verification is { Passed: true },
             Merge: () =>
             {
-                var pendingRollback = GoalRollbackPlanner.CapturePendingAcceptance(context.Workspace.ExecutionDirectory, goal.Id);
+                var pendingRollback = GoalRollbackPlanner.CapturePendingAcceptance(context.Workspace.ExecutionDirectory, goal.Id, context.Workspace.IntegrationBranch);
                 var merge = context.Worktrees.TryFastForwardMerge(
                     context.Workspace.ExecutionDirectory,
                     goal.Id,

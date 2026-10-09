@@ -553,7 +553,7 @@ public sealed class DispatchRecoveryPolicyTests
         kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", process.Command, root, process.StartedAt));
         kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
 
-        var report = GoalRecoveryPlanner.Build(kernel, goal, root, includeCleanupBackoff: false);
+        var report = GoalRecoveryPlanner.Build(kernel, goal, root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, includeCleanupBackoff: false);
 
         var finding = Xunit.Assert.Single(report.TaskFindings);
         Xunit.Assert.Contains("is not alive", finding.Finding, StringComparison.Ordinal);
@@ -576,7 +576,7 @@ public sealed class DispatchRecoveryPolicyTests
         kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", process.Command, process.WorkingDirectory, process.StartedAt));
         kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
 
-        var report = GoalRecoveryPlanner.Build(kernel, goal, process.WorkingDirectory, includeCleanupBackoff: false);
+        var report = GoalRecoveryPlanner.Build(kernel, goal, process.WorkingDirectory, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, includeCleanupBackoff: false);
 
         var finding = Xunit.Assert.Single(report.TaskFindings);
         Xunit.Assert.Contains("is not alive", finding.Finding, StringComparison.Ordinal);
@@ -633,7 +633,7 @@ public sealed class DispatchRecoveryPolicyTests
             kernel,
             goal,
             root,
-            includeCleanupBackoff: false,
+            Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, includeCleanupBackoff: false,
             processSnapshotFactory: () =>
             {
                 snapshotCalls++;

@@ -33,6 +33,14 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         "model_fit_history"
     ];
     private static readonly JsonSerializerOptions SerializerOptions = CreateSerializerOptions();
+    private static readonly GoalSnapshotArchive SnapshotArchive = new(SerializerOptions);
+    private const string GoalSnapshotArchiveSchemaSql = """
+        CREATE TABLE IF NOT EXISTS goal_snapshot_archive (
+            goal_id TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL,
+            archived_at TEXT NOT NULL
+        )
+        """;
 
     public SqliteOrchestratorStateRepository(string dbPath)
         : this(dbPath, statementObserver: null, telemetryOptions: null)
@@ -333,6 +341,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
 
     internal void ApplyCoreSchemaMigration(SqliteConnection conn)
     {
+        RunNonQuery(conn, GoalSnapshotArchiveSchemaSql);
         if (CoreSchemaTablesAlreadyExist(conn))
         {
             MigrateVersionColumn(conn);
@@ -592,6 +601,28 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         {
             try { await RunNonQueryAsync(conn, "ROLLBACK", cancellationToken); } catch { }
             telemetry.Emit("rollback", ex);
+            throw;
+        }
+    }
+
+    public async Task<int> ArchiveTerminalGoalSnapshotsAsync(
+        DateTimeOffset cutoff, CancellationToken cancellationToken = default)
+    {
+        var write = await BeginWriteAsync(ResolveOperationTag(nameof(ArchiveTerminalGoalSnapshotsAsync)), cancellationToken);
+        await using var conn = write.Connection;
+        try
+        {
+            // Already-migrated databases do not replay the core schema migration.
+            await RunNonQueryAsync(conn, GoalSnapshotArchiveSchemaSql, cancellationToken);
+            var count = await SnapshotArchive.ArchiveAsync(conn, cutoff, cancellationToken);
+            await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
+            write.Telemetry.Emit("commit");
+            return count;
+        }
+        catch (Exception ex)
+        {
+            try { await RunNonQueryAsync(conn, "ROLLBACK", CancellationToken.None); } catch { }
+            write.Telemetry.Emit("rollback", ex);
             throw;
         }
     }
@@ -1506,7 +1537,8 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
                     ORDER BY CAST(evt.key AS INTEGER) ASC
                     LIMIT 1
                 ) WHEN $include_terminal_created_at = 1
-                    THEN json_extract(goals.snapshot_json, '$.Timeline[0].OccurredAt')
+                    THEN COALESCE(json_extract(goals.snapshot_json, '$.Timeline[0].OccurredAt'),
+                        json_extract(goals.snapshot_json, '$.CreatedAt'))
                 END AS created_at,
                 {ActiveWithFailedTaskConditionSql()}
             FROM goals
@@ -1673,6 +1705,11 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
 
         using var document = JsonDocument.Parse(snapshotJson);
         var root = document.RootElement;
+        if (root.TryGetProperty("IsMetadataOnly", out var metadataOnly) && metadataOnly.ValueKind == JsonValueKind.True)
+        {
+            var stub = JsonSerializer.Deserialize<GoalSnapshot>(snapshotJson, SerializerOptions)!;
+            return new TerminalGoalMetadataValues(stub.ResultCommit, stub.CreatedAt, stub.TerminatedAt);
+        }
         string? resultCommit = null;
         if (root.TryGetProperty("Tasks", out var tasks) && tasks.ValueKind == JsonValueKind.Array)
         {
@@ -1920,7 +1957,9 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
                     logQuarantine: true,
                     out var snap))
                 {
-                    goalSnapshots.Add(snap);
+                    goalSnapshots.Add(goalIds is null
+                        ? snap
+                        : (await SnapshotArchive.HydrateAsync(conn, snap, cancellationToken))!);
                 }
             }
         }
@@ -2430,7 +2469,8 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             cmd.Parameters.AddWithValue("$id", goalId.Value);
             var json = (string?)await cmd.ExecuteScalarAsync(cancellationToken);
             if (json is null) return (GoalSnapshot?)null;
-            return JsonSerializer.Deserialize<GoalSnapshot>(json, SerializerOptions);
+            return await SnapshotArchive.HydrateAsync(
+                conn, JsonSerializer.Deserialize<GoalSnapshot>(json, SerializerOptions), cancellationToken);
         }, cancellationToken);
     }
 
@@ -2453,7 +2493,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             {
                 var snapshot = JsonSerializer.Deserialize<GoalSnapshot>(reader.GetString(0), SerializerOptions)
                     ?? throw new InvalidOperationException("Stored goal snapshot could not be deserialized.");
-                matches.Add(snapshot);
+                matches.Add((await SnapshotArchive.HydrateAsync(conn, snapshot, cancellationToken))!);
             }
 
             return (IReadOnlyList<GoalSnapshot>)matches;
@@ -2710,6 +2750,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             var json = reader.GetString(0);
             var version = reader.GetInt32(1);
             var snapshot = JsonSerializer.Deserialize<GoalSnapshot>(json, SerializerOptions);
+            snapshot = await SnapshotArchive.HydrateAsync(conn, snapshot, cancellationToken);
             return (snapshot, version);
         }, cancellationToken);
     }
@@ -2734,6 +2775,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
                 goalSnapshot = JsonSerializer.Deserialize<GoalSnapshot>(reader.GetString(0), SerializerOptions);
                 version = reader.GetInt32(1);
             }
+            goalSnapshot = await SnapshotArchive.HydrateAsync(conn, goalSnapshot, cancellationToken);
 
             var humanInputRequests = new List<HumanInputRequestSnapshot>();
             await using (var inputCommand = conn.CreateCommand())

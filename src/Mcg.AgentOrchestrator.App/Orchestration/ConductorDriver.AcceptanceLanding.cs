@@ -399,6 +399,7 @@ internal sealed partial class ConductorDriver
         AcceptanceRunExecutionOptions executionOptions,
         bool omitStableSlotIndexWithoutLease)
     {
+        executionOptions = executionOptions with { IntegrationBranch = _integrationBranch, ProjectHomeDirectory = _cohortWorkspace?.ProjectHomeDirectoryOrNull };
         var effectiveCandidate = candidate;
         var evidenceMutationLease = _tryAcquireEvidenceMutationLease(
             candidate.Goal,

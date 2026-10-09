@@ -10,7 +10,7 @@ internal sealed class PassedMergeTrainReceiptHolds
     internal sealed record Observation(
         string MainRevision,
         IReadOnlyDictionary<GoalId, string?> CandidateRevisions,
-        IReadOnlySet<GoalId> NotReadyGoalIds);
+        IReadOnlySet<GoalId> NotReadyGoalIds, string IntegrationBranch);
 
     internal sealed record Decision(
         int HeldTicks = 0,
@@ -38,7 +38,7 @@ internal sealed class PassedMergeTrainReceiptHolds
         }
 
         var moved = !string.Equals(receipt.Identity.ObservedMainRevision, observation.MainRevision,
-            StringComparison.Ordinal) ? "main" : null;
+            StringComparison.Ordinal) ? observation.IntegrationBranch : null;
         var unknownRevision = false;
         foreach (var member in receipt.Identity.Members)
         {

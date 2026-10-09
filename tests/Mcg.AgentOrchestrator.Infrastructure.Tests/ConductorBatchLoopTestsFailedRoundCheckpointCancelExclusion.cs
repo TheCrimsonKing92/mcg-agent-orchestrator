@@ -62,7 +62,7 @@ public sealed class ConductorBatchLoopTestsFailedRoundCheckpointCancelExclusion 
         Assert.Equal("modified tracked content", FailedRoundCheckpointFixture.Git(f.Worktree, "show", stash + ":seed.txt"));
         Assert.Equal("new untracked content", FailedRoundCheckpointFixture.Git(f.Worktree, "show", stash + "^3:new-untracked.txt"));
         f.Retry();
-        Assert.True(new FailedRoundCheckpointPreDispatch(f.Kernel, f.Repository)
+        Assert.True(new FailedRoundCheckpointPreDispatch(f.Kernel, f.Repository, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default)
             .IntegrateMainBeforeDeveloperDispatch(f.Goal).CanDispatch);
         Assert.Equal(before, FailedRoundCheckpointFixture.Git(f.Worktree, "rev-parse", "HEAD"));
         Assert.All(f.Worker.DispatchHistory, dispatch => Assert.Null(dispatch.FailedRoundCheckpointReceipt));

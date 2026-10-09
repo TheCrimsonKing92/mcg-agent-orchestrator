@@ -106,7 +106,8 @@ internal sealed partial class ConductorDriver
                 throw new InvalidOperationException("Grouped follower gate identity changed before child execution.");
             using var lease = _parallelAcceptanceAttemptCoordinator.AcquireCohortStableSlotLease(
                 attempt.IdentityValue, CancellationToken.None);
-            var options = CreateFollowerGateExecutionOptions(attempt, binding);
+            var options = CreateFollowerGateExecutionOptions(attempt, binding) with
+            { IntegrationBranch = _integrationBranch, ProjectHomeDirectory = _cohortWorkspace?.ProjectHomeDirectoryOrNull };
             var owner = AcceptanceExecutionOwners.CreateAttempt(integration.Path, binding.FollowerGoalId,
                 lease.Environment.BuildPermitIndex, CancellationToken.None, options);
             var verification = AcceptanceExecutionOwnerLifetime.Run(owner, () => verifier.RunOwnedAsync(
@@ -165,7 +166,7 @@ internal sealed partial class ConductorDriver
             return (true, "members");
         try
         {
-            return (true, ReadFollowerStopReason(attempt, ReadFollowerBinding(attempt)) is null ? null : "main");
+            return (true, ReadFollowerStopReason(attempt, ReadFollowerBinding(attempt)) is null ? null : _integrationBranch);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
@@ -199,7 +200,7 @@ internal sealed partial class ConductorDriver
     private FollowerGateInvalidReason? ReadFollowerStopReason(ConductorGroupedGateAttempt attempt, FollowerGateReceipt binding)
     {
         var root = attempt.ExecutionDirectory;
-        var main = ReadFollowerRevision(root, "refs/heads/main");
+        var main = ReadFollowerRevision(root, $"refs/heads/{_integrationBranch}");
         var parent = main is null ? null : ReadFollowerRevision(root, $"{main}^1");
         var tree = main is null ? null : ReadFollowerRevision(root, $"{main}^{{tree}}");
         var state = FollowerGateBindingRule.ClassifyLiveBase(binding.BaseMainRevision, binding.LeaderCandidateTree, main, parent, tree);

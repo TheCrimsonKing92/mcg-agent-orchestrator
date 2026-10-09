@@ -23,7 +23,7 @@ public sealed class ReadOnlyRoleMainIntegrationGuardTests : AcceptanceCohortWork
             RunGit(repo, "commit", "-m", "Main change");
             File.WriteAllText(Path.Combine(worktree, "dirty.txt"), "uncommitted");
             var initialHead = RunGitOutput(worktree, "rev-parse", "HEAD").Trim();
-            var expected = ConductorDriver.IntegrateMainBeforeDeveloperDispatch(repo, goal).Message;
+            var expected = ConductorDriver.IntegrateMainBeforeDeveloperDispatch(repo, goal, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default).Message;
             var dispatchStarted = false;
             string? escalation = null;
             var driver = ReadOnlyRoleMainIntegrationBeforeDispatchTests.CreateDriver(
@@ -69,7 +69,7 @@ public sealed class ReadOnlyRoleMainIntegrationGuardTests : AcceptanceCohortWork
             File.WriteAllText(Path.Combine(repo, "shared.txt"), "main change");
             RunGit(repo, "add", "shared.txt");
             RunGit(repo, "commit", "-m", "Main change");
-            var developerReason = ConductorDriver.IntegrateMainBeforeDeveloperDispatch(repo, goal).Message;
+            var developerReason = ConductorDriver.IntegrateMainBeforeDeveloperDispatch(repo, goal, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default).Message;
             var dispatchStarted = false;
             string? escalation = null;
             var driver = ReadOnlyRoleMainIntegrationBeforeDispatchTests.CreateDriver(

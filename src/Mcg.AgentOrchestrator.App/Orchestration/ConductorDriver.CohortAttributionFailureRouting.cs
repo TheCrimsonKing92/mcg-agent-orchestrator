@@ -39,7 +39,7 @@ internal sealed partial class ConductorDriver
                 {
                     try { candidate = ConductorGitRevisionReader.ReadRequiredCommit(path, "HEAD"); }
                     catch (InvalidOperationException) { /* A missing current identity cannot authorize failure. */ }
-                    try { main = ConductorGitRevisionReader.ReadRequiredCommit(path, "main^{commit}"); }
+                    try { main = ConductorGitRevisionReader.ReadRequiredCommit(path, $"{_integrationBranch}^{{commit}}"); }
                     catch (InvalidOperationException) { /* A missing current identity cannot authorize failure. */ }
                 }
             }
@@ -103,7 +103,7 @@ internal sealed partial class ConductorDriver
         }
         var path = _executionDirectory is null ? null : GoalWorktrees.TryResolve(_executionDirectory, goal.Id);
         if (path is null) return null;
-        try { return ConductorGitRevisionReader.ReadRequiredPair(path); }
+        try { return ConductorGitRevisionReader.ReadRequiredPair(path, _integrationBranch); }
         catch (InvalidOperationException) { return null; }
     }
 }

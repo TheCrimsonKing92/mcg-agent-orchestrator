@@ -16,7 +16,7 @@ internal static class PassedMergeTrainReceiptSelector
         IReadOnlyCollection<Goal>? kernelGoals,
         Func<GoalId, IReadOnlyList<MergeTrainReceipt>> readPassedReceipts,
         Func<IReadOnlySet<string>> readSuppressedPairs,
-        Func<ConductorMergeTrainSelection, MergeTrainReceipt, bool> hasCurrentIdentity)
+        Func<ConductorMergeTrainSelection, MergeTrainReceipt, bool> hasCurrentIdentity, string integrationBranch)
     {
         var ready = candidates
             .Where(candidate => candidate.ProjectionResult is GateReadyCandidateProjectionResult.Ready)
@@ -75,7 +75,7 @@ internal static class PassedMergeTrainReceiptSelector
                                 .SingleOrDefault(goal => goal.Id == member.GoalId);
                             return goal is null ? null : resolveHeads(goal).BranchHeadSha;
                         });
-                        onBlocked(receipt, new(observedMain, revisions, notReady));
+                        onBlocked(receipt, new(observedMain, revisions, notReady, integrationBranch));
                     }
                     continue;
                 }
@@ -87,7 +87,7 @@ internal static class PassedMergeTrainReceiptSelector
                 if (!string.Equals(receipt.Identity.ObservedMainRevision, observedMain,
                         StringComparison.Ordinal))
                 {
-                    onStale(receipt, "main");
+                    onStale(receipt, integrationBranch);
                     continue;
                 }
                 var movedMember = receipt.Identity.Members.FirstOrDefault(member =>

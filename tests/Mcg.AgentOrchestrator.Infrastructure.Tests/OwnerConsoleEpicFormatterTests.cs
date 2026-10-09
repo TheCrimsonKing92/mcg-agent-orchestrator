@@ -47,7 +47,7 @@ public sealed class OwnerConsoleEpicFormatterTests
     public void EmptyEpicsAndMissingPlansHaveExplicitText()
     {
         var model = new OwnerConsoleEpicViewModel(OwnerConsoleEpicWindow.AllTime, null, []);
-        Assert.Equal(["No epics."], OwnerConsoleEpicFormatter.ListLines(model, 100, null));
+        Assert.Equal(["No epics are defined yet. Create one with epic-add."], OwnerConsoleEpicFormatter.ListLines(model, 100, null));
         var row = Row("Empty");
         Assert.Contains("(no plan of record)", OwnerConsoleEpicFormatter.DetailLines(new(row.Epic, [], [], [], []), 100));
     }

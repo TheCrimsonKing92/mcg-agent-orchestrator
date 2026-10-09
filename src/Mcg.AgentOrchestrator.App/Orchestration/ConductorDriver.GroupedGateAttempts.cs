@@ -38,7 +38,7 @@ internal sealed partial class ConductorDriver
             if (attempt.Kind == "follower") continue;
             if (!attempt.Members.Any(member => selectedIds.Contains(member.GoalId))) continue;
 
-            var difference = coordinator.IdentityDifference(attempt, kind, members, mainRevision, treeRevision);
+            var difference = coordinator.IdentityDifference(attempt, kind, members, mainRevision, treeRevision, _integrationBranch);
             if (attempt.ReconciledAt is not null)
             {
                 if (difference is null && !receiptExists && !ConductorGroupedGateAttemptCoordinator.IsSlotsBusyDeferral(attempt) &&
@@ -232,7 +232,7 @@ internal sealed partial class ConductorDriver
         }
         var mainRevision = projections[0].MainRevision;
         var difference = _groupedGateAttempts!.IdentityDifference(
-            attempt, attempt.Kind, projections, mainRevision, attempt.CombinedTreeRevision);
+            attempt, attempt.Kind, projections, mainRevision, attempt.CombinedTreeRevision, _integrationBranch);
         if (difference is not null) return (true, difference);
         try
         {

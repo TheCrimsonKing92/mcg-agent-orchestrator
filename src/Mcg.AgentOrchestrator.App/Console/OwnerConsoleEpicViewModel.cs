@@ -6,7 +6,8 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 // Rollups own membership and counts; hydration only supplies stage and reason text.
 internal sealed record OwnerConsoleEpicViewModel(OwnerConsoleEpicWindow Window, DateTimeOffset? Since,
-    IReadOnlyList<EpicProgressRollup> Epics, OwnerConsoleEpicViewModel.Detail? SelectedDetail = null)
+    IReadOnlyList<EpicProgressRollup> Epics, OwnerConsoleEpicViewModel.Detail? SelectedDetail = null,
+    DateTimeOffset? LoadedAt = null)
 {
     internal sealed record GoalLine(string Id, string Title, string Stage, string? Reason = null);
     internal sealed record Detail(PortfolioEpic Epic, IReadOnlyList<GoalLine> InFlight,

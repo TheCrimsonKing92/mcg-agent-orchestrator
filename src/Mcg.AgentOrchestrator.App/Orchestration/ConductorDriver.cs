@@ -179,6 +179,7 @@ internal sealed partial class ConductorDriver
     private readonly Func<Goal, (string? BranchHeadSha, string? MainHeadSha)> _resolveAcceptanceHeads;
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly string? _executionDirectory;
+    private readonly string _integrationBranch;
     private readonly ConductorParallelAcceptanceAttemptCoordinator _parallelAcceptanceAttemptCoordinator;
     private readonly ConductorParallelAcceptanceAttemptCoordinator _focusedEvidenceAttemptCoordinator;
     private readonly bool _parallelAcceptanceEnabled;
@@ -262,6 +263,7 @@ internal sealed partial class ConductorDriver
     {
         var dir = workspace.ExecutionDirectory;
         _executionDirectory = dir;
+        _integrationBranch = workspace.IntegrationBranch;
         _resolveAcceptanceHeads = goal =>
             (TryResolveAcceptanceBranchHead(goal), TryResolveGitHead(dir));
         _getAcceptanceSlotCount = _ => ConductorBatchLoop.DefaultParallelAcceptanceCapacity;
@@ -549,7 +551,7 @@ internal sealed partial class ConductorDriver
             var slotSuffix = stableSlotIndex.HasValue ? $" on stable slot {stableSlotIndex.Value}" : string.Empty;
             var acceptanceAttemptStartedAt = DateTimeOffset.UtcNow;
             GoalOperationJournal.Begin(dir, goal, "conductor:acceptance", $"Running acceptance verification{slotSuffix}.");
-            var changedFiles = GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktreePath);
+            var changedFiles = GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktreePath, workspace.IntegrationBranch);
             var branchHeadSha = TryResolveGitHead(worktreePath);
             var mainHeadSha = TryResolveGitHead(dir);
             IReadOnlyList<CleanTestBaselineEvidence> baselineEvidence = [];
@@ -624,6 +626,7 @@ internal sealed partial class ConductorDriver
                 var executionOptions = attemptOptions with
                 {
                     ProjectHomeDirectory = workspace.ProjectHomeDirectoryOrNull,
+                    IntegrationBranch = workspace.IntegrationBranch,
                     ProgressSink = progress => AppendGateProgressEvent(gateProgressEventWriter, goal.Id, progress),
                     RemoteLaneEventSink = detail => AppendRemoteLaneEvent(gateProgressEventWriter, goal.Id.Value[..8], detail),
                     CancellationProbe = cancellationProbeState.ShouldCancel,
@@ -777,7 +780,7 @@ internal sealed partial class ConductorDriver
             var result = AcceptanceExecutionRunner.RunFocusedVerification(
                 acceptanceVerifier, worktreePath, goal.Id, request,
                 stableSlotLease?.Environment.BuildPermitIndex, stableSlotLease,
-                runBaselineArm, cancellationToken, negativeControl, revertPaths, mutation,
+                runBaselineArm, cancellationToken, workspace.IntegrationBranch, negativeControl, revertPaths, mutation,
                 NegativeControlRevertSetResolver.Resolve(goal), workspace.ProjectHomeDirectoryOrNull);
             if (result.Passed)
             {
@@ -844,9 +847,9 @@ internal sealed partial class ConductorDriver
 
         _runAdvisorySemanticAcceptance = (_, _) => { };
 
-        _integrateMainBeforeDeveloperDispatch = new FailedRoundCheckpointPreDispatch(kernel, dir).IntegrateMainBeforeDeveloperDispatch;
+        _integrateMainBeforeDeveloperDispatch = new FailedRoundCheckpointPreDispatch(kernel, dir, workspace.IntegrationBranch).IntegrateMainBeforeDeveloperDispatch;
         _integrateMainBeforeReadOnlyDispatch = (goal, role) =>
-            IntegrateMainBeforeReadOnlyDispatch(dir, goal, role);
+            IntegrateMainBeforeReadOnlyDispatch(dir, goal, role, workspace.IntegrationBranch);
         _recordPreDispatchIntegrationReceipt = new PreDispatchIntegrationReceiptRecorder(kernel).Record;
         _rebaseOntoMain = goal => GoalWorktrees.TryRebaseOntoMain(dir, goal.Id, CreateAdditiveConflictMergeOptions(kernel, goal, workspace.ConductEventsLogPath), workspace.IntegrationBranch);
         PreLandingMergeConflictProbe = goal => GoalWorktrees.ProbeAdditiveConflictMerge(dir, goal.Id, CreateAdditiveConflictMergeOptions(kernel, goal, workspace.ConductEventsLogPath).FrozenPaths, workspace.IntegrationBranch);
@@ -862,7 +865,7 @@ internal sealed partial class ConductorDriver
                     EvidenceFingerprint: "worktree=missing");
             }
 
-            var evidence = ReadLandingRecheckEvidence(worktreePath);
+            var evidence = ReadLandingRecheckEvidence(worktreePath, workspace.IntegrationBranch);
             return ClassifyPreLandingRebaseConflict(
                 () => new WorkerGitContext().ReadReviewerMergeTreeStatus(
                     worktreePath,
@@ -965,7 +968,7 @@ internal sealed partial class ConductorDriver
             try
             {
                 var branch = GoalWorktrees.BranchName(goal.Id);
-                var result = GitCli.Run(dir, "diff", "--name-only", $"main...{branch}");
+                var result = GitCli.Run(dir, "diff", "--name-only", $"{workspace.IntegrationBranch}...{branch}");
                 if (result.ExitCode != 0 || string.IsNullOrWhiteSpace(result.Output)) return null;
                 var files = result.Output
                     .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
@@ -986,7 +989,7 @@ internal sealed partial class ConductorDriver
             var worktreePath = GoalWorktrees.TryResolve(dir, goal.Id);
             var changedFiles = worktreePath is null
                 ? Array.Empty<string>()
-                : GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktreePath);
+                : GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktreePath, workspace.IntegrationBranch);
             return changedFiles.Length == 0
                 ? InferRecordedFileScopes(goal)
                 : changedFiles;
@@ -998,13 +1001,13 @@ internal sealed partial class ConductorDriver
                 var worktreePath = GoalWorktrees.TryResolve(dir, goal.Id);
                 return worktreePath is null
                     ? null
-                    : GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktreePath);
+                    : GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktreePath, workspace.IntegrationBranch);
             },
             kernel.RecordGoalPolicyDecision, new SliceBatchSiblingDependencyCoordinator(dir));
         SliceBatchParentExecutionGuard = new SliceBatchParentExecutionGuard(() => kernel.Goals);
         _isVerificationGateSatisfied = goal => kernel.BuildVerificationGate(goal.Id).IsSatisfied;
-        _gateReadyCandidateProjector = GateReadyCandidateProjector.CreateForRepository(dir);
-        _getPreReviewEvidenceContext = goal => BuildPreReviewEvidenceContext(goal, dir);
+        _gateReadyCandidateProjector = GateReadyCandidateProjector.CreateForRepository(dir, workspace.IntegrationBranch);
+        _getPreReviewEvidenceContext = goal => BuildPreReviewEvidenceContext(goal, dir, workspace.IntegrationBranch);
         _getFindingEvidenceEngineSettings = goal => AcceptanceGateEngineSettings.Load(
             GoalWorktrees.TryResolve(dir, goal.Id) ?? dir, workspace.ProjectHomeDirectoryOrNull);
         _resolveFindingEvidenceSiblingClasses = (goal, project, requestedClass) =>
@@ -1050,7 +1053,7 @@ internal sealed partial class ConductorDriver
 
     internal static DeveloperBranchIntegrationResult IntegrateMainBeforeDeveloperDispatch(
         string executionDirectory,
-        Goal goal) => IntegrateMainBeforeDispatch(executionDirectory, goal, AgentRole.Developer);
+        Goal goal, string integrationBranch) => IntegrateMainBeforeDispatch(executionDirectory, goal, AgentRole.Developer, integrationBranch);
 
     internal ConductorDriver(
         Func<Goal, GoalLifecycleFacts> getFacts,
@@ -1267,6 +1270,7 @@ internal sealed partial class ConductorDriver
         _resolveAcceptanceHeads = resolveAcceptanceHeads ?? (_ => (null, null));
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         _executionDirectory = executionDirectory;
+        _integrationBranch = TrunkBranchName.Default;
         _parallelAcceptanceEnabled =
             runAcceptanceVerificationWithSlot is not null ||
             runAcceptanceVerificationWithLease is not null;

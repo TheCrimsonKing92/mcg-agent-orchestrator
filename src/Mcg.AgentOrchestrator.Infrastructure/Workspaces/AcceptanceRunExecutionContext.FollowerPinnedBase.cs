@@ -15,9 +15,9 @@ public sealed record AcceptanceFollowerPinnedBase(
 
 public static partial class AcceptanceExecutionOwners
 {
-    private static string? ResolveFollowerPinnedMain(string worktreePath, AcceptanceFollowerPinnedBase pinnedBase)
+    private static string? ResolveFollowerPinnedMain(string worktreePath, AcceptanceFollowerPinnedBase pinnedBase, string integrationBranch)
     {
-        var live = GoalAcceptanceVerifier.ResolveGitScalarForExecutionOwner(worktreePath, "rev-parse", "refs/heads/main");
+        var live = GoalAcceptanceVerifier.ResolveGitScalarForExecutionOwner(worktreePath, "rev-parse", $"refs/heads/{integrationBranch}");
         // Resolve parent and tree from this immutable revision, never from a second read of main.
         var parent = live is null ? null :
             GoalAcceptanceVerifier.ResolveGitScalarForExecutionOwner(worktreePath, "rev-parse", $"{live}^1");

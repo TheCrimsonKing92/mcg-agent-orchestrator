@@ -10,6 +10,7 @@ public interface IAcceptanceFocusedVerificationOwner : IAsyncDisposable { }
 internal interface IAcceptanceRunExecutionContext : IAsyncDisposable
 {
     string RunId { get; }
+    string IntegrationBranch { get; }
     string ResultsPrefix { get; }
     string ApparatusReceiptPath { get; }
     AcceptanceGateEngineSettings Settings { get; }
@@ -70,7 +71,8 @@ public sealed record AcceptanceRunExecutionOptions(
     Action<string>? RemoteLaneEventSink = null,
     bool CohortRemoteLanes = false,
     AcceptanceFollowerPinnedBase? PinnedBase = null,
-    string? ProjectHomeDirectory = null);
+    string? ProjectHomeDirectory = null,
+    string? IntegrationBranch = null);
 
 public sealed record AcceptanceOwnerProtectedCohortMember(GoalId GoalId, string CandidateSha);
 
@@ -113,10 +115,12 @@ internal abstract class AcceptanceRunExecutionOwner : IAcceptanceRunExecutionCon
             ?? throw new InvalidOperationException($"Acceptance run '{runId}' has no apparatus receipt path.");
         Settings = settings ?? throw new ArgumentNullException(nameof(settings));
         _options = options ?? new AcceptanceRunExecutionOptions();
+        IntegrationBranch = TrunkBranchName.Resolve(_options.IntegrationBranch);
         _lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
     }
 
     public string RunId { get; }
+    public string IntegrationBranch { get; }
     internal string? GateRunIdentity => _options.GateRunIdentity;
     internal string? ProjectHomeDirectory => _options.ProjectHomeDirectory;
     internal bool CohortRemoteLanes => _options.CohortRemoteLanes;
@@ -471,6 +475,7 @@ internal sealed class AcceptanceRunExecutionContextView(
 {
     internal IAcceptanceRunExecutionContext Owner => owner;
     public string RunId => owner.RunId;
+    public string IntegrationBranch => owner.IntegrationBranch;
     public string ResultsPrefix { get; } = Path.GetFullPath(resultsPrefix);
     public string ApparatusReceiptPath { get; } =
         TempRootApparatusLossReceiptStore.ResolvePath(resultsPrefix)
@@ -512,9 +517,9 @@ public static partial class AcceptanceExecutionOwners
                 resultsPrefix.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
         }
 
-        var identityResolvers = CreateGitIdentityResolvers();
+        var identityResolvers = CreateGitIdentityResolvers(TrunkBranchName.Resolve(options.IntegrationBranch));
         if (options.PinnedBase is { } pinnedBase)
-            identityResolvers = identityResolvers with { ResolveMainSha = path => ResolveFollowerPinnedMain(path, pinnedBase) };
+            identityResolvers = identityResolvers with { ResolveMainSha = path => ResolveFollowerPinnedMain(path, pinnedBase, TrunkBranchName.Resolve(options.IntegrationBranch)) };
         return CreateAttemptCore(
             worktreePath,
             goalId,
@@ -601,10 +606,10 @@ public static partial class AcceptanceExecutionOwners
             publishResultsPrefix);
     }
 
-    private static AcceptanceAttemptIdentityResolvers CreateGitIdentityResolvers() =>
+    private static AcceptanceAttemptIdentityResolvers CreateGitIdentityResolvers(string integrationBranch) =>
         new(
             path => GoalAcceptanceVerifier.ResolveGitScalarForExecutionOwner(path, "rev-parse", "HEAD^{tree}"),
-            path => GoalAcceptanceVerifier.ResolveGitScalarForExecutionOwner(path, "rev-parse", "main"),
+            path => GoalAcceptanceVerifier.ResolveGitScalarForExecutionOwner(path, "rev-parse", integrationBranch),
             path => GoalAcceptanceVerifier.ResolveGitScalarForExecutionOwner(path, "rev-parse", "HEAD"));
 
     public static IAcceptanceFocusedVerificationOwner CreateFocusedVerification(

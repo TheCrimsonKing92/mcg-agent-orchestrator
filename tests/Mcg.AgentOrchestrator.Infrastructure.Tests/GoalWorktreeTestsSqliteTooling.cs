@@ -652,7 +652,7 @@ public sealed partial class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBas
                 agents,
                 WorkerProfileCatalog.Default(),
                 repo,
-                AutonomyPolicy.SupervisedAuto);
+                Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, AutonomyPolicy.SupervisedAuto);
 
             Assert.Equal(GoalHealthDisposition.Blocked, health.Disposition);
             Assert.Equal(20, health.Score);
@@ -680,7 +680,7 @@ public sealed partial class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBas
             File.WriteAllText(Path.Combine(readyPath, "ready.txt"), "ready");
             RunGit(readyPath, "add", "-A");
             RunGit(readyPath, "commit", "-m", "Ready health");
-            var ready = GoalHealthEvaluator.Build(readyKernel, readyGoal, agents, profiles, repo, AutonomyPolicy.SupervisedAuto);
+            var ready = GoalHealthEvaluator.Build(readyKernel, readyGoal, agents, profiles, repo, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, AutonomyPolicy.SupervisedAuto);
             Assert.Equal(GoalHealthDisposition.ReadyForAcceptance, ready.Disposition);
             Assert.Equal(85, ready.Score);
 
@@ -689,7 +689,7 @@ public sealed partial class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBas
             var failedGoal = failedKernel.CreateGoal("Failed health", [failedTask]);
             failedKernel.ActivateGoal(failedGoal.Id, agents);
             failedKernel.ReportTaskProgress(failedGoal.Id, failedTask.Id, WorkTaskStatus.Failed, "Verification failed.");
-            var failed = GoalHealthEvaluator.Build(failedKernel, failedGoal, agents, profiles, repo, AutonomyPolicy.SupervisedAuto);
+            var failed = GoalHealthEvaluator.Build(failedKernel, failedGoal, agents, profiles, repo, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, AutonomyPolicy.SupervisedAuto);
             Assert.Equal(GoalHealthDisposition.Blocked, failed.Disposition);
             Assert.Equal(25, failed.Score);
 
@@ -699,7 +699,7 @@ public sealed partial class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBas
             stalledKernel.ActivateGoal(stalledGoal.Id, agents);
             stalledKernel.RecordTaskDispatch(stalledGoal.Id, stalledTask.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt.md", repo, DateTimeOffset.UtcNow));
             stalledKernel.RecordTaskProcessStarted(stalledGoal.Id, stalledTask.Id, new TaskProcessRecord(999999, "codex exec prompt.md", repo, "out.log", "err.log", "exit.txt", DateTimeOffset.UtcNow, null, null));
-            var stalled = GoalHealthEvaluator.Build(stalledKernel, stalledGoal, agents, profiles, repo, AutonomyPolicy.SupervisedAuto);
+            var stalled = GoalHealthEvaluator.Build(stalledKernel, stalledGoal, agents, profiles, repo, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, AutonomyPolicy.SupervisedAuto);
             Assert.Equal(GoalHealthDisposition.NeedsOperator, stalled.Disposition);
             Assert.Equal(40, stalled.Score);
 
@@ -715,13 +715,13 @@ public sealed partial class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBas
                 "ERROR: You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 11:59 PM.",
                 string.Empty,
                 DateTimeOffset.UtcNow));
-            var limited = GoalHealthEvaluator.Build(limitedKernel, limitedGoal, agents, profiles, repo, AutonomyPolicy.SupervisedAuto);
+            var limited = GoalHealthEvaluator.Build(limitedKernel, limitedGoal, agents, profiles, repo, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, AutonomyPolicy.SupervisedAuto);
             Assert.Equal(GoalHealthDisposition.ProviderLimited, limited.Disposition);
             Assert.Equal(55, limited.Score);
 
             var healthyKernel = new AgentOrchestratorKernel();
             var healthyGoal = CreateCompletedGoal(healthyKernel, "Healthy monitor", repo);
-            var healthy = GoalHealthEvaluator.Build(healthyKernel, healthyGoal, agents, profiles, repo, AutonomyPolicy.SupervisedAuto);
+            var healthy = GoalHealthEvaluator.Build(healthyKernel, healthyGoal, agents, profiles, repo, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, AutonomyPolicy.SupervisedAuto);
             Assert.Equal(GoalHealthDisposition.Healthy, healthy.Disposition);
             Assert.Equal(90, healthy.Score);
         }

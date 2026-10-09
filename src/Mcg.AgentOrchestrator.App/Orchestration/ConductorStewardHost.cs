@@ -381,7 +381,7 @@ internal sealed partial class ConductorStewardHost
     {
         var sha = goal.LatestAcceptanceFailure?.BranchHeadSha;
         if (string.IsNullOrWhiteSpace(sha)) return null;
-        var result = GitCli.Run(workspace.ExecutionDirectory, "diff", "--name-only", $"main...{sha}");
+        var result = GitCli.Run(workspace.ExecutionDirectory, "diff", "--name-only", $"{workspace.IntegrationBranch}...{sha}");
         if (result.ExitCode != 0) return null;
         var stem = className.Split('.').Last();
         var source = result.Output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)

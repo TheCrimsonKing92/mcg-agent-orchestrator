@@ -95,7 +95,7 @@ public sealed class OwnerPolicyApprovalRebaseTests : IDisposable
             [], "owner", "cli", "local-process", DateTimeOffset.UtcNow, ActorKind: OperatorActorKind.Human));
         new OperatorIntentCoordinator(intents, decisions: decisions, goalStateVersionResolver: _ => 0,
             policyChangeFingerprintResolver: withFingerprint
-                ? (_, sha) => GoalAcceptanceVerifier.ComputeOwnerProtectedChangeFingerprintForCandidate(repo, sha)
+                ? (_, sha) => GoalAcceptanceVerifier.ComputeOwnerProtectedChangeFingerprintForCandidate(repo, sha, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default)
                 : null).ExecutePending(kernel, goal);
         return (goal, decisions);
     }

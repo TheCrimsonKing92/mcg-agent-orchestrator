@@ -10,7 +10,7 @@ public sealed class AcceptanceContainedGenerationBaselineTests
         using var baseline = AcceptanceContainedGenerationBaseline.Resolve(
             "candidate",
             "goal",
-            (_, arguments) => arguments[0] == "rev-parse" ? "bbbbbbbb" : null,
+            Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, (_, arguments) => arguments[0] == "rev-parse" ? "bbbbbbbb" : null,
             (_, _) =>
             {
                 gitInvoked = true;
@@ -28,7 +28,7 @@ public sealed class AcceptanceContainedGenerationBaselineTests
         using var baseline = AcceptanceContainedGenerationBaseline.Resolve(
             "candidate",
             "goal",
-            (_, _) => "aaaaaaaa",
+            Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, (_, _) => "aaaaaaaa",
             (_, _) => throw new InvalidOperationException("worktree creation must not run"));
 
         Assert.True(baseline.IsResolved);
@@ -44,7 +44,7 @@ public sealed class AcceptanceContainedGenerationBaselineTests
         var baseline = AcceptanceContainedGenerationBaseline.Resolve(
             "candidate",
             "goal",
-            (_, _) => ++resolveCall == 1 ? "aaaaaaaa" : "bbbbbbbb",
+            Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, (_, _) => ++resolveCall == 1 ? "aaaaaaaa" : "bbbbbbbb",
             (_, arguments) =>
             {
                 commands.Add(arguments);
@@ -71,7 +71,7 @@ public sealed class AcceptanceContainedGenerationBaselineTests
         using var baseline = AcceptanceContainedGenerationBaseline.Resolve(
             "candidate",
             "goal",
-            (_, _) => ++resolveCall == 1 ? "aaaaaaaa\r\n" : "bbbbbbbb\r\n",
+            Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, (_, _) => ++resolveCall == 1 ? "aaaaaaaa\r\n" : "bbbbbbbb\r\n",
             (_, arguments) =>
             {
                 if (arguments.Length == 5 && arguments[0] == "worktree" && arguments[1] == "add")
@@ -95,7 +95,7 @@ public sealed class AcceptanceContainedGenerationBaselineTests
         using var baseline = AcceptanceContainedGenerationBaseline.Resolve(
             "candidate",
             "goal",
-            (_, _) => ++resolveCall == 1 ? "aaaaaaaa" : "bbbbbbbb",
+            Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, (_, _) => ++resolveCall == 1 ? "aaaaaaaa" : "bbbbbbbb",
             (_, _) => new GitCli.GitResult(1, string.Empty, "failed"));
 
         Assert.False(baseline.IsResolved);

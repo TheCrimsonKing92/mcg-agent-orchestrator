@@ -6,7 +6,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal static class AcceptanceTestInventorySource
 {
-    internal static AcceptanceTestInventory Read(string worktreePath,
+    internal static AcceptanceTestInventory Read(string worktreePath, string integrationBranch,
         Func<string, string[], string?> gitText)
     {
         var classes = AcceptanceTestClassSourceScanner.Scan(worktreePath);
@@ -21,13 +21,13 @@ internal static class AcceptanceTestInventorySource
                 .Any(part => part is "bin" or "obj"))
             .Order(StringComparer.Ordinal).Select(File.ReadAllText).ToArray();
         var mainPaths = gitText(worktreePath,
-            ["grep", "-l", "-e", "CollectionDefinition", "-e", "class .*TestCollections", "main", "--",
+            ["grep", "-l", "-e", "CollectionDefinition", "-e", "class .*TestCollections", integrationBranch, "--",
              "tests/Mcg.AgentOrchestrator.Infrastructure.Tests", "tests/Mcg.AgentOrchestrator.TestSupport"]);
         if (mainPaths is null) throw new InvalidDataException("Main collection metadata file list is unavailable.");
         var mainSources = mainPaths.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Select(path => path.StartsWith("main:", StringComparison.Ordinal) ? path[5..] : path)
+            .Select(path => path.StartsWith(integrationBranch + ":", StringComparison.Ordinal) ? path[(integrationBranch.Length + 1)..] : path)
             .Order(StringComparer.Ordinal)
-            .Select(path => gitText(worktreePath, ["show", $"main:{path}"])
+            .Select(path => gitText(worktreePath, ["show", $"{integrationBranch}:{path}"])
                 ?? throw new InvalidDataException($"Main collection metadata is unavailable: {path}"))
             .ToArray();
         var candidate = ReadDefinitions(candidateSources);

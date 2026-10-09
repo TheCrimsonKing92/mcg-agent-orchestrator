@@ -30,7 +30,7 @@ public sealed partial class GoalAcceptanceVerifier
             ResolveGitScalar(path, "rev-parse", "HEAD^{tree}");
         Func<string, string?> resolveMainSha = path =>
             _testOverrides.ResolvePartitionVerdictMainShaForTests?.Invoke(path) ??
-            ResolveGitScalar(path, "rev-parse", "main");
+            ResolveGitScalar(path, "rev-parse", executionOwner.IntegrationBranch);
         Func<string, string?> resolveVerifyingCommitSha = path =>
             _testOverrides.ResolvePartitionVerdictVerifyingCommitShaForTests?.Invoke(path) ??
             ResolveGitScalar(path, "rev-parse", "HEAD");

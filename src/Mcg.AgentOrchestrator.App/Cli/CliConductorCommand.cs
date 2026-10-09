@@ -61,7 +61,7 @@ internal static class CliConductorCommand
                         output.WriteLine("No conductor is running; nothing to stop.");
                         return 0;
                     }
-                    var stopFile = Path.Combine(workspace.ExecutionDirectory, ConductorBatchLoop.StopFileName);
+                    var stopFile = workspace.ConductorStopFilePath;
                     using (new FileStream(stopFile, FileMode.OpenOrCreate, FileAccess.Write, FileShare.ReadWrite)) { }
                     output.WriteLine($"Stop requested for conductor pid {owner}. {stopFile}");
                     output.WriteLine("This is a detach, not a drain: live workers are detached without waiting for them to finish.");
@@ -175,7 +175,7 @@ internal static class CliConductorCommand
             error.WriteLine($"Refused: conductor already running (pid {owner}).");
             return 1;
         }
-        var stopFile = Path.Combine(workspace.ExecutionDirectory, ConductorBatchLoop.StopFileName);
+        var stopFile = workspace.ConductorStopFilePath;
         if (File.Exists(stopFile))
         {
             if (!clearStop)

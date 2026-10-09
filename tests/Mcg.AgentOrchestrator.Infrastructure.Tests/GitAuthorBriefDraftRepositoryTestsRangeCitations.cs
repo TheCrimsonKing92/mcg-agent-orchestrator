@@ -145,7 +145,7 @@ public sealed class GitAuthorBriefDraftRepositoryTestsRangeCitations
             Git("commit", "-q", "-m", "Citation files");
             Git("checkout", "-q", "-B", "main");
             Head = Git("rev-parse", "HEAD");
-            Repository = new(Root);
+            Repository = new(Root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
             Assert.Equal(Head, Repository.ResolveMainHead());
         }
 

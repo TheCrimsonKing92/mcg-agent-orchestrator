@@ -27,12 +27,12 @@ internal static class GoalRollbackPlanner
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
-    public static GoalRollbackAcceptanceRange? CapturePendingAcceptance(string executionDirectory, GoalId goalId)
+    public static GoalRollbackAcceptanceRange? CapturePendingAcceptance(string executionDirectory, GoalId goalId, string integrationBranch)
     {
         var branch = GoalWorktrees.BranchName(goalId);
-        var baseCommit = GitCli.Run(executionDirectory, "merge-base", "main", branch);
+        var baseCommit = GitCli.Run(executionDirectory, "merge-base", integrationBranch, branch);
         var head = GitCli.Run(executionDirectory, "rev-parse", branch);
-        var main = GitCli.Run(executionDirectory, "rev-parse", "main");
+        var main = GitCli.Run(executionDirectory, "rev-parse", integrationBranch);
         if (baseCommit.ExitCode != 0 || head.ExitCode != 0 || main.ExitCode != 0)
         {
             return null;
@@ -54,7 +54,7 @@ internal static class GoalRollbackPlanner
         File.WriteAllText(StorePath(executionDirectory, new GoalId(range.GoalId)), JsonSerializer.Serialize(range, JsonOptions));
     }
 
-    public static GoalRollbackPlan Build(string executionDirectory, Goal goal, string reason, bool dryRun = true)
+    public static GoalRollbackPlan Build(string executionDirectory, Goal goal, string reason, string integrationBranch, bool dryRun = true)
     {
         var rollbackReason = NormalizeReason(reason);
         var prefix = goal.Id.Value[..8];
@@ -93,13 +93,13 @@ internal static class GoalRollbackPlanner
             dryRun,
             CanApply: true,
             branch,
-            $"Revert accepted range {range.BaseCommit[..8]}..{range.AcceptedHeadCommit[..8]} from main into {branch}.",
+            $"Revert accepted range {range.BaseCommit[..8]}..{range.AcceptedHeadCommit[..8]} from {integrationBranch} into {branch}.",
             dryRun ? $"rollback-goal {prefix} <reason> --confirm-goal-rollback" : null);
     }
 
-    public static GoalRollbackPlan Apply(string executionDirectory, Goal goal, string reason)
+    public static GoalRollbackPlan Apply(string executionDirectory, Goal goal, string reason, string integrationBranch)
     {
-        var plan = Build(executionDirectory, goal, reason);
+        var plan = Build(executionDirectory, goal, reason, integrationBranch);
         if (!plan.CanApply)
         {
             return plan;
@@ -108,9 +108,9 @@ internal static class GoalRollbackPlanner
         var range = ReadRange(executionDirectory, goal.Id)
             ?? throw new InvalidOperationException("Rollback metadata disappeared before apply.");
 
-        var switchMain = GitCli.Run(executionDirectory, "switch", "main");
+        var switchMain = GitCli.Run(executionDirectory, "switch", integrationBranch);
         if (switchMain.ExitCode != 0)
-            throw new InvalidOperationException($"Failed to switch to main: {switchMain.Error}");
+            throw new InvalidOperationException($"Failed to switch to {integrationBranch}: {switchMain.Error}");
         var createBranch = GitCli.Run(executionDirectory, "switch", "-c", plan.RollbackBranch);
         if (createBranch.ExitCode != 0)
             throw new InvalidOperationException($"Failed to create rollback branch: {createBranch.Error}");
@@ -123,7 +123,7 @@ internal static class GoalRollbackPlanner
         var commitResult = GitCli.Run(executionDirectory, "commit", "-m", $"Rollback goal {plan.GoalPrefix}: {plan.Reason}");
         if (commitResult.ExitCode != 0)
             throw new InvalidOperationException($"Failed to commit rollback: {commitResult.Error}");
-        return Build(executionDirectory, goal, reason, dryRun: false) with
+        return Build(executionDirectory, goal, reason, integrationBranch, dryRun: false) with
         {
             CanApply = true,
             Detail = $"Created rollback branch {plan.RollbackBranch} reverting accepted range {range.BaseCommit[..8]}..{range.AcceptedHeadCommit[..8]}.",
