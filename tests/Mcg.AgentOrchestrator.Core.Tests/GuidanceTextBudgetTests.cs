@@ -46,8 +46,8 @@ public sealed class GuidanceTextBudgetTests
         new("requirements/Reviewer/Simple", 4601, () => Requirements(AgentRole.Reviewer, TaskComplexity.Simple)),
         // Reviewer Complex requirements are loaded in every complex Reviewer brief.
         new("requirements/Reviewer/Complex", 5671, () => Requirements(AgentRole.Reviewer, TaskComplexity.Complex)),
-        // The inline Planner directive is loaded with the result contract in every Planner brief.
-        new("Planner directive", 3876, () => AgentOutputDirectives.WorkerResultTemplateLinesForRole(AgentRole.Planner)[0]),
+        // Citation decision procedure adds 380 chars; mapping-layout trims save 30, raising the measured ceiling by 350.
+        new("Planner directive", 4226, () => AgentOutputDirectives.WorkerResultTemplateLinesForRole(AgentRole.Planner)[0]),
         // Planner standing rules are loaded inline or through the Planner context artifact.
         new("PlannerStandingRules", 289, () => AgentOutputDirectives.PlannerStandingRules),
         // Developer standing rules are loaded inline or through rule.md in every Developer brief.
