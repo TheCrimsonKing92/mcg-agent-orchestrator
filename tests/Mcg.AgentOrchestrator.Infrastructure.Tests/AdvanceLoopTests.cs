@@ -53,6 +53,7 @@ public sealed class AdvanceLoopTests
     ]);
 
     Goal? goal = null;
+    using var dispatchProcesses = new TestOwnedDispatchProcesses(kernel, () => goal);
         TaskSpec? researcher = null;
     try
     {
@@ -224,6 +225,7 @@ public sealed class AdvanceLoopTests
     var kernel = new AgentOrchestratorKernel();
     var task = new TaskSpec(TaskId.New(), "Watch a short local process", AgentRole.Developer, "Record explicit verification.");
     var goal = CreateRefinedGoal(kernel, "Advance refreshes a finished process", [task]);
+    using var dispatchProcesses = new TestOwnedDispatchProcesses(kernel, goal);
     var agent = new AgentDefinition(
         new AgentId("subscription-developer"),
         "Subscription developer",
@@ -241,12 +243,8 @@ public sealed class AdvanceLoopTests
     var startedProcess = task.LastProcess!;
     Assert.True(startedProcess.IsRunning);
 
-    // Event gate: the wrapper writes the exit artifact when the child exits. No wall-clock pacing.
-    var deadline = DateTimeOffset.UtcNow.AddSeconds(30);
-    while (DateTimeOffset.UtcNow < deadline && !File.Exists(startedProcess.ExitCodePath))
-    {
-        await Task.Delay(25);
-    }
+    // Wait for the host itself, which writes the exit artifact before returning.
+    await TestOwnedDispatchProcesses.AwaitCompletionAsync(startedProcess);
 
     Assert.True(File.Exists(startedProcess.ExitCodePath));
 
@@ -544,6 +542,7 @@ public sealed class AdvanceLoopTests
     var prepared = new TaskSpec(TaskId.New(), "Previously prepared local work", AgentRole.Planner, "Record explicit verification.");
     var subscription = new TaskSpec(TaskId.New(), "Prepare subscription work", AgentRole.Planner, "Record explicit verification.");
     var goal = CreateRefinedGoal(kernel, "Start only subscription-ready work", [prepared, subscription]);
+    using var dispatchProcesses = new TestOwnedDispatchProcesses(kernel, goal);
     var agent = new AgentDefinition(
         new AgentId("subscription-planner"),
         "Subscription planner",
@@ -820,6 +819,7 @@ public sealed class AdvanceLoopTests
     var first = new TaskSpec(TaskId.New(), "Inspect first independent area", AgentRole.Planner, "Record explicit verification.");
     var second = new TaskSpec(TaskId.New(), "Inspect second independent area", AgentRole.Planner, "Record explicit verification.");
     var goal = CreateRefinedGoal(kernel, "Start only the first provider-safe subscription batch", [first, second]);
+    using var dispatchProcesses = new TestOwnedDispatchProcesses(kernel, goal);
     var agent = new AgentDefinition(
         new AgentId("subscription-planner"),
         "Subscription planner",
@@ -888,6 +888,7 @@ public sealed class AdvanceLoopTests
     var tester = new TaskSpec(TaskId.New(), "Test the work", AgentRole.Tester);
     var reviewer = new TaskSpec(TaskId.New(), "Review the work", AgentRole.Reviewer);
     var goal = CreateRefinedGoal(kernel, "Dispatch in SDLC stage order", [researcher, planner, firstDeveloper, secondDeveloper, tester, reviewer]);
+    using var dispatchProcesses = new TestOwnedDispatchProcesses(kernel, goal);
     AgentDefinition[] agents =
     [
         CreateSubscriptionAgent(AgentRole.Planner),
@@ -1057,6 +1058,7 @@ public sealed class AdvanceLoopTests
     await repository.SaveAsync(kernel);
     var loopKernel = await repository.LoadGoalsAsync([goal.Id]);
     var loopGoal = loopKernel.GetGoal(goal.Id);
+    using var dispatchProcesses = new TestOwnedDispatchProcesses(loopKernel, loopGoal);
     var loopReviewer = loopGoal.Tasks.Single(task => task.Id == reviewer.Id);
     var profiles = new WorkerProfileCatalog(
     [
@@ -1112,6 +1114,7 @@ public sealed class AdvanceLoopTests
     var kernel = new AgentOrchestratorKernel();
     var task = new TaskSpec(TaskId.New(), "Run once", AgentRole.Developer);
     var goal = CreateRefinedGoal(kernel, "Do not double dispatch running task", [task]);
+    using var dispatchProcesses = new TestOwnedDispatchProcesses(kernel, goal);
     var agents = new[] { CreateSubscriptionAgent(AgentRole.Developer) };
     kernel.ActivateGoal(goal.Id, agents);
     EnsureGoalWorktree(root, goal.Id);
@@ -1239,6 +1242,7 @@ private static AgentDefinition CreateSubscriptionAgent(AgentRole role)
         AgentRole.Developer,
         "Verify the full integration with build, tests, dashboard smoke, and focused regression evidence. " + new string('v', 5000));
     var goal = CreateRefinedGoal(kernel, objective, [task]);
+    using var dispatchProcesses = new TestOwnedDispatchProcesses(kernel, goal);
     var agent = new AgentDefinition(
         new AgentId("developer"),
         "Developer",

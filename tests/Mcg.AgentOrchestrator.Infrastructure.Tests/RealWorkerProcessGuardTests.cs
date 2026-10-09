@@ -221,6 +221,7 @@ public sealed class RealWorkerProcessGuardTests
         kernel.ActivateGoal(goal.Id, [agent]);
         EnsureGoalWorktree(root, goal.Id);
 
+        var dispatchProcesses = new TestOwnedDispatchProcesses(kernel, goal);
         try
         {
             var result = new GoalAdvancementOperations().AdvanceGoalWithSubscriptionsUntilBlocked(
@@ -235,12 +236,12 @@ public sealed class RealWorkerProcessGuardTests
             Assert.NotNull(task.LastDispatch);
             Assert.Contains("codex exec", task.LastDispatch.Command, StringComparison.OrdinalIgnoreCase);
 
-            WaitForDispatchHostExit(task.LastProcess?.ProcessId);
+            WaitForDispatchHostExit(task.LastProcess);
             RealWorkerProcessGuard.AssertNoNewMatches(baseline);
         }
         finally
         {
-            TryKillDispatchHost(task.LastProcess?.ProcessId);
+            dispatchProcesses.Dispose();
         }
     }
 
@@ -275,6 +276,7 @@ public sealed class RealWorkerProcessGuardTests
             [agent],
             WorkerProfileCatalog.Default());
 
+        var dispatchProcesses = new TestOwnedDispatchProcesses(kernel, goal);
         try
         {
             var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
@@ -284,12 +286,12 @@ public sealed class RealWorkerProcessGuardTests
             Assert.NotNull(task.LastDispatch);
             Assert.Contains("codex exec", task.LastDispatch.Command, StringComparison.OrdinalIgnoreCase);
 
-            WaitForDispatchHostExit(task.LastProcess?.ProcessId);
+            WaitForDispatchHostExit(task.LastProcess);
             RealWorkerProcessGuard.AssertNoNewMatches(baseline);
         }
         finally
         {
-            TryKillDispatchHost(task.LastProcess?.ProcessId);
+            dispatchProcesses.Dispose();
         }
     }
 
@@ -341,41 +343,10 @@ public sealed class RealWorkerProcessGuardTests
         Assert.True(result.Succeeded, $"git {string.Join(' ', args)} failed: {result.Error}");
     }
 
-    private static void WaitForDispatchHostExit(int? processId)
+    private static void WaitForDispatchHostExit(TaskProcessRecord? process)
     {
-        if (processId is null)
-        {
-            return;
-        }
-
-        try
-        {
-            using var process = System.Diagnostics.Process.GetProcessById(processId.Value);
-            process.WaitForExit(5000);
-        }
-        catch (ArgumentException)
-        {
-        }
-    }
-
-    private static void TryKillDispatchHost(int? processId)
-    {
-        if (processId is null)
-        {
-            return;
-        }
-
-        try
-        {
-            using var process = System.Diagnostics.Process.GetProcessById(processId.Value);
-            if (!process.HasExited)
-            {
-                process.Kill(entireProcessTree: true);
-            }
-        }
-        catch
-        {
-        }
+        if (process is not null)
+            TestOwnedDispatchProcesses.AwaitCompletionAsync(process).GetAwaiter().GetResult();
     }
 
     private sealed class PassingAcceptanceVerifier : IGoalAcceptanceVerifier

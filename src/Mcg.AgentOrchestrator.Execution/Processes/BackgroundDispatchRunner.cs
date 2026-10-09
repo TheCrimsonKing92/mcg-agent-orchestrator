@@ -122,7 +122,8 @@ public sealed partial class BackgroundDispatchRunner
             _clock,
             isProcessRunning: _isStillRunning,
             readCurrentIdentity: DispatchProcessIdentityEvidence.Adapt(readProcessIdentity));
-        _startProcess = startProcess ?? Process.Start;
+        var launch = startProcess ?? Process.Start;
+        _startProcess = startInfo => DispatchProcessStartObservation.Start(startInfo, launch);
         _runOrchestratorBuildCheck = runOrchestratorBuildCheck ?? OrchestratorBuildEvidenceCheck.RunDefault;
         _processCommandLineSnapshotFactory = processCommandLineSnapshotFactory ?? ProcessCommandLines.SnapshotOperation;
     }

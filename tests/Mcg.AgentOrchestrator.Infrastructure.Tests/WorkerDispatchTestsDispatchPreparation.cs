@@ -2009,6 +2009,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         var first = new TaskSpec(TaskId.New(), "Run first safe fixture.", AgentRole.Planner);
         var second = new TaskSpec(TaskId.New(), "Abort second fixture before spawn.", AgentRole.Planner);
         var goal = kernel.CreateGoal("Keep checkpoint phase scoped to each process", [first, second]);
+        using var dispatchProcesses = new TestOwnedDispatchProcesses(kernel, () => kernel.GetGoal(goal.Id));
         var agent = SubscriptionPlannerAgent("planner", "Planner");
         kernel.ActivateGoal(goal.Id, [agent]);
         var at = DateTimeOffset.UtcNow;
