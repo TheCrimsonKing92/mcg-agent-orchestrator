@@ -141,7 +141,7 @@ public sealed class OwnerConsoleEpicViewTests
         using var fixture = new Fixture();
         fixture.Source.Error = new InvalidOperationException("portfolio unavailable");
         await fixture.View.HandleKeyAsync(new Key('e'));
-        Assert.Contains("EPICS unavailable: portfolio unavailable", fixture.View.EpicView.Lines);
+        Assert.Contains("Could not load epics: portfolio unavailable. Press r to retry.", fixture.View.EpicView.Lines);
         foreach (var key in new[] { new Key('q'), new Key(':'), new Key('?'), Key.Tab })
         {
             await fixture.View.HandleKeyAsync(key);
@@ -170,7 +170,7 @@ public sealed class OwnerConsoleEpicViewTests
         await fixture.View.EpicView.LastLoad;
         await fixture.View.HandleKeyAsync(Key.Enter);
         Assert.False(fixture.View.EpicView.ShowingDetail);
-        Assert.Equal(["No epics."], fixture.View.EpicView.Lines);
+        Assert.Equal(["No epics are defined yet. Create one with epic-add."], fixture.View.EpicView.Lines);
     }
 
     [Fact]
@@ -235,6 +235,184 @@ public sealed class OwnerConsoleEpicViewTests
         Assert.Equal(1, fixture.Source.Calls);
     }
 
+    [Fact(Timeout = 30000)]
+    public async Task Open_HeldLoad_ShowsLoadingBeforeRowsAndLocalUpdateTime()
+    {
+        using var fixture = new Fixture();
+        fixture.View.Window.Layout(new System.Drawing.Size(120, 30));
+        var pending = fixture.Source.HoldNextLoad();
+        var opening = fixture.View.HandleKeyAsync(new Key('e'));
+        await fixture.Source.LoadStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
+        var dialog = fixture.View.EpicView;
+
+        Assert.True(dialog.Visible);
+        Assert.Equal(["Loading epics (last 24 hours)…"], dialog.Lines);
+        Assert.Contains("loading…", dialog.HeaderLine);
+        Assert.DoesNotContain("r retry", dialog.HintText);
+        fixture.Source.Release(pending, Now.AddHours(-24));
+        await opening.WaitAsync(TestContext.Current.CancellationToken);
+
+        Assert.Contains("> Alpha epic", dialog.Lines);
+        AssertSummaries(fixture, Now.AddHours(-24));
+        Assert.Contains("updated 01:00:00", dialog.HeaderLine);
+        Assert.DoesNotContain("loading…", dialog.HeaderLine);
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task WindowChange_HeldLoad_ClearsRowsAndNamesNewWindow()
+    {
+        using var fixture = new Fixture();
+        await fixture.View.HandleKeyAsync(new Key('e'));
+        Assert.Contains("> Alpha epic", fixture.View.EpicView.Lines);
+        var pending = fixture.Source.HoldNextLoad();
+        var changing = fixture.View.HandleKeyAsync(new Key('w'));
+        await fixture.Source.LoadStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(["Loading epics (last 7 days)…"], fixture.View.EpicView.Lines);
+        Assert.Contains("loading…", fixture.View.EpicView.HeaderLine);
+        fixture.Source.Release(pending, Now.AddDays(-7));
+        await changing.WaitAsync(TestContext.Current.CancellationToken);
+        AssertSummaries(fixture, Now.AddDays(-7));
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task Enter_HeldDetailLoad_ClearsListAndNamesSelectedEpic()
+    {
+        using var fixture = new Fixture();
+        await fixture.View.HandleKeyAsync(new Key('e'));
+        await fixture.View.HandleKeyAsync(Key.CursorDown);
+        Assert.Contains("> Beta epic", fixture.View.EpicView.Lines);
+        var pending = fixture.Source.HoldNextLoad();
+        var entering = fixture.View.HandleKeyAsync(Key.Enter);
+        await fixture.Source.LoadStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(["Loading Beta epic…"], fixture.View.EpicView.Lines);
+        Assert.Contains("loading…", fixture.View.EpicView.HeaderLine);
+        fixture.Source.Release(pending, Now.AddHours(-24));
+        await entering.WaitAsync(TestContext.Current.CancellationToken);
+        Assert.Equal("Beta epic", fixture.View.EpicView.Lines[0]);
+        Assert.Contains("Plan of record:", fixture.View.EpicView.Lines);
+        Assert.Contains("updated 01:00:00", fixture.View.EpicView.HeaderLine);
+    }
+
+    [Theory(Timeout = 30000)]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Failure_Retry_ShowsReasonAndClearsFailureAndRetryHint(bool detail)
+    {
+        using var fixture = new Fixture();
+        if (detail)
+        {
+            await fixture.View.HandleKeyAsync(new Key('e'));
+            await fixture.View.HandleKeyAsync(Key.CursorDown);
+        }
+        fixture.Source.Error = new InvalidOperationException("portfolio unavailable.");
+        await fixture.View.HandleKeyAsync(detail ? Key.Enter : new Key('e'));
+        var dialog = fixture.View.EpicView;
+        Assert.Equal(["Could not load epics: portfolio unavailable. Press r to retry."], dialog.Lines);
+        Assert.Contains("failed", dialog.HeaderLine);
+        Assert.Contains("r retry", dialog.HintText);
+        fixture.Source.Error = null;
+        var pending = fixture.Source.HoldNextLoad();
+        var retrying = fixture.View.HandleKeyAsync(new Key('r'));
+        await fixture.Source.LoadStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
+        Assert.Equal([detail ? "Loading Beta epic…" : "Loading epics (last 24 hours)…"], dialog.Lines);
+        Assert.DoesNotContain("r retry", dialog.HintText);
+        fixture.Source.Release(pending, Now.AddHours(-24));
+        await retrying.WaitAsync(TestContext.Current.CancellationToken);
+
+        Assert.Contains(detail ? "Beta epic" : "> Alpha epic", dialog.Lines);
+        Assert.DoesNotContain("Could not load", string.Join(" ", dialog.Lines));
+        Assert.DoesNotContain("r retry", dialog.HintText);
+        Assert.Contains("updated 01:00:00", dialog.HeaderLine);
+    }
+
+    [Fact]
+    public async Task Open_MissingSource_ShowsUnavailableInsteadOfEmptyPortfolio()
+    {
+        using var fixture = new Fixture(wired: false);
+        await fixture.View.HandleKeyAsync(new Key('e'));
+        Assert.Equal(["Epic data is not available in this console session."], fixture.View.EpicView.Lines);
+        Assert.DoesNotContain("No epics", string.Join(" ", fixture.View.EpicView.Lines));
+        Assert.Contains("unavailable", fixture.View.EpicView.HeaderLine);
+        Assert.DoesNotContain("r retry", fixture.View.EpicView.HintText);
+        Assert.Equal(0, fixture.Source.Calls);
+    }
+
+    [Fact]
+    public async Task Open_ZeroEpics_ShowsCreationHint()
+    {
+        using var fixture = new Fixture();
+        fixture.Source.Epics.Clear();
+        await fixture.View.HandleKeyAsync(new Key('e'));
+        Assert.Equal(["No epics are defined yet. Create one with epic-add."], fixture.View.EpicView.Lines);
+        Assert.Contains("updated 01:00:00", fixture.View.EpicView.HeaderLine);
+        Assert.Equal(1, fixture.Source.Calls);
+    }
+
+    [Theory]
+    [InlineData(false, "last 24 hours")]
+    [InlineData(true, "last 7 days")]
+    public async Task Window_OldActivity_ShowsWidenHintAboveEpics(bool week, string label)
+    {
+        using var fixture = new Fixture();
+        fixture.Source.Goals.RemoveAll(goal => goal.Id != "a-oldest");
+        await fixture.View.HandleKeyAsync(new Key('e'));
+        if (week) await fixture.View.HandleKeyAsync(new Key('w'));
+        var dialog = fixture.View.EpicView;
+        Assert.Equal($"No epic activity in the {label}; press w to widen.", dialog.Lines[0]);
+        Assert.Equal("> Alpha epic", dialog.Lines[1]);
+        Assert.Contains("  Beta epic", dialog.Lines);
+        Assert.Equal(1, dialog.BodyPane.SelectedItem);
+        await fixture.View.HandleKeyAsync(Key.CursorDown);
+        Assert.Equal("> Beta epic", dialog.Lines[4]);
+        Assert.Equal(4, dialog.BodyPane.SelectedItem);
+        if (!week) await fixture.View.HandleKeyAsync(new Key('w'));
+        await fixture.View.HandleKeyAsync(new Key('w'));
+        Assert.DoesNotContain("No epic activity", string.Join(" ", dialog.Lines));
+        AssertSummaries(fixture, null);
+    }
+
+    [Theory(Timeout = 30000)]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ModelApplied_HeldRefresh_KeepsContentWithRefreshingHeader(bool detail)
+    {
+        using var fixture = new Fixture();
+        await fixture.View.HandleKeyAsync(new Key('e'));
+        if (detail) await fixture.View.HandleKeyAsync(Key.Enter);
+        var dialog = fixture.View.EpicView;
+        var currentLines = dialog.Lines.ToArray();
+        var pending = fixture.Source.HoldNextLoad();
+        fixture.View.Render(fixture.Model);
+        await fixture.Source.LoadStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
+        var refreshing = dialog.LastLoad;
+        Assert.Equal(currentLines, dialog.Lines);
+        Assert.Contains("refreshing…", dialog.HeaderLine);
+        Assert.DoesNotContain("r retry", dialog.HintText);
+        fixture.Source.Release(pending, Now.AddHours(-24));
+        await refreshing.WaitAsync(TestContext.Current.CancellationToken);
+        Assert.Contains("updated 01:00:00", dialog.HeaderLine);
+        Assert.DoesNotContain("refreshing…", dialog.HeaderLine);
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task Reopen_HeldLoad_ClearsPreviousContent()
+    {
+        using var fixture = new Fixture();
+        await fixture.View.HandleKeyAsync(new Key('e'));
+        Assert.Contains("> Alpha epic", fixture.View.EpicView.Lines);
+        await fixture.View.HandleKeyAsync(Key.Esc);
+        var pending = fixture.Source.HoldNextLoad();
+        var opening = fixture.View.HandleKeyAsync(new Key('e'));
+        await fixture.Source.LoadStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(["Loading epics (last 24 hours)…"], fixture.View.EpicView.Lines);
+        Assert.Contains("loading…", fixture.View.EpicView.HeaderLine);
+        fixture.Source.Release(pending, Now.AddHours(-24));
+        await opening.WaitAsync(TestContext.Current.CancellationToken);
+        AssertSummaries(fixture, Now.AddHours(-24));
+    }
+
     private static readonly DateTimeOffset Now = DateTimeOffset.Parse("2026-10-08T22:00:00Z");
 
     private static IEnumerable<string> Section(IReadOnlyList<string> lines, string heading) =>
@@ -273,7 +451,7 @@ public sealed class OwnerConsoleEpicViewTests
         internal readonly OwnerConsoleFullScreenView View;
         internal readonly OwnerConsoleViewModel Model = new(new(true, 3, 0, 0, null, 0), [], [], []);
 
-        internal Fixture()
+        internal Fixture(bool wired = true)
         {
             Source.Epics.AddRange([
                 new("alpha", "Alpha epic", null, Now, "test", Now, "test", "Alpha plan"),
@@ -309,7 +487,7 @@ public sealed class OwnerConsoleEpicViewTests
             var parked = Harness.AddGoal("b-parked", "Parked beta", AgentRole.Developer);
             Harness.Kernel.ParkGoal(parked.Id, "waiting on vendor");
             Controller = new(Harness.Questions, Harness.Answers, Dialogs, Harness.State, Harness.Tail,
-                Harness.Conductor, Harness.DigestReport, Harness.Digest, new Clock(), Source);
+                Harness.Conductor, Harness.DigestReport, Harness.Digest, new Clock(), wired ? Source : null);
             View = new(App, Controller, () => Task.CompletedTask);
             View.Render(Model);
             View.FocusDecisions();
@@ -332,8 +510,18 @@ public sealed class OwnerConsoleEpicViewTests
         internal readonly List<BacklogItem> Backlog = [];
         internal int Calls;
         internal Exception? Error;
-        internal readonly TaskCompletionSource LoadStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource LoadStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource<IReadOnlyList<EpicProgressRollup>>? Pending;
+        internal TaskCompletionSource<IReadOnlyList<EpicProgressRollup>> HoldNextLoad()
+        {
+            LoadStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            return Pending = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+        internal void Release(TaskCompletionSource<IReadOnlyList<EpicProgressRollup>> pending, DateTimeOffset? since)
+        {
+            Pending = null;
+            pending.SetResult(Build(since));
+        }
         internal IReadOnlyList<EpicProgressRollup> Build(DateTimeOffset? since) =>
             EpicProgressReadModel.Build(Epics, [], Members, Goals, Backlog, since);
         public Task<IReadOnlyList<EpicProgressRollup>> LoadAsync(DateTimeOffset? since, CancellationToken token)
@@ -348,6 +536,7 @@ public sealed class OwnerConsoleEpicViewTests
     private sealed class Clock : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => Now;
+        public override TimeZoneInfo LocalTimeZone => TimeZoneInfo.CreateCustomTimeZone("Test", TimeSpan.FromHours(3), "Test", "Test");
     }
 
     private sealed class Dialogs : IOwnerConsoleDialogs

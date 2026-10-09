@@ -9,14 +9,15 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
 {
     internal event Action? ModelApplied;
 
-    internal async Task<OwnerConsoleEpicViewModel> LoadEpicViewAsync(OwnerConsoleEpicWindow window,
+    internal async Task<OwnerConsoleEpicViewModel?> LoadEpicViewAsync(OwnerConsoleEpicWindow window,
         string? detailId, CancellationToken cancellationToken)
     {
+        if (epics is null) return null;
         var since = OwnerConsoleEpicViewModel.Cutoff(window, clock.GetUtcNow());
-        var rows = epics is null ? [] : await epics.LoadAsync(since, cancellationToken).ConfigureAwait(false);
+        var rows = await epics.LoadAsync(since, cancellationToken).ConfigureAwait(false);
         var row = rows.FirstOrDefault(item => item.Epic.Id == detailId);
         var detail = row is null ? null : await OwnerConsoleEpicViewModel.DetailAsync(row, since, state, cancellationToken).ConfigureAwait(false);
-        return new(window, since, rows, detail);
+        return new(window, since, rows, detail, clock.GetLocalNow());
     }
 
     internal OwnerConsoleViewModel? Model { get; private set; }
