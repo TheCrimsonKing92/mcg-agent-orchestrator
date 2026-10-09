@@ -7,15 +7,31 @@ internal static class OwnerConsoleEpicFormatter
 {
     internal const int DefaultWidth = 100;
     internal const string KeyHint = "e epics  :epics";
-    internal const string ListHint = "Up/Down select  Enter detail  w window  Esc close";
-    internal const string DetailHint = "Up/Down scroll  PgUp/PgDn page  w window  Esc epics";
+    internal const string NoEpicsText = "No epics are defined yet. Create one with epic-add.";
+    internal const string UnavailableText = "Epic data is not available in this console session.";
 
-    internal static string Header(OwnerConsoleEpicWindow window) => "EPICS · " + (window switch
+    internal static string ListHint(bool failed) => (failed ? "r retry  " : "") +
+        "Up/Down select  Enter detail  w window  Esc close";
+    internal static string DetailHint(bool failed) => (failed ? "r retry  " : "") +
+        "Up/Down scroll  PgUp/PgDn page  w window  Esc epics";
+
+    internal static string Header(OwnerConsoleEpicWindow window) => "EPICS · " + WindowLabel(window);
+    internal static string WindowLabel(OwnerConsoleEpicWindow window) => window switch
     {
         OwnerConsoleEpicWindow.Day => "last 24 hours",
         OwnerConsoleEpicWindow.Week => "last 7 days",
         _ => "all time"
-    });
+    };
+
+    internal static string LoadingLine(OwnerConsoleEpicWindow window) => $"Loading epics ({WindowLabel(window)})…";
+    internal static string LoadingDetailLine(string title) => $"Loading {Title(title)}…";
+    internal static string FailedLine(string reason) => $"Could not load epics: {reason.TrimEnd('.')}. Press r to retry.";
+    internal static string NoActivityLine(OwnerConsoleEpicWindow window) =>
+        $"No epic activity in the {WindowLabel(window)}; press w to widen.";
+    internal static bool HasNoActivity(OwnerConsoleEpicViewModel model) =>
+        model.Window is OwnerConsoleEpicWindow.Day or OwnerConsoleEpicWindow.Week && model.Epics.Count > 0 &&
+        model.Epics.All(row => (row.WindowLandedCount ?? row.LandedCount) == 0 &&
+            (row.WindowFailedCount ?? row.FailedCount) == 0 && row.VerifyingCount + row.ActiveCount == 0);
 
     internal static string Summary(EpicProgressRollup row) =>
         $"landed {row.WindowLandedCount ?? row.LandedCount} · in flight {row.VerifyingCount + row.ActiveCount} ({row.VerifyingCount} verifying, {row.ActiveCount} active) · failed {row.WindowFailedCount ?? row.FailedCount} · backlog {row.BacklogOpenCount} open / {row.BacklogDoneCount} done";
@@ -23,8 +39,9 @@ internal static class OwnerConsoleEpicFormatter
     internal static IReadOnlyList<string> ListLines(OwnerConsoleEpicViewModel model, int width, string? selectedId)
     {
         width = Width(width);
-        if (model.Epics.Count == 0) return Wrap("No epics.", width).ToArray();
+        if (model.Epics.Count == 0) return Wrap(NoEpicsText, width).ToArray();
         var lines = new List<string>();
+        if (HasNoActivity(model)) lines.AddRange(Wrap(NoActivityLine(model.Window), width));
         foreach (var row in model.Epics)
         {
             var marker = row.Epic.Id == selectedId ? "> " : "  ";
