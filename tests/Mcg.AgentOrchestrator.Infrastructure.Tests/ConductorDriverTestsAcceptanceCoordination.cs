@@ -683,7 +683,7 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
             "goal-slots-busy",
             [new DotnetBuildStableSlotWait(0, 12345)]);
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            Path.Combine(root, ".orchestrator", "test-acceptance-attempts"),
+            Path.Combine(root, ".orchestrator", "test-acceptance-attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             runInline: true,
             acquireStableSlotLease: (_, _) => null);
 
@@ -1097,7 +1097,7 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
         var candidate = driver.TryBuildParallelAcceptanceCandidate(goal, ConductorAutonomyPolicy.Conservative, 0, out _);
         Assert.NotNull(candidate);
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            Path.Combine(root, ".orchestrator", "test-acceptance-attempts"),
+            Path.Combine(root, ".orchestrator", "test-acceptance-attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             root,
             runInline: true,
             tryRunPreSlot: driver.RunParallelLandingAcceptancePreSlot);
@@ -1184,7 +1184,7 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
             var preSlotRuns = 0;
             var focusedRuns = 0;
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                Path.Combine(root, "attempts"),
+                Path.Combine(root, "attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 runInline: true,
                 tryRunPreSlot: (_, _) =>
                 {

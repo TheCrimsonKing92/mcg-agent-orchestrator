@@ -478,7 +478,7 @@ public sealed class PassedMergeTrainReceiptHoldTests(ITestOutputHelper output) :
         if (materializeReceipt)
         {
             output.WriteLine("RECEIPT_HOLD_PHASE setup=materialization-start");
-            using var train = GoalWorktrees.CreateMergeTrainWorkspace(repo, main, selection.BindMembers(), cleanup.Hooks);
+            using var train = GoalWorktrees.CreateMergeTrainWorkspace(repo, main, selection.BindMembers(), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, cleanup.Hooks);
             Assert.Empty(train.Ejections);
             Assert.Equal(3, train.Members.Count);
             var changedFiles = train.Members.SelectMany(member => member.LandingPaths)

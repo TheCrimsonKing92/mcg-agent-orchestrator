@@ -18,7 +18,7 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceStrandedReopen(ITes
         var task = goal.Tasks.Single();
         var acceptanceAttempts = 0;
         var dispatches = 0;
-        var attempts = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, runInline: true);
+        var attempts = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: true);
         var driver = MakeDriver(
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
             dispatchAndStart: _ => { dispatches++; return DispatchStartOutcome.Started(); },

@@ -56,7 +56,7 @@ public sealed class CandidateIdentityComputationTests
 
     private static Mcg.AgentOrchestrator.Core.CandidateIdentity Compute(string root)
     {
-        var succeeded = GoalWorktrees.TryComputeCandidateIdentity(root, out var identity, out var failure,
+        var succeeded = GoalWorktrees.TryComputeCandidateIdentity(root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, out var identity, out var failure,
             (_, _) => "manifest");
         Xunit.Assert.True(succeeded, failure);
         return Xunit.Assert.IsType<Mcg.AgentOrchestrator.Core.CandidateIdentity>(identity);

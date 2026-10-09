@@ -124,7 +124,7 @@ public sealed class ConductorBatchLoopTestsVerifyingStageDecision : ConductorBat
         internal AdmissionFixture()
         {
             Coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                _attemptRoot,
+                _attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 isProcessAlive: _ => true,
                 launchOwnedProcess: _ =>
                 {

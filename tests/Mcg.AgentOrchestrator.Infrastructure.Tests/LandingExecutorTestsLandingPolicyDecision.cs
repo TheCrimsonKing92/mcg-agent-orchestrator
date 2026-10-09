@@ -44,7 +44,7 @@ public sealed class LandingExecutorTestsLandingPolicyDecision
                 AddGoalBranchCommit(repo, GoalWorktrees.BranchName(goal.Id), changedFile, "goal work");
                 GoalWorktrees.Ensure(repo, goal.Id);
             }
-            var accepted = GoalAcceptanceStatusProjector.Build(kernel, goal, repo);
+            var accepted = GoalAcceptanceStatusProjector.Build(kernel, goal, repo, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
             Assert.Equal(scenario != "acceptance", accepted.IsAccepted);
             var mainBefore = ReadGit(repo, "rev-parse", "main");
             var branch = GoalWorktrees.BranchName(goal.Id);

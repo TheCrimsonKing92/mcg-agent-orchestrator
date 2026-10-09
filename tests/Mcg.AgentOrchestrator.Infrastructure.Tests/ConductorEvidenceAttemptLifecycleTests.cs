@@ -74,7 +74,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
             var goal = kernel.CreateGoal("Observe a live acceptance attempt without taking its writer lease");
             var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [], "branch-live", "main-live");
             var starter = new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 isProcessAlive: processId => processId == 7115,
                 launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7115),
                 acquireStableSlotLease: (_, _) => null);
@@ -109,7 +109,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
             var leaseBoundaryEntered = false;
             var liveRequests = new List<(string Directory, TimeSpan Wait)>();
             var observer = new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 isProcessAlive: processId => processId == 7115,
                 launchOwnedProcess: _ => throw new InvalidOperationException("live observation must not launch"),
                 acquireStableSlotLease: (_, _) => null,
@@ -150,7 +150,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
             var falseNegativeLeaseBoundaryEntered = false;
             var busyRequests = new List<(string Directory, TimeSpan Wait, bool Acquired)>();
             var falseNegativeObserver = new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 isProcessAlive: _ => false,
                 launchOwnedProcess: _ => throw new InvalidOperationException("lease-busy observation must not launch"),
                 acquireStableSlotLease: (_, _) => null,
@@ -227,7 +227,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
 
             var busyRequests = new List<(string Directory, TimeSpan Wait, bool Acquired)>();
             var observer = new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 isProcessAlive: _ => false,
                 launchOwnedProcess: _ => throw new InvalidOperationException("lease-busy observation must not launch"),
                 acquireStableSlotLease: (_, _) => null,
@@ -290,7 +290,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
             var kernel = new AgentOrchestratorKernel();
             var goal = kernel.CreateGoal("Write a typed child exit receipt after writer-lease timeout");
             var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [], "branch-timeout", "main-timeout");
-            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(root);
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
             var attempt = coordinator.CreateAttemptForTests(candidate);
             holder.Start();
             Assert.True(holderAcquired.Wait(TimeSpan.FromSeconds(10)));
@@ -330,7 +330,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                 branchHeadSha: "branch-passed",
                 mainHeadSha: "main-passed");
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                root,
+                root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 acquireStableSlotLease: (_, _) => null);
             var attempt = coordinator.CreateAttemptForTests(candidate);
             using var ownedStdout = new FileStream(
@@ -383,7 +383,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                 mainHeadSha: "main-lost-claim");
             ConductorParallelAcceptanceAttemptCoordinator coordinator = null!;
             coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                root,
+                root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 acquireStableSlotLease: (_, _) => null,
                 resultPublishedForTests: publishedAttempt =>
                 {
@@ -436,7 +436,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                 branchHeadSha: "branch-invalid-claim",
                 mainHeadSha: "main-invalid-claim");
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                root,
+                root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 acquireStableSlotLease: (_, _) => null,
                 resultPublishedForTests: publishedAttempt =>
                 {
@@ -502,11 +502,11 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
             var kernel = new AgentOrchestratorKernel();
             var goal = kernel.CreateGoal("Publish consistent ordinary acceptance success");
             var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [], "branch-success", "main-success");
-            var creator = new ConductorParallelAcceptanceAttemptCoordinator(root);
+            var creator = new ConductorParallelAcceptanceAttemptCoordinator(root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
             var attempt = creator.CreateAttemptForTests(candidate);
             using var logs = new AttemptLogWriterFixture(attempt);
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                root,
+                root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 acquireStableSlotLease: (_, _) => null,
                 attemptLogWriters: logs.Writers);
 
@@ -543,11 +543,11 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
             var kernel = new AgentOrchestratorKernel();
             var goal = kernel.CreateGoal("Publish distinct pre-result acceptance failure");
             var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [], "branch-failure", "main-failure");
-            var creator = new ConductorParallelAcceptanceAttemptCoordinator(root);
+            var creator = new ConductorParallelAcceptanceAttemptCoordinator(root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
             var attempt = creator.CreateAttemptForTests(candidate);
             using var logs = new AttemptLogWriterFixture(attempt);
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                root,
+                root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 acquireStableSlotLease: (_, _) => null,
                 attemptLogWriters: logs.Writers);
 
@@ -583,7 +583,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
             var goal = kernel.CreateGoal("Retain acceptance result across cleanup failure");
             var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [], "branch-cleanup", "main-cleanup");
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                root,
+                root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 cleanupObservedForTests: (_, phase) =>
                 {
                     if (!string.Equals(phase, "artifact-custody-released", StringComparison.Ordinal))
@@ -642,7 +642,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
             var goal = kernel.CreateGoal("Retain acceptance result across late launch failure");
             var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [], "branch-launch", "main-launch");
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                root,
+                root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 acquireStableSlotLease: (_, _) => null);
             var attempt = coordinator.CreateAttemptForTests(candidate);
             coordinator.RunAttemptForTests(
@@ -686,10 +686,10 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
             var kernel = new AgentOrchestratorKernel();
             var goal = kernel.CreateGoal("Read acceptance result while publication completes");
             var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [], "branch-reader", "main-reader");
-            var creator = new ConductorParallelAcceptanceAttemptCoordinator(root);
+            var creator = new ConductorParallelAcceptanceAttemptCoordinator(root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
             var attempt = creator.CreateAttemptForTests(candidate);
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                root,
+                root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 acquireStableSlotLease: (_, _) => null,
                 resultPublishedForTests: publishedAttempt =>
                 {
@@ -769,7 +769,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                 [],
                 branchHeadSha: "branch-bounded",
                 mainHeadSha: "main-bounded");
-            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(root);
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
             for (var ordinal = 1; ordinal <= 22; ordinal++)
             {
                 coordinator.CreateAttemptForTests(candidate);
@@ -811,7 +811,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                         "single-request")
                 ]);
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                Path.Combine(root, "attempts"),
+                Path.Combine(root, "attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 isProcessAlive: _ => true,
                 launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7100),
                 acquireStableSlotLease: (_, _) => null,
@@ -872,7 +872,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                         "compatible-same-project")
                 ]);
             var firstCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 isProcessAlive: _ => true,
                 launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7101),
                 acquireStableSlotLease: (_, _) => null,
@@ -887,7 +887,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
             Assert.True(firstCoordinator.InvalidateCurrent(goal.Id.Value, "operator retry replaced attempt"));
 
             var replacementCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 isProcessAlive: _ => false,
                 launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7102),
                 recentHeartbeatGrace: TimeSpan.Zero,
@@ -1006,7 +1006,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
             var goal = kernel.CreateGoal($"Record {expectedToken} evidence outcome");
             var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, []);
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                Path.Combine(root, "attempts"),
+                Path.Combine(root, "attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 launchOwnedProcess: expectedOutcome == ConductorEvidenceAttemptOutcome.LaunchFailed
                     ? _ => throw new InvalidOperationException("launch failed")
                     : _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7110),
@@ -1056,7 +1056,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
             var goal = kernel.CreateGoal("Record focused evidence replacement cause");
             var firstCandidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [], "branch-1", "main-1");
             var firstCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7111),
                 acquireStableSlotLease: (_, _) => null);
             var first = firstCoordinator.EvaluateFocusedEvidence(
@@ -1077,7 +1077,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                 : firstCandidate;
             var logPath = Path.Combine(root, "conduct-events.log");
             var replacementCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 isProcessAlive: _ => false,
                 launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7112),
                 acquireStableSlotLease: (_, _) => null,
@@ -1112,7 +1112,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
             var goal = kernel.CreateGoal("Serialize focused evidence replacement with retention");
             var firstCandidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [], "branch-1", "main-1");
             var firstCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7113),
                 acquireStableSlotLease: (_, _) => null);
             var first = firstCoordinator.EvaluateFocusedEvidence(
@@ -1146,7 +1146,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
 
             using var replacementAtLeaseBoundary = new ManualResetEventSlim();
             var replacementCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 isProcessAlive: _ => false,
                 launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7114),
                 acquireStableSlotLease: (_, _) => null,
@@ -1202,7 +1202,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
             var goal = kernel.CreateGoal("Render focused evidence progress");
             var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, []);
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                Path.Combine(root, "attempts"),
+                Path.Combine(root, "attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 isProcessAlive: _ => true,
                 launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7103),
                 acquireStableSlotLease: (_, _) => null,
@@ -1257,7 +1257,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
             var goal = kernel.CreateGoal("Count focused evidence tests");
             var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, []);
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                Path.Combine(root, "attempts"),
+                Path.Combine(root, "attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 runInline: true,
                 acquireStableSlotLease: (_, _) => null,
                 conductEventLogWriter: new ConductEventLogWriter(logPath));
@@ -1311,7 +1311,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
             var goal = kernel.CreateGoal("Record an indeterminate focused evidence outcome");
             var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, []);
             var startingCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 isProcessAlive: _ => true,
                 launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7104),
                 acquireStableSlotLease: (_, _) => null,
@@ -1326,7 +1326,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
             clock.Advance(TimeSpan.FromSeconds(5));
 
             var recoveringCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 isProcessAlive: _ => false,
                 launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7105),
                 recentHeartbeatGrace: TimeSpan.Zero,
@@ -1369,7 +1369,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
             var goal = kernel.CreateGoal("Aggregate focused evidence test receipts");
             var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, []);
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                Path.Combine(root, "attempts"),
+                Path.Combine(root, "attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 runInline: true,
                 acquireStableSlotLease: (_, _) => null,
                 conductEventLogWriter: new ConductEventLogWriter(logPath));

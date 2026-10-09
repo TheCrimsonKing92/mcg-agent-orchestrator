@@ -15,7 +15,7 @@ public sealed class DotnetBuildEnvironmentManagerTestsStableSlotHolderLabel : Do
         try
         {
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                Path.Combine(StorageRoot.RootPath, "attempts"), runInline: true, buildStorageRoot: StorageRoot);
+                Path.Combine(StorageRoot.RootPath, "attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: true, buildStorageRoot: StorageRoot);
             using var cohort = coordinator.AcquireCohortStableSlotLease("identity", timeout: TimeSpan.Zero,
                 holderLabel: "cohort-gate:goal-aaaaaaaa+bbbbbbbb");
             var kernel = new AgentOrchestratorKernel();

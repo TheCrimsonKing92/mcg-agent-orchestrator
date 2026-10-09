@@ -122,7 +122,7 @@ public sealed class ConductorBatchLoopTestsOperatorIntents : ConductorBatchLoopT
             kernel.BeginGoalAcceptanceVerification(goal.Id, "Acceptance attempt launched.");
 
             var attemptCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                Path.Combine(root, "attempts"),
+                Path.Combine(root, "attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 isProcessAlive: _ => acceptanceProcessAlive,
                 launchOwnedProcess: launch =>
                 {
@@ -593,7 +593,7 @@ public sealed class ConductorBatchLoopTestsOperatorIntents : ConductorBatchLoopT
 
             var acceptanceRuns = 0;
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                Path.Combine(root, "attempts"),
+                Path.Combine(root, "attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 runInline: true);
             var driver = MakeDriver(
                 getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),

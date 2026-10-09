@@ -322,7 +322,7 @@ public sealed class AcceptanceCohortWorkflowTestsGateOutcomes : AcceptanceCohort
             var bindings = selection.BindMembers();
             AcceptanceCohortIdentity identity;
             using (var integration = GoalWorktrees.CreateAcceptanceCohortWorkspace(
-                       repo, selection.Members[0].MainRevision, bindings))
+                       repo, selection.Members[0].MainRevision, bindings, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default))
             {
                 identity = AcceptanceCohortIdentity.Create(
                     bindings,

@@ -20,7 +20,7 @@ public sealed class ConductorBatchLoopTestsFallbackAcceptance : ConductorBatchLo
         var acceptanceRuns = 0;
         var launches = 0;
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            attemptRoot,
+            attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             isProcessAlive: _ => true,
             launchOwnedProcess: _ =>
             {
@@ -65,7 +65,7 @@ public sealed class ConductorBatchLoopTestsFallbackAcceptance : ConductorBatchLo
         var acceptanceRuns = 0;
         var launches = 0;
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            attemptRoot,
+            attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             isProcessAlive: _ => true,
             launchOwnedProcess: _ =>
             {
@@ -147,7 +147,7 @@ public sealed class ConductorBatchLoopTestsFallbackAcceptance : ConductorBatchLo
         var workerAlive = true;
         var runner = new BackgroundDispatchRunner(isStillRunning: _ => workerAlive);
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            attemptRoot,
+            attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             isProcessAlive: _ => true,
             launchOwnedProcess: _ =>
             {
@@ -222,7 +222,7 @@ public sealed class ConductorBatchLoopTestsFallbackAcceptance : ConductorBatchLo
         var landingRuns = 0;
         var landed = false;
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            attemptRoot,
+            attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             isProcessAlive: _ => true,
             launchOwnedProcess: launch =>
             {
@@ -287,7 +287,7 @@ public sealed class ConductorBatchLoopTestsFallbackAcceptance : ConductorBatchLo
         var attemptRoot = CreateTempDirectory("mcg-conductor-completed-hold");
         var launches = 0;
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            attemptRoot,
+            attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             isProcessAlive: _ => true,
             launchOwnedProcess: _ =>
             {
@@ -325,7 +325,7 @@ public sealed class ConductorBatchLoopTestsFallbackAcceptance : ConductorBatchLo
         var launches = 0;
         var landingRuns = 0;
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            attemptRoot,
+            attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             isProcessAlive: _ => true,
             launchOwnedProcess: launch =>
             {
@@ -387,7 +387,7 @@ public sealed class ConductorBatchLoopTestsFallbackAcceptance : ConductorBatchLo
         ConductorParallelAcceptanceOwnedProcessLaunch? ownedLaunch = null;
         var landingRuns = 0;
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            attemptRoot,
+            attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             isProcessAlive: _ => true,
             launchOwnedProcess: launch =>
             {
@@ -447,7 +447,7 @@ public sealed class ConductorBatchLoopTestsFallbackAcceptance : ConductorBatchLo
             },
             getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/OneShotGate.cs"],
             parallelAcceptanceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 runInline: true,
                 acquireStableSlotLease: (_, _) => null));
 

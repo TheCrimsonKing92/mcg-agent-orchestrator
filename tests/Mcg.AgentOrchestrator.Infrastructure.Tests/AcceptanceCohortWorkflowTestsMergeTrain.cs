@@ -27,7 +27,7 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrain : AcceptanceCohortWo
                     TrainBind(first.GoalId, first.Revision, "seed.txt", "resource:first"),
                     TrainBind(conflicting.GoalId, conflicting.Revision, "seed.txt", "resource:second"),
                     TrainBind(third.GoalId, third.Revision, "src/Third.cs", "resource:third")
-                ]);
+                ], Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
 
             Assert.Equal([first.GoalId, third.GoalId], workspace.Members.Select(member => member.GoalId));
             var ejection = Assert.Single(workspace.Ejections);
@@ -198,7 +198,7 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrain : AcceptanceCohortWo
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var databasePath = Path.Combine(workspace.OrchestratorDirectory, "merge-train-acceptance.db");
             var store = new MergeTrainAcceptanceStore(databasePath);
-            using var integration = GoalWorktrees.CreateMergeTrainWorkspace(repo, main, bindings);
+            using var integration = GoalWorktrees.CreateMergeTrainWorkspace(repo, main, bindings, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
             var identity = MergeTrainIdentity.Create(integration.Members, main, integration.TreeRevision, "manifest-v1");
             var receipt = store.SaveGateReceipt(new MergeTrainReceipt(
                 "receipt-train-held",
@@ -266,7 +266,7 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrain : AcceptanceCohortWo
             };
             var store = new MergeTrainAcceptanceStore(
                 Path.Combine(repo, ".orchestrator", "merge-train-acceptance.db"));
-            using var integration = GoalWorktrees.CreateMergeTrainWorkspace(repo, main, bindings);
+            using var integration = GoalWorktrees.CreateMergeTrainWorkspace(repo, main, bindings, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
             var identity = MergeTrainIdentity.Create(
                 integration.Members,
                 main,
@@ -284,15 +284,15 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrain : AcceptanceCohortWo
                 ValidForLanding: true));
             store.PrepareLanding(receipt, integration.CommitRevision, main);
 
-            Assert.Empty(store.RecoverPreparedLandings(repo));
+            Assert.Empty(store.RecoverPreparedLandings(repo, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default));
             RunGit(repo, "update-ref", "refs/heads/main", integration.CommitRevision, main);
-            var recovery = Assert.Single(store.RecoverPreparedLandings(repo));
+            var recovery = Assert.Single(store.RecoverPreparedLandings(repo, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default));
             Assert.Equal(identity.Value, recovery.Receipt.Identity.Value);
             Assert.Equal(3, recovery.Coverage.Count);
-            Assert.Single(store.RecoverPreparedLandings(repo));
+            Assert.Single(store.RecoverPreparedLandings(repo, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default));
 
             store.CompleteLandingEffects(identity.Value, receipt.ReceiptId);
-            Assert.Empty(store.RecoverPreparedLandings(repo));
+            Assert.Empty(store.RecoverPreparedLandings(repo, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default));
         }
         finally
         {

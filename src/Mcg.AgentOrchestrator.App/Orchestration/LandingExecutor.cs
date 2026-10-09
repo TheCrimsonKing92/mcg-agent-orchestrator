@@ -126,7 +126,7 @@ internal static partial class LandingExecutor
         }
 
         var changedFiles = changedFilesResult.Files;
-        var acceptance = GoalAcceptanceStatusProjector.Build(kernel, goal, workspace.ExecutionDirectory);
+        var acceptance = GoalAcceptanceStatusProjector.Build(kernel, goal, workspace.ExecutionDirectory, workspace.IntegrationBranch);
         landingFacts = landingFacts with
         {
             AcceptanceAccepted = acceptance.IsAccepted,
@@ -162,7 +162,7 @@ internal static partial class LandingExecutor
             goal,
             evidenceCandidateSha,
             boundMainRevision,
-            kernel,
+            kernel, workspace.IntegrationBranch,
             executionDirectory);
         landingFacts = landingFacts with
         {
@@ -709,7 +709,7 @@ internal static partial class LandingExecutor
             goals,
             goalId => receipt.Identity.Members.Single(member => member.GoalId == goalId).CandidateRevision,
             kernel,
-            $"cohort-receipt:{receipt.ReceiptId}",
+            $"cohort-receipt:{receipt.ReceiptId}", workspace.IntegrationBranch,
             executionDirectory);
         if (evidenceDiagnostic is not null)
         {

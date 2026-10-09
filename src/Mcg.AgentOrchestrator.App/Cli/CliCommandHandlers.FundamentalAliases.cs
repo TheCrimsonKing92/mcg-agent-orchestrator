@@ -35,7 +35,7 @@ private static bool HandleAcceptAlias(IReadOnlyList<string> parts, CliExecutionC
     AutoVerifyFromGitEvidence(context, context.CurrentGoal);
     ConsoleViews.PrintAcceptanceSummary(
         context.CurrentGoal,
-        GoalAcceptanceStatusProjector.Build(context.Kernel, context.CurrentGoal, context.Workspace.ExecutionDirectory));
+        GoalAcceptanceStatusProjector.Build(context.Kernel, context.CurrentGoal, context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch));
     if (!RunAcceptanceWorkspaceMerge(context, skipVerify))
     {
         return false;

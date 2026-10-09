@@ -134,7 +134,7 @@ public sealed class ConductorDriverTestsPreTesterDeferredEvidenceExitNotes
                 getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
                 getPreReviewEvidenceContext: _ => NoPreReviewContext(CandidateSha),
                 focusedEvidenceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
-                    Path.Combine(Root, "attempts"), runInline: true,
+                    Path.Combine(Root, "attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: true,
                     acquireStableSlotLease: (_, _) => null),
                 runFocusedEvidence: (_, request) => run(request),
                 dispatchAndStart: goal =>

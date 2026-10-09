@@ -322,7 +322,7 @@ public sealed class AcceptanceCohortWorkflowTestsLandingAndReceipts : Acceptance
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var store = new CohortAcceptanceStore(Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db"));
 
-            using var integration = GoalWorktrees.CreateAcceptanceCohortWorkspace(repo, main, bindings);
+            using var integration = GoalWorktrees.CreateAcceptanceCohortWorkspace(repo, main, bindings, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
             var identity = AcceptanceCohortIdentity.Create(
                 bindings,
                 main,
@@ -399,7 +399,7 @@ public sealed class AcceptanceCohortWorkflowTestsLandingAndReceipts : Acceptance
             var orchestratorWorkspace = OrchestratorWorkspace.ForDirectory(repo);
             var databasePath = Path.Combine(orchestratorWorkspace.OrchestratorDirectory, "cohort-acceptance.db");
             var store = new CohortAcceptanceStore(databasePath);
-            using var integration = GoalWorktrees.CreateAcceptanceCohortWorkspace(repo, boundMain, bindings);
+            using var integration = GoalWorktrees.CreateAcceptanceCohortWorkspace(repo, boundMain, bindings, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
             var identity = AcceptanceCohortIdentity.Create(
                 bindings,
                 boundMain,
@@ -465,7 +465,7 @@ public sealed class AcceptanceCohortWorkflowTestsLandingAndReceipts : Acceptance
             };
             var databasePath = Path.Combine(repo, ".orchestrator", "cohort-acceptance.db");
             var store = new CohortAcceptanceStore(databasePath);
-            using var integration = GoalWorktrees.CreateAcceptanceCohortWorkspace(repo, main, bindings);
+            using var integration = GoalWorktrees.CreateAcceptanceCohortWorkspace(repo, main, bindings, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
             var identity = AcceptanceCohortIdentity.Create(
                 bindings, main, integration.TreeRevision, "manifest-v1");
             var receipt = store.SaveGateReceipt(new AcceptanceCohortReceipt(
@@ -487,7 +487,7 @@ public sealed class AcceptanceCohortWorkflowTestsLandingAndReceipts : Acceptance
                 integration.CommitRevision,
                 main);
 
-            Assert.Empty(store.RecoverPreparedLandings(repo));
+            Assert.Empty(store.RecoverPreparedLandings(repo, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default));
             Assert.Equal(
                 main,
                 RunGitOutput(repo, "rev-parse", $"refs/heads/{LandingExecutor.IntegrationBranchName}").Trim());
@@ -499,10 +499,10 @@ public sealed class AcceptanceCohortWorkflowTestsLandingAndReceipts : Acceptance
                 integration.CommitRevision,
                 main);
             RunGit(repo, "merge", "--ff-only", integration.CommitRevision);
-            var recovery = Assert.Single(store.RecoverPreparedLandings(repo));
+            var recovery = Assert.Single(store.RecoverPreparedLandings(repo, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default));
             Assert.Equal(identity.Value, recovery.Receipt.Identity.Value);
             store.CompleteLandingEffects(identity.Value, receipt.ReceiptId);
-            Assert.Empty(store.RecoverPreparedLandings(repo));
+            Assert.Empty(store.RecoverPreparedLandings(repo, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default));
 
             using var connection = new SqliteConnection($"Data Source={databasePath};Pooling=False");
             connection.Open();
@@ -539,7 +539,7 @@ public sealed class AcceptanceCohortWorkflowTestsLandingAndReceipts : Acceptance
                 Bind(firstGoal.Id, firstRevision, "src/Mcg.AgentOrchestrator.Infrastructure/First.cs", "resource:first"),
                 Bind(secondGoal.Id, secondRevision, "tests/Second.cs", "resource:second")
             };
-            using var integration = GoalWorktrees.CreateAcceptanceCohortWorkspace(repo, main, bindings);
+            using var integration = GoalWorktrees.CreateAcceptanceCohortWorkspace(repo, main, bindings, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
             var identity = AcceptanceCohortIdentity.Create(
                 bindings,
                 main,
@@ -598,7 +598,7 @@ public sealed class AcceptanceCohortWorkflowTestsLandingAndReceipts : Acceptance
                             .Select(File.ReadAllText))
                     : string.Empty;
                 Assert.DoesNotContain("\"eventType\":\"GoalLanded\"", blockedLifecycleText, StringComparison.Ordinal);
-                Assert.Single(store.RecoverPreparedLandings(repo));
+                Assert.Single(store.RecoverPreparedLandings(repo, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default));
             }
 
             var recoveredDriver = new ConductorDriver(
@@ -623,7 +623,7 @@ public sealed class AcceptanceCohortWorkflowTestsLandingAndReceipts : Acceptance
                 Directory.EnumerateFiles(workspace.GoalLifecycleEventsDirectory, "*.jsonl")
                     .Select(File.ReadAllText));
             Assert.Equal(2, lifecycleText.Split("\"eventType\":\"GoalLanded\"", StringSplitOptions.None).Length - 1);
-            Assert.Empty(store.RecoverPreparedLandings(repo));
+            Assert.Empty(store.RecoverPreparedLandings(repo, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default));
         }
         finally
         {
@@ -727,7 +727,7 @@ public sealed class AcceptanceCohortWorkflowTestsLandingAndReceipts : Acceptance
             using (var integration = GoalWorktrees.CreateAcceptanceCohortWorkspace(
                        repo,
                        selection.Members[0].MainRevision,
-                       bindings))
+                       bindings, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default))
             {
                 identity = AcceptanceCohortIdentity.Create(
                     bindings,
@@ -806,7 +806,7 @@ public sealed class AcceptanceCohortWorkflowTestsLandingAndReceipts : Acceptance
             var bindings = selection.BindMembers();
             AcceptanceCohortIdentity identity;
             using (var integration = GoalWorktrees.CreateAcceptanceCohortWorkspace(
-                       repo, selection.Members[0].MainRevision, bindings))
+                       repo, selection.Members[0].MainRevision, bindings, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default))
             {
                 identity = AcceptanceCohortIdentity.Create(
                     bindings,

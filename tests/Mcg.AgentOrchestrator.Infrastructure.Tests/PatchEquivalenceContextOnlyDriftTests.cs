@@ -15,12 +15,12 @@ public sealed class PatchEquivalenceContextOnlyDriftTests : HostCapacityBoundTes
         try
         {
             Assert.True(GoalWorktrees.TryComputePatchEquivalence(
-                fixture.Repository, fixture.OldHead, fixture.NewHead, out var evidence, out var refusal), refusal);
+                fixture.Repository, fixture.OldHead, fixture.NewHead, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, out var evidence, out var refusal), refusal);
             Assert.Contains("zero-context comparison", evidence, StringComparison.Ordinal);
 
             var (kernel, goal) = BindAcceptance(fixture.OldHead);
             Assert.Null(AcceptanceCriterionEvidence.RecordAndDescribeOutstanding(
-                goal, fixture.NewHead, kernel, fixture.Repository));
+                goal, fixture.NewHead, kernel, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, fixture.Repository));
             var obligation = Assert.Single(goal.CriterionEvidenceObligations);
             Assert.Equal(CriterionEvidenceState.Satisfied, obligation.State);
             Assert.Equal(fixture.NewHead, obligation.ExpectedCandidateSha);
@@ -40,12 +40,12 @@ public sealed class PatchEquivalenceContextOnlyDriftTests : HostCapacityBoundTes
         try
         {
             Assert.True(GoalWorktrees.TryComputePatchEquivalence(
-                fixture.Repository, fixture.OldHead, fixture.NewHead, out var evidence, out var refusal), refusal);
+                fixture.Repository, fixture.OldHead, fixture.NewHead, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, out var evidence, out var refusal), refusal);
             Assert.Contains("zero-context comparison", evidence, StringComparison.Ordinal);
 
             var (kernel, goal) = BindAcceptance(fixture.OldHead);
             Assert.Null(AcceptanceCriterionEvidence.RecordAndDescribeOutstanding(
-                goal, fixture.NewHead, kernel, fixture.Repository));
+                goal, fixture.NewHead, kernel, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, fixture.Repository));
             Assert.Equal(fixture.NewHead, Assert.Single(goal.CriterionEvidenceObligations).ExpectedCandidateSha);
         }
         finally
@@ -63,12 +63,12 @@ public sealed class PatchEquivalenceContextOnlyDriftTests : HostCapacityBoundTes
         try
         {
             Assert.False(GoalWorktrees.TryComputePatchEquivalence(
-                fixture.Repository, fixture.OldHead, fixture.NewHead, out _, out var refusal));
+                fixture.Repository, fixture.OldHead, fixture.NewHead, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, out _, out var refusal));
             Assert.Equal("range-diff-not-identical", refusal);
 
             var (kernel, goal) = BindAcceptance(fixture.OldHead);
             var diagnostic = AcceptanceCriterionEvidence.RecordAndDescribeOutstanding(
-                goal, fixture.NewHead, kernel, fixture.Repository);
+                goal, fixture.NewHead, kernel, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, fixture.Repository);
             var obligation = Assert.Single(goal.CriterionEvidenceObligations);
             Assert.StartsWith($"Acceptance passed for {fixture.NewHead}, but obligation '{obligation.Id}' is bound to {fixture.OldHead}.", diagnostic);
             Assert.Contains("reason=range-diff-not-identical", diagnostic, StringComparison.Ordinal);

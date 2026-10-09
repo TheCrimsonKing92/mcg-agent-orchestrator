@@ -136,7 +136,7 @@ public sealed class ConductorDriverTestsTimedOutSelectionRerun
     {
         using var scenario = new Scenario();
         var launches = 0;
-        ConductorParallelAcceptanceAttemptCoordinator Coordinator() => new(scenario.AttemptsRoot,
+        ConductorParallelAcceptanceAttemptCoordinator Coordinator() => new(scenario.AttemptsRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             isProcessAlive: pid => pid == 7103,
             launchOwnedProcess: _ => { launches++; return new(7103); },
             acquireStableSlotLease: (_, _) => null);
@@ -309,7 +309,7 @@ public sealed class ConductorDriverTestsTimedOutSelectionRerun
             OriginalInputs = Tester.LastVerification!.InconclusiveRoundInputs!;
         }
 
-        private ConductorParallelAcceptanceAttemptCoordinator InlineCoordinator() => new(AttemptsRoot,
+        private ConductorParallelAcceptanceAttemptCoordinator InlineCoordinator() => new(AttemptsRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             runInline: true, acquireStableSlotLease: (_, _) => null);
 
         internal ConductorDriver Driver(bool timedOut = false, ConductorParallelAcceptanceAttemptCoordinator? coordinator = null,

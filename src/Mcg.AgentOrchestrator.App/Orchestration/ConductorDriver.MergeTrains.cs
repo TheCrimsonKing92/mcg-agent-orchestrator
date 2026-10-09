@@ -94,7 +94,7 @@ internal sealed partial class ConductorDriver
                 workspace = GoalWorktrees.CreateMergeTrainWorkspace(
                     _cohortWorkspace.ExecutionDirectory,
                     selection.Members[0].MainRevision,
-                    composition,
+                    composition, _integrationBranch,
                     _cohortCleanupHooks);
             }
             catch (InvalidOperationException ex)
@@ -433,7 +433,7 @@ internal sealed partial class ConductorDriver
             using var workspace = GoalWorktrees.CreateMergeTrainWorkspace(
                 _cohortWorkspace.ExecutionDirectory,
                 selection.Members[0].MainRevision,
-                selection.BindMembers(),
+                selection.BindMembers(), _integrationBranch,
                 _cohortCleanupHooks);
             if (workspace.Members.Count != receipt.Identity.Members.Count)
             {
@@ -459,7 +459,7 @@ internal sealed partial class ConductorDriver
         MergeTrainAcceptanceStore store)
     {
         var goalsById = kernel.Goals.ToDictionary(goal => goal.Id);
-        foreach (var recovery in store.RecoverPreparedLandings(workspace.ExecutionDirectory))
+        foreach (var recovery in store.RecoverPreparedLandings(workspace.ExecutionDirectory, workspace.IntegrationBranch))
         {
             var goals = recovery.Receipt.Identity.Members
                 .Select(member => goalsById.TryGetValue(member.GoalId, out var goal) ? goal : null)
@@ -496,7 +496,7 @@ internal sealed partial class ConductorDriver
                     resolvedGoals,
                     goalId => recovery.Receipt.Identity.Members.Single(member => member.GoalId == goalId).CandidateRevision,
                     kernel,
-                    $"merge-train-receipt:{recovery.Receipt.ReceiptId}",
+                    $"merge-train-receipt:{recovery.Receipt.ReceiptId}", _integrationBranch,
                     workspace.ExecutionDirectory);
                 if (evidenceDiagnostic is not null)
                 {

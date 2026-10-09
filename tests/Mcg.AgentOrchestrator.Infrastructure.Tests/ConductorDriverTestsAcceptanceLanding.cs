@@ -82,7 +82,7 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
         int? capturedSlotIndex = null;
         DotnetBuildEnvironmentLease? capturedLease = null;
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            attemptRoot,
+            attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             runInline: true,
             acquireStableSlotLease: (_, _) => stableSlotLease);
         var driver = MakeAcceptanceDriver(
@@ -119,7 +119,7 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
         var launched = false;
         var events = new List<(string GoalId, string Detail)>();
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            attemptRoot,
+            attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             isProcessAlive: _ => true,
             launchOwnedProcess: launch =>
             {
@@ -175,7 +175,7 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
         PassVerification(kernel, goal, goal.Tasks.Single());
         var verifierRan = false;
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            attemptRoot,
+            attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             runInline: true,
             acquireStableSlotLease: (_, _) => throw new DotnetBuildSlotsBusyException(
                 new DotnetBuildLeaseAcquisition.SlotsBusy(
@@ -211,7 +211,7 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
         var (kernel, goal) = SimpleGoal("No-tick landing failed verdict");
         PassVerification(kernel, goal, goal.Tasks.Single());
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            attemptRoot,
+            attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             runInline: true,
             acquireStableSlotLease: (_, _) => null);
         var driver = MakeAcceptanceDriver(
@@ -236,7 +236,7 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
         PassVerification(kernel, goal, goal.Tasks.Single());
         var now = DateTimeOffset.Parse("2026-08-24T00:00:00Z");
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            attemptRoot,
+            attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             isProcessAlive: _ => true,
             launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(9801));
         var driver = MakeAcceptanceDriver(
@@ -266,7 +266,7 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
         PassVerification(kernel, goal, goal.Tasks.Single());
         var verifierRan = false;
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            attemptRoot,
+            attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             runInline: true,
             acquireStableSlotLease: (_, _) => throw new BuildLockBlockedException(
                 new BuildLockAttribution("locked.dll", [], "injected-build-lock")));
@@ -304,7 +304,7 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
         string? backupPath = null;
         var delayCount = 0;
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            attemptRoot,
+            attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             isProcessAlive: _ => true,
             launchOwnedProcess: launch =>
             {
@@ -353,7 +353,7 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
         var (kernel, goal) = SimpleGoal("No-tick landing event sink failure");
         PassVerification(kernel, goal, goal.Tasks.Single());
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            attemptRoot,
+            attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             runInline: true,
             acquireStableSlotLease: (_, _) => null);
         var driver = MakeAcceptanceDriver(
@@ -387,7 +387,7 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
         PassVerification(kernel, goal, goal.Tasks.Single());
         ConductorParallelAcceptanceOwnedProcessLaunch? ownedLaunch = null;
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            attemptRoot,
+            attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             isProcessAlive: _ => true,
             launchOwnedProcess: launch =>
             {

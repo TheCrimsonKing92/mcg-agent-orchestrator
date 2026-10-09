@@ -19,7 +19,7 @@ public sealed class AcceptanceCohortWorkflowTestsRatchetRetighten : AcceptanceCo
                 Bind(second.GoalId, second.Revision, "src/Other.cs", "other")
             };
             string tree;
-            using (var workspace = GoalWorktrees.CreateAcceptanceCohortWorkspace(scenario.Repo, scenario.Main, members))
+            using (var workspace = GoalWorktrees.CreateAcceptanceCohortWorkspace(scenario.Repo, scenario.Main, members, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default))
             {
                 GoalWorktreeTestsRebaseRatchetRetighten.AssertRetightened(workspace.Path);
                 tree = workspace.TreeRevision;
@@ -28,7 +28,7 @@ public sealed class AcceptanceCohortWorkflowTestsRatchetRetighten : AcceptanceCo
                 Assert.Equal("unrelated", File.ReadAllText(Path.Combine(workspace.Path, "src/Other.cs")));
                 workspace.AssertGoalBranchesUnchanged();
             }
-            using var again = GoalWorktrees.CreateAcceptanceCohortWorkspace(scenario.Repo, scenario.Main, members);
+            using var again = GoalWorktrees.CreateAcceptanceCohortWorkspace(scenario.Repo, scenario.Main, members, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
             Assert.Equal(tree, again.TreeRevision);
             GoalWorktreeTestsRebaseRatchetRetighten.AssertRetightened(again.Path);
             Assert.Equal(new[]
@@ -51,7 +51,7 @@ public sealed class AcceptanceCohortWorkflowTestsRatchetRetighten : AcceptanceCo
         try
         {
             var member = Bind(scenario.Goal, scenario.OldHead, GoalWorktreeTestsRebaseRatchetRetighten.GuardedPath, "guarded");
-            using var workspace = GoalWorktrees.CreateAcceptancePartitionWorkspace(scenario.Repo, scenario.Main, member);
+            using var workspace = GoalWorktrees.CreateAcceptancePartitionWorkspace(scenario.Repo, scenario.Main, member, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
             GoalWorktreeTestsRebaseRatchetRetighten.AssertRetightened(workspace.Path);
             Assert.Equal(RunGitOutput(workspace.Path, "rev-parse", "HEAD^{tree}").Trim(), workspace.TreeRevision);
             Assert.Equal(RunGitOutput(workspace.Path, "rev-parse", "HEAD").Trim(), workspace.CommitRevision);
@@ -79,7 +79,7 @@ public sealed class AcceptanceCohortWorkflowTestsRatchetRetighten : AcceptanceCo
             string tree;
             string commit;
             string identity;
-            using (var workspace = GoalWorktrees.CreateMergeTrainWorkspace(scenario.Repo, scenario.Main, members, committerDate: date))
+            using (var workspace = GoalWorktrees.CreateMergeTrainWorkspace(scenario.Repo, scenario.Main, members, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, committerDate: date))
             {
                 GoalWorktreeTestsRebaseRatchetRetighten.AssertRetightened(workspace.Path);
                 Assert.Empty(workspace.Ejections);
@@ -91,7 +91,7 @@ public sealed class AcceptanceCohortWorkflowTestsRatchetRetighten : AcceptanceCo
                 identity = MergeTrainIdentity.Create(workspace.Members, scenario.Main, tree, "manifest-v1").Value;
                 workspace.AssertGoalBranchesUnchanged();
             }
-            using var again = GoalWorktrees.CreateMergeTrainWorkspace(scenario.Repo, scenario.Main, members, committerDate: date.AddSeconds(10));
+            using var again = GoalWorktrees.CreateMergeTrainWorkspace(scenario.Repo, scenario.Main, members, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, committerDate: date.AddSeconds(10));
             GoalWorktreeTestsRebaseRatchetRetighten.AssertRetightened(again.Path);
             Assert.Equal(tree, again.TreeRevision);
             Assert.NotEqual(commit, again.CommitRevision);

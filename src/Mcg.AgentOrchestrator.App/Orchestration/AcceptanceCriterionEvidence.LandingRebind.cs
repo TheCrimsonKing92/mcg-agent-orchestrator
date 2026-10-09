@@ -6,7 +6,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal static partial class AcceptanceCriterionEvidence
 {
     private static string? TryRebindPendingAcceptanceObligations(
-        Goal goal, string candidateSha, AgentOrchestratorKernel kernel, string? executionDirectory)
+        Goal goal, string candidateSha, AgentOrchestratorKernel kernel, string integrationBranch, string? executionDirectory)
     {
         var pending = goal.OutstandingCriterionEvidenceObligations.Where(item =>
                 item.Owner == CriterionEvidenceOwner.Acceptance &&
@@ -25,7 +25,7 @@ internal static partial class AcceptanceCriterionEvidence
             var oldHead = obligation.ExpectedCandidateSha!;
             if (evidenceByHead.ContainsKey(oldHead)) continue;
             if (!GoalWorktrees.TryComputePatchEquivalence(
-                    executionDirectory ?? string.Empty, oldHead, candidateSha,
+                    executionDirectory ?? string.Empty, oldHead, candidateSha, integrationBranch,
                     out var evidence, out var reason))
             {
                 return FormatRefusedCarryDiagnostic(

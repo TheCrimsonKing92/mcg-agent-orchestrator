@@ -36,7 +36,7 @@ public sealed class ConductorDriverTestsBaselineArmAbsentOnce
             var driver = MakeDriver(
                 getPreReviewEvidenceContext: _ => NoPreReviewContext(candidateSha),
                 focusedEvidenceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
-                    root, runInline: true, acquireStableSlotLease: (_, _) => null),
+                    root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: true, acquireStableSlotLease: (_, _) => null),
                 executionDirectory: root,
                 getLandingFileScopes: _ => [],
                 runFocusedEvidence: (_, request) =>
@@ -109,7 +109,7 @@ public sealed class ConductorDriverTestsBaselineArmAbsentOnce
                     classes: ["ConductorDriverTests"])]);
 
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                root, runInline: true, acquireStableSlotLease: (_, _) => null);
+                root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: true, acquireStableSlotLease: (_, _) => null);
             var retries = 0;
             var outcomes = 0;
             var driver = MakeDriver(
@@ -203,7 +203,7 @@ public sealed class ConductorDriverTestsBaselineArmAbsentOnce
             var retries = 0;
             string? escalation = null;
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                root,
+                root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 isProcessAlive: _ => false,
                 launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7100 + ++launches),
                 acquireStableSlotLease: (_, _) => null,

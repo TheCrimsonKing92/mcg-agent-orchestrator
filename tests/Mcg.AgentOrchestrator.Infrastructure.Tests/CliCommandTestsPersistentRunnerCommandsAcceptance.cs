@@ -485,7 +485,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsAcceptance : CliComma
         Xunit.Assert.Contains(journal.Entries, entry =>
             entry.AcceptanceOutcome == "aborted:state-guard" && entry.Status == GoalOperationStatus.Aborted);
         Xunit.Assert.DoesNotContain(journal.Entries, entry => entry.AcceptanceOutcome == "failed");
-        var acceptance = GoalAcceptanceStatusProjector.Build(restored, restored.GetGoal(goal.Id), root);
+        var acceptance = GoalAcceptanceStatusProjector.Build(restored, restored.GetGoal(goal.Id), root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
         Xunit.Assert.Contains(acceptance.Blockers, blocker => blocker.Kind == GoalAcceptanceBlockerKind.AcceptanceAborted);
         Xunit.Assert.DoesNotContain(acceptance.Blockers, blocker => blocker.Kind == GoalAcceptanceBlockerKind.AcceptanceFailed);
         Xunit.Assert.Equal("main", RunGitOutput(root, "branch", "--show-current").Trim());

@@ -88,7 +88,7 @@ public sealed class ConductorDriverTestsPreTesterNamedEvidence
         var roles = new List<AgentRole>();
         var launches = 0;
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            Path.Combine(scenario.Root, "background-attempts"),
+            Path.Combine(scenario.Root, "background-attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             isProcessAlive: processId => processId == 7103,
             launchOwnedProcess: _ =>
             {
@@ -251,7 +251,7 @@ public sealed class ConductorDriverTestsPreTesterNamedEvidence
                 getPreReviewEvidenceContext: _ => NoPreReviewContext(CandidateSha),
                 getLandingFileScopes: _ => [],
                 focusedEvidenceAttemptCoordinator: coordinator ?? new ConductorParallelAcceptanceAttemptCoordinator(
-                    Path.Combine(Root, "attempts"), runInline: true, acquireStableSlotLease: (_, _) => null),
+                    Path.Combine(Root, "attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: true, acquireStableSlotLease: (_, _) => null),
                 runFocusedEvidence: (_, request) => run(request),
                 dispatchAndStart: goal =>
                 {

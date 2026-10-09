@@ -16,6 +16,7 @@ public static partial class GoalWorktrees
 
     public static bool TryComputeCandidateIdentity(
         string worktreePath,
+        string integrationBranch,
         out CandidateIdentity? identity,
         out string failureReason,
         Func<string, IReadOnlyList<string>, string>? manifestIdentity = null)
@@ -28,11 +29,8 @@ public static partial class GoalWorktrees
         {
             if (GitCli.IsWorktreeDirty(worktreePath))
                 return Fail("dirty-worktree", out failureReason);
-            var mergeBase = GitCli.Run(worktreePath, CandidateGitTimeoutMilliseconds,
-                "merge-base", "refs/heads/main", "HEAD");
-            if (!IsUsable(mergeBase) || string.IsNullOrWhiteSpace(mergeBase.Output))
+            if (!TryResolveCandidateMergeBase(worktreePath, integrationBranch, out var baseSha))
                 return Fail("missing-merge-base", out failureReason);
-            var baseSha = mergeBase.Output.Trim();
             var changed = GitCli.Run(worktreePath, CandidateGitTimeoutMilliseconds,
                 "diff", "--name-only", "--no-ext-diff", baseSha, "HEAD");
             if (!IsUsable(changed))
@@ -65,6 +63,14 @@ public static partial class GoalWorktrees
         {
             return Fail($"candidate-computation-failed:{ex.GetType().Name}:{ex.Message}", out failureReason);
         }
+    }
+
+    internal static bool TryResolveCandidateMergeBase(string worktreePath, string integrationBranch, out string mergeBase)
+    {
+        var result = GitCli.Run(worktreePath, CandidateGitTimeoutMilliseconds,
+            "merge-base", $"refs/heads/{integrationBranch}", "HEAD");
+        mergeBase = result.Output.Trim();
+        return IsUsable(result) && !string.IsNullOrWhiteSpace(mergeBase);
     }
 
     private static bool TryHashBaseClosure(

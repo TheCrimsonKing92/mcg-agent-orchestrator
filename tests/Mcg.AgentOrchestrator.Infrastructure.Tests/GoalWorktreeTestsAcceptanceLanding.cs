@@ -717,7 +717,7 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
                 return originalRunner(workingDirectory, args);
             };
 
-            var plan = AcceptanceQueuePlanner.Build(kernel, repo, AutonomyPolicy.SupervisedAuto);
+            var plan = AcceptanceQueuePlanner.Build(kernel, repo, AutonomyPolicy.SupervisedAuto, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
 
             Assert.Equal(2, plan.Items.Count);
             Assert.Contains(plan.Items, item => item.GoalId == present.Id);

@@ -125,7 +125,7 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrainVerdict : AcceptanceC
 
             MergeTrainIdentity MaterializeIdentity(IReadOnlyList<MergeTrainMemberBinding> bindings)
             {
-                using var integration = GoalWorktrees.CreateMergeTrainWorkspace(repo, mainBefore, bindings, cleanup.Hooks);
+                using var integration = GoalWorktrees.CreateMergeTrainWorkspace(repo, mainBefore, bindings, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, cleanup.Hooks);
                 var manifest = ((IGoalAcceptanceVerifier)verifier).ComputeEffectivePlanIdentity(integration.Path,
                     integration.Members.SelectMany(member => member.LandingPaths)
                         .Distinct(StringComparer.OrdinalIgnoreCase).ToArray());

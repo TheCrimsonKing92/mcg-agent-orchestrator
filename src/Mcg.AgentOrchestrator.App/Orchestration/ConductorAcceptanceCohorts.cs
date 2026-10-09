@@ -734,7 +734,7 @@ internal sealed partial class ConductorDriver
             using var integration = GoalWorktrees.CreateAcceptanceCohortWorkspace(
                 _cohortWorkspace.ExecutionDirectory,
                 selection.Members[0].MainRevision,
-                bindings,
+                bindings, _integrationBranch,
                 _cohortCleanupHooks);
             var manifest = _cohortAcceptanceVerifier.ComputeEffectivePlanIdentity(
                 integration.Path,

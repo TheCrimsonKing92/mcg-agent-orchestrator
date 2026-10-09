@@ -79,7 +79,7 @@ public sealed class GoalWorktreeTestsFollowerWorkspace : GoalWorktreeTestBase
             var candidate = RunGitOutput(repo, "rev-parse", "HEAD");
             var head = RunGitOutput(worktree, "rev-parse", "HEAD");
             var registered = RegisteredWorktrees(repo);
-            var result = GoalWorktrees.CreateFollowerWorkspace(repo, main, Leader, candidate, goal, head);
+            var result = GoalWorktrees.CreateFollowerWorkspace(repo, main, Leader, candidate, goal, head, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
             Assert.True(result.IsConflict);
             Assert.Null(result.Workspace);
             Assert.Equal(new[] { "seed.txt" }, result.ConflictPaths);
@@ -121,7 +121,7 @@ public sealed class GoalWorktreeTestsFollowerWorkspace : GoalWorktreeTestBase
             var unrelatedCandidate = RunGitOutput(scenario.Repo, "rev-parse", $"{scenario.Main}^1");
             var registered = RegisteredWorktrees(scenario.Repo);
             Assert.Throws<InvalidOperationException>(() => GoalWorktrees.CreateFollowerWorkspace(
-                scenario.Repo, scenario.Main, Leader, unrelatedCandidate, scenario.Goal, scenario.OldHead));
+                scenario.Repo, scenario.Main, Leader, unrelatedCandidate, scenario.Goal, scenario.OldHead, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default));
             AssertFollowerUnchanged(scenario);
             Assert.Equal(registered, RegisteredWorktrees(scenario.Repo));
         }
@@ -148,7 +148,7 @@ public sealed class GoalWorktreeTestsFollowerWorkspace : GoalWorktreeTestBase
 
     internal static FollowerWorkspaceResult CreateFollower(Scenario scenario) =>
         GoalWorktrees.CreateFollowerWorkspace(scenario.Repo, scenario.Main, Leader,
-            scenario.Candidate, scenario.Goal, scenario.OldHead);
+            scenario.Candidate, scenario.Goal, scenario.OldHead, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
 
     internal static void LandLeader(Scenario scenario)
     {

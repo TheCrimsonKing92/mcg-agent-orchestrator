@@ -20,11 +20,11 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceStaleIdentity(ITest
             var policy = ConductorAutonomyPolicy.Conservative;
             var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [Scope]);
             var starter = new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 isProcessAlive: _ => true,
                 launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7103));
             var started = starter.Evaluate(candidate, policy, PassingRun);
-            var child = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, isProcessAlive: _ => false);
+            var child = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, isProcessAlive: _ => false);
             child.RunAttemptForTests(
                 started.Attempt,
                 candidate,
@@ -34,7 +34,7 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceStaleIdentity(ITest
 
             var escalations = new List<string>();
             var parent = new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 isProcessAlive: _ => false,
                 launchOwnedProcess: _ => throw new InvalidOperationException("reconciliation must not launch"));
             var driver = MakeDriver(
@@ -76,11 +76,11 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceStaleIdentity(ITest
             var policy = ConductorAutonomyPolicy.Conservative;
             var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [Scope]);
             var starter = new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 isProcessAlive: _ => true,
                 launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7104));
             var started = starter.Evaluate(candidate, policy, PassingRun);
-            var child = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, isProcessAlive: _ => false);
+            var child = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, isProcessAlive: _ => false);
             child.RunAttemptForTests(
                 started.Attempt,
                 candidate,
@@ -90,7 +90,7 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceStaleIdentity(ITest
 
             var escalations = new List<string>();
             var parent = new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 isProcessAlive: _ => false,
                 launchOwnedProcess: _ => throw new InvalidOperationException("reconciliation must not launch"));
             var driver = MakeDriver(

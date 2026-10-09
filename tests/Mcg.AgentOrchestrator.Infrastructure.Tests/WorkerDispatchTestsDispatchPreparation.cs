@@ -294,7 +294,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
             _ = GoalWorktrees.Ensure(root, goal.Id);
             kernel.CancelGoal(goal.Id, "Cancelled before paid dispatch.");
 
-            var sweep = TerminalGoalSweep.Run(kernel, root, goal.Id);
+            var sweep = TerminalGoalSweep.Run(kernel, root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, goal.Id);
             var readiness = GoalReadinessPreflight.Build(
                 kernel.GetGoal(goal.Id),
                 [agent],

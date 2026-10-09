@@ -47,7 +47,7 @@ internal sealed class HoldingAcceptanceAttemptsAcrossTicksFixture : IAsyncDispos
         ConductorBatchLoop.ResetParallelAcceptanceFairnessForTests();
 
         AttemptCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            _attemptRoot,
+            _attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             utcNow: _timeProvider.GetUtcNow,
             isProcessAlive: pid => pid == Environment.ProcessId,
             launchOwnedProcess: _ =>

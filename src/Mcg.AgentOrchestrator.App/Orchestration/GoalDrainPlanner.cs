@@ -47,7 +47,7 @@ internal static class GoalDrainPlanner
             .Take(drainPolicy.MaxSubscriptionStartsPerDrain)
             .Select(candidate => candidate.GoalId)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var acceptance = AcceptanceQueuePlanner.Build(kernel, workspace.ExecutionDirectory, policy);
+        var acceptance = AcceptanceQueuePlanner.Build(kernel, workspace.ExecutionDirectory, policy, workspace.IntegrationBranch);
 
         foreach (var goal in kernel.Goals.OrderBy(goal => goal.Timeline.FirstOrDefault()?.OccurredAt ?? DateTimeOffset.MaxValue))
         {

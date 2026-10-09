@@ -72,7 +72,7 @@ public static partial class GoalWorktrees
         string executionDirectory,
         string observedMainRevision,
         IReadOnlyList<MergeTrainMemberBinding> members,
-        GoalWorktreeCleanupHooks? cleanupHooks = null,
+        string integrationBranch, GoalWorktreeCleanupHooks? cleanupHooks = null,
         DateTimeOffset? committerDate = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(executionDirectory);
@@ -85,7 +85,7 @@ public static partial class GoalWorktrees
 
         var root = Path.GetFullPath(executionDirectory);
         var main = MergeTrainMemberBinding.NormalizeRevision(observedMainRevision, nameof(observedMainRevision));
-        if (!ResolveRequiredRef(root, "refs/heads/main").Equals(main, StringComparison.Ordinal))
+        if (!ResolveRequiredRef(root, $"refs/heads/{integrationBranch}").Equals(main, StringComparison.Ordinal))
         {
             throw new InvalidOperationException("Merge train main revision is stale before materialization.");
         }

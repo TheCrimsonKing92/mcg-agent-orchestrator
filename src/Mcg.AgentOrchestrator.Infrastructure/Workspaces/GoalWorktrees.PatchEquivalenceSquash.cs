@@ -6,7 +6,7 @@ public static partial class GoalWorktrees
 {
     // A squash may change patch history, but it must preserve exactly the merged candidate tree.
     private static bool TryComputeSquashEquivalence(
-        string executionDirectory, string oldHeadSha, string newHeadSha, out string evidence)
+        string executionDirectory, string oldHeadSha, string newHeadSha, string integrationBranch, out string evidence)
     {
         evidence = string.Empty;
         if (string.IsNullOrWhiteSpace(executionDirectory) || !Directory.Exists(executionDirectory) ||
@@ -19,14 +19,14 @@ public static partial class GoalWorktrees
         if (parents.Length != 2 || !string.Equals(parents[0], newHead, StringComparison.OrdinalIgnoreCase) ||
             !CommitShaPattern.IsMatch(parents[1])) return false;
         var mainParent = parents[1];
-        var onMain = GitCli.Run(executionDirectory, "merge-base", "--is-ancestor", mainParent, "refs/heads/main");
+        var onMain = GitCli.Run(executionDirectory, "merge-base", "--is-ancestor", mainParent, $"refs/heads/{integrationBranch}");
         if (!onMain.Succeeded || onMain.DrainTimedOut ||
             !HasMergeCommitsOutsideBase(executionDirectory, mainParent, oldHead) ||
             !TryReadCleanMergeTree(executionDirectory, mainParent, oldHead, out var mergedTree) ||
             !TryReadGit(executionDirectory, ["rev-parse", "--verify", $"{newHead}^{{tree}}"], out var newTree) ||
             !string.Equals(mergedTree, newTree, StringComparison.OrdinalIgnoreCase)) return false;
 
-        evidence = $"squashed-merge-commits: {newHead} single parent {mainParent} on main; " +
+        evidence = $"squashed-merge-commits: {newHead} single parent {mainParent} on {integrationBranch}; " +
             $"tree {newTree} equals git merge-tree --write-tree {mainParent} {oldHead}";
         return true;
     }

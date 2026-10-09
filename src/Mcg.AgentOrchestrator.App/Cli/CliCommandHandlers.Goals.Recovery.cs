@@ -37,7 +37,7 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
 
     var sweep = TerminalGoalSweep.Run(
         context.Kernel,
-        context.Workspace.ExecutionDirectory,
+        context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch,
         goal.Id,
         cleanupHooks: context.CleanupContext.Hooks,
         orchestratorDirectory: context.Workspace.OrchestratorDirectory);
@@ -225,7 +225,7 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
         context.Kernel,
         goal,
         new ConductorParallelAcceptanceAttemptCoordinator(
-            Path.Combine(context.Workspace.OrchestratorDirectory, "acceptance-gate-attempts"),
+            Path.Combine(context.Workspace.OrchestratorDirectory, "acceptance-gate-attempts"), context.Workspace.IntegrationBranch,
             context.Workspace.ExecutionDirectory),
         $"recover invalidated acceptance verification before redispatch; {note}");
     if (acceptanceInvalidation.Changed)

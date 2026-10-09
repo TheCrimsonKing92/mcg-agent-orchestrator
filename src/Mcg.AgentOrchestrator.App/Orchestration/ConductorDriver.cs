@@ -272,7 +272,7 @@ internal sealed partial class ConductorDriver
         _cohortCleanupHooks = cleanupHooks ?? new GoalWorktreeCleanupHooks();
         _workerBuildArtifactsPath = goalId => DotnetBuildEnvironmentManager.GoalArtifactsPath(goalId, _cohortCleanupHooks.BuildStorageRoot);
         _parallelAcceptanceAttemptCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts"),
+            Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts"), _integrationBranch,
             dir,
             tryRunPreSlot: RunParallelLandingAcceptancePreSlot,
             runInline: runAcceptanceAttemptsInCurrentProcess,
@@ -285,7 +285,7 @@ internal sealed partial class ConductorDriver
             goal => GoalWorktrees.TryResolve(dir, goal.Id) ?? dir);
         (_acceptanceEventSink, _noTickAcceptancePollDelay, _noTickAcceptancePollTimeout) = CreateProductionAcceptanceWaitConfiguration(workspace);
         _focusedEvidenceAttemptCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            Path.Combine(workspace.OrchestratorDirectory, "pre-review-evidence-attempts"),
+            Path.Combine(workspace.OrchestratorDirectory, "pre-review-evidence-attempts"), _integrationBranch,
             dir,
             conductEventLogWriter: new ConductEventLogWriter(workspace.ConductEventsLogPath),
             buildStorageRoot: _cohortCleanupHooks.BuildStorageRoot);
@@ -1276,12 +1276,12 @@ internal sealed partial class ConductorDriver
             runAcceptanceVerificationWithLease is not null;
         _parallelAcceptanceAttemptCoordinator = parallelAcceptanceAttemptCoordinator
             ?? new ConductorParallelAcceptanceAttemptCoordinator(
-                Path.Combine(OrchestratorTempRoot.GetPurposeDirectory("conductor-acceptance-attempts"), Guid.NewGuid().ToString("N")),
+                Path.Combine(OrchestratorTempRoot.GetPurposeDirectory("conductor-acceptance-attempts"), Guid.NewGuid().ToString("N")), _integrationBranch,
                 runInline: true,
                 acquireStableSlotLease: (_, _) => null);
         _focusedEvidenceAttemptCoordinator = focusedEvidenceAttemptCoordinator
             ?? new ConductorParallelAcceptanceAttemptCoordinator(
-                Path.Combine(OrchestratorTempRoot.GetPurposeDirectory("conductor-focused-evidence-attempts"), Guid.NewGuid().ToString("N")),
+                Path.Combine(OrchestratorTempRoot.GetPurposeDirectory("conductor-focused-evidence-attempts"), Guid.NewGuid().ToString("N")), _integrationBranch,
                 runInline: true,
                 acquireStableSlotLease: (_, _) => null);
     }

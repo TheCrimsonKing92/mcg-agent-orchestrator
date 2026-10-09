@@ -161,7 +161,7 @@ private static void HandleAcceptanceQueue(CliExecutionContext context, IReadOnly
 {
     var policy = ResolveCliAutonomyPolicy(parts);
     var apply = HasCliConfirmation(parts, "--apply");
-    var plan = AcceptanceQueuePlanner.Build(context.Kernel, context.Workspace.ExecutionDirectory, policy);
+    var plan = AcceptanceQueuePlanner.Build(context.Kernel, context.Workspace.ExecutionDirectory, policy, context.Workspace.IntegrationBranch);
     ConsoleViews.PrintAcceptanceQueuePlan(plan);
     if (!apply)
     {
@@ -314,7 +314,7 @@ internal static void EnsureGoalReadinessAllowsStart(CliExecutionContext context,
 {
     var sweep = TerminalGoalSweep.Run(
         context.Kernel,
-        context.Workspace.ExecutionDirectory,
+        context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch,
         goal.Id,
         cleanupHooks: context.CleanupContext.Hooks,
         orchestratorDirectory: context.Workspace.OrchestratorDirectory);
