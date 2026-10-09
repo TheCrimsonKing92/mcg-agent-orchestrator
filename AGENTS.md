@@ -11,7 +11,6 @@ Managed .NET build execution home: docs/operator-runbook.md owns the bounded wor
 Role capability home: docs/role-capability-matrix.md owns the enforcement-sourced worker capability and acceptance-criterion routing matrix; counterpart files point there instead of duplicating it.
 Worker guidance home: docs/worker-guidance-discipline.md owns how to phrase briefs, retry feedback, and clarification answers so a worker can check its own output; counterpart files point there instead of duplicating it.
 Repository conventions home: docs/repository-conventions.md owns test-source layout and repository-root conventions that protect test selection and isolated verification; counterpart files point there instead of duplicating them.
-Human interface home: docs/human-interface-principles.md owns the design rules for owner-facing surfaces (console, notices, human CLI output); counterpart files point there instead of duplicating them.
 Shared anchors:
 - output-discipline
 - retry-and-loop-control
@@ -36,7 +35,6 @@ Codex auto-reads this file. Claude Code auto-reads [`CLAUDE.md`](CLAUDE.md); kee
 > **Work accumulating without landings, or repeated review/correction?** Apply the shared [landing progress discipline](docs/operator-runbook.md#landing-progress-discipline) before another dispatch or full gate run.
 > **Steward and Author:** See [Steward and Author](docs/operator-runbook.md#steward-and-author) in the operator runbook.
 > **Adding or splitting test source?** Follow the shared [`repository conventions`](docs/repository-conventions.md) that protect changed-test selection and isolated verification.
-> **Changing the owner console or any human-facing text?** Name the [`human interface principles`](docs/human-interface-principles.md) the change touches, turn each into a headless-view assertion, and drive the result against the live board before calling it ready.
 > **Assigning a verdict, terminal state, circuit trip, escalation, or retry-vs-fail choice?** Use [`dispositive-decision-discipline`](docs/dispositive-decision-discipline.md). One check: *could I write the justification for this outcome from what is in scope right here?* If not, the discriminating evidence was discarded upstream and the decision is a guess.
 
 <!-- shared-discipline:output-discipline -->
