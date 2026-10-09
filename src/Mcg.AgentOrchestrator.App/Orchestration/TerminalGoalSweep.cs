@@ -98,6 +98,7 @@ internal sealed class TerminalGoalSweepCache
     private static readonly JsonSerializerOptions JsonOptions = new();
     private readonly Dictionary<GoalId, TerminalGoalSweepCacheEntry> _terminalFingerprints = [];
     private string? _integrationEvidenceDirectory;
+    private string? _integrationEvidenceBranch;
     private string? _integrationEvidenceMainSha;
     private Func<string, IReadOnlyList<string>, GitCli.GitResult>? _integrationEvidenceGitRunner;
     private IGoalIntegrationEvidenceResolver? _integrationEvidenceResolver;
@@ -109,7 +110,7 @@ internal sealed class TerminalGoalSweepCache
     internal string? ObservedMainSha => _integrationEvidenceMainSha;
 
     internal IGoalIntegrationEvidenceResolver GetIntegrationEvidenceResolver(
-        string executionDirectory,
+        string executionDirectory, string integrationBranch,
         string? mainSha,
         Func<string, IReadOnlyList<string>, GitCli.GitResult> gitRunnerIdentity,
         Func<string, IReadOnlyList<string>, GitCli.GitResult> gitRunner)
@@ -118,15 +119,17 @@ internal sealed class TerminalGoalSweepCache
         if (_integrationEvidenceResolver is not null &&
             string.Equals(_integrationEvidenceDirectory, fullDirectory, StringComparison.OrdinalIgnoreCase) &&
             string.Equals(_integrationEvidenceMainSha, mainSha, StringComparison.Ordinal) &&
+            string.Equals(_integrationEvidenceBranch, integrationBranch, StringComparison.Ordinal) &&
             ReferenceEquals(_integrationEvidenceGitRunner, gitRunnerIdentity))
         {
             return _integrationEvidenceResolver;
         }
 
         _integrationEvidenceDirectory = fullDirectory;
+        _integrationEvidenceBranch = integrationBranch;
         _integrationEvidenceMainSha = mainSha;
         _integrationEvidenceGitRunner = gitRunnerIdentity;
-        _integrationEvidenceResolver = GoalIntegrationEvidenceResolver.Build(fullDirectory, mainSha, gitRunner);
+        _integrationEvidenceResolver = GoalIntegrationEvidenceResolver.Build(fullDirectory, integrationBranch, mainSha, gitRunner);
         return _integrationEvidenceResolver;
     }
 
@@ -405,7 +408,7 @@ internal static partial class TerminalGoalSweep
 
     public static TerminalGoalSweepResult Run(
         AgentOrchestratorKernel kernel,
-        string executionDirectory,
+        string executionDirectory, string integrationBranch,
         GoalId? onlyGoalId = null,
         TerminalGoalSweepCache? cache = null,
         IGoalIntegrationEvidenceResolver? integrationEvidenceResolver = null,
@@ -445,11 +448,11 @@ internal static partial class TerminalGoalSweep
         var ownedRoots = ConductorTickStepLedger.Measure("owned-root-reap", () => ReapOwnedBuildRoots(workspace.SqliteStatePath, reclaimGoalRoots));
         ownedRootTiming.Stop();
         var gitIndexTiming = System.Diagnostics.Stopwatch.StartNew();
-        var branchFactIndex = GoalGitFactIndex.Build(executionDirectory, gitRunner);
+        var branchFactIndex = GoalGitFactIndex.Build(executionDirectory, integrationBranch, gitRunner);
         gitIndexTiming.Stop();
         var evidenceTiming = System.Diagnostics.Stopwatch.StartNew();
-        integrationEvidenceResolver ??= cache?.GetIntegrationEvidenceResolver(executionDirectory, branchFactIndex.MainSha, gitRunnerIdentity, gitRunner)
-            ?? GoalIntegrationEvidenceResolver.Build(executionDirectory, branchFactIndex.MainSha, gitRunner);
+        integrationEvidenceResolver ??= cache?.GetIntegrationEvidenceResolver(executionDirectory, integrationBranch, branchFactIndex.MainSha, gitRunnerIdentity, gitRunner)
+            ?? GoalIntegrationEvidenceResolver.Build(executionDirectory, integrationBranch, branchFactIndex.MainSha, gitRunner);
         evidenceTiming.Stop();
         attentionStore ??= CollaborationItemStore.ForDirectory(
             orchestratorDirectory);
@@ -533,7 +536,7 @@ internal static partial class TerminalGoalSweep
             var recoveredCriterionEvidence = AcceptanceCriterionEvidenceRecovery.TryRecord(
                 kernel,
                 goalPendingRecovery,
-                executionDirectory,
+                executionDirectory, integrationBranch,
                 orchestratorDirectory,
                 branchFactIndex.MainSha,
                 branchFactIndex.TryGetGoalBranchTip(goalPendingRecovery.Id),
@@ -839,7 +842,7 @@ internal static partial class TerminalGoalSweep
                 var contentEquivalent = branchFacts.ContentState == GoalBranchContentState.EquivalentToMain;
                 var acceptance = contentEquivalent
                     ? null
-                    : GoalAcceptanceStatusProjector.Build(kernel, goal, executionDirectory);
+                    : GoalAcceptanceStatusProjector.Build(kernel, goal, executionDirectory, integrationBranch);
                 blockers.Add(new TerminalGoalSweepBlocker(
                     contentEquivalent ? "completed-branch-superseded" : "completed-branch-unmerged",
                     contentEquivalent
@@ -871,7 +874,7 @@ internal static partial class TerminalGoalSweep
                     cleanupHooks);
                 if (removeResult.Message.Contains("kept because it has unmerged commits", StringComparison.OrdinalIgnoreCase))
                 {
-                    var acceptance = GoalAcceptanceStatusProjector.Build(kernel, goal, executionDirectory);
+                    var acceptance = GoalAcceptanceStatusProjector.Build(kernel, goal, executionDirectory, integrationBranch);
                     blockers.Add(new TerminalGoalSweepBlocker(
                         "completed-branch-unmerged",
                         AppendAcceptanceHold(removeResult.Message, acceptance),
@@ -1340,12 +1343,12 @@ internal static partial class TerminalGoalSweep
 
     public static TerminalGoalSweepResult Diagnose(
         AgentOrchestratorKernel kernel,
-        string executionDirectory,
+        string executionDirectory, string integrationBranch,
         GoalId? onlyGoalId = null,
         Func<string, IReadOnlyList<string>, GitCli.GitResult>? gitRunner = null)
     {
         var results = new List<TerminalGoalSweepGoalResult>();
-        var branchFactIndex = GoalGitFactIndex.Build(executionDirectory, gitRunner);
+        var branchFactIndex = GoalGitFactIndex.Build(executionDirectory, integrationBranch, gitRunner);
 
         foreach (var goal in kernel.Goals.Where(goal => onlyGoalId is null || goal.Id == onlyGoalId).ToArray())
         {
@@ -1370,7 +1373,7 @@ internal static partial class TerminalGoalSweep
                 var contentEquivalent = branchFacts.ContentState == GoalBranchContentState.EquivalentToMain;
                 var acceptance = contentEquivalent
                     ? null
-                    : GoalAcceptanceStatusProjector.Build(kernel, goal, executionDirectory);
+                    : GoalAcceptanceStatusProjector.Build(kernel, goal, executionDirectory, integrationBranch);
                 blockers.Add(new TerminalGoalSweepBlocker(
                     contentEquivalent ? "completed-branch-superseded" : "completed-branch-unmerged",
                     contentEquivalent

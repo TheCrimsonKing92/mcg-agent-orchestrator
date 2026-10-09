@@ -22,7 +22,7 @@ public sealed class AcceptanceCohortWorkflowTestsFollowerGateStart : AcceptanceC
         var members = ProjectSelection(driver, scenario.Leader, scenario.Follower).Members;
         using var workspace = Assert.IsType<FollowerGateWorkspace>(GoalWorktrees.CreateFollowerWorkspace(
             scenario.Repo, members[0].MainRevision, members[0].GoalId, members[0].CandidateRevision,
-            members[1].GoalId, members[1].BranchRevision, scenario.Cleanup).Workspace);
+            members[1].GoalId, members[1].BranchRevision, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, scenario.Cleanup).Workspace);
         var expectedPlan = GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(workspace.Path, members[1].LandingPaths);
         var started = Assert.IsType<FollowerGateStartOutcome.Started>(driver.StartFollowerGate(
             members[0], members[1], ConductorAutonomyPolicy.Permissive));
@@ -142,7 +142,7 @@ public sealed class AcceptanceCohortWorkflowTestsFollowerGateStart : AcceptanceC
         Assert.IsType<FollowerGateStartOutcome.MainDiffers>(driver.StartFollowerGate(members[0], differentMain, ConductorAutonomyPolicy.Permissive));
         using var materialized = Assert.IsType<FollowerGateWorkspace>(GoalWorktrees.CreateFollowerWorkspace(
             scenario.Repo, members[0].MainRevision, members[0].GoalId, members[0].CandidateRevision,
-            follower.GoalId, follower.BranchRevision, scenario.Cleanup).Workspace);
+            follower.GoalId, follower.BranchRevision, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, scenario.Cleanup).Workspace);
         var binding = materialized.ToReceipt(GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(materialized.Path, follower.LandingPaths));
         scenario.Store.SaveGateReceipt(new("exists", FollowerGateIdentity.Create(binding), binding,
             FollowerGateRunOutcome.Failed, DateTimeOffset.UnixEpoch, [], 1, [], null));

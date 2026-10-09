@@ -10,7 +10,7 @@ public static class GoalAcceptanceStatusProjector
     public static GoalAcceptanceSummary Build(
         AgentOrchestratorKernel kernel,
         Goal goal,
-        string? executionDirectory)
+        string? executionDirectory, string integrationBranch)
     {
         var summary = kernel.BuildGoalAcceptanceSummary(goal.Id);
         if (summary.Status is not (GoalStatus.Verified or GoalStatus.Completed))
@@ -41,7 +41,7 @@ public static class GoalAcceptanceStatusProjector
             candidate.MainHeadSha);
         if (currentOutcomes.Count == 0 &&
             goal.Status == GoalStatus.Completed &&
-            GoalGitFactIndex.Build(executionDirectory).BuildGoalBranchFacts(goal).BranchAlreadyLanded)
+            GoalGitFactIndex.Build(executionDirectory, integrationBranch).BuildGoalBranchFacts(goal).BranchAlreadyLanded)
         {
             currentOutcomes = journal.Entries
                 .Select((entry, index) => (Entry: entry, Index: index))

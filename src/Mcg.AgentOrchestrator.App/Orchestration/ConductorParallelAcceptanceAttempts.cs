@@ -158,6 +158,8 @@ internal sealed record ConductorParallelAcceptanceAttempt(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     FindingEvidenceMutation? FocusedEvidenceMutation = null)
 {
+    public string? IntegrationBranch { get; init; }
+
     public string CandidateKey => $"{GoalId}:{BranchHeadSha ?? "unknown-branch"}:{MainHeadSha ?? "unknown-main"}";
 }
 
@@ -359,6 +361,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
 
     private readonly string _rootDirectory;
     private readonly string? _executionDirectory;
+    private readonly string _integrationBranch;
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly TimeProvider _timeProvider;
     private readonly Func<int, bool> _isProcessAlive;
@@ -384,7 +387,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
     private readonly Func<TimeSpan, CancellationToken, Task>? _cohortStableSlotRoundDelay;
 
     internal ConductorParallelAcceptanceAttemptCoordinator(
-        string rootDirectory,
+        string rootDirectory, string integrationBranch,
         string? executionDirectory = null,
         Func<DateTimeOffset>? utcNow = null,
         Func<int, bool>? isProcessAlive = null,
@@ -421,6 +424,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
 
         _rootDirectory = rootDirectory;
         _executionDirectory = executionDirectory;
+        _integrationBranch = integrationBranch;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _utcNow = utcNow ?? _timeProvider.GetUtcNow;
         _isProcessAlive = isProcessAlive ?? IsProcessAlive;
@@ -1188,7 +1192,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             var executionDirectory = !string.IsNullOrWhiteSpace(attempt.ExecutionDirectory)
                 ? attempt.ExecutionDirectory!
                 : OrchestratorWorkspace.ResolveRepoRoot(Environment.CurrentDirectory);
-            var workspace = OrchestratorWorkspace.ForDirectory(executionDirectory, executionDirectory);
+            var integrationBranch = attempt.IntegrationBranch ?? throw new InvalidOperationException("acceptance attempt integration branch was not recorded");
+            var workspace = OrchestratorWorkspace.ForDirectory(executionDirectory, executionDirectory) with { IntegrationBranch = integrationBranch };
             var stateRepository = SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath);
             var kernel = stateRepository.LoadGoalsAsync([new GoalId(attempt.GoalId)]).GetAwaiter().GetResult();
             var goal = kernel.Goals.FirstOrDefault(g => g.Id.Value == attempt.GoalId)
@@ -1215,7 +1220,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                 attempt.BranchHeadSha,
                 attempt.MainHeadSha);
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                Path.GetDirectoryName(Path.GetDirectoryName(attempt.MetadataPath) ?? string.Empty) ?? executionDirectory,
+                Path.GetDirectoryName(Path.GetDirectoryName(attempt.MetadataPath) ?? string.Empty) ?? executionDirectory, integrationBranch,
                 executionDirectory,
                 tryRunPreSlot: driver.RunParallelLandingAcceptancePreSlot,
                 conductEventLogWriter: string.IsNullOrWhiteSpace(attempt.ConductEventLogPath)
@@ -1264,10 +1269,10 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         }
         catch (Exception ex)
         {
-            if (attempt is not null)
+            if (attempt is not null && !string.IsNullOrWhiteSpace(attempt.IntegrationBranch))
             {
                 var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                    Path.GetDirectoryName(Path.GetDirectoryName(attempt.MetadataPath) ?? string.Empty) ?? Environment.CurrentDirectory,
+                    Path.GetDirectoryName(Path.GetDirectoryName(attempt.MetadataPath) ?? string.Empty) ?? Environment.CurrentDirectory, attempt.IntegrationBranch,
                     attempt.ExecutionDirectory,
                     conductEventLogWriter: string.IsNullOrWhiteSpace(attempt.ConductEventLogPath)
                         ? null
@@ -2080,7 +2085,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             PolicyJson: policy.ToJson(),
             StableSlotExhaustionPolicy: stableSlotExhaustionPolicy,
             ExecutionProtocol: _runInline ? "in-process" : "out-of-process",
-            ConductorGenerationId: _conductorGenerationId);
+            ConductorGenerationId: _conductorGenerationId) { IntegrationBranch = _integrationBranch };
     }
 
     private static int AllocateOrdinal(string directory)

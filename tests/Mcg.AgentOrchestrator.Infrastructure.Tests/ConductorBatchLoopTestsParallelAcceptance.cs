@@ -1162,7 +1162,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         try
         {
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 runInline: true,
                 acquireStableSlotLease: (_, _) => null,
                 timeProvider: time);
@@ -1409,7 +1409,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
         var launches = new ConcurrentDictionary<string, ConductorParallelAcceptanceOwnedProcessLaunch>();
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            attemptRoot,
+            attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             isProcessAlive: _ => true,
             launchOwnedProcess: launch =>
             {
@@ -1447,7 +1447,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         var now = DateTimeOffset.Parse("2026-07-30T05:00:00Z");
         var launchAttempts = 0;
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            attemptRoot,
+            attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             utcNow: () => now,
             isProcessAlive: _ => true,
             launchOwnedProcess: _ =>
@@ -1518,7 +1518,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
         var launches = new ConcurrentDictionary<string, ConductorParallelAcceptanceOwnedProcessLaunch>();
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            attemptRoot,
+            attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             isProcessAlive: _ => true,
             launchOwnedProcess: launch =>
             {
@@ -1562,7 +1562,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
         var launchAttempts = 0;
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            attemptRoot,
+            attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             launchOwnedProcess: _ =>
             {
                 launchAttempts++;
@@ -1611,7 +1611,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
         var now = new DateTimeOffset(2026, 7, 23, 4, 0, 0, TimeSpan.Zero);
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            attemptRoot,
+            attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             utcNow: () => now,
             isProcessAlive: _ => false,
             recentHeartbeatGrace: TimeSpan.FromMinutes(5),
@@ -1645,7 +1645,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         var now = new DateTimeOffset(2026, 7, 23, 4, 0, 0, TimeSpan.Zero);
         var launches = 0;
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            attemptRoot,
+            attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             utcNow: () => now,
             isProcessAlive: _ => false,
             recentHeartbeatGrace: TimeSpan.FromMinutes(5),
@@ -1687,7 +1687,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         using var secondRunningHeartbeat = new ManualResetEventSlim(false);
         var runningHeartbeats = 0;
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            attemptRoot,
+            attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             runInline: true,
             heartbeatInterval: TimeSpan.FromMilliseconds(1),
             heartbeatWritten: (_, state) =>
@@ -1727,7 +1727,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
         var launches = new ConcurrentDictionary<string, ConductorParallelAcceptanceOwnedProcessLaunch>();
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            attemptRoot,
+            attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             isProcessAlive: _ => true,
             launchOwnedProcess: launch =>
             {
@@ -1763,7 +1763,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         var (_, goal) = SimpleGoal("Update src/Mcg.AgentOrchestrator.App/Orchestration/Corrupt.cs");
         var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            attemptRoot,
+            attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             isProcessAlive: _ => false,
             launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7020));
         var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, ["src/Corrupt.cs"], "branch", "main");
@@ -1789,7 +1789,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         var (_, goal) = SimpleGoal("Update src/Mcg.AgentOrchestrator.App/Orchestration/LaunchFailed.cs");
         var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            attemptRoot,
+            attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             launchOwnedProcess: _ => throw new InvalidOperationException("spawn failed"));
         var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, ["src/LaunchFailed.cs"], "branch", "main");
 
@@ -1865,7 +1865,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
         var launchAttempts = new ConcurrentDictionary<string, ConductorParallelAcceptanceOwnedProcessLaunch>();
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            attemptRoot,
+            attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             isProcessAlive: _ => true,
             launchOwnedProcess: launch =>
             {
@@ -1900,7 +1900,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         var now = new DateTimeOffset(2026, 7, 17, 12, 0, 0, TimeSpan.Zero);
         var tick = 0;
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            attemptRoot,
+            attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             utcNow: () => now.AddMinutes(tick++),
             runInline: true);
         var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, ["src/AttemptTrx.cs"], "branch", "main");
@@ -1967,7 +1967,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         var escalations = new List<string>();
         var launches = 0;
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            attemptRoot,
+            attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             launchOwnedProcess: _ =>
             {
                 launches++;
@@ -2028,7 +2028,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
         var escalations = new List<string>();
         var acceptanceAttempts = 0;
-        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, runInline: true);
+        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: true);
         var driver = MakeDriver(
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
             runAcceptanceWithSlot: (_, _) =>
@@ -2123,7 +2123,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             writeEscalation: (_, _, reason) => escalations.Add(reason),
             getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/GateEngineFault.cs"],
             parallelAcceptanceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 runInline: true));
 
         try
@@ -2203,7 +2203,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             },
             getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/RegistrationFault.cs"],
             parallelAcceptanceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 runInline: true));
 
         try
@@ -2260,7 +2260,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             writeEscalation: (_, _, reason) => escalations.Add(reason),
             getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/RegistrationFault.cs"],
             parallelAcceptanceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 runInline: true));
 
         try
@@ -2327,7 +2327,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             writeEscalation: (_, _, reason) => escalations.Add(reason),
             getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/RegistrationFault.cs"],
             parallelAcceptanceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 runInline: true));
 
         try
@@ -2394,7 +2394,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         var launches = 0;
         var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            attemptRoot,
+            attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             launchOwnedProcess: _ =>
             {
                 launches++;
@@ -2503,7 +2503,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback,
             getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/FailedGate.cs"],
             parallelAcceptanceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 runInline: true));
 
         try
@@ -2555,7 +2555,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             runAcceptanceWithSlot: (_, _) => new AcceptanceVerificationSummary(false, [interference]),
             getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/Regate.cs"],
             parallelAcceptanceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 runInline: true));
 
         try
@@ -2604,7 +2604,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
                 [interference, candidateFailure]),
             getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/MixedFailure.cs"],
             parallelAcceptanceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 runInline: true));
         var policy = ConductorAutonomyPolicy.Conservative with { MaxCriterionRetries = 0 };
 
@@ -2649,7 +2649,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             runAcceptanceWithSlot: (_, _) => new AcceptanceVerificationSummary(false, [interference]),
             getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/InheritedRegate.cs"],
             parallelAcceptanceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 runInline: true));
 
         try
@@ -2725,7 +2725,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
                     attestation),
             resolveAcceptanceHeads: _ => ("candidate-a", "main-a"),
             parallelAcceptanceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 runInline: true));
 
         try
@@ -2758,7 +2758,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         var (_, goal) = SimpleGoal("Update src/Mcg.AgentOrchestrator.App/Orchestration/FastCancel.cs");
         var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            attemptRoot,
+            attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             launchOwnedProcess: launch =>
             {
                 launch.ExecuteInCurrentProcess(7030);
@@ -2848,7 +2848,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
                     ? ["src/Mcg.AgentOrchestrator.App/Orchestration/Older.cs"]
                     : ["src/Mcg.AgentOrchestrator.App/Orchestration/Newer.cs"],
                 parallelAcceptanceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
-                    attemptRoot,
+                    attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                     runInline: true));
 
             var summary = new ConductorBatchLoop().Run(
@@ -2889,7 +2889,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         {
             var processAlive = true;
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 utcNow: () => now,
                 isProcessAlive: _ => processAlive,
                 launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(8701),
@@ -2944,7 +2944,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         try
         {
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 utcNow: () => now,
                 isProcessAlive: _ => true,
                 launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(8702),
@@ -3009,7 +3009,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         try
         {
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 isProcessAlive: pid => livePids.ContainsKey(pid),
                 launchOwnedProcess: _ =>
                 {
@@ -3078,7 +3078,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
                 },
                 getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/LeaseEvents.cs"],
                 parallelAcceptanceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
-                    attemptRoot,
+                    attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                     runInline: true,
                     timeProvider: clock));
 
@@ -3143,7 +3143,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         try
         {
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 launchOwnedProcess: launch =>
                 {
                     launch.ExecuteInCurrentProcess(8701);
@@ -3185,7 +3185,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         using var _ = IsolatedDotnetRootScope();
         var (_, goal) = SimpleGoal("Update docs/RegistrationFailure.md");
         var attemptRoot = CreateTempDirectory("mcg-conductor-registration-failure");
-        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, runInline: true);
+        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: true);
         var candidate = ConductorParallelAcceptanceCandidate.Create(
             goal,
             0,
@@ -3298,7 +3298,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             stateRepository.SaveAsync(kernel).GetAwaiter().GetResult();
 
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 executionDirectory: root,
                 buildStorageRoot: isolatedDotnetRoot,
                 launchOwnedProcess: launch => LaunchExternalAcceptanceProcess(
@@ -3437,7 +3437,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         using var _ = IsolatedDotnetRootScope();
         var (_, goal) = SimpleGoal("Update src/Mcg.AgentOrchestrator.App/Orchestration/HoldLease.cs");
         var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
-        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, runInline: true);
+        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: true);
         var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, ["src/HoldLease.cs"], "branch", "main");
         DotnetBuildLeaseAcquisition? reacquireWhileRunning = null;
 
@@ -3808,7 +3808,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         var clock = new RecordingTimeProvider();
         var waitStartedAt = clock.GetUtcNow();
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            attemptRoot,
+            attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             runInline: true,
             timeProvider: clock,
             buildPermitBusyTimeout: DotnetBuildEnvironmentManager.DefaultSlotBusyPollTimeout,
@@ -3895,7 +3895,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
                 }
 
                 var liveCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                    attemptRoot,
+                    attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                     runInline: true,
                     buildPermitBusyTimeout: TimeSpan.Zero);
                 var liveBlocked = liveCoordinator.Evaluate(
@@ -3919,7 +3919,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             }
 
             File.WriteAllText(deadEnvironment.ExecutionLockPath, "999999");
-            var deadCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, runInline: true);
+            var deadCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: true);
             var reclaimed = deadCoordinator.Evaluate(
                 deadCandidate,
                 ConductorAutonomyPolicy.Conservative,
@@ -3948,7 +3948,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         using var _ = IsolatedDotnetRootScope();
         var (_, goal) = SimpleGoal("Update src/Mcg.AgentOrchestrator.App/Orchestration/CancelAttempt.cs");
         var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
-        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, runInline: true);
+        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: true);
         var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, ["src/CancelAttempt.cs"], "branch", "main");
         DotnetBuildEnvironment? leasedEnvironment = null;
 
@@ -4043,7 +4043,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
                 verifier,
                 DefaultAgents(),
                 WorkerProfileCatalog.Default());
-            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, runInline: true);
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: true);
             var candidate = ConductorParallelAcceptanceCandidate.Create(
                 goal,
                 0,
@@ -4095,13 +4095,13 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
                 0,
                 ["src/Mcg.AgentOrchestrator.App/Orchestration/MissingReplay.cs"]);
             var startCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 isProcessAlive: _ => true,
                 launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7101));
             var started = startCoordinator.Evaluate(candidate, policy, PassingRun);
             var detail = "child observed missing branch before landing";
             var childCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 isProcessAlive: _ => false);
             childCoordinator.RunAttemptForTests(
                 started.Attempt,
@@ -4119,7 +4119,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             var retiredDetails = new List<string>();
             var escalationReasons = new List<string>();
             var parentCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 isProcessAlive: _ => false,
                 launchOwnedProcess: _ => throw new InvalidOperationException("parent should reconcile, not launch"));
             var driver = MakeDriver(
@@ -4174,13 +4174,13 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
                 0,
                 ["src/Mcg.AgentOrchestrator.App/Orchestration/EscalateReplay.cs"]);
             var startCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 isProcessAlive: _ => true,
                 launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7102));
             var started = startCoordinator.Evaluate(candidate, policy, PassingRun);
             var detail = "pre-landing rebase conflict (src/EscalateReplay.cs); use 'workspace rebase' to resolve";
             var childCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 isProcessAlive: _ => false);
             childCoordinator.RunAttemptForTests(
                 started.Attempt,
@@ -4198,7 +4198,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             var retired = false;
             var escalationReasons = new List<string>();
             var parentCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 isProcessAlive: _ => false,
                 launchOwnedProcess: _ => throw new InvalidOperationException("parent should reconcile, not launch"));
             var driver = MakeDriver(
@@ -4289,7 +4289,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         };
 
         return new ConductorParallelAcceptanceAttemptCoordinator(
-            attemptRoot,
+            attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             isProcessAlive: pid => alive.ContainsKey(pid),
             tryRunPreSlot: tryRunPreSlot,
             acquireStableSlotLease: acquireStableSlotLease,
@@ -4498,7 +4498,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         var attemptRoot = CreateTempDirectory("mcg-conductor-ambiguous-terminal-attempts");
         try
         {
-            var seedCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, runInline: true);
+            var seedCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: true);
             var liveCandidate = ConductorParallelAcceptanceCandidate.Create(
                 liveGoal,
                 0,
@@ -4531,7 +4531,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
                     new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }));
 
             var reconcileCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 isProcessAlive: _ => true,
                 launchOwnedProcess: _ => throw new InvalidOperationException("existing attempts must be observed, not relaunched"));
             var driver = MakeDriver(
@@ -4565,7 +4565,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         var attemptRoot = CreateTempDirectory("mcg-conductor-same-goal-terminal-attempts");
         try
         {
-            var seedCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, runInline: true);
+            var seedCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: true);
             var candidate = ConductorParallelAcceptanceCandidate.Create(
                 goal,
                 0,
@@ -4600,7 +4600,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
 
             var landed = false;
             var reconcileCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 launchOwnedProcess: _ => throw new InvalidOperationException("terminal receipt reconciliation must not launch"));
             var driver = MakeDriver(
                 getFacts: _ => landed
@@ -4647,7 +4647,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         var attemptRoot = CreateTempDirectory("mcg-conductor-same-goal-live-attempts");
         try
         {
-            var seedCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, runInline: true);
+            var seedCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: true);
             var candidate = ConductorParallelAcceptanceCandidate.Create(
                 goal,
                 0,
@@ -4686,7 +4686,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             var launches = 0;
             var landed = false;
             var reconcileCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 isProcessAlive: _ => true,
                 launchOwnedProcess: _ =>
                 {
@@ -4738,7 +4738,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         var attemptRoot = CreateTempDirectory("mcg-conductor-canonical-claim");
         try
         {
-            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, runInline: true);
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: true);
             var candidate = ConductorParallelAcceptanceCandidate.Create(
                 goal,
                 0,
@@ -4779,7 +4779,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         try
         {
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 isProcessAlive: _ => true,
                 launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(Environment.ProcessId));
             var candidate = ConductorParallelAcceptanceCandidate.Create(
@@ -4856,7 +4856,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         var attemptRoot = CreateTempDirectory("mcg-conductor-persisted-gate");
         try
         {
-            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, runInline: true);
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: true);
             var candidate = ConductorParallelAcceptanceCandidate.Create(
                 goal,
                 0,
@@ -4918,7 +4918,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         var events = new PostLandingCanaryEventStore(new SqliteRunEventStore(dbPath), dbPath);
         try
         {
-            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, runInline: true);
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: true);
             var candidate = ConductorParallelAcceptanceCandidate.Create(
                 goal,
                 0,
@@ -4995,7 +4995,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         {
             Assert.True(accepted.Passed);
             Assert.Single(accepted.AdvisoryUnmetCriteria);
-            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, runInline: true);
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: true);
             var candidate = ConductorParallelAcceptanceCandidate.Create(
                 goal,
                 0,
@@ -5088,7 +5088,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         var attemptRoot = CreateTempDirectory("mcg-conductor-persisted-fault-isolation");
         try
         {
-            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, runInline: true);
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: true);
             var faultyCandidate = ConductorParallelAcceptanceCandidate.Create(
                 faultyGoal,
                 0,

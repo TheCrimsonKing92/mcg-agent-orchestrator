@@ -120,7 +120,7 @@ public sealed class OperatorIntentGoalApplicationOfflineTests
             [], "operator", "cli", "local-process", DateTimeOffset.UtcNow);
         await store.EnqueueAsync(intent);
         var attempts = new ConductorParallelAcceptanceAttemptCoordinator(
-            Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts"), workspace.ExecutionDirectory);
+            Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, workspace.ExecutionDirectory);
         return new Seed(workspace, repository, goal.Id, store, intent, attempts);
     }
 

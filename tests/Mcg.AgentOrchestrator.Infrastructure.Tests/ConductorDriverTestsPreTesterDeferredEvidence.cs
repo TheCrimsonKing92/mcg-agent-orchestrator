@@ -17,7 +17,7 @@ public sealed class ConductorDriverTestsPreTesterDeferredEvidence
         using var scenario = new Scenario("deferred - DeferredAlphaTests", BaseSha, ["DeferredAlphaTests"]);
         var roles = new List<AgentRole>();
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            Path.Combine(scenario.Root, "background-attempts"),
+            Path.Combine(scenario.Root, "background-attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             isProcessAlive: processId => processId == 7103,
             launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7103),
             acquireStableSlotLease: (_, _) => null);
@@ -291,7 +291,7 @@ public sealed class ConductorDriverTestsPreTesterDeferredEvidence
                 getPreReviewEvidenceContext: _ => NoPreReviewContext(CandidateSha),
                 getLandingFileScopes: _ => changedPaths ?? [],
                 focusedEvidenceAttemptCoordinator: coordinator ?? new ConductorParallelAcceptanceAttemptCoordinator(
-                    Path.Combine(Root, "attempts"), runInline: true, acquireStableSlotLease: (_, _) => null),
+                    Path.Combine(Root, "attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: true, acquireStableSlotLease: (_, _) => null),
                 runFocusedEvidence: (_, request) => run(request),
                 dispatchAndStart: goal =>
                 {

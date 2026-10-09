@@ -81,7 +81,7 @@ internal sealed partial class ConductorDriver
             integration = GoalWorktrees.CreateAcceptanceCohortWorkspace(
                 _cohortWorkspace.ExecutionDirectory,
                 selection.Members[0].MainRevision,
-                bindings,
+                bindings, _integrationBranch,
                 _cohortCleanupHooks);
         }
         catch (AcceptanceCohortMaterializationException ex)
@@ -522,7 +522,7 @@ internal sealed partial class ConductorDriver
             using var partition = GoalWorktrees.CreateAcceptancePartitionWorkspace(
                 workspace.ExecutionDirectory,
                 identity.ObservedMainRevision,
-                member,
+                member, _integrationBranch,
                 _cohortCleanupHooks);
             treeRevision = partition.TreeRevision;
             partitionManifest = verifier.ComputeEffectivePlanIdentity(

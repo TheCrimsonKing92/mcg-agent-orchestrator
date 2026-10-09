@@ -962,16 +962,16 @@ internal static partial class CliPersistentStateRunner
                 var watchGoalId = ResolveConductWatchGoalId(args, startupKernel, currentGoalAtStartup, stateRepository);
                 // Startup and loop share the operation scheduler and its cadence.
                 var sweepKernel = LoadConductLoopSweepKernel(
-                    stateRepository, startupKernel, workspace.ExecutionDirectory, watchGoalId, cleanupContext.Hooks);
+                    stateRepository, startupKernel, workspace.ExecutionDirectory, workspace.IntegrationBranch, watchGoalId, cleanupContext.Hooks);
                 var sweepTimelineBaseline = TerminalGoalSweepLifecycleEvents.Capture(sweepKernel);
                 var sweep = TerminalGoalSweep.Run(
                     sweepKernel,
-                    workspace.ExecutionDirectory,
+                    workspace.ExecutionDirectory, workspace.IntegrationBranch,
                     watchGoalId,
                     cleanupHooks: cleanupContext.Hooks,
                     orchestratorDirectory: workspace.OrchestratorDirectory, reclaimGoalRoots: true);
                 var metadataOnlyExcludedGoalCount = CountMetadataOnlyTerminalSweepExclusions(
-                    stateRepository, workspace.ExecutionDirectory, watchGoalId, cleanupContext.Hooks);
+                    stateRepository, workspace.ExecutionDirectory, workspace.IntegrationBranch, watchGoalId, cleanupContext.Hooks);
                 if (metadataOnlyExcludedGoalCount > 0)
                 {
                     sweep = sweep with { ExcludedGoalCount = sweep.ExcludedGoalCount + metadataOnlyExcludedGoalCount };
@@ -1577,11 +1577,11 @@ internal static partial class CliPersistentStateRunner
     private static AgentOrchestratorKernel LoadConductLoopSweepKernel(
         ITransactionalOrchestratorStateRepository stateRepository,
         AgentOrchestratorKernel workingSetKernel,
-        string executionDirectory,
+        string executionDirectory, string integrationBranch,
         GoalId? onlyGoalId,
         GoalWorktreeCleanupHooks cleanupHooks)
     {
-        var candidates = ResolveTerminalSweepCandidateIds(stateRepository, executionDirectory, onlyGoalId, cleanupHooks)
+        var candidates = ResolveTerminalSweepCandidateIds(stateRepository, executionDirectory, integrationBranch, onlyGoalId, cleanupHooks)
             .Where(id => workingSetKernel.Goals.FirstOrDefault(goal => goal.Id == id) is not { IsMetadataOnly: false })
             .ToArray();
         if (candidates.Length == 0)
@@ -1595,7 +1595,7 @@ internal static partial class CliPersistentStateRunner
 
     private static IReadOnlyList<GoalId> ResolveTerminalSweepCandidateIds(
         ITransactionalOrchestratorStateRepository stateRepository,
-        string executionDirectory,
+        string executionDirectory, string integrationBranch,
         GoalId? onlyGoalId,
         GoalWorktreeCleanupHooks cleanupHooks)
     {
@@ -1605,14 +1605,14 @@ internal static partial class CliPersistentStateRunner
         }
 
         var summaries = stateRepository.ListConductLoopGoalMetadataAsync().GetAwaiter().GetResult();
-        return ResolveTerminalSweepCandidateIds(summaries, executionDirectory, onlyGoalId, cleanupHooks)
+        return ResolveTerminalSweepCandidateIds(summaries, executionDirectory, integrationBranch, onlyGoalId, cleanupHooks)
             .Concat(stateRepository.ListTerminalGoalIdsWithNonTerminalTasksAsync().GetAwaiter().GetResult())
             .Distinct().ToArray();
     }
 
     private static IReadOnlyList<GoalId> ResolveTerminalSweepCandidateIds(
         IReadOnlyList<GoalSummary> summaries,
-        string executionDirectory,
+        string executionDirectory, string integrationBranch,
         GoalId? onlyGoalId,
         GoalWorktreeCleanupHooks cleanupHooks)
     {
@@ -1621,7 +1621,7 @@ internal static partial class CliPersistentStateRunner
             return [onlyGoalId];
         }
 
-        var gitFacts = GoalGitFactIndex.Build(executionDirectory);
+        var gitFacts = GoalGitFactIndex.Build(executionDirectory, integrationBranch);
         return summaries
             .Where(summary => IsConductLoopTerminalStatus(summary.Status))
             .Select(summary => new GoalId(summary.Id))
@@ -1636,7 +1636,7 @@ internal static partial class CliPersistentStateRunner
 
     private static int CountMetadataOnlyTerminalSweepExclusions(
         ITransactionalOrchestratorStateRepository stateRepository,
-        string executionDirectory,
+        string executionDirectory, string integrationBranch,
         GoalId? onlyGoalId,
         GoalWorktreeCleanupHooks cleanupHooks)
     {
@@ -1646,7 +1646,7 @@ internal static partial class CliPersistentStateRunner
         }
 
         var summaries = stateRepository.ListConductLoopGoalMetadataAsync().GetAwaiter().GetResult();
-        var hydratedSweepCandidateIds = ResolveTerminalSweepCandidateIds(summaries, executionDirectory, onlyGoalId, cleanupHooks)
+        var hydratedSweepCandidateIds = ResolveTerminalSweepCandidateIds(summaries, executionDirectory, integrationBranch, onlyGoalId, cleanupHooks)
             .Concat(stateRepository.ListTerminalGoalIdsWithNonTerminalTasksAsync().GetAwaiter().GetResult())
             .Select(id => id.Value)
             .ToHashSet(StringComparer.Ordinal);
@@ -3959,7 +3959,7 @@ internal static partial class CliPersistentStateRunner
         var targetSweepBaseline = TerminalGoalSweepLifecycleEvents.Capture(kernel);
         var targetSweep = TerminalGoalSweep.Run(
             kernel,
-            workspace.ExecutionDirectory,
+            workspace.ExecutionDirectory, workspace.IntegrationBranch,
             goalId,
             cleanupHooks: cleanupContext.Hooks,
             orchestratorDirectory: workspace.OrchestratorDirectory);

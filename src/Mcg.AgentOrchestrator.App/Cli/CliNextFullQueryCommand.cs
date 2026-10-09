@@ -59,7 +59,7 @@ internal static class CliNextFullQueryCommand
         if (goal is null)
             return false;
 
-        var diagnosis = TerminalGoalSweep.Diagnose(kernel, workspace.ExecutionDirectory, goal.Id);
+        var diagnosis = TerminalGoalSweep.Diagnose(kernel, workspace.ExecutionDirectory, workspace.IntegrationBranch, goal.Id);
         if (diagnosis.Goals.Any(result => result.Blockers.Any(blocker =>
                 !string.IsNullOrWhiteSpace(blocker.Command) &&
                 !blocker.Command.Equals("excluded", StringComparison.OrdinalIgnoreCase))))

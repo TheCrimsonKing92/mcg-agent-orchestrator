@@ -99,7 +99,7 @@ public sealed class AcceptanceCohortWorkflowTestsFollowerGateCarry : AcceptanceC
         var members = ProjectSelection(driver, scenario.Leader, scenario.Follower).Members;
         using var workspace = Assert.IsType<FollowerGateWorkspace>(GoalWorktrees.CreateFollowerWorkspace(scenario.Repo,
             members[0].MainRevision, members[0].GoalId, members[0].CandidateRevision,
-            members[1].GoalId, members[1].BranchRevision, scenario.Cleanup).Workspace);
+            members[1].GoalId, members[1].BranchRevision, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, scenario.Cleanup).Workspace);
         var binding = workspace.ToReceipt(GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(workspace.Path, members[1].LandingPaths));
         var receipt = new FollowerGateRunReceipt("carry-receipt", FollowerGateIdentity.Create(binding), binding, outcome,
             DateTimeOffset.UnixEpoch, outcome == FollowerGateRunOutcome.Failed ? ["follower-check"] : [],

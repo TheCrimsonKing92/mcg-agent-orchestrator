@@ -23,7 +23,7 @@ internal sealed partial class ConductorBatchLoop
             var events = new PostLandingCanaryEventStore(new SqliteRunEventStore(_workspace.RunEventStorePath),
                 _workspace.RunEventStorePath);
             _mainSuspectRelease = new(events, _acceptanceEngineCircuit,
-                new LocalMainTipReader(_workspace.ExecutionDirectory), driver.CreateMainSuspectReleaseProbe(), LogReleaseProgress);
+                new LocalMainTipReader(_workspace.ExecutionDirectory, _workspace.IntegrationBranch), driver.CreateMainSuspectReleaseProbe(), LogReleaseProgress);
         }
         // Eligibility and the potentially minutes-long probe run off the tick thread.
         // The tracked wrapper never faults, so existing canary drains also cover release work.
@@ -48,8 +48,8 @@ internal sealed partial class ConductorBatchLoop
             new ConductEventLogWriter(_workspace.ConductEventsLogPath).Append("canary-gate", null, line);
     }
 
-    private sealed class LocalMainTipReader(string root) : IMainTipReader
+    private sealed class LocalMainTipReader(string root, string integrationBranch) : IMainTipReader
     {
-        public string? ReadMainTip() => GoalWorktrees.ResolveRequiredRef(root, "refs/heads/main");
+        public string? ReadMainTip() => GoalWorktrees.ResolveRequiredRef(root, $"refs/heads/{integrationBranch}");
     }
 }

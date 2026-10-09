@@ -214,7 +214,7 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohortInteractionOn
             Driver.SuccessfulLandingSink = Landings.Add;
             if (enableGrouped) Driver.EnableOwnedGroupedGateAttempts(_grouped);
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                Path.Combine(Workspace.OrchestratorDirectory, "acceptance-gate-attempts"), Repo,
+                Path.Combine(Workspace.OrchestratorDirectory, "acceptance-gate-attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, Repo,
                 isProcessAlive: pid => _liveProcesses.Contains(pid),
                 launchOwnedProcess: launch =>
                 {

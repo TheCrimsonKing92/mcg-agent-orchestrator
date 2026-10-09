@@ -240,7 +240,7 @@ internal sealed partial class ConductorDriver
             {
                 using var integration = GoalWorktrees.CreateAcceptanceCohortWorkspace(
                     _cohortWorkspace.ExecutionDirectory, mainRevision,
-                    new ConductorAcceptanceCohortSelection(projections, []).BindMembers(),
+                    new ConductorAcceptanceCohortSelection(projections, []).BindMembers(), _integrationBranch,
                     _cohortCleanupHooks);
                 return (true, integration.TreeRevision == attempt.CombinedTreeRevision ? null : "tree");
             }
@@ -248,7 +248,7 @@ internal sealed partial class ConductorDriver
             {
                 using var integration = GoalWorktrees.CreateMergeTrainWorkspace(
                     _cohortWorkspace.ExecutionDirectory, mainRevision,
-                    new ConductorMergeTrainSelection(projections).BindMembers(),
+                    new ConductorMergeTrainSelection(projections).BindMembers(), _integrationBranch,
                     _cohortCleanupHooks);
                 return (true, integration.TreeRevision == attempt.CombinedTreeRevision ? null : "tree");
             }
@@ -272,7 +272,7 @@ internal sealed partial class ConductorDriver
             var selection = new ConductorAcceptanceCohortSelection(members, []);
             var bindings = selection.BindMembers();
             using var integration = GoalWorktrees.CreateAcceptanceCohortWorkspace(
-                workspace.ExecutionDirectory, attempt.MainRevision, bindings, _cohortCleanupHooks);
+                workspace.ExecutionDirectory, attempt.MainRevision, bindings, _integrationBranch, _cohortCleanupHooks);
             var manifest = verifier.ComputeEffectivePlanIdentity(integration.Path,
                 bindings.SelectMany(member => member.LandingPaths).Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
             var identity = AcceptanceCohortIdentity.Create(bindings, attempt.MainRevision,

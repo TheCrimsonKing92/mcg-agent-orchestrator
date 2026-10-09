@@ -144,7 +144,7 @@ public sealed class ConductorDriverTestsPreTesterStaleCandidate
         public ConductorDriver Driver(Action? afterRunnerEntered = null)
         {
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                Path.Combine(Root, "attempts"), runInline: true, acquireStableSlotLease: (_, _) => null);
+                Path.Combine(Root, "attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: true, acquireStableSlotLease: (_, _) => null);
             var driver = MakeDriver(
                 getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
                 getPreReviewEvidenceContext: _ => NoPreReviewContext(

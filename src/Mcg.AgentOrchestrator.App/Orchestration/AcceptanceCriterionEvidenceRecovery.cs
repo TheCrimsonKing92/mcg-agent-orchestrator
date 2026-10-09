@@ -24,7 +24,7 @@ internal static partial class AcceptanceCriterionEvidenceRecovery
         AgentOrchestratorKernel kernel,
         Goal goal,
         string executionDirectory,
-        string orchestratorDirectory,
+        string integrationBranch, string orchestratorDirectory,
         string? mainSha,
         string? currentBranchSha,
         MergeTrainAcceptanceStore mergeTrainStore,
@@ -54,7 +54,7 @@ internal static partial class AcceptanceCriterionEvidenceRecovery
                 "merge-train-receipt",
                 receipt.ReceiptId,
                 member.CandidateRevision,
-                executionDirectory, mainSha, gitRunner);
+                executionDirectory, integrationBranch, mainSha, gitRunner);
         }
 
         foreach (var receipt in cohortStore.ReadPassedReceiptsForGoal(goal.Id))
@@ -71,7 +71,7 @@ internal static partial class AcceptanceCriterionEvidenceRecovery
                 "cohort-receipt",
                 receipt.ReceiptId,
                 member.CandidateRevision,
-                executionDirectory, mainSha, gitRunner);
+                executionDirectory, integrationBranch, mainSha, gitRunner);
         }
 
         var attempts = GoalTerminalReconciliationEvidenceResolver.ResolveForGoal(
@@ -100,7 +100,7 @@ internal static partial class AcceptanceCriterionEvidenceRecovery
                 "acceptance-attempt",
                 attempt.AttemptId,
                 attempt.CandidateSha,
-                executionDirectory, mainSha, gitRunner);
+                executionDirectory, integrationBranch, mainSha, gitRunner);
         }
 
         return null;
@@ -113,7 +113,7 @@ internal static partial class AcceptanceCriterionEvidenceRecovery
         string sourceId,
         string candidateSha,
         string executionDirectory,
-        string mainSha,
+        string integrationBranch, string mainSha,
         Func<string, IReadOnlyList<string>, GitCli.GitResult> gitRunner)
     {
         var usedLandingCarryRecord = TryApplyRecordedLandingCarry(
@@ -124,7 +124,7 @@ internal static partial class AcceptanceCriterionEvidenceRecovery
             kernel,
             usedLandingCarryRecord
                 ? $"landing-carry-record:{sourceKind}:{sourceId}"
-                : $"{sourceKind}:{sourceId}",
+                : $"{sourceKind}:{sourceId}", integrationBranch,
             executionDirectory);
         return new AcceptanceCriterionEvidenceRecoveryResult(
             sourceKind,

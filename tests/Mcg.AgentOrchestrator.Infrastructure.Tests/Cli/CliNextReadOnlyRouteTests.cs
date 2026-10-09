@@ -72,7 +72,7 @@ public sealed class CliNextReadOnlyRouteTests : CliTaskQueryTestSupport
                     Path.Combine(root, "stdout.log"), Path.Combine(root, "stderr.log"),
                     Path.Combine(root, "exit.txt"), startedAt, null, null));
             kernel = WithCompletedGoal(kernel);
-            var diagnosis = TerminalGoalSweep.Diagnose(kernel, root, TargetId);
+            var diagnosis = TerminalGoalSweep.Diagnose(kernel, root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, TargetId);
             Assert.Contains(diagnosis.Goals.Single().Blockers, blocker =>
                 blocker.Kind == "terminal-live-dispatch" && blocker.Command == "refresh-dispatch abc10000 1");
             var repository = new ProbeStateRepository(kernel) { ThrowOnOutbox = true };

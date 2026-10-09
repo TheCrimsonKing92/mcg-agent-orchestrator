@@ -19,7 +19,7 @@ public sealed class ConductorPreReviewBaselineArmChildTests
             var candidate = ConductorParallelAcceptanceCandidate.Create(
                 goal, 0, [], "abc1234", "def5678");
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                root,
+                root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 isProcessAlive: processId => processId == 7102,
                 launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7102),
                 acquireStableSlotLease: (_, _) => null);

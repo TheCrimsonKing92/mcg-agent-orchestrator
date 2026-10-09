@@ -14,7 +14,7 @@ public sealed class ConductorWakeSignalAttemptExitTests
         {
             var attempt = WriteAttempt(root, kind);
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                Path.Combine(root, "attempts"), isProcessAlive: _ => true);
+                Path.Combine(root, "attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, isProcessAlive: _ => true);
             var paths = coordinator.GetRunningAttemptExitCodePaths([attempt.GoalId]);
             Assert.Equal(attempt.ExitCodePath, Assert.Single(paths));
 
@@ -51,7 +51,7 @@ public sealed class ConductorWakeSignalAttemptExitTests
         {
             var attempt = WriteAttempt(root, ConductorParallelAcceptanceAttemptCoordinator.PreReviewEvidenceDispatchKind);
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                Path.Combine(root, "attempts"), isProcessAlive: _ => true);
+                Path.Combine(root, "attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, isProcessAlive: _ => true);
             var paths = coordinator.GetRunningAttemptExitCodePaths([attempt.GoalId]);
 
             using var signal = new FileSystemWatcherConductorWakeSignal(Path.Combine(root, "logs"), _ => { });
@@ -85,7 +85,7 @@ public sealed class ConductorWakeSignalAttemptExitTests
         {
             var attempt = WriteAttempt(root, ConductorParallelAcceptanceAttemptCoordinator.PreReviewEvidenceDispatchKind);
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                Path.Combine(root, "attempts"), isProcessAlive: _ => true);
+                Path.Combine(root, "attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, isProcessAlive: _ => true);
             var paths = coordinator.GetRunningAttemptExitCodePaths([attempt.GoalId]);
             File.WriteAllText(attempt.ExitCodePath, "0");
 

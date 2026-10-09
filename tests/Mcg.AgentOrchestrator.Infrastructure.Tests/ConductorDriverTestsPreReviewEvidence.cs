@@ -119,7 +119,7 @@ public sealed class ConductorDriverTestsPreReviewEvidence
             var completionGate = new ConductorParallelAcceptanceAttemptCompletionGateForTests();
             var attemptRoot = Path.Combine(root, "pre-review-evidence-attempts");
             var startingCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 isProcessAlive: _ => true,
                 attemptCompletionGateForTests: completionGate,
                 acquireStableSlotLease: (_, _) => null);
@@ -157,7 +157,7 @@ public sealed class ConductorDriverTestsPreReviewEvidence
             Assert.Equal(1, focusedRuns);
 
             var restartedCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 isProcessAlive: _ => false,
                 launchOwnedProcess: _ => throw new InvalidOperationException("completed attempt must be reconciled"),
                 acquireStableSlotLease: (_, _) => null);
@@ -216,7 +216,7 @@ public sealed class ConductorDriverTestsPreReviewEvidence
             var completionGate = new ConductorParallelAcceptanceAttemptCompletionGateForTests();
             var attemptRoot = Path.Combine(root, "pre-review-evidence-attempts");
             var startingCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 isProcessAlive: _ => true,
                 attemptCompletionGateForTests: completionGate,
                 acquireStableSlotLease: (_, _) => null);
@@ -259,7 +259,7 @@ public sealed class ConductorDriverTestsPreReviewEvidence
             Assert.Equal(1, focusedRuns);
 
             var restartedCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 isProcessAlive: _ => false,
                 launchOwnedProcess: _ => throw new InvalidOperationException("completed attempt must be reconciled"),
                 acquireStableSlotLease: (_, _) => null);
@@ -301,7 +301,7 @@ public sealed class ConductorDriverTestsPreReviewEvidence
             var focusedRuns = 0;
             var dispatches = 0;
             var startingCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 utcNow: () => now,
                 isProcessAlive: _ => true,
                 launchOwnedProcess: _ =>
@@ -333,7 +333,7 @@ public sealed class ConductorDriverTestsPreReviewEvidence
 
             now = now.AddMinutes(1);
             var restartedCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 utcNow: () => now,
                 isProcessAlive: _ => false,
                 launchOwnedProcess: _ =>
@@ -399,7 +399,7 @@ public sealed class ConductorDriverTestsPreReviewEvidence
 
             var completionGate = new ConductorParallelAcceptanceAttemptCompletionGateForTests();
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                Path.Combine(root, "pre-review-evidence-attempts"),
+                Path.Combine(root, "pre-review-evidence-attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 isProcessAlive: _ => true,
                 attemptCompletionGateForTests: completionGate,
                 acquireStableSlotLease: (_, _) => null);
@@ -462,7 +462,7 @@ public sealed class ConductorDriverTestsPreReviewEvidence
 
             var completionGate = new ConductorParallelAcceptanceAttemptCompletionGateForTests();
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                Path.Combine(root, "pre-review-evidence-attempts"),
+                Path.Combine(root, "pre-review-evidence-attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 isProcessAlive: _ => true,
                 attemptCompletionGateForTests: completionGate,
                 acquireStableSlotLease: (_, _) => throw new DotnetBuildSlotsBusyException(

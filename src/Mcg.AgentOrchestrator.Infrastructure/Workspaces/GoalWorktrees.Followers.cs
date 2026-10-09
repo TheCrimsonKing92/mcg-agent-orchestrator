@@ -76,7 +76,7 @@ public static partial class GoalWorktrees
     public static FollowerWorkspaceResult CreateFollowerWorkspace(
         string executionDirectory, string observedMainRevision, GoalId leaderGoalId,
         string leaderCandidateRevision, GoalId followerGoalId, string followerBranchRevision,
-        GoalWorktreeCleanupHooks? cleanupHooks = null)
+        string integrationBranch, GoalWorktreeCleanupHooks? cleanupHooks = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(executionDirectory);
         ArgumentNullException.ThrowIfNull(leaderGoalId);
@@ -86,7 +86,7 @@ public static partial class GoalWorktrees
         var candidate = AcceptanceCohortMemberBinding.NormalizeRevision(leaderCandidateRevision, nameof(leaderCandidateRevision));
         var follower = AcceptanceCohortMemberBinding.NormalizeRevision(followerBranchRevision, nameof(followerBranchRevision));
         var operationCleanupHooks = cleanupHooks ?? new GoalWorktreeCleanupHooks();
-        if (!ResolveRequiredRef(root, "refs/heads/main").Equals(main, StringComparison.Ordinal))
+        if (!ResolveRequiredRef(root, $"refs/heads/{integrationBranch}").Equals(main, StringComparison.Ordinal))
             throw new InvalidOperationException("Follower main revision is stale before materialization.");
         if (GitCli.Run(root, "merge-base", "--is-ancestor", main, candidate).ExitCode != 0)
             throw new InvalidOperationException("Follower leader candidate does not descend from the observed main.");

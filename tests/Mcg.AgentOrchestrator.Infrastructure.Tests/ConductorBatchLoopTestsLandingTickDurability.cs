@@ -49,7 +49,7 @@ public sealed class ConductorBatchLoopTestsLandingTickDurability : ConductorBatc
                 getLandingFileScopes: _ =>
                     ["src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs"],
                 parallelAcceptanceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
-                    attemptRoot, runInline: true),
+                    attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: true),
             resolveAcceptanceHeads: _ => (landedHead, mainHead));
 
             var output = AsyncLocalConsoleRouter.Capture(() => new ConductorBatchLoop(

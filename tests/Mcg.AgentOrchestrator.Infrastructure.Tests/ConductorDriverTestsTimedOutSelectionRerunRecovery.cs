@@ -92,7 +92,7 @@ public sealed class ConductorDriverTestsTimedOutSelectionRerunRecovery
         var blockedOutcome = Enum.Parse<ConductorParallelAcceptanceAttemptOutcome>(outcome);
         var launches = 0;
         var blockSlot = blockedOutcome == ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot;
-        ConductorParallelAcceptanceAttemptCoordinator Coordinator() => new(scenario.AttemptsRoot,
+        ConductorParallelAcceptanceAttemptCoordinator Coordinator() => new(scenario.AttemptsRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             isProcessAlive: pid => pid == 7103,
             launchOwnedProcess: _ => { launches++; return new(7103); },
             acquireStableSlotLease: (_, _) => blockSlot

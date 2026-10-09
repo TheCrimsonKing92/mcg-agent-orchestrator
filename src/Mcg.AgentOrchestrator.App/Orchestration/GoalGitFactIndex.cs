@@ -38,7 +38,7 @@ internal sealed class GoalGitFactIndex(
         (workingDirectory, args) => GitCli.Run(workingDirectory, args.ToArray());
 
     public static GoalGitFactIndex Build(
-        string executionDirectory,
+        string executionDirectory, string integrationBranch,
         Func<string, IReadOnlyList<string>, GitCli.GitResult>? gitRunner = null)
     {
         gitRunner ??= GitRunner;
@@ -51,7 +51,7 @@ internal sealed class GoalGitFactIndex(
 
         var mergedResult = RunGit(gitRunner, fullExecutionDirectory, "for-each-ref", "--format=%(refname:short)", "--merged", "HEAD", "refs/heads/goal/");
         var worktreeResult = RunGit(gitRunner, fullExecutionDirectory, "worktree", "list", "--porcelain");
-        var mainResult = RunGit(gitRunner, fullExecutionDirectory, "rev-parse", "--verify", "refs/heads/main");
+        var mainResult = RunGit(gitRunner, fullExecutionDirectory, "rev-parse", "--verify", $"refs/heads/{integrationBranch}");
         var resolvedMainSha = mainResult.ExitCode == 0 && IsSingleToken(mainResult.Output.Trim())
             ? mainResult.Output.Trim()
             : null;

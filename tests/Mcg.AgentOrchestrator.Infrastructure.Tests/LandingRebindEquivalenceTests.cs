@@ -17,10 +17,10 @@ public sealed class LandingRebindEquivalenceTests : HostCapacityBoundTestBase
             var (kernel, goal) = BindAcceptance(fixture.OldHead);
             var (twinKernel, twinGoal) = BindAcceptance(fixture.OldHead);
             var expected = AcceptanceCriterionEvidence.RecordAndDescribeOutstanding(
-                twinGoal, fixture.NewHead, twinKernel, fixture.Repository);
+                twinGoal, fixture.NewHead, twinKernel, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, fixture.Repository);
 
             var diagnostic = AcceptanceCriterionEvidence.RebindRecordAndDescribeOutstanding(
-                goal, fixture.NewHead, kernel, "test", fixture.Repository);
+                goal, fixture.NewHead, kernel, "test", Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, fixture.Repository);
 
             Assert.Equal(expected, diagnostic);
             var obligation = Assert.Single(goal.CriterionEvidenceObligations);
@@ -46,7 +46,7 @@ public sealed class LandingRebindEquivalenceTests : HostCapacityBoundTestBase
         {
             var (kernel, goal) = BindAcceptance(fixture.OldHead);
             Assert.Null(AcceptanceCriterionEvidence.RebindRecordAndDescribeOutstanding(
-                goal, fixture.NewHead, kernel, "test", fixture.Repository));
+                goal, fixture.NewHead, kernel, "test", Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, fixture.Repository));
 
             var obligation = Assert.Single(goal.CriterionEvidenceObligations);
             Assert.Equal(CriterionEvidenceState.Satisfied, obligation.State);
@@ -73,7 +73,7 @@ public sealed class LandingRebindEquivalenceTests : HostCapacityBoundTestBase
         {
             var (kernel, goal) = BindAcceptance(fixture.NewHead);
             Assert.Null(AcceptanceCriterionEvidence.RebindRecordAndDescribeOutstanding(
-                goal, fixture.NewHead, kernel, "test", fixture.Repository));
+                goal, fixture.NewHead, kernel, "test", Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, fixture.Repository));
             Assert.Equal(CriterionEvidenceState.Satisfied, Assert.Single(goal.CriterionEvidenceObligations).State);
             Assert.Empty(LandingCarryEntries(fixture.Repository, goal));
         }

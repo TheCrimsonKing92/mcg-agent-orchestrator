@@ -30,7 +30,7 @@ internal sealed partial class ConductorDriver
         {
             var path = _executionDirectory is null ? null : GoalWorktrees.TryResolve(_executionDirectory, goal.Id);
             if (path is null) return (null, "missing-worktree");
-            return GoalWorktrees.TryComputeCandidateIdentity(path, out var identity, out var failure)
+            return GoalWorktrees.TryComputeCandidateIdentity(path, _integrationBranch, out var identity, out var failure)
                 ? (identity, string.Empty)
                 : (null, failure);
         };

@@ -21,7 +21,7 @@ public sealed class ConductorDriverTestsNoTickLandingHoldOwner
             var launches = 0;
             var polls = 0;
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                root,
+                root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 executionDirectory: root,
                 utcNow: () => now,
                 isProcessAlive: _ => true,

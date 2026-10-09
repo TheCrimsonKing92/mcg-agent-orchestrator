@@ -6,6 +6,20 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class AcceptanceAttemptPriorityTests
 {
+    [Fact]
+    public void OwnedProcessMetadataRecordsConfiguredIntegrationBranch()
+    {
+        var root = SharedTestSupport.CreateTempDirectory();
+        try
+        {
+            var attempt = Launch(root, focusedEvidence: false, enabled: false, integrationBranch: "master");
+            using var metadata = System.Text.Json.JsonDocument.Parse(File.ReadAllText(attempt.MetadataPath));
+            Assert.Equal("master", metadata.RootElement.GetProperty("integrationBranch").GetString());
+            Assert.Equal("master", attempt.IntegrationBranch);
+        }
+        finally { SharedTestSupport.RemoveTempDirectory(root); }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -15,8 +29,8 @@ public sealed class AcceptanceAttemptPriorityTests
         Directory.CreateDirectory(root);
         try
         {
-            var enabled = Launch(root, focusedEvidence, enabled: true);
-            var disabled = Launch(root, focusedEvidence, enabled: false);
+            var enabled = Launch(root, focusedEvidence, enabled: true, integrationBranch: TrunkBranchName.Default);
+            var disabled = Launch(root, focusedEvidence, enabled: false, integrationBranch: TrunkBranchName.Default);
 
             Assert.Equal(focusedEvidence
                     ? ConductorParallelAcceptanceAttemptCoordinator.PreReviewEvidenceDispatchKind
@@ -114,7 +128,7 @@ public sealed class AcceptanceAttemptPriorityTests
         }
     }
 
-    private static ConductorParallelAcceptanceAttempt Launch(string root, bool focusedEvidence, bool enabled)
+    private static ConductorParallelAcceptanceAttempt Launch(string root, bool focusedEvidence, bool enabled, string integrationBranch)
     {
         var goal = new Goal(GoalId.New(), "Priority attempt test",
             [new TaskSpec(TaskId.New(), "Verify launch", AgentRole.Developer)]);
@@ -122,7 +136,7 @@ public sealed class AcceptanceAttemptPriorityTests
             enabled ? "branch-on" : "branch-off", "main");
         ConductorParallelAcceptanceAttempt? captured = null;
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            root,
+            root, integrationBranch,
             executionDirectory: root,
             isProcessAlive: _ => true,
             launchOwnedProcess: launch =>

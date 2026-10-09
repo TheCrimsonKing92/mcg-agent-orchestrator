@@ -43,7 +43,7 @@ internal sealed partial class ConductorDriver
             if (!string.Equals(leader.MainRevision, follower.MainRevision, StringComparison.Ordinal))
                 return new FollowerGateStartOutcome.MainDiffers();
             var result = GoalWorktrees.CreateFollowerWorkspace(root, leader.MainRevision,
-                leader.GoalId, leader.CandidateRevision, follower.GoalId, follower.BranchRevision, _cohortCleanupHooks);
+                leader.GoalId, leader.CandidateRevision, follower.GoalId, follower.BranchRevision, _integrationBranch, _cohortCleanupHooks);
             if (result.IsConflict)
                 return new FollowerGateStartOutcome.Conflict(result.ConflictPaths.Order(StringComparer.Ordinal).ToArray());
             using var integration = result.Workspace!;
@@ -96,7 +96,7 @@ internal sealed partial class ConductorDriver
         {
             var result = GoalWorktrees.CreateFollowerWorkspace(attempt.ExecutionDirectory, binding.BaseMainRevision,
                 binding.LeaderGoalId, binding.LeaderCandidateRevision, binding.FollowerGoalId,
-                binding.FollowerBranchHead, _cohortCleanupHooks);
+                binding.FollowerBranchHead, _integrationBranch, _cohortCleanupHooks);
             if (result.IsConflict) throw new InvalidOperationException("Follower gate re-materialization conflicted before child execution.");
             using var integration = result.Workspace!;
             var plan = verifier.ComputeEffectivePlanIdentity(integration.Path, follower.LandingPaths);

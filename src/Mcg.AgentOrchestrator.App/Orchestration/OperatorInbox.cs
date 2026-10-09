@@ -285,7 +285,7 @@ internal static class OperatorInbox
             return;
         }
 
-        var summary = GoalAcceptanceStatusProjector.Build(kernel, goal, workspace.ExecutionDirectory);
+        var summary = GoalAcceptanceStatusProjector.Build(kernel, goal, workspace.ExecutionDirectory, workspace.IntegrationBranch);
         if (summary.OpenVerificationCount == 0 &&
             summary.PendingHumanInputCount == 0 &&
             summary.Blockers.Count == 0)

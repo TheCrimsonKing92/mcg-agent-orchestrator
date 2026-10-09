@@ -401,7 +401,7 @@ public sealed class AcceptanceCriterionEvidenceRecoveryTests : CliCommandTestBas
     private static TerminalGoalSweepResult RunSweep(RecoveryFixture fixture) =>
         TerminalGoalSweep.Run(
             fixture.Kernel,
-            fixture.Root,
+            fixture.Root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             fixture.Goal.Id,
             gitRunner: static (workingDirectory, args) => GitCli.Run(workingDirectory, args.ToArray()),
             orchestratorDirectory: fixture.OrchestratorDirectory,

@@ -315,9 +315,9 @@ public sealed class AcceptanceVerdictCarryForwardTests : HostCapacityBoundTestBa
             var disposition = fixture.Driver.CarryForwardGreenVerdict(fixture.Candidate, fixture.Acceptance);
 
             Assert.IsType<AcceptanceMainAdvanceDisposition.Disjoint>(disposition);
-            Assert.True(GoalAcceptanceStatusProjector.Build(fixture.Kernel, fixture.Goal, repo).IsAccepted);
+            Assert.True(GoalAcceptanceStatusProjector.Build(fixture.Kernel, fixture.Goal, repo, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default).IsAccepted);
             AppendCommit(repo, "src/second-race.txt", "second main advance");
-            Assert.False(GoalAcceptanceStatusProjector.Build(fixture.Kernel, fixture.Goal, repo).IsAccepted);
+            Assert.False(GoalAcceptanceStatusProjector.Build(fixture.Kernel, fixture.Goal, repo, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default).IsAccepted);
         }
         finally
         {

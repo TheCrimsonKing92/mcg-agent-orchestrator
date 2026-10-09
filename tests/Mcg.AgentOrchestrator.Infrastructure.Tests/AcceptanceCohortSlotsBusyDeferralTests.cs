@@ -21,7 +21,7 @@ public sealed class AcceptanceCohortSlotsBusyDeferralTests : AcceptanceCohortWor
             var acquisitions = new List<string>();
             var delays = 0;
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                Path.Combine(workspace.OrchestratorDirectory, "parallel-attempts"),
+                Path.Combine(workspace.OrchestratorDirectory, "parallel-attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 buildStorageRoot: cleanup.BuildStorageRoot,
                 acquireCohortStableSlotRound: (identity, label, _) =>
                 {
@@ -106,7 +106,7 @@ public sealed class AcceptanceCohortSlotsBusyDeferralTests : AcceptanceCohortWor
             var delays = 0;
             DotnetBuildEnvironmentLease? acquired = null;
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                Path.Combine(workspace.OrchestratorDirectory, "parallel-attempts"),
+                Path.Combine(workspace.OrchestratorDirectory, "parallel-attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 acquireCohortStableSlotRound: (_, label, _) =>
                 {
                     if (++acquisitions == 1)

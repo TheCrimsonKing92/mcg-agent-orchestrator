@@ -301,7 +301,7 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
                 "branch-preset-policy",
                 "main-preset-policy");
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                Path.Combine(root, "attempts"),
+                Path.Combine(root, "attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 isProcessAlive: _ => true,
                 launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7000));
             var started = coordinator.Evaluate(
@@ -358,7 +358,7 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
                 "branch-policy",
                 "main-policy");
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 isProcessAlive: _ => true,
                 launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7001));
 
@@ -774,7 +774,7 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
                     return DispatchStartOutcome.Started();
                 });
 
-            new ConductorBatchLoop(measuredSweep: loopKernel => TerminalGoalSweep.Run(loopKernel, root, cache: cache) with
+            new ConductorBatchLoop(measuredSweep: loopKernel => TerminalGoalSweep.Run(loopKernel, root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, cache: cache) with
             {
                 GitIndexDurationMs = 11,
                 EvidenceDurationMs = 12,
@@ -919,10 +919,10 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
             kernel.CancelGoal(cancelled.Id, "Test fixture: terminal and already clean.");
             var cache = new TerminalGoalSweepCache();
 
-            var first = TerminalGoalSweep.Run(kernel, root, cache: cache);
-            var second = TerminalGoalSweep.Run(kernel, root, cache: cache);
+            var first = TerminalGoalSweep.Run(kernel, root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, cache: cache);
+            var second = TerminalGoalSweep.Run(kernel, root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, cache: cache);
             kernel.RecordGoalPolicyDecision(cancelled.Id, "Test fixture: goal write invalidates terminal sweep cache.");
-            var third = TerminalGoalSweep.Run(kernel, root, cache: cache);
+            var third = TerminalGoalSweep.Run(kernel, root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, cache: cache);
 
             Assert.Equal(1, first.CacheMissCount);
             Assert.Equal(1, second.CacheHitCount);
@@ -946,8 +946,8 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
             kernel.ReportTaskProgress(cancelled.Id, cancelled.Tasks.Single().Id, WorkTaskStatus.Cancelled, "Test fixture: task cancelled.");
             kernel.CancelGoal(cancelled.Id, "Test fixture: terminal and already clean.");
 
-            var first = TerminalGoalSweep.Run(kernel, root, cache: new TerminalGoalSweepCache());
-            var second = TerminalGoalSweep.Run(kernel, root, cache: new TerminalGoalSweepCache());
+            var first = TerminalGoalSweep.Run(kernel, root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, cache: new TerminalGoalSweepCache());
+            var second = TerminalGoalSweep.Run(kernel, root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, cache: new TerminalGoalSweepCache());
             var cacheJson = File.ReadAllText(Path.Combine(root, ".orchestrator", "terminal-goal-sweep-cache.json"));
 
             Assert.Equal(1, first.CacheMissCount);
@@ -973,10 +973,10 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
             kernel.ReportTaskProgress(cancelled.Id, cancelled.Tasks.Single().Id, WorkTaskStatus.Cancelled, "Test fixture: task cancelled.");
             kernel.CancelGoal(cancelled.Id, "Test fixture: terminal and already clean.");
 
-            var first = TerminalGoalSweep.Run(kernel, root, cache: new TerminalGoalSweepCache());
-            var second = TerminalGoalSweep.Run(kernel, root, cache: new TerminalGoalSweepCache());
+            var first = TerminalGoalSweep.Run(kernel, root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, cache: new TerminalGoalSweepCache());
+            var second = TerminalGoalSweep.Run(kernel, root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, cache: new TerminalGoalSweepCache());
             RunGit(root, "branch", GoalWorktrees.BranchName(cancelled.Id));
-            var third = TerminalGoalSweep.Run(kernel, root, cache: new TerminalGoalSweepCache());
+            var third = TerminalGoalSweep.Run(kernel, root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, cache: new TerminalGoalSweepCache());
 
             Assert.Equal(1, first.CacheMissCount);
             Assert.Equal(1, second.CacheHitCount);
@@ -1003,8 +1003,8 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
             Directory.CreateDirectory(Path.GetDirectoryName(cachePath)!);
             File.WriteAllText(cachePath, "{not-json");
 
-            var first = TerminalGoalSweep.Run(kernel, root, cache: new TerminalGoalSweepCache());
-            var second = TerminalGoalSweep.Run(kernel, root, cache: new TerminalGoalSweepCache());
+            var first = TerminalGoalSweep.Run(kernel, root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, cache: new TerminalGoalSweepCache());
+            var second = TerminalGoalSweep.Run(kernel, root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, cache: new TerminalGoalSweepCache());
 
             Assert.Equal(1, first.CacheMissCount);
             Assert.Equal(0, first.CacheHitCount);
@@ -1053,8 +1053,8 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
                 CleanupWarningSink = _ => { }
             };
 
-            var first = TerminalGoalSweep.Run(kernel, root, cache: cache, cleanupHooks: hooks);
-            var second = TerminalGoalSweep.Run(kernel, root, cache: cache, cleanupHooks: hooks);
+            var first = TerminalGoalSweep.Run(kernel, root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, cache: cache, cleanupHooks: hooks);
+            var second = TerminalGoalSweep.Run(kernel, root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, cache: cache, cleanupHooks: hooks);
 
             Assert.Equal(1, first.CacheMissCount);
             Assert.Equal(0, second.CacheHitCount);
@@ -1084,7 +1084,7 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
             PassVerification(kernel, verified, verified.Tasks.Single());
             var cache = new TerminalGoalSweepCache();
 
-            var sweep = TerminalGoalSweep.Run(kernel, root, cache: cache);
+            var sweep = TerminalGoalSweep.Run(kernel, root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, cache: cache);
 
             Assert.Empty(sweep.Goals);
             Assert.Equal(GoalStatus.Verified, verified.Status);

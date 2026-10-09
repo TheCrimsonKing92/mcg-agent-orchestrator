@@ -44,7 +44,7 @@ public sealed class ConductorDriverTestsGreenTesterFindingDelivery
             var driver = MakeDriver(
                 getPreReviewEvidenceContext: _ => NoPreReviewContext(candidateSha),
                 focusedEvidenceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
-                    root, runInline: true, acquireStableSlotLease: (_, _) => null),
+                    root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: true, acquireStableSlotLease: (_, _) => null),
                 runFocusedEvidence: (_, request) =>
                 {
                     requests.Add(request);

@@ -16,22 +16,22 @@ public static partial class GoalWorktrees
     public static bool TryComputePatchEquivalence(
         string executionDirectory,
         string oldHeadSha,
-        string newHeadSha,
+        string newHeadSha, string integrationBranch,
         out string evidence) =>
-        TryComputePatchEquivalence(executionDirectory, oldHeadSha, newHeadSha, out evidence, out _);
+        TryComputePatchEquivalence(executionDirectory, oldHeadSha, newHeadSha, integrationBranch, out evidence, out _);
 
     public static bool TryComputePatchEquivalence(
         string executionDirectory,
         string oldHeadSha,
-        string newHeadSha,
+        string newHeadSha, string integrationBranch,
         out string evidence,
         out string refusalReason)
     {
         oldHeadSha = PeelRetightenCommits(executionDirectory, oldHeadSha);
         newHeadSha = PeelRetightenCommits(executionDirectory, newHeadSha);
-        if (TryComputeLinearPatchEquivalence(executionDirectory, oldHeadSha, newHeadSha, out evidence, out refusalReason))
+        if (TryComputeLinearPatchEquivalence(executionDirectory, oldHeadSha, newHeadSha, integrationBranch, out evidence, out refusalReason))
             return true;
-        if (!TryComputeSquashEquivalence(executionDirectory, oldHeadSha, newHeadSha, out var squashEvidence))
+        if (!TryComputeSquashEquivalence(executionDirectory, oldHeadSha, newHeadSha, integrationBranch, out var squashEvidence))
             return false;
         evidence = squashEvidence;
         refusalReason = string.Empty;
@@ -41,7 +41,7 @@ public static partial class GoalWorktrees
     private static bool TryComputeLinearPatchEquivalence(
         string executionDirectory,
         string oldHeadSha,
-        string newHeadSha,
+        string newHeadSha, string integrationBranch,
         out string evidence,
         out string refusalReason)
     {
@@ -58,8 +58,8 @@ public static partial class GoalWorktrees
             refusalReason = "unresolvable-head";
             return false;
         }
-        if (!TryReadGit(executionDirectory, ["merge-base", "refs/heads/main", oldHead], out var oldBase) ||
-            !TryReadGit(executionDirectory, ["merge-base", "refs/heads/main", newHead], out var newBase))
+        if (!TryReadGit(executionDirectory, ["merge-base", $"refs/heads/{integrationBranch}", oldHead], out var oldBase) ||
+            !TryReadGit(executionDirectory, ["merge-base", $"refs/heads/{integrationBranch}", newHead], out var newBase))
         {
             refusalReason = "no-merge-base";
             return false;
@@ -79,7 +79,7 @@ public static partial class GoalWorktrees
                         return true;
                     }
                 }
-                else if (TryReadGit(executionDirectory, ["rev-parse", "--verify", "refs/heads/main"], out var currentMain) &&
+                else if (TryReadGit(executionDirectory, ["rev-parse", "--verify", $"refs/heads/{integrationBranch}"], out var currentMain) &&
                          TryCompareGoalOwnedLines(executionDirectory, oldBase, oldHead, currentMain, newHead))
                 {
                     evidence = $"goal-owned lines {oldBase}..{oldHead} vs {currentMain}..{newHead}: zero-context added and removed lines per file are identical";

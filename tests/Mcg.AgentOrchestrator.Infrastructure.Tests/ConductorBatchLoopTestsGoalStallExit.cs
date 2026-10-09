@@ -83,7 +83,7 @@ public sealed class ConductorBatchLoopTestsGoalStallExit : ConductorBatchLoopTes
                 var logPath = Path.Combine(root, $"attempt-{ordinal}", ConductEventLogWriter.CurrentFileName);
                 var attemptId = $"shared-{ordinal}";
                 var reason = new ConductorParallelAcceptanceAttemptCoordinator(
-                    Path.Combine(root, $"attempt-{ordinal}", "attempts"))
+                    Path.Combine(root, $"attempt-{ordinal}", "attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default)
                     .DescribeFocusedEvidenceHold(new ConductorParallelAcceptanceAttempt(
                         attemptId,
                         goal.Id.Value,
@@ -217,7 +217,7 @@ public sealed class ConductorBatchLoopTestsGoalStallExit : ConductorBatchLoopTes
         var root = CreateTempDirectory("mcg-goal-stall-invalidated-state-read");
         var (kernel, goal) = SimpleGoal("hold invalidated acceptance through a state read failure");
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            Path.Combine(root, "attempts"),
+            Path.Combine(root, "attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             isProcessAlive: _ => true,
             launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7301));
         var candidate = ConductorParallelAcceptanceCandidate.Create(

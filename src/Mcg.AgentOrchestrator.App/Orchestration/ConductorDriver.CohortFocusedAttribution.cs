@@ -152,7 +152,7 @@ internal sealed partial class ConductorDriver
                 ?? throw new InvalidOperationException("Production acceptance cohort verifier is unavailable.");
             var clock = Stopwatch.StartNew();
             using var partition = GoalWorktrees.CreateAcceptancePartitionWorkspace(
-                workspace.ExecutionDirectory, identity.ObservedMainRevision, member, driver._cohortCleanupHooks);
+                workspace.ExecutionDirectory, identity.ObservedMainRevision, member, workspace.IntegrationBranch, driver._cohortCleanupHooks);
             using var lease = driver.CohortPartitionStableSlotLeaseSource is { } source
                 ? source(identity.Value, cancellationToken)
                 : driver._parallelAcceptanceAttemptCoordinator.AcquireCohortStableSlotLease(identity.Value, cancellationToken);

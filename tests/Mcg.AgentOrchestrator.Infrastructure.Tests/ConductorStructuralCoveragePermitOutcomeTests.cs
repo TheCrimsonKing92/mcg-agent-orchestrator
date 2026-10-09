@@ -25,7 +25,7 @@ public sealed class ConductorStructuralCoveragePermitOutcomeTests
             var candidate = ConductorParallelAcceptanceCandidate.Create(
                 goal, 0, [], "branch-permit", "main-permit");
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                root, acquireStableSlotLease: (_, _) => null);
+                root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, acquireStableSlotLease: (_, _) => null);
             var attempt = coordinator.CreateAttemptForTests(candidate);
             coordinator.RunAttemptForTests(
                 attempt,

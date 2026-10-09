@@ -87,7 +87,7 @@ public sealed class SliceBatchStreamCompleteHoldTests
             var dispatches = new List<GoalId>();
             var attemptRoot = Path.Combine(workspace.RootDirectory, "attempts");
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot, runInline: true,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: true,
                 acquireStableSlotLease: (_, candidate) =>
                 {
                     reservations.Add(candidate.Goal.Id);

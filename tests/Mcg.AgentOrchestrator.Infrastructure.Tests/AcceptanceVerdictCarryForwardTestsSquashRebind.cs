@@ -26,11 +26,11 @@ public sealed class AcceptanceVerdictCarryForwardTestsSquashRebind : HostCapacit
             Assert.Equal("squashed-merge-commits", result.Detail);
             var newHead = ReadGit(path, "rev-parse", "HEAD");
             Assert.Equal(tree, ReadGit(path, "rev-parse", "HEAD^{tree}"));
-            Assert.True(GoalWorktrees.TryComputePatchEquivalence(repo, oldHead, newHead, out var evidence, out var refusal), refusal);
+            Assert.True(GoalWorktrees.TryComputePatchEquivalence(repo, oldHead, newHead, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, out var evidence, out var refusal), refusal);
             Assert.StartsWith("squashed-merge-commits:", evidence);
 
             var diagnostic = AcceptanceCriterionEvidence.RebindRecordAndDescribeOutstanding(
-                goal, newHead, kernel, "test", repo);
+                goal, newHead, kernel, "test", Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, repo);
 
             Assert.Null(diagnostic);
             var obligation = Assert.Single(goal.CriterionEvidenceObligations);
@@ -61,11 +61,11 @@ public sealed class AcceptanceVerdictCarryForwardTestsSquashRebind : HostCapacit
             ReadGit(path, "add", "feature-one.txt");
             ReadGit(path, "commit", "--amend", "--no-edit");
             var changedHead = ReadGit(path, "rev-parse", "HEAD");
-            Assert.False(GoalWorktrees.TryComputePatchEquivalence(repo, oldHead, changedHead, out _, out var refusal));
+            Assert.False(GoalWorktrees.TryComputePatchEquivalence(repo, oldHead, changedHead, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, out _, out var refusal));
             Assert.Equal("commit-count-mismatch", refusal);
 
             var diagnostic = AcceptanceCriterionEvidence.RebindRecordAndDescribeOutstanding(
-                goal, changedHead, kernel, "test", repo);
+                goal, changedHead, kernel, "test", Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, repo);
 
             Assert.Contains("reason=commit-count-mismatch", diagnostic, StringComparison.Ordinal);
             var obligation = Assert.Single(goal.CriterionEvidenceObligations);

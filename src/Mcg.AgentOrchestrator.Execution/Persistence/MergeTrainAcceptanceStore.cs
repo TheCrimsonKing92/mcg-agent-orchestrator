@@ -260,7 +260,7 @@ public sealed class MergeTrainAcceptanceStore
             .ToArray();
     }
 
-    public IReadOnlyList<MergeTrainLandingRecovery> RecoverPreparedLandings(string executionDirectory)
+    public IReadOnlyList<MergeTrainLandingRecovery> RecoverPreparedLandings(string executionDirectory, string integrationBranch)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(executionDirectory);
         var prepared = new List<(string TrainId, string ReceiptId, string Commit)>();
@@ -287,7 +287,7 @@ public sealed class MergeTrainAcceptanceStore
                 !receipt.HasAuthoritativeLandingEvidence ||
                 GitCli.Run(
                     executionDirectory,
-                    "merge-base", "--is-ancestor", intent.Commit, "refs/heads/main").ExitCode != 0)
+                    "merge-base", "--is-ancestor", intent.Commit, $"refs/heads/{integrationBranch}").ExitCode != 0)
             {
                 continue;
             }

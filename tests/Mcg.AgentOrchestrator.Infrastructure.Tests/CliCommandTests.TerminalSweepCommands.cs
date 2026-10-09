@@ -1176,7 +1176,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
                 mainHead,
                 "Acceptance aborted:state-guard before verification.");
 
-            var acceptance = GoalAcceptanceStatusProjector.Build(kernel, kernel.GetGoal(goal.Id), root);
+            var acceptance = GoalAcceptanceStatusProjector.Build(kernel, kernel.GetGoal(goal.Id), root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
             var acceptanceAbort = Assert.Single(acceptance.Blockers.Where(candidate => candidate.Kind == GoalAcceptanceBlockerKind.AcceptanceAborted));
             Assert.Contains("no passing gate receipt was recorded", acceptanceAbort.SuggestedAction, StringComparison.OrdinalIgnoreCase);
             var blocker = Assert.Single(DiagnoseSweep(kernel, root, goal.Id).Blockers);
@@ -2076,7 +2076,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
 
             return new GitCli.GitResult(1, string.Empty, $"unexpected git command: {command}");
         }
-        var resolver = GoalIntegrationEvidenceResolver.Build(root, "main-sha", GitRunner);
+        var resolver = GoalIntegrationEvidenceResolver.Build(root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, "main-sha", GitRunner);
 
         Xunit.Assert.True(resolver.TryResolve(goalId, out var first));
         Xunit.Assert.True(resolver.TryResolve(goalId, out var second));
@@ -2243,7 +2243,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         GoalWorktreeCleanupHooks? cleanupHooks = null) =>
         TerminalGoalSweep.Run(
             kernel,
-            executionDirectory,
+            executionDirectory, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             onlyGoalId,
             cache,
             integrationEvidenceResolver,
@@ -2256,7 +2256,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         string executionDirectory,
         GoalId? onlyGoalId = null,
         Func<string, IReadOnlyList<string>, GitCli.GitResult>? gitRunner = null) =>
-        TerminalGoalSweep.Diagnose(kernel, executionDirectory, onlyGoalId, gitRunner ?? StableGitRunner);
+        TerminalGoalSweep.Diagnose(kernel, executionDirectory, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, onlyGoalId, gitRunner ?? StableGitRunner);
 
 
 }

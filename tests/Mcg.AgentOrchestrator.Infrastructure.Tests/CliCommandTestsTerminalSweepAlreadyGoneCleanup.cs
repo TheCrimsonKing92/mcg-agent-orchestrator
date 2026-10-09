@@ -63,7 +63,7 @@ public sealed class CliCommandTestsTerminalSweepAlreadyGoneCleanup : CliCommandT
 
     private static void RunSweep(AgentOrchestratorKernel kernel, string root, GoalId goalId) =>
         TerminalGoalSweep.Run(
-            kernel, root, onlyGoalId: goalId,
+            kernel, root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, onlyGoalId: goalId,
             gitRunner: static (directory, args) => GitCli.Run(directory, args.ToArray()),
             cleanupHooks: new GoalWorktreeCleanupHooks
             {

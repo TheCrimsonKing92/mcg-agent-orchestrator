@@ -65,7 +65,7 @@ internal static class GoalAcceptanceEvidenceBundleBuilder
     {
         var blockers = new List<GoalAcceptanceEvidenceBlocker>();
         var nextCommands = new List<string>();
-        var acceptance = GoalAcceptanceStatusProjector.Build(kernel, goal, executionDirectory);
+        var acceptance = GoalAcceptanceStatusProjector.Build(kernel, goal, executionDirectory, integrationBranch);
         var changedFiles = Array.Empty<string>();
         var changeSummary = RepositoryChangeClassifier.Classify(changedFiles);
         var diffStat = "not available";

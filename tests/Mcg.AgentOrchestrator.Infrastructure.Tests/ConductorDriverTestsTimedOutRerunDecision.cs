@@ -41,7 +41,7 @@ public sealed class ConductorDriverTestsTimedOutRerunDecision
                 scenario.Kernel.RecordTaskNote(scenario.Goal.Id, scenario.Owner.Id, "fixture changed recovery context");
                 return NoPreReviewContext(CandidateSha);
             },
-            focusedEvidenceAttemptCoordinator: new(scenario.AttemptsRoot,
+            focusedEvidenceAttemptCoordinator: new(scenario.AttemptsRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 runInline: true, acquireStableSlotLease: (_, _) => null));
 
         var held = Assert.IsType<ConductorAdvanceOutcome.Held>(
@@ -68,7 +68,7 @@ public sealed class ConductorDriverTestsTimedOutRerunDecision
     {
         using var scenario = new Scenario();
         var launches = 0;
-        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(scenario.AttemptsRoot,
+        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(scenario.AttemptsRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             isProcessAlive: pid => pid == 7103,
             launchOwnedProcess: _ => { launches++; return new(7103); },
             acquireStableSlotLease: (_, _) => null);
@@ -143,7 +143,7 @@ public sealed class ConductorDriverTestsTimedOutRerunDecision
         var dispatches = 0;
         var driver = MakeDriver(
             getPreReviewEvidenceContext: _ => NoPreReviewContext(CandidateSha),
-            focusedEvidenceAttemptCoordinator: new(scenario.AttemptsRoot,
+            focusedEvidenceAttemptCoordinator: new(scenario.AttemptsRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 runInline: true, acquireStableSlotLease: (_, _) => null),
             retryTaskWithCause: (gid, tid, message, round, cause) =>
             {

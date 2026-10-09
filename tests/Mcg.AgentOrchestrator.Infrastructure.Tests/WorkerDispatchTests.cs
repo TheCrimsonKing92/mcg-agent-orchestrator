@@ -2394,7 +2394,7 @@ public sealed class WorkerDispatchAcceptanceAdmissionTests : WorkerDispatchTestS
                 $"Incumbent lease holder did not signal readiness for {holderFixture.Environment.BuildPermitIndex}."));
             Directory.Delete(environment.ArtifactsPath, recursive: true);
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 runInline: true,
                 buildPermitBusyTimeout: TimeSpan.Zero,
                 tryRunPreSlot: (_, _) =>
