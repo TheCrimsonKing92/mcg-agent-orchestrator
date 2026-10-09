@@ -20,15 +20,25 @@ public sealed class WorkerSkillResolverTests : WorkerDispatchTestSupport, IDispo
         var before = Directory.GetFiles(workingDirectory, "*", SearchOption.AllDirectories);
         Assert.False(Directory.Exists(Path.Combine(workingDirectory, ".agents")));
 
+        // Pin the provider under test; automatic light-role routing can move Planner to Claude.
+        var modelOverride = new DispatchModelOverride(profile,
+            profile == "codex-cli" ? AgentCatalog.OpenAiGpt61SolSubscriptionModelAlias
+                : AgentCatalog.AnthropicComplexModelName, "low");
         var dispatch = WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, goal, task,
             agents, DispatchTestProfiles(), Path.Combine(root, "prompts"), workingDirectory,
-            DateTimeOffset.Parse("2026-10-09T12:00:00Z"), sandboxOptions: DisabledSandbox,
+            DateTimeOffset.Parse("2026-10-09T12:00:00Z"), modelOverride: modelOverride,
+            sandboxOptions: DisabledSandbox,
             commandExists: _ => true, claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli,
             orchestratorSkillDirectory: skillDirectory);
 
         Assert.True(File.Exists(dispatch.PromptPath));
         Assert.NotNull(task.LastDispatch);
         Assert.Equal(profile, task.LastDispatch.WorkerName);
+        // Typed package receipts are currently an OpenAI delivery contract.
+        if (profile == "codex-cli")
+            Assert.NotNull(task.LastDispatch.ContextPackageReceipt);
+        else
+            Assert.Null(task.LastDispatch.ContextPackageReceipt);
         var context = Path.Combine(workingDirectory, ".orchestrator-context", goal.Id.Value);
         var instructions = File.ReadAllText(Path.Combine(context, "selected-skills.md"));
         using var registry = JsonDocument.Parse(File.ReadAllText(Path.Combine(context, "artifact-registry.json")));
@@ -48,9 +58,12 @@ public sealed class WorkerSkillResolverTests : WorkerDispatchTestSupport, IDispo
             Assert.Equal(Convert.ToHexString(SHA256.HashData(expectedBytes)).ToLowerInvariant(),
                 entry.GetProperty("sha256").GetString());
             Assert.Equal(expectedBytes, File.ReadAllBytes(Path.Combine(context, "packages", task.Id.Value, skill.RelativePath)));
-            var packaged = Assert.Single(task.LastDispatch.ContextPackageReceipt!.Sections,
-                section => section.LogicalIdentity == "context/" + skill.RelativePath.Replace('\\', '/'));
-            Assert.Equal(entry.GetProperty("sha256").GetString(), packaged.ContentHash);
+            if (profile == "codex-cli")
+            {
+                var packaged = Assert.Single(task.LastDispatch.ContextPackageReceipt!.Sections,
+                    section => section.LogicalIdentity == "context/" + skill.RelativePath.Replace('\\', '/'));
+                Assert.Equal(entry.GetProperty("sha256").GetString(), packaged.ContentHash);
+            }
         });
         Assert.All(Directory.GetFiles(workingDirectory, "*", SearchOption.AllDirectories).Except(before),
             path => Assert.StartsWith(".orchestrator-context" + Path.DirectorySeparatorChar,
@@ -95,7 +108,7 @@ public sealed class WorkerSkillResolverTests : WorkerDispatchTestSupport, IDispo
         Assert.Contains(Path.Combine(skillDirectory, "criterion-ownership-planning", "SKILL.md"),
             finding, StringComparison.Ordinal);
         Assert.DoesNotContain("dotnet-windows-build-hygiene", finding, StringComparison.Ordinal);
-        var exception = Assert.Throws<InvalidOperationException>(() =>
+        var exception = Assert.Throws<WorkerSubscriptionPreflightException>(() =>
             WorkerProfileDispatcher.PrepareSubscriptionTask(new AgentOrchestratorKernel(), goal, task,
                 agents, DispatchTestProfiles(), Path.Combine(root, "prompts"), workingDirectory,
                 DateTimeOffset.Parse("2026-10-09T12:00:00Z"), sandboxOptions: DisabledSandbox,
