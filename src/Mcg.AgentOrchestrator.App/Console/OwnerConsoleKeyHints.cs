@@ -26,17 +26,26 @@ internal static class OwnerConsoleKeyHints
         _ => throw new ArgumentOutOfRangeException(nameof(pane))
     };
 
+    internal static OwnerConsolePane Previous(OwnerConsolePane pane) => pane switch
+    {
+        OwnerConsolePane.Decisions => OwnerConsolePane.Activity,
+        OwnerConsolePane.Board => OwnerConsolePane.Decisions,
+        OwnerConsolePane.Activity => OwnerConsolePane.Board,
+        _ => throw new ArgumentOutOfRangeException(nameof(pane))
+    };
+
     internal static string Hint(OwnerConsolePane pane) => (pane switch
     {
         OwnerConsolePane.Decisions => "Enter detail  a accept default  r answer",
         OwnerConsolePane.Board => "Enter goal detail",
         OwnerConsolePane.Activity => "Up/Down scroll  Enter what this means",
         _ => throw new ArgumentOutOfRangeException(nameof(pane))
-    }) + "  " + OwnerActivityNarrator.JumpKeyHint + "  Tab next pane  : command  ? help  q quit";
+    }) + "  " + OwnerActivityNarrator.JumpKeyHint + "  Tab/Shift+Tab pane  : command  ? help  q quit";
 
     internal static string HelpText => string.Join("\n", new[]
     {
         "Tab: Next pane (DECISIONS, BOARD, ACTIVITY).",
+        "Shift+Tab: Previous pane (ACTIVITY, BOARD, DECISIONS).",
         "Up: Select the previous row in DECISIONS or BOARD; scroll ACTIVITY up.",
         "Down: Select the next row in DECISIONS or BOARD; scroll ACTIVITY down.",
         "Enter: Open detail in DECISIONS or BOARD, or What this means in ACTIVITY; submit a command or activate a dialog button.",

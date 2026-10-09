@@ -247,6 +247,12 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
             _app.RequestStop(Window);
             return;
         }
+        if (key == Key.Tab.WithShift)
+        {
+            key.Handled = true;
+            if (!ActionRunning) FocusPane(OwnerConsoleKeyHints.Previous(FocusedPane));
+            return;
+        }
         if (key == Key.Tab)
         {
             key.Handled = true;
