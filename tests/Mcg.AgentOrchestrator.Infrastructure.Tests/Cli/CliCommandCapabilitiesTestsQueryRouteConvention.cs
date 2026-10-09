@@ -24,7 +24,8 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteConvention
             ["backlog-similar"] = [["backlog-similar", "query"]],
             ["goal-events"] = [["goal-events", "abc10000"]],
             ["timeline"] = [["timeline", "abc10000"]],
-            ["next"] = [["next", "--full", "abc10000"], ["next", "abc10000"], ["next"]]
+            ["next"] = [["next", "--full", "abc10000"], ["next", "abc10000"], ["next"],
+                ["next", "abc10000", "--autonomy", "observe"], ["next", "abc10000", "--autonomy-policy", "observe"]]
         };
 
     private static readonly IReadOnlyDictionary<string, string> Exemptions =
@@ -39,7 +40,6 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteConvention
     [
         (["status", "abc10000", "--tasks-only"], "Tasks-only status routing belongs to a follow-up slice."),
         (["status", "--tasks-only"], "Bare tasks-only status routing belongs to a follow-up slice."),
-        (["next", "abc10000", "--autonomy", "conservative"], "Autonomy next routing belongs to a follow-up slice.")
     ];
 
     [Fact]
@@ -136,7 +136,7 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteConvention
                 failures.Add($"{form}: writer-path form must retain QueryOnly composition.");
         }
 
-        string[][] required = [["status", "abc10000", "--tasks-only"], ["next", "abc10000", "--autonomy", "conservative"]];
+        string[][] required = [["status", "abc10000", "--tasks-only"]];
         foreach (var args in required)
         {
             if (!WriterPathForms.Any(form => form.Args.SequenceEqual(args, StringComparer.OrdinalIgnoreCase)))

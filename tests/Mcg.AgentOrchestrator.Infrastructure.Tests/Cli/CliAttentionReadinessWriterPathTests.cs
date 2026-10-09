@@ -277,8 +277,6 @@ public sealed class CliAttentionReadinessWriterPathTests : CliTaskQueryTestSuppo
     [Xunit.InlineData("status", "abc10000", "--tasks-only")]
     [Xunit.InlineData("status", "--help")]
     [Xunit.InlineData("status", "-h")]
-    [Xunit.InlineData("next", "abc10000", "--autonomy", "conservative")]
-    [Xunit.InlineData("next", "abc10000", "--autonomy-policy", "conservative")]
     [Xunit.InlineData("next", "--help")]
     [Xunit.InlineData("next", "-h")]
     [Xunit.InlineData("monitor")]

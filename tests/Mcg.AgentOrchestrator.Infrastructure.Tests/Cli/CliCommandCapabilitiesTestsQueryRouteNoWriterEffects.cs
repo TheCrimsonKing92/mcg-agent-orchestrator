@@ -29,7 +29,8 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteNoWriterEffects : CliTa
             ["backlog-similar"] = [["backlog-similar", "query"]],
             ["goal-events"] = [["goal-events", "abc10000"]],
             ["timeline"] = [["timeline", "abc10000"]],
-            ["next"] = [["next", "--full", "abc10000"], ["next", "abc10000"], ["next"]]
+            ["next"] = [["next", "--full", "abc10000"], ["next", "abc10000"], ["next"],
+                ["next", "abc10000", "--autonomy", "observe"], ["next", "abc10000", "--autonomy-policy", "observe"]]
         };
 
     [Fact]
@@ -148,7 +149,6 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteNoWriterEffects : CliTa
         [
             ["status", "abc10000", "--tasks-only"],
             ["status", "--tasks-only"],
-            ["next", "abc10000", "--autonomy", "conservative"]
         ];
         foreach (var args in forms)
         {
