@@ -297,6 +297,7 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
         var (kernel, goal) = SimpleGoal("Real dispatch checkpoint rollback");
+        using var dispatchProcesses = new TestOwnedDispatchProcesses(kernel, () => kernel.GetGoal(goal.Id));
         kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
             "Dispatch checkpoint rollback fixture is already refined.",
             ["The ready task reaches the real dispatch checkpoint."],

@@ -25,6 +25,7 @@ public sealed class ConductorDriverTestsCriticalDispatchLifecycleEventGate
         var clock = new MutableClock();
         var kernel = new AgentOrchestratorKernel(clock);
         var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "Checkpoint dispatch history");
+        using var dispatchProcesses = new TestOwnedDispatchProcesses(kernel, () => kernel.GetGoal(goal.Id));
         kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
             "Checkpoint dispatch history", ["Only committed dispatches reach disk."],
             VerificationClass.TestVerifiable, [], []));
