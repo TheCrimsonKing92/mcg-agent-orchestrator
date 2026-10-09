@@ -25,8 +25,11 @@ public sealed class CliNextBareAutonomyReadOnlyRouteTests : CliTaskQueryTestSupp
             CopyWorkspace(root, writerRoot);
             var writerWorkspace = OrchestratorWorkspace.ForDirectory(writerRoot);
             var args = new[] { "next", flag, policy };
-            // Compare with the existing goal-prefixed writer form; bare selection is checked below.
-            var writerArgs = new[] { "next", TargetId.Value, flag, policy };
+            // CliPersistentStateRunner.cs:4614-4622 omits --autonomy-policy from IsCliValueFlag.
+            // Use the equivalent bare --autonomy writer form for that alias until its follow-up fix.
+            var writerArgs = flag.Equals("--autonomy-policy", StringComparison.OrdinalIgnoreCase)
+                ? new[] { "next", "--autonomy", policy }
+                : args;
             var writerRepository = new SqliteOrchestratorStateRepository(writerWorkspace.SqliteStatePath);
             IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
             var profiles = WorkerProfileCatalog.Default();
