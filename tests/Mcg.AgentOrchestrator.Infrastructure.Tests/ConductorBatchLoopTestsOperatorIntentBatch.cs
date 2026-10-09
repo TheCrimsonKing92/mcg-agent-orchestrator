@@ -20,6 +20,8 @@ public sealed class ConductorBatchLoopTestsOperatorIntentBatch(ITestOutputHelper
             var intents = await EnqueueMappings(store, goal);
             var persisted = new List<GoalId>();
             var persistCalls = 0;
+            var detachPersistCalls = 0;
+            var completedTicks = 0;
             var durableSnapshot = kernel.ExportSnapshot();
 
             var summary = new ConductorBatchLoop(operatorIntents: new OperatorIntentCoordinator(store)).Run(
@@ -27,18 +29,38 @@ public sealed class ConductorBatchLoopTestsOperatorIntentBatch(ITestOutputHelper
                 MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
                     getRunningCount: () => ConductorAutonomyPolicy.Conservative.MaxConcurrentPaidWorkers),
                 ConductorAutonomyPolicy.Conservative, NoStopPath(), maxIterations: 1,
+                onTick: tick =>
+                {
+                    Assert.Equal(1, tick.Tick);
+                    Assert.Equal(1, persistCalls);
+                    AssertBatchState(AgentOrchestratorKernel.FromSnapshot(durableSnapshot).GetGoal(goal.Id), intents);
+                    foreach (var intent in intents)
+                        Assert.Equal(OperatorIntentStatus.Applied, store.GetAsync(intent.Id).GetAwaiter().GetResult()!.Status);
+                    completedTicks++;
+                },
                 persistGoalTick: (current, ids) =>
                 {
+                    Assert.Equal(goal.Id, Assert.Single(ids));
+                    // Max-iterations shutdown checkpoints the detached goal after the tick has published its intents.
+                    if (completedTicks > 0)
+                    {
+                        detachPersistCalls++;
+                        foreach (var intent in intents)
+                            Assert.Equal(OperatorIntentStatus.Applied, store.GetAsync(intent.Id).GetAwaiter().GetResult()!.Status);
+                        return;
+                    }
+
                     persistCalls++;
                     persisted.AddRange(ids);
-                    Assert.Equal(goal.Id, Assert.Single(ids));
                     foreach (var intent in intents)
                         Assert.Equal(OperatorIntentStatus.Claimed, store.GetAsync(intent.Id).GetAwaiter().GetResult()!.Status);
                     durableSnapshot = current.ExportSnapshot();
                 });
 
             Assert.Equal(1, summary.Ticks);
+            Assert.Equal(1, completedTicks);
             Assert.Equal(1, persistCalls);
+            Assert.Equal(1, detachPersistCalls);
             Assert.Equal(goal.Id, Assert.Single(persisted));
             var durableGoal = AgentOrchestratorKernel.FromSnapshot(durableSnapshot).GetGoal(goal.Id);
             AssertBatchState(durableGoal, intents);
