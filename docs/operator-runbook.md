@@ -705,7 +705,9 @@ mcg-orchestrator.cmd record-goal <goal-prefix>   # compatibility alias for add +
 
 ### Move the default project's state to the user data root
 
-Use a [state repair quiet window](#state-repair-quiet-window): all goals must be terminal (Completed, Failed, Cancelled or Superseded), with no running dispatches or processes, no held conductor lock and no pending `.conduct-stop`. Draft, Parked and Verified goals still block the move. Stop other board writers too. Follow the existing [graceful stop and relaunch procedure](#manual-bounce-fallback-after-loop-affecting-code-lands) before moving and relaunch after success.
+Use a [state repair quiet window](#state-repair-quiet-window): all goals must be terminal (Completed, Failed, Cancelled or Superseded), with no running dispatches or processes, no held conductor lock and no pending `.conduct-stop`. Draft, Parked and Verified goals still block the move. Stop other board writers too. Follow the stop steps in the existing [graceful stop and relaunch procedure](#manual-bounce-fallback-after-loop-affecting-code-lands), wait for `LOOP_STOP`, and confirm the recorded conductor PID is no longer running before proceeding.
+
+The stop sequence leaves `.conduct-stop` in the repository root. Only after `LOOP_STOP` and that PID check, remove it with `Remove-Item -LiteralPath .conduct-stop` immediately before running the move or undo below; the verb refuses while the file is present. Removing it lifts launcher stop authority, including the auto-resume guard, so keep launchers and auto-resume paused throughout the remaining quiet window. After a successful move or undo, relaunch through the linked procedure.
 
 ```powershell
 mcg-orchestrator.cmd project move-default-state --dry-run
