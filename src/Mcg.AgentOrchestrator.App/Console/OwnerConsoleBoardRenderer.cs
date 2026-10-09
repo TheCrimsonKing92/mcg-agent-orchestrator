@@ -30,7 +30,7 @@ internal static class OwnerConsoleBoardRenderer
         foreach (var row in cells)
         {
             for (var column = 0; column < row.Length; column++)
-                row[column] = OwnerConsoleLineFitter.Fit(row[column], [row[column]],
+                row[column] = OwnerConsoleLineFitter.Fit(row[column], OwnerConsoleLineSpans.None,
                     column == 2 ? titleWidth : paneWidth > 0 ? widths[column] : 0);
             table.Rows.Add(row);
         }
