@@ -1709,7 +1709,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
             [agent],
             WorkerProfileCatalog.Default(),
             task => kernel.BuildTaskBrief(goal.Id, task.Id).Content.Length);
-        var output = CaptureConsole(() => ConsoleViews.PrintSubscriptionPlan(plan));
+        var output = CaptureConsole(() => SubscriptionPlanTextView.Print(plan));
         Xunit.Assert.DoesNotContain("Ready start risk:", output);
         Xunit.Assert.DoesNotContain("--confirm-large-paid-subscription-start", output);
         Xunit.Assert.Contains(AgentCatalog.OpenAiSubscriptionModelAlias, output);
@@ -1736,7 +1736,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
             [agent],
             WorkerProfileCatalog.Default(),
             _ => 8500);
-        var output = CaptureConsole(() => ConsoleViews.PrintSubscriptionPlan(plan));
+        var output = CaptureConsole(() => SubscriptionPlanTextView.Print(plan));
         Xunit.Assert.Contains("estPrompt=8500chars", output);
         var budget = AgentOrchestratorKernel.TaskBriefCharacterBudget(AgentRole.Developer, usesFileAccessContext: true);
         Xunit.Assert.Contains($"budget={budget}chars headroom={budget - 8500}chars", output);
@@ -1762,7 +1762,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
             [agent],
             WorkerProfileCatalog.Default(),
             _ => 1200);
-        var output = CaptureConsole(() => ConsoleViews.PrintSubscriptionPlan(plan));
+        var output = CaptureConsole(() => SubscriptionPlanTextView.Print(plan));
         Xunit.Assert.Contains("route: Selected", output);
         Xunit.Assert.Contains("reason: role=Developer", output);
         Xunit.Assert.Contains("reason: provider=OpenAI", output);
@@ -1789,7 +1789,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
             [agent],
             WorkerProfileCatalog.Default(),
             _ => 9100);
-        var output = CaptureConsole(() => ConsoleViews.PrintSubscriptionPlan(plan));
+        var output = CaptureConsole(() => SubscriptionPlanTextView.Print(plan));
         Xunit.Assert.Contains("estPrompt=9100chars", output);
         Xunit.Assert.Contains("budget=8000chars over=1100chars", output);
     }
@@ -1826,7 +1826,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
             [agent],
             WorkerProfileCatalog.Default(),
             task => kernel.BuildTaskBrief(goal.Id, task.Id).Content.Length);
-        var output = CaptureConsole(() => ConsoleViews.PrintSubscriptionPlan(plan));
+        var output = CaptureConsole(() => SubscriptionPlanTextView.Print(plan));
         Xunit.Assert.Contains("prior fit 1: overkill 1", output);
         Xunit.Assert.Contains("shapes copy-only change", output);
         Xunit.Assert.Contains("try local Ollama/qwen3:8b via agent configuration before paid start", output);

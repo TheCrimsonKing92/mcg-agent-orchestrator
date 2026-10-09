@@ -102,7 +102,7 @@ private static void PrintNextFullDetail(CliExecutionContext context, AutonomyPol
     ConsoleViews.PrintVerificationGate(goal, context.Kernel.BuildVerificationGate(goal.Id));
     ConsoleViews.PrintVerificationWorklist(goal, context.Kernel.BuildVerificationWorklist(goal.Id));
     ConsoleViews.PrintHumanInputWorklist(goal, context.Kernel.BuildHumanInputWorklist(goal.Id));
-    ConsoleViews.PrintSubscriptionPlan(SubscriptionPlanBuilder.Build(
+    SubscriptionPlanTextView.Print(SubscriptionPlanBuilder.Build(
         goal,
         context.Agents,
         context.WorkerProfiles,

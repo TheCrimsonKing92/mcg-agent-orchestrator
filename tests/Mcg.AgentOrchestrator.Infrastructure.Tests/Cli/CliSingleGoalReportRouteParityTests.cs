@@ -38,8 +38,8 @@ public sealed class CliSingleGoalReportRouteParityTests : CliTaskQueryTestSuppor
             var fullPlan = SubscriptionPlanBuilder.Build(target, agents, profiles, providerHoldScope: kernel.Goals);
             Xunit.Assert.All(targetPlan.Items, item => Xunit.Assert.Null(item.ProviderBudgetHold));
             Xunit.Assert.Contains(fullPlan.Items, item => item.ProviderBudgetHold is not null);
-            var targetPlanText = CaptureConsole(() => ConsoleViews.PrintSubscriptionPlan(targetPlan));
-            var fullPlanText = CaptureConsole(() => ConsoleViews.PrintSubscriptionPlan(fullPlan));
+            var targetPlanText = CaptureConsole(() => SubscriptionPlanTextView.Print(targetPlan));
+            var fullPlanText = CaptureConsole(() => SubscriptionPlanTextView.Print(fullPlan));
             Xunit.Assert.NotEqual(targetPlanText, fullPlanText);
 
             foreach (var args in CliSingleGoalReportReadOnlyRouteTests.ExplicitForms("abc10000"))

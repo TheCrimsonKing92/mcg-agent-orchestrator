@@ -428,6 +428,10 @@ internal static class SourceSizeRatchet
             new SourceClassCeiling("ConductorBatchLoop", 9258, 56), // 7e047f78: measured slot-contention hold arm and streak lifecycle; no new partial.
             // Goal 4da02c2f extracted the single-goal report predicate to CliSingleGoalReportCommand.
             new SourceClassCeiling("CliPersistentStateRunner", 6017, 18),
+            // Goal 5935c270 extracts subscription-plan output into SubscriptionPlanTextView
+            // (2026-10-09 console architecture review, finding 4, taming slice 13).
+            // Measured 3364 total lines across the existing 45 partial files; no extra headroom.
+            new SourceClassCeiling("ConsoleViews", 3364, 45),
         });
 
     internal static IReadOnlyList<SourceSizeViolation> EvaluateClasses(

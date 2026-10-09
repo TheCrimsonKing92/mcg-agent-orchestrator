@@ -17,7 +17,7 @@ public sealed class SourceClassSizeRatchetTests
         var root = FindRepositoryRoot();
         Assert.Equal(
             new[] { "ConductorDriver", "CliCommandHandlers", "GoalAcceptanceVerifier", "AgentOrchestratorKernel",
-                "ConductorBatchLoop", "CliPersistentStateRunner" },
+                "ConductorBatchLoop", "CliPersistentStateRunner", "ConsoleViews" },
             SourceSizeRatchet.SeededClassCeilings.Select(row => row.ClassName));
         var files = Directory.EnumerateFiles(Path.Combine(root, "src"), "*.cs", SearchOption.AllDirectories)
             .Where(path => !Path.GetRelativePath(root, path).Split(Path.DirectorySeparatorChar)
