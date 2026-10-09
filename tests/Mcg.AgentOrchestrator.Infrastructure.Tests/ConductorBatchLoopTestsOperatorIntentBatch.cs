@@ -6,6 +6,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using Xunit;
 
 // Parallel-safe: isolated SQLite state, no real workers or shared build resources.
+[Xunit.Collection(TestCollections.DotnetBuildSlots)]
 public sealed class ConductorBatchLoopTestsOperatorIntentBatch(ITestOutputHelper output)
     : ConductorBatchLoopTests(output)
 {
