@@ -128,7 +128,8 @@ public sealed class Goal
 
     // The invariant is a goal-level outstanding proof obligation, not a task
     // result. Only refinement or an attributed operator action may set Owner.
-    public IReadOnlyList<CriterionEvidenceObligation> CriterionEvidenceObligations => _criterionEvidenceObligations;
+    public IReadOnlyList<CriterionEvidenceObligation> CriterionEvidenceObligations =>
+        _criterionEvidenceObligations.Select(item => CriterionObligationRetirementRule.Annotate(item, _criterionEvidenceObligations)).ToArray();
 
     public IReadOnlyList<CriterionEvidenceObligation> OutstandingCriterionEvidenceObligations =>
         _criterionEvidenceObligations.Where(obligation =>
@@ -142,13 +143,14 @@ public sealed class Goal
 
     private bool IsCurrentCriterionEvidenceObligation(CriterionEvidenceObligation obligation) =>
         obligation.Owner == CriterionEvidenceOwner.Unknown
-            ? !obligation.Provenance.Contains("unresolved during refinement v", StringComparison.Ordinal) ||
+            ? CriterionObligationRetirementRule.FindSupersedingObligation(obligation, _criterionEvidenceObligations) is null &&
+              (!obligation.Provenance.Contains("unresolved during refinement v", StringComparison.Ordinal) ||
               !_criterionEvidenceObligations.Any(item =>
                   item.CriterionIndex == obligation.CriterionIndex &&
                   item.CriterionVersion > obligation.CriterionVersion &&
                   item.Provenance.StartsWith(
                       $"ownership carried from criterion-v{obligation.CriterionVersion}-{obligation.CriterionIndex} ",
-                      StringComparison.Ordinal))
+                      StringComparison.Ordinal)))
             : !_refinedSpecVersions.Any(version =>
                 version.Version == obligation.CriterionVersion && version.IsSuperseded);
 
