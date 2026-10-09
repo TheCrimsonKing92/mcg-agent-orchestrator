@@ -1348,7 +1348,7 @@ public sealed class ConductorDriverTestsPreReviewEvidence
         "WorkerBuildEvidenceRequirementTests",
         "WorkerContextRendererDispatchPathTests",
         "WorkerDispatchBuildEvidenceClassificationTests",
-        "WorkerDispatchCompletionClassifierTests",
+        "WorkerDispatchSelectedSkillsSnapshotTests",
         "WorkerDispatchJobAccountingTests",
         "WorkerDispatchTestsDispatchPreparation",
         "WorkerDispatchTestsModelSelection",
