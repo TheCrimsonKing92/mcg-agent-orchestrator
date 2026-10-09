@@ -270,7 +270,8 @@ public sealed class CliCommandTestsExperimentReading
         {
             var kernel = Seed(workspace);
             var comparison = kernel.Goals.Single(g => g.Id.Value.StartsWith("cccc", StringComparison.Ordinal));
-            var other = new Goal(new GoalId(comparison.Id.Value + "-other"), "shares prefix", []);
+            var other = new Goal(new GoalId(comparison.Id.Value + "-other"), "shares prefix",
+                [new TaskSpec(new TaskId("other-task"), "shares prefix task", AgentRole.Developer)]);
             var spec = CliCommandTestsExperiments.Spec() with
             {
                 Baseline = new(ExperimentBaselineKind.TwinGoal, TwinGoalId: "aaaa", ComparisonGoalId: "cccc"),
