@@ -84,8 +84,7 @@ internal static class ConductorGroupedGateAttemptHost
 
     private static ConductorGroupedGateOutcome? RunGateBody(ConductorGroupedGateAttempt attempt)
     {
-        var workspace = OrchestratorWorkspace.ForDirectory(
-            attempt.ExecutionDirectory, attempt.ExecutionDirectory);
+        var workspace = OwnedChildWorkspaceResolver.ForGroupedGateAttempt(attempt);
         var state = SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath);
         var kernel = state.LoadGoalsAsync(attempt.Members
             .Select(member => new GoalId(member.GoalId)).ToArray()).GetAwaiter().GetResult();

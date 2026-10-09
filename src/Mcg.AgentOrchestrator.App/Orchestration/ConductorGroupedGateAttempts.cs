@@ -50,7 +50,9 @@ internal sealed record ConductorGroupedGateAttempt(
     int? AdoptedByGenerationId = null,
     DateTimeOffset? ReconciledAt = null,
     string? Detail = null,
-    string Outcome = "Running");
+    string Outcome = "Running",
+    string? StateDirectory = null,
+    string? ProjectName = null);
 
 internal sealed record ConductorGroupedGateLaunchResult(
     int ProcessId, DateTimeOffset? StartedAt, string? ExecutablePath);
@@ -60,6 +62,8 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
     internal const string OwnedProcessSubcommandName = "__acceptance-grouped-gate-attempt";
     private static readonly ConcurrentDictionary<int, Process> OwnedProcessDrains = new();
     private readonly string _root;
+    private readonly string? _stateDirectory;
+    private readonly string? _projectName;
     private readonly Func<ConductorGroupedGateAttempt, ConductorGroupedGateLaunchResult> _launch;
     private readonly Func<int, bool> _isProcessAlive;
     private readonly Func<ConductorGroupedGateAttempt, bool> _stop;
@@ -77,9 +81,13 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
         Func<ConductorGroupedGateAttempt, bool>? stop = null,
         Func<DateTimeOffset>? utcNow = null,
         Action<string>? eventSink = null,
-        DotnetBuildStorageRoot? buildStorageRoot = null)
+        DotnetBuildStorageRoot? buildStorageRoot = null,
+        string? stateDirectory = null,
+        string? projectName = null)
     {
         _root = root;
+        _stateDirectory = stateDirectory;
+        _projectName = projectName;
         GenerationId = generationId ?? Environment.ProcessId;
         _launch = launch ?? LaunchOwnedProcess;
         _isProcessAlive = isProcessAlive ?? IsProcessAlive;
@@ -173,7 +181,8 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
             id, kind, members.Select(ConductorGroupedGateMember.From).ToArray(),
             mainRevision, treeRevision, manifestIdentity, identityValue, _utcNow(), 0,
             GenerationId, prefix + ".attempt.json", prefix + ".result.json", prefix + ".exit",
-            prefix + ".out.log", prefix + ".err.log", executionDirectory, policy.ToJson());
+            prefix + ".out.log", prefix + ".err.log", executionDirectory, policy.ToJson(),
+            StateDirectory: _stateDirectory, ProjectName: _projectName);
     }
 
     internal ConductorGroupedGateAttempt Launch(ConductorGroupedGateAttempt attempt)

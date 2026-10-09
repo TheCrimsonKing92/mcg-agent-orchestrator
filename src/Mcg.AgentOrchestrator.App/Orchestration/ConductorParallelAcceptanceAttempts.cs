@@ -159,6 +159,8 @@ internal sealed record ConductorParallelAcceptanceAttempt(
     FindingEvidenceMutation? FocusedEvidenceMutation = null)
 {
     public string? IntegrationBranch { get; init; }
+    public string? StateDirectory { get; init; }
+    public string? ProjectName { get; init; }
 
     public string CandidateKey => $"{GoalId}:{BranchHeadSha ?? "unknown-branch"}:{MainHeadSha ?? "unknown-main"}";
 }
@@ -361,6 +363,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
 
     private readonly string _rootDirectory;
     private readonly string? _executionDirectory;
+    private readonly string? _stateDirectory;
+    private readonly string? _projectName;
     private readonly string _integrationBranch;
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly TimeProvider _timeProvider;
@@ -413,7 +417,9 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         int? conductorGenerationId = null,
         Func<string, TimeSpan, IDisposable?>? tryAcquireAttemptWriterLease = null,
         Func<string, string, CancellationToken, DotnetBuildEnvironmentLease>? acquireCohortStableSlotRound = null,
-        Func<TimeSpan, CancellationToken, Task>? cohortStableSlotRoundDelay = null)
+        Func<TimeSpan, CancellationToken, Task>? cohortStableSlotRoundDelay = null,
+        string? stateDirectory = null,
+        string? projectName = null)
     {
         if (runInline && attemptCompletionGateForTests is not null)
         {
@@ -424,6 +430,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
 
         _rootDirectory = rootDirectory;
         _executionDirectory = executionDirectory;
+        _stateDirectory = stateDirectory;
+        _projectName = projectName;
         _integrationBranch = integrationBranch;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _utcNow = utcNow ?? _timeProvider.GetUtcNow;
@@ -1189,11 +1197,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                     "acceptance attempt metadata path has no parent directory"),
                 attemptWriterLeaseTimeout);
             attemptLogWriters = RedirectConsole(attempt);
-            var executionDirectory = !string.IsNullOrWhiteSpace(attempt.ExecutionDirectory)
-                ? attempt.ExecutionDirectory!
-                : OrchestratorWorkspace.ResolveRepoRoot(Environment.CurrentDirectory);
-            var integrationBranch = attempt.IntegrationBranch ?? throw new InvalidOperationException("acceptance attempt integration branch was not recorded");
-            var workspace = OrchestratorWorkspace.ForDirectory(executionDirectory, executionDirectory) with { IntegrationBranch = integrationBranch };
+            var workspace = OwnedChildWorkspaceResolver.ForParallelAcceptanceAttempt(attempt);
             var stateRepository = SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath);
             var kernel = stateRepository.LoadGoalsAsync([new GoalId(attempt.GoalId)]).GetAwaiter().GetResult();
             var goal = kernel.Goals.FirstOrDefault(g => g.Id.Value == attempt.GoalId)
@@ -1220,8 +1224,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                 attempt.BranchHeadSha,
                 attempt.MainHeadSha);
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                Path.GetDirectoryName(Path.GetDirectoryName(attempt.MetadataPath) ?? string.Empty) ?? executionDirectory, integrationBranch,
-                executionDirectory,
+                Path.GetDirectoryName(Path.GetDirectoryName(attempt.MetadataPath) ?? string.Empty) ?? workspace.ExecutionDirectory, workspace.IntegrationBranch,
+                workspace.ExecutionDirectory,
                 tryRunPreSlot: driver.RunParallelLandingAcceptancePreSlot,
                 conductEventLogWriter: string.IsNullOrWhiteSpace(attempt.ConductEventLogPath)
                     ? null
@@ -2085,7 +2089,12 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             PolicyJson: policy.ToJson(),
             StableSlotExhaustionPolicy: stableSlotExhaustionPolicy,
             ExecutionProtocol: _runInline ? "in-process" : "out-of-process",
-            ConductorGenerationId: _conductorGenerationId) { IntegrationBranch = _integrationBranch };
+            ConductorGenerationId: _conductorGenerationId)
+        {
+            IntegrationBranch = _integrationBranch,
+            StateDirectory = _stateDirectory,
+            ProjectName = _projectName
+        };
     }
 
     private static int AllocateOrdinal(string directory)

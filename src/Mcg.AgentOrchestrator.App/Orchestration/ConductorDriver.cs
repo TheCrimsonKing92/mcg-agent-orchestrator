@@ -276,7 +276,9 @@ internal sealed partial class ConductorDriver
             dir,
             tryRunPreSlot: RunParallelLandingAcceptancePreSlot,
             runInline: runAcceptanceAttemptsInCurrentProcess,
-            buildStorageRoot: _cohortCleanupHooks.BuildStorageRoot);
+            buildStorageRoot: _cohortCleanupHooks.BuildStorageRoot,
+            stateDirectory: workspace.OrchestratorDirectory,
+            projectName: OwnedChildWorkspaceResolver.RecordedProjectName(workspace));
         _apparatusRedGate = new ApparatusRedGate(
             Path.Combine(
                 workspace.OrchestratorDirectory,
@@ -288,7 +290,9 @@ internal sealed partial class ConductorDriver
             Path.Combine(workspace.OrchestratorDirectory, "pre-review-evidence-attempts"), _integrationBranch,
             dir,
             conductEventLogWriter: new ConductEventLogWriter(workspace.ConductEventsLogPath),
-            buildStorageRoot: _cohortCleanupHooks.BuildStorageRoot);
+            buildStorageRoot: _cohortCleanupHooks.BuildStorageRoot,
+            stateDirectory: workspace.OrchestratorDirectory,
+            projectName: OwnedChildWorkspaceResolver.RecordedProjectName(workspace));
         var eventWriter = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, integrationBranch: workspace.IntegrationBranch);
         _cohortKernel = kernel;
         ConfigureCandidateIdentity(kernel, workspace.ConductEventsLogPath);
