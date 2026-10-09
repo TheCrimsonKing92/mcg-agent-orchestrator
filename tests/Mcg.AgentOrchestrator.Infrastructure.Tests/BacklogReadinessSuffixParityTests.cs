@@ -111,6 +111,8 @@ public sealed class BacklogReadinessSuffixParityTests
         await fixture.Store.AddDependencyAsync(fixture.Item.Id, new(prerequisite.Id, BacklogDependencyTargetKind.Backlog));
         await fixture.Store.CloseAsync(prerequisite.Id);
         var kernel = new AgentOrchestratorKernel();
+        // backlog-show reads claim lineage from state.db; the draft fixture only creates backlog.db.
+        _ = StateDbMigrations.EnsureUpToDate(fixture.Workspace.SqliteStatePath);
         IReadOnlyList<AgentDefinition> agents = [];
         var providers = new InMemoryModelProviderRegistry([]);
         var profiles = WorkerProfileCatalog.Default();
