@@ -119,7 +119,9 @@ internal static class SourceSizeRatchet
             // Goal 0079c3a4 moved dispatch-start effects into DispatchStartExecutor.
             // Goal 47f09f71 adds three lines to pass workspace project-home context at the existing
             // preflight and acceptance orchestration seams; manifest resolution stays in AcceptanceManifestLocator.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 1802),
+            // Goal b6abf7a1 extracts dispatch checkpoint sequencing and hold lifetime to
+            // CriticalDispatchLifecycleCheckpoint; measured 1785 lines, with no extra headroom.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 1785),
             // Goal 0e30d5e9 extracted impact-plan mapping to PreReviewEvidenceContextBuilder.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.PreReviewEvidence.cs", 480),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.ReviewRecovery.cs", 461),
@@ -398,7 +400,9 @@ internal static class SourceSizeRatchet
             // Measured 15290 lines across the existing 70 partial files; no extra headroom.
             // Goal 01ea3f4d extracts passing-evidence routing and re-raise identity into
             // PassingFindingEvidenceRouter; measured 15271 lines across the same 70 partial files.
-            new SourceClassCeiling("ConductorDriver", 15271, 70),
+            // Goal b6abf7a1 extracts dispatch checkpoint sequencing to CriticalDispatchLifecycleCheckpoint.
+            // Measured 15250 lines across the same 70 partial files; no extra headroom.
+            new SourceClassCeiling("ConductorDriver", 15250, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.

@@ -311,7 +311,8 @@ internal sealed partial class ConductorDriver
         };
         _mergeTrainAcceptanceStore = new MergeTrainAcceptanceStore(
             Path.Combine(workspace.OrchestratorDirectory, "merge-train-acceptance.db"));
-        kernel.SetEventWriter(eventWriter);
+        var dispatchLifecycleGate = new CriticalDispatchLifecycleEventGate(eventWriter);
+        kernel.SetEventWriter(dispatchLifecycleGate);
         _tryBuildAwaitingClarificationEscalationReason = goal =>
             GoalRefinementGate.TryBuildAwaitingClarificationEscalationReason(workspace, goal, eventWriter, out var reason)
                 ? reason
@@ -417,8 +418,10 @@ internal sealed partial class ConductorDriver
             }
             GoalOperationJournal.Begin(dir, goal, "conductor:dispatch", "Starting subscription dispatch.");
             var goalSnapshotBeforeDispatch = kernel.ExportGoalSnapshot(goal.Id);
-            var criticalCheckpointPersisted = false;
             SubscriptionStartResult result;
+            using var dispatchCheckpoint = CriticalDispatchLifecycleCheckpoint.Begin(
+                dispatchLifecycleGate, kernel, goal.Id, persistCriticalDispatchStart,
+                goalId => DispatchRecordWriteSucceededSink?.Invoke(goalId));
             try
             {
                 result = new GoalDispatchOperations().StartSubscriptionReadyTasks(
@@ -429,19 +432,7 @@ internal sealed partial class ConductorDriver
                     profiles,
                     providers ?? new InMemoryModelProviderRegistry([]),
                     approveHighRiskOwnership: policy.AllowsAutonomousHighRiskOwnership,
-                    checkpointBeforeWorkerStart: persistCriticalDispatchStart is null
-                        ? null
-                        : (checkpointKernel, goalId, taskId, checkpointPhase) =>
-                        {
-                            ConductorBatchLoop.PersistCriticalDispatchStartOrThrow(
-                                persistCriticalDispatchStart,
-                                checkpointKernel,
-                                goalId,
-                                taskId,
-                                checkpointPhase);
-                            criticalCheckpointPersisted = true;
-                            DispatchRecordWriteSucceededSink?.Invoke(goalId);
-                    },
+                    checkpointBeforeWorkerStart: dispatchCheckpoint?.BeforeWorkerStart,
                     readCurrentInterruptedDispatchState: readCurrentInterruptedDispatchState,
                     conductorPolicy: policy,
                     recordDurableGoalBaseline: recordDurableGoalBaseline,
@@ -456,7 +447,7 @@ internal sealed partial class ConductorDriver
                     return DispatchStartOutcome.Deferred(reason);
                 }
 
-                if (!ex.ProcessMayHaveStarted && !criticalCheckpointPersisted)
+                if (!ex.ProcessMayHaveStarted && dispatchCheckpoint?.HasCommitted != true)
                     kernel.ReplaceGoalWithSnapshot(goalSnapshotBeforeDispatch);
                 throw;
             }
@@ -498,24 +489,16 @@ internal sealed partial class ConductorDriver
             }
             GoalOperationJournal.Begin(dir, goal, "conductor:dispatch-start", "Starting recorded dispatch.");
             ProcessBatchExecutionResult result;
+            using var dispatchCheckpoint = CriticalDispatchLifecycleCheckpoint.Begin(
+                dispatchLifecycleGate, kernel, goal.Id, persistCriticalDispatchStart,
+                goalId => DispatchRecordWriteSucceededSink?.Invoke(goalId));
             try
             {
                 result = new GoalDispatchOperations().StartDispatches(
                     kernel,
                     workspace,
                     goal,
-                    checkpointBeforeWorkerStart: persistCriticalDispatchStart is null
-                        ? null
-                        : (checkpointKernel, goalId, taskId, checkpointPhase) =>
-                        {
-                            ConductorBatchLoop.PersistCriticalDispatchStartOrThrow(
-                                persistCriticalDispatchStart,
-                                checkpointKernel,
-                                goalId,
-                                taskId,
-                                checkpointPhase);
-                            DispatchRecordWriteSucceededSink?.Invoke(goalId);
-                        },
+                    checkpointBeforeWorkerStart: dispatchCheckpoint?.BeforeWorkerStart,
                     readCurrentInterruptedDispatchState: readCurrentInterruptedDispatchState,
                     conductorPolicy: policy,
                     recordDurableGoalBaseline: recordDurableGoalBaseline);
