@@ -27,14 +27,19 @@ internal sealed class TestOwnedDispatchProcesses(AgentOrchestratorKernel kernel,
                 finally
                 {
                     // Completed records can still have an OS host finishing teardown.
-                    if (!host.HasExited) host.Kill(entireProcessTree: true);
-                    host.WaitForExit();
+                    StopAndAwait(host);
                 }
             }
             catch (Exception exception) { failures.Add(exception); }
         }
 
         if (failures.Count != 0) throw new AggregateException("Could not reap test-owned dispatch hosts.", failures);
+    }
+
+    internal static void StopAndAwait(Process host)
+    {
+        if (!host.HasExited) host.Kill(entireProcessTree: true);
+        host.WaitForExit();
     }
 
     internal static async Task AwaitCompletionAsync(TaskProcessRecord record)
