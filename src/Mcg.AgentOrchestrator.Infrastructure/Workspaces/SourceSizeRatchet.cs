@@ -282,8 +282,8 @@ internal static class SourceSizeRatchet
             // must retain the single route-selection call so existing fallback semantics stay centralized.
             // Goal 28397f6a adds the store-only epic command routes; retain the runner's
             // shared dispatch seam and account for its two-line net increase.
-            // Goal 4da02c2f extracted the single-goal report predicate to CliSingleGoalReportCommand.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 4848),
+            // Goal ec8903af moved the goal-prefix parser to CliGoalPrefixArguments.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 4806),
             // Goal 03aaf13e adds the explicit-root isolation fact at the verifier's existing execution-
             // environment seam; the production verifier remains at its prior ceiling.
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs", 1611),
@@ -426,8 +426,8 @@ internal static class SourceSizeRatchet
             // Goal 679eee57 added a one-line tick call to the separately owned ConductorExperimentWatch (+1); goal 80de5cb2 extracted
             // dependency hold evaluation to its own type (-42). Measured 9231 across 56 files after both, no extra headroom.
             new SourceClassCeiling("ConductorBatchLoop", 9258, 56), // 7e047f78: measured slot-contention hold arm and streak lifecycle; no new partial.
-            // Goal 4da02c2f extracted the single-goal report predicate to CliSingleGoalReportCommand.
-            new SourceClassCeiling("CliPersistentStateRunner", 6017, 18),
+            // Goal ec8903af moved the goal-prefix parser to CliGoalPrefixArguments.
+            new SourceClassCeiling("CliPersistentStateRunner", 5975, 18),
             // Goal 5935c270 extracts subscription-plan output into SubscriptionPlanTextView
             // (2026-10-09 console architecture review, finding 4, taming slice 13).
             // Measured 3364 total lines across the existing 45 partial files; no extra headroom.

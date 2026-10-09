@@ -9,7 +9,7 @@ internal static class CliSingleGoalReportQueryCommand
         (args.Count > 0 &&
         args[0].ToLowerInvariant() is "subscription-plan" or "goal-changes" &&
         !CliCommandHelp.IsCommandSpecificHelp(args) &&
-        !string.IsNullOrWhiteSpace(CliSingleGoalReportSelector.ResolveGoalPrefix(args, GetOptionalArgument))) ||
+        !string.IsNullOrWhiteSpace(CliSingleGoalReportSelector.ResolveGoalPrefix(args, CliGoalPrefixArguments.GetOptionalArgument))) ||
         (args.Count == 2 &&
         (args[0].Equals("retention-plan", StringComparison.OrdinalIgnoreCase) ||
          args[0].Equals("supervisor", StringComparison.OrdinalIgnoreCase) ||
@@ -30,7 +30,7 @@ internal static class CliSingleGoalReportQueryCommand
         ref Goal? currentGoal,
         IClock? diagnosticsClock = null)
     {
-        var prefix = CliSingleGoalReportSelector.ResolveGoalPrefix(args, GetOptionalArgument)!;
+        var prefix = CliSingleGoalReportSelector.ResolveGoalPrefix(args, CliGoalPrefixArguments.GetOptionalArgument)!;
         var matches = stateQueries.ListGoalMetadataAsync().GetAwaiter().GetResult()
             .Where(goal => goal.Id.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
             .ToArray();
@@ -46,47 +46,4 @@ internal static class CliSingleGoalReportQueryCommand
         CliReadOnlyQueryExecutor.Execute(args, kernel, workspace, providers, channel,
             ref agents, ref workerProfiles, ref currentGoal, diagnosticsClock);
     }
-
-    // Keep prefix parsing identical to CliPersistentStateRunner.GetOptionalArgument/IsCliValueFlag.
-    private static string? GetOptionalArgument(IReadOnlyList<string> parts, params string[] flags)
-    {
-        for (var i = 1; i < parts.Count; i++)
-        {
-            var part = parts[i];
-            if (flags.Contains(part, StringComparer.OrdinalIgnoreCase))
-            {
-                if (IsCliValueFlag(part))
-                {
-                    i++;
-                }
-
-                continue;
-            }
-
-            if (IsCliValueFlag(part))
-            {
-                i++;
-                continue;
-            }
-
-            if (part.StartsWith("--", StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            return part;
-        }
-
-        return null;
-    }
-
-    private static bool IsCliValueFlag(string value) =>
-        value.Equals("--goal", StringComparison.OrdinalIgnoreCase) ||
-        value.Equals("--backlog-coverage", StringComparison.OrdinalIgnoreCase) ||
-        value.Equals("--backlog-item", StringComparison.OrdinalIgnoreCase) ||
-        value.Equals("--pipeline", StringComparison.OrdinalIgnoreCase) ||
-        value.Equals("--role", StringComparison.OrdinalIgnoreCase) ||
-        value.Equals("--task", StringComparison.OrdinalIgnoreCase) ||
-        value.Equals("--autonomy", StringComparison.OrdinalIgnoreCase) ||
-        value.Equals("--policy", StringComparison.OrdinalIgnoreCase);
 }

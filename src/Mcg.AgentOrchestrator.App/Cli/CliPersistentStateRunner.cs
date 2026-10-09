@@ -793,7 +793,7 @@ internal static partial class CliPersistentStateRunner
             var goalId = ResolveSingleGoalCommandGoalId(
                 stateRepository,
                 currentGoalId,
-                GetOptionalArgument(args, "--confirm-goal-mark-landed", "--force"));
+                CliGoalPrefixArguments.GetOptionalArgument(args, "--confirm-goal-mark-landed", "--force"));
             var kernel = LoadSingleGoalKernel(stateRepository, goalId, cancellation.Token);
             currentGoal = ResolveCurrentGoal(kernel, goalId.Value);
 
@@ -4501,7 +4501,7 @@ internal static partial class CliPersistentStateRunner
     }
 
     private static string? ResolveAcceptanceGoalPrefix(IReadOnlyList<string> parts) =>
-        GetOptionalArgument(parts, "--skip-verify", "--keep-workspace", "--no-record");
+        CliGoalPrefixArguments.GetOptionalArgument(parts, "--skip-verify", "--keep-workspace", "--no-record");
 
     private static string? ResolveSingleGoalCommandGoalPrefix(IReadOnlyList<string> parts)
     {
@@ -4541,7 +4541,7 @@ internal static partial class CliPersistentStateRunner
 
         if (IsSingleGoalReportCommand(parts))
         {
-            return CliSingleGoalReportSelector.ResolveGoalPrefix(parts, GetOptionalArgument);
+            return CliSingleGoalReportSelector.ResolveGoalPrefix(parts, CliGoalPrefixArguments.GetOptionalArgument);
         }
 
         return null;
@@ -4578,48 +4578,6 @@ internal static partial class CliPersistentStateRunner
                 $"Resolved task '{task.Id.Value}' does not belong to goal '{goal.Id.Value}'.");
         }
     }
-
-    private static string? GetOptionalArgument(IReadOnlyList<string> parts, params string[] flags)
-    {
-        for (var i = 1; i < parts.Count; i++)
-        {
-            var part = parts[i];
-            if (flags.Contains(part, StringComparer.OrdinalIgnoreCase))
-            {
-                if (IsCliValueFlag(part))
-                {
-                    i++;
-                }
-
-                continue;
-            }
-
-            if (IsCliValueFlag(part))
-            {
-                i++;
-                continue;
-            }
-
-            if (part.StartsWith("--", StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            return part;
-        }
-
-        return null;
-    }
-
-    private static bool IsCliValueFlag(string value) =>
-        value.Equals("--goal", StringComparison.OrdinalIgnoreCase) ||
-        value.Equals("--backlog-coverage", StringComparison.OrdinalIgnoreCase) ||
-        value.Equals("--backlog-item", StringComparison.OrdinalIgnoreCase) ||
-        value.Equals("--pipeline", StringComparison.OrdinalIgnoreCase) ||
-        value.Equals("--role", StringComparison.OrdinalIgnoreCase) ||
-        value.Equals("--task", StringComparison.OrdinalIgnoreCase) ||
-        value.Equals("--autonomy", StringComparison.OrdinalIgnoreCase) ||
-        value.Equals("--policy", StringComparison.OrdinalIgnoreCase);
 
     private static GoalId ResolveSingleGoalCommandGoalId(
         ITransactionalOrchestratorStateRepository stateRepository,
