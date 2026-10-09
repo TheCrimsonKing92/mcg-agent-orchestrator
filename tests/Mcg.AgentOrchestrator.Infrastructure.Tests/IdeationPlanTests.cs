@@ -123,6 +123,31 @@ public sealed class IdeationPlanTests
         Assert.Contains("Dogfood Log (SQLite recent entries", context);
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void IdeationEvidenceUnavailableDogfoodDatabaseReportsSetupWithoutMutation(bool legacy)
+    {
+        var workspace = CreateRefinedWorkspace(CreateTempDirectory());
+        if (legacy)
+            RunEventStoreTests.CreateLegacyDogfoodDatabase(workspace.DogfoodLogStorePath);
+        else
+            Assert.False(File.Exists(workspace.DogfoodLogStorePath));
+        var bytes = legacy ? File.ReadAllBytes(workspace.DogfoodLogStorePath) : null;
+        var schema = legacy ? RunEventStoreTests.DogfoodSchemaSnapshot(workspace.DogfoodLogStorePath) : null;
+
+        var context = IdeationProposalPlanner.BuildEvidenceContext(new AgentOrchestratorKernel(), workspace);
+
+        Assert.Contains($"(dogfood-log unavailable: Dogfood log store '{workspace.DogfoodLogStorePath}' schema is Missing (expected version 1); run setup.)", context);
+        if (legacy)
+        {
+            Assert.Equal(bytes, File.ReadAllBytes(workspace.DogfoodLogStorePath));
+            Assert.Equal(schema, RunEventStoreTests.DogfoodSchemaSnapshot(workspace.DogfoodLogStorePath));
+        }
+        else
+            Assert.False(File.Exists(workspace.DogfoodLogStorePath));
+    }
+
     [Xunit.Fact(DisplayName = "IdeationPlan_HasEvidenceCitation_GenericText_ReturnsFalse")]
     public void IdeationPlan_HasEvidenceCitation_GenericText_ReturnsFalse()
     {

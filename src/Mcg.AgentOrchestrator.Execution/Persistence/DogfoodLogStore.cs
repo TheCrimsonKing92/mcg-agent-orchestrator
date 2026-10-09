@@ -26,14 +26,45 @@ public sealed class DogfoodLogStore
 {
     private const int MaxBusyRetries = 6;
     private readonly string _dbPath;
+    private readonly bool _readOnly;
 
-    public DogfoodLogStore(string dbPath)
+    public DogfoodLogStore(string dbPath) : this(dbPath, readOnly: false)
     {
-        _dbPath = dbPath;
-        EnsureSchema();
+        Setup(dbPath);
     }
 
-    private string ConnectionString => $"Data Source={_dbPath};Mode=ReadWriteCreate;Pooling=False;";
+    private DogfoodLogStore(string dbPath, bool readOnly)
+    {
+        _dbPath = dbPath;
+        _readOnly = readOnly;
+    }
+
+    public static DogfoodLogStore OpenReadOnly(string dbPath)
+    {
+        if (!File.Exists(dbPath))
+            throw SchemaSetupRequired(dbPath, StoreSchemaState.Missing);
+
+        var store = new DogfoodLogStore(dbPath, readOnly: true);
+        using var conn = store.OpenConnection();
+        var state = StoreSchemaVersions.Verify(conn, StoreSchemaRegistry.DogfoodLog);
+        if (state != StoreSchemaState.Current)
+            throw SchemaSetupRequired(dbPath, state);
+        return store;
+    }
+
+    private static InvalidOperationException SchemaSetupRequired(string dbPath, StoreSchemaState state) =>
+        new($"Dogfood log store '{dbPath}' schema is {state} (expected version {StoreSchemaRegistry.DogfoodLog.CurrentVersion}); run setup.");
+
+    private string ConnectionString => CreateConnectionString(_dbPath, _readOnly);
+
+    private static string CreateConnectionString(string dbPath, bool readOnly) => readOnly
+        ? new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false
+        }.ToString()
+        : $"Data Source={dbPath};Mode=ReadWriteCreate;Pooling=False;";
 
     public async Task<DogfoodLogRecord> UpsertAsync(DogfoodLogAppend entry, CancellationToken cancellationToken = default)
     {
@@ -124,29 +155,47 @@ public sealed class DogfoodLogStore
         return conn;
     }
 
-    private void EnsureSchema()
+    public static void Setup(string dbPath)
     {
-        var directory = Path.GetDirectoryName(_dbPath);
+        var directory = Path.GetDirectoryName(dbPath);
         if (!string.IsNullOrEmpty(directory))
             Directory.CreateDirectory(directory);
 
-        using var conn = new SqliteConnection(ConnectionString);
+        using var conn = new SqliteConnection(CreateConnectionString(dbPath, readOnly: false));
         conn.Open();
         RunNonQuery(conn, "PRAGMA busy_timeout=30000");
+        var state = StoreSchemaVersions.Verify(conn, StoreSchemaRegistry.DogfoodLog);
+        if (state == StoreSchemaState.Newer)
+            return;
+
         RunNonQuery(conn, "PRAGMA journal_mode=WAL");
-        RunNonQuery(conn, """
-            CREATE TABLE IF NOT EXISTS dogfood_log (
-                seq               INTEGER PRIMARY KEY AUTOINCREMENT,
-                goal_id           TEXT NOT NULL UNIQUE,
-                recorded_at       TEXT NOT NULL,
-                header            TEXT NOT NULL,
-                summary           TEXT NOT NULL,
-                operator_gate     TEXT NOT NULL,
-                model_fit         TEXT NOT NULL,
-                rendered_markdown TEXT NOT NULL
-            )
-            """);
-        RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_dogfood_log_recorded_at ON dogfood_log(recorded_at DESC, seq DESC)");
+        if (state == StoreSchemaState.Current)
+            return;
+
+        RunNonQuery(conn, "BEGIN IMMEDIATE");
+        try
+        {
+            RunNonQuery(conn, """
+                CREATE TABLE IF NOT EXISTS dogfood_log (
+                    seq               INTEGER PRIMARY KEY AUTOINCREMENT,
+                    goal_id           TEXT NOT NULL UNIQUE,
+                    recorded_at       TEXT NOT NULL,
+                    header            TEXT NOT NULL,
+                    summary           TEXT NOT NULL,
+                    operator_gate     TEXT NOT NULL,
+                    model_fit         TEXT NOT NULL,
+                    rendered_markdown TEXT NOT NULL
+                )
+                """);
+            RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_dogfood_log_recorded_at ON dogfood_log(recorded_at DESC, seq DESC)");
+            StoreSchemaVersions.UpgradeToCurrent(conn, StoreSchemaRegistry.DogfoodLog);
+            RunNonQuery(conn, "COMMIT");
+        }
+        catch
+        {
+            try { RunNonQuery(conn, "ROLLBACK"); } catch { }
+            throw;
+        }
     }
 
     private static DogfoodLogRecord ReadRecord(SqliteDataReader reader) =>

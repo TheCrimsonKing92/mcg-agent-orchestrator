@@ -29,6 +29,9 @@ public static class StoreSchemaRegistry
     public static StoreSchemaEntry OperatorEscapes { get; } =
         new("operator-escapes", Persistence + "OperatorEscapeStore.cs", "operator-escapes.db", "backlog", 1);
 
+    public static StoreSchemaEntry DogfoodLog { get; } =
+        new("dogfood-log", Persistence + "DogfoodLogStore.cs", "dogfood-log.db", "collaboration", 1);
+
     // Source fragments of one database are separate inventory entries, not separate databases.
     public static IReadOnlyList<StoreSchemaEntry> Inventory { get; } = Array.AsReadOnly<StoreSchemaEntry>(
     [
@@ -45,7 +48,7 @@ public static class StoreSchemaRegistry
         new("follower-gate-acceptance", Persistence + "FollowerGateAcceptanceStore.cs", "follower-gate-acceptance.db", "cohort", null),
         new("collaboration-items", Persistence + "CollaborationItemStore.Storage.cs", "collaboration-items.db", "collaboration", null),
         new("run-events", Persistence + "RunEventStore.cs", "run-events.db", "collaboration", null),
-        new("dogfood-log", Persistence + "DogfoodLogStore.cs", "dogfood-log.db", "collaboration", null),
+        DogfoodLog,
         new("practice-registry", Persistence + "PracticeRegistryStore.cs", "state.db", "collaboration", null),
         new("author-claims", Conductor + "ConductorAuthorClaimStore.cs", "author-claims.db", "conductor", null),
         new("steward-triggers", Conductor + "ConductorStewardTriggerStore.cs", "steward-triggers.db", "conductor", null),

@@ -66,7 +66,7 @@ internal static class IdeationProposalPlanner
         sb.AppendLine("## Dogfood Log (SQLite recent entries, top 2000 chars)");
         try
         {
-            var records = new DogfoodLogStore(workspace.DogfoodLogStorePath)
+            var records = DogfoodLogStore.OpenReadOnly(workspace.DogfoodLogStorePath)
                 .ListRecentAsync(10)
                 .GetAwaiter()
                 .GetResult();

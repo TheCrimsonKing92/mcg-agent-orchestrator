@@ -21,7 +21,9 @@ public static class StoreSetupRunner
             [StoreSchemaRegistry.OperatorEscapes.StoreName] = new(SqliteOperatorEscapeStore.Setup,
                 directory => Path.Combine(directory, StoreSchemaRegistry.OperatorEscapes.Database)),
             [StoreSchemaRegistry.OperatorIntents.StoreName] = new(SqliteOperatorIntentStore.Setup,
-                directory => Path.Combine(directory, SqliteOperatorIntentStore.DatabaseFileName))
+                directory => Path.Combine(directory, SqliteOperatorIntentStore.DatabaseFileName)),
+            [StoreSchemaRegistry.DogfoodLog.StoreName] = new(DogfoodLogStore.Setup,
+                directory => Path.Combine(directory, StoreSchemaRegistry.DogfoodLog.Database))
         };
 
     public static IReadOnlyCollection<string> RegisteredStoreNames { get; } =
