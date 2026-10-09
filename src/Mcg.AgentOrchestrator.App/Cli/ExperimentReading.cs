@@ -9,7 +9,7 @@ internal sealed record ExperimentMetricReading(string Metric, double? Before, do
 
 internal sealed record ExperimentReadingResult(int? ObservedCount, ExperimentStopRule StopRule,
     bool StopRuleMet, IReadOnlyList<ExperimentMetricReading> Metrics, string Verdict, string Reason,
-    bool GuardrailBreached);
+    bool GuardrailBreached, string? Goals = null);
 
 internal static class ExperimentGoals
 {
@@ -38,19 +38,29 @@ internal static class ExperimentReading
                     .Max() is { } at && at >= start && at < asOf)
             : spec.StopRule.Unit == ExperimentStopUnit.Gates ? observedGateCount : (int?)null;
         var stopRuleMet = observed is { } n && n >= spec.StopRule.Count;
-        if (spec.Baseline.Kind != ExperimentBaselineKind.BeforeAfterWindow)
+        if (spec.Baseline.Kind == ExperimentBaselineKind.AlternatingGates)
         {
             return new(observed, spec.StopRule, stopRuleMet, [], "unavailable",
                 $"baseline kind {Name(spec.Baseline.Kind)} not computable in this slice", false);
         }
 
-        var since = spec.Baseline.Since!.Value;
-        var until = spec.Baseline.Until!.Value;
-        var baseline = RoundValueReport.Build(goals, since, until, intents).Window;
-        var comparison = asOf > until ? RoundValueReport.Build(goals, until, asOf, intents).Window : null;
-        var values = ExperimentMetrics.Menu.ToDictionary(metric => metric, metric => (
-            Before: Value(metric, baseline, goals, landings, since, until),
-            After: Value(metric, comparison, goals, landings, until, asOf)));
+        IReadOnlyDictionary<string, (double? Before, double? After)> values;
+        ExperimentTwinValues? twin = null;
+        if (spec.Baseline.Kind == ExperimentBaselineKind.TwinGoal)
+        {
+            twin = ExperimentTwinReading.Compute(spec.Baseline, goals, intents);
+            values = twin.Values;
+        }
+        else
+        {
+            var since = spec.Baseline.Since!.Value;
+            var until = spec.Baseline.Until!.Value;
+            var baseline = RoundValueReport.Build(goals, since, until, intents).Window;
+            var comparison = asOf > until ? RoundValueReport.Build(goals, until, asOf, intents).Window : null;
+            values = ExperimentMetrics.Menu.ToDictionary(metric => metric, metric => (
+                Before: Value(metric, baseline, goals, landings, since, until),
+                After: Value(metric, comparison, goals, landings, until, asOf)));
+        }
         var metrics = spec.Metrics.Append(spec.Guardrail.Metric).Select(metric =>
         {
             var value = values[metric];
@@ -78,7 +88,9 @@ internal static class ExperimentReading
             var missing = spec.DecisionRule.KeepIf.Concat(spec.DecisionRule.RevertIf)
                 .Append(spec.Guardrail.BreachIf).Where(c => EvaluateCondition(c) is null).Select(c => c.Metric).Distinct();
             return new(observed, spec.StopRule, stopRuleMet, metrics, "inconclusive",
-                $"unavailable comparison or zero baseline: {string.Join(", ", missing)}", guardrail == true);
+                $"unavailable comparison or zero baseline: {string.Join(", ", missing)}" +
+                (twin is { Diagnostics.Count: > 0 } ? $"; {string.Join("; ", twin.Diagnostics)}" : ""),
+                guardrail == true, twin?.Goals);
         }
         var keepHolds = keep.All(v => v == true);
         var revertHolds = revert.All(v => v == true);
@@ -90,7 +102,7 @@ internal static class ExperimentReading
             var value = values[spec.Guardrail.Metric];
             reason += $"; guardrail breached: {spec.Guardrail.Metric} baseline={Format(value.Before)} comparison={Format(value.After)}";
         }
-        return new(observed, spec.StopRule, stopRuleMet, metrics, verdict, reason, guardrail == true);
+        return new(observed, spec.StopRule, stopRuleMet, metrics, verdict, reason, guardrail == true, twin?.Goals);
     }
 
     internal static DateTimeOffset ComparisonStart(ExperimentRecord record) => record.Spec.Baseline.Until ?? record.CreatedAt;
@@ -100,6 +112,7 @@ internal static class ExperimentReading
         var progress = result.ObservedCount is { } count ? $"{count} of {result.StopRule.Count}" : $"unavailable of {result.StopRule.Count}";
         var met = result.ObservedCount is not null ? result.StopRuleMet ? "met" : "not met" : "progress unavailable";
         Console.WriteLine($"stop rule: {progress} {Name(result.StopRule.Unit)} ({met})");
+        if (result.Goals is not null) Console.WriteLine($"twin goals: {result.Goals}");
         foreach (var metric in result.Metrics)
             Console.WriteLine($"{metric.Metric.Replace('-', ' ')}: baseline={Format(metric.Before)} comparison={Format(metric.After)}");
         Console.WriteLine($"reading: {result.Verdict} ({result.Reason})");
@@ -114,6 +127,11 @@ internal static class ExperimentReading
                 && at >= since && at < until);
             return until <= since || count == 0 ? null : count / (until - since).TotalHours;
         }
+        return TotalsValue(metric, totals);
+    }
+
+    internal static double? TotalsValue(string metric, RoundValueTotals? totals)
+    {
         if (totals is null || totals.LandedGoals == 0) return null;
         return metric switch
         {

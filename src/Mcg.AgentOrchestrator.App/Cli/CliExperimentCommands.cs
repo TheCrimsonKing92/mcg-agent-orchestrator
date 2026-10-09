@@ -138,6 +138,10 @@ internal static class CliExperimentCommands
             throw new ArgumentException("baseline: before-after-window requires since < until.");
         if (spec.Baseline.Kind == ExperimentBaselineKind.TwinGoal && string.IsNullOrWhiteSpace(spec.Baseline.TwinGoalId))
             throw new ArgumentException("baseline.twinGoalId: required for twin-goal.");
+        if (spec.Baseline.Kind == ExperimentBaselineKind.TwinGoal &&
+            (string.IsNullOrWhiteSpace(spec.Baseline.ComparisonGoalId) ||
+             string.Equals(spec.Baseline.ComparisonGoalId.Trim(), spec.Baseline.TwinGoalId!.Trim(), StringComparison.OrdinalIgnoreCase)))
+            throw new ArgumentException("baseline.comparisonGoalId: required for twin-goal and must differ from twinGoalId.");
         if (spec.Baseline.Kind == ExperimentBaselineKind.AlternatingGates &&
             (spec.Baseline.Since is null || spec.Baseline.Until is null || spec.Baseline.Since >= spec.Baseline.Until))
             throw new ArgumentException("baseline: alternating-gates requires a window with since < until.");
@@ -189,6 +193,7 @@ internal static class CliExperimentCommands
         Console.WriteLine($"baseline since: {spec.Baseline.Since:O}");
         Console.WriteLine($"baseline until: {spec.Baseline.Until:O}");
         Console.WriteLine($"baseline twin goal: {spec.Baseline.TwinGoalId ?? "none"}");
+        Console.WriteLine($"baseline comparison goal: {spec.Baseline.ComparisonGoalId ?? "none"}");
         Console.WriteLine($"metrics: {string.Join(", ", spec.Metrics)}");
         Console.WriteLine($"guardrail: {JsonSerializer.Serialize(spec.Guardrail, ExperimentStore.JsonOptions)}");
         Console.WriteLine($"stop rule target: {spec.StopRule.Count} {ExperimentReading.Name(spec.StopRule.Unit)}");
