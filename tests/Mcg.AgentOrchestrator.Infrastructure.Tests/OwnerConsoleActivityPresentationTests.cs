@@ -6,6 +6,134 @@ using Terminal.Gui.Input;
 // Parallel-safe: per-test logs and headless application instances; no time-zone globals.
 public sealed class OwnerConsoleActivityPresentationTests
 {
+    // Literal conductor reasons: FailedGoalRecoveryPolicy, LandingRebasePolicy, GoalRefinementGate.
+    private const string RetryDetail = "GOAL goal=11111111 result=escalated state=Failed reason=" +
+        "Task_aaaaaaaa_exhausted_bounded_real-failure_retries_(2/2);_failed_command:_codex_exec_--json_--skip-git-repo-check_--sandbox_workspace-write_--cd_C:\\wt;_failure_evidence:_exit_code_1";
+    private const string RebaseDetail = "GOAL goal=11111111 result=escalated state=Verified reason=" +
+        "pre-landing_rebase_conflict_(src/Example.cs);_use_'workspace_rebase'_to_resolve decision=landing-rebase/2/rebase-conflict";
+    private const string ClarificationDetail = "GOAL goal=11111111 result=escalated state=Failed reason=" +
+        "Resolve_spec_clarification_before_dispatching_planner_work:_1_pending_for_goal_11111111._Run_`attention_show_11111111`_to_read_and_answer_them.";
+
+    [Theory]
+    [InlineData(RetryDetail, "the worker failed and used up its retries (2 of 2).")]
+    [InlineData(RebaseDetail, "conflicts with main in src/Example.cs; needs a rebase.")]
+    public void ConductorEscalationReasonsUsePlainWordsAndKeepRawDetail(string detail, string reason)
+    {
+        var activity = Assert.Single(OwnerActivityNarrator.Narrate(
+            [new(DateTimeOffset.UnixEpoch, "goal-escalation", "11111111", detail)], _ => "Search"));
+        Assert.Equal("11111111 escalated: " + reason, activity.Phrase);
+        Assert.Equal(reason, activity.Why);
+        Assert.Equal(detail, activity.Detail);
+        Assert.DoesNotContain("_", activity.Phrase + activity.Why);
+        Assert.DoesNotContain("codex exec", activity.Phrase + activity.Why);
+        Assert.DoesNotContain("workspace rebase", activity.Phrase + activity.Why);
+    }
+
+    [Fact]
+    public void RetryNamesOnlyTheEarlierWorkerOnTheSameGoalAndTask()
+    {
+        var time = DateTimeOffset.UnixEpoch;
+        var items = OwnerActivityNarrator.Narrate([
+            new(time, "goal-lifecycle", "11111111", "TaskFailed task=aaaaaaaaffffffff role=Developer"),
+            new(time.AddSeconds(1), "goal-lifecycle", "22222222", "TaskFailed task=aaaaaaaa role=Reviewer"),
+            new(time.AddSeconds(2), "goal-lifecycle", "11111111", "TaskFailed task=bbbbbbbb role=Planner"),
+            new(time.AddSeconds(3), "goal-escalation", "11111111", RetryDetail),
+            new(time.AddSeconds(4), "goal-lifecycle", "11111111", "TaskFailed task=aaaaaaaa role=Tester")], _ => "Search");
+        Assert.Equal("Developer failed and used up its retries (2 of 2).",
+            Assert.Single(items, item => item.Kind == "goal-escalation").Why);
+    }
+
+    [Theory]
+    [InlineData("pre-merge rebase conflict (src/ConductorBatchLoop.TickPersistence.cs, src/my_file.cs); use 'workspace rebase' to resolve",
+        "conflicts with main in src/ConductorBatchLoop.TickPersistence.cs, src/my_file.cs; needs a rebase.")]
+    [InlineData("PRE-LANDING_REBASE_CONFLICT_WITH_release_(src/Example.cs);_use_'workspace_rebase'_to_resolve",
+        "conflicts with release in src/Example.cs; needs a rebase.")]
+    [InlineData("Task_aaaaaaaa_exhausted_bounded_real-failure_retries;_failed_command:_codex_exec",
+        "the worker failed and used up its retries.")]
+    public void KnownReasonsPreserveSuppliedFacts(string reason, string expected)
+    {
+        var activity = Assert.Single(OwnerActivityNarrator.Narrate(
+            [new(default, "goal-escalation", "11111111", "reason=" + reason)], _ => "Search"));
+        Assert.Equal(expected, activity.Why);
+    }
+
+    [Theory]
+    [InlineData("codex_exec --json")]
+    [InlineData("codex__exec --json")]
+    [InlineData("workspace_rebase 11111111")]
+    [InlineData("attention_show 11111111")]
+    [InlineData("mcg-orchestrator.cmd status")]
+    [InlineData("mcg status")]
+    [InlineData("`secret command`")]
+    [InlineData(" $ secret command")]
+    [InlineData("command: secret command")]
+    [InlineData("use 'workspace_rebase' to resolve")]
+    public void UnknownReasonsCutTheFirstCommandMarkerAfterVocabularyTranslation(string command)
+    {
+        var detail = "reason=receipt_waiting_for_capacity; " + command + "\nraw=full raw second line";
+        var activity = Assert.Single(OwnerActivityNarrator.Narrate(
+            [new(default, "goal-escalation", "11111111", detail)], _ => "Search"));
+        Assert.Equal("proof waiting for capacity.", activity.Why);
+        Assert.Equal("11111111 escalated: proof waiting for capacity.", activity.Phrase);
+        Assert.Equal(detail, activity.Detail);
+    }
+
+    [Theory]
+    [InlineData(ClarificationDetail, "Resolve spec clarification before dispatching planner work: 1 pending")]
+    [InlineData("reason=Resolve_the_spec_clarification_item_before_dispatching_planner_work.",
+        "Resolve the spec clarification item before dispatching planner work")]
+    public void SpecClarificationIsARoutineAuthorQuestion(string detail, string question)
+    {
+        var activity = Assert.Single(OwnerActivityNarrator.Narrate(
+            [new(default, "goal-escalation", "11111111", detail)], _ => "Search"));
+        Assert.Equal("11111111 question for the Author: " + question + ".", activity.Phrase);
+        Assert.Equal("question for the Author: " + question + ".", activity.Why);
+        Assert.Equal(detail, activity.Detail);
+        Assert.DoesNotContain("_", activity.Phrase + activity.Why);
+        Assert.DoesNotContain("attention show", activity.Phrase + activity.Why);
+        Assert.DoesNotContain("escalated", activity.Phrase);
+        Assert.Null(activity.Resolution);
+    }
+
+    [Theory]
+    [InlineData("GoalPolicyDecision resolution-verb=answer resolution-actor=author", "11111111", true)]
+    [InlineData("GoalPolicyDecision resolution-verb=answer resolution-actor=operator", "11111111", false)]
+    [InlineData("GoalPolicyDecision resolution-verb=answer resolution-actor=author", "22222222", false)]
+    [InlineData("TaskDispatched role=Planner", "11111111", false)]
+    public void SpecClarificationAnswerRequiresRecordedAuthorEvidence(string detail, string goal, bool answered)
+    {
+        var time = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
+        var items = OwnerActivityNarrator.Narrate([
+            new(time, "goal-escalation", "11111111", ClarificationDetail),
+            new(time.AddSeconds(5), "goal-lifecycle", goal, detail)], _ => "Search");
+        var activity = Assert.Single(items, item => item.Kind == "goal-escalation");
+        if (answered)
+        {
+            Assert.Contains($"answered by the Author at {time.AddSeconds(5).ToLocalTime():HH:mm:ss}", activity.Phrase);
+            Assert.Equal(new(time.AddSeconds(5), Actor: "author"), activity.Resolution);
+        }
+        else
+        {
+            Assert.DoesNotContain("answered by", activity.Phrase);
+            if (detail.StartsWith("TaskDispatched", StringComparison.Ordinal))
+                Assert.True(activity.Resolution?.AutomaticRetry);
+            else Assert.Null(activity.Resolution);
+        }
+    }
+
+    [Theory]
+    [InlineData("Stale_spec_clarification_detected_before_dispatching_planner_work._Run_`attention_show_11111111`")]
+    [InlineData("Resolve_spec_clarification_in_a_different_stage;_command:_secret")]
+    public void OtherClarificationReasonsRemainEscalations(string reason)
+    {
+        var activity = Assert.Single(OwnerActivityNarrator.Narrate(
+            [new(default, "goal-escalation", "11111111", "reason=" + reason)], _ => "Search"));
+        Assert.StartsWith("11111111 escalated: ", activity.Phrase);
+        Assert.DoesNotContain("question for the Author", activity.Phrase);
+        Assert.DoesNotContain("_", activity.Phrase);
+        Assert.DoesNotContain("attention show", activity.Phrase);
+    }
+
     [Fact]
     public async Task HeadlessActivityUsesLocalTimeWordsAndTitlesAndOmitsDiagnostics()
     {

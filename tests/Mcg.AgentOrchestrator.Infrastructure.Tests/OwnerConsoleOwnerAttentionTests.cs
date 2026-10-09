@@ -111,7 +111,7 @@ public sealed class OwnerConsoleOwnerAttentionTests
         Assert.Contains(reason, retried);
         Assert.Contains($"retried automatically at {time.AddSeconds(-2).ToLocalTime():HH:mm:ss}", retried);
         Assert.Contains("Do you need to act: No.", retried);
-        Assert.All(retried.Split('\n'), line => Assert.Contains("11111111", line));
+        Assert.Equal(1, retried.Split("11111111", StringSplitOptions.None).Length - 1);
 
         scene.View.ActivityPane.SelectedItem = Array.FindIndex(items.ToArray(), item => item.OwnerQuestionId == "q2");
         await scene.View.HandleKeyAsync(Key.Enter);
@@ -121,7 +121,8 @@ public sealed class OwnerConsoleOwnerAttentionTests
         Assert.Contains("still waiting on you", open);
         Assert.Contains("Do you need to act: Yes.", open);
         Assert.Contains("DECISIONS row [1] 22222222 HumanInput", open);
-        Assert.All(open.Split('\n'), line => Assert.Contains("22222222", line));
+        Assert.DoesNotContain("22222222", open.Split('\n')[1]);
+        Assert.DoesNotContain("22222222", open.Split('\n')[2]);
 
         // A stale screen cannot turn a closed item into a live decision at Enter time.
         scene.Harness.Questions.Items.Clear();

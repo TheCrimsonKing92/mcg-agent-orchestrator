@@ -108,6 +108,41 @@ public sealed class OwnerConsoleActivityOutcomeTests
         Assert.StartsWith("What happens next: ", parts[2]);
         Assert.StartsWith("Do you need to act: ", parts[3]);
         Assert.Contains("No.", parts[3]);
+        Assert.Equal(1, dialog.Text.Split("11111111", StringSplitOptions.None).Length - 1);
+        const string noQuestion = "no owner question is listed in DECISIONS for this event";
+        Assert.Equal(1, dialog.Text.Split(noQuestion, StringSplitOptions.None).Length - 1);
+        Assert.Contains(noQuestion, parts[3]);
+        Assert.DoesNotContain(noQuestion, parts[2]);
+    }
+
+    [Fact]
+    public async Task MeaningStillNamesTheMatchingDecisionsRow()
+    {
+        using var scene = new Scene();
+        scene.AddGoals();
+        scene.Harness.Questions.Items.Add(new("q1", "11111111", OwnerQuestionKind.HumanInput, "Continue?"));
+        await scene.Render([]);
+        var model = scene.Controller.Model!;
+        var item = Assert.Single(model.Activity);
+        var decision = Assert.Single(model.Decisions);
+        var text = OwnerActivityNarrator.Explain(item, model.Decisions);
+        Assert.Contains($"Do you need to act: Yes. open DECISIONS row [{decision.Number}] 11111111 HumanInput: Continue?", text);
+        Assert.Contains("What happens next: still waiting on you. Work waits for your answer.", text);
+        Assert.Contains("Why: Continue?", text);
+    }
+
+    [Fact]
+    public void ResolvedMeaningNamesGoalOnceAndRetainsResolutionAndNextStep()
+    {
+        var time = DateTimeOffset.UnixEpoch;
+        var item = new OwnerConsoleActivityItem(time, "goal-escalation", "outcome", "11111111", "raw",
+            "Search", "11111111 escalated: needs a rebase", "needs a rebase", "Work can continue.",
+            Resolution: new(time.AddSeconds(5), Actor: "author"));
+        var text = OwnerActivityNarrator.Explain(item);
+        Assert.Equal(1, text.Split("11111111", StringSplitOptions.None).Length - 1);
+        Assert.Contains("Why: needs a rebase", text);
+        Assert.Contains($"What happens next: resolved at {time.AddSeconds(5).ToLocalTime():HH:mm:ss} by the Author. Work can continue.", text);
+        Assert.Contains($"Do you need to act: No. resolved at {time.AddSeconds(5).ToLocalTime():HH:mm:ss} by the Author.", text);
     }
 
     [Fact]

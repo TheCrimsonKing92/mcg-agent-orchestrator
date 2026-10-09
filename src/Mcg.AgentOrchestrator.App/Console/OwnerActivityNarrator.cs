@@ -84,12 +84,24 @@ internal static class OwnerActivityNarrator
                     var question = OwnerHoldReason.FirstLine(Field(item, "question"));
                     if (attention?.Any(entry => Prefix(entry.Question.GoalId) == prefix && question is not null &&
                         OwnerHoldReason.FirstLine(entry.Question.Text) == question) == true) break;
+                    var rawReason = Field(item, "reason");
+                    var authorQuestion = item.EventKind == "goal-escalation" && question is null &&
+                        OwnerEscalationReasonText.IsAuthorQuestion(rawReason);
                     var subject = FailureReason(item) is { } plan ? "plan rejected: " + plan :
                         question is not null ? Words(question, "") : head == "owner-review-hold" ? "approval of the completed work" :
-                        Words(OwnerHoldReason.Read(Field(item, "reason")), "the conductor reported a hold on " + name);
-                    Add(item, prefix + (head == "author-owner-question" || item.EventKind == "author" ?
+                        OwnerEscalationReasonText.Plain(rawReason, "the conductor reported a hold on " + name, Words,
+                            task => ordered.Take(index).LastOrDefault(value => value.EventKind == "goal-lifecycle" &&
+                                Prefix(value.GoalId) == prefix && Field(value, "task")?.StartsWith(task, StringComparison.OrdinalIgnoreCase) == true)
+                                is { } worker ? Role(worker) : null);
+                    Add(item, prefix + (authorQuestion ? " " : head == "author-owner-question" || item.EventKind == "author" ?
                         " question sent to the operator: " : " escalated: ") + subject, subject,
-                        "The conductor or operator will handle the next step.");
+                        authorQuestion ? "The Author will handle the question." : "The conductor or operator will handle the next step.");
+                    if (authorQuestion && ordered.Skip(index + 1).FirstOrDefault(value => value.Timestamp > item.Timestamp && value.EventKind == "goal-lifecycle" &&
+                        Prefix(value.GoalId) == prefix && Field(value, "resolution-verb") == "answer" &&
+                        Field(value, "resolution-actor") == "author") is { } answer)
+                        result[^1] = result[^1] with { Resolution = new(answer.Timestamp, Actor: "author"),
+                            Phrase = result[^1].Phrase.TrimEnd('.') + $"; answered by the Author at {answer.Timestamp.ToLocalTime():HH:mm:ss}.",
+                            Next = "The Author answered the question; work can continue." };
                     break;
                 case "goal-stalled": Stall(item); break;
                 case "acceptance":
@@ -275,14 +287,13 @@ internal static class OwnerActivityNarrator
         var decision = item.OwnerQuestionId is null ? null : decisions?.FirstOrDefault(value =>
             value.Id == item.OwnerQuestionId && value.GoalPrefix.Equals(item.GoalPrefix, StringComparison.OrdinalIgnoreCase) &&
             Words(OwnerHoldReason.FirstLine(value.FullText), "") == item.Subject);
-        var goal = item.GoalPrefix.Length == 0 ? "Conductor" : item.GoalPrefix;
         var resolution = decision is not null ? "still waiting on you" : item.Resolution is { } resolved ?
             resolved.AutomaticRetry ? $"retried automatically at {resolved.At.ToLocalTime():HH:mm:ss}" :
                 $"resolved at {resolved.At.ToLocalTime():HH:mm:ss}" + (resolved.Actor is { } actor ? " by " + ResolutionActor(actor) :
                     "; no longer listed in DECISIONS (the resolving actor was not recorded)") :
             item.OwnerQuestionId is not null ? "no longer listed in DECISIONS" : "no owner question is listed in DECISIONS for this event";
-        var act = decision is not null ? $"Yes. {goal}: open DECISIONS row [{decision.Number}] {decision.GoalPrefix} {decision.Kind}: {decision.Summary}" :
-            $"No. {goal}: {resolution}.";
+        var act = decision is not null ? $"Yes. open DECISIONS row [{decision.Number}] {decision.GoalPrefix} {decision.Kind}: {decision.Summary}" :
+            $"No. {resolution}.";
         var happened = Line(item);
         if (item.GoalTitle.Length > 0 && !happened.Contains(item.GoalTitle, StringComparison.Ordinal))
             happened += " (" + item.GoalTitle + ")";
@@ -290,8 +301,8 @@ internal static class OwnerActivityNarrator
             "The conductor resumed this work." : item.OwnerQuestionId is not null ?
             "This question no longer requires an owner answer." : item.Next;
         return string.Join("\n", ["What happened: " + happened,
-            "Why: " + goal + " " + (item.Subject ?? item.Why),
-            "What happens next: " + goal + " " + resolution + ". " + next,
+            "Why: " + (item.Subject ?? item.Why),
+            "What happens next: " + (decision is not null || item.Resolution is not null || item.OwnerQuestionId is not null ? resolution + ". " : "") + next,
             "Do you need to act: " + act]);
     }
 
