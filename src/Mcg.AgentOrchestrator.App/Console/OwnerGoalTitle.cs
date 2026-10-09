@@ -13,7 +13,7 @@ internal static class OwnerGoalTitle
             var title = line.Trim();
             if (title.Length == 0) continue;
             title = title.TrimStart('#').Trim();
-            return title.Length > 100 ? title[..97] + "..." : title;
+            return title;
         }
         return string.Empty;
     }

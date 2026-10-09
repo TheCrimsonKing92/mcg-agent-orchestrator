@@ -45,7 +45,7 @@ public sealed class OwnerConsoleOwnerAttentionTests
 
             kernel.ClearGoalHold(new("33333333"));
             await scene.Render(events.Append(new(time.AddSeconds(1), "goal-lifecycle", "33333333", "HumanInputReceived")).ToArray());
-            Assert.Contains("Resolved: 33333333 Ship now?", Assert.Single(scene.View.ActivityLines, line => line.Contains("Resolved:")));
+            Assert.Contains("Resolved: 33333333 Help: Ship now?", Assert.Single(scene.View.ActivityLines, line => line.Contains("Resolved:")));
             await scene.Render(events);
             Assert.Single(scene.View.ActivityLines, line => line.Contains("Resolved:"));
             Assert.Empty(scene.Controller.Model!.Decisions);

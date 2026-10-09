@@ -54,7 +54,7 @@ public sealed class OwnerConsoleActivityOutcomeTests
             new(time.AddSeconds(2), "goal-stalled", "11111111", "GOAL_STALLED owner=none repeatedForSeconds=300 blocker=waiting_for_approval"),
             new(time.AddSeconds(2), "goal-escalation", "11111111", "ownerless-hold-stalled heldForSeconds=300 blocker=waiting_for_approval"),
             new(time.AddSeconds(3), "train-receipt-released", "11111111", "result=released")]);
-        Assert.Equal(new[] { "Needs you: 11111111 Keep this direction?", "Resolved: 11111111 Keep this direction?",
+        Assert.Equal(new[] { "Needs you: 11111111 Keep this direction?", "Resolved: 11111111 Search: Keep this direction?",
             "Waiting: Search has been held 5 min: waiting for your approval", "Moving again: Search" },
             scene.Controller.Model!.Activity.Reverse().Select(item => item.Phrase));
     }
@@ -144,7 +144,7 @@ public sealed class OwnerConsoleActivityOutcomeTests
         scene.Harness.Questions.Items.Clear();
         scene.Harness.Kernel.ReplaceWithSnapshot(snapshot);
         await scene.Render(events);
-        Assert.Contains(scene.Controller.Model!.Activity, item => item.Phrase == "Resolved: 11111111 Continue?");
+        Assert.Contains(scene.Controller.Model!.Activity, item => item.Phrase == "Resolved: 11111111 Search: Continue?");
         Assert.Contains(scene.Controller.Model.Activity, item => item.Phrase == "Moving again: Search");
     }
 
