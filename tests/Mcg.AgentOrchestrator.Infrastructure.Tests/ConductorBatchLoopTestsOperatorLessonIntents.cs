@@ -74,6 +74,9 @@ internal sealed class FaultingWorkspaceIntentStore : IOperatorIntentStore
     public Task<OperatorIntentRecord?> ClaimNextAsync(string goalId, string claimOwner,
         CancellationToken cancellationToken = default) => throw new IOException("workspace intent store failed");
 
+    public Task<OperatorIntentRecord?> ClaimNextPendingAsync(string goalId, string claimOwner,
+        CancellationToken cancellationToken = default) => ClaimNextAsync(goalId, claimOwner, cancellationToken);
+
     public Task<IReadOnlyList<string>> ListActionableGoalIdsAsync(CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyList<string>>([]);
 
