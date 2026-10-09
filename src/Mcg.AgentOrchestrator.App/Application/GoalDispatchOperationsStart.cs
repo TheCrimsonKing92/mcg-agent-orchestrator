@@ -57,7 +57,8 @@ internal sealed partial class GoalDispatchOperations
             sandboxOptions: sandboxOptions,
             plannerSampleCount: ResolvePlannerSampleCount(workspace, plannerSampleCount, conductorPolicy),
             cascadeTesterCheapFirst: ResolveCascadeTesterCheapFirst(workspace, cascadeTesterCheapFirst, conductorPolicy),
-            cascadeCheapModelAlias: ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy), cascadeMechanicalReworkCheap: ResolveCascadeMechanicalReworkCheap(workspace, cascadeMechanicalReworkCheap, conductorPolicy));
+            cascadeCheapModelAlias: ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy), cascadeMechanicalReworkCheap: ResolveCascadeMechanicalReworkCheap(workspace, cascadeMechanicalReworkCheap, conductorPolicy),
+            orchestratorSkillDirectory: ResolveOrchestratorSkillDirectory(workspace));
         // Validate recovery authority before admission can hydrate a whole durable snapshot.
         // The runner repeats this guard immediately before launch to cover later state changes.
         var rejectedRecoveryIds = batch.Dispatches

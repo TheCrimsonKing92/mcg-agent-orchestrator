@@ -41,7 +41,8 @@ internal sealed class WorkerSkillSelector(WorkerSkillResolver? resolver = null)
             "Use a fresh execution-evidence gate before claiming Developer work complete.")
     ];
 
-    internal string BuildSelectedSkills(Goal goal, TaskSpec task, string workingDirectory)
+    internal string BuildSelectedSkills(Goal goal, TaskSpec task, string workingDirectory,
+        string? contextDirectory = null)
     {
         var selected = SelectSkillRequirements(goal, task, workingDirectory);
         var lines = new List<string>
@@ -67,7 +68,9 @@ internal sealed class WorkerSkillSelector(WorkerSkillResolver? resolver = null)
         foreach (var skill in selected)
         {
             lines.Add($"- {skill.Name}");
-            lines.Add($"  Path: {skill.RelativePath}");
+            var deliveredPath = skill.ResolvedSource == WorkerSkillSource.Orchestrator && contextDirectory is not null
+                ? Path.Combine(contextDirectory, skill.RelativePath) : skill.RelativePath;
+            lines.Add($"  Path: {deliveredPath}");
             lines.Add($"  Status: {(skill.Available ? "available" : "missing")}");
             lines.Add($"  Reason: {skill.Reason}");
             lines.Add($"  Usage: {skill.Usage}");

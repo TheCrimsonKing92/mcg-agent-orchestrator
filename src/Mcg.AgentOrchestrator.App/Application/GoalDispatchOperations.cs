@@ -112,7 +112,8 @@ internal sealed partial class GoalDispatchOperations
             sandboxOptions: sandboxOptions,
             plannerSampleCount: ResolvePlannerSampleCount(workspace, plannerSampleCount),
             paidRoute: subscriptionMetadata?.PaidRoute ?? PaidRouteClassification.Unknown,
-            shadowRecorder: DispatchShadowRecorder.Default);
+            shadowRecorder: DispatchShadowRecorder.Default,
+            orchestratorSkillDirectory: ResolveOrchestratorSkillDirectory(workspace));
     }
 
     public WorkerProfileDispatchResult RefreshPreparedDispatchBeforeStart(
@@ -435,7 +436,8 @@ internal sealed partial class GoalDispatchOperations
             sandboxOptions: sandboxOptions,
             plannerSampleCount: ResolvePlannerSampleCount(workspace, plannerSampleCount),
             cascadeTesterCheapFirst: ResolveCascadeTesterCheapFirst(workspace, cascadeTesterCheapFirst, conductorPolicy),
-            cascadeCheapModelAlias: ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy), cascadeMechanicalReworkCheap: ResolveCascadeMechanicalReworkCheap(workspace, cascadeMechanicalReworkCheap, conductorPolicy));
+            cascadeCheapModelAlias: ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy), cascadeMechanicalReworkCheap: ResolveCascadeMechanicalReworkCheap(workspace, cascadeMechanicalReworkCheap, conductorPolicy),
+            orchestratorSkillDirectory: ResolveOrchestratorSkillDirectory(workspace));
     }
 
     public WorkerProfileDispatchResult SubscriptionDispatchTask(
@@ -470,11 +472,15 @@ internal sealed partial class GoalDispatchOperations
             citedPriorEvidenceResolver: CreateCitedPriorEvidenceResolver(workspace),
             plannerSampleCount: ResolvePlannerSampleCount(workspace, plannerSampleCount, conductorPolicy),
             cascadeTesterCheapFirst: ResolveCascadeTesterCheapFirst(workspace, cascadeTesterCheapFirst, conductorPolicy),
-            cascadeCheapModelAlias: ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy), cascadeMechanicalReworkCheap: ResolveCascadeMechanicalReworkCheap(workspace, cascadeMechanicalReworkCheap, conductorPolicy));
+            cascadeCheapModelAlias: ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy), cascadeMechanicalReworkCheap: ResolveCascadeMechanicalReworkCheap(workspace, cascadeMechanicalReworkCheap, conductorPolicy),
+            orchestratorSkillDirectory: ResolveOrchestratorSkillDirectory(workspace));
     }
 
     private static CitedPriorEvidenceResolver CreateCitedPriorEvidenceResolver(OrchestratorWorkspace workspace) =>
         CitedPriorEvidenceResolver.ForWorkspace(workspace.SqliteStatePath, workspace.OrchestratorDirectory);
+
+    private static string ResolveOrchestratorSkillDirectory(OrchestratorWorkspace workspace) =>
+        Path.Combine(OrchestratorHome.Resolve(workspace.ExecutionDirectory).RootDirectory, ".agents", "skills");
 
     private static int ResolveReviewAutoRetryStopRound(
         OrchestratorWorkspace workspace,
