@@ -14,7 +14,8 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteNoWriterEffects : CliTa
         {
             ["tasks"] = [["tasks"]],
             ["task"] = [["task", "abc10000"]],
-            ["status"] = [["status", "abc10000"], ["status"]],
+            ["status"] = [["status", "abc10000"], ["status"],
+                ["status", "abc10000", "--tasks-only"], ["status", "--tasks-only", "abc10000"], ["status", "--tasks-only"]],
             ["readiness"] = [["readiness", "abc10000"], ["readiness"]],
             ["goals"] = [["goals"]],
             ["failure-clusters"] = [["failure-clusters"]],
@@ -122,11 +123,13 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteNoWriterEffects : CliTa
             IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
             var profiles = WorkerProfileCatalog.Default();
             Goal? currentGoal = null;
+            string[] args = ["status", "abc10000", "--tasks-only", "--tasks-only"];
+            Assert.False(CliReadOnlyCommandRunner.IsReadOnlyCommand(args));
             CaptureConsole(() =>
             {
-                // Tasks-only status uses the writer scope and drains without opening a transaction.
+                // Repeated flags retain the writer scope and drain without opening a transaction.
                 Assert.False(CliPersistentStateRunner.ExecuteCommand(
-                    ["status", "abc10000", "--tasks-only"], repository, workspace, ref agents, new InMemoryModelProviderRegistry([]),
+                    args, repository, workspace, ref agents, new InMemoryModelProviderRegistry([]),
                     ref profiles, ref currentGoal));
             });
 
@@ -147,11 +150,12 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteNoWriterEffects : CliTa
     {
         string[][] forms =
         [
-            ["status", "abc10000", "--tasks-only"],
-            ["status", "--tasks-only"],
+            ["status", "abc10000", "--tasks-only", "--tasks-only"],
+            ["status", "abc10000", "extra", "--tasks-only"],
         ];
         foreach (var args in forms)
         {
+            Assert.False(CliReadOnlyCommandRunner.IsReadOnlyCommand(args));
             var root = CreateTempDirectory();
             try
             {

@@ -273,8 +273,8 @@ public sealed class CliAttentionReadinessWriterPathTests : CliTaskQueryTestSuppo
     }
 
     [Xunit.Theory]
-    [Xunit.InlineData("status", "--tasks-only")]
-    [Xunit.InlineData("status", "abc10000", "--tasks-only")]
+    [Xunit.InlineData("status", "abc10000", "--tasks-only", "--tasks-only")]
+    [Xunit.InlineData("status", "abc10000", "extra", "--tasks-only")]
     [Xunit.InlineData("status", "--help")]
     [Xunit.InlineData("status", "-h")]
     [Xunit.InlineData("next", "--help")]

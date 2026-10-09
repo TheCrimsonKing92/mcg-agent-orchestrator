@@ -9,7 +9,8 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteConvention
         {
             ["tasks"] = [["tasks"]],
             ["task"] = [["task", "abc10000"]],
-            ["status"] = [["status", "abc10000"], ["status"]],
+            ["status"] = [["status", "abc10000"], ["status"],
+                ["status", "abc10000", "--tasks-only"], ["status", "--tasks-only", "abc10000"], ["status", "--tasks-only"]],
             ["readiness"] = [["readiness", "abc10000"], ["readiness"]],
             ["goals"] = [["goals"]],
             ["failure-clusters"] = [["failure-clusters"]],
@@ -38,8 +39,8 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteConvention
 
     private static readonly (string[] Args, string Reason)[] WriterPathForms =
     [
-        (["status", "abc10000", "--tasks-only"], "Tasks-only status routing belongs to a follow-up slice."),
-        (["status", "--tasks-only"], "Bare tasks-only status routing belongs to a follow-up slice."),
+        (["status", "abc10000", "--tasks-only", "--tasks-only"], "Repeated tasks-only flags keep the writer path."),
+        (["status", "abc10000", "extra", "--tasks-only"], "Extra positional arguments keep the writer path."),
     ];
 
     [Fact]
@@ -136,7 +137,7 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteConvention
                 failures.Add($"{form}: writer-path form must retain QueryOnly composition.");
         }
 
-        string[][] required = [["status", "abc10000", "--tasks-only"]];
+        string[][] required = [["status", "abc10000", "--tasks-only", "--tasks-only"]];
         foreach (var args in required)
         {
             if (!WriterPathForms.Any(form => form.Args.SequenceEqual(args, StringComparer.OrdinalIgnoreCase)))

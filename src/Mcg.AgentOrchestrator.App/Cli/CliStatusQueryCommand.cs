@@ -6,6 +6,7 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 internal static class CliStatusQueryCommand
 {
     internal static bool IsStatusQueryCommand(IReadOnlyList<string> args) =>
+        CliStatusTasksOnlyForm.IsForm(args) ||
         (args.Count == 1 && args[0].Equals("status", StringComparison.OrdinalIgnoreCase)) ||
         (args.Count == 2 &&
         (args[0].Equals("status", StringComparison.OrdinalIgnoreCase) ||
@@ -24,18 +25,24 @@ internal static class CliStatusQueryCommand
         ref WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal)
     {
-        if (args.Count == 1)
-            args = [args[0], CliCurrentGoalSelector.Select(stateQueries, currentGoal?.Id).Value];
-
-        var matches = stateQueries.ListGoalIdStatusesAsync().GetAwaiter().GetResult()
-            .Where(goal => goal.Id.StartsWith(args[1], StringComparison.OrdinalIgnoreCase))
-            .ToArray();
-        var goalId = matches.Length switch
+        var prefix = CliStatusTasksOnlyForm.IsForm(args)
+            ? CliStatusTasksOnlyForm.ResolveGoalPrefix(args)
+            : args.Count == 2 ? args[1] : null;
+        GoalId goalId;
+        if (prefix is null)
+            goalId = CliCurrentGoalSelector.Select(stateQueries, currentGoal?.Id);
+        else
         {
-            1 => new GoalId(matches[0].Id),
-            0 => throw new KeyNotFoundException($"Goal '{args[1]}' was not found."),
-            _ => throw new InvalidOperationException($"Goal prefix '{args[1]}' is ambiguous.")
-        };
+            var matches = stateQueries.ListGoalIdStatusesAsync().GetAwaiter().GetResult()
+                .Where(goal => goal.Id.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            goalId = matches.Length switch
+            {
+                1 => new GoalId(matches[0].Id),
+                0 => throw new KeyNotFoundException($"Goal '{prefix}' was not found."),
+                _ => throw new InvalidOperationException($"Goal prefix '{prefix}' is ambiguous.")
+            };
+        }
         var kernel = stateQueries.LoadGoalsAsync([goalId]).GetAwaiter().GetResult();
         var goal = kernel.Goals.SingleOrDefault(candidate => candidate.Id == goalId)
             ?? throw new KeyNotFoundException($"Goal '{goalId.Value}' was not found.");

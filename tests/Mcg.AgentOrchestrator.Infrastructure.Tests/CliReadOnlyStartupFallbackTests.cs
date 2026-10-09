@@ -20,8 +20,10 @@ public sealed class CliReadOnlyStartupFallbackTests : CliCommandTestBase
             Goal? currentGoal = null;
             var changed = true;
 
+            string[] args = ["status", goal.Id.Value[..8], "--tasks-only", "--tasks-only"];
+            Xunit.Assert.False(CliReadOnlyCommandRunner.IsReadOnlyCommand(args));
             var output = CaptureConsole(() => changed = CliReadOnlyStartupHydration.ExecuteStartupCommand(
-                ["status", goal.Id.Value[..8], "--tasks-only"], repository,
+                args, repository,
                 OrchestratorWorkspace.ForDirectory(root), ref agents,
                 new InMemoryModelProviderRegistry([]), ref profiles, ref currentGoal,
                 hydrated: false));

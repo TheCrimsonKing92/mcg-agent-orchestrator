@@ -64,9 +64,11 @@ public sealed class CliReadOnlyStartupHydrationTests : CliTaskQueryTestSupport
             var profiles = WorkerProfileCatalog.Default();
             Goal? currentGoal = null;
 
+            string[] args = ["status", goal.Id.Value[..8], "--tasks-only", "--tasks-only"];
+            Xunit.Assert.False(CliReadOnlyCommandRunner.IsReadOnlyCommand(args));
             var error = Xunit.Assert.Throws<InvalidOperationException>(() =>
                 CliReadOnlyStartupHydration.ExecuteStartupCommand(
-                    ["status", goal.Id.Value[..8], "--tasks-only"], repository,
+                    args, repository,
                     OrchestratorWorkspace.ForDirectory(root), ref agents,
                     new InMemoryModelProviderRegistry([]), ref profiles, ref currentGoal,
                     hydrated: false));
@@ -94,7 +96,7 @@ public sealed class CliReadOnlyStartupHydrationTests : CliTaskQueryTestSupport
     }
 
     [Xunit.Theory]
-    [Xunit.InlineData("status", "--tasks-only")]
+    [Xunit.InlineData("status", "--help")]
     [Xunit.InlineData("goal-events", "--follow")]
     public void NonSingleGoalFormsKeepNormalPath(string verb, string argument) =>
         Xunit.Assert.False(CliReadOnlyCommandRunner.IsReadOnlyCommand([verb, "abc10000", argument]));
