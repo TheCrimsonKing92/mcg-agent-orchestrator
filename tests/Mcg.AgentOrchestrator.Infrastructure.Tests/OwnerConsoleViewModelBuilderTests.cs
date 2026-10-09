@@ -5,6 +5,18 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // Parallel-safe: all state, event data and time come from per-test fakes.
 public sealed class OwnerConsoleViewModelBuilderTests
 {
+    [Fact(DisplayName = "Board and activity models retain complete goal titles longer than 100 characters")]
+    public async Task LongGoalTitlesRemainCompleteInViewModel()
+    {
+        var harness = new OwnerConsoleHarness();
+        var title = new string('t', 150);
+        var goal = harness.AddGoal("11111111-full", "# " + title, AgentRole.Developer);
+        var model = await Builder(harness, harness.Questions).BuildAsync(new(harness.Clock.GetUtcNow(), null,
+            [new(harness.Clock.GetUtcNow(), "acceptance", goal.Id.Value, "result=passed")], 0));
+        Assert.Equal(title, Assert.Single(model.Board).Title);
+        Assert.Equal(title, Assert.Single(model.Activity).GoalTitle);
+        Assert.Contains(title, model.Activity[0].Phrase);
+    }
     [Fact]
     public async Task EmptyWorkspaceBuildsWithTheRealQuestionReadModel()
     {
