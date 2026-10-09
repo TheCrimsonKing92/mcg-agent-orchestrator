@@ -48,7 +48,7 @@ public sealed class ConductorVerbStartTests
         Assert.Equal(0, CliConductorCommand.Run(["conductor", "start"], workspace,
             launcher, new FixedProbe(null), output: output, error: error, home: home));
         var request = Assert.Single(launcher.Requests);
-        Assert.Equal(Path.Combine(home.RootDirectory, "scripts", "Start-OrchestratorCommand.ps1"),
+        Assert.Equal(Path.Combine(home.InstallRootDirectory, "scripts", "Start-OrchestratorCommand.ps1"),
             request.Arguments[4]);
         Assert.Equal(workspace.ExecutionDirectory, request.WorkingDirectory);
         Assert.Equal(projectScoped ? ["--project=alpha"] : Array.Empty<string>(),
@@ -145,6 +145,26 @@ public sealed class ConductorVerbStartTests
         Assert.Empty(launcher.Requests);
         Assert.Equal($"Error: setup failed{Environment.NewLine}", error.ToString());
         Assert.Equal("", output.ToString());
+    }
+
+    [Fact]
+    public void Start_InstallWithoutSources_UsesInstallLauncher()
+    {
+        using var fixture = new Fixture();
+        var installRoot = fixture.Workspace.RootDirectory + "-install";
+        var home = OrchestratorHome.ForInstallRoot(installRoot);
+        var launcher = new RecordingLauncher();
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        Assert.Null(home.SourceRootDirectory);
+        Assert.Equal(0, CliConductorCommand.Run(["conductor", "start"], fixture.Workspace,
+            launcher, new FixedProbe(null), output: output, error: error, home: home));
+        var request = Assert.Single(launcher.Requests);
+        Assert.Equal(Path.Combine(Path.GetFullPath(installRoot), "scripts", "Start-OrchestratorCommand.ps1"),
+            request.Arguments[4]);
+        Assert.Equal(fixture.Workspace.ExecutionDirectory, request.WorkingDirectory);
+        Assert.Equal("", error.ToString());
     }
 
     internal sealed class RecordingLauncher(Action? onLaunch = null) : IConductorProcessLauncher

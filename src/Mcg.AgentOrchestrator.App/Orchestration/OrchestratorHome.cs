@@ -4,24 +4,50 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-// The orchestrator's source/install root, independent of the selected target project.
+// Install assets and optional dogfood sources, independent of the selected target project.
 internal sealed class OrchestratorHome
 {
     internal const string EnvironmentVariable = "MCG_ORCHESTRATOR_HOME";
 
-    private OrchestratorHome(string rootDirectory) => RootDirectory = Path.GetFullPath(rootDirectory);
+    private static readonly string AppProjectRelativePath =
+        Path.Combine("src", "Mcg.AgentOrchestrator.App", "Mcg.AgentOrchestrator.App.csproj");
+    private static readonly string HeadMarkerRelativePath =
+        Path.Combine("scripts", "Update-AppDllGitHeadMarker.ps1");
 
-    internal string RootDirectory { get; }
+    private OrchestratorHome(string installRoot, string? sourceRoot)
+    {
+        InstallRootDirectory = Path.GetFullPath(installRoot);
+        SourceRootDirectory = sourceRoot is null ? null : Path.GetFullPath(sourceRoot);
+    }
+
+    internal string InstallRootDirectory { get; }
+    internal string? SourceRootDirectory { get; }
 
     internal static OrchestratorHome Resolve(
         string defaultWorkspaceRoot, Func<string, string?>? readEnvironment = null)
     {
         var configured = (readEnvironment ?? Environment.GetEnvironmentVariable)(EnvironmentVariable)?.Trim();
-        return new OrchestratorHome(string.IsNullOrEmpty(configured) ? defaultWorkspaceRoot : configured);
+        var root = string.IsNullOrEmpty(configured) ? defaultWorkspaceRoot : configured;
+        return new OrchestratorHome(root, root);
+    }
+
+    internal static OrchestratorHome ForInstallRoot(string installRoot) => new(installRoot, null);
+
+    internal static OrchestratorHome ResolveForLaunch(
+        string launchRoot, Func<string, string?>? readEnvironment = null)
+    {
+        var configured = (readEnvironment ?? Environment.GetEnvironmentVariable)(EnvironmentVariable)?.Trim();
+        if (!string.IsNullOrEmpty(configured))
+            return new OrchestratorHome(configured, configured);
+
+        // A target Git repository is not necessarily the orchestrator's source tree.
+        var hasSources = File.Exists(Path.Combine(launchRoot, AppProjectRelativePath))
+            && File.Exists(Path.Combine(launchRoot, HeadMarkerRelativePath));
+        return new OrchestratorHome(launchRoot, hasSources ? launchRoot : null);
     }
 
     internal static OrchestratorHome ResolveForProcess() =>
-        Resolve(OrchestratorWorkspace.ResolveRepoRoot(Environment.CurrentDirectory));
+        ResolveForLaunch(OrchestratorWorkspace.ResolveRepoRoot(Environment.CurrentDirectory));
 
     internal static void ExportForDescendants(
         string defaultWorkspaceRoot,
@@ -31,15 +57,23 @@ internal sealed class OrchestratorHome
         // A supervisor child starts in the selected project's directory. Preserve the
         // unprojected launch root rather than rediscovering home from that child's CWD.
         // Normalize configured relative paths too, before descendants change directory.
-        var home = Resolve(defaultWorkspaceRoot, readEnvironment);
-        (writeEnvironment ?? Environment.SetEnvironmentVariable)(EnvironmentVariable, home.RootDirectory);
+        ExportForDescendants(Resolve(defaultWorkspaceRoot, readEnvironment), writeEnvironment);
+    }
+
+    internal static void ExportForDescendants(
+        OrchestratorHome home, Action<string, string?>? writeEnvironment = null)
+    {
+        // HOME explicitly declares both roots. Exporting an install-only root would
+        // incorrectly enable source builds when a descendant resolves it again.
+        if (home.SourceRootDirectory is not null)
+            (writeEnvironment ?? Environment.SetEnvironmentVariable)(EnvironmentVariable, home.SourceRootDirectory);
     }
 
     internal bool IsHome(OrchestratorWorkspace workspace) => IsHome(workspace.ExecutionDirectory);
 
-    internal bool IsHome(string directory) => string.Equals(
+    internal bool IsHome(string directory) => SourceRootDirectory is not null && string.Equals(
         Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory)),
-        Path.TrimEndingDirectorySeparator(RootDirectory), StringComparison.OrdinalIgnoreCase);
+        Path.TrimEndingDirectorySeparator(SourceRootDirectory), StringComparison.OrdinalIgnoreCase);
 
     internal ConductorSuccessorStagingOptions? CreateSuccessorStagingOptions(OrchestratorWorkspace workspace)
     {
@@ -56,9 +90,9 @@ internal sealed class OrchestratorHome
         var dotnetPath = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_DOTNET_PATH");
         return new ConductorSuccessorStagingOptions(
             RepositoryRoot: repositoryRoot,
-            AppProjectPath: Path.Combine(repositoryRoot, "src", "Mcg.AgentOrchestrator.App", "Mcg.AgentOrchestrator.App.csproj"),
+            AppProjectPath: Path.Combine(repositoryRoot, AppProjectRelativePath),
             AppDllPath: Path.Combine(appOutputDirectory, "Mcg.AgentOrchestrator.App.dll"),
-            UpdateHeadMarkerScriptPath: Path.Combine(repositoryRoot, "scripts", "Update-AppDllGitHeadMarker.ps1"),
+            UpdateHeadMarkerScriptPath: Path.Combine(repositoryRoot, HeadMarkerRelativePath),
             ResolveRunDirectoryScriptPath: Path.Combine(repositoryRoot, "scripts", "resolve-run-dir.ps1"),
             StateStorePath: workspace.SqliteStatePath,
             AgentCatalogPath: workspace.AgentCatalogPath,

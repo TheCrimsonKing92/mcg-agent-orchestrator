@@ -38,5 +38,5 @@ internal static partial class ConductorSelfRelaunch
 
     private static void RecordNotHome(
         OrchestratorHome home, OrchestratorWorkspace workspace, Action<string> recordSkip) =>
-        recordSkip($"LOOP_HANDOFF_SKIPPED reason=target-not-home target={workspace.ExecutionDirectory} home={home.RootDirectory}");
+        recordSkip($"LOOP_HANDOFF_SKIPPED reason=target-not-home target={workspace.ExecutionDirectory} home={home.SourceRootDirectory ?? "none"}");
 }

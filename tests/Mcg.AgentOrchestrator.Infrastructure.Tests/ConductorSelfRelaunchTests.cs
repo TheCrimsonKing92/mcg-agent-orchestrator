@@ -50,7 +50,7 @@ public sealed class ConductorSelfRelaunchTests
             var record = Assert.Single(records);
             Assert.Contains("LOOP_HANDOFF_SKIPPED reason=target-not-home", record);
             Assert.Contains($"target={workspace.ExecutionDirectory}", record);
-            Assert.Contains($"home={home.RootDirectory}", record);
+            Assert.Contains($"home={home.SourceRootDirectory}", record);
         }
         Assert.Equal(buildsBefore, ConductorSelfRelaunch.AppBuildInvocationCount);
     }

@@ -120,7 +120,7 @@ var commandCapability = CliCommandCapabilities.Classify(startupArgs);
 var repoRoot = !string.IsNullOrWhiteSpace(executionDirectory)
     ? executionDirectory
     : OrchestratorWorkspace.ResolveRepoRoot(Environment.CurrentDirectory);
-OrchestratorHome.ExportForDescendants(repoRoot);
+OrchestratorHome.ExportForDescendants(OrchestratorHome.ResolveForLaunch(repoRoot));
 OrchestratorDataRoot.ExportForDescendants();
 var projectRegistry = OrchestratorProjectRegistry.CreateDefault();
 if (startupArgs.Count > 0 && startupArgs[0].Equals("project", StringComparison.OrdinalIgnoreCase))

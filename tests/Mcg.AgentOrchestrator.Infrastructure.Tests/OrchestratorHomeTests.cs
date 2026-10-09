@@ -16,7 +16,7 @@ public sealed class OrchestratorHomeTests
             Assert.Equal("MCG_ORCHESTRATOR_HOME", name);
             return configured;
         });
-        Assert.Equal(Path.GetFullPath(DefaultRoot), home.RootDirectory);
+        Assert.Equal(Path.GetFullPath(DefaultRoot), home.InstallRootDirectory);
         Assert.True(home.IsHome(OrchestratorWorkspace.ForDirectory(DefaultRoot)));
         Assert.False(home.IsHome(OrchestratorWorkspace.ForProject("alpha", DefaultRoot + "-target")));
     }
@@ -28,7 +28,7 @@ public sealed class OrchestratorHomeTests
     {
         var configured = relative ? Path.Combine("relative-home", "nested") : DefaultRoot + "-configured";
         var home = OrchestratorHome.Resolve(DefaultRoot, _ => "  " + configured + "  ");
-        Assert.Equal(Path.GetFullPath(configured), home.RootDirectory);
+        Assert.Equal(Path.GetFullPath(configured), home.InstallRootDirectory);
         Assert.True(home.IsHome(OrchestratorWorkspace.ForDirectory(Path.GetFullPath(configured))));
         Assert.False(home.IsHome(OrchestratorWorkspace.ForDirectory(DefaultRoot)));
     }
@@ -59,6 +59,6 @@ public sealed class OrchestratorHomeTests
         Assert.Equal(Path.GetFullPath(string.IsNullOrWhiteSpace(configured) ? DefaultRoot : configured),
             exported[OrchestratorHome.EnvironmentVariable]);
         var childHome = OrchestratorHome.Resolve(DefaultRoot + "-target", name => exported[name]);
-        Assert.Equal(exported[OrchestratorHome.EnvironmentVariable], childHome.RootDirectory);
+        Assert.Equal(exported[OrchestratorHome.EnvironmentVariable], childHome.InstallRootDirectory);
     }
 }

@@ -47,6 +47,43 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         Assert.Empty(await fixture.Events.ReadForLandingAsync(landing.LandingSha!));
     }
 
+    [Xunit.Fact]
+    public async Task Factory_InstallRootWithoutSources_DisablesCanaryButCheckoutRuns()
+    {
+        using var fixture = new CanaryTestFixture();
+        var workspace = OrchestratorWorkspace.ForDirectory(fixture.Root);
+        var calls = 0;
+        var runner = new FakeRunner((_, _) =>
+        {
+            Interlocked.Increment(ref calls);
+            return Task.FromResult(PostLandingCanaryOutcome.Passed(1, "checkout canary receipt"));
+        });
+        var landing = new ConductorLandingReceipt("goal-install-test",
+            ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs"], "install-test-sha");
+        Assert.True(PostLandingCanaryTrigger.Evaluate(landing.ChangedFiles, []).ShouldRun);
+        var progress = new ConcurrentQueue<string>();
+        var installHome = OrchestratorHome.ForInstallRoot(fixture.Root);
+        Assert.Null(installHome.SourceRootDirectory);
+        Assert.Equal(workspace.ExecutionDirectory, installHome.InstallRootDirectory);
+        var installed = PostLandingCanaryFactory.CreateDefault(workspace, progress.Enqueue, installHome, runner);
+
+        Assert.Equal(PostLandingCanaryDisposition.NotTriggered, installed.HandleLanding(landing));
+        Assert.Equal(PostLandingCanaryDisposition.NotTriggered,
+            await installed.LaunchLandingAsync(landing with { LandingSha = "second-install-sha" }));
+        Assert.Equal(0, Volatile.Read(ref calls));
+        Assert.Empty(await fixture.Events.ReadForLandingAsync(landing.LandingSha!));
+        Assert.Empty(await fixture.Events.ReadForLandingAsync("second-install-sha"));
+        Assert.Empty(progress);
+
+        var checkout = PostLandingCanaryFactory.CreateDefault(workspace, progress.Enqueue,
+            OrchestratorHome.Resolve(fixture.Root, _ => null), runner);
+        Assert.Equal(PostLandingCanaryDisposition.Passed,
+            await checkout.LaunchLandingAsync(landing).WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.Equal(1, Volatile.Read(ref calls));
+        Assert.Contains(await fixture.Events.ReadForLandingAsync(landing.LandingSha!),
+            record => record.Kind == PostLandingCanaryEventKind.Passed);
+    }
+
     [Xunit.Fact(DisplayName = "Post-landing canary classifier covers every engine surface and ignores unrelated paths")]
     public void ClassifierCoversEveryEngineSurface()
     {

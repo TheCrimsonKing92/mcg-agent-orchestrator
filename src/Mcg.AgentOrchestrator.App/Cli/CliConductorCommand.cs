@@ -188,7 +188,7 @@ internal static class CliConductorCommand
         if (!TryRunStoreSetup(workspace, storeSetup, error, out _))
             return 1;
         List<string> launchArguments = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-                Path.Combine(home.RootDirectory, "scripts", "Start-OrchestratorCommand.ps1"),
+                Path.Combine(home.InstallRootDirectory, "scripts", "Start-OrchestratorCommand.ps1"),
                 "-Name", "conduct-loop-daemon", "conduct", "--loop", "--daemon", "--watch",
                 "--poll-seconds", "120", "--max-duration", "43200"];
         if (workspace.IsProjectScoped)
