@@ -42,6 +42,7 @@ internal static class DispatchProcessLeakGuard
                     _ = handle.SafeHandle;
                     if (handle.StartTime.ToUniversalTime() != process.StartTime.ToUniversalTime())
                         throw new InvalidOperationException($"Dispatch pid={process.Id} identity changed during registration.");
+                    TestOwnedDispatchProcesses.RecordLaunch(process, dispatchFile);
                     Hosts.Add(new(handle, dispatchFile));
                 }
                 catch { handle.Dispose(); throw; }

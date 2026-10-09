@@ -35,6 +35,7 @@ public sealed class AdvanceLoopTestsDispatchProcessLeakGuard
     [Fact]
     public async Task After_AwaitedRealDispatch_Passes()
     {
+        using var registry = WorkerProcessJobs.UseRegistryScopeForTests(null);
         var root = InfrastructureTestSupport.CreateTempDirectory();
         var (kernel, goal, task) = PrepareDispatch(root);
         using var owned = new TestOwnedDispatchProcesses(kernel, goal);
@@ -42,6 +43,7 @@ public sealed class AdvanceLoopTestsDispatchProcessLeakGuard
             kernel, goal.Id, task.Id, OrchestratorWorkspace.ForDirectory(root).LogDirectory);
         var test = Assert.IsAssignableFrom<IXunitTest>(TestContext.Current.Test);
         Assert.Same(record, task.LastProcess);
+        Assert.Null(record.ProcessIdentityStartedAt);
         Assert.True(DispatchProcessLeakGuard.HasHost(test.UniqueID, record.ProcessId, DispatchFile(record)));
         AdvanceLoopTests.ReleaseBlockingWorkers(root);
         await TestOwnedDispatchProcesses.AwaitCompletionAsync(record);
@@ -54,6 +56,7 @@ public sealed class AdvanceLoopTestsDispatchProcessLeakGuard
     [Fact]
     public async Task After_ConcurrentDispatches_FailsOnlyLeakingOwner()
     {
+        using var registry = WorkerProcessJobs.UseRegistryScopeForTests(null);
         var leakingReady = new TaskCompletionSource<TaskProcessRecord>(TaskCreationOptions.RunContinuationsAsynchronously);
         var awaitedPassed = new TaskCompletionSource<TaskProcessRecord>(TaskCreationOptions.RunContinuationsAsynchronously);
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
@@ -127,16 +130,39 @@ public sealed class AdvanceLoopTestsDispatchProcessLeakGuard
     [Fact]
     public void Dispose_UnawaitedDispatch_ReapsRecordedHost()
     {
+        using var registry = WorkerProcessJobs.UseRegistryScopeForTests(null);
         var root = InfrastructureTestSupport.CreateTempDirectory();
         var (kernel, goal, task) = PrepareDispatch(root);
         using var owned = new TestOwnedDispatchProcesses(kernel, goal);
         var record = new BackgroundDispatchRunner().StartLatestDispatch(
             kernel, goal.Id, task.Id, OrchestratorWorkspace.ForDirectory(root).LogDirectory);
         using var host = Process.GetProcessById(record.ProcessId);
+        Assert.Null(record.ProcessIdentityStartedAt);
         Assert.False(host.HasExited);
         owned.Dispose();
         Assert.True(host.HasExited, $"Test-owned dispatch host pid={record.ProcessId} did not exit during disposal.");
         Assert.True(task.LastProcess!.WasCancelled);
+    }
+
+    [Fact]
+    public void Dispose_ClearedProcessRecord_ReapsCapturedHost()
+    {
+        using var registry = WorkerProcessJobs.UseRegistryScopeForTests(null);
+        var root = InfrastructureTestSupport.CreateTempDirectory();
+        var (kernel, goal, task) = PrepareDispatch(root);
+        using var owned = new TestOwnedDispatchProcesses(kernel, goal);
+        var record = new BackgroundDispatchRunner().StartLatestDispatch(
+            kernel, goal.Id, task.Id, OrchestratorWorkspace.ForDirectory(root).LogDirectory);
+        using var host = Process.GetProcessById(record.ProcessId);
+        Assert.Null(record.ProcessIdentityStartedAt);
+        Assert.False(host.HasExited);
+        kernel.RequeueInterruptedDispatch(goal.Id, task.Id, "Exercise cleanup after requeue clears the record",
+            RetryCause.EnvironmentApparatusFailure);
+        Assert.Null(task.LastProcess);
+
+        owned.Dispose();
+
+        Assert.True(host.HasExited, $"Captured dispatch host pid={record.ProcessId} survived clearing its task record.");
     }
 
     [Fact]
