@@ -46,7 +46,7 @@ public sealed class AcceptanceCohortWorkflowTestsLandingDenylist : AcceptanceCoh
                     TrainBind(candidates[0].GoalId, candidates[0].Revision, Watched, "resource:first"),
                     TrainBind(candidates[1].GoalId, candidates[1].Revision, Ordinary, "resource:second")
                 };
-                using var integration = GoalWorktrees.CreateMergeTrainWorkspace(repo, main, bindings);
+                using var integration = GoalWorktrees.CreateMergeTrainWorkspace(repo, main, bindings, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
                 commit = integration.CommitRevision;
                 var identity = MergeTrainIdentity.Create(integration.Members, main, integration.TreeRevision, "manifest-v1");
                 var store = new MergeTrainAcceptanceStore(Path.Combine(workspace.OrchestratorDirectory, "merge-train-acceptance.db"));
@@ -72,7 +72,7 @@ public sealed class AcceptanceCohortWorkflowTestsLandingDenylist : AcceptanceCoh
                     Bind(candidates[0].GoalId, candidates[0].Revision, Watched, "resource:first"),
                     Bind(candidates[1].GoalId, candidates[1].Revision, Ordinary, "resource:second")
                 };
-                using var integration = GoalWorktrees.CreateAcceptanceCohortWorkspace(repo, main, bindings);
+                using var integration = GoalWorktrees.CreateAcceptanceCohortWorkspace(repo, main, bindings, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
                 commit = integration.CommitRevision;
                 var identity = AcceptanceCohortIdentity.Create(bindings, main, integration.TreeRevision,
                     GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(integration.Path, [Watched, Ordinary]));

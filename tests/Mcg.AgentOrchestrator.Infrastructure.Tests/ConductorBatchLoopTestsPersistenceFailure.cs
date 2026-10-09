@@ -214,7 +214,7 @@ public sealed class ConductorBatchLoopTestsPersistenceFailure : ConductorBatchLo
             ordering.Add("sweep");
             return TerminalGoalSweep.Run(
                 currentKernel,
-                root,
+                root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 goal.Id,
                 integrationEvidenceResolver: resolver,
                 attentionStore: CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory),
@@ -243,7 +243,7 @@ public sealed class ConductorBatchLoopTestsPersistenceFailure : ConductorBatchLo
         tickTwoKernel.SetEventWriter(new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory));
         var tickTwo = TerminalGoalSweep.Run(
             tickTwoKernel,
-            root,
+            root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             goal.Id,
             integrationEvidenceResolver: resolver,
             attentionStore: CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory),
@@ -259,7 +259,7 @@ public sealed class ConductorBatchLoopTestsPersistenceFailure : ConductorBatchLo
         tickThreeKernel.SetEventWriter(new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory));
         var tickThree = TerminalGoalSweep.Run(
             tickThreeKernel,
-            root,
+            root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             goal.Id,
             integrationEvidenceResolver: resolver,
             attentionStore: CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory),

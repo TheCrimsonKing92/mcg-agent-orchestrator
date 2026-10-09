@@ -787,7 +787,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     RunGoalMarkLandedStep(
                         "branch-ancestry-check",
                         () => GitCli.Run(landedDir, "merge-base", "--is-ancestor", branchRef, "HEAD")).ExitCode == 0;
-                var mergeEvidenceResolver = GoalIntegrationEvidenceResolver.Build(landedDir);
+                var mergeEvidenceResolver = GoalIntegrationEvidenceResolver.Build(landedDir, context.Workspace.IntegrationBranch);
                 var hasIntegrateCommit = mergeEvidenceResolver.TryResolve(landedId, out var mergeEvidence) &&
                     mergeEvidence is not null;
                 if (!branchIsAncestor && !hasIntegrateCommit)
@@ -1092,7 +1092,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
             var readinessSweep = TerminalGoalSweep.Run(
                 context.Kernel,
-                context.Workspace.ExecutionDirectory,
+                context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch,
                 context.CurrentGoal.Id,
                 cleanupHooks: context.CleanupContext.Hooks,
                 orchestratorDirectory: context.Workspace.OrchestratorDirectory);
@@ -1123,7 +1123,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
             var recoverySweep = TerminalGoalSweep.Run(
                 context.Kernel,
-                context.Workspace.ExecutionDirectory,
+                context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch,
                 context.CurrentGoal.Id,
                 cleanupHooks: context.CleanupContext.Hooks,
                 orchestratorDirectory: context.Workspace.OrchestratorDirectory);
@@ -1268,7 +1268,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
 
             ConsoleViews.PrintAcceptanceSummary(
                 context.CurrentGoal,
-                GoalAcceptanceStatusProjector.Build(context.Kernel, context.CurrentGoal, context.Workspace.ExecutionDirectory));
+                GoalAcceptanceStatusProjector.Build(context.Kernel, context.CurrentGoal, context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch));
             return false;
 
         case "workspace":
@@ -1370,14 +1370,14 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             if (context.IsReadOnlyQuery)
             {
                 var nextDiagnosis = TerminalGoalSweep.Diagnose(
-                    context.Kernel, context.Workspace.ExecutionDirectory, context.CurrentGoal.Id);
+                    context.Kernel, context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch, context.CurrentGoal.Id);
                 ConsoleViews.PrintTerminalGoalSweep(nextDiagnosis, includeRepairs: false);
             }
             else
             {
                 var nextSweep = TerminalGoalSweep.Run(
                     context.Kernel,
-                    context.Workspace.ExecutionDirectory,
+                    context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch,
                     context.CurrentGoal.Id,
                     cleanupHooks: context.CleanupContext.Hooks,
                     orchestratorDirectory: context.Workspace.OrchestratorDirectory);
@@ -1638,7 +1638,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         loopDriver,
                         remedy,
                         loopPolicy),
-                    remedy => GoalGitFactIndex.Build(context.Workspace.ExecutionDirectory)
+                    remedy => GoalGitFactIndex.Build(context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch)
                         .TryGetGoalBranchTip(remedy.GoalId));
                 var loopReaper = new BackgroundDispatchRunner
                 {
@@ -1794,7 +1794,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
 
                     var terminalSweep = ConductorTickStepLedger.Measure("terminal-sweep-run", () => TerminalGoalSweep.Run(
                         loopKernel,
-                        context.Workspace.ExecutionDirectory,
+                        context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch,
                         cache: terminalSweepCache,
                         cleanupHooks: context.CleanupContext.Hooks,
                         orchestratorDirectory: context.Workspace.OrchestratorDirectory));
@@ -1803,7 +1803,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     {
                         var remediatedSweep = ConductorTickStepLedger.Measure("terminal-sweep-run", () => TerminalGoalSweep.Run(
                             loopKernel,
-                            context.Workspace.ExecutionDirectory,
+                            context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch,
                             cache: terminalSweepCache,
                             cleanupHooks: context.CleanupContext.Hooks,
                             orchestratorDirectory: context.Workspace.OrchestratorDirectory));

@@ -25,12 +25,12 @@ public sealed class ConductorBatchLoopTestsSupersededGateStop(ITestOutputHelper 
             var policy = ConductorAutonomyPolicy.Conservative with { AcceptanceWidth = 2 };
             var candidate = ConductorParallelAcceptanceCandidate.Create(waiting, 1, [Scope], Branch, OldMain);
             var starter = new ConductorParallelAcceptanceAttemptCoordinator(
-                root, isProcessAlive: _ => true,
+                root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, isProcessAlive: _ => true,
                 launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7105));
             var started = starter.Evaluate(candidate, policy, PassingRun);
             var alive = true;
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                root, runInline: true, isProcessAlive: _ => alive);
+                root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: true, isProcessAlive: _ => alive);
             var main = OldMain;
             var landed = false;
             var stopCalls = new List<string>();
@@ -103,7 +103,7 @@ public sealed class ConductorBatchLoopTestsSupersededGateStop(ITestOutputHelper 
             var policy = ConductorAutonomyPolicy.Conservative with { AcceptanceWidth = 2 };
             var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [Scope], Branch, OldMain);
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                root, isProcessAlive: _ => true,
+                root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, isProcessAlive: _ => true,
                 launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7106));
             var started = coordinator.Evaluate(candidate, policy, PassingRun);
             var stopCalls = 0;
@@ -144,11 +144,11 @@ public sealed class ConductorBatchLoopTestsSupersededGateStop(ITestOutputHelper 
             var policy = ConductorAutonomyPolicy.Conservative with { AcceptanceWidth = 2 };
             var candidate = ConductorParallelAcceptanceCandidate.Create(waiting, 1, [Scope], Branch, OldMain);
             var starter = new ConductorParallelAcceptanceAttemptCoordinator(
-                root, isProcessAlive: _ => true,
+                root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, isProcessAlive: _ => true,
                 launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7109));
             var started = starter.Evaluate(candidate, policy, PassingRun);
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                root, runInline: true, isProcessAlive: _ => true);
+                root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: true, isProcessAlive: _ => true);
             var main = OldMain;
             var stopCalls = 0;
             var driver = MakeDriver(
@@ -197,7 +197,7 @@ public sealed class ConductorBatchLoopTestsSupersededGateStop(ITestOutputHelper 
             var goal = CreateVerifiedSimpleGoal(kernel, "Run gate with reusable lane");
             var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [Scope], Branch, OldMain);
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                root, isProcessAlive: _ => true,
+                root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, isProcessAlive: _ => true,
                 launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7107));
             var started = coordinator.Evaluate(candidate, ConductorAutonomyPolicy.Conservative, PassingRun);
             var lane = new GoalAcceptanceVerifier.AcceptanceManifestCheck
@@ -239,12 +239,12 @@ public sealed class ConductorBatchLoopTestsSupersededGateStop(ITestOutputHelper 
             var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [Scope], Branch, OldMain);
             var policy = ConductorAutonomyPolicy.Conservative;
             var starter = new ConductorParallelAcceptanceAttemptCoordinator(
-                root, isProcessAlive: _ => true,
+                root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, isProcessAlive: _ => true,
                 launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7108));
             var started = starter.Evaluate(candidate, policy, PassingRun);
-            var child = new ConductorParallelAcceptanceAttemptCoordinator(root, isProcessAlive: _ => false);
+            var child = new ConductorParallelAcceptanceAttemptCoordinator(root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, isProcessAlive: _ => false);
             child.RunAttemptForTests(started.Attempt, candidate, policy, PassingRun);
-            var parent = new ConductorParallelAcceptanceAttemptCoordinator(root, isProcessAlive: _ => false);
+            var parent = new ConductorParallelAcceptanceAttemptCoordinator(root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, isProcessAlive: _ => false);
 
             Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed,
                 ReadAttempt(started.Attempt.MetadataPath).Outcome);

@@ -62,6 +62,6 @@ public sealed class MergeTrainOperatorCriterionAdmissionTests
         Assert.Null(AcceptanceCriterionEvidence.DescribeTrainOperatorEvidenceGap(goal));
         Assert.Equal(
             "Acceptance completed but required criterion evidence remains outstanding: criterion 1 (v1) criterion-v1-0:Operator:Pending:next=operator observation.",
-            AcceptanceCriterionEvidence.RecordAndDescribeOutstanding(goal, new string('a', 40), kernel));
+            AcceptanceCriterionEvidence.RecordAndDescribeOutstanding(goal, new string('a', 40), kernel, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default));
     }
 }

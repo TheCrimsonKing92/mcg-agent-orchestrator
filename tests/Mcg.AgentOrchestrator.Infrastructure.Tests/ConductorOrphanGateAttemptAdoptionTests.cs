@@ -253,7 +253,7 @@ public sealed class ConductorOrphanGateAttemptAdoptionTests
         Func<DateTimeOffset> utcNow,
         Func<ConductorParallelAcceptanceOwnedProcessLaunch, ConductorParallelAcceptanceOwnedProcessLaunchResult> launch) =>
         new(
-            attemptRoot,
+            attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             utcNow: utcNow,
             isProcessAlive: isProcessAlive,
             launchOwnedProcess: launch,

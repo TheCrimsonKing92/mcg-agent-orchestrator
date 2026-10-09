@@ -546,7 +546,7 @@ public sealed class CliAttentionReadinessWriterPathTests : CliTaskQueryTestSuppo
                     ? item with { Status = GoalStatus.Completed } : item).ToArray()
             });
             Xunit.Assert.False(GoalWorktrees.IsBranchMergedIntoCurrent(root, goal.Id));
-            Xunit.Assert.Contains(TerminalGoalSweep.Diagnose(kernel, root, goal.Id).Blockers,
+            Xunit.Assert.Contains(TerminalGoalSweep.Diagnose(kernel, root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, goal.Id).Blockers,
                 blocker => blocker.Kind == "completed-branch-superseded");
             var workspace = OrchestratorWorkspace.ForDirectory(root);
             StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);

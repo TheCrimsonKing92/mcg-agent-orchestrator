@@ -14,7 +14,7 @@ internal static class CliReadinessQueryCommand
             throw new ArgumentException("Usage: readiness [goal-id]");
         context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, args.Count > 1 ? args[1] : null);
         var readinessDiagnosis = TerminalGoalSweep.Diagnose(
-            context.Kernel, context.Workspace.ExecutionDirectory, context.CurrentGoal.Id);
+            context.Kernel, context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch, context.CurrentGoal.Id);
         ConsoleViews.PrintTerminalGoalSweep(readinessDiagnosis, includeRepairs: false);
         IReadOnlyCollection<Goal> diagnosisHoldScope = context.Kernel.Goals;
         if (!ConductLoopGoalStatus.IsTerminal(context.CurrentGoal.Status.ToString()) &&

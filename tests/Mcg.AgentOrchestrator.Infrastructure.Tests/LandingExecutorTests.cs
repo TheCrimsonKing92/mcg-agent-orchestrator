@@ -465,7 +465,7 @@ public sealed class LandingExecutorTests
                 .ThenBy(wait => wait.Id.Value, StringComparer.Ordinal)
                 .ToArray();
 
-            var hold = GoalAcceptanceStatusProjector.Build(kernel, goal, repo).AcceptanceHoldDescription;
+            var hold = GoalAcceptanceStatusProjector.Build(kernel, goal, repo, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default).AcceptanceHoldDescription;
 
             Assert.NotNull(hold);
             Assert.All(waits.Take(5), wait => Assert.Contains(wait.Id.Value[..8], hold, StringComparison.Ordinal));
@@ -1208,7 +1208,7 @@ public sealed class LandingExecutorTests
                 "remove:simulated-cleanup-failure",
                 new GoalWorktreeCleanupHooks { CleanupWarningSink = _ => { } });
 
-            var result = TerminalGoalSweep.Run(kernel, repo, goal.Id);
+            var result = TerminalGoalSweep.Run(kernel, repo, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, goal.Id);
 
             var goalResult = Assert.Single(result.Goals);
             var blocker = Assert.Single(goalResult.Blockers);
@@ -1232,8 +1232,8 @@ public sealed class LandingExecutorTests
         {
             var (kernel, goal) = CreateCompletedGoalWithLeftoverWorkspace(repo);
 
-            var first = TerminalGoalSweep.Run(kernel, repo, goal.Id);
-            var second = TerminalGoalSweep.Run(kernel, repo, goal.Id);
+            var first = TerminalGoalSweep.Run(kernel, repo, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, goal.Id);
+            var second = TerminalGoalSweep.Run(kernel, repo, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, goal.Id);
 
             Assert.Contains(first.Goals, item => item.Repairs.Any(repair => repair.Kind == "merged-branch-cleanup"));
             Assert.Empty(second.Goals);
@@ -1396,7 +1396,7 @@ public sealed class LandingExecutorTests
 
             var landing = LandingExecutor.Execute(kernel, goal, workspace);
             RemoteGitMirror.EnqueueAfterLanding(repo, goal);
-            TerminalGoalSweep.Run(kernel, repo, goal.Id);
+            TerminalGoalSweep.Run(kernel, repo, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, goal.Id);
 
             Assert.True(landing.MainAdvanced);
             Assert.Equal(0, pushCount);
@@ -1474,7 +1474,7 @@ public sealed class LandingExecutorTests
             var first = RemoteGitMirror.ProcessDue(kernel, repo, goal.Id);
             GoalOperationJournal.Completed(repo, goal, "conductor:land", "landed");
             kernel.CompleteGoal(goal.Id, "Completed after durable landing.");
-            var cleanup = TerminalGoalSweep.Run(kernel, repo, goal.Id);
+            var cleanup = TerminalGoalSweep.Run(kernel, repo, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, goal.Id);
 
             Assert.True(landing.MainAdvanced);
             Assert.Contains(first.Outcomes, outcome => outcome.Kind == RemoteMirrorOutcomeKind.MirrorFailed);

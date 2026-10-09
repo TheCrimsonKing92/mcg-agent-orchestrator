@@ -44,7 +44,7 @@ internal sealed partial class ConductorDriver
         if (_cohortWorkspace is null || _executionDirectory is null) return null;
         var receipt = FollowerGateStore.ReadReceiptsForFollower(follower).FirstOrDefault();
         if (receipt is null || FollowerReceiptConsumed(follower, receipt.ReceiptId)) return null;
-        var main = ReadFollowerRevision(_executionDirectory, "refs/heads/main");
+        var main = ReadFollowerRevision(_executionDirectory, $"refs/heads/{_integrationBranch}");
         return new(receipt, ReadFollowerReceiptLeaderStatus(receipt.Binding),
             FollowerGateBindingRule.ClassifyLiveBase(receipt.Binding.BaseMainRevision,
                 receipt.Binding.LeaderCandidateTree, main,
@@ -88,7 +88,7 @@ internal sealed partial class ConductorDriver
         if (rebase is not null) return new(rebase, leaderPrefix, "rebase");
         var worktree = GoalWorktrees.TryResolve(_executionDirectory, follower.Id) ??
             throw new InvalidOperationException("Follower landing worktree is unavailable.");
-        var main = ReadFollowerRevision(_executionDirectory, "refs/heads/main");
+        var main = ReadFollowerRevision(_executionDirectory, $"refs/heads/{_integrationBranch}");
         var head = ReadFollowerRevision(worktree, "HEAD");
         var observation = new FollowerGateLandingObservation(leader switch
         {

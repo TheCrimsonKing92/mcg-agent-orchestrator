@@ -80,7 +80,7 @@ internal sealed partial class OperatorIntentCoordinator
             evidenceResolver: new AdjudicationEvidenceResolver(workspace.OrchestratorDirectory),
             apparatusRegateIndex: ConductorStewardCaseDSources.CreateIndex(workspace),
             hasLiveAcceptanceAttempt: BuildLiveAcceptanceAttemptQuery(new ConductorParallelAcceptanceAttemptCoordinator(
-                Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts"), workspace.ExecutionDirectory)),
+                Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts"), workspace.IntegrationBranch, workspace.ExecutionDirectory)),
             clarificationAnswers: (key, answer, briefVersion) =>
                 refinement.TryResolveOpenClarificationAsync(key, answer, briefVersion),
             clarificationAnswerRecovery: (key, answer, briefVersion) =>

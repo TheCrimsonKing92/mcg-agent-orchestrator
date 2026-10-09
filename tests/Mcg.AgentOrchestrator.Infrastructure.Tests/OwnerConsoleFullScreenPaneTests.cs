@@ -116,7 +116,7 @@ public sealed class OwnerConsoleFullScreenPaneTests
         using IApplication app = Terminal.Gui.App.Application.Create();
         using var view = new OwnerConsoleFullScreenView(app, Controller(harness, dialogs), () => Task.CompletedTask);
         view.Render(await Model(harness));
-        const string common = "  Home/End first/last  PgUp/PgDn page  Tab next pane  : command  ? help  q quit";
+        const string common = "  Home/End first/last  PgUp/PgDn page  Tab/Shift+Tab pane  : command  ? help  q quit";
         Assert.Equal("Enter detail  a accept default  r answer" + common, view.HintText);
         await view.HandleKeyAsync(Key.Tab);
         Assert.Equal(OwnerConsolePane.Board, view.FocusedPane);
@@ -136,6 +136,93 @@ public sealed class OwnerConsoleFullScreenPaneTests
             Assert.Contains(binding, help.Text);
         foreach (var command in new[] { "conductor start", "conductor stop", "conductor status", "digest", "metrics", "bell on", "bell off", "goal <id-prefix>" })
             Assert.Contains(help.Text.Split('\n'), line => line.StartsWith(":" + command + ": ", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ShiftTabCyclesPanesBackwardAndWraps()
+    {
+        var harness = new OwnerConsoleHarness();
+        using IApplication app = Terminal.Gui.App.Application.Create();
+        using var view = new OwnerConsoleFullScreenView(app, Controller(harness, new Dialogs()), () => Task.CompletedTask);
+        view.Render(await Model(harness));
+        Assert.Equal(OwnerConsolePane.Decisions, view.FocusedPane);
+
+        foreach (var pane in new[] { OwnerConsolePane.Activity, OwnerConsolePane.Board, OwnerConsolePane.Decisions })
+        {
+            var key = Key.Tab.WithShift;
+            await view.HandleKeyAsync(key);
+            Assert.Equal(pane, view.FocusedPane);
+            Assert.True(key.Handled);
+        }
+    }
+
+    [Fact]
+    public async Task TabThenShiftTabReturnsToStartingPane()
+    {
+        var harness = new OwnerConsoleHarness();
+        using IApplication app = Terminal.Gui.App.Application.Create();
+        using var view = new OwnerConsoleFullScreenView(app, Controller(harness, new Dialogs()), () => Task.CompletedTask);
+        view.Render(await Model(harness));
+        var startingPane = view.FocusedPane;
+
+        var tab = Key.Tab;
+        await view.HandleKeyAsync(tab);
+        Assert.Equal(OwnerConsolePane.Board, view.FocusedPane);
+        Assert.True(tab.Handled);
+        var shiftTab = Key.Tab.WithShift;
+        await view.HandleKeyAsync(shiftTab);
+        Assert.Equal(startingPane, view.FocusedPane);
+        Assert.True(shiftTab.Handled);
+    }
+
+    [Fact]
+    public async Task HintAndHelpAdvertiseShiftTab()
+    {
+        var harness = new OwnerConsoleHarness();
+        var dialogs = new Dialogs();
+        using IApplication app = Terminal.Gui.App.Application.Create();
+        using var view = new OwnerConsoleFullScreenView(app, Controller(harness, dialogs), () => Task.CompletedTask);
+        view.Render(await Model(harness));
+
+        foreach (var pane in new[] { OwnerConsolePane.Decisions, OwnerConsolePane.Board, OwnerConsolePane.Activity })
+        {
+            Assert.Equal(pane, view.FocusedPane);
+            Assert.Contains("Tab/Shift+Tab pane", view.HintText);
+            Assert.DoesNotContain("Tab next pane", view.HintText);
+            await view.HandleKeyAsync(Key.Tab);
+        }
+        await view.HandleKeyAsync(new Key('?'));
+        var help = Assert.Single(dialogs.Texts);
+        Assert.Equal("Help", help.Title);
+        var lines = help.Text.Split('\n');
+        const string shiftTabLine = "Shift+Tab: Previous pane (ACTIVITY, BOARD, DECISIONS).";
+        Assert.Equal(shiftTabLine, Assert.Single(lines.Where(line => line.StartsWith("Shift+Tab:", StringComparison.Ordinal))));
+        Assert.Equal(shiftTabLine, lines[Array.IndexOf(lines, "Tab: Next pane (DECISIONS, BOARD, ACTIVITY).") + 1]);
+    }
+
+    [Fact]
+    public async Task ShiftTabWhileActionRunningKeepsFocus()
+    {
+        var harness = new OwnerConsoleHarness();
+        harness.AddGoal("11111111-first", "First", AgentRole.Developer);
+        var opened = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var dialogs = new Dialogs { Opened = opened, Hold = release.Task };
+        using IApplication app = Terminal.Gui.App.Application.Create();
+        using var view = new OwnerConsoleFullScreenView(app, Controller(harness, dialogs), () => Task.CompletedTask);
+        view.Render(await Model(harness));
+        await view.HandleKeyAsync(Key.Tab);
+        var action = view.HandleKeyAsync(Key.Enter);
+        try
+        {
+            await opened.Task.WaitAsync(TestContext.Current.CancellationToken);
+            Assert.False(action.IsCompleted); // The dialog is held by the unreleased completion source.
+            var key = Key.Tab.WithShift;
+            await view.HandleKeyAsync(key);
+            Assert.Equal(OwnerConsolePane.Board, view.FocusedPane);
+            Assert.True(key.Handled);
+        }
+        finally { release.TrySetResult(); await action; }
     }
 
     [Fact]

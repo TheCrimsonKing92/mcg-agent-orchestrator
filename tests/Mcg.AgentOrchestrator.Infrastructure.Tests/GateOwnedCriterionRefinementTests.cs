@@ -642,7 +642,7 @@ public sealed class GateOwnedCriterionRefinementTests
             AcceptanceGateOwnedAcceptanceCriteria = [criterion]
         });
 
-        var hold = AcceptanceCriterionEvidence.RecordAndCreateHold(goal, Candidate, kernel);
+        var hold = AcceptanceCriterionEvidence.RecordAndCreateHold(goal, Candidate, kernel, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
 
         Xunit.Assert.Null(hold);
         Xunit.Assert.Equal(

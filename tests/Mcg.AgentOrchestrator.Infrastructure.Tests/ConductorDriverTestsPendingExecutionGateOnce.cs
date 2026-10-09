@@ -36,7 +36,7 @@ public sealed class ConductorDriverTestsPendingExecutionGateOnce
                 StandardOutputPath: "C:\\tmp\\tester.out.log", WorkerResultPresent: true));
 
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                root, isProcessAlive: processId => processId == 7102,
+                root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, isProcessAlive: processId => processId == 7102,
                 launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7102),
                 acquireStableSlotLease: (_, _) => null);
             var driver = MakeDriver(

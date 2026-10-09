@@ -87,7 +87,7 @@ public sealed class ConductorDriverTestsPreReviewHoldOwner
                 PassVerification(_kernel, Goal, task);
 
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                Path.Combine(_root, "pre-review-evidence-attempts"),
+                Path.Combine(_root, "pre-review-evidence-attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 executionDirectory: _root,
                 utcNow: () => Start,
                 isProcessAlive: _ => true,

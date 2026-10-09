@@ -37,7 +37,7 @@ public sealed class ConductorDriverTestsFindingEvidenceRevertSetReceipt
             var driver = MakeDriver(
                 getPreReviewEvidenceContext: _ => NoPreReviewContext(candidate),
                 focusedEvidenceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
-                    root, runInline: true, acquireStableSlotLease: (_, _) => null),
+                    root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: true, acquireStableSlotLease: (_, _) => null),
                 runFocusedEvidence: (_, request) =>
                 {
                     calls++;

@@ -15,7 +15,7 @@ public sealed class PatchEquivalenceIntegratedMainParentTests : HostCapacityBoun
         {
             Assert.NotEqual(fixture.MainParent, ReadGit(fixture.Repository, "rev-parse", "main"));
             Assert.True(GoalWorktrees.TryComputePatchEquivalence(
-                fixture.Repository, fixture.OldHead, fixture.MergeHead,
+                fixture.Repository, fixture.OldHead, fixture.MergeHead, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 out var evidence, out var refusal), refusal);
             Assert.Equal(IntegratedParentEvidence(fixture, fixture.MainParent, fixture.MergeHead), evidence);
             Assert.Equal(string.Empty, refusal);
@@ -36,7 +36,7 @@ public sealed class PatchEquivalenceIntegratedMainParentTests : HostCapacityBoun
         {
             Assert.NotEqual(fixture.MainParent, ReadGit(fixture.Repository, "rev-parse", "main"));
             Assert.False(GoalWorktrees.TryComputePatchEquivalence(
-                fixture.Repository, fixture.OldHead, fixture.MergeHead,
+                fixture.Repository, fixture.OldHead, fixture.MergeHead, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 out var evidence, out var refusal));
             Assert.Equal($"integration-merge-not-clean; merge={fixture.MergeHead}", refusal);
             Assert.Equal(string.Empty, evidence);
@@ -71,7 +71,7 @@ public sealed class PatchEquivalenceIntegratedMainParentTests : HostCapacityBoun
             }
 
             Assert.False(GoalWorktrees.TryComputePatchEquivalence(
-                fixture.Repository, fixture.MergeHead, newHead, out var evidence, out var refusal));
+                fixture.Repository, fixture.MergeHead, newHead, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, out var evidence, out var refusal));
             Assert.Equal($"integration-merge-not-clean; merge={fixture.MergeHead}", refusal);
             Assert.Equal(string.Empty, evidence);
         }
@@ -101,7 +101,7 @@ public sealed class PatchEquivalenceIntegratedMainParentTests : HostCapacityBoun
                 $"{newestMainParent}..{newHead}").Split('\n')[0]);
 
             Assert.True(GoalWorktrees.TryComputePatchEquivalence(
-                fixture.Repository, fixture.OldHead, newHead, out var evidence, out var refusal), refusal);
+                fixture.Repository, fixture.OldHead, newHead, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, out var evidence, out var refusal), refusal);
             Assert.Equal(IntegratedParentEvidence(fixture, newestMainParent, newestMerge, newHead), evidence);
             Assert.Equal(string.Empty, refusal);
         }
@@ -127,7 +127,7 @@ public sealed class PatchEquivalenceIntegratedMainParentTests : HostCapacityBoun
                 $"{currentMain}..{newHead}"));
 
             Assert.True(GoalWorktrees.TryComputePatchEquivalence(
-                fixture.Repository, fixture.MergeHead, newHead, out var evidence, out var refusal), refusal);
+                fixture.Repository, fixture.MergeHead, newHead, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, out var evidence, out var refusal), refusal);
             Assert.Equal($"goal-owned lines {oldBase}..{fixture.MergeHead} vs {currentMain}..{newHead}: zero-context added and removed lines per file are identical", evidence);
             Assert.Equal(string.Empty, refusal);
         }
@@ -158,7 +158,7 @@ public sealed class PatchEquivalenceIntegratedMainParentTests : HostCapacityBoun
             Assert.Equal(string.Empty, ReadGit(repository, "rev-list", "--merges", $"{newBase}..{newHead}"));
 
             Assert.True(GoalWorktrees.TryComputePatchEquivalence(
-                repository, oldHead, newHead, out var evidence, out var refusal), refusal);
+                repository, oldHead, newHead, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, out var evidence, out var refusal), refusal);
             Assert.Equal($"range-diff {oldBase}..{oldHead} vs {newBase}..{newHead}: 1/1 commits have identical patch ids in order", evidence);
             Assert.Equal(string.Empty, refusal);
         }

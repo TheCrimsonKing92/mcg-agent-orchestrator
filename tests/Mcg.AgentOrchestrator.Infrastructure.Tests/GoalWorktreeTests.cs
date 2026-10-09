@@ -2719,7 +2719,7 @@ public sealed class GoalWorktreeAcceptanceContentionTests : GoalWorktreeTestBase
             _ = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0, storageRoot: other.StorageRoot);
             var selectedRoot = useOwningRoot ? owner.StorageRoot : other.StorageRoot;
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot, runInline: true, buildPermitBusyTimeout: TimeSpan.Zero, buildStorageRoot: selectedRoot);
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: true, buildPermitBusyTimeout: TimeSpan.Zero, buildStorageRoot: selectedRoot);
             var decision = coordinator.Evaluate(candidate, ConductorAutonomyPolicy.Conservative,
                 (item, _, _, _, _) => ConductorParallelAcceptanceRunResult.Accepted(
                     item, AcceptanceVerificationSummary.PassedWithNoUnmetCriteria));
@@ -2758,7 +2758,7 @@ public sealed class GoalWorktreeAcceptanceContentionTests : GoalWorktreeTestBase
         {
             ConductorParallelAcceptanceOwnedProcessLaunch? observedLaunch = null;
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot, executionDirectory: attemptRoot, buildStorageRoot: owner.StorageRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, executionDirectory: attemptRoot, buildStorageRoot: owner.StorageRoot,
                 isProcessAlive: _ => true,
                 launchOwnedProcess: launch =>
                 {
@@ -2821,7 +2821,7 @@ public sealed class GoalWorktreeAcceptanceContentionTests : GoalWorktreeTestBase
                 }
 
                 var blockedCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                    attemptRoot,
+                    attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                     runInline: true,
                     buildPermitBusyTimeout: TimeSpan.Zero, buildStorageRoot: isolatedRoot.StorageRoot);
                 blocked = blockedCoordinator.Evaluate(
@@ -2848,7 +2848,7 @@ public sealed class GoalWorktreeAcceptanceContentionTests : GoalWorktreeTestBase
             }
 
             var regateCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 runInline: true, buildStorageRoot: isolatedRoot.StorageRoot);
             var regated = regateCoordinator.Evaluate(
                 candidate,
@@ -2916,7 +2916,7 @@ public sealed class GoalWorktreeAcceptanceContentionTests : GoalWorktreeTestBase
         var bothExecuting = new CountdownEvent(2);
         var release = new ManualResetEventSlim();
         var coverageByGoal = new ConcurrentDictionary<string, TestCoverageInvariantResult>();
-        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, runInline: true, buildStorageRoot: isolatedRoot.StorageRoot);
+        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: true, buildStorageRoot: isolatedRoot.StorageRoot);
 
         try
         {

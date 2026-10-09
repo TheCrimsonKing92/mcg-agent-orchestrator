@@ -144,7 +144,7 @@ public sealed class ConductorDriverTestsFindingRoundNextPendingRequest
         public void RestartDriver() => _driver = MakeDriver(
             getPreReviewEvidenceContext: _ => NoPreReviewContext(CandidateSha),
             focusedEvidenceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
-                _root, runInline: true, acquireStableSlotLease: (_, _) => null),
+                _root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: true, acquireStableSlotLease: (_, _) => null),
             runFocusedEvidence: (_, request) =>
             {
                 // Keep the configured outcome across retries: the receipt store retains

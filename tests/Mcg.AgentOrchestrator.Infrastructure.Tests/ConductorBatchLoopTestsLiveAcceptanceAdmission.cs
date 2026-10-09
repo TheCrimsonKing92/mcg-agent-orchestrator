@@ -265,7 +265,7 @@ public sealed class ConductorBatchLoopTestsLiveAcceptanceAdmission : ConductorBa
             var nextPid = 9000;
             var attemptRoot = Path.Combine(root, "attempts");
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 isProcessAlive: _ => true,
                 launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(
                     Interlocked.Increment(ref nextPid)));
@@ -343,7 +343,7 @@ public sealed class ConductorBatchLoopTestsLiveAcceptanceAdmission : ConductorBa
 
             var nextPid = 9200;
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                root,
+                root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 isProcessAlive: _ => true,
                 launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(
                     Interlocked.Increment(ref nextPid)));
@@ -396,7 +396,7 @@ public sealed class ConductorBatchLoopTestsLiveAcceptanceAdmission : ConductorBa
             PassVerificationAt(kernel, goal, goal.Tasks.Single(), DateTimeOffset.UtcNow);
             var now = DateTimeOffset.Parse("2026-09-03T11:00:00Z");
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                root,
+                root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 utcNow: () => now,
                 isProcessAlive: _ => true,
                 launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(9401),
@@ -449,7 +449,7 @@ public sealed class ConductorBatchLoopTestsLiveAcceptanceAdmission : ConductorBa
             File.WriteAllText(Path.Combine(corruptGoalDirectory, "corrupt.attempt.json"), "{");
             var launches = 0;
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                root,
+                root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 isProcessAlive: _ => false,
                 launchOwnedProcess: _ =>
                 {
@@ -500,7 +500,7 @@ public sealed class ConductorBatchLoopTestsLiveAcceptanceAdmission : ConductorBa
 
             var nextPid = 9600;
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                root,
+                root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 utcNow: () => clock.UtcNow,
                 isProcessAlive: _ => true,
                 launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(
@@ -595,7 +595,7 @@ public sealed class ConductorBatchLoopTestsLiveAcceptanceAdmission : ConductorBa
             Assert.Equal(WorkTaskStatus.Completed, goal.Tasks.Single().Status);
             Assert.True(kernel.BuildVerificationGate(goal.Id).IsSatisfied);
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                root,
+                root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 utcNow: () => now,
                 isProcessAlive: _ => true,
                 launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(9701));
@@ -671,7 +671,7 @@ public sealed class ConductorBatchLoopTestsLiveAcceptanceAdmission : ConductorBa
         };
 
         return new ConductorParallelAcceptanceAttemptCoordinator(
-            attemptRoot,
+            attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             isProcessAlive: pid => alive.ContainsKey(pid),
             launchOwnedProcess: launch =>
             {

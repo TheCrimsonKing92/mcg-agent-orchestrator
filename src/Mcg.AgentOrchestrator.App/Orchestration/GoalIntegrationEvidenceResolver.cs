@@ -38,14 +38,14 @@ internal sealed class GoalIntegrationEvidenceResolver : IGoalIntegrationEvidence
     }
 
     public static GoalIntegrationEvidenceResolver Build(
-        string executionDirectory,
+        string executionDirectory, string integrationBranch,
         string? knownMainSha = null,
         Func<string, IReadOnlyList<string>, GitCli.GitResult>? gitRunner = null)
     {
         gitRunner ??= GitRunner;
         var fullExecutionDirectory = Path.GetFullPath(executionDirectory);
         var mainSha = string.IsNullOrWhiteSpace(knownMainSha)
-            ? ResolveMainSha(fullExecutionDirectory, gitRunner)
+            ? ResolveMainSha(fullExecutionDirectory, integrationBranch, gitRunner)
             : knownMainSha.Trim();
         if (string.IsNullOrWhiteSpace(mainSha))
         {
@@ -136,10 +136,10 @@ internal sealed class GoalIntegrationEvidenceResolver : IGoalIntegrationEvidence
     }
 
     private static string? ResolveMainSha(
-        string executionDirectory,
+        string executionDirectory, string integrationBranch,
         Func<string, IReadOnlyList<string>, GitCli.GitResult> gitRunner)
     {
-        var result = RunGit(gitRunner, executionDirectory, "rev-parse", "--verify", "refs/heads/main");
+        var result = RunGit(gitRunner, executionDirectory, "rev-parse", "--verify", $"refs/heads/{integrationBranch}");
         var sha = result.Output.Trim();
         return result.ExitCode == 0 && sha.Length > 0 && !sha.Any(char.IsWhiteSpace)
             ? sha

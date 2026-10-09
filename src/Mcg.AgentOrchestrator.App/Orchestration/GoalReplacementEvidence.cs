@@ -15,7 +15,7 @@ internal static class GoalReplacementEvidence
         Goal predecessor,
         Func<string, IReadOnlyList<string>, GitCli.GitResult>? gitRunner = null)
     {
-        var gitFacts = GoalGitFactIndex.Build(workspace.ExecutionDirectory, gitRunner);
+        var gitFacts = GoalGitFactIndex.Build(workspace.ExecutionDirectory, workspace.IntegrationBranch, gitRunner);
         var branchFacts = gitFacts.BuildReplacementFacts(predecessor);
         var journal = GoalOperationJournal.Read(workspace.ExecutionDirectory, predecessor.Id);
         var hasDispatch = predecessor.Tasks.Any(task =>

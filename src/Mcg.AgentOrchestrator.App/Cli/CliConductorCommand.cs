@@ -126,7 +126,7 @@ internal static class CliConductorCommand
 
         var goalId = new GoalId(matches[0].Id);
         var attempts = new ConductorParallelAcceptanceAttemptCoordinator(
-            Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts"), workspace.ExecutionDirectory);
+            Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts"), workspace.IntegrationBranch, workspace.ExecutionDirectory);
         var outcome = OperatorIntentGoalApplication.ApplyOffline(
             workspace, repository, OperatorIntentCoordinator.CreateDefault(workspace), attempts, goalId)
             .GetAwaiter().GetResult();

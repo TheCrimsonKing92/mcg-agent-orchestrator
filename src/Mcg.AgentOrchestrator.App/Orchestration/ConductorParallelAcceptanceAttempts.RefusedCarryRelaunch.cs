@@ -26,7 +26,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             return false;
 
         var hold = AcceptanceCriterionEvidence.DescribeRefusedCarryHold(
-            candidate.Goal, candidate.BranchHeadSha, _executionDirectory);
+            candidate.Goal, candidate.BranchHeadSha, _integrationBranch, _executionDirectory);
         if (hold is null) return false;
 
         RecordRefusedCarryTimelineNoteOnce(candidate, hold.Reason);

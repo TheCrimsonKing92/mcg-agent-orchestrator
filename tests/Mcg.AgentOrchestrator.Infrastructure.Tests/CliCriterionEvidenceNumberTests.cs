@@ -202,7 +202,7 @@ public sealed class CliCriterionEvidenceNumberTests
         kernel.MapCriterionEvidenceOwner(goal.Id, 0, 1, CriterionEvidenceOwner.Acceptance,
             "operator", findingStableId: "original-finding", expectedCandidateSha: "old-candidate");
 
-        var hold = AcceptanceCriterionEvidence.DescribeRefusedCarryHold(goal, Candidate, null);
+        var hold = AcceptanceCriterionEvidence.DescribeRefusedCarryHold(goal, Candidate, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, null);
 
         Assert.NotNull(hold);
         Assert.Contains($"criterion-evidence-map --goal {goal.Id.Value} --criterion 1 --version 1 acceptance acceptance:full-gate original-finding {Candidate}", hold.Reason, StringComparison.Ordinal);
@@ -255,7 +255,7 @@ public sealed class CliCriterionEvidenceNumberTests
         kernel.RecordGoalRefinement(goal.Id, new RefinedSpec("Observe behavior", ["Implementation works", "Operator observes"],
             VerificationClass.RealWorldDependent, [], []) { OperatorOwnedAcceptanceCriteria = ["Operator observes"] });
 
-        var diagnostic = AcceptanceCriterionEvidence.RecordAndDescribeOutstanding(goal, Candidate, kernel);
+        var diagnostic = AcceptanceCriterionEvidence.RecordAndDescribeOutstanding(goal, Candidate, kernel, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
 
         Assert.NotNull(diagnostic);
         Assert.Contains("criterion 2 (v1) criterion-v1-1:Operator:Pending", diagnostic, StringComparison.Ordinal);

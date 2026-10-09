@@ -79,7 +79,7 @@ public sealed class FindingEvidenceRecoveryHoldOwnerTests
                     classes: [nameof(FindingEvidenceRecoveryHoldOwnerTests)])]);
 
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                _root, runInline: buildSlotsBusy, utcNow: () => _now,
+                _root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: buildSlotsBusy, utcNow: () => _now,
                 isProcessAlive: _ => true,
                 launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7300 + ++Launches),
                 acquireStableSlotLease: (_, _) => null);

@@ -7,9 +7,9 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 // Records only the obligations owned by a successful full gate; other evidence still blocks landing.
 internal static partial class AcceptanceCriterionEvidence
 {
-    public static ConductorAdvanceOutcome.Held? RecordAndCreateHold(Goal goal, string? candidateSha, AgentOrchestratorKernel? kernel, string? executionDirectory = null)
+    public static ConductorAdvanceOutcome.Held? RecordAndCreateHold(Goal goal, string? candidateSha, AgentOrchestratorKernel? kernel, string integrationBranch, string? executionDirectory = null)
     {
-        var diagnostic = RecordAndDescribeOutstanding(goal, candidateSha, kernel, executionDirectory);
+        var diagnostic = RecordAndDescribeOutstanding(goal, candidateSha, kernel, integrationBranch, executionDirectory);
         return diagnostic is null ? null : new ConductorAdvanceOutcome.Held(
             GoalLifecycleState.Verified, diagnostic, StableIdentity: HoldIdentity(goal, candidateSha));
     }
@@ -57,9 +57,9 @@ internal static partial class AcceptanceCriterionEvidence
             $"Acceptance completed but required criterion evidence remains outstanding: {string.Join(", ", missing)}.";
     }
 
-    public static string? RecordAndDescribeOutstanding(Goal goal, string? candidateSha, AgentOrchestratorKernel? kernel, string? executionDirectory = null)
+    public static string? RecordAndDescribeOutstanding(Goal goal, string? candidateSha, AgentOrchestratorKernel? kernel, string integrationBranch, string? executionDirectory = null)
     {
-        var diagnostic = RecordFullAcceptanceEvidence(goal, candidateSha, kernel, evidenceSource: null, executionDirectory);
+        var diagnostic = RecordFullAcceptanceEvidence(goal, candidateSha, kernel, evidenceSource: null, integrationBranch, executionDirectory);
         if (diagnostic is not null) return diagnostic;
         var outstanding = goal.GetOutstandingCriterionEvidenceObligations(candidateSha)
             .Where(IsBoundOrNonAcceptanceObligation)
@@ -75,7 +75,7 @@ internal static partial class AcceptanceCriterionEvidence
         Func<GoalId, string?> resolveCandidateSha,
         AgentOrchestratorKernel? kernel,
         string evidenceSource,
-        string? executionDirectory)
+        string integrationBranch, string? executionDirectory)
     {
         ArgumentNullException.ThrowIfNull(goals);
         ArgumentNullException.ThrowIfNull(resolveCandidateSha);
@@ -87,7 +87,7 @@ internal static partial class AcceptanceCriterionEvidence
                 resolveCandidateSha(goal.Id),
                 kernel,
                 evidenceSource,
-                executionDirectory);
+                integrationBranch, executionDirectory);
             if (diagnostic is not null)
             {
                 diagnostics.Add($"goal {goal.Id.Value[..Math.Min(8, goal.Id.Value.Length)]}: {diagnostic}");
@@ -102,7 +102,7 @@ internal static partial class AcceptanceCriterionEvidence
         string? candidateSha,
         AgentOrchestratorKernel? kernel,
         string evidenceSource,
-        string? executionDirectory)
+        string integrationBranch, string? executionDirectory)
     {
         if (kernel is null || string.IsNullOrWhiteSpace(candidateSha))
         {
@@ -111,10 +111,10 @@ internal static partial class AcceptanceCriterionEvidence
 
         var normalizedCandidate = candidateSha.Trim();
         var rebindDiagnostic = TryRebindPendingAcceptanceObligations(
-            goal, normalizedCandidate, kernel, executionDirectory);
+            goal, normalizedCandidate, kernel, integrationBranch, executionDirectory);
         if (rebindDiagnostic is not null) return rebindDiagnostic;
 
-        var diagnostic = RecordFullAcceptanceEvidence(goal, normalizedCandidate, kernel, evidenceSource, executionDirectory: null);
+        var diagnostic = RecordFullAcceptanceEvidence(goal, normalizedCandidate, kernel, evidenceSource, integrationBranch, executionDirectory: null);
         if (diagnostic is not null) return diagnostic;
         var outstanding = goal.GetOutstandingCriterionEvidenceObligations(normalizedCandidate)
             .Where(IsBoundOrNonAcceptanceObligation)
@@ -130,7 +130,7 @@ internal static partial class AcceptanceCriterionEvidence
         string candidateSha,
         string mainSha,
         AgentOrchestratorKernel kernel,
-        string executionDirectory)
+        string integrationBranch, string executionDirectory)
     {
         var hasPendingAcceptanceObligation = goal.OutstandingCriterionEvidenceObligations.Any(item =>
             item.Owner == CriterionEvidenceOwner.Acceptance &&
@@ -155,7 +155,7 @@ internal static partial class AcceptanceCriterionEvidence
             passedOutcome is null
                 ? "landing-executor current deterministic acceptance outcome"
                 : $"goal-operation:{passedOutcome.Operation}",
-            executionDirectory);
+            integrationBranch, executionDirectory);
     }
 
     private static string? RecordFullAcceptanceEvidence(
@@ -163,7 +163,7 @@ internal static partial class AcceptanceCriterionEvidence
         string? candidateSha,
         AgentOrchestratorKernel? kernel,
         string? evidenceSource,
-        string? executionDirectory)
+        string integrationBranch, string? executionDirectory)
     {
         var outstanding = goal.GetOutstandingCriterionEvidenceObligations(candidateSha);
         if (outstanding.Count == 0) return null;
@@ -172,7 +172,7 @@ internal static partial class AcceptanceCriterionEvidence
             return "Acceptance passed but criterion evidence could not be recorded: the authoritative kernel or candidate SHA is unavailable. No obligation was resolved.";
         }
 
-        TryCarryPatchEquivalentBindings(goal, candidateSha, kernel, executionDirectory, out var carryRefusal);
+        TryCarryPatchEquivalentBindings(goal, candidateSha, kernel, integrationBranch, executionDirectory, out var carryRefusal);
         outstanding = goal.GetOutstandingCriterionEvidenceObligations(candidateSha);
         var matching = outstanding
             .Where(item =>
@@ -222,10 +222,10 @@ internal static partial class AcceptanceCriterionEvidence
         Goal goal,
         string candidateSha,
         AgentOrchestratorKernel kernel,
-        string? executionDirectory,
+        string integrationBranch, string? executionDirectory,
         out string? refusal)
     {
-        if (!TryPlanPatchEquivalentBindings(goal, candidateSha, executionDirectory,
+        if (!TryPlanPatchEquivalentBindings(goal, candidateSha, integrationBranch, executionDirectory,
                 out var eligible, out var oldHeads, out var evidenceByHead, out refusal))
             return false;
 

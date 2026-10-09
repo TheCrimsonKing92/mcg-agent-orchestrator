@@ -18,7 +18,7 @@ public sealed class ConductorDriverTests
         Goal goal)
     {
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            Path.Combine(root, "acceptance-attempts"),
+            Path.Combine(root, "acceptance-attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             isProcessAlive: _ => true,
             launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(4242));
         var candidate = ConductorParallelAcceptanceCandidate.Create(

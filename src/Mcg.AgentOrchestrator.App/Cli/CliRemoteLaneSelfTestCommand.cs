@@ -40,7 +40,7 @@ internal static class CliRemoteLaneSelfTestCommand
         var passed = false;
         try
         {
-            var main = git(workspace.ExecutionDirectory, 30_000, ["rev-parse", "refs/heads/main"]);
+            var main = git(workspace.ExecutionDirectory, 30_000, ["rev-parse", $"refs/heads/{workspace.IntegrationBranch}"]);
             if (main.ExitCode != 0 || string.IsNullOrWhiteSpace(main.Output)) { firstFailure = "resolve-main"; return 1; }
             var sha = main.Output.Trim();
             var tree = git(workspace.ExecutionDirectory, 30_000, ["rev-parse", sha + "^{tree}"]);

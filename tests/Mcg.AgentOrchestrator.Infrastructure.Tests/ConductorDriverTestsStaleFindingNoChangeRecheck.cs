@@ -158,7 +158,7 @@ public sealed class ConductorDriverTestsStaleFindingNoChangeRecheck
                 getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
                 getPreReviewEvidenceContext: _ => NoPreReviewContext(_candidate),
                 focusedEvidenceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
-                    Path.Combine(Root, "attempts"), runInline: true, acquireStableSlotLease: (_, _) => null),
+                    Path.Combine(Root, "attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: true, acquireStableSlotLease: (_, _) => null),
                 runFocusedEvidence: (_, request) =>
                     ConductorDriverTestsFindingEvidenceReuse.RetainedEvidenceWithExecutedClasses(Root, request, _candidate),
                 dispatchAndStart: goal =>

@@ -19,7 +19,7 @@ public sealed class TerminalGoalSweepTerminalTaskClosureTests : CliCommandTestBa
         kernel.ReportTaskProgress(goal.Id, failed.Id, WorkTaskStatus.Failed, "Earlier failure");
         kernel = WithGoalStatus(kernel, goal.Id, status);
 
-        var first = TerminalGoalSweep.Run(kernel, root, goal.Id);
+        var first = TerminalGoalSweep.Run(kernel, root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, goal.Id);
         var repaired = kernel.GetGoal(goal.Id);
 
         Xunit.Assert.Equal(status, repaired.Status);
@@ -32,7 +32,7 @@ public sealed class TerminalGoalSweepTerminalTaskClosureTests : CliCommandTestBa
         Xunit.Assert.Contains($"goalState={status}", repair.Evidence, StringComparison.Ordinal);
         Xunit.Assert.Contains("action=cancel-stale-tasks", repair.Evidence, StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain(repaired.Timeline, evt => evt.Kind == ProgressKind.HumanInputRequested);
-        Xunit.Assert.Empty(TerminalGoalSweep.Run(kernel, root, goal.Id).Goals);
+        Xunit.Assert.Empty(TerminalGoalSweep.Run(kernel, root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, goal.Id).Goals);
     }
 
     [Xunit.Fact]
@@ -44,7 +44,7 @@ public sealed class TerminalGoalSweepTerminalTaskClosureTests : CliCommandTestBa
         kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
         kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Failed);
 
-        var sweep = TerminalGoalSweep.Run(kernel, CreateTempDirectory(), goal.Id);
+        var sweep = TerminalGoalSweep.Run(kernel, CreateTempDirectory(), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, goal.Id);
 
         Xunit.Assert.Equal(GoalStatus.Active, kernel.GetGoal(goal.Id).Status);
         Xunit.Assert.Equal(WorkTaskStatus.Assigned, kernel.GetTask(goal.Id, task.Id).Status);
@@ -66,7 +66,7 @@ public sealed class TerminalGoalSweepTerminalTaskClosureTests : CliCommandTestBa
         kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "Earlier failure");
         kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Superseded);
 
-        var sweep = TerminalGoalSweep.Run(kernel, CreateTempDirectory(), goal.Id);
+        var sweep = TerminalGoalSweep.Run(kernel, CreateTempDirectory(), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, goal.Id);
 
         Xunit.Assert.Contains(Xunit.Assert.Single(sweep.Goals).Repairs, repair => repair.Kind == "terminal-task-desync");
         Xunit.Assert.Equal(GoalStatus.Superseded, kernel.GetGoal(goal.Id).Status);
@@ -85,7 +85,7 @@ public sealed class TerminalGoalSweepTerminalTaskClosureTests : CliCommandTestBa
         kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
         kernel = WithGoalStatus(kernel, goal.Id, status);
 
-        var sweep = TerminalGoalSweep.Run(kernel, CreateTempDirectory());
+        var sweep = TerminalGoalSweep.Run(kernel, CreateTempDirectory(), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
 
         Xunit.Assert.Contains(Xunit.Assert.Single(sweep.Goals).Repairs, repair => repair.Kind == "terminal-task-desync");
         Xunit.Assert.Equal(status, kernel.GetGoal(goal.Id).Status);
@@ -114,7 +114,7 @@ public sealed class TerminalGoalSweepTerminalTaskClosureTests : CliCommandTestBa
                 "DISPATCH_PROVIDER_INTERRUPTION", "Interrupted provider round"));
 
         BackgroundDispatchRunner.ApplyRefreshOutcome(kernel, goal.Id, task.Id, outcome);
-        var sweep = TerminalGoalSweep.Run(kernel, root, goal.Id);
+        var sweep = TerminalGoalSweep.Run(kernel, root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, goal.Id);
 
         Xunit.Assert.Equal(GoalStatus.Superseded, kernel.GetGoal(goal.Id).Status);
         Xunit.Assert.Equal(WorkTaskStatus.Cancelled, kernel.GetTask(goal.Id, task.Id).Status);
@@ -132,7 +132,7 @@ public sealed class TerminalGoalSweepTerminalTaskClosureTests : CliCommandTestBa
         var request = kernel.RequestHumanInput(goal.Id, task.Id, "Continue?", HumanWaitKind.SpecClarification);
         kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Superseded);
 
-        TerminalGoalSweep.Run(kernel, CreateTempDirectory(), goal.Id);
+        TerminalGoalSweep.Run(kernel, CreateTempDirectory(), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, goal.Id);
 
         Xunit.Assert.Equal(GoalStatus.Superseded, kernel.GetGoal(goal.Id).Status);
         Xunit.Assert.Equal(WorkTaskStatus.Cancelled, kernel.GetTask(goal.Id, task.Id).Status);

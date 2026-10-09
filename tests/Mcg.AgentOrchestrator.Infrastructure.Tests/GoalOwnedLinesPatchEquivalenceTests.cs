@@ -12,7 +12,7 @@ public sealed class GoalOwnedLinesPatchEquivalenceTests : HostCapacityBoundTestB
         try
         {
             Assert.True(GoalWorktrees.TryComputePatchEquivalence(
-                fixture.Repository, fixture.OldHead, fixture.NewHead,
+                fixture.Repository, fixture.OldHead, fixture.NewHead, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 out var evidence, out var refusal), refusal);
             Assert.Contains("goal-owned lines", evidence, StringComparison.Ordinal);
         }
@@ -29,7 +29,7 @@ public sealed class GoalOwnedLinesPatchEquivalenceTests : HostCapacityBoundTestB
         try
         {
             Assert.False(GoalWorktrees.TryComputePatchEquivalence(
-                fixture.Repository, fixture.OldHead, fixture.NewHead,
+                fixture.Repository, fixture.OldHead, fixture.NewHead, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 out _, out var refusal));
             Assert.Equal($"integration-merge-not-clean; merge={fixture.NewHead}", refusal);
         }

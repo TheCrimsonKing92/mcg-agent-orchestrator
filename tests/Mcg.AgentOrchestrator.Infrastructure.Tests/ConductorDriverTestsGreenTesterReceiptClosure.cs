@@ -378,7 +378,7 @@ public sealed class ConductorDriverTestsGreenTesterReceiptClosure
             _driver = MakeDriver(
                 getPreReviewEvidenceContext: _ => NoPreReviewContext(CandidateSha),
                 focusedEvidenceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
-                    _root, runInline: true, acquireStableSlotLease: (_, _) => null),
+                    _root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: true, acquireStableSlotLease: (_, _) => null),
                 runFocusedEvidence: evidenceFailure == "executor-unavailable" ? null : (_, request) =>
                 {
                     Requests.Add(request);

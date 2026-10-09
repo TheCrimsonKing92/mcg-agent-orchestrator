@@ -457,7 +457,7 @@ public sealed partial class CohortAcceptanceStore
         command.ExecuteNonQuery();
     }
 
-    public IReadOnlyList<AcceptanceCohortLandingRecovery> RecoverPreparedLandings(string executionDirectory)
+    public IReadOnlyList<AcceptanceCohortLandingRecovery> RecoverPreparedLandings(string executionDirectory, string integrationBranch)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(executionDirectory);
         var prepared = new List<(string CohortId, string ReceiptId, string Commit, string? PriorIntegration)>();
@@ -498,7 +498,7 @@ public sealed partial class CohortAcceptanceStore
             }
             if (GitCli.Run(
                     executionDirectory,
-                    "merge-base", "--is-ancestor", intent.Commit, "refs/heads/main").ExitCode != 0)
+                    "merge-base", "--is-ancestor", intent.Commit, $"refs/heads/{integrationBranch}").ExitCode != 0)
             {
                 if (RestoreIntegrationAfterInterruptedLanding(executionDirectory, intent))
                 {

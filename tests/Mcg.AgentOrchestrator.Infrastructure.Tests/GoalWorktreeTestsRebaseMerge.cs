@@ -609,7 +609,7 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
 
             Directory.Delete(Path.Combine(worktreePath, "Microsoft"), recursive: true);
             var timelineCountBeforeRemedy = goal.Timeline.Count;
-            var blocker = Assert.Single(TerminalGoalSweep.Diagnose(kernel, repo, goal.Id).Blockers);
+            var blocker = Assert.Single(TerminalGoalSweep.Diagnose(kernel, repo, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, goal.Id).Blockers);
             var executionOutput = string.Empty;
             var coordinator = new ReconcileSweepRemediationCoordinator(
                 new ReconcileSweepRemediationStore(OrchestratorWorkspace.ForDirectory(repo).SqliteStatePath),
@@ -631,7 +631,7 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
             Assert.Contains(outcome.Events, line => line.StartsWith("SWEEP_REMEDY_ATTEMPT", StringComparison.Ordinal));
             Assert.Contains(outcome.Events, line => line.StartsWith("SWEEP_REMEDY_RESULT", StringComparison.Ordinal) && line.Contains("exit=0", StringComparison.Ordinal));
             Assert.True(File.Exists(Path.Combine(repo, "feature.txt")));
-            Assert.Empty(TerminalGoalSweep.Diagnose(kernel, repo, goal.Id).Blockers);
+            Assert.Empty(TerminalGoalSweep.Diagnose(kernel, repo, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, goal.Id).Blockers);
             Assert.Contains(
                 goal.Timeline.Skip(timelineCountBeforeRemedy),
                 entry => entry.Message.Contains("Verifying", StringComparison.OrdinalIgnoreCase));

@@ -147,7 +147,7 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceTransientRetryPrior
             }
             else
             {
-                coordinator = new ConductorParallelAcceptanceAttemptCoordinator(_attemptRoot, runInline: true);
+                coordinator = new ConductorParallelAcceptanceAttemptCoordinator(_attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: true);
                 _waitForAttempts = () => { };
             }
             var projector = new GateReadyCandidateProjector(

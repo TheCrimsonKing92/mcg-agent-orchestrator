@@ -107,7 +107,7 @@ public sealed class ConductorDriverTestsPreReviewEvidenceHoldDecision
                 PassVerification(kernel, Goal, task);
 
             _coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                Path.Combine(_root, "pre-review-evidence-attempts"),
+                Path.Combine(_root, "pre-review-evidence-attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 executionDirectory: _root,
                 isProcessAlive: _ => true,
                 attemptCompletionGateForTests: _gate,

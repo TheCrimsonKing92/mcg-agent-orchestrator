@@ -190,8 +190,8 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooksAbandon : CliCommand
         var journal = GoalOperationJournal.Read(root, goal.Id);
         Xunit.Assert.True(GoalOperationJournal.HasRetiredTerminalDisposition(journal));
 
-        var firstSweep = TerminalGoalSweep.Run(kernel, root, goal.Id);
-        var secondSweep = TerminalGoalSweep.Run(kernel, root, goal.Id);
+        var firstSweep = TerminalGoalSweep.Run(kernel, root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, goal.Id);
+        var secondSweep = TerminalGoalSweep.Run(kernel, root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, goal.Id);
 
         Xunit.Assert.Empty(firstSweep.Goals);
         Xunit.Assert.Empty(secondSweep.Goals);
@@ -942,7 +942,7 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooksAcceptance : CliComm
         Xunit.Assert.DoesNotContain("Acceptance passed", dogfoodRecord.RenderedMarkdown, StringComparison.Ordinal);
         var facts = new GoalLifecycleFacts(WorkspaceExists: true, IsMerged: true, IsRecorded: true, IsCleanedUp: false);
         Xunit.Assert.Equal(GoalLifecycleState.Recorded, GoalLifecycle.ResolveState(kernel.GetGoal(goal.Id), facts));
-        var sweep = TerminalGoalSweep.Run(kernel, root, goal.Id);
+        var sweep = TerminalGoalSweep.Run(kernel, root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, goal.Id);
         Xunit.Assert.Empty(sweep.Goals);
         Xunit.Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
     }

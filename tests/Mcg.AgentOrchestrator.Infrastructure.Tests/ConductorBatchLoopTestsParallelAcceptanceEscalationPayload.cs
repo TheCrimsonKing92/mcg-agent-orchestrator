@@ -33,7 +33,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance
                     "handle64-timeout", "acceptance-output", "classify-build-lock"));
             },
             getLandingFileScopes: _ => ["src/BuildLockPayload.cs"],
-            parallelAcceptanceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, runInline: true));
+            parallelAcceptanceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: true));
 
         try
         {

@@ -171,7 +171,7 @@ public sealed class GoalWorktreeTestsRemoveCleanupLifecycleCommands : GoalWorktr
                 return false;
             };
 
-            var sweep = TerminalGoalSweep.Run(kernel, repo, goal.Id, cleanupHooks: CleanupHooks.Build());
+            var sweep = TerminalGoalSweep.Run(kernel, repo, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, goal.Id, cleanupHooks: CleanupHooks.Build());
 
             Assert.True(deleteAttempts > 0, "The terminal sweep must execute the injected deletion failure.");
             var blocker = Assert.Single(sweep.Blockers);

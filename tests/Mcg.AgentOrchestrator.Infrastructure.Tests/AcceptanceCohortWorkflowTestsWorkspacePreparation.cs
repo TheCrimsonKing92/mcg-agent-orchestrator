@@ -171,7 +171,7 @@ public sealed class AcceptanceCohortWorkflowTestsWorkspacePreparation : Acceptan
 
             string workspacePath;
             string combinedTree;
-            using (var workspace = GoalWorktrees.CreateAcceptanceCohortWorkspace(repo, main, bindings))
+            using (var workspace = GoalWorktrees.CreateAcceptanceCohortWorkspace(repo, main, bindings, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default))
             {
                 workspacePath = workspace.Path;
                 combinedTree = workspace.TreeRevision;
@@ -228,7 +228,7 @@ public sealed class AcceptanceCohortWorkflowTestsWorkspacePreparation : Acceptan
                 [
                     Bind(first.GoalId, first.Revision, "src/First.cs", "resource:first"),
                     Bind(second.GoalId, second.Revision, "tests/Second.cs", "resource:second")
-                ]);
+                ], Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
 
             var scratchWrite = Path.Combine(workspace.Path, ".scratch", "mcg-wt", Guid.NewGuid().ToString("N"));
             var gitFile = Path.Combine(workspace.Path, ".git");
@@ -283,7 +283,7 @@ public sealed class AcceptanceCohortWorkflowTestsWorkspacePreparation : Acceptan
                 [
                     Bind(first.GoalId, first.Revision, "src/First.cs", "resource:first"),
                     Bind(second.GoalId, second.Revision, "tests/Second.cs", "resource:second")
-                ]);
+                ], Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
 
             Assert.False(labeler.WouldDenyLowWrite(
                 Path.Combine(workspace.Path, ".scratch", "mcg-wt", Guid.NewGuid().ToString("N"))));
@@ -326,7 +326,7 @@ public sealed class AcceptanceCohortWorkflowTestsWorkspacePreparation : Acceptan
                     [
                         Bind(first.GoalId, first.Revision, "src/First.cs", "resource:first"),
                         Bind(second.GoalId, second.Revision, "tests/Second.cs", "resource:second")
-                    ]));
+                    ], Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default));
 
             Assert.Equal(AcceptanceCohortMaterializationFailureKind.WorkspaceFailure, failure.Kind);
             Assert.Contains("Low-integrity gate writes", failure.Message, StringComparison.Ordinal);
@@ -363,7 +363,7 @@ public sealed class AcceptanceCohortWorkflowTestsWorkspacePreparation : Acceptan
                 [
                     Bind(first.GoalId, first.Revision, "src/First.cs", "resource:first"),
                     Bind(second.GoalId, second.Revision, "tests/Second.cs", "resource:second")
-                ]))
+                ], Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default))
             {
                 cohortWorkspace = workspace.Path;
                 Assert.Matches("^c-[0-9a-f]{12}$", Path.GetFileName(workspace.Path));
@@ -378,7 +378,7 @@ public sealed class AcceptanceCohortWorkflowTestsWorkspacePreparation : Acceptan
             using (var workspace = GoalWorktrees.CreateAcceptancePartitionWorkspace(
                 outerWorktree,
                 main,
-                Bind(first.GoalId, first.Revision, "src/First.cs", "resource:first")))
+                Bind(first.GoalId, first.Revision, "src/First.cs", "resource:first"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default))
             {
                 partitionWorkspace = workspace.Path;
                 Assert.Matches("^p-[0-9a-f]{12}$", Path.GetFileName(workspace.Path));
@@ -415,7 +415,7 @@ public sealed class AcceptanceCohortWorkflowTestsWorkspacePreparation : Acceptan
                 [
                     Bind(first.GoalId, first.Revision, "src/First.cs", "resource:first"),
                     Bind(second.GoalId, second.Revision, "tests/Second.cs", "resource:second")
-                ]);
+                ], Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
             AcceptanceCohortWorkspace.WorkspaceRemover = (_, _) =>
                 throw new InvalidOperationException("simulated cohort cleanup failure");
 
@@ -456,7 +456,7 @@ public sealed class AcceptanceCohortWorkflowTestsWorkspacePreparation : Acceptan
                     [
                         Bind(first.GoalId, first.Revision, "seed.txt", "resource:first"),
                         Bind(second.GoalId, second.Revision, "seed.txt", "resource:second")
-                    ]));
+                    ], Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default));
 
             Assert.Equal(AcceptanceCohortMaterializationFailureKind.WorkspaceFailure, failure.Kind);
             var debt = Assert.Single(GoalWorktrees.ListCleanupDebt(repo), item =>
@@ -488,7 +488,7 @@ public sealed class AcceptanceCohortWorkflowTestsWorkspacePreparation : Acceptan
             };
 
             var failure = Assert.Throws<AcceptanceCohortMaterializationException>(() =>
-                GoalWorktrees.CreateAcceptanceCohortWorkspace(repo, main, bindings));
+                GoalWorktrees.CreateAcceptanceCohortWorkspace(repo, main, bindings, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default));
             Assert.Equal(AcceptanceCohortMaterializationFailureKind.MergeConflict, failure.Kind);
 
             Assert.Equal(first.Revision, RunGitOutput(repo, "rev-parse", $"refs/heads/{GoalWorktrees.BranchName(first.GoalId)}").Trim());

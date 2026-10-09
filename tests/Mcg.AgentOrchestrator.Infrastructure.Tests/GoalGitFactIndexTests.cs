@@ -8,7 +8,7 @@ public sealed class GoalGitFactIndexTests
     public void BuildBranchQueryFailureMarksEvidenceUnavailable()
     {
         var index = GoalGitFactIndex.Build(
-            Environment.CurrentDirectory,
+            Environment.CurrentDirectory, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             (_, _) => new GitCli.GitResult(1, string.Empty, "git unavailable"));
 
         Assert.False(index.IsAvailable);
@@ -199,7 +199,7 @@ public sealed class GoalGitFactIndexTests
             };
         }
 
-        var resolver = GoalIntegrationEvidenceResolver.Build(Environment.CurrentDirectory, "main-sha", GitRunner);
+        var resolver = GoalIntegrationEvidenceResolver.Build(Environment.CurrentDirectory, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, "main-sha", GitRunner);
 
         Assert.False(resolver.TryResolve(goalId, out var evidence));
         Assert.Null(evidence);
@@ -226,7 +226,7 @@ public sealed class GoalGitFactIndexTests
             };
         }
 
-        var index = GoalGitFactIndex.Build(Environment.CurrentDirectory, GitRunner);
+        var index = GoalGitFactIndex.Build(Environment.CurrentDirectory, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, GitRunner);
 
         Assert.True(index.HasGoalBranch("goal/present"));
         Assert.False(index.HasGoalBranch("goal/missing"));

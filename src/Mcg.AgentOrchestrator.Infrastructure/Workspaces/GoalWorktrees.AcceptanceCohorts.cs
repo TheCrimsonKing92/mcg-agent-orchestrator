@@ -89,7 +89,7 @@ public static partial class GoalWorktrees
         string executionDirectory,
         string observedMainRevision,
         AcceptanceCohortMemberBinding member,
-        GoalWorktreeCleanupHooks? cleanupHooks = null)
+        string integrationBranch, GoalWorktreeCleanupHooks? cleanupHooks = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(executionDirectory);
         ArgumentNullException.ThrowIfNull(member);
@@ -98,7 +98,7 @@ public static partial class GoalWorktrees
         var normalizedMain = AcceptanceCohortMemberBinding.NormalizeRevision(
             observedMainRevision,
             nameof(observedMainRevision));
-        var liveMain = ResolveRequiredRef(root, "refs/heads/main");
+        var liveMain = ResolveRequiredRef(root, $"refs/heads/{integrationBranch}");
         if (!liveMain.Equals(normalizedMain, StringComparison.Ordinal))
         {
             throw new InvalidOperationException("Attribution main revision changed before partition materialization.");
@@ -160,7 +160,7 @@ public static partial class GoalWorktrees
         string executionDirectory,
         string observedMainRevision,
         IReadOnlyList<AcceptanceCohortMemberBinding> members,
-        GoalWorktreeCleanupHooks? cleanupHooks = null)
+        string integrationBranch, GoalWorktreeCleanupHooks? cleanupHooks = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(executionDirectory);
         ArgumentNullException.ThrowIfNull(members);
@@ -174,7 +174,7 @@ public static partial class GoalWorktrees
         var normalizedMain = AcceptanceCohortMemberBinding.NormalizeRevision(
             observedMainRevision,
             nameof(observedMainRevision));
-        var liveMain = ResolveRequiredRef(root, "refs/heads/main");
+        var liveMain = ResolveRequiredRef(root, $"refs/heads/{integrationBranch}");
         if (!liveMain.Equals(normalizedMain, StringComparison.Ordinal))
         {
             throw new AcceptanceCohortMaterializationException(

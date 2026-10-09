@@ -45,7 +45,7 @@ public sealed class ConductorDriverTestsSourceSizePreflight
             0, out _);
         Assert.NotNull(candidate);
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            Path.Combine(root, ".orchestrator", "test-acceptance-attempts"),
+            Path.Combine(root, ".orchestrator", "test-acceptance-attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             root,
             runInline: true,
             tryRunPreSlot: driver.RunParallelLandingAcceptancePreSlot);

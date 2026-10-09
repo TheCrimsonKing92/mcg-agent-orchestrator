@@ -16,7 +16,7 @@ public sealed class SatisfiedAcceptancePatchCarryTests : HostCapacityBoundTestBa
         {
             var (kernel, goal) = CreateGoal(fixture.OldHead, true);
             var diagnostic = AcceptanceCriterionEvidence.RecordAndDescribeOutstanding(
-                goal, fixture.NewHead, kernel, fixture.Repository);
+                goal, fixture.NewHead, kernel, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, fixture.Repository);
 
             Assert.Null(diagnostic);
             var obligation = Assert.Single(goal.CriterionEvidenceObligations);
@@ -32,7 +32,7 @@ public sealed class SatisfiedAcceptancePatchCarryTests : HostCapacityBoundTestBa
             Assert.Contains("patch-equivalent carry of satisfied acceptance obligation", note.Detail, StringComparison.Ordinal);
 
             Assert.Null(AcceptanceCriterionEvidence.RecordAndDescribeOutstanding(
-                goal, fixture.NewHead, kernel, fixture.Repository));
+                goal, fixture.NewHead, kernel, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, fixture.Repository));
             Assert.Equal(obligation, Assert.Single(goal.CriterionEvidenceObligations));
             Assert.Single(CarryNotes(fixture.Repository, goal));
         }
@@ -90,7 +90,7 @@ public sealed class SatisfiedAcceptancePatchCarryTests : HostCapacityBoundTestBa
             var before = Assert.Single(goal.CriterionEvidenceObligations);
 
             var diagnostic = AcceptanceCriterionEvidence.RecordAndDescribeOutstanding(
-                goal, fixture.NewHead, kernel, fixture.Repository);
+                goal, fixture.NewHead, kernel, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, fixture.Repository);
 
             Assert.Equal(
                 $"Acceptance passed for {fixture.NewHead}, but obligation '{before.Id}' is bound to {fixture.OldHead}. Rebind the obligation to the current candidate before recording its evidence. Carry-forward refused: reason=not-eligible.",
@@ -114,7 +114,7 @@ public sealed class SatisfiedAcceptancePatchCarryTests : HostCapacityBoundTestBa
             var before = Assert.Single(goal.CriterionEvidenceObligations);
 
             var diagnostic = AcceptanceCriterionEvidence.RecordAndDescribeOutstanding(
-                goal, fixture.NewHead, kernel, fixture.Repository);
+                goal, fixture.NewHead, kernel, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, fixture.Repository);
 
             Assert.Equal(
                 $"Acceptance passed for {fixture.NewHead}, but obligation '{before.Id}' is bound to {fixture.OldHead}. Rebind the obligation to the current candidate before recording its evidence. Carry-forward refused: reason=not-eligible.",
@@ -138,7 +138,7 @@ public sealed class SatisfiedAcceptancePatchCarryTests : HostCapacityBoundTestBa
             var before = goal.CriterionEvidenceObligations.ToArray();
 
             var diagnostic = AcceptanceCriterionEvidence.RecordAndDescribeOutstanding(
-                goal, fixture.NewHead, kernel, fixture.Repository);
+                goal, fixture.NewHead, kernel, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, fixture.Repository);
 
             Assert.Equal(
                 $"Acceptance passed for {fixture.NewHead}, but obligation '{before[0].Id}' is bound to {fixture.OldHead}. Rebind the obligation to the current candidate before recording its evidence. Carry-forward refused: reason=not-eligible.",
@@ -172,7 +172,7 @@ public sealed class SatisfiedAcceptancePatchCarryTests : HostCapacityBoundTestBa
             var before = goal.CriterionEvidenceObligations.ToArray();
 
             var diagnostic = AcceptanceCriterionEvidence.RecordAndDescribeOutstanding(
-                goal, fixture.NewHead, kernel, fixture.Repository);
+                goal, fixture.NewHead, kernel, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, fixture.Repository);
 
             Assert.Equal(
                 $"Acceptance passed for {fixture.NewHead}, but obligation '{before[0].Id}' is bound to {fixture.OldHead}. Rebind the obligation to the current candidate before recording its evidence. Carry-forward refused: reason=not-eligible.",

@@ -870,7 +870,7 @@ public sealed class AcceptanceCohortWorkflowTestsBackgroundAndCapacity : Accepta
             const int ownerProcessId = 8123;
             var landed = false;
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                attemptRoot,
+                attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 isProcessAlive: _ => true,
                 launchOwnedProcess: pending =>
                 {
@@ -978,7 +978,7 @@ public sealed class AcceptanceCohortWorkflowTestsBackgroundAndCapacity : Accepta
             using var second = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
                 DotnetBuildEnvironmentManager.TryAcquireStableSlotExecutionLock(1, TimeSpan.Zero, storageRoot: storageRoot)).Lease;
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                Path.Combine(root, "attempts"),
+                Path.Combine(root, "attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 runInline: true, buildStorageRoot: storageRoot);
 
             Assert.Throws<DotnetBuildSlotsBusyException>(() =>

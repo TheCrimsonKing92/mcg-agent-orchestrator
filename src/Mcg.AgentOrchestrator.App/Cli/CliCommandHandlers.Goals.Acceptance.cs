@@ -697,7 +697,7 @@ private static bool TryNormalizePrematureCompletedGoalForAcceptance(
         return false;
     }
 
-    var gitFacts = GoalGitFactIndex.Build(context.Workspace.ExecutionDirectory).BuildGoalBranchFacts(goal);
+    var gitFacts = GoalGitFactIndex.Build(context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch).BuildGoalBranchFacts(goal);
     var hasBranchArtifact = context.Worktrees.TryResolve(context.Workspace.ExecutionDirectory, goal.Id) is not null ||
         gitFacts.HasGoalBranch;
     if (!hasBranchArtifact || gitFacts.BranchAlreadyLanded)
@@ -977,7 +977,7 @@ private static void RecordAcceptanceGuardAbort(
     var projectionGoal = projectionKernel.Goals.FirstOrDefault(candidate => candidate.Id == goal.Id) ?? goal;
     ConsoleViews.PrintAcceptanceSummary(
         projectionGoal,
-        GoalAcceptanceStatusProjector.Build(projectionKernel, projectionGoal, context.Workspace.ExecutionDirectory));
+        GoalAcceptanceStatusProjector.Build(projectionKernel, projectionGoal, context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch));
 }
 
 private static T RunGoalMarkLandedStep<T>(string stepName, Func<T> step)

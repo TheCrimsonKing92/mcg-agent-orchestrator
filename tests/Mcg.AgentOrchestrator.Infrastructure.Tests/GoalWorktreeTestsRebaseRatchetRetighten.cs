@@ -26,7 +26,7 @@ public sealed class GoalWorktreeTestsRebaseRatchetRetighten : GoalWorktreeTestBa
             Assert.Contains($"{GuardedPath}: 15 -> {expectedCeiling}", RunGitOutput(scenario.Worktree, "log", "-1", "--format=%b"));
             Assert.Equal(new[] { $"RATCHET_RETIGHTEN goal={scenario.Goal.Value[..8]} path={GuardedPath} old=15 new={expectedCeiling}" }, progress);
             var head = RunGitOutput(scenario.Worktree, "rev-parse", "HEAD").Trim();
-            Assert.True(GoalWorktrees.TryComputePatchEquivalence(scenario.Repo, scenario.OldHead, head,
+            Assert.True(GoalWorktrees.TryComputePatchEquivalence(scenario.Repo, scenario.OldHead, head, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 out var evidence, out var refusal), $"{refusal}: {evidence}");
             Assert.Equal(string.Empty, RunGitOutput(scenario.Worktree, "status", "--porcelain").Trim());
         }
@@ -81,7 +81,7 @@ public sealed class GoalWorktreeTestsRebaseRatchetRetighten : GoalWorktreeTestBa
             Assert.False(SourceSizeRatchetPreflight.Evaluate(scenario.Worktree).HasBlockingViolation);
             Assert.Contains($"{GuardedPath}: 18 -> 20", RunGitOutput(scenario.Worktree, "log", "-1", "--format=%b"));
             var current = RunGitOutput(scenario.Worktree, "rev-parse", "HEAD").Trim();
-            Assert.True(GoalWorktrees.TryComputePatchEquivalence(scenario.Repo, accepted, current,
+            Assert.True(GoalWorktrees.TryComputePatchEquivalence(scenario.Repo, accepted, current, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 out var evidence, out var refusal), $"{refusal}: {evidence}");
         }
         finally { DeleteDirectory(scenario.Repo); }
@@ -131,7 +131,7 @@ public sealed class GoalWorktreeTestsRebaseRatchetRetighten : GoalWorktreeTestBa
             RunGit(scenario.Worktree, "add", modifiesOtherFile ? "seed.txt" : SourceSizeRatchet.SourcePath);
             RunGit(scenario.Worktree, "commit", "-m", SourceSizeRatchetRetightener.CommitSubject);
             var after = RunGitOutput(scenario.Worktree, "rev-parse", "HEAD").Trim();
-            Assert.False(GoalWorktrees.TryComputePatchEquivalence(scenario.Repo, before, after, out _));
+            Assert.False(GoalWorktrees.TryComputePatchEquivalence(scenario.Repo, before, after, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, out _));
         }
         finally { DeleteDirectory(scenario.Repo); }
     }

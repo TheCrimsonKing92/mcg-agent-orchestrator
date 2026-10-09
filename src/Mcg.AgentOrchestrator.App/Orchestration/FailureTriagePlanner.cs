@@ -90,7 +90,7 @@ public static class FailureTriagePlanner
                 "goal-recovery"));
         }
 
-        var acceptance = AcceptanceQueuePlanner.Build(kernel, executionDirectory, policy)
+        var acceptance = AcceptanceQueuePlanner.Build(kernel, executionDirectory, policy, integrationBranch)
             .Items
             .FirstOrDefault(item => item.GoalId == goal.Id);
         if (acceptance?.Disposition == AcceptanceQueueDisposition.Held &&

@@ -30,7 +30,7 @@ public sealed class AcceptanceCohortWorkflowTestsGitRunner : AcceptanceCohortWor
             };
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var store = new CohortAcceptanceStore(Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db"));
-            using var integration = GoalWorktrees.CreateAcceptanceCohortWorkspace(repo, main, bindings);
+            using var integration = GoalWorktrees.CreateAcceptanceCohortWorkspace(repo, main, bindings, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
             var identity = AcceptanceCohortIdentity.Create(
                 bindings,
                 main,
@@ -93,7 +93,7 @@ public sealed class AcceptanceCohortWorkflowTestsGitRunner : AcceptanceCohortWor
                 repo,
                 "rev-parse",
                 $"refs/heads/{LandingExecutor.IntegrationBranchName}").Trim();
-            using var integration = GoalWorktrees.CreateAcceptanceCohortWorkspace(repo, main, bindings);
+            using var integration = GoalWorktrees.CreateAcceptanceCohortWorkspace(repo, main, bindings, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
             var identity = AcceptanceCohortIdentity.Create(
                 bindings,
                 main,

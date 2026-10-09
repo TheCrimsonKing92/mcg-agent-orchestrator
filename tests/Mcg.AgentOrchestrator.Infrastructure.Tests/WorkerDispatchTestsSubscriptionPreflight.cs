@@ -31,7 +31,7 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
         kernel.ActivateGoal(goal.Id, [agent]);
         kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
 
-        var sweep = TerminalGoalSweep.Run(kernel, root, goal.Id);
+        var sweep = TerminalGoalSweep.Run(kernel, root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, goal.Id);
         var repairedGoal = kernel.GetGoal(goal.Id);
         var repairedTask = repairedGoal.Tasks.Single(candidate => candidate.Id == task.Id);
         Assert.Equal(GoalStatus.Completed, repairedGoal.Status);

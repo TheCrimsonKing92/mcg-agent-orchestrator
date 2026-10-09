@@ -121,7 +121,7 @@ public sealed class ConductorDriverTestsDeferredNoChangePrefixCoverage
                 getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
                 getPreReviewEvidenceContext: _ => NoPreReviewContext(Candidate),
                 focusedEvidenceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
-                    Path.Combine(Root, "attempts"), runInline: true, acquireStableSlotLease: (_, _) => null),
+                    Path.Combine(Root, "attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: true, acquireStableSlotLease: (_, _) => null),
                 runFocusedEvidence: (_, request) => run(request),
                 dispatchAndStart: goal =>
                 {

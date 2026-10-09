@@ -7,9 +7,9 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal static partial class AcceptanceCriterionEvidence
 {
     internal static ConductorAdvanceOutcome.Held? DescribeRefusedCarryHold(
-        Goal goal, string candidateSha, string? executionDirectory)
+        Goal goal, string candidateSha, string integrationBranch, string? executionDirectory)
     {
-        if (TryPlanPatchEquivalentBindings(goal, candidateSha, executionDirectory,
+        if (TryPlanPatchEquivalentBindings(goal, candidateSha, integrationBranch, executionDirectory,
                 out _, out _, out _, out var refusal))
             return null;
         var obligation = goal.GetOutstandingCriterionEvidenceObligations(candidateSha)
@@ -41,7 +41,7 @@ internal static partial class AcceptanceCriterionEvidence
         $"Acceptance passed for {candidateSha}, but obligation '{obligation.Id}' is bound to {obligation.ExpectedCandidateSha ?? "no candidate"}. Rebind the obligation to the current candidate before recording its evidence. Carry-forward refused: {refusal ?? "reason=not-eligible"}.";
 
     private static bool TryPlanPatchEquivalentBindings(
-        Goal goal, string candidateSha, string? executionDirectory,
+        Goal goal, string candidateSha, string integrationBranch, string? executionDirectory,
         out CriterionEvidenceObligation[] eligible,
         out string[] oldHeads,
         out Dictionary<string, string> evidenceByHead,
@@ -83,7 +83,7 @@ internal static partial class AcceptanceCriterionEvidence
         foreach (var oldHead in oldHeads)
         {
             if (!GoalWorktrees.TryComputePatchEquivalence(
-                    executionDirectory, oldHead, candidateSha, out var evidence, out var reason))
+                    executionDirectory, oldHead, candidateSha, integrationBranch, out var evidence, out var reason))
             {
                 refusal = eligible.Any(item => item.Owner == CriterionEvidenceOwner.Acceptance &&
                     item.State == CriterionEvidenceState.Satisfied &&

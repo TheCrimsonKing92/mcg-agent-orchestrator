@@ -52,7 +52,7 @@ public sealed class ConductorBatchLoopTestsRefusedCarryRelaunch : ConductorBatch
                 getLandingFileScopes: _ => ["src/goal.txt"],
                 executionDirectory: repository,
                 parallelAcceptanceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
-                    attemptRoot, repository, runInline: true));
+                    attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, repository, runInline: true));
 
             var first = new ConductorBatchLoop().Run(
                 kernel, driver, ConductorAutonomyPolicy.Conservative, NoStopPath(), maxIterations: 1);
@@ -63,7 +63,7 @@ public sealed class ConductorBatchLoopTestsRefusedCarryRelaunch : ConductorBatch
                 $"Acceptance passed for {candidateSha}, but obligation '{obligation.Id}' is bound to {boundSha}. Rebind the obligation to the current candidate before recording its evidence. Carry-forward refused: reason=range-diff-not-identical; head={boundSha}.";
             Assert.Equal(expectedDiagnostic,
                 AcceptanceCriterionEvidence.RecordAndDescribeOutstanding(
-                    goal, candidateSha, kernel, repository));
+                    goal, candidateSha, kernel, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, repository));
 
             for (var tick = 0; tick < 2; tick++)
             {

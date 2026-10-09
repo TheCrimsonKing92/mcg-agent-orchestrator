@@ -38,7 +38,7 @@ public sealed class LandingExecutorTestsIntegrationMergeBody
             Xunit.Assert.Equal($"Integrate {branch}", ReadGit(repo, "log", "main", "-1", "--format=%s"));
             Xunit.Assert.Equal(expectedBody, ReadGit(repo, "log", "main", "-1", "--format=%b"));
             var mergeSha = ReadGit(repo, "rev-parse", "main");
-            Xunit.Assert.True(GoalIntegrationEvidenceResolver.Build(repo).TryResolve(goal.Id, out var evidence));
+            Xunit.Assert.True(GoalIntegrationEvidenceResolver.Build(repo, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default).TryResolve(goal.Id, out var evidence));
             Xunit.Assert.Equal(mergeSha, evidence!.IntegrateSha);
         }
         finally

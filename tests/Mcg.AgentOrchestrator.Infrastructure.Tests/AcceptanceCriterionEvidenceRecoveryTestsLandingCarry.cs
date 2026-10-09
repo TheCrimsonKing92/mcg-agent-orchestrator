@@ -37,7 +37,7 @@ public sealed class AcceptanceCriterionEvidenceRecoveryTestsLandingCarry : CliCo
             RunGit(worktree, "rebase", "main");
             var newHead = RunGitOutput(worktree, "rev-parse", "HEAD").Trim();
             Assert.NotEqual(oldHead, newHead);
-            Assert.True(GoalWorktrees.TryComputePatchEquivalence(root, oldHead, newHead,
+            Assert.True(GoalWorktrees.TryComputePatchEquivalence(root, oldHead, newHead, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 out var equivalence, out var refusal), refusal);
             var obligation = Assert.Single(goal.CriterionEvidenceObligations);
             if (writeCarry)
@@ -52,7 +52,7 @@ public sealed class AcceptanceCriterionEvidenceRecoveryTestsLandingCarry : CliCo
             var store = new MergeTrainAcceptanceStore(Path.Combine(workspace.OrchestratorDirectory, "merge-train-acceptance.db"));
             SavePassedReceipt(root, goal.Id, newHead, store);
             var result = TerminalGoalSweep.Run(
-                kernel, root, goal.Id,
+                kernel, root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, goal.Id,
                 gitRunner: static (directory, args) => GitCli.Run(directory, args.ToArray()),
                 orchestratorDirectory: workspace.OrchestratorDirectory,
                 mergeTrainAcceptanceStore: store);

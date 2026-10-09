@@ -109,7 +109,7 @@ public sealed class AcceptanceQueuePlannerGitProbeFailureTests
                 };
             }
 
-            var item = Assert.Single(AcceptanceQueuePlanner.Build(kernel, root, AutonomyPolicy.SupervisedAuto, Run).Items);
+            var item = Assert.Single(AcceptanceQueuePlanner.Build(kernel, root, AutonomyPolicy.SupervisedAuto, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, Run).Items);
             assert(item, goal);
         }
         finally

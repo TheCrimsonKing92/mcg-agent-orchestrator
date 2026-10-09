@@ -39,19 +39,19 @@ public static class AcceptanceQueuePlanner
     public static AcceptanceQueuePlan Build(
         AgentOrchestratorKernel kernel,
         string executionDirectory,
-        AutonomyPolicy policy) => BuildCore(kernel, executionDirectory, policy, null);
+        AutonomyPolicy policy, string integrationBranch) => BuildCore(kernel, executionDirectory, policy, integrationBranch, null);
 
     internal static AcceptanceQueuePlan Build(
         AgentOrchestratorKernel kernel,
         string executionDirectory,
-        AutonomyPolicy policy,
+        AutonomyPolicy policy, string integrationBranch,
         Func<string, IReadOnlyList<string>, GitCli.GitResult> gitRunner) =>
-        BuildCore(kernel, executionDirectory, policy, gitRunner);
+        BuildCore(kernel, executionDirectory, policy, integrationBranch, gitRunner);
 
     private static AcceptanceQueuePlan BuildCore(
         AgentOrchestratorKernel kernel,
         string executionDirectory,
-        AutonomyPolicy policy,
+        AutonomyPolicy policy, string integrationBranch,
         Func<string, IReadOnlyList<string>, GitCli.GitResult>? gitRunner)
     {
         var goals = kernel.Goals.ToArray();
@@ -60,7 +60,7 @@ public static class AcceptanceQueuePlanner
             return new AcceptanceQueuePlan(policy, []);
         }
 
-        var gitFacts = GoalGitFactIndex.Build(executionDirectory, gitRunner);
+        var gitFacts = GoalGitFactIndex.Build(executionDirectory, integrationBranch, gitRunner);
         Func<string, IReadOnlyList<string>, GitCli.GitResult> probeRunner =
             gitRunner ?? ((directory, args) => GitCli.Run(directory, args.ToArray()));
         var items = goals

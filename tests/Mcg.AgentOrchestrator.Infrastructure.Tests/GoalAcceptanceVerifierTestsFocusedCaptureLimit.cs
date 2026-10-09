@@ -168,7 +168,7 @@ public sealed class GoalAcceptanceVerifierTestsFocusedCaptureLimit : GoalAccepta
             var goal = new AgentOrchestratorKernel().CreateGoal("Record capture-limited focused evidence");
             var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, []);
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                Path.Combine(root, "attempts"),
+                Path.Combine(root, "attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 runInline: true,
                 acquireStableSlotLease: (_, _) => null,
                 conductEventLogWriter: new ConductEventLogWriter(eventPath));

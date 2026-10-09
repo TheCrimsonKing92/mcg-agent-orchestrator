@@ -716,7 +716,7 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
             Directory.CreateDirectory(contextPath);
             Directory.CreateDirectory(tempPath);
 
-            var result = TerminalGoalSweep.Run(kernel, repo, goal.Id);
+            var result = TerminalGoalSweep.Run(kernel, repo, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, goal.Id);
             var repairedTask = kernel.GetGoal(goal.Id).Tasks.Single();
 
             Assert.Contains(result.Goals.Single().Repairs, repair => repair.Kind == "owned-ephemeral-cleanup");

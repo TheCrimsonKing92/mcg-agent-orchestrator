@@ -17,13 +17,13 @@ public sealed class PatchEquivalenceIntegrationMergeTests : HostCapacityBoundTes
         {
             Assert.True(
                 GoalWorktrees.TryComputePatchEquivalence(
-                    fixture.Repository, fixture.OldHead, fixture.NewHead, out var evidence, out var refusal),
+                    fixture.Repository, fixture.OldHead, fixture.NewHead, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, out var evidence, out var refusal),
                 refusal);
             Assert.Contains("range-diff", evidence, StringComparison.Ordinal);
 
             var (kernel, goal) = BindAcceptanceObligation(fixture.OldHead);
             var diagnostic = AcceptanceCriterionEvidence.RecordAndDescribeOutstanding(
-                goal, fixture.NewHead, kernel, fixture.Repository);
+                goal, fixture.NewHead, kernel, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, fixture.Repository);
 
             Assert.Null(diagnostic);
             var obligation = Assert.Single(goal.CriterionEvidenceObligations);
@@ -47,12 +47,12 @@ public sealed class PatchEquivalenceIntegrationMergeTests : HostCapacityBoundTes
         try
         {
             Assert.False(GoalWorktrees.TryComputePatchEquivalence(
-                fixture.Repository, fixture.OldHead, fixture.NewHead, out _, out var refusal));
+                fixture.Repository, fixture.OldHead, fixture.NewHead, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, out _, out var refusal));
             Assert.Equal(reason, refusal);
 
             var (kernel, goal) = BindAcceptanceObligation(fixture.OldHead);
             var diagnostic = AcceptanceCriterionEvidence.RecordAndDescribeOutstanding(
-                goal, fixture.NewHead, kernel, fixture.Repository);
+                goal, fixture.NewHead, kernel, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, fixture.Repository);
 
             var obligation = Assert.Single(goal.CriterionEvidenceObligations);
             Assert.StartsWith(
@@ -81,12 +81,12 @@ public sealed class PatchEquivalenceIntegrationMergeTests : HostCapacityBoundTes
             var dirtyMerge = dirtyOldHead ? fixture.OldMerge : fixture.NewMerge;
             var expectedReason = $"integration-merge-not-clean; merge={dirtyMerge}";
             Assert.False(GoalWorktrees.TryComputePatchEquivalence(
-                fixture.Repository, fixture.OldHead, fixture.NewHead, out _, out var refusal));
+                fixture.Repository, fixture.OldHead, fixture.NewHead, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, out _, out var refusal));
             Assert.Equal(expectedReason, refusal);
 
             var (kernel, goal) = BindAcceptanceObligation(fixture.OldHead);
             var diagnostic = AcceptanceCriterionEvidence.RecordAndDescribeOutstanding(
-                goal, fixture.NewHead, kernel, fixture.Repository);
+                goal, fixture.NewHead, kernel, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, fixture.Repository);
 
             Assert.Contains($"reason={expectedReason}", diagnostic, StringComparison.Ordinal);
             var obligation = Assert.Single(goal.CriterionEvidenceObligations);

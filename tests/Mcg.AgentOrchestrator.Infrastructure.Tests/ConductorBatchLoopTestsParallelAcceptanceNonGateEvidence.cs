@@ -108,7 +108,7 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceNonGateEvidence : C
         var root = CreateTempDirectory("mcg-passed-nongate-evidence");
         try
         {
-            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(root, runInline: true);
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: true);
             var candidate = ConductorParallelAcceptanceCandidate.Create(
                 goal, 0, ["src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs"],
                 CandidateSha, MainSha);
@@ -120,7 +120,7 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceNonGateEvidence : C
             Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Completed, seed.Kind);
             coordinator.MarkReconciled(seed.Attempt);
             var hold = Assert.IsType<ConductorAdvanceOutcome.Held>(
-                AcceptanceCriterionEvidence.RecordAndCreateHold(goal, CandidateSha, kernel));
+                AcceptanceCriterionEvidence.RecordAndCreateHold(goal, CandidateSha, kernel, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default));
 
             var scenario = new Scenario(root, kernel, goal, coordinator, hold);
             scenario.Driver = MakeDriver(

@@ -150,7 +150,7 @@ public sealed class CriterionEvidencePatchCarryTests : HostCapacityBoundTestBase
             goal.Id, obligation.Id, CriterionEvidenceOwner.Operator, oldHead,
             "operator-old", obligation.RequiredScope, passed: true, detail: "Observed at old head");
 
-        var diagnostic = AcceptanceCriterionEvidence.RecordAndDescribeOutstanding(goal, newHead, kernel);
+        var diagnostic = AcceptanceCriterionEvidence.RecordAndDescribeOutstanding(goal, newHead, kernel, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
 
         Assert.Contains("reason=no-execution-directory", diagnostic, StringComparison.Ordinal);
         Assert.Equal(oldHead, Assert.Single(goal.CriterionEvidenceObligations).ExpectedCandidateSha);

@@ -33,7 +33,7 @@ public sealed class ConductorDriverTestsCandidateRerunReceipts
             var driver = MakeDriver(
                 getPreReviewEvidenceContext: _ => NoPreReviewContext(candidateSha),
                 focusedEvidenceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
-                    root, runInline: true, acquireStableSlotLease: (_, _) => null),
+                    root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: true, acquireStableSlotLease: (_, _) => null),
                 getLandingFileScopes: _ => [],
                 runFocusedEvidence: (_, request) =>
                 {
@@ -147,7 +147,7 @@ public sealed class ConductorDriverTestsCandidateRerunReceipts
             var driver = MakeDriver(
                 getPreReviewEvidenceContext: _ => NoPreReviewContext(candidateSha),
                 focusedEvidenceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
-                    root, runInline: true, acquireStableSlotLease: (_, _) => null),
+                    root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, runInline: true, acquireStableSlotLease: (_, _) => null),
                 getLandingFileScopes: _ => [],
                 runFocusedEvidence: (_, request) =>
                 {
