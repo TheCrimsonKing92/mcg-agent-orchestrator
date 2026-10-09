@@ -412,13 +412,10 @@ internal static class SourceSizeRatchet
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
-            // Goal 69c9d936 adds six call-site lines to pass the workspace integration branch into
-            // existing acceptance, recovery and diagnostic collaborators; resolution remains in the workspace.
-            // Measured 12229 lines across the same 30 partial files, with no extra headroom or new partials.
-            // Goal f1045cfb adds five lines for the dogfood-log list missing-file branch, preserving
-            // its no-entries output without creating a database; schema setup stays in DogfoodLogStore.
-            // Measured 12234 lines across the same 30 partial files; no extra headroom or new partials.
-            new SourceClassCeiling("CliCommandHandlers", 12234, 30),
+            // Goal cb35d012 extracts epic list/show validation, reads and rendering into EpicProgressCommands;
+            // goals 69c9d936 (+6 integration-branch call-site lines) and f1045cfb (+5 dogfood-log missing-file lines) add to it.
+            // Measured 12228 total lines across the same 30 partial files after all three; no extra headroom.
+            new SourceClassCeiling("CliCommandHandlers", 12228, 30),
             new SourceClassCeiling("GoalAcceptanceVerifier", 9064, 32),
             // Goal d647b5f3 extracts premise-invalid clarification construction to PremiseInvalidClarification.
             // Goal 439c80ae extracts Reviewer evidence brief projection to ReviewerEvidenceBriefSection;

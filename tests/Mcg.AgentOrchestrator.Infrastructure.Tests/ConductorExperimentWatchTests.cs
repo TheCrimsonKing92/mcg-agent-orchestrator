@@ -126,10 +126,10 @@ public sealed class ConductorExperimentWatchTests(ITestOutputHelper output) : Co
     }
 
     [Theory]
-    [InlineData(ExperimentStopUnit.Gates)]
-    [InlineData(ExperimentStopUnit.Ticks)]
-    [InlineData(ExperimentStopUnit.Goals)]
-    public void Run_MissingDecisionMetricStillRaisesEarlyGuardrailQuestion(ExperimentStopUnit unit)
+    [InlineData(ExperimentStopUnit.Gates, "0")]
+    [InlineData(ExperimentStopUnit.Ticks, "unavailable")]
+    [InlineData(ExperimentStopUnit.Goals, "2")]
+    public void Run_MissingDecisionMetricStillRaisesEarlyGuardrailQuestion(ExperimentStopUnit unit, string expectedObserved)
     {
         WithWorkspace(workspace =>
         {
@@ -144,7 +144,7 @@ public sealed class ConductorExperimentWatchTests(ITestOutputHelper output) : Co
             fixture.Run(2);
             var detail = Assert.Single(fixture.Events()).GetProperty("detail").GetString()!;
             Assert.Contains($"experiment={record.Id} trigger=guardrail ", detail);
-            Assert.Contains($"observed={(unit == ExperimentStopUnit.Goals ? "2" : "unavailable")} stopRuleMet=false verdict=inconclusive guardrailBreached=true", detail);
+            Assert.Contains($"observed={expectedObserved} stopRuleMet=false verdict=inconclusive guardrailBreached=true", detail);
             Assert.Equal(Key(record, "guardrail"), Assert.Single(fixture.Attention()).CorrelationKey);
         });
     }

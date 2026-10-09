@@ -80,8 +80,12 @@ internal static class CliExperimentCommands
             throw new ArgumentException("as-of: timestamp must include an offset.");
         WriteExperimentRecord(record);
         var goals = ExperimentGoals.Read(context.Workspace.SqliteStatePath);
+        var gateCount = record.Spec.StopRule.Unit == ExperimentStopUnit.Gates
+            ? ExperimentGateAttempts.Count(ExperimentGateAttempts.Read(context.Workspace.ConductEventsLogPath),
+                ExperimentReading.ComparisonStart(record), asOf)
+            : (int?)null;
         ExperimentReading.Render(ExperimentReading.Evaluate(record, goals, ExperimentLandingTimes.Read(context.Workspace.GoalLifecycleEventsDirectory),
-            CliOwnerDigestRetryIntents.Read(context.Workspace, asOf), asOf));
+            CliOwnerDigestRetryIntents.Read(context.Workspace, asOf), asOf, gateCount));
         Console.WriteLine($"outcome: {ExperimentReading.Name(record.Outcome)}");
         var overlaps = ExperimentOverlap.Find(record, store.ListAllAsync().GetAwaiter().GetResult());
         if (overlaps.Count == 0) Console.WriteLine("overlaps: none");

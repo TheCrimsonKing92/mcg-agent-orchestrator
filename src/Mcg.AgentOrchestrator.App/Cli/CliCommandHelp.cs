@@ -66,6 +66,13 @@ internal static class CliCommandHelp
     public const string ExperimentApplyFlagUsage = "Usage: experiment-apply-flag <experiment> [--operator-actor <actor>] [--actor-kind <human|agent>] [--idempotency-key <key>]";
     public const string EpicRenameUsage = "Usage: epic-rename <epic> <new-title>";
     public const string EpicDescribeUsage = "Usage: epic-describe <epic> <text> | epic-describe <epic> --text-file <path>";
+    public const string EpicPlanUsage = "Usage: epic-plan <epic>";
+    public const string EpicPlanAddUsage = "Usage: epic-plan-add <epic> --backlog <id> [--at <n>] | epic-plan-add <epic> --step-file <path> [--at <n>]";
+    public const string EpicPlanMoveUsage = "Usage: epic-plan-move <epic> <n> <m>";
+    public const string EpicPlanRemoveUsage = "Usage: epic-plan-remove <epic> <n>";
+    public const string EpicPlanDoneUsage = "Usage: epic-plan-done <epic> <n>";
+    public const string EpicDecideUsage = "Usage: epic-decide <epic> --text-file <path> [--by <name>]";
+    public const string EpicBarUsage = "Usage: epic-bar <epic> --text-file <path>";
     public const string EpicAssignUsage = "Usage: epic-assign <goal-or-backlog-id> <epic>";
     public const string EpicAssignManyUsage = "Usage: epic-assign-many <epic> [<id>...] [--ids-file <path>] [--dry-run]";
     public const string EpicListUsage = "Usage: epic-list [--since <Nh|Nd|timestamp>]";
@@ -484,6 +491,21 @@ internal static class CliCommandHelp
         "Replace an epic's description; blank text clears it.",
         ["--text-file", "--help", "-h"]);
 
+    private static readonly CommandHelpEntry EpicPlan = new(EpicPlanUsage,
+        "Show purpose, bar, ordered plan with current status, decisions, next step and unplanned members.", ["--help", "-h"]);
+    private static readonly CommandHelpEntry EpicPlanAdd = new(EpicPlanAddUsage,
+        "Add a backlog slice or a step; --at is a 1-based insertion position, omitted to append.", ["--backlog", "--step-file", "--at", "--help", "-h"]);
+    private static readonly CommandHelpEntry EpicPlanMove = new(EpicPlanMoveUsage,
+        "Move the item at 1-based position n to position m.", ["--help", "-h"]);
+    private static readonly CommandHelpEntry EpicPlanRemove = new(EpicPlanRemoveUsage,
+        "Remove only the plan item; keep its backlog item and epic membership.", ["--help", "-h"]);
+    private static readonly CommandHelpEntry EpicPlanDone = new(EpicPlanDoneUsage,
+        "Mark a step done; slice status follows its backlog item and goal.", ["--help", "-h"]);
+    private static readonly CommandHelpEntry EpicDecide = new(EpicDecideUsage,
+        "Append a decision dated with the current UTC time and optional attribution.", ["--text-file", "--by", "--help", "-h"]);
+    private static readonly CommandHelpEntry EpicBar = new(EpicBarUsage,
+        "Set the condition that ends the epic; an empty file clears it.", ["--text-file", "--help", "-h"]);
+
     private static readonly CommandHelpEntry EpicAssign = new(
         EpicAssignUsage,
         "Assign a goal or backlog item to one epic.",
@@ -760,7 +782,7 @@ internal static class CliCommandHelp
         {
             "--text", "--request-key", "--brief-file", "--text-file", "--ids-file", "--pipeline",
             "--backlog-item", "--backlog-coverage", "--ideation", "--researcher", "--planner",
-            "--developer", "--tester", "--reviewer", "--wait", "--epic", "--since"
+            "--developer", "--tester", "--reviewer", "--wait", "--epic", "--since", "--backlog", "--step-file", "--at", "--by"
         };
 
     public static bool TryPrintStartupHelp(IReadOnlyList<string> args)
@@ -800,6 +822,13 @@ internal static class CliCommandHelp
         Console.WriteLine("  backlog-list      List backlog items.");
         Console.WriteLine("  backlog-add       Add a backlog item.");
         Console.WriteLine("  backlog-similar   Rank related backlog items and completed goals.");
+        Console.WriteLine("  epic-plan         Show an epic's structured plan and computed next step.");
+        Console.WriteLine("  epic-plan-add     Add a backlog slice or step to an epic plan.");
+        Console.WriteLine("  epic-plan-move    Reorder plan items by numbered position.");
+        Console.WriteLine("  epic-plan-remove  Remove a plan item, retaining membership.");
+        Console.WriteLine("  epic-plan-done    Mark a step done.");
+        Console.WriteLine("  epic-decide       Record a dated owner decision.");
+        Console.WriteLine("  epic-bar          Set or clear the epic's completion bar.");
         Console.WriteLine("  retry             Retry a task with operator feedback.");
         Console.WriteLine("  recover           Recover a goal with an operator note.");
         Console.WriteLine("  conduct           Drive one goal or the autonomous loop.");
@@ -1363,6 +1392,14 @@ internal static class CliCommandHelp
             entry = EpicDescribe;
             return true;
         }
+
+        CommandHelpEntry? planEntry = args[0].ToLowerInvariant() switch
+        {
+            "epic-plan" => EpicPlan, "epic-plan-add" => EpicPlanAdd, "epic-plan-move" => EpicPlanMove,
+            "epic-plan-remove" => EpicPlanRemove, "epic-plan-done" => EpicPlanDone,
+            "epic-decide" => EpicDecide, "epic-bar" => EpicBar, _ => null
+        };
+        if (planEntry is { } resolvedPlanEntry) { entry = resolvedPlanEntry; return true; }
 
         if (args[0].Equals("epic-suggest", StringComparison.OrdinalIgnoreCase) ||
             args[0].Equals("epic-suggestions", StringComparison.OrdinalIgnoreCase))

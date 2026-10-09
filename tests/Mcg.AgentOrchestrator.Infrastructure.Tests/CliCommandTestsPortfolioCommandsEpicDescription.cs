@@ -112,7 +112,8 @@ public sealed class CliCommandTestsPortfolioCommandsEpicDescription : CliCommand
         var workspace = CreateRefinedWorkspace(root);
         var epic = new PortfolioStore(workspace.PortfolioStorePath).AddEpicAsync("Baseline epic").GetAwaiter().GetResult();
         var output = ExecuteCliAndCapture(["epic-list"], new AgentOrchestratorKernel(), workspace);
-        Assert.Equal($"Baseline epic ({epic.Id[..8]}) project=unassigned goals=0 backlog=0 active=0 verified=0 parked=0 landed=0 newest=none verifying=0 failed=0 closed=0 missing=0 backlog-open=0 backlog-done=0{Environment.NewLine}", output);
+        Assert.Equal($"Baseline epic ({epic.Id[..8]}) project=unassigned goals=0 backlog=0 active=0 verified=0 parked=0 landed=0 newest=none verifying=0 failed=0 closed=0 missing=0 backlog-open=0 backlog-done=0{Environment.NewLine}"
+            + $"  0 of 0 slices landed; next: no plan{Environment.NewLine}", output);
         new PortfolioStore(workspace.PortfolioStorePath).UpdateEpicAsync(epic.Id, description: "Scope").GetAwaiter().GetResult();
         Assert.Equal(output, ExecuteCliAndCapture(["epic-list"], new AgentOrchestratorKernel(), workspace));
     }

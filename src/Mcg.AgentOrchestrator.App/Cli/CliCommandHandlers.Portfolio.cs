@@ -189,18 +189,7 @@ private static bool? TryExecutePortfolioCommand(string command, IReadOnlyList<st
         }
 
         case "epic-list":
-        {
-            DateTimeOffset? since = null;
-            if (parts.Any(part => part.Equals("--since", StringComparison.OrdinalIgnoreCase)
-                || part.StartsWith("--since=", StringComparison.OrdinalIgnoreCase)))
-            {
-                if (!CliSinceArgument.TryParse(GetFlagValue(parts, "--since"), DateTimeOffset.UtcNow, out var cutoff))
-                    throw new ArgumentException(CliCommandHelp.EpicListUsage);
-                since = cutoff;
-            }
-            ConsoleViews.PrintEpicRollups(EpicProgressReadModel.Load(context.Workspace, since), since);
-            return false;
-        }
+            return EpicProgressCommands.ExecuteList(context.Workspace, parts, GetFlagValue(parts, "--since"));
 
         case "epic-members":
         {
@@ -214,11 +203,16 @@ private static bool? TryExecutePortfolioCommand(string command, IReadOnlyList<st
         }
 
         case "epic-show":
-        {
-            CliArgumentParser.RequirePartCount(parts, 2, "epic-show <epic>");
-            ConsoleViews.PrintEpicShow(EpicProgressReadModel.LoadEpic(context.Workspace, parts[1]));
-            return false;
-        }
+            return EpicProgressCommands.ExecuteShow(context.Workspace, parts);
+
+        case "epic-plan":
+        case "epic-plan-add":
+        case "epic-plan-move":
+        case "epic-plan-remove":
+        case "epic-plan-done":
+        case "epic-decide":
+        case "epic-bar":
+            return EpicPlanCommands.Execute(command, parts, context);
 
         case "epic-rename":
         case "epic-describe":

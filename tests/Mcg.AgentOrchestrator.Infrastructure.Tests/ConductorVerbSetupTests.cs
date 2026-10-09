@@ -21,7 +21,7 @@ public sealed class ConductorVerbSetupTests
             output.GetStringBuilder().Clear();
             Assert.Equal(0, CliConductorCommand.Run(["conductor", "setup"], workspace,
                 launcher, new ConductorVerbStartTests.FixedProbe(owner), output: output, error: error));
-            Assert.Equal($"portfolio: version 1 ({workspace.PortfolioStorePath}){Environment.NewLine}" +
+            Assert.Equal($"portfolio: version 2 ({workspace.PortfolioStorePath}){Environment.NewLine}" +
                 $"backlog: version 1 ({workspace.BacklogStorePath}){Environment.NewLine}" +
                 $"operator-intents: version 1 ({Path.Combine(workspace.OrchestratorDirectory, SqliteOperatorIntentStore.DatabaseFileName)}){Environment.NewLine}" +
                 $"operator-lessons: version 1 ({workspace.OperatorLessonsStorePath}){Environment.NewLine}" +
@@ -49,7 +49,7 @@ public sealed class ConductorVerbSetupTests
         using var error = new StringWriter();
         Assert.Equal(0, CliConductorCommand.Run(["conductor", "setup"], fixture.Workspace,
             lockProbe: new UnavailableProbe(), output: output, error: error));
-        Assert.Contains("portfolio: version 1", output.ToString());
+        Assert.Contains("portfolio: version 2", output.ToString());
         Assert.Equal("", error.ToString());
     }
 

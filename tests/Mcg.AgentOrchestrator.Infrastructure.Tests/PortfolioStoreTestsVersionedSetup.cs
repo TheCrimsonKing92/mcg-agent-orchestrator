@@ -18,13 +18,15 @@ public sealed class PortfolioStoreTestsVersionedSetup : IDisposable
         var oldSchema = Schema(legacy);
         var newSchema = Schema(current);
 
-        var added = Assert.Single(newSchema.Except(oldSchema));
-        Assert.Equal("table", added.Type);
-        Assert.Equal(StoreSchemaVersions.TableName, added.Name);
-        Assert.Equal(oldSchema, newSchema.Where(row => row.Name != added.Name).ToArray());
+        var additions = newSchema.Where(row => oldSchema.All(old => old.Name != row.Name)).ToArray();
+        Assert.Equal(new[] { "idx_epic_decisions_epic", "idx_epic_plan_items_epic", "ux_epic_plan_items_slice",
+            "epic_decisions", "epic_plan_items", "sqlite_sequence", StoreSchemaVersions.TableName }, additions.Select(row => row.Name).ToArray());
+        Assert.Equal(oldSchema.Where(row => row.Name != "epics").ToArray(),
+            newSchema.Where(row => oldSchema.Any(old => old.Name == row.Name) && row.Name != "epics").ToArray());
         foreach (var table in oldSchema.Where(row => row.Type == "table"))
-            Assert.Equal(Columns(legacy, table.Name), Columns(current, table.Name));
-        Assert.Equal(["store_name", "version", "applied_at"], Columns(current, added.Name).Select(column => column.Name).ToArray());
+            Assert.Equal(Columns(legacy, table.Name), Columns(current, table.Name).Where(column => table.Name != "epics" || column.Name != "bar").ToArray());
+        Assert.Equal(new ColumnRow(8, "bar", "TEXT", 0, null, 0), Assert.Single(Columns(current, "epics").Where(column => column.Name == "bar")));
+        Assert.Equal(["store_name", "version", "applied_at"], Columns(current, StoreSchemaVersions.TableName).Select(column => column.Name).ToArray());
         Assert.Equal(StoreSchemaRegistry.Portfolio.CurrentVersion, StoreSchemaVersions.Read(current, "portfolio"));
     }
 

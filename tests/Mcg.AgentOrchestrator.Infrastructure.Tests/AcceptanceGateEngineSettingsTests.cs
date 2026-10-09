@@ -17,7 +17,7 @@ public sealed class AcceptanceGateEngineSettingsTests
         Xunit.Assert.Equal(4, settings.MaxConcurrentShards);
         Xunit.Assert.Equal(5, settings.PartitionVerdictFullRerunEveryN);
         Xunit.Assert.Equal(AcceptanceGateEngineSettings.DefaultOutputCaptureLimitBytes, settings.OutputCaptureLimitBytes);
-        Xunit.Assert.Equal(23, settings.InfrastructureTestLanes.Count);
+        Xunit.Assert.Equal(24, settings.InfrastructureTestLanes.Count);
         Xunit.Assert.Equal(8, startupContract.ManifestCheckCount);
         using var manifestDocument = System.Text.Json.JsonDocument.Parse(
             File.ReadAllText(Path.Combine(repositoryRoot, "config", "acceptance-manifest.json")));
@@ -246,6 +246,33 @@ public sealed class AcceptanceGateEngineSettingsTests
             .ToArray();
 
         AssertLanePartitionInvariants(settings, runnableClasses);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("unowned-key")]
+    [Xunit.InlineData("unshared-collection")]
+    [Xunit.InlineData("missing-host-key")]
+    public void LocalHostSplit_InvalidSharedBuildSlotKey_RejectsPartition(string mutation)
+    {
+        var lanes = AcceptanceGateEngineSettings.Load(InfrastructureTestSupport.FindRepositoryRoot())
+            .InfrastructureTestLanes.Select(lane =>
+                mutation == "unowned-key" && lane.Name == "Dotnet build slots"
+                    ? lane with { OwnedCollections = [] }
+                    : mutation == "missing-host-key" && lane.Name == "Dotnet build slots local-only"
+                        ? lane with { ExclusiveResourceKeys = ["xunit:DotnetBuildSlots"] }
+                        : lane).ToArray();
+        var runnableClasses = typeof(AcceptanceGateEngineSettingsTests).Assembly.GetTypes()
+            .Where(IsRunnableTestClass)
+            .Where(type => mutation != "unshared-collection" ||
+                type.GetCustomAttribute<Xunit.CollectionAttribute>(inherit: true)?.Name !=
+                    TestCollections.DotnetBuildEnvironmentManagerStaticHooks ||
+                type == typeof(DotnetBuildEnvironmentManagerTestsLocalHostOnlyLockAttribution))
+            .ToArray();
+        var error = Xunit.Assert.Throws<InvalidDataException>(() => AssertLanePartitionInvariants(
+            new AcceptanceGateEngineSettings { InfrastructureTestLanes = lanes }, runnableClasses));
+
+        Xunit.Assert.Contains("Acceptance lane 'Dotnet build slots local-only'", error.Message);
+        Xunit.Assert.Contains("exclusive resource key 'xunit:DotnetBuildSlots'", error.Message);
     }
 
     [Xunit.Fact(DisplayName = "AcceptanceGateEngine_lane_partition_rejects_duplicate_assignment")]
@@ -2580,6 +2607,11 @@ public sealed class AcceptanceGateEngineSettingsTests
                     continue;
                 }
 
+                if (IsSharedLocalHostBuildSlotKey(lane, normalizedKey))
+                {
+                    continue;
+                }
+
                 var nonExclusiveClasses = matchedClasses
                     .Where(type => !declaredXunitCollections.Contains(
                         type.GetCustomAttribute<Xunit.CollectionAttribute>(inherit: true)?.Name,
@@ -2590,6 +2622,40 @@ public sealed class AcceptanceGateEngineSettingsTests
                     $"but matched classes do not belong to any declared exclusive xUnit collection: " +
                     $"[{string.Join(", ", nonExclusiveClasses)}].");
             }
+        }
+
+        bool IsSharedLocalHostBuildSlotKey(AcceptanceTestLane lane, string resourceKey)
+        {
+            // The host-only split retains the sibling's lock because their static-hook
+            // collection spans both processes, even though this lane owns no slot collection.
+            if (lane.Name != "Dotnet build slots local-only" || resourceKey != "xunit:DotnetBuildSlots" ||
+                !lane.ExclusiveResourceKeys.Contains("host:DotnetBuildSlotsHostOnly"))
+            {
+                return false;
+            }
+
+            var owner = settings.InfrastructureTestLanes.SingleOrDefault(candidate =>
+                candidate.Name == "Dotnet build slots" &&
+                candidate.OwnedCollections.Contains(TestCollections.DotnetBuildSlots) &&
+                candidate.ExclusiveResourceKeys.Contains(resourceKey));
+            if (owner is null || !classesByLane[owner.Name].Any(type =>
+                    type.GetCustomAttribute<Xunit.CollectionAttribute>(inherit: true)?.Name == TestCollections.DotnetBuildSlots))
+            {
+                return false;
+            }
+
+            var ownerCollections = classesByLane[owner.Name]
+                .Select(type => type.GetCustomAttribute<Xunit.CollectionAttribute>(inherit: true)?.Name)
+                .ToHashSet(StringComparer.Ordinal);
+            var disabledCollections = runnableClasses.Select(type => type.Assembly).Distinct()
+                .SelectMany(assembly => assembly.GetTypes())
+                .Select(type => type.GetCustomAttribute<Xunit.CollectionDefinitionAttribute>())
+                .Where(definition => definition is { DisableParallelization: true })
+                .Select(definition => definition!.Name)
+                .ToHashSet(StringComparer.Ordinal);
+            return classesByLane[lane.Name].Any(type =>
+                type.GetCustomAttribute<Xunit.CollectionAttribute>(inherit: true)?.Name is { } collection &&
+                ownerCollections.Contains(collection) && disabledCollections.Contains(collection));
         }
     }
 

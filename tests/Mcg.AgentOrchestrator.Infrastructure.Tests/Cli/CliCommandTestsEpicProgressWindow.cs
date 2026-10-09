@@ -107,7 +107,9 @@ public sealed class CliCommandTestsEpicProgressWindow : CliTaskQueryTestSupport,
         var lines = output.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
         Assert.Equal("Window since 2000-01-01T00:00:00.0000000Z (UTC)", lines[0]);
         Assert.Equal(baseline[0] + " window-created=11 window-transitioned=11 window-failed=2 window-landed=1", lines[1]);
-        Assert.Equal(baseline[1] + " window-created=0 window-transitioned=0 window-failed=0 window-landed=0", lines[2]);
+        Assert.Equal(baseline[1], lines[2]);
+        Assert.Equal(baseline[2] + " window-created=0 window-transitioned=0 window-failed=0 window-landed=0", lines[3]);
+        Assert.Equal(baseline[3], lines[4]);
         Assert.Equal(baseline.Length + 1, lines.Length);
         Assert.DoesNotContain("window-", Execute(["epic-show", "Board"], workspace, probe));
         AssertNoKernelAccess(probe);
@@ -141,13 +143,13 @@ public sealed class CliCommandTestsEpicProgressWindow : CliTaskQueryTestSupport,
         var workspace = Seed();
         var before = SnapshotStores(workspace);
         var probe = new ProbeStateRepository(new AgentOrchestratorKernel());
-        var baseline = Execute(["epic-list"], workspace, probe).TrimEnd('\r', '\n');
+        var baseline = Execute(["epic-list"], workspace, probe).Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
 
         string[] args = inline ? ["epic-list", $"--since={value}"] : ["epic-list", "--since", value];
         var output = Execute(args, workspace, probe);
 
         var lines = output.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
-        Assert.Equal(2, lines.Length);
+        Assert.Equal(3, lines.Length);
         var header = lines[0];
         Assert.StartsWith("Window since ", header);
         Assert.EndsWith("Z (UTC)", header);
@@ -155,9 +157,10 @@ public sealed class CliCommandTestsEpicProgressWindow : CliTaskQueryTestSupport,
         Assert.True(DateTimeOffset.TryParse(timestamp, CultureInfo.InvariantCulture,
             DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var parsed));
         Assert.Equal(TimeSpan.Zero, parsed.Offset);
-        Assert.StartsWith(baseline, lines[1]);
+        Assert.StartsWith(baseline[0], lines[1]);
         Assert.Matches(@"^ window-created=\d+ window-transitioned=\d+ window-failed=\d+ window-landed=\d+$",
-            lines[1][baseline.Length..]);
+            lines[1][baseline[0].Length..]);
+        Assert.Equal(baseline[1], lines[2]);
         AssertStoresUnchanged(before);
         AssertNoKernelAccess(probe);
         Assert.True(CliPersistentStateRunner.SkipsKernelState(args));

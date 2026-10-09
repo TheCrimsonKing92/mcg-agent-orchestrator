@@ -99,8 +99,20 @@ internal static class LaneIsolatedRootScanner
         Assert.True(arguments.Length > 0 && arguments.Length % 2 == 0, $"Empty or incomplete lane filter: '{filter}'.");
         for (var index = 0; index < arguments.Length; index += 2)
         {
-            Assert.True(arguments[index] == "--filter-class", $"Unsupported lane token '{arguments[index]}'.");
             var pattern = arguments[index + 1];
+            if (arguments[index] == "--filter-not-trait")
+            {
+                Assert.True(testTypes.SelectMany(type => type.GetMethods())
+                    .SelectMany(method => method.GetCustomAttributesData())
+                    .Any(attribute => attribute.AttributeType == typeof(Xunit.TraitAttribute) &&
+                        attribute.ConstructorArguments.Count == 2 &&
+                        $"{attribute.ConstructorArguments[0].Value}={attribute.ConstructorArguments[1].Value}"
+                            .Equals(pattern, StringComparison.OrdinalIgnoreCase)),
+                    $"Lane token '{pattern}' resolves to no test trait.");
+                continue;
+            }
+            Assert.True(arguments[index] is "--filter-class" or "--filter-not-class",
+                $"Unsupported lane token '{arguments[index]}'.");
             Assert.True(testTypes.Any(type => pattern.StartsWith('*') && pattern.EndsWith('*')
                     ? type.FullName!.Contains(pattern.Trim('*'), StringComparison.OrdinalIgnoreCase)
                     : type.FullName == pattern),

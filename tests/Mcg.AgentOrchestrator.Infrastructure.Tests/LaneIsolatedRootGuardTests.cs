@@ -45,19 +45,30 @@ public sealed class LaneIsolatedRootGuardTests
         [typeof(OperatorIntentAdjudicationTestsStewardCaseD)] = "Uses StewardCaseDHarness with GUID stores and injected actions; no real build."
     };
 
-    private static readonly IReadOnlyDictionary<(Type Class, string Method), string> ChildClearExceptions =
+    private static readonly IReadOnlyDictionary<(Type Class, string Method), string> LocalHostChildClearExceptions =
         new Dictionary<(Type, string), string>
         {
-            [(typeof(DotnetBuildEnvironmentManagerTestsFocusedRunner),
-                nameof(DotnetBuildEnvironmentManagerTestsFocusedRunner.FocusedRunner_Pass_ExecutesUnderLeaseAndWritesReceipt))] =
-                "The child removes its override to test fallback, then redirects LOCALAPPDATA to a GUID profile (FocusedRunner.cs:275-286,402-403). The parent fixture is unchanged."
+            [(typeof(DotnetBuildEnvironmentManagerTestsLocalHostOnlyFocusedRunner),
+                nameof(DotnetBuildEnvironmentManagerTestsLocalHostOnlyFocusedRunner.FocusedRunner_Pass_ExecutesUnderLeaseAndWritesReceipt))] =
+                "The child removes its override to test fallback, then redirects LOCALAPPDATA to its GUID sharedProfileRoot. The parent rooted fixture is unchanged."
         };
 
     [Xunit.Fact]
     public void Effective_lane_classes_keep_isolated_roots_or_named_exceptions() =>
         LaneIsolatedRootScanner.VerifyLane(VerifiedRepositoryRoot.Find(), "Dotnet build slots",
             typeof(LaneIsolatedRootGuardTests).Assembly, IsIsolatedCollection,
-            CollectionExceptions, ChildClearExceptions, TestCollections.DotnetBuildSlots);
+            CollectionExceptions, new Dictionary<(Type, string), string>(), TestCollections.DotnetBuildSlots);
+
+    [Xunit.Fact]
+    public void Local_host_only_lane_keeps_isolated_roots_or_named_exceptions() =>
+        LaneIsolatedRootScanner.VerifyLane(VerifiedRepositoryRoot.Find(), "Dotnet build slots local-only",
+            typeof(LaneIsolatedRootGuardTests).Assembly, IsIsolatedCollection,
+            new Dictionary<Type, string>
+            {
+                [typeof(DotnetBuildEnvironmentManagerTestsLocalHostOnlyFocusedRunner)] =
+                    "Owns explicit storage through the rooted base; its child uses a GUID LOCALAPPDATA fallback.",
+                [typeof(DotnetBuildEnvironmentManagerTestsLocalHostOnlyLockAttribution)] = ExplicitStorage
+            }, LocalHostChildClearExceptions, TestCollections.DotnetBuildSlots);
 
     private static bool IsIsolatedCollection(Type type) =>
         type.GetCustomAttribute<Xunit.CollectionAttribute>(inherit: true)?.Name == TestCollections.DotnetBuildSlots;
