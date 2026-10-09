@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Security.Cryptography;
 using System.Xml;
 
 namespace Mcg.AgentOrchestrator.Core;
@@ -7,7 +8,7 @@ namespace Mcg.AgentOrchestrator.Core;
 internal static class TrxCoherenceCache
 {
     private const int MaxEntries = 2048;
-    private static readonly ConcurrentDictionary<FileStamp, bool> Entries = new();
+    private static readonly ConcurrentDictionary<ContentIdentity, bool> Entries = new();
     private static readonly object InsertionLock = new();
     private static long loadCount;
 
@@ -30,10 +31,12 @@ internal static class TrxCoherenceCache
             return false;
         }
 
-        if (Entries.TryGetValue(stamp, out var cached))
+        // Keep the handle open through evaluation: Windows denies writes and replacement while
+        // the hash and the parser read the same file. A stamp alone cannot detect restored timestamps.
+        using var readable = File.OpenRead(fullPath);
+        var identity = new ContentIdentity(stamp, Convert.ToHexString(SHA256.HashData(readable)));
+        if (Entries.TryGetValue(identity, out var cached))
         {
-            // A sharing violation or access change must still fail, even with an unchanged stamp.
-            using var readable = File.OpenRead(fullPath);
             return TryReadStamp(fullPath, out var current) && current == stamp && cached;
         }
 
@@ -45,7 +48,7 @@ internal static class TrxCoherenceCache
         }
         catch (XmlException)
         {
-            // Malformed content is stable under the stamp; transient access/IO failures are not.
+            // Malformed content is stable under its hash; transient access/IO failures are not.
             verdict = false;
         }
         if (!TryReadStamp(fullPath, out var afterParse) || afterParse != stamp)
@@ -60,7 +63,7 @@ internal static class TrxCoherenceCache
             {
                 Entries.Clear();
             }
-            Entries[stamp] = verdict;
+            Entries[identity] = verdict;
         }
         return verdict;
     }
@@ -78,4 +81,5 @@ internal static class TrxCoherenceCache
     }
 
     private readonly record struct FileStamp(string Path, long Length, long LastWriteTimeUtcTicks);
+    private readonly record struct ContentIdentity(FileStamp Stamp, string Sha256);
 }

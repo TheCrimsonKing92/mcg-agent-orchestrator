@@ -115,22 +115,70 @@ public sealed class TrxCoherenceCacheTests : IDisposable
         Assert.Equal(2, TrxCoherenceCache.LoadCount);
     }
 
-    [Fact(DisplayName = "A file changed during evaluation cannot seed a passing memo")]
-    public void ChangeDuringEvaluationFailsAndIsNotCached()
+    [Theory]
+    [InlineData(1, 2)]
+    [InlineData(2, 1)]
+    public void SameStampRewrite_ReevaluatesChangedContent(int original, int replacement)
+    {
+        var path = Path.Combine(directory, "same-stamp.trx");
+        File.WriteAllText(path, Trx(total: original));
+        var stamp = File.GetLastWriteTimeUtc(path);
+        var length = new FileInfo(path).Length;
+        Assert.Equal(original == 1, AcceptanceCohortGateEvidence.HasCoherentTrxEvidence([path]));
+
+        File.WriteAllText(path, Trx(total: replacement));
+        File.SetLastWriteTimeUtc(path, stamp);
+        Assert.Equal(length, new FileInfo(path).Length);
+        Assert.Equal(stamp, File.GetLastWriteTimeUtc(path));
+
+        Assert.Equal(replacement == 1, AcceptanceCohortGateEvidence.HasCoherentTrxEvidence([path]));
+        Assert.Equal(2, TrxCoherenceCache.LoadCount);
+        Assert.Equal(replacement == 1, AcceptanceCohortGateEvidence.HasCoherentTrxEvidence([path]));
+        Assert.Equal(2, TrxCoherenceCache.LoadCount);
+    }
+
+    [Fact]
+    public void SameStampRewrite_LandingRejectsFreshlyBoundIncoherentEvidence()
+    {
+        var receipt = CreateReceipt();
+        Assert.True(receipt.HasAuthoritativeLandingEvidence);
+        var path = receipt.GateTestResultPaths[1];
+        var stamp = File.GetLastWriteTimeUtc(path);
+        var length = new FileInfo(path).Length;
+
+        File.WriteAllText(path, Trx(total: 2));
+        File.SetLastWriteTimeUtc(path, stamp);
+        Assert.Equal(length, new FileInfo(path).Length);
+        Assert.Equal(stamp, File.GetLastWriteTimeUtc(path));
+        receipt = receipt with
+        {
+            GateEvidenceArtifacts = receipt.GateEvidenceArtifacts
+                .Select(artifact => artifact.Path == path ? Artifact("trx", path) : artifact)
+                .ToArray()
+        };
+
+        // Refreshing the artifact hash makes coherence the discriminating landing check.
+        Assert.False(receipt.HasAuthoritativeLandingEvidence);
+        Assert.Equal(3, TrxCoherenceCache.LoadCount);
+    }
+
+    [Fact]
+    public void Evaluation_ActiveReadHandlePreventsContentChange()
     {
         var path = Path.Combine(directory, "during.trx");
         File.WriteAllText(path, Trx(total: 1));
         var evaluated = false;
 
-        Assert.False(TrxCoherenceCache.Evaluate(path, fullPath =>
+        Assert.True(TrxCoherenceCache.Evaluate(path, fullPath =>
         {
             evaluated = true;
-            File.WriteAllText(fullPath, Trx(total: 20));
+            Assert.Throws<IOException>(() => File.WriteAllText(fullPath, Trx(total: 20)));
+            Assert.Throws<IOException>(() => File.Delete(fullPath));
             return true;
         }));
         Assert.True(evaluated);
-        Assert.False(AcceptanceCohortGateEvidence.HasCoherentTrxEvidence([path]));
-        Assert.Equal(2, TrxCoherenceCache.LoadCount);
+        Assert.True(AcceptanceCohortGateEvidence.HasCoherentTrxEvidence([path]));
+        Assert.Equal(1, TrxCoherenceCache.LoadCount);
     }
 
     [Fact(DisplayName = "Overflow evicts old stamps instead of growing the memo forever")]
