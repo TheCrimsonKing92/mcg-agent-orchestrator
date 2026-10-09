@@ -3,20 +3,28 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 public sealed class DeveloperDeferredTestSelectionTests
 {
     [Fact]
-    public void ExperimentClasses_ResolveEveryReportedClassAcrossMainAndCliProjects()
+    public void ResolveFindsClassesAcrossMainAndCliProjects()
     {
-        var classes = new[]
+        var root = ConductorDriverTests.CreateTempDirectory();
+        try
         {
-            nameof(ExperimentFlagTargetStoreTests), nameof(ConductorPolicyBooleanFlagsTests),
-            nameof(ExperimentFlagIntentHandlerTests), nameof(ConductorExperimentFlagRevertControllerTests),
-            "CliCommandTestsExperiments", nameof(CliHandledVerbRegistryTests),
-            nameof(ConductorExperimentWatchTests), nameof(DeveloperDeferredTestSelectionTests)
-        };
-        var selection = DeveloperDeferredTestSelections.Resolve(VerifiedRepositoryRoot.Find(),
-            "deferred - " + string.Join(", ", classes));
-        Assert.Empty(selection.NotRun);
-        Assert.Equal(classes.OrderBy(name => name, StringComparer.Ordinal),
-            selection.Selections.Select(item => item.TestClass).OrderBy(name => name, StringComparer.Ordinal));
+            var classes = new[] { "MainTests", "CliTests" };
+            foreach (var name in classes)
+            {
+                var project = Path.Combine(root, "tests", name);
+                Directory.CreateDirectory(project);
+                File.WriteAllText(Path.Combine(project, name + ".csproj"), "<Project />");
+                var source = name == "CliTests" ? Path.Combine(project, "Cli") : project;
+                Directory.CreateDirectory(source);
+                File.WriteAllText(Path.Combine(source, name + ".cs"), "public class " + name + " {}");
+            }
+            var selection = DeveloperDeferredTestSelections.Resolve(root,
+                "deferred - " + string.Join(", ", classes));
+            Assert.Empty(selection.NotRun);
+            Assert.Equal(classes.OrderBy(name => name, StringComparer.Ordinal),
+                selection.Selections.Select(item => item.TestClass).OrderBy(name => name, StringComparer.Ordinal));
+        }
+        finally { Directory.Delete(root, recursive: true); }
     }
 
     [Fact]

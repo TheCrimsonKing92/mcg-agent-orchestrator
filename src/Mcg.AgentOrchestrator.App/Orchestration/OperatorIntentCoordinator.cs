@@ -121,7 +121,7 @@ internal sealed partial class OperatorIntentCoordinator
                         .ListGoalIdStatusesAsync().GetAwaiter().GetResult().Select(g => g.Id).ToArray()
                     : [],
                 id => HasGoalLandedEvent(workspace.GoalLifecycleEventsDirectory, id)),
-            ExperimentFlags = new ExperimentFlagIntentHandler(new ExperimentStore(workspace.ExperimentStorePath),
+            ExperimentFlags = new ExperimentFlagIntentHandler(workspace.ExperimentStorePath,
                 Path.Combine(workspace.OrchestratorDirectory, "conductor-policy.json"))
         };
     }

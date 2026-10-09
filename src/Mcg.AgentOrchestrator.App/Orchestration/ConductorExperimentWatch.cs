@@ -78,13 +78,15 @@ internal sealed class ConductorExperimentWatch
             var intents = File.Exists(Path.Combine(_workspace.OrchestratorDirectory, SqliteOperatorIntentStore.DatabaseFileName))
                 ? CliOwnerDigestRetryIntents.Read(_workspace, asOf) : [];
             var reverts = new ConductorExperimentFlagRevertController(experiments,
-                SqliteOperatorIntentStore.ForDirectories(_workspace.OrchestratorDirectory, _workspace.LogDirectory));
+                () => SqliteOperatorIntentStore.ForDirectories(_workspace.OrchestratorDirectory, _workspace.LogDirectory),
+                Path.Combine(_workspace.OrchestratorDirectory, "conductor-policy.json"));
             foreach (var record in open)
             {
                 try
                 {
                     var reading = ExperimentReading.Evaluate(record, goals, landings, intents, asOf);
-                    if (reverts.TryRevert(record, reading, asOf)) continue;
+                    try { if (reverts.TryRevert(record, reading, asOf)) continue; }
+                    catch (Exception error) { LogFailure(error); }
                     foreach (var trigger in Triggers)
                     {
                         if (!(trigger == "stop-rule" ? reading.StopRuleMet : reading.GuardrailBreached) ||

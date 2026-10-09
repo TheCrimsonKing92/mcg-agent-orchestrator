@@ -7,7 +7,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 /// <summary>The workspace intent seam is the sole experiment writer of conductor policy.</summary>
-internal sealed class ExperimentFlagIntentHandler(ExperimentStore store, string policyPath)
+internal sealed class ExperimentFlagIntentHandler(string experimentStorePath, string policyPath)
 {
     internal bool Apply(OperatorIntentRecord intent) => Execute(intent, revert: false);
     internal bool Revert(OperatorIntentRecord intent) => Execute(intent, revert: true);
@@ -17,6 +17,10 @@ internal sealed class ExperimentFlagIntentHandler(ExperimentStore store, string 
         if (!DecisionAuthorization.Meets(OperatorIntentAdjudication.ResolveAuthorizationTier(intent.AuthenticationAssurance),
                 AuthorizationTier.Mutate))
             throw new InvalidOperationException("tier-below-mutate");
+        if (intent.AuthenticationAssurance == OperatorIntentAdjudication.StewardAssurance &&
+            (!revert || intent.ActorKind != OperatorActorKind.Agent || intent.Actor != "conductor" ||
+             intent.Channel != "conductor-experiment-revert"))
+            throw new InvalidOperationException("steward-capability-boundary");
         string? experimentId;
         try
         {
@@ -26,6 +30,8 @@ internal sealed class ExperimentFlagIntentHandler(ExperimentStore store, string 
         }
         catch (JsonException error) { throw new ArgumentException("invalid-payload", error); }
         if (string.IsNullOrWhiteSpace(experimentId)) throw new ArgumentException("invalid-payload");
+        if (!File.Exists(experimentStorePath)) throw new InvalidOperationException("experiment-not-found");
+        var store = new ExperimentStore(experimentStorePath);
         var record = store.ResolveAsync(experimentId).GetAwaiter().GetResult()
             ?? throw new InvalidOperationException("experiment-not-found");
         if (!revert && record.Outcome != ExperimentOutcomeState.Open)
@@ -61,34 +67,10 @@ internal sealed class ExperimentFlagIntentHandler(ExperimentStore store, string 
         }
         var desired = revert ? target.PriorValue!.Value : target.ValueToApply;
         if (current == desired) return true;
-        var candidate = RewriteProperty(json, target.PropertyName, desired);
+        var candidate = ExperimentPolicyPropertyRewrite.Rewrite(json, target.PropertyName, desired);
         ConductorAutonomyPolicy.ParseJson(candidate);
         WriteAtomically(candidate);
         return false;
-    }
-
-    private static string RewriteProperty(string json, string propertyName, bool desired)
-    {
-        using var document = JsonDocument.Parse(json, new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip });
-        using var buffer = new MemoryStream();
-        using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions { Indented = true }))
-        {
-            writer.WriteStartObject();
-            var found = false;
-            foreach (var property in document.RootElement.EnumerateObject())
-            {
-                writer.WritePropertyName(property.Name);
-                if (property.Name == propertyName)
-                {
-                    writer.WriteBooleanValue(desired);
-                    found = true;
-                }
-                else writer.WriteRawValue(property.Value.GetRawText(), skipInputValidation: true);
-            }
-            if (!found) writer.WriteBoolean(propertyName, desired);
-            writer.WriteEndObject();
-        }
-        return Encoding.UTF8.GetString(buffer.ToArray());
     }
 
     private void WriteAtomically(string json)
@@ -96,7 +78,11 @@ internal sealed class ExperimentFlagIntentHandler(ExperimentStore store, string 
         var temporary = policyPath + "." + Guid.NewGuid().ToString("n") + ".tmp";
         try
         {
-            File.WriteAllText(temporary, json);
+            using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                stream.Write(Encoding.UTF8.GetBytes(json));
+                stream.Flush(flushToDisk: true);
+            }
             File.Move(temporary, policyPath, overwrite: true);
         }
         finally { if (File.Exists(temporary)) File.Delete(temporary); }

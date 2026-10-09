@@ -265,6 +265,8 @@ public sealed class ConductorExperimentWatchTests(ITestOutputHelper output) : Co
             watch.ObserveTick(AsOf);
             watch.ObserveTick(AsOf);
             new ConductorExperimentWatch(workspace, null).ObserveTick(AsOf);
+            if (trigger == "keep")
+                Assert.False(File.Exists(Path.Combine(workspace.OrchestratorDirectory, SqliteOperatorIntentStore.DatabaseFileName)));
             var intents = SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory);
             var queued = intents.ListForGoalAsync(OperatorIntentScopes.Workspace).GetAwaiter().GetResult();
             var items = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory).ListAsync().GetAwaiter().GetResult();
@@ -287,6 +289,37 @@ public sealed class ConductorExperimentWatchTests(ITestOutputHelper output) : Co
                 Assert.False(restored.RootElement.GetProperty("followerGatesEnabled").GetBoolean());
                 Assert.Equal(OperatorIntentStatus.Applied, intents.GetAsync(revert.Id).GetAwaiter().GetResult()!.Status);
             }
+        });
+    }
+
+    [Fact]
+    public void ObserveTick_FailedRevertSubmissionStillRaisesGuardrailQuestion()
+    {
+        WithWorkspace(workspace =>
+        {
+            Seed(workspace);
+            var spec = BreachedSpec(99) with { Intervention = new(ExperimentInterventionKind.ConfigFlag, "Trial flag",
+                new(ExperimentFlagFileKind.ConductorPolicy, "followerGatesEnabled", true)) };
+            var experiments = new ExperimentStore(workspace.ExperimentStorePath);
+            var record = experiments.AddAsync(spec).GetAwaiter().GetResult();
+            experiments.RecordFlagPriorAsync(record.Id, false).GetAwaiter().GetResult();
+            var path = Path.Combine(workspace.OrchestratorDirectory, "conductor-policy.json");
+            File.WriteAllText(path, ExperimentFlagTestFixture.PolicyJson(enabled: true));
+            var before = File.ReadAllBytes(path);
+            var intents = SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory);
+            intents.EnqueueAsync(new OperatorIntentRecord(Guid.NewGuid().ToString("n"), $"experiment-revert-flag:{record.Id}",
+                OperatorIntentVerbs.ExperimentRevertFlag, OperatorIntentScopes.Workspace, null,
+                JsonSerializer.Serialize(new ExperimentRevertFlagOperatorIntentPayload(record.Id), OperatorIntentJson.Options),
+                [], "different", "conductor-experiment-revert", OperatorIntentAdjudication.StewardAssurance, AsOf,
+                ActorKind: OperatorActorKind.Agent)).GetAwaiter().GetResult();
+            var watch = new ConductorExperimentWatch(workspace, null);
+            watch.ObserveTick(AsOf);
+            watch.ObserveTick(AsOf);
+            var items = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory).ListAsync().GetAwaiter().GetResult();
+            Assert.Equal(Key(record, "guardrail"), Assert.Single(items).CorrelationKey);
+            Assert.Equal(ExperimentOutcomeState.Open, experiments.ResolveAsync(record.Id).GetAwaiter().GetResult()!.Outcome);
+            Assert.Equal(before, File.ReadAllBytes(path));
+            Assert.Single(intents.ListForGoalAsync(OperatorIntentScopes.Workspace).GetAwaiter().GetResult());
         });
     }
 

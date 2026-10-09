@@ -25,7 +25,7 @@ internal sealed class ExperimentFlagTestFixture : IDisposable
         File.WriteAllText(PolicyPath, PolicyJson());
         Coordinator = new OperatorIntentCoordinator(Intents, utcNow: () => Now)
         {
-            ExperimentFlags = new ExperimentFlagIntentHandler(Experiments, PolicyPath)
+            ExperimentFlags = new ExperimentFlagIntentHandler(Workspace.ExperimentStorePath, PolicyPath)
         };
     }
 
@@ -48,7 +48,8 @@ internal sealed class ExperimentFlagTestFixture : IDisposable
     internal ExperimentRecord Add(ExperimentSpec? spec = null) => Experiments.AddAsync(spec ?? Spec()).GetAwaiter().GetResult();
 
     internal OperatorIntentRecord Submit(string experimentId, bool revert = false, string assurance = "local-process",
-        string? idempotencyKey = null)
+        string? idempotencyKey = null, string actor = "owner", string channel = "cli",
+        OperatorActorKind actorKind = OperatorActorKind.Human)
     {
         var id = Guid.NewGuid().ToString("n");
         var payload = revert
@@ -56,7 +57,8 @@ internal sealed class ExperimentFlagTestFixture : IDisposable
             : JsonSerializer.Serialize(new ExperimentApplyFlagOperatorIntentPayload(experimentId), OperatorIntentJson.Options);
         return Intents.EnqueueAsync(new OperatorIntentRecord(id, idempotencyKey ?? id,
             revert ? OperatorIntentVerbs.ExperimentRevertFlag : OperatorIntentVerbs.ExperimentApplyFlag,
-            OperatorIntentScopes.Workspace, null, payload, [], "owner", "cli", assurance, Now)).GetAwaiter().GetResult();
+            OperatorIntentScopes.Workspace, null, payload, [], actor, channel, assurance, Now,
+            ActorKind: actorKind)).GetAwaiter().GetResult();
     }
 
     internal void Tick() => Coordinator.ExecuteWorkspacePending(new AgentOrchestratorKernel());
