@@ -7,7 +7,7 @@ public sealed class AcceptanceLaneMembershipTests
     public void LocalHostOnlyBuildSlotTestsBelongOnlyToTheirConductorLane()
     {
         const string localLaneName = "Dotnet build slots local-only";
-        const string hostKey = "xunit:DotnetBuildSlotsHostOnly";
+        const string hostKey = "host:DotnetBuildSlotsHostOnly";
         var root = InfrastructureTestSupport.FindRepositoryRoot();
         var lanes = AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes;
         var descriptors = RunnableClasses();
@@ -69,6 +69,51 @@ public sealed class AcceptanceLaneMembershipTests
     }
 
     [Xunit.Fact]
+    public void WildcardRemoteSelectionKeepsHostOnlyBuildSlotsLocal()
+    {
+        var lanes = AcceptanceGateEngineSettings.Load(InfrastructureTestSupport.FindRepositoryRoot())
+            .InfrastructureTestLanes;
+        var root = Path.Combine(Path.GetTempPath(), "build-slot-eligibility-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var configurationPath = Path.Combine(root, "executors.json");
+            File.WriteAllText(configurationPath,
+                """{"executors":[{"id":"fixture-executor"}],"lanes":["*"],"machineLocalResourceKeys":["xunit:DotnetBuildSlots"]}""");
+            var configuration = RemoteLaneExecutorConfiguration.Load(configurationPath)
+                .ResolveLanes(lanes.Select(lane => "infrastructure tests: " + lane.Name));
+            Xunit.Assert.True(configuration.Enabled);
+            Xunit.Assert.DoesNotContain("host:DotnetBuildSlotsHostOnly", configuration.MachineLocalResourceKeys);
+            using var coordinator = new RemoteLaneCoordinator(configuration,
+                new RemoteLaneCandidateIdentity("attempt", "goal", "commit", "tree", "main", "manifest"),
+                root, null, new FakeRemoteLaneExecutor(), TimeProvider.System, TimeSpan.FromSeconds(1), null);
+            foreach (var laneName in new[] { "Dotnet build slots", "Dotnet build slots local-only" })
+            {
+                var lane = Xunit.Assert.Single(lanes, lane => lane.Name == laneName);
+                var check = new GoalAcceptanceVerifier.AcceptanceManifestCheck
+                {
+                    Name = "infrastructure tests: " + lane.Name,
+                    Type = "dotnet-test",
+                    Project = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+                    Arguments = ["--filter", lane.Filter],
+                    ExclusiveResourceKeys = lane.ExclusiveResourceKeys
+                };
+                Xunit.Assert.Contains(check.Name, configuration.Lanes);
+                Xunit.Assert.True(GoalAcceptanceVerifier.TryGetInfrastructurePartitionId(check, out _, out _));
+                Xunit.Assert.Equal(laneName == "Dotnet build slots", coordinator.IsEligible(check));
+            }
+            var refusal = Xunit.Assert.Single(RemoteExecutorHealthLedger.ReadAll(
+                RemoteExecutorHealthLedger.ResolveStorePath(root)));
+            Xunit.Assert.Equal("infrastructure tests: Dotnet build slots local-only", refusal.Lane);
+            Xunit.Assert.Equal(RemoteLaneOutcomeCode.NotEligibleExclusiveResource, refusal.Outcome);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
     public void BuildSlotDocumentationKeepsHostTestsLocalAndRemoteClearancePending()
     {
         var row = File.ReadLines(Path.Combine(InfrastructureTestSupport.FindRepositoryRoot(),
@@ -79,7 +124,7 @@ public sealed class AcceptanceLaneMembershipTests
         Xunit.Assert.Contains("Category=LocalHostOnly", row);
         Xunit.Assert.Contains("`Dotnet build slots local-only`", row);
         Xunit.Assert.Contains("never remote-eligible", row);
-        Xunit.Assert.Contains("`xunit:DotnetBuildSlotsHostOnly`, which must never be added to the machine-local list", row);
+        Xunit.Assert.Contains("`host:DotnetBuildSlotsHostOnly`, which must never be added to the machine-local list", row);
         Xunit.Assert.Contains("an accepted remote run of the reduced lane", row);
         Xunit.Assert.Contains("executed count, summed with the local-only lane, equals the local count", row);
         Xunit.Assert.DoesNotContain("cleared for the machine-local list after the P4a hold", row);

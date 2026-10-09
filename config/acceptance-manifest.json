@@ -113,7 +113,7 @@
         "name": "Dotnet build slots local-only",
         "filter": "FullyQualifiedName~DotnetBuildEnvironmentManagerTestsLocalHostOnly",
         "estimatedSerialSeconds": 20.0,
-        "exclusiveResourceKeys": [ "xunit:DotnetBuildSlots", "xunit:DotnetBuildSlotsHostOnly" ]
+        "exclusiveResourceKeys": [ "xunit:DotnetBuildSlots", "host:DotnetBuildSlotsHostOnly" ]
       },
       {
         "name": "Goal acceptance verifier",
