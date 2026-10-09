@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
@@ -55,8 +56,12 @@ public sealed class ExperimentFlagIntentSafetyTests
     {
         using var fixture = new ExperimentFlagTestFixture();
         var json = "{ /* operator note ✓ */ \"name\":\"trial\",\r\n" +
+            " \"maxConcurrentPaidWorkers\": 1,\r\n" +
+            " \"transitionMap\":" + JsonSerializer.Serialize(ConductorAutonomyPolicy.Conservative.TransitionMap
+                .ToDictionary(entry => entry.Key.ToString(), entry => entry.Value.ToString())) + ",\r\n" +
             " \"followerGatesEnabled\" : false, // experiment flag\r\n" +
             " \"unknown\": { \"followerGatesEnabled\": false } }\r\n";
+        Assert.False(ConductorAutonomyPolicy.ParseJson(json).FollowerGatesEnabled);
         File.WriteAllText(fixture.PolicyPath, json);
         var record = fixture.Add();
         var apply = fixture.Submit(record.Id);
