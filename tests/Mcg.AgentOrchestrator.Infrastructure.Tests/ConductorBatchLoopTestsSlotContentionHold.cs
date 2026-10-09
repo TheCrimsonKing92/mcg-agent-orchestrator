@@ -104,16 +104,20 @@ public sealed class ConductorBatchLoopTestsSlotContentionHold : ConductorBatchLo
     public void Advance_OrdinaryFault_EscalatesReapsAndSetsAside(bool ioFault)
     {
         var (kernel, goal) = SimpleGoal("ordinary advance fault");
+        // A dispatchable Active goal is re-admitted by stall reconciliation. Use
+        // acceptance-ready state to observe the advance-fault set-aside itself.
+        PassVerification(kernel, goal, goal.Tasks.Single());
         var attempts = 0;
         var reaps = 0;
         var driver = MakeDriver(
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
-            dispatchAndStart: _ =>
+            runAcceptance: _ =>
             {
                 attempts++;
                 throw ioFault ? new IOException("ordinary IO fault")
                     : new InvalidOperationException("ordinary advance fault");
-            });
+            },
+            isVerificationGateSatisfied: _ => true);
         var loop = new ConductorBatchLoop(
             reapGoalRunningDispatches: (_, _) => reaps++,
             detachGoalRunningDispatches: (_, _) => { });
@@ -122,11 +126,16 @@ public sealed class ConductorBatchLoopTestsSlotContentionHold : ConductorBatchLo
             NoStopPath(), maxIterations: 3, watchInterval: TimeSpan.FromMilliseconds(1),
             sleepFunc: _ => false);
 
-        Assert.Equal(3, summary.Ticks);
+        Assert.Equal(1, summary.Ticks);
+        Assert.Equal(2, summary.Rechecks);
+        Assert.Equal("max-iter", summary.StopReason);
         Assert.Equal(1, summary.Escalated);
         Assert.Equal(1, reaps);
         Assert.Equal(1, attempts);
+        Assert.Equal(GoalStatus.Verified, kernel.GetGoal(goal.Id).Status);
         Assert.Single(Decisions(kernel, goal).Where(IsAdvanceFault));
+        Assert.DoesNotContain(Decisions(kernel, goal), message =>
+            message.Contains("re-admitted", StringComparison.Ordinal));
     }
 
     private static Exception BuildContention(bool lockBlocked) => lockBlocked
