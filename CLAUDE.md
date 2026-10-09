@@ -10,6 +10,7 @@ Managed .NET test execution home: docs/operator-runbook.md owns the repository-s
 Managed .NET build execution home: docs/operator-runbook.md owns the bounded worker-build helper, durable diagnostic-output contract, and exceptional diagnostic wrapper; counterpart files and worker skills point there instead of inventing build launch commands.
 Role capability home: docs/role-capability-matrix.md owns the enforcement-sourced worker capability and acceptance-criterion routing matrix; counterpart files point there instead of duplicating it.
 Repository conventions home: docs/repository-conventions.md owns test-source layout and repository-root conventions that protect test selection and isolated verification; counterpart files point there instead of duplicating them.
+Human interface home: docs/human-interface-principles.md owns the design rules for owner-facing surfaces (console, notices, human CLI output); counterpart files point there instead of duplicating them.
 Shared anchors:
 - output-discipline
 - retry-and-loop-control
@@ -32,6 +33,7 @@ Claude Code auto-reads this file. Shared repository discipline stays in [AGENTS.
 > **Work accumulating without landings, or repeated review/correction?** Apply the shared [landing progress discipline](docs/operator-runbook.md#landing-progress-discipline) before another dispatch or full gate run.
 > **Steward and Author:** See [Steward and Author](docs/operator-runbook.md#steward-and-author) in the operator runbook.
 > **Adding or splitting test source?** Follow the shared [`repository conventions`](docs/repository-conventions.md) that protect changed-test selection and isolated verification.
+> **Changing the owner console or any human-facing text?** Name the [`human interface principles`](docs/human-interface-principles.md) the change touches, turn each into a headless-view assertion, and drive the result against the live board before calling it ready.
 > **Writing acceptance criteria?** Assign each criterion to a capable evidence owner using the shared [`role-capability-matrix`](docs/role-capability-matrix.md) before creating the goal.
 > **Writing a brief, retry feedback, or a clarification answer — especially a second correction to the same worker?** Use [`worker-guidance-discipline`](docs/worker-guidance-discipline.md). A prohibition invites variants and an adjective invites interpretation; give a decision procedure the worker can run on its own output, or point at an exemplar already in the repo.
 > **Assigning a verdict, terminal state, circuit trip, escalation, or retry-vs-fail choice?** Use [`dispositive-decision-discipline`](docs/dispositive-decision-discipline.md). One check: *could I write the justification for this outcome from what is in scope right here?* If not, the discriminating evidence was discarded upstream and the decision is a guess. Five instances of this shipped in a single day.
