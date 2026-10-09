@@ -16,7 +16,12 @@ internal sealed partial class WorkerArtifactWriter
 
     private readonly WorkerSourceSurvey _sourceSurvey = new();
     private readonly WorkerGitContext _gitContext = new();
-    private readonly WorkerSkillSelector _skillSelector = new();
+    private readonly WorkerSkillSelector _skillSelector;
+
+    internal WorkerArtifactWriter(string? orchestratorSkillDirectory = null)
+    {
+        _skillSelector = new WorkerSkillSelector(new WorkerSkillResolver(orchestratorSkillDirectory));
+    }
     private readonly WorkerResultContractParser _resultContractParser = new();
     private static readonly JsonSerializerOptions RegistryJsonOptions = new()
     {

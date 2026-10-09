@@ -2,8 +2,9 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-internal sealed class WorkerSkillSelector
+internal sealed class WorkerSkillSelector(WorkerSkillResolver? resolver = null)
 {
+    private readonly WorkerSkillResolver _resolver = resolver ?? new WorkerSkillResolver();
     private static readonly SkillCandidate[] KnownSkills =
     [
         new(
@@ -82,11 +83,11 @@ internal sealed class WorkerSkillSelector
     {
         return SelectSkills(goal, task)
             .DistinctBy(skill => skill.Name, StringComparer.OrdinalIgnoreCase)
-            .Select(skill => new WorkerSkillRequirement(
+            .Select(skill => _resolver.Resolve(
+                workingDirectory,
                 skill.Name,
                 skill.RelativePath,
                 skill.Usage,
-                File.Exists(Path.Combine(workingDirectory, skill.RelativePath)),
                 BuildSkillReason(skill.Name, goal, task)))
             .ToArray();
     }

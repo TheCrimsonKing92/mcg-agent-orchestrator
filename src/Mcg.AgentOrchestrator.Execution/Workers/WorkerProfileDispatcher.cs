@@ -155,7 +155,7 @@ public static partial class WorkerProfileDispatcher
         PaidRouteClassification paidRoute = PaidRouteClassification.Unknown,
         // The credential source this dispatch's Claude auth preflight selected and reported. Recorded on
         // the dispatch so the start boundary transports that one decision instead of selecting again.
-        ClaudeCredentialSourceSelection? claudeCredentialSelection = null, DispatchShadowRecorder? shadowRecorder = null)
+        ClaudeCredentialSourceSelection? claudeCredentialSelection = null, DispatchShadowRecorder? shadowRecorder = null, string? orchestratorSkillDirectory = null)
     {
         EnsureTaskNeedsExecution(task, allowPendingRecordedDispatchRefresh);
         EnsureSubscriptionRetryWindowHasPassed(task, dispatchedAt);
@@ -190,7 +190,7 @@ public static partial class WorkerProfileDispatcher
 
         WorkerCommandTemplate.WriteHandoffFile(goal.Tasks, task.Id, workingDirectory);
         var contextDirectory = WriteDispatchContextArtifacts(kernel, goal, task, workingDirectory,
-            preflightFindings, providerName, modelName, citedPriorEvidenceResolver, dispatchedAt);
+            preflightFindings, providerName, modelName, citedPriorEvidenceResolver, dispatchedAt, orchestratorSkillDirectory);
         var targetContext = TryReadCurrentTargetContext(workingDirectory);
         var currentMainIdentity = ReadCurrentMainIdentityForRetry(workingDirectory);
         var reviewerRoundTouchScope = ReadReviewRoundTouchScope(
@@ -491,7 +491,7 @@ public static partial class WorkerProfileDispatcher
         Func<string, bool>? commandExists = null,
         int? reviewAutoRetryStopRound = null,
         CitedPriorEvidenceResolver? citedPriorEvidenceResolver = null,
-        int plannerSampleCount = 1, bool cascadeTesterCheapFirst = true, string? cascadeCheapModelAlias = null, bool cascadeMechanicalReworkCheap = true)
+        int plannerSampleCount = 1, bool cascadeTesterCheapFirst = true, string? cascadeCheapModelAlias = null, bool cascadeMechanicalReworkCheap = true, string? orchestratorSkillDirectory = null)
     {
         EnsureTaskNeedsExecution(task);
         var sandbox = sandboxOptions ?? WorkerSandboxOptions.FromEnvironment();
@@ -532,7 +532,7 @@ public static partial class WorkerProfileDispatcher
             claudeAuthProbe,
             sandbox,
             commandExists,
-            providerHoldScope: kernel.Goals, cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias, cascadeMechanicalReworkCheap: cascadeMechanicalReworkCheap);
+            providerHoldScope: kernel.Goals, cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias, cascadeMechanicalReworkCheap: cascadeMechanicalReworkCheap, orchestratorSkillDirectory: orchestratorSkillDirectory);
         ThrowIfPreflightBlocked(preflight);
         return PrepareTask(
             kernel,
@@ -567,7 +567,7 @@ public static partial class WorkerProfileDispatcher
             sandboxOptions: sandbox,
             plannerSampleCount: plannerSampleCount,
             paidRoute: ClassifyPaidRoute(roleSelection.Model.SubscriptionMode),
-            claudeCredentialSelection: preflight.ClaudeCredentialSelection, shadowRecorder: DispatchShadowRecorder.Default);
+            claudeCredentialSelection: preflight.ClaudeCredentialSelection, shadowRecorder: DispatchShadowRecorder.Default, orchestratorSkillDirectory: orchestratorSkillDirectory);
     }
 
     public static WorkerSubscriptionPreflightResult PreflightSubscriptionTask(
@@ -582,7 +582,7 @@ public static partial class WorkerProfileDispatcher
         Func<ClaudeCliAuthState>? claudeAuthProbe = null,
         WorkerSandboxOptions? sandboxOptions = null,
         Func<string, bool>? commandExists = null,
-        IEnumerable<Goal>? providerHoldScope = null, bool cascadeTesterCheapFirst = true, string? cascadeCheapModelAlias = null, bool cascadeMechanicalReworkCheap = true)
+        IEnumerable<Goal>? providerHoldScope = null, bool cascadeTesterCheapFirst = true, string? cascadeCheapModelAlias = null, bool cascadeMechanicalReworkCheap = true, string? orchestratorSkillDirectory = null)
     {
         var findings = new List<string>();
         ReviewerChangedFileScope? reviewerScope = null;
@@ -664,7 +664,7 @@ public static partial class WorkerProfileDispatcher
                 findings.Add($"blocked: {capability.Detail}");
             }
 
-            AddSkillAvailabilityFindings(findings, goal, task, workingDirectory);
+            AddSkillAvailabilityFindings(findings, goal, task, workingDirectory, orchestratorSkillDirectory);
             AddBuildEnvironmentFinding(findings, goal, task);
             AddWorktreeCleanlinessFinding(findings, task, workingDirectory);
             AddGitMetadataAccessFinding(findings, task, workingDirectory, sandbox);
@@ -987,9 +987,9 @@ public static partial class WorkerProfileDispatcher
         findings.Add(blocked ? $"blocked: {blockedMessage}" : $"ok: {okMessage}");
     }
 
-    private static void AddSkillAvailabilityFindings(List<string> findings, Goal goal, TaskSpec task, string workingDirectory)
+    private static void AddSkillAvailabilityFindings(List<string> findings, Goal goal, TaskSpec task, string workingDirectory, string? orchestratorSkillDirectory)
     {
-        var selectedSkills = WorkerContextArtifacts.SelectSkillRequirements(goal, task, workingDirectory);
+        var selectedSkills = WorkerContextArtifacts.SelectSkillRequirements(goal, task, workingDirectory, orchestratorSkillDirectory);
         if (selectedSkills.Count == 0)
         {
             findings.Add("skills: no deterministic skill rule matched this task");
@@ -1003,10 +1003,7 @@ public static partial class WorkerProfileDispatcher
             return;
         }
 
-        findings.Add(
-            "blocked: missing required local skill(s): " +
-            string.Join(", ", missing.Select(skill => $"{skill.Name} at {skill.RelativePath}")) +
-            "; add the SKILL.md file(s) or adjust the task so the router no longer selects them");
+        findings.Add(WorkerSkillResolver.DescribeMissing(missing));
     }
 
     private static void AddBuildEnvironmentFinding(List<string> findings, Goal goal, TaskSpec task)
@@ -1139,7 +1136,7 @@ public static partial class WorkerProfileDispatcher
         // Shared Claude auth probe, so a test can supply fixture credential sources instead of this
         // batch reading the operator's real credential store. Production leaves it null and each
         // prepared task below gets its own single resolution.
-        Func<ClaudeCliAuthState>? claudeAuthProbe = null, bool cascadeTesterCheapFirst = true, string? cascadeCheapModelAlias = null, bool cascadeMechanicalReworkCheap = true)
+        Func<ClaudeCliAuthState>? claudeAuthProbe = null, bool cascadeTesterCheapFirst = true, string? cascadeCheapModelAlias = null, bool cascadeMechanicalReworkCheap = true, string? orchestratorSkillDirectory = null)
     {
         var selections = goal.Tasks
             .Where(task => task.Status == WorkTaskStatus.Assigned)
@@ -1186,7 +1183,7 @@ public static partial class WorkerProfileDispatcher
                 claudeAuthProbe: taskClaudeAuthProbe,
                 sandboxOptions: sandbox,
                 commandExists: commandExists,
-                providerHoldScope: kernel.Goals, cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias, cascadeMechanicalReworkCheap: cascadeMechanicalReworkCheap);
+                providerHoldScope: kernel.Goals, cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias, cascadeMechanicalReworkCheap: cascadeMechanicalReworkCheap, orchestratorSkillDirectory: orchestratorSkillDirectory);
             if (!preflight.Allowed)
             {
                 TryResolveMissingArtifactDependency(kernel, goal, selection.Task, preflight);
@@ -1234,7 +1231,7 @@ public static partial class WorkerProfileDispatcher
                 sandboxOptions: sandbox,
                 plannerSampleCount: plannerSampleCount,
                 paidRoute: ClassifyPaidRoute(roleSelection.Model.SubscriptionMode),
-                claudeCredentialSelection: preflight.ClaudeCredentialSelection, shadowRecorder: DispatchShadowRecorder.Default));
+                claudeCredentialSelection: preflight.ClaudeCredentialSelection, shadowRecorder: DispatchShadowRecorder.Default, orchestratorSkillDirectory: orchestratorSkillDirectory));
         }
 
         return new WorkerProfileReadyBatchResult(results, blocked);

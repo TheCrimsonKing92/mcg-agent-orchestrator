@@ -6,7 +6,7 @@ public static partial class WorkerProfileDispatcher
 {
     private static string WriteDispatchContextArtifacts(AgentOrchestratorKernel kernel, Goal goal, TaskSpec task,
         string workingDirectory, IReadOnlyList<string>? preflightFindings, string? providerName, string? modelName,
-        CitedPriorEvidenceResolver? resolver, DateTimeOffset dispatchedAt)
+        CitedPriorEvidenceResolver? resolver, DateTimeOffset dispatchedAt, string? orchestratorSkillDirectory)
     {
         var answers = kernel.HumanInputRequests
             .Where(request => request.GoalId == goal.Id && request.Kind == HumanWaitKind.PlannerPrerequisiteEvidence
@@ -18,7 +18,8 @@ public static partial class WorkerProfileDispatcher
         return WorkerContextArtifacts.Write(goal, task, workingDirectory, preflightFindings,
             resolver?.Resolve(goal, task), providerName, modelName,
             orchestratorStoreRoot: resolver?.OrchestratorDirectory,
-            answeredEvidenceTexts: answers, clock: new DispatchContextClock(dispatchedAt));
+            answeredEvidenceTexts: answers, clock: new DispatchContextClock(dispatchedAt),
+            orchestratorSkillDirectory: orchestratorSkillDirectory);
     }
 
     private sealed class DispatchContextClock(DateTimeOffset utcNow) : IClock
