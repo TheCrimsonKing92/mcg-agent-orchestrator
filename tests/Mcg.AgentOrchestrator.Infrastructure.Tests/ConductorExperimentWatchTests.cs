@@ -245,7 +245,7 @@ public sealed class ConductorExperimentWatchTests(ITestOutputHelper output) : Co
     [InlineData("revert")]
     [InlineData("guardrail")]
     [InlineData("keep")]
-    public void ObserveTick_AppliedFlagsRevertOnceOrKeepOwnerQuestion(string trigger)
+    public void ObserveTick_AppliedFlagsRevertOrKeepOnce(string trigger)
     {
         WithWorkspace(workspace =>
         {
@@ -263,6 +263,11 @@ public sealed class ConductorExperimentWatchTests(ITestOutputHelper output) : Co
             var before = File.ReadAllBytes(path);
             var watch = new ConductorExperimentWatch(workspace, null);
             watch.ObserveTick(AsOf);
+            if (trigger == "keep")
+            {
+                Assert.Equal(ExperimentOutcomeState.Confirmed, experiments.ResolveAsync(record.Id).GetAwaiter().GetResult()!.Outcome);
+                Assert.Single(new BacklogStore(workspace.BacklogStorePath).ListAsync().GetAwaiter().GetResult());
+            }
             watch.ObserveTick(AsOf);
             new ConductorExperimentWatch(workspace, null).ObserveTick(AsOf);
             if (trigger == "keep")
@@ -273,9 +278,17 @@ public sealed class ConductorExperimentWatchTests(ITestOutputHelper output) : Co
             if (trigger == "keep")
             {
                 Assert.Empty(queued);
-                Assert.Equal(Key(record, "stop-rule"), Assert.Single(items).CorrelationKey);
+                Assert.Empty(items);
+                var item = Assert.Single(new BacklogStore(workspace.BacklogStorePath).ListAsync().GetAwaiter().GetResult());
+                Assert.Equal($"experiment-flag-keep-{record.Id}", item.Id);
+                Assert.Equal(BacklogItemStatus.Open, item.Status);
+                Assert.Contains(record.Id, item.Body);
+                Assert.Contains("followerGatesEnabled", item.Body);
+                Assert.Contains("True", item.Body);
                 Assert.Equal(before, File.ReadAllBytes(path));
-                Assert.Equal(ExperimentOutcomeState.Open, experiments.ResolveAsync(record.Id).GetAwaiter().GetResult()!.Outcome);
+                var decided = experiments.ResolveAsync(record.Id).GetAwaiter().GetResult()!;
+                Assert.Equal(ExperimentOutcomeState.Confirmed, decided.Outcome);
+                Assert.Equal($"backlog:{item.Id}", decided.Decision!.Evidence);
             }
             else
             {
@@ -289,6 +302,70 @@ public sealed class ConductorExperimentWatchTests(ITestOutputHelper output) : Co
                 Assert.False(restored.RootElement.GetProperty("followerGatesEnabled").GetBoolean());
                 Assert.Equal(OperatorIntentStatus.Applied, intents.GetAsync(revert.Id).GetAwaiter().GetResult()!.Status);
             }
+        });
+    }
+
+    [Theory]
+    [InlineData("drifted-policy")]
+    [InlineData("invalid-policy")]
+    [InlineData("backlog-failure")]
+    public void ObserveTick_KeepDeclinedOrFailed_RaisesQuestionsAndContinues(string condition)
+    {
+        WithWorkspace(workspace =>
+        {
+            Seed(workspace);
+            var experiments = new ExperimentStore(workspace.ExperimentStorePath);
+            var spec = Spec() with { Intervention = new(ExperimentInterventionKind.ConfigFlag, "Trial flag",
+                new(ExperimentFlagFileKind.ConductorPolicy, "followerGatesEnabled", true)) };
+            var record = experiments.AddAsync(spec).GetAwaiter().GetResult();
+            experiments.RecordFlagPriorAsync(record.Id, false).GetAwaiter().GetResult();
+            var manual = experiments.AddAsync(Spec()).GetAwaiter().GetResult();
+            var path = Path.Combine(workspace.OrchestratorDirectory, "conductor-policy.json");
+            File.WriteAllText(path, condition == "invalid-policy" ? "invalid json" :
+                ExperimentFlagTestFixture.PolicyJson(enabled: condition != "drifted-policy"));
+            if (condition == "backlog-failure") Directory.CreateDirectory(workspace.BacklogStorePath);
+            var before = File.ReadAllBytes(path);
+
+            new ConductorExperimentWatch(workspace, null).ObserveTick(AsOf);
+
+            var items = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory).ListAsync().GetAwaiter().GetResult();
+            Assert.Equal(2, items.Count);
+            Assert.Contains(items, item => item.CorrelationKey == Key(record, "stop-rule"));
+            Assert.Contains(items, item => item.CorrelationKey == Key(manual, "stop-rule"));
+            Assert.Equal(ExperimentOutcomeState.Open, experiments.ResolveAsync(record.Id).GetAwaiter().GetResult()!.Outcome);
+            Assert.False(File.Exists(workspace.BacklogStorePath));
+            Assert.Equal(before, File.ReadAllBytes(path));
+            Assert.False(File.Exists(Path.Combine(workspace.OrchestratorDirectory, SqliteOperatorIntentStore.DatabaseFileName)));
+        });
+    }
+
+    [Fact]
+    public void ObserveTick_KeepConfirmed_ResolvesEarlierQuestionOnNextTick()
+    {
+        WithWorkspace(workspace =>
+        {
+            Seed(workspace);
+            var experiments = new ExperimentStore(workspace.ExperimentStorePath);
+            var record = experiments.AddAsync(Spec() with
+            {
+                Intervention = new(ExperimentInterventionKind.ConfigFlag, "Trial flag",
+                    new(ExperimentFlagFileKind.ConductorPolicy, "followerGatesEnabled", true))
+            }).GetAwaiter().GetResult();
+            experiments.RecordFlagPriorAsync(record.Id, false).GetAwaiter().GetResult();
+            var path = Path.Combine(workspace.OrchestratorDirectory, "conductor-policy.json");
+            File.WriteAllText(path, ExperimentFlagTestFixture.PolicyJson(enabled: false));
+            var watch = new ConductorExperimentWatch(workspace, null);
+            watch.ObserveTick(AsOf);
+            var items = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+            Assert.Equal(Key(record, "stop-rule"), Assert.Single(items.ListAsync().GetAwaiter().GetResult()).CorrelationKey);
+            File.WriteAllText(path, ExperimentFlagTestFixture.PolicyJson(enabled: true));
+            watch.ObserveTick(AsOf);
+            Assert.Equal(ExperimentOutcomeState.Confirmed, experiments.ResolveAsync(record.Id).GetAwaiter().GetResult()!.Outcome);
+
+            watch.ObserveTick(AsOf);
+
+            Assert.Equal(CollaborationItemStatus.Resolved, Assert.Single(items.ListAsync().GetAwaiter().GetResult()).Status);
+            Assert.Single(new BacklogStore(workspace.BacklogStorePath).ListAsync().GetAwaiter().GetResult());
         });
     }
 

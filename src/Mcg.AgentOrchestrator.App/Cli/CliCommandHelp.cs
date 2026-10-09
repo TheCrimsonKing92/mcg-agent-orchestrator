@@ -468,7 +468,7 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry ExperimentDecide = new(
         ExperimentDecideUsage, "Record evidence and action once on an open experiment.", ["--outcome", "--evidence", "--action", "--help", "-h"]);
     private static readonly CommandHelpEntry ExperimentApplyFlag = new(
-        ExperimentApplyFlagUsage, "Queue a workspace Mutate-tier intent to apply a boolean policy flag. The conductor captures its prior value; keep remains an owner decision.",
+        ExperimentApplyFlagUsage, "Queue a workspace Mutate-tier intent to apply a boolean policy flag. The conductor captures its prior value; an eligible keep reading at the stop rule records confirmed and files a make-permanent backlog item.",
         ["--operator-actor", "--actor-kind", "--idempotency-key", "--help", "-h"]);
 
     private static readonly CommandHelpEntry EpicAdd = new(

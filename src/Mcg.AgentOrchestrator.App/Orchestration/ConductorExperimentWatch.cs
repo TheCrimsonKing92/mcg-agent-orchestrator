@@ -6,7 +6,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-/// <summary>Observes readings, submits flag reverts and records refutations; keep stays an owner question.</summary>
+/// <summary>Observes readings, submits flag reverts and records refutations, and confirms applied flag keeps with a make-permanent backlog item.</summary>
 internal sealed class ConductorExperimentWatch
 {
     private const string KeyPrefix = "experiment-reading-due:";
@@ -79,9 +79,12 @@ internal sealed class ConductorExperimentWatch
                 ? ExperimentGateAttempts.Read(_workspace.ConductEventsLogPath) : [];
             var intents = File.Exists(Path.Combine(_workspace.OrchestratorDirectory, SqliteOperatorIntentStore.DatabaseFileName))
                 ? CliOwnerDigestRetryIntents.Read(_workspace, asOf) : [];
+            var policyPath = Path.Combine(_workspace.OrchestratorDirectory, "conductor-policy.json");
             var reverts = new ConductorExperimentFlagRevertController(experiments,
                 () => SqliteOperatorIntentStore.ForDirectories(_workspace.OrchestratorDirectory, _workspace.LogDirectory),
-                Path.Combine(_workspace.OrchestratorDirectory, "conductor-policy.json"));
+                policyPath);
+            var keeps = new ConductorExperimentFlagKeepController(experiments,
+                () => new BacklogStore(_workspace.BacklogStorePath), policyPath);
             foreach (var record in open)
             {
                 try
@@ -89,6 +92,8 @@ internal sealed class ConductorExperimentWatch
                     var reading = ExperimentReading.Evaluate(record, goals, landings, intents, asOf,
                         ExperimentGateAttempts.Count(gateAttempts, ExperimentReading.ComparisonStart(record), asOf));
                     try { if (reverts.TryRevert(record, reading, asOf)) continue; }
+                    catch (Exception error) { LogFailure(error); }
+                    try { if (keeps.TryKeep(record, reading, asOf)) continue; }
                     catch (Exception error) { LogFailure(error); }
                     foreach (var trigger in Triggers)
                     {
