@@ -66,13 +66,14 @@ internal sealed class OwnerConsoleEpicDialog : FrameView
         _body.ViewportChanged += (_, _) => Format();
     }
 
-    internal async Task OpenAsync(OwnerConsolePane returnPane)
+    internal async Task OpenAsync(OwnerConsolePane returnPane, string? epicId = null)
     {
         if (_disposed || IsOpen) return;
         ReturnPane = returnPane;
         _session = CancellationTokenSource.CreateLinkedTokenSource(_hostToken);
         IsOpen = true;
-        ShowingDetail = false;
+        ShowingDetail = epicId is not null;
+        if (epicId is not null) SelectedEpicId = epicId;
         _loadingDetailTitle = null;
         _scroll = 0;
         _revision++;

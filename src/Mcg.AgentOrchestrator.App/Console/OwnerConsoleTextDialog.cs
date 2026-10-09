@@ -12,10 +12,11 @@ internal sealed class OwnerConsoleTextDialog : Dialog
     internal event Action<int>? ChoiceAccepted;
     private bool _formatting;
 
-    internal OwnerConsoleTextDialog(string title, string text, IReadOnlyList<int>? choiceLines = null)
+    internal OwnerConsoleTextDialog(string title, string text, IReadOnlyList<int>? choiceLines = null,
+        OwnerConsoleTextPage? page = null)
     {
         Title = title; Width = Dim.Percent(85); Height = Dim.Percent(80);
-        Page = new(text, 60, 15, choiceLines);
+        Page = page ?? new(text, 60, 15, choiceLines);
         Add(Body);
         Body.ViewportChanged += (_, _) => Format(Body.Viewport.Width, Body.Viewport.Height);
         Initialized += (_, _) => Body.SetFocus();
@@ -38,7 +39,7 @@ internal sealed class OwnerConsoleTextDialog : Dialog
         Render(); key.Handled = true; return true;
     }
 
-    private void Render()
+    internal void Render()
     {
         var wasFormatting = _formatting;
         _formatting = true;

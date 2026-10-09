@@ -41,7 +41,7 @@ public sealed class OwnerConsoleGoalDetailFormatterTests
         await view.HandleKeyAsync(Key.Enter);
 
         var text = Assert.Single(dialogs.Texts);
-        Assert.Contains("Goal: " + goal.Id.Value, text);
+        Assert.Contains("11111111  Readable detail", text);
         Assert.Contains("Title: Readable detail", text);
         Assert.Contains("Status: " + goal.Status, text);
         Assert.Contains("Stage: Blocked", text);

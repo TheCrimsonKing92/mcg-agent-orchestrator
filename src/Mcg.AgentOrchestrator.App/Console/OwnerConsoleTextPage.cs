@@ -7,8 +7,9 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 // Full text belongs to the model; wrapping and the viewport belong to this dialog instance.
 internal sealed class OwnerConsoleTextPage
 {
-    private readonly string _text;
-    private readonly IReadOnlyList<int> _choiceLines;
+    private string _text;
+    private IReadOnlyList<int> _choiceLines;
+    private int _width;
     private int _height;
     internal IReadOnlyList<string> Lines { get; private set; } = [];
     internal IReadOnlyList<int> SourceLines { get; private set; } = [];
@@ -23,6 +24,7 @@ internal sealed class OwnerConsoleTextPage
     internal void Resize(int width, int height)
     {
         width = Math.Max(2, width);
+        _width = width;
         _height = Math.Max(1, height);
         var lines = new List<string>();
         var sources = new List<int>();
@@ -50,6 +52,15 @@ internal sealed class OwnerConsoleTextPage
         }
         Lines = lines; SourceLines = sources;
         Select(Selected);
+    }
+
+    internal void Replace(string text, IReadOnlyList<int>? choiceLines = null)
+    {
+        var offset = Offset;
+        _text = text;
+        _choiceLines = choiceLines ?? [];
+        Resize(_width, _height);
+        Offset = Math.Clamp(offset, 0, Math.Max(0, Lines.Count - _height));
     }
 
     internal void Select(int row)

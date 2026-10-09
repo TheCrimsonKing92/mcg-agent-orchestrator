@@ -1,17 +1,18 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Mcg.AgentOrchestrator.App.Orchestration;
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 internal static class OwnerConsoleGoalDetailFormatter
 {
-    internal static async Task ComposeAsync(IOrchestratorStateQueries state, IGoalEventTail tail,
-        string id, IOwnerConsoleOutput output, CancellationToken token)
+    internal static async Task<Goal?> ComposeAsync(IOrchestratorStateQueries state, IGoalEventTail tail,
+        string id, IOwnerConsoleOutput output, CancellationToken token, TimeZoneInfo? zone = null)
     {
         var kernel = await state.LoadGoalsAsync([new GoalId(id)], token);
         var goal = kernel.Goals.SingleOrDefault(goal => goal.Id.Value == id);
-        if (goal is null) { output.WriteLine("goal state unavailable"); return; }
-        output.WriteLine("Goal: " + goal.Id.Value);
+        if (goal is null) { output.WriteLine("goal state unavailable"); return null; }
+        output.WriteLine(goal.Id.Value[..Math.Min(8, goal.Id.Value.Length)] + "  " + OwnerGoalTitle.From(goal.Objective));
         var title = OwnerGoalTitle.Full(goal.Objective);
         output.WriteLine("Title: " + title);
         output.WriteLine("Status: " + goal.Status);
@@ -19,6 +20,19 @@ internal static class OwnerConsoleGoalDetailFormatter
         if (stage != goal.Status.ToString()) output.WriteLine("Stage: " + stage);
         var role = OwnerConsoleGoalDetail.Stage(goal);
         if (role != "-") output.WriteLine("Role: " + role);
+        int? position = null;
+        if (goal.Status == GoalStatus.Verified && goal.CurrentHold is null)
+        {
+            var metadata = await state.ListGoalMetadataAsync(token);
+            var ids = metadata.Where(item => item.Status == nameof(GoalStatus.Verified)).Select(item => new GoalId(item.Id)).ToArray();
+            var queued = await state.LoadGoalsAsync(ids, token);
+            var ordered = ConductorBatchLoop.OrderParallelAcceptanceEligibleGoals(queued.Goals
+                .Where(item => item.Status == GoalStatus.Verified && item.CurrentHold is null).ToArray());
+            var index = ordered.ToList().FindIndex(item => item.Id == goal.Id);
+            if (index >= 0) position = index + 1;
+        }
+        if (OwnerConsoleGoalLanding.Line(goal, position, zone ?? TimeZoneInfo.Local) is { } landing)
+            output.WriteLine("Landing: " + landing);
         output.WriteLine("Tasks:");
         foreach (var task in goal.Tasks) output.WriteLine($"  {task.RequiredRole}: {task.Status}");
         if (goal.CurrentHold is { } hold)
@@ -33,6 +47,7 @@ internal static class OwnerConsoleGoalDetailFormatter
                 (lines.Count == 0 || lines[^1].Phrase != phrase)) lines.Add((item.Timestamp, phrase));
         output.WriteLine(lines.Count == 0 ? "Recent events: none" : "Recent events:");
         foreach (var line in lines.TakeLast(10)) output.WriteLine($"  {line.Time.ToLocalTime():HH:mm:ss} {Plain(line.Phrase)}");
+        return goal;
     }
 
     private static string Plain(string text) => text.Replace('{', ' ').Replace('}', ' ').Replace('\r', ' ').Replace('\n', ' ');

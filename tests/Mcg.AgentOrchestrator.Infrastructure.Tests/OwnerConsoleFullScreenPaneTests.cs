@@ -26,7 +26,7 @@ public sealed class OwnerConsoleFullScreenPaneTests
         var detail = Assert.Single(dialogs.Texts);
         Assert.Equal("Goal", detail.Title);
         Assert.Equal(selected.Id.Value, view.SelectedGoalId);
-        Assert.Contains(selected.Id.Value, detail.Text);
+        Assert.Contains("22222222  Second goal", detail.Text);
         Assert.Contains("Second goal", detail.Text);
         Assert.Contains(selected.Status.ToString(), detail.Text);
         Assert.Contains("Stage: Created", detail.Text);
@@ -36,8 +36,8 @@ public sealed class OwnerConsoleFullScreenPaneTests
         Assert.Equal((selected.Id.Value, 100), Assert.Single(tail.Calls));
 
         await controller.RunCommandAsync(":goal " + selected.Id.Value);
-        Assert.Contains("newest event for " + selected.Id.Value, dialogs.Texts[1].Text);
-        Assert.Equal((selected.Id.Value, 15), tail.Calls[1]);
+        Assert.Equal(detail.Text, dialogs.Texts[1].Text);
+        Assert.Equal((selected.Id.Value, 100), tail.Calls[1]);
         await view.HandleKeyAsync(Key.CursorUp);
         Assert.Equal("11111111-first", view.SelectedGoalId);
         Assert.Empty(harness.Answers.Calls);

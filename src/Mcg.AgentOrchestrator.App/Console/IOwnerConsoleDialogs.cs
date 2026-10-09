@@ -8,4 +8,10 @@ internal interface IOwnerConsoleDialogs
     Task ShowDecisionAsync(OwnerConsoleDecisionDetail detail) => ShowTextAsync("Decision", detail.State.Text);
     async Task<int?> ShowPageAsync(string title, string text, IReadOnlyList<int>? choiceLines = null)
     { await ShowTextAsync(title, text); return null; }
+    async Task ShowGoalAsync(OwnerConsoleGoalDialog dialog)
+    {
+        dialog.Start(action => action());
+        var selected = await ShowPageAsync(dialog.Title, dialog.Current.Text, dialog.Current.ChoiceLines);
+        if (selected is { } index) await dialog.OpenResolutionAsync(index);
+    }
 }

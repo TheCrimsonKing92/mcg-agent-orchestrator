@@ -371,6 +371,8 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
             if (!_token.IsCancellationRequested) await _refresh();
         }
         finally { _acting = false; }
+        if (_controller.TakeRequestedEpicId() is { } epicId && !_token.IsCancellationRequested)
+            await EpicView.OpenAsync(FocusedPane, epicId);
     }
 
     internal void FocusDecisions() => FocusPane(OwnerConsolePane.Decisions);

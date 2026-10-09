@@ -28,6 +28,9 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     internal string? SelectedDecisionId { get; private set; }
     internal bool BellEnabled { get; private set; } = true;
     internal bool QuitRequested { get; private set; }
+    private string? _requestedEpicId;
+    internal string? TakeRequestedEpicId()
+    { var id = _requestedEpicId; _requestedEpicId = null; return id; }
     internal async Task ShowActivityMeaningAsync(OwnerConsoleActivityItem item, OwnerConsoleScreenOperation? operation = null,
         CancellationToken cancellationToken = default)
     {
@@ -91,6 +94,11 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
 
     internal Task ShowHelpAsync() => dialogs.ShowTextAsync("Help", OwnerConsoleKeyHints.HelpText);
 
+    internal Task ShowDecisionAsync(OwnerConsoleDecision decision) => ShowDecisionAsync(decision, null, CancellationToken.None);
+
+    internal string ResolutionText(OwnerQuestionResolution resolution) =>
+        OwnerQuestionResolutionText.Build(resolution, clock.LocalTimeZone);
+
     private async Task ShowDecisionAsync(OwnerConsoleDecision decision, OwnerConsoleScreenOperation? operation,
         CancellationToken cancellationToken)
     {
@@ -108,14 +116,23 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     internal async Task ShowGoalDetailAsync(string goalId, OwnerConsoleScreenOperation? operation = null,
         CancellationToken cancellationToken = default)
     {
-        var output = new OwnerConsoleCapturedOutput();
-        IReadOnlyList<OwnerQuestionResolution> resolved = [];
+        OwnerConsoleGoalDialog.Content? content = null;
         if (!await RunDependencyAsync("goal detail", async stepToken =>
-        {
-            await OwnerConsoleGoalDetailFormatter.ComposeAsync(state, tail, goalId, output, stepToken);
-            if (resolutions is not null) resolved = await resolutions.ListForGoalAsync(goalId, stepToken);
-        }, operation, cancellationToken)) return;
+            content = await ComposeGoalAsync(goalId, stepToken), operation, cancellationToken)) return;
         cancellationToken.ThrowIfCancellationRequested();
+        if (content is null) { await dialogs.ShowTextAsync("Goal", "goal state unavailable"); return; }
+        using var dialog = new OwnerConsoleGoalDialog(this, content, token => ComposeGoalAsync(goalId, token),
+            decision => ShowDecisionAsync(decision, operation, cancellationToken), dialogs.ShowTextAsync, cancellationToken);
+        await dialogs.ShowGoalAsync(dialog);
+        _requestedEpicId = dialog.RequestedEpicId;
+    }
+
+    private async Task<OwnerConsoleGoalDialog.Content?> ComposeGoalAsync(string goalId, CancellationToken token)
+    {
+        var output = new OwnerConsoleCapturedOutput();
+        var goal = await OwnerConsoleGoalDetailFormatter.ComposeAsync(state, tail, goalId, output, token, clock.LocalTimeZone).ConfigureAwait(false);
+        if (goal is null) return null;
+        var resolved = resolutions is null ? [] : await resolutions.ListForGoalAsync(goalId, token).ConfigureAwait(false);
         var lines = output.Text.Replace("\r", "").TrimEnd('\n').Split('\n').ToList();
         var choiceLines = new List<int>();
         if (resolved.Count > 0)
@@ -124,9 +141,11 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
             foreach (var question in resolved)
             { choiceLines.Add(lines.Count); lines.Add(OwnerQuestionResolutionText.Summary(question, clock.LocalTimeZone)); }
         }
-        var selected = await dialogs.ShowPageAsync("Goal", string.Join(Environment.NewLine, lines), choiceLines);
-        if (selected is { } index && index >= 0 && index < resolved.Count)
-            await dialogs.ShowTextAsync("Question resolution", OwnerQuestionResolutionText.Build(resolved[index], clock.LocalTimeZone));
+        var openQuestion = Model?.Decisions.Where(item => item.GoalId == goalId).OrderBy(item => item.Number).FirstOrDefault();
+        var epicRows = epics is null ? null : await epics.LoadAsync(null, token).ConfigureAwait(false);
+        var epicId = epicRows?.FirstOrDefault(row => row.MemberGoals.Any(item => item.Id == goalId))?.Epic.Id;
+        var failure = goal.RetainedAcceptanceFailure is { } recorded ? OwnerConsoleGoalLanding.FailureText(recorded, clock.LocalTimeZone) : null;
+        return new(string.Join(Environment.NewLine, lines), choiceLines, resolved, openQuestion, failure, epicId);
     }
 
     private async Task AnswerAsync(bool accept, OwnerConsoleScreenOperation? operation, CancellationToken cancellationToken,
@@ -192,9 +211,11 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
         var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         if (parts.Length == 0) return;
         var output = new OwnerConsoleCapturedOutput();
+        string? goalId = null;
         var control = new OwnerConsoleControlCommands(conductor, digest, output, clock);
         if (!await RunDependencyAsync(line, ExecuteAsync, operation, cancellationToken)) return;
         cancellationToken.ThrowIfCancellationRequested();
+        if (goalId is not null) { await ShowGoalDetailAsync(goalId, operation, cancellationToken); return; }
         await dialogs.ShowTextAsync("Command result", output.Text);
 
         async Task ExecuteAsync(CancellationToken stepToken)
@@ -213,7 +234,7 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
                     break;
                 case "goal":
                     if (parts.Length != 2) { output.WriteLine("usage: goal <id-prefix>"); break; }
-                    await OwnerConsoleGoalDetail.ComposeAsync(state, tail, parts[1], output, stepToken);
+                    goalId = await OwnerConsoleGoalDetail.ResolveAsync(state, parts[1], output, stepToken);
                     break;
                 default: output.WriteLine("unknown command"); break;
             }

@@ -13,7 +13,7 @@ internal static class OwnerConsoleKeyHints
         ("metrics", "Show conductor metrics."),
         ("bell on", "Enable the attention bell."),
         ("bell off", "Disable the attention bell."),
-        ("goal <id-prefix>", "Show goal status, stage and recent events.")
+        ("goal <id-prefix>", "Open live goal detail, landing status and actions.")
     ];
 
     internal static string CommandPrompt => string.Join(" | ", Commands.Select(item => item.Command));

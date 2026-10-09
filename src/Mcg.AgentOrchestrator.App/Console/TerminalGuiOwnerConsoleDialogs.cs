@@ -67,6 +67,58 @@ internal sealed class TerminalGuiOwnerConsoleDialogs(IApplication app, Cancellat
         return result;
     });
 
+    public async Task ShowGoalAsync(OwnerConsoleGoalDialog goal) => await OnUiAsync(() =>
+    {
+        using var dialog = new OwnerConsoleTextDialog(goal.Title, goal.Current.Text, goal.Current.ChoiceLines, goal.Page);
+        var acting = false;
+        var close = new Button { Text = "Close", IsDefault = true };
+        close.Accepting += (_, args) => { args.Handled = true; app.RequestStop(dialog); };
+        dialog.AddButton(close);
+        var buttons = new Dictionary<char, Button>();
+        foreach (var (key, label) in new[] { ('q', "Open question (q)"), ('f', "Last failure (f)"), ('e', "Epic (e)") })
+        {
+            var button = new Button { Text = label };
+            button.Accepting += async (_, args) => { args.Handled = true; await ActAsync(() => goal.HandleKeyAsync(key)); };
+            buttons.Add(key, button); dialog.AddButton(button);
+        }
+        void Refresh()
+        {
+            foreach (var button in buttons.Values) button.Visible = goal.Actions.Contains(button.Text.ToString());
+            dialog.Render();
+        }
+        void Close() => app.RequestStop(dialog);
+        async Task ActAsync(Func<Task> action)
+        {
+            if (acting) return;
+            acting = true;
+            try { await action(); }
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+            catch (Exception ex) { await ShowTextAsync("Goal action failed", ex.Message); }
+            finally { acting = false; }
+        }
+        async void Handle(object? sender, Key key)
+        {
+            if (app.TopRunnableView != dialog) return;
+            var character = char.ToLowerInvariant((char)key.AsRune.Value);
+            if (buttons.TryGetValue(character, out var button) && button.Visible && !key.IsCtrl && !key.IsAlt)
+            { key.Handled = true; await ActAsync(() => goal.HandleKeyAsync(character)); }
+            else if (dialog.Body.HasFocus) dialog.HandleKey(key);
+        }
+        dialog.ChoiceAccepted += async index => await ActAsync(() => goal.OpenResolutionAsync(index));
+        goal.Changed += Refresh; goal.CloseRequested += Close;
+        goal.Start(action => { if (app.Initialized) app.Invoke(action); else action(); });
+        Refresh();
+        var keyboard = app.Keyboard;
+        if (keyboard is not null) keyboard.KeyDown += Handle;
+        try { app.Run(dialog); }
+        finally
+        {
+            if (keyboard is not null) keyboard.KeyDown -= Handle;
+            goal.Changed -= Refresh; goal.CloseRequested -= Close;
+        }
+        return true;
+    });
+
     private void Run(OwnerConsoleTextDialog dialog)
     {
         void Handle(object? sender, Key key)

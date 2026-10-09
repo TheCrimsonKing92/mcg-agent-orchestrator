@@ -298,7 +298,7 @@ internal sealed partial class ConductorBatchLoop
     private static string FormatParallelAcceptanceCandidateUnavailableDetail(Exception exception) =>
         SanitizeReason(exception.Message);
 
-    private static IReadOnlyList<Goal> OrderParallelAcceptanceEligibleGoals(IReadOnlyList<Goal> eligible) =>
+    internal static IReadOnlyList<Goal> OrderParallelAcceptanceEligibleGoals(IReadOnlyList<Goal> eligible) =>
         eligible
             .OrderBy(ParallelAcceptanceVerifiedAt)
             .ThenBy(goal => goal.Timeline.FirstOrDefault()?.OccurredAt ?? DateTimeOffset.MinValue)
