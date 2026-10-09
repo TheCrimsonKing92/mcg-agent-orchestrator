@@ -148,7 +148,7 @@ internal sealed partial class OperatorIntentCoordinator
         var appliedVerbs = new List<string>();
         for (var count = 0; count < MaxIntentsPerGoalPerTick; count++)
         {
-            var intent = (count == 0
+            var intent = (appliedVerbs.Count == 0
                 ? _store.ClaimNextAsync(goal.Id.Value, ClaimOwner)
                 : _store.ClaimNextPendingAsync(goal.Id.Value, ClaimOwner)).GetAwaiter().GetResult();
             if (intent is null)
