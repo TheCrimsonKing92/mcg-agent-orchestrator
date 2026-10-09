@@ -18,6 +18,7 @@ internal sealed class OperatorLessonRejectedException(string message) : Exceptio
 internal sealed partial class OperatorIntentCoordinator
 {
     internal OperatorLessonIntentServices? Lessons { get; init; }
+    internal ExperimentFlagIntentHandler? ExperimentFlags { get; init; }
 
     public IReadOnlyList<string> ExecuteWorkspacePending(AgentOrchestratorKernel kernel)
     {
@@ -30,14 +31,16 @@ internal sealed partial class OperatorIntentCoordinator
             bool replayed;
             try
             {
-                if (Lessons is null)
+                if (Lessons is null && intent.Verb is OperatorIntentVerbs.LessonRecord or OperatorIntentVerbs.LessonRetire or OperatorIntentVerbs.EscapeRecord)
                     throw new InvalidOperationException("Workspace intent services are unavailable.");
                 replayed = intent.Verb switch
                 {
-                    OperatorIntentVerbs.LessonRecord => ApplyLessonRecord(kernel, intent, Lessons),
-                    OperatorIntentVerbs.LessonRetire => ApplyLessonRetire(intent, Lessons),
-                    OperatorIntentVerbs.EscapeRecord => ApplyEscapeRecord(kernel, intent, Lessons,
+                    OperatorIntentVerbs.LessonRecord => ApplyLessonRecord(kernel, intent, Lessons!),
+                    OperatorIntentVerbs.LessonRetire => ApplyLessonRetire(intent, Lessons!),
+                    OperatorIntentVerbs.EscapeRecord => ApplyEscapeRecord(kernel, intent, Lessons!,
                         Escapes ?? throw new InvalidOperationException("Escape intent services are unavailable.")),
+                    OperatorIntentVerbs.ExperimentApplyFlag => (ExperimentFlags ?? throw new InvalidOperationException("Experiment intent services are unavailable.")).Apply(intent),
+                    OperatorIntentVerbs.ExperimentRevertFlag => (ExperimentFlags ?? throw new InvalidOperationException("Experiment intent services are unavailable.")).Revert(intent),
                     _ => throw new OperatorLessonRejectedException($"unsupported-workspace-verb {intent.Verb}")
                 };
             }
@@ -50,7 +53,9 @@ internal sealed partial class OperatorIntentCoordinator
                 continue;
             }
             _store.CompleteAsync(intent.Id, ClaimOwner, OperatorIntentStatus.Applied,
-                replayed ? $"Applied; recovered lesson intent {intent.Id}." : $"Applied {intent.Verb}.",
+                intent.Verb is OperatorIntentVerbs.ExperimentApplyFlag or OperatorIntentVerbs.ExperimentRevertFlag
+                    ? $"Applied {intent.Verb}; tier=Mutate; replayed={replayed}."
+                    : replayed ? $"Applied; recovered lesson intent {intent.Id}." : $"Applied {intent.Verb}.",
                 _utcNow()).GetAwaiter().GetResult();
             lines.Add($"OPERATOR_INTENT id={intent.Id} verb={intent.Verb} scope=workspace result={(replayed ? "applied-recovered" : "applied")}");
         }

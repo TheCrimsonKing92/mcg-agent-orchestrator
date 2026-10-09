@@ -3,6 +3,23 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 public sealed class DeveloperDeferredTestSelectionTests
 {
     [Fact]
+    public void ExperimentClasses_ResolveEveryReportedClassAcrossMainAndCliProjects()
+    {
+        var classes = new[]
+        {
+            nameof(ExperimentFlagTargetStoreTests), nameof(ConductorPolicyBooleanFlagsTests),
+            nameof(ExperimentFlagIntentHandlerTests), nameof(ConductorExperimentFlagRevertControllerTests),
+            "CliCommandTestsExperiments", nameof(CliHandledVerbRegistryTests),
+            nameof(ConductorExperimentWatchTests), nameof(DeveloperDeferredTestSelectionTests)
+        };
+        var selection = DeveloperDeferredTestSelections.Resolve(VerifiedRepositoryRoot.Find(),
+            "deferred - " + string.Join(", ", classes));
+        Assert.Empty(selection.NotRun);
+        Assert.Equal(classes.OrderBy(name => name, StringComparer.Ordinal),
+            selection.Selections.Select(item => item.TestClass).OrderBy(name => name, StringComparer.Ordinal));
+    }
+
+    [Fact]
     public void ResolveSelectsOnlyDeclaredClassesAndSkipsGeneratedTrees()
     {
         var root = ConductorDriverTests.CreateTempDirectory();

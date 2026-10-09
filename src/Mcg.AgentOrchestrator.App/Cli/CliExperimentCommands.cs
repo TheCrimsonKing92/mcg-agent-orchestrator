@@ -8,11 +8,12 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 internal static class CliExperimentCommands
 {
     internal static bool IsCommand(string command) =>
-        command.ToLowerInvariant() is "experiment-add" or "experiment-show" or "experiment-decide";
+        command.ToLowerInvariant() is "experiment-add" or "experiment-show" or "experiment-decide" or "experiment-apply-flag";
 
     internal static bool? TryExecute(string command, IReadOnlyList<string> parts, CliExecutionContext context)
     {
         if (!IsCommand(command)) return null;
+        if (command == "experiment-apply-flag") return CliExperimentFlagCommands.SubmitApply(parts, context.Workspace);
         var options = ExperimentOptions(parts, command == "experiment-add" ? 1 : 2);
         if (command == "experiment-add")
         {
@@ -116,6 +117,17 @@ internal static class CliExperimentCommands
         if (string.IsNullOrWhiteSpace(spec.Hypothesis)) throw new ArgumentException("hypothesis: required non-empty text.");
         if (spec.Intervention is null || !Enum.IsDefined(spec.Intervention.Kind)) throw new ArgumentException("intervention.kind: unknown or missing kind.");
         if (string.IsNullOrWhiteSpace(spec.Intervention.Description)) throw new ArgumentException("intervention.description: required non-empty text.");
+        if (spec.Intervention.FlagTarget is { } target)
+        {
+            if (spec.Intervention.Kind != ExperimentInterventionKind.ConfigFlag)
+                throw new ArgumentException("intervention.flagTarget: only config-flag interventions can name a flag target.");
+            if (target.FileKind != ExperimentFlagFileKind.ConductorPolicy)
+                throw new ArgumentException("intervention.flagTarget.fileKind: expected conductor-policy.");
+            if (!ConductorPolicyBooleanFlags.IsAllowed(target.PropertyName))
+                throw new ArgumentException($"intervention.flagTarget.propertyName: property-not-allowlisted {target.PropertyName}");
+            if (target.PriorValue is not null)
+                throw new ArgumentException("intervention.flagTarget.priorValue: captured by apply; must not be supplied.");
+        }
         if (spec.Baseline is null || !Enum.IsDefined(spec.Baseline.Kind)) throw new ArgumentException("baseline.kind: unknown or missing kind.");
         if (spec.Baseline.Kind == ExperimentBaselineKind.BeforeAfterWindow &&
             (spec.Baseline.Since is null || spec.Baseline.Until is null || spec.Baseline.Since >= spec.Baseline.Until))
@@ -167,6 +179,8 @@ internal static class CliExperimentCommands
         Console.WriteLine($"hypothesis: {spec.Hypothesis}");
         Console.WriteLine($"intervention kind: {ExperimentReading.Name(spec.Intervention.Kind)}");
         Console.WriteLine($"intervention description: {spec.Intervention.Description}");
+        if (spec.Intervention.FlagTarget is { } target)
+            Console.WriteLine($"intervention flag target: {JsonSerializer.Serialize(target, ExperimentStore.JsonOptions)}");
         Console.WriteLine($"baseline kind: {ExperimentReading.Name(spec.Baseline.Kind)}");
         Console.WriteLine($"baseline since: {spec.Baseline.Since:O}");
         Console.WriteLine($"baseline until: {spec.Baseline.Until:O}");

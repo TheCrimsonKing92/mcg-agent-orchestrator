@@ -236,8 +236,58 @@ public sealed class ConductorExperimentWatchTests(ITestOutputHelper output) : Co
         Assert.True(start >= 0);
         var end = text.IndexOf("### ", start + "### Experiments".Length, StringComparison.Ordinal);
         var section = text[start..end];
-        foreach (var token in new[] { "experiment-reading-due", "stop-rule", "guardrail", "attention queue", "experiment-show", "experiment-decide", "automatically resolves" })
+        foreach (var token in new[] { "experiment-reading-due", "stop-rule", "guardrail", "attention queue", "experiment-show", "experiment-decide", "automatically resolves",
+            "experiment-apply-flag", "experiment-revert-flag", "Mutate", "owner decision", "priorValue" })
             Assert.Contains(token, section);
+    }
+
+    [Theory]
+    [InlineData("revert")]
+    [InlineData("guardrail")]
+    [InlineData("keep")]
+    public void ObserveTick_AppliedFlagsRevertOnceOrKeepOwnerQuestion(string trigger)
+    {
+        WithWorkspace(workspace =>
+        {
+            Seed(workspace);
+            var spec = Spec() with { Intervention = new(ExperimentInterventionKind.ConfigFlag, "Trial flag",
+                new(ExperimentFlagFileKind.ConductorPolicy, "followerGatesEnabled", true)) };
+            if (trigger == "revert") spec = spec with { DecisionRule = new([new("rounds-per-landing", ">", 0)], [new("rounds-per-landing", "<", 0)]) };
+            if (trigger == "guardrail") spec = spec with { Guardrail = BreachedSpec(99).Guardrail,
+                StopRule = new(99, ExperimentStopUnit.Goals) };
+            var experiments = new ExperimentStore(workspace.ExperimentStorePath);
+            var record = experiments.AddAsync(spec).GetAwaiter().GetResult();
+            experiments.RecordFlagPriorAsync(record.Id, false).GetAwaiter().GetResult();
+            var path = Path.Combine(workspace.OrchestratorDirectory, "conductor-policy.json");
+            File.WriteAllText(path, ExperimentFlagTestFixture.PolicyJson(enabled: true));
+            var before = File.ReadAllBytes(path);
+            var watch = new ConductorExperimentWatch(workspace, null);
+            watch.ObserveTick(AsOf);
+            watch.ObserveTick(AsOf);
+            new ConductorExperimentWatch(workspace, null).ObserveTick(AsOf);
+            var intents = SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory);
+            var queued = intents.ListForGoalAsync(OperatorIntentScopes.Workspace).GetAwaiter().GetResult();
+            var items = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory).ListAsync().GetAwaiter().GetResult();
+            if (trigger == "keep")
+            {
+                Assert.Empty(queued);
+                Assert.Equal(Key(record, "stop-rule"), Assert.Single(items).CorrelationKey);
+                Assert.Equal(before, File.ReadAllBytes(path));
+                Assert.Equal(ExperimentOutcomeState.Open, experiments.ResolveAsync(record.Id).GetAwaiter().GetResult()!.Outcome);
+            }
+            else
+            {
+                var revert = Assert.Single(queued);
+                Assert.Equal(OperatorIntentVerbs.ExperimentRevertFlag, revert.Verb);
+                Assert.Empty(items);
+                Assert.Equal(ExperimentOutcomeState.Refuted, experiments.ResolveAsync(record.Id).GetAwaiter().GetResult()!.Outcome);
+                Assert.Equal($"operator-intent:{revert.Id}", experiments.ResolveAsync(record.Id).GetAwaiter().GetResult()!.Decision!.Evidence);
+                OperatorIntentCoordinator.CreateDefault(workspace).ExecuteWorkspacePending(new AgentOrchestratorKernel());
+                using var restored = JsonDocument.Parse(File.ReadAllText(path));
+                Assert.False(restored.RootElement.GetProperty("followerGatesEnabled").GetBoolean());
+                Assert.Equal(OperatorIntentStatus.Applied, intents.GetAsync(revert.Id).GetAwaiter().GetResult()!.Status);
+            }
+        });
     }
 
     private static string RepositoryRoot([CallerFilePath] string source = "") => VerifiedRepositoryRoot.Find(source);
