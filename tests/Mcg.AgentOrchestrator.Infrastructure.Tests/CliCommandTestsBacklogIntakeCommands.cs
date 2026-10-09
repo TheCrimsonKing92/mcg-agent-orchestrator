@@ -4,6 +4,7 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Microsoft.Data.Sqlite;
 using System.Diagnostics;
 using System.Text.Json;
 
@@ -1622,6 +1623,61 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         Xunit.Assert.Equal(1, plan.Nodes.Count);
     }
 
+
+    [Xunit.Fact]
+    public void CliDogfoodLogListMissingDatabasePrintsNoEntriesWithoutCreatingFile()
+    {
+        var workspace = CreateRefinedWorkspace(CreateTempDirectory());
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        Assert.False(File.Exists(workspace.DogfoodLogStorePath));
+
+        var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["dogfood-log", "list"], kernel, workspace, ref agents, providers, ref profiles, ref currentGoal));
+
+        Assert.Equal($"No dogfood log entries in {workspace.DogfoodLogStorePath}.{Environment.NewLine}", output);
+        Assert.False(File.Exists(workspace.DogfoodLogStorePath));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void CliDogfoodLogListIncompatibleDatabaseUsesReadableSetupErrorWithoutMutation(bool older)
+    {
+        var workspace = CreateRefinedWorkspace(CreateTempDirectory());
+        RunEventStoreTests.CreateLegacyDogfoodDatabase(workspace.DogfoodLogStorePath);
+        if (older)
+        {
+            DogfoodLogStore.Setup(workspace.DogfoodLogStorePath);
+            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = workspace.DogfoodLogStorePath, Mode = SqliteOpenMode.ReadWrite, Pooling = false
+            }.ToString());
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "UPDATE store_schema_versions SET version = 0";
+            Assert.Equal(1, command.ExecuteNonQuery());
+        }
+        var bytes = File.ReadAllBytes(workspace.DogfoodLogStorePath);
+        var schema = RunEventStoreTests.DogfoodSchemaSnapshot(workspace.DogfoodLogStorePath);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var error = Assert.Throws<InvalidOperationException>(() => CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["dogfood-log", "list"], kernel, workspace, ref agents, providers, ref profiles, ref currentGoal)));
+
+        var expected = $"Dogfood log store '{workspace.DogfoodLogStorePath}' schema is {(older ? "Older" : "Missing")} (expected version 1); run setup.";
+        Assert.Equal(expected, error.Message);
+        Assert.Equal($"InvalidOperationException: {expected}", ProgramStartupErrorFormatter.Format(error));
+        Assert.Equal(bytes, File.ReadAllBytes(workspace.DogfoodLogStorePath));
+        Assert.Equal(schema, RunEventStoreTests.DogfoodSchemaSnapshot(workspace.DogfoodLogStorePath));
+    }
 
     [Xunit.Fact(DisplayName = "Cli_dogfood_log_add_and_list_use_sqlite_store")]
     public async Task CliDogfoodLogAddAndListUseSqliteStore()

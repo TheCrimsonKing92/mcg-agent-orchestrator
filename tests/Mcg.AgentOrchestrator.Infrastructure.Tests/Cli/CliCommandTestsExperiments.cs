@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Xunit;
 
@@ -116,6 +117,7 @@ public sealed class CliCommandTestsExperiments : CliTaskQueryTestSupport
     [InlineData("experiment-add", "--spec")]
     [InlineData("experiment-show", "--as-of")]
     [InlineData("experiment-decide", "--outcome")]
+    [InlineData("experiment-apply-flag", "--idempotency-key")]
     public void Verbs_HaveCatalogHelpAndFastRouting(string command, string flag)
     {
         Assert.Contains(command, CliArgumentParser.RecognizedCommands);
@@ -267,6 +269,66 @@ public sealed class CliCommandTestsExperiments : CliTaskQueryTestSupport
             Guardrail = spec.Guardrail with { Metric = spec.Guardrail.Metric.ToUpperInvariant() } } };
         Assert.Empty(ExperimentOverlap.Find(subject, [caseMismatch]));
     }
+
+    [Theory]
+    [InlineData("property")]
+    [InlineData("case")]
+    [InlineData("file-kind")]
+    [InlineData("non-config")]
+    [InlineData("prior")]
+    [InlineData("missing-value")]
+    public void Add_RejectsInvalidFlagTargetWithoutWritingStore(string fault)
+    {
+        WithWorkspace(workspace =>
+        {
+            var store = new ExperimentStore(workspace.ExperimentStorePath);
+            var json = JsonSerializer.SerializeToNode(FlagSpec(), ExperimentStore.JsonOptions)!;
+            var target = json["intervention"]!["flagTarget"]!.AsObject();
+            if (fault == "property") target["propertyName"] = "maxCriterionRetries";
+            if (fault == "case") target["propertyName"] = "FollowerGatesEnabled";
+            if (fault == "file-kind") target["fileKind"] = "remote-executor";
+            if (fault == "non-config") json["intervention"]!["kind"] = "policy";
+            if (fault == "prior") target["priorValue"] = false;
+            if (fault == "missing-value") target.Remove("valueToApply");
+            var path = Path.Combine(workspace.RootDirectory, "flag-spec.json");
+            File.WriteAllText(path, json.ToJsonString());
+            var before = File.ReadAllBytes(workspace.ExperimentStorePath);
+            Assert.Throws<ArgumentException>(() => Execute(["experiment-add", "--spec", path], workspace));
+            Assert.Equal(before, File.ReadAllBytes(workspace.ExperimentStorePath));
+            Assert.Equal(0, store.CountAsync().GetAwaiter().GetResult());
+        });
+    }
+
+    [Fact]
+    public void ApplyFlag_QueuesTypedWorkspaceIntentAndReplayDoesNotWritePolicyOrKernel()
+    {
+        WithWorkspace(workspace =>
+        {
+            var record = Add(workspace, FlagSpec());
+            var path = Path.Combine(workspace.OrchestratorDirectory, "conductor-policy.json");
+            File.WriteAllText(path, ConductorAutonomyPolicy.Conservative.ToJson());
+            var before = File.ReadAllBytes(path);
+            var args = new[] { "experiment-apply-flag", record.Id[..8], "--idempotency-key", "flag-apply", "--operator-actor", "test-owner" };
+            var probe = new ProbeStateRepository(new AgentOrchestratorKernel());
+            Execute(args, workspace, probe);
+            Execute(args, workspace, probe);
+            var intent = Assert.Single(SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory)
+                .ListForGoalAsync(OperatorIntentScopes.Workspace).GetAwaiter().GetResult());
+            Assert.Equal(OperatorIntentVerbs.ExperimentApplyFlag, intent.Verb);
+            Assert.Equal(record.Id, JsonSerializer.Deserialize<ExperimentApplyFlagOperatorIntentPayload>(intent.PayloadJson, OperatorIntentJson.Options)!.ExperimentId);
+            Assert.Equal("local-process", intent.AuthenticationAssurance);
+            Assert.Equal("test-owner", intent.Actor);
+            Assert.Equal(OperatorIntentStatus.Pending, intent.Status);
+            Assert.Equal(before, File.ReadAllBytes(path));
+            AssertNoStateWrites(probe);
+        });
+    }
+
+    private static ExperimentSpec FlagSpec() => Spec() with
+    {
+        Intervention = new(ExperimentInterventionKind.ConfigFlag, "Trial a boolean policy flag",
+            new(ExperimentFlagFileKind.ConductorPolicy, "followerGatesEnabled", true))
+    };
 
     private static ExperimentSpec WithMetrics(ExperimentSpec spec, string metric, string guardrail) => spec with
     {

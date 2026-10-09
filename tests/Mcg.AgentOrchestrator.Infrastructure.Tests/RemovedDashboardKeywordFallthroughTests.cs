@@ -1,29 +1,9 @@
 using Mcg.AgentOrchestrator.App.Cli;
-using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
-using static InfrastructureTestSupport;
 
-// Parallel-safe: each backlog owns a unique temporary root; process queries use injected snapshots.
+// Parallel-safe: process queries use injected snapshots.
 public sealed class RemovedDashboardKeywordFallthroughTests
 {
-    [Theory]
-    [InlineData("dashboard")]
-    [InlineData("operator inbox")]
-    [InlineData("work-summary")]
-    public void BacklogIntake_OmitsRetiredRenderingCheck(string surface)
-    {
-        var root = CreateTempDirectory();
-        SeedBacklog(root, $"## Polish {surface}\n\nPolish the {surface} view. Done when focused checks pass.");
-
-        var plan = BacklogIntakePlanner.Build(BacklogStorePathFor(root), maxItems: 1);
-
-        var item = Assert.Single(plan.Items);
-        Assert.Equal($"Polish {surface}", item.Heading);
-        Assert.Equal(["Focused unit tests for changed planner/command/mapper behavior."], item.Verification);
-        Assert.DoesNotContain(item.Verification, check =>
-            check.Contains("Dashboard rendering", StringComparison.OrdinalIgnoreCase));
-    }
-
     [Theory]
     [InlineData("status", "app-host")]
     [InlineData("serve-dashboard", "app-host")]

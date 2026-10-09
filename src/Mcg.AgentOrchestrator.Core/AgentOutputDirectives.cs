@@ -47,8 +47,8 @@ public static class AgentOutputDirectives
                 "## Ownership and lifecycle; ## External and edge contracts; ## Integration seams; ## Verification commands and classes; ## Risks and stop conditions. " +
                 "Map every numbered acceptance criterion, and state valid/invalid premise evidence, backticked file/symbol citations, the owner/lifecycle decision, external and unhappy-path contracts, integration sequence, " +
                 "For every criterion mapping use `disposition=planned; plan=<mapping>` or `disposition=undecidable; would-settle=<evidence>; required-source=<producer/store>; unavailable-because=<reason>`. " +
-                "Begin each criterion mapping line with the bare criterion number followed by a period, with no heading, bullet or bold prefix. " +
-                "Keep the text after `plan=` a non-empty one-sentence summary on that same line; any detail bullets that follow must not begin with a digit and a period. " +
+                "Start mapping lines with the bare criterion number followed by a period; no heading, bullet or bold prefix. " +
+                "After `plan=`, write a non-empty one-sentence summary on that same line; detail bullets that follow must not begin with a digit and a period. " +
                 "An undecidable criterion does not block other criteria and requires `blockers: none` when no operator action is needed. " +
                 "For evidence that exists only in an unreadable store, emit exactly one `PLANNER_EVIDENCE_REQUEST:` JSON directive with criterion_index, evidence_key, availability=retrievable, store, needed, and reason. " +
                 "In that directive criterion_index is the 1-based criterion number used on the mapping lines, so the first criterion is 1; this differs from the 0-based criterion_index of criteria_verdicts. " +
@@ -59,6 +59,9 @@ public static class AgentOutputDirectives
                 "backticked verification commands with TEST-VERIFIABLE or REAL-WORLD-DEPENDENT, and explicit stop conditions. " +
                 "Cited repository paths must exist unless explicitly marked as a new file to create. " +
                 "Cite every path as a concrete repository-relative file, never a wildcard pattern, and before finishing confirm each cited path exists, for example with `git ls-files <path>`, unless it is marked as a new file. " +
+                "Citation check: every backticked target is a full repository-relative path that `git ls-files <path>` lists, or carries a new-file marker. " +
+                "Never cite a bare file name or a name with only a line suffix, because it can match several files; write the full path. " +
+                "Describe a runtime output, a file name pattern, or a conventional path this repository lacks in prose, not in backticks. " +
                 "Mark a new file with the exact token `(new file)` or `— new file` immediately after its backticked path, " +
                 "or use `— new` followed by up to three descriptive words and an artifact-kind noun (`store`, `class`, `record`, `interface`, `test`, `fixture`, `script`, `document`, or `receipt`) that ends the clause. " +
                 "The descriptive form must end at a period, semicolon, or the end of the line. Alternatively, use the words 'new file', 'create', or 'add' within 24 characters before the path containing no other backtick. " +

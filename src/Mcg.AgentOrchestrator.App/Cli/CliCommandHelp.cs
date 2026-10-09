@@ -63,6 +63,7 @@ internal static class CliCommandHelp
     public const string ExperimentAddUsage = "Usage: experiment-add --spec <path>";
     public const string ExperimentShowUsage = "Usage: experiment-show <experiment> [--as-of <timestamp-with-offset>]";
     public const string ExperimentDecideUsage = "Usage: experiment-decide <experiment> --outcome <confirmed|refuted|inconclusive> --evidence <reference> --action <text>";
+    public const string ExperimentApplyFlagUsage = "Usage: experiment-apply-flag <experiment> [--operator-actor <actor>] [--actor-kind <human|agent>] [--idempotency-key <key>]";
     public const string EpicRenameUsage = "Usage: epic-rename <epic> <new-title>";
     public const string EpicDescribeUsage = "Usage: epic-describe <epic> <text> | epic-describe <epic> --text-file <path>";
     public const string EpicAssignUsage = "Usage: epic-assign <goal-or-backlog-id> <epic>";
@@ -454,11 +455,14 @@ internal static class CliCommandHelp
     private const string ExperimentOverlapHelp = "Overlap means an exact shared metric across metrics plus guardrail and intersecting active windows, from baseline end (or creation) to decided-at (or open-ended). Boundary touches and empty or inverted windows do not overlap. Overlap only warns and never refuses an add or changes an outcome.";
 
     private static readonly CommandHelpEntry ExperimentAdd = new(
-        ExperimentAddUsage, "Register an experiment from a JSON spec; interventions remain manual. Prints overlap: warnings before the new id. " + ExperimentOverlapHelp, ["--spec", "--help", "-h"]);
+        ExperimentAddUsage, "Register an experiment from a JSON spec; typed boolean policy flags can be applied through experiment-apply-flag. Prints overlap: warnings before the new id. " + ExperimentOverlapHelp, ["--spec", "--help", "-h"]);
     private static readonly CommandHelpEntry ExperimentShow = new(
         ExperimentShowUsage, "Show an experiment, a freshly computed reading, and its separate stored outcome; append overlaps: entries or overlaps: none. " + ExperimentOverlapHelp, ["--as-of", "--help", "-h"]);
     private static readonly CommandHelpEntry ExperimentDecide = new(
         ExperimentDecideUsage, "Record evidence and action once on an open experiment.", ["--outcome", "--evidence", "--action", "--help", "-h"]);
+    private static readonly CommandHelpEntry ExperimentApplyFlag = new(
+        ExperimentApplyFlagUsage, "Queue a workspace Mutate-tier intent to apply a boolean policy flag. The conductor captures its prior value; keep remains an owner decision.",
+        ["--operator-actor", "--actor-kind", "--idempotency-key", "--help", "-h"]);
 
     private static readonly CommandHelpEntry EpicAdd = new(
         EpicAddUsage,
@@ -1311,6 +1315,7 @@ internal static class CliCommandHelp
         if (args[0].Equals("experiment-add", StringComparison.OrdinalIgnoreCase)) { entry = ExperimentAdd; return true; }
         if (args[0].Equals("experiment-show", StringComparison.OrdinalIgnoreCase)) { entry = ExperimentShow; return true; }
         if (args[0].Equals("experiment-decide", StringComparison.OrdinalIgnoreCase)) { entry = ExperimentDecide; return true; }
+        if (args[0].Equals("experiment-apply-flag", StringComparison.OrdinalIgnoreCase)) { entry = ExperimentApplyFlag; return true; }
         if (args[0].Equals("epic-add", StringComparison.OrdinalIgnoreCase))
         {
             entry = EpicAdd;

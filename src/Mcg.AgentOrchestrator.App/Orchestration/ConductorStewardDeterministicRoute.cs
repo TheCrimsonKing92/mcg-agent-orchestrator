@@ -13,6 +13,8 @@ internal sealed class ConductorStewardDeterministicRoute(
     private static readonly Regex Unmapped = new(@"\bcriterion (?<number>\d+) is unmapped\b", RegexOptions.CultureInvariant);
     private static readonly Regex MissingPlan = new(@"acceptance criterion (?<number>\d+) with disposition=planned must include a non-empty plan", RegexOptions.CultureInvariant);
     private static readonly Regex Citation = new(@"target citation '(?<path>[^']+)' does not exist and is not marked as a new file", RegexOptions.CultureInvariant);
+    private static readonly Regex AmbiguousCitation = new(@"target citation '(?<path>[^']+)' is ambiguous; at least these repository files match:[ \t]*(?<candidates>[^;\r\n]*)", RegexOptions.CultureInvariant);
+    private static readonly Regex QuotedCandidate = new(@"'(?<path>[^']+)'", RegexOptions.CultureInvariant);
     private static readonly Regex Section = new(@"missing required section '(?<section>[^']+)'", RegexOptions.CultureInvariant);
     private static readonly Regex Class = new("Disabled-collection test class ['\"](?<name>[^'\"]+)['\"]", RegexOptions.CultureInvariant);
 
@@ -88,6 +90,17 @@ internal sealed class ConductorStewardDeterministicRoute(
                 (matches.Count == 0
                     ? $"No tracked file matches the cited stem '{stem}'."
                     : $"Tracked files matching the cited stem '{stem}': {string.Join(", ", matches)}."));
+        }
+        foreach (Match ambiguous in AmbiguousCitation.Matches(evidence))
+        {
+            var candidates = QuotedCandidate.Matches(ambiguous.Groups["candidates"].Value)
+                .Select(match => match.Groups["path"].Value)
+                .Where(path => !string.IsNullOrWhiteSpace(path))
+                .ToArray();
+            if (candidates.Length == 0) continue;
+            corrections.Add($"Offending ambiguous target citation: '{ambiguous.Groups["path"].Value}'. " +
+                $"Cite exactly one of these full repository-relative paths on the same mapping line: {string.Join(", ", candidates.Select(path => $"'{path}'"))}. " +
+                $"{ConcreteFileRule} {SameLineRule}");
         }
         return corrections.Count == 0 ? null : string.Join(" ", corrections);
     }

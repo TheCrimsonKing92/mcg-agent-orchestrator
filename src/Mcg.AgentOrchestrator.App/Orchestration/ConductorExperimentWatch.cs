@@ -6,7 +6,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-/// <summary>Observes experiment readings without mutating the conductor's goal state.</summary>
+/// <summary>Observes readings, submits flag reverts and records refutations; keep stays an owner question.</summary>
 internal sealed class ConductorExperimentWatch
 {
     private const string KeyPrefix = "experiment-reading-due:";
@@ -77,11 +77,16 @@ internal sealed class ConductorExperimentWatch
             var landings = ExperimentLandingTimes.Read(_workspace.GoalLifecycleEventsDirectory);
             var intents = File.Exists(Path.Combine(_workspace.OrchestratorDirectory, SqliteOperatorIntentStore.DatabaseFileName))
                 ? CliOwnerDigestRetryIntents.Read(_workspace, asOf) : [];
+            var reverts = new ConductorExperimentFlagRevertController(experiments,
+                () => SqliteOperatorIntentStore.ForDirectories(_workspace.OrchestratorDirectory, _workspace.LogDirectory),
+                Path.Combine(_workspace.OrchestratorDirectory, "conductor-policy.json"));
             foreach (var record in open)
             {
                 try
                 {
                     var reading = ExperimentReading.Evaluate(record, goals, landings, intents, asOf);
+                    try { if (reverts.TryRevert(record, reading, asOf)) continue; }
+                    catch (Exception error) { LogFailure(error); }
                     foreach (var trigger in Triggers)
                     {
                         if (!(trigger == "stop-rule" ? reading.StopRuleMet : reading.GuardrailBreached) ||

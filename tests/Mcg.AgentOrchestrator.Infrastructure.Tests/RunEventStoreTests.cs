@@ -72,6 +72,241 @@ public sealed class RunEventStoreTests
         Assert.Contains(recent, record => record.GoalId == "goal-2");
     }
 
+    // Dogfood fixtures are parallel-safe: unique directories and pooling-disabled connections.
+    [Xunit.Fact]
+    public async Task DogfoodSetupLegacyDatabasePreservesEveryFieldAndIsIdempotent()
+    {
+        var path = Path.Combine(CreateTempDirectory(), "dogfood-log.db");
+        var expected = CreateLegacyDogfoodDatabase(path);
+        using (var legacy = OpenDogfoodConnection(path))
+            Assert.Null(StoreSchemaVersions.Read(legacy, StoreSchemaRegistry.DogfoodLog.StoreName));
+
+        DogfoodLogStore.Setup(path);
+
+        var store = DogfoodLogStore.OpenReadOnly(path);
+        Assert.Equal(expected.Reverse(), await store.ListRecentAsync());
+        foreach (var record in expected)
+            Assert.Equal(record, await store.GetByGoalIdAsync(record.GoalId));
+        using (var connection = OpenDogfoodConnection(path, SqliteOpenMode.ReadWrite))
+        {
+            Assert.Equal(1, StoreSchemaVersions.Read(connection, StoreSchemaRegistry.DogfoodLog.StoreName));
+            RunDogfoodSql(connection, "UPDATE store_schema_versions SET applied_at = 'original'");
+        }
+        var bytes = File.ReadAllBytes(path);
+        var schema = DogfoodSchemaSnapshot(path);
+
+        DogfoodLogStore.Setup(path);
+
+        Assert.Equal(bytes, File.ReadAllBytes(path));
+        Assert.Equal(schema, DogfoodSchemaSnapshot(path));
+        Assert.Equal(expected.Reverse(), await DogfoodLogStore.OpenReadOnly(path).ListRecentAsync());
+    }
+
+    [Xunit.Fact]
+    public void DogfoodSetupNewerVersionLeavesBytesSchemaAndJournalModeUntouched()
+    {
+        var path = Path.Combine(CreateTempDirectory(), "dogfood-log.db");
+        DogfoodLogStore.Setup(path);
+        using (var connection = OpenDogfoodConnection(path, SqliteOpenMode.ReadWrite))
+        {
+            RunDogfoodSql(connection, "UPDATE store_schema_versions SET version = 2, applied_at = 'future'");
+            RunDogfoodSql(connection, "PRAGMA journal_mode=DELETE");
+        }
+        var bytes = File.ReadAllBytes(path);
+        var schema = DogfoodSchemaSnapshot(path);
+
+        DogfoodLogStore.Setup(path);
+
+        Assert.Equal(bytes, File.ReadAllBytes(path));
+        Assert.Equal(schema, DogfoodSchemaSnapshot(path));
+        using var readBack = OpenDogfoodConnection(path);
+        Assert.Equal(2, StoreSchemaVersions.Read(readBack, StoreSchemaRegistry.DogfoodLog.StoreName));
+        using var command = readBack.CreateCommand();
+        command.CommandText = "PRAGMA journal_mode";
+        Assert.Equal("delete", command.ExecuteScalar());
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("missing", StoreSchemaState.Missing)]
+    [Xunit.InlineData("unversioned", StoreSchemaState.Missing)]
+    [Xunit.InlineData("missing-record", StoreSchemaState.Missing)]
+    [Xunit.InlineData("older", StoreSchemaState.Older)]
+    [Xunit.InlineData("newer", StoreSchemaState.Newer)]
+    public void DogfoodOpenReadOnlyRequiresCurrentSchemaWithoutMutatingDatabase(string scenario, StoreSchemaState state)
+    {
+        var path = Path.Combine(CreateTempDirectory(), "absent-directory", "dogfood-log.db");
+        if (scenario == "unversioned")
+            CreateLegacyDogfoodDatabase(path);
+        else if (scenario != "missing")
+        {
+            DogfoodLogStore.Setup(path);
+            using var connection = OpenDogfoodConnection(path, SqliteOpenMode.ReadWrite);
+            RunDogfoodSql(connection, scenario switch
+            {
+                "missing-record" => "DELETE FROM store_schema_versions",
+                "older" => "UPDATE store_schema_versions SET version = 0",
+                _ => "UPDATE store_schema_versions SET version = 2"
+            });
+        }
+        var bytes = File.Exists(path) ? File.ReadAllBytes(path) : null;
+        var schema = File.Exists(path) ? DogfoodSchemaSnapshot(path) : null;
+
+        var error = Assert.Throws<InvalidOperationException>(() => DogfoodLogStore.OpenReadOnly(path));
+
+        Assert.Equal($"Dogfood log store '{path}' schema is {state} (expected version 1); run setup.", error.Message);
+        if (scenario == "missing")
+        {
+            Assert.False(File.Exists(path));
+            Assert.False(Directory.Exists(Path.GetDirectoryName(path)));
+        }
+        else
+        {
+            Assert.Equal(bytes, File.ReadAllBytes(path));
+            Assert.Equal(schema, DogfoodSchemaSnapshot(path));
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task DogfoodOpenReadOnlyReturnsWriterRowsAndRejectsWritesWithoutMutation()
+    {
+        var path = Path.Combine(CreateTempDirectory(), "dogfood-log.db");
+        var writer = new DogfoodLogStore(path);
+        var expected = await writer.UpsertAsync(new DogfoodLogAppend(
+            "current-goal", "header", "summary", "gate", "model", "markdown",
+            DateTimeOffset.Parse("2026-07-02T12:00:00Z")));
+        var bytes = File.ReadAllBytes(path);
+        var schema = DogfoodSchemaSnapshot(path);
+
+        var reader = DogfoodLogStore.OpenReadOnly(path);
+        Assert.Equal(expected, Assert.Single(await reader.ListRecentAsync()));
+        Assert.Equal(expected, await reader.GetByGoalIdAsync(expected.GoalId));
+        Assert.Equal(bytes, File.ReadAllBytes(path));
+        Assert.Equal(schema, DogfoodSchemaSnapshot(path));
+        var error = await Assert.ThrowsAsync<SqliteException>(() => reader.UpsertAsync(
+            new DogfoodLogAppend("forbidden-goal", "header", "summary", "gate", "model", "markdown")));
+
+        Assert.Equal(8, error.SqliteErrorCode);
+        Assert.Null(await reader.GetByGoalIdAsync("forbidden-goal"));
+        Assert.Equal(expected, Assert.Single(await reader.ListRecentAsync()));
+        Assert.Equal(bytes, File.ReadAllBytes(path));
+        Assert.Equal(schema, DogfoodSchemaSnapshot(path));
+    }
+
+    [Xunit.Fact]
+    public async Task DogfoodSetupAndReadOnlyReadsKeepWalJournalMode()
+    {
+        var path = Path.Combine(CreateTempDirectory(), "dogfood-log.db");
+        for (var run = 0; run < 2; run++)
+        {
+            DogfoodLogStore.Setup(path);
+            Assert.Empty(await DogfoodLogStore.OpenReadOnly(path).ListRecentAsync());
+            using var connection = OpenDogfoodConnection(path);
+            using var command = connection.CreateCommand();
+            command.CommandText = "PRAGMA journal_mode";
+            Assert.Equal("wal", command.ExecuteScalar());
+        }
+        // SQLite may create WAL/SHM sidecars on read; only main-file immutability is asserted.
+    }
+
+    [Xunit.Fact]
+    public void DogfoodSetupVersionFailureRollsBackTableAndIndexCreation()
+    {
+        var path = Path.Combine(CreateTempDirectory(), "dogfood-log.db");
+        using (var connection = OpenDogfoodConnection(path, SqliteOpenMode.ReadWriteCreate))
+            RunDogfoodSql(connection, "CREATE TABLE store_schema_versions (store_name TEXT PRIMARY KEY, version INTEGER)");
+
+        Assert.Throws<SqliteException>(() => DogfoodLogStore.Setup(path));
+
+        using var readBack = OpenDogfoodConnection(path);
+        using var command = readBack.CreateCommand();
+        command.CommandText = "SELECT count(*) FROM sqlite_schema WHERE name IN ('dogfood_log', 'ix_dogfood_log_recorded_at')";
+        Assert.Equal(0L, command.ExecuteScalar());
+        Assert.Null(StoreSchemaVersions.Read(readBack, StoreSchemaRegistry.DogfoodLog.StoreName));
+    }
+
+    internal static DogfoodLogRecord[] CreateLegacyDogfoodDatabase(string path)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        using var connection = OpenDogfoodConnection(path, SqliteOpenMode.ReadWriteCreate);
+        // Frozen pre-versioning schema; deliberately does not call the current setup code.
+        RunDogfoodSql(connection, """
+            PRAGMA journal_mode=WAL;
+            CREATE TABLE IF NOT EXISTS dogfood_log (
+                seq               INTEGER PRIMARY KEY AUTOINCREMENT,
+                goal_id           TEXT NOT NULL UNIQUE,
+                recorded_at       TEXT NOT NULL,
+                header            TEXT NOT NULL,
+                summary           TEXT NOT NULL,
+                operator_gate     TEXT NOT NULL,
+                model_fit         TEXT NOT NULL,
+                rendered_markdown TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS ix_dogfood_log_recorded_at ON dogfood_log(recorded_at DESC, seq DESC);
+            """);
+        var records = new[]
+        {
+            new DogfoodLogRecord(1, "legacy-1", DateTimeOffset.Parse("2026-07-01T12:00:00Z"),
+                "first header", "first summary", "first gate", "first model", "first markdown"),
+            new DogfoodLogRecord(2, "legacy-2", DateTimeOffset.Parse("2026-07-02T12:00:00+02:00"),
+                "second header", "second summary", "second gate", "second model", "second markdown")
+        };
+        foreach (var record in records)
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                INSERT INTO dogfood_log (seq, goal_id, recorded_at, header, summary, operator_gate, model_fit, rendered_markdown)
+                VALUES ($seq, $goal, $time, $header, $summary, $gate, $model, $markdown)
+                """;
+            command.Parameters.AddWithValue("$seq", record.Sequence);
+            command.Parameters.AddWithValue("$goal", record.GoalId);
+            command.Parameters.AddWithValue("$time", record.RecordedAt.ToString("O"));
+            command.Parameters.AddWithValue("$header", record.Header);
+            command.Parameters.AddWithValue("$summary", record.Summary);
+            command.Parameters.AddWithValue("$gate", record.OperatorGate);
+            command.Parameters.AddWithValue("$model", record.ModelFit);
+            command.Parameters.AddWithValue("$markdown", record.RenderedMarkdown);
+            Assert.Equal(1, command.ExecuteNonQuery());
+        }
+        return records;
+    }
+
+    internal static string[] DogfoodSchemaSnapshot(string path)
+    {
+        using var connection = OpenDogfoodConnection(path);
+        var rows = new List<string>();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT type, name, tbl_name, coalesce(sql, '') FROM sqlite_schema ORDER BY name";
+        using (var reader = command.ExecuteReader())
+            while (reader.Read())
+                rows.Add(string.Join("|", Enumerable.Range(0, reader.FieldCount).Select(reader.GetString)));
+        command.CommandText = "SELECT count(*) FROM sqlite_schema WHERE name = 'store_schema_versions'";
+        if ((long)command.ExecuteScalar()! > 0)
+        {
+            command.CommandText = "SELECT store_name, version, applied_at FROM store_schema_versions ORDER BY store_name";
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+                rows.Add($"{reader.GetString(0)}|{reader.GetInt32(1)}|{reader.GetString(2)}");
+        }
+        return rows.ToArray();
+    }
+
+    private static SqliteConnection OpenDogfoodConnection(string path, SqliteOpenMode mode = SqliteOpenMode.ReadOnly)
+    {
+        var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = path, Mode = mode, Pooling = false
+        }.ToString());
+        connection.Open();
+        return connection;
+    }
+
+    private static void RunDogfoodSql(SqliteConnection connection, string sql)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.ExecuteNonQuery();
+    }
+
     [Xunit.Fact(DisplayName = "SqliteRunEventStore_appends_records_without_mutating_prior_events")]
     public async Task SqliteRunEventStoreAppendsRecordsWithoutMutatingPriorEvents()
     {

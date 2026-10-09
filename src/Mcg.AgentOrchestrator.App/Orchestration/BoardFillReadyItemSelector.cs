@@ -25,7 +25,7 @@ internal static class BoardFillReadyItemSelector
         items.Where(item => item.Status == BacklogItemStatus.Open &&
             !alreadyDrafted.Contains(item.Id) &&
             (rounds is null || rounds.Count(round => round.BacklogItemId == item.Id &&
-                round.Outcome == "failed" && round.ChangeStamp >= ChangeStamp(item)) < MaxFailedRoundsPerChange) &&
+                BoardFillFailureKind.CountsTowardItem(round) && round.ChangeStamp >= ChangeStamp(item)) < MaxFailedRoundsPerChange) &&
             !goals.Any(goal => goal.SourceBacklogItemId == item.Id && !goal.IsTerminal) &&
             !IsOwnerGated(item))
         .Select(item => (Item: item, Ready: readiness(item)))

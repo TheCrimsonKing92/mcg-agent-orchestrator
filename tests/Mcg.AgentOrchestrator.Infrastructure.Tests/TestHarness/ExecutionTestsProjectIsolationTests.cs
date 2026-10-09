@@ -22,7 +22,27 @@ public sealed class ExecutionTestsProjectIsolationTests
         "WorkerBuildLogErrorReaderTests",
         "WorkerBuildLogErrorReaderTestsSlotDirectories",
         "ModelFunctionCatalogStoreTests",
-        "PracticeRegistryStoreTests"
+        "PracticeRegistryStoreTests",
+        "BackgroundDispatchRunnerProcessSnapshotTests",
+        "BackgroundDispatchRunnerSkillUsageTests",
+        "DispatchProcessIdentityEvidenceProbeFailureTests",
+        "DispatchProcessRecoveryServiceAccessDeniedProbeTests",
+        "DispatchProcessRecoveryServiceTests",
+        "DispatchWorktreeCommitterMessageTests",
+        "ExtendedLengthPathTests",
+        "LaunchLockSummaryFormatterTests",
+        "OwnedRunRootReaperTests",
+        "ReviewerChangedExistingTestClassifierTests",
+        "SpawnRegistryOwnerTransferTests",
+        "TempRootJanitorDeleteTests",
+        "WindowsNativeProcessInspectionTests",
+        "WorkerContextArtifactsVerificationTests",
+        "WorkerContextCompatibilityTests",
+        "WorkerGitContextTests",
+        "WorkerResultParserBacktickWrappedBlockTests",
+        "WorkerResultParserEvidenceTests",
+        "WorkerSkillReadParserTests",
+        "WorkerSourceSurveyInventoryTests"
     ];
 
     [Fact]

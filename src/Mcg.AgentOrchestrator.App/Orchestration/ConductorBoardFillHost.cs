@@ -14,6 +14,8 @@ internal sealed partial class ConductorBoardFillHost
     private readonly ConductEventLogWriter _events;
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly Func<string?> _mainHead;
+    private readonly Func<string?> _staleMainHead;
+    private readonly BoardFillTrackedEditsHold _trackedEditsHold;
     private readonly IBoardFillPremiseVerifier? _verifier;
     private readonly CancellationTokenSource _shutdown = new();
     private BoardFillDraftRound? _running;
@@ -31,7 +33,8 @@ internal sealed partial class ConductorBoardFillHost
         Func<AgentOrchestratorKernel, IReadOnlyList<BacklogItem>, Func<BacklogItem, BacklogReadiness>> readiness,
         Func<ConductorAutonomyPolicy> policy, ConductEventLogWriter events, Func<DateTimeOffset>? utcNow = null,
         IBoardFillPremiseVerifier? verifier = null, BoardFillFilingSeams? filing = null,
-        Func<string?>? mainHead = null)
+        Func<string?>? mainHead = null, Func<(bool Clean, AuthorDraftTrackedEdits? Edits)>? trackedEdits = null,
+        Func<string?>? staleMainHead = null)
     {
         _store = store;
         _draft = draft;
@@ -43,6 +46,8 @@ internal sealed partial class ConductorBoardFillHost
         _verifier = verifier;
         _filingSeams = filing;
         _mainHead = mainHead ?? (() => null);
+        _staleMainHead = staleMainHead ?? _mainHead;
+        _trackedEditsHold = new(store, events, trackedEdits ?? (() => (false, null)));
     }
 
     internal void ServiceTick(AgentOrchestratorKernel kernel, string? onlyGoalId = null)
@@ -76,8 +81,12 @@ internal sealed partial class ConductorBoardFillHost
                 string.Equals(mainHead, _heldMainHead, StringComparison.OrdinalIgnoreCase)) return;
             _heldMainHead = null;
         }
+        if (_trackedEditsHold.Blocks(now)) return;
+        string? observedMain;
+        try { observedMain = _staleMainHead(); }
+        catch { observedMain = null; }
         var items = ConductorTickStepLedger.CountBacklogRows(_backlog());
-        var item = BoardFillReadyItemSelector.Select(items, kernel.Goals.ToArray(), _store.AlreadyDrafted(items),
+        var item = BoardFillReadyItemSelector.Select(items, kernel.Goals.ToArray(), _store.AlreadyDrafted(items, observedMain),
             ConductorTickStepLedger.CountReadinessEvaluations(_readiness(kernel, items)), _store.ReadAll());
         if (item is null) return;
         _running = _store.Begin(item, now);
@@ -94,6 +103,7 @@ internal sealed partial class ConductorBoardFillHost
             new("failed", 0, [], exception.GetType().Name)); }
         _store.Finish(_running, result.Outcome, now);
         var finished = _store.ReadAll().Single(round => round.Id == _running.Id);
+        _trackedEditsHold.Enter(finished);
         Assess(finished, result.Markdown, result.Verification, _kernel!);
         _running = null;
         _round = null;

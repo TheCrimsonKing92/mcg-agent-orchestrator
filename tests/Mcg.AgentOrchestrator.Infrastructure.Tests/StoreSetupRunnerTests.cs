@@ -33,13 +33,18 @@ public sealed class StoreSetupRunnerTests
         var backlog = Assert.Single(results, result => result.StoreName == "backlog");
         Assert.Equal(workspace.BacklogStorePath, backlog.DatabasePath);
         Assert.Equal(1, backlog.Version);
+        var dogfood = Assert.Single(results, result => result.StoreName == "dogfood-log");
+        Assert.Equal(workspace.DogfoodLogStorePath, dogfood.DatabasePath);
+        Assert.Equal(1, dogfood.Version);
         using var connection = Open(workspace.PortfolioStorePath, SqliteOpenMode.ReadOnly);
         Assert.Equal(1, StoreSchemaVersions.Read(connection, portfolio.StoreName));
         Assert.All(Directory.GetFiles(workspace.OrchestratorDirectory), path =>
             Assert.Contains(Path.GetFileName(path), new[] { "portfolio.db", "portfolio.db-wal", "portfolio.db-shm",
                 "backlog.db", "backlog.db-wal", "backlog.db-shm",
                 "operator-intents.db", "operator-intents.db-wal", "operator-intents.db-shm",
-                "operator-lessons.db", "operator-escapes.db" }));
+                "operator-lessons.db", "operator-escapes.db",
+                "dogfood-log.db", "dogfood-log.db-wal", "dogfood-log.db-shm" }));
+        Assert.Empty(await DogfoodLogStore.OpenReadOnly(workspace.DogfoodLogStorePath).ListRecentAsync());
         Assert.Empty(await PortfolioStore.OpenReadOnly(workspace.PortfolioStorePath).ListProjectsAsync());
         Assert.Empty(await BacklogStore.OpenReadOnly(workspace.BacklogStorePath).ListAsync());
         var intents = Assert.Single(results, result => result.StoreName == StoreSchemaRegistry.OperatorIntents.StoreName);
@@ -77,6 +82,9 @@ public sealed class StoreSetupRunnerTests
         }
 
         Assert.Equal(first, StoreSetupRunner.Run(workspace.OrchestratorDirectory));
+        Assert.Equal(1, Assert.Single(first, result => result.StoreName == "dogfood-log").Version);
+        using var dogfood = Open(workspace.DogfoodLogStorePath, SqliteOpenMode.ReadOnly);
+        Assert.Equal(1, StoreSchemaVersions.Read(dogfood, StoreSchemaRegistry.DogfoodLog.StoreName));
         Assert.Equal(1, Assert.Single(first, result => result.StoreName == StoreSchemaRegistry.OperatorIntents.StoreName).Version);
         using var intents = Open(Path.Combine(workspace.OrchestratorDirectory, SqliteOperatorIntentStore.DatabaseFileName), SqliteOpenMode.ReadOnly);
         Assert.Equal(1, StoreSchemaVersions.Read(intents, StoreSchemaRegistry.OperatorIntents.StoreName));

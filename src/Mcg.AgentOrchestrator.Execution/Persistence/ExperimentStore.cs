@@ -9,7 +9,7 @@ public enum ExperimentBaselineKind { BeforeAfterWindow = 1, AlternatingGates, Tw
 public enum ExperimentStopUnit { Gates = 1, Goals, Ticks }
 public enum ExperimentOutcomeState { Open = 1, Confirmed, Refuted, Inconclusive }
 
-public sealed record ExperimentIntervention(ExperimentInterventionKind Kind, string Description);
+public sealed record ExperimentIntervention(ExperimentInterventionKind Kind, string Description, ExperimentFlagTarget? FlagTarget = null);
 public sealed record ExperimentBaseline(ExperimentBaselineKind Kind, DateTimeOffset? Since = null,
     DateTimeOffset? Until = null, string? TwinGoalId = null);
 public sealed record ExperimentStopRule(int Count, ExperimentStopUnit Unit);
@@ -31,7 +31,7 @@ public static class ExperimentMetrics
     });
 }
 
-/// <summary>A pre-registered experiment has one immutable spec and at most one recorded decision.</summary>
+/// <summary>A pre-registered spec only permits capturing a flag's prior value, and at most one decision.</summary>
 public sealed class ExperimentStore
 {
     public static JsonSerializerOptions JsonOptions { get; } = CreateJsonOptions();
@@ -115,6 +115,26 @@ public sealed class ExperimentStore
         var records = new List<ExperimentRecord>();
         while (await reader.ReadAsync(cancellationToken)) records.Add(Read(reader));
         return records;
+    }
+
+    /// <summary>Capture the only mutable spec member once, with a conditional update on the stored intervention.</summary>
+    public async Task<bool> RecordFlagPriorAsync(string id, bool prior, CancellationToken cancellationToken = default)
+    {
+        using var connection = Open();
+        using var read = connection.CreateCommand();
+        read.CommandText = "SELECT intervention_json FROM experiments WHERE id=$id AND outcome='open'";
+        read.Parameters.AddWithValue("$id", id);
+        if (await read.ExecuteScalarAsync(cancellationToken) is not string oldJson) return false;
+        var intervention = JsonSerializer.Deserialize<ExperimentIntervention>(oldJson, JsonOptions);
+        if (intervention is not { Kind: ExperimentInterventionKind.ConfigFlag, FlagTarget.PriorValue: null } ||
+            intervention.FlagTarget is null) return false;
+        using var write = connection.CreateCommand();
+        write.CommandText = "UPDATE experiments SET intervention_json=$new WHERE id=$id AND outcome='open' AND intervention_json=$old";
+        write.Parameters.AddWithValue("$id", id);
+        write.Parameters.AddWithValue("$old", oldJson);
+        write.Parameters.AddWithValue("$new", JsonSerializer.Serialize(intervention with
+            { FlagTarget = intervention.FlagTarget with { PriorValue = prior } }, JsonOptions));
+        return await write.ExecuteNonQueryAsync(cancellationToken) == 1;
     }
 
     public async Task DecideAsync(string id, ExperimentOutcomeState outcome, string evidence, string action,

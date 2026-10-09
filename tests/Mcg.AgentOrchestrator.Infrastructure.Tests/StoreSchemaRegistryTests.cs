@@ -24,7 +24,9 @@ public sealed class StoreSchemaRegistryTests
             Assert.False(string.IsNullOrWhiteSpace(entry.Family));
         });
         Assert.Equal(new[] { StoreSchemaRegistry.Portfolio, StoreSchemaRegistry.Backlog, StoreSchemaRegistry.OperatorIntents, StoreSchemaRegistry.OperatorLessons,
-            StoreSchemaRegistry.OperatorEscapes }, entries.Where(entry => entry.CurrentVersion.HasValue).ToArray());
+            StoreSchemaRegistry.OperatorEscapes, StoreSchemaRegistry.DogfoodLog }, entries.Where(entry => entry.CurrentVersion.HasValue).ToArray());
+        Assert.Equal(1, StoreSchemaRegistry.DogfoodLog.CurrentVersion);
+        Assert.Equal("dogfood-log.db", StoreSchemaRegistry.DogfoodLog.Database);
         Assert.Equal(1, StoreSchemaRegistry.OperatorIntents.CurrentVersion);
         Assert.Equal(SqliteOperatorIntentStore.DatabaseFileName, StoreSchemaRegistry.OperatorIntents.Database);
     }

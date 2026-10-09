@@ -25,7 +25,9 @@ public sealed class ConductorVerbSetupTests
                 $"backlog: version 1 ({workspace.BacklogStorePath}){Environment.NewLine}" +
                 $"operator-intents: version 1 ({Path.Combine(workspace.OrchestratorDirectory, SqliteOperatorIntentStore.DatabaseFileName)}){Environment.NewLine}" +
                 $"operator-lessons: version 1 ({workspace.OperatorLessonsStorePath}){Environment.NewLine}" +
-                $"operator-escapes: version 1 ({workspace.OperatorEscapesStorePath}){Environment.NewLine}", output.ToString());
+                $"operator-escapes: version 1 ({workspace.OperatorEscapesStorePath}){Environment.NewLine}" +
+                $"dogfood-log: version 1 ({workspace.DogfoodLogStorePath}){Environment.NewLine}", output.ToString());
+            Assert.NotNull(DogfoodLogStore.OpenReadOnly(workspace.DogfoodLogStorePath));
             Assert.NotNull(PortfolioStore.OpenReadOnly(workspace.PortfolioStorePath));
             Assert.NotNull(BacklogStore.OpenReadOnly(workspace.BacklogStorePath));
             Assert.NotNull(SqliteOperatorIntentStore.OpenExisting(workspace.OrchestratorDirectory, workspace.LogDirectory));

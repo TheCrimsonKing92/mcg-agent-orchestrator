@@ -413,7 +413,10 @@ internal static class SourceSizeRatchet
             // Goal 69c9d936 adds six call-site lines to pass the workspace integration branch into
             // existing acceptance, recovery and diagnostic collaborators; resolution remains in the workspace.
             // Measured 12229 lines across the same 30 partial files, with no extra headroom or new partials.
-            new SourceClassCeiling("CliCommandHandlers", 12229, 30),
+            // Goal f1045cfb adds five lines for the dogfood-log list missing-file branch, preserving
+            // its no-entries output without creating a database; schema setup stays in DogfoodLogStore.
+            // Measured 12234 lines across the same 30 partial files; no extra headroom or new partials.
+            new SourceClassCeiling("CliCommandHandlers", 12234, 30),
             new SourceClassCeiling("GoalAcceptanceVerifier", 9064, 32),
             // Goal d647b5f3 extracts premise-invalid clarification construction to PremiseInvalidClarification.
             // Goal 439c80ae extracts Reviewer evidence brief projection to ReviewerEvidenceBriefSection;

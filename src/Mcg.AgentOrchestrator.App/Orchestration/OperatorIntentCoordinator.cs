@@ -120,7 +120,9 @@ internal sealed partial class OperatorIntentCoordinator
                     ? SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath)
                         .ListGoalIdStatusesAsync().GetAwaiter().GetResult().Select(g => g.Id).ToArray()
                     : [],
-                id => HasGoalLandedEvent(workspace.GoalLifecycleEventsDirectory, id))
+                id => HasGoalLandedEvent(workspace.GoalLifecycleEventsDirectory, id)),
+            ExperimentFlags = new ExperimentFlagIntentHandler(workspace.ExperimentStorePath,
+                Path.Combine(workspace.OrchestratorDirectory, "conductor-policy.json"))
         };
     }
 

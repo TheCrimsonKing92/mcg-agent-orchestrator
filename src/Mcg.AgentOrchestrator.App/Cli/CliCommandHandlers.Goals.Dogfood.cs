@@ -51,7 +51,12 @@ private static void HandleDogfoodLog(CliExecutionContext context, IReadOnlyList<
             var limit = GetFlagValue(parts, "--limit") is { } value
                 ? ParsePositiveInteger(value, "--limit")
                 : 20;
-            var records = new DogfoodLogStore(context.Workspace.DogfoodLogStorePath)
+            if (!File.Exists(context.Workspace.DogfoodLogStorePath))
+            {
+                Console.WriteLine($"No dogfood log entries in {context.Workspace.DogfoodLogStorePath}.");
+                return;
+            }
+            var records = DogfoodLogStore.OpenReadOnly(context.Workspace.DogfoodLogStorePath)
                 .ListRecentAsync(limit)
                 .GetAwaiter()
                 .GetResult();
