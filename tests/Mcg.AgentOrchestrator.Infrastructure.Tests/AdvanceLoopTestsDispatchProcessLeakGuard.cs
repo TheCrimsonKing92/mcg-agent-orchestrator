@@ -48,7 +48,8 @@ public sealed class AdvanceLoopTestsDispatchProcessLeakGuard
         AdvanceLoopTests.ReleaseBlockingWorkers(root);
         await TestOwnedDispatchProcesses.AwaitCompletionAsync(record);
         Assert.True(File.Exists(record.ExitCodePath));
-        Assert.Equal("0", File.ReadAllText(record.ExitCodePath).Trim());
+        Assert.True(DispatchExitArtifacts.TryRead(record.ExitCodePath, out var exitArtifact));
+        Assert.Equal(0, exitArtifact.ExitCode);
         new DispatchProcessLeakGuardAttribute().After(
             GetType().GetMethod(nameof(After_AwaitedRealDispatch_Passes))!, test);
     }
@@ -104,7 +105,8 @@ public sealed class AdvanceLoopTestsDispatchProcessLeakGuard
                 var peer = await TestHangGuard.WaitAsync(leakingReady.Task.WaitAsync(cancellation.Token), "leaking peer launch");
                 AdvanceLoopTests.ReleaseBlockingWorkers(root);
                 await TestOwnedDispatchProcesses.AwaitCompletionAsync(record);
-                Assert.Equal("0", File.ReadAllText(record.ExitCodePath).Trim());
+                Assert.True(DispatchExitArtifacts.TryRead(record.ExitCodePath, out var exitArtifact));
+                Assert.Equal(0, exitArtifact.ExitCode);
                 using var peerHost = Process.GetProcessById(peer.ProcessId);
                 Assert.False(peerHost.HasExited);
                 // This owner passes while the other scope's real host remains live.
@@ -219,7 +221,7 @@ public sealed class AdvanceLoopTestsDispatchProcessLeakGuard
         var observed = false;
         var invoked = false;
         using var observation = DispatchProcessStartObservation.Observe((_, _) => observed = true);
-        var result = DispatchProcessStartObservation.Start(new ProcessStartInfo("dotnet"), _ =>
+        var result = DispatchProcessStartObservation.Start(new ProcessStartInfo("dotnet") { CreateNoWindow = true }, _ =>
         {
             invoked = true;
             return process;
@@ -243,6 +245,7 @@ public sealed class AdvanceLoopTestsDispatchProcessLeakGuard
 
     private static ProcessStartInfo DispatchStartInfo(string file) => new("dotnet")
     {
+        CreateNoWindow = true,
         ArgumentList = { "exec", "App.dll", DispatchProcessHost.SubcommandName, file }
     };
 
