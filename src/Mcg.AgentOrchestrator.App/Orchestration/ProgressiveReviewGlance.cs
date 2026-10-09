@@ -209,7 +209,7 @@ internal sealed class ProgressiveReviewGlanceCoordinator
     {
         return new ProgressiveReviewGlanceCoordinator(
             new SubscriptionCliProgressiveReviewGlanceRunner(workerProfiles),
-            new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory),
+            new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, integrationBranch: workspace.IntegrationBranch),
             CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory),
             options,
             steeringStore: SqliteProgressiveReviewSteeringStore.ForDirectory(workspace.OrchestratorDirectory),

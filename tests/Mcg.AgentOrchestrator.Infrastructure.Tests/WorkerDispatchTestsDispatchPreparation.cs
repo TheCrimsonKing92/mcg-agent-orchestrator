@@ -1994,7 +1994,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
             dispatch.PaidRoute,
             "candidate-a",
             priorDispatch.BaseCommit,
-            WorkerProfileDispatcher.ReadCurrentMainIdentityForRetry(workingDirectory));
+            WorkerProfileDispatcher.ReadCurrentMainIdentityForRetry(workingDirectory, TrunkBranchName.Default));
 
         Assert.Equal(expected, dispatch.RetryContextFingerprint);
     }
@@ -4096,13 +4096,13 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         var task = new TaskSpec(TaskId.New(), "Retry after main drift.", AgentRole.Developer);
         var goal = kernel.CreateGoal("Track current main in retry context", [task]);
         var worktree = GoalWorktrees.Ensure(root, goal.Id);
-        var before = WorkerProfileDispatcher.ReadCurrentMainIdentityForRetry(worktree);
+        var before = WorkerProfileDispatcher.ReadCurrentMainIdentityForRetry(worktree, TrunkBranchName.Default);
 
         File.WriteAllText(Path.Combine(root, "main-drift.txt"), "main advanced");
         RunGit(root, ["add", "main-drift.txt"], DateTimeOffset.Parse("2026-07-15T18:53:00Z"));
         RunGit(root, ["commit", "-m", "Advance main for retry fingerprint"], DateTimeOffset.Parse("2026-07-15T18:53:00Z"));
 
-        var after = WorkerProfileDispatcher.ReadCurrentMainIdentityForRetry(worktree);
+        var after = WorkerProfileDispatcher.ReadCurrentMainIdentityForRetry(worktree, TrunkBranchName.Default);
 
         Assert.NotNull(before);
         Assert.NotNull(after);
@@ -4275,6 +4275,33 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     Assert.Equal(WorkerProfileDispatcher.ReviewerScopeUnavailableErrorCode, ex.ErrorCode);
     Assert.Contains(ex.Findings, finding => finding.Contains("git ref 'main' could not be resolved", StringComparison.Ordinal));
 }
+
+    [Xunit.Fact]
+    public void PrepareReadyTasksReviewerUsesConfiguredMasterBranch()
+    {
+        var root = CreateSeededDispatchRepository();
+        var now = DateTimeOffset.Parse("2026-07-15T19:01:00Z");
+        RunGit(root, ["branch", "-m", "master"], now);
+        RunGit(root, ["checkout", "-b", "goal/configured-review"], now);
+        File.WriteAllText(Path.Combine(root, "review-change.txt"), "goal change");
+        RunGit(root, ["add", "review-change.txt"], now);
+        RunGit(root, ["commit", "-m", "Goal change"], now);
+        var kernel = new AgentOrchestratorKernel();
+        var reviewer = new TaskSpec(TaskId.New(), "Review implementation output and risks.", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Review configured trunk", [reviewer]);
+        kernel.ActivateGoal(goal.Id, [new AgentDefinition(
+            new AgentId("reviewer"), "Reviewer", AgentRole.Reviewer,
+            new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey))]);
+        var profile = new WorkerProfile("codex-cli", "codex exec --sandbox read-only --cd {workingDirectory}");
+
+        var results = WorkerProfileDispatcher.PrepareReadyTasks(kernel, goal, profile,
+            Path.Combine(root, "prompts"), root, now, sandboxOptions: DisabledSandbox,
+            integrationBranch: "master");
+
+        var prompt = File.ReadAllText(Assert.Single(results).PromptPath);
+        Assert.Contains("## Reviewer Changed-File Scope", prompt, StringComparison.Ordinal);
+        Assert.Contains("review-change.txt", prompt, StringComparison.Ordinal);
+    }
 
     [Xunit.Fact(DisplayName = "PrepareTask_reviewer_fails_with_typed_merge_tree_unavailable")]
     public void PrepareTaskReviewerFailsWithTypedMergeTreeUnavailable()

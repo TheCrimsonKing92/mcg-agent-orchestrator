@@ -155,8 +155,9 @@ public static partial class WorkerProfileDispatcher
         PaidRouteClassification paidRoute = PaidRouteClassification.Unknown,
         // The credential source this dispatch's Claude auth preflight selected and reported. Recorded on
         // the dispatch so the start boundary transports that one decision instead of selecting again.
-        ClaudeCredentialSourceSelection? claudeCredentialSelection = null, DispatchShadowRecorder? shadowRecorder = null, string? orchestratorSkillDirectory = null)
+        ClaudeCredentialSourceSelection? claudeCredentialSelection = null, DispatchShadowRecorder? shadowRecorder = null, string? orchestratorSkillDirectory = null, string? integrationBranch = null)
     {
+        integrationBranch = TrunkBranchName.Resolve(integrationBranch);
         EnsureTaskNeedsExecution(task, allowPendingRecordedDispatchRefresh);
         EnsureSubscriptionRetryWindowHasPassed(task, dispatchedAt);
         var priorDispatch = task.LastDispatch ?? task.DispatchHistory.LastOrDefault();
@@ -179,7 +180,7 @@ public static partial class WorkerProfileDispatcher
 
         EnsureReviewerScopeForPreparation(
             task,
-            workingDirectory,
+            workingDirectory, integrationBranch,
             ref preflightFindings,
             ref reviewerScopeChangedFiles,
             ref reviewerScopeMergeBase,
@@ -192,7 +193,7 @@ public static partial class WorkerProfileDispatcher
         var contextDirectory = WriteDispatchContextArtifacts(kernel, goal, task, workingDirectory,
             preflightFindings, providerName, modelName, citedPriorEvidenceResolver, dispatchedAt, orchestratorSkillDirectory);
         var targetContext = TryReadCurrentTargetContext(workingDirectory);
-        var currentMainIdentity = ReadCurrentMainIdentityForRetry(workingDirectory);
+        var currentMainIdentity = ReadCurrentMainIdentityForRetry(workingDirectory, integrationBranch);
         var reviewerRoundTouchScope = ReadReviewRoundTouchScope(
             goal,
             task,
@@ -373,7 +374,7 @@ public static partial class WorkerProfileDispatcher
 
     private static void EnsureReviewerScopeForPreparation(
         TaskSpec task,
-        string workingDirectory,
+        string workingDirectory, string integrationBranch,
         ref IReadOnlyList<string>? preflightFindings,
         ref IReadOnlyList<string>? reviewerScopeChangedFiles,
         ref string? reviewerScopeMergeBase,
@@ -405,7 +406,7 @@ public static partial class WorkerProfileDispatcher
             reviewerScopeTotalChangedFileCount.HasValue;
         if (!hasScope)
         {
-            var scope = AddReviewerChangedFileScopeFindings(findings, task, workingDirectory);
+            var scope = AddReviewerChangedFileScopeFindings(findings, task, workingDirectory, integrationBranch);
             if (scope is null)
             {
                 var errorCode = ResolvePreflightErrorCode(findings) ?? ReviewerScopeUnavailableErrorCode;
@@ -430,7 +431,7 @@ public static partial class WorkerProfileDispatcher
             return;
         }
 
-        var mergeTree = AddReviewerMergeTreeStatusFindings(findings, task, workingDirectory);
+        var mergeTree = AddReviewerMergeTreeStatusFindings(findings, task, workingDirectory, integrationBranch);
         if (mergeTree is null)
         {
             var errorCode = ResolvePreflightErrorCode(findings) ?? ReviewerMergeTreeUnavailableErrorCode;
@@ -455,7 +456,7 @@ public static partial class WorkerProfileDispatcher
         string workingDirectory,
         DateTimeOffset dispatchedAt,
         CitedPriorEvidenceResolver? citedPriorEvidenceResolver = null,
-        WorkerSandboxOptions? sandboxOptions = null)
+        WorkerSandboxOptions? sandboxOptions = null, string? integrationBranch = null)
     {
         var results = new List<WorkerProfileDispatchResult>();
         foreach (var task in goal.Tasks.Where(task => task.Status == WorkTaskStatus.Assigned).ToList())
@@ -469,7 +470,7 @@ public static partial class WorkerProfileDispatcher
                 workingDirectory,
                 dispatchedAt,
                 citedPriorEvidenceResolver: citedPriorEvidenceResolver,
-                sandboxOptions: sandboxOptions, shadowRecorder: DispatchShadowRecorder.Default));
+                sandboxOptions: sandboxOptions, shadowRecorder: DispatchShadowRecorder.Default, integrationBranch: integrationBranch));
         }
 
         return results;
@@ -491,7 +492,7 @@ public static partial class WorkerProfileDispatcher
         Func<string, bool>? commandExists = null,
         int? reviewAutoRetryStopRound = null,
         CitedPriorEvidenceResolver? citedPriorEvidenceResolver = null,
-        int plannerSampleCount = 1, bool cascadeTesterCheapFirst = true, string? cascadeCheapModelAlias = null, bool cascadeMechanicalReworkCheap = true, string? orchestratorSkillDirectory = null)
+        int plannerSampleCount = 1, bool cascadeTesterCheapFirst = true, string? cascadeCheapModelAlias = null, bool cascadeMechanicalReworkCheap = true, string? orchestratorSkillDirectory = null, string? integrationBranch = null)
     {
         EnsureTaskNeedsExecution(task);
         var sandbox = sandboxOptions ?? WorkerSandboxOptions.FromEnvironment();
@@ -532,7 +533,7 @@ public static partial class WorkerProfileDispatcher
             claudeAuthProbe,
             sandbox,
             commandExists,
-            providerHoldScope: kernel.Goals, cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias, cascadeMechanicalReworkCheap: cascadeMechanicalReworkCheap, orchestratorSkillDirectory: orchestratorSkillDirectory);
+            providerHoldScope: kernel.Goals, cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias, cascadeMechanicalReworkCheap: cascadeMechanicalReworkCheap, orchestratorSkillDirectory: orchestratorSkillDirectory, integrationBranch: integrationBranch);
         ThrowIfPreflightBlocked(preflight);
         return PrepareTask(
             kernel,
@@ -567,7 +568,7 @@ public static partial class WorkerProfileDispatcher
             sandboxOptions: sandbox,
             plannerSampleCount: plannerSampleCount,
             paidRoute: ClassifyPaidRoute(roleSelection.Model.SubscriptionMode),
-            claudeCredentialSelection: preflight.ClaudeCredentialSelection, shadowRecorder: DispatchShadowRecorder.Default, orchestratorSkillDirectory: orchestratorSkillDirectory);
+            claudeCredentialSelection: preflight.ClaudeCredentialSelection, shadowRecorder: DispatchShadowRecorder.Default, orchestratorSkillDirectory: orchestratorSkillDirectory, integrationBranch: integrationBranch);
     }
 
     public static WorkerSubscriptionPreflightResult PreflightSubscriptionTask(
@@ -582,8 +583,9 @@ public static partial class WorkerProfileDispatcher
         Func<ClaudeCliAuthState>? claudeAuthProbe = null,
         WorkerSandboxOptions? sandboxOptions = null,
         Func<string, bool>? commandExists = null,
-        IEnumerable<Goal>? providerHoldScope = null, bool cascadeTesterCheapFirst = true, string? cascadeCheapModelAlias = null, bool cascadeMechanicalReworkCheap = true, string? orchestratorSkillDirectory = null)
+        IEnumerable<Goal>? providerHoldScope = null, bool cascadeTesterCheapFirst = true, string? cascadeCheapModelAlias = null, bool cascadeMechanicalReworkCheap = true, string? orchestratorSkillDirectory = null, string? integrationBranch = null)
     {
+        integrationBranch = TrunkBranchName.Resolve(integrationBranch);
         var findings = new List<string>();
         ReviewerChangedFileScope? reviewerScope = null;
         ReviewerMergeTreeStatus? reviewerMergeTree = null;
@@ -668,8 +670,8 @@ public static partial class WorkerProfileDispatcher
             AddBuildEnvironmentFinding(findings, goal, task);
             AddWorktreeCleanlinessFinding(findings, task, workingDirectory);
             AddGitMetadataAccessFinding(findings, task, workingDirectory, sandbox);
-            reviewerScope = AddReviewerChangedFileScopeFindings(findings, task, workingDirectory);
-            reviewerMergeTree = AddReviewerMergeTreeStatusFindings(findings, task, workingDirectory);
+            reviewerScope = AddReviewerChangedFileScopeFindings(findings, task, workingDirectory, integrationBranch);
+            reviewerMergeTree = AddReviewerMergeTreeStatusFindings(findings, task, workingDirectory, integrationBranch);
 
             if (IsTaskRetryDeferred(task, now, out var retryAfter))
             {
@@ -878,7 +880,7 @@ public static partial class WorkerProfileDispatcher
     private static ReviewerChangedFileScope? AddReviewerChangedFileScopeFindings(
         List<string> findings,
         TaskSpec task,
-        string workingDirectory)
+        string workingDirectory, string integrationBranch)
     {
         if (task.RequiredRole != AgentRole.Reviewer)
         {
@@ -888,9 +890,9 @@ public static partial class WorkerProfileDispatcher
 
         try
         {
-            var scope = new WorkerGitContext().ReadReviewerChangedFileScope(workingDirectory);
+            var scope = new WorkerGitContext().ReadReviewerChangedFileScope(workingDirectory, integrationBranch);
             findings.Add(
-                $"reviewer-scope: git diff --name-only main...HEAD found {scope.TotalChangedFileCount} changed file(s) from merge-base {ShortSha(scope.MergeBase)}");
+                $"reviewer-scope: git diff --name-only {integrationBranch}...HEAD found {scope.TotalChangedFileCount} changed file(s) from merge-base {ShortSha(scope.MergeBase)}");
             if (scope.Truncated)
             {
                 findings.Add(
@@ -915,7 +917,7 @@ public static partial class WorkerProfileDispatcher
     private static ReviewerMergeTreeStatus? AddReviewerMergeTreeStatusFindings(
         List<string> findings,
         TaskSpec task,
-        string workingDirectory)
+        string workingDirectory, string integrationBranch)
     {
         if (task.RequiredRole != AgentRole.Reviewer)
         {
@@ -925,15 +927,15 @@ public static partial class WorkerProfileDispatcher
 
         try
         {
-            var status = new WorkerGitContext().ReadReviewerMergeTreeStatus(workingDirectory);
+            var status = new WorkerGitContext().ReadReviewerMergeTreeStatus(workingDirectory, integrationBranch);
             if (status.IsClean)
             {
-                findings.Add("reviewer-merge-tree: git merge-tree --write-tree --name-only main HEAD is clean against current main");
+                findings.Add($"reviewer-merge-tree: git merge-tree --write-tree --name-only {integrationBranch} HEAD is clean against current {integrationBranch}");
             }
             else
             {
                 findings.Add(
-                    $"reviewer-merge-tree: git merge-tree --write-tree --name-only main HEAD found {status.TotalConflictPathCount} conflict path(s) against current main");
+                    $"reviewer-merge-tree: git merge-tree --write-tree --name-only {integrationBranch} HEAD found {status.TotalConflictPathCount} conflict path(s) against current {integrationBranch}");
                 if (status.Truncated)
                 {
                     findings.Add(
@@ -1101,7 +1103,7 @@ public static partial class WorkerProfileDispatcher
         int? reviewAutoRetryStopRound = null,
         CitedPriorEvidenceResolver? citedPriorEvidenceResolver = null,
         WorkerSandboxOptions? sandboxOptions = null,
-        int plannerSampleCount = 1, bool cascadeTesterCheapFirst = true, string? cascadeCheapModelAlias = null, bool cascadeMechanicalReworkCheap = true)
+        int plannerSampleCount = 1, bool cascadeTesterCheapFirst = true, string? cascadeCheapModelAlias = null, bool cascadeMechanicalReworkCheap = true, string? integrationBranch = null)
     {
         return PrepareSubscriptionReadyBatch(
             kernel,
@@ -1116,7 +1118,7 @@ public static partial class WorkerProfileDispatcher
             reviewAutoRetryStopRound,
             citedPriorEvidenceResolver,
             sandboxOptions,
-            plannerSampleCount, cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias, cascadeMechanicalReworkCheap: cascadeMechanicalReworkCheap).Dispatches;
+            plannerSampleCount, cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias, cascadeMechanicalReworkCheap: cascadeMechanicalReworkCheap, integrationBranch: integrationBranch).Dispatches;
     }
 
     public static WorkerProfileReadyBatchResult PrepareSubscriptionReadyBatch(
@@ -1136,7 +1138,7 @@ public static partial class WorkerProfileDispatcher
         // Shared Claude auth probe, so a test can supply fixture credential sources instead of this
         // batch reading the operator's real credential store. Production leaves it null and each
         // prepared task below gets its own single resolution.
-        Func<ClaudeCliAuthState>? claudeAuthProbe = null, bool cascadeTesterCheapFirst = true, string? cascadeCheapModelAlias = null, bool cascadeMechanicalReworkCheap = true, string? orchestratorSkillDirectory = null)
+        Func<ClaudeCliAuthState>? claudeAuthProbe = null, bool cascadeTesterCheapFirst = true, string? cascadeCheapModelAlias = null, bool cascadeMechanicalReworkCheap = true, string? orchestratorSkillDirectory = null, string? integrationBranch = null)
     {
         var selections = goal.Tasks
             .Where(task => task.Status == WorkTaskStatus.Assigned)
@@ -1183,7 +1185,7 @@ public static partial class WorkerProfileDispatcher
                 claudeAuthProbe: taskClaudeAuthProbe,
                 sandboxOptions: sandbox,
                 commandExists: commandExists,
-                providerHoldScope: kernel.Goals, cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias, cascadeMechanicalReworkCheap: cascadeMechanicalReworkCheap, orchestratorSkillDirectory: orchestratorSkillDirectory);
+                providerHoldScope: kernel.Goals, cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias, cascadeMechanicalReworkCheap: cascadeMechanicalReworkCheap, orchestratorSkillDirectory: orchestratorSkillDirectory, integrationBranch: integrationBranch);
             if (!preflight.Allowed)
             {
                 TryResolveMissingArtifactDependency(kernel, goal, selection.Task, preflight);
@@ -1231,7 +1233,7 @@ public static partial class WorkerProfileDispatcher
                 sandboxOptions: sandbox,
                 plannerSampleCount: plannerSampleCount,
                 paidRoute: ClassifyPaidRoute(roleSelection.Model.SubscriptionMode),
-                claudeCredentialSelection: preflight.ClaudeCredentialSelection, shadowRecorder: DispatchShadowRecorder.Default, orchestratorSkillDirectory: orchestratorSkillDirectory));
+                claudeCredentialSelection: preflight.ClaudeCredentialSelection, shadowRecorder: DispatchShadowRecorder.Default, orchestratorSkillDirectory: orchestratorSkillDirectory, integrationBranch: integrationBranch));
         }
 
         return new WorkerProfileReadyBatchResult(results, blocked);
@@ -1718,12 +1720,12 @@ public static partial class WorkerProfileDispatcher
             string.IsNullOrWhiteSpace(headCommit) ? null : headCommit);
     }
 
-    internal static string? ReadCurrentMainIdentityForRetry(string workingDirectory)
+    internal static string? ReadCurrentMainIdentityForRetry(string workingDirectory, string integrationBranch)
     {
         if (string.IsNullOrWhiteSpace(workingDirectory) || !Directory.Exists(workingDirectory))
             return null;
 
-        var main = GitCli.Run(workingDirectory, "rev-parse", "main");
+        var main = GitCli.Run(workingDirectory, "rev-parse", integrationBranch);
         if (main.ExitCode != 0)
             return null;
         var identity = main.Output.Trim();

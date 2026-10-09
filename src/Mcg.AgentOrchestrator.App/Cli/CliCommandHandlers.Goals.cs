@@ -1830,7 +1830,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     ConductorTickStepLedger.Measure("failure-clusters", () => failureClustersDaily.OnTick());
                     ConductorTickStepLedger.Measure("host-health", () => hostHealthMonitor.Evaluate());
                     ConductorTickStepLedger.Measure("remote-executor-probe", () => remoteExecutorProbe.Evaluate());
-                    ConductorTickStepLedger.Measure("remote-git-mirror", () => RemoteGitMirror.TryStartBackgroundProcessing(loopKernel, context.Workspace.ExecutionDirectory));
+                    ConductorTickStepLedger.Measure("remote-git-mirror", () => RemoteGitMirror.TryStartBackgroundProcessing(loopKernel, context.Workspace.ExecutionDirectory, integrationBranch: context.Workspace.IntegrationBranch));
                     return terminalSweep;
                 }
                 ConductorGoalReloadObservation resolveGoalReloadObservation(string goalId)
@@ -1993,7 +1993,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     }
 
                     watchReaper.SweepExitedProcesses(wk, context.CurrentGoal.Id);
-                    RemoteGitMirror.TryStartBackgroundProcessing(wk, context.Workspace.ExecutionDirectory, context.CurrentGoal.Id);
+                    RemoteGitMirror.TryStartBackgroundProcessing(wk, context.Workspace.ExecutionDirectory, context.CurrentGoal.Id, context.Workspace.IntegrationBranch);
                     var g = wk.Goals.FirstOrDefault(x => x.Id.Value == watchGoalId);
                     if (g is not null) { try { new GoalDispatchOperations().RefreshDispatches(wk, g, watchReaper); } catch { } }
                 };

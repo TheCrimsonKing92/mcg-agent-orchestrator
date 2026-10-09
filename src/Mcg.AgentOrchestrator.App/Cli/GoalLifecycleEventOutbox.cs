@@ -24,7 +24,7 @@ internal static class GoalLifecycleEventOutbox
     internal static void AppendForMessage(OrchestratorWorkspace workspace, OrchestratorStateOutboxMessage message)
     {
         var payload = Deserialize(message);
-        new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory)
+        new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, integrationBranch: workspace.IntegrationBranch)
             .AppendIdempotent(new GoalId(payload.GoalId), message.Id,
                 writer => writer.AppendTimelineEvent(payload.Event));
     }

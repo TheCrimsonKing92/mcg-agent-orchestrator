@@ -30,6 +30,7 @@ public sealed record DispatchProviderSessionRetentionOptions(TimeSpan RetentionP
 public sealed class GoalLifecycleEventWriter : IGoalLifecycleEventWriter
 {
     private readonly string _eventsDirectory;
+    private readonly string _integrationBranch;
     private readonly IClock _clock;
     private readonly AgentOrchestratorKernel? _kernel;
     private readonly DispatchProviderSessionRetentionOptions _sessionRetentionOptions;
@@ -42,9 +43,10 @@ public sealed class GoalLifecycleEventWriter : IGoalLifecycleEventWriter
         string eventsDirectory,
         IClock? clock = null,
         AgentOrchestratorKernel? kernel = null,
-        DispatchProviderSessionRetentionOptions? sessionRetentionOptions = null)
+        DispatchProviderSessionRetentionOptions? sessionRetentionOptions = null, string? integrationBranch = null)
     {
         _eventsDirectory = eventsDirectory;
+        _integrationBranch = TrunkBranchName.Resolve(integrationBranch);
         _clock = clock ?? new SystemClock();
         _kernel = kernel;
         _sessionRetentionOptions = sessionRetentionOptions ?? DispatchProviderSessionRetentionOptions.FromEnvironment();
@@ -179,7 +181,7 @@ public sealed class GoalLifecycleEventWriter : IGoalLifecycleEventWriter
         string mainSha) =>
         Append(goalId, "GoalLanded", obj =>
         {
-            obj["integrationBranch"] = "main";
+            obj["integrationBranch"] = _integrationBranch;
             obj["goalBranch"] = goalBranch;
             obj["branchTip"] = branchTip;
             obj["mainSha"] = mainSha;
@@ -193,7 +195,7 @@ public sealed class GoalLifecycleEventWriter : IGoalLifecycleEventWriter
         string mainSha) =>
         Append(goalId, "GoalLanded", obj =>
         {
-            obj["integrationBranch"] = "main";
+            obj["integrationBranch"] = _integrationBranch;
             obj["goalBranch"] = goalBranch;
             obj["integrateSha"] = integrateSha;
             obj["mainSha"] = mainSha;

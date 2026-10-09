@@ -164,7 +164,7 @@ internal static class GoalCreationSideEffectDelivery
 
         var lifecycleWriter = new GoalLifecycleEventWriter(
             workspace.GoalLifecycleEventsDirectory,
-            kernel: kernel);
+            kernel: kernel, integrationBranch: workspace.IntegrationBranch);
         foreach (var effect in receipt.LifecycleEffects)
         {
             cancellationToken.ThrowIfCancellationRequested();

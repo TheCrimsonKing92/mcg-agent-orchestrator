@@ -9,20 +9,12 @@ public sealed class IntegrationBranchLiteralConventionTests
         public override string ToString() => $"{File}:{Line}: integration branch literal \"{Literal}\"";
     }
 
-    private const string SliceTwo = "Slice two: worker/mirror/lifecycle branch argument; remove when threaded.";
     private static readonly Allowance[] AllowList =
     [
-        new("Mcg.AgentOrchestrator.Infrastructure/Workspaces/TrunkBranchName.cs", "main",
+        new("Mcg.AgentOrchestrator.Execution/Processes/TrunkBranchName.cs", "main",
             "Single definition of the default integration branch.", "public const string Default ="),
         new("Mcg.AgentOrchestrator.App/Console/OwnerActivityNarrator.cs", "main",
             "Classifies user-facing activity text; does not construct git arguments.", "Contains("),
-        new("Mcg.AgentOrchestrator.Execution/Processes/GitCli.cs", "main", SliceTwo),
-        new("Mcg.AgentOrchestrator.Execution/Workers/WorkerGitContext.cs", "main", SliceTwo),
-        new("Mcg.AgentOrchestrator.Execution/Workers/WorkerGitContext.cs", "main...HEAD", SliceTwo),
-        new("Mcg.AgentOrchestrator.Execution/Workers/WorkerGitContext.cs", "main^{commit}", SliceTwo),
-        new("Mcg.AgentOrchestrator.Execution/Workers/WorkerProfileDispatcher.cs", "main", SliceTwo),
-        new("Mcg.AgentOrchestrator.Infrastructure/GoalLifecycleEventWriter.cs", "main", SliceTwo),
-        new("Mcg.AgentOrchestrator.App/Orchestration/RemoteGitMirror.cs", "main", SliceTwo)
     ];
 
     [Fact]
@@ -34,6 +26,19 @@ public sealed class IntegrationBranchLiteralConventionTests
         Assert.All(AllowList, entry => Assert.False(string.IsNullOrWhiteSpace(entry.Reason)));
         var violations = Violations(hits);
         Assert.True(violations.Length == 0, string.Join(Environment.NewLine, violations.Select(hit => hit.ToString())));
+    }
+
+    [Theory]
+    [InlineData("Mcg.AgentOrchestrator.Execution/Processes/GitCli.cs")]
+    [InlineData("Mcg.AgentOrchestrator.Execution/Workers/WorkerGitContext.cs")]
+    [InlineData("Mcg.AgentOrchestrator.Execution/Workers/WorkerProfileDispatcher.cs")]
+    [InlineData("Mcg.AgentOrchestrator.Infrastructure/GoalLifecycleEventWriter.cs")]
+    [InlineData("Mcg.AgentOrchestrator.App/Orchestration/RemoteGitMirror.cs")]
+    public void FormerAllowanceRejectsLiteralGitArgument(string file)
+    {
+        var hit = Assert.Single(Violations(ScanSource(file, "GitCli.Run(root, \"rev-parse\", \"main\");")));
+        Assert.Equal(file, hit.File);
+        Assert.Equal("main", hit.Literal);
     }
 
     [Theory]
