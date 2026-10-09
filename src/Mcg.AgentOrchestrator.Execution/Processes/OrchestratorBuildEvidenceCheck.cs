@@ -78,11 +78,17 @@ public static class OrchestratorBuildEvidenceCheck
             return new(MissingEvidence: false, BuildFailed: false, Diagnostic: string.Empty);
         }
         var receipt = workerBuildReceipt();
-        if (receipt.Matches)
+        var missingProjects = receipt.Matches
+            ? WorkerBuildReceiptCoverage.FindMissingProjects(projects, receipt.Projects)
+            : [];
+        if (receipt.Matches && missingProjects.Count == 0)
         {
             return new(MissingEvidence: false, BuildFailed: false, Diagnostic: string.Empty);
         }
 
+        var receiptReason = receipt.Matches
+            ? $"projects-incomplete; missing_projects={string.Join(", ", missingProjects)}"
+            : receipt.Reason;
         OrchestratorBuildCheckResult result;
         try
         {
@@ -100,13 +106,13 @@ public static class OrchestratorBuildEvidenceCheck
             return new(
                 MissingEvidence: true,
                 BuildFailed: false,
-                Diagnostic: $"worker_build_receipt={receipt.Reason}; build_evidence_attempt=orchestrator; {projectsDiagnostic}; no compile verdict produced. {boundedOutput}".Trim());
+                Diagnostic: $"worker_build_receipt={receiptReason}; build_evidence_attempt=orchestrator; {projectsDiagnostic}; no compile verdict produced. {boundedOutput}".Trim());
         }
 
         return new(
             MissingEvidence: false,
             BuildFailed: result.ExitCode != 0,
-            Diagnostic: $"worker_build_receipt={receipt.Reason}; build_evidence_producer=orchestrator; {projectsDiagnostic}; {boundedOutput}".Trim());
+            Diagnostic: $"worker_build_receipt={receiptReason}; build_evidence_producer=orchestrator; {projectsDiagnostic}; {boundedOutput}".Trim());
     }
 
     public static string? ResolveScriptPath(Func<string, string?>? readEnvironment = null)
