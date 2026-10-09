@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
@@ -32,7 +33,7 @@ internal static class OwnerEscalationReasonText
         if (rebase.Success)
         {
             var files = string.Join(", ", rebase.Groups["files"].Value.Split(',').Select(file => file.Trim(' ', '_')));
-            var branch = rebase.Groups["branch"].Success ? rebase.Groups["branch"].Value : "main";
+            var branch = rebase.Groups["branch"].Success ? rebase.Groups["branch"].Value : TrunkBranchName.Default;
             return $"conflicts with {branch} in {files}; needs a rebase.";
         }
         if (IsAuthorQuestion(firstLine))
