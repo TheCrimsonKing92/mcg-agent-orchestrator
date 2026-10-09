@@ -109,7 +109,7 @@ public static void PrintTask(Goal goal, TaskSpec task)
 
         if (DispatchFailureClassifier.TryBuildDirtyDispatchRecovery(task, out var recovery))
         {
-            PrintDirtyDispatchRecovery(GetTaskDisplayNumber(goal, task.Id), recovery);
+            DirtyDispatchRecoveryTextView.PrintDirtyDispatchRecovery(GetTaskDisplayNumber(goal, task.Id), recovery);
         }
     }
 

@@ -282,7 +282,7 @@ private static void PrintBriefLintAdvisory(string briefText)
 {
     try
     {
-        ConsoleViews.PrintBriefLintFindings(BriefLint.Lint(briefText));
+        BriefLintTextView.PrintBriefLintFindings(BriefLint.Lint(briefText));
     }
     catch (Exception)
     {
@@ -1160,7 +1160,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
         case "failure-triage":
             var triagePolicy = ResolveCliAutonomyPolicy(parts);
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, GetOptionalArgument(parts));
-            ConsoleViews.PrintFailureTriageReport(FailureTriagePlanner.Build(
+            FailureTriageTextView.PrintFailureTriageReport(FailureTriagePlanner.Build(
                 context.Kernel,
                 context.CurrentGoal,
                 context.Agents,
@@ -1172,7 +1172,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
 
         case "retention-plan":
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, GetOptionalArgument(parts));
-            ConsoleViews.PrintGoalArtifactRetentionPlan(GoalArtifactRetentionPlanner.Build(
+            GoalArtifactRetentionTextView.PrintGoalArtifactRetentionPlan(GoalArtifactRetentionPlanner.Build(
                 context.Kernel,
                 context.CurrentGoal,
                 context.Workspace,

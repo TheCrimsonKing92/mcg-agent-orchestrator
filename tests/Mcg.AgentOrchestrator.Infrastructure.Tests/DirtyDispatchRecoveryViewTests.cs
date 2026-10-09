@@ -18,7 +18,7 @@ public sealed class DirtyDispatchRecoveryViewTests
     [Xunit.Fact(DisplayName = "FormatDirtyDispatchRecoverySummary_formats_dirty_useful_with_evidence")]
     public void FormatDirtyDispatchRecoverySummaryFormatsDirtyUsefulWithEvidence()
     {
-        var summary = ConsoleViews.FormatDirtyDispatchRecoverySummary(DirtyUsefulRecovery);
+        var summary = DirtyDispatchRecoveryTextView.FormatDirtyDispatchRecoverySummary(DirtyUsefulRecovery);
 
         Assert.StartsWith("dirty-useful:", summary, StringComparison.Ordinal);
         Assert.Contains("src/Foo.cs", summary, StringComparison.Ordinal);
@@ -29,7 +29,7 @@ public sealed class DirtyDispatchRecoveryViewTests
     [Xunit.Fact(DisplayName = "FormatDirtyDispatchRecoverySummary_formats_dirty_unverified_with_no_evidence_note")]
     public void FormatDirtyDispatchRecoverySummaryFormatsDirtyUnverifiedWithNoEvidenceNote()
     {
-        var summary = ConsoleViews.FormatDirtyDispatchRecoverySummary(DirtyUnverifiedRecovery);
+        var summary = DirtyDispatchRecoveryTextView.FormatDirtyDispatchRecoverySummary(DirtyUnverifiedRecovery);
 
         Assert.StartsWith("dirty-unverified:", summary, StringComparison.Ordinal);
         Assert.Contains("src/Bar.cs", summary, StringComparison.Ordinal);
@@ -41,7 +41,7 @@ public sealed class DirtyDispatchRecoveryViewTests
     public void BuildDirtyDispatchRecoverySuggestedCommandPointsToTaskDetails()
     {
         const int taskNumber = 3;
-        var command = ConsoleViews.BuildDirtyDispatchRecoverySuggestedCommand(taskNumber, DirtyUsefulRecovery);
+        var command = DirtyDispatchRecoveryTextView.BuildDirtyDispatchRecoverySuggestedCommand(taskNumber, DirtyUsefulRecovery);
 
         Assert.Equal($"task {taskNumber}", command);
     }
@@ -50,7 +50,7 @@ public sealed class DirtyDispatchRecoveryViewTests
     public void PrintDirtyDispatchRecoveryIncludesGitInspectStageCommitAndVerifyManualWorkflow()
     {
         const int taskNumber = 7;
-        var output = CaptureConsole(() => ConsoleViews.PrintDirtyDispatchRecovery(taskNumber, DirtyUnverifiedRecovery));
+        var output = CaptureConsole(() => DirtyDispatchRecoveryTextView.PrintDirtyDispatchRecovery(taskNumber, DirtyUnverifiedRecovery));
         Assert.Contains("C:\\worktrees\\goal-abc", output, StringComparison.Ordinal);
         Assert.Contains("status --short", output, StringComparison.Ordinal);
         Assert.Contains("add -A", output, StringComparison.Ordinal);

@@ -2,7 +2,7 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
-internal static partial class ConsoleViews
+internal static class DirtyDispatchRecoveryTextView
 {
 public static string BuildDirtyDispatchRecoverySuggestedCommand(int taskNumber, DirtyDispatchRecovery recovery)
 {

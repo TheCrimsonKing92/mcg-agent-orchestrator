@@ -2,7 +2,7 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
-internal static partial class ConsoleViews
+internal static class FailureTriageTextView
 {
     public static void PrintFailureTriageReport(FailureTriageReport report)
     {

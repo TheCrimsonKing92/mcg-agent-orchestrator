@@ -80,7 +80,7 @@ internal static partial class CliCommandHandlers
         var leaveRunning = outcome.LiveDispatches is { Count: > 0 };
         if (outcome.Disposition is GoalLifecycleTransitionDisposition.DryRun or GoalLifecycleTransitionDisposition.Rejected)
         {
-            ConsoleViews.PrintGoalAbandonPlan(GoalAbandonPlanner.Build(kernel, outcome.Goal, workspace,
+            GoalAbandonTextView.PrintGoalAbandonPlan(GoalAbandonPlanner.Build(kernel, outcome.Goal, workspace,
                 command.Reason, hooks, leaveLiveDispatchesRunning: leaveRunning));
             if (outcome.Disposition == GoalLifecycleTransitionDisposition.Rejected)
             {
@@ -115,7 +115,7 @@ internal static partial class CliCommandHandlers
                 : deliverAfterCommitEffect() ?? GoalAbandonPlanner.Build(kernel, outcome.Goal, workspace, command.Reason, hooks, dryRun: false);
         }
 
-        ConsoleViews.PrintGoalAbandonPlan(plan);
+        GoalAbandonTextView.PrintGoalAbandonPlan(plan);
         if (leaveRunning)
         {
             Console.WriteLine($"Live dispatches still running: {outcome.LiveDispatches!.Count}");

@@ -58,7 +58,7 @@ internal static partial class CliCommandHandlers
 
     internal static void RenderGoalAbandonStopAliasPlan(GoalAbandonCommand command, GoalAbandonPlan plan)
     {
-        ConsoleViews.PrintGoalAbandonPlan(plan);
+        GoalAbandonTextView.PrintGoalAbandonPlan(plan);
         if (command.Confirmed)
             throw new InvalidOperationException("abandon-goal could not apply because one or more steps are blocked.");
     }
@@ -98,7 +98,7 @@ internal static partial class CliCommandHandlers
         var plan = deliverAfterCommitEffect is null
             ? GoalAbandonPlanner.CompleteAfterCommit(committed, outcome.Goal!, workspace, reason, hooks)
             : deliverAfterCommitEffect() ?? GoalAbandonPlanner.Build(committed, outcome.Goal!, workspace, reason, hooks, dryRun: false);
-        ConsoleViews.PrintGoalAbandonPlan(plan);
+        GoalAbandonTextView.PrintGoalAbandonPlan(plan);
     }
 
     private static GoalSnapshot CaptureGoalSnapshot(AgentOrchestratorKernel kernel, GoalId goalId) =>

@@ -115,7 +115,7 @@ private static bool HandleConfigAlias(IReadOnlyList<string> parts, CliExecutionC
             ConsoleViews.PrintWorkerProfiles(context.WorkerProfiles);
             return false;
         case "policy":
-            ConsoleViews.PrintAutonomyPolicies();
+            AutonomyPoliciesTextView.PrintAutonomyPolicies();
             return false;
         case "doctor":
             ConsoleViews.PrintHealth(OrchestratorHealthInspector.InspectCurrentEnvironment(

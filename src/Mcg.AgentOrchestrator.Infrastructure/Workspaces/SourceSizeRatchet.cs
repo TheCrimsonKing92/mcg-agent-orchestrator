@@ -434,8 +434,9 @@ internal static class SourceSizeRatchet
             new SourceClassCeiling("CliPersistentStateRunner", 5975, 18),
             // Goal 5935c270 extracts subscription-plan output into SubscriptionPlanTextView
             // (2026-10-09 console architecture review, finding 4, taming slice 13).
-            // Measured 3364 total lines across the existing 45 partial files; no extra headroom.
-            new SourceClassCeiling("ConsoleViews", 3364, 45),
+            // Goal c0ff6203 extracts six small text views (taming slice 14).
+            // Measured 3216 total lines across the remaining 39 partial files; no extra headroom.
+            new SourceClassCeiling("ConsoleViews", 3216, 39),
         });
 
     internal static IReadOnlyList<SourceSizeViolation> EvaluateClasses(

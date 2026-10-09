@@ -81,7 +81,7 @@ public static string BuildSuggestedCommand(
                 ? $"{command} {SubscriptionPromptCostGuard.CliConfirmationFlag}"
                 : command,
         NextActionKind.FixFailedVerification when DispatchFailureClassifier.TryBuildDirtyDispatchRecovery(task, out var recovery) =>
-            BuildDirtyDispatchRecoverySuggestedCommand(taskNumber.Value, recovery),
+            DirtyDispatchRecoveryTextView.BuildDirtyDispatchRecoverySuggestedCommand(taskNumber.Value, recovery),
         NextActionKind.RunAssignedTask => BuildRunAssignedTaskCommand(goal, task, taskNumber.Value, agents),
         _ => command
     };
