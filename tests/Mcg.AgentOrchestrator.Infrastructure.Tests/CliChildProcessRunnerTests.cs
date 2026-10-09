@@ -36,8 +36,9 @@ public sealed class CliChildProcessRunnerTests
             descendantIdentity = TestOwnedProcessStop.Identify(descendant);
             Assert.False(descendant.HasExited);
 
-            var error = await Assert.ThrowsAsync<TimeoutException>(async () =>
-                await run.WaitAsync(TestHangGuard.Bound));
+            await TestHangGuard.CompletesWithinAsync(run, TestHangGuard.HangSafetyBound,
+                "CliChildProcessRunner.RunAsync with injected 10 s guard");
+            var error = await Assert.ThrowsAsync<TimeoutException>(() => run);
             Assert.Contains(start.FileName, error.Message, StringComparison.Ordinal);
             Assert.Contains("did not exit", error.Message, StringComparison.Ordinal);
             Assert.Contains("stdout=started", error.Message, StringComparison.Ordinal);
@@ -69,6 +70,24 @@ public sealed class CliChildProcessRunnerTests
             catch (IOException) { }
             catch (UnauthorizedAccessException) { }
         }
+    }
+
+    [Fact]
+    public async Task HangSafetyBoundFailsWithItsOwnMessageWhenTaskNeverCompletes()
+    {
+        var never = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var bound = TimeSpan.FromMilliseconds(200);
+        const string operation = "never-completing control";
+
+        var error = await Assert.ThrowsAsync<TestHangGuardExpiredException>(() =>
+            TestHangGuard.CompletesWithinAsync(never.Task, bound, operation));
+
+        Assert.IsNotAssignableFrom<TimeoutException>(error);
+        Assert.Contains("hang-safety bound", error.Message, StringComparison.Ordinal);
+        Assert.Contains(bound.ToString(), error.Message, StringComparison.Ordinal);
+        Assert.Contains(operation, error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("did not exit", error.Message, StringComparison.Ordinal);
+        Assert.False(never.Task.IsCompleted);
     }
 
     private static ProcessStartInfo TreeStart(string marker, string temporaryMarker)
