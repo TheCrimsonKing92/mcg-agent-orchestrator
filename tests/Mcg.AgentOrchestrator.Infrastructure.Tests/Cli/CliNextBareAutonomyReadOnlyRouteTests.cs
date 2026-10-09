@@ -13,8 +13,8 @@ public sealed class CliNextBareAutonomyReadOnlyRouteTests : CliTaskQueryTestSupp
     [Theory]
     [InlineData("--autonomy", "observe")]
     [InlineData("--autonomy-policy", "observe")]
-    [InlineData("--autonomy", "conservative")]
-    [InlineData("--autonomy-policy", "conservative")]
+    [InlineData("--autonomy", "safe-auto")]
+    [InlineData("--autonomy-policy", "safe-auto")]
     public async Task ReadOnlyDatabase_AutonomyForms_MatchWriterOutput(string flag, string policy)
     {
         var root = CreateTempDirectory();
@@ -25,12 +25,14 @@ public sealed class CliNextBareAutonomyReadOnlyRouteTests : CliTaskQueryTestSupp
             CopyWorkspace(root, writerRoot);
             var writerWorkspace = OrchestratorWorkspace.ForDirectory(writerRoot);
             var args = new[] { "next", flag, policy };
+            // Compare with the existing goal-prefixed writer form; bare selection is checked below.
+            var writerArgs = new[] { "next", TargetId.Value, flag, policy };
             var writerRepository = new SqliteOrchestratorStateRepository(writerWorkspace.SqliteStatePath);
             IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
             var profiles = WorkerProfileCatalog.Default();
             Goal? currentGoal = null;
             var writerOutput = CaptureConsole(() => Assert.False(CliPersistentStateRunner.ExecuteCommand(
-                args, writerRepository, writerWorkspace, ref agents,
+                writerArgs, writerRepository, writerWorkspace, ref agents,
                 new InMemoryModelProviderRegistry([]), ref profiles, ref currentGoal,
                 skipReadOnlyRoute: true)));
 
