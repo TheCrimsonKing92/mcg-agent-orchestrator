@@ -137,7 +137,7 @@ public sealed class OwnerActivityNarratorTests
             new(time.AddSeconds(1), "goal-lifecycle", "11111111", "HumanInputReceived"),
             new(time.AddSeconds(2), "owner-question-resolved", "11111111", "question=Keep the ticket direction?")], _ => "Search",
             attention: [new(new("q1", "11111111", OwnerQuestionKind.HumanInput, "Keep the ticket direction?"), time, time.AddSeconds(1))]);
-        Assert.Single(lines, line => line.Phrase == "Resolved: 11111111 Keep the issue direction?");
+        Assert.Single(lines, line => line.Phrase == "Resolved: 11111111 Search: Keep the issue direction?");
         Assert.Equal(2, lines.Count);
     }
 

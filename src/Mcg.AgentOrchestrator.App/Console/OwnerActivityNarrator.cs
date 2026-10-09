@@ -165,8 +165,11 @@ internal static class OwnerActivityNarrator
             if (entry.ResolvedAt is { } resolvedAt)
             {
                 Add(source with { Timestamp = resolvedAt, EventKind = "owner-question-resolved" },
-                    "Resolved: " + Prefix(entry.Question.GoalId) + " " + question, question, "The conductor can continue.");
-                result[^1] = result[^1] with { Subject = question, OwnerQuestionId = entry.Question.ItemId, Resolution = resolution };
+                    "Resolved: " + Prefix(entry.Question.GoalId) +
+                    (FullName(entry.Question.GoalId) == Prefix(entry.Question.GoalId) ? " " : " " + FullName(entry.Question.GoalId) + ": ") + question,
+                    question, "The conductor can continue.");
+                result[^1] = result[^1] with { Subject = question, OwnerQuestionId = entry.Question.ItemId,
+                    Resolution = resolution, GoalId = entry.Question.GoalId, Question = entry.Question.Text };
             }
         }
         return result.OrderByDescending(item => item.Timestamp).ThenByDescending(item => item.Kind == "owner-question-resolved")
@@ -253,12 +256,12 @@ internal static class OwnerActivityNarrator
         _ => null
     };
 
-    internal static string? StagePhrase(OwnerConductEvent item) => Head(item) switch
+    internal static string? StagePhrase(OwnerConductEvent item, string? finding = null) => Head(item) switch
     {
         "TaskDispatched" => Role(item) + " started",
         "TaskCompleted" => Role(item) + " passed",
         "TaskFailed" => Role(item) + " sent back: " + (FailureReason(item) is { } reason ? "plan rejected: " + reason :
-            Field(item, "outcome") == "finding" ? "a problem needs correction" : "the worker could not finish"),
+            finding ?? (Field(item, "outcome") == "finding" ? "a problem needs correction" : "the worker could not finish")),
         _ => null
     };
 

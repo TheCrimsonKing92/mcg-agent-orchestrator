@@ -35,11 +35,10 @@ public sealed class OwnerConsoleGoalTitleTests
     }
 
     [Fact]
-    public void LongTitleCapsAtOneHundredCharactersIncludingEllipsis()
+    public void LongTitleRetainsAllCharactersBeforeRendering()
     {
         var title = OwnerGoalTitle.From("\r\n# " + new string('a', 150));
-        Assert.Equal(100, title.Length);
-        Assert.EndsWith("...", title);
+        Assert.Equal(new string('a', 150), title);
         Assert.Equal(new string('a', 100), OwnerGoalTitle.From(new string('a', 100)));
         Assert.Equal(string.Empty, OwnerGoalTitle.From("###"));
     }

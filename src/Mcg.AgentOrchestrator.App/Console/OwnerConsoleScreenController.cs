@@ -6,7 +6,7 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     IOwnerConsoleDialogs dialogs, IOrchestratorStateQueries state, IGoalEventTail tail,
     IOwnerConsoleConductor conductor, IOwnerConsoleDigestReport digest,
     IOwnerDigestSummary summary, TimeProvider clock, IOwnerConsoleEpicSource? epics = null,
-    AnswerIntentStatusTracker? answerTracking = null) : IDisposable
+    AnswerIntentStatusTracker? answerTracking = null, OwnerQuestionResolutionReader? resolutions = null) : IDisposable
 {
     private readonly AnswerIntentStatusTracker _answerTracking = answerTracking ?? new(answers.ReadStatusAsync, clock);
     public void Dispose() => _answerTracking.Dispose();
@@ -31,6 +31,18 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     internal async Task ShowActivityMeaningAsync(OwnerConsoleActivityItem item, OwnerConsoleScreenOperation? operation = null,
         CancellationToken cancellationToken = default)
     {
+        if (item.Kind == "owner-question-resolved" && resolutions is not null)
+        {
+            OwnerQuestionResolution? resolution = null;
+            if (!await RunDependencyAsync("question resolution", async stepToken =>
+                resolution = await resolutions.ReadAsync(item, stepToken), operation, cancellationToken)) return;
+            if (resolution is not null)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                await dialogs.ShowTextAsync("What this means", OwnerQuestionResolutionText.Build(resolution, clock.LocalTimeZone));
+                return;
+            }
+        }
         IReadOnlyList<OwnerConsoleDecision> live = [];
         if (!await RunDependencyAsync("activity decision state", async stepToken =>
         {
@@ -83,10 +95,24 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
         CancellationToken cancellationToken = default)
     {
         var output = new OwnerConsoleCapturedOutput();
-        if (!await RunDependencyAsync("goal detail", stepToken =>
-            OwnerConsoleGoalDetailFormatter.ComposeAsync(state, tail, goalId, output, stepToken), operation, cancellationToken)) return;
+        IReadOnlyList<OwnerQuestionResolution> resolved = [];
+        if (!await RunDependencyAsync("goal detail", async stepToken =>
+        {
+            await OwnerConsoleGoalDetailFormatter.ComposeAsync(state, tail, goalId, output, stepToken);
+            if (resolutions is not null) resolved = await resolutions.ListForGoalAsync(goalId, stepToken);
+        }, operation, cancellationToken)) return;
         cancellationToken.ThrowIfCancellationRequested();
-        await dialogs.ShowTextAsync("Goal", output.Text);
+        var lines = output.Text.Replace("\r", "").TrimEnd('\n').Split('\n').ToList();
+        var choiceLines = new List<int>();
+        if (resolved.Count > 0)
+        {
+            lines.Add("Resolved questions (Enter to open):");
+            foreach (var question in resolved)
+            { choiceLines.Add(lines.Count); lines.Add(OwnerQuestionResolutionText.Summary(question, clock.LocalTimeZone)); }
+        }
+        var selected = await dialogs.ShowPageAsync("Goal", string.Join(Environment.NewLine, lines), choiceLines);
+        if (selected is { } index && index >= 0 && index < resolved.Count)
+            await dialogs.ShowTextAsync("Question resolution", OwnerQuestionResolutionText.Build(resolved[index], clock.LocalTimeZone));
     }
 
     private async Task AnswerAsync(bool accept, OwnerConsoleScreenOperation? operation, CancellationToken cancellationToken)
