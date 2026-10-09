@@ -246,7 +246,7 @@ public sealed class GoalLifecycleEventWriter : IGoalLifecycleEventWriter
         AgentOrchestratorKernel? kernel,
         GoalId goalId,
         DateTimeOffset cleanedUpAt,
-        DispatchProviderSessionRetentionOptions? sessionRetentionOptions = null, string? integrationBranch = null)
+        DispatchProviderSessionRetentionOptions? sessionRetentionOptions = null)
     {
         if (kernel is null)
         {
