@@ -26,7 +26,10 @@ public sealed class ConductorVerbSetupTests
                 $"operator-intents: version 1 ({Path.Combine(workspace.OrchestratorDirectory, SqliteOperatorIntentStore.DatabaseFileName)}){Environment.NewLine}" +
                 $"operator-lessons: version 1 ({workspace.OperatorLessonsStorePath}){Environment.NewLine}" +
                 $"operator-escapes: version 1 ({workspace.OperatorEscapesStorePath}){Environment.NewLine}" +
-                $"dogfood-log: version 1 ({workspace.DogfoodLogStorePath}){Environment.NewLine}", output.ToString());
+                $"dogfood-log: version 1 ({workspace.DogfoodLogStorePath}){Environment.NewLine}" +
+                $"progressive-review-steering: version 1 ({Path.Combine(workspace.OrchestratorDirectory, "progressive-review-steering.db")}){Environment.NewLine}", output.ToString());
+            Assert.NotNull(SqliteProgressiveReviewSteeringStore.OpenReadOnly(
+                Path.Combine(workspace.OrchestratorDirectory, StoreSchemaRegistry.ProgressiveReviewSteering.Database)));
             Assert.NotNull(DogfoodLogStore.OpenReadOnly(workspace.DogfoodLogStorePath));
             Assert.NotNull(PortfolioStore.OpenReadOnly(workspace.PortfolioStorePath));
             Assert.NotNull(BacklogStore.OpenReadOnly(workspace.BacklogStorePath));

@@ -32,6 +32,9 @@ public static class StoreSchemaRegistry
     public static StoreSchemaEntry DogfoodLog { get; } =
         new("dogfood-log", Persistence + "DogfoodLogStore.cs", "dogfood-log.db", "collaboration", 1);
 
+    public static StoreSchemaEntry ProgressiveReviewSteering { get; } =
+        new("progressive-review-steering", Persistence + "ProgressiveReviewSteeringStoreSetup.cs", "progressive-review-steering.db", "review", 1);
+
     // Source fragments of one database are separate inventory entries, not separate databases.
     public static IReadOnlyList<StoreSchemaEntry> Inventory { get; } = Array.AsReadOnly<StoreSchemaEntry>(
     [
@@ -57,7 +60,7 @@ public static class StoreSchemaRegistry
         new("judge-panel", Conductor + "ConductorJudgePanelCaseStore.Schema.cs", "judge-panel.db", "conductor", null),
         new("board-fill", Conductor + "ConductorBoardFillDraftStore.cs", "board-fill.db", "conductor", null),
         new("progressive-review-glance-circuit", Persistence + "ProgressiveReviewGlanceCircuitStore.cs", "progressive-review-glance-circuit.db", "review", null),
-        new("progressive-review-steering", Persistence + "ProgressiveReviewSteeringStore.cs", "progressive-review-steering.db", "review", null),
+        ProgressiveReviewSteering,
         new("reconcile-sweep-remediation", Persistence + "ReconcileSweepRemediationStore.cs", "state.db", "review", null),
         new("control-plane-delivery", Comms + "DiscordControlPlaneDeliveryStore.cs", "control-plane-delivery.db", "review", null),
         new("orchestrator-state", Persistence + "SqliteOrchestratorStateRepository.cs", "state.db", "review", null),

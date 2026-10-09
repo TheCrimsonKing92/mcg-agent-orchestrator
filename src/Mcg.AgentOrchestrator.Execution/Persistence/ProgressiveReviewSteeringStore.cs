@@ -124,17 +124,46 @@ public sealed class SqliteProgressiveReviewSteeringStore : IProgressiveReviewSte
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly string _dbPath;
+    private readonly bool _readOnly;
 
-    public SqliteProgressiveReviewSteeringStore(string dbPath)
+    public SqliteProgressiveReviewSteeringStore(string dbPath) : this(dbPath, readOnly: false)
+    {
+        ProgressiveReviewSteeringStoreSetup.Setup(dbPath);
+    }
+
+    private SqliteProgressiveReviewSteeringStore(string dbPath, bool readOnly)
     {
         _dbPath = dbPath;
-        EnsureSchema();
+        _readOnly = readOnly;
     }
+
+    public static SqliteProgressiveReviewSteeringStore OpenReadOnly(string dbPath)
+    {
+        if (!File.Exists(dbPath))
+            throw SchemaSetupRequired(dbPath, StoreSchemaState.Missing);
+
+        var store = new SqliteProgressiveReviewSteeringStore(dbPath, readOnly: true);
+        using var conn = store.OpenConnection();
+        var state = StoreSchemaVersions.Verify(conn, StoreSchemaRegistry.ProgressiveReviewSteering);
+        if (state != StoreSchemaState.Current)
+            throw SchemaSetupRequired(dbPath, state);
+        return store;
+    }
+
+    private static InvalidOperationException SchemaSetupRequired(string dbPath, StoreSchemaState state) =>
+        new($"Progressive review steering store '{dbPath}' schema is {state} (expected version {StoreSchemaRegistry.ProgressiveReviewSteering.CurrentVersion}); run setup.");
 
     public static SqliteProgressiveReviewSteeringStore ForDirectory(string orchestratorDirectory) =>
         new(Path.Combine(orchestratorDirectory, "progressive-review-steering.db"));
 
-    private string ConnectionString => $"Data Source={_dbPath};Mode=ReadWriteCreate;Pooling=False;";
+    private string ConnectionString => _readOnly
+        ? new SqliteConnectionStringBuilder
+        {
+            DataSource = _dbPath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false
+        }.ToString()
+        : $"Data Source={_dbPath};Mode=ReadWriteCreate;Pooling=False;";
 
     public async Task EnqueueIntentAsync(ProgressiveReviewSteerIntent intent, CancellationToken cancellationToken = default)
     {
@@ -160,6 +189,9 @@ public sealed class SqliteProgressiveReviewSteeringStore : IProgressiveReviewSte
         string goalId,
         CancellationToken cancellationToken = default)
     {
+        if (_readOnly)
+            throw new InvalidOperationException("ReserveNextPendingAsync is a writer operation unavailable on a read-only progressive review steering store.");
+
         await using var conn = OpenConnection();
         await using var tx = await conn.BeginTransactionAsync(cancellationToken);
         var intent = await ReadNextPendingAsync(conn, goalId, cancellationToken);
@@ -258,60 +290,6 @@ public sealed class SqliteProgressiveReviewSteeringStore : IProgressiveReviewSte
         cmd.CommandText = "PRAGMA busy_timeout=30000";
         cmd.ExecuteNonQuery();
         return conn;
-    }
-
-    private void EnsureSchema()
-    {
-        var directory = Path.GetDirectoryName(_dbPath);
-        if (!string.IsNullOrWhiteSpace(directory))
-            Directory.CreateDirectory(directory);
-
-        using var conn = OpenConnection();
-        RunNonQuery(conn, """
-            CREATE TABLE IF NOT EXISTS progressive_review_steer_intents (
-                id                        TEXT PRIMARY KEY,
-                goal_id                   TEXT NOT NULL,
-                task_id                   TEXT NOT NULL,
-                role                      TEXT NOT NULL,
-                round_key                 TEXT NOT NULL,
-                trigger_glance_id         TEXT NOT NULL,
-                inputs_hash               TEXT NOT NULL,
-                glance_verdict_timestamp  TEXT NOT NULL,
-                misdirection_evidence     TEXT NOT NULL,
-                corrective_direction      TEXT NOT NULL,
-                guidance_text             TEXT NOT NULL,
-                created_at                TEXT NOT NULL,
-                status                    TEXT NOT NULL,
-                completed_at              TEXT
-            )
-            """);
-        RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS idx_progressive_review_steer_intents_pending ON progressive_review_steer_intents(goal_id, status, created_at)");
-        RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS idx_progressive_review_steer_intents_round ON progressive_review_steer_intents(round_key)");
-        RunNonQuery(conn, """
-            CREATE TABLE IF NOT EXISTS progressive_review_steer_receipts (
-                id                         TEXT PRIMARY KEY,
-                intent_id                  TEXT NOT NULL,
-                goal_id                    TEXT NOT NULL,
-                task_id                    TEXT NOT NULL,
-                round_key                  TEXT NOT NULL,
-                trigger_glance_id          TEXT NOT NULL,
-                inputs_hash                TEXT NOT NULL,
-                misdirection_evidence      TEXT NOT NULL,
-                cancel_confirmation        TEXT NOT NULL,
-                decision                   TEXT NOT NULL,
-                admission_checks_json      TEXT NOT NULL,
-                guidance_text              TEXT NOT NULL,
-                cancelled_input_tokens     INTEGER NOT NULL,
-                cancelled_output_tokens    INTEGER NOT NULL,
-                steered_input_tokens       INTEGER NOT NULL,
-                steered_output_tokens      INTEGER NOT NULL,
-                cancelled_wall_ms          INTEGER NOT NULL,
-                steered_wall_ms            INTEGER NOT NULL,
-                outcome                    TEXT NOT NULL,
-                created_at                 TEXT NOT NULL
-            )
-            """);
-        RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS idx_progressive_review_steer_receipts_round ON progressive_review_steer_receipts(round_key)");
     }
 
     private static async Task<ProgressiveReviewSteerIntent?> ReadNextPendingAsync(
@@ -416,11 +394,4 @@ public sealed class SqliteProgressiveReviewSteeringStore : IProgressiveReviewSte
             reader.GetInt64(17),
             reader.GetString(18),
             DateTimeOffset.Parse(reader.GetString(19)));
-
-    private static void RunNonQuery(SqliteConnection conn, string sql)
-    {
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = sql;
-        cmd.ExecuteNonQuery();
-    }
 }
