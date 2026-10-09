@@ -199,11 +199,6 @@ internal sealed record GoalMonitoringEvent(
 
 internal sealed record MonitorErrorEvent(string GoalId, string Code, string Message);
 
-internal static class ApplicationMonitoringContract
-{
-    public const string KeepAliveEventName = "monitor.keepalive";
-}
-
 internal static class ApplicationGoalStatusText
 {
     public static string Resolve(GoalStatus status, GoalLifecycleState? lifecycleState) =>

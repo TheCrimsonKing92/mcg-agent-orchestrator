@@ -810,20 +810,4 @@ internal sealed partial class GoalDispatchOperations
 
         return new ProcessBatchExecutionResult(plan, refreshed, RefreshOutcomes: outcomes);
     }
-
-    public ProcessBatchExecutionResult CancelDispatches(AgentOrchestratorKernel kernel, Goal goal)
-    {
-        var runner = new BackgroundDispatchRunner();
-        var plan = kernel.BuildProcessBatchPlan(goal.Id, ProcessBatchActionKind.CancelDispatches);
-        var cancelled = new List<TaskSpec>();
-
-        foreach (var item in plan.Items.Where(item => item.Status == ProcessBatchItemStatus.Ready))
-        {
-            var task = goal.Tasks.Single(task => task.Id == item.TaskId);
-            runner.CancelLatestProcess(kernel, goal.Id, task.Id);
-            cancelled.Add(task);
-        }
-
-        return new ProcessBatchExecutionResult(plan, cancelled);
-    }
 }
