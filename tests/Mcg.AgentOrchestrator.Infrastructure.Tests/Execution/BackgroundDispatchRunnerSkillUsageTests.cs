@@ -40,7 +40,7 @@ public sealed class BackgroundDispatchRunnerSkillUsageTests
     private static (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Task) Refresh(string root, ProviderKind provider, string mode)
     {
         Directory.CreateDirectory(root);
-        var (kernel, goal) = ConductorDriverTests.SimpleGoal("Record round skill observations");
+        var (kernel, goal) = SimpleGoal("Record round skill observations");
         var task = goal.Tasks.First();
         var started = DateTimeOffset.Parse("2026-09-05T15:05:00Z");
         var command = provider == ProviderKind.OpenAICodexCli ? "codex exec" : "claude -p";
