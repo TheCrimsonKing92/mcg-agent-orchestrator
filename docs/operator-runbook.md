@@ -703,6 +703,20 @@ mcg-orchestrator.cmd record-goal <goal-prefix>   # compatibility alias for add +
 
 `DOGFOOD_LOG.md` remains only as a pointer for operators and should not receive new durable entries.
 
+### Move the default project's state to the user data root
+
+Use a [state repair quiet window](#state-repair-quiet-window): all goals must be terminal (Completed, Failed, Cancelled or Superseded), with no running dispatches or processes, no held conductor lock and no pending `.conduct-stop`. Draft, Parked and Verified goals still block the move. Stop other board writers too. Follow the existing [graceful stop and relaunch procedure](#manual-bounce-fallback-after-loop-affecting-code-lands) before moving and relaunch after success.
+
+```powershell
+mcg-orchestrator.cmd project move-default-state --dry-run
+mcg-orchestrator.cmd project move-default-state
+# To reverse, in another quiet window:
+mcg-orchestrator.cmd project move-default-state --undo --dry-run
+mcg-orchestrator.cmd project move-default-state --undo
+```
+
+The verb verifies the copied tree and state database, retains `.orchestrator.backup-<UTC timestamp>` beside the original location, and records a per-repository destination under the user data root. The old `.orchestrator` path continues to work through a directory junction (a directory symlink on non-Windows hosts). Undo restores the current moved tree to a real directory, falling back to the backup only if the moved tree cannot be read, and clears the registry record. Backups and the moved tree are retained for manual cleanup; a retained destination blocks another forward move until the operator removes it. Run this on the live board only after the relocation goal lands.
+
 ### State backup and restore
 
 Use `scripts\Backup-OrchestratorState.ps1` for machine-local `.orchestrator` backups. It writes timestamped archives to `%USERPROFILE%\backups\mcg-orchestrator\` by default, snapshots SQLite stores with `sqlite3 .backup`, includes the goal/event/log artifact directories plus `agents.json` and `workers.json`, verifies an extracted copy with row counts when `-VerifyRestore` is supplied, and retains the latest 7 daily plus 4 weekly archives unless overridden.
