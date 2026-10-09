@@ -5,6 +5,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal interface IAuthorBriefDraftRepository
 {
     string ResolveMainHead();
+    (string? MainHead, AuthorDraftTrackedEdits? TrackedEdits) ResolveMainHeadOrTrackedEdits() => (ResolveMainHead(), null);
     int? TrackedLineCount(string sha, string path);
     bool IsTrackedDirectory(string sha, string path) => false;
 }
@@ -12,6 +13,14 @@ internal interface IAuthorBriefDraftRepository
 internal sealed class GitAuthorBriefDraftRepository(string repositoryRoot, string integrationBranch) : IAuthorBriefDraftRepository
 {
     public string ResolveMainHead()
+    {
+        var result = ResolveMainHeadOrTrackedEdits();
+        if (result.TrackedEdits is not null)
+            throw new InvalidOperationException("Author drafting requires no tracked edits against main HEAD.");
+        return result.MainHead!;
+    }
+
+    public (string? MainHead, AuthorDraftTrackedEdits? TrackedEdits) ResolveMainHeadOrTrackedEdits()
     {
         var main = Require(GitCli.Run(repositoryRoot, "rev-parse", "--verify", $"{integrationBranch}^{{commit}}")).Trim();
         var head = Require(GitCli.Run(repositoryRoot, "rev-parse", "--verify", "HEAD^{commit}")).Trim();
@@ -22,11 +31,10 @@ internal sealed class GitAuthorBriefDraftRepository(string repositoryRoot, strin
             throw new AuthorDraftRepositoryNotAtMainException(
                 wrongRoot ? head != main ? "head-not-main, toplevel-not-root" : "toplevel-not-root" : "head-not-main",
                 head, main, root, repositoryRoot);
-        var diff = GitCli.Run(repositoryRoot, "diff", "--quiet", "HEAD", "--");
-        if (diff.ExitCode == 1 && !diff.DrainTimedOut)
-            throw new InvalidOperationException("Author drafting requires no tracked edits against main HEAD.");
-        Require(diff);
-        return main;
+        var tracked = GitTrackedEditsProbe.Probe(repositoryRoot);
+        if (tracked.Edits is not null) return (main, tracked.Edits);
+        if (!tracked.Clean) throw new InvalidOperationException("Author repository inspection failed: tracked edits unresolved.");
+        return (main, null);
     }
 
     public int? TrackedLineCount(string sha, string path)

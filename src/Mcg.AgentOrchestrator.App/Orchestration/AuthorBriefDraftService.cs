@@ -7,7 +7,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed record AuthorBriefDraftOutcome(string Kind, int ExitCode, string? MainHead,
     string? DraftPath, string? ReceiptPath, IReadOnlyList<AuthorBriefDraftCheck> Checks, string? Failure = null,
-    string? HeldMainHead = null);
+    string? HeldMainHead = null, string? FailureKind = null, AuthorDraftTrackedEdits? TrackedEdits = null);
 
 internal static class AuthorBriefDraftService
 {
@@ -22,6 +22,9 @@ internal static class AuthorBriefDraftService
         string? backlogItemId = null;
         string? mainHead = null;
         string? heldMainHead = null;
+        string? failureKind = null;
+        AuthorDraftTrackedEdits? trackedEdits = null;
+        var processSeamEntered = false;
         int? exitCode = null;
         string? model = null;
         var kind = "failed";
@@ -40,11 +43,25 @@ internal static class AuthorBriefDraftService
             receiptPath = Path.Combine(directory, stem + ".receipt.json");
             var resolvedModel = ConductorRoundModelResolver.Resolve(seams.Catalog, ModelFunctionPurposes.ConductorAuthor);
             model = resolvedModel.Alias;
-            mainHead = seams.Repository.ResolveMainHead();
+            var repository = seams.Repository.ResolveMainHeadOrTrackedEdits();
+            if (repository.TrackedEdits is { } edits)
+            {
+                kind = "held";
+                trackedEdits = edits;
+                failureDetail = $"{AuthorDraftTrackedEdits.Reason}: {edits.Render()}";
+                WriteReceipt(failureDetail);
+                error.WriteLine($"Error: {failureDetail}");
+                return Outcome(1);
+            }
+            mainHead = repository.MainHead;
             var lessons = new ConductorLessonSelector(workspace.OperatorLessonsStorePath)
                 .Select(ConductorLessonSelector.AuthorTags("brief"));
             var round = AuthorBriefDraftRound.DispatchAsync(AuthorBriefDraftPrompt.Render(item, lessons, mainHead),
-                workspace.ExecutionDirectory, seams.RunProcessAsync, resolvedModel, cancellationToken).GetAwaiter().GetResult();
+                workspace.ExecutionDirectory, (request, token) =>
+                {
+                    processSeamEntered = true;
+                    return seams.RunProcessAsync(request, token);
+                }, resolvedModel, cancellationToken).GetAwaiter().GetResult();
             exitCode = round.ExitCode;
             if (exitCode != 0) throw new InvalidOperationException($"Author model exited {exitCode}: {round.StandardError}");
             var result = AuthorBriefDraftResultParser.Parse(round.StandardOutput);
@@ -95,6 +112,8 @@ internal static class AuthorBriefDraftService
         }
         catch (Exception ex)
         {
+            failureKind = exitCode is not null ? BoardFillFailureKind.ModelRound :
+                BoardFillFailureKind.Classify(ex, processSeamEntered);
             // A hold is free of model spend; a repository change after dispatch remains a failure.
             if (ex is AuthorDraftRepositoryNotAtMainException notAtMain && mainHead is null)
             {
@@ -110,17 +129,20 @@ internal static class AuthorBriefDraftService
 
         AuthorBriefDraftOutcome Outcome(int code) => new(
             kind == "held" || failureDetail is null && kind is "draft" or "stale" ? kind : "failed",
-            code, mainHead, draftPath, receiptPath, checks, failureDetail, heldMainHead);
+            code, mainHead, draftPath, receiptPath, checks, failureDetail, heldMainHead, failureKind, trackedEdits);
 
         void WriteReceipt(string? failure)
         {
             object receipt = rawOutputPath is null ? new
             {
-                backlogItemId, mainHead, exitCode, kind, checks, staleReason, evidenceReferences, failure, model
+                backlogItemId, mainHead, exitCode, kind, checks, staleReason, evidenceReferences, failure, model,
+                failureKind, holdReason = trackedEdits is null ? null : AuthorDraftTrackedEdits.Reason,
+                heldPaths = trackedEdits?.Paths
             } : new
             {
                 backlogItemId, mainHead, exitCode, kind, checks, staleReason, evidenceReferences, failure, model,
-                rawOutputPath, rawOutputBytes
+                rawOutputPath, rawOutputBytes, failureKind,
+                holdReason = trackedEdits is null ? null : AuthorDraftTrackedEdits.Reason, heldPaths = trackedEdits?.Paths
             };
             File.WriteAllText(receiptPath!, JsonSerializer.Serialize(receipt,
                 new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, WriteIndented = true }));

@@ -34,7 +34,9 @@ internal sealed partial class ConductorBoardFillHost
         }, policy, new(workspace.ConductEventsLogPath), verifier: new BoardFillPremiseVerifier(
             () => ModelFunctionCatalogStore.Load(workspace.ModelFunctionCatalogPath),
             new GitAuthorBriefDraftRepository(workspace.ExecutionDirectory, workspace.IntegrationBranch), workspace.ExecutionDirectory),
-        filing: CreateFilingSeams(workspace), mainHead: mainHead);
+        filing: CreateFilingSeams(workspace), mainHead: mainHead,
+        trackedEdits: () => GitTrackedEditsProbe.Probe(workspace.ExecutionDirectory),
+        staleMainHead: mainHead ?? (() => BoardFillStaleItemRule.ReadMainHead(workspace.ExecutionDirectory, workspace.IntegrationBranch)));
 
     private static BoardFillFilingSeams CreateFilingSeams(OrchestratorWorkspace workspace)
     {

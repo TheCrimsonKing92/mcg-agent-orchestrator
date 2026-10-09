@@ -8,7 +8,9 @@ internal sealed record BoardFillDraftRound(string Id, string BacklogItemId, Date
     DateTimeOffset? ItemNewestNoteAt, string? MainHead, string? Outcome, string? DraftPath, string? ReceiptPath,
     IReadOnlyList<AuthorBriefDraftCheck> Checks, DateTimeOffset StartedAt, DateTimeOffset? FinishedAt,
     string? Failure = null, bool Reported = false, BoardFillDraftAssessment? Assessment = null,
-    IReadOnlyList<BoardFillFilingAttempt>? Filings = null, bool StaleHead = false)
+    IReadOnlyList<BoardFillFilingAttempt>? Filings = null, bool StaleHead = false,
+    string? FailureKind = null, string? HoldReason = null, IReadOnlyList<string>? HeldPaths = null,
+    bool HoldStartReported = false, DateTimeOffset? HoldReleasedAt = null, bool HoldReleaseReported = false)
 {
     internal DateTimeOffset ChangeStamp => ItemNewestNoteAt is { } note && note > ItemUpdatedAt ? note : ItemUpdatedAt;
 }
@@ -22,12 +24,14 @@ internal sealed partial class ConductorBoardFillDraftStore(string path)
         current.Outcome is not null && current.Assessment is null ? current with { Assessment = assessment } :
         throw new InvalidOperationException("Cannot assess an unfinished or already assessed board-fill round."));
 
-    internal IReadOnlyList<BoardFillDraftRound> ReadAll()
+    internal IReadOnlyList<BoardFillDraftRound> ReadAll(bool newestFirst = false)
     {
         if (!File.Exists(path)) return [];
         using var connection = Open(readOnly: true);
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT payload FROM board_fill_rounds ORDER BY round_id";
+        command.CommandText = newestFirst
+            ? "SELECT payload FROM board_fill_rounds ORDER BY rowid DESC"
+            : "SELECT payload FROM board_fill_rounds ORDER BY round_id";
         using var reader = command.ExecuteReader();
         var rounds = new List<BoardFillDraftRound>();
         while (reader.Read())
@@ -57,7 +61,10 @@ internal sealed partial class ConductorBoardFillDraftStore(string path)
         Update(round.Id, current => current.Outcome is null ? current with
         {
             MainHead = outcome.MainHead, Outcome = outcome.Kind, DraftPath = outcome.DraftPath,
-            ReceiptPath = outcome.ReceiptPath, Checks = outcome.Checks, FinishedAt = now, Failure = outcome.Failure
+            ReceiptPath = outcome.ReceiptPath, Checks = outcome.Checks, FinishedAt = now, Failure = outcome.Failure,
+            FailureKind = outcome.FailureKind,
+            HoldReason = outcome.TrackedEdits is null ? null : AuthorDraftTrackedEdits.Reason,
+            HeldPaths = outcome.TrackedEdits?.Paths
         } : throw new InvalidOperationException("Board-fill round is already finished."));
     }
 
@@ -68,12 +75,22 @@ internal sealed partial class ConductorBoardFillDraftStore(string path)
     internal int StartedOnUtcDay(DateTimeOffset now) =>
         ReadAll().Count(round => round.Outcome != "held" && round.StartedAt.UtcDateTime.Date == now.UtcDateTime.Date);
 
-    internal IReadOnlySet<string> AlreadyDrafted(IReadOnlyList<BacklogItem> items)
+    internal void MarkHoldStartReported(string id) => Update(id, current => current with { HoldStartReported = true });
+
+    internal void ReleaseHold(string id, DateTimeOffset now) => Update(id, current =>
+        current with { HoldReleasedAt = current.HoldReleasedAt ?? now });
+
+    internal void MarkHoldReleaseReported(string id) => Update(id, current => current with { HoldReleaseReported = true });
+
+    internal IReadOnlySet<string> AlreadyDrafted(IReadOnlyList<BacklogItem> items, string? currentMainHead = null)
     {
-        var verdicts = ReadAll().Where(round => round.Outcome is "draft" or "stale")
-            .GroupBy(round => round.BacklogItemId).ToDictionary(group => group.Key, group => group.Max(round => round.ChangeStamp));
-        return items.Where(item => verdicts.TryGetValue(item.Id, out var stamp) &&
-            stamp >= BoardFillReadyItemSelector.ChangeStamp(item)).Select(item => item.Id).ToHashSet(StringComparer.Ordinal);
+        // Insertion order identifies the latest round even when the injected clock has not moved.
+        var history = ReadAll(newestFirst: true).GroupBy(round => round.BacklogItemId)
+            .ToDictionary(group => group.Key, group => group.ToArray());
+        return items.Where(item => history.TryGetValue(item.Id, out var rounds) &&
+            (rounds.Any(round => round.Outcome == "draft" && round.ChangeStamp >= BoardFillReadyItemSelector.ChangeStamp(item)) ||
+             BoardFillStaleItemRule.Excludes(rounds[0], item, currentMainHead)))
+            .Select(item => item.Id).ToHashSet(StringComparer.Ordinal);
     }
 
     private void Update(string id, Func<BoardFillDraftRound, BoardFillDraftRound> change)
