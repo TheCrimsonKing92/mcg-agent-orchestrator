@@ -150,7 +150,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     {
         if (_controller.Model is not { } model) return;
         var rows = model.Decisions.Select(item => OwnerConsoleLineFitter.Fit(
-            $"[{item.Number}] {item.GoalPrefix} {item.Kind}: {item.Summary}", [item.Summary], _decisions.Viewport.Width)).ToArray();
+            $"[{item.Number}] {item.GoalPrefix} {item.Kind}: {item.Summary}", OwnerConsoleLineSpans.None, _decisions.Viewport.Width)).ToArray();
         _emptyDecisions.Text = model.DecisionsState is { Loading: true } ? "loading..." :
             model.DecisionsState?.Error is { } error ? "DECISIONS unavailable: " + error : "Nothing needs you right now.";
         _emptyDecisions.Visible = rows.Length == 0;
@@ -192,8 +192,9 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         _fullActivityLines = _notices.Concat(pane)
             .Take(OwnerConsoleViewModelBuilder.MaxActivityItems).ToArray();
         ActivityLines = _fullActivityLines.Select((line, row) => OwnerConsoleLineFitter.Fit(line,
-            row >= _notices.Count && state is null && _controller.Model is { } model && row - _notices.Count < model.Activity.Length
-                ? model.Activity[row - _notices.Count].Titles ?? [] : [], _activityWidth)).ToArray();
+            row >= _notices.Count && state is not { Loading: true } && state?.Error is null &&
+                _controller.Model is { } model && row - _notices.Count < model.Activity.Length
+                ? OwnerActivityNarrator.LineSpans(model.Activity[row - _notices.Count]) : OwnerConsoleLineSpans.None, _activityWidth)).ToArray();
         _activity.SetSource(new ObservableCollection<string>(ActivityLines));
         var preserved = selectedLine is null ? -1 : Array.IndexOf(_fullActivityLines.ToArray(), selectedLine);
         _activity.SelectedItem = ActivityLines.Count == 0 ? null :
