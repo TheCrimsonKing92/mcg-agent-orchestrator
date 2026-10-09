@@ -19,7 +19,7 @@ public sealed class FailureTriageTextViewCharacterizationTests
             new(7, TaskId.New(), FailureTriageCause.MissingVerification, FailureTriageAction.Verify,
                 AutonomyAction.BuildTest, true, autoApply, false, "Focused verification is missing.", "verify 7")
         ]);
-        var actual = CaptureConsole(() => FailureTriageTextView.PrintFailureTriageReport(report));
+        var actual = AsyncLocalConsoleRouter.Capture(() => FailureTriageTextView.PrintFailureTriageReport(report));
         var expected = string.Join(Environment.NewLine,
             "Failure triage goal: goal-abc",
             "Policy: safe-auto",

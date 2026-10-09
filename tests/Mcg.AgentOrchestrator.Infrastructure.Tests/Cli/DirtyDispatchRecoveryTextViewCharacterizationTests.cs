@@ -27,7 +27,7 @@ public sealed class DirtyDispatchRecoveryTextViewCharacterizationTests
     [InlineData(false)]
     public void Print_QuotedDirectoryAndMultipleFiles_PreservesExactText(bool verified)
     {
-        var actual = CaptureConsole(() => DirtyDispatchRecoveryTextView.PrintDirtyDispatchRecovery(7, Recovery(verified)));
+        var actual = AsyncLocalConsoleRouter.Capture(() => DirtyDispatchRecoveryTextView.PrintDirtyDispatchRecovery(7, Recovery(verified)));
         var expected = string.Join(Environment.NewLine,
             verified ? "Dispatch recovery: dirty-useful" : "Dispatch recovery: dirty-unverified",
             "Changed files: M src/Foo.cs, M tests/FooTests.cs",

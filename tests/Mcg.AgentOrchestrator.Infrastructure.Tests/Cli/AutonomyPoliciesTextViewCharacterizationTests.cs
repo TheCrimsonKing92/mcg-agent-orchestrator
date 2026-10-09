@@ -8,7 +8,7 @@ public sealed class AutonomyPoliciesTextViewCharacterizationTests
     [Fact]
     public void Print_AllPolicies_PreservesExactText()
     {
-        var actual = CaptureConsole(AutonomyPoliciesTextView.PrintAutonomyPolicies);
+        var actual = AsyncLocalConsoleRouter.Capture(AutonomyPoliciesTextView.PrintAutonomyPolicies);
         var expected = string.Join(Environment.NewLine,
             "Default autonomy policy: supervised-auto",
             "Policy observe: Read and report state only; do not start workers, invoke models, verify, merge, clean up, or edit operator records.",

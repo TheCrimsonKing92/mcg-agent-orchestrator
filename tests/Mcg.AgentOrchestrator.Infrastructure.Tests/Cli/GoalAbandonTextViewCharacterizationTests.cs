@@ -28,7 +28,7 @@ public sealed class GoalAbandonTextViewCharacterizationTests
             new(GoalAbandonStepKind.BuildLease, GoalAbandonDisposition.Missing,
                 "No build lease.", noCommand)
         ], retention);
-        var actual = CaptureConsole(() => GoalAbandonTextView.PrintGoalAbandonPlan(plan));
+        var actual = AsyncLocalConsoleRouter.Capture(() => GoalAbandonTextView.PrintGoalAbandonPlan(plan));
         var expected = string.Join(Environment.NewLine,
             "Goal abandon goal-abc Active: Operator requested stop.",
             "Dry run: True",

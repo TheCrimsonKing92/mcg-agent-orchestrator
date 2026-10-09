@@ -20,7 +20,7 @@ public sealed class GoalArtifactRetentionTextViewCharacterizationTests
             new(RetentionArtifactKind.WorkerLogs, RetentionDecision.Keep, "C:\\logs\\goal-abc",
                 false, "Keep diagnostic evidence.", noCommand)
         ]);
-        var actual = CaptureConsole(() => GoalArtifactRetentionTextView.PrintGoalArtifactRetentionPlan(plan));
+        var actual = AsyncLocalConsoleRouter.Capture(() => GoalArtifactRetentionTextView.PrintGoalArtifactRetentionPlan(plan));
         var expected = string.Join(Environment.NewLine,
             "Retention plan goal: goal-abc",
             "State: Abandoned",
