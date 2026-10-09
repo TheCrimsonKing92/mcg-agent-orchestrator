@@ -252,10 +252,7 @@ internal sealed partial class ConductorDriver
                     IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException or
                     NotSupportedException)
                 {
-                    if (gateOnly)
-                    {
-                        throw;
-                    }
+                    if (gateOnly && !MergeTrainBisectRedRetention.KeepsFailedReceipt(lastRecordedReceipt)) throw;
                     return Fallback($"gate infrastructure failure: {ex.GetType().Name}: {BoundCohortDetail(ex.Message)}");
                 }
                 finally
@@ -346,9 +343,9 @@ internal sealed partial class ConductorDriver
             var attributed = MergeTrainRedAttribution.TryAttribute(receipt, workspace.Path, members, out var subjects);
             var messageSubjectFailure = MergeTrainRedAttribution.ReadFatalFailures(receipt.GateTestResultPaths)
                 .Any(MergeTrainRedAttribution.IsMessageSubjectGuard);
-            // Positive subject ownership already proves this member's RED; do not wait for
-            // the remainder to pass before excluding the unchanged revision.
-            if (messageSubjectFailure && attributed is not null)
+            // Record positively attributed RED before the bisect can lose its build slot;
+            // the existing sink keeps repeat implication records idempotent.
+            if (attributed is not null && (messageSubjectFailure || MergeTrainBisectRedRetention.RecordsBeforeBisect(receipt, members.Count, attempt, attributed)))
                 RecordTrainImplicatedMember(attributed, receipt, subjects);
             if (receipt.Outcome != MergeTrainGateOutcome.Failed || members.Count == 2 || attempt == 1)
             {

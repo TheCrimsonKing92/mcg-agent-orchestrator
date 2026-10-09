@@ -322,8 +322,8 @@ public sealed class AcceptanceCohortWorkflowTestsTrainRedAttribution : Acceptanc
             Assert.Empty(scenario.Result.MemberResults);
             Assert.Equal(2, scenario.Verifier.RunCount);
             Assert.Equal(Paths.Skip(1), scenario.Verifier.ChangedFiles[1]);
-            Assert.Equal(Key(scenario, 1), Assert.Single(scenario.Driver.ReadTrainImplicatedMemberKeys()));
-            Assert.DoesNotContain(Key(scenario, 0), scenario.Driver.ReadTrainImplicatedMemberKeys());
+            Assert.Equal(new[] { Key(scenario, 0), Key(scenario, 1) }.Order(),
+                scenario.Driver.ReadTrainImplicatedMemberKeys().Order());
             Assert.DoesNotContain(Key(scenario, 2), scenario.Driver.ReadTrainImplicatedMemberKeys());
             AssertPairSuppressed(scenario, 1, 2);
             Assert.Contains("fallback=ordinary", scenario.Result.Detail);
