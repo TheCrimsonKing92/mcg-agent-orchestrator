@@ -406,7 +406,9 @@ internal static class SourceSizeRatchet
             // Goal b6abf7a1 extracts dispatch checkpoint sequencing to CriticalDispatchLifecycleCheckpoint;
             // goal 69c9d936 passes the configured integration branch through existing collaborators.
             // Measured 15256 lines across the same 70 partial files after both; no extra headroom.
-            new SourceClassCeiling("ConductorDriver", 15256, 70),
+            // Goal 8d620666 adds bounded partition/train slot admission and partition deferral propagation.
+            // Measured 15270 lines across the same 70 partial files; no extra headroom.
+            new SourceClassCeiling("ConductorDriver", 15270, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.

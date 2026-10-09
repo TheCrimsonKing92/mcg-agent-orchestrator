@@ -17,7 +17,9 @@ internal sealed partial class ConductorDriver
     {
         using var lease = CohortPartitionStableSlotLeaseSource is { } source
             ? source(identity.Value, cancellationToken)
-            : _parallelAcceptanceAttemptCoordinator.AcquireCohortStableSlotLease(identity.Value, cancellationToken);
+            : _parallelAcceptanceAttemptCoordinator.AcquireCohortStableSlotLeaseInRounds(identity.Value,
+                $"cohort-partition:goal-{member.GoalId.Value[..8]}", CohortStableSlotRoundCount, cancellationToken)
+                ?? throw new CohortStableSlotsDeferredException(identity.Value);
         return AcceptanceExecutionRunner.RunAttempt(
             verifier, partitionPath, member.GoalId, member.LandingPaths,
             lease.Environment.BuildPermitIndex, lease, cancellationToken,

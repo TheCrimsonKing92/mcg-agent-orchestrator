@@ -492,8 +492,12 @@ internal sealed partial class ConductorDriver
         if (receipt.Outcome == AcceptanceCohortGateOutcome.Failed &&
             receipt.Attribution == AcceptanceCohortAttributionOutcome.NotApplicable)
         {
-            receipt = AttributeFailedCohort(store, identity, bindings, pairFingerprint,
-                cohortFailingTests, cohortFailedChecks, gateProgressEventWriter, cancellationToken);
+            try
+            {
+                receipt = AttributeFailedCohort(store, identity, bindings, pairFingerprint,
+                    cohortFailingTests, cohortFailedChecks, gateProgressEventWriter, cancellationToken);
+            }
+            catch (CohortStableSlotsDeferredException) { return null; }
         }
 
         return receipt;
