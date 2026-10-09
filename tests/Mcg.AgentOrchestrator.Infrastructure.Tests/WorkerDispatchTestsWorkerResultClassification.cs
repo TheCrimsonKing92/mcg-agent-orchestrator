@@ -518,8 +518,10 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         DateTimeOffset.UtcNow));
 
     using var protectedPidScope = ClearProtectedPidEnvironment();
+    using var dispatchProcesses = new TestOwnedDispatchProcesses(kernel, goal);
     var process = new BackgroundDispatchRunner().StartLatestDispatch(kernel, goal.Id, task.Id, logs);
     WaitForExitFile(process.ExitCodePath);
+    TestOwnedDispatchProcesses.AwaitCompletionAsync(process).GetAwaiter().GetResult();
     new BackgroundDispatchRunner().RefreshLatestProcess(kernel, goal.Id, task.Id);
 
     // The exit file can appear before the final accounting snapshot lands, so under load the first
