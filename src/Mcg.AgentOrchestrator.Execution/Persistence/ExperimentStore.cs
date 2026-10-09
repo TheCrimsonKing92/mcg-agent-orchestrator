@@ -11,7 +11,7 @@ public enum ExperimentOutcomeState { Open = 1, Confirmed, Refuted, Inconclusive 
 
 public sealed record ExperimentIntervention(ExperimentInterventionKind Kind, string Description, ExperimentFlagTarget? FlagTarget = null);
 public sealed record ExperimentBaseline(ExperimentBaselineKind Kind, DateTimeOffset? Since = null,
-    DateTimeOffset? Until = null, string? TwinGoalId = null);
+    DateTimeOffset? Until = null, string? TwinGoalId = null, string? ComparisonGoalId = null);
 public sealed record ExperimentStopRule(int Count, ExperimentStopUnit Unit);
 public sealed record ExperimentCondition(string Metric, string Op, [property: JsonRequired] double ChangePercent);
 public sealed record ExperimentDecisionRule(IReadOnlyList<ExperimentCondition> KeepIf, IReadOnlyList<ExperimentCondition> RevertIf);

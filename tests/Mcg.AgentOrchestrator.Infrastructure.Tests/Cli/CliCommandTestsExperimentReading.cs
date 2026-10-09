@@ -27,7 +27,7 @@ public sealed class CliCommandTestsExperimentReading
             if (scenario == "breach") spec = spec with { Guardrail = new("productive-rounds", new("productive-rounds", ">", 20)) };
             if (scenario == "unsupported") spec = spec with
             {
-                Baseline = new(ExperimentBaselineKind.TwinGoal, TwinGoalId: "twin"), StopRule = new(4, ExperimentStopUnit.Ticks)
+                Baseline = new(ExperimentBaselineKind.AlternatingGates, Since, Until), StopRule = new(4, ExperimentStopUnit.Ticks)
             };
             var record = CliCommandTestsExperiments.Add(workspace, spec);
             var output = Show(workspace, record.Id, scenario == "missing" ? Until : AsOf);
@@ -38,7 +38,7 @@ public sealed class CliCommandTestsExperimentReading
             if (scenario == "unsupported")
             {
                 lines.Add("stop rule: unavailable of 4 ticks (progress unavailable)");
-                lines.Add("reading: unavailable (baseline kind twin-goal not computable in this slice)");
+                lines.Add("reading: unavailable (baseline kind alternating-gates not computable in this slice)");
             }
             else
             {
@@ -171,7 +171,6 @@ public sealed class CliCommandTestsExperimentReading
     }
 
     [Theory]
-    [InlineData(ExperimentBaselineKind.TwinGoal, ExperimentStopUnit.Ticks)]
     [InlineData(ExperimentBaselineKind.AlternatingGates, ExperimentStopUnit.Gates)]
     public void Show_UnsupportedBaselinesAndCountersAreExplicitlyUnavailable(ExperimentBaselineKind kind, ExperimentStopUnit unit)
     {
@@ -189,6 +188,107 @@ public sealed class CliCommandTestsExperimentReading
             Assert.Contains(unit == ExperimentStopUnit.Gates ? "stop rule: 0 of 4 gates (not met)" :
                 $"stop rule: unavailable of 4 {unitText} (progress unavailable)", output);
             Assert.Contains("outcome: open", output);
+        });
+    }
+
+    [Theory]
+    [InlineData("keep")]
+    [InlineData("revert")]
+    [InlineData("breach")]
+    public void Show_TwinValuesUsePerGoalTotalsAndSharedVerdictRules(string scenario)
+    {
+        CliCommandTestsExperiments.WithWorkspace(workspace =>
+        {
+            var kernel = Seed(workspace);
+            var twin = kernel.Goals.Single(g => g.Id.Value.StartsWith("aaaa", StringComparison.Ordinal));
+            var comparison = kernel.Goals.Single(g => g.Id.Value.StartsWith("cccc", StringComparison.Ordinal));
+            var before = RoundValueReport.Build([twin], DateTimeOffset.MinValue, DateTimeOffset.MaxValue).Window;
+            var after = RoundValueReport.Build([comparison], DateTimeOffset.MinValue, DateTimeOffset.MaxValue).Window;
+            Assert.True(before.RoundsPerLanding > 0);
+            Assert.True(before.Productive > 0);
+            var change = (after.RoundsPerLanding!.Value - before.RoundsPerLanding!.Value) / before.RoundsPerLanding.Value * 100;
+            var guardrailChange = (double)(after.Productive - before.Productive) / before.Productive * 100;
+            var threshold = change + (scenario == "revert" ? -1 : 1);
+            var spec = CliCommandTestsExperiments.Spec() with
+            {
+                Baseline = new(ExperimentBaselineKind.TwinGoal, TwinGoalId: "AAAA", ComparisonGoalId: comparison.Id.Value),
+                Metrics = ["rounds-per-landing", "expected-overhead-rounds", "wasted-rounds"],
+                DecisionRule = new([new("rounds-per-landing", "<=", threshold)], [new("rounds-per-landing", ">", threshold)]),
+                Guardrail = new("productive-rounds", new("productive-rounds", ">", guardrailChange + (scenario == "breach" ? -1 : 1)))
+            };
+            var output = Show(workspace, CliCommandTestsExperiments.Add(workspace, spec).Id, Since.AddDays(-10));
+            Assert.Contains($"twin goals: baseline={twin.Id.Value} comparison={comparison.Id.Value}", output);
+            AssertMetric(output, "rounds per landing", before.RoundsPerLanding, after.RoundsPerLanding);
+            AssertMetric(output, "expected overhead rounds", before.ExpectedOverhead, after.ExpectedOverhead);
+            AssertMetric(output, "wasted rounds", before.Wasted, after.Wasted);
+            AssertMetric(output, "productive rounds", before.Productive, after.Productive);
+            Assert.Contains($"reading: {(scenario == "breach" ? "inconclusive" : scenario)} (pre-registered rules evaluated", output);
+            if (scenario == "breach") Assert.Contains("guardrail breached: productive-rounds", output);
+            else Assert.DoesNotContain("guardrail breached:", output);
+            Assert.DoesNotContain("not computable in this slice", output);
+        });
+    }
+
+    [Theory]
+    [InlineData("unknown", "comparison goal 'ffff' not found", "rounds-per-landing")]
+    [InlineData("pending", "has not landed", "rounds-per-landing")]
+    [InlineData("zero", "zero baseline: wasted-rounds", "wasted-rounds")]
+    [InlineData("same", "twin and comparison resolve to the same goal", "rounds-per-landing")]
+    [InlineData("landings", "zero baseline: landings-per-hour", "landings-per-hour")]
+    public void Show_TwinMissingEvidenceIsInconclusive(string scenario, string diagnostic, string metric)
+    {
+        CliCommandTestsExperiments.WithWorkspace(workspace =>
+        {
+            var kernel = Seed(workspace);
+            var spec = CliCommandTestsExperiments.Spec() with
+            {
+                Baseline = new(ExperimentBaselineKind.TwinGoal, TwinGoalId: "aaaa",
+                    ComparisonGoalId: scenario switch { "unknown" => "ffff", "pending" => "eeee", "same" => "aaaaaaaa", _ => "cccc" }),
+                Metrics = [metric],
+                DecisionRule = new([new(metric, "<=", 0)], [new(metric, ">", 0)]),
+                Guardrail = new("productive-rounds", new("productive-rounds", ">", 1000))
+            };
+            if (scenario == "zero")
+            {
+                var twin = kernel.Goals.Single(g => g.Id.Value.StartsWith("aaaa", StringComparison.Ordinal));
+                Assert.Equal(0, RoundValueReport.Build([twin], DateTimeOffset.MinValue, DateTimeOffset.MaxValue).Window.Wasted);
+            }
+            var output = Show(workspace, CliCommandTestsExperiments.Add(workspace, spec).Id);
+            Assert.Contains("reading: inconclusive (unavailable comparison or zero baseline:", output);
+            Assert.Contains(metric, output[(output.IndexOf("reading: ", StringComparison.Ordinal))..]);
+            Assert.Contains(diagnostic, output);
+            if (scenario == "pending") Assert.Contains("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", output);
+            if (scenario == "landings") AssertMetric(output, "landings per hour", null, null);
+            Assert.DoesNotContain("not computable in this slice", output);
+        });
+    }
+
+    [Fact]
+    public void Evaluate_TwinAmbiguousPrefixIsInconclusiveButExactIdWins()
+    {
+        CliCommandTestsExperiments.WithWorkspace(workspace =>
+        {
+            var kernel = Seed(workspace);
+            var comparison = kernel.Goals.Single(g => g.Id.Value.StartsWith("cccc", StringComparison.Ordinal));
+            var other = new Goal(new GoalId(comparison.Id.Value + "-other"), "shares prefix", []);
+            var spec = CliCommandTestsExperiments.Spec() with
+            {
+                Baseline = new(ExperimentBaselineKind.TwinGoal, TwinGoalId: "aaaa", ComparisonGoalId: "cccc"),
+                Metrics = ["rounds-per-landing"],
+                DecisionRule = new([new("rounds-per-landing", "<", 0)], [new("rounds-per-landing", ">=", 0)]),
+                Guardrail = new("productive-rounds", new("productive-rounds", ">", 1000))
+            };
+            var record = CliCommandTestsExperiments.Add(workspace, spec);
+            var goals = kernel.Goals.Append(other).ToArray();
+            var result = ExperimentReading.Evaluate(record, goals, new Dictionary<string, DateTimeOffset>(), [], AsOf, null);
+            Assert.Equal("inconclusive", result.Verdict);
+            Assert.Contains("rounds-per-landing", result.Reason);
+            Assert.Contains("comparison goal 'cccc' is ambiguous", result.Reason);
+            Assert.Null(result.Metrics.Single(m => m.Metric == "rounds-per-landing").After);
+            var exact = record with { Spec = spec with { Baseline = spec.Baseline with { ComparisonGoalId = comparison.Id.Value } } };
+            result = ExperimentReading.Evaluate(exact, goals, new Dictionary<string, DateTimeOffset>(), [], AsOf, null);
+            Assert.Equal("keep", result.Verdict);
+            Assert.DoesNotContain("ambiguous", result.Reason);
         });
     }
 

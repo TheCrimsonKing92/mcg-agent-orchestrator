@@ -6,6 +6,7 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Microsoft.Data.Sqlite;
 using Xunit;
 
 // Parallel-safe: cases own their stores and use AsyncLocal console capture.
@@ -46,6 +47,71 @@ public sealed class CliCommandTestsExperiments : CliTaskQueryTestSupport
             Assert.False(File.Exists(workspace.SqliteStatePath));
             Assert.False(File.Exists(workspace.PortfolioStorePath));
         });
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("  ")]
+    [InlineData("twin")]
+    [InlineData(" TWIN ")]
+    public void Add_TwinRequiresDifferentComparisonGoalBeforePersisting(string? comparisonId)
+    {
+        WithWorkspace(workspace =>
+        {
+            var store = new ExperimentStore(workspace.ExperimentStorePath);
+            var spec = Spec() with { Baseline = new(ExperimentBaselineKind.TwinGoal, TwinGoalId: "twin", ComparisonGoalId: comparisonId) };
+            var error = Assert.Throws<ArgumentException>(() => Add(workspace, spec));
+            Assert.Contains("baseline.comparisonGoalId", error.Message);
+            Assert.Equal(0, store.CountAsync().GetAwaiter().GetResult());
+            var record = Add(workspace, spec with { Baseline = spec.Baseline with { ComparisonGoalId = "comparison" } });
+            Assert.Equal("comparison", record.Spec.Baseline.ComparisonGoalId);
+            var output = Execute(["experiment-show", record.Id], workspace);
+            Assert.Contains($"baseline twin goal: twin{Environment.NewLine}baseline comparison goal: comparison{Environment.NewLine}", output);
+        });
+    }
+
+    [Fact]
+    public void Show_LegacyTwinSpecLoadsAndPreservesBaselineWithMissingComparison()
+    {
+        WithWorkspace(workspace =>
+        {
+            var kernel = CliCommandTestsExperimentReading.Seed(workspace);
+            var twin = kernel.Goals.Single(g => g.Id.Value.StartsWith("aaaa", StringComparison.Ordinal));
+            var record = Add(workspace, Spec() with
+            {
+                Baseline = new(ExperimentBaselineKind.TwinGoal, TwinGoalId: "aaaa", ComparisonGoalId: "cccc"),
+                Metrics = ["rounds-per-landing"]
+            });
+            var baseline = JsonSerializer.SerializeToNode(record.Spec.Baseline, ExperimentStore.JsonOptions)!.AsObject();
+            Assert.True(baseline.Remove("comparisonGoalId"));
+            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = workspace.ExperimentStorePath, Pooling = false }.ToString()))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = "UPDATE experiments SET baseline_json = $baseline WHERE id = $id";
+                command.Parameters.AddWithValue("$baseline", baseline.ToJsonString());
+                command.Parameters.AddWithValue("$id", record.Id);
+                Assert.Equal(1, command.ExecuteNonQuery());
+            }
+            Assert.Null(new ExperimentStore(workspace.ExperimentStorePath).ResolveAsync(record.Id).GetAwaiter().GetResult()!.Spec.Baseline.ComparisonGoalId);
+            var output = Execute(["experiment-show", record.Id], workspace);
+            var totals = RoundValueReport.Build([twin], DateTimeOffset.MinValue, DateTimeOffset.MaxValue).Window;
+            Assert.Contains("baseline comparison goal: none", output);
+            Assert.Contains($"rounds per landing: baseline={totals.RoundsPerLanding} comparison=unavailable", output);
+            Assert.Contains("reading: inconclusive (unavailable comparison or zero baseline: rounds-per-landing, productive-rounds; comparison goal id not declared)", output);
+            Assert.DoesNotContain("not computable in this slice", output);
+        });
+    }
+
+    [Fact]
+    public void Runbook_DescribesTwinComparisonAndOnlyAlternatingReadingsAsUnavailable()
+    {
+        var runbook = File.ReadAllText(Path.Combine(RepositoryRoot(), "docs", "operator-runbook.md"));
+        Assert.Contains("comparisonGoalId", runbook);
+        Assert.Contains("A twin-goal reading resolves both goal ids by full id or unique prefix", runbook);
+        Assert.Contains("Alternating-gates readings and tick progress remain explicitly unavailable", runbook);
+        Assert.DoesNotContain("Alternating-gates and twin-goal readings", runbook);
     }
 
     [Fact]
