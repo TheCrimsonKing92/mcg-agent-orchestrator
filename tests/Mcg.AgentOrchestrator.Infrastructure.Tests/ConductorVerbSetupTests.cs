@@ -23,10 +23,12 @@ public sealed class ConductorVerbSetupTests
                 launcher, new ConductorVerbStartTests.FixedProbe(owner), output: output, error: error));
             Assert.Equal($"portfolio: version 1 ({workspace.PortfolioStorePath}){Environment.NewLine}" +
                 $"backlog: version 1 ({workspace.BacklogStorePath}){Environment.NewLine}" +
+                $"operator-intents: version 1 ({Path.Combine(workspace.OrchestratorDirectory, SqliteOperatorIntentStore.DatabaseFileName)}){Environment.NewLine}" +
                 $"operator-lessons: version 1 ({workspace.OperatorLessonsStorePath}){Environment.NewLine}" +
                 $"operator-escapes: version 1 ({workspace.OperatorEscapesStorePath}){Environment.NewLine}", output.ToString());
             Assert.NotNull(PortfolioStore.OpenReadOnly(workspace.PortfolioStorePath));
             Assert.NotNull(BacklogStore.OpenReadOnly(workspace.BacklogStorePath));
+            Assert.NotNull(SqliteOperatorIntentStore.OpenExisting(workspace.OrchestratorDirectory, workspace.LogDirectory));
             Assert.NotNull(SqliteOperatorLessonStore.OpenReadOnly(workspace.OperatorLessonsStorePath));
             Assert.NotNull(SqliteOperatorEscapeStore.OpenReadOnly(workspace.OperatorEscapesStorePath));
         }
@@ -102,6 +104,7 @@ public sealed class ConductorVerbSetupTests
         {
             Calls++;
             Assert.True(File.Exists(workspace.PortfolioStorePath));
+            Assert.NotNull(SqliteOperatorIntentStore.OpenExisting(workspace.OrchestratorDirectory, workspace.LogDirectory));
             Assert.NotNull(PortfolioStore.OpenReadOnly(workspace.PortfolioStorePath));
             Assert.NotNull(SqliteOperatorLessonStore.OpenReadOnly(workspace.OperatorLessonsStorePath));
             Assert.NotNull(SqliteOperatorEscapeStore.OpenReadOnly(workspace.OperatorEscapesStorePath));
