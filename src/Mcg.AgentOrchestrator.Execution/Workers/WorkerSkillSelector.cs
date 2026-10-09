@@ -183,7 +183,7 @@ internal sealed class WorkerSkillSelector
         {
             "dotnet-windows-build-hygiene" => task.RequiredRole is AgentRole.Developer or AgentRole.Tester
                 ? "Developer/Tester work in this repository usually needs .NET build/test hygiene and Windows lock avoidance."
-                : "Task text references .NET, build, test, dashboard, or known Windows build-lock failure modes.",
+                : "Task text references .NET, build, test, or known Windows build-lock failure modes.",
             "orchestrator-dogfood" => "Task or goal text names an operator-seat command or artifact: dogfood, backlog, run-goal, simple-goal, lifecycle-simple-goal, dogfood-log, conduct --loop, Get-OrchestratorSnapshot, workspace create, workspace remove, or subscription-dispatch.",
             "orchestrator-worker-verification" => task.RequiredRole == AgentRole.Tester
                 ? "Tester work must verify worker output, logs, diffs, and acceptance evidence before trusting task status."
