@@ -11,7 +11,8 @@ internal sealed record OwnerConsoleEpicViewModel(OwnerConsoleEpicWindow Window, 
 {
     internal sealed record GoalLine(string Id, string Title, string Stage, string? Reason = null);
     internal sealed record Detail(PortfolioEpic Epic, IReadOnlyList<GoalLine> InFlight,
-        IReadOnlyList<GoalLine> Landed, IReadOnlyList<GoalLine> Failed, IReadOnlyList<GoalLine> Parked);
+        IReadOnlyList<GoalLine> Landed, IReadOnlyList<GoalLine> Failed, IReadOnlyList<GoalLine> Parked,
+        EpicPlanView? Plan = null);
 
     internal static DateTimeOffset? Cutoff(OwnerConsoleEpicWindow window, DateTimeOffset now)
     {

@@ -8,4 +8,7 @@ internal sealed class WorkspaceEpicProgressSource(OrchestratorWorkspace workspac
 {
     public Task<IReadOnlyList<EpicProgressRollup>> LoadAsync(DateTimeOffset? since, CancellationToken cancellationToken) =>
         Task.Run(() => EpicProgressReadModel.Load(workspace, since), cancellationToken);
+
+    public Task<EpicPlanView> LoadPlanAsync(PortfolioEpic epic, CancellationToken cancellationToken) =>
+        Task.Run(() => EpicPlanStatusReader.Load(workspace, [epic], includeReasons: true)[epic.Id], cancellationToken);
 }

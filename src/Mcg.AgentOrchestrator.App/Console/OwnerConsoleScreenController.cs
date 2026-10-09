@@ -21,6 +21,8 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
         var rows = await epics.LoadAsync(since, cancellationToken).ConfigureAwait(false);
         var row = rows.FirstOrDefault(item => item.Epic.Id == detailId);
         var detail = row is null ? null : await OwnerConsoleEpicViewModel.DetailAsync(row, since, state, cancellationToken).ConfigureAwait(false);
+        if (detail is not null)
+            detail = detail with { Plan = await epics.LoadPlanAsync(detail.Epic, cancellationToken).ConfigureAwait(false) };
         return new(window, since, rows, detail, clock.GetLocalNow());
     }
 

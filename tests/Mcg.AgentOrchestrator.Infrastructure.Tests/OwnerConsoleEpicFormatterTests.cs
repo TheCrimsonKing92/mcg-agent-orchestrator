@@ -37,7 +37,7 @@ public sealed class OwnerConsoleEpicFormatterTests
         Assert.All(lines, line => Assert.True(line.Length <= width, line));
         Assert.Contains(lines, line => line.StartsWith("12345678  ", StringComparison.Ordinal) && line.EndsWith("  Developer", StringComparison.Ordinal));
         Assert.Contains(lines, line => line.Contains('…') && line.EndsWith("  Developer", StringComparison.Ordinal));
-        var planLines = lines.Skip(2).TakeWhile(line => line != "In flight:").Where(line => line.Length > 0);
+        var planLines = lines.Skip(2).TakeWhile(line => line != "Epic plan:").Where(line => line.Length > 0);
         Assert.Equal(plan.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries),
             string.Join(" ", planLines).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
         Assert.Contains("External dependency returned a rejected response.", string.Join(" ", lines));

@@ -254,6 +254,8 @@ public sealed class OwnerConsoleGoalDialogTests
     { public Task<string> GetTitleAsync(string id, CancellationToken token) => Task.FromResult(""); }
     private sealed class EpicSource : IOwnerConsoleEpicSource
     {
+        public Task<EpicPlanView> LoadPlanAsync(PortfolioEpic epic, CancellationToken token) =>
+            Task.FromResult(new EpicPlanView(new(epic.Id, null, [], []), [], []));
         public Task<IReadOnlyList<EpicProgressRollup>> LoadAsync(DateTimeOffset? since, CancellationToken token) =>
             Task.FromResult<IReadOnlyList<EpicProgressRollup>>([new(new("member-epic", "Member epic", null, At, "test", At, "test"), null,
                 [], [new(Id, EpicProgressBucket.Active, "Active", At, "Member goal")], 1, 0, 1, 0, 0, 0, At, 0, 0, 0, 0, 0, 0)]);

@@ -56,7 +56,7 @@ public sealed class OwnerConsoleEpicViewTests
         Assert.True(dialog.ShowingDetail);
         Assert.Equal("beta", dialog.SelectedEpicId);
         var lines = dialog.Lines;
-        var plan = lines.Skip(2).TakeWhile(line => line != "In flight:").Where(line => line.Length > 0);
+        var plan = lines.Skip(2).TakeWhile(line => line != "Epic plan:").Where(line => line.Length > 0);
         Assert.Equal(Fixture.Plan.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries),
             string.Join(" ", plan).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
         Assert.Contains("b-active  Active beta  Developer", lines);
@@ -74,6 +74,54 @@ public sealed class OwnerConsoleEpicViewTests
         Assert.True(dialog.IsOpen);
         Assert.False(dialog.ShowingDetail);
         Assert.Equal("beta", dialog.SelectedEpicId);
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task Enter_HeldPlanRead_ShowsSelectedEpicPlanThroughSource()
+    {
+        using var fixture = new Fixture();
+        var item = new EpicPlanItemStatus(new(1, EpicPlanItemKind.Step, null, "Review with owner", false),
+            null, "Review with owner");
+        var plan = new EpicPlanView(new("beta", "Owner can read the plan", [item.Item], []), [item], []);
+        fixture.Source.Plans.Add("beta", plan);
+        await fixture.View.HandleKeyAsync(new Key('e'));
+        Assert.Equal(0, fixture.Source.PlanCalls);
+        await fixture.View.HandleKeyAsync(Key.CursorDown);
+        var pending = fixture.Source.PendingPlan = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var entering = fixture.View.HandleKeyAsync(Key.Enter);
+        // PlanStarted synchronizes the read; the timeout only detects a plan read that never finishes.
+        await fixture.Source.PlanStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
+
+        var dialog = fixture.View.EpicView;
+        Assert.Equal(["Loading Beta epic…"], dialog.Lines);
+        Assert.Equal(1, fixture.Source.PlanCalls);
+        Assert.Equal(["beta"], fixture.Source.PlanIds);
+        Assert.False(entering.IsCompleted);
+        fixture.Source.PendingPlan = null;
+        pending.SetResult(plan);
+        await entering.WaitAsync(TestContext.Current.CancellationToken);
+
+        Assert.Contains("Epic plan:", dialog.Lines);
+        Assert.Contains("Bar: Owner can read the plan", dialog.Lines);
+        Assert.Contains("1. Review with owner — open", dialog.Lines);
+        Assert.Contains("Next step: " + EpicPlanNextStep.Compute(plan.Items).Text, dialog.Lines);
+        Assert.True(Array.IndexOf(dialog.Lines.ToArray(), "Epic plan:") < Array.IndexOf(dialog.Lines.ToArray(), "In flight:"));
+    }
+
+    [Fact]
+    public async Task PlanReadFailure_ShowsReasonAndRetriesSelectedPlan()
+    {
+        using var fixture = new Fixture();
+        await fixture.View.HandleKeyAsync(new Key('e'));
+        fixture.Source.PlanError = new InvalidOperationException("plan unavailable");
+        await fixture.View.HandleKeyAsync(Key.Enter);
+        Assert.Equal(["Could not load epics: plan unavailable. Press r to retry."], fixture.View.EpicView.Lines);
+        Assert.DoesNotContain("(no plan)", fixture.View.EpicView.Lines);
+        fixture.Source.PlanError = null;
+        await fixture.View.HandleKeyAsync(new Key('r'));
+        Assert.Contains("Epic plan:", fixture.View.EpicView.Lines);
+        Assert.Contains("(no plan)", fixture.View.EpicView.Lines);
+        Assert.Equal(["alpha", "alpha"], fixture.Source.PlanIds);
     }
 
     [Theory]
@@ -118,6 +166,7 @@ public sealed class OwnerConsoleEpicViewTests
         await fixture.View.HandleKeyAsync(Key.CursorDown);
         await fixture.View.HandleKeyAsync(Key.Enter);
         fixture.Source.Epics[1] = fixture.Source.Epics[1] with { Description = "New reviewed plan" };
+        fixture.Source.Plans["beta"] = new(new("beta", "Updated epic bar", [], []), [], []);
         fixture.Source.Goals.Add(new("b-newest", "Active", "New live goal", Now.ToString("O")));
         fixture.Source.Members.Add(new("beta", PortfolioMemberKind.Goal, "b-newest", Now, "test"));
         fixture.Harness.AddGoal("b-newest", "New live goal", AgentRole.Reviewer);
@@ -125,6 +174,8 @@ public sealed class OwnerConsoleEpicViewTests
         await fixture.View.EpicView.LastLoad;
         Assert.Equal("beta", fixture.View.EpicView.SelectedEpicId);
         Assert.Contains("New reviewed plan", fixture.View.EpicView.Lines);
+        Assert.Contains("Bar: Updated epic bar", fixture.View.EpicView.Lines);
+        Assert.Equal(["beta", "beta"], fixture.Source.PlanIds);
         Assert.Contains("b-newest  New live goal  Reviewer", fixture.View.EpicView.Lines);
 
         await fixture.View.HandleKeyAsync(Key.Esc);
@@ -185,13 +236,13 @@ public sealed class OwnerConsoleEpicViewTests
         var dialog = fixture.View.EpicView;
         Assert.True(dialog.BodyPane.Viewport.Width > 0);
         Assert.All(dialog.Lines, line => Assert.True(line.GetColumns() <= dialog.BodyPane.Viewport.Width, line));
-        var narrowPlanLines = dialog.Lines.TakeWhile(line => line != "In flight:").Count();
+        var narrowPlanLines = dialog.Lines.TakeWhile(line => line != "Epic plan:").Count();
         await fixture.View.HandleKeyAsync(Key.PageDown);
         Assert.True(dialog.BodyPane.SelectedItem > 0);
         await fixture.View.HandleKeyAsync(Key.PageUp);
         Assert.Equal(0, dialog.BodyPane.SelectedItem);
         fixture.View.Window.Layout(new System.Drawing.Size(90, 18));
-        Assert.True(dialog.Lines.TakeWhile(line => line != "In flight:").Count() < narrowPlanLines);
+        Assert.True(dialog.Lines.TakeWhile(line => line != "Epic plan:").Count() < narrowPlanLines);
         Assert.All(dialog.Lines, line => Assert.True(line.GetColumns() <= dialog.BodyPane.Viewport.Width, line));
     }
 
@@ -508,6 +559,12 @@ public sealed class OwnerConsoleEpicViewTests
         internal readonly List<PortfolioEpicMember> Members = [];
         internal readonly List<GoalSummary> Goals = [];
         internal readonly List<BacklogItem> Backlog = [];
+        internal readonly Dictionary<string, EpicPlanView> Plans = [];
+        internal readonly List<string> PlanIds = [];
+        internal int PlanCalls;
+        internal Exception? PlanError;
+        internal readonly TaskCompletionSource PlanStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource<EpicPlanView>? PendingPlan;
         internal int Calls;
         internal Exception? Error;
         internal TaskCompletionSource LoadStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -530,6 +587,15 @@ public sealed class OwnerConsoleEpicViewTests
             LoadStarted.TrySetResult();
             if (Pending is { } pending) return pending.Task;
             return Error is null ? Task.FromResult(Build(since)) : Task.FromException<IReadOnlyList<EpicProgressRollup>>(Error);
+        }
+        public Task<EpicPlanView> LoadPlanAsync(PortfolioEpic epic, CancellationToken token)
+        {
+            PlanCalls++;
+            PlanIds.Add(epic.Id);
+            PlanStarted.TrySetResult();
+            if (PendingPlan is { } pending) return pending.Task;
+            if (PlanError is { } error) return Task.FromException<EpicPlanView>(error);
+            return Task.FromResult(Plans.GetValueOrDefault(epic.Id) ?? new(new(epic.Id, null, [], []), [], []));
         }
     }
 

@@ -57,6 +57,9 @@ internal static class OwnerConsoleEpicFormatter
         width = Width(width);
         var lines = new List<string> { Fit(Title(detail.Epic.Title), width), "Plan of record:" };
         lines.AddRange(Wrap(string.IsNullOrWhiteSpace(detail.Epic.Description) ? "(no plan of record)" : detail.Epic.Description, width));
+        lines.Add(string.Empty);
+        lines.Add("Epic plan:");
+        lines.AddRange(OwnerConsoleEpicPlanFormatter.Lines(detail, width));
         Section("In flight", detail.InFlight);
         Section("Landed in window", detail.Landed);
         Section("Failed", detail.Failed);
