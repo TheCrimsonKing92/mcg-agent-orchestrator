@@ -423,14 +423,10 @@ public static class AcceptanceCohortGateEvidence
 
         foreach (var path in paths!)
         {
-            if (!File.Exists(path))
-            {
-                return false;
-            }
-
             try
             {
-                if (!HasCoherentExecutedTrxEvidence(XDocument.Load(path, LoadOptions.None)))
+                if (!TrxCoherenceCache.Evaluate(path, static fullPath =>
+                        HasCoherentExecutedTrxEvidence(XDocument.Load(fullPath, LoadOptions.None))))
                 {
                     return false;
                 }
