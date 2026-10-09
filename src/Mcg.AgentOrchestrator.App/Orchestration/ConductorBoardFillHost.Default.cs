@@ -12,7 +12,7 @@ internal sealed partial class ConductorBoardFillHost
         (id, token) => AuthorBriefDraftService.Run(id, workspace,
             new(WorkerProcessRunner.RunBufferedAsync, new GitAuthorBriefDraftRepository(workspace.ExecutionDirectory, workspace.IntegrationBranch),
                 ModelFunctionCatalogStore.Load(workspace.ModelFunctionCatalogPath)),
-            TextWriter.Null, TextWriter.Null, token, "board-fill-drafts"),
+            TextWriter.Null, TextWriter.Null, token, "board-fill-drafts", includeBoardFillMetadata: true),
         () => BoardFillBacklogSnapshot.Read(workspace.BacklogStorePath),
         (kernel, items) =>
         {

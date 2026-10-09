@@ -14,7 +14,7 @@ public sealed class AuthorBriefDraftServiceFailureKindTests
         var calls = 0;
         var outcome = AuthorBriefDraftService.Run(fixture.Item.Id, fixture.Workspace,
             new((_, _) => { calls++; throw new Exception("unexpected model call"); }, fixture.Repository),
-            fixture.Output, fixture.Error);
+            fixture.Output, fixture.Error, includeBoardFillMetadata: true);
         Assert.Equal(0, calls);
         AssertFailure(fixture, outcome, BoardFillFailureKind.PreModel);
     }
@@ -39,7 +39,7 @@ public sealed class AuthorBriefDraftServiceFailureKindTests
                     "exit" => Task.FromResult(new WorkerProcessRunResult(1, "", "model crashed")),
                     _ => Task.FromResult(new WorkerProcessRunResult(0, "unusable output", ""))
                 };
-            }, fixture.Repository), fixture.Output, fixture.Error);
+            }, fixture.Repository), fixture.Output, fixture.Error, includeBoardFillMetadata: true);
         Assert.Equal(1, calls);
         AssertFailure(fixture, outcome, expected);
     }
@@ -61,7 +61,7 @@ public sealed class AuthorBriefDraftServiceFailureKindTests
             new((_, _) => Task.FromResult(new WorkerProcessRunResult(0,
                 JsonSerializer.Serialize(new { kind = "stale", reason = "already done",
                     evidenceReferences = new[] { "seed.txt:1" } }), "")), fixture.Repository),
-            fixture.Output, fixture.Error);
+            fixture.Output, fixture.Error, includeBoardFillMetadata: true);
         Assert.Equal(2, resolutions);
         AssertFailure(fixture, outcome, BoardFillFailureKind.ModelRound);
     }

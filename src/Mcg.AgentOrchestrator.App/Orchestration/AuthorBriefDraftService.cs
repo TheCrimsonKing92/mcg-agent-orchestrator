@@ -14,7 +14,7 @@ internal static class AuthorBriefDraftService
     internal static AuthorBriefDraftOutcome Run(string prefix, OrchestratorWorkspace workspace,
         AuthorBriefDraftSeams seams, TextWriter output, TextWriter error,
         CancellationToken cancellationToken = default, string draftsDirectory = "author-drafts",
-        Func<DateTimeOffset>? utcNow = null)
+        Func<DateTimeOffset>? utcNow = null, bool includeBoardFillMetadata = false)
     {
         string? draftPath = null;
         string? failureDetail = null;
@@ -133,7 +133,8 @@ internal static class AuthorBriefDraftService
 
         void WriteReceipt(string? failure)
         {
-            object receipt = rawOutputPath is null ? new
+            // Ordinary Author receipts retain their CLI contract; board-fill metadata is opt-in.
+            object receipt = includeBoardFillMetadata || trackedEdits is not null ? rawOutputPath is null ? new
             {
                 backlogItemId, mainHead, exitCode, kind, checks, staleReason, evidenceReferences, failure, model,
                 failureKind, holdReason = trackedEdits is null ? null : AuthorDraftTrackedEdits.Reason,
@@ -143,6 +144,13 @@ internal static class AuthorBriefDraftService
                 backlogItemId, mainHead, exitCode, kind, checks, staleReason, evidenceReferences, failure, model,
                 rawOutputPath, rawOutputBytes, failureKind,
                 holdReason = trackedEdits is null ? null : AuthorDraftTrackedEdits.Reason, heldPaths = trackedEdits?.Paths
+            } : rawOutputPath is null ? new
+            {
+                backlogItemId, mainHead, exitCode, kind, checks, staleReason, evidenceReferences, failure, model
+            } : new
+            {
+                backlogItemId, mainHead, exitCode, kind, checks, staleReason, evidenceReferences, failure, model,
+                rawOutputPath, rawOutputBytes
             };
             File.WriteAllText(receiptPath!, JsonSerializer.Serialize(receipt,
                 new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, WriteIndented = true }));
