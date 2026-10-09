@@ -224,18 +224,18 @@ private static void ApplyBacklogPromotionDependencies(
     Goal goal,
     BacklogItem item)
 {
-    foreach (var dependency in item.Dependencies)
-        context.Kernel.SetGoalDependency(goal.Id, ResolvePromotedDependencyGoal(context, dependency).Id);
+    foreach (var prerequisiteGoal in item.Dependencies.Select(dependency => ResolvePromotedDependencyGoal(context, dependency)).OfType<Goal>())
+        context.Kernel.SetGoalDependency(goal.Id, prerequisiteGoal.Id);
 }
 
-private static Goal ResolvePromotedDependencyGoal(
+private static Goal? ResolvePromotedDependencyGoal(
     CliExecutionContext context,
     BacklogDependency dependency)
 {
     var goal = dependency.TargetKind == BacklogDependencyTargetKind.Goal
         ? context.Kernel.Goals.FirstOrDefault(candidate => candidate.Id.Value == dependency.PrerequisiteId)
         : FindAuthoritativeSourceGoal(context, dependency.PrerequisiteId);
-    if (goal is not null)
+    if (goal is not null || dependency.TargetKind == BacklogDependencyTargetKind.Backlog && BacklogDependencyReadiness.IsSatisfiedWithoutGoal(new BacklogStore(context.Workspace.BacklogStorePath).GetByExactIdAsync(dependency.PrerequisiteId).GetAwaiter().GetResult(), new(null)))
         return goal;
 
     var reason = dependency.TargetKind == BacklogDependencyTargetKind.Backlog

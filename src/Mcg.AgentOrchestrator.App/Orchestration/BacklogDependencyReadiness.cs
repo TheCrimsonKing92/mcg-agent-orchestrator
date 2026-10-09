@@ -9,6 +9,9 @@ internal sealed record BacklogPrerequisiteOwner(Goal? Goal, bool Ambiguous = fal
 // Both CLI rendering and board selection use the same first-blocker and landing rules.
 internal static class BacklogDependencyReadiness
 {
+    internal static bool IsSatisfiedWithoutGoal(BacklogItem? prerequisite, BacklogPrerequisiteOwner owner) =>
+        prerequisite is { Status: BacklogItemStatus.Done } && owner is { Goal: null, Ambiguous: false };
+
     internal static BacklogReadiness Evaluate(BacklogItem item, Func<string, Goal?> findGoal,
         Func<string, BacklogItem?> findBacklog, Func<string, BacklogPrerequisiteOwner> findOwner,
         Func<Goal, string> landingState)
@@ -26,6 +29,7 @@ internal static class BacklogDependencyReadiness
                 goal = owner.Goal;
                 if (owner.Ambiguous)
                     return Blocked($" [Blocked: reason=legacy-owner-ambiguous prerequisite {ShortId(dependency.PrerequisiteId)}]");
+                if (IsSatisfiedWithoutGoal(prerequisite, owner)) continue;
                 if (goal is null)
                     return Blocked($" [Blocked: waiting on open prerequisite {ShortId(dependency.PrerequisiteId)}]");
             }

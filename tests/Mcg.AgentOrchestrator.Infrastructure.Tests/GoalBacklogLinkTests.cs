@@ -212,6 +212,35 @@ public sealed class GoalBacklogLinkTests
         Assert.Empty(kernel.Goals);
     }
 
+    [Xunit.Fact]
+    public async Task PromotionWithDoneOwnerlessPrerequisiteCreatesLinkedGoalWithoutDependencies()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var store = new BacklogStore(workspace.BacklogStorePath);
+        var prerequisiteItem = await store.AddAsync("Prerequisite closed without a goal");
+        var dependentItem = await store.AddAsync("Dependent");
+        await store.AddDependencyAsync(
+            dependentItem.Id, new(prerequisiteItem.Id, BacklogDependencyTargetKind.Backlog));
+        await store.CloseAsync(prerequisiteItem.Id);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = [];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["simple-goal", "Promote dependent", "--backlog-item", dependentItem.Id[..8], "--backlog-coverage", "full"],
+            kernel, workspace, ref agents, providers, ref profiles, ref currentGoal));
+
+        Assert.NotNull(currentGoal);
+        Assert.Same(currentGoal, Assert.Single(kernel.Goals));
+        Assert.Equal(dependentItem.Id, currentGoal.SourceBacklogItemId);
+        Assert.Empty(currentGoal.DependsOn);
+        Assert.Equal(BacklogItemStatus.Done, (await store.GetByExactIdAsync(prerequisiteItem.Id))!.Status);
+        Assert.Single((await store.GetByExactIdAsync(dependentItem.Id))!.Dependencies);
+    }
+
     [Xunit.Fact(DisplayName = "GoalBacklogLink_backlog_intake_backlog_item_flag_resolves_prefix_and_creates_linked_goal")]
     public async Task BacklogIntakeBacklogItemFlagResolvesPrefixAndCreatesLinkedGoal()
     {
