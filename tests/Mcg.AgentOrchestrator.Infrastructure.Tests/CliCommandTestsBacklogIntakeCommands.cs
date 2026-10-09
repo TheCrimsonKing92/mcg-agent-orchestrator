@@ -869,13 +869,11 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
     public void CliGateStatusListsStableSlotHeartbeats()
     {
         var root = CreateTempDirectory();
-        var isolatedRoot = Path.Combine(root, "isolated-dotnet");
-        var previousRoot = Environment.GetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable);
+        var storageRoot = new DotnetBuildStorageRoot(Path.Combine(root, ".orchestrator", "test-dotnet"));
         try
         {
-            Environment.SetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, isolatedRoot);
             GateHeartbeatArtifacts.Write(
-                GateHeartbeatArtifacts.GetStableSlotPath(1),
+                GateHeartbeatArtifacts.GetStableSlotPath(1, storageRoot),
                 new GateHeartbeatSnapshot(
                     "abcdef12abcdef12abcdef12abcdef12",
                     "verification-check",
@@ -891,8 +889,10 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
                     3,
                     15,
                     "dotnet test"));
-            var workspace = CreateRefinedWorkspace(root);
-            var output = ExecuteCliAndCapture(["gate-status"], new AgentOrchestratorKernel(), workspace);
+            _ = CreateRefinedWorkspace(root);
+            var result = RunAppCommand(root, "gate-status");
+            Xunit.Assert.True(result.ExitCode == 0, result.Stderr);
+            var output = result.Stdout;
 
             Xunit.Assert.Contains("Gate status:", output);
             Xunit.Assert.Contains("slot-1: goal=abcdef12 phase=verification-check state=running", output);
@@ -902,7 +902,6 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         }
         finally
         {
-            Environment.SetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, previousRoot);
             try { Directory.Delete(root, recursive: true); } catch { }
         }
     }
