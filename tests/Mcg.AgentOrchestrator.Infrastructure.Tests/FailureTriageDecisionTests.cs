@@ -24,7 +24,7 @@ public sealed class FailureTriageDecisionTests : WorkerDispatchTestSupport
                     goal,
                     agents,
                     repo,
-                    AutonomyPolicy.Observe)
+                    Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, AutonomyPolicy.Observe)
                 .Items
                 .Single(item => item.TaskId == task.Id);
 
@@ -59,7 +59,7 @@ public sealed class FailureTriageDecisionTests : WorkerDispatchTestSupport
                     goal,
                     agents,
                     repo,
-                    AutonomyPolicy.Observe)
+                    Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, AutonomyPolicy.Observe)
                 .Items
                 .Single(candidate => candidate.TaskId == task.Id);
 
@@ -93,7 +93,7 @@ public sealed class FailureTriageDecisionTests : WorkerDispatchTestSupport
                     goal,
                     agents,
                     repo,
-                    AutonomyPolicy.Observe)
+                    Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, AutonomyPolicy.Observe)
                 .Items
                 .Single(item => item.TaskId == task.Id);
 
@@ -130,7 +130,7 @@ public sealed class FailureTriageDecisionTests : WorkerDispatchTestSupport
                     goal,
                     agents,
                     repo,
-                    AutonomyPolicy.Observe)
+                    Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, AutonomyPolicy.Observe)
                 .Items
                 .Single(item => item.TaskId == task.Id);
 
@@ -167,7 +167,7 @@ public sealed class FailureTriageDecisionTests : WorkerDispatchTestSupport
                     goal,
                     agents,
                     repo,
-                    AutonomyPolicy.Observe)
+                    Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, AutonomyPolicy.Observe)
                 .Items
                 .Single(item => item.TaskId == task.Id);
 
@@ -195,7 +195,7 @@ public sealed class FailureTriageDecisionTests : WorkerDispatchTestSupport
                 agents,
                 WorkerProfileCatalog.Default(),
                 repo,
-                AutonomyPolicy.Observe);
+                Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, AutonomyPolicy.Observe);
 
             Assert.Equal(GoalHealthDisposition.Blocked, health.Disposition);
             Assert.Equal(25, health.Score);
@@ -239,7 +239,7 @@ public sealed class FailureTriageDecisionTests : WorkerDispatchTestSupport
                 agents,
                 WorkerProfileCatalog.Default(),
                 repo,
-                AutonomyPolicy.Observe);
+                Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, AutonomyPolicy.Observe);
 
             Assert.NotEqual(GoalHealthDisposition.Blocked, health.Disposition);
             Assert.DoesNotContain(health.Reasons, reason => reason.Contains("failed", StringComparison.OrdinalIgnoreCase));

@@ -220,7 +220,7 @@ public sealed class ProviderBudgetExhaustionClassifierTests : WorkerDispatchTest
                     kernel.GetGoal(task.LastDispatch.GoalId!),
                     [XaiDeveloperAgent()],
                     repository,
-                    AutonomyPolicy.Observe)
+                    Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, AutonomyPolicy.Observe)
                 .Items
                 .Single(candidate => candidate.TaskId == task.Id);
 

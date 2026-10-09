@@ -940,7 +940,7 @@ internal static partial class CliPersistentStateRunner
             CaptureMissingConductLoopTickBaselines(tickBaselines, loaded);
             return loaded;
         }
-        var startupStopPath = Path.Combine(workspace.ExecutionDirectory, ConductorBatchLoop.StopFileName);
+        var startupStopPath = workspace.ConductorStopFilePath;
         TransientSqliteLoadHold? initialConductLoopLoadHold = null;
         var currentGoalAtStartup = currentGoal;
         var kernel = RunConductPreLoopStartup(
@@ -977,7 +977,7 @@ internal static partial class CliPersistentStateRunner
                     sweep = sweep with { ExcludedGoalCount = sweep.ExcludedGoalCount + metadataOnlyExcludedGoalCount };
                 }
 
-                ConsoleViews.PrintTerminalGoalSweep(sweep, includeBlockers: ConductLoopWillExitBeforeFirstTick(args, workspace.ExecutionDirectory));
+                ConsoleViews.PrintTerminalGoalSweep(sweep, includeBlockers: ConductLoopWillExitBeforeFirstTick(args, workspace.ConductorStopFilePath));
                 TerminalGoalSweepAttention.Surface(sweepKernel, sweep, workspace.OrchestratorDirectory, watchGoalId);
                 if (sweep.Changed)
                 {
@@ -4781,7 +4781,7 @@ internal static partial class CliPersistentStateRunner
         return OrchestratorEntityResolver.ResolveGoal(kernel, currentGoal, prefix).Id;
     }
 
-    private static bool ConductLoopWillExitBeforeFirstTick(IReadOnlyList<string> args, string executionDirectory)
+    private static bool ConductLoopWillExitBeforeFirstTick(IReadOnlyList<string> args, string stopFilePath)
     {
         if (args.Count == 0 ||
             !args[0].Equals("conduct", StringComparison.OrdinalIgnoreCase) ||
@@ -4800,7 +4800,7 @@ internal static partial class CliPersistentStateRunner
             return true;
         }
 
-        return File.Exists(Path.Combine(executionDirectory, ConductorBatchLoop.StopFileName));
+        return File.Exists(stopFilePath);
     }
 
     private static string? GetFlagValue(IReadOnlyList<string> args, string flag)

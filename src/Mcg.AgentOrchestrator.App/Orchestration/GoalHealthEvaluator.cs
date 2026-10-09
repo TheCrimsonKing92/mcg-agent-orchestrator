@@ -32,11 +32,12 @@ public static class GoalHealthEvaluator
         IReadOnlyList<AgentDefinition> agents,
         WorkerProfileCatalog workerProfiles,
         string executionDirectory,
+        string integrationBranch,
         AutonomyPolicy policy)
     {
         var prefix = goal.Id.Value[..8];
         var nextAction = kernel.BuildNextActions(goal.Id).Items.FirstOrDefault();
-        var recovery = GoalRecoveryPlanner.Build(kernel, goal, executionDirectory);
+        var recovery = GoalRecoveryPlanner.Build(kernel, goal, executionDirectory, integrationBranch);
         var acceptance = AcceptanceQueuePlanner.Build(kernel, executionDirectory, policy)
             .Items
             .FirstOrDefault(item => item.GoalId == goal.Id);

@@ -38,13 +38,14 @@ internal sealed class AcceptanceContainedGenerationBaseline : IDisposable
     internal static AcceptanceContainedGenerationBaseline Resolve(
         string candidateWorktreePath,
         string ownerKey,
+        string integrationBranch,
         Func<string, string[], string?> resolveGitText,
         Func<string, string[], GitCli.GitResult> runGit)
     {
         var containedMainSha = NormalizeGitSha(
-            resolveGitText(candidateWorktreePath, ["merge-base", "HEAD", "main"]));
+            resolveGitText(candidateWorktreePath, ["merge-base", "HEAD", integrationBranch]));
         var observedMainSha = NormalizeGitSha(
-            resolveGitText(candidateWorktreePath, ["rev-parse", "main"]));
+            resolveGitText(candidateWorktreePath, ["rev-parse", integrationBranch]));
         if (string.IsNullOrWhiteSpace(containedMainSha))
         {
             return Unresolved(observedMainSha, "merge-base-unresolved");
@@ -90,6 +91,7 @@ internal sealed class AcceptanceContainedGenerationBaseline : IDisposable
     internal static async Task<AcceptanceContainedGenerationBaseline> PrepareAsync(
         string candidateWorktreePath,
         string ownerKey,
+        string integrationBranch,
         Func<string, string, CancellationToken, Task<AcceptanceStructuralCoverageBaseline?>> prepareBaseline,
         Func<string, string[], string?> resolveGitText,
         Func<string, string[], GitCli.GitResult> runGit,
@@ -98,6 +100,7 @@ internal sealed class AcceptanceContainedGenerationBaseline : IDisposable
         var contained = Resolve(
             candidateWorktreePath,
             ownerKey,
+            integrationBranch,
             resolveGitText,
             runGit);
         if (!contained.IsResolved || contained.UseObservedBaseline)
@@ -147,7 +150,7 @@ internal sealed class AcceptanceContainedGenerationBaseline : IDisposable
     }
 
     internal static string? ResolveMainWorktreePath(
-        string worktreePath,
+        string worktreePath, string integrationBranch,
         Func<string, string[], string?> resolveGitText)
     {
         var output = resolveGitText(worktreePath, ["worktree", "list", "--porcelain"]);
@@ -163,7 +166,7 @@ internal sealed class AcceptanceContainedGenerationBaseline : IDisposable
             {
                 currentPath = line["worktree ".Length..].Trim();
             }
-            else if (line.Equals("branch refs/heads/main", StringComparison.Ordinal) &&
+            else if (line.Equals($"branch refs/heads/{integrationBranch}", StringComparison.Ordinal) &&
                 !string.IsNullOrWhiteSpace(currentPath))
             {
                 return currentPath;

@@ -7,13 +7,13 @@ public sealed partial class GoalAcceptanceVerifier
 {
     private static IReadOnlyList<string> SelectOwnerProtectedPolicyPaths(
         string worktreePath, IReadOnlyList<string> changedFiles,
-        Func<string, string[], string?> resolveGitText, string candidateRef)
+        Func<string, string[], string?> resolveGitText, string candidateRef, string integrationBranch)
     {
         const string manifestPath = "config/acceptance-manifest.json";
         var noRenamePaths = changedFiles.Any(path =>
             !RepositoryChangeClassifier.IsOwnerProtectedPolicyPath(path) &&
             !NormalizePath(path).Equals(manifestPath, StringComparison.OrdinalIgnoreCase))
-            ? resolveGitText(worktreePath, ["diff", "--name-only", "--no-renames", $"main...{candidateRef}", "--"])?
+            ? resolveGitText(worktreePath, ["diff", "--name-only", "--no-renames", $"{integrationBranch}...{candidateRef}", "--"])?
                 .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) ?? []
             : [];
         return changedFiles.Concat(noRenamePaths)
@@ -26,12 +26,12 @@ public sealed partial class GoalAcceptanceVerifier
     private static string? ComputeOwnerProtectedChangeFingerprint(
         string worktreePath, IReadOnlyList<string>? changedFiles,
         Func<string, string[], string?> resolveGitText, string candidateRef,
-        bool readCommittedCandidate)
+        bool readCommittedCandidate, string integrationBranch)
     {
         if (changedFiles is null) return null;
         const string manifestPath = "config/acceptance-manifest.json";
         var inputs = new List<(string File, string? Trusted, string? Candidate)>();
-        var paths = SelectOwnerProtectedPolicyPaths(worktreePath, changedFiles, resolveGitText, candidateRef).ToList();
+        var paths = SelectOwnerProtectedPolicyPaths(worktreePath, changedFiles, resolveGitText, candidateRef, integrationBranch).ToList();
         var manifestChanged = changedFiles.Any(path =>
             NormalizePath(path).Equals(manifestPath, StringComparison.OrdinalIgnoreCase));
         var candidateManifest = readCommittedCandidate
@@ -48,7 +48,7 @@ public sealed partial class GoalAcceptanceVerifier
             var root = Path.GetFullPath(worktreePath).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
             if (!fullPath.StartsWith(root, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException($"Owner-protected path escapes worktree: {path}");
-            var trusted = resolveGitText(worktreePath, ["show", $"main:{path}"]);
+            var trusted = resolveGitText(worktreePath, ["show", $"{integrationBranch}:{path}"]);
             if (path == manifestPath && string.IsNullOrWhiteSpace(trusted)) return null;
             var candidate = readCommittedCandidate
                 ? resolveGitText(worktreePath, ["show", $"{candidateRef}:{path}"])
@@ -61,14 +61,14 @@ public sealed partial class GoalAcceptanceVerifier
         return RepositoryChangeClassifier.ComputeOwnerProtectedChangeFingerprint(inputs);
     }
 
-    internal static string? ComputeOwnerProtectedChangeFingerprintForCandidate(string worktreePath, string candidateSha)
+    internal static string? ComputeOwnerProtectedChangeFingerprintForCandidate(string worktreePath, string candidateSha, string integrationBranch)
     {
         if (!AcceptancePolicyChangeDecision.IsFullSha(candidateSha)) return null;
         var changed = AcceptanceGitTextResolver.Resolve(worktreePath,
-            ["diff", "--name-only", "--no-renames", $"main...{candidateSha}", "--"]);
+            ["diff", "--name-only", "--no-renames", $"{integrationBranch}...{candidateSha}", "--"]);
         if (changed is null) return null;
         var changedFiles = changed.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         return ComputeOwnerProtectedChangeFingerprint(worktreePath, changedFiles,
-            AcceptanceGitTextResolver.Resolve, candidateSha, readCommittedCandidate: true);
+            AcceptanceGitTextResolver.Resolve, candidateSha, readCommittedCandidate: true, integrationBranch);
     }
 }

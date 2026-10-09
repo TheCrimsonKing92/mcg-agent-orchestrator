@@ -314,7 +314,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
             string.Empty,
             "Background dispatch made no observable progress before the stall timeout; wrapper heartbeat state=running.",
             DateTimeOffset.UtcNow));
-        var plan = GoalSupervisor.Build(kernel, goal, agents, workspace.ExecutionDirectory, AutonomyPolicy.SafeAuto);
+        var plan = GoalSupervisor.Build(kernel, goal, agents, workspace.ExecutionDirectory, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, AutonomyPolicy.SafeAuto);
         Xunit.Assert.True(
             plan.Proposals.Any(proposal => proposal.Kind == GoalSupervisorProposalKind.ReDelegateAfterRecoverableFailure && proposal.CanApply),
             string.Join(" | ", plan.Proposals.Select(proposal => $"{proposal.Kind}:{proposal.CanApply}:{proposal.Reason}")));

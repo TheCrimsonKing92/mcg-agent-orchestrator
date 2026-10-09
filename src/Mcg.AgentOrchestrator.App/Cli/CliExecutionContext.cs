@@ -414,7 +414,7 @@ internal sealed class DefaultCliGoalWorktreeService : ICliGoalWorktreeService
     }
 
     public IReadOnlyList<string> GetChangedFiles(string worktreePath) =>
-        GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktreePath);
+        GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktreePath, trunkBranch);
 
     public GoalAcceptanceEvidenceBundle BuildAcceptanceEvidence(
         AgentOrchestratorKernel kernel,
@@ -425,7 +425,7 @@ internal sealed class DefaultCliGoalWorktreeService : ICliGoalWorktreeService
         string? executionDirectory = null) =>
         GoalAcceptanceEvidenceBundleBuilder.Build(
             kernel, goal, worktreePath, verification, verificationSkipped,
-            cleanupHooks.BuildStorageRoot, executionDirectory);
+            cleanupHooks.BuildStorageRoot, trunkBranch, executionDirectory);
 }
 
 internal sealed record AcceptanceHostStopRequest(

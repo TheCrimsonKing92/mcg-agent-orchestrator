@@ -128,12 +128,12 @@ internal static class GoalLandingPostActions
                         .Select(check => $"{check.Name}: {check.ResultSummary}"))
                     : null;
 
-                var perFileDiffs = GoalAcceptanceEvidenceBundleBuilder.GetPerFileDiffs(worktreePath);
+                var perFileDiffs = GoalAcceptanceEvidenceBundleBuilder.GetPerFileDiffs(worktreePath, workspace.IntegrationBranch);
                 var inputs = new SemanticAcceptanceInputs(
                     goal.Objective,
                     criteria,
-                    GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktreePath),
-                    GoalAcceptanceEvidenceBundleBuilder.GetDiffExcerpt(worktreePath),
+                    GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktreePath, workspace.IntegrationBranch),
+                    GoalAcceptanceEvidenceBundleBuilder.GetDiffExcerpt(worktreePath, workspace.IntegrationBranch),
                     testSummary,
                     perFileDiffs);
 

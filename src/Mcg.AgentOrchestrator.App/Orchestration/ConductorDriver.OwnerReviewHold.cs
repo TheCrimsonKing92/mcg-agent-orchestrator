@@ -119,7 +119,7 @@ internal sealed partial class ConductorDriver
             if (_resolveOwnerReviewFingerprint is not null) return _resolveOwnerReviewFingerprint(goal, sha);
             var worktree = _executionDirectory is null ? null : GoalWorktrees.TryResolve(_executionDirectory, goal.Id);
             return worktree is null ? null :
-                GoalAcceptanceVerifier.ComputeOwnerProtectedChangeFingerprintForCandidate(worktree, sha);
+                GoalAcceptanceVerifier.ComputeOwnerProtectedChangeFingerprintForCandidate(worktree, sha, _integrationBranch);
         }
         catch (Exception)
         {

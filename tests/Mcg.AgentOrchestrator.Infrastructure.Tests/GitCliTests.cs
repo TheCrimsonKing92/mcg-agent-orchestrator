@@ -41,24 +41,28 @@ public sealed class GitCliTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "GitCli_InspectAheadBehind_returns_typed_divergence_counts")]
-    public void GitCliInspectAheadBehindReturnsTypedDivergenceCounts()
+    [Xunit.Theory(DisplayName = "GitCli_InspectAheadBehind_returns_typed_divergence_counts")]
+    [Xunit.InlineData("main")]
+    [Xunit.InlineData("master")]
+    public void GitCliInspectAheadBehindReturnsTypedDivergenceCounts(string integrationBranch)
     {
         var repo = CreateSeededRepository();
         try
         {
-            RunGit(repo, "branch", "-M", "main");
+            RunGit(repo, "branch", "-M", integrationBranch);
+            if (integrationBranch == "master")
+                Assert.False(GitCli.Run(repo, "rev-parse", "--verify", "refs/heads/main").Succeeded);
             RunGit(repo, "checkout", "-b", "feature");
             File.WriteAllText(Path.Combine(repo, "feature.txt"), "feature");
             RunGit(repo, "add", "-A");
             RunGit(repo, "commit", "-m", "Feature");
-            RunGit(repo, "checkout", "main");
+            RunGit(repo, "checkout", integrationBranch);
             File.WriteAllText(Path.Combine(repo, "main.txt"), "main");
             RunGit(repo, "add", "-A");
             RunGit(repo, "commit", "-m", "Main");
             RunGit(repo, "checkout", "feature");
 
-            var result = GitCli.InspectAheadBehind(repo);
+            var result = GitCli.InspectAheadBehind(repo, integrationBranch);
 
             Assert.True(result.Succeeded, result.Error);
             Assert.Equal(1, result.Ahead);

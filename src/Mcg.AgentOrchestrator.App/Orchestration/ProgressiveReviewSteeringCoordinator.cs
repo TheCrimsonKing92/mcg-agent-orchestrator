@@ -1319,11 +1319,11 @@ Evidence: {intent.MisdirectionEvidence}
             .ToArray();
     }
 
-    private static IReadOnlyList<string> TryGetChangedFiles(string workingDirectory)
+    private IReadOnlyList<string> TryGetChangedFiles(string workingDirectory)
     {
         try
         {
-            return GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(workingDirectory);
+            return GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(workingDirectory, _workspace.IntegrationBranch);
         }
         catch (Exception ex)
         {

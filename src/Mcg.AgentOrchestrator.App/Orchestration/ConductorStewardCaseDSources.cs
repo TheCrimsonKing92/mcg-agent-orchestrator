@@ -33,7 +33,7 @@ internal sealed record ConductorStewardCaseDSources(
         {
             var worktree = GoalWorktrees.TryResolve(workspace.ExecutionDirectory, goal.Id);
             if (worktree is null) return ["changed paths unavailable: goal worktree missing"];
-            var result = GitCli.Run(worktree, "diff", "--name-only", $"main...{sha}");
+            var result = GitCli.Run(worktree, "diff", "--name-only", $"{workspace.IntegrationBranch}...{sha}");
             return result.Succeeded
                 ? result.Output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
                 : ["changed paths unavailable: git diff failed"];

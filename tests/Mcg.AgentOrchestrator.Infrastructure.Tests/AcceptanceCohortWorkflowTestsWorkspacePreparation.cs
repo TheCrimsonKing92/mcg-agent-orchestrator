@@ -28,7 +28,7 @@ public sealed class AcceptanceCohortWorkflowTestsWorkspacePreparation : Acceptan
             var originalCandidate = RunGitOutput(worktree, "rev-parse", "HEAD").Trim();
             var integratedMain = RunGitOutput(repo, "rev-parse", "main").Trim();
 
-            var result = ConductorDriver.IntegrateMainBeforeDeveloperDispatch(repo, goal);
+            var result = ConductorDriver.IntegrateMainBeforeDeveloperDispatch(repo, goal, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
 
             Assert.Equal(DeveloperBranchIntegrationStatus.Integrated, result.Status);
             Assert.Empty(result.ConflictPaths);
@@ -76,7 +76,7 @@ public sealed class AcceptanceCohortWorkflowTestsWorkspacePreparation : Acceptan
             RunGit(repo, "add", "shared.txt");
             RunGit(repo, "commit", "-m", "Main change");
 
-            var result = ConductorDriver.IntegrateMainBeforeDeveloperDispatch(repo, goal);
+            var result = ConductorDriver.IntegrateMainBeforeDeveloperDispatch(repo, goal, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
 
             Assert.Equal(DeveloperBranchIntegrationStatus.Conflict, result.Status);
             Assert.Equal(["shared.txt"], result.ConflictPaths);

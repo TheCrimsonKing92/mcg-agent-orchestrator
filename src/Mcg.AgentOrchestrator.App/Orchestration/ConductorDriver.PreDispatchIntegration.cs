@@ -10,7 +10,7 @@ internal sealed partial class ConductorDriver
     internal static DeveloperBranchIntegrationResult IntegrateMainBeforeDispatch(
         string executionDirectory,
         Goal goal,
-        AgentRole role)
+        AgentRole role, string integrationBranch)
     {
         var branch = GoalWorktrees.BranchName(goal.Id);
         var worktreePath = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
@@ -38,13 +38,13 @@ internal sealed partial class ConductorDriver
                 $"Registered worktree for {branch} is not attached to the expected branch.");
         }
 
-        var mainHead = GitCli.Run(worktreePath, "rev-parse", "--verify", "main^{commit}");
+        var mainHead = GitCli.Run(worktreePath, "rev-parse", "--verify", $"{integrationBranch}^{{commit}}");
         var branchHead = GitCli.Run(worktreePath, "rev-parse", "--verify", "HEAD^{commit}");
         if (mainHead.ExitCode != 0 || branchHead.ExitCode != 0 ||
             string.IsNullOrWhiteSpace(mainHead.Output) || string.IsNullOrWhiteSpace(branchHead.Output))
         {
             return DeveloperIntegrationFailure(
-                $"Could not resolve main and {branch} before {role} dispatch.");
+                $"Could not resolve {integrationBranch} and {branch} before {role} dispatch.");
         }
 
         var mainRevision = mainHead.Output.Trim();
@@ -53,7 +53,7 @@ internal sealed partial class ConductorDriver
         {
             return new DeveloperBranchIntegrationResult(
                 DeveloperBranchIntegrationStatus.Current,
-                $"Goal branch {branch} is already current with main at {mainRevision[..12]}.",
+                $"Goal branch {branch} is already current with {integrationBranch} at {mainRevision[..12]}.",
                 []);
         }
 
@@ -75,11 +75,11 @@ internal sealed partial class ConductorDriver
         {
             return new DeveloperBranchIntegrationResult(
                 DeveloperBranchIntegrationStatus.Conflict,
-                BuildDeveloperIntegrationConflictMessage(branch, mergeTree.ConflictPaths, role),
+                BuildDeveloperIntegrationConflictMessage(branch, mergeTree.ConflictPaths, role, integrationBranch),
                 mergeTree.ConflictPaths);
         }
 
-        var mergeArgs = new List<string> { "merge", "--no-ff", mainRevision, "-m", $"Integrate main into {branch} before {role} dispatch" };
+        var mergeArgs = new List<string> { "merge", "--no-ff", mainRevision, "-m", $"Integrate {integrationBranch} into {branch} before {role} dispatch" };
         var goalTitleBody = OrchestratorCommitMessage.GoalTitleBody(goal);
         if (goalTitleBody is not null)
         {
@@ -95,7 +95,7 @@ internal sealed partial class ConductorDriver
             {
                 return new DeveloperBranchIntegrationResult(
                     DeveloperBranchIntegrationStatus.Conflict,
-                    BuildDeveloperIntegrationConflictMessage(branch, conflictPaths, role),
+                    BuildDeveloperIntegrationConflictMessage(branch, conflictPaths, role, integrationBranch),
                     conflictPaths);
             }
 
@@ -105,7 +105,7 @@ internal sealed partial class ConductorDriver
                     .Where(value => !string.IsNullOrWhiteSpace(value))
                     .Select(value => value.Trim().ReplaceLineEndings(" | ")));
             return DeveloperIntegrationFailure(
-                $"Conductor could not integrate main into {branch} before {role} dispatch: " +
+                $"Conductor could not integrate {integrationBranch} into {branch} before {role} dispatch: " +
                 (diagnostic.Length == 0 ? $"git merge exited {merge.ExitCode}." : diagnostic));
         }
 
@@ -120,12 +120,12 @@ internal sealed partial class ConductorDriver
         if (!integrationIsCurrent || GitCli.IsWorktreeDirty(worktreePath))
         {
             return DeveloperIntegrationFailure(
-                $"Conductor integrated main into {branch}, but the resulting branch failed the clean/current invariant; {role} dispatch is blocked.");
+                $"Conductor integrated {integrationBranch} into {branch}, but the resulting branch failed the clean/current invariant; {role} dispatch is blocked.");
         }
 
         return new DeveloperBranchIntegrationResult(
             DeveloperBranchIntegrationStatus.Integrated,
-            $"Conductor integrated main {mainRevision[..12]} into {branch} before {role} dispatch at {integratedHead.Output.Trim()[..12]}.",
+            $"Conductor integrated {integrationBranch} {mainRevision[..12]} into {branch} before {role} dispatch at {integratedHead.Output.Trim()[..12]}.",
             [],
             OriginalCandidateSha: branchRevision,
             IntegratedMainSha: mainRevision,
@@ -138,8 +138,8 @@ internal sealed partial class ConductorDriver
     private static string BuildDeveloperIntegrationConflictMessage(
         string branch,
         IReadOnlyList<string> conflictPaths,
-        AgentRole role) =>
-        $"{role} dispatch blocked: main conflicts with {branch} in {string.Join(", ", conflictPaths)}. " +
+        AgentRole role, string integrationBranch) =>
+        $"{role} dispatch blocked: {integrationBranch} conflicts with {branch} in {string.Join(", ", conflictPaths)}. " +
         "Conflict resolution requires semantic ownership and must be performed by the conductor or operator; " +
         "do not instruct a worker to rebase or resolve the branch integration.";
 
@@ -159,7 +159,7 @@ internal sealed partial class ConductorDriver
     internal static DeveloperBranchIntegrationResult IntegrateMainBeforeReadOnlyDispatch(
         string executionDirectory,
         Goal goal,
-        AgentRole role)
+        AgentRole role, string integrationBranch)
     {
         if (GoalWorktrees.TryResolve(executionDirectory, goal.Id) is null)
         {
@@ -169,7 +169,7 @@ internal sealed partial class ConductorDriver
                 []);
         }
 
-        return IntegrateMainBeforeDispatch(executionDirectory, goal, role);
+        return IntegrateMainBeforeDispatch(executionDirectory, goal, role, integrationBranch);
     }
 
     private static bool TryGetAssignedReadOnlyRoleReadyForDispatch(Goal goal, out AgentRole role)

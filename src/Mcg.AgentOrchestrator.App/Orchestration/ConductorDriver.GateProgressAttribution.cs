@@ -24,7 +24,7 @@ internal sealed partial class ConductorDriver
             TryAppendGateProgressEvent(writer, goalId, detail);
         }, RemoteLaneEventSink: detail => AppendRemoteLaneEvent(writer, member.GoalId.Value[..8], detail),
             GateRunIdentity: CohortGateRunIdentity(identity.Members.Select(binding => binding.GoalId.Value)),
-            ProjectHomeDirectory: _cohortWorkspace?.ProjectHomeDirectoryOrNull);
+            ProjectHomeDirectory: _cohortWorkspace?.ProjectHomeDirectoryOrNull, IntegrationBranch: _integrationBranch);
 
     private static void AppendCohortAttributionStartEvent(
         ConductEventLogWriter writer,
@@ -75,7 +75,7 @@ internal sealed partial class ConductorDriver
                 AppendRemoteLaneEvent(writer, members.Count == 1 ? members[0].GoalId.Value[..8] : null, detail);
             }
             catch (Exception) { /* Event-log setup is observational. */ }
-        }, GateRunIdentity: trainKey, ProjectHomeDirectory: workspace.ProjectHomeDirectoryOrNull);
+        }, GateRunIdentity: trainKey, ProjectHomeDirectory: workspace.ProjectHomeDirectoryOrNull, IntegrationBranch: workspace.IntegrationBranch);
     }
 
     private static void TryAppendGateProgressEvent(

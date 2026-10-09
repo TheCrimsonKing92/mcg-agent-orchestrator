@@ -15,8 +15,8 @@ public sealed partial class GoalAcceptanceVerifier
             ? CollaborationItemStore.ForDirectory(directory) : null;
         return EvaluateOwnerProtectedConfigurationCore(worktreePath, goalId, changedFiles, cohortMembers,
             AcceptanceGitTextResolver.Resolve, store,
-            () => AcceptanceTestInventorySource.Read(worktreePath, AcceptanceGitTextResolver.Resolve),
-            () => ResolveGitScalar(worktreePath, "rev-parse", "HEAD"));
+            () => AcceptanceTestInventorySource.Read(worktreePath, IntegrationBranch, AcceptanceGitTextResolver.Resolve),
+            () => ResolveGitScalar(worktreePath, "rev-parse", "HEAD"), IntegrationBranch);
     }
 
     internal static OwnerProtectedDecision EvaluateOwnerProtectedConfigurationForTests(string worktreePath,
@@ -25,36 +25,36 @@ public sealed partial class GoalAcceptanceVerifier
         Func<string, string[], string?> gitText, ICollaborationItemStore? decisions,
         Func<AcceptanceTestInventory> inventory, string? candidateSha) =>
         EvaluateOwnerProtectedConfigurationCore(worktreePath, goalId, changedFiles, cohortMembers,
-            gitText, decisions, inventory, () => candidateSha);
+            gitText, decisions, inventory, () => candidateSha, TrunkBranchName.Default);
 
     private static OwnerProtectedDecision EvaluateOwnerProtectedConfigurationCore(string worktreePath,
         GoalId? goalId, IReadOnlyList<string>? changedFiles,
         IReadOnlyList<AcceptanceOwnerProtectedCohortMember>? cohortMembers,
         Func<string, string[], string?> gitText, ICollaborationItemStore? decisions,
-        Func<AcceptanceTestInventory> inventory, Func<string?> candidateSha)
+        Func<AcceptanceTestInventory> inventory, Func<string?> candidateSha, string integrationBranch)
     {
-        var failure = TryClassifyManifestTrustCore(worktreePath, changedFiles, gitText);
+        var failure = TryClassifyManifestTrustCore(worktreePath, changedFiles, gitText, integrationBranch);
         if (failure is null) return new(null, null);
         if (goalId is { } singleGoal && decisions is not null &&
             IsApproved(worktreePath, changedFiles, gitText, decisions, singleGoal, candidateSha(),
-                "HEAD", readCommittedCandidate: false))
+                "HEAD", readCommittedCandidate: false, integrationBranch))
         {
             if (cohortMembers is { Count: > 0 })
             {
                 var cohortApproved = CohortChangesAreApproved(worktreePath, cohortMembers, gitText, decisions,
-                    inventory, out var manifestApproved);
+                    inventory, integrationBranch, out var manifestApproved);
                 return new(null, null, OwnerApprovalSatisfied: cohortApproved && manifestApproved);
             }
             return new(null, null, OwnerApprovalSatisfied: true);
         }
         var equivalent = IsEquivalentManifestChange(worktreePath, changedFiles, gitText, inventory, "HEAD",
-                gitText(worktreePath, ["show", "main:config/acceptance-manifest.json"]),
+                gitText(worktreePath, ["show", $"{integrationBranch}:config/acceptance-manifest.json"]),
                 File.Exists(Path.Combine(worktreePath, "config", "acceptance-manifest.json"))
-                    ? File.ReadAllText(Path.Combine(worktreePath, "config", "acceptance-manifest.json")) : null);
+                    ? File.ReadAllText(Path.Combine(worktreePath, "config", "acceptance-manifest.json")) : null, integrationBranch);
         if (cohortMembers is { Count: > 0 })
         {
             if (!CohortChangesAreApproved(worktreePath, cohortMembers, gitText, decisions, inventory,
-                    out var manifestOwnerApproved))
+                    integrationBranch, out var manifestOwnerApproved))
                 return new(failure, null);
             return equivalent
                 ? new(null, new AcceptanceCheckResult("owner-protected configuration", true, 0,
@@ -69,7 +69,7 @@ public sealed partial class GoalAcceptanceVerifier
 
     private static bool IsEquivalentManifestChange(string worktreePath, IReadOnlyList<string>? changedFiles,
         Func<string, string[], string?> gitText, Func<AcceptanceTestInventory> inventory,
-        string candidateRef, string? trusted, string? candidate)
+        string candidateRef, string? trusted, string? candidate, string integrationBranch)
     {
         if (changedFiles is null || !changedFiles.Any(path => NormalizePath(path).Equals(
                 "config/acceptance-manifest.json", StringComparison.OrdinalIgnoreCase)) ||
@@ -77,7 +77,7 @@ public sealed partial class GoalAcceptanceVerifier
         try
         {
             var noRename = gitText(worktreePath,
-                ["diff", "--name-only", "--no-renames", $"main...{candidateRef}", "--"]);
+                ["diff", "--name-only", "--no-renames", $"{integrationBranch}...{candidateRef}", "--"]);
             if (noRename is null || changedFiles.Concat(SplitPaths(noRename))
                     .Any(RepositoryChangeClassifier.IsOwnerProtectedPolicyPath))
                 return false;
@@ -92,13 +92,13 @@ public sealed partial class GoalAcceptanceVerifier
 
     private static bool IsApproved(string worktreePath, IReadOnlyList<string>? changedFiles,
         Func<string, string[], string?> gitText, ICollaborationItemStore decisions,
-        GoalId goalId, string? candidateSha, string candidateRef, bool readCommittedCandidate)
+        GoalId goalId, string? candidateSha, string candidateRef, bool readCommittedCandidate, string integrationBranch)
     {
         if (candidateSha is null) return false;
         if (AcceptancePolicyChangeDecision.IsApprovedAsync(decisions, goalId.Value, candidateSha)
             .GetAwaiter().GetResult()) return true;
         var fingerprint = ComputeOwnerProtectedChangeFingerprint(worktreePath, changedFiles, gitText,
-            candidateRef, readCommittedCandidate);
+            candidateRef, readCommittedCandidate, integrationBranch);
         return fingerprint is not null && AcceptancePolicyChangeDecision.IsApprovedForFingerprintAsync(
             decisions, goalId.Value, fingerprint).GetAwaiter().GetResult();
     }
@@ -106,13 +106,13 @@ public sealed partial class GoalAcceptanceVerifier
     private static bool CohortChangesAreApproved(string worktreePath,
         IReadOnlyList<AcceptanceOwnerProtectedCohortMember> members,
         Func<string, string[], string?> gitText, ICollaborationItemStore? decisions,
-        Func<AcceptanceTestInventory> inventory, out bool manifestOwnerApproved)
+        Func<AcceptanceTestInventory> inventory, string integrationBranch, out bool manifestOwnerApproved)
     {
         const string manifest = "config/acceptance-manifest.json";
         manifestOwnerApproved = false;
         try
         {
-            var combinedDiff = gitText(worktreePath, ["diff", "--name-only", "--no-renames", "main...HEAD", "--"]);
+            var combinedDiff = gitText(worktreePath, ["diff", "--name-only", "--no-renames", $"{integrationBranch}...HEAD", "--"]);
             if (combinedDiff is null) return false;
             var combined = ProtectedPaths(SplitPaths(combinedDiff));
             var changes = new List<(AcceptanceOwnerProtectedCohortMember Member, string[] Files, HashSet<string> Protected)>();
@@ -120,7 +120,7 @@ public sealed partial class GoalAcceptanceVerifier
             {
                 if (!AcceptancePolicyChangeDecision.IsFullSha(member.CandidateSha)) return false;
                 var diff = gitText(worktreePath,
-                    ["diff", "--name-only", "--no-renames", $"main...{member.CandidateSha}", "--"]);
+                    ["diff", "--name-only", "--no-renames", $"{integrationBranch}...{member.CandidateSha}", "--"]);
                 if (diff is null) return false;
                 var files = SplitPaths(diff);
                 changes.Add((member, files, ProtectedPaths(files)));
@@ -139,12 +139,12 @@ public sealed partial class GoalAcceptanceVerifier
             {
                 if (change.Protected.Any(path => !combined.Contains(path))) return false;
                 if (decisions is not null && IsApproved(worktreePath, change.Files, gitText, decisions, change.Member.GoalId,
-                        change.Member.CandidateSha, change.Member.CandidateSha, readCommittedCandidate: true)) continue;
+                        change.Member.CandidateSha, change.Member.CandidateSha, readCommittedCandidate: true, integrationBranch)) continue;
                 if (change.Protected.Contains(manifest)) allManifestChangesApproved = false;
                 if (change.Protected.Count == 1 && change.Protected.Contains(manifest) &&
                     IsEquivalentManifestChange(worktreePath, change.Files, gitText, inventory, change.Member.CandidateSha,
-                        gitText(worktreePath, ["show", $"main:{manifest}"]),
-                        gitText(worktreePath, ["show", $"{change.Member.CandidateSha}:{manifest}"]))) continue;
+                        gitText(worktreePath, ["show", $"{integrationBranch}:{manifest}"]),
+                        gitText(worktreePath, ["show", $"{change.Member.CandidateSha}:{manifest}"]), integrationBranch)) continue;
                 return false;
             }
             manifestOwnerApproved = combined.Count > 0 && hasManifestChange && allManifestChangesApproved;

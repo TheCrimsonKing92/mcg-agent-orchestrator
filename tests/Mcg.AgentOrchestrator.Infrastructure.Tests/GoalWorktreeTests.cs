@@ -696,7 +696,7 @@ public abstract class GoalWorktreeTestBase : HostCapacityBoundTestBase
         }
 
         public IReadOnlyList<string> GetChangedFiles(string worktreePath) =>
-            GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktreePath);
+            GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktreePath, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
 
         public GoalAcceptanceEvidenceBundle BuildAcceptanceEvidence(
             AgentOrchestratorKernel kernel,

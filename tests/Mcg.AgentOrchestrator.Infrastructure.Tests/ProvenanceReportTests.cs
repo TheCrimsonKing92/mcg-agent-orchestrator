@@ -154,7 +154,7 @@ public sealed class ProvenanceReportTests
             worktreePath: null,
             verification: null,
             verificationSkipped: true,
-            buildStorageRoot: null);
+            buildStorageRoot: null, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
 
         Assert.False(bundle.Passed);
         Assert.Equal(DotnetBuildEnvironmentManager.GoalRoot(goal.Id), bundle.BuildEnvironment.RootPath);

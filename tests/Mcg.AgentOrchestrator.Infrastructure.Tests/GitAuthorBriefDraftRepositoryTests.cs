@@ -10,7 +10,7 @@ public sealed class GitAuthorBriefDraftRepositoryTests
         using var fixture = new RepositoryFixture();
         var main = fixture.Git("rev-parse", "main");
         Assert.Equal(main, fixture.Git("rev-parse", "HEAD"));
-        var repository = new GitAuthorBriefDraftRepository(fixture.Root + "\\");
+        var repository = new GitAuthorBriefDraftRepository(fixture.Root + "\\", Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
 
         Assert.Equal(main, repository.ResolveMainHead());
     }
@@ -26,7 +26,7 @@ public sealed class GitAuthorBriefDraftRepositoryTests
         fixture.Git("checkout", "-q", "--detach", first);
         Assert.Equal(first, fixture.Git("rev-parse", "HEAD"));
         var configuredRoot = fixture.Root + "\\";
-        var repository = new GitAuthorBriefDraftRepository(configuredRoot);
+        var repository = new GitAuthorBriefDraftRepository(configuredRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
 
         var exception = Assert.Throws<AuthorDraftRepositoryNotAtMainException>(() => repository.ResolveMainHead());
         Assert.Equal("head-not-main", exception.Condition);
@@ -47,7 +47,7 @@ public sealed class GitAuthorBriefDraftRepositoryTests
         Assert.NotEqual(first, main);
         fixture.Git("checkout", "-q", "--detach", first);
         Assert.Equal(first, fixture.Git("rev-parse", "HEAD"));
-        var repository = new GitAuthorBriefDraftRepository(fixture.Root);
+        var repository = new GitAuthorBriefDraftRepository(fixture.Root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
 
         var exception = Assert.Throws<AuthorDraftRepositoryNotAtMainException>(() => repository.ResolveMainHead());
         Assert.Equal("head-not-main", exception.Condition);
@@ -78,7 +78,7 @@ public sealed class GitAuthorBriefDraftRepositoryTests
         var main = fixture.Git("rev-parse", "main");
         var subdirectory = Path.Combine(fixture.Root, "nested");
         Directory.CreateDirectory(subdirectory);
-        var repository = new GitAuthorBriefDraftRepository(subdirectory);
+        var repository = new GitAuthorBriefDraftRepository(subdirectory, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
 
         var exception = Assert.Throws<AuthorDraftRepositoryNotAtMainException>(() => repository.ResolveMainHead());
         Assert.Equal(differentHead ? "head-not-main, toplevel-not-root" : "toplevel-not-root", exception.Condition);
@@ -98,7 +98,7 @@ public sealed class GitAuthorBriefDraftRepositoryTests
     {
         using var fixture = new RepositoryFixture();
         File.WriteAllText(Path.Combine(fixture.Root, "seed.txt"), "changed");
-        var repository = new GitAuthorBriefDraftRepository(fixture.Root);
+        var repository = new GitAuthorBriefDraftRepository(fixture.Root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
 
         var exception = Assert.Throws<InvalidOperationException>(() => repository.ResolveMainHead());
         Assert.Equal("Author drafting requires no tracked edits against main HEAD.", exception.Message);

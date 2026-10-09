@@ -474,7 +474,7 @@ public sealed class GoalWorktreeTestsRemoveCleanupLifecycleCommands : GoalWorktr
             var cleanupBackoff = TryGetCleanupBackoff(repo, goal.Id);
             Assert.NotNull(cleanupBackoff);
             Assert.StartsWith("remove:", cleanupBackoff!.Reason, StringComparison.Ordinal);
-            var recovery = GoalRecoveryPlanner.Build(kernel, goal, repo);
+            var recovery = GoalRecoveryPlanner.Build(kernel, goal, repo, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
             Assert.NotNull(recovery.CleanupBackoff);
             Assert.Contains(recovery.RecommendedActions, action =>
                 action.Contains("workspace remove", StringComparison.Ordinal));

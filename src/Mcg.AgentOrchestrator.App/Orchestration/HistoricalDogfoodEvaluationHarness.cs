@@ -33,7 +33,7 @@ internal static class HistoricalDogfoodEvaluationHarness
         var inbox = OperatorInbox.Build(kernel, agents, profiles, workspace, goal.Id.Value[..8], includeAcknowledged: false);
         var subscription = SubscriptionPlanBuilder.Build(goal, agents, profiles);
         var acceptance = GoalAcceptanceStatusProjector.Build(kernel, goal, workspace.ExecutionDirectory);
-        var recovery = GoalRecoveryPlanner.Build(kernel, goal, workspace.ExecutionDirectory);
+        var recovery = GoalRecoveryPlanner.Build(kernel, goal, workspace.ExecutionDirectory, workspace.IntegrationBranch);
 
         var metrics = new List<HistoricalDogfoodMetric>
         {

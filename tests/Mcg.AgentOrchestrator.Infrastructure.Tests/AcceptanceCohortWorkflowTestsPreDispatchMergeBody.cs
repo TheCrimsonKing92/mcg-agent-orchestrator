@@ -23,7 +23,7 @@ public sealed class AcceptanceCohortWorkflowTestsPreDispatchMergeBody : Acceptan
             RunGit(repo, "add", "main.txt");
             RunGit(repo, "commit", "-m", "Main change");
 
-            var result = ConductorDriver.IntegrateMainBeforeDispatch(repo, goal, AgentRole.Developer);
+            var result = ConductorDriver.IntegrateMainBeforeDispatch(repo, goal, AgentRole.Developer, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default);
 
             Xunit.Assert.Equal(DeveloperBranchIntegrationStatus.Integrated, result.Status);
             Xunit.Assert.Equal(

@@ -110,10 +110,10 @@ private static void PrintNextFullDetail(CliExecutionContext context, AutonomyPol
         providerHoldScope: context.Kernel.Goals));
     ModelOutcomeBoundModels.Print(context.Kernel.BuildModelOutcomeScorecard(), context.Workspace);
     ConsoleViews.PrintLoopHealthReport(context.Kernel.BuildLoopHealthReport(null));
-    ConsoleViews.PrintFailureTriageReport(FailureTriagePlanner.Build(context.Kernel, goal, context.Agents, context.Workspace.ExecutionDirectory, policy));
+    ConsoleViews.PrintFailureTriageReport(FailureTriagePlanner.Build(context.Kernel, goal, context.Agents, context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch, policy));
     ConsoleViews.PrintGoalRecoveryReport(GoalRecoveryPlanner.Build(
-        context.Kernel, goal, context.Workspace.ExecutionDirectory, cleanupHooks: context.CleanupContext.Hooks));
-    ConsoleViews.PrintGoalSupervisorPlan(GoalSupervisor.Build(context.Kernel, goal, context.Agents, context.Workspace.ExecutionDirectory, policy));
+        context.Kernel, goal, context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch, cleanupHooks: context.CleanupContext.Hooks));
+    ConsoleViews.PrintGoalSupervisorPlan(GoalSupervisor.Build(context.Kernel, goal, context.Agents, context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch, policy));
     ConsoleViews.PrintOperatorInbox(OperatorInbox.Build(context.Kernel, context.Agents, context.WorkerProfiles, context.Workspace, goal.Id.Value[..8], includeAcknowledged: false));
 }
 

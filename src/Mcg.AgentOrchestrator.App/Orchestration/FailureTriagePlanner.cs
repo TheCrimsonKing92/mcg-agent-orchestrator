@@ -61,12 +61,13 @@ public static class FailureTriagePlanner
         Goal goal,
         IReadOnlyList<AgentDefinition> agents,
         string executionDirectory,
+        string integrationBranch,
         AutonomyPolicy policy,
         DateTimeOffset? now = null)
     {
         var observedAt = now ?? DateTimeOffset.UtcNow;
         var items = new List<FailureTriageItem>();
-        var recovery = GoalRecoveryPlanner.Build(kernel, goal, executionDirectory);
+        var recovery = GoalRecoveryPlanner.Build(kernel, goal, executionDirectory, integrationBranch);
 
         for (var index = 0; index < goal.Tasks.Count; index++)
         {

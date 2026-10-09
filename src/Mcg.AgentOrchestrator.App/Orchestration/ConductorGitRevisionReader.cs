@@ -5,10 +5,10 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal static partial class ConductorGitRevisionReader
 {
-    internal static GateReadyCandidateRevisionPair ReadRequiredPair(string worktreePath) =>
+    internal static GateReadyCandidateRevisionPair ReadRequiredPair(string worktreePath, string integrationBranch) =>
         new(
             ReadRequiredCommit(worktreePath, "HEAD"),
-            ReadRequiredCommit(worktreePath, "main^{commit}"));
+            ReadRequiredCommit(worktreePath, $"{integrationBranch}^{{commit}}"));
 
     internal static string ReadRequiredCommit(string worktreePath, string reference)
     {

@@ -221,7 +221,7 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
     internal string? IdentityDifference(
         ConductorGroupedGateAttempt attempt, string kind,
         IReadOnlyList<GateReadyCandidateProjection> members,
-        string mainRevision, string treeRevision)
+        string mainRevision, string treeRevision, string integrationBranch)
     {
         if (!string.Equals(attempt.Kind, kind, StringComparison.Ordinal) ||
             attempt.Members.Count != members.Count ||
@@ -233,7 +233,7 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
         if (members.Any(member => revisions[member.GoalId.Value] != member.CandidateRevision))
             return "candidate";
         if (!string.Equals(attempt.MainRevision, mainRevision, StringComparison.Ordinal))
-            return "main";
+            return integrationBranch;
         return !string.Equals(attempt.CombinedTreeRevision, treeRevision, StringComparison.Ordinal)
             ? "tree" : null;
     }

@@ -123,13 +123,13 @@ internal sealed partial class ConductorDriver
         return true;
     }
 
-    internal static PreReviewEvidenceContext BuildPreReviewEvidenceContext(Goal goal, string executionDirectory)
+    internal static PreReviewEvidenceContext BuildPreReviewEvidenceContext(Goal goal, string executionDirectory, string integrationBranch)
     {
         var worktreePath = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
         var candidateSha = worktreePath is null ? null : TryResolveGitHead(worktreePath);
         var changedFiles = worktreePath is null
             ? Array.Empty<string>()
-            : GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktreePath);
+            : GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(worktreePath, integrationBranch);
         return BuildPreReviewEvidenceContext(
             candidateSha,
             changedFiles,
