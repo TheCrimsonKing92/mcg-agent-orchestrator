@@ -21,6 +21,9 @@ public sealed class AuthorBriefDraftServiceFailureKindTests
 
     [Theory]
     [InlineData("launch", "pre-model")]
+    [InlineData("launch-null-process", "pre-model")]
+    [InlineData("launch-null-process-async", "pre-model")]
+    [InlineData("other-invalid-operation", "model-round")]
     [InlineData("timeout", "model-round")]
     [InlineData("exit", "model-round")]
     [InlineData("output", "model-round")]
@@ -35,6 +38,11 @@ public sealed class AuthorBriefDraftServiceFailureKindTests
                 return fault switch
                 {
                     "launch" => throw new Win32Exception(2, "executable missing"),
+                    "launch-null-process" => throw new InvalidOperationException("Failed to start worker process."),
+                    "launch-null-process-async" => Task.FromException<WorkerProcessRunResult>(
+                        new InvalidOperationException("Failed to start worker process.")),
+                    "other-invalid-operation" => Task.FromException<WorkerProcessRunResult>(
+                        new InvalidOperationException("worker failed after starting")),
                     "timeout" => Task.FromException<WorkerProcessRunResult>(new OperationCanceledException("model timed out")),
                     "exit" => Task.FromResult(new WorkerProcessRunResult(1, "", "model crashed")),
                     _ => Task.FromResult(new WorkerProcessRunResult(0, "unusable output", ""))
