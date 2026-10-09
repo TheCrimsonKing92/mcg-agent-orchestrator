@@ -58,7 +58,7 @@ internal sealed partial class GoalDispatchOperations
             plannerSampleCount: ResolvePlannerSampleCount(workspace, plannerSampleCount, conductorPolicy),
             cascadeTesterCheapFirst: ResolveCascadeTesterCheapFirst(workspace, cascadeTesterCheapFirst, conductorPolicy),
             cascadeCheapModelAlias: ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy), cascadeMechanicalReworkCheap: ResolveCascadeMechanicalReworkCheap(workspace, cascadeMechanicalReworkCheap, conductorPolicy),
-            orchestratorSkillDirectory: ResolveOrchestratorSkillDirectory(workspace));
+            orchestratorSkillDirectory: ResolveOrchestratorSkillDirectory(workspace), integrationBranch: workspace.IntegrationBranch);
         // Validate recovery authority before admission can hydrate a whole durable snapshot.
         // The runner repeats this guard immediately before launch to cover later state changes.
         var rejectedRecoveryIds = batch.Dispatches
@@ -476,7 +476,7 @@ internal sealed partial class GoalDispatchOperations
             kernel.ReplaceGoalStateWithSnapshot(persisted.Snapshot, persisted.HumanInputRequests ?? []);
             recordDurableGoalBaseline?.Invoke(persisted.Snapshot);
             GoalEventsTimelineMirror.AppendMissing(
-                new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, kernel: kernel),
+                new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, kernel: kernel, integrationBranch: workspace.IntegrationBranch),
                 goalId, addedEvents, "retry-admission");
             return persisted.Admission;
         }

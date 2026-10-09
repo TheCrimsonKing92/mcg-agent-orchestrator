@@ -111,7 +111,7 @@ internal sealed partial class ConductorStewardHost
                 Path.Combine(workspace.OrchestratorDirectory, "state.db"), goalId.Value,
                 CancellationToken.None).GetAwaiter().GetResult(),
             goal => GoalWorktrees.TryResolve(workspace.ExecutionDirectory, goal.Id) ?? workspace.ExecutionDirectory,
-            new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory),
+            new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, integrationBranch: workspace.IntegrationBranch),
             new ConductEventLogWriter(workspace.ConductEventsLogPath),
             enabled: !string.Equals(enabledSetting, "false", StringComparison.OrdinalIgnoreCase) &&
                      enabledSetting != "0",

@@ -47,7 +47,7 @@ public static bool ExecuteCommand(
     WorktreeCleanupContext? cleanupContext = null,
     IClock? diagnosticsClock = null)
 {
-    eventWriter ??= new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, kernel: kernel);
+    eventWriter ??= new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, kernel: kernel, integrationBranch: workspace.IntegrationBranch);
     kernel.SetEventWriter(eventWriter);
     var operationCleanupContext = cleanupContext ?? WorktreeCleanupContext.Load(
         attentionStoreDirectory: workspace.OrchestratorDirectory);

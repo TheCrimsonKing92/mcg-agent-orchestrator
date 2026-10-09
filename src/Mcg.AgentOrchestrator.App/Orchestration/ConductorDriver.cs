@@ -289,7 +289,7 @@ internal sealed partial class ConductorDriver
             dir,
             conductEventLogWriter: new ConductEventLogWriter(workspace.ConductEventsLogPath),
             buildStorageRoot: _cohortCleanupHooks.BuildStorageRoot);
-        var eventWriter = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory);
+        var eventWriter = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, integrationBranch: workspace.IntegrationBranch);
         _cohortKernel = kernel;
         ConfigureCandidateIdentity(kernel, workspace.ConductEventsLogPath);
         _cohortWorkspace = workspace;
@@ -901,7 +901,7 @@ internal sealed partial class ConductorDriver
             }
 
             RemoteGitMirror.EnqueueAfterLanding(dir, goal);
-            RemoteGitMirror.TryStartBackgroundProcessing(kernel, dir, goal.Id);
+            RemoteGitMirror.TryStartBackgroundProcessing(kernel, dir, goal.Id, _integrationBranch);
             RefreshJournal(goal.Id);
 
             if (goal.SourceBacklogItemId is null)

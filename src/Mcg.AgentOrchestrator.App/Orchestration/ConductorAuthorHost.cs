@@ -57,7 +57,7 @@ internal sealed partial class ConductorAuthorHost
         SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory),
         new SpecRefinerPrecedentStore(workspace.SpecRefinerPrecedentsPath),
         goal => GoalWorktrees.TryResolve(workspace.ExecutionDirectory, goal.Id) ?? workspace.ExecutionDirectory,
-        new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory),
+        new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, integrationBranch: workspace.IntegrationBranch),
         new ConductEventLogWriter(workspace.ConductEventsLogPath),
         enabled: ResolveEnabled(Environment.GetEnvironmentVariable(EnabledEnvironmentVariable)),
         lessons: new ConductorLessonSelector(workspace.OperatorLessonsStorePath,

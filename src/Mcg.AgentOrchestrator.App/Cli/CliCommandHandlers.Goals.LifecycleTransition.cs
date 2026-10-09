@@ -142,7 +142,7 @@ internal static partial class CliCommandHandlers
 
         try
         {
-            new Mcg.AgentOrchestrator.Infrastructure.GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory)
+            new Mcg.AgentOrchestrator.Infrastructure.GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, integrationBranch: workspace.IntegrationBranch)
                 .AppendTimelineEvent(outcome.CommittedTimelineEvent);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

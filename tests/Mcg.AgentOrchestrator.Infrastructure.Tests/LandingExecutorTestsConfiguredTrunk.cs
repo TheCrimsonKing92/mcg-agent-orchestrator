@@ -5,6 +5,49 @@ using static LandingExecutorTests;
 [Collection(TestCollections.LandingGitRunner)]
 public sealed class LandingExecutorTestsConfiguredTrunk
 {
+    [Fact]
+    public void MirrorPushesAndReportsConfiguredIntegrationBranch()
+    {
+        var repo = CreateGitRepository();
+        var previousRunner = RemoteGitMirror.GitRunner;
+        var pushes = new List<string[]>();
+        try
+        {
+            ReadGit(repo, "branch", "-M", "master");
+            AssertMissingMain(repo);
+            Directory.CreateDirectory(Path.Combine(repo, "config"));
+            File.WriteAllText(Path.Combine(repo, "config", "mirror.json"), """
+                { "enabled": true, "remotes": ["mirror"],
+                  "push": { "main": true, "goalBranch": true, "tags": true } }
+                """);
+            var (kernel, goal) = CreateVerifiedGoal(repo);
+            var branch = GoalWorktrees.BranchName(goal.Id);
+            ReadGit(repo, "checkout", "-b", branch);
+            AppendCommit(repo, "goal.txt", "goal change");
+            ReadGit(repo, "checkout", "master");
+            RemoteGitMirror.GitRunner = (directory, args) =>
+            {
+                if (args.Count == 0 || args[0] != "push") return previousRunner(directory, args);
+                pushes.Add(args.ToArray());
+                return new GitCli.GitResult(0, string.Empty, string.Empty);
+            };
+            RemoteGitMirror.EnqueueAfterLanding(repo, goal);
+
+            var result = RemoteGitMirror.ProcessDue(kernel, repo, goal.Id, integrationBranch: "master");
+
+            Assert.Contains(pushes, args => args.SequenceEqual(new[] { "push", "mirror", "master" }));
+            Assert.DoesNotContain(pushes, args => args.Contains("main", StringComparer.Ordinal));
+            var outcome = Assert.Single(result.Outcomes);
+            Assert.Equal(RemoteMirrorOutcomeKind.MirrorSucceeded, outcome.Kind);
+            Assert.Contains($"refs=master,{branch},tags", outcome.Detail, StringComparison.Ordinal);
+        }
+        finally
+        {
+            RemoteGitMirror.GitRunner = previousRunner;
+            TryDeleteDirectory(repo);
+        }
+    }
+
     [Theory]
     [InlineData("master", true)]
     [InlineData("main", false)]

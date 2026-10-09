@@ -984,13 +984,13 @@ internal static partial class CliPersistentStateRunner
                     PersistSweepChanges(sweepKernel, stateRepository, sweep.Goals.Select(goal => goal.GoalId).ToArray());
                     TerminalGoalSweepLifecycleEvents.Publish(
                         sweepKernel, sweepTimelineBaseline, sweep.Goals.Select(goal => goal.GoalId),
-                        new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory), Console.WriteLine);
+                        new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, integrationBranch: workspace.IntegrationBranch), Console.WriteLine);
                     startupKernel = LoadLoopKernel();
                     tickBaselines = startupKernel.ExportSnapshot().Goals.ToDictionary(goal => goal.Id, StringComparer.Ordinal);
                 }
 
                 cleanupContext.Scheduler.SweepIfDue(workspace.ExecutionDirectory, sweepKernel);
-                RemoteGitMirror.TryStartBackgroundProcessing(sweepKernel, workspace.ExecutionDirectory, watchGoalId);
+                RemoteGitMirror.TryStartBackgroundProcessing(sweepKernel, workspace.ExecutionDirectory, watchGoalId, workspace.IntegrationBranch);
             }
             catch (Exception ex)
             {
@@ -2601,7 +2601,7 @@ internal static partial class CliPersistentStateRunner
                 _ = DeliverGoalCreationSideEffects(outboxRepository, workspace, kernel, preparedGoal.Id);
                 deferredCollaborationWriter.CompleteDelivery();
                 deferredEventWriter.CompleteDeliveryTo(
-                    new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, kernel: kernel));
+                    new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, kernel: kernel, integrationBranch: workspace.IntegrationBranch));
                 _ = GoalRefinementWorkCoordinator.TryLaunch(workspace, preparedGoal.Id);
             }
             var outcomeCode = RenderGoalReplacementOutcomeCode(receipt.Outcome);
@@ -3551,7 +3551,7 @@ internal static partial class CliPersistentStateRunner
                 _ = DeliverGoalCreationSideEffects(outboxRepository, workspace, kernel, goal.Id);
                 deferredCollaborationWriter.CompleteDelivery();
                 deferredEventWriter.CompleteDeliveryTo(
-                    new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, kernel: kernel));
+                    new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, kernel: kernel, integrationBranch: workspace.IntegrationBranch));
                 _ = GoalRefinementWorkCoordinator.TryLaunch(workspace, goal.Id);
             }
             catch (Exception ex)
@@ -3888,7 +3888,7 @@ internal static partial class CliPersistentStateRunner
         var reconciled = runner.SweepExitedProcesses(kernel);
         cleanupContext ??= WorktreeCleanupContext.Load(attentionStoreDirectory: workspace.OrchestratorDirectory);
         cleanupContext.Scheduler.SweepIfDue(workspace.ExecutionDirectory, kernel);
-        RemoteGitMirror.TryStartBackgroundProcessing(kernel, workspace.ExecutionDirectory);
+        RemoteGitMirror.TryStartBackgroundProcessing(kernel, workspace.ExecutionDirectory, integrationBranch: workspace.IntegrationBranch);
         Console.WriteLine($"Reconciled dispatches: {reconciled}");
 
         var results = CaptureRefreshResults(kernel, candidates);
@@ -3984,7 +3984,7 @@ internal static partial class CliPersistentStateRunner
         var criticalCheckpointRejected = false;
         void PublishSweepEvents() => TerminalGoalSweepLifecycleEvents.Publish(
             kernel, targetSweepBaseline, targetSweep.Goals.Select(goal => goal.GoalId),
-            new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory), Console.WriteLine, targetSweepTimelineEnd);
+            new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, integrationBranch: workspace.IntegrationBranch), Console.WriteLine, targetSweepTimelineEnd);
 
         void Persist(AgentOrchestratorKernel checkpoint) =>
             PersistSingleGoalSnapshot(stateRepository, checkpoint, goalId);

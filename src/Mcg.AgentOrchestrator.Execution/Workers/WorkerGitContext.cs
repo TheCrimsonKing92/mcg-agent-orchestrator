@@ -60,7 +60,7 @@ internal sealed class WorkerGitContext
         return files.Order(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
-    internal ReviewerChangedFileScope ReadReviewerChangedFileScope(string workingDirectory)
+    internal ReviewerChangedFileScope ReadReviewerChangedFileScope(string workingDirectory, string integrationBranch)
     {
         if (!LooksLikeGitWorkspace(workingDirectory))
         {
@@ -69,30 +69,30 @@ internal sealed class WorkerGitContext
                 "Reviewer changed-file scope unavailable because the working directory is not a git workspace.");
         }
 
-        var mainResult = GitCli.Run(workingDirectory, "rev-parse", "--verify", "main^{commit}");
+        var mainResult = GitCli.Run(workingDirectory, "rev-parse", "--verify", $"{integrationBranch}^{{commit}}");
         if (!mainResult.Succeeded || string.IsNullOrWhiteSpace(mainResult.Output))
         {
             throw new ReviewerChangedFileScopeException(
                 ReviewerScopeUnavailableErrorCode,
-                "Reviewer changed-file scope unavailable because git ref 'main' could not be resolved.",
+                $"Reviewer changed-file scope unavailable because git ref '{integrationBranch}' could not be resolved.",
                 mainResult.Error);
         }
 
-        var mergeBaseResult = GitCli.Run(workingDirectory, "merge-base", "main", "HEAD");
+        var mergeBaseResult = GitCli.Run(workingDirectory, "merge-base", integrationBranch, "HEAD");
         if (!mergeBaseResult.Succeeded || string.IsNullOrWhiteSpace(mergeBaseResult.Output))
         {
             throw new ReviewerChangedFileScopeException(
                 ReviewerMergeBaseUnavailableErrorCode,
-                "Reviewer changed-file scope unavailable because git merge-base main HEAD could not be computed.",
+                $"Reviewer changed-file scope unavailable because git merge-base {integrationBranch} HEAD could not be computed.",
                 mergeBaseResult.Error);
         }
 
-        var diffResult = GitCli.Run(workingDirectory, "diff", "--name-only", "main...HEAD", "--");
+        var diffResult = GitCli.Run(workingDirectory, "diff", "--name-only", $"{integrationBranch}...HEAD", "--");
         if (!diffResult.Succeeded)
         {
             throw new ReviewerChangedFileScopeException(
                 ReviewerScopeUnavailableErrorCode,
-                "Reviewer changed-file scope unavailable because git diff --name-only main...HEAD failed.",
+                $"Reviewer changed-file scope unavailable because git diff --name-only {integrationBranch}...HEAD failed.",
                 diffResult.Error);
         }
 
@@ -212,7 +212,7 @@ internal sealed class WorkerGitContext
 
     internal ReviewerMergeTreeStatus ReadReviewerMergeTreeStatus(
         string workingDirectory,
-        string baseReference = "main",
+        string baseReference,
         string headReference = "HEAD")
     {
         if (!LooksLikeGitWorkspace(workingDirectory))
@@ -260,7 +260,7 @@ internal sealed class WorkerGitContext
 
         throw new ReviewerMergeTreeStatusException(
             ReviewerMergeTreeUnavailableErrorCode,
-            "Reviewer merge-tree status unavailable because git merge-tree --write-tree --name-only main HEAD failed.",
+            $"Reviewer merge-tree status unavailable because git merge-tree --write-tree --name-only {baseReference} {headReference} failed.",
             string.Join(" ", [mergeTreeResult.Output.Trim(), mergeTreeResult.Error.Trim()]).Trim());
     }
 

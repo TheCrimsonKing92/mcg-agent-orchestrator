@@ -132,7 +132,7 @@ internal static partial class GoalRefinementWorkCoordinator
                     var service = CreateService(workspace, providers, workerProfiles, rawOutputStamp);
                     var eventWriter = new GoalLifecycleEventWriter(
                         workspace.GoalLifecycleEventsDirectory,
-                        kernel: refinementKernel);
+                        kernel: refinementKernel, integrationBranch: workspace.IntegrationBranch);
                     var baselineSnapshot = refinementKernel.ExportGoalSnapshot(goalId);
                     var synchronizingAnswers = goal.RefinedSpec is not null;
 
@@ -305,7 +305,7 @@ internal static partial class GoalRefinementWorkCoordinator
                     messageId,
                     statePath);
                 store.Save(goalId, attempt);
-                new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory).AppendGoalEscalated(
+                new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, integrationBranch: workspace.IntegrationBranch).AppendGoalEscalated(
                     goalId,
                     GoalLifecycleState.WorkspaceReady,
                     BuildEscalationDetail(goalId, decision.ConsecutiveFailedClaims, messageId, statePath),

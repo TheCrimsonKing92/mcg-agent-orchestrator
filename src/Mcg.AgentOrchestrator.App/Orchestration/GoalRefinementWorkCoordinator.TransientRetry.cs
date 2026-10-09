@@ -41,7 +41,7 @@ internal static partial class GoalRefinementWorkCoordinator
             if (retry.ExhaustedAt is null)
             {
                 store.Save(goalId, retry with { ExhaustedAt = now, LastFailureDetail = failedState.Detail! });
-                new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory).AppendGoalEscalated(
+                new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, integrationBranch: workspace.IntegrationBranch).AppendGoalEscalated(
                     goalId, GoalLifecycleState.WorkspaceReady, detail, "spec-refinement-transient-retry");
             }
             return new(retry.Attempts, new(false, null, detail), detail);

@@ -113,7 +113,7 @@ internal sealed partial class GoalDispatchOperations
             plannerSampleCount: ResolvePlannerSampleCount(workspace, plannerSampleCount),
             paidRoute: subscriptionMetadata?.PaidRoute ?? PaidRouteClassification.Unknown,
             shadowRecorder: DispatchShadowRecorder.Default,
-            orchestratorSkillDirectory: ResolveOrchestratorSkillDirectory(workspace));
+            orchestratorSkillDirectory: ResolveOrchestratorSkillDirectory(workspace), integrationBranch: workspace.IntegrationBranch);
     }
 
     public WorkerProfileDispatchResult RefreshPreparedDispatchBeforeStart(
@@ -437,7 +437,7 @@ internal sealed partial class GoalDispatchOperations
             plannerSampleCount: ResolvePlannerSampleCount(workspace, plannerSampleCount),
             cascadeTesterCheapFirst: ResolveCascadeTesterCheapFirst(workspace, cascadeTesterCheapFirst, conductorPolicy),
             cascadeCheapModelAlias: ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy), cascadeMechanicalReworkCheap: ResolveCascadeMechanicalReworkCheap(workspace, cascadeMechanicalReworkCheap, conductorPolicy),
-            orchestratorSkillDirectory: ResolveOrchestratorSkillDirectory(workspace));
+            orchestratorSkillDirectory: ResolveOrchestratorSkillDirectory(workspace), integrationBranch: workspace.IntegrationBranch);
     }
 
     public WorkerProfileDispatchResult SubscriptionDispatchTask(
@@ -473,7 +473,7 @@ internal sealed partial class GoalDispatchOperations
             plannerSampleCount: ResolvePlannerSampleCount(workspace, plannerSampleCount, conductorPolicy),
             cascadeTesterCheapFirst: ResolveCascadeTesterCheapFirst(workspace, cascadeTesterCheapFirst, conductorPolicy),
             cascadeCheapModelAlias: ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy), cascadeMechanicalReworkCheap: ResolveCascadeMechanicalReworkCheap(workspace, cascadeMechanicalReworkCheap, conductorPolicy),
-            orchestratorSkillDirectory: ResolveOrchestratorSkillDirectory(workspace));
+            orchestratorSkillDirectory: ResolveOrchestratorSkillDirectory(workspace), integrationBranch: workspace.IntegrationBranch);
     }
 
     private static CitedPriorEvidenceResolver CreateCitedPriorEvidenceResolver(OrchestratorWorkspace workspace) =>

@@ -19,7 +19,7 @@ public sealed class WorkerGitContextTests
                     ProcessStarted: processStarted));
 
             var exception = Xunit.Assert.Throws<ReviewerMergeTreeStatusException>(() =>
-                context.ReadReviewerMergeTreeStatus(workspace));
+                context.ReadReviewerMergeTreeStatus(workspace, TrunkBranchName.Default));
 
             Xunit.Assert.Equal(processStarted, exception.GitProcessStarted);
         }

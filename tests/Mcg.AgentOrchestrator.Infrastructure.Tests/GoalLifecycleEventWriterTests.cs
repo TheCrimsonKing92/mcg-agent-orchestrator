@@ -11,6 +11,33 @@ namespace Mcg.AgentOrchestrator.Infrastructure.Tests;
 [Xunit.Collection(TestCollections.EnvMutation)]
 public sealed class GoalLifecycleEventWriterTests
 {
+    [Xunit.Theory]
+    [Xunit.InlineData("master", "master")]
+    [Xunit.InlineData(null, "main")]
+    public void LandingEvidenceEventsRecordConfiguredOrDefaultBranch(string? configured, string expected)
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var goalId = GoalId.New();
+            var writer = new GoalLifecycleEventWriter(root, integrationBranch: configured);
+            writer.AppendGoalLandedFromAncestry(goalId, "goal/example", "tip", "trunk");
+            writer.AppendGoalLandedFromMergeEvidence(goalId, "goal/example", "integrate", "trunk");
+            var lines = File.ReadAllLines(Path.Combine(root, $"{goalId.Value}.jsonl"));
+            Xunit.Assert.Equal(2, lines.Length);
+            Xunit.Assert.All(lines, line =>
+            {
+                using var document = JsonDocument.Parse(line);
+                Xunit.Assert.Equal(expected, document.RootElement.GetProperty("integrationBranch").GetString());
+            });
+            using var ancestry = JsonDocument.Parse(lines[0]);
+            using var merge = JsonDocument.Parse(lines[1]);
+            Xunit.Assert.Equal("ancestry", ancestry.RootElement.GetProperty("source").GetString());
+            Xunit.Assert.Equal("merge-evidence", merge.RootElement.GetProperty("source").GetString());
+        }
+        finally { DeleteDirectory(root); }
+    }
+
     [Xunit.Fact]
     public void KernelTimelineEventsWriteAppendOnlyJsonlInOrder()
     {
