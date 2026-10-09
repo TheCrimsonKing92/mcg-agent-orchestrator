@@ -32,7 +32,7 @@ internal static class OwnerConsoleKeyHints
         OwnerConsolePane.Board => "Enter goal detail",
         OwnerConsolePane.Activity => "Up/Down scroll  Enter what this means",
         _ => throw new ArgumentOutOfRangeException(nameof(pane))
-    }) + "  Tab next pane  : command  ? help  q quit";
+    }) + "  " + OwnerActivityNarrator.JumpKeyHint + "  Tab next pane  : command  ? help  q quit";
 
     internal static string HelpText => string.Join("\n", new[]
     {
@@ -48,5 +48,5 @@ internal static class OwnerConsoleKeyHints
         "Esc: Cancel command entry or close a dialog.",
         "e: Open the epic view (any pane).",
         ":epics: Open the epic view (same as e)."
-    }.Concat(Commands.Select(item => $":{item.Command}: {item.Description}")));
+    }.Concat(OwnerActivityNarrator.JumpKeyHelp).Concat(Commands.Select(item => $":{item.Command}: {item.Description}")));
 }

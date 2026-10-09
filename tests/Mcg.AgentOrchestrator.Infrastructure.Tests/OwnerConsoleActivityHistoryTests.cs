@@ -63,7 +63,7 @@ public sealed class OwnerConsoleActivityHistoryTests
         Assert.Contains("Waiting on: waiting for your approval", detail);
         Assert.DoesNotContain("goal lifecycle decision", detail, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("task note", detail, StringComparison.OrdinalIgnoreCase);
-        Assert.Single(detail.Split(Environment.NewLine), line => line.Contains("Developer started on " + title));
+        Assert.Single(detail.Split(Environment.NewLine), line => line.EndsWith("Developer started", StringComparison.Ordinal));
         Assert.Equal(100, tail.Requested);
     }
 

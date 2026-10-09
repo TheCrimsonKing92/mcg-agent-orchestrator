@@ -43,7 +43,8 @@ public sealed class OwnerConsoleBoardFirstStartupTests
             await fill.WaitAsync(TestContext.Current.CancellationToken);
         }
         Assert.Equal("[1] 11111111 HumanInput: Ship?", Assert.Single(view.DecisionLines));
-        Assert.Equal($"{DateTimeOffset.UnixEpoch.ToLocalTime():HH:mm:ss} Board first: passed its tests, landing next", Assert.Single(view.ActivityLines));
+        Assert.Contains($"{DateTimeOffset.UnixEpoch.ToLocalTime():HH:mm:ss} 11111111 Board first: passed its tests, landing next", view.ActivityLines);
+        Assert.Contains(view.ActivityLines, line => line.Contains("Needs you: 11111111 Ship?"));
         Assert.Single(view.BoardTable.Rows.Cast<System.Data.DataRow>());
     }
 
@@ -71,6 +72,40 @@ public sealed class OwnerConsoleBoardFirstStartupTests
         Assert.Equal(error, Assert.Single(failQuestions ? view.DecisionLines : view.ActivityLines));
         Assert.DoesNotContain("loading...", view.DecisionLines);
         Assert.DoesNotContain("loading...", view.ActivityLines);
+    }
+
+    [Fact]
+    public async Task DecisionsArrivingAfterActivityImmediatelyRaiseTheOwnerItem()
+    {
+        var harness = new OwnerConsoleHarness();
+        harness.AddGoal("11111111-first", "Board first", Mcg.AgentOrchestrator.Core.AgentRole.Developer);
+        var questions = new GatedQuestions();
+        var activity = new GatedActivity();
+        var activityRendered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var app = Terminal.Gui.App.Application.Create();
+        using var view = View(app, harness);
+        var startup = new OwnerConsoleStartupLoader(Builder(harness, questions), activity, action => action());
+        var fill = await startup.StartAsync(view.Render, model =>
+        {
+            view.Render(model);
+            if (model.ActivityState is null) activityRendered.TrySetResult();
+        }, new(harness.Clock.GetUtcNow(), null, [], 0), _ => { }, TestContext.Current.CancellationToken);
+        try
+        {
+            await activity.Entered.Task.WaitAsync(TestContext.Current.CancellationToken);
+            activity.Release.SetResult(new([], null));
+            await activityRendered.Task.WaitAsync(TestContext.Current.CancellationToken);
+            Assert.Empty(view.ActivityLines);
+            questions.Release.SetResult([new("q1", "11111111-first", OwnerQuestionKind.HumanInput, "Ship?")]);
+            await fill.WaitAsync(TestContext.Current.CancellationToken);
+            Assert.Contains("Needs you: 11111111 Ship?", Assert.Single(view.ActivityLines));
+        }
+        finally
+        {
+            questions.Release.TrySetResult([]);
+            activity.Release.TrySetResult(new([], null));
+            await fill.WaitAsync(TestContext.Current.CancellationToken);
+        }
     }
 
     [Fact]

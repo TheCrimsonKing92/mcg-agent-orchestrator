@@ -63,13 +63,26 @@ public sealed record OrchestratorWorkspace(
     public static OrchestratorWorkspace ForDirectory(
         string rootDirectory,
         string? executionDirectory = null,
-        string? tenantName = null)
+        string? tenantName = null) =>
+        ForDirectory(rootDirectory, executionDirectory, tenantName, OrchestratorProjectRegistry.CreateDefault());
+
+    public static OrchestratorWorkspace ForDirectory(
+        string rootDirectory,
+        string? executionDirectory,
+        string? tenantName,
+        OrchestratorProjectRegistry registry)
     {
         var root = Path.GetFullPath(rootDirectory);
         var executionRoot = Path.GetFullPath(string.IsNullOrWhiteSpace(executionDirectory) ? rootDirectory : executionDirectory);
         var normalizedTenant = OrchestratorTenantSelection.NormalizeTenantName(tenantName);
         var isTenantScoped = !normalizedTenant.Equals(DefaultTenantName, StringComparison.OrdinalIgnoreCase);
         var orchestrator = ResolveOrchestratorDirectory(root, null, normalizedTenant);
+        var location = registry.GetDefaultStateLocation(root);
+        if (location is not null)
+        {
+            var stateRoot = location.ResolveStateDirectory(registry.DataRootDirectory);
+            orchestrator = isTenantScoped ? Path.Combine(stateRoot, "tenants", normalizedTenant) : stateRoot;
+        }
         return Create(
             root,
             executionRoot,

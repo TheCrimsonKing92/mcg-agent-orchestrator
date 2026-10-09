@@ -10,12 +10,11 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
     Func<OwnerConductEvent, OwnerActivityTestEvidence?>? testEvidence = null)
 {
     internal const int MaxActivityItems = 100;
-    internal const int SummaryMaxLength = 120;
     private readonly Dictionary<string, int> _numbers = new(StringComparer.OrdinalIgnoreCase);
     private IReadOnlyList<GoalSummary> _metadata = [];
     private IReadOnlyDictionary<string, AgentRole> _roles = new Dictionary<string, AgentRole>();
     private readonly object _observationGate = new();
-    private Dictionary<string, OwnerQuestion>? _previousQuestions;
+    private readonly OwnerNeedsYouLedger _attention = new();
     private readonly Dictionary<string, bool> _previousHolds = new();
     private readonly List<OwnerConductEvent> _observed = [];
 
@@ -43,11 +42,7 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
         }).ToImmutableArray();
         lock (_observationGate)
         {
-            var live = snapshot.Live.ToDictionary(question => question.ItemId);
-            if (_previousQuestions is not null)
-                foreach (var old in _previousQuestions.Values.Where(question => !live.ContainsKey(question.ItemId)))
-                    Observe(new(clock.GetUtcNow(), "owner-question-resolved", old.GoalId, "question=" + old.Text));
-            _previousQuestions = live;
+            _attention.Observe(snapshot.Live, clock.GetUtcNow());
         }
         return (decisions, snapshot.Hidden.Count);
     }
@@ -79,7 +74,7 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
             }
             foreach (var goal in kernel.Goals.Where(goal => ids.Contains(goal.Id) && IsActive(goal.Status)))
                 board.Add(new(Prefix(goal.Id.Value), await epics.GetTitleAsync(goal.Id.Value, cancellationToken),
-                    OwnerGoalTitle.From(goal.Objective), goal.Status.ToString(),
+                    OwnerGoalTitle.Full(goal.Objective), goal.Status.ToString(),
                     OwnerConsoleGoalDetail.Stage(goal),
                     Age(goal.Timeline.OrderByDescending(item => item.OccurredAt).FirstOrDefault()?.OccurredAt), goal.Id.Value));
         }
@@ -89,9 +84,10 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
     internal OwnerConsoleViewModel WithActivity(OwnerConsoleViewModel model, OwnerConsoleViewInputs inputs)
     {
         OwnerConductEvent[] observed;
-        lock (_observationGate) observed = _observed.ToArray();
+        OwnerAttentionObservation[] attention;
+        lock (_observationGate) { observed = _observed.ToArray(); attention = _attention.Snapshot(); }
         var activity = OwnerActivityNarrator.Narrate(inputs.RecentEvents.Concat(observed)
-            .Select(item => OwnerGoalLifecycleEvent.WithRole(item, _roles)), Title, testEvidence).ToImmutableArray();
+            .Select(item => OwnerGoalLifecycleEvent.WithRole(item, _roles)), Title, testEvidence, attention).ToImmutableArray();
         return model with { Activity = activity, Status = model.Status with
             { LastEventAge = Age(inputs.LastConductEvent), LandedToday = inputs.LandedToday } };
     }
@@ -124,6 +120,6 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
     {
         var line = text.Split(['\r', '\n'], 2)[0];
         line = string.Join(" ", line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-        return line.Length <= SummaryMaxLength ? line : line[..(SummaryMaxLength - 1)] + "…";
+        return line;
     }
 }

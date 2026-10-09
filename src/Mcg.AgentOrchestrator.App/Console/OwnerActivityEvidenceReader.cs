@@ -29,11 +29,13 @@ internal sealed class OwnerActivityEvidenceReader(string databasePath)
             var paths = JsonSerializer.Deserialize<string[]>(reader.GetString(1)) ?? [];
             var own = JsonSerializer.Deserialize<AcceptanceCohortAttributedMember[]>(reader.GetString(2)) ?? [];
             var tests = own.SelectMany(member => member.ReproducedFailingTests).Distinct().ToArray();
-            if (tests.Length == 0) tests = paths.SelectMany(path => AcceptanceTrxFailureReader.Read(path).Failures)
-                .Select(failure => failure.TestName).OfType<string>().Distinct().ToArray();
-            return new(tests, checks, own.Length > 0);
+            var failures = paths.SelectMany(path => AcceptanceTrxFailureReader.Read(
+                Path.GetFullPath(path, Path.GetDirectoryName(Path.GetFullPath(databasePath))!)).Failures).ToArray();
+            if (tests.Length == 0) tests = failures.Select(failure => failure.TestName).OfType<string>().Distinct().ToArray();
+            return new(tests, checks, own.Length > 0,
+                failures.Length == 0 ? null : OwnerGateFailureEvidence.Describe(failures[0]));
         }
-        catch (Exception ex) when (ex is SqliteException or IOException or UnauthorizedAccessException or JsonException)
+        catch (Exception ex) when (ex is SqliteException or IOException or UnauthorizedAccessException or JsonException or ArgumentException)
         { return null; }
     }
 }

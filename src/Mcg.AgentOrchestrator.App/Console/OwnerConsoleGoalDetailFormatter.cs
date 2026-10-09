@@ -20,14 +20,14 @@ internal static class OwnerConsoleGoalDetailFormatter
         output.WriteLine("Tasks:");
         foreach (var task in goal.Tasks) output.WriteLine($"  {task.RequiredRole}: {task.Status}");
         if (goal.CurrentHold is { } hold)
-            output.WriteLine("Waiting on: " + OwnerActivityNarrator.Blocker(hold.Blocker));
+            output.WriteLine("Waiting on: " + OwnerActivityNarrator.WaitingOn(hold.Blocker));
         var roles = goal.Tasks.ToDictionary(task => task.Id.Value, task => task.RequiredRole);
         var events = tail.ReadLast(id, 100)
             .Select(line => OwnerGoalLifecycleEvent.TryParse(line, id, out var item) ? item : null)
             .Where(item => item is not null).Select(item => OwnerGoalLifecycleEvent.WithRole(item!, roles)).ToArray();
         var lines = new List<(DateTimeOffset Time, string Phrase)>();
         foreach (var item in events)
-            if (OwnerActivityNarrator.DetailPhrase(item, title) is { } phrase &&
+            if (OwnerActivityNarrator.StagePhrase(item) is { } phrase &&
                 (lines.Count == 0 || lines[^1].Phrase != phrase)) lines.Add((item.Timestamp, phrase));
         output.WriteLine(lines.Count == 0 ? "Recent events: none" : "Recent events:");
         foreach (var line in lines.TakeLast(10)) output.WriteLine($"  {line.Time.ToLocalTime():HH:mm:ss} {Plain(line.Phrase)}");

@@ -24,6 +24,35 @@ public sealed class OrchestratorProjectRegistry
     public string RegistryPath => Path.Combine(RegistryDirectory, RegistryFileName);
     public string CurrentProjectPath => Path.Combine(RegistryDirectory, CurrentProjectFileName);
 
+    public DefaultProjectStateLocation? GetDefaultStateLocation(string repositoryRoot) =>
+        LoadFile().DefaultProjectStateLocations?.SingleOrDefault(location =>
+            DefaultProjectStateLocation.SameRoot(location.RepositoryRoot, repositoryRoot));
+
+    public void RecordDefaultStateLocation(DefaultProjectStateLocation location)
+    {
+        _ = location.ResolveStateDirectory(DataRootDirectory);
+        var file = LoadFile();
+        file.DefaultProjectStateLocations ??= [];
+        if (file.DefaultProjectStateLocations.Any(existing =>
+            DefaultProjectStateLocation.SameRoot(existing.RepositoryRoot, location.RepositoryRoot)))
+            throw new InvalidOperationException("Default state location is already recorded for this repository.");
+        file.DefaultProjectStateLocations.Add(location with
+        {
+            RepositoryRoot = DefaultProjectStateLocation.CanonicalRoot(location.RepositoryRoot)
+        });
+        SaveFile(file);
+    }
+
+    public void ClearDefaultStateLocation(string repositoryRoot)
+    {
+        var file = LoadFile();
+        if (file.DefaultProjectStateLocations is null) return;
+        file.DefaultProjectStateLocations.RemoveAll(location =>
+            DefaultProjectStateLocation.SameRoot(location.RepositoryRoot, repositoryRoot));
+        if (file.DefaultProjectStateLocations.Count == 0) file.DefaultProjectStateLocations = null;
+        SaveFile(file);
+    }
+
     public static OrchestratorProjectRegistry CreateDefault(Func<string, string?>? readEnvironment = null)
     {
         var configured = (readEnvironment ?? Environment.GetEnvironmentVariable)(RegistryHomeEnvironmentVariable);
@@ -203,6 +232,16 @@ public sealed class OrchestratorProjectRegistry
         var file = JsonSerializer.Deserialize<RegistryFile>(File.ReadAllText(RegistryPath), JsonOptions)
             ?? new RegistryFile();
         file.Projects.RemoveAll(project => string.IsNullOrWhiteSpace(project.Name) || string.IsNullOrWhiteSpace(project.RootDirectory));
+        if (file.DefaultProjectStateLocations is not null)
+        {
+            foreach (var location in file.DefaultProjectStateLocations)
+                _ = location.ResolveStateDirectory(DataRootDirectory);
+            var comparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+            if (file.DefaultProjectStateLocations.Select(location =>
+                DefaultProjectStateLocation.CanonicalRoot(location.RepositoryRoot)).Distinct(comparer).Count() !=
+                file.DefaultProjectStateLocations.Count)
+                throw new InvalidOperationException("Duplicate default state locations for a repository.");
+        }
         return file;
     }
 
@@ -233,6 +272,8 @@ public sealed class OrchestratorProjectRegistry
     private sealed class RegistryFile
     {
         public List<ProjectEntry> Projects { get; set; } = [];
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public List<DefaultProjectStateLocation>? DefaultProjectStateLocations { get; set; }
     }
 
     private sealed class ProjectEntry

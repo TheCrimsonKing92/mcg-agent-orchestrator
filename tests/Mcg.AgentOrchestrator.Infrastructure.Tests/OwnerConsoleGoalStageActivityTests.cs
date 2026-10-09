@@ -45,9 +45,9 @@ public sealed class OwnerConsoleGoalStageActivityTests
             Assert.Equal(new[]
             {
                 $"{time.AddSeconds(3).ToLocalTime():HH:mm:ss} Landed: Console stages (11111111)",
-                $"{time.AddSeconds(2).ToLocalTime():HH:mm:ss} Console stages: passed its tests, landing next",
-                $"{time.AddSeconds(1).ToLocalTime():HH:mm:ss} Tester sent Console stages back: a problem needs correction",
-                $"{time.ToLocalTime():HH:mm:ss} Developer started on Console stages"
+                $"{time.AddSeconds(2).ToLocalTime():HH:mm:ss} 11111111 Console stages: passed its tests, landing next",
+                $"{time.AddSeconds(1).ToLocalTime():HH:mm:ss} 11111111 Tester sent Console stages back: a problem needs correction",
+                $"{time.ToLocalTime():HH:mm:ss} 11111111 Developer started on Console stages"
             }, view.ActivityLines);
 
             Assert.Empty(tail.ReadNew([goal.Id.Value]));

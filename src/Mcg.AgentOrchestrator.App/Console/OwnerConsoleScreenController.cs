@@ -27,8 +27,18 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     internal string? SelectedDecisionId { get; private set; }
     internal bool BellEnabled { get; private set; } = true;
     internal bool QuitRequested { get; private set; }
-    internal Task ShowActivityMeaningAsync(OwnerConsoleActivityItem item) =>
-        dialogs.ShowTextAsync("What this means", OwnerActivityNarrator.Explain(item));
+    internal async Task ShowActivityMeaningAsync(OwnerConsoleActivityItem item, OwnerConsoleScreenOperation? operation = null,
+        CancellationToken cancellationToken = default)
+    {
+        IReadOnlyList<OwnerConsoleDecision> live = [];
+        if (!await RunDependencyAsync("activity decision state", async stepToken =>
+        {
+            var snapshot = await questions.ReadAsync(stepToken);
+            live = Model?.Decisions.Where(decision => snapshot.Live.Contains(decision.ToQuestion())).ToArray() ?? [];
+        }, operation, cancellationToken)) return;
+        cancellationToken.ThrowIfCancellationRequested();
+        await dialogs.ShowTextAsync("What this means", OwnerActivityNarrator.Explain(item, live));
+    }
     internal int SelectedIndex => Model is null ? -1 :
         Array.FindIndex(Model.Decisions.ToArray(), item => item.Id == SelectedDecisionId);
 

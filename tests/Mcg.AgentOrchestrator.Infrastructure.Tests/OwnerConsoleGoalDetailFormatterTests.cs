@@ -50,13 +50,45 @@ public sealed class OwnerConsoleGoalDetailFormatterTests
         foreach (var task in goal.Tasks) Assert.Single(lines, line => line == $"  {task.RequiredRole}: {task.Status}");
         Assert.Contains("Waiting on: waiting for your approval", text);
         Assert.Equal(100, tail.Count);
-        Assert.Single(lines, line => line.EndsWith("Developer started on Readable detail", StringComparison.Ordinal));
-        Assert.Contains($"  {time.ToLocalTime():HH:mm:ss} Developer started on Readable detail", text);
+        Assert.Single(lines, line => line.EndsWith("Developer started", StringComparison.Ordinal));
+        Assert.Contains($"  {time.ToLocalTime():HH:mm:ss} Developer started", text);
+        Assert.DoesNotContain(lines.SkipWhile(line => line != "Recent events:"), line => line.Contains("Readable detail"));
         Assert.DoesNotContain("{", text);
         Assert.DoesNotContain("}", text);
         Assert.DoesNotContain("\"eventKind\"", text);
         Assert.DoesNotContain("secret", text);
         Assert.DoesNotContain("evidence", text);
+    }
+
+    [Fact]
+    public async Task RecordedHoldQuestionIsShownInDetailAndRecentEventsOmitTheTitle()
+    {
+        var harness = new OwnerConsoleHarness();
+        var goal = harness.AddGoal("11111111", "Recovery for export", AgentRole.Developer);
+        var snapshot = harness.Kernel.ExportSnapshot();
+        harness.Kernel.ReplaceWithSnapshot(snapshot with { Goals = snapshot.Goals.Select(item => item with
+        {
+            CurrentHold = new GoalHoldSnapshot("hold", "author-owner-question",
+                "author-owner-question item=Goal:11111111 reason=choose recovery question=Retry the export lane? recommendation=Retry with evidence",
+                harness.Clock.GetUtcNow())
+        }).ToArray() });
+        var tail = new Tail([JsonSerializer.Serialize(new { timestamp = harness.Clock.GetUtcNow(), eventType = "TaskDispatched",
+            taskId = goal.Tasks.Single().Id.Value })]);
+        var dialogs = new Dialogs();
+        var controller = new OwnerConsoleScreenController(harness.Questions, harness.Answers, dialogs,
+            harness.State, tail, harness.Conductor, harness.DigestReport, harness.Digest, harness.Clock);
+        using IApplication app = Terminal.Gui.App.Application.Create();
+        using var view = new OwnerConsoleFullScreenView(app, controller, () => Task.CompletedTask);
+        var builder = new OwnerConsoleViewModelBuilder(harness.State, harness.Questions, harness.Liveness, new Epics(), harness.Clock);
+        view.Render(await builder.BuildAsync(new(harness.Clock.GetUtcNow(), null, [], 0)));
+        await view.HandleKeyAsync(Key.Tab);
+        await view.HandleKeyAsync(Key.Enter);
+        var text = Assert.Single(dialogs.Texts);
+        Assert.Contains("Waiting on: Retry the export lane?", text);
+        Assert.DoesNotContain("a blocker needs review", text);
+        var recent = text.Split(Environment.NewLine).SkipWhile(line => line != "Recent events:").Skip(1).ToArray();
+        Assert.Contains(recent, line => line.EndsWith("Developer started", StringComparison.Ordinal));
+        Assert.DoesNotContain(recent, line => line.Contains("Recovery for export", StringComparison.Ordinal));
     }
 
     [Fact]

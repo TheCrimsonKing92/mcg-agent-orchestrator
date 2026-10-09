@@ -68,11 +68,13 @@ public sealed class GoalAcceptanceVerifierSplitFactParityTests
             OriginalSplitFragments);
         Assert.All(
             buildSlotFragments,
-            // The root-isolation guard reuses the scenario builder without the job-accounting scenarios.
-            // Its DotnetBuildSlots fixture owns the isolated root; all other subclasses keep JobAccounting.
+            // Both root-isolation guards reuse the scenario builder without job-accounting scenarios.
+            // Each keeps its own isolated-root fixture; all other subclasses keep JobAccounting.
             fragment => Assert.Equal(
                 fragment == typeof(GoalWorktreeAcceptanceContentionTestsScenarioHostRootIsolation)
                     ? TestCollections.DotnetBuildSlots
+                    : fragment == typeof(GoalAcceptanceLaneIsolatedRootGuardTests)
+                        ? "IsolatedProcessSpawning"
                     : TestCollections.JobAccounting,
                 CollectionName(fragment)));
         Assert.Equal(TestCollections.JobAccounting, CollectionName(typeof(RealProcessShardAlphaSmokeTests)));

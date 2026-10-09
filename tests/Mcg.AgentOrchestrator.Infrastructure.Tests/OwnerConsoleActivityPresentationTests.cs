@@ -36,8 +36,8 @@ public sealed class OwnerConsoleActivityPresentationTests
 
             Assert.Equal(new[]
             {
-                $"{passed.Timestamp.ToLocalTime():HH:mm:ss} Improve the owner console: passed its tests, landing next",
-                $"{escalation.Timestamp.ToLocalTime():HH:mm:ss} Waiting: Improve the owner console has been held 0 min: waiting for your approval"
+                $"{passed.Timestamp.ToLocalTime():HH:mm:ss} 11111111 Improve the owner console: passed its tests, landing next",
+                $"{escalation.Timestamp.ToLocalTime():HH:mm:ss} 11111111 Waiting: Improve the owner console has been held 0 min: owner review required"
             }, view.ActivityLines);
             Assert.Equal(2, recent.Count);
             Assert.DoesNotContain(view.ActivityLines, line => line.Contains("STATE_LOG_DIVERGENCE", StringComparison.Ordinal));
@@ -70,10 +70,10 @@ public sealed class OwnerConsoleActivityPresentationTests
     }
 
     [Theory]
-    [InlineData("author", "kind=ask-owner item=internal-id", "Needs you: Review the blocked work and choose how to proceed.")]
+    [InlineData("author", "kind=ask-owner item=internal-id", "unknown- question sent to the operator: the conductor reported a hold on unknown-")]
     [InlineData("acceptance", "result=failed code=1", "unknown-: failed its tests (the failure reason has not been recorded); awaiting the conductor's next step")]
     [InlineData("acceptance", "result=blocked reason=missing_evidence", "unknown-: failed its tests (the failure reason has not been recorded); awaiting the conductor's next step")]
-    [InlineData("goal-escalation", "ownerless-hold-stalled state=blocked heldForSeconds=30 blocker=waiting for owner approval", "Waiting: unknown- has been held 0 min: waiting for your approval")]
+    [InlineData("goal-escalation", "ownerless-hold-stalled state=blocked heldForSeconds=30 blocker=waiting for owner approval", "Waiting: unknown- has been held 0 min: waiting for owner approval")]
     public async Task StructuredEventsRenderPlainPhrasesWithoutRawFields(string kind, string detail, string phrase)
     {
         var harness = new OwnerConsoleHarness();
@@ -83,7 +83,8 @@ public sealed class OwnerConsoleActivityPresentationTests
         Assert.Equal(phrase, activity.Phrase);
         Assert.Equal("unknown-", activity.GoalTitle);
         Assert.Equal(detail, activity.Detail);
-        Assert.Equal($"{item.Timestamp.ToLocalTime():HH:mm:ss} {phrase}", OwnerActivityNarrator.Line(activity));
+        Assert.Equal($"{item.Timestamp.ToLocalTime():HH:mm:ss} " + (phrase.Contains("unknown-") ? "" : "unknown- ") + phrase,
+            OwnerActivityNarrator.Line(activity));
     }
 
     // Matches FormatOwnerReviewEscalation, including its multiline command payload.
@@ -93,10 +94,10 @@ public sealed class OwnerConsoleActivityPresentationTests
         "decline: cancel-goal 11111111 or abandon-goal 11111111";
 
     [Theory]
-    [InlineData(OwnerReviewDetail, "Needs you: Approve the completed work?")]
-    [InlineData("steward-owner-question case=C trigger=internal-trigger question=Should we retry this task? evidence=[internal-evidence]", "Needs you: Should we retry this task?")]
-    [InlineData("author-owner-question item=Goal:internal-goal reason=choose recovery question=Should we retry? recommendation=Retry with evidence", "Needs you: Should we retry?")]
-    [InlineData("unrecognized-escalation raw payload with commands and evidence", "Needs you: Review the blocked work and choose how to proceed.")]
+    [InlineData(OwnerReviewDetail, "11111111 escalated: approval of the completed work")]
+    [InlineData("steward-owner-question case=C trigger=internal-trigger question=Should we retry this task? evidence=[internal-evidence]", "11111111 escalated: Should we retry this task?")]
+    [InlineData("author-owner-question item=Goal:internal-goal reason=choose recovery question=Should we retry? recommendation=Retry with evidence", "11111111 question sent to the operator: Should we retry?")]
+    [InlineData("unrecognized-escalation raw payload with commands and evidence", "11111111 escalated: the conductor reported a hold on Improve the owner console")]
     public async Task EscalationPayloadsStayOutOfGoalDetail(string detail, string phrase)
     {
         var harness = new OwnerConsoleHarness();
@@ -118,7 +119,7 @@ public sealed class OwnerConsoleActivityPresentationTests
     }
 
     [Theory]
-    [InlineData("goal-escalation", OwnerReviewDetail, "Needs you: Approve the completed work?")]
+    [InlineData("goal-escalation", OwnerReviewDetail, "escalated: approval of the completed work")]
     [InlineData("acceptance", "result=passed commit=internal-sha", "passed its tests, landing next")]
     public async Task LongGoalTitlesLeaveTheActivityPhraseVisible(string kind, string detail, string phrase)
     {
@@ -131,6 +132,7 @@ public sealed class OwnerConsoleActivityPresentationTests
         using IApplication app = Terminal.Gui.App.Application.Create();
         using var view = new OwnerConsoleFullScreenView(app, controller, () => Task.CompletedTask);
         view.Render(await Builder(harness).BuildAsync(new(harness.Clock.GetUtcNow(), null, [item], 0)));
+        view.Fit(118, 40);
 
         var line = Assert.Single(view.ActivityLines);
         Assert.Contains(phrase, line[..Math.Min(118, line.Length)]);

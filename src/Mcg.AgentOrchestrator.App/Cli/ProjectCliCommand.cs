@@ -15,11 +15,22 @@ internal static class ProjectCliCommand
         string defaultRootDirectory,
         string? activeProjectOverride,
         TextWriter? discoveryOutput = null,
-        Func<IUnitCommandMeasurer>? measurerFactory = null)
+        Func<IUnitCommandMeasurer>? measurerFactory = null,
+        Func<DefaultStateMover>? defaultStateMoverFactory = null)
     {
         var subcommand = parts.Count > 1 ? parts[1].ToLowerInvariant() : "show";
         switch (subcommand)
         {
+            case "move-default-state":
+                if (parts.Skip(2).Any(part => part is not "--undo" and not "--dry-run"))
+                    throw new ArgumentException("Usage: project move-default-state [--undo] [--dry-run]");
+                var mover = defaultStateMoverFactory?.Invoke() ?? new DefaultStateMover(defaultRootDirectory, registry);
+                var result = parts.Contains("--undo") ? mover.Undo(parts.Contains("--dry-run")) : mover.Move(parts.Contains("--dry-run"));
+                var output = discoveryOutput ?? Console.Out;
+                foreach (var line in result.PlanLines) output.WriteLine(line);
+                foreach (var reason in result.Refusals) output.WriteLine($"Refused: {reason}");
+                return result.ExitCode;
+
             case "list":
                 PrintList(registry, defaultRootDirectory, activeProjectOverride);
                 return 0;
@@ -41,7 +52,7 @@ internal static class ProjectCliCommand
                 return 0;
 
             default:
-                throw new ArgumentException("Usage: project list|show [name]|discover [name] [--root <path>] [--measure build|test|all]|create <name> --root <path> [--integration-branch <name>] [--relocate-state]|select <name>");
+                throw new ArgumentException("Usage: project list|show [name]|discover [name] [--root <path>] [--measure build|test|all]|create <name> --root <path> [--integration-branch <name>] [--relocate-state]|select <name>|move-default-state [--undo] [--dry-run]");
         }
     }
 
