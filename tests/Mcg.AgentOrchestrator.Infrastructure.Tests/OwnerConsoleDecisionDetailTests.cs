@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Mcg.AgentOrchestrator.App.OwnerConsole;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -21,7 +22,7 @@ public sealed class OwnerConsoleDecisionDetailTests
         Assert.Contains("Full context", string.Join("\n", dialog.Lines));
         session.Controller.SelectIndex(1); // The modal answers its own row, even after selection changes.
 
-        await dialog.HandleKeyAsync(new Key('r'));
+        await session.HandleKeyAsync(new Key('r'));
 
         Assert.Equal(("q1", "owner answer"), Assert.Single(session.Harness.Answers.Calls));
         var queued = AnswerIntentStatusTracker.Queued(1, "11111111");
@@ -41,7 +42,7 @@ public sealed class OwnerConsoleDecisionDetailTests
         session.Dialogs.Confirmed = confirmed;
         await session.OpenAsync();
 
-        await session.Dialog.HandleKeyAsync(new Key('a'));
+        await session.HandleKeyAsync(new Key('a'));
 
         Assert.Equal(1, session.Dialogs.ConfirmCalls);
         Assert.Equal("ship", session.Dialogs.ConfirmationText);
@@ -58,10 +59,10 @@ public sealed class OwnerConsoleDecisionDetailTests
         await session.OpenAsync();
         Assert.Equal(["Answer (r)", "Close"], session.Dialog.Actions);
         Assert.DoesNotContain("a accept default", session.Dialog.HintText);
-        await session.Dialog.HandleKeyAsync(new Key('a'));
+        await session.HandleKeyAsync(new Key('a'));
         Assert.Equal(0, session.Dialogs.ConfirmCalls);
-        await session.Dialog.HandleKeyAsync(new Key('?'));
-        Assert.DoesNotContain("a:", session.Dialogs.Texts.Last().Text);
+        await session.HandleKeyAsync(new Key('?'));
+        Assert.DoesNotContain(session.Dialogs.Texts.Last().Text.Split('\n'), line => line.StartsWith("a:", StringComparison.Ordinal));
 
         session.Harness.Questions.Items[0] = session.Harness.Questions.Items[0] with
         { Text = "Updated question", ProposedDefault = "wait" };
@@ -70,7 +71,7 @@ public sealed class OwnerConsoleDecisionDetailTests
         Assert.Contains("Updated question", string.Join("\n", session.Dialog.Lines));
         Assert.Contains("default: wait", string.Join("\n", session.Dialog.Lines));
         Assert.Contains("Accept default (a)", session.Dialog.Actions);
-        await session.Dialog.HandleKeyAsync(new Key('?'));
+        await session.HandleKeyAsync(new Key('?'));
         Assert.Contains("a: Accept", session.Dialogs.Texts.Last().Text);
         session.Harness.Questions.Items[0] = session.Harness.Questions.Items[0] with { ProposedDefault = null };
         await session.RefreshAsync();
@@ -161,7 +162,7 @@ public sealed class OwnerConsoleDecisionDetailTests
             else session.Harness.Questions.Items.Clear();
         };
         await session.OpenAsync();
-        await session.Dialog.HandleKeyAsync(new Key('r'));
+        await session.HandleKeyAsync(new Key('r'));
         Assert.Empty(session.Harness.Answers.Calls);
         Assert.Equal(expected, session.Dialog.NoticeText);
         Assert.Equal(expected, Assert.Single(session.Dialogs.Texts).Text);
@@ -176,10 +177,11 @@ public sealed class OwnerConsoleDecisionDetailTests
         await using var session = new Session(answers);
         session.AddQuestion("q1", "Ship?", "ship");
         await session.OpenAsync();
-        await session.Dialog.HandleKeyAsync(new Key('r'));
+        await session.HandleKeyAsync(new Key('r'));
         Assert.Equal(AnswerIntentStatusTracker.Queued(1, "11111111"), session.Dialog.NoticeText);
         answers.Release.TrySetResult();
         await session.Tracker.WhenIdle().WaitAsync(TestContext.Current.CancellationToken);
+        session.Dialogs.Dispatch.Drain();
         var expected = status == OperatorIntentStatus.Applied ? AnswerIntentStatusTracker.Applied(1, "11111111") :
             AnswerIntentStatusTracker.Rejected(1, "11111111", "duplicate answer");
         Assert.Equal(expected, session.Dialog.NoticeText);
@@ -203,22 +205,27 @@ public sealed class OwnerConsoleDecisionDetailTests
                 await release.Task; // Intentionally ignores cancellation to test the late-result guard.
                 return null;
             }, _ => Task.CompletedTask);
-        using var dialog = new OwnerConsoleDecisionDialog(detail, action => action());
+        var dispatch = new UiDispatchQueue();
+        using var dialog = new OwnerConsoleDecisionDialog(detail, dispatch.Enqueue);
         var closed = false;
         dialog.Closed += () => closed = true;
         detail.Observe(null);
         try
         {
             await entered.Task.WaitAsync(TestContext.Current.CancellationToken);
+            Assert.Equal("", dialog.BannerText); // Background reads cannot render before the UI dispatch.
+            dispatch.Drain();
             Assert.Contains("reading how it was resolved", dialog.BannerText);
             Assert.Equal(["Close"], dialog.Actions);
             detail.Observe(null); // Coalesce a refresh while the read is held.
             Assert.Equal(1, reads);
+            dispatch.Drain();
             await dialog.HandleKeyAsync(Key.Esc);
             Assert.True(closed);
             var banner = dialog.BannerText;
             detail.Dispose();
             await detail.LastRefresh.WaitAsync(TestContext.Current.CancellationToken);
+            dispatch.Drain();
             Assert.Equal(banner, dialog.BannerText);
         }
         finally { release.TrySetResult(); }
@@ -229,14 +236,16 @@ public sealed class OwnerConsoleDecisionDetailTests
         Assert.Equal(["Close"], session.Dialog.Actions);
         Assert.DoesNotContain("r answer", session.Dialog.HintText);
         Assert.DoesNotContain("a accept default", session.Dialog.HintText);
-        await session.Dialog.HandleKeyAsync(new Key('r'));
-        await session.Dialog.HandleKeyAsync(new Key('a'));
+        await session.HandleKeyAsync(new Key('r'));
+        await session.HandleKeyAsync(new Key('a'));
         Assert.Equal(0, session.Dialogs.PromptCalls);
         Assert.Equal(0, session.Dialogs.ConfirmCalls);
         Assert.Empty(session.Harness.Answers.Calls);
-        await session.Dialog.HandleKeyAsync(new Key('?'));
-        Assert.DoesNotContain("r:", session.Dialogs.Texts.Last().Text);
-        Assert.DoesNotContain("a:", session.Dialogs.Texts.Last().Text);
+        await session.HandleKeyAsync(new Key('?'));
+        var helpLines = session.Dialogs.Texts.Last().Text.Split('\n');
+        Assert.DoesNotContain(helpLines, line => line.StartsWith("r:", StringComparison.Ordinal));
+        Assert.DoesNotContain(helpLines, line => line.StartsWith("a:", StringComparison.Ordinal));
+        Assert.Contains("Enter: Activate the focused button.", helpLines);
         Assert.Contains("Esc: Close", session.Dialogs.Texts.Last().Text);
     }
 
@@ -275,6 +284,12 @@ public sealed class OwnerConsoleDecisionDetailTests
                 Harness.Liveness, new Epics(), Harness.Clock).BuildAsync(new(Harness.Clock.GetUtcNow(), null, [], 0));
             View.Render(model);
             if (Dialogs.Dialog is { } dialog) await dialog.LastRefresh.WaitAsync(TestContext.Current.CancellationToken);
+            Dialogs.Dispatch.Drain();
+        }
+        internal async Task HandleKeyAsync(Key key)
+        {
+            await Dialog.HandleKeyAsync(key);
+            Dialogs.Dispatch.Drain();
         }
         public async ValueTask DisposeAsync()
         {
@@ -286,6 +301,7 @@ public sealed class OwnerConsoleDecisionDetailTests
 
     private sealed class LiveDialogs : IOwnerConsoleDialogs
     {
+        internal readonly UiDispatchQueue Dispatch = new();
         internal readonly TaskCompletionSource Entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal readonly TaskCompletionSource Close = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal OwnerConsoleDecisionDialog? Dialog;
@@ -297,7 +313,7 @@ public sealed class OwnerConsoleDecisionDetailTests
         internal readonly List<(string Title, string Text)> Texts = [];
         public async Task ShowDecisionAsync(OwnerConsoleDecisionDetail detail)
         {
-            using var dialog = Dialog = new(detail, action => action());
+            using var dialog = Dialog = new(detail, Dispatch.Enqueue);
             dialog.Closed += () => Close.TrySetResult();
             Entered.TrySetResult();
             await Close.Task;
@@ -308,6 +324,17 @@ public sealed class OwnerConsoleDecisionDetailTests
         { ConfirmCalls++; ConfirmationText = text; return Task.FromResult(Confirmed); }
         public Task ShowTextAsync(string title, string text)
         { Texts.Add((title, text)); return Task.CompletedTask; }
+    }
+
+    // Like app.Invoke, callbacks are queued; only the test's UI pump renders them.
+    private sealed class UiDispatchQueue
+    {
+        private readonly ConcurrentQueue<Action> _pending = new();
+        internal void Enqueue(Action action) => _pending.Enqueue(action);
+        internal void Drain()
+        {
+            while (_pending.TryDequeue(out var action)) action();
+        }
     }
 
     private sealed class TrackedAnswers(OperatorIntentStatus status) : IOwnerAnswerSubmitter
