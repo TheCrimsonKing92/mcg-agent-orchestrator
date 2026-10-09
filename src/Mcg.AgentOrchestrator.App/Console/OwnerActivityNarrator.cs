@@ -33,9 +33,21 @@ internal static class OwnerActivityNarrator
 
     internal static IReadOnlyList<OwnerConsoleActivityItem> Narrate(IEnumerable<OwnerConductEvent> events,
         Func<string?, string> title, Func<OwnerConductEvent, OwnerActivityTestEvidence?>? evidence = null,
-        IReadOnlyList<OwnerAttentionObservation>? attention = null)
+        IReadOnlyList<OwnerAttentionObservation>? attention = null, Func<OwnerConductEvent, string?>? finding = null)
     {
         var ordered = events.Where(Maps).Distinct().OrderBy(item => item.Timestamp).ToArray();
+        var questionRoutes = new Dictionary<OwnerConductEvent, OwnerConductEvent>();
+        var foldedAuthors = new HashSet<OwnerConductEvent>();
+        foreach (var observation in ordered.Where(item => item.EventKind == "goal-escalation" && Head(item) == "author-owner-question"))
+        {
+            var candidates = ordered.Where(item => item.EventKind == "author" && !foldedAuthors.Contains(item) &&
+                Prefix(item.GoalId) == Prefix(observation.GoalId) && SameQuestion(item, observation)).ToArray();
+            var route = candidates.Where(item => item.Timestamp <= observation.Timestamp).MaxBy(item => item.Timestamp) ??
+                candidates.MinBy(item => item.Timestamp);
+            if (route is null) continue;
+            questionRoutes[observation] = route;
+            foldedAuthors.Add(route);
+        }
         var result = new List<OwnerConsoleActivityItem>();
         var held = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var landed = new HashSet<OwnerConductEvent>();
@@ -74,7 +86,7 @@ internal static class OwnerActivityNarrator
             switch (item.EventKind)
             {
                 case "goal-lifecycle":
-                    if (DetailPhrase(item, name) is { } stage)
+                    if (DetailPhrase(item, name, finding?.Invoke(item)) is { } stage)
                         Add(item, stage, FailureReason(item) is { } rejection ? "plan rejected: " + rejection : head == "TaskFailed" ? Field(item, "outcome") == "finding" ?
                             "The worker reported a blocking finding." : "The worker could not finish its task." :
                             "The work reached this stage.", head == "TaskFailed" ? Field(item, "outcome") == "finding" ?
@@ -84,6 +96,7 @@ internal static class OwnerActivityNarrator
                 case "owner-question-resolved": break; // Only removal from the live read model resolves owner attention.
                 case "author":
                 case "goal-escalation":
+                    if (foldedAuthors.Contains(item)) break;
                     if (head == "ownerless-hold-stalled") { if (!held.Contains(prefix)) Stall(item); break; }
                     var question = OwnerHoldReason.FirstLine(Field(item, "question"));
                     if (attention?.Any(entry => Prefix(entry.Question.GoalId) == prefix && question is not null &&
@@ -91,14 +104,24 @@ internal static class OwnerActivityNarrator
                     var rawReason = Field(item, "reason");
                     var authorQuestion = item.EventKind == "goal-escalation" && question is null &&
                         OwnerEscalationReasonText.IsAuthorQuestion(rawReason);
+                    if (!authorQuestion && (head == "author-owner-question" || item.EventKind == "author"))
+                    {
+                        var routing = questionRoutes.GetValueOrDefault(item) ?? item;
+                        var recipient = QuestionRecipient(Field(routing, "recipient") ?? Field(routing, "reason") ??
+                            Field(item, "recipient") ?? Field(item, "reason"));
+                        var lead = prefix + " question for " + recipient + (question is null ? " " : ": ");
+                        var text = question is null ? "about " + name : Words(question, "");
+                        Add(item, lead + text, text, "The conductor or operator will handle the next step.",
+                            spans: question is null ? SingleTitle(name, lead.Length + "about ".Length) : null);
+                        break;
+                    }
                     var subject = FailureReason(item) is { } plan ? "plan rejected: " + plan :
                         question is not null ? Words(question, "") : head == "owner-review-hold" ? "approval of the completed work" :
                         OwnerEscalationReasonText.Plain(rawReason, "the conductor reported a hold on " + name, Words,
                             task => ordered.Take(index).LastOrDefault(value => value.EventKind == "goal-lifecycle" &&
                                 Prefix(value.GoalId) == prefix && Field(value, "task")?.StartsWith(task, StringComparison.OrdinalIgnoreCase) == true)
                                 is { } worker ? Role(worker) : null);
-                    Add(item, prefix + (authorQuestion ? " " : head == "author-owner-question" || item.EventKind == "author" ?
-                        " question sent to the operator: " : " escalated: ") + subject, subject,
+                    Add(item, prefix + (authorQuestion ? " " : " escalated: ") + subject, subject,
                         authorQuestion ? "The Author will handle the question." : "The conductor or operator will handle the next step.");
                     if (authorQuestion && ordered.Skip(index + 1).FirstOrDefault(value => value.Timestamp > item.Timestamp && value.EventKind == "goal-lifecycle" &&
                         Prefix(value.GoalId) == prefix && Field(value, "resolution-verb") == "answer" &&
@@ -280,10 +303,10 @@ internal static class OwnerActivityNarrator
         _ => null
     };
 
-    internal static string? DetailPhrase(OwnerConductEvent item, string title) => DetailLead(item) is { } lead
+    internal static string? DetailPhrase(OwnerConductEvent item, string title, string? finding = null) => DetailLead(item) is { } lead
         ? lead + title + (Head(item) == "TaskFailed" ? " back: " + (FailureReason(item) is { } rejected
-            ? "plan rejected: " + rejected : Field(item, "outcome") == "finding"
-                ? "a problem needs correction" : "the worker could not finish") : "") : null;
+            ? "plan rejected: " + rejected : OwnerHoldReason.FirstLine(finding) ?? (Field(item, "outcome") == "finding"
+                ? "a problem needs correction" : "the worker could not finish")) : "") : null;
 
     private static OwnerConsoleTitleSpan TitleSpan(string title, int start, int trailingLength = 0)
     {
@@ -364,6 +387,27 @@ internal static class OwnerActivityNarrator
         "operator" or "owner" or "owner-console" or "miles" => "the operator",
         _ => actor
     };
+
+    private static string QuestionRecipient(string? token) => token?.ToLowerInvariant() switch
+    {
+        { } value when value.Contains("operator", StringComparison.Ordinal) => "the operator",
+        { } value when value.Contains("owner", StringComparison.Ordinal) => "you",
+        _ => "the Author"
+    };
+
+    private static bool SameQuestion(OwnerConductEvent author, OwnerConductEvent observation)
+    {
+        var left = Field(author, "question-id") ?? Field(author, "item");
+        var right = Field(observation, "question-id") ?? Field(observation, "item");
+        // Author item identities include a goal prefix; question observations omit that prefix.
+        if (left is not null && right is not null)
+            return left.Equals(right, StringComparison.OrdinalIgnoreCase) ||
+                left.Equals(author.GoalId + ":" + right, StringComparison.OrdinalIgnoreCase);
+        var agent = Field(author, "agent");
+        var observedAgent = Field(observation, "agent");
+        return (agent is null || observedAgent is null || agent.Equals(observedAgent, StringComparison.OrdinalIgnoreCase)) &&
+            author.Timestamp <= observation.Timestamp;
+    }
 
     internal static string WaitingOn(string? value)
     {
