@@ -94,6 +94,10 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
 
     private OwnerConsoleDecision? Selected() => Model?.Decisions.FirstOrDefault(item => item.Id == SelectedDecisionId);
 
+    internal OwnerConsoleDecision? SelectedDecision => Selected();
+
+    internal static bool AnswersInConsole(OwnerConsoleDecision decision) => decision.Kind != OwnerQuestionKind.StewardHold;
+
     internal Task ShowHelpAsync() => dialogs.ShowTextAsync("Help", OwnerConsoleKeyHints.HelpText);
 
     internal Task ShowDecisionAsync(OwnerConsoleDecision decision) => ShowDecisionAsync(decision, null, CancellationToken.None);
@@ -155,7 +159,7 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     {
         var decision = target ?? Selected();
         if (decision is null) return;
-        if (decision.Kind == OwnerQuestionKind.StewardHold)
+        if (!AnswersInConsole(decision))
         {
             await ShowNoticeAsync("View only", $"Steward questions are answered through goal verbs for now; use the CLI retry/adjudicate commands for goal {decision.GoalId}.");
             return;
@@ -238,7 +242,10 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
                     if (parts.Length != 2) { output.WriteLine("usage: goal <id-prefix>"); break; }
                     goalId = await OwnerConsoleGoalDetail.ResolveAsync(state, parts[1], output, stepToken);
                     break;
-                default: output.WriteLine("unknown command"); break;
+                default:
+                    output.WriteLine("unknown command");
+                    output.WriteLine("valid commands: " + OwnerConsoleKeyHints.CommandPrompt);
+                    break;
             }
         }
     }
