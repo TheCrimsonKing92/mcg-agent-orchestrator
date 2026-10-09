@@ -197,17 +197,21 @@ internal static partial class FocusedEvidenceRequestResolver
         var built = new List<AcceptanceManifestCheck>();
         foreach (var item in planned)
         {
+            var usesDeclaredVstestCheck = VstestFocusedEvidenceCheckShape.TryResolve(
+                item.Project, engineSettings, out var declaringCheck);
             var check = new AcceptanceManifestCheck
             {
                 Name = item.Filter is null
                     ? $"reviewer mapped project evidence: {GoalAcceptanceVerifier.ProjectLabel(item.Project)}"
                     : $"reviewer focused evidence: {GoalAcceptanceVerifier.ProjectLabel(item.Project)} {item.Filter.CanonicalText}",
                 Type = "dotnet-test",
-                // Focused-evidence checks are synthesized from a referenced project, so runner selection
-                // follows that project's declaration just like policy and impact-plan checks.
-                Runner = GoalAcceptanceVerifier.ResolveDotnetTestRunner(worktreePath, item.Project),
+                Runner = usesDeclaredVstestCheck
+                    ? "vstest"
+                    : GoalAcceptanceVerifier.ResolveDotnetTestRunner(worktreePath, item.Project),
                 Project = item.Project,
-                Arguments = item.Filter is null
+                Arguments = usesDeclaredVstestCheck
+                    ? VstestFocusedEvidenceCheckShape.Arguments(declaringCheck, item.Filter?.CanonicalText)
+                    : item.Filter is null
                     ? ["--verbosity", "minimal"]
                     : ["--verbosity", "minimal", "--filter", item.Filter.CanonicalText],
                 FocusedEvidenceTokens = item.Filter?.Tokens ?? [],
@@ -216,7 +220,9 @@ internal static partial class FocusedEvidenceRequestResolver
                     .ToArray(),
                 IsFocusedEvidenceSelection = item.Filter is not null,
                 FocusedEvidenceMatchedClasses = budget.For(item.Project, item.SelectionFilters),
-                TimeoutMinutes = budget.TargetCount <= GoalAcceptanceVerifier.FocusedEvidenceShortTimeoutTargetLimit ? 10 : null
+                TimeoutMinutes = usesDeclaredVstestCheck
+                    ? declaringCheck.TimeoutMinutes
+                    : budget.TargetCount <= GoalAcceptanceVerifier.FocusedEvidenceShortTimeoutTargetLimit ? 10 : null
             };
             built.Add(check);
         }
@@ -440,7 +446,8 @@ internal static partial class FocusedEvidenceRequestResolver
             return true;
         }
 
-        return DeclaredTestProjectInventory.TryResolve(normalized, engineSettings, out project);
+        return DeclaredTestProjectInventory.TryResolve(
+            normalized, engineSettings, out project, engineSettings?.DeclaredDotnetTestChecks);
     }
 
     private static bool TryNormalizeFocusedEvidenceFilter(

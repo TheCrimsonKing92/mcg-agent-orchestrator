@@ -318,7 +318,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     internal const int MaxFocusedEvidenceFilterLength = 1024;
     internal static string FocusedEvidenceSupportedProjectForms(
         AcceptanceGateEngineSettings? engineSettings) =>
-        DeclaredTestProjectInventory.DescribeSupportedProjectForms(engineSettings);
+        DeclaredTestProjectInventory.DescribeSupportedProjectForms(engineSettings, engineSettings?.DeclaredDotnetTestChecks);
     internal const int FocusedEvidenceShortTimeoutTargetLimit = 4;
     internal const int MaxFailureAttributionFocusedEvidenceIdentities = FocusedEvidenceShortTimeoutTargetLimit;
     public const string AcceptanceAttemptTrxPrefixVariable = "MCG_ACCEPTANCE_GATE_ATTEMPT_TRX_PREFIX";

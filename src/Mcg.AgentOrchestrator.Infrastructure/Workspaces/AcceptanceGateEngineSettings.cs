@@ -1,4 +1,6 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using AcceptanceManifestCheck = Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier.AcceptanceManifestCheck;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -14,6 +16,8 @@ internal sealed class AcceptanceGateEngineSettings
 
     public IReadOnlyList<AcceptanceTestLane> InfrastructureTestLanes { get; init; } = [];
     public IReadOnlyList<AcceptanceMtpInvocation> MtpInvocations { get; init; } = [];
+    [JsonIgnore]
+    public IReadOnlyList<AcceptanceManifestCheck> DeclaredDotnetTestChecks { get; private set; } = [];
     public AcceptanceGateTimeoutSettings Timeouts { get; init; } = new();
     public int MaxConcurrentShards { get; init; } = 1;
     public bool EnforceStructuralCoverage { get; init; }
@@ -34,13 +38,15 @@ internal sealed class AcceptanceGateEngineSettings
     internal static AcceptanceGateEngineSettings Parse(string manifestJson)
     {
         using var document = JsonDocument.Parse(manifestJson);
+        var checks = CheckDeclaredTestProjects.Read(document.RootElement);
         if (!document.RootElement.TryGetProperty("engine", out var engineElement))
         {
-            return new AcceptanceGateEngineSettings();
+            return new AcceptanceGateEngineSettings { DeclaredDotnetTestChecks = checks };
         }
 
         var settings = engineElement.Deserialize<AcceptanceGateEngineSettings>(JsonOptions)
             ?? throw new InvalidDataException("Acceptance manifest engine settings could not be read.");
+        settings.DeclaredDotnetTestChecks = checks;
         settings.Validate();
         return settings;
     }
