@@ -104,10 +104,16 @@
       },
       {
         "name": "Dotnet build slots",
-        "filter": "FullyQualifiedName~GoalWorktreeAcceptanceContentionTests|FullyQualifiedName~WorkerDispatchAcceptanceAdmissionTests|FullyQualifiedName~ConductorCrossTickTests|FullyQualifiedName~DependencyOrderingRegressionTests|FullyQualifiedName~ConductorBatchLoopTests|FullyQualifiedName~OperatorIntentAdjudicationTests|FullyQualifiedName~DotnetBuildEnvironmentManagerTests|FullyQualifiedName~LocalProcessVerifierDotnetBuildSlotTests|FullyQualifiedName~LocalProcessVerifierStaticHookTests|FullyQualifiedName~StructuralCoveragePermitWaitTests",
+        "filter": "(FullyQualifiedName~GoalWorktreeAcceptanceContentionTests|FullyQualifiedName~WorkerDispatchAcceptanceAdmissionTests|FullyQualifiedName~ConductorCrossTickTests|FullyQualifiedName~DependencyOrderingRegressionTests|FullyQualifiedName~ConductorBatchLoopTests|FullyQualifiedName~OperatorIntentAdjudicationTests|FullyQualifiedName~DotnetBuildEnvironmentManagerTests|FullyQualifiedName~LocalProcessVerifierDotnetBuildSlotTests|FullyQualifiedName~LocalProcessVerifierStaticHookTests|FullyQualifiedName~StructuralCoveragePermitWaitTests)&FullyQualifiedName!~DotnetBuildEnvironmentManagerTestsLocalHostOnly&Category!=LocalHostOnly",
         "ownedCollections": [ "DotnetBuildSlots" ],
         "estimatedSerialSeconds": 225.1,
         "exclusiveResourceKeys": [ "xunit:DotnetBuildSlots" ]
+      },
+      {
+        "name": "Dotnet build slots local-only",
+        "filter": "FullyQualifiedName~DotnetBuildEnvironmentManagerTestsLocalHostOnly",
+        "estimatedSerialSeconds": 20.0,
+        "exclusiveResourceKeys": [ "xunit:DotnetBuildSlots", "xunit:DotnetBuildSlotsHostOnly" ]
       },
       {
         "name": "Goal acceptance verifier",
@@ -166,7 +172,7 @@
       {
         "name": "Conductor",
         "description": "Conductor watch, build-slot, and process-spawning coverage.",
-        "laneNames": [ "Conduct watch sweep scoping", "Dotnet build slots", "Process spawning", "Process spawning process-local", "Mtp managed project rebuild", "Process spawning parallel" ]
+        "laneNames": [ "Conduct watch sweep scoping", "Dotnet build slots", "Dotnet build slots local-only", "Process spawning", "Process spawning process-local", "Mtp managed project rebuild", "Process spawning parallel" ]
       },
       {
         "name": "ChaosGate",

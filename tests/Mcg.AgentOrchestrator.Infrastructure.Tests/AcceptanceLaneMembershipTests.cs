@@ -4,6 +4,95 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class AcceptanceLaneMembershipTests
 {
     [Xunit.Fact]
+    public void LocalHostOnlyBuildSlotTestsBelongOnlyToTheirConductorLane()
+    {
+        const string localLaneName = "Dotnet build slots local-only";
+        const string hostKey = "xunit:DotnetBuildSlotsHostOnly";
+        var root = InfrastructureTestSupport.FindRepositoryRoot();
+        var lanes = AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes;
+        var descriptors = RunnableClasses();
+        var resolved = AcceptanceLaneMembership.ResolveOwnedCollections(lanes, descriptors);
+        var localLane = Xunit.Assert.Single(lanes, lane => lane.Name == localLaneName);
+        var expectedTypes = new[]
+        {
+            typeof(DotnetBuildEnvironmentManagerTestsLocalHostOnlyFocusedRunner),
+            typeof(DotnetBuildEnvironmentManagerTestsLocalHostOnlyLockAttribution)
+        };
+        var expectedMethods = new[]
+        {
+            "FocusedRunner_Pass_ExecutesUnderLeaseAndWritesReceipt",
+            "LockAttributionRestartManagerNamesFileHolder"
+        };
+        var testMethods = descriptors.SelectMany(descriptor => typeof(AcceptanceLaneMembershipTests).Assembly
+                .GetType(descriptor.FullName)!.GetMethods(BindingFlags.Instance | BindingFlags.Public))
+            .Where(method => method.GetCustomAttribute<Xunit.FactAttribute>(inherit: true) is not null)
+            .ToArray();
+        var namedMethods = testMethods.Where(method => expectedMethods.Contains(method.Name)).ToArray();
+        Xunit.Assert.Equal(expectedMethods.Order(), namedMethods.Select(method => method.Name).Order());
+        Xunit.Assert.Equal("LockAttribution_restart_manager_names_file_holder",
+            namedMethods.Single(method => method.Name == expectedMethods[1])
+                .GetCustomAttribute<Xunit.FactAttribute>()!.DisplayName);
+        Xunit.Assert.Equal(expectedTypes.Select(type => type.FullName).Order(),
+            descriptors.Where(descriptor => AcceptanceLaneMembership.LanesIncluding(resolved, descriptor.FullName)
+                    .Any(lane => lane.Name == localLaneName))
+                .Select(descriptor => descriptor.FullName).Order());
+        foreach (var type in expectedTypes)
+        {
+            var method = Xunit.Assert.Single(testMethods.Where(method => method.DeclaringType == type));
+            Xunit.Assert.Contains(method.Name, expectedMethods);
+            Xunit.Assert.True(HasLocalHostOnlyTrait(method));
+            // Check both the written filters and collection-resolved filters. Reverting the
+            // manifest places these tests back in the remote-capable lane and fails here.
+            foreach (var membership in new[] { lanes, resolved })
+                Xunit.Assert.Equal(localLaneName, Xunit.Assert.Single(
+                    AcceptanceLaneMembership.LanesIncluding(membership, type.FullName!)).Name);
+        }
+        Xunit.Assert.Equal(expectedMethods.Order(), testMethods.Where(HasLocalHostOnlyTrait)
+            .Select(method => method.Name).Order());
+        Xunit.Assert.Equal(["xunit:DotnetBuildSlots", hostKey], localLane.ExclusiveResourceKeys);
+        Xunit.Assert.Equal(localLaneName, Xunit.Assert.Single(lanes,
+            lane => lane.ExclusiveResourceKeys.Contains(hostKey)).Name);
+        Xunit.Assert.Equal(["--filter-class", "*DotnetBuildEnvironmentManagerTestsLocalHostOnly*"],
+            AcceptanceCheckCommandBuilder.TranslateMtpFilter(localLane.Filter).ToArray());
+        var reducedArguments = AcceptanceCheckCommandBuilder.TranslateMtpFilter(
+            Xunit.Assert.Single(lanes, lane => lane.Name == "Dotnet build slots").Filter).ToArray();
+        Xunit.Assert.Contains(Enumerable.Range(0, reducedArguments.Length / 2), index =>
+            reducedArguments[index * 2] == "--filter-not-trait" &&
+            reducedArguments[index * 2 + 1] == "Category=LocalHostOnly");
+        using var manifest = System.Text.Json.JsonDocument.Parse(
+            File.ReadAllText(Path.Combine(root, "config", "acceptance-manifest.json")));
+        var conductor = Xunit.Assert.Single(manifest.RootElement.GetProperty("engine")
+            .GetProperty("localTestPartitions").EnumerateArray(),
+            partition => partition.GetProperty("name").GetString() == "Conductor");
+        Xunit.Assert.Contains(localLaneName, conductor.GetProperty("laneNames").EnumerateArray()
+            .Select(name => name.GetString()));
+    }
+
+    [Xunit.Fact]
+    public void BuildSlotDocumentationKeepsHostTestsLocalAndRemoteClearancePending()
+    {
+        var row = File.ReadLines(Path.Combine(InfrastructureTestSupport.FindRepositoryRoot(),
+                "docs", "acceptance-gate-resource-isolation.md"))
+            .Single(line => line.StartsWith("| `DotnetBuildSlots` /", StringComparison.Ordinal));
+        Xunit.Assert.Contains("FocusedRunner_Pass_ExecutesUnderLeaseAndWritesReceipt", row);
+        Xunit.Assert.Contains("LockAttribution_restart_manager_names_file_holder", row);
+        Xunit.Assert.Contains("Category=LocalHostOnly", row);
+        Xunit.Assert.Contains("`Dotnet build slots local-only`", row);
+        Xunit.Assert.Contains("never remote-eligible", row);
+        Xunit.Assert.Contains("`xunit:DotnetBuildSlotsHostOnly`, which must never be added to the machine-local list", row);
+        Xunit.Assert.Contains("an accepted remote run of the reduced lane", row);
+        Xunit.Assert.Contains("executed count, summed with the local-only lane, equals the local count", row);
+        Xunit.Assert.DoesNotContain("cleared for the machine-local list after the P4a hold", row);
+    }
+
+    private static bool HasLocalHostOnlyTrait(MethodInfo method) =>
+        method.GetCustomAttributesData().Any(attribute =>
+            attribute.AttributeType == typeof(Xunit.TraitAttribute) &&
+            attribute.ConstructorArguments.Count == 2 &&
+            attribute.ConstructorArguments[0].Value as string == "Category" &&
+            attribute.ConstructorArguments[1].Value as string == "LocalHostOnly");
+
+    [Xunit.Fact]
     public void ExactClassFilterKeepsTheFullNameWithoutWildcards()
     {
         Xunit.Assert.Equal(
