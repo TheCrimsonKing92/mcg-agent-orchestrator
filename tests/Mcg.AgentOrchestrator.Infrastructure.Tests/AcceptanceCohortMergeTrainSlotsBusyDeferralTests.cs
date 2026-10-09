@@ -50,7 +50,7 @@ public sealed class AcceptanceCohortMergeTrainSlotsBusyDeferralTests : Acceptanc
             string? identity = null;
             DotnetBuildEnvironmentLease? acquired = null;
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                Path.Combine(workspace.OrchestratorDirectory, "parallel-attempts"),
+                Path.Combine(workspace.OrchestratorDirectory, "parallel-attempts"), workspace.IntegrationBranch,
                 buildStorageRoot: cleanup.BuildStorageRoot,
                 acquireCohortStableSlotRound: (trainId, label, token) =>
                 {

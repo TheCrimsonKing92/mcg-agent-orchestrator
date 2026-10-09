@@ -36,7 +36,7 @@ public sealed class AcceptanceCohortPartitionSlotsBusyDeferralTests : Acceptance
             string? identity = null;
             var leases = new List<DotnetBuildEnvironmentLease>();
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                Path.Combine(workspace.OrchestratorDirectory, "parallel-attempts"),
+                Path.Combine(workspace.OrchestratorDirectory, "parallel-attempts"), workspace.IntegrationBranch,
                 buildStorageRoot: cleanup.BuildStorageRoot,
                 acquireCohortStableSlotRound: (cohortId, label, token) =>
                 {
@@ -139,7 +139,7 @@ public sealed class AcceptanceCohortPartitionSlotsBusyDeferralTests : Acceptance
             var delays = 0;
             var leases = new List<DotnetBuildEnvironmentLease>();
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-                Path.Combine(workspace.OrchestratorDirectory, "parallel-attempts"),
+                Path.Combine(workspace.OrchestratorDirectory, "parallel-attempts"), workspace.IntegrationBranch,
                 buildStorageRoot: cleanup.BuildStorageRoot,
                 acquireCohortStableSlotRound: (_, label, token) =>
                 {
