@@ -167,7 +167,7 @@ internal static class SourceSizeRatchet
             // Goal 6e664238 (backlog c7f9845c) moved conduct-event classification and progress formatting unchanged; measured at 3338 lines.
             // Goal 8c677dd2 (backlog 21450794) split RunParallelAcceptanceBatch into named admission phases; measured at 2686 lines.
             // Goal ae7d1201 extracted shared per-goal operator-intent application; measured at 2675 lines.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2675),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2689), // 7e047f78: measured slot-contention hold arm and streak lifecycle.
             // Goal 354522f1 tick persistence partial measured at 467 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.TickPersistence.cs", 467),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.DependencyReadmission.cs", 375),
@@ -424,7 +424,7 @@ internal static class SourceSizeRatchet
             // adds one admission predicate to exclude stream-complete children before slot reservation. Measured 9255.
             // Goal 679eee57 added a one-line tick call to the separately owned ConductorExperimentWatch (+1); goal 80de5cb2 extracted
             // dependency hold evaluation to its own type (-42). Measured 9231 across 56 files after both, no extra headroom.
-            new SourceClassCeiling("ConductorBatchLoop", 9231, 56), // def5cd48: revision ledger and planner conflict routing.
+            new SourceClassCeiling("ConductorBatchLoop", 9258, 56), // 7e047f78: measured slot-contention hold arm and streak lifecycle; no new partial.
             // Goal 4da02c2f extracted the single-goal report predicate to CliSingleGoalReportCommand.
             new SourceClassCeiling("CliPersistentStateRunner", 6017, 18),
         });
