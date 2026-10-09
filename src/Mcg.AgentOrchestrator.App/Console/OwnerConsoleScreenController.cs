@@ -77,7 +77,7 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
         if (key == ConsoleKey.UpArrow) SelectIndex(SelectedIndex - 1);
         else if (key == ConsoleKey.DownArrow) SelectIndex(SelectedIndex + 1);
         else if (key == ConsoleKey.Enter && Selected() is { } detail)
-            await dialogs.ShowTextAsync("Decision", $"{detail.GoalId} | {detail.Kind}\n{detail.FullText}\nblast radius: {detail.BlastRadius}\nconfidence: {detail.Confidence}\ndefault: {detail.ProposedDefault}");
+            await ShowDecisionAsync(detail, operation, cancellationToken);
         else if (character is 'a' or 'r') await AnswerAsync(character == 'a', operation, cancellationToken);
         else if (character == ':')
         {
@@ -90,6 +90,20 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     private OwnerConsoleDecision? Selected() => Model?.Decisions.FirstOrDefault(item => item.Id == SelectedDecisionId);
 
     internal Task ShowHelpAsync() => dialogs.ShowTextAsync("Help", OwnerConsoleKeyHints.HelpText);
+
+    private async Task ShowDecisionAsync(OwnerConsoleDecision decision, OwnerConsoleScreenOperation? operation,
+        CancellationToken cancellationToken)
+    {
+        using var detail = new OwnerConsoleDecisionDetail(decision, clock.LocalTimeZone,
+            (target, accept, notify) => AnswerAsync(accept, operation, cancellationToken, target, notify),
+            async token => resolutions is null ? null :
+                (await resolutions.ListForGoalAsync(decision.GoalId, token)).FirstOrDefault(item => item.Id == decision.Id),
+            text => dialogs.ShowTextAsync("Help", text), cancellationToken);
+        void Refresh() => detail.Observe(Model?.Decisions.FirstOrDefault(item => item.Id == decision.Id));
+        ModelApplied += Refresh;
+        try { await dialogs.ShowDecisionAsync(detail); }
+        finally { ModelApplied -= Refresh; }
+    }
 
     internal async Task ShowGoalDetailAsync(string goalId, OwnerConsoleScreenOperation? operation = null,
         CancellationToken cancellationToken = default)
@@ -115,27 +129,28 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
             await dialogs.ShowTextAsync("Question resolution", OwnerQuestionResolutionText.Build(resolved[index], clock.LocalTimeZone));
     }
 
-    private async Task AnswerAsync(bool accept, OwnerConsoleScreenOperation? operation, CancellationToken cancellationToken)
+    private async Task AnswerAsync(bool accept, OwnerConsoleScreenOperation? operation, CancellationToken cancellationToken,
+        OwnerConsoleDecision? target = null, Action<string>? notice = null)
     {
-        var decision = Selected();
+        var decision = target ?? Selected();
         if (decision is null) return;
         if (decision.Kind == OwnerQuestionKind.StewardHold)
         {
-            await dialogs.ShowTextAsync("View only", $"Steward questions are answered through goal verbs for now; use the CLI retry/adjudicate commands for goal {decision.GoalId}.");
+            await ShowNoticeAsync("View only", $"Steward questions are answered through goal verbs for now; use the CLI retry/adjudicate commands for goal {decision.GoalId}.");
             return;
         }
         string? text;
         if (accept)
         {
             if (string.IsNullOrWhiteSpace(decision.ProposedDefault))
-            { await dialogs.ShowTextAsync("Decision", $"question {decision.Number} has no proposed default"); return; }
+            { await ShowNoticeAsync("Decision", $"question {decision.Number} has no proposed default"); return; }
             if (!await dialogs.ConfirmAsync("Accept default?", decision.ProposedDefault)) return;
             text = decision.ProposedDefault;
         }
         else text = await dialogs.PromptTextAsync("Answer", decision.FullText);
         if (text is null) return;
         if (string.IsNullOrWhiteSpace(text) || text.StartsWith("--", StringComparison.Ordinal))
-        { await dialogs.ShowTextAsync("Answer", "Answer cannot be empty or start with --"); return; }
+        { await ShowNoticeAsync("Answer", "Answer cannot be empty or start with --"); return; }
         var title = "Answer";
         var message = string.Empty;
         OwnerAnswerSubmission? submission = null;
@@ -158,11 +173,15 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
         cancellationToken.ThrowIfCancellationRequested();
         if (submission is not null && operation is not null)
         {
-            operation.Notify(message);
-            _answerTracking.Track(submission.IntentId, decision.Number, decision.GoalPrefix, operation.Notify, cancellationToken);
+            Notify(message);
+            _answerTracking.Track(submission.IntentId, decision.Number, decision.GoalPrefix, Notify, cancellationToken);
             return;
         }
-        await dialogs.ShowTextAsync(title, message);
+        await ShowNoticeAsync(title, message);
+
+        void Notify(string text) { operation!.Notify(text); notice?.Invoke(text); }
+        Task ShowNoticeAsync(string heading, string text)
+        { notice?.Invoke(text); return dialogs.ShowTextAsync(heading, text); }
     }
 
     internal async Task RunCommandAsync(string raw, OwnerConsoleScreenOperation? operation = null,

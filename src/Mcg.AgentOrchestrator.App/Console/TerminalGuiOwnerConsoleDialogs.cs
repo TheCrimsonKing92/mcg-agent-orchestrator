@@ -24,6 +24,19 @@ internal sealed class TerminalGuiOwnerConsoleDialogs(IApplication app, Cancellat
 
     public async Task ShowTextAsync(string title, string text) => await ShowPageAsync(title, text);
 
+    public async Task ShowDecisionAsync(OwnerConsoleDecisionDetail detail) => await OnUiAsync(() =>
+    {
+        using var dialog = new OwnerConsoleDecisionDialog(detail, action => app.Invoke(action));
+        dialog.Closed += () => app.RequestStop(dialog);
+        void Handle(object? sender, Key key)
+        { if (app.TopRunnableView == dialog) _ = dialog.HandleKeyAsync(key); }
+        var keyboard = app.Keyboard;
+        if (keyboard is not null) keyboard.KeyDown += Handle;
+        try { app.Run(dialog); }
+        finally { if (keyboard is not null) keyboard.KeyDown -= Handle; }
+        return true;
+    });
+
     public Task<int?> ShowPageAsync(string title, string text, IReadOnlyList<int>? choiceLines = null) => OnUiAsync(() =>
     {
         using var dialog = new OwnerConsoleTextDialog(title, text, choiceLines);
