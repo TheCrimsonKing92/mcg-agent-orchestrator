@@ -42,6 +42,7 @@ public sealed class RuntimeAssemblyArchitectureTests
         new("Mcg.AgentOrchestrator.App.Orchestration.ConductorLoopHandoff", "Detached conduct loop successor", "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorLoopHandoff.cs:870"),
         new("Mcg.AgentOrchestrator.App.Orchestration.ConductorSelfRelaunch", "Successor preparation commands", "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorSelfRelaunch.cs:367"),
         new("Mcg.AgentOrchestrator.App.Orchestration.PanelJudgeProcess", "Blinded shadow judge calls retaining partial raw output on timeout", "src/Mcg.AgentOrchestrator.App/Orchestration/PanelJudgeProcess.cs:27"),
+        new("Mcg.AgentOrchestrator.App.Orchestration.DefaultStateMover", "Bounded Windows mklink /J child behind the compatibility-link seam", "src/Mcg.AgentOrchestrator.App/Orchestration/DefaultStateMover.cs:360"),
         new("Mcg.AgentOrchestrator.Infrastructure.BackgroundDispatchRunner", "Default start delegate, method group", "src/Mcg.AgentOrchestrator.Execution/Processes/BackgroundDispatchRunner.cs:125"),
         new("Mcg.AgentOrchestrator.Infrastructure.DefenderPreferenceCmdletAdapter", "Defender preference PowerShell child for the explicit host-exclusions CLI verb", "src/Mcg.AgentOrchestrator.Execution/Processes/DefenderExclusionPreferences.cs:70"),
         new("Mcg.AgentOrchestrator.Infrastructure.DispatchProcessHost", "where.exe resolution and low-integrity preflight", "src/Mcg.AgentOrchestrator.Execution/Processes/DispatchProcessHost.cs:856,956"),

@@ -242,7 +242,7 @@ internal sealed class DefaultStateMover
         var activeDispatches = false;
         foreach (var database in databases)
         {
-            var probe = Path.Combine(Path.GetTempPath(), "mcg-default-state-probe-" + Guid.NewGuid().ToString("N"));
+            var probe = Path.Combine(OrchestratorTempRoot.GetParent(), "mcg-default-state-probe-" + Guid.NewGuid().ToString("N"));
             try
             {
                 Directory.CreateDirectory(probe);
@@ -312,7 +312,10 @@ internal sealed class DefaultStateMover
 
     private static string HashFile(string path)
     {
-        using var stream = File.OpenRead(path);
+        // A conductor lease permits readers but keeps a writable handle open. Sharing
+        // that handle lets the snapshot reach the lock probe and report its owner.
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
         return Convert.ToHexString(SHA256.HashData(stream));
     }
 

@@ -106,12 +106,22 @@ public sealed class DefaultStateMoverRefusalTests
         using var lease = ConductorLoopLease.Acquire(tenant);
         Assert.True(ConductorLoopLease.IsActive(tenant));
         var before = DefaultStateMoverFixture.Snapshot(fixture.Source);
-        var result = fixture.Mover().Move();
+        var copied = 0;
+        var result = fixture.Mover(copyFile: (source, destination) =>
+        {
+            copied++;
+            File.Copy(source, destination);
+        }).Move();
         Assert.False(result.Succeeded);
         Assert.Contains(result.Refusals, reason => reason.Contains("Conductor lock is held"));
         Assert.Equal(before, DefaultStateMoverFixture.Snapshot(fixture.Source));
+        Assert.Equal(0, copied);
+        Assert.True(ConductorLoopLease.IsActive(tenant));
         Assert.False(Directory.Exists(fixture.Destination));
         Assert.Null(fixture.Registry.GetDefaultStateLocation(fixture.Repository));
+        Assert.False(File.Exists(fixture.Registry.RegistryPath));
+        Assert.False(Directory.Exists(fixture.Backup));
+        Assert.False(Directory.Exists(fixture.DataRoot));
     }
 
     [Fact]

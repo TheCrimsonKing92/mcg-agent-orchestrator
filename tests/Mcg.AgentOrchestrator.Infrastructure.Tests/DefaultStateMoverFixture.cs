@@ -75,8 +75,16 @@ internal sealed class DefaultStateMoverFixture : IDisposable
         return Directory.EnumerateFileSystemEntries(directory, "*", SearchOption.AllDirectories)
             .Select(path => Directory.Exists(path)
                 ? "D:" + Path.GetRelativePath(directory, path)
-                : "F:" + Path.GetRelativePath(directory, path) + ":" + Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))))
+                : "F:" + Path.GetRelativePath(directory, path) + ":" + HashFile(path))
             .Order(StringComparer.Ordinal).ToArray();
+    }
+
+    private static string HashFile(string path)
+    {
+        // Match the lock probe's sharing contract while a real lease is held.
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+        return Convert.ToHexString(SHA256.HashData(stream));
     }
 
     internal static long GoalCount(string stateDirectory)
