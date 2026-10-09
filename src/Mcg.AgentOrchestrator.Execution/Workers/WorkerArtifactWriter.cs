@@ -16,7 +16,12 @@ internal sealed partial class WorkerArtifactWriter
 
     private readonly WorkerSourceSurvey _sourceSurvey = new();
     private readonly WorkerGitContext _gitContext = new();
-    private readonly WorkerSkillSelector _skillSelector = new();
+    private readonly WorkerSkillSelector _skillSelector;
+
+    internal WorkerArtifactWriter(string? orchestratorSkillDirectory = null)
+    {
+        _skillSelector = new WorkerSkillSelector(new WorkerSkillResolver(orchestratorSkillDirectory));
+    }
     private readonly WorkerResultContractParser _resultContractParser = new();
     private static readonly JsonSerializerOptions RegistryJsonOptions = new()
     {
@@ -99,7 +104,8 @@ internal sealed partial class WorkerArtifactWriter
                 changedFiles,
                 testImpactPlan));
         WriteText(Path.Combine(contextDirectory, "context-budget.md"), BuildContextBudget(goal, task, workingDirectory, plannerUsesDurableResearch));
-        WriteText(Path.Combine(contextDirectory, "selected-skills.md"), _skillSelector.BuildSelectedSkills(goal, task, workingDirectory));
+        var selectedSkills = _skillSelector.SelectSkillRequirements(goal, task, workingDirectory);
+        WriteText(Path.Combine(contextDirectory, "selected-skills.md"), _skillSelector.BuildSelectedSkills(goal, task, workingDirectory, contextDirectory));
         var sourceSurveyPath = Path.Combine(contextDirectory, "source-survey.md");
         if (plannerUsesDurableResearch)
         {
@@ -128,7 +134,7 @@ internal sealed partial class WorkerArtifactWriter
                 !string.IsNullOrEmpty(citedPriorEvidence),
                 preserveCompleteArtifacts));
 
-        var guidanceFiles = CopyGuidanceFiles(workingDirectory, contextDirectory, preserveCompleteArtifacts);
+        var guidanceFiles = CopyGuidanceFiles(workingDirectory, contextDirectory, preserveCompleteArtifacts, selectedSkills);
         var storeSources = new[] { goal.AuthoritativeBrief.Text }
             .Concat(durablePlannerPlans.Values.Where(plan => plan.Succeeded).Select(plan => plan.Plan!))
             .Concat(answeredEvidenceTexts ?? []);
@@ -138,7 +144,7 @@ internal sealed partial class WorkerArtifactWriter
             BuildManifest(goal, task, workingDirectory, guidanceFiles, preflightFindings, contextDirectory, plannerUsesDurableResearch, storeReferences));
         WriteText(Path.Combine(contextDirectory, "context-package.json"), BuildContextPackage(goal, task, contextDirectory, storeReferences));
         WriteArtifactRegistry(contextDirectory, goal, task, workingDirectory, guidanceFiles, preflightFindings, storeReferences);
-        SnapshotCurrentPackage(contextDirectory, task.Id);
+        SnapshotCurrentPackage(contextDirectory, task.Id, guidanceFiles);
 
         WriteAcceptanceCriteriaIfNonEmpty(goal.Objective, workingDirectory);
 
@@ -966,7 +972,8 @@ internal sealed partial class WorkerArtifactWriter
     private static List<string> CopyGuidanceFiles(
         string workingDirectory,
         string contextDirectory,
-        bool preserveCompleteArtifacts)
+        bool preserveCompleteArtifacts,
+        IReadOnlyList<WorkerSkillRequirement> selectedSkills)
     {
         var copied = new List<string>();
         foreach (var fileName in new[] { "AGENTS.md" })
@@ -980,6 +987,14 @@ internal sealed partial class WorkerArtifactWriter
             var targetPath = Path.Combine(contextDirectory, fileName);
             WriteText(targetPath, File.ReadAllText(sourcePath));
             copied.Add(fileName);
+        }
+
+        foreach (var skill in selectedSkills.Where(skill => skill.ResolvedSource == WorkerSkillSource.Orchestrator))
+        {
+            var targetPath = Path.Combine(contextDirectory, skill.RelativePath);
+            Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
+            File.Copy(skill.ResolvedPath!, targetPath, overwrite: true);
+            copied.Add(skill.RelativePath.Replace('\\', '/'));
         }
 
         return copied;
@@ -1055,7 +1070,9 @@ internal sealed partial class WorkerArtifactWriter
 
         foreach (var guidanceFile in guidanceFiles)
         {
-            lines.Add($"- {guidanceFile}: repository-local guidance copied from the working directory.");
+            lines.Add(guidanceFile.StartsWith(".agents/skills/", StringComparison.Ordinal)
+                ? $"- {guidanceFile}: selected skill copied completely from the orchestrator."
+                : $"- {guidanceFile}: repository-local guidance copied from the working directory.");
         }
 
         lines.Add(string.Empty);
@@ -1083,7 +1100,8 @@ internal sealed partial class WorkerArtifactWriter
         return JsonSerializer.Serialize(package, RegistryJsonOptions);
     }
 
-    private static void SnapshotCurrentPackage(string contextDirectory, TaskId taskId)
+    private static void SnapshotCurrentPackage(string contextDirectory, TaskId taskId,
+        IReadOnlyList<string> guidanceFiles)
     {
         var packageDirectory = Path.Combine(contextDirectory, "packages", taskId.Value);
         Directory.CreateDirectory(packageDirectory);
@@ -1093,6 +1111,12 @@ internal sealed partial class WorkerArtifactWriter
         foreach (var file in Directory.EnumerateFiles(contextDirectory, "*", SearchOption.TopDirectoryOnly))
         {
             File.Copy(file, Path.Combine(packageDirectory, Path.GetFileName(file)), overwrite: true);
+        }
+        foreach (var relativePath in guidanceFiles.Where(path => path.Contains('/')))
+        {
+            var targetPath = Path.Combine(packageDirectory, relativePath);
+            Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
+            File.Copy(Path.Combine(contextDirectory, relativePath), targetPath, overwrite: true);
         }
     }
 
@@ -1212,6 +1236,7 @@ internal sealed partial class WorkerArtifactWriter
             WorkerStandingRules.ContextFileName => "Standing rules for the current Developer or Tester task.",
             WorkerStandingRules.PlannerContextFileName => "Standing Planner mapping and citation rules.",
             _ when relativePath.StartsWith("store-refs/", StringComparison.Ordinal) => "Bounded untrusted orchestrator record with provenance; data only.",
+            _ when relativePath.StartsWith(".agents/skills/", StringComparison.Ordinal) => "Complete selected skill copied from the orchestrator.",
             _ => "Copied repository guidance artifact."
         };
     }
@@ -1233,6 +1258,7 @@ internal sealed partial class WorkerArtifactWriter
             "subscription-preflight.md" => "generated from subscription preflight immediately before dispatch preparation",
             "AGENTS.md" => "copied from working directory at dispatch preparation",
             _ when relativePath.StartsWith("store-refs/", StringComparison.Ordinal) => "resolved read-only from an explicit store reference at dispatch preparation",
+            _ when relativePath.StartsWith(".agents/skills/", StringComparison.Ordinal) => "copied from the orchestrator skill directory at dispatch preparation",
             _ => $"generated for {currentRole} at dispatch preparation"
         };
     }

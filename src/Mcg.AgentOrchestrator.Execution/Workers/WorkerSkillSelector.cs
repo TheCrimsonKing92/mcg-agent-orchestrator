@@ -2,8 +2,9 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-internal sealed class WorkerSkillSelector
+internal sealed class WorkerSkillSelector(WorkerSkillResolver? resolver = null)
 {
+    private readonly WorkerSkillResolver _resolver = resolver ?? new WorkerSkillResolver();
     private static readonly SkillCandidate[] KnownSkills =
     [
         new(
@@ -40,7 +41,8 @@ internal sealed class WorkerSkillSelector
             "Use a fresh execution-evidence gate before claiming Developer work complete.")
     ];
 
-    internal string BuildSelectedSkills(Goal goal, TaskSpec task, string workingDirectory)
+    internal string BuildSelectedSkills(Goal goal, TaskSpec task, string workingDirectory,
+        string? contextDirectory = null)
     {
         var selected = SelectSkillRequirements(goal, task, workingDirectory);
         var lines = new List<string>
@@ -66,7 +68,9 @@ internal sealed class WorkerSkillSelector
         foreach (var skill in selected)
         {
             lines.Add($"- {skill.Name}");
-            lines.Add($"  Path: {skill.RelativePath}");
+            var deliveredPath = skill.ResolvedSource == WorkerSkillSource.Orchestrator && contextDirectory is not null
+                ? Path.Combine(contextDirectory, skill.RelativePath) : skill.RelativePath;
+            lines.Add($"  Path: {deliveredPath}");
             lines.Add($"  Status: {(skill.Available ? "available" : "missing")}");
             lines.Add($"  Reason: {skill.Reason}");
             lines.Add($"  Usage: {skill.Usage}");
@@ -82,11 +86,11 @@ internal sealed class WorkerSkillSelector
     {
         return SelectSkills(goal, task)
             .DistinctBy(skill => skill.Name, StringComparer.OrdinalIgnoreCase)
-            .Select(skill => new WorkerSkillRequirement(
+            .Select(skill => _resolver.Resolve(
+                workingDirectory,
                 skill.Name,
                 skill.RelativePath,
                 skill.Usage,
-                File.Exists(Path.Combine(workingDirectory, skill.RelativePath)),
                 BuildSkillReason(skill.Name, goal, task)))
             .ToArray();
     }
