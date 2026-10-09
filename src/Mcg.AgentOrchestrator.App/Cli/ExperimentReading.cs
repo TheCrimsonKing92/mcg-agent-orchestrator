@@ -27,16 +27,16 @@ internal static class ExperimentReading
 {
     internal static ExperimentReadingResult Evaluate(ExperimentRecord record, IReadOnlyCollection<Goal> goals,
         IReadOnlyDictionary<string, DateTimeOffset> landings, IReadOnlyCollection<AppliedRetryIntent> intents,
-        DateTimeOffset asOf)
+        DateTimeOffset asOf, int? observedGateCount)
     {
         var spec = record.Spec;
-        var start = spec.Baseline.Until ?? record.CreatedAt;
-        // Gates and ticks have no authoritative queryable counter in this slice.
+        var start = ComparisonStart(record);
+        // Ticks still have no authoritative queryable counter.
         var observed = spec.StopRule.Unit == ExperimentStopUnit.Goals
             ? goals.Count(g => g.Status is GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Superseded or GoalStatus.Failed &&
                 g.Tasks.SelectMany(t => t.DispatchHistory).Select(d => (DateTimeOffset?)d.DispatchedAt)
                     .Max() is { } at && at >= start && at < asOf)
-            : (int?)null;
+            : spec.StopRule.Unit == ExperimentStopUnit.Gates ? observedGateCount : (int?)null;
         var stopRuleMet = observed is { } n && n >= spec.StopRule.Count;
         if (spec.Baseline.Kind != ExperimentBaselineKind.BeforeAfterWindow)
         {
@@ -92,6 +92,8 @@ internal static class ExperimentReading
         }
         return new(observed, spec.StopRule, stopRuleMet, metrics, verdict, reason, guardrail == true);
     }
+
+    internal static DateTimeOffset ComparisonStart(ExperimentRecord record) => record.Spec.Baseline.Until ?? record.CreatedAt;
 
     internal static void Render(ExperimentReadingResult result)
     {

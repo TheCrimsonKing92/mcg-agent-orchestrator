@@ -75,6 +75,8 @@ internal sealed class ConductorExperimentWatch
             // same durable history as experiment-show, loaded afresh without a writer transaction.
             var goals = ExperimentGoals.Read(_workspace.SqliteStatePath);
             var landings = ExperimentLandingTimes.Read(_workspace.GoalLifecycleEventsDirectory);
+            IReadOnlyCollection<DateTimeOffset> gateAttempts = open.Any(record => record.Spec.StopRule.Unit == ExperimentStopUnit.Gates)
+                ? ExperimentGateAttempts.Read(_workspace.ConductEventsLogPath) : [];
             var intents = File.Exists(Path.Combine(_workspace.OrchestratorDirectory, SqliteOperatorIntentStore.DatabaseFileName))
                 ? CliOwnerDigestRetryIntents.Read(_workspace, asOf) : [];
             var reverts = new ConductorExperimentFlagRevertController(experiments,
@@ -84,7 +86,8 @@ internal sealed class ConductorExperimentWatch
             {
                 try
                 {
-                    var reading = ExperimentReading.Evaluate(record, goals, landings, intents, asOf);
+                    var reading = ExperimentReading.Evaluate(record, goals, landings, intents, asOf,
+                        ExperimentGateAttempts.Count(gateAttempts, ExperimentReading.ComparisonStart(record), asOf));
                     try { if (reverts.TryRevert(record, reading, asOf)) continue; }
                     catch (Exception error) { LogFailure(error); }
                     foreach (var trigger in Triggers)

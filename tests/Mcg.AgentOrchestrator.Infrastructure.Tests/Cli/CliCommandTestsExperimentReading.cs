@@ -80,7 +80,7 @@ public sealed class CliCommandTestsExperimentReading
             var record = CliCommandTestsExperiments.Add(workspace, spec);
             ExperimentReadingResult? result = null;
             var output = AsyncLocalConsoleRouter.Capture(() => result = ExperimentReading.Evaluate(record, kernel.Goals,
-                new Dictionary<string, DateTimeOffset>(), [], AsOf));
+                new Dictionary<string, DateTimeOffset>(), [], AsOf, null));
             Assert.Empty(output);
             Assert.NotNull(result);
             Assert.True(result.GuardrailBreached);
@@ -186,7 +186,8 @@ public sealed class CliCommandTestsExperimentReading
             var kindText = JsonNamingPolicy.KebabCaseLower.ConvertName(kind.ToString());
             var unitText = JsonNamingPolicy.KebabCaseLower.ConvertName(unit.ToString());
             Assert.Contains($"reading: unavailable (baseline kind {kindText} not computable in this slice)", output);
-            Assert.Contains($"stop rule: unavailable of 4 {unitText} (progress unavailable)", output);
+            Assert.Contains(unit == ExperimentStopUnit.Gates ? "stop rule: 0 of 4 gates (not met)" :
+                $"stop rule: unavailable of 4 {unitText} (progress unavailable)", output);
             Assert.Contains("outcome: open", output);
         });
     }
