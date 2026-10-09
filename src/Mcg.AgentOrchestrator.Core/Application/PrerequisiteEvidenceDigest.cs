@@ -71,7 +71,7 @@ internal static partial class PrerequisiteEvidenceDigest
         }
 
         // Both rendered forms are built once per entry, so the trim stages below re-measure without
-        // re-running the evidence pattern over answer text. BuildTaskBrief runs on every dashboard
+        // re-running the evidence pattern over answer text. BuildTaskBrief runs on every dispatch
         // and CLI preview refresh, so a rescan per measurement would be paid there too.
         var retained = entries.Select(entry => Prepare(entry, currentBriefVersion)).ToList();
         var trimmed = new List<string>();

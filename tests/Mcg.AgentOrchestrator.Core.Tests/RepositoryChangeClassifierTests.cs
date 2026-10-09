@@ -775,32 +775,6 @@ public sealed class RepositoryChangeClassifierTests
         throw new DirectoryNotFoundException("Repository root was not found from the test source path.");
     }
 
-    [Xunit.Fact(DisplayName = "Dashboard source no longer selects dashboard checks")]
-    public void RepositoryTestImpactPlannerSelectsFocusedDashboardFilterForDashboardOnlyChanges()
-    {
-        var plan = RepositoryTestImpactPlanner.Plan([
-            "src/Mcg.AgentOrchestrator.App/Dashboard/Rendering/DashboardRenderer.OperatorShell.cs"
-        ]);
-
-        Assert.DoesNotContain(plan.Checks, check =>
-            check.CommandLine.Contains("Mcg.AgentOrchestrator.Dashboard.Tests", StringComparison.Ordinal));
-        Assert.DoesNotContain(plan.Checks, check =>
-            check.CommandLine.Contains("DashboardRenderingTests", StringComparison.Ordinal));
-    }
-
-    [Xunit.Fact(DisplayName = "Dashboard test changes no longer select dashboard class filters")]
-    public void RepositoryTestImpactPlannerSelectsTouchedDashboardTestClassFilter()
-    {
-        var plan = RepositoryTestImpactPlanner.Plan([
-            "tests/Mcg.AgentOrchestrator.Dashboard.Tests/DashboardDispatchStartFailureEndpointTests.cs"
-        ]);
-
-        Assert.DoesNotContain(plan.Checks, check =>
-            check.CommandLine.Contains("Mcg.AgentOrchestrator.Dashboard.Tests", StringComparison.Ordinal));
-        Assert.DoesNotContain(plan.Checks, check =>
-            check.CommandLine.Contains("DashboardDispatchStartFailureEndpointTests", StringComparison.Ordinal));
-    }
-
     [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_falls_back_to_full_infrastructure_tests_for_shared_infrastructure")]
     public void RepositoryTestImpactPlannerFallsBackToFullInfrastructureTestsForSharedInfrastructure()
     {

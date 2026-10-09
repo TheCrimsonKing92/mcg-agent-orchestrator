@@ -54,7 +54,7 @@ internal sealed partial class ConductorBatchLoop
     // workers do not hold build slots. On the 47.9-GiB operator host, a reviewed paid-worker
     // dispatch peaked at 1,750,343,680 bytes. Limiting workers to one third of physical memory
     // yields floor(51,385,864,192 / 3 / 1,750,343,680) = 9, leaving two thirds for the OS,
-    // dashboard, builds, and acceptance gates (observed 2026-08-08). Provider cooldowns are
+    // conductor, builds, and acceptance gates (observed 2026-08-08). Provider cooldowns are
     // handled separately; revisit this fixed limit when memory-aware admission is implemented.
     // Do NOT tie this to BuildConcurrencySlotCount or DefaultParallelAcceptanceCapacity.
     internal const int WorkerAdmissionCapacity = 9;

@@ -9,7 +9,7 @@ namespace Mcg.AgentOrchestrator.Core;
 /// This lives beside <see cref="PrerequisiteEvidenceDigest"/> rather than inside a dispatcher
 /// because every path that turns a brief into an emitted prompt owes the same note, and each one
 /// had to grow its own copy otherwise. <see cref="AgentOrchestratorKernel.BuildTaskBrief"/> cannot
-/// record it itself: it is a query that CLI and dashboard previews re-run on every refresh, so
+/// record it itself: it is a query that CLI previews re-run on every refresh, so
 /// recording there would write a timeline entry for a prompt that was never emitted.
 /// </remarks>
 public static class PrerequisiteEvidenceTrimNote

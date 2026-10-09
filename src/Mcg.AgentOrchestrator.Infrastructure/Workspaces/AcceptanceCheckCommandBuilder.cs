@@ -289,7 +289,7 @@ internal static class AcceptanceCheckCommandBuilder
                 : translateCheckFilter(check, filter));
         }
 
-        // MTP execution does not go through BuildDotnetTestArguments. Unattended dashboard /
+        // MTP execution does not go through BuildDotnetTestArguments. Unattended acceptance /
         // full-suite checks often have no --filter in Arguments, so HostIntegration must be
         // excluded here to match discovery.
         if (excludeHostIntegration &&

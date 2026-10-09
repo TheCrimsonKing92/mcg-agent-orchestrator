@@ -35,7 +35,7 @@ public static class ConductorTickPusher
         }
         catch
         {
-            // Observability is advisory; never fail the conductor because a dashboard event write failed.
+            // Observability is advisory; never fail the conductor because a tick event write failed.
         }
     }
 

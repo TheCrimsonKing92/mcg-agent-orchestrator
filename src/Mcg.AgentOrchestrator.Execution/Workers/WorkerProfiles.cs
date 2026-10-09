@@ -819,7 +819,7 @@ public static class WorkerProfileStore
 
         // A superseded built-in claude-cli command is deliberately NOT repaired here. The effort repair is
         // invocation-time and in-memory only (ClaudeCliEffortPolicy.ResolveInvocationCommandTemplate): the
-        // catalog this returns is what the dashboard and CLI hand back to Save, so repairing it on load
+        // catalog this returns is what the CLI commands hand back to Save, so repairing it on load
         // would persist the rewritten template on the next unrelated profile edit.
         return provider.Identity.Kind is ProviderKind.AnthropicClaudeCli &&
             (!profile.CommandTemplate.Contains("--model {subscriptionModelName}", StringComparison.OrdinalIgnoreCase) ||

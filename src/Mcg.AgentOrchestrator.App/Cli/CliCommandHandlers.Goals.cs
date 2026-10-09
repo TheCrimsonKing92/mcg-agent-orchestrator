@@ -1561,7 +1561,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
 
                 // --daemon: run as a PERSISTENT conductor — never exit on an empty backlog. The loop stays
                 // alive and polls, so goals submitted later (via a separate `goal` command, backlog
-                // promotion, or the dashboard) are ingested by the per-tick sweep and driven without a
+                // promotion, or any other goal source) are ingested by the per-tick sweep and driven without a
                 // restart. Implies watch behavior; defaults the poll interval when not given. Stop via the
                 // .conduct-stop file or --max-duration.
                 var loopDaemon = HasCliConfirmation(parts, "--daemon");

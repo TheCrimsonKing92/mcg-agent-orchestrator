@@ -23,7 +23,7 @@ public static void PrintAdvanceResult(
         Console.WriteLine($"Next action: {result.Action.Kind} - {OutputTextPreview.CreateTimeline(result.Action.Message).Text}");
         // The suggested command is a follow-up hint, so it is deliberately built from the live goal
         // rather than from a pre-execution capture: after an executed step the operator wants the
-        // command for the state they are now in. The dispatch state on the dashboard response is a
+        // command for the state they are now in. The dispatch state on the advance outcome is a
         // record of the action that ran, so that one is captured before execution instead - see
         // GoalAdvanceOutcome.ActionDispatchState.
         Console.WriteLine($"Command: {BuildSuggestedCommand(goal, result.Action, agents)}");
