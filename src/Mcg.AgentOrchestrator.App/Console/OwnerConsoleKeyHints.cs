@@ -18,6 +18,17 @@ internal static class OwnerConsoleKeyHints
 
     internal static string CommandPrompt => string.Join(" | ", Commands.Select(item => item.Command));
 
+    internal static string DecisionDetailHint(bool canAnswer, bool canAcceptDefault) =>
+        (canAnswer ? "r answer  " : "") + (canAcceptDefault ? "a accept default  " : "") +
+        "Up/Down PgUp/PgDn scroll  ? help  Esc close";
+
+    internal static string DecisionDetailHelpText(bool canAnswer, bool canAcceptDefault) => string.Join("\n",
+        (canAnswer ? new[] { "r: Answer this decision." } : [])
+        .Concat(canAcceptDefault ? ["a: Accept this decision's proposed default after confirmation."] : [])
+        .Concat(["Up/Down: Scroll the detail.", "PgUp/PgDn: Scroll one page.",
+            "Tab/Shift+Tab: Move between the detail and its buttons.", "Enter: Activate the focused button.",
+            "?: Open this help dialog.", "Esc: Close the detail."]));
+
     internal static OwnerConsolePane Next(OwnerConsolePane pane) => pane switch
     {
         OwnerConsolePane.Decisions => OwnerConsolePane.Board,
