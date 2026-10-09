@@ -42,8 +42,7 @@ internal sealed class OwnerConsoleStartupLoader(OwnerConsoleViewModelBuilder bui
                 var (rows, hidden) = await LoadBoundedAsync(builder.ReadDecisionsAsync, "questions", token);
                 Update(current =>
                 {
-                    var updated = current with { Decisions = rows, DecisionsState = null,
-                        Status = current.Status with { LiveDecisions = rows.Length, HiddenQuestions = hidden } };
+                    var updated = builder.WithDecisions(current, rows, hidden) with { DecisionsState = null };
                     return loadedInputs is null ? updated : builder.WithActivity(updated, loadedInputs);
                 });
             }

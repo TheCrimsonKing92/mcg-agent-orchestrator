@@ -29,6 +29,7 @@ internal static class OwnerConsoleFullScreenHost
         using IApplication app = Terminal.Gui.App.Application.Create();
         OwnerConsoleFullScreenView? view = null;
         Task? reader = null;
+        Task periodicRefresh = Task.CompletedTask;
         try
         {
             IOrchestratorStateQueries state = File.Exists(workspace.SqliteStatePath)
@@ -51,9 +52,13 @@ internal static class OwnerConsoleFullScreenHost
                 label => app.Invoke(() => { if (!token.IsCancellationRequested) view!.SetWorking("refresh", label); }),
                 message => app.Invoke(() => { if (!token.IsCancellationRequested) view!.ShowRefreshFailure(message); }));
 
-            async Task RefreshAsync(OwnerConductEvent? item = null)
+            async Task RefreshAsync(OwnerConductEvent? item = null, bool skipIfBusy = false)
             {
-                await rebuild.WaitAsync(token);
+                if (skipIfBusy)
+                {
+                    if (!await rebuild.WaitAsync(0, token)) return;
+                }
+                else await rebuild.WaitAsync(token);
                 try
                 {
                     if (clock.GetLocalNow().Date != landingDate)
@@ -66,14 +71,13 @@ internal static class OwnerConsoleFullScreenHost
                         OwnerConsoleStartupActivity.Append(recent, item, OwnerConsoleStartupActivity.MaxRawEvents);
                     }
                     var inputs = new OwnerConsoleViewInputs(opened, last, recent.ToArray(), landings);
-                    await refreshOperation.RunAsync("refresh after conductor event", async stepToken =>
+                    await refreshOperation.RunAsync(item is null ? "refresh" : "refresh after conductor event", async stepToken =>
                     {
                         var board = await builder.BuildBoardAsync(stepToken);
                         boardIds = board.Board.Select(row => row.GoalId).ToArray();
                         foreach (var lifecycle in activityLoader.ReadNew(boardIds)) OwnerConsoleStartupActivity.Append(recent, builder.EnrichEvent(lifecycle), OwnerConsoleStartupActivity.MaxRawEvents);
                         var (decisions, hidden) = await builder.ReadDecisionsAsync(stepToken);
-                        var model = builder.WithActivity(board with { Decisions = decisions,
-                            Status = board.Status with { LiveDecisions = decisions.Length, HiddenQuestions = hidden } },
+                        var model = builder.WithActivity(builder.WithDecisions(board, decisions, hidden),
                             inputs with { RecentEvents = recent.ToArray() });
                         stepToken.ThrowIfCancellationRequested();
                         app.Invoke(() => { if (!token.IsCancellationRequested) view!.Render(model); });
@@ -99,7 +103,7 @@ internal static class OwnerConsoleFullScreenHost
                     new OwnerDigestSummaryAdapter(workspace), clock, new WorkspaceEpicProgressSource(workspace),
                     resolutions: new OwnerQuestionResolutionReader(state, new GoalEventFileTail(workspace.GoalLifecycleEventsDirectory),
                         workspace.OrchestratorDirectory, workspace.LogDirectory, clock));
-                view = new(app, controller, () => RefreshAsync(), token);
+                view = new(app, controller, () => RefreshAsync(), token, clock, OwnerConsoleLoopOptions.Default);
                 boardIds = board.Board.Select(row => row.GoalId).ToArray();
                 view.Render(board);
                 var startup = new OwnerConsoleStartupLoader(builder, activityLoader, action => app.Invoke(action), clock);
@@ -127,6 +131,16 @@ internal static class OwnerConsoleFullScreenHost
                     message => app.Invoke(() => { if (!token.IsCancellationRequested) view!.ShowRefreshFailure(message); }))
                     .RunAsync(item => RefreshAsync(item), token);
             });
+            periodicRefresh = Task.Run(async () =>
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    await Task.Delay(OwnerConsoleLoopOptions.Default.RefreshInterval, clock, token);
+                    app.Invoke(() => { if (!token.IsCancellationRequested) view.RefreshStatus(); });
+                    // Skip rather than queue another refresh behind startup or an event.
+                    await RefreshAsync(skipIfBusy: true);
+                }
+            }, token);
             app.Run(view!.Window);
             return 0;
         }
@@ -141,6 +155,9 @@ internal static class OwnerConsoleFullScreenHost
         finally
         {
             linked.Cancel();
+            try { await periodicRefresh.WaitAsync(OwnerConsoleLoopOptions.Default.ShutdownBound, clock, CancellationToken.None); }
+            catch (OperationCanceledException) { }
+            catch (TimeoutException) { }
             if (reader is not null)
             {
                 try { await reader.WaitAsync(OwnerConsoleLoopOptions.Default.ShutdownBound, clock, CancellationToken.None); }
