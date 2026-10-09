@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Xunit;
 
@@ -17,6 +18,7 @@ public sealed class RepositoryHazardAnswerKeyTests
         foreach (var key in new[] { "xunit:EnvMutation", "xunit:DotnetBuildSlots" })
         {
             var hazard = Assert.Single(hazards.Where(hazard => hazard.IsolationKey.Value == key));
+            Assert.Equal(FactConfidence.High, hazard.IsolationKey.Confidence);
             Assert.Contains(key, resourceKeys);
             Assert.Equal("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/AssemblyInfo.cs", hazard.IsolationKey.Source.Path);
             var source = hazard.IsolationKey.Source;

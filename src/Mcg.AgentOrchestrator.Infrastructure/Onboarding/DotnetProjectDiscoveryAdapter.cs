@@ -111,7 +111,7 @@ public sealed class DotnetProjectDiscoveryAdapter : IProjectDiscoveryAdapter
 
         var environment = DotnetEnvironmentNeedReader.Read(root, commands, questions);
         var measurements = UnitMeasurementCollector.Collect(root, commands, measurer, measuredKinds, questions);
-        var hazards = DotnetSharedStateHazardReader.Read(root, units, questions);
+        var hazards = DotnetSharedStateHazardReader.Read(root, units, dependencies, questions);
         // Paths in the snapshot are relative to its logical root, independent of the discovery host.
         return new ProjectModel(ProjectModel.CurrentSchemaVersion, ".", units,
             dependencies.GroupBy(edge => (edge.FromUnit, edge.ToUnit))

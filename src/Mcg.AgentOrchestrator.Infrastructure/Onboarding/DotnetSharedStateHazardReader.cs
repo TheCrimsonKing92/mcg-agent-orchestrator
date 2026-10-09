@@ -9,14 +9,17 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 internal static class DotnetSharedStateHazardReader
 {
     public static IReadOnlyList<SharedStateHazard> Read(string root, IReadOnlyList<ProjectUnit> units,
-        List<ProjectOwnerQuestion> questions)
+        IReadOnlyList<UnitDependency> dependencies, List<ProjectOwnerQuestion> questions)
     {
         var hazards = new List<SharedStateHazard>();
+        var knownUnits = units.Select(unit => unit.Id).ToHashSet(StringComparer.Ordinal);
+        var referencedConstants = new Dictionary<string, LiteralConstant[]>(StringComparer.Ordinal);
         foreach (var unit in units.Where(unit => unit.IsTest.Value == true).OrderBy(unit => unit.Id, StringComparer.Ordinal))
         {
             var directory = Path.GetDirectoryName(Path.Combine(root, unit.Id))!;
             var sources = ReadSources(root, directory, unit.Id, questions);
             LiteralConstant[]? constants = null;
+            LiteralConstant[]? directConstants = null;
             var seen = new HashSet<string>(StringComparer.Ordinal);
             foreach (var (path, text) in sources)
             {
@@ -42,7 +45,15 @@ internal static class DotnetSharedStateHazardReader
                         else if (expression is IdentifierNameSyntax or MemberAccessExpressionSyntax or AliasQualifiedNameSyntax)
                         {
                             constants ??= ReadConstants(sources);
-                            literal = Resolve(expression, constants);
+                            literal = Resolve(expression, constants, out var foundInUnit);
+                            // An ambiguous local name stays unknown; references cannot override it.
+                            // Cross-unit lookup requires a type/member reference, never a bare member.
+                            if (!foundInUnit && ReferenceName(expression) is { } referenceName && referenceName.Contains('.'))
+                            {
+                                directConstants ??= ReadDirectConstants(root, unit.Id, knownUnits,
+                                    dependencies, referencedConstants, questions);
+                                literal = Resolve(expression, directConstants, out _);
+                            }
                         }
                         if (string.IsNullOrWhiteSpace(literal))
                         {
@@ -151,23 +162,45 @@ internal static class DotnetSharedStateHazardReader
                     .Select(declaration => declaration.Name.ToString());
                 var prefix = string.Join(".", namespaces.Concat(types));
                 foreach (var variable in field.Declaration.Variables)
-                    if (variable.Initializer?.Value is LiteralExpressionSyntax literal &&
-                        literal.IsKind(SyntaxKind.StringLiteralExpression))
-                        constants.Add(new LiteralConstant(prefix + "." + variable.Identifier.ValueText,
-                            literal.Token.ValueText));
+                    constants.Add(new LiteralConstant(prefix + "." + variable.Identifier.ValueText,
+                        variable.Initializer?.Value is LiteralExpressionSyntax literal &&
+                            literal.IsKind(SyntaxKind.StringLiteralExpression) ? literal.Token.ValueText : null));
             }
         }
         return constants.ToArray();
     }
 
-    private static string? Resolve(ExpressionSyntax expression, LiteralConstant[] constants)
+    private static LiteralConstant[] ReadDirectConstants(string root, string unitId, HashSet<string> knownUnits,
+        IReadOnlyList<UnitDependency> dependencies, Dictionary<string, LiteralConstant[]> cache,
+        List<ProjectOwnerQuestion> questions)
+    {
+        var constants = new List<LiteralConstant>();
+        foreach (var target in dependencies.Where(edge => edge.FromUnit == unitId)
+            .GroupBy(edge => edge.ToUnit, StringComparer.Ordinal)
+            .Where(group => knownUnits.Contains(group.Key) && group.All(edge => edge.Confidence == FactConfidence.High))
+            .Select(group => group.Key).Order(StringComparer.Ordinal))
+        {
+            if (!cache.TryGetValue(target, out var referenced))
+            {
+                var directory = Path.GetDirectoryName(Path.Combine(root, target))!;
+                referenced = ReadConstants(ReadSources(root, directory, target, questions));
+                cache.Add(target, referenced);
+            }
+            constants.AddRange(referenced);
+        }
+        return constants.ToArray();
+    }
+
+    private static string? Resolve(ExpressionSyntax expression, LiteralConstant[] constants, out bool found)
     {
         var name = ReferenceName(expression);
+        found = false;
         if (name is null)
             return null;
         var candidates = constants.Where(constant => constant.Name == name ||
             constant.Name.EndsWith("." + name, StringComparison.Ordinal)).Select(constant => constant.Value)
             .Distinct(StringComparer.Ordinal).ToArray();
+        found = candidates.Length != 0;
         return candidates.Length == 1 ? candidates[0] : null;
     }
 
@@ -180,5 +213,5 @@ internal static class DotnetSharedStateHazardReader
         _ => null
     };
 
-    private sealed record LiteralConstant(string Name, string Value);
+    private sealed record LiteralConstant(string Name, string? Value);
 }
