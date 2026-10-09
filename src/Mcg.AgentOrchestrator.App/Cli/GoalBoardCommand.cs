@@ -268,7 +268,7 @@ internal static class GoalBoardCommand
                 .ListActionableSummariesAsync(goalIds).GetAwaiter().GetResult();
             return new IntentRead(true, summaries);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Microsoft.Data.Sqlite.SqliteException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Microsoft.Data.Sqlite.SqliteException or InvalidOperationException)
         {
             return IntentRead.Unavailable;
         }

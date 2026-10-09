@@ -20,6 +20,9 @@ public static class StoreSchemaRegistry
     public static StoreSchemaEntry Backlog { get; } =
         new("backlog", Persistence + "BacklogStore.cs", "backlog.db", "backlog", 1);
 
+    public static StoreSchemaEntry OperatorIntents { get; } =
+        new("operator-intents", Persistence + "OperatorIntentStore.cs", SqliteOperatorIntentStore.DatabaseFileName, "backlog", 1);
+
     public static StoreSchemaEntry OperatorLessons { get; } =
         new("operator-lessons", Persistence + "OperatorLessonStore.cs", "operator-lessons.db", "backlog", 1);
 
@@ -32,7 +35,7 @@ public static class StoreSchemaRegistry
         Portfolio,
         new("experiments", Persistence + "ExperimentStore.cs", "experiments.db", "experiment", null),
         Backlog,
-        new("operator-intents", Persistence + "OperatorIntentStore.cs", "operator-intents.db", "backlog", null),
+        OperatorIntents,
         OperatorLessons,
         OperatorEscapes,
         new("cohort-acceptance", Persistence + "CohortAcceptanceStore.cs", "cohort-acceptance.db", "cohort", null),

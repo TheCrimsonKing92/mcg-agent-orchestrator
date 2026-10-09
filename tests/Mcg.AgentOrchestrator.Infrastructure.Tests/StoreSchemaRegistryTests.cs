@@ -23,8 +23,10 @@ public sealed class StoreSchemaRegistryTests
             Assert.False(string.IsNullOrWhiteSpace(entry.Database));
             Assert.False(string.IsNullOrWhiteSpace(entry.Family));
         });
-        Assert.Equal(new[] { StoreSchemaRegistry.Portfolio, StoreSchemaRegistry.Backlog, StoreSchemaRegistry.OperatorLessons,
+        Assert.Equal(new[] { StoreSchemaRegistry.Portfolio, StoreSchemaRegistry.Backlog, StoreSchemaRegistry.OperatorIntents, StoreSchemaRegistry.OperatorLessons,
             StoreSchemaRegistry.OperatorEscapes }, entries.Where(entry => entry.CurrentVersion.HasValue).ToArray());
+        Assert.Equal(1, StoreSchemaRegistry.OperatorIntents.CurrentVersion);
+        Assert.Equal(SqliteOperatorIntentStore.DatabaseFileName, StoreSchemaRegistry.OperatorIntents.Database);
     }
 
     [Fact]
