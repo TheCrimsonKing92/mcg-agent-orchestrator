@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="src/Plain.Library/Plain.Library.csproj" />
+  <Project Path="tests/Plain.Tests/Plain.Tests.csproj" />
+</Solution>

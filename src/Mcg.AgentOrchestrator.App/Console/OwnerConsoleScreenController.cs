@@ -5,8 +5,12 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource questions, IOwnerAnswerSubmitter answers,
     IOwnerConsoleDialogs dialogs, IOrchestratorStateQueries state, IGoalEventTail tail,
     IOwnerConsoleConductor conductor, IOwnerConsoleDigestReport digest,
-    IOwnerDigestSummary summary, TimeProvider clock, IOwnerConsoleEpicSource? epics = null)
+    IOwnerDigestSummary summary, TimeProvider clock, IOwnerConsoleEpicSource? epics = null,
+    AnswerIntentStatusTracker? answerTracking = null) : IDisposable
 {
+    private readonly AnswerIntentStatusTracker _answerTracking = answerTracking ?? new(answers.ReadStatusAsync, clock);
+    public void Dispose() => _answerTracking.Dispose();
+
     internal event Action? ModelApplied;
 
     internal async Task<OwnerConsoleEpicViewModel> LoadEpicViewAsync(OwnerConsoleEpicWindow window,
@@ -97,6 +101,7 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
         { await dialogs.ShowTextAsync("Answer", "Answer cannot be empty or start with --"); return; }
         var title = "Answer";
         var message = string.Empty;
+        OwnerAnswerSubmission? submission = null;
         if (!await RunDependencyAsync(accept ? "accept default" : "answer", async stepToken =>
         {
             try
@@ -107,14 +112,19 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
                 if (live != decision.ToQuestion())
                 { title = "Decision"; message = "Question changed; review it again before answering."; return; }
                 stepToken.ThrowIfCancellationRequested();
-                answers.Submit(live, text);
-                var stillOpen = (await questions.ReadAsync(stepToken)).Live.Any(item => item.ItemId == decision.Id);
-                message = stillOpen ? $"question {decision.Number} is still open; answer was not accepted" : $"answered question {decision.Number}";
+                submission = answers.Submit(live, text);
+                message = AnswerIntentStatusTracker.Queued(decision.Number, decision.GoalPrefix);
             }
             catch (OperationCanceledException) when (stepToken.IsCancellationRequested) { throw; }
             catch (Exception ex) { message = $"error: {ex.Message}"; }
         }, operation, cancellationToken)) return;
         cancellationToken.ThrowIfCancellationRequested();
+        if (submission is not null && operation is not null)
+        {
+            operation.Notify(message);
+            _answerTracking.Track(submission.IntentId, decision.Number, decision.GoalPrefix, operation.Notify, cancellationToken);
+            return;
+        }
         await dialogs.ShowTextAsync(title, message);
     }
 

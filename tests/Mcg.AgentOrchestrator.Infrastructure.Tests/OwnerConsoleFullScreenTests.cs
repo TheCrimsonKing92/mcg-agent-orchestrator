@@ -90,7 +90,11 @@ public sealed class OwnerConsoleFullScreenTests
         Assert.Equal(key == 'a' ? 1 : 0, dialogs.ConfirmCalls);
         Assert.Equal(1, refreshCalls);
         Assert.DoesNotContain("working:", view.StatusText);
-        Assert.Empty(view.Notices);
+        if (expected is null)
+            Assert.Empty(view.Notices);
+        else
+            Assert.Equal("Answer queued for question 1 (11111111); the conductor applies it on its next tick.",
+                Assert.Single(view.Notices));
     }
 
     [Fact]

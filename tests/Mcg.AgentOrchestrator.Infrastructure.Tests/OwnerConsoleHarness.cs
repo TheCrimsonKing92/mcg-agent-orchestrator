@@ -97,7 +97,10 @@ internal sealed class OwnerConsoleHarness
     internal sealed class FakeAnswers : IOwnerAnswerSubmitter
     {
         internal readonly List<(string Id, string Text)> Calls = [];
-        public void Submit(OwnerQuestion question, string answer) => Calls.Add((question.ItemId, answer));
+        public OwnerAnswerSubmission Submit(OwnerQuestion question, string answer)
+        { Calls.Add((question.ItemId, answer)); return new(null); }
+        public Task<OwnerAnswerIntentStatus?> ReadStatusAsync(string intentId, CancellationToken cancellationToken) =>
+            Task.FromResult<OwnerAnswerIntentStatus?>(null);
     }
 
     internal sealed class FakeOutput : IOwnerConsoleOutput

@@ -10,7 +10,8 @@ internal sealed record SliceBatchAdmissionDecision(bool IsAllowed, string? Reaso
 internal sealed class SliceBatchAdmissionEvaluator(
     Func<IReadOnlyCollection<Goal>> siblingSource,
     Func<Goal, IReadOnlyList<string>?> observedChangedPathsReader,
-    Action<GoalId, string> policyDecisionRecorder)
+    Action<GoalId, string> policyDecisionRecorder,
+    SliceBatchSiblingDependencyCoordinator? siblingDependencies = null)
 {
     private const int MaximumScopeTextCharacters = 64_000;
     private readonly HashSet<GoalId> _admittedThisTick = [];
@@ -30,9 +31,28 @@ internal sealed class SliceBatchAdmissionEvaluator(
             return SliceBatchAdmissionDecision.Allowed;
         }
 
-        var candidateScope = GetEffectiveScope(candidate);
+        var siblings = siblingSource();
+        var dependencyHold = SliceBatchSiblingDependencyCoordinator.TryDescribeSiblingHold(candidate, siblings);
+        if (dependencyHold is not null)
+        {
+            RecordOnce(candidate.Id, dependencyHold);
+            return new SliceBatchAdmissionDecision(false, dependencyHold);
+        }
+
         var candidateDispatched = candidate.Tasks.Any(task => task.LastProcess is not null);
-        var occupyingSiblings = GoalScopeCollisionAdvisor.SelectComparisonCandidates(siblingSource())
+        if (!candidateDispatched)
+        {
+            var branchHold = (siblingDependencies ?? new SliceBatchSiblingDependencyCoordinator(null))
+                .PrepareBranch(candidate, siblings);
+            if (branchHold is not null)
+            {
+                RecordOnce(candidate.Id, branchHold);
+                return new SliceBatchAdmissionDecision(false, branchHold);
+            }
+        }
+
+        var candidateScope = GetEffectiveScope(candidate);
+        var occupyingSiblings = GoalScopeCollisionAdvisor.SelectComparisonCandidates(siblings)
             .Where(goal =>
                 goal.Id != candidate.Id &&
                 goal.SliceBatchParentId == candidate.SliceBatchParentId &&
@@ -43,6 +63,9 @@ internal sealed class SliceBatchAdmissionEvaluator(
 
         foreach (var sibling in occupyingSiblings)
         {
+            if (SliceBatchSiblingDependencyCoordinator.IsSatisfiedSibling(candidate, sibling))
+                continue;
+
             var siblingScope = GetEffectiveScope(sibling);
             var collision = candidateScope.IsAvailable && siblingScope.IsAvailable
                 ? GoalScopeCollisionAdvisor.ClassifySiblingScopeCollision(candidateScope.Paths, siblingScope.Paths)

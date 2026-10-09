@@ -14,6 +14,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     private readonly IKeyboard? _keyboard;
     private readonly Func<Task> _refresh;
     private readonly CancellationToken _token;
+    private readonly CancellationTokenSource _lifetime;
     private readonly Label _status = new() { Width = Dim.Fill(), Height = 1 };
     private readonly ListView _decisions = new() { Width = Dim.Fill(), Height = Dim.Fill() };
     private readonly Label _emptyDecisions = new() { Text = "Nothing needs you right now.", Width = Dim.Fill(), Height = 1, Visible = false };
@@ -57,7 +58,8 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         _app = app;
         _controller = controller;
         _refresh = refresh;
-        _token = token;
+        _lifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
+        _token = _lifetime.Token;
         _operation = new(clock ?? TimeProvider.System,
             label => Invoke(() => { if (!_token.IsCancellationRequested) SetWorking("command", label); }),
             message => Invoke(() => { if (!_token.IsCancellationRequested) ShowRefreshFailure(message); }), options);
@@ -340,8 +342,11 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
 
     public void Dispose()
     {
+        _lifetime.Cancel();
+        _controller.Dispose();
         if (_keyboard is not null) _keyboard.KeyDown -= OnKeyDown;
         Window.Dispose();
         BoardTable.Dispose();
+        _lifetime.Dispose();
     }
 }

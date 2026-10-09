@@ -65,7 +65,7 @@ internal sealed class GoalEventFileTail(string directory) : IGoalEventTail
 
 internal sealed class AttentionAnswerHandlerAdapter(OrchestratorWorkspace workspace) : IOwnerAnswerSubmitter
 {
-    public void Submit(OwnerQuestion question, string answer)
+    public OwnerAnswerSubmission Submit(OwnerQuestion question, string answer)
     {
         if (question.Kind == OwnerQuestionKind.StewardHold)
             throw new InvalidOperationException("Steward holds have no attention answer handler.");
@@ -73,10 +73,28 @@ internal sealed class AttentionAnswerHandlerAdapter(OrchestratorWorkspace worksp
         IReadOnlyList<AgentDefinition> agents = AgentCatalogStore.Load(workspace.AgentCatalogPath).Agents;
         var profiles = WorkerProfileStore.Load(workspace.WorkerProfilePath);
         Goal? currentGoal = null;
+        var key = Guid.NewGuid().ToString("N");
         CliPersistentStateRunner.ExecuteCommand(
-            ["attention", "answer", question.ItemId, answer],
+            ["attention", "answer", question.ItemId, answer, "--idempotency-key", key],
             repository, workspace, ref agents,
             new InMemoryModelProviderRegistry([]), ref profiles, ref currentGoal,
             NullOperatorChannel.Instance);
+        // Submission has succeeded even if the subsequent read cannot resolve its receipt.
+        try
+        {
+            var store = SqliteOperatorIntentStore.OpenExisting(workspace.OrchestratorDirectory, workspace.LogDirectory);
+            var intent = store.ListForGoalAsync(question.GoalId).GetAwaiter().GetResult()
+                .FirstOrDefault(item => item.IdempotencyKey == key);
+            return new(intent?.Id);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Microsoft.Data.Sqlite.SqliteException)
+        { return new(null); }
+    }
+
+    public async Task<OwnerAnswerIntentStatus?> ReadStatusAsync(string intentId, CancellationToken cancellationToken)
+    {
+        var intent = await SqliteOperatorIntentStore.OpenExisting(workspace.OrchestratorDirectory, workspace.LogDirectory)
+            .GetAsync(intentId, cancellationToken).ConfigureAwait(false);
+        return intent is null ? null : new(intent.Status, intent.Outcome);
     }
 }

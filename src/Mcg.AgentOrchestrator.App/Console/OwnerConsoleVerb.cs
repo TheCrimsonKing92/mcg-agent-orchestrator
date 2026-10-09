@@ -31,7 +31,7 @@ internal static class OwnerConsoleVerb
             var source = new ConductEventFileSource(workspace.ConductEventsLogPath, clock);
             var changes = new ChangeStreamFileReader(Path.Combine(
                 Path.GetDirectoryName(workspace.ConductEventsLogPath) ?? ".", ChangeStreamWriter.FileName));
-            var session = new OwnerConsoleSession(
+            using var session = new OwnerConsoleSession(
                 state,
                 new OwnerQuestionReadModel(state, workspace.OrchestratorDirectory),
                 new AttentionAnswerHandlerAdapter(workspace),

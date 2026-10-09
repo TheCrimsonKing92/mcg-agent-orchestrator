@@ -167,7 +167,7 @@ internal static class SourceSizeRatchet
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2675),
             // Goal 354522f1 tick persistence partial measured at 467 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.TickPersistence.cs", 467),
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.DependencyReadmission.cs", 384),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.DependencyReadmission.cs", 375),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.ParallelAcceptanceFairness.cs", 150),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.ParallelAcceptanceCompletion.cs", 465),
             // Goal 6e664238 conduct-event partial measured at 260 lines.
@@ -410,9 +410,9 @@ internal static class SourceSizeRatchet
             new SourceClassCeiling("AgentOrchestratorKernel", 9319, 27),
             // Goal d6033045 extracted the pre-admission receipt pass to PassedMergeTrainReceiptAdmission; goal 1d0f2317
             // adds one admission predicate to exclude stream-complete children before slot reservation. Measured 9255.
-            // Goal 679eee57 adds the required one-line tick call to the separately owned ConductorExperimentWatch.
-            // Experiment evaluation and notification behavior remain in that type; measured 9273 across 56 files, no extra headroom.
-            new SourceClassCeiling("ConductorBatchLoop", 9273, 56), // def5cd48: revision ledger and planner conflict routing.
+            // Goal 679eee57 added a one-line tick call to the separately owned ConductorExperimentWatch (+1); goal 80de5cb2 extracted
+            // dependency hold evaluation to its own type (-42). Measured 9231 across 56 files after both, no extra headroom.
+            new SourceClassCeiling("ConductorBatchLoop", 9231, 56), // def5cd48: revision ledger and planner conflict routing.
             // Goal 4da02c2f extracted the single-goal report predicate to CliSingleGoalReportCommand.
             new SourceClassCeiling("CliPersistentStateRunner", 6017, 18),
         });

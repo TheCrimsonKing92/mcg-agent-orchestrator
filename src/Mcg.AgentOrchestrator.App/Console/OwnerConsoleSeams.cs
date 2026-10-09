@@ -30,8 +30,13 @@ internal interface IOwnerQuestionSource
 
 internal interface IOwnerAnswerSubmitter
 {
-    void Submit(OwnerQuestion question, string answer);
+    OwnerAnswerSubmission Submit(OwnerQuestion question, string answer);
+    Task<OwnerAnswerIntentStatus?> ReadStatusAsync(string intentId, CancellationToken cancellationToken);
 }
+
+internal sealed record OwnerAnswerSubmission(string? IntentId);
+internal sealed record OwnerAnswerIntentStatus(
+    Mcg.AgentOrchestrator.Infrastructure.OperatorIntentStatus Status, string? Outcome = null);
 
 internal interface IConductorLiveness
 {

@@ -9,15 +9,6 @@ internal sealed partial class ConductorBatchLoop
             task.Status == WorkTaskStatus.Running ||
             task.LastProcess is { IsRunning: true });
 
-    private static bool IsMetadataSatisfiedDependencyStatus(string status) =>
-        status.Equals("CleanedUp", StringComparison.OrdinalIgnoreCase);
-
-    private static bool IsTerminalWithoutLandingDependencyStatus(string status) =>
-        status.Equals(GoalStatus.Failed.ToString(), StringComparison.OrdinalIgnoreCase) ||
-        status.Equals(GoalStatus.Cancelled.ToString(), StringComparison.OrdinalIgnoreCase) ||
-        status.Equals(GoalStatus.Superseded.ToString(), StringComparison.OrdinalIgnoreCase) ||
-        status.Equals("Retired", StringComparison.OrdinalIgnoreCase);
-
     private static void MarkCompletedDependencyGoals(
         AgentOrchestratorKernel kernel,
         ConductorDriver driver,

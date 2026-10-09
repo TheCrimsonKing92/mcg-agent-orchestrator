@@ -61,12 +61,13 @@ internal static class ProjectCliCommand
             : name.Equals(OrchestratorWorkspace.DefaultProjectName, StringComparison.OrdinalIgnoreCase)
                 ? new OrchestratorProject(OrchestratorWorkspace.DefaultProjectName, Path.GetFullPath(defaultRootDirectory))
                 : registry.GetRequiredProject(name);
+        var workspaceDirectory = ProjectDiscoveryModelLocation.ResolveDirectory(project, rootOverride, defaultRootDirectory,
+            registry.DataRootDirectory);
         IProjectDiscoveryAdapter adapter = new DotnetProjectDiscoveryAdapter();
         var measurer = measuredKinds is null ? null : measurerFactory is null ? new ProcessUnitCommandMeasurer()
             : measurerFactory() ?? throw new InvalidOperationException("The measurement factory returned no measurer.");
         var model = adapter.Discover(rootOverride ?? project.RootDirectory, RepositorySourceInventory.ExcludedDirectoryNames,
             measurer, measuredKinds ?? UnitCommandKinds.None);
-        var workspaceDirectory = project.ResolveWorkspace().OrchestratorDirectory;
         Directory.CreateDirectory(workspaceDirectory);
         var modelPath = Path.Combine(workspaceDirectory, "project-model.json");
         var temporaryPath = Path.Combine(workspaceDirectory, $".project-model-{Guid.NewGuid():N}.tmp");

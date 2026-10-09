@@ -5,8 +5,283 @@ using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 using System.Text.Json;
 
+// Parallel-safe: repositories/workspaces are unique, and worker dispatch is seamed.
 public sealed class SliceBatchExecutionTests
 {
+    [Xunit.Fact]
+    public void Prompt_SiblingContract_DeclaresEdgeInInstructionAndExample()
+    {
+        var prompt = GoalDagDecompositionPlanner.BuildPrompt("Implement product", true);
+        Xunit.Assert.Contains("uses a symbol, API, path or contract that the sibling introduces", prompt);
+        Xunit.Assert.Contains("list that sibling's id in \"dependsOn\"", prompt);
+        var example = GoalDagDecompositionPlanner.ValidateSliceBatch(
+            GoalDagDecompositionPlanner.Parse("example", prompt));
+        Xunit.Assert.True(example.IsValid, string.Join("; ", example.ValidationErrors));
+        var consumer = Xunit.Assert.Single(example.Nodes, node => node.DependsOn.Count > 0);
+        Xunit.Assert.Contains(example.Nodes, node => node.Id == consumer.DependsOn.Single());
+    }
+
+    [Xunit.Fact]
+    public void Validation_DeclaredSiblingContract_AcceptsEdge()
+    {
+        var plan = GoalDagDecompositionPlanner.ValidateSliceBatch(
+            GoalDagDecompositionPlanner.Parse("slices", SiblingPlan("Code against g1's contract.", true)));
+        Xunit.Assert.True(plan.IsValid, string.Join("; ", plan.ValidationErrors));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("Built in parallel against the sibling contract.", "in parallel against")]
+    [Xunit.InlineData("Code against g1's contract.", "g1")]
+    [Xunit.InlineData("Consume the contract from g1.", "g1")]
+    [Xunit.InlineData("Read src/Mcg.AgentOrchestrator.Core/Application/AlphaService.cs.", "AlphaService.cs")]
+    [Xunit.InlineData("Use the contract introduced by the sibling.", "introduced by")]
+    public void Validation_HiddenSiblingReference_RejectsPlan(string objective, string match)
+    {
+        var plan = GoalDagDecompositionPlanner.ValidateSliceBatch(
+            GoalDagDecompositionPlanner.Parse("slices", SiblingPlan(objective, false)));
+        Xunit.Assert.False(plan.IsValid);
+        Xunit.Assert.Contains(plan.ValidationErrors, error =>
+            error.Contains("g2", StringComparison.Ordinal) &&
+            error.Contains(match, StringComparison.OrdinalIgnoreCase) &&
+            error.Contains("g1", StringComparison.Ordinal) &&
+            error.Contains("dependsOn", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public void Validation_IndependentNodes_IgnoresIdsInsideIncludes()
+    {
+        // Keep a trusted repository scope, with the sibling id only in the Includes annotation.
+        var json = SiblingPlan("Implement independent feature.", false,
+            "src/Mcg.AgentOrchestrator.Core/Application/BetaService.cs (g1)");
+        var plan = GoalDagDecompositionPlanner.ValidateSliceBatch(
+            GoalDagDecompositionPlanner.Parse("slices", json));
+        Xunit.Assert.True(plan.IsValid, string.Join("; ", plan.ValidationErrors));
+        Xunit.Assert.All(plan.Nodes, node => Xunit.Assert.Empty(node.DependsOn));
+    }
+
+    [Xunit.Fact]
+    public void Validation_SiblingReferenceAfterIncludes_RejectsPlan()
+    {
+        var json = SiblingPlan("Implement independent feature.", false)
+            .Replace("BetaService.cs", "BetaService.cs\\nNotes: use g1's contract.", StringComparison.Ordinal);
+        var plan = GoalDagDecompositionPlanner.ValidateSliceBatch(
+            GoalDagDecompositionPlanner.Parse("slices", json));
+        Xunit.Assert.False(plan.IsValid);
+        Xunit.Assert.Contains(plan.ValidationErrors, error => error.Contains("without declaring dependsOn", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public void Plan_DeclaredEdge_RecordsChildDependencyAndSnapshot()
+    {
+        var (kernel, workspace, agents, providers) = CreateContext(SiblingPlan("Consume g1's contract.", true));
+        try
+        {
+            var parent = CreateBatch(kernel, workspace, agents, providers);
+            var children = kernel.Goals.Where(goal => goal.SliceBatchParentId == parent.Id).ToArray();
+            Xunit.Assert.Equal(2, children.Length);
+            Xunit.Assert.Equal([children[0].Id], children[1].DependsOn);
+            var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+            Xunit.Assert.Equal([children[0].Id], restored.GetGoal(children[1].Id).DependsOn);
+        }
+        finally { Directory.Delete(workspace.RootDirectory, recursive: true); }
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void SiblingEdge_StreamComplete_PreparesBranchBeforeFirstDispatch(bool existingBranch)
+    {
+        var (kernel, workspace, agents, providers) = CreateContext(SiblingPlan("Consume g1's contract.", true));
+        using var repository = new SliceBatchSiblingBranchFixture();
+        try
+        {
+            var parent = CreateBatch(kernel, workspace, agents, providers);
+            var children = kernel.Goals.Where(goal => goal.SliceBatchParentId == parent.Id).ToArray();
+            var producer = children[0];
+            var consumer = children[1];
+            var tip = repository.Commit(producer.Id,
+                "src/Mcg.AgentOrchestrator.Core/Application/AlphaService.cs", "Producer contract");
+            if (existingBranch)
+                repository.Commit(consumer.Id,
+                    "src/Mcg.AgentOrchestrator.Core/Application/BetaService.cs", "Existing consumer work");
+            var dispatches = new List<GoalId>();
+            var callbackObserved = false;
+            var driver = CreateDriver(kernel, [], dispatches, repository.Repository, goal =>
+            {
+                Xunit.Assert.Equal(consumer.Id, goal.Id);
+                Xunit.Assert.All(goal.Tasks, task => Xunit.Assert.Null(task.LastProcess));
+                repository.AssertContains(consumer.Id, tip);
+                callbackObserved = true;
+            });
+            driver.SliceBatchAdmissionEvaluator = new SliceBatchAdmissionEvaluator(
+                () => kernel.Goals,
+                _ => ["src/Mcg.AgentOrchestrator.Core/Application/AlphaService.cs"],
+                kernel.RecordGoalPolicyDecision,
+                new SliceBatchSiblingDependencyCoordinator(repository.Repository));
+
+            // Exercise both the batch dependency gate and the driver admission gate.
+            RunConsumerTick(kernel, driver, consumer, repository.Repository);
+            Xunit.Assert.Empty(dispatches);
+            driver.BeginTick();
+            var held = Xunit.Assert.IsType<ConductorAdvanceOutcome.Held>(
+                driver.AdvanceOnce(consumer, ConductorAutonomyPolicy.Conservative).Outcome);
+            Xunit.Assert.Contains("stream completion", held.Reason);
+            CompleteStream(kernel, producer);
+            Xunit.Assert.Equal(GoalStatus.Verified, producer.Status);
+            Xunit.Assert.False(kernel.IsKnownCompletedDependencyGoal(producer.Id));
+            Xunit.Assert.True(SliceBatchParentExecutionGuard.IsStreamComplete(producer));
+
+            RunConsumerTick(kernel, driver, consumer, repository.Repository);
+            Xunit.Assert.True(callbackObserved, "Consumer dispatch callback was not invoked.");
+            Xunit.Assert.Equal([consumer.Id], dispatches);
+            Xunit.Assert.Equal(GoalStatus.Verified, producer.Status);
+            Xunit.Assert.Null(new SliceBatchSiblingDependencyCoordinator(repository.Repository)
+                .PrepareBranch(consumer, kernel.Goals));
+            repository.AssertContains(consumer.Id, tip);
+        }
+        finally { Directory.Delete(workspace.RootDirectory, recursive: true); }
+    }
+
+    [Xunit.Fact]
+    public void Admission_CompleteSiblingWithoutEdge_StillBlocksCollidingScope()
+    {
+        var (kernel, workspace, agents, providers) = CreateContext(SiblingPlan("Implement independent feature.", false));
+        try
+        {
+            var parent = CreateBatch(kernel, workspace, agents, providers);
+            var children = kernel.Goals.Where(goal => goal.SliceBatchParentId == parent.Id).ToArray();
+            CompleteStream(kernel, children[0]);
+            var driver = CreateDriver(kernel, [], new List<GoalId>());
+            driver.BeginTick();
+            var held = Xunit.Assert.IsType<ConductorAdvanceOutcome.Held>(
+                driver.AdvanceOnce(children[1], ConductorAutonomyPolicy.Conservative).Outcome);
+            Xunit.Assert.Contains("occupies colliding scope", held.Reason);
+        }
+        finally { Directory.Delete(workspace.RootDirectory, recursive: true); }
+    }
+
+    [Xunit.Fact]
+    public void SiblingEdge_MergeConflict_HoldsConsumerAndRestoresBranch()
+    {
+        var (kernel, workspace, agents, providers) = CreateContext(SiblingPlan("Consume g1's contract.", true));
+        using var repository = new SliceBatchSiblingBranchFixture();
+        try
+        {
+            var parent = CreateBatch(kernel, workspace, agents, providers);
+            var children = kernel.Goals.Where(goal => goal.SliceBatchParentId == parent.Id).ToArray();
+            const string path = "src/Mcg.AgentOrchestrator.Core/Application/AlphaService.cs";
+            repository.Commit(children[0].Id, path, "Producer contract");
+            var consumerTip = repository.Commit(children[1].Id, path, "Conflicting consumer contract");
+            CompleteStream(kernel, children[0]);
+            var dispatches = new List<GoalId>();
+            var driver = CreateDriver(kernel, [], dispatches, repository.Repository);
+            driver.BeginTick();
+            var held = Xunit.Assert.IsType<ConductorAdvanceOutcome.Held>(
+                driver.AdvanceOnce(children[1], ConductorAutonomyPolicy.Conservative).Outcome);
+            Xunit.Assert.Contains(children[0].Id.Value[..8], held.Reason);
+            Xunit.Assert.Contains(children[1].Id.Value[..8], held.Reason);
+            Xunit.Assert.Contains(path, held.Reason);
+            Xunit.Assert.Empty(dispatches);
+            repository.AssertRestored(children[1].Id, consumerTip);
+        }
+        finally { Directory.Delete(workspace.RootDirectory, recursive: true); }
+    }
+
+    [Xunit.Fact]
+    public void DependencyHold_FailedSibling_EscalatesWithoutDispatch()
+    {
+        var (kernel, workspace, agents, providers) = CreateContext(SiblingPlan("Consume g1's contract.", true));
+        try
+        {
+            var parent = CreateBatch(kernel, workspace, agents, providers);
+            var children = kernel.Goals.Where(goal => goal.SliceBatchParentId == parent.Id).ToArray();
+            var producerId = children[0].Id;
+            var consumerId = children[1].Id;
+            var snapshot = kernel.ExportSnapshot();
+            kernel.ReplaceWithSnapshot(snapshot with
+            {
+                Goals = snapshot.Goals.Select(goal => goal.Id == producerId.Value
+                    ? goal with { Status = GoalStatus.Failed }
+                    : goal).ToArray()
+            });
+            kernel.MarkKnownDependencyGoalStatuses([
+                new KeyValuePair<GoalId, string>(producerId, GoalStatus.Failed.ToString())
+            ]);
+            var producer = kernel.GetGoal(producerId);
+            var consumer = kernel.GetGoal(consumerId);
+            Xunit.Assert.True(SliceBatchSiblingDependencyCoordinator.IsSiblingEdge(consumer, producer));
+            Xunit.Assert.False(SliceBatchParentExecutionGuard.IsStreamComplete(producer));
+            var expected = $"dependency-terminal-without-landing: {producerId.Value[..8]} state=Failed";
+            var reason = ConductorDependencyHoldEvaluator.Evaluate(consumer, [], [], kernel, out var requiresPerson);
+            Xunit.Assert.Equal(expected, reason);
+            Xunit.Assert.True(requiresPerson);
+
+            var dispatches = new List<GoalId>();
+            CaptureConsole(() =>
+            {
+                var summary = new ConductorBatchLoop().Run(kernel, CreateDriver(kernel, [], dispatches),
+                    ConductorAutonomyPolicy.Conservative, Path.Combine(workspace.RootDirectory, "stop.txt"),
+                    maxIterations: 1, onlyGoalId: consumerId.Value);
+                Xunit.Assert.Equal(1, summary.Escalated);
+            });
+            Xunit.Assert.Empty(dispatches);
+            Xunit.Assert.Contains(kernel.GetGoal(consumerId).Timeline, item =>
+                item.Message.Contains(expected, StringComparison.Ordinal));
+        }
+        finally { Directory.Delete(workspace.RootDirectory, recursive: true); }
+    }
+
+    [Xunit.Fact]
+    public void DependencyHold_EscalatedSibling_RequiresPerson()
+    {
+        var (kernel, workspace, agents, providers) = CreateContext(SiblingPlan("Consume g1's contract.", true));
+        try
+        {
+            var parent = CreateBatch(kernel, workspace, agents, providers);
+            var children = kernel.Goals.Where(goal => goal.SliceBatchParentId == parent.Id).ToArray();
+            Xunit.Assert.False(SliceBatchParentExecutionGuard.IsStreamComplete(children[0]));
+            var reason = ConductorDependencyHoldEvaluator.Evaluate(children[1], [],
+                [children[0].Id.Value], kernel, out var requiresPerson);
+            Xunit.Assert.Equal($"dependency escalated: {children[0].Id.Value[..8]}", reason);
+            Xunit.Assert.True(requiresPerson);
+        }
+        finally { Directory.Delete(workspace.RootDirectory, recursive: true); }
+    }
+
+    private static void RunConsumerTick(AgentOrchestratorKernel kernel, ConductorDriver driver,
+        Goal consumer, string root) => CaptureConsole(() =>
+        new ConductorBatchLoop().Run(kernel, driver, ConductorAutonomyPolicy.Conservative,
+            Path.Combine(root, "stop.txt"), maxIterations: 1, onlyGoalId: consumer.Id.Value));
+
+    private static void CompleteStream(AgentOrchestratorKernel kernel, Goal goal)
+    {
+        var completedAt = new DateTimeOffset(2026, 10, 7, 12, 0, 0, TimeSpan.Zero);
+        foreach (var task in goal.Tasks)
+        {
+            kernel.RecordTaskDispatch(goal.Id, task.Id,
+                new TaskDispatchRecord("test-worker", "test.exe", "unused", completedAt));
+            kernel.RecordTaskProcessStarted(goal.Id, task.Id,
+                new TaskProcessRecord(101, "test.exe", "unused", "stdout", "stderr", "exit",
+                    completedAt, completedAt, 0));
+            kernel.RecordTaskVerification(goal.Id, task.Id,
+                new TaskVerificationRecord("test.exe", "unused", 0, "ok", "", completedAt));
+        }
+    }
+
+    private static string SiblingPlan(string consumerObjective, bool dependsOn, string? consumerPath = null)
+    {
+        static string Scoped(string objective, string path) =>
+            $"{objective}\n\nTarget files/scopes:\nScope confidence: precise\nIncludes:\n- {path}";
+        return "```json\n" + JsonSerializer.Serialize(new[]
+        {
+            new { id = "g1", objective = Scoped("Introduce producer contract.",
+                "src/Mcg.AgentOrchestrator.Core/Application/AlphaService.cs"), dependsOn = Array.Empty<string>() },
+            new { id = "g2", objective = Scoped(consumerObjective,
+                consumerPath ?? "src/Mcg.AgentOrchestrator.Core/Application/BetaService.cs"),
+                dependsOn = dependsOn ? new[] { "g1" } : Array.Empty<string>() }
+        }) + "\n```";
+    }
+
     [Xunit.Fact]
     public void Plan_TwoSlices_RecordsStreamReviewPipelineOnlyForChildren()
     {
@@ -185,7 +460,9 @@ public sealed class SliceBatchExecutionTests
     internal static ConductorDriver CreateDriver(
         AgentOrchestratorKernel kernel,
         ICollection<GoalId> workspaceCreations,
-        ICollection<GoalId> dispatches)
+        ICollection<GoalId> dispatches,
+        string? repository = null,
+        Action<Goal>? beforeDispatch = null)
     {
         var driver = new ConductorDriver(
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
@@ -197,6 +474,7 @@ public sealed class SliceBatchExecutionTests
             },
             dispatchAndStart: goal =>
             {
+                beforeDispatch?.Invoke(goal);
                 dispatches.Add(goal.Id);
                 return DispatchStartOutcome.Started();
             },
@@ -230,7 +508,8 @@ public sealed class SliceBatchExecutionTests
         driver.SliceBatchAdmissionEvaluator = new SliceBatchAdmissionEvaluator(
             () => kernel.Goals,
             _ => [],
-            kernel.RecordGoalPolicyDecision);
+            kernel.RecordGoalPolicyDecision,
+            new SliceBatchSiblingDependencyCoordinator(repository));
         return driver;
     }
 
