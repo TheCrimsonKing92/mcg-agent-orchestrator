@@ -16,7 +16,7 @@ public sealed partial class GoalAcceptanceVerifier
         if (goalId is null || _ownerPolicyDecisionStoreDirectory is null ||
             !Directory.Exists(_ownerPolicyDecisionStoreDirectory)) return false;
         var fingerprint = ComputeOwnerProtectedChangeFingerprint(worktreePath, changedFiles,
-            AcceptanceGitTextResolver.Resolve, "HEAD", readCommittedCandidate: false);
+            AcceptanceGitTextResolver.Resolve, "HEAD", readCommittedCandidate: false, IntegrationBranch);
         return fingerprint is not null && AcceptancePolicyChangeDecision.IsApprovedForFingerprintAsync(
             CollaborationItemStore.ForDirectory(_ownerPolicyDecisionStoreDirectory), goalId.Value, fingerprint)
             .GetAwaiter().GetResult();
@@ -40,16 +40,16 @@ public sealed partial class GoalAcceptanceVerifier
         AcceptancePolicyChangeDecision.IsApprovedAsync(store, goalId.Value, candidateSha)
             .GetAwaiter().GetResult();
 
-    private static AcceptanceCheckResult? TryClassifyManifestTrust(
+    private AcceptanceCheckResult? TryClassifyManifestTrust(
         string worktreePath,
         IReadOnlyList<string>? changedFiles) =>
-        TryClassifyManifestTrustCore(worktreePath, changedFiles, AcceptanceGitTextResolver.Resolve);
+        TryClassifyManifestTrustCore(worktreePath, changedFiles, AcceptanceGitTextResolver.Resolve, IntegrationBranch);
 
     internal static AcceptanceCheckResult? TryClassifyManifestTrustWithGitForTests(
         string worktreePath,
         IReadOnlyList<string>? changedFiles,
         Func<string, string[], string?> resolveGitText) =>
-        TryClassifyManifestTrustCore(worktreePath, changedFiles, resolveGitText);
+        TryClassifyManifestTrustCore(worktreePath, changedFiles, resolveGitText, TrunkBranchName.Default);
 
     internal static AcceptanceCheckResult? TryClassifyManifestTrustWithGitForTests(
         string worktreePath,
@@ -59,11 +59,11 @@ public sealed partial class GoalAcceptanceVerifier
         GoalId goalId,
         string candidateSha)
     {
-        var failure = TryClassifyManifestTrustCore(worktreePath, changedFiles, resolveGitText);
+        var failure = TryClassifyManifestTrustCore(worktreePath, changedFiles, resolveGitText, TrunkBranchName.Default);
         if (failure is null || HasOwnerPolicyApprovalForTests(decisions, goalId, candidateSha))
             return null;
         var fingerprint = ComputeOwnerProtectedChangeFingerprint(
-            worktreePath, changedFiles, resolveGitText, "HEAD", readCommittedCandidate: false);
+            worktreePath, changedFiles, resolveGitText, "HEAD", readCommittedCandidate: false, TrunkBranchName.Default);
         return fingerprint is not null && AcceptancePolicyChangeDecision.IsApprovedForFingerprintAsync(
             decisions, goalId.Value, fingerprint).GetAwaiter().GetResult() ? null : failure;
     }
@@ -71,7 +71,7 @@ public sealed partial class GoalAcceptanceVerifier
     private static AcceptanceCheckResult? TryClassifyManifestTrustCore(
         string worktreePath,
         IReadOnlyList<string>? changedFiles,
-        Func<string, string[], string?> resolveGitText)
+        Func<string, string[], string?> resolveGitText, string integrationBranch)
     {
         if (changedFiles is null)
             return null;
@@ -85,7 +85,7 @@ public sealed partial class GoalAcceptanceVerifier
             !File.Exists(candidateManifestPath);
         var details = new List<string>();
 
-        foreach (var rawPath in SelectOwnerProtectedPolicyPaths(worktreePath, changedFiles, resolveGitText, "HEAD"))
+        foreach (var rawPath in SelectOwnerProtectedPolicyPaths(worktreePath, changedFiles, resolveGitText, "HEAD", integrationBranch))
         {
             var path = NormalizePath(rawPath);
             var fullPath = Path.GetFullPath(Path.Combine(worktreePath, path.Replace('/', Path.DirectorySeparatorChar)));
@@ -93,7 +93,7 @@ public sealed partial class GoalAcceptanceVerifier
             if (!fullPath.StartsWith(root, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException($"Owner-protected path escapes worktree: {path}");
             var candidate = File.Exists(fullPath) ? File.ReadAllText(fullPath) : null;
-            var trusted = resolveGitText(worktreePath, ["show", $"main:{path}"]);
+            var trusted = resolveGitText(worktreePath, ["show", $"{integrationBranch}:{path}"]);
             IReadOnlyList<string> fields;
             try
             {
@@ -108,7 +108,7 @@ public sealed partial class GoalAcceptanceVerifier
 
         if (manifestChanged || manifestMissing)
         {
-            var trusted = resolveGitText(worktreePath, ["show", "main:config/acceptance-manifest.json"]);
+            var trusted = resolveGitText(worktreePath, ["show", $"{integrationBranch}:config/acceptance-manifest.json"]);
             if (string.IsNullOrWhiteSpace(trusted))
             {
                 if (manifestChanged)

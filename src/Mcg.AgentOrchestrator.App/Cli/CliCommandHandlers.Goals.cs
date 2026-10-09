@@ -956,8 +956,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             var rollbackReason = ResolveTextArgument(rollbackParts, inlineIndex: 2, "rollback-goal <goal-id-prefix> <reason> [--confirm-goal-rollback] | rollback-goal <goal-id-prefix> --text-file <path> [--confirm-goal-rollback]", "--text-file");
             var rollbackPlan = HasCliConfirmation(parts, "--confirm-goal-rollback") ||
                 parts[2].Contains("--confirm-goal-rollback", StringComparison.OrdinalIgnoreCase)
-                ? GoalRollbackPlanner.Apply(context.Workspace.ExecutionDirectory, context.CurrentGoal, rollbackReason)
-                : GoalRollbackPlanner.Build(context.Workspace.ExecutionDirectory, context.CurrentGoal, rollbackReason);
+                ? GoalRollbackPlanner.Apply(context.Workspace.ExecutionDirectory, context.CurrentGoal, rollbackReason, context.Workspace.IntegrationBranch)
+                : GoalRollbackPlanner.Build(context.Workspace.ExecutionDirectory, context.CurrentGoal, rollbackReason, context.Workspace.IntegrationBranch);
             ConsoleViews.PrintGoalRollbackPlan(rollbackPlan);
             if (rollbackPlan.DryRun)
             {
@@ -1131,7 +1131,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             TerminalGoalSweepAttention.Surface(context.Kernel, recoverySweep, context.Workspace.OrchestratorDirectory, context.CurrentGoal.Id);
             context.CurrentGoal = context.Kernel.GetGoal(context.CurrentGoal.Id);
             ConsoleViews.PrintGoalRecoveryReport(GoalRecoveryPlanner.Build(
-                context.Kernel, context.CurrentGoal, context.Workspace.ExecutionDirectory,
+                context.Kernel, context.CurrentGoal, context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch,
                 cleanupHooks: context.CleanupContext.Hooks));
             return recoverySweep.Changed;
 
@@ -1165,6 +1165,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.CurrentGoal,
                 context.Agents,
                 context.Workspace.ExecutionDirectory,
+                context.Workspace.IntegrationBranch,
                 triagePolicy,
                 now: context.DiagnosticsClock?.UtcNow));
             return false;
@@ -1206,6 +1207,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.CurrentGoal,
                 context.Agents,
                 context.Workspace.ExecutionDirectory,
+                context.Workspace.IntegrationBranch,
                 supervisorPolicy));
             return false;
 
@@ -1391,6 +1393,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.Agents,
                 context.WorkerProfiles,
                 context.Workspace.ExecutionDirectory,
+                context.Workspace.IntegrationBranch,
                 nextPolicy);
             ConsoleViews.PrintNextActions(context.CurrentGoal, context.Kernel.BuildNextActions(context.CurrentGoal.Id),
                 context.WorkerProfiles, context.Agents, nextHealth, diagnosticsClock: context.DiagnosticsClock);
@@ -1597,7 +1600,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         new ConductEventLogWriter(context.Workspace.ConductEventsLogPath)
                             .Append("canary-gate", null, line);
                     });
-                var stopFilePath = Path.Combine(context.Workspace.ExecutionDirectory, ConductorBatchLoop.StopFileName);
+                var stopFilePath = context.Workspace.ConductorStopFilePath;
                 var handoffOptions = new ConductLoopHandoffOptions(
                     Args: parts.ToArray(),
                     ExecutionDirectory: context.Workspace.ExecutionDirectory,
@@ -1994,7 +1997,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     var g = wk.Goals.FirstOrDefault(x => x.Id.Value == watchGoalId);
                     if (g is not null) { try { new GoalDispatchOperations().RefreshDispatches(wk, g, watchReaper); } catch { } }
                 };
-                var watchStopPath = Path.Combine(context.Workspace.ExecutionDirectory, ConductorBatchLoop.StopFileName);
+                var watchStopPath = context.Workspace.ConductorStopFilePath;
                 Console.WriteLine($"[conduct --watch] Driving goal {watchGoalId[..8]} [{conductPolicy.Name}] continuously; poll {watchPollSeconds}s; stop via {ConductorBatchLoop.StopFileName}.");
                 using var watchWakeSignal = new FileSystemWatcherConductorWakeSignal(context.Workspace.LogDirectory);
                 var watchSummary = new ConductorBatchLoop(

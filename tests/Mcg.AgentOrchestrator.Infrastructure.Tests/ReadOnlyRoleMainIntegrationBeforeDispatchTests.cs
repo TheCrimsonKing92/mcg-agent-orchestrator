@@ -121,5 +121,5 @@ public class ReadOnlyRoleMainIntegrationBeforeDispatchTests : AcceptanceCohortWo
             writeEscalation: (_, _, reason) => onEscalation?.Invoke(reason),
             classifyChangeRisk: _ => null,
             integrateMainBeforeReadOnlyDispatch: (candidate, role) =>
-                ConductorDriver.IntegrateMainBeforeReadOnlyDispatch(repo, candidate, role));
+                ConductorDriver.IntegrateMainBeforeReadOnlyDispatch(repo, candidate, role, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default));
 }

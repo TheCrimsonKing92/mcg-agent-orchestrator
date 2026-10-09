@@ -43,11 +43,12 @@ public static class GoalSupervisor
         Goal goal,
         IReadOnlyList<AgentDefinition> agents,
         string executionDirectory,
+        string integrationBranch,
         AutonomyPolicy policy,
         bool applySafe = false,
         DateTimeOffset? now = null)
     {
-        var recovery = GoalRecoveryPlanner.Build(kernel, goal, executionDirectory, includeCleanupBackoff: false);
+        var recovery = GoalRecoveryPlanner.Build(kernel, goal, executionDirectory, integrationBranch, includeCleanupBackoff: false);
         var proposals = new List<GoalSupervisorProposal>();
         var observedAt = now ?? DateTimeOffset.UtcNow;
 
@@ -112,7 +113,7 @@ public static class GoalSupervisor
         OrchestratorWorkspace workspace,
         AutonomyPolicy policy)
     {
-        var plan = Build(kernel, goal, agents, workspace.ExecutionDirectory, policy, applySafe: true);
+        var plan = Build(kernel, goal, agents, workspace.ExecutionDirectory, workspace.IntegrationBranch, policy, applySafe: true);
         var applied = new List<string>();
         var appliedKeys = new HashSet<string>(StringComparer.Ordinal);
 
@@ -141,7 +142,7 @@ public static class GoalSupervisor
             }
         }
 
-        var updatedPlan = Build(kernel, goal, agents, workspace.ExecutionDirectory, policy, applySafe: true);
+        var updatedPlan = Build(kernel, goal, agents, workspace.ExecutionDirectory, workspace.IntegrationBranch, policy, applySafe: true);
         return new GoalSupervisorApplyResult(updatedPlan, applied);
     }
 

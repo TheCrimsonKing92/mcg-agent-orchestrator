@@ -42,6 +42,7 @@ internal static class AcceptanceExecutionRunner
         DotnetBuildEnvironmentLease? stableSlotLease,
         bool runBaselineArm,
         CancellationToken cancellationToken,
+        string integrationBranch,
         FindingEvidenceNegativeControl? negativeControl = null, IReadOnlyList<string>? revertPaths = null, FindingEvidenceMutation? mutation = null, IReadOnlyList<string>? declaredPaths = null,
         string? projectHomeDirectory = null)
     {
@@ -51,7 +52,7 @@ internal static class AcceptanceExecutionRunner
             goalId,
             stableSlotIndex,
             cancellationToken,
-            new AcceptanceRunExecutionOptions(ProjectHomeDirectory: projectHomeDirectory));
+            new AcceptanceRunExecutionOptions(ProjectHomeDirectory: projectHomeDirectory, IntegrationBranch: integrationBranch));
         return AcceptanceExecutionOwnerLifetime.Run(
             executionOwner,
             () => (negativeControl is { } mode

@@ -104,7 +104,7 @@ internal sealed class FailedRoundCheckpointFixture : WorkerDispatchTestSupport, 
         cleanup: _ => new GoalWorktreeRemoveResult("clean", null, [], null),
         writeEscalation: (_, _, reason) => onEscalation?.Invoke(reason), classifyChangeRisk: _ => null,
         integrateMainBeforeDeveloperDispatch:
-            new FailedRoundCheckpointPreDispatch(Kernel, Repository).IntegrateMainBeforeDeveloperDispatch);
+            new FailedRoundCheckpointPreDispatch(Kernel, Repository, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default).IntegrateMainBeforeDeveloperDispatch);
 
     internal static string Git(string path, params string[] arguments)
     {

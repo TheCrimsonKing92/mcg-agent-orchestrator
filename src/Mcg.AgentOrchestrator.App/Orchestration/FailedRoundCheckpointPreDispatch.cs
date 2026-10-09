@@ -4,14 +4,14 @@ using Mcg.AgentOrchestrator.Infrastructure;
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed class FailedRoundCheckpointPreDispatch(
-    AgentOrchestratorKernel kernel, string executionDirectory, DispatchWorktreeCommitter? committer = null)
+    AgentOrchestratorKernel kernel, string executionDirectory, string integrationBranch, DispatchWorktreeCommitter? committer = null)
 {
     private readonly DispatchWorktreeCommitter _committer = committer ?? new();
 
     internal DeveloperBranchIntegrationResult IntegrateMainBeforeDeveloperDispatch(Goal goal)
     {
         TryCheckpoint(goal);
-        return ConductorDriver.IntegrateMainBeforeDeveloperDispatch(executionDirectory, goal);
+        return ConductorDriver.IntegrateMainBeforeDeveloperDispatch(executionDirectory, goal, integrationBranch);
     }
 
     private void TryCheckpoint(Goal goal)

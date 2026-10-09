@@ -16,7 +16,7 @@ public sealed class GoalAcceptanceEvidenceBundleTests
         try
         {
             Xunit.Assert.Throws<InvalidOperationException>(() =>
-                GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(root));
+                GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default));
         }
         finally
         {
@@ -43,7 +43,7 @@ public sealed class GoalAcceptanceEvidenceBundleTests
             File.WriteAllText(corruptMainRef, "not-an-object-id");
 
             var exception = Xunit.Assert.Throws<InvalidOperationException>(() =>
-                GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(root));
+                GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default));
 
             Xunit.Assert.Contains("git base-ref discovery failed", exception.Message, StringComparison.Ordinal);
             Xunit.Assert.Contains("ref=main", exception.Message, StringComparison.Ordinal);

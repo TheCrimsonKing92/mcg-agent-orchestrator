@@ -68,9 +68,9 @@ internal static class AcceptanceStructuralCoverageInputs
     }
 
     internal static string? ResolveDeletedTestFileDiff(
-        string worktreePath,
+        string worktreePath, string integrationBranch,
         Func<string, string[], string?> resolveGitText) =>
-        resolveGitText(worktreePath, ["diff", "--name-status", "main...HEAD", "--"]);
+        resolveGitText(worktreePath, ["diff", "--name-status", $"{integrationBranch}...HEAD", "--"]);
 
     internal static DeletedTestFileParse ParseDeletedTestFiles(
         string output,

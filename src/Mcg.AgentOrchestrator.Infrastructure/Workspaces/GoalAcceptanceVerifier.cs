@@ -366,6 +366,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private readonly TimeProvider _timeProvider;
     private readonly Action<TimeSpan> _leaseSleep;
     private readonly IAcceptanceRunExecutionContext? _executionContext;
+    private string IntegrationBranch => _executionContext?.IntegrationBranch ?? TrunkBranchName.Default;
     private readonly AcceptanceInvocationContext? _invocationContext;
     private readonly GoalAcceptanceVerifierTestOverrides _testOverrideSource, _testOverrides;
     // Injected runners return only CommandResult; missing TRX remains a typed compatibility signal for that seam.
@@ -863,6 +864,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 _runner,
                 EngineSettings,
                 worktreePath,
+                IntegrationBranch,
                 sanctionedRemovedTests,
                 cancellationToken).ConfigureAwait(false));
         }
@@ -1067,7 +1069,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                         .ToArray()))
                 .ToArray(),
             ExecutionReason: "failure-attribution-gate-batch");
-        var baselineSha = ResolveGitScalar(worktreePath, "merge-base", "HEAD", "main");
+        var baselineSha = ResolveGitScalar(worktreePath, "merge-base", "HEAD", IntegrationBranch);
         FocusedEvidenceArmRunResult baseline;
         try
         {
@@ -1187,7 +1189,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         FindingEvidenceNegativeControl? negativeControl = null, IReadOnlyList<string>? revertPaths = null, FindingEvidenceMutation? mutation = null, IReadOnlyList<string>? declaredPaths = null) =>
         FocusedEvidenceExecution.RunOwnedFocusedEvidenceAsync(
             _executionContext, RunFocusedEvidenceArmAsync, RunBaselineFocusedEvidenceArmAsync,
-            AddSourceRevertedEvidenceAsync, ResolveFocusedEvidenceMergeBase,
+            AddSourceRevertedEvidenceAsync, path => ResolveFocusedEvidenceMergeBase(path, IntegrationBranch),
             worktreePath, goalId, request, stableSlotIndex, stableSlotLease, runBaselineArm,
             cancellationToken, negativeControl, revertPaths, mutation, declaredPaths);
 
@@ -3650,7 +3652,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         CancellationToken cancellationToken)
     {
         var result = await _runner(
-            ["git", "diff", "--name-only", "main...HEAD"],
+            ["git", "diff", "--name-only", $"{IntegrationBranch}...HEAD"],
             worktreePath,
             EngineSettings.ResolveCheckTimeout(null),
             cancellationToken).ConfigureAwait(false);
@@ -3875,16 +3877,17 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         return AcceptanceContainedGenerationBaseline.ResolveMainWorktreePath(
             worktreePath,
+            IntegrationBranch,
             AcceptanceGitTextResolver.Resolve);
     }
 
     internal static string? ResolveMainWorktreePathWithGitForTests(
         string worktreePath,
         Func<string, string[], string?> resolveGitText) =>
-        AcceptanceContainedGenerationBaseline.ResolveMainWorktreePath(worktreePath, resolveGitText);
+        AcceptanceContainedGenerationBaseline.ResolveMainWorktreePath(worktreePath, TrunkBranchName.Default, resolveGitText);
 
     // A source belongs to one preparation pass; only the project-independent input is cached.
-    private sealed class DeletedTestFileDiffSource(Func<string, string[]>? resolveOverride)
+    private sealed class DeletedTestFileDiffSource(Func<string, string[]>? resolveOverride, string integrationBranch)
     {
         private readonly Dictionary<string, (string? Text, string[]? Override)> _inputs =
             new(StringComparer.OrdinalIgnoreCase);
@@ -3896,7 +3899,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             {
                 input = resolveOverride is not null
                     ? (null, resolveOverride(worktreePath))
-                    : (AcceptanceStructuralCoverageInputs.ResolveDeletedTestFileDiff(worktreePath, AcceptanceGitTextResolver.Resolve), null);
+                    : (AcceptanceStructuralCoverageInputs.ResolveDeletedTestFileDiff(worktreePath, integrationBranch, AcceptanceGitTextResolver.Resolve), null);
                 _inputs.Add(root, input);
             }
 
@@ -3912,7 +3915,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string project,
         Func<string, string[], string?> resolveGitText) =>
         AcceptanceStructuralCoverageInputs.ParseDeletedTestFiles(
-            AcceptanceStructuralCoverageInputs.ResolveDeletedTestFileDiff(worktreePath, resolveGitText) ?? "",
+            AcceptanceStructuralCoverageInputs.ResolveDeletedTestFileDiff(worktreePath, TrunkBranchName.Default, resolveGitText) ?? "",
             project,
             destination => AcceptanceStructuralCoverageInputs.ResolveOwningProject(worktreePath, destination)).Removed;
 
@@ -3922,7 +3925,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         Func<string, string[], string?> resolveGitText)
     {
         return AcceptanceStructuralCoverageInputs.ParseDeletedTestFiles(
-            AcceptanceStructuralCoverageInputs.ResolveDeletedTestFileDiff(worktreePath, resolveGitText) ?? "",
+            AcceptanceStructuralCoverageInputs.ResolveDeletedTestFileDiff(worktreePath, TrunkBranchName.Default, resolveGitText) ?? "",
             project,
             destination => AcceptanceStructuralCoverageInputs.ResolveOwningProject(worktreePath, destination)).Removed;
     }
@@ -3956,7 +3959,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         PolicyShardPlan policyShardPlan) =>
         AcceptanceDotnetBuildPhase.Create(worktreePath, checks, changedFiles, policyShardPlan,
             path => _testOverrides.ResolveBaseBuildMainShaForTests?.Invoke(path) ??
-                ResolveGitScalar(path, "merge-base", "HEAD", "main"));
+                ResolveGitScalar(path, "merge-base", "HEAD", IntegrationBranch));
 
     internal static string? ResolveGitScalar(string worktreePath, params string[] arguments)
     {

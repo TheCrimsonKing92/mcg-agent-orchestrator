@@ -203,9 +203,9 @@ internal static class GitCli
             : new WorktreeStatusInspection(false, [], string.IsNullOrWhiteSpace(result.Error) ? "git status failed" : result.Error.Trim());
     }
 
-    internal static AheadBehindInspection InspectAheadBehind(string workingDirectory)
+    internal static AheadBehindInspection InspectAheadBehind(string workingDirectory, string integrationBranch)
     {
-        var result = Run(workingDirectory, "rev-list", "--left-right", "--count", "main...HEAD");
+        var result = Run(workingDirectory, "rev-list", "--left-right", "--count", $"{integrationBranch}...HEAD");
         return InspectAheadBehind(result);
     }
 

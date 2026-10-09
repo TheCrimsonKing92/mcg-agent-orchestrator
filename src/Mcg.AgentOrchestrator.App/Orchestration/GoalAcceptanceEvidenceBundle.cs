@@ -60,6 +60,7 @@ internal static class GoalAcceptanceEvidenceBundleBuilder
         AcceptanceVerificationResult? verification,
         bool verificationSkipped,
         DotnetBuildStorageRoot? buildStorageRoot,
+        string integrationBranch,
         string? executionDirectory = null)
     {
         var blockers = new List<GoalAcceptanceEvidenceBlocker>();
@@ -90,8 +91,8 @@ internal static class GoalAcceptanceEvidenceBundleBuilder
                     $"goal-recovery {goal.Id.Value[..8]}");
             }
 
-            var diffSpec = BuildDiffSpec(worktreePath);
-            changedFiles = GetChangedFiles(worktreePath);
+            var diffSpec = BuildDiffSpec(worktreePath, integrationBranch);
+            changedFiles = GetChangedFiles(worktreePath, integrationBranch);
             changeSummary = RepositoryChangeClassifier.Classify(changedFiles);
             diffStat = GitCli.Run(worktreePath, "diff", "--stat", diffSpec).Output.Trim();
             if (string.IsNullOrWhiteSpace(diffStat))
@@ -387,9 +388,9 @@ internal static class GoalAcceptanceEvidenceBundleBuilder
     private static string[] SplitLines(string value) =>
         value.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
-    public static string[] GetChangedFiles(string workingDirectory) =>
+    public static string[] GetChangedFiles(string workingDirectory, string integrationBranch) =>
         ParseChangedFilesResult(
-            GitCli.Run(workingDirectory, "diff", "--name-only", BuildDiffSpec(workingDirectory)));
+            GitCli.Run(workingDirectory, "diff", "--name-only", BuildDiffSpec(workingDirectory, integrationBranch)));
 
     internal static string[] ParseChangedFilesResult(GitCli.GitResult result)
     {
@@ -421,9 +422,9 @@ internal static class GoalAcceptanceEvidenceBundleBuilder
 
     // Bounded unified diff of the goal branch against its base, for feeding an advisory semantic
     // judge. Truncated so a large change cannot blow the judge's context/cost budget.
-    public static string GetDiffExcerpt(string workingDirectory, int maxChars = 6000)
+    public static string GetDiffExcerpt(string workingDirectory, string integrationBranch, int maxChars = 6000)
     {
-        var diff = GitCli.Run(workingDirectory, "diff", BuildDiffSpec(workingDirectory)).Output.Trim();
+        var diff = GitCli.Run(workingDirectory, "diff", BuildDiffSpec(workingDirectory, integrationBranch)).Output.Trim();
         return diff.Length <= maxChars
             ? diff
             : diff[..maxChars] + $"{Environment.NewLine}...(diff truncated at {maxChars} chars)";
@@ -433,11 +434,12 @@ internal static class GoalAcceptanceEvidenceBundleBuilder
     // file's changes are hidden behind the whole-diff truncation boundary.
     public static IReadOnlyList<(string File, string Diff)> GetPerFileDiffs(
         string workingDirectory,
+        string integrationBranch,
         int perFileMaxChars = 4000)
     {
-        var diffSpec = BuildDiffSpec(workingDirectory);
+        var diffSpec = BuildDiffSpec(workingDirectory, integrationBranch);
         var result = new List<(string File, string Diff)>();
-        foreach (var file in GetChangedFiles(workingDirectory))
+        foreach (var file in GetChangedFiles(workingDirectory, integrationBranch))
         {
             var diff = GitCli.Run(workingDirectory, "diff", diffSpec, "--", file).Output.Trim();
             if (string.IsNullOrWhiteSpace(diff))
@@ -454,11 +456,11 @@ internal static class GoalAcceptanceEvidenceBundleBuilder
         return result;
     }
 
-    private static string BuildDiffSpec(string workingDirectory)
+    private static string BuildDiffSpec(string workingDirectory, string integrationBranch)
     {
-        if (RevisionExists(workingDirectory, "main"))
+        if (RevisionExists(workingDirectory, integrationBranch))
         {
-            return "main...HEAD";
+            return $"{integrationBranch}...HEAD";
         }
 
         if (RevisionExists(workingDirectory, "master"))

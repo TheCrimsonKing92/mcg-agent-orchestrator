@@ -51,7 +51,7 @@ internal sealed class RemoteFocusedEvidenceShadow : IAsyncDisposable
             var tree = GoalAcceptanceVerifier.ResolveGitScalar(worktreePath, "rev-parse", "HEAD^{tree}");
             if (string.IsNullOrWhiteSpace(head) || string.IsNullOrWhiteSpace(tree)) return shadow;
             var identity = new RemoteLaneCandidateIdentity(owner.RunId, goalId.Value, head, tree,
-                GoalAcceptanceVerifier.ResolveGitScalar(worktreePath, "rev-parse", "main") ?? "", "");
+                GoalAcceptanceVerifier.ResolveGitScalar(worktreePath, "rev-parse", owner.IntegrationBranch) ?? "", "");
             var prefix = Path.Combine(AcceptancePartitionVerdictCache.ResolveHostStateRoot(worktreePath),
                 ".orchestrator", "fe-shadow", GoalAcceptanceVerifier.ShortHash(owner.RunId), "shadow");
             shadow._ledgerPath = RemoteExecutorHealthLedger.ResolveStorePath(worktreePath);

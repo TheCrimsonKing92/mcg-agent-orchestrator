@@ -52,7 +52,7 @@ internal static class GoalDrainPlanner
         foreach (var goal in kernel.Goals.OrderBy(goal => goal.Timeline.FirstOrDefault()?.OccurredAt ?? DateTimeOffset.MaxValue))
         {
             var goalPrefix = goal.Id.Value[..8];
-            var supervisor = GoalSupervisor.Build(kernel, goal, agents, workspace.ExecutionDirectory, policy);
+            var supervisor = GoalSupervisor.Build(kernel, goal, agents, workspace.ExecutionDirectory, workspace.IntegrationBranch, policy);
             foreach (var proposal in supervisor.Proposals.Where(proposal => proposal.CanApply && !proposal.RequiresOperatorGate))
             {
                 items.Add(new GoalDrainItem(

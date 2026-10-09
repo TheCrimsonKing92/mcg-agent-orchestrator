@@ -37,6 +37,7 @@ public static class GoalRecoveryPlanner
         AgentOrchestratorKernel kernel,
         Goal goal,
         string executionDirectory,
+        string integrationBranch,
         bool includeCleanupBackoff = true,
         Func<ProcessCommandLineSnapshot>? processSnapshotFactory = null,
         GoalWorktreeCleanupHooks? cleanupHooks = null)
@@ -54,8 +55,8 @@ public static class GoalRecoveryPlanner
         string? worktreeStatusError = worktreeInspection is { Succeeded: false }
             ? worktreeInspection.Value.Error
             : null;
-        var hasDiff = GoalWorktrees.TryGetBranchDiff(executionDirectory, goal.Id) is not null;
-        var changeSummary = RepositoryChangeClassifier.Classify(worktree is null ? Array.Empty<string>() : TryGetChangedFiles(worktree));
+        var hasDiff = GoalWorktrees.TryGetBranchDiff(executionDirectory, goal.Id, trunkBranch: integrationBranch) is not null;
+        var changeSummary = RepositoryChangeClassifier.Classify(worktree is null ? Array.Empty<string>() : TryGetChangedFiles(worktree, integrationBranch));
         var testImpactPlan = worktree is null
             ? RepositoryTestImpactPlanner.Plan(changeSummary)
             : RepositoryTestImpactPlanner.Plan(changeSummary, worktree);
@@ -277,19 +278,19 @@ public static class GoalRecoveryPlanner
     private static bool IsTerminal(GoalStatus status) =>
         status is GoalStatus.Completed or GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded;
 
-    private static string[] TryGetChangedFiles(string worktree)
+    private static string[] TryGetChangedFiles(string worktree, string integrationBranch)
     {
-        var result = GitCli.Run(worktree, "diff", "--name-only", BuildDiffSpec(worktree));
+        var result = GitCli.Run(worktree, "diff", "--name-only", BuildDiffSpec(worktree, integrationBranch));
         return result.ExitCode == 0
             ? result.Output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             : [];
     }
 
-    private static string BuildDiffSpec(string workingDirectory)
+    private static string BuildDiffSpec(string workingDirectory, string integrationBranch)
     {
-        if (GitCli.Run(workingDirectory, "rev-parse", "--verify", "main").Succeeded)
+        if (GitCli.Run(workingDirectory, "rev-parse", "--verify", integrationBranch).Succeeded)
         {
-            return "main...HEAD";
+            return $"{integrationBranch}...HEAD";
         }
 
         if (GitCli.Run(workingDirectory, "rev-parse", "--verify", "master").Succeeded)

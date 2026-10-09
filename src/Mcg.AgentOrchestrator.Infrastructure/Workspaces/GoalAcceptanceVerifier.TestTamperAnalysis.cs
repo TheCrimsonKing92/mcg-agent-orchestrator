@@ -21,18 +21,19 @@ internal static class TestTamperAnalysis
         @"Assert\.True\(\s*true\s*\)|Assert\.False\(\s*false\s*\)|Assert\.Equal\(\s*(?<v>\w+)\s*,\s*\k<v>\s*\)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
-    private static readonly string[] DiffBaseArgs = ["git", "diff", "--unified=0", "main...HEAD"];
+    private static string[] DiffBaseArgs(string integrationBranch) => ["git", "diff", "--unified=0", $"{integrationBranch}...HEAD"];
 
     internal static async Task<AcceptanceCheckResult> RunTestTamperCheckAsync(
         Func<string[], string, TimeSpan, CancellationToken, Task<GoalAcceptanceVerifier.CommandResult>> runner,
         AcceptanceGateEngineSettings engineSettings,
         string worktreePath,
+        string integrationBranch,
         IReadOnlyList<string> sanctionedRemovedTests,
         CancellationToken cancellationToken)
     {
         const string CheckName = "test tamper guard";
 
-        string[] diffArgs = [.. DiffBaseArgs];
+        string[] diffArgs = [.. DiffBaseArgs(integrationBranch)];
 
         var result = await runner(
             diffArgs,

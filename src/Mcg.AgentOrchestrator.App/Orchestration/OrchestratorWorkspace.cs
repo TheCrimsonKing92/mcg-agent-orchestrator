@@ -22,6 +22,8 @@ public sealed record OrchestratorWorkspace(
     public const string DefaultProjectName = "default";
     public string? ProjectHomeDirectoryOrNull => IsProjectScoped ? OrchestratorDirectory : null;
     public string IntegrationBranch { get; init; } = TrunkBranchName.Default;
+    public string ConductorStopFilePath => Path.Combine(
+        IsProjectScoped ? OrchestratorDirectory : ExecutionDirectory, ConductorBatchLoop.StopFileName);
     public const string DefaultTenantName = "default";
     public const string ContinuationStoreFileName = "continuation-watches.json";
     public const string RepoRootEnvironmentVariable = "MCG_ORCHESTRATOR_REPOSITORY_ROOT";

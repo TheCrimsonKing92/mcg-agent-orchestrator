@@ -123,7 +123,7 @@ public sealed class FailedRoundCheckpointPreDispatchTests
         var before = FailedRoundCheckpointFixture.Git(f.Worktree, "rev-parse", "HEAD");
         var committer = new DispatchWorktreeCommitter(runGit: (path, args) => args[0] == "commit"
             ? new GitCli.GitResult(1, "", "injected commit failure") : GitCli.Run(path, args));
-        var result = new FailedRoundCheckpointPreDispatch(f.Kernel, f.Repository, committer)
+        var result = new FailedRoundCheckpointPreDispatch(f.Kernel, f.Repository, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, committer)
             .IntegrateMainBeforeDeveloperDispatch(f.Goal);
         Assert.False(result.CanDispatch);
         Assert.Equal(before, FailedRoundCheckpointFixture.Git(f.Worktree, "rev-parse", "HEAD"));

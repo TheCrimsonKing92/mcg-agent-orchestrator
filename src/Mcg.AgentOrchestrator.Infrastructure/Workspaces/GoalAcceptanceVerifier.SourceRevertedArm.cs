@@ -24,8 +24,8 @@ public sealed partial class GoalAcceptanceVerifier
             : throw new ArgumentException("A focused-verification execution owner is required.", nameof(executionOwner));
     }
 
-    private static string? ResolveFocusedEvidenceMergeBase(string worktreePath) =>
-        ResolveGitScalar(worktreePath, "merge-base", "HEAD", "main");
+    private static string? ResolveFocusedEvidenceMergeBase(string worktreePath, string integrationBranch) =>
+        ResolveGitScalar(worktreePath, "merge-base", "HEAD", integrationBranch);
 
     private async Task<FocusedEvidenceRunResult> AddSourceRevertedEvidenceAsync(
         FocusedEvidenceRunResult evidence, FindingEvidenceNegativeControl? mode,
@@ -41,7 +41,7 @@ public sealed partial class GoalAcceptanceVerifier
         EmitFocusedEvidenceArmStarted(FindingEvidenceArm.SourceReverted, candidate.Sha);
         var reverted = candidate.Disposition == FindingEvidenceArmDisposition.Green
             ? await RunSourceRevertedFocusedEvidenceArmAsync(worktreePath, candidate.Sha,
-                mergeBase ?? ResolveFocusedEvidenceMergeBase(worktreePath), goalId, checks, coverage,
+                mergeBase ?? ResolveFocusedEvidenceMergeBase(worktreePath, executionOwner.IntegrationBranch), goalId, checks, coverage,
                 stableSlotIndex, stableSlotLease, executionOwner, revertPaths, mutation, declaredPaths).ConfigureAwait(false)
             : InconclusiveSourceReverted(candidate.Sha,
                 $"Candidate arm is {candidate.Disposition}; source-reverted arm not run");

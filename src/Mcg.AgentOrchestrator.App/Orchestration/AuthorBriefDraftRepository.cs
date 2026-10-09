@@ -9,11 +9,11 @@ internal interface IAuthorBriefDraftRepository
     bool IsTrackedDirectory(string sha, string path) => false;
 }
 
-internal sealed class GitAuthorBriefDraftRepository(string repositoryRoot) : IAuthorBriefDraftRepository
+internal sealed class GitAuthorBriefDraftRepository(string repositoryRoot, string integrationBranch) : IAuthorBriefDraftRepository
 {
     public string ResolveMainHead()
     {
-        var main = Require(GitCli.Run(repositoryRoot, "rev-parse", "--verify", "main^{commit}")).Trim();
+        var main = Require(GitCli.Run(repositoryRoot, "rev-parse", "--verify", $"{integrationBranch}^{{commit}}")).Trim();
         var head = Require(GitCli.Run(repositoryRoot, "rev-parse", "--verify", "HEAD^{commit}")).Trim();
         var root = Require(GitCli.Run(repositoryRoot, "rev-parse", "--show-toplevel")).Trim();
         var wrongRoot = !Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)).Equals(

@@ -13,7 +13,7 @@ internal static class AuthorDraftExtractionBaseline
 
     internal static int Run(IReadOnlyList<string> args, OrchestratorWorkspace workspace) =>
         Run(args, workspace, new(WorkerProcessRunner.RunBufferedAsync,
-            new GitAuthorBriefDraftRepository(workspace.ExecutionDirectory),
+            new GitAuthorBriefDraftRepository(workspace.ExecutionDirectory, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default),
             ModelFunctionCatalogStore.Load(workspace.ModelFunctionCatalogPath)), Console.Out, Console.Error);
 
     internal static int Run(IReadOnlyList<string> args, OrchestratorWorkspace workspace,

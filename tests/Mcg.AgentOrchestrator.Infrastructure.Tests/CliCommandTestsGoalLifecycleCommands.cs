@@ -2556,7 +2556,7 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         File.WriteAllText(Path.Combine(worktree, "bad.txt"), "bad");
         RunGit(worktree, "add", "-A");
         RunGit(worktree, "commit", "-m", "Bad accepted change");
-        var range = GoalRollbackPlanner.CapturePendingAcceptance(root, goal.Id)
+        var range = GoalRollbackPlanner.CapturePendingAcceptance(root, goal.Id, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default)
             ?? throw new InvalidOperationException("Expected rollback metadata capture.");
         var merge = GoalWorktrees.TryFastForwardMerge(root, goal.Id);
         Xunit.Assert.True(merge!.FastForwarded);

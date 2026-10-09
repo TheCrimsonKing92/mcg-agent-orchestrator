@@ -223,12 +223,12 @@ public sealed class SemanticAcceptanceTests : IDisposable
         RunGit(root, "add", ".");
         RunGit(root, "commit", "-m", "large change");
 
-        var perFileDiffs = GoalAcceptanceEvidenceBundleBuilder.GetPerFileDiffs(root, perFileMaxChars: 220);
+        var perFileDiffs = GoalAcceptanceEvidenceBundleBuilder.GetPerFileDiffs(root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, perFileMaxChars: 220);
         var context = SemanticAcceptancePlanner.BuildEvidenceContext(new SemanticAcceptanceInputs(
             "Keep oversized changed-file evidence visible",
             [],
-            GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(root),
-            GoalAcceptanceEvidenceBundleBuilder.GetDiffExcerpt(root, maxChars: 80),
+            GoalAcceptanceEvidenceBundleBuilder.GetChangedFiles(root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default),
+            GoalAcceptanceEvidenceBundleBuilder.GetDiffExcerpt(root, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default, maxChars: 80),
             null,
             perFileDiffs));
 

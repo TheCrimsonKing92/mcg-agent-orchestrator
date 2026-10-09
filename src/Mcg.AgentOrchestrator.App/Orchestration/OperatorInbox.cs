@@ -382,7 +382,7 @@ internal static class OperatorInbox
         OrchestratorWorkspace workspace,
         IReadOnlyDictionary<string, OperatorInboxAcknowledgement> acknowledgements)
     {
-        var plan = GoalSupervisor.Build(kernel, goal, agents, workspace.ExecutionDirectory, AutonomyPolicy.SafeAuto);
+        var plan = GoalSupervisor.Build(kernel, goal, agents, workspace.ExecutionDirectory, workspace.IntegrationBranch, AutonomyPolicy.SafeAuto);
         foreach (var proposal in plan.Proposals.Where(proposal => proposal.Kind != GoalSupervisorProposalKind.Monitor))
         {
             var severity = proposal.RequiresOperatorGate || !proposal.PolicyAllows

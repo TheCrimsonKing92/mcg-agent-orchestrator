@@ -120,8 +120,9 @@ internal static class SourceSizeRatchet
             // Goal 47f09f71 adds three lines to pass workspace project-home context at the existing
             // preflight and acceptance orchestration seams; manifest resolution stays in AcceptanceManifestLocator.
             // Goal b6abf7a1 extracts dispatch checkpoint sequencing and hold lifetime to
-            // CriticalDispatchLifecycleCheckpoint; measured 1785 lines, with no extra headroom.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 1785),
+            // CriticalDispatchLifecycleCheckpoint; goal 69c9d936 then threads the workspace integration
+            // branch through it (one field and its wiring). Measured 1789 lines after both; no extra headroom.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 1789),
             // Goal 0e30d5e9 extracted impact-plan mapping to PreReviewEvidenceContextBuilder.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.PreReviewEvidence.cs", 480),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.ReviewRecovery.cs", 461),
@@ -400,13 +401,17 @@ internal static class SourceSizeRatchet
             // Measured 15290 lines across the existing 70 partial files; no extra headroom.
             // Goal 01ea3f4d extracts passing-evidence routing and re-raise identity into
             // PassingFindingEvidenceRouter; measured 15271 lines across the same 70 partial files.
-            // Goal b6abf7a1 extracts dispatch checkpoint sequencing to CriticalDispatchLifecycleCheckpoint.
-            // Measured 15250 lines across the same 70 partial files; no extra headroom.
-            new SourceClassCeiling("ConductorDriver", 15250, 70),
+            // Goal b6abf7a1 extracts dispatch checkpoint sequencing to CriticalDispatchLifecycleCheckpoint;
+            // goal 69c9d936 passes the configured integration branch through existing collaborators.
+            // Measured 15256 lines across the same 70 partial files after both; no extra headroom.
+            new SourceClassCeiling("ConductorDriver", 15256, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
-            new SourceClassCeiling("CliCommandHandlers", 12223, 30),
+            // Goal 69c9d936 adds six call-site lines to pass the workspace integration branch into
+            // existing acceptance, recovery and diagnostic collaborators; resolution remains in the workspace.
+            // Measured 12229 lines across the same 30 partial files, with no extra headroom or new partials.
+            new SourceClassCeiling("CliCommandHandlers", 12229, 30),
             new SourceClassCeiling("GoalAcceptanceVerifier", 9064, 32),
             // Goal d647b5f3 extracts premise-invalid clarification construction to PremiseInvalidClarification.
             // Goal 439c80ae extracts Reviewer evidence brief projection to ReviewerEvidenceBriefSection;

@@ -328,13 +328,13 @@ internal sealed partial class ConductorDriver
         var effectiveCandidate = RefreshParallelAcceptanceCandidate(candidate);
         var branchHeadSha = effectiveCandidate.BranchHeadSha;
         if (string.IsNullOrWhiteSpace(branchHeadSha) ||
-            !IsCommitReachableFromMain(_executionDirectory, branchHeadSha))
+            !IsCommitReachableFromMain(_executionDirectory, branchHeadSha, _integrationBranch))
         {
             return RunParallelLandingSourceSizePreflight(effectiveCandidate);
         }
 
         var skippedAt = DateTimeOffset.UtcNow;
-        var mergeCommitSha = RecoverMainMergeCommitForBranchTip(_executionDirectory, branchHeadSha);
+        var mergeCommitSha = RecoverMainMergeCommitForBranchTip(_executionDirectory, branchHeadSha, _integrationBranch);
         var detail = $"Acceptance skipped:skip-already-merged goalId={effectiveCandidate.Goal.Id.Value}; branchRef={GoalWorktrees.BranchName(effectiveCandidate.Goal.Id)}; mergeCommitSha={mergeCommitSha}; skippedAtUtc={skippedAt:O}.";
         GoalOperationJournal.AcceptanceSkippedAlreadyMerged(
             _executionDirectory,

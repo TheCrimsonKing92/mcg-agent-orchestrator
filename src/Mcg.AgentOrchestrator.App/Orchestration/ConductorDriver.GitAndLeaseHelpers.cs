@@ -20,9 +20,9 @@ internal sealed partial class ConductorDriver
     }
 
     private static (string BranchHead, string MainHead, string Fingerprint) ReadLandingRecheckEvidence(
-        string worktreePath)
+        string worktreePath, string integrationBranch)
     {
-        var revisions = ConductorGitRevisionReader.ReadRequiredPair(worktreePath);
+        var revisions = ConductorGitRevisionReader.ReadRequiredPair(worktreePath, integrationBranch);
         return (
             revisions.BranchRevision!,
             revisions.MainRevision!,
@@ -43,12 +43,12 @@ internal sealed partial class ConductorDriver
     private static string FormatAcceptanceCandidate(string? branchHeadSha, string? mainHeadSha) =>
         $"branch={FormatShortSha(branchHeadSha)} main={FormatShortSha(mainHeadSha)}";
 
-    private static bool IsCommitReachableFromMain(string executionDirectory, string commitSha) =>
-        GitCli.Run(executionDirectory, "merge-base", "--is-ancestor", commitSha, "main").ExitCode == 0;
+    private static bool IsCommitReachableFromMain(string executionDirectory, string commitSha, string integrationBranch) =>
+        GitCli.Run(executionDirectory, "merge-base", "--is-ancestor", commitSha, integrationBranch).ExitCode == 0;
 
-    private static string RecoverMainMergeCommitForBranchTip(string executionDirectory, string branchHeadSha)
+    private static string RecoverMainMergeCommitForBranchTip(string executionDirectory, string branchHeadSha, string integrationBranch)
     {
-        var ancestry = GitCli.Run(executionDirectory, "log", "--format=%H", "--reverse", "--ancestry-path", $"{branchHeadSha}..main");
+        var ancestry = GitCli.Run(executionDirectory, "log", "--format=%H", "--reverse", "--ancestry-path", $"{branchHeadSha}..{integrationBranch}");
         if (ancestry.ExitCode == 0)
         {
             var mergeCommit = ancestry.Output
