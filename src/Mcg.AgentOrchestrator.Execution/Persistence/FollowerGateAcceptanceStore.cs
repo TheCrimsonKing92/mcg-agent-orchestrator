@@ -8,30 +8,42 @@ public sealed class FollowerGateAcceptanceStore
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly string _databasePath;
+    private readonly bool _readOnly;
 
     public FollowerGateAcceptanceStore(string databasePath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(databasePath);
         _databasePath = Path.GetFullPath(databasePath);
-        Directory.CreateDirectory(Path.GetDirectoryName(_databasePath)!);
-        using var connection = Open();
-        using var command = connection.CreateCommand();
-        command.CommandText = """
-            CREATE TABLE IF NOT EXISTS follower_gate_receipts(
-                identity_value TEXT PRIMARY KEY,
-                receipt_id TEXT NOT NULL UNIQUE,
-                leader_goal_id TEXT NOT NULL,
-                follower_goal_id TEXT NOT NULL,
-                payload_json TEXT NOT NULL);
-            CREATE INDEX IF NOT EXISTS follower_gate_receipts_follower
-                ON follower_gate_receipts(follower_goal_id);
-            """;
-        command.ExecuteNonQuery();
+        FollowerGateAcceptanceStoreSetup.Setup(_databasePath);
     }
+
+    private FollowerGateAcceptanceStore(string dbPath, bool readOnly)
+    {
+        _databasePath = dbPath;
+        _readOnly = readOnly;
+    }
+
+    public static FollowerGateAcceptanceStore OpenReadOnly(string dbPath)
+    {
+        if (!File.Exists(dbPath))
+            throw SchemaSetupRequired(dbPath, StoreSchemaState.Missing);
+
+        var store = new FollowerGateAcceptanceStore(dbPath, readOnly: true);
+        using var connection = store.Open();
+        var state = StoreSchemaVersions.Verify(connection, StoreSchemaRegistry.FollowerGateAcceptance);
+        if (state != StoreSchemaState.Current)
+            throw SchemaSetupRequired(dbPath, state);
+        return store;
+    }
+
+    private static InvalidOperationException SchemaSetupRequired(string dbPath, StoreSchemaState state) =>
+        new($"Follower gate acceptance store '{dbPath}' schema is {state} (expected version {StoreSchemaRegistry.FollowerGateAcceptance.CurrentVersion}); run setup.");
 
     public FollowerGateRunReceipt SaveGateReceipt(FollowerGateRunReceipt receipt)
     {
         ArgumentNullException.ThrowIfNull(receipt);
+        if (_readOnly)
+            throw new InvalidOperationException("SaveGateReceipt is a writer operation unavailable on a read-only follower gate acceptance store.");
         var existing = TryReadReceipt(receipt.IdentityValue);
         if (existing is not null) return existing;
         if (receipt.Outcome == FollowerGateRunOutcome.Passed &&
@@ -85,7 +97,10 @@ public sealed class FollowerGateAcceptanceStore
 
     private SqliteConnection Open()
     {
-        var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        var connection = new SqliteConnection(_readOnly ? new SqliteConnectionStringBuilder
+        {
+            DataSource = _databasePath, Mode = SqliteOpenMode.ReadOnly, Pooling = false
+        }.ConnectionString : new SqliteConnectionStringBuilder
         {
             DataSource = _databasePath, Mode = SqliteOpenMode.ReadWriteCreate,
             Cache = SqliteCacheMode.Shared, Pooling = false

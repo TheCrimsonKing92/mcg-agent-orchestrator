@@ -42,7 +42,7 @@ public sealed class StoreSetupRunnerTests
             Assert.Contains(Path.GetFileName(path), new[] { "portfolio.db", "portfolio.db-wal", "portfolio.db-shm",
                 "backlog.db", "backlog.db-wal", "backlog.db-shm",
                 "operator-intents.db", "operator-intents.db-wal", "operator-intents.db-shm",
-                "operator-lessons.db", "operator-escapes.db",
+                "operator-lessons.db", "operator-escapes.db", "follower-gate-acceptance.db",
                 "dogfood-log.db", "dogfood-log.db-wal", "dogfood-log.db-shm", "progressive-review-steering.db" }));
         Assert.Empty(await DogfoodLogStore.OpenReadOnly(workspace.DogfoodLogStorePath).ListRecentAsync());
         Assert.Empty(await PortfolioStore.OpenReadOnly(workspace.PortfolioStorePath).ListProjectsAsync());
@@ -82,6 +82,9 @@ public sealed class StoreSetupRunnerTests
         }
 
         Assert.Equal(first, StoreSetupRunner.Run(workspace.OrchestratorDirectory));
+        Assert.Equal(1, Assert.Single(first, result => result.StoreName == StoreSchemaRegistry.FollowerGateAcceptance.StoreName).Version);
+        using var follower = Open(Path.Combine(workspace.OrchestratorDirectory, StoreSchemaRegistry.FollowerGateAcceptance.Database), SqliteOpenMode.ReadOnly);
+        Assert.Equal(1, StoreSchemaVersions.Read(follower, StoreSchemaRegistry.FollowerGateAcceptance.StoreName));
         Assert.Equal(1, Assert.Single(first, result => result.StoreName == StoreSchemaRegistry.ProgressiveReviewSteering.StoreName).Version);
         using var steering = Open(Path.Combine(workspace.OrchestratorDirectory, StoreSchemaRegistry.ProgressiveReviewSteering.Database), SqliteOpenMode.ReadOnly);
         Assert.Equal(1, StoreSchemaVersions.Read(steering, StoreSchemaRegistry.ProgressiveReviewSteering.StoreName));

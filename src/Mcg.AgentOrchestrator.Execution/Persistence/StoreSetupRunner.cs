@@ -22,6 +22,8 @@ public static class StoreSetupRunner
                 directory => Path.Combine(directory, StoreSchemaRegistry.OperatorEscapes.Database)),
             [StoreSchemaRegistry.OperatorIntents.StoreName] = new(SqliteOperatorIntentStore.Setup,
                 directory => Path.Combine(directory, SqliteOperatorIntentStore.DatabaseFileName)),
+            [StoreSchemaRegistry.FollowerGateAcceptance.StoreName] = new(FollowerGateAcceptanceStoreSetup.Setup,
+                directory => Path.Combine(directory, StoreSchemaRegistry.FollowerGateAcceptance.Database)),
             [StoreSchemaRegistry.DogfoodLog.StoreName] = new(DogfoodLogStore.Setup,
                 directory => Path.Combine(directory, StoreSchemaRegistry.DogfoodLog.Database)),
             [StoreSchemaRegistry.ProgressiveReviewSteering.StoreName] = new(ProgressiveReviewSteeringStoreSetup.Setup,

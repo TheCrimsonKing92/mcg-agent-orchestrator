@@ -24,7 +24,9 @@ public sealed class StoreSchemaRegistryTests
             Assert.False(string.IsNullOrWhiteSpace(entry.Family));
         });
         Assert.Equal(new[] { StoreSchemaRegistry.Portfolio, StoreSchemaRegistry.Backlog, StoreSchemaRegistry.OperatorIntents, StoreSchemaRegistry.OperatorLessons,
-            StoreSchemaRegistry.OperatorEscapes, StoreSchemaRegistry.DogfoodLog, StoreSchemaRegistry.ProgressiveReviewSteering }, entries.Where(entry => entry.CurrentVersion.HasValue).ToArray());
+            StoreSchemaRegistry.OperatorEscapes, StoreSchemaRegistry.FollowerGateAcceptance, StoreSchemaRegistry.DogfoodLog, StoreSchemaRegistry.ProgressiveReviewSteering }, entries.Where(entry => entry.CurrentVersion.HasValue).ToArray());
+        Assert.Equal(1, StoreSchemaRegistry.FollowerGateAcceptance.CurrentVersion);
+        Assert.Equal("follower-gate-acceptance.db", StoreSchemaRegistry.FollowerGateAcceptance.Database);
         Assert.Equal(1, StoreSchemaRegistry.ProgressiveReviewSteering.CurrentVersion);
         Assert.Equal("progressive-review-steering.db", StoreSchemaRegistry.ProgressiveReviewSteering.Database);
         Assert.Equal(1, StoreSchemaRegistry.DogfoodLog.CurrentVersion);

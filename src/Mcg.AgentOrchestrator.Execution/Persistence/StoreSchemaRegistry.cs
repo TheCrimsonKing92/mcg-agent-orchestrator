@@ -29,6 +29,9 @@ public static class StoreSchemaRegistry
     public static StoreSchemaEntry OperatorEscapes { get; } =
         new("operator-escapes", Persistence + "OperatorEscapeStore.cs", "operator-escapes.db", "backlog", 1);
 
+    public static StoreSchemaEntry FollowerGateAcceptance { get; } =
+        new("follower-gate-acceptance", Persistence + "FollowerGateAcceptanceStoreSetup.cs", "follower-gate-acceptance.db", "cohort", 1);
+
     public static StoreSchemaEntry DogfoodLog { get; } =
         new("dogfood-log", Persistence + "DogfoodLogStore.cs", "dogfood-log.db", "collaboration", 1);
 
@@ -48,7 +51,7 @@ public static class StoreSchemaRegistry
         new("cohort-attribution-retractions", Persistence + "CohortAcceptanceStore.AttributionRetractions.cs", "cohort-acceptance.db", "cohort", null),
         new("cohort-solo-inherited-receipts", Persistence + "CohortAcceptanceStore.SoloInheritedReceipts.cs", "cohort-acceptance.db", "cohort", null),
         new("merge-train-acceptance", Persistence + "MergeTrainAcceptanceStore.cs", "merge-train-acceptance.db", "cohort", null),
-        new("follower-gate-acceptance", Persistence + "FollowerGateAcceptanceStore.cs", "follower-gate-acceptance.db", "cohort", null),
+        FollowerGateAcceptance,
         new("collaboration-items", Persistence + "CollaborationItemStore.Storage.cs", "collaboration-items.db", "collaboration", null),
         new("run-events", Persistence + "RunEventStore.cs", "run-events.db", "collaboration", null),
         DogfoodLog,
