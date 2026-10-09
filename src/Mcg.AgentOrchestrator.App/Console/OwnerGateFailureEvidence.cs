@@ -41,6 +41,7 @@ internal sealed class OwnerGateFailureEvidence(string orchestratorDirectory)
         var name = failure.TestName?.Split('(', 2)[0];
         name = name is null ? "" : string.Join(".", name.Split('.').TakeLast(2));
         var message = OwnerHoldReason.FirstLine(failure.Message);
-        return string.Join(": ", new[] { name, message }.Where(value => !string.IsNullOrWhiteSpace(value)));
+        return string.Join(": ", new[] { name, message }.Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => string.Join(" ", value!.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))));
     }
 }

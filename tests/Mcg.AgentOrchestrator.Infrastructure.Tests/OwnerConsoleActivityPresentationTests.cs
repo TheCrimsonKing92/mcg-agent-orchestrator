@@ -198,7 +198,7 @@ public sealed class OwnerConsoleActivityPresentationTests
     }
 
     [Theory]
-    [InlineData("author", "kind=ask-owner item=internal-id", "unknown- question sent to the operator: the conductor reported a hold on unknown-")]
+    [InlineData("author", "kind=ask-owner item=internal-id", "unknown- question for the Author about unknown-")]
     [InlineData("acceptance", "result=failed code=1", "unknown-: failed its tests (the failure reason has not been recorded); awaiting the conductor's next step")]
     [InlineData("acceptance", "result=blocked reason=missing_evidence", "unknown-: failed its tests (the failure reason has not been recorded); awaiting the conductor's next step")]
     [InlineData("goal-escalation", "ownerless-hold-stalled state=blocked heldForSeconds=30 blocker=waiting for owner approval", "Waiting: unknown- has been held 0 min: waiting for owner approval")]
@@ -224,7 +224,7 @@ public sealed class OwnerConsoleActivityPresentationTests
     [Theory]
     [InlineData(OwnerReviewDetail, "11111111 escalated: approval of the completed work")]
     [InlineData("steward-owner-question case=C trigger=internal-trigger question=Should we retry this task? evidence=[internal-evidence]", "11111111 escalated: Should we retry this task?")]
-    [InlineData("author-owner-question item=Goal:internal-goal reason=choose recovery question=Should we retry? recommendation=Retry with evidence", "11111111 question sent to the operator: Should we retry?")]
+    [InlineData("author-owner-question item=Goal:internal-goal reason=choose recovery question=Should we retry? recommendation=Retry with evidence", "11111111 question for the Author: Should we retry?")]
     [InlineData("unrecognized-escalation raw payload with commands and evidence", "11111111 escalated: the conductor reported a hold on Improve the owner console")]
     public async Task EscalationPayloadsStayOutOfGoalDetail(string detail, string phrase)
     {

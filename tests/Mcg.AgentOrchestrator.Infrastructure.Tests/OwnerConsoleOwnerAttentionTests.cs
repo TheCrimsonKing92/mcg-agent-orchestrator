@@ -39,7 +39,7 @@ public sealed class OwnerConsoleOwnerAttentionTests
             Assert.DoesNotContain(scene.View.ActivityLines, line => line.Contains("Resolved:"));
             Assert.Single(scene.Controller.Model!.Decisions);
             var escalation = Assert.Single(scene.Controller.Model.Activity, item => item.Kind == "goal-escalation");
-            Assert.Contains("22222222 question sent to the operator: Pick a lane?", escalation.Phrase);
+            Assert.Contains("22222222 question for the Author: Pick a lane?", escalation.Phrase);
             await scene.Controller.ShowActivityMeaningAsync(escalation);
             Assert.Contains("Do you need to act: No.", scene.Dialogs.Messages[^1].Text);
 

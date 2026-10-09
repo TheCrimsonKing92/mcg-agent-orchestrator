@@ -52,7 +52,7 @@ internal static class OwnerConsoleGoalDetailFormatter
 
     private static string Plain(string text) => text.Replace('{', ' ').Replace('}', ' ').Replace('\r', ' ').Replace('\n', ' ');
 
-    private static string? Finding(Goal goal, OwnerConductEvent item)
+    internal static string? Finding(Goal goal, OwnerConductEvent item)
     {
         if (!item.Detail.StartsWith("TaskFailed", StringComparison.Ordinal)) return null;
         var id = OwnerActivityNarrator.Field(item, "task");

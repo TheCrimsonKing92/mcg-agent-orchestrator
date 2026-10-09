@@ -13,6 +13,7 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
     private readonly Dictionary<string, int> _numbers = new(StringComparer.OrdinalIgnoreCase);
     private IReadOnlyList<GoalSummary> _metadata = [];
     private IReadOnlyDictionary<string, AgentRole> _roles = new Dictionary<string, AgentRole>();
+    private IReadOnlyDictionary<string, Goal> _goals = new Dictionary<string, Goal>();
     private readonly object _observationGate = new();
     private readonly OwnerNeedsYouLedger _attention = new();
     private readonly Dictionary<string, bool> _previousHolds = new();
@@ -64,6 +65,9 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
             foreach (var task in kernel.Goals.Where(goal => ids.Contains(goal.Id)).SelectMany(goal => goal.Tasks))
                 roles[task.Id.Value] = task.RequiredRole;
             _roles = roles;
+            var goals = new Dictionary<string, Goal>(_goals);
+            foreach (var goal in kernel.Goals) goals[goal.Id.Value] = goal;
+            _goals = goals;
             lock (_observationGate)
             {
                 foreach (var goal in kernel.Goals)
@@ -113,7 +117,12 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
         OwnerAttentionObservation[] attention;
         lock (_observationGate) { observed = _observed.ToArray(); attention = _attention.Snapshot(); }
         var activity = OwnerActivityNarrator.Narrate(inputs.RecentEvents.Concat(observed)
-            .Select(item => OwnerGoalLifecycleEvent.WithRole(item, _roles)), Title, testEvidence, attention).ToImmutableArray();
+            .Select(item => OwnerGoalLifecycleEvent.WithRole(item, _roles)), Title, testEvidence, attention, item =>
+            {
+                var matches = _goals.Values.Where(goal => item.GoalId is not null &&
+                    goal.Id.Value.StartsWith(item.GoalId, StringComparison.OrdinalIgnoreCase)).ToArray();
+                return matches.Length == 1 ? OwnerConsoleGoalDetailFormatter.Finding(matches[0], item) : null;
+            }).ToImmutableArray();
         return model with { Activity = activity, Status = model.Status with
             { LastEventAge = Age(inputs.LastConductEvent), LandedToday = inputs.LandedToday } };
     }
