@@ -42,7 +42,8 @@ public sealed class ExecutionTestsProjectIsolationTests
         "WorkerResultParserBacktickWrappedBlockTests",
         "WorkerResultParserEvidenceTests",
         "WorkerSkillReadParserTests",
-        "WorkerSourceSurveyInventoryTests"
+        "WorkerSourceSurveyInventoryTests",
+        "WorkerDispatchCompletionClassifierTests"
     ];
 
     [Fact]

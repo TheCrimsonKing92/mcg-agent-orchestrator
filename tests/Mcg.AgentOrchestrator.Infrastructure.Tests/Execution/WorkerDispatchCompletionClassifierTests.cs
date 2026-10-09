@@ -69,7 +69,7 @@ public sealed class WorkerDispatchCompletionClassifierTests
         var developer = new TaskSpec(TaskId.New(), "Implement the work.", AgentRole.Developer);
         var goal = kernel.CreateGoal("Converge without edits", [developer]);
         kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
-        kernel.RetryTask(goal.Id, developer.Id, "Retry current reviewed candidate after focused evidence.");
+        kernel.RetryTask(goal.Id, developer.Id, "Retry current reviewed candidate after focused evidence.", RetryCause.ContractClarification);
         var evidenceHash = new string('a', 64);
         kernel.RecordTaskDispatch(goal.Id, developer.Id, new TaskDispatchRecord(
             "codex-cli",
