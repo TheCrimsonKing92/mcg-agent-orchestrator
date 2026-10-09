@@ -28,6 +28,9 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     private readonly Dictionary<string, string> _working = new();
     private readonly List<string> _notices = [];
     private readonly OwnerConsoleScreenOperation _operation;
+    private readonly TimeProvider _clock;
+    private readonly TimeSpan _refreshInterval;
+    private DateTimeOffset? _refreshedAt;
     private bool _rendering;
     private bool _editingCommand;
     private bool _acting;
@@ -63,7 +66,10 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         _refresh = refresh;
         _lifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
         _token = _lifetime.Token;
-        _operation = new(clock ?? TimeProvider.System,
+        _clock = clock ?? TimeProvider.System;
+        _refreshInterval = (options ?? OwnerConsoleLoopOptions.Default).RefreshInterval;
+        if (_refreshInterval <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(options), "Refresh interval must be positive.");
+        _operation = new(_clock,
             label => Invoke(() => { if (!_token.IsCancellationRequested) SetWorking("command", label); }),
             message => Invoke(() => { if (!_token.IsCancellationRequested) ShowRefreshFailure(message); }), options);
         var decisions = new FrameView { Title = "DECISIONS", Y = 1, Width = Dim.Fill(), Height = Dim.Percent(25) };
@@ -119,6 +125,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         try
         {
             _controller.Apply(model);
+            _refreshedAt = _clock.GetUtcNow();
             RenderStatus();
             RenderDecisions();
             RenderBoard();
@@ -178,8 +185,20 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         if (_controller.Model is not { } model) return;
         var status = model.Status;
         _status.Text = $"conductor: {(status.ConductorRunning ? "running" : "stopped")} | active: {status.ActiveGoals} | decisions: {status.LiveDecisions} | last event: {Age(status.LastEventAge)} | landed today: {status.LandedToday} | bell: {(_controller.BellEnabled ? "on" : "off")}";
+        if (status.HiddenQuestions > 0) _status.Text += $" | hidden: {status.HiddenQuestions}";
+        if (_refreshedAt is { } refreshed)
+        {
+            var age = _clock.GetUtcNow() - refreshed;
+            _status.Text += age.TotalSeconds > 3 * _refreshInterval.TotalSeconds
+                ? $" | stale {Math.Max(1, (int)age.TotalMinutes)}m"
+                : $" | refreshed {TimeZoneInfo.ConvertTime(refreshed, _clock.LocalTimeZone):HH:mm:ss}";
+        }
+        if (status.FailedToday > 0) _status.Text += $" | failed today: {status.FailedToday}";
         if (_working.Count > 0) _status.Text += $" | working: {string.Join(", ", _working.Values)}";
     }
+
+    // Host ticks repaint freshness even when the state refresh is blocked or has failed.
+    internal void RefreshStatus() => RenderStatus();
 
     private void RenderActivity()
     {

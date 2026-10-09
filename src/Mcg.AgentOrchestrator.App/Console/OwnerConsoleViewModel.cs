@@ -8,7 +8,7 @@ internal sealed record OwnerConsoleViewModel(
     OwnerConsolePaneState? DecisionsState = null, OwnerConsolePaneState? ActivityState = null);
 
 internal sealed record OwnerConsoleStatus(bool ConductorRunning, int ActiveGoals, int LiveDecisions,
-    int HiddenQuestions, TimeSpan? LastEventAge, int LandedToday);
+    int HiddenQuestions, TimeSpan? LastEventAge, int LandedToday, int FailedToday = 0);
 
 internal sealed record OwnerConsoleDecision(string Id, int Number, string GoalId, string GoalPrefix,
     OwnerQuestionKind Kind, string Summary, string FullText, string? BlastRadius,
@@ -18,7 +18,11 @@ internal sealed record OwnerConsoleDecision(string Id, int Number, string GoalId
 }
 
 internal sealed record OwnerConsoleBoardRow(string GoalPrefix, string Epic, string Title,
-    string State, string Stage, TimeSpan? Age, string GoalId);
+    string State, string Stage, TimeSpan? Age, string GoalId, bool Dimmed = false)
+{
+    internal OwnerConsoleBoardSortKey SortKey { get; init; }
+    internal string? StageWithoutQuestion { get; init; }
+}
 
 internal sealed record OwnerConsoleActivityItem(DateTimeOffset Timestamp, string Kind, string Tag,
     string GoalPrefix, string Detail, string GoalTitle = "", string Phrase = "",

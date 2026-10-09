@@ -23,8 +23,7 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
     {
         var (decisions, hidden) = await ReadDecisionsAsync(cancellationToken);
         var model = await BuildBoardAsync(cancellationToken);
-        return WithActivity(model with { Decisions = decisions, Status = model.Status with
-            { LiveDecisions = decisions.Length, HiddenQuestions = hidden } }, inputs);
+        return WithActivity(WithDecisions(model, decisions, hidden), inputs);
     }
 
     internal async Task<(ImmutableArray<OwnerConsoleDecision> Decisions, int Hidden)> ReadDecisionsAsync(
@@ -51,7 +50,10 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
     {
         var metadata = await state.ListGoalMetadataAsync(cancellationToken);
         _metadata = metadata;
-        var ids = metadata.Where(item => Enum.TryParse<GoalStatus>(item.Status, true, out var status) && IsActive(status))
+        var now = clock.GetUtcNow();
+        var ids = metadata.Where(item => Enum.TryParse<GoalStatus>(item.Status, true, out var status) &&
+                (IsActive(status) || status is GoalStatus.Failed or GoalStatus.Parked &&
+                    (!DateTimeOffset.TryParse(item.UpdatedAt, out var updated) || now - updated <= TimeSpan.FromHours(24))))
             .Select(item => new GoalId(item.Id)).ToArray();
         var board = ImmutableArray.CreateBuilder<OwnerConsoleBoardRow>();
         if (ids.Length > 0)
@@ -72,13 +74,37 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
                     _previousHolds[goal.Id.Value] = hasHold;
                 }
             }
-            foreach (var goal in kernel.Goals.Where(goal => ids.Contains(goal.Id) && IsActive(goal.Status)))
+            var ranked = kernel.Goals.Where(goal => ids.Contains(goal.Id))
+                .Select(goal => (Goal: goal, Key: OwnerConsoleBoardSortKey.For(goal)))
+                .Where(item => IsActive(item.Goal.Status) || item.Key.Rank == OwnerConsoleAttention.RecentTerminal &&
+                    item.Key.Since is { } at && now - at <= TimeSpan.FromHours(24)).OrderBy(item => item.Key).ToArray();
+            var queuePosition = 0;
+            foreach (var (goal, key) in ranked)
+            {
+                var stage = OwnerConsoleStageDescriber.Describe(goal, key,
+                    key.Rank == OwnerConsoleAttention.WaitingForGate ? ++queuePosition : null, now);
                 board.Add(new(Prefix(goal.Id.Value), await epics.GetTitleAsync(goal.Id.Value, cancellationToken),
-                    OwnerGoalTitle.Full(goal.Objective), goal.Status.ToString(),
-                    OwnerConsoleGoalDetail.Stage(goal),
-                    Age(goal.Timeline.OrderByDescending(item => item.OccurredAt).FirstOrDefault()?.OccurredAt), goal.Id.Value));
+                    OwnerGoalTitle.Full(goal.Objective), goal.Status.ToString(), stage,
+                    Age(goal.Timeline.MaxBy(item => item.OccurredAt)?.OccurredAt), goal.Id.Value,
+                    key.Rank == OwnerConsoleAttention.RecentTerminal) { SortKey = key, StageWithoutQuestion = stage });
+            }
         }
-        return new(new(liveness.IsRunning(), board.Count, 0, 0, null, 0), [], board.ToImmutable(), []);
+        return new(new(liveness.IsRunning(), board.Count(row => !row.Dimmed), 0, 0, null, 0,
+            board.Count(row => row.Dimmed && row.State == nameof(GoalStatus.Failed))), [], board.ToImmutable(), []);
+    }
+
+    internal OwnerConsoleViewModel WithDecisions(OwnerConsoleViewModel model,
+        ImmutableArray<OwnerConsoleDecision> decisions, int hidden)
+    {
+        var questionGoals = decisions.Select(item => item.GoalId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var rows = model.Board.Select(row => row with
+        {
+            StageWithoutQuestion = row.StageWithoutQuestion ?? row.Stage,
+            Stage = !row.Dimmed && questionGoals.Contains(row.GoalId) ? OwnerConsoleStageDescriber.OwnerQuestion :
+                row.StageWithoutQuestion ?? row.Stage
+        }).OrderBy(row => row.SortKey.WithOwnerQuestion(questionGoals.Contains(row.GoalId))).ToImmutableArray();
+        return model with { Board = rows, Decisions = decisions,
+            Status = model.Status with { LiveDecisions = decisions.Length, HiddenQuestions = hidden } };
     }
 
     internal OwnerConsoleViewModel WithActivity(OwnerConsoleViewModel model, OwnerConsoleViewInputs inputs)

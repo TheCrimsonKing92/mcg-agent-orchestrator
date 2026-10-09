@@ -1,4 +1,5 @@
 using System.Data;
+using Terminal.Gui.Drawing;
 using Terminal.Gui.Text;
 using Terminal.Gui.Views;
 
@@ -9,6 +10,8 @@ internal static class OwnerConsoleBoardRenderer
     internal static void Render(DataTable table, TableView view, IReadOnlyList<OwnerConsoleBoardRow> rows,
         int paneWidth, int titleWidth)
     {
+        view.Style.RowColorGetter = args => args.RowIndex >= 0 && args.RowIndex < rows.Count && rows[args.RowIndex].Dimmed
+            ? new Scheme(view.GetScheme().Disabled) : null;
         var cells = rows.Select(row => new[] { row.GoalPrefix, row.Epic, row.Title, row.State, row.Stage, Age(row.Age) }).ToArray();
         var widths = Enumerable.Range(0, table.Columns.Count).Select(column =>
             Math.Max(table.Columns[column].ColumnName.GetColumns(), cells.Select(row => row[column].GetColumns()).DefaultIfEmpty().Max())).ToArray();
