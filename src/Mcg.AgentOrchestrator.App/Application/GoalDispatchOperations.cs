@@ -480,7 +480,7 @@ internal sealed partial class GoalDispatchOperations
         CitedPriorEvidenceResolver.ForWorkspace(workspace.SqliteStatePath, workspace.OrchestratorDirectory);
 
     private static string ResolveOrchestratorSkillDirectory(OrchestratorWorkspace workspace) =>
-        Path.Combine(OrchestratorHome.Resolve(workspace.ExecutionDirectory).RootDirectory, ".agents", "skills");
+        Path.Combine(OrchestratorHome.Resolve(workspace.ExecutionDirectory).InstallRootDirectory, ".agents", "skills");
 
     private static int ResolveReviewAutoRetryStopRound(
         OrchestratorWorkspace workspace,
