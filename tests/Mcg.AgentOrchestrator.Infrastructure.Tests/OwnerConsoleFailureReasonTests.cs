@@ -43,7 +43,7 @@ public sealed class OwnerConsoleFailureReasonTests
                 await scene.View.HandleKeyAsync(Key.Tab);
                 await scene.View.HandleKeyAsync(Key.Tab);
                 await scene.View.HandleKeyAsync(Key.Enter);
-                Assert.Contains("Why: 11111111 AcceptanceLaneMembershipTests.ExistingRunnableClassesKeepTheirSubstringLaneMembership: found 1 offending test class(es)", scene.Dialogs.Messages[^1].Text);
+                Assert.Contains("Why: AcceptanceLaneMembershipTests.ExistingRunnableClassesKeepTheirSubstringLaneMembership: found 1 offending test class(es)", scene.Dialogs.Messages[^1].Text);
             }
             else Assert.Contains("the failure reason has not been recorded", line);
         }
