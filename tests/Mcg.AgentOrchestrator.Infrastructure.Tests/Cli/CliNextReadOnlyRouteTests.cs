@@ -161,8 +161,6 @@ public sealed class CliNextReadOnlyRouteTests : CliTaskQueryTestSupport
     }
 
     [Theory]
-    [InlineData("next", "--autonomy", "conservative")]
-    [InlineData("next", "--autonomy-policy", "conservative")]
     [InlineData("next", "abc10000", "--full")]
     [InlineData("next", "abc10000", "extra")]
     [InlineData("next", "--help")]

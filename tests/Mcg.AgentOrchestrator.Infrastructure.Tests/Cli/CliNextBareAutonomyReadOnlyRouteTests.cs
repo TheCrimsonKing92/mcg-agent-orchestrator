@@ -6,14 +6,16 @@ using Microsoft.Data.Sqlite;
 using Xunit;
 
 // Each test owns its workspace and stores; console capture is async-local.
-public sealed class CliNextAutonomyReadOnlyRouteTests : CliTaskQueryTestSupport
+public sealed class CliNextBareAutonomyReadOnlyRouteTests : CliTaskQueryTestSupport
 {
     private static readonly GoalId TargetId = new("abc10000aaaaaaaaaaaaaaaaaaaaaaaa");
 
     [Theory]
-    [InlineData("--autonomy")]
-    [InlineData("--autonomy-policy")]
-    public async Task ReadOnlyDatabase_AutonomyForms_MatchWriterOutput(string flag)
+    [InlineData("--autonomy", "observe")]
+    [InlineData("--autonomy-policy", "observe")]
+    [InlineData("--autonomy", "conservative")]
+    [InlineData("--autonomy-policy", "conservative")]
+    public async Task ReadOnlyDatabase_AutonomyForms_MatchWriterOutput(string flag, string policy)
     {
         var root = CreateTempDirectory();
         var writerRoot = CreateTempDirectory();
@@ -22,7 +24,7 @@ public sealed class CliNextAutonomyReadOnlyRouteTests : CliTaskQueryTestSupport
             var workspace = await SeedWorkspaceAsync(root);
             CopyWorkspace(root, writerRoot);
             var writerWorkspace = OrchestratorWorkspace.ForDirectory(writerRoot);
-            var args = new[] { "next", "abc10000", flag, "observe" };
+            var args = new[] { "next", flag, policy };
             var writerRepository = new SqliteOrchestratorStateRepository(writerWorkspace.SqliteStatePath);
             IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
             var profiles = WorkerProfileCatalog.Default();
@@ -85,7 +87,7 @@ public sealed class CliNextAutonomyReadOnlyRouteTests : CliTaskQueryTestSupport
             var collaborationDatabaseBytes = File.ReadAllBytes(collaborationDatabasePath);
             var before = SnapshotFiles(root, workspace.SqliteStatePath, collaborationDatabasePath);
 
-            var result = ExecuteReadOnly(["next", "abc10000", flag, "observe"], repository, workspace);
+            var result = ExecuteReadOnly(["next", flag, "observe"], repository, workspace);
 
             Assert.True(result.Served);
             Assert.False(result.Changed);
@@ -109,12 +111,10 @@ public sealed class CliNextAutonomyReadOnlyRouteTests : CliTaskQueryTestSupport
         {
             var workspace = OrchestratorWorkspace.ForDirectory(root);
             _ = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
-            var kernel = new AgentOrchestratorKernel();
-            kernel.CreateGoal(TargetId, "Healthy autonomy query");
-            kernel.CreateGoal(new GoalId("abc20000aaaaaaaaaaaaaaaaaaaaaaaa"), "Unrelated goal");
+            var kernel = CreateTwoGoalKernel();
             var repository = new ProbeStateRepository(kernel) { ThrowOnOutbox = true };
 
-            var result = ExecuteReadOnly(["next", "abc10000", flag, "observe"], repository, workspace);
+            var result = ExecuteReadOnly(["next", flag, "observe"], repository, workspace);
 
             Assert.True(result.Served);
             Assert.False(result.Changed);
@@ -160,7 +160,7 @@ public sealed class CliNextAutonomyReadOnlyRouteTests : CliTaskQueryTestSupport
                     blocker.Command == "refresh-dispatch abc10000 1");
             var repository = new ProbeStateRepository(kernel) { ThrowOnOutbox = true };
 
-            var result = ExecuteReadOnly(["next", "abc10000", flag, "observe"], repository, workspace);
+            var result = ExecuteReadOnly(["next", flag, "observe"], repository, workspace);
 
             Assert.False(result.Served);
             Assert.False(result.Changed);
@@ -191,7 +191,7 @@ public sealed class CliNextAutonomyReadOnlyRouteTests : CliTaskQueryTestSupport
                 $"terminal-sweep-blocker:{TargetId.Value}:stale");
             var repository = new ProbeStateRepository(kernel) { ThrowOnOutbox = true };
 
-            var result = ExecuteReadOnly(["next", "abc10000", flag, "observe"], repository, workspace);
+            var result = ExecuteReadOnly(["next", flag, "observe"], repository, workspace);
 
             Assert.False(result.Served);
             Assert.False(result.Changed);
@@ -206,14 +206,14 @@ public sealed class CliNextAutonomyReadOnlyRouteTests : CliTaskQueryTestSupport
     }
 
     [Theory]
-    [InlineData("next", "abc10000", "--autonomy", "observe")]
-    [InlineData("NEXT", "ABC10000", "--AUTONOMY-POLICY", "observe")]
-    [InlineData("next", "abc10000", "--autonomy", "bogus")]
     [InlineData("next", "--autonomy", "observe")]
     [InlineData("next", "--autonomy-policy", "observe")]
     [InlineData("NEXT", "--AUTONOMY-POLICY", "observe")]
     [InlineData("next", "--autonomy", "bogus")]
-    public void ExactAutonomyForms_SelectReadOnlyRoute(params string[] args)
+    [InlineData("next", "--autonomy", "conservative")]
+    [InlineData("next", "--autonomy-policy", "conservative")]
+    [InlineData("next", "--autonomy", "-x")]
+    public void ExactBareAutonomyForms_SelectReadOnlyRoute(params string[] args)
     {
         Assert.True(CliNextAutonomyQueryCommand.IsNextAutonomyQueryCommand(args));
         Assert.True(CliReadOnlyCommandRunner.IsReadOnlyCommand(args));
@@ -221,21 +221,150 @@ public sealed class CliNextAutonomyReadOnlyRouteTests : CliTaskQueryTestSupport
 
     [Theory]
     [InlineData("next", "--autonomy", "observe", "abc10000")]
-    [InlineData("next", "abc10000", "--autonomy=observe")]
-    [InlineData("next", "abc10000", "--autonomy", "observe", "--full")]
-    [InlineData("next", "abc10000", "--autonomy", "--help")]
-    [InlineData("next", "abc10000", "--autonomy-policy", "-h")]
-    [InlineData("next", "abc10000", "--autonomy", "")]
-    [InlineData("next", "abc10000", "--autonomy-policy", " ")]
-    [InlineData("next", "", "--autonomy", "observe")]
-    [InlineData("next", " ", "--autonomy-policy", "observe")]
-    [InlineData("next", "-prefix", "--autonomy", "observe")]
-    [InlineData("next", "abc10000", "--other", "observe")]
-    public void OtherAutonomyForms_KeepWriterRoute(params string[] args)
+    [InlineData("next", "--autonomy=observe")]
+    [InlineData("next", "--autonomy", "observe", "--full")]
+    [InlineData("next", "--autonomy", "--help")]
+    [InlineData("next", "--autonomy-policy", "-h")]
+    [InlineData("next", "--autonomy", "")]
+    [InlineData("next", "--autonomy-policy", " ")]
+    [InlineData("next", "--other", "observe")]
+    public void OtherBareAutonomyForms_KeepWriterRoute(params string[] args)
     {
+        // Establish the widened route before checking its rejected boundary forms.
+        Assert.True(CliReadOnlyCommandRunner.IsReadOnlyCommand(["next", "--autonomy", "observe"]));
         Assert.False(CliNextAutonomyQueryCommand.IsNextAutonomyQueryCommand(args));
         Assert.False(CliReadOnlyCommandRunner.IsReadOnlyCommand(args));
     }
+
+    [Theory]
+    [InlineData("--autonomy", null)]
+    [InlineData("--autonomy-policy", null)]
+    [InlineData("--autonomy", "abc20000aaaaaaaaaaaaaaaaaaaaaaaa")]
+    [InlineData("--autonomy-policy", "abc20000aaaaaaaaaaaaaaaaaaaaaaaa")]
+    [InlineData("--autonomy", "missing0aaaaaaaaaaaaaaaaaaaaaaaa")]
+    [InlineData("--autonomy-policy", "missing0aaaaaaaaaaaaaaaaaaaaaaaa")]
+    public void SessionSelection_BareAutonomy_MatchesBareNext(string flag, string? sessionId)
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            _ = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+            var kernel = CreateTwoGoalKernel();
+            var sessionGoal = sessionId is null ? null :
+                new AgentOrchestratorKernel().CreateGoal(new GoalId(sessionId), "Session goal");
+            var nextRepository = new ProbeStateRepository(kernel) { ThrowOnOutbox = true };
+            var autonomyRepository = new ProbeStateRepository(kernel) { ThrowOnOutbox = true };
+
+            var next = ExecuteReadOnly(["next"], nextRepository, workspace, sessionGoal);
+            var autonomy = ExecuteReadOnly(["next", flag, "observe"], autonomyRepository, workspace, sessionGoal);
+
+            var expectedId = sessionId == "abc20000aaaaaaaaaaaaaaaaaaaaaaaa"
+                ? new GoalId(sessionId) : TargetId;
+            Assert.True(next.Served);
+            Assert.True(autonomy.Served);
+            Assert.False(next.Changed);
+            Assert.False(autonomy.Changed);
+            Assert.Equal(expectedId, next.Goal?.Id);
+            Assert.Equal(next.Goal?.Id, autonomy.Goal?.Id);
+            Assert.Contains($"Goal {expectedId.Value[..8]} ", next.Output, StringComparison.Ordinal);
+            Assert.Equal(GoalHeader(next.Output), GoalHeader(autonomy.Output));
+            Assert.Equal(1, autonomyRepository.ListGoalMetadataCount);
+            Assert.Equal(1, autonomyRepository.LoadGoalsCount);
+            Assert.Equal([expectedId.Value], autonomyRepository.LoadedGoalIds);
+            AssertNoWriterEffects(nextRepository);
+            AssertNoWriterEffects(autonomyRepository);
+        }
+        finally
+        {
+            DeleteWorkspace(root);
+        }
+    }
+
+    [Theory]
+    [InlineData("--autonomy")]
+    [InlineData("--autonomy-policy")]
+    public void NoGoals_BareAutonomy_MatchesBareNextMessage(string flag)
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var kernel = new AgentOrchestratorKernel();
+            var nextRepository = new ProbeStateRepository(kernel) { ThrowOnOutbox = true };
+            var autonomyRepository = new ProbeStateRepository(kernel) { ThrowOnOutbox = true };
+
+            var next = Assert.Throws<InvalidOperationException>(() =>
+                ExecuteReadOnly(["next"], nextRepository, workspace));
+            var autonomy = Assert.Throws<InvalidOperationException>(() =>
+                ExecuteReadOnly(["next", flag, "observe"], autonomyRepository, workspace));
+
+            Assert.Equal("Create a goal first with: goal <objective>", next.Message);
+            Assert.Equal(next.Message, autonomy.Message);
+            Assert.Equal(1, nextRepository.ListGoalMetadataCount);
+            Assert.Equal(1, autonomyRepository.ListGoalMetadataCount);
+            Assert.Equal(0, nextRepository.LoadGoalsCount);
+            Assert.Equal(0, autonomyRepository.LoadGoalsCount);
+            AssertNoWriterEffects(nextRepository);
+            AssertNoWriterEffects(autonomyRepository);
+        }
+        finally
+        {
+            DeleteWorkspace(root);
+        }
+    }
+
+    [Theory]
+    [InlineData("--autonomy")]
+    [InlineData("--autonomy-policy")]
+    public void MissingItemsStore_BareAutonomy_DeclinesWithoutWriterEffects(string flag)
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var repository = new ProbeStateRepository(CreateTwoGoalKernel()) { ThrowOnOutbox = true };
+            Assert.False(File.Exists(Path.Combine(workspace.OrchestratorDirectory, "collaboration-items.db")));
+
+            var result = ExecuteReadOnly(["next", flag, "observe"], repository, workspace);
+
+            Assert.False(result.Served);
+            Assert.False(result.Changed);
+            Assert.Empty(result.Output);
+            Assert.Equal(1, repository.ListGoalMetadataCount);
+            Assert.Equal(0, repository.LoadGoalsCount);
+            AssertNoWriterEffects(repository);
+        }
+        finally
+        {
+            DeleteWorkspace(root);
+        }
+    }
+
+    private static AgentOrchestratorKernel CreateTwoGoalKernel()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        kernel.CreateGoal(TargetId, "Healthy autonomy query");
+        kernel.CreateGoal(new GoalId("abc20000aaaaaaaaaaaaaaaaaaaaaaaa"), "Unrelated older goal");
+        var created = new DateTimeOffset(2026, 10, 7, 0, 0, 0, TimeSpan.Zero);
+        var snapshot = kernel.ExportSnapshot();
+        return AgentOrchestratorKernel.FromSnapshot(snapshot with
+        {
+            Goals = snapshot.Goals.Select(goal =>
+            {
+                var creationTime = created.AddDays(goal.Id == TargetId.Value ? 1 : 0);
+                return goal with
+                {
+                    CreatedAt = creationTime,
+                    Timeline = [goal.Timeline[0] with { OccurredAt = creationTime }]
+                };
+            }).ToArray()
+        });
+    }
+
+    private static string GoalHeader(string output) =>
+        Assert.Single(output.Split(Environment.NewLine)
+            .Where(line => line.StartsWith("Goal ", StringComparison.Ordinal)));
 
     private static async Task<OrchestratorWorkspace> SeedWorkspaceAsync(string root)
     {
@@ -249,12 +378,13 @@ public sealed class CliNextAutonomyReadOnlyRouteTests : CliTaskQueryTestSupport
     }
 
     private static (bool Served, bool Changed, string Output, Goal? Goal) ExecuteReadOnly(
-        string[] args, ITransactionalOrchestratorStateRepository repository, OrchestratorWorkspace workspace)
+        string[] args, ITransactionalOrchestratorStateRepository repository, OrchestratorWorkspace workspace,
+        Goal? sessionGoal = null)
     {
         Assert.True(CliReadOnlyCommandRunner.IsReadOnlyCommand(args));
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var profiles = WorkerProfileCatalog.Default();
-        Goal? currentGoal = null;
+        Goal? currentGoal = sessionGoal;
         var served = false;
         var changed = false;
         var output = CaptureConsole(() => served = CliReadOnlyCommandRunner.TryExecute(
@@ -291,7 +421,7 @@ public sealed class CliNextAutonomyReadOnlyRouteTests : CliTaskQueryTestSupport
         return output[start..];
     }
 
-    private static (string Path, long Length, DateTime LastWriteTimeUtc)[] SnapshotFiles(
+    private static (string Path, long Length, DateTime LastWriteTimeUtc, FileAttributes Attributes)[] SnapshotFiles(
         string root, params string[] readOnlyDatabasePaths) =>
         Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
             // Read-only WAL opens may touch sidecars; main databases and all other files remain covered.
@@ -299,7 +429,7 @@ public sealed class CliNextAutonomyReadOnlyRouteTests : CliTaskQueryTestSupport
                 path.Equals(databasePath + "-wal", StringComparison.OrdinalIgnoreCase) ||
                 path.Equals(databasePath + "-shm", StringComparison.OrdinalIgnoreCase)))
             .Select(path => new FileInfo(path))
-            .Select(file => (Path.GetRelativePath(root, file.FullName), file.Length, file.LastWriteTimeUtc))
+            .Select(file => (Path.GetRelativePath(root, file.FullName), file.Length, file.LastWriteTimeUtc, file.Attributes))
             .OrderBy(file => file.Item1, StringComparer.Ordinal).ToArray();
 
     private static void CopyWorkspace(string source, string destination)

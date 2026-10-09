@@ -31,7 +31,8 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteNoWriterEffects : CliTa
             ["goal-events"] = [["goal-events", "abc10000"]],
             ["timeline"] = [["timeline", "abc10000"]],
             ["next"] = [["next", "--full", "abc10000"], ["next", "abc10000"], ["next"],
-                ["next", "abc10000", "--autonomy", "observe"], ["next", "abc10000", "--autonomy-policy", "observe"]]
+                ["next", "abc10000", "--autonomy", "observe"], ["next", "abc10000", "--autonomy-policy", "observe"],
+                ["next", "--autonomy", "observe"], ["next", "--autonomy-policy", "observe"]]
         };
 
     [Fact]
