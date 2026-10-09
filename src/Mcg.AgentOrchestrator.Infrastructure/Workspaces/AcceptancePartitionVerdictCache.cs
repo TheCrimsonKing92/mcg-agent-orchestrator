@@ -98,7 +98,6 @@ internal sealed record AcceptancePartitionVerdictCacheOptions(
     Func<IReadOnlyList<TempRootApparatusLossReceiptV1>>? ResolveApparatusLossReceipts = null,
     Func<AcceptanceManifestCheck, string?>? ResolveClosureHash = null,
     Func<string, string, string, IReadOnlyList<string>>? ResolveChangedFiles = null,
-    bool DisableLaneReuseShadow = false,
     IReadOnlyList<AcceptanceManifestCheck>? IdenticalTreeChecks = null);
 
 internal sealed partial class AcceptancePartitionVerdictCache
@@ -129,7 +128,8 @@ internal sealed partial class AcceptancePartitionVerdictCache
     private readonly ConcurrentDictionary<string, Lazy<string?>> _closureHashes = new(StringComparer.OrdinalIgnoreCase);
     private AcceptanceSharedApparatusInvalidation? _sharedApparatusInvalidation;
     private AcceptanceTestReuseShadow? TestReuseShadow { get; init; }
-    private AcceptanceLaneReuseShadow? LaneReuseShadow { get; init; }
+    private bool _shadowsPending;
+    internal bool HasPendingShadows => TestReuseShadow is not null && _shadowsPending;
 
     private AcceptancePartitionVerdictCache(
         string goalId,
@@ -263,12 +263,7 @@ internal sealed partial class AcceptancePartitionVerdictCache
                 GoalAcceptanceVerifier.NormalizeShaToken(mainSha),
                 GoalAcceptanceVerifier.NormalizeShaToken(candidateTreeSha),
                 GoalAcceptanceVerifier.NormalizeShaToken(verifyingCommitSha),
-                options.ResolveChangedFiles ?? AcceptanceTestReuseShadow.ResolveChangedFilesFromGit),
-            LaneReuseShadow = partitionCount == 0 || options.DisableLaneReuseShadow ? null : new AcceptanceLaneReuseShadow(
-                options.WorktreePath, options.GoalId.Value, attemptId,
-                GoalAcceptanceVerifier.NormalizeShaToken(mainSha),
-                GoalAcceptanceVerifier.NormalizeShaToken(candidateTreeSha),
-                GoalAcceptanceVerifier.NormalizeShaToken(verifyingCommitSha), options.EffectiveChecks)
+                options.ResolveChangedFiles ?? AcceptanceTestReuseShadow.ResolveChangedFilesFromGit)
         };
     }
 
@@ -706,7 +701,6 @@ internal sealed partial class AcceptancePartitionVerdictCache
                 probeReceipt?.FlakeConfirmed));
         }
         TestReuseShadow?.Observe(check, result);
-        LaneReuseShadow?.Observe(check, result, probeReceipt?.FlakeConfirmed);
     }
 
     internal void RecordSemanticDeduplications(
@@ -785,8 +779,7 @@ internal sealed partial class AcceptancePartitionVerdictCache
         _wholeProjectClosureReuse.AppendGreen(ManifestIdentity, _freshRecords, retriedPartitionIds);
         Console.WriteLine($"PARTITION_VERDICT_CACHE {receipt}");
         Console.Out.Flush();
-        TestReuseShadow?.Complete();
-        LaneReuseShadow?.Complete();
+        _shadowsPending = true;
         return new AcceptanceCheckResult(
             "infrastructure partition verdict cache",
             true,
@@ -794,6 +787,13 @@ internal sealed partial class AcceptancePartitionVerdictCache
             null,
             ResultSummary: receipt,
             Advisory: true);
+    }
+
+    internal void CompleteShadows()
+    {
+        if (!HasPendingShadows) return;
+        _shadowsPending = false;
+        TestReuseShadow?.Complete();
     }
 
     private void RecordReuse(PartitionVerdictReuseReceipt receipt)

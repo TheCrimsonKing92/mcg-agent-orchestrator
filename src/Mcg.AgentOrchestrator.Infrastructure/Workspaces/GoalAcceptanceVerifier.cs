@@ -793,10 +793,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         phaseAccountant.TransitionTo(AcceptanceGatePhaseNames.PolicySynthesis);
-        if (partitionVerdictCache?.CompleteAttempt() is { } partitionCacheReceipt)
-        {
-            checks.Add(partitionCacheReceipt);
-        }
+        if (partitionVerdictCache?.CompleteAttempt() is { } partitionCacheReceipt) checks.Add(partitionCacheReceipt);
         partitionVerdictCache?.RecordSemanticDeduplications(effectivePlan.SemanticDeduplications);
 
         if (effectivePlan.DotnetShardDisposition == DotnetShardDisposition.RunDotnetShards)
@@ -920,6 +917,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             executionOwner.MarkSuccessful();
         }
 
+        if (partitionVerdictCache?.HasPendingShadows == true)
+            phaseAccountant.TransitionTo(AcceptanceGatePhaseNames.ShadowObservation);
+        partitionVerdictCache?.CompleteShadows();
         phaseAccountant.MarkCompleted(verification.Passed);
         return verification;
         }

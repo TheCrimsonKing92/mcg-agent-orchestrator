@@ -13,6 +13,7 @@ internal static class AcceptanceGatePhaseNames
     internal const string StructuralCoverage = "structural-coverage";
     internal const string AdvisoryAndTamper = "advisory-and-tamper";
     internal const string Finalize = "finalize";
+    internal const string ShadowObservation = "shadow-observation";
 }
 
 public sealed record AcceptanceGatePhaseDuration(string Name, TimeSpan Duration);
