@@ -81,14 +81,17 @@ public sealed class CliNextAutonomyReadOnlyRouteTests : CliTaskQueryTestSupport
             var workspace = await SeedWorkspaceAsync(root);
             var repository = SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath);
             var databaseBytes = File.ReadAllBytes(workspace.SqliteStatePath);
-            var before = SnapshotFiles(root, workspace.SqliteStatePath);
+            var collaborationDatabasePath = Path.Combine(workspace.OrchestratorDirectory, "collaboration-items.db");
+            var collaborationDatabaseBytes = File.ReadAllBytes(collaborationDatabasePath);
+            var before = SnapshotFiles(root, workspace.SqliteStatePath, collaborationDatabasePath);
 
             var result = ExecuteReadOnly(["next", "abc10000", flag, "observe"], repository, workspace);
 
             Assert.True(result.Served);
             Assert.False(result.Changed);
-            Assert.Equal(before, SnapshotFiles(root, workspace.SqliteStatePath));
+            Assert.Equal(before, SnapshotFiles(root, workspace.SqliteStatePath, collaborationDatabasePath));
             Assert.Equal(databaseBytes, File.ReadAllBytes(workspace.SqliteStatePath));
+            Assert.Equal(collaborationDatabaseBytes, File.ReadAllBytes(collaborationDatabasePath));
         }
         finally
         {
@@ -152,7 +155,7 @@ public sealed class CliNextAutonomyReadOnlyRouteTests : CliTaskQueryTestSupport
                 Goals = snapshot.Goals.Select(item => item.Id == TargetId.Value
                     ? item with { Status = GoalStatus.Completed } : item).ToArray()
             });
-            Assert.Contains(TerminalGoalSweep.Diagnose(kernel, root, TargetId).Goals.Single().Blockers,
+            Assert.Contains(TerminalGoalSweep.Diagnose(kernel, root, workspace.IntegrationBranch, TargetId).Goals.Single().Blockers,
                 blocker => blocker.Kind == "terminal-live-dispatch" &&
                     blocker.Command == "refresh-dispatch abc10000 1");
             var repository = new ProbeStateRepository(kernel) { ThrowOnOutbox = true };
@@ -286,10 +289,12 @@ public sealed class CliNextAutonomyReadOnlyRouteTests : CliTaskQueryTestSupport
     }
 
     private static (string Path, long Length, DateTime LastWriteTimeUtc)[] SnapshotFiles(
-        string root, string stateDbPath) =>
+        string root, params string[] readOnlyDatabasePaths) =>
         Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
-            .Where(path => !path.Equals(stateDbPath + "-wal", StringComparison.OrdinalIgnoreCase) &&
-                !path.Equals(stateDbPath + "-shm", StringComparison.OrdinalIgnoreCase))
+            // Read-only WAL opens may touch sidecars; main databases and all other files remain covered.
+            .Where(path => !readOnlyDatabasePaths.Any(databasePath =>
+                path.Equals(databasePath + "-wal", StringComparison.OrdinalIgnoreCase) ||
+                path.Equals(databasePath + "-shm", StringComparison.OrdinalIgnoreCase)))
             .Select(path => new FileInfo(path))
             .Select(file => (Path.GetRelativePath(root, file.FullName), file.Length, file.LastWriteTimeUtc))
             .OrderBy(file => file.Item1, StringComparer.Ordinal).ToArray();
