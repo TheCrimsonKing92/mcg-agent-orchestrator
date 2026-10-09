@@ -114,8 +114,9 @@ public sealed class AcceptanceCohortMergeTrainSlotsBusyDeferralTests : Acceptanc
                 var receipt = Assert.IsType<MergeTrainReceipt>(run.Receipt);
                 Assert.Equal(MergeTrainGateOutcome.Passed, receipt.Outcome);
                 Assert.Equal(identity, receipt.Identity.Value);
-                Assert.Equal(resultPath, Assert.Single(receipt.GateTestResultPaths));
-                Assert.True(File.Exists(resultPath));
+                var recordedResultPath = Assert.Single(receipt.GateTestResultPaths);
+                Assert.True(File.Exists(recordedResultPath));
+                Assert.Equal(File.ReadAllText(resultPath), File.ReadAllText(recordedResultPath));
                 Assert.Equal(receipt.ReceiptId, store.TryReadReceipt(identity)?.ReceiptId);
                 Assert.Equal(MergeTrainGateOutcome.Passed, store.TryReadReceipt(identity)?.Outcome);
                 Assert.Equal(1, verifier.RunCount);
