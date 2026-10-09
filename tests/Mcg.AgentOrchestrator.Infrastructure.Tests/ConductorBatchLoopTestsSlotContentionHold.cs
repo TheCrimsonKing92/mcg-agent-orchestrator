@@ -127,7 +127,9 @@ public sealed class ConductorBatchLoopTestsSlotContentionHold : ConductorBatchLo
             sleepFunc: _ => false);
 
         Assert.Equal(1, summary.Ticks);
-        Assert.Equal(2, summary.Rechecks);
+        // One watch recheck follows the faulting tick, then two idle rechecks
+        // exhaust the iteration budget while the goal remains set aside.
+        Assert.Equal(3, summary.Rechecks);
         Assert.Equal("max-iter", summary.StopReason);
         Assert.Equal(1, summary.Escalated);
         Assert.Equal(1, reaps);
