@@ -32,6 +32,7 @@ internal sealed partial class ConductorBatchLoop
     internal const int QuietSummaryEveryTicks = 20;
     internal const int DefaultMaxBusyWriteAttempts = 1;
     internal const int DispatchRecordContentionSkipLimit = 5;
+    internal const int SlotContentionAttentionHoldLimit = 5;
     internal const int DefaultGracefulDetachCheckpointAttempts = 3;
     internal const int JanitorialFailureEscalationThreshold = 3;
     internal const int ParallelAcceptanceTransientFailureCap = 3;
@@ -87,6 +88,7 @@ internal sealed partial class ConductorBatchLoop
     private readonly OrchestratorWorkspace? _workspace;
     // Janitorial phases run only on the conductor loop thread; acceptance work never mutates this state.
     private readonly Dictionary<string, int> _consecutiveJanitorialFailures = new(StringComparer.Ordinal);
+    private readonly ConductorSlotContentionHolds _slotContentionHolds = new();
     private readonly Dictionary<string, long> _tickPhaseElapsedMs = new(StringComparer.Ordinal);
     private readonly Action<string>? _janitorialPhaseProbe;
     private readonly Func<long> _janitorialTimestamp;
@@ -204,6 +206,7 @@ internal sealed partial class ConductorBatchLoop
         using var activeRunEventLease = leaseAcquisition.RunEventLease!;
         checkpointGoalTick = ResetLandingTickSave(checkpointGoalTick);
         _consecutiveJanitorialFailures.Clear();
+        _slotContentionHolds.Clear();
         ResetWorkerCapacityWatch();
         var previousConductEventLogWriter = leaseAcquisition.PreviousConductEventLogWriter;
         var previousRetryDiagnostics = CurrentRetryDiagnostics.Value;
@@ -752,6 +755,7 @@ internal sealed partial class ConductorBatchLoop
                 }
             }
 
+            _slotContentionHolds.Retain(kernel.Goals.Select(goal => goal.Id));
             var scopedGoals = kernel.Goals
                 .Where(g => (onlyGoalId is null || g.Id.Value == onlyGoalId)
                     && !sweepTerminalizedGoalIds.Contains(g.Id)
@@ -1785,6 +1789,7 @@ internal sealed partial class ConductorBatchLoop
         try
         {
             var advanceResult = advance();
+            _slotContentionHolds.Clear(goal.Id);
             if (advanceResult is null)
             {
                 result = null!;
@@ -1836,6 +1841,28 @@ internal sealed partial class ConductorBatchLoop
             SetAside(kernel, driver, kernel.GetGoal(goal.Id), BatchSetAsideCondition.AdvanceFault, setAsideGoals, selfClearedSetAsideEntries);
             tickEscalated++;
             finishGoalWalk($"dispatch-record-{disposition}-limit");
+            result = null!;
+            return false;
+        }
+        catch (Exception ex) when (ex is DotnetBuildSlotsBusyException or BuildLockBlockedException)
+        {
+            if (TrySkipGoalLeftWorkingSet(kernel, goal, totalTicks, "build-slot-contention", tickLines, finishGoalWalk, out result))
+            {
+                _slotContentionHolds.Clear(goal.Id);
+                return false;
+            }
+
+            var holds = _slotContentionHolds.RecordHold(goal.Id);
+            if (holds == SlotContentionAttentionHoldLimit)
+            {
+                var detail = ex is DotnetBuildSlotsBusyException busy
+                    ? FormatSlotsBusy(busy.SlotsBusy)
+                    : FormatBuildLockBlocked(((BuildLockBlockedException)ex).Attribution);
+                EmitProgress($"INFRASTRUCTURE_ATTENTION tick={totalTicks} kind=build-slot-contention goal={label} holds={holds} {detail}", tickLines);
+            }
+
+            tickHeld++;
+            finishGoalWalk("build-slot-contention");
             result = null!;
             return false;
         }

@@ -374,6 +374,9 @@ Known direct-command limitation: [acceptance](cli-reference.md#acceptance-and-ga
 
 Additional recovery notes:
 
+- `recover` remedies dispatch-exit and advance-fault escalations. It does not clear pre-landing rebase conflicts; repair the conflict and relaunch the conductor.
+- Build-slot contention during per-goal advance holds the goal for retry. After five consecutive holds, one `INFRASTRUCTURE_ATTENTION` line names the busy holders; the goal keeps holding without escalation.
+
 - A failed acceptance verdict is scoped to its recorded branch/main candidate pair. If either HEAD has changed, `acceptance <goal>` records the old verdict as superseded, restores the otherwise-ready goal to `Verified`, and runs one fresh gate against the current pair without consuming or bypassing the `acceptance-retry` cap. An unchanged pair remains `AcceptanceFailed` and requires the ordinary failure-specific repair path.
 - If a retry is swallowed because the same completed dispatch exit artifact keeps being reconciled, stop the loop, identify the exact stale `.exit.txt` from `task <goal> <n>` or `Get-GoalDispatchInventory.ps1`, move that single exit artifact aside with a `.retired` suffix, then run `recover <goal> --text-file <path>` and `retry <goal> <task-number> --text-file <path>`. Do not delete broad log sets; preserve stdout/stderr for evidence.
 - `recover` can over-reset tasks that had already passed. Bridge those back with one evidence-backed decision: `adjudicate --goal <goal> <task-number> close --text-file <explanation-path> --evidence operator-evidence:<evidence-path>`. Keep the evidence file available until the intent is `Applied`.
