@@ -275,15 +275,37 @@ public sealed class InMemoryProgressiveReviewGlanceCircuitStore : IProgressiveRe
 public sealed class SqliteProgressiveReviewGlanceCircuitStore : IProgressiveReviewGlanceCircuitStore
 {
     private readonly string _dbPath;
+    private readonly bool _readOnly;
 
-    public SqliteProgressiveReviewGlanceCircuitStore(string dbPath)
+    public SqliteProgressiveReviewGlanceCircuitStore(string dbPath) : this(dbPath, readOnly: false)
+    {
+        Setup(dbPath);
+    }
+
+    private SqliteProgressiveReviewGlanceCircuitStore(string dbPath, bool readOnly)
     {
         _dbPath = dbPath;
-        EnsureSchema();
+        _readOnly = readOnly;
     }
 
     public static SqliteProgressiveReviewGlanceCircuitStore ForDirectory(string orchestratorDirectory) =>
         new(Path.Combine(orchestratorDirectory, "progressive-review-glance-circuit.db"));
+
+    public static SqliteProgressiveReviewGlanceCircuitStore OpenReadOnly(string dbPath)
+    {
+        if (!File.Exists(dbPath))
+            throw SchemaSetupRequired(dbPath, StoreSchemaState.Missing);
+
+        var store = new SqliteProgressiveReviewGlanceCircuitStore(dbPath, readOnly: true);
+        using var connection = store.OpenConnection();
+        var state = StoreSchemaVersions.Verify(connection, StoreSchemaRegistry.ProgressiveReviewGlanceCircuit);
+        if (state != StoreSchemaState.Current)
+            throw SchemaSetupRequired(dbPath, state);
+        return store;
+    }
+
+    private static InvalidOperationException SchemaSetupRequired(string dbPath, StoreSchemaState state) =>
+        new($"Progressive review glance circuit store '{dbPath}' schema is {state} (expected version {StoreSchemaRegistry.ProgressiveReviewGlanceCircuit.CurrentVersion}); run setup.");
 
     public ProgressiveReviewGlanceCircuitAdmission TryAcquireProbe(
         ProgressiveReviewGlanceContractIdentity identity,
@@ -501,13 +523,15 @@ public sealed class SqliteProgressiveReviewGlanceCircuitStore : IProgressiveRevi
         }
     }
 
-    private SqliteConnection OpenConnection()
+    private SqliteConnection OpenConnection() => OpenConnection(_dbPath, _readOnly);
+
+    private static SqliteConnection OpenConnection(string dbPath, bool readOnly)
     {
         var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
-            DataSource = _dbPath,
-            Mode = SqliteOpenMode.ReadWriteCreate,
-            Cache = SqliteCacheMode.Shared,
+            DataSource = dbPath,
+            Mode = readOnly ? SqliteOpenMode.ReadOnly : SqliteOpenMode.ReadWriteCreate,
+            Cache = readOnly ? SqliteCacheMode.Default : SqliteCacheMode.Shared,
             Pooling = false
         }.ToString());
         connection.Open();
@@ -515,49 +539,64 @@ public sealed class SqliteProgressiveReviewGlanceCircuitStore : IProgressiveRevi
         return connection;
     }
 
-    private void EnsureSchema()
+    public static void Setup(string dbPath)
     {
-        var directory = Path.GetDirectoryName(_dbPath);
+        var directory = Path.GetDirectoryName(dbPath);
         if (!string.IsNullOrWhiteSpace(directory))
             Directory.CreateDirectory(directory);
-        using var connection = OpenConnection();
-        Execute(connection, """
-            CREATE TABLE IF NOT EXISTS progressive_review_glance_circuits (
-                circuit_identity       TEXT PRIMARY KEY,
-                provider               TEXT NOT NULL,
-                profile                TEXT NOT NULL,
-                model                  TEXT NOT NULL,
-                command_fingerprint    TEXT NOT NULL,
-                output_format          TEXT NOT NULL,
-                parser_contract_version TEXT NOT NULL,
-                state                  TEXT NOT NULL CHECK(state IN ('Closed', 'ProbeInFlight', 'Open')),
-                probe_lease_id         TEXT,
-                probe_expires_at       TEXT,
-                opening_cause          TEXT,
-                opening_reason         TEXT,
-                suppression_count      INTEGER NOT NULL DEFAULT 0,
-                updated_at             TEXT NOT NULL
-            )
-            """);
-        Execute(connection, """
-            CREATE TABLE IF NOT EXISTS progressive_review_glance_suppressions (
-                aggregation_key            TEXT PRIMARY KEY,
-                round_key                  TEXT NOT NULL,
-                goal_id                    TEXT NOT NULL,
-                task_id                    TEXT NOT NULL,
-                circuit_identity           TEXT NOT NULL,
-                admission_outcome          TEXT NOT NULL,
-                opening_cause              TEXT NOT NULL,
-                original_reason            TEXT NOT NULL,
-                probe_outcome               TEXT NOT NULL,
-                avoided_call_count          INTEGER NOT NULL,
-                avoided_input_tokens        INTEGER NOT NULL,
-                admission_latency_ms        INTEGER NOT NULL,
-                changed_files_trigger_count INTEGER NOT NULL,
-                elapsed_trigger_count       INTEGER NOT NULL,
-                updated_at                  TEXT NOT NULL
-            )
-            """);
+        using var connection = OpenConnection(dbPath, readOnly: false);
+        var state = StoreSchemaVersions.Verify(connection, StoreSchemaRegistry.ProgressiveReviewGlanceCircuit);
+        if (state is StoreSchemaState.Current or StoreSchemaState.Newer)
+            return;
+
+        Execute(connection, "BEGIN IMMEDIATE");
+        try
+        {
+            Execute(connection, """
+                CREATE TABLE IF NOT EXISTS progressive_review_glance_circuits (
+                    circuit_identity       TEXT PRIMARY KEY,
+                    provider               TEXT NOT NULL,
+                    profile                TEXT NOT NULL,
+                    model                  TEXT NOT NULL,
+                    command_fingerprint    TEXT NOT NULL,
+                    output_format          TEXT NOT NULL,
+                    parser_contract_version TEXT NOT NULL,
+                    state                  TEXT NOT NULL CHECK(state IN ('Closed', 'ProbeInFlight', 'Open')),
+                    probe_lease_id         TEXT,
+                    probe_expires_at       TEXT,
+                    opening_cause          TEXT,
+                    opening_reason         TEXT,
+                    suppression_count      INTEGER NOT NULL DEFAULT 0,
+                    updated_at             TEXT NOT NULL
+                )
+                """);
+            Execute(connection, """
+                CREATE TABLE IF NOT EXISTS progressive_review_glance_suppressions (
+                    aggregation_key            TEXT PRIMARY KEY,
+                    round_key                  TEXT NOT NULL,
+                    goal_id                    TEXT NOT NULL,
+                    task_id                    TEXT NOT NULL,
+                    circuit_identity           TEXT NOT NULL,
+                    admission_outcome          TEXT NOT NULL,
+                    opening_cause              TEXT NOT NULL,
+                    original_reason            TEXT NOT NULL,
+                    probe_outcome               TEXT NOT NULL,
+                    avoided_call_count          INTEGER NOT NULL,
+                    avoided_input_tokens        INTEGER NOT NULL,
+                    admission_latency_ms        INTEGER NOT NULL,
+                    changed_files_trigger_count INTEGER NOT NULL,
+                    elapsed_trigger_count       INTEGER NOT NULL,
+                    updated_at                  TEXT NOT NULL
+                )
+                """);
+            StoreSchemaVersions.UpgradeToCurrent(connection, StoreSchemaRegistry.ProgressiveReviewGlanceCircuit);
+            Execute(connection, "COMMIT");
+        }
+        catch
+        {
+            TryRollback(connection);
+            throw;
+        }
     }
 
     private static SuppressionRow? ReadSuppression(SqliteConnection connection, string key)
