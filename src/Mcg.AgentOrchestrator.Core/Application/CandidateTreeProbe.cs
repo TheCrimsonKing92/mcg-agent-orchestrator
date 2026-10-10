@@ -16,12 +16,17 @@ public static class CandidateTreeProbe
         if (!Path.IsPathFullyQualified(repositoryRoot))
             throw new ArgumentException("The repository root must be an absolute path.", nameof(repositoryRoot));
 
-        // Git metadata plus a top-level solution or nearby project distinguish a candidate tree from a partial fixture.
-        return (File.Exists(Path.Combine(repositoryRoot, ".git")) ||
-                Directory.Exists(Path.Combine(repositoryRoot, ".git"))) &&
-            (HasTopLevelSolution(repositoryRoot) || HasProjectFileWithin(repositoryRoot, depth: 2))
-                ? new FileSystemTree(repositoryRoot)
-                : AssumeAllPresent;
+        if (!File.Exists(Path.Combine(repositoryRoot, ".git")) &&
+            !Directory.Exists(Path.Combine(repositoryRoot, ".git")))
+            return AssumeAllPresent;
+
+        var candidateTree = new FileSystemTree(repositoryRoot);
+        // Without a solution, partial built-in trees retain the fail-safe assumption.
+        return HasTopLevelSolution(repositoryRoot) ||
+            (RepositoryTestImpactPlanner.BuiltInTestProjectPaths.All(path => !candidateTree.Exists(path)) &&
+                HasProjectFileWithin(repositoryRoot, depth: 2))
+                    ? candidateTree
+                    : AssumeAllPresent;
     }
 
     private static bool HasTopLevelSolution(string repositoryRoot)

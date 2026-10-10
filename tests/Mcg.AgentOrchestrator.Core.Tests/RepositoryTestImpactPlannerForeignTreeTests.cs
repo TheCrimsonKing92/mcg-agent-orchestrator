@@ -65,6 +65,45 @@ public sealed class RepositoryTestImpactPlannerForeignTreeTests
         Assert.DoesNotContain("skipped absent test project", allPresentPlan.Summary);
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void PartialBuiltInTreeWithoutSolutionKeepsMissingProjectCheck(bool useWorktreeFile)
+    {
+        var root = Directory.CreateTempSubdirectory().FullName;
+        var missingProject = RepositoryTestImpactPlanner.BuiltInTestProjectPaths.First();
+        try
+        {
+            if (useWorktreeFile)
+                File.WriteAllText(Path.Combine(root, ".git"), "gitdir: isolated-fixture");
+            else
+                Directory.CreateDirectory(Path.Combine(root, ".git"));
+
+            foreach (var project in RepositoryTestImpactPlanner.BuiltInTestProjectPaths
+                .Where(path => path != missingProject))
+            {
+                var fullPath = Path.Combine(root, project);
+                Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+                File.WriteAllText(fullPath, "<Project />");
+            }
+            var fullSourcePath = Path.Combine(root, SourcePath);
+            Directory.CreateDirectory(Path.GetDirectoryName(fullSourcePath)!);
+            File.WriteAllText(fullSourcePath, "namespace Domain; public class Widget { }");
+
+            Assert.False(File.Exists(Path.Combine(root, missingProject)));
+            Assert.DoesNotContain(Directory.EnumerateFiles(root), path =>
+                Path.GetExtension(path) is ".sln" or ".slnx");
+            Assert.Same(CandidateTreeProbe.AssumeAllPresent, CandidateTreeProbe.ForRepositoryRoot(root));
+
+            var plan = RepositoryTestImpactPlanner.Plan([SourcePath], root);
+
+            Assert.Single(plan.Checks, check => check.Command.Contains(missingProject));
+            Assert.Equal(RepositoryTestImpactPlanner.BuiltInTestProjectPaths.Count, plan.Checks.Count);
+            Assert.DoesNotContain("skipped absent test project", plan.Summary);
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
     private static RepositoryTestImpactPlan Plan(string[] paths, ICandidateTreeProbe tree) =>
         RepositoryTestImpactPlanner.Plan(RepositoryChangeClassifier.Classify(paths),
             UnavailableTestClassDeclarationReader.Instance, tree);
