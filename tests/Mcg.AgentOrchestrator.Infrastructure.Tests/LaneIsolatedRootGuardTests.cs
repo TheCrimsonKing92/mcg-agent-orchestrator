@@ -67,7 +67,8 @@ public sealed class LaneIsolatedRootGuardTests
             {
                 [typeof(DotnetBuildEnvironmentManagerTestsLocalHostOnlyFocusedRunner)] =
                     "Owns explicit storage through the rooted base; its child uses a GUID LOCALAPPDATA fallback.",
-                [typeof(DotnetBuildEnvironmentManagerTestsLocalHostOnlyLockAttribution)] = ExplicitStorage
+                [typeof(DotnetBuildEnvironmentManagerTestsLocalHostOnlyLockAttribution)] = ExplicitStorage,
+                [typeof(DotnetBuildEnvironmentManagerTestsLocalHostOnlyHandleProbe)] = ExplicitStorage
             }, LocalHostChildClearExceptions, TestCollections.DotnetBuildSlots);
 
     private static bool IsIsolatedCollection(Type type) =>

@@ -18,14 +18,16 @@ public sealed class AcceptanceLaneMembershipTests
             typeof(DotnetBuildEnvironmentManagerTestsLocalHostOnlyFocusedRunner),
             typeof(DotnetBuildEnvironmentManagerTestsLocalHostOnlyLockAttribution),
             typeof(DotnetBuildEnvironmentManagerTestsLocalHostOnlyLoopHandoffStdout),
-            typeof(DotnetBuildEnvironmentManagerTestsLocalHostOnlyLoopHandoffSuppressionFailure)
+            typeof(DotnetBuildEnvironmentManagerTestsLocalHostOnlyLoopHandoffSuppressionFailure),
+            typeof(DotnetBuildEnvironmentManagerTestsLocalHostOnlyHandleProbe)
         };
         var expectedMethods = new[]
         {
             "FocusedRunner_Pass_ExecutesUnderLeaseAndWritesReceipt",
             "LockAttributionRestartManagerNamesFileHolder",
             "ConductorLoopHandoffWindowsLauncherInheritsRedirectedStdoutHandle",
-            "ConductorLoopHandoffSuppressionFailureStillStartsSuccessor"
+            "ConductorLoopHandoffSuppressionFailureStillStartsSuccessor",
+            "LockAttributionHandleProbeReturnsResultsForRealHeldFile"
         };
         var testMethods = descriptors.SelectMany(descriptor => typeof(AcceptanceLaneMembershipTests).Assembly
                 .GetType(descriptor.FullName)!.GetMethods(BindingFlags.Instance | BindingFlags.Public))
@@ -38,6 +40,9 @@ public sealed class AcceptanceLaneMembershipTests
                 .GetCustomAttribute<Xunit.FactAttribute>()!.DisplayName);
         Xunit.Assert.Equal("ConductorLoopHandoff_windows_launcher_inherits_redirected_stdout_handle",
             namedMethods.Single(method => method.Name == expectedMethods[2])
+                .GetCustomAttribute<Xunit.FactAttribute>()!.DisplayName);
+        Xunit.Assert.Equal("LockAttribution_handle_probe_returns_results_for_real_held_file",
+            namedMethods.Single(method => method.Name == expectedMethods[4])
                 .GetCustomAttribute<Xunit.FactAttribute>()!.DisplayName);
         Xunit.Assert.Equal(expectedTypes.Select(type => type.FullName).Order(),
             descriptors.Where(descriptor => AcceptanceLaneMembership.LanesIncluding(resolved, descriptor.FullName)
@@ -148,6 +153,7 @@ public sealed class AcceptanceLaneMembershipTests
         Xunit.Assert.Contains("LockAttribution_restart_manager_names_file_holder", row);
         Xunit.Assert.Contains("ConductorLoopHandoffWindowsLauncherInheritsRedirectedStdoutHandle", row);
         Xunit.Assert.Contains("ConductorLoopHandoffSuppressionFailureStillStartsSuccessor", row);
+        Xunit.Assert.Contains("LockAttribution_handle_probe_returns_results_for_real_held_file", row);
         Xunit.Assert.Contains("Category=LocalHostOnly", row);
         Xunit.Assert.Contains("`Dotnet build slots local-only`", row);
         Xunit.Assert.Contains("never remote-eligible", row);
