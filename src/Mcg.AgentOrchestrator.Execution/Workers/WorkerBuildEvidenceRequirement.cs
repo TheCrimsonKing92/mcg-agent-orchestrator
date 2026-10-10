@@ -40,26 +40,10 @@ internal static class WorkerBuildEvidenceRequirement
                 continue;
             }
 
-            var directory = Path.GetDirectoryName(absolutePath);
-            while (!string.IsNullOrWhiteSpace(directory))
+            var project = OwningProjectResolver.FindOwningProject(root, absolutePath);
+            if (project is not null)
             {
-                var project = Directory.Exists(directory)
-                    ? Directory.EnumerateFiles(directory, "*.csproj", SearchOption.TopDirectoryOnly)
-                        .OrderBy(candidate => candidate, StringComparer.Ordinal)
-                        .FirstOrDefault()
-                    : null;
-                if (project is not null)
-                {
-                    projects.Add(Path.GetRelativePath(root, project).Replace('\\', '/'));
-                    break;
-                }
-
-                if (string.Equals(directory, root, StringComparison.OrdinalIgnoreCase))
-                {
-                    break;
-                }
-
-                directory = Path.GetDirectoryName(directory);
+                projects.Add(Path.GetRelativePath(root, project).Replace('\\', '/'));
             }
         }
 

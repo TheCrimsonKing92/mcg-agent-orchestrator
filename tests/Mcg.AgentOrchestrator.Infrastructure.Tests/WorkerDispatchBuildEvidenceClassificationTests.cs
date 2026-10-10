@@ -345,6 +345,23 @@ public sealed class WorkerDispatchBuildEvidenceClassificationTests : WorkerDispa
     }
 
     [Xunit.Fact]
+    public void HelperWithoutBuildVerdict_RejectsUnexpectedBuildRequest()
+    {
+        var (task, _) = RefreshDeveloper(
+            "deferred - acceptance gate owns tests", AddCompiledFeature);
+
+        Xunit.Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        Xunit.Assert.Contains("Unexpected build request: inject the test's build verdict.",
+            task.LastVerification!.StandardError, StringComparison.Ordinal);
+        Xunit.Assert.Contains(
+            DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing),
+            task.LastVerification.StandardError, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain(
+            DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed,
+            task.LastVerification.StandardError, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
     public void NonCompiledChangeWithoutBuildEvidenceKeepsExistingCompletion()
     {
         var (task, worktree) = RefreshDeveloper(
@@ -450,7 +467,9 @@ public sealed class WorkerDispatchBuildEvidenceClassificationTests : WorkerDispa
 
         new BackgroundDispatchRunner(
             clock,
-            runOrchestratorBuildCheck: runOrchestratorBuildCheck).RefreshLatestProcess(kernel, goal.Id, task.Id);
+            runOrchestratorBuildCheck: runOrchestratorBuildCheck ?? (_ =>
+                throw new InvalidOperationException("Unexpected build request: inject the test's build verdict.")))
+            .RefreshLatestProcess(kernel, goal.Id, task.Id);
         return (task, process.WorkingDirectory);
     }
 

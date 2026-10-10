@@ -2,7 +2,8 @@ using System.Text.Json;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-internal sealed record WorkerBuildReceiptVerdict(bool Matches, string Reason);
+internal sealed record WorkerBuildReceiptVerdict(
+    bool Matches, string Reason, IReadOnlyList<string>? Projects = null);
 
 internal static class WorkerBuildReceipt
 {
@@ -45,7 +46,8 @@ internal static class WorkerBuildReceipt
             { return new(false, "receipt-malformed"); }
             if (!WorktreeTreeDigest.TryCompute(worktreeRoot, out var currentDigest, out _)) return new(false, "digest-unavailable");
             return string.Equals(recordedDigest, currentDigest, StringComparison.Ordinal)
-                ? new(true, "matched") : new(false, "digest-mismatch");
+                ? new(true, "matched", projects.EnumerateArray().Select(project => project.GetString()!).ToArray())
+                : new(false, "digest-mismatch");
         }
     }
 
