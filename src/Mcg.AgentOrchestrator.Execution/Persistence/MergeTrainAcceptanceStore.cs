@@ -55,6 +55,76 @@ public sealed class MergeTrainAcceptanceStore
                 created_at TEXT NOT NULL);
             """;
         command.ExecuteNonQuery();
+        EnsureMemberIndex(connection);
+    }
+
+    private static void EnsureMemberIndex(SqliteConnection connection)
+    {
+        using var transaction = connection.BeginTransaction(deferred: false);
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='merge_train_receipt_members';";
+        if ((long)command.ExecuteScalar()! != 0)
+        {
+            transaction.Commit();
+            return;
+        }
+
+        command.CommandText = """
+            CREATE TABLE IF NOT EXISTS merge_train_receipt_members(
+                goal_id TEXT NOT NULL,
+                train_id TEXT NOT NULL REFERENCES merge_train_receipts(train_id),
+                PRIMARY KEY(goal_id, train_id));
+            """;
+        command.ExecuteNonQuery();
+        command.CommandText = "SELECT train_id, payload_json FROM merge_train_receipts;";
+        var rows = new List<(string TrainId, string Payload)>();
+        using (var reader = command.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                rows.Add((reader.GetString(0), reader.GetString(1)));
+            }
+        }
+
+        foreach (var row in rows)
+        {
+            ReceiptDto? dto;
+            try
+            {
+                dto = JsonSerializer.Deserialize<ReceiptDto>(row.Payload, JsonOptions);
+            }
+            catch (JsonException)
+            {
+                // Unreadable legacy receipts contribute no membership rows.
+                continue;
+            }
+            if (dto?.Members is not null)
+            {
+                WriteReceiptMembers(connection, transaction, row.TrainId, dto.Members);
+            }
+        }
+        transaction.Commit();
+    }
+
+    private static void WriteReceiptMembers(
+        SqliteConnection connection, SqliteTransaction transaction,
+        string trainId, IReadOnlyList<MergeTrainMemberBinding> members)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT OR IGNORE INTO merge_train_receipt_members(goal_id, train_id)
+            SELECT $goal, train_id FROM merge_train_receipts WHERE train_id=$train;
+            """;
+        command.Parameters.AddWithValue("$train", trainId);
+        var goalParameter = command.Parameters.Add("$goal", SqliteType.Text);
+        foreach (var goal in members.Select(member => member?.GoalId?.Value)
+                     .Where(goal => !string.IsNullOrWhiteSpace(goal)).Distinct(StringComparer.Ordinal))
+        {
+            goalParameter.Value = goal!;
+            command.ExecuteNonQuery();
+        }
     }
 
     public MergeTrainReceipt SaveGateReceipt(MergeTrainReceipt receipt)
@@ -74,7 +144,9 @@ public sealed class MergeTrainAcceptanceStore
         }
         receipt = CaptureEvidence(receipt);
         using var connection = Open();
+        using var transaction = connection.BeginTransaction(deferred: false);
         using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = """
             INSERT OR IGNORE INTO merge_train_receipts(train_id, receipt_id, payload_json)
             VALUES($train, $receipt, $payload);
@@ -83,6 +155,8 @@ public sealed class MergeTrainAcceptanceStore
         command.Parameters.AddWithValue("$receipt", receipt.ReceiptId);
         command.Parameters.AddWithValue("$payload", JsonSerializer.Serialize(ToDto(receipt), JsonOptions));
         command.ExecuteNonQuery();
+        WriteReceiptMembers(connection, transaction, receipt.Identity.Value, receipt.Identity.Members);
+        transaction.Commit();
         return TryReadReceipt(receipt.Identity.Value) ??
             throw new InvalidOperationException("Merge train receipt write did not become readable.");
     }
@@ -102,13 +176,18 @@ public sealed class MergeTrainAcceptanceStore
     {
         using var connection = Open();
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT payload_json FROM merge_train_receipts ORDER BY rowid DESC;";
+        command.CommandText = """
+            SELECT r.payload_json FROM merge_train_receipt_members m
+            JOIN merge_train_receipts r ON r.train_id=m.train_id
+            WHERE m.goal_id=$goal;
+            """;
+        command.Parameters.AddWithValue("$goal", goalId.Value);
         using var reader = command.ExecuteReader();
         var receipts = new List<MergeTrainReceipt>();
         while (reader.Read())
         {
             var receipt = FromDto(JsonSerializer.Deserialize<ReceiptDto>(reader.GetString(0), JsonOptions)!);
-            if (receipt.Identity.Members.Any(member => member.GoalId == goalId) && receipt.HasAuthoritativeLandingEvidence)
+            if (receipt.HasAuthoritativeLandingEvidence)
             {
                 receipts.Add(receipt);
             }
