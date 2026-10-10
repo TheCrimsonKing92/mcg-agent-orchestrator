@@ -67,6 +67,15 @@ internal sealed class TerminalGuiOwnerConsoleDialogs(IApplication app, Cancellat
         return result;
     });
 
+    public Task<OwnerExperimentDecisionForm?> PromptExperimentDecisionAsync(string title, string text, string defaultEvidence) =>
+        OnUiAsync(() =>
+        {
+            using var dialog = new OwnerConsoleExperimentDecisionDialog(title, text, defaultEvidence);
+            dialog.CloseRequested += () => app.RequestStop(dialog);
+            app.Run(dialog);
+            return dialog.Result;
+        });
+
     public async Task ShowGoalAsync(OwnerConsoleGoalDialog goal) => await OnUiAsync(() =>
     {
         using var dialog = new OwnerConsoleTextDialog(goal.Title, goal.Current.Text, goal.Current.ChoiceLines, goal.Page);

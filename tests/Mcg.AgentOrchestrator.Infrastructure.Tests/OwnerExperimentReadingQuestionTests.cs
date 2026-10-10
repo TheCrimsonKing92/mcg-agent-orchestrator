@@ -85,7 +85,7 @@ public sealed class OwnerExperimentReadingQuestionTests
     }
 
     [Fact]
-    public async Task HandleKeyAsync_Reading_RefusesAnswersAndSkipsGoalResolution()
+    public async Task HandleKeyAsync_Reading_ShowsDecisionFormAndSkipsGoalResolution()
     {
         using var scene = new Scene();
         await scene.RaiseAsync(StopId, "stop-rule");
@@ -93,17 +93,18 @@ public sealed class OwnerExperimentReadingQuestionTests
         // A default ensures an unguarded accept path would submit, rather than stop at no-default.
         scene.Harness.Questions.Items.Add(reading with { ProposedDefault = "keep" });
         var dialogs = new Dialogs();
+        var decisionPrompt = new OwnerConsoleExperimentDecideTests.DecisionPromptProbe(dialogs);
         var probe = new OwnerConsoleHarness();
         var reader = new OwnerQuestionResolutionReader(probe.State, probe.Tail,
             scene.Root, scene.Root, probe.Clock);
         using var controller = new OwnerConsoleScreenController(scene.Harness.Questions,
-            scene.Harness.Answers, dialogs, scene.Harness.State, scene.Harness.Tail,
+            scene.Harness.Answers, decisionPrompt, scene.Harness.State, scene.Harness.Tail,
             scene.Harness.Conductor, scene.Harness.DigestReport, scene.Harness.Digest,
             scene.Harness.Clock, resolutions: reader);
         var builder = scene.Builder();
         var inputs = new OwnerConsoleViewInputs(scene.Harness.Clock.GetUtcNow(), null, [], 0);
         controller.Apply(await builder.BuildAsync(inputs));
-        Assert.False(OwnerConsoleScreenController.AnswersInConsole(controller.SelectedDecision!));
+        Assert.True(OwnerConsoleScreenController.AnswersInConsole(controller.SelectedDecision!));
 
         await controller.HandleKeyAsync(ConsoleKey.R, 'r');
         await controller.HandleKeyAsync(ConsoleKey.A, 'a');
@@ -111,14 +112,8 @@ public sealed class OwnerExperimentReadingQuestionTests
         Assert.Empty(scene.Harness.Answers.Calls);
         Assert.Equal(0, dialogs.PromptCalls);
         Assert.Equal(0, dialogs.ConfirmCalls);
-        Assert.Equal(2, dialogs.Texts.Count);
-        Assert.All(dialogs.Texts, notice =>
-        {
-            Assert.Equal("View only", notice.Title);
-            Assert.Contains("experiment-show", notice.Text);
-            Assert.Contains("experiment-decide", notice.Text);
-            Assert.DoesNotContain("goal", notice.Text, StringComparison.OrdinalIgnoreCase);
-        });
+        Assert.Equal(new[] { "experiment-show:1a2b3c4d", "experiment-show:1a2b3c4d" }, decisionPrompt.Defaults);
+        Assert.Empty(dialogs.Texts);
 
         await controller.HandleKeyAsync(ConsoleKey.Enter);
         Assert.Equal(1, dialogs.DecisionCalls);

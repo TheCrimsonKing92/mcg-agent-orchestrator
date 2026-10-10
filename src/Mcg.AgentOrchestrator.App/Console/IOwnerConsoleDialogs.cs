@@ -4,6 +4,8 @@ internal interface IOwnerConsoleDialogs
 {
     Task<bool> ConfirmAsync(string title, string text);
     Task<string?> PromptTextAsync(string title, string text);
+    Task<OwnerExperimentDecisionForm?> PromptExperimentDecisionAsync(string title, string text, string defaultEvidence) =>
+        Task.FromResult<OwnerExperimentDecisionForm?>(null);
     Task ShowTextAsync(string title, string text);
     Task ShowDecisionAsync(OwnerConsoleDecisionDetail detail) => ShowTextAsync("Decision", detail.State.Text);
     async Task<int?> ShowPageAsync(string title, string text, IReadOnlyList<int>? choiceLines = null)

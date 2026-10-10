@@ -66,14 +66,10 @@ internal static class CliExperimentCommands
         if (command == "experiment-decide")
         {
             var outcomeText = RequiredExperimentOption(options, "--outcome");
-            var outcome = outcomeText switch
-            {
-                "confirmed" => ExperimentOutcomeState.Confirmed, "refuted" => ExperimentOutcomeState.Refuted,
-                "inconclusive" => ExperimentOutcomeState.Inconclusive,
-                _ => throw new ArgumentException("outcome: expected confirmed, refuted or inconclusive.")
-            };
-            store.DecideAsync(record.Id, outcome, RequiredExperimentOption(options, "--evidence"),
-                RequiredExperimentOption(options, "--action")).GetAwaiter().GetResult();
+            var outcome = ExperimentDecisionApplier.ParseOutcome(outcomeText);
+            var evidence = RequiredExperimentOption(options, "--evidence");
+            var action = RequiredExperimentOption(options, "--action");
+            ExperimentDecisionApplier.Decide(store, record.Id, outcome, evidence, action);
             Console.WriteLine($"outcome: {outcomeText} (experiment {record.Id})");
             return false;
         }

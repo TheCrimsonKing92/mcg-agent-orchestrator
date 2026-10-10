@@ -17,6 +17,7 @@ public static class OperatorIntentVerbs
     public const string EscapeRecord = "escape-record";
     public const string ExperimentApplyFlag = "experiment-apply-flag";
     public const string ExperimentRevertFlag = "experiment-revert-flag";
+    public const string ExperimentDecide = "experiment-decide";
 }
 
 public static class OperatorIntentScopes
@@ -67,6 +68,7 @@ public sealed record ApprovePolicyChangeOperatorIntentPayload(string CandidateSh
 
 public sealed record ExperimentApplyFlagOperatorIntentPayload(string ExperimentId);
 public sealed record ExperimentRevertFlagOperatorIntentPayload(string ExperimentId);
+public sealed record ExperimentDecideOperatorIntentPayload(string ExperimentId, string Outcome, string Evidence, string Action);
 
 public sealed record CancelDispatchOperatorIntentPayload(
     int ProcessId,

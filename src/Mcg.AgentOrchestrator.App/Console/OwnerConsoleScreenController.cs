@@ -96,7 +96,8 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
 
     internal OwnerConsoleDecision? SelectedDecision => Selected();
 
-    internal static bool AnswersInConsole(OwnerConsoleDecision decision) => !OwnerQuestionViewOnly.IsViewOnly(decision.Kind);
+    internal static bool AnswersInConsole(OwnerConsoleDecision decision) =>
+        decision.Kind == OwnerQuestionKind.ExperimentReading || !OwnerQuestionViewOnly.IsViewOnly(decision.Kind);
 
     internal Task ShowHelpAsync() => dialogs.ShowTextAsync("Help", OwnerConsoleKeyHints.HelpText);
 
@@ -159,6 +160,12 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     {
         var decision = target ?? Selected();
         if (decision is null) return;
+        if (decision.Kind == OwnerQuestionKind.ExperimentReading)
+        {
+            await new OwnerExperimentDecisionFlow(questions, answers, dialogs, _answerTracking)
+                .RunAsync(decision, operation, notice, cancellationToken);
+            return;
+        }
         if (!AnswersInConsole(decision))
         {
             await ShowNoticeAsync("View only", OwnerQuestionViewOnly.Notice(decision.Kind, decision.GoalId));

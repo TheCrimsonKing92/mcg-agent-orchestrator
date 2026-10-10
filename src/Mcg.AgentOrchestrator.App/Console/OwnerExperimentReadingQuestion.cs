@@ -4,6 +4,13 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 internal static class OwnerExperimentReadingQuestion
 {
+    internal static string? ShortId(string questionText)
+    {
+        var firstLine = questionText.Split('\n', 2)[0];
+        var match = System.Text.RegularExpressions.Regex.Match(firstLine, @"^Experiment (\S{8}) reading due: ");
+        return match.Success ? match.Groups[1].Value : null;
+    }
+
     internal static OwnerQuestion? From(CollaborationItem item)
     {
         if (item.Type != CollaborationItemType.Decision || !string.IsNullOrWhiteSpace(item.GoalId) ||

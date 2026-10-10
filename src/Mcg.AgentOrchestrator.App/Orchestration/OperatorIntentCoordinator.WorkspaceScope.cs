@@ -19,6 +19,7 @@ internal sealed partial class OperatorIntentCoordinator
 {
     internal OperatorLessonIntentServices? Lessons { get; init; }
     internal ExperimentFlagIntentHandler? ExperimentFlags { get; init; }
+    internal ExperimentDecideIntentHandler? ExperimentDecisions { get; init; }
 
     public IReadOnlyList<string> ExecuteWorkspacePending(AgentOrchestratorKernel kernel)
     {
@@ -41,6 +42,7 @@ internal sealed partial class OperatorIntentCoordinator
                         Escapes ?? throw new InvalidOperationException("Escape intent services are unavailable.")),
                     OperatorIntentVerbs.ExperimentApplyFlag => (ExperimentFlags ?? throw new InvalidOperationException("Experiment intent services are unavailable.")).Apply(intent),
                     OperatorIntentVerbs.ExperimentRevertFlag => (ExperimentFlags ?? throw new InvalidOperationException("Experiment intent services are unavailable.")).Revert(intent),
+                    OperatorIntentVerbs.ExperimentDecide => (ExperimentDecisions ?? throw new InvalidOperationException("Experiment intent services are unavailable.")).Apply(intent),
                     _ => throw new OperatorLessonRejectedException($"unsupported-workspace-verb {intent.Verb}")
                 };
             }

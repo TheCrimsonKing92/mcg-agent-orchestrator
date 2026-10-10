@@ -31,6 +31,8 @@ internal interface IOwnerQuestionSource
 internal interface IOwnerAnswerSubmitter
 {
     OwnerAnswerSubmission Submit(OwnerQuestion question, string answer);
+    OwnerAnswerSubmission SubmitExperimentDecision(string experimentReference, OwnerExperimentDecisionForm form) =>
+        throw new NotSupportedException("Experiment decisions are unavailable.");
     Task<OwnerAnswerIntentStatus?> ReadStatusAsync(string intentId, CancellationToken cancellationToken);
 }
 

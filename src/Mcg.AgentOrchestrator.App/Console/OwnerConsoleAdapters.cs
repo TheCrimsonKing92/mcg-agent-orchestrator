@@ -92,6 +92,9 @@ internal sealed class AttentionAnswerHandlerAdapter(OrchestratorWorkspace worksp
         { return new(null); }
     }
 
+    public OwnerAnswerSubmission SubmitExperimentDecision(string experimentReference, OwnerExperimentDecisionForm form) =>
+        new ExperimentDecideIntentSubmitter(workspace).Submit(experimentReference, form);
+
     public async Task<OwnerAnswerIntentStatus?> ReadStatusAsync(string intentId, CancellationToken cancellationToken)
     {
         var intent = await SqliteOperatorIntentStore.OpenExisting(workspace.OrchestratorDirectory, workspace.LogDirectory)
