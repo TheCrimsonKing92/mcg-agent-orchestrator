@@ -121,6 +121,7 @@ public sealed class MergeTrainBisectSlotLossTests : AcceptanceCohortWorkflowTest
             scenario.Verifier.BeforeBisect = () =>
             {
                 beforeLease = scenario.Driver.ReadTrainImplicatedMemberKeys();
+                if (evidence == "unattributed") scenario.HoldSlots();
             };
             var run = scenario.Driver.RunMergeTrain(scenario.Selection, scenario.Goals,
                 ConductorAutonomyPolicy.Permissive, gateOnly: true);
@@ -138,6 +139,22 @@ public sealed class MergeTrainBisectSlotLossTests : AcceptanceCohortWorkflowTest
                 Assert.False(MergeTrainBisectRedRetention.RecordsBeforeBisect(
                     receipt with { Outcome = MergeTrainGateOutcome.Failed }, 3, 0, scenario.Selection.BindMembers()[0]));
                 Assert.False(MergeTrainBisectRedRetention.KeepsFailedReceipt(receipt));
+            }
+            else if (evidence == "unattributed")
+            {
+                var receipt = Assert.IsType<MergeTrainReceipt>(run.RecordedReceipt);
+                Assert.Equal(MergeTrainGateOutcome.Failed, receipt.Outcome);
+                Assert.Equal(receipt.ReceiptId, scenario.Store.TryReadReceipt(receipt.Identity.Value)?.ReceiptId);
+                Assert.Null(run.Receipt);
+                Assert.Equal(1, scenario.Verifier.Inner.RunCount);
+                Assert.NotNull(beforeLease);
+                Assert.Empty(beforeLease);
+                var ejection = Assert.Single(run.Ejections);
+                Assert.Equal(scenario.Goals[^1].Id, ejection.GoalId);
+                Assert.Equal(MergeTrainEjectionReason.RedNewestMember, ejection.Reason);
+                Assert.Contains(nameof(DotnetBuildSlotsBusyException), run.Detail, StringComparison.Ordinal);
+                Assert.Equal("Ns.UnchangedTests.Fails",
+                    Assert.Single(MergeTrainRedAttribution.ReadFatalFailures(receipt.GateTestResultPaths)).TestName);
             }
             else
             {
