@@ -33,6 +33,38 @@ public sealed class MechanicalReworkClassifierTests
         Assert.False(Classify(Prefix + "config/other.json: collection ownership inconsistent.").IsMechanical);
     }
 
+    [Fact]
+    public void StructuralManifest_StateDirectoryPathsKeepCanonicalRuleAndId()
+    {
+        foreach (var path in new[] { @"C:\state\alpha project\acceptance-manifest.json", "/var/state/alpha/acceptance-manifest.json", ".orchestrator/acceptance-manifest.json", "acceptance-manifest.json" })
+        {
+            var result = Classify(Prefix + path + ": maxConcurrentShards must be at least 1.");
+            Assert.True(result.IsMechanical);
+            Assert.Equal("structural-manifest", result.RuleId);
+            Assert.Equal(["config/acceptance-manifest.json"], result.Ids);
+        }
+    }
+
+    [Fact]
+    public void StructuralManifest_RejectsOtherFilesAndNonPathPrefixes()
+    {
+        foreach (var line in new[]
+        {
+            @"C:\state\alpha\other.json: invalid settings.",
+            "src/not-acceptance-manifest.json: invalid settings.",
+            "other.json: mentions /state/acceptance-manifest.json: invalid settings.",
+            "other finding\n/state/acceptance-manifest.json: invalid settings.",
+            "config/Acceptance-Manifest.json: invalid settings.",
+            "config/acceptance-manifest.json:invalid settings."
+        })
+        {
+            var result = Classify(Prefix + line);
+            Assert.False(result.IsMechanical);
+            Assert.Null(result.RuleId);
+            Assert.Empty(result.Ids);
+        }
+    }
+
     [Theory]
     [InlineData(FindingCategory.SpecCompliance, "SourceSizeRatchet overrun", "finding", true)]
     [InlineData(FindingCategory.Correctness, "sourcesizeratchet overrun", "finding", true)]

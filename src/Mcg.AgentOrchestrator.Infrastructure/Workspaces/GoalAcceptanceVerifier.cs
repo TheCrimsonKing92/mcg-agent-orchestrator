@@ -632,8 +632,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             executionOwner.ProjectHomeDirectory);
         if (effectivePlan.UndeclaredTestProjects.Count > 0)
         {
-            var message = "Structural coverage requires every discovered test project to be declared by a dotnet-test check in config/acceptance-manifest.json:" +
-                Environment.NewLine + string.Join(Environment.NewLine, effectivePlan.UndeclaredTestProjects);
+            var message = StructuralCoverageFailureMessage.Build(worktreePath, executionOwner.ProjectHomeDirectory,
+                effectivePlan.UndeclaredTestProjects);
             phaseAccountant.MarkCompleted(passed: false);
             var check = new AcceptanceCheckResult(
                 "structural coverage declaration", false, 1, message,

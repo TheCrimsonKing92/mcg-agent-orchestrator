@@ -99,7 +99,7 @@ public sealed record RoundValueCheckSlice(DateTimeOffset Since, DateTimeOffset U
         var body = message[StructuralPrefix.Length..];
         foreach (var line in body.Split('\n').Select(l => l.TrimEnd('\r')))
         {
-            if (line.StartsWith("config/acceptance-manifest.json: ", StringComparison.Ordinal)) return "acceptance-manifest";
+            if (AcceptanceManifestFindingPrefix.Matches(line)) return "acceptance-manifest";
             var size = SizeLine.Match(line);
             if (size.Success) return "source-size-ratchet:" + size.Groups["path"].Value;
             var type = ClassLine.Match(line);

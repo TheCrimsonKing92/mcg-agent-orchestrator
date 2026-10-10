@@ -28,6 +28,38 @@ public sealed class RoundValueCheckSliceTests
     }
 
     [Fact]
+    public void StructuralManifest_StateDirectoryPathsKeepAcceptanceManifestKey()
+    {
+        foreach (var path in new[] { @"C:\state\alpha project\acceptance-manifest.json", "/var/state/alpha/acceptance-manifest.json", ".orchestrator/acceptance-manifest.json", "acceptance-manifest.json" })
+        {
+            var slice = Build(Create(Structural + path + ": maxConcurrentShards must be at least 1.",
+                verifications: [Verdict(1)]));
+            AssertCounts(slice.Rows.Single(r => r.Check == "acceptance-manifest"), 1, 1, 0, 0, 1, 0);
+            Assert.Equal(1, slice.Rows.Sum(r => r.Rounds));
+            Assert.DoesNotContain(slice.Rows, r => r.Check == "worker-build-check-failed");
+        }
+    }
+
+    [Fact]
+    public void StructuralManifest_OtherFilesAndLookalikesKeepFailedVerdictKey()
+    {
+        foreach (var line in new[]
+        {
+            @"C:\state\alpha\other.json: invalid settings.",
+            "src/not-acceptance-manifest.json: invalid settings.",
+            "other.json: mentions /state/acceptance-manifest.json: invalid settings.",
+            "config/acceptance-\nmanifest.json: invalid settings.",
+            "config/Acceptance-Manifest.json: invalid settings.",
+            "config/acceptance-manifest.json:invalid settings."
+        })
+        {
+            var slice = Build(Create(Structural + line, verifications: [Verdict(1)]));
+            Assert.DoesNotContain(slice.Rows, r => r.Check == "acceptance-manifest");
+            AssertCounts(slice.Rows.Single(r => r.Check == "worker-build-check-failed"), 1, 1, 0, 0, 1, 0);
+        }
+    }
+
+    [Fact]
     public void FailedPriorVerdictWinsButSuccessfulAndUnpairedVerdictsDoNot()
     {
         var slice = Build(Create(Acceptance + "Cli: 2 failed", verifications: [Verdict(1)]));

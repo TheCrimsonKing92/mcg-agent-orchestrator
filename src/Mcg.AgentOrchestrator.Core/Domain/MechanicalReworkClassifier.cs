@@ -34,7 +34,7 @@ public static class MechanicalReworkClassifier
         if (message.StartsWith(StructuralPrefix, StringComparison.Ordinal))
         {
             var remainder = message[StructuralPrefix.Length..];
-            if (remainder.StartsWith("config/acceptance-manifest.json: ", StringComparison.Ordinal))
+            if (AcceptanceManifestFindingPrefix.Matches(remainder))
                 return new(true, "structural-manifest", ["config/acceptance-manifest.json"]);
             var lines = remainder.Split('\n').Select(line => line.TrimEnd('\r')).Where(line => line.Length > 0).ToArray();
             if (lines.Length == 0) return NotMechanical;
