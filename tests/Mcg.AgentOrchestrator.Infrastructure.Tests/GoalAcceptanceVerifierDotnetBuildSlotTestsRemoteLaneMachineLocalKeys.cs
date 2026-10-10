@@ -179,10 +179,12 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLaneMachineL
         Assert.Single(fake.Requests, request => request.Lane == Lane(0));
         Assert.Contains(0, scenario.LocalStarts);
         Assert.DoesNotContain("remote-executor=", LaneCheck(result, 0).ResultSummary ?? "");
-        var row = Assert.Single(scenario.Health(), row => row.Lane == Lane(0));
+        var laneRows = scenario.Health().Where(row => row.Lane == Lane(0)).ToArray();
+        var row = Assert.Single(laneRows, row => row.Outcome == RemoteLaneOutcomeCode.UnexpectedNotExecuted);
         Assert.Equal(RemoteLaneOutcomeCode.UnexpectedNotExecuted, row.Outcome);
         Assert.StartsWith("not_executed=1", row.Reason!);
         Assert.Equal("executor", row.FaultOwner);
+        Assert.DoesNotContain(laneRows, row => row.Outcome == RemoteLaneOutcomeCode.Accepted);
     }
 
     private static void AssertLocalRefusal(Scenario scenario, FakeRemoteLaneExecutor fake, AcceptanceVerificationResult result)
