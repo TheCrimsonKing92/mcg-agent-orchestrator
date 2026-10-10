@@ -59,7 +59,6 @@ public static class StoreSchemaRegistry
         new("author-claims", Conductor + "ConductorAuthorClaimStore.cs", "author-claims.db", "conductor", null),
         new("steward-triggers", Conductor + "ConductorStewardTriggerStore.cs", "steward-triggers.db", "conductor", null),
         new("steward-triage-receipts", Comms + "StewardTriageReceiptStore.cs", "steward-triage-receipts.db", "conductor", null),
-        new("steward-shadow-recommendations", Comms + "StewardShadowRecommendationStore.cs", "steward-shadow-recommendations.db", "conductor", null),
         new("judge-panel", Conductor + "ConductorJudgePanelCaseStore.Schema.cs", "judge-panel.db", "conductor", null),
         new("board-fill", Conductor + "ConductorBoardFillDraftStore.cs", "board-fill.db", "conductor", null),
         new("progressive-review-glance-circuit", Persistence + "ProgressiveReviewGlanceCircuitStore.cs", "progressive-review-glance-circuit.db", "review", null),

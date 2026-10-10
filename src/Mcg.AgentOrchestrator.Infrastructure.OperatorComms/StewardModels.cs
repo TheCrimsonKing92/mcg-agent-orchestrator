@@ -213,8 +213,7 @@ public sealed record StewardDailyBrief(
     int LandedGoals,
     int HumanBlockedItems,
     string Next,
-    decimal Spend,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<StewardShadowClassAgreementRate>? ShadowAgreement = null);
+    decimal Spend);
 
 public sealed record StewardAutonomousAction(
     string ActionId,
@@ -245,8 +244,7 @@ public sealed record StewardHeartbeat(
     int Acted,
     int Raised,
     double ActedRatio,
-    double RaisedRatio,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<StewardShadowClassAgreementRate>? ShadowAgreement = null);
+    double RaisedRatio);
 
 public sealed record StewardCardLoadMeasurement(
     int LandedGoals,
@@ -392,8 +390,7 @@ public sealed class StewardBypassPolicy
 public static class StewardHeartbeatCalculator
 {
     public static StewardHeartbeat FromReceipts(
-        IReadOnlyList<StewardTriageReceipt> receipts,
-        IReadOnlyList<StewardShadowClassAgreementRate>? shadowAgreement = null)
+        IReadOnlyList<StewardTriageReceipt> receipts)
     {
         var triaged = receipts.Sum(receipt => receipt.InputIds.Count);
         var raised = receipts.Sum(receipt => receipt.Dispositions.Count(disposition =>
@@ -405,8 +402,7 @@ public static class StewardHeartbeatCalculator
             acted,
             raised,
             triaged == 0 ? 0 : (double)acted / triaged,
-            triaged == 0 ? 0 : (double)raised / triaged,
-            shadowAgreement);
+            triaged == 0 ? 0 : (double)raised / triaged);
     }
 }
 

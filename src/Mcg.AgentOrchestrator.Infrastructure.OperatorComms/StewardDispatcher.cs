@@ -7,7 +7,6 @@ public sealed class StewardDispatcher
     private readonly IControlPlaneMessageTransport _transport;
     private readonly StewardDispatchOptions _options;
     private readonly StewardBypassPolicy _bypassPolicy;
-    private readonly StewardShadowAdjudicator? _shadowAdjudicator;
     private readonly TimeProvider _timeProvider;
 
     public StewardDispatcher(
@@ -16,7 +15,6 @@ public sealed class StewardDispatcher
         IControlPlaneMessageTransport transport,
         StewardDispatchOptions? options = null,
         StewardBypassPolicy? bypassPolicy = null,
-        StewardShadowAdjudicator? shadowAdjudicator = null,
         TimeProvider? timeProvider = null)
     {
         _engine = engine;
@@ -24,7 +22,6 @@ public sealed class StewardDispatcher
         _transport = transport;
         _options = options ?? StewardDispatchOptions.Default;
         _bypassPolicy = bypassPolicy ?? new StewardBypassPolicy();
-        _shadowAdjudicator = shadowAdjudicator;
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
@@ -64,28 +61,24 @@ public sealed class StewardDispatcher
                 await triageCancellation.CancelAsync();
                 receipts.AddRange(await FailOpenAsync(triageBundle, now, cancellationToken));
                 await StoreAsync(receipts, cancellationToken);
-                await RunShadowFailOpenAsync(bundle, now, cancellationToken);
                 return new StewardDispatchResult([], receipts, FailedOpen: true);
             }
 
             var batch = await batchTask;
             receipts.AddRange(batch.Receipts);
             await StoreAsync(receipts, cancellationToken);
-            await RunShadowFailOpenAsync(bundle, now, cancellationToken);
             return new StewardDispatchResult(batch.Cards, receipts, FailedOpen: false);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             receipts.AddRange(await FailOpenAsync(triageBundle, now, cancellationToken));
             await StoreAsync(receipts, cancellationToken);
-            await RunShadowFailOpenAsync(bundle, now, cancellationToken);
             return new StewardDispatchResult([], receipts, FailedOpen: true);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             receipts.AddRange(await FailOpenAsync(triageBundle, now, cancellationToken));
             await StoreAsync(receipts, cancellationToken);
-            await RunShadowFailOpenAsync(bundle, now, cancellationToken);
             return new StewardDispatchResult([], receipts, FailedOpen: true);
         }
     }
@@ -94,43 +87,13 @@ public sealed class StewardDispatcher
         DateTimeOffset now, CancellationToken cancellationToken = default)
     {
         var receipts = await _receiptStore.ListAsync(cancellationToken);
-        return StewardHeartbeatCalculator.FromReceipts(
-            receipts, await GetShadowRatesFailOpenAsync(now, cancellationToken));
+        return StewardHeartbeatCalculator.FromReceipts(receipts);
     }
 
     public async Task<StewardOutput<StewardDailyBrief>> ComposeDailyBriefAsync(
         StewardBriefingBundle bundle, string next, decimal spend, DateTimeOffset now,
         CancellationToken cancellationToken = default) =>
-        new StewardComposer().ComposeDailyBrief(
-            bundle, next, spend, now, await GetShadowRatesFailOpenAsync(now, cancellationToken));
-
-    private async Task<IReadOnlyList<StewardShadowClassAgreementRate>?> GetShadowRatesFailOpenAsync(
-        DateTimeOffset now, CancellationToken cancellationToken)
-    {
-        if (_shadowAdjudicator is null) return null;
-        try { return await _shadowAdjudicator.RatesAsync(now, cancellationToken); }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-        catch (Exception ex)
-        {
-            System.Diagnostics.Trace.TraceError(ex.ToString());
-            return null;
-        }
-    }
-
-    private async Task RunShadowFailOpenAsync(
-        StewardBriefingBundle bundle, DateTimeOffset now, CancellationToken cancellationToken)
-    {
-        if (_shadowAdjudicator is null) return;
-        try
-        {
-            var recorded = await _shadowAdjudicator.RecordAsync(bundle, now, cancellationToken);
-            if (recorded.Error is not null) System.Diagnostics.Trace.TraceError(recorded.Error.ToString());
-            var reconciled = await _shadowAdjudicator.ReconcileAsync(cancellationToken);
-            if (reconciled.Error is not null) System.Diagnostics.Trace.TraceError(reconciled.Error.ToString());
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-        catch (Exception ex) { System.Diagnostics.Trace.TraceError(ex.ToString()); }
-    }
+        await Task.FromResult(new StewardComposer().ComposeDailyBrief(bundle, next, spend, now));
 
     private async Task<IReadOnlyList<StewardTriageReceipt>> FailOpenAsync(
         StewardBriefingBundle bundle,
