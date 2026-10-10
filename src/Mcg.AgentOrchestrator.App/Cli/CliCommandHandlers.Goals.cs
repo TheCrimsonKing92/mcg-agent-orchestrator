@@ -1528,13 +1528,12 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
 
             if (HasCliConfirmation(parts, "--loop"))
             {
+                using var loopSetup = ConductorStartupHeartbeat.Shipped.Begin(ConductorStartupHeartbeat.Phases.LoopSetup);
                 ConductorTargetGitExclude.Apply(context.Workspace, Console.WriteLine);
                 var supervisedChild = HasCliConfirmation(parts, ConductorContinuitySupervisor.ChildFlag);
                 var continuityExitArtifactPath = GetFlagValue(parts, ConductorContinuitySupervisor.ExitArtifactFlag);
                 var loopPolicyName = GetFlagValue(parts, "--policy");
-                var loopPolicyResolution = ResolveConductorPolicy(
-                    loopPolicyName,
-                    context.Workspace.OrchestratorDirectory);
+                var loopPolicyResolution = ResolveConductorPolicy(loopPolicyName, context.Workspace.OrchestratorDirectory);
                 PrintConductorPolicyWarnings(loopPolicyResolution);
                 var loopPolicy = loopPolicyResolution.Policy;
                 int? loopMaxIter = null;
@@ -1855,6 +1854,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 try
                 {
                     var loopSummary = new ConductorBatchLoop(
+                        loadTrxCoherenceVerdicts: directory => { TrxCoherenceVerdictStore.Load(directory); TrxCoherenceVerdictStore.EnableAppend(directory); loopSetup.Dispose(); },
                         measuredSweepWithCheckpointHolds: reconcileSweep,
                         reapGoalRunningDispatches: (loopKernel, loopGoal) => loopReaper.CancelRunningProcessesForGoal(loopKernel, loopGoal.Id),
                         detachGoalRunningDispatches: (loopKernel, loopGoal) => loopReaper.DetachRunningProcessesForGoal(loopKernel, loopGoal.Id),

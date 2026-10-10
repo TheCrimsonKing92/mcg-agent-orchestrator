@@ -960,37 +960,37 @@ internal static partial class CliPersistentStateRunner
             try
             {
                 var watchGoalId = ResolveConductWatchGoalId(args, startupKernel, currentGoalAtStartup, stateRepository);
-                // Startup and loop share the operation scheduler and its cadence.
-                var sweepKernel = LoadConductLoopSweepKernel(
-                    stateRepository, startupKernel, workspace.ExecutionDirectory, workspace.IntegrationBranch, watchGoalId, cleanupContext.Hooks);
+                var heartbeat = ConductorStartupHeartbeat.Shipped;
+                var sweepKernel = heartbeat.Run(ConductorStartupHeartbeat.Phases.SweepKernelLoad, () => LoadConductLoopSweepKernel(
+                    stateRepository, startupKernel, workspace.ExecutionDirectory, workspace.IntegrationBranch, watchGoalId, cleanupContext.Hooks));
                 var sweepTimelineBaseline = TerminalGoalSweepLifecycleEvents.Capture(sweepKernel);
-                var sweep = TerminalGoalSweep.Run(
+                var sweep = heartbeat.Run(ConductorStartupHeartbeat.Phases.TerminalSweep, () => TerminalGoalSweep.Run(
                     sweepKernel,
                     workspace.ExecutionDirectory, workspace.IntegrationBranch,
                     watchGoalId,
                     cleanupHooks: cleanupContext.Hooks,
-                    orchestratorDirectory: workspace.OrchestratorDirectory, reclaimGoalRoots: true);
-                var metadataOnlyExcludedGoalCount = CountMetadataOnlyTerminalSweepExclusions(
-                    stateRepository, workspace.ExecutionDirectory, workspace.IntegrationBranch, watchGoalId, cleanupContext.Hooks);
+                    orchestratorDirectory: workspace.OrchestratorDirectory, reclaimGoalRoots: true));
+                var metadataOnlyExcludedGoalCount = heartbeat.Run(ConductorStartupHeartbeat.Phases.MetadataExclusionCount, () => CountMetadataOnlyTerminalSweepExclusions(
+                    stateRepository, workspace.ExecutionDirectory, workspace.IntegrationBranch, watchGoalId, cleanupContext.Hooks));
                 if (metadataOnlyExcludedGoalCount > 0)
                 {
                     sweep = sweep with { ExcludedGoalCount = sweep.ExcludedGoalCount + metadataOnlyExcludedGoalCount };
                 }
 
-                ConsoleViews.PrintTerminalGoalSweep(sweep, includeBlockers: ConductLoopWillExitBeforeFirstTick(args, workspace.ConductorStopFilePath));
-                TerminalGoalSweepAttention.Surface(sweepKernel, sweep, workspace.OrchestratorDirectory, watchGoalId);
-                if (sweep.Changed)
-                {
+                heartbeat.Run(ConductorStartupHeartbeat.Phases.SweepSurfacing, () => { ConsoleViews.PrintTerminalGoalSweep(sweep, includeBlockers: ConductLoopWillExitBeforeFirstTick(args, workspace.ConductorStopFilePath));
+                    TerminalGoalSweepAttention.Surface(sweepKernel, sweep, workspace.OrchestratorDirectory, watchGoalId); });
+                heartbeat.Run(ConductorStartupHeartbeat.Phases.SweepPersistence, () => {
+                    if (!sweep.Changed) return;
                     PersistSweepChanges(sweepKernel, stateRepository, sweep.Goals.Select(goal => goal.GoalId).ToArray());
                     TerminalGoalSweepLifecycleEvents.Publish(
                         sweepKernel, sweepTimelineBaseline, sweep.Goals.Select(goal => goal.GoalId),
                         new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, integrationBranch: workspace.IntegrationBranch), Console.WriteLine);
                     startupKernel = LoadLoopKernel();
                     tickBaselines = startupKernel.ExportSnapshot().Goals.ToDictionary(goal => goal.Id, StringComparer.Ordinal);
-                }
+                });
 
-                cleanupContext.Scheduler.SweepIfDue(workspace.ExecutionDirectory, sweepKernel);
-                RemoteGitMirror.TryStartBackgroundProcessing(sweepKernel, workspace.ExecutionDirectory, watchGoalId, workspace.IntegrationBranch);
+                heartbeat.Run(ConductorStartupHeartbeat.Phases.OrphanWorktreeSweep, () => cleanupContext.Scheduler.SweepIfDue(workspace.ExecutionDirectory, sweepKernel));
+                heartbeat.Run(ConductorStartupHeartbeat.Phases.RemoteMirrorStart, () => RemoteGitMirror.TryStartBackgroundProcessing(sweepKernel, workspace.ExecutionDirectory, watchGoalId, workspace.IntegrationBranch));
             }
             catch (Exception ex)
             {
