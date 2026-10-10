@@ -316,18 +316,7 @@ public sealed class GitCliTests
         Assert.False(string.IsNullOrWhiteSpace(result.Error));
     }
 
-    private static string CreateSeededRepository()
-    {
-        var root = Path.Combine(Path.GetTempPath(), "mcg-gitcli-tests", Guid.NewGuid().ToString("n"));
-        Directory.CreateDirectory(root);
-        RunGit(root, "init");
-        RunGit(root, "config", "user.email", "tests@example.com");
-        RunGit(root, "config", "user.name", "GitCli Tests");
-        File.WriteAllText(Path.Combine(root, "seed.txt"), "seed");
-        RunGit(root, "add", "-A");
-        RunGit(root, "commit", "-m", "Seed");
-        return root;
-    }
+    internal static string CreateSeededRepository() => SeededGitRepositoryTemplate.CreateCopy();
 
     private static void RunGit(string workingDirectory, params string[] arguments)
     {
