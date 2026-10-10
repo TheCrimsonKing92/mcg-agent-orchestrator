@@ -29,13 +29,16 @@ internal sealed partial class GoalDispatchOperations
 
     private readonly Func<int, bool> _isProcessRunning;
     private readonly Func<int, SpawnProcessIdentity?> _readProcessIdentity;
+    private readonly Func<OrchestratorWorkspace, OrchestratorHome> _resolveHome;
 
     public GoalDispatchOperations(
         Func<int, bool>? isProcessRunning = null,
-        Func<int, SpawnProcessIdentity?>? readProcessIdentity = null)
+        Func<int, SpawnProcessIdentity?>? readProcessIdentity = null,
+        Func<OrchestratorWorkspace, OrchestratorHome>? resolveHome = null)
     {
         _isProcessRunning = isProcessRunning ?? IsProcessRunning;
         _readProcessIdentity = readProcessIdentity ?? DispatchProcessIdentityEvidence.ReadCurrent;
+        _resolveHome = resolveHome ?? (workspace => OrchestratorHome.ResolveForLaunch(workspace.ExecutionDirectory));
     }
 
     public IReadOnlyList<WorkerProfileDispatchResult> ProfileDispatchReadyTasks(
@@ -84,6 +87,7 @@ internal sealed partial class GoalDispatchOperations
         var subscriptionMetadata = TryBuildProfileSubscriptionMetadata(goal, task, profile, agents,
             subscriptionProfiles, ResolveCascadeTesterCheapFirst(workspace, cascadeTesterCheapFirst, conductorPolicy),
             ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy), cascadeMechanicalReworkCheap: ResolveCascadeMechanicalReworkCheap(workspace, cascadeMechanicalReworkCheap, conductorPolicy));
+        var home = _resolveHome(workspace);
         return WorkerProfileDispatcher.PrepareTask(
             kernel,
             goal,
@@ -113,7 +117,8 @@ internal sealed partial class GoalDispatchOperations
             plannerSampleCount: ResolvePlannerSampleCount(workspace, plannerSampleCount),
             paidRoute: subscriptionMetadata?.PaidRoute ?? PaidRouteClassification.Unknown,
             shadowRecorder: DispatchShadowRecorder.Default,
-            orchestratorSkillDirectory: ResolveOrchestratorSkillDirectory(workspace), integrationBranch: workspace.IntegrationBranch);
+            orchestratorSkillDirectory: ResolveOrchestratorSkillDirectory(home), integrationBranch: workspace.IntegrationBranch,
+            targetHome: new WorkerTargetHome(home.IsHome(workspace)));
     }
 
     public WorkerProfileDispatchResult RefreshPreparedDispatchBeforeStart(
@@ -422,6 +427,7 @@ internal sealed partial class GoalDispatchOperations
         var safeBatch = DispatchReadinessRules.SelectFirstParallelSafeAssignedBatch(goal, agents);
         EnsureRefinedForSelectedTasks(kernel, workspace, providers, goal, safeBatch.TaskIds);
         goal = kernel.GetGoal(goal.Id);
+        var home = _resolveHome(workspace);
         return WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
             kernel,
             goal,
@@ -437,7 +443,8 @@ internal sealed partial class GoalDispatchOperations
             plannerSampleCount: ResolvePlannerSampleCount(workspace, plannerSampleCount),
             cascadeTesterCheapFirst: ResolveCascadeTesterCheapFirst(workspace, cascadeTesterCheapFirst, conductorPolicy),
             cascadeCheapModelAlias: ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy), cascadeMechanicalReworkCheap: ResolveCascadeMechanicalReworkCheap(workspace, cascadeMechanicalReworkCheap, conductorPolicy),
-            orchestratorSkillDirectory: ResolveOrchestratorSkillDirectory(workspace), integrationBranch: workspace.IntegrationBranch);
+            orchestratorSkillDirectory: ResolveOrchestratorSkillDirectory(home), integrationBranch: workspace.IntegrationBranch,
+            targetHome: new WorkerTargetHome(home.IsHome(workspace)));
     }
 
     public WorkerProfileDispatchResult SubscriptionDispatchTask(
@@ -457,6 +464,7 @@ internal sealed partial class GoalDispatchOperations
         string? cascadeCheapModelAlias = null, bool? cascadeMechanicalReworkCheap = null)
     {
         EnsureRefinedForTask(kernel, workspace, providers, goal, task);
+        var home = _resolveHome(workspace);
         return WorkerProfileDispatcher.PrepareSubscriptionTask(
             kernel,
             goal,
@@ -473,14 +481,15 @@ internal sealed partial class GoalDispatchOperations
             plannerSampleCount: ResolvePlannerSampleCount(workspace, plannerSampleCount, conductorPolicy),
             cascadeTesterCheapFirst: ResolveCascadeTesterCheapFirst(workspace, cascadeTesterCheapFirst, conductorPolicy),
             cascadeCheapModelAlias: ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy), cascadeMechanicalReworkCheap: ResolveCascadeMechanicalReworkCheap(workspace, cascadeMechanicalReworkCheap, conductorPolicy),
-            orchestratorSkillDirectory: ResolveOrchestratorSkillDirectory(workspace), integrationBranch: workspace.IntegrationBranch);
+            orchestratorSkillDirectory: ResolveOrchestratorSkillDirectory(home), integrationBranch: workspace.IntegrationBranch,
+            targetHome: new WorkerTargetHome(home.IsHome(workspace)));
     }
 
     private static CitedPriorEvidenceResolver CreateCitedPriorEvidenceResolver(OrchestratorWorkspace workspace) =>
         CitedPriorEvidenceResolver.ForWorkspace(workspace.SqliteStatePath, workspace.OrchestratorDirectory);
 
-    private static string ResolveOrchestratorSkillDirectory(OrchestratorWorkspace workspace) =>
-        Path.Combine(OrchestratorHome.Resolve(workspace.ExecutionDirectory).InstallRootDirectory, ".agents", "skills");
+    private static string ResolveOrchestratorSkillDirectory(OrchestratorHome home) =>
+        Path.Combine(home.InstallRootDirectory, ".agents", "skills");
 
     private static int ResolveReviewAutoRetryStopRound(
         OrchestratorWorkspace workspace,

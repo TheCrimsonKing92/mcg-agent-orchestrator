@@ -30,9 +30,10 @@ public static class WorkerContextArtifacts
         string? orchestratorStoreRoot = null,
         IReadOnlyList<string>? answeredEvidenceTexts = null,
         IClock? clock = null,
-        string? orchestratorSkillDirectory = null)
+        string? orchestratorSkillDirectory = null,
+        WorkerTargetHome? targetHome = null)
     {
-        return new WorkerArtifactWriter(orchestratorSkillDirectory).Write(
+        return new WorkerArtifactWriter(orchestratorSkillDirectory, targetHome).Write(
             goal,
             task,
             workingDirectory,
@@ -49,9 +50,10 @@ public static class WorkerContextArtifacts
         Goal goal,
         TaskSpec task,
         string workingDirectory,
-        string? orchestratorSkillDirectory = null)
+        string? orchestratorSkillDirectory = null,
+        WorkerTargetHome? targetHome = null)
     {
-        return new WorkerSkillSelector(new WorkerSkillResolver(orchestratorSkillDirectory))
+        return new WorkerSkillSelector(new WorkerSkillResolver(orchestratorSkillDirectory, targetHome), targetHome)
             .SelectSkillRequirements(goal, task, workingDirectory);
     }
 }

@@ -2,9 +2,14 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-internal sealed class WorkerSkillSelector(WorkerSkillResolver? resolver = null)
+internal sealed class WorkerSkillSelector(WorkerSkillResolver? resolver = null, WorkerTargetHome? targetHome = null)
 {
-    private readonly WorkerSkillResolver _resolver = resolver ?? new WorkerSkillResolver();
+    private readonly WorkerSkillResolver _resolver = resolver ?? new WorkerSkillResolver(targetHome: targetHome);
+    private readonly WorkerTargetHome _targetHome = targetHome ?? WorkerTargetHome.Home;
+
+    internal static bool RequiresHomeOrWorktreeCopy(string name) =>
+        name.Equals("dotnet-windows-build-hygiene", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("orchestrator-dogfood", StringComparison.OrdinalIgnoreCase);
     private static readonly SkillCandidate[] KnownSkills =
     [
         new(
@@ -86,6 +91,8 @@ internal sealed class WorkerSkillSelector(WorkerSkillResolver? resolver = null)
     {
         return SelectSkills(goal, task)
             .DistinctBy(skill => skill.Name, StringComparer.OrdinalIgnoreCase)
+            .Where(skill => _targetHome.IsOrchestratorHome || !RequiresHomeOrWorktreeCopy(skill.Name) ||
+                File.Exists(Path.Combine(workingDirectory, skill.RelativePath)))
             .Select(skill => _resolver.Resolve(
                 workingDirectory,
                 skill.Name,

@@ -17,10 +17,12 @@ internal sealed partial class WorkerArtifactWriter
     private readonly WorkerSourceSurvey _sourceSurvey = new();
     private readonly WorkerGitContext _gitContext = new();
     private readonly WorkerSkillSelector _skillSelector;
+    private readonly WorkerTargetHome _targetHome;
 
-    internal WorkerArtifactWriter(string? orchestratorSkillDirectory = null)
+    internal WorkerArtifactWriter(string? orchestratorSkillDirectory = null, WorkerTargetHome? targetHome = null)
     {
-        _skillSelector = new WorkerSkillSelector(new WorkerSkillResolver(orchestratorSkillDirectory));
+        _targetHome = targetHome ?? WorkerTargetHome.Home;
+        _skillSelector = new WorkerSkillSelector(new WorkerSkillResolver(orchestratorSkillDirectory, _targetHome), _targetHome);
     }
     private readonly WorkerResultContractParser _resultContractParser = new();
     private static readonly JsonSerializerOptions RegistryJsonOptions = new()
@@ -616,17 +618,24 @@ internal sealed partial class WorkerArtifactWriter
             "  Artifact: deterministic-verification.md plus current-task.md",
             "  Use for: acceptance manifest status, verification history, model-fit evidence, and WORKER_RESULT completeness.",
             "  Failure handling: missing acceptance evidence should become an explicit blocker or a verify command, not a silent pass.",
-            "- backlog-log-evidence",
-            "  Command: `dogfood-log list --limit <n>` / `dogfood-log add <goal-prefix>`",
-            "  Store: `.orchestrator/dogfood-log.db` is the durable dogfood evidence source; DOGFOOD_LOG.md is only an operator pointer when present.",
-            "  Use for: closing backlog items, filing follow-ups, and recording Model fit at goal boundaries.",
-            "  Failure handling: missing backlog/log evidence should be resolved with the SQLite-backed command surface, not file edits.",
+        };
+        if (_targetHome.IsOrchestratorHome)
+        {
+            lines.AddRange([
+                "- backlog-log-evidence",
+                "  Command: `dogfood-log list --limit <n>` / `dogfood-log add <goal-prefix>`",
+                "  Store: `.orchestrator/dogfood-log.db` is the durable dogfood evidence source; DOGFOOD_LOG.md is only an operator pointer when present.",
+                "  Use for: closing backlog items, filing follow-ups, and recording Model fit at goal boundaries.",
+                "  Failure handling: missing backlog/log evidence should be resolved with the SQLite-backed command surface, not file edits.",
+            ]);
+        }
+        lines.AddRange([
             string.Empty,
             "## Broker Output Contract",
             "- Prefer broker artifact paths in your evidence over repeating full artifact contents.",
             "- Include broker failures in WORKER_RESULT blockers.",
             "- Include broker commands and required checks in WORKER_RESULT commands/tests."
-        };
+        ]);
         if (!plannerUsesDurableResearch)
         {
             lines.InsertRange(
