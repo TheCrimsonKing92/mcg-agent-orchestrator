@@ -13,8 +13,6 @@ internal static class OwnerConsoleGoalDetailFormatter
         var goal = kernel.Goals.SingleOrDefault(goal => goal.Id.Value == id);
         if (goal is null) { output.WriteLine("goal state unavailable"); return null; }
         output.WriteLine(goal.Id.Value[..Math.Min(8, goal.Id.Value.Length)] + "  " + OwnerGoalTitle.From(goal.Objective));
-        var title = OwnerGoalTitle.Full(goal.Objective);
-        output.WriteLine("Title: " + title);
         output.WriteLine("Status: " + goal.Status);
         var stage = GoalLifecycle.ResolveState(goal, new(IsBlocked: goal.CurrentHold is not null)).ToString();
         if (stage != goal.Status.ToString()) output.WriteLine("Stage: " + stage);

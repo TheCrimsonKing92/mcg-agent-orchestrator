@@ -39,7 +39,12 @@ public sealed class OwnerConsolePaneJumpTests
             await scene.View.HandleKeyAsync(Key.Enter);
             var text = scene.Dialogs.Messages[^1].Text;
             if (pane == 0) Assert.Contains("Question 5", text);
-            else if (pane == 1) Assert.Contains("Title: Goal 5", text);
+            else if (pane == 1)
+            {
+                var lines = text.Split(Environment.NewLine);
+                Assert.Equal("00000005  Goal 5", lines[0]);
+                Assert.DoesNotContain(lines, line => line.StartsWith("Title: ", StringComparison.Ordinal));
+            }
             else Assert.Contains(OwnerActivityNarrator.Line(scene.Controller.Model!.Activity[5]), text);
             await scene.View.HandleKeyAsync(Key.PageUp);
             Assert.Equal(0, Selection());

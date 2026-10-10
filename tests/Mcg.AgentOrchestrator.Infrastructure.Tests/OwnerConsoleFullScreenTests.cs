@@ -191,6 +191,10 @@ public sealed class OwnerConsoleFullScreenTests
         await view.HandleKeyAsync(new Key(':'));
         Assert.True(view.CommandLine.HasFocus);
         foreach (var command in OwnerConsoleKeyHints.Commands) Assert.Contains(command.Command, view.HintText);
+        var expectedCommands = OwnerConsoleKeyHints.Commands.Select(command => command.Command).ToArray();
+        var hintCommands = view.HintText.Split("commands: ", StringSplitOptions.None)[1].Split(" | ", StringSplitOptions.None);
+        Assert.Equal(expectedCommands, hintCommands);
+        Assert.Contains("epics", hintCommands);
         view.CommandLine.Text = "frobnicate";
         view.Render(model);
         Assert.Equal("frobnicate", view.CommandLine.Text);
@@ -207,8 +211,28 @@ public sealed class OwnerConsoleFullScreenTests
         Assert.StartsWith("unknown command", output);
         foreach (var command in OwnerConsoleKeyHints.Commands)
             Assert.True(output.IndexOf(command.Command, StringComparison.Ordinal) > output.IndexOf("unknown command", StringComparison.Ordinal));
+        const string commandPrefix = "valid commands: ";
+        var commandLine = Assert.Single(output.Split(Environment.NewLine), line => line.StartsWith(commandPrefix, StringComparison.Ordinal));
+        var outputCommands = commandLine[commandPrefix.Length..].Split(" | ", StringSplitOptions.None);
+        Assert.Equal(expectedCommands, outputCommands);
+        Assert.Equal(hintCommands, outputCommands);
+        Assert.Contains("epics", outputCommands);
         Assert.Equal(paneHint, view.HintText);
         Assert.Equal(string.Empty, harness.Output.Text);
+    }
+
+    [Fact]
+    public void HelpText_PreservesEpicCommandPositionAndListsEachCommandOnce()
+    {
+        var lines = OwnerConsoleKeyHints.HelpText.Split('\n');
+        var epicCommand = OwnerConsoleKeyHints.Commands.Single(item => item.Command == "epics");
+        var epicLine = $":{epicCommand.Command}: {epicCommand.Description}";
+        var index = Array.IndexOf(lines, epicLine);
+        Assert.True(index > 0 && index < lines.Length - 1);
+        Assert.Equal("e: Open the epic view (any pane).", lines[index - 1]);
+        Assert.Equal("Epic list Up: Select the previous epic.", lines[index + 1]);
+        foreach (var command in OwnerConsoleKeyHints.Commands)
+            Assert.Single(lines, line => line == $":{command.Command}: {command.Description}");
     }
 
     [Theory]

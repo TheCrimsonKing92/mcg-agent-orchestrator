@@ -13,12 +13,13 @@ internal static class OwnerConsoleKeyHints
         ("metrics", "Show conductor metrics."),
         ("bell on", "Enable the attention bell."),
         ("bell off", "Disable the attention bell."),
-        ("goal <id-prefix>", "Open live goal detail, landing status and actions.")
+        ("goal <id-prefix>", "Open live goal detail, landing status and actions."),
+        ("epics", "Open the epic view (same as e).")
     ];
 
     internal static string CommandPrompt => string.Join(" | ", Commands.Select(item => item.Command));
 
-    internal static string CommandLineHint => "Enter run  Esc cancel  commands: " + CommandPrompt + " | epics";
+    internal static string CommandLineHint => "Enter run  Esc cancel  commands: " + CommandPrompt;
 
     internal static string UnavailableKey(char key, OwnerConsolePane pane) =>
         $"{key}: not available here ({pane.ToString().ToUpperInvariant()}); use DECISIONS.";
@@ -72,7 +73,7 @@ internal static class OwnerConsoleKeyHints
         "q: Quit the console (any pane).",
         "Esc: Cancel command entry or close a dialog.",
         "e: Open the epic view (any pane).",
-        ":epics: Open the epic view (same as e).",
+        Commands.Where(item => item.Command == "epics").Select(item => $":{item.Command}: {item.Description}").Single(),
         "Epic list Up: Select the previous epic.",
         "Epic list Down: Select the next epic.",
         "Epic list Enter: Open the selected epic's detail.",
@@ -84,5 +85,6 @@ internal static class OwnerConsoleKeyHints
         "Epic detail Esc: Back to the epic list.",
         "Epic view w (list and detail): Cycle the time window (day, week, all time).",
         "Epic view r (list and detail): Reload after a failed load."
-    }.Concat(OwnerActivityNarrator.JumpKeyHelp).Concat(Commands.Select(item => $":{item.Command}: {item.Description}")));
+    }.Concat(OwnerActivityNarrator.JumpKeyHelp).Concat(Commands.Where(item => item.Command != "epics")
+        .Select(item => $":{item.Command}: {item.Description}")));
 }
