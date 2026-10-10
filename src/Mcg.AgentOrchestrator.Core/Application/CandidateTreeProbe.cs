@@ -16,12 +16,24 @@ public static class CandidateTreeProbe
         if (!Path.IsPathFullyQualified(repositoryRoot))
             throw new ArgumentException("The repository root must be an absolute path.", nameof(repositoryRoot));
 
-        // Partial fixture roots cannot establish that a file was removed from a candidate.
+        // Git metadata and a top-level solution distinguish a candidate tree from a partial fixture.
         return (File.Exists(Path.Combine(repositoryRoot, ".git")) ||
                 Directory.Exists(Path.Combine(repositoryRoot, ".git"))) &&
-            File.Exists(Path.Combine(repositoryRoot, "Mcg.AgentOrchestrator.sln"))
+            HasTopLevelSolution(repositoryRoot)
                 ? new FileSystemTree(repositoryRoot)
                 : AssumeAllPresent;
+    }
+
+    private static bool HasTopLevelSolution(string repositoryRoot)
+    {
+        try
+        {
+            return Directory.EnumerateFiles(repositoryRoot).Any(path =>
+                Path.GetExtension(path).Equals(".sln", StringComparison.OrdinalIgnoreCase) ||
+                Path.GetExtension(path).Equals(".slnx", StringComparison.OrdinalIgnoreCase));
+        }
+        catch (IOException) { return false; }
+        catch (UnauthorizedAccessException) { return false; }
     }
 
     private sealed class PresentTree : ICandidateTreeProbe

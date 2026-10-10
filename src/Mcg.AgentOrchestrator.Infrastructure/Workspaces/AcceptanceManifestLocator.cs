@@ -6,16 +6,18 @@ internal static class AcceptanceManifestLocator
 
     internal static string Resolve(string worktreePath, string? projectHomeDirectory = null)
     {
-        if (!string.IsNullOrWhiteSpace(projectHomeDirectory))
-        {
-            var projectPath = Path.Combine(projectHomeDirectory, ManifestFileName);
-            if (File.Exists(projectPath))
-                return projectPath;
-        }
+        var locations = SearchedLocations(worktreePath, projectHomeDirectory);
+        return locations.FirstOrDefault(File.Exists) ?? locations[^1];
+    }
 
-        var trackedPath = Path.Combine(worktreePath, "config", ManifestFileName);
-        return File.Exists(trackedPath)
-            ? trackedPath
-            : Path.Combine(worktreePath, ".orchestrator", ManifestFileName);
+    internal static IReadOnlyList<string> SearchedLocations(string worktreePath, string? projectHomeDirectory = null)
+    {
+        var locations = new List<string>();
+        if (!string.IsNullOrWhiteSpace(projectHomeDirectory))
+            locations.Add(Path.Combine(projectHomeDirectory, ManifestFileName));
+
+        locations.Add(Path.Combine(worktreePath, "config", ManifestFileName));
+        locations.Add(Path.Combine(worktreePath, ".orchestrator", ManifestFileName));
+        return locations.AsReadOnly();
     }
 }

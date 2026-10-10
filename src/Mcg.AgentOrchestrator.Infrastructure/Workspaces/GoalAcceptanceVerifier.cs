@@ -925,6 +925,12 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         phaseAccountant.MarkCompleted(verification.Passed);
         return verification;
         }
+        catch (MissingAcceptanceManifestException missing)
+        {
+            phaseAccountant.MarkCompleted(passed: false);
+            var check = new AcceptanceCheckResult("acceptance manifest", false, 1, missing.Message);
+            return new AcceptanceVerificationResult(false, false, 1, missing.Message, Checks: [check]);
+        }
         catch (Exception exception) when (ShouldCaptureGateEngineFault(exception))
         {
             throw AcceptanceGateEngineException.Capture(exception, phaseAccountant.Snapshot);
@@ -4882,57 +4888,12 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         {
             var path = AcceptanceManifestLocator.Resolve(worktreePath, projectHomeDirectory);
             if (!File.Exists(path))
-            {
-                return changedFiles is null
-                    ? new AcceptanceManifest()
-                    : FromTestImpactPlan(
-                        worktreePath,
-                        RepositoryTestImpactPlanner.Plan(changedFiles, worktreePath));
-            }
+                throw new MissingAcceptanceManifestException(
+                    AcceptanceManifestLocator.SearchedLocations(worktreePath, projectHomeDirectory));
 
             return JsonSerializer.Deserialize<AcceptanceManifest>(
                 File.ReadAllText(path),
                 JsonOptions) ?? new AcceptanceManifest();
-        }
-
-        private static AcceptanceManifest FromTestImpactPlan(
-            string worktreePath,
-            RepositoryTestImpactPlan plan) =>
-            new()
-            {
-                Checks = plan.Checks
-                    .Select(check => ToAcceptanceCheck(worktreePath, check))
-                    .SelectMany(check => ExpandBroadInfrastructureCheck(check))
-                    .ToArray()
-            };
-
-        private static AcceptanceManifestCheck ToAcceptanceCheck(
-            string worktreePath,
-            RepositoryTestImpactCheck check)
-        {
-            if (check.Command.Count == 0)
-            {
-                return new AcceptanceManifestCheck
-                {
-                    Name = check.Name,
-                    Type = "no-op"
-                };
-            }
-
-            if (check.Command.Count >= 2 &&
-                check.Command[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase) &&
-                check.Command[1].Equals("test", StringComparison.OrdinalIgnoreCase))
-            {
-                return DotnetCommandToManifestCheck(worktreePath, check.Name, [.. check.Command]);
-            }
-
-            return new AcceptanceManifestCheck
-            {
-                Name = check.Name,
-                Type = "command",
-                Command = check.Command[0],
-                Arguments = check.Command.Skip(1).ToArray()
-            };
         }
 
     }

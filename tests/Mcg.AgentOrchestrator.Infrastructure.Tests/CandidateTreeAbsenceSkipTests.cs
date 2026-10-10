@@ -131,6 +131,49 @@ public sealed class CandidateTreeAbsenceSkipTests
         finally { Directory.Delete(root, recursive: true); }
     }
 
+    [Theory]
+    [InlineData(false, "Foreign.sln", false)]
+    [InlineData(false, "Foreign.slnx", false)]
+    [InlineData(true, "Foreign.sln", false)]
+    [InlineData(true, "Foreign.slnx", false)]
+    [InlineData(false, "Foreign.SLNX", false)]
+    [InlineData(false, null, true)]
+    [InlineData(true, null, true)]
+    [InlineData(false, "nested/Foreign.sln", true)]
+    [InlineData(false, "nested/Foreign.slnx", true)]
+    public void ForeignSolution_UsesTreeOnlyWithTopLevelSolution(
+        bool gitDirectory, string? solutionPath, bool assumedPresent)
+    {
+        var root = CreateRoot();
+        try
+        {
+            if (gitDirectory) Directory.CreateDirectory(Path.Combine(root, ".git"));
+            else Write(root, ".git", "gitdir: isolated-fixture");
+            if (solutionPath is not null) Write(root, solutionPath, "");
+
+            var probe = CandidateTreeProbe.ForRepositoryRoot(root);
+            Assert.Equal(assumedPresent, probe.Exists(RemovedPath));
+            Write(root, SurvivorPath, "survivor");
+            Assert.True(probe.Exists(SurvivorPath));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Theory]
+    [InlineData("Foreign.sln")]
+    [InlineData("Foreign.slnx")]
+    public void ForeignSolution_WithoutGitMetadata_AssumesAllPresent(string solutionPath)
+    {
+        var root = CreateRoot();
+        try
+        {
+            Write(root, solutionPath, "");
+            Assert.Same(CandidateTreeProbe.AssumeAllPresent, CandidateTreeProbe.ForRepositoryRoot(root));
+            Assert.True(CandidateTreeProbe.ForRepositoryRoot(root).Exists(RemovedPath));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
     private static AcceptanceManifestCheck TestCheck(string project) =>
         new() { Name = "fixture tests", Type = "dotnet-test", Project = project };
 
