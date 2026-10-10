@@ -96,7 +96,7 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
 
     internal OwnerConsoleDecision? SelectedDecision => Selected();
 
-    internal static bool AnswersInConsole(OwnerConsoleDecision decision) => decision.Kind != OwnerQuestionKind.StewardHold;
+    internal static bool AnswersInConsole(OwnerConsoleDecision decision) => !OwnerQuestionViewOnly.IsViewOnly(decision.Kind);
 
     internal Task ShowHelpAsync() => dialogs.ShowTextAsync("Help", OwnerConsoleKeyHints.HelpText);
 
@@ -110,7 +110,7 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     {
         using var detail = new OwnerConsoleDecisionDetail(decision, clock.LocalTimeZone,
             (target, accept, notify) => AnswerAsync(accept, operation, cancellationToken, target, notify),
-            async token => resolutions is null ? null :
+            async token => resolutions is null || string.IsNullOrEmpty(decision.GoalId) ? null :
                 (await resolutions.ListForGoalAsync(decision.GoalId, token)).FirstOrDefault(item => item.Id == decision.Id),
             text => dialogs.ShowTextAsync("Help", text), cancellationToken);
         void Refresh() => detail.Observe(Model?.Decisions.FirstOrDefault(item => item.Id == decision.Id));
@@ -161,7 +161,7 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
         if (decision is null) return;
         if (!AnswersInConsole(decision))
         {
-            await ShowNoticeAsync("View only", $"Steward questions are answered through goal verbs for now; use the CLI retry/adjudicate commands for goal {decision.GoalId}.");
+            await ShowNoticeAsync("View only", OwnerQuestionViewOnly.Notice(decision.Kind, decision.GoalId));
             return;
         }
         string? text;

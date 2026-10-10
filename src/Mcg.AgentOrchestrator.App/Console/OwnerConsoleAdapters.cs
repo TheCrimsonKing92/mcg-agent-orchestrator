@@ -67,8 +67,9 @@ internal sealed class AttentionAnswerHandlerAdapter(OrchestratorWorkspace worksp
 {
     public OwnerAnswerSubmission Submit(OwnerQuestion question, string answer)
     {
-        if (question.Kind == OwnerQuestionKind.StewardHold)
-            throw new InvalidOperationException("Steward holds have no attention answer handler.");
+        if (OwnerQuestionViewOnly.IsViewOnly(question.Kind))
+            throw new InvalidOperationException(question.Kind == OwnerQuestionKind.StewardHold ?
+                "Steward holds have no attention answer handler." : OwnerQuestionViewOnly.Notice(question.Kind, question.GoalId));
         var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
         IReadOnlyList<AgentDefinition> agents = AgentCatalogStore.Load(workspace.AgentCatalogPath).Agents;
         var profiles = WorkerProfileStore.Load(workspace.WorkerProfilePath);

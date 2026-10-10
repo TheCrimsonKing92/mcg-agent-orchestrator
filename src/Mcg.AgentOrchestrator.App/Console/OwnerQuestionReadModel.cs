@@ -72,11 +72,15 @@ internal sealed class OwnerQuestionReadModel(
         {
             var store = CollaborationItemStore.OpenExisting(orchestratorDirectory);
             var items = await store.GetAttentionQueueAsync(cancellationToken);
-            foreach (var item in items.Where(item =>
-                item.GoalId is not null &&
-                item.CorrelationKey?.StartsWith("spec-clarification:", StringComparison.Ordinal) == true &&
-                !CollaborationItemLifecycle.IsTerminal(item.Status)))
+            foreach (var item in items.Where(item => !CollaborationItemLifecycle.IsTerminal(item.Status)))
             {
+                if (OwnerExperimentReadingQuestion.From(item) is { } reading)
+                {
+                    candidates.Add(new QuestionCandidate(reading, item.RaisedAt));
+                    continue;
+                }
+                if (item.GoalId is null ||
+                    item.CorrelationKey?.StartsWith("spec-clarification:", StringComparison.Ordinal) != true) continue;
                 candidates.Add(new QuestionCandidate(new OwnerQuestion(item.Id, item.GoalId!,
                     OwnerQuestionKind.Clarification,
                     Field(item.Body, "Question:") ?? item.Subject,
@@ -90,7 +94,8 @@ internal sealed class OwnerQuestionReadModel(
         var hidden = new List<HiddenOwnerQuestion>();
         foreach (var candidate in candidates)
         {
-            var reason = !goals.TryGetValue(candidate.Question.GoalId, out var status) ? "goal-missing" :
+            var reason = candidate.Question.Kind == OwnerQuestionKind.ExperimentReading ? null :
+                !goals.TryGetValue(candidate.Question.GoalId, out var status) ? "goal-missing" :
                 status switch
                 {
                     GoalStatus.Completed => "goal-completed",

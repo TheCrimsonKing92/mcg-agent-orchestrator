@@ -65,7 +65,7 @@ internal interface IGoalEventTail
 
 internal sealed record OwnerConductEvent(DateTimeOffset Timestamp, string EventKind, string? GoalId, string Detail);
 
-internal enum OwnerQuestionKind { Clarification, HumanInput, StewardHold }
+internal enum OwnerQuestionKind { Clarification, HumanInput, StewardHold, ExperimentReading }
 
 internal sealed record OwnerQuestion(
     string ItemId, string GoalId, OwnerQuestionKind Kind, string Text,

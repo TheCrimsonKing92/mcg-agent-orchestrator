@@ -163,8 +163,8 @@ internal sealed class OwnerConsoleSession(
             Announce(_retired.Contains(number) ? $"question {number} is no longer open" : $"no question {number}");
             return;
         }
-        if (question.Kind == OwnerQuestionKind.StewardHold)
-        { Announce($"Steward questions are answered through goal verbs for now; use the CLI retry/adjudicate commands for goal {question.GoalId}."); return; }
+        if (OwnerQuestionViewOnly.IsViewOnly(question.Kind))
+        { Announce(OwnerQuestionViewOnly.Notice(question.Kind, question.GoalId)); return; }
         if (command == "accept")
         {
             text = question.ProposedDefault;
