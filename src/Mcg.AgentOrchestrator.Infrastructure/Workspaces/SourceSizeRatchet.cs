@@ -444,7 +444,8 @@ internal static class SourceSizeRatchet
             // (2026-10-09 console architecture review, finding 4, taming slice 13).
             // Goal c0ff6203 extracts six small text views (taming slice 14).
             // Goal 1a8bb30d extracts portfolio output (slice 11): measured 3102 lines in 38 partials; no headroom.
-            new SourceClassCeiling("ConsoleViews", 3102, 38),
+            // Goal c860b9ff extracts verification and acceptance command advice (slice 12, first family): measured 3047 lines in 38 partials; no headroom.
+            new SourceClassCeiling("ConsoleViews", 3047, 38),
         });
 
     internal static IReadOnlyList<SourceSizeViolation> EvaluateClasses(

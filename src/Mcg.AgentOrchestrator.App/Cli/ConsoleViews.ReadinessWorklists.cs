@@ -145,7 +145,7 @@ public static void PrintVerificationWorklist(Goal goal, GoalVerificationWorklist
             Console.WriteLine($"  {taskNumber}. [{item.GateStatus}] {item.Role}: {OutputTextPreview.CreateSummary(item.Description).Text}");
             Console.WriteLine($"     {OutputTextPreview.CreateTimeline(item.Message).Text}");
             Console.WriteLine($"     action: {OutputTextPreview.CreateTimeline(item.SuggestedAction).Text}");
-            Console.WriteLine($"     command: {BuildVerificationSuggestedCommand(taskNumber, item.GateStatus)}");
+            Console.WriteLine($"     command: {VerificationCommandAdvice.BuildVerificationSuggestedCommand(taskNumber, item.GateStatus)}");
         }
     }
 

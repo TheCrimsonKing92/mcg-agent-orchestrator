@@ -66,7 +66,7 @@ public static void PrintAcceptanceSummary(Goal goal, GoalAcceptanceSummary summa
             var scope = taskNumber is null ? "goal" : $"task {taskNumber}";
             Console.WriteLine($"  {blocker.Kind} ({scope}): {OutputTextPreview.CreateTimeline(blocker.Message).Text}");
             Console.WriteLine($"     action: {OutputTextPreview.CreateTimeline(blocker.SuggestedAction).Text}");
-            Console.WriteLine($"     command: {BuildAcceptanceSuggestedCommand(blocker, taskNumber)}");
+            Console.WriteLine($"     command: {VerificationCommandAdvice.BuildAcceptanceSuggestedCommand(blocker, taskNumber)}");
         }
     }
 
