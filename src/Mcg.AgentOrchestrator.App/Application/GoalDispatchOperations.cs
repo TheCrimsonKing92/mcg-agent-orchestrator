@@ -118,7 +118,7 @@ internal sealed partial class GoalDispatchOperations
             paidRoute: subscriptionMetadata?.PaidRoute ?? PaidRouteClassification.Unknown,
             shadowRecorder: DispatchShadowRecorder.Default,
             orchestratorSkillDirectory: ResolveOrchestratorSkillDirectory(home), integrationBranch: workspace.IntegrationBranch,
-            targetHome: new WorkerTargetHome(home.IsHome(workspace)));
+            targetHome: new WorkerTargetHome(home.IsHome(workspace), WorkerAcceptanceManifestResolver.For(workspace)));
     }
 
     public WorkerProfileDispatchResult RefreshPreparedDispatchBeforeStart(
@@ -444,7 +444,7 @@ internal sealed partial class GoalDispatchOperations
             cascadeTesterCheapFirst: ResolveCascadeTesterCheapFirst(workspace, cascadeTesterCheapFirst, conductorPolicy),
             cascadeCheapModelAlias: ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy), cascadeMechanicalReworkCheap: ResolveCascadeMechanicalReworkCheap(workspace, cascadeMechanicalReworkCheap, conductorPolicy),
             orchestratorSkillDirectory: ResolveOrchestratorSkillDirectory(home), integrationBranch: workspace.IntegrationBranch,
-            targetHome: new WorkerTargetHome(home.IsHome(workspace)));
+            targetHome: new WorkerTargetHome(home.IsHome(workspace), WorkerAcceptanceManifestResolver.For(workspace)));
     }
 
     public WorkerProfileDispatchResult SubscriptionDispatchTask(
@@ -482,7 +482,7 @@ internal sealed partial class GoalDispatchOperations
             cascadeTesterCheapFirst: ResolveCascadeTesterCheapFirst(workspace, cascadeTesterCheapFirst, conductorPolicy),
             cascadeCheapModelAlias: ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy), cascadeMechanicalReworkCheap: ResolveCascadeMechanicalReworkCheap(workspace, cascadeMechanicalReworkCheap, conductorPolicy),
             orchestratorSkillDirectory: ResolveOrchestratorSkillDirectory(home), integrationBranch: workspace.IntegrationBranch,
-            targetHome: new WorkerTargetHome(home.IsHome(workspace)));
+            targetHome: new WorkerTargetHome(home.IsHome(workspace), WorkerAcceptanceManifestResolver.For(workspace)));
     }
 
     private static CitedPriorEvidenceResolver CreateCitedPriorEvidenceResolver(OrchestratorWorkspace workspace) =>

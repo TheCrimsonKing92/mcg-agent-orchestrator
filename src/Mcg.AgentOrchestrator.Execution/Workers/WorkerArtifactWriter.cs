@@ -440,7 +440,7 @@ internal sealed partial class WorkerArtifactWriter
             "# Deterministic Verification Checklist",
             string.Empty,
             $"Working directory: {workingDirectory}",
-            $"Acceptance manifest: {(File.Exists(Path.Combine(workingDirectory, "config", "acceptance-manifest.json")) ? "present: config/acceptance-manifest.json" : "missing")}",
+            $"Acceptance manifest: {WorkerAcceptanceManifestLine.Render(workingDirectory, _targetHome.AcceptanceManifestPath is { } resolveManifest ? resolveManifest(workingDirectory) : Path.Combine(workingDirectory, "config", "acceptance-manifest.json"))}",
             $"Current verification plan: {(string.IsNullOrWhiteSpace(task.VerificationPlan) ? "missing" : "present")}",
             $"Prior tasks inspected: {priorTasks.Count}",
             $"Prior completed tasks: {completedPriorTasks.Count}",
