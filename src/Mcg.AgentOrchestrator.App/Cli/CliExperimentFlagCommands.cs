@@ -22,7 +22,7 @@ internal static class CliExperimentFlagCommands
         }
         if (!File.Exists(workspace.ExperimentStorePath))
             throw new InvalidOperationException($"Experiment '{parts[1]}' was not found.");
-        var record = new ExperimentStore(workspace.ExperimentStorePath).ResolveAsync(parts[1]).GetAwaiter().GetResult()
+        var record = ExperimentStore.OpenReadOnly(workspace.ExperimentStorePath).ResolveAsync(parts[1]).GetAwaiter().GetResult()
             ?? throw new InvalidOperationException($"Experiment '{parts[1]}' was not found.");
         if (record.Spec.Intervention.Kind != ExperimentInterventionKind.ConfigFlag || record.Spec.Intervention.FlagTarget is null)
             throw new ArgumentException("experiment-apply-flag: a config-flag experiment with a flag target is required.");

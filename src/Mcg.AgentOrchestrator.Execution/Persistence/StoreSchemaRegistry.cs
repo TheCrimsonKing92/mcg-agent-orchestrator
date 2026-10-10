@@ -17,6 +17,9 @@ public static class StoreSchemaRegistry
     public static StoreSchemaEntry Portfolio { get; } =
         new("portfolio", Persistence + "PortfolioStore.cs", "portfolio.db", "portfolio", 2);
 
+    public static StoreSchemaEntry Experiments { get; } =
+        new("experiments", Persistence + "ExperimentStore.cs", "experiments.db", "experiment", 1);
+
     public static StoreSchemaEntry Backlog { get; } =
         new("backlog", Persistence + "BacklogStore.cs", "backlog.db", "backlog", 1);
 
@@ -42,7 +45,7 @@ public static class StoreSchemaRegistry
     public static IReadOnlyList<StoreSchemaEntry> Inventory { get; } = Array.AsReadOnly<StoreSchemaEntry>(
     [
         Portfolio,
-        new("experiments", Persistence + "ExperimentStore.cs", "experiments.db", "experiment", null),
+        Experiments,
         Backlog,
         OperatorIntents,
         OperatorLessons,

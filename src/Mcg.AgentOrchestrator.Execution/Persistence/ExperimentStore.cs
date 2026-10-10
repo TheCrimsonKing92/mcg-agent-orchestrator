@@ -38,22 +38,72 @@ public sealed class ExperimentStore
     public static JsonSerializerOptions JsonOptions { get; } = CreateJsonOptions();
     private readonly string _connectionString;
 
-    public ExperimentStore(string dbPath)
+    public ExperimentStore(string dbPath) : this(dbPath, readOnly: false)
+    {
+        Setup(dbPath);
+    }
+
+    private ExperimentStore(string dbPath, bool readOnly)
+    {
+        _connectionString = CreateConnectionString(dbPath, readOnly);
+    }
+
+    public static ExperimentStore OpenReadOnly(string dbPath)
+    {
+        if (!File.Exists(dbPath))
+            throw SchemaSetupRequired(dbPath, StoreSchemaState.Missing);
+
+        var store = new ExperimentStore(dbPath, readOnly: true);
+        using var connection = store.Open();
+        var state = StoreSchemaVersions.Verify(connection, StoreSchemaRegistry.Experiments);
+        if (state != StoreSchemaState.Current)
+            throw SchemaSetupRequired(dbPath, state);
+        return store;
+    }
+
+    private static InvalidOperationException SchemaSetupRequired(string dbPath, StoreSchemaState state) =>
+        new($"Experiment store '{dbPath}' schema is {state} (expected version {StoreSchemaRegistry.Experiments.CurrentVersion}); run setup.");
+
+    private static string CreateConnectionString(string dbPath, bool readOnly) =>
+        new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath, Mode = readOnly ? SqliteOpenMode.ReadOnly : SqliteOpenMode.ReadWriteCreate,
+            Pooling = false, DefaultTimeout = 30
+        }.ToString();
+
+    public static void Setup(string dbPath)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(dbPath))!);
-        _connectionString = new SqliteConnectionStringBuilder
+        using var connection = new SqliteConnection(CreateConnectionString(dbPath, readOnly: false));
+        connection.Open();
+        var state = StoreSchemaVersions.Verify(connection, StoreSchemaRegistry.Experiments);
+        if (state is StoreSchemaState.Newer or StoreSchemaState.Current)
+            return;
+
+        RunNonQuery(connection, "BEGIN IMMEDIATE");
+        try
         {
-            DataSource = dbPath, Mode = SqliteOpenMode.ReadWriteCreate, Pooling = false, DefaultTimeout = 30
-        }.ToString();
-        using var connection = Open();
+            RunNonQuery(connection, """
+                CREATE TABLE IF NOT EXISTS experiments (
+                    id TEXT PRIMARY KEY, hypothesis TEXT NOT NULL, epic_id TEXT, created_at TEXT NOT NULL,
+                    intervention_json TEXT NOT NULL, baseline_json TEXT NOT NULL, metrics_json TEXT NOT NULL,
+                    guardrail_json TEXT NOT NULL, stop_rule_json TEXT NOT NULL, decision_rule_json TEXT NOT NULL,
+                    outcome TEXT NOT NULL CHECK(outcome IN ('open','confirmed','refuted','inconclusive')), decision_json TEXT);
+                """);
+            StoreSchemaVersions.UpgradeToCurrent(connection, StoreSchemaRegistry.Experiments);
+            RunNonQuery(connection, "COMMIT");
+        }
+        catch
+        {
+            try { RunNonQuery(connection, "ROLLBACK"); } catch { }
+            throw;
+        }
+    }
+
+    private static void RunNonQuery(SqliteConnection connection, string sql)
+    {
         using var command = connection.CreateCommand();
-        command.CommandText = """
-            CREATE TABLE IF NOT EXISTS experiments (
-                id TEXT PRIMARY KEY, hypothesis TEXT NOT NULL, epic_id TEXT, created_at TEXT NOT NULL,
-                intervention_json TEXT NOT NULL, baseline_json TEXT NOT NULL, metrics_json TEXT NOT NULL,
-                guardrail_json TEXT NOT NULL, stop_rule_json TEXT NOT NULL, decision_rule_json TEXT NOT NULL,
-                outcome TEXT NOT NULL CHECK(outcome IN ('open','confirmed','refuted','inconclusive')), decision_json TEXT);
-            """;
+        command.CommandText = sql;
         command.ExecuteNonQuery();
     }
 

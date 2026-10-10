@@ -30,6 +30,9 @@ public sealed class StoreSetupRunnerTests
         Assert.Equal(StoreSchemaRegistry.Portfolio.StoreName, portfolio.StoreName);
         Assert.Equal(workspace.PortfolioStorePath, portfolio.DatabasePath);
         Assert.Equal(2, portfolio.Version);
+        var experiments = Assert.Single(results, result => result.StoreName == "experiments");
+        Assert.Equal(workspace.ExperimentStorePath, experiments.DatabasePath);
+        Assert.Equal(1, experiments.Version);
         var backlog = Assert.Single(results, result => result.StoreName == "backlog");
         Assert.Equal(workspace.BacklogStorePath, backlog.DatabasePath);
         Assert.Equal(1, backlog.Version);
@@ -40,11 +43,12 @@ public sealed class StoreSetupRunnerTests
         Assert.Equal(2, StoreSchemaVersions.Read(connection, portfolio.StoreName));
         Assert.All(Directory.GetFiles(workspace.OrchestratorDirectory), path =>
             Assert.Contains(Path.GetFileName(path), new[] { "portfolio.db", "portfolio.db-wal", "portfolio.db-shm",
-                "backlog.db", "backlog.db-wal", "backlog.db-shm",
+                "experiments.db", "backlog.db", "backlog.db-wal", "backlog.db-shm",
                 "operator-intents.db", "operator-intents.db-wal", "operator-intents.db-shm",
                 "operator-lessons.db", "operator-escapes.db", "follower-gate-acceptance.db",
                 "dogfood-log.db", "dogfood-log.db-wal", "dogfood-log.db-shm", "progressive-review-steering.db" }));
         Assert.Empty(await DogfoodLogStore.OpenReadOnly(workspace.DogfoodLogStorePath).ListRecentAsync());
+        Assert.Empty(await ExperimentStore.OpenReadOnly(workspace.ExperimentStorePath).ListAllAsync());
         Assert.Empty(await PortfolioStore.OpenReadOnly(workspace.PortfolioStorePath).ListProjectsAsync());
         Assert.Empty(await BacklogStore.OpenReadOnly(workspace.BacklogStorePath).ListAsync());
         var intents = Assert.Single(results, result => result.StoreName == StoreSchemaRegistry.OperatorIntents.StoreName);

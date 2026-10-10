@@ -37,7 +37,7 @@ internal sealed class ConductorExperimentWatch
         try
         {
             if (!File.Exists(_workspace.ExperimentStorePath)) return;
-            var experiments = new ExperimentStore(_workspace.ExperimentStorePath);
+            var experiments = ExperimentStore.OpenReadOnly(_workspace.ExperimentStorePath);
             var open = experiments.ListOpenAsync().GetAwaiter().GetResult();
             var items = _collaborationStore();
             if (!_rehydrated)
@@ -82,10 +82,11 @@ internal sealed class ConductorExperimentWatch
             var policyPath = Path.Combine(_workspace.OrchestratorDirectory, "conductor-policy.json");
             var flags = new ExperimentFlagStateReader(policyPath,
                 RemoteLaneExecutorConfiguration.ResolveStorePath(_workspace.ExecutionDirectory));
-            var reverts = new ConductorExperimentFlagRevertController(experiments,
+            var writableExperiments = new ExperimentStore(_workspace.ExperimentStorePath);
+            var reverts = new ConductorExperimentFlagRevertController(writableExperiments,
                 () => SqliteOperatorIntentStore.ForDirectories(_workspace.OrchestratorDirectory, _workspace.LogDirectory),
                 flags);
-            var keeps = new ConductorExperimentFlagKeepController(experiments,
+            var keeps = new ConductorExperimentFlagKeepController(writableExperiments,
                 () => new BacklogStore(_workspace.BacklogStorePath), flags);
             foreach (var record in open)
             {
