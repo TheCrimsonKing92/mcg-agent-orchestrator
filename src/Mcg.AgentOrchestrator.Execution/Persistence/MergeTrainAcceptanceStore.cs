@@ -14,59 +14,103 @@ public sealed class MergeTrainAcceptanceStore
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly string _databasePath;
+    private readonly bool _readOnly;
 
-    public MergeTrainAcceptanceStore(string databasePath)
+    public MergeTrainAcceptanceStore(string databasePath) : this(databasePath, readOnly: false)
+    {
+        Setup(_databasePath);
+    }
+
+    private MergeTrainAcceptanceStore(string databasePath, bool readOnly)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(databasePath);
         _databasePath = Path.GetFullPath(databasePath);
-        Directory.CreateDirectory(Path.GetDirectoryName(_databasePath)!);
-        using var connection = Open();
-        using var command = connection.CreateCommand();
-        command.CommandText = """
-            CREATE TABLE IF NOT EXISTS merge_train_receipts(
-                train_id TEXT PRIMARY KEY,
-                receipt_id TEXT NOT NULL UNIQUE,
-                payload_json TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS merge_train_landings(
-                train_id TEXT PRIMARY KEY REFERENCES merge_train_receipts(train_id),
-                receipt_id TEXT NOT NULL,
-                commit_revision TEXT NOT NULL,
-                prior_integration_revision TEXT NULL,
-                state TEXT NOT NULL CHECK(state IN ('prepared','finalized')),
-                updated_at TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS merge_train_ejections(
-                ejection_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                train_attempt_id TEXT NOT NULL,
-                goal_id TEXT NOT NULL,
-                reason TEXT NOT NULL,
-                conflict_paths_json TEXT NOT NULL,
-                detail TEXT NOT NULL,
-                recorded_at TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS merge_train_implicated_candidates(
-                goal_id TEXT NOT NULL,
-                candidate_revision TEXT NOT NULL,
-                train_id TEXT NOT NULL,
-                observed_main_revision TEXT NOT NULL,
-                recorded_at TEXT NOT NULL,
-                PRIMARY KEY(goal_id, candidate_revision));
-            CREATE TABLE IF NOT EXISTS merge_train_pair_suppressions(
-                pair_fingerprint TEXT PRIMARY KEY,
-                train_id TEXT NOT NULL,
-                created_at TEXT NOT NULL);
-            """;
-        command.ExecuteNonQuery();
-        EnsureMemberIndex(connection);
+        _readOnly = readOnly;
     }
 
-    private static void EnsureMemberIndex(SqliteConnection connection)
+    public static MergeTrainAcceptanceStore OpenReadOnly(string dbPath)
     {
+        if (!File.Exists(dbPath))
+            throw SchemaSetupRequired(dbPath, StoreSchemaState.Missing);
+
+        var store = new MergeTrainAcceptanceStore(dbPath, readOnly: true);
+        using var connection = store.Open();
+        var state = StoreSchemaVersions.Verify(connection, StoreSchemaRegistry.MergeTrainAcceptance);
+        if (state != StoreSchemaState.Current)
+            throw SchemaSetupRequired(dbPath, state);
+        return store;
+    }
+
+    private static InvalidOperationException SchemaSetupRequired(string dbPath, StoreSchemaState state) =>
+        new($"Merge train acceptance store '{dbPath}' schema is {state} (expected version {StoreSchemaRegistry.MergeTrainAcceptance.CurrentVersion}); run setup.");
+
+    public static void Setup(string dbPath)
+    {
+        var directory = Path.GetDirectoryName(dbPath);
+        if (!string.IsNullOrEmpty(directory))
+            Directory.CreateDirectory(directory);
+        using var connection = OpenConnection(dbPath, readOnly: false);
+        var state = StoreSchemaVersions.Verify(connection, StoreSchemaRegistry.MergeTrainAcceptance);
+        if (state == StoreSchemaState.Newer)
+            return;
+
         using var transaction = connection.BeginTransaction(deferred: false);
+        try
+        {
+            using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = """
+                CREATE TABLE IF NOT EXISTS merge_train_receipts(
+                    train_id TEXT PRIMARY KEY,
+                    receipt_id TEXT NOT NULL UNIQUE,
+                    payload_json TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS merge_train_landings(
+                    train_id TEXT PRIMARY KEY REFERENCES merge_train_receipts(train_id),
+                    receipt_id TEXT NOT NULL,
+                    commit_revision TEXT NOT NULL,
+                    prior_integration_revision TEXT NULL,
+                    state TEXT NOT NULL CHECK(state IN ('prepared','finalized')),
+                    updated_at TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS merge_train_ejections(
+                    ejection_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    train_attempt_id TEXT NOT NULL,
+                    goal_id TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    conflict_paths_json TEXT NOT NULL,
+                    detail TEXT NOT NULL,
+                    recorded_at TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS merge_train_implicated_candidates(
+                    goal_id TEXT NOT NULL,
+                    candidate_revision TEXT NOT NULL,
+                    train_id TEXT NOT NULL,
+                    observed_main_revision TEXT NOT NULL,
+                    recorded_at TEXT NOT NULL,
+                    PRIMARY KEY(goal_id, candidate_revision));
+                CREATE TABLE IF NOT EXISTS merge_train_pair_suppressions(
+                    pair_fingerprint TEXT PRIMARY KEY,
+                    train_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL);
+                """;
+            command.ExecuteNonQuery();
+            EnsureMemberIndex(connection, transaction);
+            if (state != StoreSchemaState.Current)
+                StoreSchemaVersions.UpgradeToCurrent(connection, StoreSchemaRegistry.MergeTrainAcceptance);
+            transaction.Commit();
+        }
+        catch
+        {
+            try { transaction.Rollback(); } catch { }
+            throw;
+        }
+    }
+
+    private static void EnsureMemberIndex(SqliteConnection connection, SqliteTransaction transaction)
+    {
         using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='merge_train_receipt_members';";
         if ((long)command.ExecuteScalar()! != 0)
         {
-            transaction.Commit();
             return;
         }
 
@@ -104,7 +148,6 @@ public sealed class MergeTrainAcceptanceStore
                 WriteReceiptMembers(connection, transaction, row.TrainId, dto.Members);
             }
         }
-        transaction.Commit();
     }
 
     private static void WriteReceiptMembers(
@@ -396,13 +439,15 @@ public sealed class MergeTrainAcceptanceStore
         }
     }
 
-    private SqliteConnection Open()
+    private SqliteConnection Open() => OpenConnection(_databasePath, _readOnly);
+
+    private static SqliteConnection OpenConnection(string dbPath, bool readOnly)
     {
         var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
-            DataSource = _databasePath,
-            Mode = SqliteOpenMode.ReadWriteCreate,
-            Cache = SqliteCacheMode.Shared,
+            DataSource = dbPath,
+            Mode = readOnly ? SqliteOpenMode.ReadOnly : SqliteOpenMode.ReadWriteCreate,
+            Cache = readOnly ? SqliteCacheMode.Default : SqliteCacheMode.Shared,
             Pooling = false
         }.ConnectionString);
         connection.Open();

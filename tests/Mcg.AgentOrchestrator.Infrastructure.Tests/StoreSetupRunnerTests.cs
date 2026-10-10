@@ -36,6 +36,9 @@ public sealed class StoreSetupRunnerTests
         var backlog = Assert.Single(results, result => result.StoreName == "backlog");
         Assert.Equal(workspace.BacklogStorePath, backlog.DatabasePath);
         Assert.Equal(1, backlog.Version);
+        var mergeTrain = Assert.Single(results, result => result.StoreName == "merge-train-acceptance");
+        Assert.Equal(Path.Combine(workspace.OrchestratorDirectory, "merge-train-acceptance.db"), mergeTrain.DatabasePath);
+        Assert.Equal(1, mergeTrain.Version);
         var dogfood = Assert.Single(results, result => result.StoreName == "dogfood-log");
         Assert.Equal(workspace.DogfoodLogStorePath, dogfood.DatabasePath);
         Assert.Equal(1, dogfood.Version);
@@ -45,7 +48,7 @@ public sealed class StoreSetupRunnerTests
             Assert.Contains(Path.GetFileName(path), new[] { "portfolio.db", "portfolio.db-wal", "portfolio.db-shm",
                 "experiments.db", "backlog.db", "backlog.db-wal", "backlog.db-shm",
                 "operator-intents.db", "operator-intents.db-wal", "operator-intents.db-shm",
-                "operator-lessons.db", "operator-escapes.db", "follower-gate-acceptance.db",
+                "operator-lessons.db", "operator-escapes.db", "merge-train-acceptance.db", "follower-gate-acceptance.db",
                 "dogfood-log.db", "dogfood-log.db-wal", "dogfood-log.db-shm", "progressive-review-steering.db" }));
         Assert.Empty(await DogfoodLogStore.OpenReadOnly(workspace.DogfoodLogStorePath).ListRecentAsync());
         Assert.Empty(await ExperimentStore.OpenReadOnly(workspace.ExperimentStorePath).ListAllAsync());
