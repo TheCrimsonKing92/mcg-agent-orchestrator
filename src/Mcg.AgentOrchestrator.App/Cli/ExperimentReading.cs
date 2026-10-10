@@ -9,7 +9,7 @@ internal sealed record ExperimentMetricReading(string Metric, double? Before, do
 
 internal sealed record ExperimentReadingResult(int? ObservedCount, ExperimentStopRule StopRule,
     bool StopRuleMet, IReadOnlyList<ExperimentMetricReading> Metrics, string Verdict, string Reason,
-    bool GuardrailBreached, string? Goals = null, string? GoalsLabel = null);
+    bool GuardrailBreached, string? Goals = null, string? GoalsLabel = null, int? StopTarget = null);
 
 internal static class ExperimentGoals
 {
@@ -37,11 +37,12 @@ internal static class ExperimentReading
                 g.Tasks.SelectMany(t => t.DispatchHistory).Select(d => (DateTimeOffset?)d.DispatchedAt)
                     .Max() is { } at && at >= start && at < asOf)
             : spec.StopRule.Unit == ExperimentStopUnit.Gates ? observedGateCount : (int?)null;
-        var stopRuleMet = observed is { } n && n >= spec.StopRule.Count;
+        var target = ExperimentStopTarget.Effective(spec.StopRule);
+        var stopRuleMet = observed is { } n && n >= target;
         if (spec.Baseline.Kind == ExperimentBaselineKind.AlternatingGates)
         {
             return new(observed, spec.StopRule, stopRuleMet, [], "unavailable",
-                $"baseline kind {Name(spec.Baseline.Kind)} not computable in this slice", false);
+                $"baseline kind {Name(spec.Baseline.Kind)} not computable in this slice", false, StopTarget: target);
         }
 
         IReadOnlyDictionary<string, (double? Before, double? After)> values;
@@ -95,7 +96,7 @@ internal static class ExperimentReading
             return new(observed, spec.StopRule, stopRuleMet, metrics, "inconclusive",
                 $"unavailable comparison or zero baseline: {string.Join(", ", missing)}" +
                 (twin is { Diagnostics.Count: > 0 } ? $"; {string.Join("; ", twin.Diagnostics)}" : ""),
-                guardrail == true, twin?.Goals, spec.Baseline.Kind == ExperimentBaselineKind.GoalCohort ? "cohort goals" : null);
+                guardrail == true, twin?.Goals, spec.Baseline.Kind == ExperimentBaselineKind.GoalCohort ? "cohort goals" : null, target);
         }
         var keepHolds = keep.All(v => v == true);
         var revertHolds = revert.All(v => v == true);
@@ -108,14 +109,15 @@ internal static class ExperimentReading
             reason += $"; guardrail breached: {spec.Guardrail.Metric} baseline={Format(value.Before)} comparison={Format(value.After)}";
         }
         return new(observed, spec.StopRule, stopRuleMet, metrics, verdict, reason, guardrail == true, twin?.Goals,
-            spec.Baseline.Kind == ExperimentBaselineKind.GoalCohort ? "cohort goals" : null);
+            spec.Baseline.Kind == ExperimentBaselineKind.GoalCohort ? "cohort goals" : null, target);
     }
 
     internal static DateTimeOffset ComparisonStart(ExperimentRecord record) => record.Spec.Baseline.Until ?? record.CreatedAt;
 
     internal static void Render(ExperimentReadingResult result)
     {
-        var progress = result.ObservedCount is { } count ? $"{count} of {result.StopRule.Count}" : $"unavailable of {result.StopRule.Count}";
+        var target = result.StopTarget ?? ExperimentStopTarget.Effective(result.StopRule);
+        var progress = result.ObservedCount is { } count ? $"{count} of {target}" : $"unavailable of {target}";
         var met = result.ObservedCount is not null ? result.StopRuleMet ? "met" : "not met" : "progress unavailable";
         Console.WriteLine($"stop rule: {progress} {Name(result.StopRule.Unit)} ({met})");
         if (result.Goals is not null) Console.WriteLine($"{result.GoalsLabel ?? "twin goals"}: {result.Goals}");

@@ -63,6 +63,7 @@ internal static class CliCommandHelp
     public const string ExperimentAddUsage = "Usage: experiment-add --spec <path>";
     public const string ExperimentShowUsage = "Usage: experiment-show <experiment> [--as-of <timestamp-with-offset>]";
     public const string ExperimentDecideUsage = "Usage: experiment-decide <experiment> --outcome <confirmed|refuted|inconclusive> --evidence <reference> --action <text>";
+    public const string ExperimentExtendUsage = "Usage: experiment-extend <experiment> --count <n> --reason <text>";
     public const string ExperimentApplyFlagUsage = "Usage: experiment-apply-flag <experiment> [--operator-actor <actor>] [--actor-kind <human|agent>] [--idempotency-key <key>]";
     public const string EpicRenameUsage = "Usage: epic-rename <epic> <new-title>";
     public const string EpicDescribeUsage = "Usage: epic-describe <epic> <text> | epic-describe <epic> --text-file <path>";
@@ -467,6 +468,8 @@ internal static class CliCommandHelp
         ExperimentShowUsage, "Show an experiment, a freshly computed reading, and its separate stored outcome; append overlaps: entries or overlaps: none. " + ExperimentOverlapHelp, ["--as-of", "--help", "-h"]);
     private static readonly CommandHelpEntry ExperimentDecide = new(
         ExperimentDecideUsage, "Record evidence and action once on an open experiment.", ["--outcome", "--evidence", "--action", "--help", "-h"]);
+    private static readonly CommandHelpEntry ExperimentExtend = new(
+        ExperimentExtendUsage, "Record a longer stop target and reason on an open experiment.", ["--count", "--reason", "--help", "-h"]);
     private static readonly CommandHelpEntry ExperimentApplyFlag = new(
         ExperimentApplyFlagUsage, "Queue a workspace Mutate-tier intent to apply a boolean policy flag. The conductor captures its prior value; an eligible keep reading at the stop rule records confirmed and files a make-permanent backlog item.",
         ["--operator-actor", "--actor-kind", "--idempotency-key", "--help", "-h"]);
@@ -1344,6 +1347,7 @@ internal static class CliCommandHelp
         if (args[0].Equals("experiment-add", StringComparison.OrdinalIgnoreCase)) { entry = ExperimentAdd; return true; }
         if (args[0].Equals("experiment-show", StringComparison.OrdinalIgnoreCase)) { entry = ExperimentShow; return true; }
         if (args[0].Equals("experiment-decide", StringComparison.OrdinalIgnoreCase)) { entry = ExperimentDecide; return true; }
+        if (args[0].Equals("experiment-extend", StringComparison.OrdinalIgnoreCase)) { entry = ExperimentExtend; return true; }
         if (args[0].Equals("experiment-apply-flag", StringComparison.OrdinalIgnoreCase)) { entry = ExperimentApplyFlag; return true; }
         if (args[0].Equals("epic-add", StringComparison.OrdinalIgnoreCase))
         {

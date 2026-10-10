@@ -27,7 +27,7 @@ public sealed class OwnerExperimentReadingQuestionTests
             "Experiment 1a2b3c4d reading due: stop rule reached",
             "keep: confirm the result with experiment-decide 1a2b3c4d --outcome confirmed --evidence <reference> --action <text>",
             "revert: refute it with experiment-decide 1a2b3c4d --outcome refuted --evidence <reference> --action <text>",
-            "extend: do nothing now; the question stays open until you decide",
+            "extend: wait for more evidence with experiment-extend 1a2b3c4d --count <n> --reason <text>",
             "show: run experiment-show 1a2b3c4d to print the reading"
         }, question.Text.Split('\n'));
         Assert.DoesNotContain(StopId, question.Text);

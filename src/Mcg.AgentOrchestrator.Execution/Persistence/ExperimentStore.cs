@@ -13,7 +13,7 @@ public sealed record ExperimentIntervention(ExperimentInterventionKind Kind, str
 public sealed record ExperimentBaseline(ExperimentBaselineKind Kind, DateTimeOffset? Since = null,
     DateTimeOffset? Until = null, string? TwinGoalId = null, string? ComparisonGoalId = null,
     IReadOnlyList<string>? BaselineGoalIds = null, IReadOnlyList<string>? ComparisonGoalIds = null);
-public sealed record ExperimentStopRule(int Count, ExperimentStopUnit Unit);
+public sealed record ExperimentStopRule(int Count, ExperimentStopUnit Unit, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<ExperimentStopExtension>? Extensions = null);
 public sealed record ExperimentCondition(string Metric, string Op, [property: JsonRequired] double ChangePercent);
 public sealed record ExperimentDecisionRule(IReadOnlyList<ExperimentCondition> KeepIf, IReadOnlyList<ExperimentCondition> RevertIf);
 public sealed record ExperimentGuardrail(string Metric, ExperimentCondition BreachIf);
@@ -185,6 +185,31 @@ public sealed class ExperimentStore
         write.Parameters.AddWithValue("$old", oldJson);
         write.Parameters.AddWithValue("$new", JsonSerializer.Serialize(intervention with
             { FlagTarget = intervention.FlagTarget with { PriorValue = prior } }, JsonOptions));
+        return await write.ExecuteNonQueryAsync(cancellationToken) == 1;
+    }
+
+    public async Task<bool> ExtendStopRuleAsync(string id, int newCount, string reason, DateTimeOffset at,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(reason)) throw new ArgumentException("reason: text is required.");
+        using var connection = Open();
+        using var read = connection.CreateCommand();
+        read.CommandText = "SELECT stop_rule_json FROM experiments WHERE id=$id AND outcome='open'";
+        read.Parameters.AddWithValue("$id", id);
+        if (await read.ExecuteScalarAsync(cancellationToken) is not string oldJson)
+            throw new InvalidOperationException($"Experiment '{id}' is already decided or does not exist.");
+        var rule = JsonSerializer.Deserialize<ExperimentStopRule>(oldJson, JsonOptions)
+            ?? throw new InvalidDataException($"Experiment '{id}' has missing stored stop rule.");
+        var effective = ExperimentStopTarget.Effective(rule);
+        if (newCount <= effective)
+            throw new ArgumentException($"count: must be greater than the current stop target {effective}.");
+        var extension = new ExperimentStopExtension(effective, newCount, reason.Trim(), at);
+        using var write = connection.CreateCommand();
+        write.CommandText = "UPDATE experiments SET stop_rule_json=$new WHERE id=$id AND outcome='open' AND stop_rule_json=$old";
+        write.Parameters.AddWithValue("$id", id);
+        write.Parameters.AddWithValue("$old", oldJson);
+        write.Parameters.AddWithValue("$new", JsonSerializer.Serialize(rule with
+            { Extensions = [..(rule.Extensions ?? []), extension] }, JsonOptions));
         return await write.ExecuteNonQueryAsync(cancellationToken) == 1;
     }
 

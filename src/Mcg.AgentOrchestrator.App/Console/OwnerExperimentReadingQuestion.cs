@@ -29,7 +29,7 @@ internal static class OwnerExperimentReadingQuestion
         var text = $"Experiment {id} reading due: {trigger}\n" +
             $"keep: confirm the result with experiment-decide {id} --outcome confirmed --evidence <reference> --action <text>\n" +
             $"revert: refute it with experiment-decide {id} --outcome refuted --evidence <reference> --action <text>\n" +
-            "extend: do nothing now; the question stays open until you decide\n" +
+            $"extend: wait for more evidence with experiment-extend {id} --count <n> --reason <text>\n" +
             $"show: run experiment-show {id} to print the reading";
         return new OwnerQuestion(item.Id, "", OwnerQuestionKind.ExperimentReading, text);
     }

@@ -8,7 +8,7 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 internal static class CliExperimentCommands
 {
     internal static bool IsCommand(string command) =>
-        command.ToLowerInvariant() is "experiment-add" or "experiment-show" or "experiment-decide" or "experiment-apply-flag";
+        command.ToLowerInvariant() is "experiment-add" or "experiment-show" or "experiment-decide" or "experiment-extend" or "experiment-apply-flag";
 
     internal static bool? TryExecute(string command, IReadOnlyList<string> parts, CliExecutionContext context)
     {
@@ -71,6 +71,17 @@ internal static class CliExperimentCommands
             var action = RequiredExperimentOption(options, "--action");
             ExperimentDecisionApplier.Decide(store, record.Id, outcome, evidence, action);
             Console.WriteLine($"outcome: {outcomeText} (experiment {record.Id})");
+            return false;
+        }
+        if (command == "experiment-extend")
+        {
+            var countText = RequiredExperimentOption(options, "--count");
+            if (!int.TryParse(countText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var count))
+                throw new ArgumentException("count: expected a whole number.");
+            var reason = RequiredExperimentOption(options, "--reason");
+            var updated = ExperimentExtensionApplier.Extend(store, record.Id, count, reason, DateTimeOffset.UtcNow);
+            var extension = updated.Spec.StopRule.Extensions!.Single(entry => entry.NewCount == count);
+            Console.WriteLine($"stop rule extended: {extension.FromCount} to {extension.NewCount} (experiment {updated.Id})");
             return false;
         }
         var asOf = DateTimeOffset.UtcNow;
@@ -162,6 +173,8 @@ internal static class CliExperimentCommands
         ValidateExperimentCondition(spec.Guardrail.BreachIf, [spec.Guardrail.Metric], "guardrail.breachIf");
         if (spec.StopRule is null || !Enum.IsDefined(spec.StopRule.Unit)) throw new ArgumentException("stopRule.unit: expected gates, goals or ticks.");
         if (spec.StopRule.Count <= 0) throw new ArgumentException("stopRule.count: must be positive.");
+        if (spec.StopRule.Extensions is not null)
+            throw new ArgumentException("stopRule.extensions: recorded by experiment-extend; must not be supplied.");
         if (spec.DecisionRule is null) throw new ArgumentException("decisionRule: required.");
         ValidateExperimentConditions(spec.DecisionRule.KeepIf, spec.Metrics, "decisionRule.keepIf");
         ValidateExperimentConditions(spec.DecisionRule.RevertIf, spec.Metrics, "decisionRule.revertIf");
@@ -227,6 +240,8 @@ internal static class CliExperimentCommands
         Console.WriteLine($"metrics: {string.Join(", ", spec.Metrics)}");
         Console.WriteLine($"guardrail: {JsonSerializer.Serialize(spec.Guardrail, ExperimentStore.JsonOptions)}");
         Console.WriteLine($"stop rule target: {spec.StopRule.Count} {ExperimentReading.Name(spec.StopRule.Unit)}");
+        foreach (var extension in spec.StopRule.Extensions ?? [])
+            Console.WriteLine($"stop rule extension: {extension.FromCount} to {extension.NewCount} at {extension.ExtendedAt:O}: {extension.Reason}");
         Console.WriteLine($"decision rule: {JsonSerializer.Serialize(spec.DecisionRule, ExperimentStore.JsonOptions)}");
         Console.WriteLine($"epic id: {spec.EpicId ?? "none"}");
         Console.WriteLine($"decision evidence: {record.Decision?.Evidence ?? "none"}");

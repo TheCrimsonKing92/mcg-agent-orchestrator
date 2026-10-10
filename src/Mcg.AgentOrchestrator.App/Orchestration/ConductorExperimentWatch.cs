@@ -50,7 +50,11 @@ internal sealed class ConductorExperimentWatch
                         item.CorrelationKey is not { } key || !key.StartsWith(KeyPrefix, StringComparison.Ordinal)) continue;
                     var parts = key[KeyPrefix.Length..].Split(':');
                     if (parts.Length == 2 && parts[0].Length == 32 && Triggers.Contains(parts[1]))
+                    {
+                        if (parts[1] == "stop-rule" && CollaborationItemLifecycle.IsTerminal(item.Status) &&
+                            item.Resolution?.Contains(" stop rule extended to ", StringComparison.Ordinal) == true) continue;
                         _raised.Add((parts[0], parts[1]));
+                    }
                 }
                 _rehydrated = true;
             }
@@ -94,6 +98,15 @@ internal sealed class ConductorExperimentWatch
                 {
                     var reading = ExperimentReading.Evaluate(record, goals, landings, intents, asOf,
                         ExperimentGateAttempts.Count(gateAttempts, ExperimentReading.ComparisonStart(record), asOf));
+                    try
+                    {
+                        if (!reading.StopRuleMet && _raised.Contains((record.Id, "stop-rule")) &&
+                            items.TryResolveAsync(Key(record.Id, "stop-rule"),
+                                $"experiment {record.Id} stop rule extended to {ExperimentStopTarget.Effective(record.Spec.StopRule)}")
+                                .GetAwaiter().GetResult())
+                            _raised.Remove((record.Id, "stop-rule"));
+                    }
+                    catch (Exception error) { LogFailure(error); }
                     try { if (reverts.TryRevert(record, reading, asOf)) continue; }
                     catch (Exception error) { LogFailure(error); }
                     try { if (keeps.TryKeep(record, reading, asOf)) continue; }

@@ -26,6 +26,7 @@ public sealed class CliHandledVerbRegistryTests
     [InlineData("operator-intent-status")]
     [InlineData("model-outcomes")]
     [InlineData("experiment-apply-flag")]
+    [InlineData("experiment-extend")]
     [InlineData("stop")]
     public void HandledVerbsAreRecognized(string verb)
     {
