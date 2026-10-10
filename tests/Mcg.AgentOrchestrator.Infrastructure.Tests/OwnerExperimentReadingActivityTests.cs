@@ -4,12 +4,13 @@ using Mcg.AgentOrchestrator.Core;
 // Parallel-safe: pure event inputs and per-test state with an explicit clock.
 public sealed class OwnerExperimentReadingActivityTests
 {
-    private const string ExperimentId = "1a2b3c4d0123456789abcdef0123456789";
+    private const string ExperimentId = "1a2b3c4d0123456789abcdef01234567";
     private const string ExperimentPrefix = "1a2b3c4d";
 
     [Fact]
     public void BothTriggersNameTheExperimentCountAndResultCommandsWithoutInternalTerms()
     {
+        Assert.Equal(32, ExperimentId.Length);
         var stopRule = ReadingDue("stop-rule", "10");
         var guardrail = ReadingDue("guardrail", "unavailable");
         Assert.True(OwnerActivityNarrator.Maps(stopRule));
