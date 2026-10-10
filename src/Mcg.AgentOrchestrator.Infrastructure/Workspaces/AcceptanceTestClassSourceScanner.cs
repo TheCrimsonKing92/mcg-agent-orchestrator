@@ -70,6 +70,7 @@ internal static class AcceptanceTestClassSourceScanner
         var testRoot = Path.Combine(worktreePath, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests");
         if (!Directory.Exists(testRoot))
         {
+            AcceptanceTestClassSourceCache.Current.Forget(worktreePath);
             return [];
         }
 
@@ -82,30 +83,15 @@ internal static class AcceptanceTestClassSourceScanner
                 .Any(part => part is "bin" or "obj"))
             .Order(StringComparer.Ordinal)
             .ToArray();
-        var roots = files.Select(path => CSharpSyntaxTree.ParseText(File.ReadAllText(path)).GetRoot()).ToArray();
-        var constants = roots.SelectMany(root => root.DescendantNodes().OfType<FieldDeclarationSyntax>())
-            .Where(field => field.Parent is ClassDeclarationSyntax)
-            .Where(field => field.Modifiers.Any(SyntaxKind.ConstKeyword) &&
-                            field.Declaration.Type.ToString() == "string")
-            .SelectMany(field => field.Declaration.Variables.Select(variable => new
-            {
-                Owner = ((ClassDeclarationSyntax)field.Parent!).Identifier.ValueText,
-                Variable = variable
-            }))
-            .Where(item => item.Variable.Initializer?.Value is LiteralExpressionSyntax)
-            .GroupBy(item => $"{item.Owner}.{item.Variable.Identifier.ValueText}", StringComparer.Ordinal)
+        var extracts = AcceptanceTestClassSourceCache.Current.Extract(worktreePath, files, ExtractFile);
+        var constants = extracts.SelectMany(extract => extract.Constants)
+            .GroupBy(item => item.Key, StringComparer.Ordinal)
             .ToDictionary(group => group.Key,
-                group => group.Select(item => ((LiteralExpressionSyntax)item.Variable.Initializer!.Value).Token.ValueText)
-                    .Distinct(StringComparer.Ordinal).ToArray(), StringComparer.Ordinal);
+                group => group.Select(item => item.Value).Distinct(StringComparer.Ordinal).ToArray(), StringComparer.Ordinal);
 
-        var classes = roots.SelectMany(root => root.DescendantNodes().OfType<ClassDeclarationSyntax>())
-            .Select(node => new SourceClass(
-                NameOf(node),
-                node.Identifier.ValueText,
-                node.Modifiers.Any(SyntaxKind.AbstractKeyword),
-                node.BaseList?.Types.FirstOrDefault()?.Type.ToString().Split('.').Last(),
-                HasFacts(node),
-                CollectionOf(node, constants)))
+        var classes = extracts.SelectMany(extract => extract.Classes)
+            .Select(item => new SourceClass(item.FullName, item.ShortName, item.Abstract, item.BaseName,
+                item.HasFacts, ResolveCollection(item.FullName, item.Collection, constants)))
             .GroupBy(item => item.FullName, StringComparer.Ordinal)
             .Select(group => group.Aggregate((left, right) => left with
             {
@@ -121,6 +107,35 @@ internal static class AcceptanceTestClassSourceScanner
             .Select(item => new AcceptanceTestClassDescriptor(item.FullName, InheritedCollection(item, byName, [])))
             .OrderBy(item => item.FullName, StringComparer.Ordinal)
             .ToArray();
+    }
+
+    private static FileExtract ExtractFile(string path)
+    {
+        var root = CSharpSyntaxTree.ParseText(File.ReadAllText(path)).GetRoot();
+        var constants = root.DescendantNodes().OfType<FieldDeclarationSyntax>()
+            .Where(field => field.Parent is ClassDeclarationSyntax)
+            .Where(field => field.Modifiers.Any(SyntaxKind.ConstKeyword) &&
+                            field.Declaration.Type.ToString() == "string")
+            .SelectMany(field => field.Declaration.Variables.Select(variable => new
+            {
+                Owner = ((ClassDeclarationSyntax)field.Parent!).Identifier.ValueText,
+                Variable = variable
+            }))
+            .Where(item => item.Variable.Initializer?.Value is LiteralExpressionSyntax)
+            .Select(item => new ConstantExtract($"{item.Owner}.{item.Variable.Identifier.ValueText}",
+                ((LiteralExpressionSyntax)item.Variable.Initializer!.Value).Token.ValueText))
+            .ToArray();
+
+        var classes = root.DescendantNodes().OfType<ClassDeclarationSyntax>()
+            .Select(node => new ClassExtract(
+                NameOf(node),
+                node.Identifier.ValueText,
+                node.Modifiers.Any(SyntaxKind.AbstractKeyword),
+                node.BaseList?.Types.FirstOrDefault()?.Type.ToString().Split('.').Last(),
+                HasFacts(node),
+                ExtractCollection(node)))
+            .ToArray();
+        return new FileExtract(constants, classes);
     }
 
     private static string NameOf(ClassDeclarationSyntax node)
@@ -139,35 +154,50 @@ internal static class AcceptanceTestClassSourceScanner
                 attribute.Name.ToString().Split('.').Last() is "Fact" or "FactAttribute" or
                     "Theory" or "TheoryAttribute"));
 
-    private static string? CollectionOf(ClassDeclarationSyntax node, IReadOnlyDictionary<string, string[]> constants)
+    private static CollectionExpression ExtractCollection(ClassDeclarationSyntax node)
     {
         var attribute = node.AttributeLists.SelectMany(list => list.Attributes)
             .FirstOrDefault(item => item.Name.ToString().Split('.').Last() is "Collection" or "CollectionAttribute");
         if (attribute is null)
         {
-            return null;
+            return new(CollectionExpressionKind.None, null);
         }
         var expression = attribute.ArgumentList?.Arguments.FirstOrDefault()?.Expression;
-        var value = expression switch
+        return expression switch
         {
-            LiteralExpressionSyntax literal when literal.IsKind(SyntaxKind.StringLiteralExpression) => literal.Token.ValueText,
+            LiteralExpressionSyntax literal when literal.IsKind(SyntaxKind.StringLiteralExpression) =>
+                new(CollectionExpressionKind.Literal, literal.Token.ValueText),
             InvocationExpressionSyntax invocation when invocation.Expression.ToString() == "nameof" =>
-                invocation.ArgumentList.Arguments.FirstOrDefault()?.Expression.ToString().Split('.').Last(),
-            MemberAccessExpressionSyntax member when constants.TryGetValue(member.ToString(), out var resolved) &&
-                                                     resolved.Length == 1 => resolved[0],
-            IdentifierNameSyntax identifier => ResolveUnqualifiedConstant(identifier.Identifier.ValueText, constants),
+                new(CollectionExpressionKind.NameOf,
+                    invocation.ArgumentList.Arguments.FirstOrDefault()?.Expression.ToString().Split('.').Last()),
+            MemberAccessExpressionSyntax member => new(CollectionExpressionKind.Member, member.ToString()),
+            IdentifierNameSyntax identifier => new(CollectionExpressionKind.Identifier, identifier.Identifier.ValueText),
+            _ => new(CollectionExpressionKind.Unresolvable, null)
+        };
+    }
+
+    private static string? ResolveCollection(string fullName, CollectionExpression expression,
+        IReadOnlyDictionary<string, string[]> constants)
+    {
+        if (expression.Kind == CollectionExpressionKind.None) return null;
+        var value = expression.Kind switch
+        {
+            CollectionExpressionKind.Literal or CollectionExpressionKind.NameOf => expression.Value,
+            CollectionExpressionKind.Member when constants.TryGetValue(expression.Value!, out var resolved) &&
+                                                 resolved.Length == 1 => resolved[0],
+            CollectionExpressionKind.Identifier => ResolveUnqualifiedConstant(expression.Value!, constants),
             _ => null
         };
-        if (value is null && expression switch
+        if (value is null && expression.Kind switch
             {
-                MemberAccessExpressionSyntax member => constants.TryGetValue(member.ToString(), out var values) &&
-                                                       values.Length > 1,
-                IdentifierNameSyntax identifier => constants.Any(item =>
-                    item.Key.EndsWith($".{identifier.Identifier.ValueText}", StringComparison.Ordinal) &&
+                CollectionExpressionKind.Member => constants.TryGetValue(expression.Value!, out var values) &&
+                                                   values.Length > 1,
+                CollectionExpressionKind.Identifier => constants.Any(item =>
+                    item.Key.EndsWith($".{expression.Value}", StringComparison.Ordinal) &&
                     item.Value.Length > 1),
                 _ => false
             }) return null;
-        return value ?? throw new InvalidDataException($"Cannot resolve test collection on '{NameOf(node)}'.");
+        return value ?? throw new InvalidDataException($"Cannot resolve test collection on '{fullName}'.");
     }
 
     private static string? ResolveUnqualifiedConstant(string name, IReadOnlyDictionary<string, string[]> constants)
@@ -197,4 +227,12 @@ internal static class AcceptanceTestClassSourceScanner
 
     private sealed record SourceClass(string FullName, string ShortName, bool Abstract, string? BaseName,
         bool HasFacts, string? Collection);
+
+    // Only file-local syntax facts are cached; resolution against other files happens on every scan.
+    internal sealed record FileExtract(IReadOnlyList<ConstantExtract> Constants, IReadOnlyList<ClassExtract> Classes);
+    internal sealed record ConstantExtract(string Key, string Value);
+    internal sealed record ClassExtract(string FullName, string ShortName, bool Abstract, string? BaseName,
+        bool HasFacts, CollectionExpression Collection);
+    internal sealed record CollectionExpression(CollectionExpressionKind Kind, string? Value);
+    internal enum CollectionExpressionKind { None, Literal, NameOf, Member, Identifier, Unresolvable }
 }
