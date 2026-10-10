@@ -1050,7 +1050,7 @@ public static class WorkerResultBlockers
 
     private static string NormalizeWorkerResultLine(string line)
     {
-        return WorkerResultLineUnwrap.Unwrap(line.Trim());
+        return WorkerResultMarkdownEmphasis.Normalize(WorkerResultLineUnwrap.Unwrap(line.Trim()));
     }
 
     private static bool IsWorkerResultOpener(string line)
