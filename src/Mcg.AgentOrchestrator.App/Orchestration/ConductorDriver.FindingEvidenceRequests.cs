@@ -91,7 +91,7 @@ internal sealed partial class ConductorDriver
             {
                 normalizationRefused = true;
                 RecordNotHonoured(
-                    goal.Id, requestingTask, finding, refusalReason, refusalDetail, telemetryCandidateSha);
+                    goal.Id, requestingTask, finding, refusalReason, refusalDetail, telemetryCandidateSha, findingEvidenceEngineSettings);
                 continue;
             }
 
@@ -101,7 +101,7 @@ internal sealed partial class ConductorDriver
             var mergedFinding = ReviewFindingConvergence.ResolveMergedFinding(
                 mergedFindings, round, finding.StableId);
             var priorOutcome = mergedFinding?.EvidenceOutcome;
-            if (priorOutcome is not null && IsPermanentFindingEvidenceRefusal(priorOutcome))
+            if (priorOutcome is not null && IsPermanentFindingEvidenceRefusal(priorOutcome) && FocusedEvidenceInventoryIdentity.StillBinds(priorOutcome, findingEvidenceEngineSettings))
             {
                 continue;
             }
@@ -284,7 +284,7 @@ internal sealed partial class ConductorDriver
             {
                 RecordNotHonoured(
                     goal.Id, requestingTask, finding, reason,
-                    detail, telemetryCandidateSha);
+                    detail, telemetryCandidateSha, findingEvidenceEngineSettings);
             }
             decision = BuildCappedFindingEvidenceDeliveryRetry(
                 goal, requestingTask, telemetryCandidateSha, runnable.Findings, [],
@@ -487,11 +487,11 @@ internal sealed partial class ConductorDriver
         ReviewFinding finding,
         FindingEvidenceNotHonouredReason reason,
         string detail,
-        string candidateSha)
+        string candidateSha, AcceptanceGateEngineSettings? inventorySettings = null)
     {
         _recordFindingEvidenceOutcome(
             goalId, requestingTask.Id, finding.StableId,
-            new FindingEvidenceOutcome(Honoured: false, Reason: reason, Detail: detail), null);
+            FocusedEvidenceInventoryIdentity.NotHonoured(reason, detail, inventorySettings), null);
         _recordFindingEvidenceRequest(
             goalId, requestingTask.Id,
             $"finding-evidence disposition=not-honoured; role={requestingTask.RequiredRole}; task_id={requestingTask.Id}; " +
