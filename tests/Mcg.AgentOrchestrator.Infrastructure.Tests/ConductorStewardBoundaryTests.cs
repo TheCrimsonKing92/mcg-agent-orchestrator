@@ -40,6 +40,6 @@ public sealed class ConductorStewardBoundaryTests
 
     private sealed class ForbiddenFieldNegativeControl
     {
-        private readonly SqliteStewardShadowRecommendationStore? _store;
+        private readonly InMemoryStewardTriageReceiptStore? _store;
     }
 }
