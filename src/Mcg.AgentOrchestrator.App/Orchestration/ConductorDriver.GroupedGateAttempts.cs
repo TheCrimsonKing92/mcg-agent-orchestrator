@@ -8,6 +8,8 @@ internal sealed partial class ConductorDriver
 {
     private ConductorGroupedGateAttemptCoordinator? _groupedGateAttempts;
 
+    internal int CountLiveGroupedGateAttempts() => ConductorLiveGroupedGateCount.Count(_groupedGateAttempts);
+
     internal void EnableOwnedGroupedGateAttempts(
         ConductorGroupedGateAttemptCoordinator? coordinator = null)
     {
