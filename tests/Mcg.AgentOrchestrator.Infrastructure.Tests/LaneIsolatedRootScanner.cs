@@ -12,7 +12,8 @@ internal static class LaneIsolatedRootScanner
     {
         Assert.True(File.Exists(Path.Combine(repository, "config", "acceptance-manifest.json")),
             $"Acceptance manifest missing under '{repository}'.");
-        var lane = Assert.Single(AcceptanceGateEngineSettings.Load(repository).InfrastructureTestLanes,
+        var lanes = AcceptanceGateEngineSettings.Load(repository).InfrastructureTestLanes;
+        var lane = Assert.Single(lanes,
             item => item.Name == laneName);
         var testTypes = assembly.GetTypes()
             .Where(type => !type.IsAbstract && !type.ContainsGenericParameters && (type.IsPublic || type.IsNestedPublic))
@@ -20,8 +21,8 @@ internal static class LaneIsolatedRootScanner
                 .Any(attribute => attribute is Xunit.FactAttribute or Xunit.TheoryAttribute)))
             .ToArray();
         ValidateFilter(lane.Filter, testTypes);
-        var resolvedLanes = AcceptanceLaneMembership.ResolveOwnedCollections([lane],
-            AcceptanceTestClassSourceScanner.Scan(repository));
+        var resolvedLanes = new[] { Assert.Single(AcceptanceLaneMembership.ResolveOwnedCollections(lanes,
+            AcceptanceTestClassSourceScanner.Scan(repository)), item => item.Name == laneName) };
         var classes = testTypes.Where(type => AcceptanceLaneMembership.LanesIncluding(resolvedLanes, type.FullName!).Count > 0)
             .ToArray();
         Assert.NotEmpty(classes);

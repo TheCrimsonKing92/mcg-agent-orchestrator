@@ -76,6 +76,24 @@ public sealed class AcceptanceLaneMembershipTests
     }
 
     [Xunit.Fact]
+    public void IsolatedRootScannerKeepsBreakawayHandoffClassesInLocalOnlyLane()
+    {
+        var root = InfrastructureTestSupport.FindRepositoryRoot();
+        var assembly = typeof(AcceptanceLaneMembershipTests).Assembly;
+        var reducedClasses = LaneIsolatedRootScanner.ResolveLaneClasses(root, "Dotnet build slots", assembly);
+        var localClasses = LaneIsolatedRootScanner.ResolveLaneClasses(root, "Dotnet build slots local-only", assembly);
+        foreach (var type in new[]
+                 {
+                     typeof(DotnetBuildEnvironmentManagerTestsLocalHostOnlyLoopHandoffStdout),
+                     typeof(DotnetBuildEnvironmentManagerTestsLocalHostOnlyLoopHandoffSuppressionFailure)
+                 })
+        {
+            Xunit.Assert.DoesNotContain(type, reducedClasses);
+            Xunit.Assert.Contains(type, localClasses);
+        }
+    }
+
+    [Xunit.Fact]
     public void WildcardRemoteSelectionKeepsHostOnlyBuildSlotsLocal()
     {
         var lanes = AcceptanceGateEngineSettings.Load(InfrastructureTestSupport.FindRepositoryRoot())

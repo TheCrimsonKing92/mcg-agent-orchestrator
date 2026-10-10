@@ -263,6 +263,8 @@ public sealed class AcceptanceGateEngineSettingsTests
                         : lane).ToArray();
         var runnableClasses = typeof(AcceptanceGateEngineSettingsTests).Assembly.GetTypes()
             .Where(IsRunnableTestClass)
+            .Where(type => type != typeof(DotnetBuildEnvironmentManagerTestsLocalHostOnlyLoopHandoffStdout) &&
+                type != typeof(DotnetBuildEnvironmentManagerTestsLocalHostOnlyLoopHandoffSuppressionFailure))
             .Where(type => mutation != "unshared-collection" ||
                 type.GetCustomAttribute<Xunit.CollectionAttribute>(inherit: true)?.Name !=
                     TestCollections.DotnetBuildEnvironmentManagerStaticHooks ||
