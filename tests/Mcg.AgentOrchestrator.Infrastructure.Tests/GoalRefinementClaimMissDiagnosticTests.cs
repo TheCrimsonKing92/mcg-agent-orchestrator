@@ -110,11 +110,22 @@ public sealed class GoalRefinementClaimMissDiagnosticTests
             (_, _) => Task.FromException<OrchestratorStateOutboxProcessingResult>(
                 new InvalidOperationException("failed-receipt")), TestContext.Current.CancellationToken));
 
-        var diagnostic = Describe(fixture);
+        var state = await fixture.Repository.GetOutboxStateAsync(fixture.Message.Id, TestContext.Current.CancellationToken);
+        Assert.NotNull(state);
+        Assert.Equal(OrchestratorStateOutboxStatus.Failed, state.Status);
+        // Failure releases the claim token but retains the last processing start timestamp.
+        Assert.NotNull(state.ProcessingStartedAt);
+        var leaseStartedAt = state.ProcessingStartedAt.Value;
+        var observedAt = leaseStartedAt.AddSeconds(42);
 
-        Assert.StartsWith($"row_state=failed row_created_at={CreatedAt:O} ", diagnostic);
-        Assert.Contains("failed-receipt", diagnostic);
-        Assert.Contains("lease_started_at=none lease_age_seconds=none", diagnostic);
+        var diagnostic = GoalRefinementClaimMissDiagnostic.Describe(
+            fixture.Repository, fixture.Message.Id, () => observedAt, ProcessStartedAt);
+
+        Assert.Equal(
+            $"row_state=failed row_created_at={CreatedAt:O} " +
+            $"lease_started_at={leaseStartedAt:O} lease_age_seconds=42 " +
+            $"row_detail=\"failed-receipt\" observed_at={observedAt:O} process_started_at={ProcessStartedAt:O}",
+            diagnostic);
     }
 
     [Fact]
