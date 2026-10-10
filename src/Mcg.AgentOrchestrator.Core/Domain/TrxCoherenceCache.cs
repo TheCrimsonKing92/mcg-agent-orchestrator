@@ -11,8 +11,27 @@ internal static class TrxCoherenceCache
     private static readonly ConcurrentDictionary<ContentIdentity, bool> Entries = new();
     private static readonly object InsertionLock = new();
     private static long loadCount;
+    private static int storeLoadClaimed;
+    private static Action<PersistedVerdict>? verdictSink;
 
     internal static long LoadCount => Interlocked.Read(ref loadCount);
+
+    internal static bool TryClaimStoreLoad() => Interlocked.CompareExchange(ref storeLoadClaimed, 1, 0) == 0;
+
+    internal static void SetVerdictSink(Action<PersistedVerdict>? sink) => Volatile.Write(ref verdictSink, sink);
+
+    internal static void Seed(PersistedVerdict entry)
+    {
+        var identity = new ContentIdentity(new FileStamp(entry.Path, entry.Length, entry.Ticks), entry.Sha256);
+        lock (InsertionLock)
+        {
+            // Loading never evicts; duplicate keys still take the last verdict in file order.
+            if (Entries.ContainsKey(identity) || Entries.Count < MaxEntries)
+            {
+                Entries[identity] = entry.Verdict;
+            }
+        }
+    }
 
     internal static void Reset()
     {
@@ -20,6 +39,8 @@ internal static class TrxCoherenceCache
         {
             Entries.Clear();
             Interlocked.Exchange(ref loadCount, 0);
+            Interlocked.Exchange(ref storeLoadClaimed, 0);
+            SetVerdictSink(null);
         }
     }
 
@@ -56,6 +77,7 @@ internal static class TrxCoherenceCache
             return false;
         }
 
+        Action<PersistedVerdict>? sink;
         lock (InsertionLock)
         {
             // Serialize only insertions, so concurrent misses cannot overrun the ceiling.
@@ -64,6 +86,15 @@ internal static class TrxCoherenceCache
                 Entries.Clear();
             }
             Entries[identity] = verdict;
+            sink = Volatile.Read(ref verdictSink);
+        }
+        try
+        {
+            // Persistence runs outside the insertion lock and cannot replace the computed verdict.
+            sink?.Invoke(new PersistedVerdict(fullPath, stamp.Length, stamp.LastWriteTimeUtcTicks, identity.Sha256, verdict));
+        }
+        catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException or AccessViolationException))
+        {
         }
         return verdict;
     }
@@ -82,4 +113,5 @@ internal static class TrxCoherenceCache
 
     private readonly record struct FileStamp(string Path, long Length, long LastWriteTimeUtcTicks);
     private readonly record struct ContentIdentity(FileStamp Stamp, string Sha256);
+    internal readonly record struct PersistedVerdict(string Path, long Length, long Ticks, string Sha256, bool Verdict);
 }

@@ -86,6 +86,7 @@ internal sealed partial class ConductorBatchLoop
     private readonly Func<string, ConductorGoalReloadObservation> _goalReloadObservation;
     private readonly TimeSpan _blockedRecheckHeartbeatInterval;
     private readonly OrchestratorWorkspace? _workspace;
+    private readonly Action<string> _loadTrxCoherenceVerdicts;
     // Janitorial phases run only on the conductor loop thread; acceptance work never mutates this state.
     private readonly Dictionary<string, int> _consecutiveJanitorialFailures = new(StringComparer.Ordinal);
     private readonly ConductorSlotContentionHolds _slotContentionHolds = new();
@@ -123,7 +124,8 @@ internal sealed partial class ConductorBatchLoop
         Func<long>? janitorialTimestamp = null,
         Func<string?>? readRelaunchDrainCap = null,
         PromptRolloutWatchCoordinator? promptRolloutWatch = null,
-        Func<TimeSpan>? processCpuTime = null)
+        Func<TimeSpan>? processCpuTime = null,
+        Action<string>? loadTrxCoherenceVerdicts = null)
     {
         _sweep = measuredSweepWithCheckpointHolds is not null
             ? measuredSweepWithCheckpointHolds
@@ -157,6 +159,12 @@ internal sealed partial class ConductorBatchLoop
         _goalReloadObservation = goalReloadObservation ?? (_ => new ConductorGoalReloadObservation.Missing());
         _blockedRecheckHeartbeatInterval = blockedRecheckHeartbeatInterval ?? DefaultBlockedRecheckHeartbeatInterval;
         _workspace = workspace;
+        _loadTrxCoherenceVerdicts = loadTrxCoherenceVerdicts ?? (directory =>
+        {
+            if (workspace is null) return;
+            TrxCoherenceVerdictStore.Load(directory);
+            TrxCoherenceVerdictStore.EnableAppend(directory);
+        });
         _promptRolloutWatch = promptRolloutWatch ?? PromptRolloutWatchCoordinator.CreateDefault(workspace, line => EmitProgress(line));
         _janitorialPhaseProbe = janitorialPhaseProbe;
         _janitorialTimestamp = janitorialTimestamp ?? Stopwatch.GetTimestamp;
@@ -386,6 +394,7 @@ internal sealed partial class ConductorBatchLoop
             previousSuccessfulLandingSink?.Invoke(receipt);
         };
         var workerAdmission = driver.GetWorkerAdmissionSnapshot(policy);
+        _loadTrxCoherenceVerdicts(_workspace?.OrchestratorDirectory ?? leaseDirectory);
         EmitProgress(
             $"LOOP_START policy={Sanitize(policy.Name)} policySource={SanitizeReason(policySource)} maxIterations={maxIterations?.ToString() ?? "none"} " +
             $"maxDurationSeconds={(maxDuration.HasValue ? ((int)maxDuration.Value.TotalSeconds).ToString() : "none")} " +

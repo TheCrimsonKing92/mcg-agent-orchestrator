@@ -169,7 +169,9 @@ internal static class SourceSizeRatchet
             // Goal 6e664238 (backlog c7f9845c) moved conduct-event classification and progress formatting unchanged; measured at 3338 lines.
             // Goal 8c677dd2 (backlog 21450794) split RunParallelAcceptanceBatch into named admission phases; measured at 2686 lines.
             // Goal ae7d1201 extracted shared per-goal operator-intent application; measured at 2675 lines.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2689), // 7e047f78: measured slot-contention hold arm and streak lifecycle.
+            // Goal 7b54219d adds nine startup-wiring lines: the injectable load seam and its invocation
+            // belong before LOOP_START; hash-keyed persistence remains in TrxCoherenceVerdictStore.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2698), // 7e047f78: measured slot-contention hold arm and streak lifecycle.
             // Goal 354522f1 tick persistence partial measured at 467 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.TickPersistence.cs", 467),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.DependencyReadmission.cs", 375),
@@ -429,7 +431,9 @@ internal static class SourceSizeRatchet
             // adds one admission predicate to exclude stream-complete children before slot reservation. Measured 9255.
             // Goal 679eee57 added a one-line tick call to the separately owned ConductorExperimentWatch (+1); goal 80de5cb2 extracted
             // dependency hold evaluation to its own type (-42). Measured 9231 across 56 files after both, no extra headroom.
-            new SourceClassCeiling("ConductorBatchLoop", 9258, 56), // 7e047f78: measured slot-contention hold arm and streak lifecycle; no new partial.
+            // Goal 7b54219d retains only the nine startup-wiring lines needed to load before LOOP_START;
+            // persistence is separately owned. Measured 9267 total lines across the same 56 partial files.
+            new SourceClassCeiling("ConductorBatchLoop", 9267, 56), // 7e047f78: measured slot-contention hold arm and streak lifecycle; no new partial.
             // Goal ec8903af moved the goal-prefix parser to CliGoalPrefixArguments.
             new SourceClassCeiling("CliPersistentStateRunner", 5975, 18),
             // Goal 5935c270 extracts subscription-plan output into SubscriptionPlanTextView
