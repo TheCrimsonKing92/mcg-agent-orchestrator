@@ -24,13 +24,15 @@ public sealed class StoreSchemaRegistryTests
             Assert.False(string.IsNullOrWhiteSpace(entry.Family));
         });
         Assert.Equal(new[] { StoreSchemaRegistry.Portfolio, StoreSchemaRegistry.Experiments, StoreSchemaRegistry.Backlog, StoreSchemaRegistry.OperatorIntents, StoreSchemaRegistry.OperatorLessons,
-            StoreSchemaRegistry.OperatorEscapes, StoreSchemaRegistry.FollowerGateAcceptance, StoreSchemaRegistry.DogfoodLog, StoreSchemaRegistry.ProgressiveReviewSteering }, entries.Where(entry => entry.CurrentVersion.HasValue).ToArray());
+            StoreSchemaRegistry.OperatorEscapes, StoreSchemaRegistry.MergeTrainAcceptance, StoreSchemaRegistry.FollowerGateAcceptance, StoreSchemaRegistry.DogfoodLog, StoreSchemaRegistry.ProgressiveReviewSteering }, entries.Where(entry => entry.CurrentVersion.HasValue).ToArray());
         Assert.Equal(1, StoreSchemaRegistry.FollowerGateAcceptance.CurrentVersion);
         Assert.Equal(1, StoreSchemaRegistry.Experiments.CurrentVersion);
         Assert.Equal("experiments.db", StoreSchemaRegistry.Experiments.Database);
         Assert.Equal("follower-gate-acceptance.db", StoreSchemaRegistry.FollowerGateAcceptance.Database);
         Assert.Equal(1, StoreSchemaRegistry.ProgressiveReviewSteering.CurrentVersion);
         Assert.Equal("progressive-review-steering.db", StoreSchemaRegistry.ProgressiveReviewSteering.Database);
+        Assert.Equal(1, StoreSchemaRegistry.MergeTrainAcceptance.CurrentVersion);
+        Assert.Equal("merge-train-acceptance.db", StoreSchemaRegistry.MergeTrainAcceptance.Database);
         Assert.Equal(1, StoreSchemaRegistry.DogfoodLog.CurrentVersion);
         Assert.Equal("dogfood-log.db", StoreSchemaRegistry.DogfoodLog.Database);
         Assert.Equal(1, StoreSchemaRegistry.OperatorIntents.CurrentVersion);

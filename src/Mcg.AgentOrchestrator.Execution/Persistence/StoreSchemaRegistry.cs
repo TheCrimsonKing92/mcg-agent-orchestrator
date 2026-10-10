@@ -32,6 +32,9 @@ public static class StoreSchemaRegistry
     public static StoreSchemaEntry OperatorEscapes { get; } =
         new("operator-escapes", Persistence + "OperatorEscapeStore.cs", "operator-escapes.db", "backlog", 1);
 
+    public static StoreSchemaEntry MergeTrainAcceptance { get; } =
+        new("merge-train-acceptance", Persistence + "MergeTrainAcceptanceStore.cs", "merge-train-acceptance.db", "cohort", 1);
+
     public static StoreSchemaEntry FollowerGateAcceptance { get; } =
         new("follower-gate-acceptance", Persistence + "FollowerGateAcceptanceStoreSetup.cs", "follower-gate-acceptance.db", "cohort", 1);
 
@@ -53,7 +56,7 @@ public static class StoreSchemaRegistry
         new("cohort-acceptance", Persistence + "CohortAcceptanceStore.cs", "cohort-acceptance.db", "cohort", null),
         new("cohort-attribution-retractions", Persistence + "CohortAcceptanceStore.AttributionRetractions.cs", "cohort-acceptance.db", "cohort", null),
         new("cohort-solo-inherited-receipts", Persistence + "CohortAcceptanceStore.SoloInheritedReceipts.cs", "cohort-acceptance.db", "cohort", null),
-        new("merge-train-acceptance", Persistence + "MergeTrainAcceptanceStore.cs", "merge-train-acceptance.db", "cohort", null),
+        MergeTrainAcceptance,
         FollowerGateAcceptance,
         new("collaboration-items", Persistence + "CollaborationItemStore.Storage.cs", "collaboration-items.db", "collaboration", null),
         new("run-events", Persistence + "RunEventStore.cs", "run-events.db", "collaboration", null),
