@@ -439,14 +439,13 @@ internal sealed partial class ConductorBatchLoop
                 }
             }
 
-            var holdForDispatches = activeDispatches.Value > 0 && !capDecision.Detach && !capDecision.AlreadyDetached;
-            if (holdForDispatches || liveGates > 0)
+            var drainHold = new ConductorSelfRelaunchDrainHold(
+                activeDispatches.Value > 0 && !capDecision.Detach && !capDecision.AlreadyDetached, liveGates, drainElapsed);
+            if (drainHold.ShouldWait)
             {
-                if (drainElapsed >= DispatchRecoveryPolicy.DefaultLiveIdleTimeout)
+                if (drainHold.TimedOut)
                 {
-                    EmitSelfRelaunchRollback(totalTicks, pendingSelfRelaunch!.GoalId, "drain",
-                        $"active dispatches did not reach terminal receipts within {(int)DispatchRecoveryPolicy.DefaultLiveIdleTimeout.TotalMinutes} minutes" +
-                        (liveGates > 0 ? $" liveGates={liveGates}" : string.Empty));
+                    EmitSelfRelaunchRollback(totalTicks, pendingSelfRelaunch!.GoalId, "drain", drainHold.TimeoutReason);
                     deferredSelfRelaunch = pendingSelfRelaunch;
                     selfRelaunchRetryAfterTick = totalTicks + 1;
                     pendingSelfRelaunch = null;
@@ -455,8 +454,7 @@ internal sealed partial class ConductorBatchLoop
 
                 if (pendingSelfRelaunch is not null)
                 {
-                    EmitProgress(
-                        $"LOOP_RELAUNCH_DRAIN tick={totalTicks} goal={pendingSelfRelaunch.GoalId} active={activeDispatches.Value} admitting=false{capDecision.DrainSuffix} liveGates={liveGates}");
+                    EmitProgress(drainHold.DescribeProgress(totalTicks, pendingSelfRelaunch.GoalId, activeDispatches.Value, capDecision.DrainSuffix));
                     TryPersistCheckpoint(
                         persistTick,
                         persistGoalTick,
@@ -468,19 +466,8 @@ internal sealed partial class ConductorBatchLoop
                         busyWriteDelay,
                         checkpointGoalTick: checkpointGoalTick,
                         checkpointHeldGoalIds: checkpointHeldGoals);
-                    var drainWait = TimeSpan.FromSeconds(WatchStopPollIntervalSeconds);
-                    if (sleepFunc is not null)
-                    {
-                        sleepFunc(drainWait);
-                    }
-                    else
-                    {
-                        SleepUntilNextTick(
-                            drainWait,
-                            stopFilePath,
-                            wakeSignal,
-                            GetRunningDispatchExitCodePaths(kernel, onlyGoalId));
-                    }
+                    drainHold.Wait(sleepFunc, interval => SleepUntilNextTick(
+                        interval, stopFilePath, wakeSignal, GetRunningDispatchExitCodePaths(kernel, onlyGoalId)));
                     return new(SelfRelaunchDrainDisposition.ContinueTick);
                 }
             }

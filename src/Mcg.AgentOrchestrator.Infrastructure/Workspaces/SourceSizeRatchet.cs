@@ -171,7 +171,8 @@ internal static class SourceSizeRatchet
             // Goal ae7d1201 extracted shared per-goal operator-intent application; measured at 2675 lines.
             // Goal 7b54219d adds nine startup-wiring lines: the injectable load seam and its invocation
             // belong before LOOP_START; hash-keyed persistence remains in TrxCoherenceVerdictStore.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2698), // 7e047f78: measured slot-contention hold arm and streak lifecycle.
+            // Goal 8cc45279 extracts live-gate drain hold policy and polling to ConductorSelfRelaunchDrainHold; measured 2694.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2694),
             // Goal 354522f1 tick persistence partial measured at 467 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.TickPersistence.cs", 467),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.DependencyReadmission.cs", 375),
@@ -435,7 +436,8 @@ internal static class SourceSizeRatchet
             // dependency hold evaluation to its own type (-42). Measured 9231 across 56 files after both, no extra headroom.
             // Goal 7b54219d retains only the nine startup-wiring lines needed to load before LOOP_START;
             // persistence is separately owned. Measured 9267 total lines across the same 56 partial files.
-            new SourceClassCeiling("ConductorBatchLoop", 9267, 56), // 7e047f78: measured slot-contention hold arm and streak lifecycle; no new partial.
+            // Goal 8cc45279 extracts drain hold policy and polling to a separately owned type; measured 9263 across the same 56 partials.
+            new SourceClassCeiling("ConductorBatchLoop", 9263, 56),
             // Goal ec8903af moved the goal-prefix parser to CliGoalPrefixArguments.
             new SourceClassCeiling("CliPersistentStateRunner", 5975, 18),
             // Goal 5935c270 extracts subscription-plan output into SubscriptionPlanTextView

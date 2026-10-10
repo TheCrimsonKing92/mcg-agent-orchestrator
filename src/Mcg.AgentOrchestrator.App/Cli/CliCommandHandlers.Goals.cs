@@ -1886,9 +1886,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                             readAdoptionCensus: WorkerAdoptionCensus.CreateDefault(context.Workspace.SqliteStatePath),
                             adoptInheritedWorkers: WorkerAdoptionTransfer.CreateDefault(context.Workspace.SqliteStatePath,
                                 goalIds => context.ReloadKernel(goalIds))),
-                        blockedRecheckHeartbeatInterval: reconcileSweepOptions.HeartbeatInterval,
-                        workspace: context.Workspace,
-                        countLiveGroupedGates: loopDriver.CountLiveGroupedGateAttempts).WithSteward(ConductorStewardHost.CreateDefault(context.Workspace))
+                        blockedRecheckHeartbeatInterval: reconcileSweepOptions.HeartbeatInterval, countLiveGroupedGates: loopDriver.CountLiveGroupedGateAttempts,
+                        workspace: context.Workspace).WithSteward(ConductorStewardHost.CreateDefault(context.Workspace))
                         .WithUnintendedExitDiagnostics(conductorDiagnosticPath, conductorOutputLogPath)
                         .WithJudgePanel(ConductorJudgePanelHost.CreateDefault(context.Workspace))
                         .WithBoardFill(ConductorBoardFillHost.CreateDefault(context.Workspace,
