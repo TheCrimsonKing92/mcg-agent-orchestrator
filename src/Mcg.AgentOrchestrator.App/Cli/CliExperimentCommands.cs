@@ -58,7 +58,9 @@ internal static class CliExperimentCommands
             return false;
         }
         if (parts.Count < 2 || parts[1].StartsWith('-')) throw new ArgumentException($"{command}: experiment reference is required.");
-        var store = new ExperimentStore(context.Workspace.ExperimentStorePath);
+        var store = command == "experiment-show"
+            ? ExperimentStore.OpenReadOnly(context.Workspace.ExperimentStorePath)
+            : new ExperimentStore(context.Workspace.ExperimentStorePath);
         var record = store.ResolveAsync(parts[1]).GetAwaiter().GetResult()
             ?? throw new InvalidOperationException($"Experiment '{parts[1]}' was not found.");
         if (command == "experiment-decide")
