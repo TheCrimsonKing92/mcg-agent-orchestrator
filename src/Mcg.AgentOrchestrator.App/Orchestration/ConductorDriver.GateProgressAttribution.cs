@@ -40,10 +40,11 @@ internal sealed partial class ConductorDriver
             eventKind: "cohort-attribution");
     }
 
-    private AcceptanceRunExecutionOptions CreateMergeTrainGateExecutionOptions(
+    internal AcceptanceRunExecutionOptions CreateMergeTrainGateExecutionOptions(
         MergeTrainIdentity identity,
         IReadOnlyList<MergeTrainMemberBinding> members,
-        string trainKey)
+        string trainKey,
+        IReadOnlyDictionary<GoalId, Goal> goalsById)
     {
         var workspace = _cohortWorkspace ?? throw new InvalidOperationException("Production acceptance cohort workspace is unavailable.");
         var logPath = workspace.ConductEventsLogPath;
@@ -75,7 +76,9 @@ internal sealed partial class ConductorDriver
                 AppendRemoteLaneEvent(writer, members.Count == 1 ? members[0].GoalId.Value[..8] : null, detail);
             }
             catch (Exception) { /* Event-log setup is observational. */ }
-        }, GateRunIdentity: trainKey, ProjectHomeDirectory: workspace.ProjectHomeDirectoryOrNull, IntegrationBranch: workspace.IntegrationBranch);
+        }, GateRunIdentity: trainKey, ProjectHomeDirectory: workspace.ProjectHomeDirectoryOrNull, IntegrationBranch: workspace.IntegrationBranch,
+            MemberTestRemovals: MemberDeclaredTestRemovals.FromMembers(members.Select(member =>
+                (member.GoalId, goalsById.TryGetValue(member.GoalId, out var goal) ? goal.Objective : null))));
     }
 
     private static void TryAppendGateProgressEvent(

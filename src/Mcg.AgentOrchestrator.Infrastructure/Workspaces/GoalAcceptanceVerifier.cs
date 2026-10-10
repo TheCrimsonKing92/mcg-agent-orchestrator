@@ -655,7 +655,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             : null;
 
         var advisoryChecks = LoadAdvisoryChecks(worktreePath);
-        var sanctionedRemovedTests = LoadSanctionedTestRemovals(worktreePath);
+        var sanctionedRemovedTests = ResolveSanctionedTestRemovals(worktreePath, executionOwner);
         if (structuralCoverageApplies)
         {
             _coverageHasIndependentChecks = effectiveChecks.Any(check =>
@@ -2395,6 +2395,12 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return [];
         }
     }
+
+    internal string[] SanctionedTestRemovalsForTests(string worktreePath) =>
+        ResolveSanctionedTestRemovals(worktreePath, _executionContext as AcceptanceRunExecutionOwner);
+
+    private static string[] ResolveSanctionedTestRemovals(string worktreePath, AcceptanceRunExecutionOwner? owner) =>
+        MemberDeclaredTestRemovals.UnionSanctioned(LoadSanctionedTestRemovals(worktreePath), owner?.MemberTestRemovals);
 
     private static string[] LoadSanctionedTestRemovals(string worktreePath)
     {

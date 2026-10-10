@@ -72,7 +72,8 @@ public sealed record AcceptanceRunExecutionOptions(
     bool CohortRemoteLanes = false,
     AcceptanceFollowerPinnedBase? PinnedBase = null,
     string? ProjectHomeDirectory = null,
-    string? IntegrationBranch = null);
+    string? IntegrationBranch = null,
+    IReadOnlyList<MemberDeclaredTestRemoval>? MemberTestRemovals = null);
 
 public sealed record AcceptanceOwnerProtectedCohortMember(GoalId GoalId, string CandidateSha);
 
@@ -129,6 +130,7 @@ internal abstract class AcceptanceRunExecutionOwner : IAcceptanceRunExecutionCon
     public AcceptanceGateEngineSettings Settings { get; }
     public IReadOnlyList<AcceptanceOwnerProtectedCohortMember>? OwnerProtectedCohortMembers =>
         _options.OwnerProtectedCohortMembers;
+    public IReadOnlyList<MemberDeclaredTestRemoval>? MemberTestRemovals => _options.MemberTestRemovals;
     public CancellationToken CancellationToken => _lifetime.Token;
     public AcceptanceAttemptArtifactCustodyContext? ArtifactCustody { get; protected init; }
 

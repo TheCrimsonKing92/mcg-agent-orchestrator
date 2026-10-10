@@ -415,7 +415,10 @@ internal static class SourceSizeRatchet
             // Measured 15270 lines across the same 70 partial files; no extra headroom.
             // Goal f62c7f67 extracts owned coordinator construction to a separately owned factory.
             // Measured 15266 lines across the same 70 partial files; no extra headroom.
-            new SourceClassCeiling("ConductorDriver", 15266, 70),
+            // Goal 87740668 adds three lines of member-objective wiring at the train gate options boundary;
+            // removal parsing and union logic live in MemberDeclaredTestRemovals. Measured 15269 across
+            // the same 70 partial files; no extra headroom.
+            new SourceClassCeiling("ConductorDriver", 15269, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
