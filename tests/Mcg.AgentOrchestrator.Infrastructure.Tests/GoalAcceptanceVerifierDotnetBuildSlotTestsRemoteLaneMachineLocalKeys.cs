@@ -110,6 +110,83 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLaneMachineL
         Assert.Null(row.FaultOwner);
     }
 
+    [Xunit.Fact]
+    public async Task KeyedRemoteNotExecuted_DeclaredLiteralSkip_AcceptsRemotely()
+    {
+        using var scenario = CreateScenario(["xunit:EnvMutation"], lane0Source: SkippedSource("Skip = \"text\""));
+        scenario.Configure(["xunit:EnvMutation"]);
+        scenario.RedLane = 0; // Falling back locally must make this test red.
+        var fake = GreenExecutor(scenario, notExecutedLane: 0);
+
+        var result = await scenario.RunAsync();
+
+        Assert.True(result.Passed, JsonSerializer.Serialize(result.Checks));
+        Assert.Single(fake.Requests, request => request.Lane == Lane(0));
+        Assert.DoesNotContain(0, scenario.LocalStarts);
+        var remote = LaneCheck(result, 0);
+        Assert.StartsWith("remote-executor=fixture-executor", remote.ResultSummary!);
+        Assert.Equal(1, remote.ExecutedTestCount);
+        Assert.Equal(2, remote.DiscoveredTestCount);
+        var row = Assert.Single(scenario.Health(), row => row.Lane == Lane(0));
+        Assert.Equal(RemoteLaneOutcomeCode.Accepted, row.Outcome);
+        Assert.Null(row.FaultOwner);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("SkipUnless")]
+    [Xunit.InlineData("SkipWhen")]
+    public async Task KeyedRemoteNotExecuted_SkipBesideConditionalSkip_FallsBackLocally(string member)
+    {
+        using var scenario = CreateScenario(["xunit:EnvMutation"],
+            lane0Source: SkippedSource($"Skip = \"text\", {member} = \"IsSet\""));
+        scenario.Configure(["xunit:EnvMutation"]);
+        var fake = GreenExecutor(scenario, notExecutedLane: 0);
+
+        var result = await scenario.RunAsync();
+
+        AssertNotExecutedFallback(scenario, fake, result);
+    }
+
+    [Xunit.Fact]
+    public async Task KeyedRemoteNotExecuted_UndeclaredSkip_FallsBackLocally()
+    {
+        using var scenario = CreateScenario(["xunit:EnvMutation"]);
+        scenario.Configure(["xunit:EnvMutation"]);
+        var events = new ConcurrentQueue<string>();
+        TestOverrides.OnRemoteLaneEventForTests = events.Enqueue;
+        var fake = GreenExecutor(scenario, notExecutedLane: 0);
+
+        var result = await scenario.RunAsync();
+
+        AssertNotExecutedFallback(scenario, fake, result);
+        Assert.Contains(events, message => message.StartsWith("REMOTE_LANE_NOT_EXECUTED ", StringComparison.Ordinal) &&
+                                           message.Contains("first_undeclared=Lane0Tests.Skipped", StringComparison.Ordinal));
+    }
+
+    private static string SkippedSource(string arguments) => $$"""
+        public class Lane0Tests
+        {
+            public static bool IsSet => true;
+            [Xunit.Fact] public void Executes() { }
+            [Xunit.Fact({{arguments}})] public void Skipped() { }
+        }
+        """;
+
+    private static void AssertNotExecutedFallback(Scenario scenario, FakeRemoteLaneExecutor fake,
+        AcceptanceVerificationResult result)
+    {
+        Assert.True(result.Passed, JsonSerializer.Serialize(result.Checks));
+        Assert.Single(fake.Requests, request => request.Lane == Lane(0));
+        Assert.Contains(0, scenario.LocalStarts);
+        Assert.DoesNotContain("remote-executor=", LaneCheck(result, 0).ResultSummary ?? "");
+        var laneRows = scenario.Health().Where(row => row.Lane == Lane(0)).ToArray();
+        var row = Assert.Single(laneRows, row => row.Outcome == RemoteLaneOutcomeCode.UnexpectedNotExecuted);
+        Assert.Equal(RemoteLaneOutcomeCode.UnexpectedNotExecuted, row.Outcome);
+        Assert.StartsWith("not_executed=1", row.Reason!);
+        Assert.Equal("executor", row.FaultOwner);
+        Assert.DoesNotContain(laneRows, row => row.Outcome == RemoteLaneOutcomeCode.Accepted);
+    }
+
     private static void AssertLocalRefusal(Scenario scenario, FakeRemoteLaneExecutor fake, AcceptanceVerificationResult result)
     {
         Assert.True(result.Passed, JsonSerializer.Serialize(result.Checks));
@@ -136,12 +213,12 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLaneMachineL
         return fake;
     }
 
-    private Scenario CreateScenario(string[]? keys = null, bool requiresBuildSystemChange = false)
+    private Scenario CreateScenario(string[]? keys = null, bool requiresBuildSystemChange = false, string? lane0Source = null)
     {
         SetPartitionVerdictKeyHooks("candidate-tree", "main-sha", "verifying-commit");
         TestOverrides.PartitionVerdictWithinAttemptRerunEnabled = false;
         TestOverrides.ResolveShardCoreBudgetForTests = () => 3;
-        var scenario = new Scenario(this, CreateShardWorkspace(keys ?? [], requiresBuildSystemChange));
+        var scenario = new Scenario(this, CreateShardWorkspace(keys ?? [], requiresBuildSystemChange, lane0Source));
         TestOverrides.RemoteLaneExecutorConfigurationPathForTests = scenario.ConfigurationPath;
         RemoteLaneOfferSeeding.PrepareFixture(scenario.Root, TestOverrides);
         TestOverrides.RemoteLaneTimeProviderForTests = scenario.Clock;
@@ -154,7 +231,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLaneMachineL
     private static AcceptanceCheckResult LaneCheck(AcceptanceVerificationResult result, int index) =>
         Assert.Single(result.Checks!, check => check.Name == Lane(index));
 
-    private static string CreateShardWorkspace(string[] keys, bool requiresBuildSystemChange)
+    private static string CreateShardWorkspace(string[] keys, bool requiresBuildSystemChange, string? lane0Source)
     {
         var rows = Enumerable.Range(0, 3).Select(index => new
         {
@@ -185,7 +262,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLaneMachineL
         var sourceDirectory = Path.Combine(root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests");
         Directory.CreateDirectory(sourceDirectory);
         foreach (var index in Enumerable.Range(0, 3))
-            File.WriteAllText(Path.Combine(sourceDirectory, $"Lane{index}Tests.cs"), $"public class Lane{index}Tests {{ [Xunit.Fact] public void Executes() {{ }} }}");
+            File.WriteAllText(Path.Combine(sourceDirectory, $"Lane{index}Tests.cs"), index == 0 && lane0Source is not null
+                ? lane0Source : $"public class Lane{index}Tests {{ [Xunit.Fact] public void Executes() {{ }} }}");
         return root;
     }
 
