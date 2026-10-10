@@ -8,8 +8,10 @@ using System.Text.Json.Nodes;
 using System.Xml.Linq;
 
 [Xunit.Collection(TestCollections.JobAccounting)]
-public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsAdvisoryChecks : GoalAcceptanceVerifierDotnetBuildSlotTests
+public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsAdvisoryChecks : GoalAcceptanceVerifierDotnetBuildSlotTests, IDisposable
 {
+    private readonly List<string> runnerWorkspaces = [];
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_advisory_grep_absent_failure_does_not_affect_passed")]
     public async Task GoalAcceptanceVerifierAdvisoryGrepAbsentFailureDoesNotAffectPassed()
     {
@@ -221,20 +223,35 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsAdvisoryChecks : G
         });
 
         // Use a plain worktree with no criteria file
-        var result = await verifier.RunAsync("C:\\fake\\worktree");
+        var result = await verifier.RunAsync(CreateRunnerWorkspace());
 
         Assert.True(result.Passed);
         Assert.True(result.Checks is null || !result.Checks.Any(c => c.Advisory));
     }
 
-    private static string CreateAdvisoryWorkspace(string criteriaJson)
+    private string CreateAdvisoryWorkspace(string criteriaJson)
     {
-        var root = Path.Combine(Path.GetTempPath(), "mcg-acceptance-tests", Guid.NewGuid().ToString("N"));
+        var root = CreateRunnerWorkspace();
         var orchestratorDir = Path.Combine(root, ".orchestrator");
         Directory.CreateDirectory(orchestratorDir);
         File.WriteAllText(
             Path.Combine(orchestratorDir, "goal-acceptance-criteria.json"),
             criteriaJson);
         return root;
+    }
+
+    private string CreateRunnerWorkspace()
+    {
+        var root = CreateManifestWorkspace("""
+            { "version": 1, "checks": [{ "name": "dotnet test", "type": "dotnet-test" }] }
+            """);
+        runnerWorkspaces.Add(root);
+        return root;
+    }
+
+    public void Dispose()
+    {
+        foreach (var root in runnerWorkspaces)
+            DeleteDirectoryWithRetry(root);
     }
 }

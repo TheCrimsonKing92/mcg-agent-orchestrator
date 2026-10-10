@@ -9,11 +9,14 @@ using System.Text.Json.Nodes;
 using System.Xml.Linq;
 
 [Xunit.Collection(TestCollections.JobAccounting)]
-public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResources : GoalAcceptanceVerifierDotnetBuildSlotTests
+public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResources : GoalAcceptanceVerifierDotnetBuildSlotTests, IDisposable
 {
+    private readonly List<string> runnerWorkspaces = [];
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_unexpected_runner_fault_carries_phase_target_and_stack")]
     public async Task GoalAcceptanceVerifierUnexpectedRunnerFaultCarriesPhaseTargetAndStack()
     {
+        var root = CreateRunnerWorkspace();
         static Task<GoalAcceptanceVerifier.CommandResult> ThrowUnexpectedRunnerFault(
             string[] _,
             string __,
@@ -23,7 +26,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
         var verifier = new GoalAcceptanceVerifier(TestOverrides, ThrowUnexpectedRunnerFault);
 
         var exception = await Xunit.Record.ExceptionAsync(() =>
-            verifier.RunAsync("C:\\fake\\worktree"));
+            verifier.RunAsync(root));
 
         Assert.NotNull(exception);
         Assert.Equal("AcceptanceGateEngineException", exception.GetType().Name);
@@ -1142,6 +1145,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_self_heals_once_on_CS2012_file_lock_and_returns_passed")]
     public async Task GoalAcceptanceVerifierSelfHealsOnceOnCs2012FileLockAndReturnsPassed()
     {
+        var root = CreateRunnerWorkspace();
         var calls = new List<string[]>();
         var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
             new(1, "error CS2012: Cannot open 'Core.dll' for writing because it is being used by another process."),
@@ -1155,7 +1159,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
         });
 
         var goalId = new GoalId("abcd1234abcd1234abcd1234abcd1234");
-        var result = await verifier.RunAsync("C:\\fake\\worktree", goalId);
+        var result = await verifier.RunAsync(root, goalId);
 
         Assert.True(result.Passed);
         Assert.True(result.Retried);
@@ -1179,6 +1183,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_stable_slot_shuts_down_compiler_server_before_CS2012_retry")]
     public async Task GoalAcceptanceVerifierStableSlotShutsDownCompilerServerBeforeCs2012Retry()
     {
+        var root = CreateRunnerWorkspace();
         var events = new List<string>();
         var buildAttempts = 0;
         DotnetBuildEnvironmentManager.ShutdownBuildServersForTests = () => events.Add("shutdown");
@@ -1205,7 +1210,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
                 TimeSpan.FromSeconds(2));
 
             var result = await verifier.RunAsync(
-                "C:\\fake\\worktree",
+                root,
                 new GoalId("abcd1234abcd1234abcd1234abcd1234"),
                 stableSlotIndex: StableSlotIndex(lease.Environment.ArtifactsPath),
                 stableSlotLease: lease);
@@ -1280,8 +1285,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_self_heals_once_on_compiler_lock_and_returns_failed_when_retry_also_fails")]
     public void GoalAcceptanceVerifierSelfHealsOnceOnCompilerLockAndReturnsFailedWhenRetryAlsoFails()
     {
+        var root = CreateRunnerWorkspace();
         var calls = new List<string[]>();
-        var lockedPath = Path.Combine("C:\\fake\\worktree", "obj", "Core.dll");
+        var lockedPath = Path.Combine(root, "obj", "Core.dll");
         var previousMaxCycles = TestOverrides.TransientNoHolderBuildLockMaxRetryCycles;
         var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
             new(1, "MSB3491: Could not write lines to file because it is being used by another process."),
@@ -1300,7 +1306,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
 
             BuildLockBlockedException? blocked = null;
             var output = AsyncLocalConsoleRouter.Capture(() =>
-                blocked = Assert.ThrowsAsync<BuildLockBlockedException>(() => verifier.RunAsync("C:\\fake\\worktree"))
+                blocked = Assert.ThrowsAsync<BuildLockBlockedException>(() => verifier.RunAsync(root))
                     .GetAwaiter()
                     .GetResult());
 
@@ -1327,9 +1333,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_blocks_when_owned_process_kill_retry_still_reports_lock")]
     public async Task GoalAcceptanceVerifierBlocksWhenOwnedProcessKillRetryStillReportsLock()
     {
+        var root = CreateRunnerWorkspace();
         var calls = new List<string[]>();
         var killed = new List<int>();
-        var lockedPath = Path.Combine("C:\\fake\\worktree", "obj", "Core.dll");
+        var lockedPath = Path.Combine(root, "obj", "Core.dll");
         var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
             new(1, $"error CS2012: Cannot open '{lockedPath}' for writing because it is being used by another process."),
             new(1, $"error CS2012: Cannot open '{lockedPath}' for writing because it is being used by another process."),
@@ -1354,7 +1361,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
                 return Task.FromResult(responses.Dequeue());
             });
 
-            var blocked = await Assert.ThrowsAsync<BuildLockBlockedException>(() => verifier.RunAsync("C:\\fake\\worktree"));
+            var blocked = await Assert.ThrowsAsync<BuildLockBlockedException>(() => verifier.RunAsync(root));
 
             Assert.Equal(lockedPath, blocked.Attribution.Path);
             Assert.Equal([987654], killed);
@@ -1373,6 +1380,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_does_not_self_heal_non_lock_failure")]
     public async Task GoalAcceptanceVerifierDoesNotSelfHealNonLockFailure()
     {
+        var root = CreateRunnerWorkspace();
         var calls = new List<string[]>();
         var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
             new(1, "error CS2012: Cannot open 'Core.dll' for writing")
@@ -1384,7 +1392,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
             return Task.FromResult(responses.Dequeue());
         });
 
-        var result = await verifier.RunAsync("C:\\fake\\worktree");
+        var result = await verifier.RunAsync(root);
 
         Assert.False(result.Passed);
         Assert.False(result.Retried);
@@ -1451,6 +1459,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_returns_passed_without_retry_on_first_time_pass")]
     public async Task GoalAcceptanceVerifierReturnsPassedWithoutRetryOnFirstTimePass()
     {
+        var root = CreateRunnerWorkspace();
         var calls = new List<string[]>();
         var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
             new(0, "Test run succeeded.")
@@ -1462,7 +1471,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
             return Task.FromResult(responses.Dequeue());
         });
 
-        var result = await verifier.RunAsync("C:\\fake\\worktree");
+        var result = await verifier.RunAsync(root);
 
         Assert.True(result.Passed);
         Assert.False(result.Retried);
@@ -1472,6 +1481,21 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResourc
         AssertIsolatedTestCommand(calls[0]);
         Assert.Equal(1, result.Checks!.Count);
         Assert.Equal("dotnet test", result.Checks![0].Name);
+    }
+
+    private string CreateRunnerWorkspace()
+    {
+        var root = CreateManifestWorkspace("""
+            { "version": 1, "checks": [{ "name": "dotnet test", "type": "dotnet-test" }] }
+            """);
+        runnerWorkspaces.Add(root);
+        return root;
+    }
+
+    public void Dispose()
+    {
+        foreach (var root in runnerWorkspaces)
+            DeleteDirectoryWithRetry(root);
     }
 
     private static SpawnProcessIdentity DeterministicRegistrationIdentity(Process process) =>
