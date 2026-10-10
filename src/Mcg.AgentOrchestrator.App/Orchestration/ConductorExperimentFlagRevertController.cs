@@ -8,7 +8,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 /// <summary>Submits a durable, once-keyed revert; keep remains an owner decision.</summary>
 internal sealed class ConductorExperimentFlagRevertController(ExperimentStore experiments,
-    Func<IOperatorIntentStore> intentStore, string policyPath)
+    Func<IOperatorIntentStore> intentStore, ExperimentFlagStateReader flags)
 {
     internal bool TryRevert(ExperimentRecord record, ExperimentReadingResult reading, DateTimeOffset now)
     {
@@ -19,8 +19,7 @@ internal sealed class ConductorExperimentFlagRevertController(ExperimentStore ex
         // Refresh persisted eligibility when a stale reading is delivered after a previous tick.
         if (experiments.ResolveAsync(record.Id).GetAwaiter().GetResult()?.Outcome != ExperimentOutcomeState.Open) return false;
         // Prior capture precedes the write and cannot prove that the intervention took effect.
-        if (!File.Exists(policyPath) || ConductorPolicyBooleanFlags.Read(
-                ConductorAutonomyPolicy.ParseJson(File.ReadAllText(policyPath)), target.PropertyName) != target.ValueToApply)
+        if (flags.Read(target) != target.ValueToApply)
             return false;
         var intents = intentStore();
         var id = Guid.NewGuid().ToString("n");

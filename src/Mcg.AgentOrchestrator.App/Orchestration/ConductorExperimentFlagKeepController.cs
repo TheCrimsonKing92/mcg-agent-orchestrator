@@ -7,7 +7,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 /// <summary>Files a once-keyed make-permanent follow-up before confirming an applied flag.</summary>
 internal sealed class ConductorExperimentFlagKeepController(ExperimentStore experiments,
-    Func<BacklogStore> backlogStore, string policyPath)
+    Func<BacklogStore> backlogStore, ExperimentFlagStateReader flags)
 {
     internal static string BacklogId(string experimentId) => $"experiment-flag-keep-{experimentId}";
 
@@ -20,8 +20,7 @@ internal sealed class ConductorExperimentFlagKeepController(ExperimentStore expe
         // Refresh persisted eligibility when a stale reading is delivered after a previous tick.
         if (experiments.ResolveAsync(record.Id).GetAwaiter().GetResult()?.Outcome != ExperimentOutcomeState.Open) return false;
         // Prior capture precedes the write and cannot prove that the intervention took effect.
-        if (!File.Exists(policyPath) || ConductorPolicyBooleanFlags.Read(
-                ConductorAutonomyPolicy.ParseJson(File.ReadAllText(policyPath)), target.PropertyName) != target.ValueToApply)
+        if (flags.Read(target) != target.ValueToApply)
             return false;
 
         var id = BacklogId(record.Id);

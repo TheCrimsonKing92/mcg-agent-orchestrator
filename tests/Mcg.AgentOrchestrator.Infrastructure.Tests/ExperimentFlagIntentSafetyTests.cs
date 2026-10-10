@@ -113,7 +113,7 @@ public sealed class ExperimentFlagIntentSafetyTests
         Assert.False(record.Spec.Intervention.FlagTarget!.PriorValue);
         Assert.False(ConductorAutonomyPolicy.ParseJson(File.ReadAllText(fixture.PolicyPath)).FollowerGatesEnabled);
         var controller = new ConductorExperimentFlagRevertController(fixture.Experiments,
-            () => throw new InvalidOperationException("intent store must stay unopened"), fixture.PolicyPath);
+            () => throw new InvalidOperationException("intent store must stay unopened"), fixture.Flags);
         var reading = new ExperimentReadingResult(0, new(99, ExperimentStopUnit.Goals), false, [], "revert", "fault path", true);
         Assert.False(controller.TryRevert(record, reading, ExperimentFlagTestFixture.Now));
         Assert.Equal(ExperimentOutcomeState.Open, fixture.Experiments.ResolveAsync(record.Id).GetAwaiter().GetResult()!.Outcome);
