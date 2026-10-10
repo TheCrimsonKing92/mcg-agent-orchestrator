@@ -101,6 +101,58 @@ public sealed class WorkerBuildReceiptCoverageTests : WorkerDispatchTestSupport
         Xunit.Assert.Equal(string.Empty, resolution.Diagnostic);
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData(true, 0, WorkTaskStatus.Completed)]
+    [Xunit.InlineData(true, 1, WorkTaskStatus.Failed)]
+    [Xunit.InlineData(false, -1, WorkTaskStatus.Failed)]
+    public void PartialReceipt_DispatchUsesInjectedRunnerVerdict(
+        bool ran, int buildExitCode, WorkTaskStatus expectedStatus)
+    {
+        var root = CreateSeededDispatchRepository();
+        var clock = new TestClock(DateTimeOffset.Parse("2026-10-09T22:00:00Z"));
+        string? receiptPath = null;
+        var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+            root, AgentRole.Developer,
+            WorkerResultBlock("Parent/Cli/NewTests.cs, Parent/Other.cs", "implemented tests",
+                "deferred - acceptance gate owns tests"),
+            string.Empty, clock, worktree =>
+            {
+                AddProjects(worktree);
+                receiptPath = WriteReceipt(worktree, ["Parent/Parent.csproj"]);
+            });
+        var receipt = WorkerBuildReceipt.Evaluate(receiptPath!, process.WorkingDirectory);
+        Xunit.Assert.True(receipt.Matches, receipt.Reason);
+        Xunit.Assert.Equal(["Parent/Parent.csproj"], receipt.Projects);
+        var builds = 0;
+        const string injectedOutput = "injected build runner verdict; no script launched";
+        var runner = new BackgroundDispatchRunner(clock,
+            runOrchestratorBuildCheck: request =>
+            {
+                builds++;
+                Xunit.Assert.Equal(process.WorkingDirectory, request.WorktreeRoot);
+                Xunit.Assert.Equal(RequiredProjects, request.Projects);
+                return new(ran, buildExitCode, injectedOutput);
+            },
+            resolveWorkerBuildReceiptPath: _ => receiptPath!);
+
+        runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        Xunit.Assert.Equal(1, builds);
+        Xunit.Assert.Equal(expectedStatus, task.Status);
+        var verification = Xunit.Assert.IsType<TaskVerificationRecord>(task.LastVerification);
+        Xunit.Assert.Equal(expectedStatus == WorkTaskStatus.Completed ? 0 : 1, verification.ExitCode);
+        Xunit.Assert.Contains(
+            "worker_build_receipt=projects-incomplete; missing_projects=Parent/Cli/Nested.csproj;",
+            verification.StandardError);
+        Xunit.Assert.Contains(injectedOutput, verification.StandardError);
+        var expectedMarker = ran
+            ? "build_evidence_producer=orchestrator"
+            : "build_evidence_attempt=orchestrator";
+        Xunit.Assert.Contains(expectedMarker, verification.StandardError);
+        if (expectedStatus == WorkTaskStatus.Completed)
+            Xunit.Assert.Equal(string.Empty, ReadGit(process.WorkingDirectory, ["status", "--short"]));
+    }
+
     [Xunit.Fact]
     public void MatchingVerdict_WithoutProjectsBuildsAllRequiredProjects()
     {
