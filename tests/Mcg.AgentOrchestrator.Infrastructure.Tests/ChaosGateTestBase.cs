@@ -16,6 +16,13 @@ public abstract class ChaosGateTestBase
     protected static string CreateSeededRepo()
     {
         var root = CreateTempDirectory();
+        ChaosGateSeededRepositoryTemplate.CopyTo(root);
+        return root;
+    }
+
+    internal static string CreateSeededRepoByLaunchingGit()
+    {
+        var root = CreateTempDirectory();
         RunGit(root, ["init"], DispatchedAt.AddMinutes(-5));
         RunGit(root, ["config", "user.email", "chaos-tests@example.com"], DispatchedAt.AddMinutes(-5));
         RunGit(root, ["config", "user.name", "Chaos Tests"], DispatchedAt.AddMinutes(-5));
