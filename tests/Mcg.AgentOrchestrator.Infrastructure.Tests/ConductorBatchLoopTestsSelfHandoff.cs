@@ -23,8 +23,6 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
     private const int ParentExitFailsafeMilliseconds = 300_000;
 
     public static bool IsWindows => OperatingSystem.IsWindows();
-    public static bool IsWindowsBreakawayPermitted =>
-        OperatingSystem.IsWindows() && BreakawayJobProbe.CanCreateBreakawayChild().IsPermitted;
 
     [Xunit.Fact(DisplayName = "BatchLoop_explicitly_disabled_self_relaunch_does_not_schedule_or_execute")]
     public void BatchLoopExplicitlyDisabledSelfRelaunchDoesNotScheduleOrExecute()
@@ -900,123 +898,6 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
     }
 
     [Xunit.Fact(
-        DisplayName = "ConductorLoopHandoff_windows_launcher_inherits_redirected_stdout_handle",
-        Skip = "requires a breakaway-permitted job; the acceptance gate runs this test",
-        SkipUnless = nameof(IsWindowsBreakawayPermitted))]
-    public void ConductorLoopHandoffWindowsLauncherInheritsRedirectedStdoutHandle()
-    {
-        var root = CreateTempDirectory("mcg-conduct-loop-stdout-handoff");
-        ConductorSupervisorProcessIdentity? successorIdentity = null;
-        int? processId = null;
-        var suppressionScopeActive = false;
-        try
-        {
-            var stdoutPath = Path.Combine(root, "successor.out.log");
-            var stderrPath = Path.Combine(root, "successor.err.log");
-            var stdoutMarker = "handoff-stdout-marker-" + Guid.NewGuid().ToString("N");
-            var stderrMarker = "handoff-stderr-marker-" + Guid.NewGuid().ToString("N");
-            var scriptPath = Path.Combine(root, "write-marker.cmd");
-            File.WriteAllText(scriptPath, $"@echo {stdoutMarker}{Environment.NewLine}@echo {stderrMarker} 1>&2{Environment.NewLine}");
-            var cmdPath = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.System),
-                "cmd.exe");
-            var result = ConductorLoopHandoff.LaunchDetachedWindows(
-                new ConductLoopLaunchRequest("batch1", [], stdoutPath, stderrPath, root, 0),
-                [
-                    cmdPath,
-                    "/d",
-                    "/c",
-                    scriptPath
-                ],
-                acquireConsoleSuppression: () =>
-                {
-                    suppressionScopeActive = true;
-                    return new ProcessTreeGuiSuppression.ConsoleSpawnScope(
-                        childConsolePolicyApplied: true,
-                        onDispose: () => suppressionScopeActive = false);
-                },
-                beforeCreateProcess: () => Assert.True(
-                    suppressionScopeActive,
-                    "Hidden-console suppression was disposed before CreateProcessW."));
-
-            Assert.True(result.ProcessId > 0);
-            Assert.Contains("breakawaySucceeded=true", result.LaunchDetail, StringComparison.Ordinal);
-            Assert.Matches("residualJobMembership=(true|false)", result.LaunchDetail);
-            Assert.False(suppressionScopeActive);
-            successorIdentity = result.SuccessorIdentity;
-            processId = result.ProcessId;
-            var conductEventsPath = Path.Combine(root, ConductEventLogWriter.CurrentFileName);
-            Assert.True(File.Exists(conductEventsPath), "Windows handoff did not journal its pre-spawn diagnostic.");
-            var conductEvents = File.ReadAllText(conductEventsPath);
-            Assert.Contains("\"eventKind\":\"loop-handoff-spawn\"", conductEvents, StringComparison.Ordinal);
-            Assert.Contains("spawnPath=windows-createprocess", conductEvents, StringComparison.Ordinal);
-            Assert.Matches("incumbentConsole=(present|absent)", conductEvents);
-            Assert.Matches("incumbentConsoleAttached=(true|false)", conductEvents);
-            Assert.Contains("suppression=child-owned-hidden-console", conductEvents, StringComparison.Ordinal);
-            Assert.True(WaitUntil(
-                () => File.Exists(stdoutPath) && ReadAllTextShared(stdoutPath).Contains(stdoutMarker, StringComparison.Ordinal),
-                TimeSpan.FromSeconds(10)),
-                $"stdout did not contain marker. child={DescribeProcess(processId.Value)} stdout={TryReadAllTextShared(stdoutPath)} stderr={TryReadAllTextShared(stderrPath)}");
-            Assert.True(WaitUntil(
-                () => File.Exists(stderrPath) && ReadAllTextShared(stderrPath).Contains(stderrMarker, StringComparison.Ordinal),
-                TimeSpan.FromSeconds(10)),
-                $"stderr did not contain marker. child={DescribeProcess(processId.Value)} stdout={TryReadAllTextShared(stdoutPath)} stderr={TryReadAllTextShared(stderrPath)}");
-        }
-        finally
-        {
-            TestOwnedProcessStop.StopTreeIfSame(successorIdentity);
-
-            TryDeleteDirectory(root);
-        }
-    }
-
-    [Xunit.Fact(
-        Skip = "requires a breakaway-permitted job; the acceptance gate runs this test",
-        SkipUnless = nameof(IsWindowsBreakawayPermitted))]
-    public void ConductorLoopHandoffSuppressionFailureStillStartsSuccessor()
-    {
-        var root = CreateTempDirectory("mcg-conduct-loop-suppression-failure");
-        ConductorSupervisorProcessIdentity? successorIdentity = null;
-        try
-        {
-            var stdoutPath = Path.Combine(root, "successor.out.log");
-            var stderrPath = Path.Combine(root, "successor.err.log");
-            var marker = "handoff-fail-open-marker-" + Guid.NewGuid().ToString("N");
-            var scriptPath = Path.Combine(root, "write-marker.cmd");
-            File.WriteAllText(scriptPath, $"@echo {marker}{Environment.NewLine}");
-            var cmdPath = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.System),
-                "cmd.exe");
-
-            var result = ConductorLoopHandoff.LaunchDetachedWindows(
-                new ConductLoopLaunchRequest("batch1", [], stdoutPath, stderrPath, root, 0),
-                [cmdPath, "/d", "/c", scriptPath],
-                acquireConsoleSuppression: () => throw new System.ComponentModel.Win32Exception(5, "synthetic suppression failure"));
-
-            Assert.True(result.ProcessId > 0);
-            Assert.Contains("breakawaySucceeded=true", result.LaunchDetail, StringComparison.Ordinal);
-            Assert.Matches("residualJobMembership=(true|false)", result.LaunchDetail);
-            successorIdentity = result.SuccessorIdentity;
-            Assert.True(WaitUntil(
-                () => File.Exists(stdoutPath) && ReadAllTextShared(stdoutPath).Contains(marker, StringComparison.Ordinal),
-                TimeSpan.FromSeconds(10)),
-                $"successor did not start after suppression failure. stdout={TryReadAllTextShared(stdoutPath)} stderr={TryReadAllTextShared(stderrPath)}");
-
-            var conductEvents = File.ReadAllText(Path.Combine(root, ConductEventLogWriter.CurrentFileName));
-            Assert.Contains("\"eventKind\":\"loop-handoff-console-suppression-failed\"", conductEvents, StringComparison.Ordinal);
-            Assert.Contains("error=Win32Exception", conductEvents, StringComparison.Ordinal);
-            Assert.Contains("nativeError=5", conductEvents, StringComparison.Ordinal);
-            Assert.Contains("suppression=acquisition-failed", conductEvents, StringComparison.Ordinal);
-        }
-        finally
-        {
-            TestOwnedProcessStop.StopTreeIfSame(successorIdentity);
-
-            TryDeleteDirectory(root);
-        }
-    }
-
-    [Xunit.Fact(
         DisplayName = "ConductorLoopHandoff_successor_survives_parent_job_exit_and_emits_loop_start",
         Skip = "Requires Windows process-job semantics.",
         SkipUnless = nameof(IsWindows))]
@@ -1325,22 +1206,6 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
         var end = line.IndexOf(' ', start);
         value = end < 0 ? line[start..] : line[start..end];
         return value.Length > 0;
-    }
-
-    private static bool WaitUntil(Func<bool> predicate, TimeSpan timeout)
-    {
-        var deadline = DateTimeOffset.UtcNow.Add(timeout);
-        while (DateTimeOffset.UtcNow < deadline)
-        {
-            if (predicate())
-            {
-                return true;
-            }
-
-            Thread.Sleep(50);
-        }
-
-        return predicate();
     }
 
     private static void TryKillOwned(Process process)

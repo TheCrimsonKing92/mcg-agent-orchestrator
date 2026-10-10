@@ -242,6 +242,22 @@ public abstract class ConductorBatchLoopTests
         return path;
     }
 
+    private protected static bool WaitUntil(Func<bool> predicate, TimeSpan timeout)
+    {
+        var deadline = DateTimeOffset.UtcNow.Add(timeout);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            if (predicate())
+            {
+                return true;
+            }
+
+            Thread.Sleep(50);
+        }
+
+        return predicate();
+    }
+
     private protected static string CreateTempDirectory(string prefix)
     {
         var path = Path.Combine(Path.GetTempPath(), $"{prefix}-{Guid.NewGuid():N}");
