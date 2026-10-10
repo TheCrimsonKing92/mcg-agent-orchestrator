@@ -87,12 +87,14 @@ public sealed class CollaborationItemStoreAttentionStatusFilterTests : IDisposab
 
         if (removeIndexBeforeReopening)
         {
-            // Simulate a populated database created before this index was introduced.
+            // Simulate an unversioned populated database created before this index was introduced.
             using var connection = new SqliteConnection(
                 $"Data Source={DatabasePath};Mode=ReadWrite;Pooling=False;");
             connection.Open();
             using var command = connection.CreateCommand();
             command.CommandText = "DROP INDEX idx_collaboration_items_status_raised";
+            command.ExecuteNonQuery();
+            command.CommandText = "DROP TABLE store_schema_versions";
             command.ExecuteNonQuery();
         }
 
