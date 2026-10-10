@@ -9,14 +9,7 @@ internal static class WorkerAcceptanceManifestLine
         if (string.IsNullOrWhiteSpace(manifestPath) || !File.Exists(manifestPath))
             return "missing";
 
-        var fullPath = Path.GetFullPath(manifestPath);
-        var relativePath = Path.GetRelativePath(Path.GetFullPath(worktreePath), fullPath);
-        var escapesWorktree = relativePath == ".." ||
-            relativePath.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) ||
-            relativePath.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal);
-        var displayPath = !Path.IsPathRooted(relativePath) && relativePath != "." && !escapesWorktree
-            ? relativePath.Replace('\\', '/')
-            : fullPath;
+        var displayPath = WorkerAcceptanceManifestDisplayPath.Render(worktreePath, manifestPath);
 
         string checks;
         try

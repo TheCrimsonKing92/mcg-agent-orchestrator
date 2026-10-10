@@ -175,7 +175,7 @@ public sealed partial class AgentOrchestratorKernel
         ReviewRetryCapReceipt? reviewRetryCap = null,
         bool measureWithTypedSourceBoundaries = false,
         IReadOnlyList<ChangedExistingTest>? changedExistingTests = null,
-        string? changedExistingTestsDiagnostic = null)
+        string? changedExistingTestsDiagnostic = null, string? acceptanceManifestPromptPath = null)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
@@ -397,7 +397,7 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         var roleLines = new List<string>();
-        roleLines.AddRange(isScoutPlanner
+        roleLines.AddRange(RoleRequirementManifestPath.Apply(isScoutPlanner
             ? SdlcRolePromptRequirements.BuildScout(
                 complexity,
                 SdlcRolePromptRequirements.HasHighRiskOrComplexIntakeRiskLabel(goal))
@@ -405,7 +405,7 @@ public sealed partial class AgentOrchestratorKernel
                 task.RequiredRole,
                 complexity,
                 SdlcRolePromptRequirements.HasHighRiskOrComplexIntakeRiskLabel(goal),
-                hasDurableResearch));
+                hasDurableResearch), acceptanceManifestPromptPath));
         if (!string.IsNullOrWhiteSpace(contextDirectory))
             CriteriaSelfCheckPromptContext.Externalize(roleLines, task.RequiredRole, includeReference: false);
         roleLines.Add(string.Empty);
