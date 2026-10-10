@@ -43,6 +43,7 @@ internal sealed partial class ConductorContinuitySupervisor
         private int? _lastTick;
         private DateTimeOffset? _lastTickEndAt;
         private DateTimeOffset _lastLineAt;
+        private DateTimeOffset? _loopReadyAt;
         private TaskCompletionSource _changed = NewSignal();
 
         internal ActivationMonitor(Func<DateTimeOffset> utcNow)
@@ -55,7 +56,13 @@ internal sealed partial class ConductorContinuitySupervisor
         {
             lock (_gate)
             {
-                if (!string.IsNullOrWhiteSpace(line)) _lastLineAt = _utcNow();
+                var nonBlank = !string.IsNullOrWhiteSpace(line);
+                if (nonBlank) _lastLineAt = _utcNow();
+                if (!_started && _loopReadyAt is null &&
+                    line.StartsWith(LoopReadyLinePrefix, StringComparison.Ordinal))
+                {
+                    _loopReadyAt = _lastLineAt;
+                }
                 if (line.StartsWith("LOOP_START ", StringComparison.Ordinal) && !_started)
                 {
                     _started = true;
@@ -70,7 +77,7 @@ internal sealed partial class ConductorContinuitySupervisor
                         CultureInfo.InvariantCulture, out var tick) ? tick : null;
                     _lastTickEndAt = _utcNow();
                 }
-                else
+                else if (_started || _loopReadyAt is null || !nonBlank)
                 {
                     return;
                 }
@@ -102,6 +109,14 @@ internal sealed partial class ConductorContinuitySupervisor
             lock (_gate)
             {
                 return _lastLineAt;
+            }
+        }
+
+        internal DateTimeOffset? LoopReadyAt()
+        {
+            lock (_gate)
+            {
+                return _loopReadyAt;
             }
         }
 
@@ -158,25 +173,52 @@ internal sealed partial class ConductorContinuitySupervisor
                     ended, ended?.TerminationConfirmed == true);
             }
 
-            using var deadlineCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             var timeout = !snapshot.Started ? _readinessTimeout :
                 snapshot.Ticks == 0 ? _activationStallTimeout : tickGapTimeout;
-            var deadline = _activationDelay(timeout, deadlineCts.Token);
-            var completed = await Task.WhenAny(runTask, snapshot.Changed, deadline).ConfigureAwait(false);
-            deadlineCts.Cancel();
-            if (completed == snapshot.Changed || completed == runTask || runTask.IsCompleted ||
-                monitor.Snapshot().Changed != snapshot.Changed)
+            var loopReadyAt = !snapshot.Started ? monitor.LoopReadyAt() : null;
+            var ceilingReached = false;
+            if (loopReadyAt is { } readyAt)
+            {
+                var startup = ConductorStartupProgressDeadline.Compute(
+                    readyAt, monitor.LastLineAt(), _timeProvider.GetUtcNow(), _readinessTimeout);
+                timeout = startup.Delay;
+                ceilingReached = startup.CeilingReached;
+            }
+
+            if (!ceilingReached)
+            {
+                using var deadlineCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                var deadline = _activationDelay(timeout, deadlineCts.Token);
+                var completed = await Task.WhenAny(runTask, snapshot.Changed, deadline).ConfigureAwait(false);
+                deadlineCts.Cancel();
+                if (completed == snapshot.Changed || completed == runTask)
+                {
+                    continue;
+                }
+            }
+
+            var current = monitor.Snapshot();
+            if (runTask.IsCompleted || current.Started != snapshot.Started ||
+                (!ceilingReached && current.Changed != snapshot.Changed))
             {
                 continue;
             }
 
             cancellationToken.ThrowIfCancellationRequested();
+            if (loopReadyAt is { } deadlineReadyAt)
+            {
+                ceilingReached = ConductorStartupProgressDeadline.Compute(
+                    deadlineReadyAt, monitor.LastLineAt(), _timeProvider.GetUtcNow(), _readinessTimeout)
+                    .CeilingReached;
+            }
             processCts.Cancel();
             var stopped = await ObserveStoppedSuccessor(runTask).ConfigureAwait(false);
             return new(false,
                 snapshot.Started ? ConductorActivationRevertReason.TickStall :
                     ConductorActivationRevertReason.ReadinessNeverReported,
-                snapshot.Started ? $"lastHealthyTick={snapshot.Ticks}" : "LOOP_START missing",
+                snapshot.Started ? $"lastHealthyTick={snapshot.Ticks}" : ceilingReached
+                    ? $"LOOP_START missing ceiling={(int)ConductorStartupProgressDeadline.Ceiling.TotalSeconds}"
+                    : "LOOP_START missing",
                 stopped, stopped?.TerminationConfirmed == true);
         }
     }
