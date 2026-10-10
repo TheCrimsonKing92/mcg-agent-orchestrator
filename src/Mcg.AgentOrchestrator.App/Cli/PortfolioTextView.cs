@@ -3,7 +3,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
-internal static partial class ConsoleViews
+internal static class PortfolioTextView
 {
     public static void PrintEpicRollups(IReadOnlyList<EpicProgressRollup> rollups, DateTimeOffset? since = null,
         IReadOnlyDictionary<string, string>? summaries = null)
@@ -26,17 +26,17 @@ internal static partial class ConsoleViews
 
     internal static string FormatEpicRollupLine(EpicProgressRollup row)
     {
-        var project = row.Project is null ? "unassigned" : $"{row.Project.Title} ({ShortId(row.Project.Id)})";
+        var project = row.Project is null ? "unassigned" : $"{row.Project.Title} ({CliIdentifierText.ShortId(row.Project.Id)})";
         var window = row.WindowCreatedCount is null ? string.Empty
             : $" window-created={row.WindowCreatedCount} window-transitioned={row.WindowTransitionedCount} window-failed={row.WindowFailedCount} window-landed={row.WindowLandedCount}";
-        return $"{row.Epic.Title} ({ShortId(row.Epic.Id)}) project={project} goals={row.GoalCount} backlog={row.BacklogItemCount} active={row.ActiveCount} verified={row.VerifiedCount} parked={row.ParkedCount} landed={row.LandedCount} newest={FormatTimestamp(row.NewestUpdatedAt)} verifying={row.VerifyingCount} failed={row.FailedCount} closed={row.ClosedCount} missing={row.MissingCount} backlog-open={row.BacklogOpenCount} backlog-done={row.BacklogDoneCount}{window}";
+        return $"{row.Epic.Title} ({CliIdentifierText.ShortId(row.Epic.Id)}) project={project} goals={row.GoalCount} backlog={row.BacklogItemCount} active={row.ActiveCount} verified={row.VerifiedCount} parked={row.ParkedCount} landed={row.LandedCount} newest={FormatTimestamp(row.NewestUpdatedAt)} verifying={row.VerifyingCount} failed={row.FailedCount} closed={row.ClosedCount} missing={row.MissingCount} backlog-open={row.BacklogOpenCount} backlog-done={row.BacklogDoneCount}{window}";
     }
 
     public static void PrintEpicShow(EpicProgressRollup row, string? summary = null)
     {
         Console.WriteLine($"Epic: {row.Epic.Title}");
         Console.WriteLine($"Id: {row.Epic.Id}");
-        Console.WriteLine(row.Project is null ? "Project: unassigned" : $"Project: {row.Project.Title} ({ShortId(row.Project.Id)})");
+        Console.WriteLine(row.Project is null ? "Project: unassigned" : $"Project: {row.Project.Title} ({CliIdentifierText.ShortId(row.Project.Id)})");
         if (row.Epic.Description is null)
             Console.WriteLine("Description: (no description)");
         else
@@ -51,18 +51,18 @@ internal static partial class ConsoleViews
         if (summary is not null) Console.WriteLine($"  {summary}");
         Console.WriteLine("Member goals:");
         foreach (var member in row.MemberGoals)
-            Console.WriteLine($"  - {ShortId(member.Id)} {member.Status} updated={FormatTimestamp(member.UpdatedAt)} {member.Title}");
+            Console.WriteLine($"  - {CliIdentifierText.ShortId(member.Id)} {member.Status} updated={FormatTimestamp(member.UpdatedAt)} {member.Title}");
     }
 
     public static void PrintEpicMembers(PortfolioEpic epic, IReadOnlyList<PortfolioEpicMember> members)
     {
         if (members.Count == 0)
         {
-            Console.WriteLine($"Epic {epic.Title} ({ShortId(epic.Id)}) has no members.");
+            Console.WriteLine($"Epic {epic.Title} ({CliIdentifierText.ShortId(epic.Id)}) has no members.");
             return;
         }
 
-        Console.WriteLine($"Epic {epic.Title} ({ShortId(epic.Id)}) members:");
+        Console.WriteLine($"Epic {epic.Title} ({CliIdentifierText.ShortId(epic.Id)}) members:");
         foreach (var member in members)
             Console.WriteLine($"  {member.Kind}: {member.MemberId}");
     }
@@ -78,13 +78,13 @@ internal static partial class ConsoleViews
         foreach (var projectGroup in rollups.GroupBy(row => row.Project?.Id ?? "", StringComparer.Ordinal))
         {
             var project = projectGroup.First().Project;
-            Console.WriteLine(project is null ? "Project: unassigned" : $"Project: {project.Title} ({ShortId(project.Id)})");
+            Console.WriteLine(project is null ? "Project: unassigned" : $"Project: {project.Title} ({CliIdentifierText.ShortId(project.Id)})");
             foreach (var epic in projectGroup.OrderBy(row => row.Epic.Title, StringComparer.OrdinalIgnoreCase))
             {
-                Console.WriteLine($"  Epic: {epic.Epic.Title} ({ShortId(epic.Epic.Id)}) goals={epic.GoalCount} active={epic.ActiveCount} verified={epic.VerifiedCount} parked={epic.ParkedCount} landed={epic.LandedCount} newest={FormatTimestamp(epic.NewestTransitionAt)}");
+                Console.WriteLine($"  Epic: {epic.Epic.Title} ({CliIdentifierText.ShortId(epic.Epic.Id)}) goals={epic.GoalCount} active={epic.ActiveCount} verified={epic.VerifiedCount} parked={epic.ParkedCount} landed={epic.LandedCount} newest={FormatTimestamp(epic.NewestTransitionAt)}");
                 foreach (var goalRow in rows.Where(row => row.Epic.Id == epic.Epic.Id))
                 {
-                    Console.WriteLine($"    - {ShortId(goalRow.Goal.Id.Value)} [{goalRow.Goal.Status}] newest={FormatTimestamp(goalRow.NewestTransitionAt)} {OutputTextPreview.CreateSummary(goalRow.Goal.Objective).Text}");
+                    Console.WriteLine($"    - {CliIdentifierText.ShortId(goalRow.Goal.Id.Value)} [{goalRow.Goal.Status}] newest={FormatTimestamp(goalRow.NewestTransitionAt)} {OutputTextPreview.CreateSummary(goalRow.Goal.Objective).Text}");
                 }
             }
         }
@@ -100,9 +100,9 @@ internal static partial class ConsoleViews
 
         foreach (var suggestion in suggestions)
         {
-            var goals = suggestion.GoalIds.Count == 0 ? "none" : string.Join(",", suggestion.GoalIds.Select(ShortId));
-            var backlog = suggestion.BacklogItemIds.Count == 0 ? "none" : string.Join(",", suggestion.BacklogItemIds.Select(ShortId));
-            Console.WriteLine($"{ShortId(suggestion.Id)} signal={suggestion.Signal} goals={goals} backlog={backlog} title={suggestion.Title}");
+            var goals = suggestion.GoalIds.Count == 0 ? "none" : string.Join(",", suggestion.GoalIds.Select(CliIdentifierText.ShortId));
+            var backlog = suggestion.BacklogItemIds.Count == 0 ? "none" : string.Join(",", suggestion.BacklogItemIds.Select(CliIdentifierText.ShortId));
+            Console.WriteLine($"{CliIdentifierText.ShortId(suggestion.Id)} signal={suggestion.Signal} goals={goals} backlog={backlog} title={suggestion.Title}");
             Console.WriteLine($"  evidence: {suggestion.Evidence}");
         }
     }

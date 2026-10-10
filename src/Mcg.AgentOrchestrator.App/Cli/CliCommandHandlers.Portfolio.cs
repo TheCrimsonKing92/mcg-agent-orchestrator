@@ -198,7 +198,7 @@ private static bool? TryExecutePortfolioCommand(string command, IReadOnlyList<st
             var epic = store.ResolveEpicAsync(parts[1]).GetAwaiter().GetResult()
                 ?? throw new InvalidOperationException($"Epic '{parts[1]}' was not found.");
             var members = store.ListEpicMembersAsync(epic.Id).GetAwaiter().GetResult();
-            ConsoleViews.PrintEpicMembers(epic, members);
+            PortfolioTextView.PrintEpicMembers(epic, members);
             return false;
         }
 
@@ -236,7 +236,7 @@ private static bool? TryExecutePortfolioCommand(string command, IReadOnlyList<st
             var store = new PortfolioStore(context.Workspace.PortfolioStorePath);
             var rollups = store.BuildEpicRollupsAsync(context.Kernel.Goals).GetAwaiter().GetResult();
             var rows = store.BuildPortfolioGoalRowsAsync(context.Kernel.Goals).GetAwaiter().GetResult();
-            ConsoleViews.PrintPortfolio(rollups, rows);
+            PortfolioTextView.PrintPortfolio(rollups, rows);
             return false;
         }
 
@@ -246,14 +246,14 @@ private static bool? TryExecutePortfolioCommand(string command, IReadOnlyList<st
             var backlog = new BacklogStore(context.Workspace.BacklogStorePath).ListAsync(includeAll: true).GetAwaiter().GetResult();
             var suggestions = PortfolioClusterer.BuildSuggestions(context.Kernel.Goals, backlog);
             store.ReplaceSuggestionsAsync(suggestions).GetAwaiter().GetResult();
-            ConsoleViews.PrintClusterSuggestions(suggestions);
+            PortfolioTextView.PrintClusterSuggestions(suggestions);
             return false;
         }
 
         case "epic-suggestions":
         {
             var store = new PortfolioStore(context.Workspace.PortfolioStorePath);
-            ConsoleViews.PrintClusterSuggestions(store.ListSuggestionsAsync().GetAwaiter().GetResult());
+            PortfolioTextView.PrintClusterSuggestions(store.ListSuggestionsAsync().GetAwaiter().GetResult());
             return false;
         }
 

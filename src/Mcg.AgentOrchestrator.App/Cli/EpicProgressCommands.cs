@@ -16,7 +16,7 @@ internal static class EpicProgressCommands
         }
         var rollups = EpicProgressReadModel.Load(workspace, since);
         var plans = EpicPlanStatusReader.Load(workspace, rollups.Select(row => row.Epic).ToArray());
-        ConsoleViews.PrintEpicRollups(rollups, since,
+        PortfolioTextView.PrintEpicRollups(rollups, since,
             plans.ToDictionary(pair => pair.Key, pair => EpicPlanNextStep.Summary(pair.Value.Items)));
         return false;
     }
@@ -26,7 +26,7 @@ internal static class EpicProgressCommands
         CliArgumentParser.RequirePartCount(parts, 2, "epic-show <epic>");
         var row = EpicProgressReadModel.LoadEpic(workspace, parts[1]);
         var plan = EpicPlanStatusReader.Load(workspace, [row.Epic])[row.Epic.Id];
-        ConsoleViews.PrintEpicShow(row, EpicPlanNextStep.Summary(plan.Items));
+        PortfolioTextView.PrintEpicShow(row, EpicPlanNextStep.Summary(plan.Items));
         return false;
     }
 }

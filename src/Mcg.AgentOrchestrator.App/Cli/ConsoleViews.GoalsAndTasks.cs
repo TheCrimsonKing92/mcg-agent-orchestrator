@@ -78,7 +78,7 @@ public static void PrintGoal(
         Console.WriteLine("Effective acceptance criteria corrections:");
         foreach (var correction in goal.EffectiveAcceptanceCriteriaCorrections.OrderByDescending(item => item.RecordedAt))
         {
-            var source = correction.SourceTaskId is null ? "goal" : ShortId(correction.SourceTaskId.Value);
+            var source = correction.SourceTaskId is null ? "goal" : CliIdentifierText.ShortId(correction.SourceTaskId.Value);
             Console.WriteLine($"  - supersedes: {OutputTextPreview.CreateSummary(correction.SupersededCriterion).Text}");
             Console.WriteLine(correction.IsWaiver
                 ? $"    waiver reason: {OutputTextPreview.CreateSummary(correction.WaiverReason!).Text}"
@@ -170,7 +170,7 @@ public static void PrintGoal(
     for (var index = 0; index < goal.Tasks.Count; index++)
     {
         var task = goal.Tasks[index];
-        var assignment = task.AssignedAgentId is null ? "unassigned" : ShortId(task.AssignedAgentId.Value);
+        var assignment = task.AssignedAgentId is null ? "unassigned" : CliIdentifierText.ShortId(task.AssignedAgentId.Value);
         Console.WriteLine($"  {index + 1}. [{task.Status}] {task.RequiredRole}: {OutputTextPreview.CreateSummary(task.Description).Text} ({assignment})");
     }
 
@@ -185,7 +185,7 @@ public static void PrintTaskQueryResult(Goal goal, TaskQueryResult result)
 
     foreach (var task in result.Tasks)
     {
-        var assignment = task.AssignedAgentId is null ? "unassigned" : ShortId(task.AssignedAgentId.Value);
+        var assignment = task.AssignedAgentId is null ? "unassigned" : CliIdentifierText.ShortId(task.AssignedAgentId.Value);
         Console.WriteLine($"  {GetTaskDisplayNumber(goal, task.Id)}. {task.Id.Value[..8]} [{task.Status}] {task.RequiredRole}: {OutputTextPreview.CreateSummary(task.Description).Text} ({assignment}) evidence={FormatTaskEvidence(task)}");
     }
 
@@ -221,8 +221,6 @@ public static string FormatTaskEvidence(TaskSpec task)
 
     return "none";
 }
-
-private static string ShortId(string value) => value[..Math.Min(8, value.Length)];
 }
 
 
