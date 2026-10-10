@@ -30,7 +30,7 @@ public sealed class ChaosGateHermeticGitProbeTests : ChaosGateTestBase
                        return process.Start();
                    }))
             {
-                intended = CreateSeededRepo();
+                intended = CreateSeededRepoByLaunchingGit();
             }
 
             var head = InfrastructureTestSupport.RunGitProbe(intended, ["log", "-1", "--format=%s|%ae"]);
