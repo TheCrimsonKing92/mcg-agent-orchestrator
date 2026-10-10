@@ -85,11 +85,14 @@ public sealed class ConductorExperimentFlagKeepControllerTests
         AssertItemUnchanged(item, AssertConfirmed(fixture, record));
     }
 
-    [Fact]
-    public void TryKeep_DecisionFailsAfterUpsert_RestartConfirmsWithoutSecondItem()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TryKeep_DecisionFailsAfterUpsert_RestartConfirmsWithoutSecondItem(bool executors)
     {
         using var fixture = new ExperimentFlagTestFixture();
-        var record = Apply(fixture);
+        if (executors) File.WriteAllText(fixture.ExecutorsPath, ExperimentFlagTestFixture.ExecutorsJson());
+        var record = Apply(fixture, executors);
         // Abort exactly the decision write after the real backlog upsert has succeeded.
         ExecuteSql(fixture, """
             CREATE TRIGGER fail_keep_decision BEFORE UPDATE OF outcome ON experiments
@@ -106,7 +109,7 @@ public sealed class ConductorExperimentFlagKeepControllerTests
         ExecuteSql(fixture, "DROP TRIGGER fail_keep_decision;");
 
         var restarted = new ConductorExperimentFlagKeepController(new ExperimentStore(fixture.Workspace.ExperimentStorePath),
-            () => new BacklogStore(fixture.Workspace.BacklogStorePath), fixture.PolicyPath);
+            () => new BacklogStore(fixture.Workspace.BacklogStorePath), fixture.Flags);
         Assert.True(restarted.TryKeep(record, Reading(), ExperimentFlagTestFixture.Now.AddHours(1)));
         var decided = fixture.Experiments.ResolveAsync(record.Id).GetAwaiter().GetResult()!;
         Assert.False(restarted.TryKeep(record, Reading(), ExperimentFlagTestFixture.Now.AddHours(2)));
@@ -121,7 +124,7 @@ public sealed class ConductorExperimentFlagKeepControllerTests
         var record = Apply(fixture);
         var before = File.ReadAllBytes(fixture.PolicyPath);
         var controller = new ConductorExperimentFlagKeepController(fixture.Experiments,
-            () => throw new IOException("simulated backlog failure"), fixture.PolicyPath);
+            () => throw new IOException("simulated backlog failure"), fixture.Flags);
         Assert.Throws<IOException>(() => controller.TryKeep(record, Reading(), ExperimentFlagTestFixture.Now));
         Assert.Equal(ExperimentOutcomeState.Open, fixture.Experiments.ResolveAsync(record.Id).GetAwaiter().GetResult()!.Outcome);
         Assert.False(File.Exists(fixture.Workspace.BacklogStorePath));
@@ -150,22 +153,66 @@ public sealed class ConductorExperimentFlagKeepControllerTests
             Assert.DoesNotContain(forbidden, source);
     }
 
+    [Fact]
+    public void Executors_Keep_FilesOnceAndConfirmsWithoutWriting()
+    {
+        using var fixture = new ExperimentFlagTestFixture();
+        File.WriteAllText(fixture.ExecutorsPath, ExperimentFlagTestFixture.ExecutorsJson());
+        var record = Apply(fixture, executors: true);
+        var before = File.ReadAllBytes(fixture.ExecutorsPath);
+        Assert.True(Controller(fixture).TryKeep(record, Reading(), ExperimentFlagTestFixture.Now));
+        var item = AssertConfirmed(fixture, record);
+        Assert.Equal(BacklogItemStatus.Open, item.Status);
+        Assert.Contains("focusedEvidenceShadow", item.Body);
+        Assert.Contains("True", item.Body);
+        Assert.Contains("permanent", item.Title);
+        Assert.Contains("remove the flag", item.Title);
+        Assert.False(Controller(fixture).TryKeep(record, Reading(), ExperimentFlagTestFixture.Now.AddHours(1)));
+        AssertItemUnchanged(item, AssertConfirmed(fixture, record));
+        Assert.Equal(before, File.ReadAllBytes(fixture.ExecutorsPath));
+    }
+
+    [Theory]
+    [InlineData("off")]
+    [InlineData("bogus")]
+    [InlineData("missing")]
+    [InlineData("block-absent")]
+    [InlineData("mode-absent")]
+    public void Executors_Drift_DoesNotFileOrConfirm(string drift)
+    {
+        using var fixture = new ExperimentFlagTestFixture();
+        File.WriteAllText(fixture.ExecutorsPath, ExperimentFlagTestFixture.ExecutorsJson());
+        var record = Apply(fixture, executors: true);
+        if (drift == "missing") File.Delete(fixture.ExecutorsPath);
+        else File.WriteAllText(fixture.ExecutorsPath, drift switch
+        {
+            "block-absent" => "{\"executors\":[],\"lanes\":[]}",
+            "mode-absent" => "{\"executors\":[],\"lanes\":[],\"focusedEvidence\":{}}",
+            _ => ExperimentFlagTestFixture.ExecutorsJson(drift)
+        });
+        Assert.False(Controller(fixture).TryKeep(record, Reading(), ExperimentFlagTestFixture.Now));
+        Assert.False(File.Exists(fixture.Workspace.BacklogStorePath));
+        var unchanged = fixture.Experiments.ResolveAsync(record.Id).GetAwaiter().GetResult()!;
+        Assert.Equal(ExperimentOutcomeState.Open, unchanged.Outcome);
+        Assert.Null(unchanged.Decision);
+    }
+
     private static string RepositoryRoot([CallerFilePath] string source = "") => VerifiedRepositoryRoot.Find(source);
 
-    private static ExperimentRecord Apply(ExperimentFlagTestFixture fixture)
+    private static ExperimentRecord Apply(ExperimentFlagTestFixture fixture, bool executors = false)
     {
-        var record = fixture.Add();
+        var record = fixture.Add(executors ? ExperimentFlagTestFixture.ExecutorsSpec() : null);
         var intent = fixture.Submit(record.Id);
         fixture.Tick();
         Assert.Equal(OperatorIntentStatus.Applied, fixture.Result(intent).Status);
         record = fixture.Experiments.ResolveAsync(record.Id).GetAwaiter().GetResult()!;
         Assert.Equal(false, record.Spec.Intervention.FlagTarget!.PriorValue);
-        Assert.True(ConductorAutonomyPolicy.ParseJson(File.ReadAllText(fixture.PolicyPath)).FollowerGatesEnabled);
+        Assert.True(fixture.Flags.Read(record.Spec.Intervention.FlagTarget));
         return record;
     }
 
     private static ConductorExperimentFlagKeepController Controller(ExperimentFlagTestFixture fixture) =>
-        new(fixture.Experiments, () => new BacklogStore(fixture.Workspace.BacklogStorePath), fixture.PolicyPath);
+        new(fixture.Experiments, () => new BacklogStore(fixture.Workspace.BacklogStorePath), fixture.Flags);
 
     private static BacklogItem AssertConfirmed(ExperimentFlagTestFixture fixture, ExperimentRecord record)
     {
@@ -174,7 +221,7 @@ public sealed class ConductorExperimentFlagKeepControllerTests
         var item = Assert.Single(new BacklogStore(fixture.Workspace.BacklogStorePath).ListAsync().GetAwaiter().GetResult());
         Assert.Equal($"experiment-flag-keep-{record.Id}", item.Id);
         Assert.Equal($"backlog:{item.Id}", decided.Decision!.Evidence);
-        Assert.Contains("followerGatesEnabled=True", decided.Decision.Action);
+        Assert.Contains($"{record.Spec.Intervention.FlagTarget!.PropertyName}=True", decided.Decision.Action);
         Assert.Contains("remove the flag", decided.Decision.Action);
         return item;
     }

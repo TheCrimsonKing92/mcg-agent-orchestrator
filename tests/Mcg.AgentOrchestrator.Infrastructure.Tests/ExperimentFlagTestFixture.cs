@@ -10,6 +10,8 @@ internal sealed class ExperimentFlagTestFixture : IDisposable
     internal string Root { get; } = Path.Combine(Path.GetTempPath(), "experiment-flag-" + Guid.NewGuid().ToString("n"));
     internal OrchestratorWorkspace Workspace { get; }
     internal string PolicyPath { get; }
+    internal string ExecutorsPath { get; }
+    internal ExperimentFlagStateReader Flags => new(PolicyPath, ExecutorsPath);
     internal ExperimentStore Experiments { get; }
     internal SqliteOperatorIntentStore Intents { get; }
     internal OperatorIntentCoordinator Coordinator { get; }
@@ -22,10 +24,11 @@ internal sealed class ExperimentFlagTestFixture : IDisposable
         Experiments = new ExperimentStore(Workspace.ExperimentStorePath);
         Intents = SqliteOperatorIntentStore.ForDirectories(Workspace.OrchestratorDirectory, Workspace.LogDirectory);
         PolicyPath = Path.Combine(Workspace.OrchestratorDirectory, "conductor-policy.json");
+        ExecutorsPath = RemoteLaneExecutorConfiguration.ResolveStorePath(Workspace.ExecutionDirectory);
         File.WriteAllText(PolicyPath, PolicyJson());
         Coordinator = new OperatorIntentCoordinator(Intents, utcNow: () => Now)
         {
-            ExperimentFlags = new ExperimentFlagIntentHandler(Workspace.ExperimentStorePath, PolicyPath)
+            ExperimentFlags = new ExperimentFlagIntentHandler(Workspace.ExperimentStorePath, PolicyPath, ExecutorsPath)
         };
     }
 
@@ -44,6 +47,15 @@ internal sealed class ExperimentFlagTestFixture : IDisposable
         document["zzOperatorNote"] = JsonNode.Parse("{\"nested\":[1,2,\"keep me\"]}");
         return document.ToJsonString();
     }
+
+    internal static ExperimentSpec ExecutorsSpec() => Spec(new(ExperimentFlagFileKind.RemoteLaneExecutors,
+        RemoteLaneExecutorFlags.FocusedEvidenceShadow, true));
+
+    internal static string ExecutorsJson(string mode = "off") =>
+        "{\r\n  \"executors\": [{\"id\":\"remote-a\",\"slots\":2}], \"lanes\": [\"lane-a\"],\r\n" +
+        "  \"machineLocalResourceKeys\": [\"local-a\"], \"unknown\": {\"nested\":[1,2,\"keep me\"]},\r\n" +
+        "  \"focusedEvidence\" : { \"mode\" : \"" + mode + "\", \"sampleEvery\":7, \"graceSeconds\":120, " +
+        "\"unknown\":{\"mode\":\"off\"} }\r\n}\r\n";
 
     internal ExperimentRecord Add(ExperimentSpec? spec = null) => Experiments.AddAsync(spec ?? Spec()).GetAwaiter().GetResult();
 

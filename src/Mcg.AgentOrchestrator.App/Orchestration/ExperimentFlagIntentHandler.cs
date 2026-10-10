@@ -6,8 +6,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-/// <summary>The workspace intent seam is the sole experiment writer of conductor policy.</summary>
-internal sealed class ExperimentFlagIntentHandler(string experimentStorePath, string policyPath)
+/// <summary>The workspace intent seam is the sole experiment writer of targeted host configuration.</summary>
+internal sealed class ExperimentFlagIntentHandler(string experimentStorePath, string policyPath, string executorsPath)
 {
     internal bool Apply(OperatorIntentRecord intent) => Execute(intent, revert: false);
     internal bool Revert(OperatorIntentRecord intent) => Execute(intent, revert: true);
@@ -39,23 +39,48 @@ internal sealed class ExperimentFlagIntentHandler(string experimentStorePath, st
         if (record.Spec.Intervention.Kind != ExperimentInterventionKind.ConfigFlag)
             throw new InvalidOperationException("not-config-flag");
         var target = record.Spec.Intervention.FlagTarget ?? throw new InvalidOperationException("flag-target-missing");
-        if (target.FileKind != ExperimentFlagFileKind.ConductorPolicy)
-            throw new InvalidOperationException("file-kind-unsupported");
-        if (!ConductorPolicyBooleanFlags.IsAllowed(target.PropertyName))
+        var allowed = target.FileKind switch
+        {
+            ExperimentFlagFileKind.ConductorPolicy => ConductorPolicyBooleanFlags.IsAllowed(target.PropertyName),
+            ExperimentFlagFileKind.RemoteLaneExecutors => RemoteLaneExecutorFlags.IsAllowed(target.PropertyName),
+            _ => throw new InvalidOperationException("file-kind-unsupported")
+        };
+        if (!allowed)
             throw new InvalidOperationException($"property-not-allowlisted {target.PropertyName}");
         if (revert && target.PriorValue is null) throw new InvalidOperationException("flag-not-applied");
-        if (!File.Exists(policyPath)) throw new InvalidOperationException("policy-file-missing");
 
-        string json;
+        string? json = null;
+        byte[]? executorsCandidate = null;
         bool current;
-        try
+        if (target.FileKind == ExperimentFlagFileKind.RemoteLaneExecutors)
         {
-            json = File.ReadAllText(policyPath);
-            var policy = ConductorAutonomyPolicy.ParseJson(json);
-            current = ConductorPolicyBooleanFlags.Read(policy, target.PropertyName);
+            if (!File.Exists(executorsPath)) throw new InvalidOperationException("executors-file-missing");
+            try
+            {
+                var original = File.ReadAllBytes(executorsPath);
+                var configuration = RemoteLaneExecutorConfiguration.LoadForFocusedEvidence(executorsPath);
+                if (configuration.DisabledReason is not null || configuration.FocusedEvidence.FaultReason is not null)
+                    throw new InvalidOperationException("executors-file-invalid");
+                current = configuration.FocusedEvidence.Mode == "shadow";
+                executorsCandidate = RemoteLaneExecutorFlags.Rewrite(original, target.PropertyName,
+                    revert ? target.PriorValue!.Value : target.ValueToApply);
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException)
+            { throw new InvalidOperationException("executors-file-invalid", error); }
+            if (executorsCandidate is null) throw new InvalidOperationException("focused-evidence-mode-absent");
         }
-        catch (Exception error) when (error is JsonException or FormatException or InvalidOperationException)
-        { throw new InvalidOperationException("policy-file-invalid", error); }
+        else
+        {
+            if (!File.Exists(policyPath)) throw new InvalidOperationException("policy-file-missing");
+            try
+            {
+                json = File.ReadAllText(policyPath);
+                var policy = ConductorAutonomyPolicy.ParseJson(json);
+                current = ConductorPolicyBooleanFlags.Read(policy, target.PropertyName);
+            }
+            catch (Exception error) when (error is JsonException or FormatException or InvalidOperationException)
+            { throw new InvalidOperationException("policy-file-invalid", error); }
+        }
 
         if (!revert && target.PriorValue is null)
         {
@@ -67,23 +92,35 @@ internal sealed class ExperimentFlagIntentHandler(string experimentStorePath, st
         }
         var desired = revert ? target.PriorValue!.Value : target.ValueToApply;
         if (current == desired) return true;
-        var candidate = ExperimentPolicyPropertyRewrite.Rewrite(json, target.PropertyName, desired);
-        ConductorAutonomyPolicy.ParseJson(candidate);
-        WriteAtomically(candidate);
+        if (executorsCandidate is not null)
+            WriteAtomically(executorsPath, executorsCandidate, temporary =>
+            {
+                var configuration = RemoteLaneExecutorConfiguration.LoadForFocusedEvidence(temporary);
+                if (configuration.DisabledReason is not null || configuration.FocusedEvidence.FaultReason is not null ||
+                    (configuration.FocusedEvidence.Mode == "shadow") != desired)
+                    throw new InvalidOperationException("executors-file-invalid");
+            });
+        else
+        {
+            var candidate = ExperimentPolicyPropertyRewrite.Rewrite(json!, target.PropertyName, desired);
+            ConductorAutonomyPolicy.ParseJson(candidate);
+            WriteAtomically(policyPath, Encoding.UTF8.GetBytes(candidate));
+        }
         return false;
     }
 
-    private void WriteAtomically(string json)
+    private static void WriteAtomically(string path, byte[] bytes, Action<string>? validate = null)
     {
-        var temporary = policyPath + "." + Guid.NewGuid().ToString("n") + ".tmp";
+        var temporary = path + "." + Guid.NewGuid().ToString("n") + ".tmp";
         try
         {
             using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             {
-                stream.Write(Encoding.UTF8.GetBytes(json));
+                stream.Write(bytes);
                 stream.Flush(flushToDisk: true);
             }
-            File.Move(temporary, policyPath, overwrite: true);
+            validate?.Invoke(temporary);
+            File.Move(temporary, path, overwrite: true);
         }
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
     }
