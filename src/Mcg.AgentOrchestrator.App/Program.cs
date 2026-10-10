@@ -215,6 +215,8 @@ if (CliRemoteLaneSelfTestCommand.IsCommand(startupArgs))
 
 if (Mcg.AgentOrchestrator.App.OwnerConsole.OwnerConsoleVerb.IsCommand(startupArgs))
     return ExitCompletedStartupCommand(await Mcg.AgentOrchestrator.App.OwnerConsole.OwnerConsoleVerb.RunAsync(startupArgs, workspace));
+if (CliOperatorIntentRoute.IsServed(startupArgs))
+    return ExitCompletedStartupCommand(CliOperatorIntentRoute.Run(startupArgs, workspace));
 
 if (ConductorContinuitySupervisor.ShouldSupervise(
         startupArgs,

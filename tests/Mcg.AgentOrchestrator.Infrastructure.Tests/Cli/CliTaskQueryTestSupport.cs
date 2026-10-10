@@ -66,6 +66,8 @@ public abstract class CliTaskQueryTestSupport
 
         public int LoadGoalsCount { get; private set; }
 
+        public int LoadGoalCount { get; private set; }
+
         public int ListGoalMetadataCount { get; private set; }
 
         public int MutationAttempts { get; private set; }
@@ -212,6 +214,7 @@ public abstract class CliTaskQueryTestSupport
             CancellationToken cancellationToken = default)
         {
             ObserveWriteOperationTag();
+            LoadGoalCount++;
             return Task.FromResult<GoalSnapshot?>(_kernel.ExportSnapshot().Goals.SingleOrDefault(goal => goal.Id == goalId.Value));
         }
 

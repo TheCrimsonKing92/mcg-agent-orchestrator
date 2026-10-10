@@ -14,6 +14,7 @@ internal static partial class CliCriterionEvidenceIntents
     public static void Submit(IReadOnlyList<string> args, OrchestratorWorkspace workspace,
         Goal goal, CliPersistentStateRunner.OperatorIntentAttribution attribution)
     {
+        if (CliCriterionNumberList.TrySubmit(args, workspace, goal, attribution)) return;
         var verb = args[0].ToLowerInvariant();
         var target = verb is OperatorIntentVerbs.CriterionEvidenceMap or OperatorIntentVerbs.CriterionEvidenceRepair
             ? ResolveCriterionTarget(args, goal)
@@ -59,7 +60,7 @@ internal static partial class CliCriterionEvidenceIntents
 
     }
 
-    private static (int Index, int Version, string Text) ResolveCriterionTarget(IReadOnlyList<string> args, Goal goal)
+    internal static (int Index, int Version, string Text) ResolveCriterionTarget(IReadOnlyList<string> args, Goal goal)
     {
         const string numberError = "Criterion numbers are 1-based, as the brief numbers them.";
         if (!args.Any(value => value.Equals("--criterion", StringComparison.OrdinalIgnoreCase)))
@@ -121,7 +122,7 @@ internal static partial class CliCriterionEvidenceIntents
         return value;
     }
 
-    private static IReadOnlyList<string> PositionalCriterionEvidenceArguments(IReadOnlyList<string> args)
+    internal static IReadOnlyList<string> PositionalCriterionEvidenceArguments(IReadOnlyList<string> args)
     {
         var values = new List<string>();
         for (var index = 1; index < args.Count; index++)
@@ -146,7 +147,7 @@ internal static partial class CliCriterionEvidenceIntents
         return values;
     }
 
-    private static CriterionEvidenceMappingOperatorIntentPayload BuildCriterionEvidenceMappingPayload(IReadOnlyList<string> values, int index, int version)
+    internal static CriterionEvidenceMappingOperatorIntentPayload BuildCriterionEvidenceMappingPayload(IReadOnlyList<string> values, int index, int version)
     {
         var usage = CliCommandHelp.CriterionEvidenceMapUsage["Usage: ".Length..];
         if (values.Count != 4 || !Enum.TryParse<CriterionEvidenceOwner>(values[0], true, out var owner) ||
@@ -189,14 +190,14 @@ internal static partial class CliCriterionEvidenceIntents
         IReadOnlyList<string> args,
         OrchestratorWorkspace workspace)
     {
-        var (intentId, _) = ParseStatusArguments(args);
+        var (intentIds, _) = ParseStatusArguments(args);
 
         var databasePath = Path.Combine(
             workspace.OrchestratorDirectory,
             SqliteOperatorIntentStore.DatabaseFileName);
         if (!File.Exists(databasePath))
         {
-            throw new KeyNotFoundException($"Operator intent '{intentId}' was not found.");
+            throw new KeyNotFoundException($"Operator intent '{intentIds[0]}' was not found.");
         }
 
         var exitCode = PrintStatus(args,

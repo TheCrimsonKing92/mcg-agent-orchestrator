@@ -11,7 +11,7 @@ internal static class CliCommandHelp
     public const string AcceptanceUsage = "Usage: acceptance [goal-id-prefix] [--skip-verify] [--keep-workspace] [--no-record] [--autonomy <policy>]";
     public const string RunGoalUsage = "Usage: run-goal [goal-id-prefix] --confirm-batch-start [--confirm-large-paid-subscription-start] [--confirm-readiness-risk] [--autonomy <policy>]";
     public const string GoalIntakeStatusUsage = "Usage: goal-intake-status <request-key>";
-    public const string OperatorIntentStatusUsage = "Usage: operator-intent-status <intent-id> [--wait [seconds]] (default 300 seconds; with --wait: exit 0 Applied, 2 Rejected, 3 Pending/Claimed at deadline; without --wait: one read, exit 0)";
+    public const string OperatorIntentStatusUsage = "Usage: operator-intent-status <intent-id> [<intent-id> ...] [--wait [seconds]] (default 300 seconds; with --wait: exit 0 all Applied, 2 any Rejected, 3 any Pending/Claimed at shared deadline; Rejected takes precedence; without --wait: one read per id, exit 0)";
     public const string GoalBoardUsage = GoalBoardOptions.Usage;
     public const string GoalReplaceUsage = "Usage: goal-replace <predecessor-goal-id> --brief-file <path> --reason-file <path> --request-id <guid> --disposition <zero-work-correction|abandon-failed-attempt|supersede-unlanded-attempt> --confirm-goal-replace [--pipeline <auto|scout|five-role|developer-reviewer|developer-only>] [--ideation <agent>|--researcher <agent>|--planner <agent>|--developer <agent>|--tester <agent>|--reviewer <agent>]";
     public const string AddTaskUsage = "Usage: add-task [--goal <goal-prefix>] <role> <description> [--before-role <role>] | add-task [--goal <goal-prefix>] <role> --text-file <path> [--before-role <role>]";
@@ -260,7 +260,7 @@ internal static class CliCommandHelp
         "Record a human candidate-bound approval for acceptance policy changes.",
         ["--text-file", "--idempotency-key", "--operator-actor", "--actor-kind", "--help", "-h"]);
 
-    public const string CriterionEvidenceMapUsage = "Usage: criterion-evidence-map --goal <goal-prefix> --criterion <brief-number> [--version <criterion-version>] <acceptance|operator> <required-scope> <finding-stable-id> <candidate-sha> [--idempotency-key <key>] [--operator-actor <actor>]";
+    public const string CriterionEvidenceMapUsage = "Usage: criterion-evidence-map --goal <goal-prefix> --criterion <brief-number>[,<brief-number>...] [--version <criterion-version>] <acceptance|operator> <required-scope> <finding-stable-id> <candidate-sha> [--idempotency-key <key>] [--operator-actor <actor>]";
     public const string CriterionEvidenceRecordUsage = "Usage: criterion-evidence-record --goal <goal-prefix> <obligation-id> operator <candidate-sha> <receipt-id> <scope> <passed|failed> <detail> [--idempotency-key <key>] [--operator-actor <actor>]";
     public const string CriterionEvidenceRepairUsage = "Usage: criterion-evidence-repair --goal <goal-prefix> <malformed-obligation-id> --criterion <brief-number> [--version <criterion-version>] <acceptance|operator> <required-scope> <finding-stable-id> <candidate-sha> <reason> [--idempotency-key <key>] [--operator-actor <actor>]";
 
