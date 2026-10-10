@@ -54,7 +54,7 @@ public sealed class CliOperatorIntentRouteTestsCriterionBatch : CliTaskQueryTest
             Assert.Equal(OperatorIntentStatus.Claimed, (await fixture.Store.GetAsync(intent.Id))!.Status);
         var beforeSave = await repository.LoadGoalAsync(fixture.Goal.Id);
         Assert.NotNull(beforeSave);
-        Assert.Empty(beforeSave.CriterionEvidenceObligations);
+        Assert.Empty(beforeSave.CriterionEvidenceObligations ?? []);
         await repository.SaveAsync(fixture.Kernel);
         var persisted = await repository.LoadGoalAsync(fixture.Goal.Id);
         Assert.NotNull(persisted);
