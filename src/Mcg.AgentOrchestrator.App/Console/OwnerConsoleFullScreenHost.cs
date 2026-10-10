@@ -38,10 +38,11 @@ internal static class OwnerConsoleFullScreenHost
             var cohortEvidence = new OwnerActivityEvidenceReader(Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db"));
             var gateEvidence = new OwnerGateFailureEvidence(workspace.OrchestratorDirectory);
             var jointEvidence = new OwnerJointGateFailureEvidence(workspace.OrchestratorDirectory);
+            var gateMotion = new OwnerGateMotionReader(workspace.ConductEventsLogPath, clock);
             var builder = new OwnerConsoleViewModelBuilder(state, questions,
                 new ConductorLeaseLiveness(workspace.OrchestratorDirectory), new PortfolioGoalEpicLookup(workspace.PortfolioStorePath), clock,
                 item => item.EventKind == "acceptance-cohort" ? jointEvidence.Read(item, cohortEvidence.Read(item)) :
-                    gateEvidence.Read(item) ?? jointEvidence.Read(item));
+                    gateEvidence.Read(item) ?? jointEvidence.Read(item), gateMotion.Describe);
             var opened = clock.GetUtcNow();
             DateTimeOffset? last = null;
             var landings = 0;

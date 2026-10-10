@@ -7,7 +7,7 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries state,
     IOwnerQuestionSource questions, IConductorLiveness liveness, IOwnerGoalEpicLookup epics, TimeProvider clock,
-    Func<OwnerConductEvent, OwnerActivityTestEvidence?>? testEvidence = null)
+    Func<OwnerConductEvent, OwnerActivityTestEvidence?>? testEvidence = null, Func<string, string?>? gateMotion = null)
 {
     internal const int MaxActivityItems = 100;
     private readonly Dictionary<string, int> _numbers = new(StringComparer.OrdinalIgnoreCase);
@@ -87,6 +87,8 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
             {
                 var stage = OwnerConsoleStageDescriber.Describe(goal, key,
                     key.Rank == OwnerConsoleAttention.WaitingForGate ? ++queuePosition : null, now);
+                if (key.Rank == OwnerConsoleAttention.GateRunning && gateMotion?.Invoke(goal.Id.Value) is { } motion &&
+                    !string.IsNullOrWhiteSpace(motion)) stage += ", " + motion;
                 board.Add(new(Prefix(goal.Id.Value), await epics.GetTitleAsync(goal.Id.Value, cancellationToken),
                     OwnerGoalTitle.Full(goal.Objective), goal.Status.ToString(), stage,
                     Age(goal.Timeline.MaxBy(item => item.OccurredAt)?.OccurredAt), goal.Id.Value,
