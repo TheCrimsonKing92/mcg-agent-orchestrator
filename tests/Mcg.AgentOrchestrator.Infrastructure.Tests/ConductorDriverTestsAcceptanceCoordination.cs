@@ -285,14 +285,7 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
     public void ConductorDriverRealDispatchCheckpointRollsBackThenNotifiesOnSuccess()
     {
         var root = CreateTempDirectory();
-        SeedLocalSkillCatalog(root);
-        RunGit(root, "init");
-        RunGit(root, "checkout", "-b", "main");
-        RunGit(root, "config", "user.email", "test@example.com");
-        RunGit(root, "config", "user.name", "Test User");
-        File.WriteAllText(Path.Combine(root, "README.md"), "initial");
-        RunGit(root, "add", ".");
-        RunGit(root, "commit", "-m", "initial");
+        MainBranchGitRepositoryTemplate.CopyTo(root, includeSkillCatalog: true);
 
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
@@ -343,14 +336,7 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
     public void ConductorDriverCriticalCheckpointConflictHoldsWithoutStartingStaleWorker()
     {
         var root = CreateTempDirectory();
-        SeedLocalSkillCatalog(root);
-        RunGit(root, "init");
-        RunGit(root, "checkout", "-b", "main");
-        RunGit(root, "config", "user.email", "test@example.com");
-        RunGit(root, "config", "user.name", "Test User");
-        File.WriteAllText(Path.Combine(root, "README.md"), "initial");
-        RunGit(root, "add", ".");
-        RunGit(root, "commit", "-m", "initial");
+        MainBranchGitRepositoryTemplate.CopyTo(root, includeSkillCatalog: true);
 
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
@@ -406,14 +392,7 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
     public void ConductorDriverTerminalCriticalCheckpointConflictHoldsAfterAuthoritativeEviction()
     {
         var root = CreateTempDirectory();
-        SeedLocalSkillCatalog(root);
-        RunGit(root, "init");
-        RunGit(root, "checkout", "-b", "main");
-        RunGit(root, "config", "user.email", "test@example.com");
-        RunGit(root, "config", "user.name", "Test User");
-        File.WriteAllText(Path.Combine(root, "README.md"), "initial");
-        RunGit(root, "add", ".");
-        RunGit(root, "commit", "-m", "initial");
+        MainBranchGitRepositoryTemplate.CopyTo(root, includeSkillCatalog: true);
 
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
@@ -538,13 +517,7 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
     public void ConductorDriverReplacementLeaseBlocksAcceptanceAndLandingEvidenceMutation()
     {
         var root = CreateTempDirectory();
-        RunGit(root, "init");
-        RunGit(root, "checkout", "-b", "main");
-        RunGit(root, "config", "user.email", "test@example.com");
-        RunGit(root, "config", "user.name", "Test User");
-        File.WriteAllText(Path.Combine(root, "README.md"), "initial");
-        RunGit(root, "add", ".");
-        RunGit(root, "commit", "-m", "initial");
+        MainBranchGitRepositoryTemplate.CopyTo(root, includeSkillCatalog: false);
 
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         var kernel = new AgentOrchestratorKernel();
@@ -664,13 +637,7 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
     public void ConductorDriverAcceptanceSlotsBusyJournalsBlockedOutcome()
     {
         var root = CreateTempDirectory();
-        RunGit(root, "init");
-        RunGit(root, "checkout", "-b", "main");
-        RunGit(root, "config", "user.email", "test@example.com");
-        RunGit(root, "config", "user.name", "Test User");
-        File.WriteAllText(Path.Combine(root, "README.md"), "initial");
-        RunGit(root, "add", ".");
-        RunGit(root, "commit", "-m", "initial");
+        MainBranchGitRepositoryTemplate.CopyTo(root, includeSkillCatalog: false);
 
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         var kernel = new AgentOrchestratorKernel();
@@ -1070,13 +1037,7 @@ public sealed partial class ConductorDriverTestsAcceptanceCoordination
     public void ConductorDriverAcceptanceSlotPathSkipsAlreadyMergedBranchBeforeLease()
     {
         var root = CreateTempDirectory();
-        RunGit(root, "init");
-        RunGit(root, "checkout", "-b", "main");
-        RunGit(root, "config", "user.email", "test@example.com");
-        RunGit(root, "config", "user.name", "Test User");
-        File.WriteAllText(Path.Combine(root, "README.md"), "initial");
-        RunGit(root, "add", ".");
-        RunGit(root, "commit", "-m", "initial");
+        MainBranchGitRepositoryTemplate.CopyTo(root, includeSkillCatalog: false);
 
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         var kernel = new AgentOrchestratorKernel();
