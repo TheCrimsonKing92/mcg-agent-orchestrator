@@ -104,6 +104,46 @@ public sealed class RepositoryTestImpactPlannerForeignTreeTests
         finally { Directory.Delete(root, recursive: true); }
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void DeletedSoleBuiltInProjectWithoutSolutionKeepsMissingProjectCheck(bool useWorktreeFile)
+    {
+        var root = Directory.CreateTempSubdirectory().FullName;
+        var missingProject = RepositoryTestImpactPlanner.BuiltInTestProjectPaths.First();
+        try
+        {
+            if (useWorktreeFile)
+                File.WriteAllText(Path.Combine(root, ".git"), "gitdir: isolated-fixture");
+            else
+                Directory.CreateDirectory(Path.Combine(root, ".git"));
+
+            var fullProjectPath = Path.Combine(root, missingProject);
+            Directory.CreateDirectory(Path.GetDirectoryName(fullProjectPath)!);
+            File.WriteAllText(fullProjectPath, "<Project />");
+            File.Delete(fullProjectPath);
+            var sourceDirectory = Path.Combine(root, "src", "Domain");
+            Directory.CreateDirectory(sourceDirectory);
+            File.WriteAllText(Path.Combine(sourceDirectory, "Domain.csproj"), "<Project />");
+            File.WriteAllText(Path.Combine(root, SourcePath), "namespace Domain; public class Widget { }");
+
+            Assert.True(Directory.Exists(Path.GetDirectoryName(fullProjectPath)));
+            Assert.All(RepositoryTestImpactPlanner.BuiltInTestProjectPaths,
+                path => Assert.False(File.Exists(Path.Combine(root, path))));
+            Assert.DoesNotContain(Directory.EnumerateFiles(root), path =>
+                Path.GetExtension(path) is ".sln" or ".slnx");
+            Assert.Same(CandidateTreeProbe.AssumeAllPresent, CandidateTreeProbe.ForRepositoryRoot(root));
+
+            var plan = RepositoryTestImpactPlanner.Plan([SourcePath], root);
+
+            var missingProjectCheck = Assert.Single(plan.Checks, check => check.Command.Contains(missingProject));
+            Assert.DoesNotContain("--filter", missingProjectCheck.Command);
+            Assert.Equal(RepositoryTestImpactPlanner.BuiltInTestProjectPaths.Count, plan.Checks.Count);
+            Assert.DoesNotContain("acceptance manifest", plan.Summary);
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
     private static RepositoryTestImpactPlan Plan(string[] paths, ICandidateTreeProbe tree) =>
         RepositoryTestImpactPlanner.Plan(RepositoryChangeClassifier.Classify(paths),
             UnavailableTestClassDeclarationReader.Instance, tree);

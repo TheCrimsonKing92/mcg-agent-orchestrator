@@ -21,9 +21,10 @@ public static class CandidateTreeProbe
             return AssumeAllPresent;
 
         var candidateTree = new FileSystemTree(repositoryRoot);
-        // Without a solution, partial built-in trees retain the fail-safe assumption.
+        // Retained project directories also keep damaged built-in trees on the fail-safe assumption.
         return HasTopLevelSolution(repositoryRoot) ||
-            (RepositoryTestImpactPlanner.BuiltInTestProjectPaths.All(path => !candidateTree.Exists(path)) &&
+            (RepositoryTestImpactPlanner.BuiltInTestProjectPaths.All(path =>
+                !candidateTree.Exists(path) && !candidateTree.Exists(Path.GetDirectoryName(path)!)) &&
                 HasProjectFileWithin(repositoryRoot, depth: 2))
                     ? candidateTree
                     : AssumeAllPresent;
