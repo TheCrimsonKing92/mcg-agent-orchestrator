@@ -16,6 +16,7 @@ internal sealed record ChangeStreamRecord(
     internal const int CurrentSchemaVersion = 1;
     internal const string GoalTransition = "goal-transition";
     internal const string OwnerDecisionRaised = "owner-decision-raised";
+    internal const string GoalStage = "goal-stage";
     internal static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     internal static bool TryClassify(string eventKind, string? goalId, out string? changeKind)
@@ -24,6 +25,7 @@ internal sealed record ChangeStreamRecord(
         {
             "goal-escalation" => OwnerDecisionRaised,
             "goal" or "goal-landing" or "goal-left-working-set" or "watch-transition" => GoalTransition,
+            "goal-lifecycle" or "acceptance" or "acceptance-cohort" => GoalStage,
             _ => null
         };
         return changeKind is not null;

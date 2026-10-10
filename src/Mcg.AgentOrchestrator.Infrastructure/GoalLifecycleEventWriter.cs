@@ -34,6 +34,7 @@ public sealed class GoalLifecycleEventWriter : IGoalLifecycleEventWriter
     private readonly IClock _clock;
     private readonly AgentOrchestratorKernel? _kernel;
     private readonly DispatchProviderSessionRetentionOptions _sessionRetentionOptions;
+    private readonly Action<GoalLifecycleCommit>? _committed;
 
     private readonly ConcurrentDictionary<string, object> _locks = new();
     private readonly ConcurrentDictionary<string, int> _nextCursors = new();
@@ -43,13 +44,14 @@ public sealed class GoalLifecycleEventWriter : IGoalLifecycleEventWriter
         string eventsDirectory,
         IClock? clock = null,
         AgentOrchestratorKernel? kernel = null,
-        DispatchProviderSessionRetentionOptions? sessionRetentionOptions = null, string? integrationBranch = null)
+        DispatchProviderSessionRetentionOptions? sessionRetentionOptions = null, string? integrationBranch = null, Action<GoalLifecycleCommit>? committed = null)
     {
         _eventsDirectory = eventsDirectory;
         _integrationBranch = TrunkBranchName.Resolve(integrationBranch);
         _clock = clock ?? new SystemClock();
         _kernel = kernel;
         _sessionRetentionOptions = sessionRetentionOptions ?? DispatchProviderSessionRetentionOptions.FromEnvironment();
+        _committed = committed;
     }
 
     public void AppendTimelineEvent(ProgressEvent progressEvent) =>
@@ -415,10 +417,11 @@ public sealed class GoalLifecycleEventWriter : IGoalLifecycleEventWriter
         {
             var cursor = _nextCursors.GetOrAdd(key, _ => CountExistingLines(EventFilePath(goalId)));
 
+            var timestamp = _clock.UtcNow;
             var obj = new JsonObject
             {
                 ["cursor"] = cursor,
-                ["timestamp"] = _clock.UtcNow,
+                ["timestamp"] = timestamp,
                 ["goalId"] = goalId.Value,
                 ["eventType"] = eventType
             };
@@ -433,6 +436,11 @@ public sealed class GoalLifecycleEventWriter : IGoalLifecycleEventWriter
             File.AppendAllText(path, line);
 
             _nextCursors[key] = cursor + 1;
+            if (_committed is null) return;
+            var taskId = obj["taskId"] is JsonValue task && task.TryGetValue<string>(out var taskValue) ? taskValue : null;
+            var role = obj["role"] is JsonValue agentRole && agentRole.TryGetValue<string>(out var roleValue) ? roleValue : null;
+            try { _committed(new GoalLifecycleCommit(goalId, eventType, timestamp, taskId, role, obj["operatorIntentApplied"] is JsonObject)); }
+            catch (IOException) { }
         }
     }
 
