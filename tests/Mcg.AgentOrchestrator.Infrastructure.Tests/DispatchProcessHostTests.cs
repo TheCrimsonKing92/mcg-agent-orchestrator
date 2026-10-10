@@ -2495,21 +2495,8 @@ public sealed class DispatchProcessHostTests
     private static void CreateLinkedWorktree(string repo, string worktree)
     {
         Directory.CreateDirectory(repo);
-        RunGit(repo, "init");
-        RunGit(repo, "config", "user.email", "tests@example.invalid");
-        RunGit(repo, "config", "user.name", "Tests");
-        File.WriteAllText(Path.Combine(repo, "seed.txt"), "seed");
-        RunGit(repo, "add", "seed.txt");
-        RunGit(repo, "commit", "-m", "seed");
+        MainBranchGitRepositoryTemplate.CopyTo(repo, includeSkillCatalog: false);
         RunGit(repo, "worktree", "add", "-b", "linked-test", worktree);
-    }
-
-    private static void CreateGitRepository(string worktree)
-    {
-        Directory.CreateDirectory(worktree);
-        RunGit(worktree, "init");
-        RunGit(worktree, "config", "user.email", "tests@example.invalid");
-        RunGit(worktree, "config", "user.name", "Tests");
     }
 
     private static string GitStatus(string worktree) =>

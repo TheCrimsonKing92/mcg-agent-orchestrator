@@ -377,17 +377,14 @@ public sealed class ConductorDriverTests
         }
     }
 
+    private static readonly Lazy<string> TemplateHead = new(
+        () => ReadGit(SeededGitRepositoryTemplate.TemplatePath, "rev-parse", "HEAD"),
+        LazyThreadSafetyMode.ExecutionAndPublication);
+
     internal static SeededGitRepository CreateSeededGitRepository()
     {
-        var workingDirectory = CreateTempDirectory();
-        RunGit(workingDirectory, "init");
-        RunGit(workingDirectory, "config", "user.email", "test@example.com");
-        RunGit(workingDirectory, "config", "user.name", "Test User");
-        File.WriteAllText(Path.Combine(workingDirectory, "seed.txt"), "seed");
-        RunGit(workingDirectory, "add", "seed.txt");
-        RunGit(workingDirectory, "commit", "-m", "seed");
-        var head = ReadGit(workingDirectory, "rev-parse", "HEAD");
-        return new SeededGitRepository(workingDirectory, head);
+        var workingDirectory = SeededGitRepositoryTemplate.CreateCopy();
+        return new SeededGitRepository(workingDirectory, TemplateHead.Value);
     }
 
     internal static int CountOccurrences(string value, string expected)
