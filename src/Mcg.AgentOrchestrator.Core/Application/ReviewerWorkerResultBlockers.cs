@@ -784,6 +784,11 @@ public static class WorkerResultBlockers
             return false;
         }
 
+        if (ReviewerFindingsLineBlocker.TryReadFindingsLine(line, out blocker))
+        {
+            return blocker.Length > 0;
+        }
+
         if (ContainsBlockerClassification(line) || line.StartsWith("blocker:", StringComparison.OrdinalIgnoreCase))
         {
             blocker = line;
