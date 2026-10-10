@@ -20,7 +20,7 @@ internal static class OwnerActivityNarrator
         "author" => Field(item, "kind") == "ask-owner",
         "acceptance" or "acceptance-cohort" or "canary-gate" or "loop-relaunch" or "loop-handoff" or
             "loop-start" or "loop-stop" or "goal-escalation" or "goal-stalled" or "train-receipt-released" or
-            "owner-question-resolved" or "owner-hold-cleared" or "admission" or "infrastructure-deferral" => true,
+            "owner-question-resolved" or "owner-hold-cleared" or "admission" or "infrastructure-deferral" or "experiment-reading-due" => true,
         _ => false
     };
 
@@ -131,6 +131,10 @@ internal static class OwnerActivityNarrator
                             Next = "The Author answered the question; work can continue." };
                     break;
                 case "goal-stalled": Stall(item); break;
+                case "experiment-reading-due":
+                    if (OwnerExperimentReadingNarration.TryNarrate(item, out var readingSentence, out var readingWhy, out var readingNext, out var readingAct))
+                        Add(item, readingSentence, readingWhy, readingNext, readingAct);
+                    break;
                 case "acceptance":
                     if (Field(item, "result") == "passed")
                         Add(item, name + ": passed its tests, landing next", "The required checks passed.", "The conductor will land this work.",
