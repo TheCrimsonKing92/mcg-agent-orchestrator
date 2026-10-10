@@ -6,7 +6,6 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed partial class ConductorDriver
 {
     internal const int CohortAttributionStableSlotRoundCount = 20;
-
     internal Func<string, CancellationToken, DotnetBuildEnvironmentLease>? CohortPartitionStableSlotLeaseSource { get; set; }
 
     private AcceptanceVerificationResult RunCohortPartitionAttempt(
