@@ -108,7 +108,7 @@ public static void PrintNextActions(
             PrintDispatchState(dispatchState, "     ");
         }
 
-        Console.WriteLine($"     command: {BuildSuggestedCommand(goal, item, agents)}");
+        Console.WriteLine($"     command: {NextActionCommandAdvice.BuildSuggestedCommand(goal, item, agents)}");
         var control = NextActionControls.Build(goal, item, workerProfiles, agentDefinitions: agents);
         if (!string.IsNullOrWhiteSpace(control?.CostRisk))
         {
@@ -121,7 +121,7 @@ public static void PrintNextActions(
 
     var runCommand = health?.SuggestedCommand is { Length: > 0 } hCmd
         ? hCmd
-        : actions.Items.Count > 0 ? BuildSuggestedCommand(goal, actions.Items[0], agents) : null;
+        : actions.Items.Count > 0 ? NextActionCommandAdvice.BuildSuggestedCommand(goal, actions.Items[0], agents) : null;
     if (runCommand is not null)
     {
         Console.WriteLine($"Run: {runCommand}");

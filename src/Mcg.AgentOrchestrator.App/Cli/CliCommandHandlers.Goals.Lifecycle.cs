@@ -299,7 +299,7 @@ private static string BuildLifecycleRunGoalNextCommand(
     IReadOnlyList<AgentDefinition>? agents)
 {
     if (result.BlockingAction is { } blockingAction &&
-        ConsoleViews.BuildSuggestedCommand(goal, blockingAction, agents) is { Length: > 0 } command)
+        NextActionCommandAdvice.BuildSuggestedCommand(goal, blockingAction, agents) is { Length: > 0 } command)
     {
         return command;
     }

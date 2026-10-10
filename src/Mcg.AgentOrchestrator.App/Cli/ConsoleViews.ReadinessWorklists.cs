@@ -103,7 +103,7 @@ public static void PrintStageReadinessReport(
         Console.WriteLine($"     task={stage.TaskStatus}; assigned={stage.IsAssigned}; evidence={stage.LatestEvidence}; gate={stage.VerificationStatus}");
         Console.WriteLine($"     {OutputTextPreview.CreateTimeline(stage.Message).Text}");
         Console.WriteLine($"     action: {OutputTextPreview.CreateTimeline(stage.SuggestedAction).Text}");
-        Console.WriteLine($"     command: {BuildStageSuggestedCommand(goal, stage, agents)}");
+        Console.WriteLine($"     command: {NextActionCommandAdvice.BuildStageSuggestedCommand(goal, stage, agents)}");
     }
 
     Console.WriteLine();
