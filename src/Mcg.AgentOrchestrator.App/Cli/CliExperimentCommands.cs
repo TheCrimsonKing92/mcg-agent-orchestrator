@@ -146,6 +146,14 @@ internal static class CliExperimentCommands
             (string.IsNullOrWhiteSpace(spec.Baseline.ComparisonGoalId) ||
              string.Equals(spec.Baseline.ComparisonGoalId.Trim(), spec.Baseline.TwinGoalId!.Trim(), StringComparison.OrdinalIgnoreCase)))
             throw new ArgumentException("baseline.comparisonGoalId: required for twin-goal and must differ from twinGoalId.");
+        if (spec.Baseline.Kind == ExperimentBaselineKind.GoalCohort)
+        {
+            var baselineIds = ValidateCohortGoalIds(spec.Baseline.BaselineGoalIds, "baseline.baselineGoalIds");
+            var comparisonIds = ValidateCohortGoalIds(spec.Baseline.ComparisonGoalIds, "baseline.comparisonGoalIds");
+            foreach (var id in comparisonIds)
+                if (baselineIds.Contains(id))
+                    throw new ArgumentException($"baseline.comparisonGoalIds: id '{id}' also appears in baselineGoalIds.");
+        }
         if (spec.Baseline.Kind == ExperimentBaselineKind.AlternatingGates &&
             (spec.Baseline.Since is null || spec.Baseline.Until is null || spec.Baseline.Since >= spec.Baseline.Until))
             throw new ArgumentException("baseline: alternating-gates requires a window with since < until.");
@@ -160,6 +168,21 @@ internal static class CliExperimentCommands
         ValidateExperimentConditions(spec.DecisionRule.KeepIf, spec.Metrics, "decisionRule.keepIf");
         ValidateExperimentConditions(spec.DecisionRule.RevertIf, spec.Metrics, "decisionRule.revertIf");
         if (spec.EpicId is not null && string.IsNullOrWhiteSpace(spec.EpicId)) throw new ArgumentException("epicId: must be non-empty when supplied.");
+    }
+
+    private static HashSet<string> ValidateCohortGoalIds(IReadOnlyList<string>? references, string field)
+    {
+        if (references is null || references.Count == 0)
+            throw new ArgumentException($"{field}: required non-empty list for goal-cohort.");
+        var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var reference in references)
+        {
+            if (string.IsNullOrWhiteSpace(reference))
+                throw new ArgumentException($"{field}: entries must be non-blank.");
+            var id = reference.Trim();
+            if (!ids.Add(id)) throw new ArgumentException($"{field}: repeated id '{id}'.");
+        }
+        return ids;
     }
 
     private static void ValidateExperimentConditions(IReadOnlyList<ExperimentCondition>? conditions, IReadOnlyList<string> metrics, string field)
@@ -198,6 +221,11 @@ internal static class CliExperimentCommands
         Console.WriteLine($"baseline until: {spec.Baseline.Until:O}");
         Console.WriteLine($"baseline twin goal: {spec.Baseline.TwinGoalId ?? "none"}");
         Console.WriteLine($"baseline comparison goal: {spec.Baseline.ComparisonGoalId ?? "none"}");
+        if (spec.Baseline.Kind == ExperimentBaselineKind.GoalCohort)
+        {
+            Console.WriteLine($"baseline cohort goals: {string.Join(", ", spec.Baseline.BaselineGoalIds ?? [])}");
+            Console.WriteLine($"comparison cohort goals: {string.Join(", ", spec.Baseline.ComparisonGoalIds ?? [])}");
+        }
         Console.WriteLine($"metrics: {string.Join(", ", spec.Metrics)}");
         Console.WriteLine($"guardrail: {JsonSerializer.Serialize(spec.Guardrail, ExperimentStore.JsonOptions)}");
         Console.WriteLine($"stop rule target: {spec.StopRule.Count} {ExperimentReading.Name(spec.StopRule.Unit)}");
