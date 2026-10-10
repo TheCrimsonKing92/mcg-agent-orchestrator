@@ -60,7 +60,7 @@ internal sealed partial class GoalDispatchOperations
             cascadeTesterCheapFirst: ResolveCascadeTesterCheapFirst(workspace, cascadeTesterCheapFirst, conductorPolicy),
             cascadeCheapModelAlias: ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy), cascadeMechanicalReworkCheap: ResolveCascadeMechanicalReworkCheap(workspace, cascadeMechanicalReworkCheap, conductorPolicy),
             orchestratorSkillDirectory: ResolveOrchestratorSkillDirectory(home), integrationBranch: workspace.IntegrationBranch,
-            targetHome: new WorkerTargetHome(home.IsHome(workspace)));
+            targetHome: new WorkerTargetHome(home.IsHome(workspace), WorkerAcceptanceManifestResolver.For(workspace)));
         // Validate recovery authority before admission can hydrate a whole durable snapshot.
         // The runner repeats this guard immediately before launch to cover later state changes.
         var rejectedRecoveryIds = batch.Dispatches
