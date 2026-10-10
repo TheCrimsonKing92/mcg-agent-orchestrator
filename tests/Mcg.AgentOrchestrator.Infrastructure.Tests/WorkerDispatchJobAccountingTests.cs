@@ -63,6 +63,7 @@ public sealed class WorkerDispatchJobAccountingTests : IDisposable
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_non_local_dispatch_records_resource_accounting")]
     public void BackgroundDispatchRunnerNonLocalDispatchRecordsResourceAccounting()
     {
+        using var registry = WorkerProcessJobs.UseRegistryScopeForTests(null);
         var root = CreateTempDirectory();
         var logs = Path.Combine(root, "logs");
         var kernel = new AgentOrchestratorKernel();
@@ -111,6 +112,7 @@ public sealed class WorkerDispatchJobAccountingTests : IDisposable
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_claude_dispatch_records_session_tuple_before_worker_start")]
     public void BackgroundDispatchRunnerClaudeDispatchRecordsSessionTupleBeforeWorkerStart()
     {
+        using var registry = WorkerProcessJobs.UseRegistryScopeForTests(null);
         using var sandboxEnv = ClearWorkerSandboxEnv();
         var root = CreateTempDirectory();
         var logs = Path.Combine(root, "logs");
@@ -153,6 +155,7 @@ public sealed class WorkerDispatchJobAccountingTests : IDisposable
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_codex_dispatch_records_reported_session_tuple_in_receipt_and_heartbeat")]
     public void BackgroundDispatchRunnerCodexDispatchRecordsReportedSessionTupleInReceiptAndHeartbeat()
     {
+        using var registry = WorkerProcessJobs.UseRegistryScopeForTests(null);
         using var sandboxEnv = ClearWorkerSandboxEnv();
         var root = CreateTempDirectory();
         var logs = Path.Combine(root, "logs");
@@ -191,6 +194,7 @@ public sealed class WorkerDispatchJobAccountingTests : IDisposable
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_reaped_startup_hang_records_job_accounting")]
     public void BackgroundDispatchRunnerReapedStartupHangRecordsJobAccounting()
     {
+        using var registry = WorkerProcessJobs.UseRegistryScopeForTests(null);
         if (!OperatingSystem.IsWindows())
         {
             return;

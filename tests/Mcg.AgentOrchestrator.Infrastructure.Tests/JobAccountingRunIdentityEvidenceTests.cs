@@ -15,10 +15,6 @@ public sealed class JobAccountingRunIdentityEvidenceTests
     private static readonly IReadOnlyDictionary<(Type Class, string Kind), string> Exceptions =
         new Dictionary<(Type, string), string>
         {
-            [(typeof(WorkerDispatchJobAccountingTests), "dispatch")] =
-                "StartLatestDispatch owns logs under CreateTempDirectory, but child-side PID/registry ownership is beyond one hop; no per-run registry is configured by this class.",
-            [(typeof(WorkerDispatchJobAccountingTests), "job")] =
-                "TryRegister reads a process-static registry, potentially unconfigured, and attaches an anonymous job handle. This does not establish a GUID-rooted PID registry.",
             [(typeof(GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResources), "job")] = AnonymousJob,
             [(typeof(GoalAcceptanceVerifierDotnetBuildSlotTestsSharedApparatusInvalidation), "job")] = AnonymousJob,
             [(typeof(GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCache), "job")] = AnonymousJob,
@@ -67,6 +63,7 @@ public sealed class JobAccountingRunIdentityEvidenceTests
                         "slot" => UsesFixtureStorage(site.Node, type),
                         "registry" or "path" => site.Identity is not null &&
                             IsRunPath(site.Identity, site.Node, declaration),
+                        "dispatch" or "job" => IsRegistryScoped(site, declaration),
                         _ => false
                     };
                     if (proof)
@@ -118,6 +115,25 @@ public sealed class JobAccountingRunIdentityEvidenceTests
         Assert.Equal(expected, IsRunPath(variable.Initializer!.Value, variable, declaration));
     }
 
+    [Xunit.Fact]
+    public void Registry_scope_evidence_rejects_unscoped_dispatch_and_accepts_scoped_dispatch()
+    {
+        const string dispatch = "new BackgroundDispatchRunner().StartLatestDispatch(kernel, goal, task, logs);";
+        var unscopedSyntax = CSharpSyntaxTree.ParseText("class Probe { void Test() { " + dispatch + " } }").GetRoot();
+        var unscopedClass = Assert.Single(unscopedSyntax.DescendantNodes().OfType<ClassDeclarationSyntax>());
+        var unscopedSite = Assert.Single(CreationSites(unscopedClass));
+        Assert.Equal("dispatch", unscopedSite.Kind);
+        Assert.False(IsRegistryScoped(unscopedSite, unscopedClass));
+
+        var scopedSyntax = CSharpSyntaxTree.ParseText(
+            "class Probe { void Test() { using var registry = WorkerProcessJobs.UseRegistryScopeForTests(null); " +
+            dispatch + " } }").GetRoot();
+        var scopedClass = Assert.Single(scopedSyntax.DescendantNodes().OfType<ClassDeclarationSyntax>());
+        var scopedSite = Assert.Single(CreationSites(scopedClass));
+        Assert.Equal("dispatch", scopedSite.Kind);
+        Assert.True(IsRegistryScoped(scopedSite, scopedClass));
+    }
+
     private sealed record Site(string Kind, SyntaxNode Node, ExpressionSyntax? Identity = null);
 
     private static IEnumerable<Site> CreationSites(ClassDeclarationSyntax declaration)
@@ -153,6 +169,13 @@ public sealed class JobAccountingRunIdentityEvidenceTests
                 yield return new Site(creation.Type.ToString().EndsWith("SpawnRegistry", StringComparison.Ordinal)
                     ? "registry" : "job", creation, creation.ArgumentList?.Arguments.FirstOrDefault()?.Expression);
     }
+
+    private static bool IsRegistryScoped(Site site, ClassDeclarationSyntax declaration) =>
+        (site.Kind == "dispatch" || site.Kind == "job" &&
+            site.Node is InvocationExpressionSyntax invocation &&
+            invocation.Expression.ToString() == "WorkerProcessJobs.TryRegister") &&
+        declaration.DescendantNodes().OfType<InvocationExpressionSyntax>()
+            .Any(call => call.Expression.ToString() == "WorkerProcessJobs.UseRegistryScopeForTests");
 
     private static bool UsesFixtureStorage(SyntaxNode node, Type type)
     {
@@ -268,6 +291,8 @@ public sealed class JobAccountingRunIdentityEvidenceTests
             "CreateKillOnCloseJob", "CreateJobObjectW(IntPtr.Zero, null)");
         RequireMethod(repository, "src/Mcg.AgentOrchestrator.Execution/Processes/WorkerProcessJobs.cs",
             "ConfigureRegistry", "new SpawnRegistry(dbPath)", "Registry = registry");
+        RequireMethod(repository, "src/Mcg.AgentOrchestrator.Execution/Processes/WorkerProcessJobs.RegistryScope.cs",
+            "UseRegistryScopeForTests", "ScopedRegistry.Value = new RegistryScopeState");
     }
 
     private static void RequireMethod(string repository, string path, string name, params string[] anchors)
