@@ -17,6 +17,7 @@ internal sealed class RemoteLaneCoordinator : IDisposable
     private readonly TimeProvider _clock;
     private readonly TimeSpan _pollInterval;
     private readonly string _ledgerPath;
+    private readonly string _worktreePath;
     private readonly string _occupancyRoot;
     private readonly string? _attemptPrefix;
     private readonly Action<string, RemoteLaneOutcomeCode>? _onOutcome;
@@ -33,6 +34,7 @@ internal sealed class RemoteLaneCoordinator : IDisposable
         Action<string, RemoteLaneOutcomeCode>? onOutcome, Action<string>? onEvent = null)
     {
         _configuration = configuration;
+        _worktreePath = worktreePath;
         _cache = cache;
         _executor = executor;
         _clock = clock;
@@ -163,8 +165,20 @@ internal sealed class RemoteLaneCoordinator : IDisposable
                         return await Fallback(red ? RemoteLaneOutcomeCode.RemoteRed : RemoteLaneOutcomeCode.TrxIncomplete, result).ConfigureAwait(false);
                     }
                     if (check.ExclusiveResourceKeys.Count > 0 && trx.NotExecutedTestCount is not 0)
-                        return await Fallback(RemoteLaneOutcomeCode.UnexpectedNotExecuted, result,
-                            reason: $"not_executed={trx.NotExecutedTestCount?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}").ConfigureAwait(false);
+                    {
+                        var projectDirectory = string.IsNullOrWhiteSpace(check.Project) ? null :
+                            Path.GetDirectoryName(Path.GetFullPath(Path.Combine(_worktreePath, check.Project)));
+                        var skips = RemoteLaneNotExecutedDecision.Decide(trx.NotExecutedTestCount,
+                            RemoteLaneNotExecutedIdentityReader.Read(result.TestResultPaths),
+                            DeclaredStaticSkipScanner.Scan(projectDirectory));
+                        if (!skips.Accept)
+                        {
+                            try { _onEvent?.Invoke($"REMOTE_LANE_NOT_EXECUTED lane={check.Name} first_undeclared={skips.FirstUndeclared}"); }
+                            catch { }
+                            return await Fallback(RemoteLaneOutcomeCode.UnexpectedNotExecuted, result,
+                                reason: $"not_executed={trx.NotExecutedTestCount?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}").ConfigureAwait(false);
+                        }
+                    }
                     var paths = GoalAcceptanceVerifierTestTelemetry.CopyCompletedTestReceiptsToAttemptFolder(result.TestResultPaths, _attemptPrefix);
                     // Custody is part of acceptance: a missing or unretained receipt falls back too.
                     var folder = Path.GetDirectoryName(_attemptPrefix);
