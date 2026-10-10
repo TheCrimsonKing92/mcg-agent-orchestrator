@@ -798,13 +798,7 @@ public sealed class ConductorDriverTestsPreReviewEvidence
     public void ConductorDriverPreReviewUsesEmptyCandidateDiffInsteadOfGeneratedPathsFromBrief()
     {
         var root = CreateTempDirectory();
-        RunGit(root, "init");
-        RunGit(root, "checkout", "-b", "main");
-        RunGit(root, "config", "user.email", "test@example.com");
-        RunGit(root, "config", "user.name", "Test User");
-        File.WriteAllText(Path.Combine(root, "README.md"), "initial");
-        RunGit(root, "add", ".");
-        RunGit(root, "commit", "-m", "initial");
+        MainBranchGitRepositoryTemplate.CopyTo(root, includeSkillCatalog: false);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal(
             "Review a clean candidate after historical src/App/bin/Debug/generated.dll evidence");

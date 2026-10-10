@@ -13,13 +13,7 @@ public sealed class ConductorDriverTestsSourceSizePreflight
     public void ViolatingAuthority_FailsBeforeLeaseOrAcceptanceRunner()
     {
         var root = ConductorDriverTests.CreateTempDirectory();
-        RunGit(root, "init");
-        RunGit(root, "checkout", "-b", "main");
-        RunGit(root, "config", "user.email", "test@example.com");
-        RunGit(root, "config", "user.name", "Test User");
-        File.WriteAllText(Path.Combine(root, "README.md"), "initial");
-        RunGit(root, "add", ".");
-        RunGit(root, "commit", "-m", "initial");
+        MainBranchGitRepositoryTemplate.CopyTo(root, includeSkillCatalog: false);
 
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         var kernel = new AgentOrchestratorKernel();

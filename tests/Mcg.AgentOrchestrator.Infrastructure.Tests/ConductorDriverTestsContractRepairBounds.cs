@@ -1142,14 +1142,7 @@ public sealed class ConductorDriverTestsContractRepairBounds
     public void SubscriptionDispatchPathsUseWorkspaceConfiguredReviewStopRound()
     {
         var root = CreateTempDirectory();
-        SeedLocalSkillCatalog(root);
-        RunGit(root, "init");
-        RunGit(root, "checkout", "-b", "main");
-        RunGit(root, "config", "user.email", "test@example.com");
-        RunGit(root, "config", "user.name", "Test User");
-        File.WriteAllText(Path.Combine(root, "README.md"), "initial");
-        RunGit(root, "add", ".");
-        RunGit(root, "commit", "-m", "initial");
+        MainBranchGitRepositoryTemplate.CopyTo(root, includeSkillCatalog: true);
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
         Directory.CreateDirectory(workspace.OrchestratorDirectory);
