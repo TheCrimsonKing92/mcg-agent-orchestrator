@@ -52,9 +52,18 @@ public sealed class OwnerConsoleNoticeStripTests
             new OnHelp(() => { }), harness.State, harness.Tail, harness.Conductor,
             harness.DigestReport, harness.Digest, clock);
         using var view = new OwnerConsoleFullScreenView(app, controller, () => Task.CompletedTask, clock: clock);
+        Assert.Empty(scheduled); // Construction must not create even an inactive timer.
         view.Render(await new OwnerConsoleViewModelBuilder(harness.State, harness.Questions,
             harness.Liveness, new Epics(), clock).BuildAsync(new(clock.Now, null, [], 0)));
         var history = Assert.Single(view.ActivityLines);
+        view.ShowNotice("refresh failed", OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Refresh);
+        view.RefreshStatus();
+        Assert.Contains("refresh failed", view.NoticeText);
+        Assert.Empty(scheduled); // Failures wait for recovery, so no expiry timer is needed.
+        view.NoticeStrip.RefreshSucceeded();
+        view.RefreshStatus();
+        Assert.Empty(view.NoticeText);
+        Assert.Empty(scheduled);
         view.ShowNotice("queued", OwnerConsoleNoticeSeverity.Success, OwnerConsoleNoticeSource.Action);
         Assert.Equal("00:05:00 queued", view.NoticeText);
         Assert.Equal([history], view.ActivityLines);
