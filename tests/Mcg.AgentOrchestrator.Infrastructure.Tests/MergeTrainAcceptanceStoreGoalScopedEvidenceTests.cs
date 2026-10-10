@@ -4,7 +4,7 @@ using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 // Each case owns its database and TRX files; the process-wide cache counter requires serial execution.
-[Collection(TestCollections.EnvMutation)]
+[Collection("TrxCoherenceCache")]
 public sealed class MergeTrainAcceptanceStoreGoalScopedEvidenceTests
 {
     [Fact]

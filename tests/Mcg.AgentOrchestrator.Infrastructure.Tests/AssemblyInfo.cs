@@ -2,6 +2,11 @@
 [Xunit.CollectionDefinition(TestCollections.EnvMutation, DisableParallelization = true)]
 public sealed class EnvMutationCollection;
 
+// TRX cache counters are process-local; each test owns its database and evidence directory.
+[Xunit.CollectionDefinition("TrxCoherenceCache", DisableParallelization = true)]
+[ProcessLocalTestCollection("TRX cache reset and load counters are process-local; database and TRX paths use unique temporary roots.")]
+public sealed class TrxCoherenceCacheCollection;
+
 // Chaos gate tests run many real git operations and refresh fake dispatch records.
 // Keep that fixture family serial so one adversarial gate scenario cannot perturb another.
 [Xunit.CollectionDefinition(TestCollections.ChaosGateGit, DisableParallelization = true)]
