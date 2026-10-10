@@ -297,7 +297,7 @@ public sealed class OwnerConsoleFullScreenPaneTests
         harness.AddGoal("11111111-first", "First", AgentRole.Developer);
         var dialogs = new Dialogs();
         var controller = Controller(harness, dialogs);
-        foreach (var item in OwnerConsoleKeyHints.Commands)
+        foreach (var item in OwnerConsoleKeyHints.Commands.Where(item => item.Command != "epics")) // The full-screen view handles epics, not the controller.
         {
             await controller.RunCommandAsync(item.Command.Replace("<id-prefix>", "11111111", StringComparison.Ordinal));
             Assert.DoesNotContain("unknown command", dialogs.Texts[^1].Text);

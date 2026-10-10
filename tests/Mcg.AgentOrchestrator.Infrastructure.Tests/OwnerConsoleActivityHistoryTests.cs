@@ -59,7 +59,10 @@ public sealed class OwnerConsoleActivityHistoryTests
         await scene.View.HandleKeyAsync(Key.Tab);
         await scene.View.HandleKeyAsync(Key.Enter);
         var detail = Assert.Single(scene.Dialogs.Messages).Text;
-        Assert.Contains("Title: " + title, detail);
+        var lines = detail.Split(Environment.NewLine);
+        Assert.Equal("11111111  " + title, lines[0]);
+        Assert.Single(lines, line => line.Contains(title, StringComparison.Ordinal));
+        Assert.DoesNotContain(lines, line => line.StartsWith("Title: ", StringComparison.Ordinal));
         Assert.Contains("Waiting on: waiting for your approval", detail);
         Assert.DoesNotContain("goal lifecycle decision", detail, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("task note", detail, StringComparison.OrdinalIgnoreCase);
