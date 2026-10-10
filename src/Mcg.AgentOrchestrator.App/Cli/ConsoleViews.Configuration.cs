@@ -74,12 +74,9 @@ internal static partial class ConsoleViews
         Console.WriteLine($"Continuations: {workspace.ContinuationStorePath}");
     }
 
-    public static void PrintWorkerProfileChecks(AgentCatalog agents, WorkerProfileCatalog catalog, string? name)
+    public static void PrintWorkerProfileChecks(AgentCatalog agents, WorkerProfileCatalog catalog, string? name, Func<string, bool>? commandExists = null)
     {
-        var selected = string.IsNullOrWhiteSpace(name)
-            ? catalog
-            : new WorkerProfileCatalog([catalog.GetRequired(name)]);
-        var report = OrchestratorHealthInspector.InspectCurrentEnvironment(agents, selected);
+        var report = EnvironmentHealthQuery.InspectCurrentEnvironment(agents, catalog, name, commandExists);
 
         Console.WriteLine("Worker profile checks:");
         foreach (var profile in report.WorkerProfiles)
@@ -87,7 +84,7 @@ internal static partial class ConsoleViews
             Console.WriteLine($"  {profile.Name}: executable={profile.Executable} resolvable={profile.IsResolvable} patchCapable={profile.IsPatchCapable} ({profile.Detail})");
         }
 
-        var routeIssues = BuildSubscriptionRouteIssues(report, name).ToList();
+        var routeIssues = EnvironmentHealthQuery.BuildSubscriptionRouteIssues(report, name).ToList();
         foreach (var issue in routeIssues)
         {
             Console.WriteLine($"  route {issue.Role}: profile={issue.ProfileName} ({issue.Detail})");
@@ -127,68 +124,6 @@ internal static partial class ConsoleViews
         {
             Console.WriteLine($"    - {gate}");
         }
-    }
-
-    private static IEnumerable<(AgentRole Role, string ProfileName, string Detail)> BuildSubscriptionRouteIssues(
-        OrchestratorHealthReport report,
-        string? name)
-    {
-        var profiles = report.WorkerProfiles.ToDictionary(profile => profile.Name, StringComparer.OrdinalIgnoreCase);
-        foreach (var agent in report.Agents.Where(agent => AgentExecutionPolicies.AllowsSubscription(agent.ExecutionPolicy)))
-        {
-            if (string.IsNullOrWhiteSpace(agent.SubscriptionProfileName))
-            {
-                continue;
-            }
-
-            if (!string.IsNullOrWhiteSpace(name) &&
-                !agent.SubscriptionProfileName.Equals(name, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            if (!profiles.TryGetValue(agent.SubscriptionProfileName, out var profile))
-            {
-                yield return (agent.Role, agent.SubscriptionProfileName, "subscription profile is not configured");
-                continue;
-            }
-
-            if (!profile.IsResolvable)
-            {
-                yield return (agent.Role, agent.SubscriptionProfileName, "subscription profile is not executable");
-                continue;
-            }
-
-            if (profile.IsEchoOnly)
-            {
-                yield return (agent.Role, agent.SubscriptionProfileName, "subscription profile only echoes the prompt path");
-                continue;
-            }
-
-            if (!WorkerProfileDiagnostics.UsesSubscriptionModelPlaceholder(profile.CommandTemplate))
-            {
-                yield return (agent.Role, agent.SubscriptionProfileName, "subscription profile does not pin the selected model");
-                continue;
-            }
-
-            if (RequiresSubscriptionReasoningPlaceholder(agent.ProviderName, agent.SubscriptionReasoningEffort ?? agent.ReasoningEffort) &&
-                !WorkerProfileDiagnostics.UsesSubscriptionReasoningPlaceholder(profile.CommandTemplate))
-            {
-                yield return (agent.Role, agent.SubscriptionProfileName, "subscription profile does not pin the selected reasoning effort");
-                continue;
-            }
-
-            if (agent.Role == AgentRole.Developer && !profile.IsPatchCapable)
-            {
-                yield return (agent.Role, agent.SubscriptionProfileName, "subscription profile cannot patch Developer tasks");
-            }
-        }
-    }
-
-    private static bool RequiresSubscriptionReasoningPlaceholder(string providerName, string? reasoningEffort)
-    {
-        return providerName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase) &&
-            !string.IsNullOrWhiteSpace(reasoningEffort);
     }
 
     public static void PrintAgents(IReadOnlyList<AgentDefinition> agents)
