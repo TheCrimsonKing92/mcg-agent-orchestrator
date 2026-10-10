@@ -56,7 +56,7 @@ public sealed class DispatchWorktreeCommitterTests
     public void DirtyInspectionUsesInjectedGitAndFilesystemSeams()
     {
         var goalId = GoalId.New();
-        var branch = GoalWorktrees.BranchName(goalId);
+        var branch = GoalWorktreeLayout.BranchName(goalId);
         var calls = new List<string[]>();
         var committer = new DispatchWorktreeCommitter(
             runGit: (_, arguments) =>
