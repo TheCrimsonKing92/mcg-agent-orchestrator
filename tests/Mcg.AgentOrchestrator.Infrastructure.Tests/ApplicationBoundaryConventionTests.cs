@@ -33,7 +33,6 @@ public sealed class ApplicationBoundaryConventionTests
     [
         "GoalDispatchOperations",
         "GoalAdvancementOperations",
-        "GoalTaskCommandOperations"
     ];
 
     [Xunit.Fact(DisplayName = "Application_module_exists_and_declares_its_operation_owners")]

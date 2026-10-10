@@ -1132,19 +1132,29 @@ public sealed class GoalRefinementTests
         var task = goal.Tasks.Single();
         kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "needs retry");
 
-        var queued = await new Mcg.AgentOrchestrator.App.Application.GoalTaskCommandOperations()
-            .EnqueueOperatorIntentAsync(
-                workspace,
-                goal,
-                task,
-                OperatorIntentVerbs.Retry,
-                new RetryOperatorIntentPayload(
-                    "Retry after running gh pr checkout and git push.",
-                    RetryRoundKind: null,
-                    RetryCause: RetryCause.ContractClarification),
-                idempotencyKey: null,
-                channel: "test",
-                authenticationAssurance: "test");
+        var payload = new RetryOperatorIntentPayload(
+            "Retry after running gh pr checkout and git push.",
+            RetryRoundKind: null,
+            RetryCause: RetryCause.ContractClarification);
+        var intentId = Guid.NewGuid().ToString("N");
+        var intent = new OperatorIntentRecord(
+            intentId,
+            intentId,
+            OperatorIntentVerbs.Retry,
+            goal.Id.Value,
+            task.Id.Value,
+            System.Text.Json.JsonSerializer.Serialize(payload, payload.GetType(), OperatorIntentJson.Options),
+            [],
+            Actor: "operator",
+            Channel: "test",
+            AuthenticationAssurance: "test",
+            CreatedAt: DateTimeOffset.UtcNow);
+        var queued = new
+        {
+            Persisted = await SqliteOperatorIntentStore
+                .ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory)
+                .EnqueueAsync(intent)
+        };
 
         Xunit.Assert.Equal(OperatorIntentStatus.Pending, queued.Persisted.Status);
         Xunit.Assert.DoesNotContain(

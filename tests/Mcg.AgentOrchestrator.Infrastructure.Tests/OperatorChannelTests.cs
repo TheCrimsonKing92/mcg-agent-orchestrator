@@ -390,61 +390,6 @@ public sealed class OperatorChannelTests : CliCommandTestBase
         Assert.True(result.ErrorMessage is not null);
     }
 
-    // ---- OperatorDecisionLog (idempotency) ----
-
-    [Xunit.Fact(DisplayName = "OperatorDecisionLog_records_and_detects_duplicate")]
-    public void OperatorDecisionLogRecordsAndDetectsDuplicate()
-    {
-        var dir = CreateTempDirectory();
-        var decision = new OperatorDecision("inbox-001", 0, null, "discord:user1", "key-001");
-
-        var first = OperatorDecisionLog.TryRecord(dir, decision, DateTimeOffset.UtcNow);
-        var second = OperatorDecisionLog.TryRecord(dir, decision, DateTimeOffset.UtcNow);
-
-        Assert.True(first);
-        Assert.False(second);
-        Assert.True(OperatorDecisionLog.IsRecorded(dir, "inbox-001"));
-    }
-
-    [Xunit.Fact(DisplayName = "OperatorDecisionLog_different_items_both_record")]
-    public void OperatorDecisionLogDifferentItemsBothRecord()
-    {
-        var dir = CreateTempDirectory();
-        var d1 = new OperatorDecision("inbox-001", 0, null, "discord:user1", "key-1");
-        var d2 = new OperatorDecision("inbox-002", 1, null, "discord:user1", "key-2");
-
-        OperatorDecisionLog.TryRecord(dir, d1, DateTimeOffset.UtcNow);
-        OperatorDecisionLog.TryRecord(dir, d2, DateTimeOffset.UtcNow);
-
-        Assert.True(OperatorDecisionLog.IsRecorded(dir, "inbox-001"));
-        Assert.True(OperatorDecisionLog.IsRecorded(dir, "inbox-002"));
-        Assert.Equal(2, OperatorDecisionLog.LoadAll(dir).Count);
-    }
-
-    [Xunit.Fact(DisplayName = "OperatorDecisionLog_unrecorded_item_returns_false")]
-    public void OperatorDecisionLogUnrecordedItemReturnsFalse()
-    {
-        var dir = CreateTempDirectory();
-        Assert.False(OperatorDecisionLog.IsRecorded(dir, "inbox-not-present"));
-    }
-
-    [Xunit.Fact(DisplayName = "OperatorDecisionLog_audit_persists_across_loads")]
-    public void OperatorDecisionLogAuditPersistsAcrossLoads()
-    {
-        var dir = CreateTempDirectory();
-        var decision = new OperatorDecision("inbox-persist-001", 0, null, "discord:op1", "idem-key-1");
-        var now = new DateTimeOffset(2026, 1, 15, 12, 0, 0, TimeSpan.Zero);
-
-        OperatorDecisionLog.TryRecord(dir, decision, now);
-        var entries = OperatorDecisionLog.LoadAll(dir);
-
-        Assert.Equal(1, entries.Count);
-        Assert.Equal("inbox-persist-001", entries[0].InboxItemId);
-        Assert.Equal(0, entries[0].ActionIndex);
-        Assert.Equal("discord:op1", entries[0].ActorId);
-        Assert.Equal(now, entries[0].DecidedAt);
-    }
-
     // ---- DiscordSignatureVerifier ----
 
     [Xunit.Fact(DisplayName = "DiscordSignatureVerifier_valid_signature_returns_true")]
