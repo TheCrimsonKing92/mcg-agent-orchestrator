@@ -108,7 +108,7 @@ public sealed class MergeTrainAcceptanceStore
         while (reader.Read())
         {
             var receipt = FromDto(JsonSerializer.Deserialize<ReceiptDto>(reader.GetString(0), JsonOptions)!);
-            if (receipt.HasAuthoritativeLandingEvidence && receipt.Identity.Members.Any(member => member.GoalId == goalId))
+            if (receipt.Identity.Members.Any(member => member.GoalId == goalId) && receipt.HasAuthoritativeLandingEvidence)
             {
                 receipts.Add(receipt);
             }
