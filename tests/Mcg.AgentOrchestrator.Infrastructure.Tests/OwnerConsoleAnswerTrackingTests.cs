@@ -33,17 +33,19 @@ public sealed class OwnerConsoleAnswerTrackingTests
 
         await view.HandleKeyAsync(new Key('r'));
 
-        Assert.Equal(Queued, Assert.Single(view.Notices));
+        Assert.Equal(Queued, Assert.Single(view.NoticeStrip.Visible).Text);
+        Assert.Contains(Queued, view.NoticeText);
         Assert.Empty(dialogs.Texts); // Queue acknowledgement never opens a modal result dialog.
         Assert.Equal(("q1", "yes"), Assert.Single(answers.Submissions));
         Assert.Single(harness.Questions.Items); // No optimistic mutation of conductor state.
         answers.ReleaseStatusRead.TrySetResult();
         await tracker.WhenIdle().WaitAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal([expected, Queued], view.Notices);
+        Assert.Equal([expected, Queued], view.NoticeStrip.Visible.Select(entry => entry.Text));
+        Assert.Contains(expected, view.NoticeText);
         Assert.Equal(reads, answers.Reads);
         Assert.All(answers.StatusIds, id => Assert.Equal("intent-1", id));
-        Assert.All(view.Notices, text => Assert.DoesNotContain("not accepted", text));
+        Assert.All(view.NoticeStrip.Visible, entry => Assert.DoesNotContain("not accepted", entry.Text));
     }
 
     [Theory(Timeout = 30_000)]

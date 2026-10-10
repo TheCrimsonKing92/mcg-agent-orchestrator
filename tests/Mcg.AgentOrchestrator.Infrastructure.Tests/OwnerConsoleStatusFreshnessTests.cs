@@ -42,7 +42,7 @@ public sealed class OwnerConsoleStatusFreshnessTests
         var model = new OwnerConsoleViewModel(new(true, 0, 0, 0, null, 0, 1), [], [], []);
         view.Render(model);
         clock.Now += TimeSpan.FromMinutes(6);
-        view.ShowRefreshFailure("state store unavailable");
+        view.ShowNotice("state store unavailable", OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Refresh);
         view.RefreshStatus();
 
         Assert.Contains("stale 6m | failed today: 1", view.StatusText);

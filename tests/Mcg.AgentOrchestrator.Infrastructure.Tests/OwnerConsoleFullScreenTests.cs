@@ -79,7 +79,7 @@ public sealed class OwnerConsoleFullScreenTests
             clock.Advance(OwnerConsoleLoopOptions.Default.OperationBound);
 
             Assert.False(clock.TimerCreated.Task.IsCompleted); // No dependency timer includes owner think time.
-            Assert.Empty(view.Notices);
+            Assert.Empty(view.NoticeStrip.Visible);
             Assert.Empty(harness.Answers.Calls);
             Assert.Equal(0, refreshCalls);
             Assert.False(action.IsCompleted);
@@ -91,10 +91,10 @@ public sealed class OwnerConsoleFullScreenTests
         Assert.Equal(1, refreshCalls);
         Assert.DoesNotContain("working:", view.StatusText);
         if (expected is null)
-            Assert.Empty(view.Notices);
+            Assert.Empty(view.NoticeStrip.Visible);
         else
             Assert.Equal("Answer queued for question 1 (11111111); the conductor applies it on its next tick.",
-                Assert.Single(view.Notices));
+                Assert.Single(view.NoticeStrip.Visible).Text);
     }
 
     [Fact]
@@ -118,7 +118,7 @@ public sealed class OwnerConsoleFullScreenTests
 
             Assert.False(clock.TimerCreated.Task.IsCompleted);
             Assert.DoesNotContain("working:", view.StatusText);
-            Assert.Empty(view.Notices);
+            Assert.Empty(view.NoticeStrip.Visible);
             Assert.False(action.IsCompleted);
             Assert.Contains("Ship?\nFull context", Assert.Single(dialogs.Texts));
         }
@@ -237,7 +237,7 @@ public sealed class OwnerConsoleFullScreenTests
     }
 
     [Fact]
-    public async Task WorkingAndFailuresSurviveEventRedrawWithoutChangingInput()
+    public async Task RefreshRecoveryClearsFailureAndPreservesWorkingAndInput()
     {
         var harness = Harness();
         var controller = Controller(harness, new Dialogs());
@@ -248,12 +248,14 @@ public sealed class OwnerConsoleFullScreenTests
         view.CommandLine.Text = "conductor sta";
         var focus = view.CommandLine.HasFocus;
         view.SetWorking("refresh", "refresh after conductor event");
-        view.ShowRefreshFailure("conductor event read failed; retrying: unavailable");
+        view.ShowNotice("conductor event read failed; retrying: unavailable", OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Refresh);
+        Assert.Contains("conductor event read failed", view.NoticeText);
 
         view.Render(await Model(harness));
 
         Assert.Contains("working: refresh after conductor event", view.StatusText);
-        Assert.Contains("conductor event read failed", Assert.Single(view.Notices));
+        Assert.Empty(view.NoticeStrip.Visible);
+        Assert.Empty(view.NoticeText);
         Assert.Equal("conductor sta", view.CommandLine.Text);
         Assert.True(focus);
         Assert.True(view.CommandLine.HasFocus);
@@ -274,7 +276,8 @@ public sealed class OwnerConsoleFullScreenTests
         await view.HandleKeyAsync(Key.Enter);
         view.Render(await Model(harness));
 
-        Assert.Contains("unsupported control", Assert.Single(view.Notices));
+        Assert.Contains("unsupported control", Assert.Single(view.NoticeStrip.Visible).Text);
+        Assert.Contains("unsupported control", view.NoticeText);
     }
 
     [Fact]

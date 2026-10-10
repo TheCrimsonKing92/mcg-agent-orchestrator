@@ -16,6 +16,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     private readonly CancellationToken _token;
     private readonly CancellationTokenSource _lifetime;
     private readonly Label _status = new() { Width = Dim.Fill(), Height = 1 };
+    private readonly Label _notice = new() { Y = Pos.AnchorEnd(3), Width = Dim.Fill(), Height = 1 };
     private readonly ListView _decisions = new() { Width = Dim.Fill(), Height = Dim.Fill() };
     private readonly Label _emptyDecisions = new() { Text = "Nothing needs you right now.", Width = Dim.Fill(), Height = 1, Visible = false };
     private readonly TableView _board = new() { Width = Dim.Fill(), Height = Dim.Fill() };
@@ -26,7 +27,6 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     internal OwnerConsoleEpicDialog EpicView { get; }
     internal string EpicHintText => _epicHint.Text;
     private readonly Dictionary<string, string> _working = new();
-    private readonly List<string> _notices = [];
     private readonly OwnerConsoleScreenOperation _operation;
     private readonly TimeProvider _clock;
     private readonly TimeSpan _refreshInterval;
@@ -45,7 +45,8 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     internal Window Window { get; } = new() { Title = "Owner console", Width = Dim.Fill(), Height = Dim.Fill() };
     internal DataTable BoardTable { get; } = CreateBoardTable();
     internal string StatusText => _status.Text;
-    internal IReadOnlyList<string> Notices => _notices;
+    internal OwnerConsoleNoticeStrip NoticeStrip { get; }
+    internal string NoticeText => _notice.Text;
     internal TextField CommandLine => _command;
     internal TableView BoardPane => _board;
     internal ListView DecisionsPane => _decisions;
@@ -67,14 +68,16 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         _lifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
         _token = _lifetime.Token;
         _clock = clock ?? TimeProvider.System;
+        NoticeStrip = new(_clock);
         _refreshInterval = (options ?? OwnerConsoleLoopOptions.Default).RefreshInterval;
         if (_refreshInterval <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(options), "Refresh interval must be positive.");
         _operation = new(_clock,
             label => Invoke(() => { if (!_token.IsCancellationRequested) SetWorking("command", label); }),
-            message => Invoke(() => { if (!_token.IsCancellationRequested) ShowRefreshFailure(message); }), options);
+            message => Invoke(() => { if (!_token.IsCancellationRequested) ShowNotice(message, OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Action); }), options,
+            message => Invoke(() => { if (!_token.IsCancellationRequested) ShowNotice(message, OwnerConsoleNoticeSeverity.Success, OwnerConsoleNoticeSource.Action); }));
         var decisions = new FrameView { Title = "DECISIONS", Y = 1, Width = Dim.Fill(), Height = Dim.Percent(25) };
         var board = new FrameView { Title = "BOARD", Y = Pos.Bottom(decisions), Width = Dim.Fill(), Height = Dim.Percent(40) };
-        var activity = new FrameView { Title = "ACTIVITY", Y = Pos.Bottom(board), Width = Dim.Fill(), Height = Dim.Fill(2) };
+        var activity = new FrameView { Title = "ACTIVITY", Y = Pos.Bottom(board), Width = Dim.Fill(), Height = Dim.Fill(3) };
         decisions.Add(_decisions, _emptyDecisions);
         board.Add(_board);
         activity.Add(_activity);
@@ -86,7 +89,8 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         _epicHint.X = Pos.AnchorEnd(OwnerConsoleEpicFormatter.KeyHint.Length);
         _hints.Width = Dim.Fill(OwnerConsoleEpicFormatter.KeyHint.Length + 2);
         EpicView = new(controller, Invoke, token);
-        Window.Add(_status, decisions, board, activity, _hints, _epicHint, _command, EpicView);
+        Window.Add(_status, decisions, board, activity, _notice, _hints, _epicHint, _command, EpicView);
+        _notice.ViewportChanged += (_, _) => RenderNotices();
         _decisions.ValueChanged += (_, _) =>
         {
             if (!_rendering && _decisions.SelectedItem is { } index) _controller.SelectIndex(index);
@@ -135,6 +139,8 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
             SelectBoard(index < 0 ? _selectedBoardIndex : index);
             RenderActivity();
             RenderHints();
+            NoticeStrip.RefreshSucceeded();
+            RenderNotices();
         }
         finally { _rendering = false; }
     }
@@ -175,11 +181,24 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         RenderStatus();
     }
 
-    internal void ShowRefreshFailure(string message)
+    internal void ShowNotice(string message, OwnerConsoleNoticeSeverity severity, OwnerConsoleNoticeSource source)
     {
-        _notices.Insert(0, message);
-        if (_notices.Count > OwnerConsoleViewModelBuilder.MaxActivityItems) _notices.RemoveAt(_notices.Count - 1);
-        RenderActivity();
+        NoticeStrip.Raise(message, severity, source);
+        RenderNotices();
+        if (severity == OwnerConsoleNoticeSeverity.Success) _ = RepaintAfterExpiryAsync();
+    }
+
+    private void RenderNotices() => _notice.Text = NoticeStrip.Format(_notice.Viewport.Width);
+
+    private async Task RepaintAfterExpiryAsync()
+    {
+        try
+        {
+            await Task.Delay(OwnerConsoleNoticeStrip.SuccessLifetime, _clock, _token);
+            if (!_token.IsCancellationRequested)
+                Invoke(() => { if (!_token.IsCancellationRequested) RenderNotices(); });
+        }
+        catch (OperationCanceledException) when (_token.IsCancellationRequested) { }
     }
 
     private void RenderStatus()
@@ -200,7 +219,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     }
 
     // Host ticks repaint freshness even when the state refresh is blocked or has failed.
-    internal void RefreshStatus() => RenderStatus();
+    internal void RefreshStatus() { RenderStatus(); RenderNotices(); }
 
     private void RenderActivity()
     {
@@ -210,12 +229,11 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         var state = _controller.Model?.ActivityState;
         IEnumerable<string> pane = state is { Loading: true } ? ["loading..."] : state?.Error is { } error
             ? ["ACTIVITY unavailable: " + error] : _controller.Model?.Activity.Select(OwnerActivityNarrator.Line) ?? [];
-        _fullActivityLines = _notices.Concat(pane)
-            .Take(OwnerConsoleViewModelBuilder.MaxActivityItems).ToArray();
+        _fullActivityLines = pane.Take(OwnerConsoleViewModelBuilder.MaxActivityItems).ToArray();
         ActivityLines = _fullActivityLines.Select((line, row) => OwnerConsoleLineFitter.Fit(line,
-            row >= _notices.Count && state is not { Loading: true } && state?.Error is null &&
-                _controller.Model is { } model && row - _notices.Count < model.Activity.Length
-                ? OwnerActivityNarrator.LineSpans(model.Activity[row - _notices.Count]) : OwnerConsoleLineSpans.None, _activityWidth)).ToArray();
+            state is not { Loading: true } && state?.Error is null &&
+                _controller.Model is { } model && row < model.Activity.Length
+                ? OwnerActivityNarrator.LineSpans(model.Activity[row]) : OwnerConsoleLineSpans.None, _activityWidth)).ToArray();
         _activity.SetSource(new ObservableCollection<string>(ActivityLines));
         var preserved = selectedLine is null ? -1 : Array.IndexOf(_fullActivityLines.ToArray(), selectedLine);
         _activity.SelectedItem = ActivityLines.Count == 0 ? null :
@@ -227,7 +245,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         if (_app.TopRunnableView != Window) return;
         try { await HandleKeyAsync(key); }
         catch (OperationCanceledException) when (_token.IsCancellationRequested) { }
-        catch (Exception ex) { ShowRefreshFailure($"key action failed: {ex.Message}"); }
+        catch (Exception ex) { ShowNotice($"key action failed: {ex.Message}", OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Action); }
     }
 
     // The production keyboard callback and headless tests use this same routing path.
@@ -247,6 +265,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
             FinishCommand();
             if (line.Trim().TrimStart(':').Trim().Equals("epics", StringComparison.OrdinalIgnoreCase))
             {
+                StartAction();
                 await EpicView.OpenAsync(FocusedPane);
                 return;
             }
@@ -291,7 +310,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         if (character == 'e')
         {
             key.Handled = true;
-            if (!ActionRunning) await EpicView.OpenAsync(FocusedPane);
+            if (!ActionRunning) { StartAction(); await EpicView.OpenAsync(FocusedPane); }
             return;
         }
         var pane = FocusedPane;
@@ -345,9 +364,9 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
             else if (pane == OwnerConsolePane.Decisions && _controller.SelectedIndex >= 0)
                 await ActAsync(ct => _controller.HandleKeyAsync(ConsoleKey.Enter, operation: _operation, cancellationToken: ct));
             else if (pane == OwnerConsolePane.Activity && _controller.Model?.ActivityState is null &&
-                _activity.SelectedItem is { } selected && selected >= _notices.Count &&
-                selected - _notices.Count < _controller.Model!.Activity.Length)
-                await ActAsync(ct => _controller.ShowActivityMeaningAsync(_controller.Model.Activity[selected - _notices.Count], _operation, ct));
+                _activity.SelectedItem is { } selected && selected >= 0 &&
+                selected < _controller.Model!.Activity.Length)
+                await ActAsync(ct => _controller.ShowActivityMeaningAsync(_controller.Model.Activity[selected], _operation, ct));
             return;
         }
         if (character is 'a' or 'r')
@@ -357,7 +376,10 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
             if (pane == OwnerConsolePane.Decisions && _controller.SelectedIndex >= 0)
                 await ActAsync(ct => _controller.HandleKeyAsync(0, character, _operation, ct));
             else if (pane != OwnerConsolePane.Decisions)
-                ShowRefreshFailure(OwnerConsoleKeyHints.UnavailableKey(character, pane));
+            {
+                StartAction();
+                ShowNotice(OwnerConsoleKeyHints.UnavailableKey(character, pane), OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Action);
+            }
         }
     }
 
@@ -372,6 +394,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     private async Task ActAsync(Func<CancellationToken, Task> action)
     {
         // Modal waits belong to the owner; only the controller's dependency work is bounded.
+        StartAction();
         _acting = true;
         try
         {
@@ -382,6 +405,8 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         if (_controller.TakeRequestedEpicId() is { } epicId && !_token.IsCancellationRequested)
             await EpicView.OpenAsync(FocusedPane, epicId);
     }
+
+    private void StartAction() { NoticeStrip.ActionStarted(); RenderNotices(); }
 
     internal void FocusDecisions() => FocusPane(OwnerConsolePane.Decisions);
 

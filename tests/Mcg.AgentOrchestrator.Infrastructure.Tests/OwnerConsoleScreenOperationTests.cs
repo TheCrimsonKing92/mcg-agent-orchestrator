@@ -73,6 +73,22 @@ public sealed class OwnerConsoleScreenOperationTests
         Assert.True(await operation.RunAsync("command", _ => Task.CompletedTask));
     }
 
+    [Fact]
+    public async Task NotificationUsesItsChannelAndDependencyFailureUsesReport()
+    {
+        var reports = new List<string>();
+        var notices = new List<string>();
+        var operation = new OwnerConsoleScreenOperation(new ManualStewardTimeProvider(), _ => { },
+            reports.Add, notify: notices.Add);
+
+        operation.Notify("Answer queued");
+        Assert.Equal("Answer queued", Assert.Single(notices));
+        Assert.Empty(reports);
+        Assert.False(await operation.RunAsync("command", _ => throw new IOException("unavailable")));
+        Assert.Equal("command failed: unavailable", Assert.Single(reports));
+        Assert.Single(notices);
+    }
+
     private sealed class HeldQuestions : IOwnerQuestionSource
     {
         internal int Reads;

@@ -52,7 +52,7 @@ internal static class OwnerConsoleFullScreenHost
             activityLoader = new(workspace.ConductEventsLogPath, workspace.GoalLifecycleEventsDirectory, clock);
             var refreshOperation = new OwnerConsoleScreenOperation(clock,
                 label => app.Invoke(() => { if (!token.IsCancellationRequested) view!.SetWorking("refresh", label); }),
-                message => app.Invoke(() => { if (!token.IsCancellationRequested) view!.ShowRefreshFailure(message); }));
+                message => app.Invoke(() => { if (!token.IsCancellationRequested) view!.ShowNotice(message, OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Refresh); }));
 
             async Task RefreshAsync(OwnerConductEvent? item = null, bool skipIfBusy = false)
             {
@@ -87,7 +87,7 @@ internal static class OwnerConsoleFullScreenHost
                 }
                 catch (OperationCanceledException) when (token.IsCancellationRequested) { }
                 catch (Exception ex)
-                { app.Invoke(() => view!.ShowRefreshFailure(ex.Message)); }
+                { app.Invoke(() => view!.ShowNotice(ex.Message, OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Refresh)); }
                 finally { rebuild.Release(); }
             }
 
@@ -130,7 +130,7 @@ internal static class OwnerConsoleFullScreenHost
                 token.ThrowIfCancellationRequested();
                 events = activityLoader.Events ?? new OwnerConsoleStartupEventSource(workspace.ConductEventsLogPath, clock);
                 await new OwnerConsoleEventPump(events, clock,
-                    message => app.Invoke(() => { if (!token.IsCancellationRequested) view!.ShowRefreshFailure(message); }))
+                    message => app.Invoke(() => { if (!token.IsCancellationRequested) view!.ShowNotice(message, OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Refresh); }))
                     .RunAsync(item => RefreshAsync(item), token);
             });
             periodicRefresh = Task.Run(async () =>
