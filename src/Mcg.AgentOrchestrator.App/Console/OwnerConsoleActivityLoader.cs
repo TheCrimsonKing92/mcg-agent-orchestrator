@@ -42,12 +42,21 @@ internal sealed class OwnerConsoleActivityLoader(string conductPath, string life
         }
     }
 
-    internal IReadOnlyList<OwnerConductEvent> ReadNew(IReadOnlyCollection<string> goalIds)
+    internal IReadOnlyList<OwnerConductEvent> ReadNew(IReadOnlyCollection<string> goalIds) =>
+        ReadNew(goalIds, OwnerConsoleRefreshScope.All);
+
+    internal IReadOnlyList<OwnerConductEvent> ReadNew(IReadOnlyCollection<string> boardGoalIds, OwnerConsoleRefreshScope scope)
     {
+        if (ReferenceEquals(scope, OwnerConsoleRefreshScope.None)) return [];
         // A timed-out filesystem read can still be unwinding. Never overlap cursor
         // mutations or make a refresh wait for that read; the next refresh drains it.
         if (!Monitor.TryEnter(_gate)) return [];
-        try { return _lifecycle.ReadNew(goalIds); }
+        try
+        {
+            return ReferenceEquals(scope, OwnerConsoleRefreshScope.All)
+                ? _lifecycle.ReadNew(boardGoalIds)
+                : _lifecycle.ReadNew(scope.Resolve(boardGoalIds), evictDeparted: false);
+        }
         finally { Monitor.Exit(_gate); }
     }
     public ValueTask DisposeAsync() => Events?.DisposeAsync() ?? ValueTask.CompletedTask;

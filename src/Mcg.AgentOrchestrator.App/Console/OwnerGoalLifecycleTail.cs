@@ -10,11 +10,13 @@ internal sealed class OwnerGoalLifecycleTail(string directory)
 
     internal void Reset() => _cursors.Clear();
 
-    internal IReadOnlyList<OwnerConductEvent> ReadNew(IReadOnlyCollection<string> goalIds, CancellationToken token = default)
+    internal IReadOnlyList<OwnerConductEvent> ReadNew(IReadOnlyCollection<string> goalIds, CancellationToken token = default,
+        bool evictDeparted = true)
     {
         // Drain known goals once more before eviction: completion may remove a board
-        // row in the same refresh that writes its final role-finish event.
-        var departing = _cursors.Keys.Except(goalIds).ToArray();
+        // row in the same refresh that writes its final role-finish event. Scoped reads
+        // leave every other cursor untouched until the next full refresh.
+        var departing = evictDeparted ? _cursors.Keys.Except(goalIds).ToArray() : [];
         var result = new List<OwnerConductEvent>();
         foreach (var id in goalIds.Concat(departing).Distinct())
         {

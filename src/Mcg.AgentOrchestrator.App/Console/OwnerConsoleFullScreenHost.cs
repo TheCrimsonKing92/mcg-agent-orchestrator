@@ -30,6 +30,7 @@ internal static class OwnerConsoleFullScreenHost
         OwnerConsoleFullScreenView? view = null;
         Task? reader = null;
         Task periodicRefresh = Task.CompletedTask;
+        Task streamRefresh = Task.CompletedTask;
         try
         {
             IOrchestratorStateQueries state = File.Exists(workspace.SqliteStatePath)
@@ -39,6 +40,7 @@ internal static class OwnerConsoleFullScreenHost
             var gateEvidence = new OwnerGateFailureEvidence(workspace.OrchestratorDirectory);
             var jointEvidence = new OwnerJointGateFailureEvidence(workspace.OrchestratorDirectory);
             var gateMotion = new OwnerGateMotionReader(workspace.ConductEventsLogPath, clock);
+            var changes = new ChangeStreamFileReader(Path.Combine(workspace.LogDirectory, Orchestration.ChangeStreamWriter.FileName));
             var builder = new OwnerConsoleViewModelBuilder(state, questions,
                 new ConductorLeaseLiveness(workspace.OrchestratorDirectory), new PortfolioGoalEpicLookup(workspace.PortfolioStorePath), clock,
                 item => item.EventKind == "acceptance-cohort" ? jointEvidence.Read(item, cohortEvidence.Read(item)) :
@@ -55,7 +57,7 @@ internal static class OwnerConsoleFullScreenHost
                 label => app.Invoke(() => { if (!token.IsCancellationRequested) view!.SetWorking("refresh", label); }),
                 message => app.Invoke(() => { if (!token.IsCancellationRequested) view!.ShowNotice(message, OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Refresh); }));
 
-            async Task RefreshAsync(OwnerConductEvent? item = null, bool skipIfBusy = false)
+            async Task RefreshAsync(OwnerConductEvent? item = null, bool skipIfBusy = false, OwnerConsoleRefreshScope? scope = null)
             {
                 if (skipIfBusy)
                 {
@@ -78,7 +80,7 @@ internal static class OwnerConsoleFullScreenHost
                     {
                         var board = await builder.BuildBoardAsync(stepToken);
                         boardIds = board.Board.Select(row => row.GoalId).ToArray();
-                        foreach (var lifecycle in activityLoader.ReadNew(boardIds)) OwnerConsoleStartupActivity.Append(recent, builder.EnrichEvent(lifecycle), OwnerConsoleStartupActivity.MaxRawEvents);
+                        foreach (var lifecycle in activityLoader.ReadNew(boardIds, scope ?? OwnerConsoleRefreshScope.All)) OwnerConsoleStartupActivity.Append(recent, builder.EnrichEvent(lifecycle), OwnerConsoleStartupActivity.MaxRawEvents);
                         var (decisions, hidden) = await builder.ReadDecisionsAsync(stepToken);
                         var model = builder.WithActivity(builder.WithDecisions(board, decisions, hidden),
                             inputs with { RecentEvents = recent.ToArray() });
@@ -132,7 +134,7 @@ internal static class OwnerConsoleFullScreenHost
                 events = activityLoader.Events ?? new OwnerConsoleStartupEventSource(workspace.ConductEventsLogPath, clock);
                 await new OwnerConsoleEventPump(events, clock,
                     message => app.Invoke(() => { if (!token.IsCancellationRequested) view!.ShowNotice(message, OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Refresh); }))
-                    .RunAsync(item => RefreshAsync(item), token);
+                    .RunAsync(item => RefreshAsync(item, scope: OwnerConsoleRefreshScope.None), token);
             });
             periodicRefresh = Task.Run(async () =>
             {
@@ -144,6 +146,7 @@ internal static class OwnerConsoleFullScreenHost
                     await RefreshAsync(skipIfBusy: true);
                 }
             }, token);
+            streamRefresh = Task.Run(() => new OwnerConsoleStreamRefresh(changes, scope => RefreshAsync(scope: scope), clock).RunAsync(token), token);
             app.Run(view!.Window);
             return 0;
         }
@@ -159,6 +162,9 @@ internal static class OwnerConsoleFullScreenHost
         {
             linked.Cancel();
             try { await periodicRefresh.WaitAsync(OwnerConsoleLoopOptions.Default.ShutdownBound, clock, CancellationToken.None); }
+            catch (OperationCanceledException) { }
+            catch (TimeoutException) { }
+            try { await streamRefresh.WaitAsync(OwnerConsoleLoopOptions.Default.ShutdownBound, clock, CancellationToken.None); }
             catch (OperationCanceledException) { }
             catch (TimeoutException) { }
             if (reader is not null)
