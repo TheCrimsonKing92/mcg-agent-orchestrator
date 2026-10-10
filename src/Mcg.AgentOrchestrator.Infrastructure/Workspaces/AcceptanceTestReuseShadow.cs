@@ -14,7 +14,7 @@ internal sealed class AcceptanceTestReuseShadow
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
     };
     private readonly object _gate = new();
-    private readonly Dictionary<(string Class, string Check), ClassRow> _rows = [];
+    private readonly Dictionary<(string Class, string Check), AcceptanceTestReuseShadowObservation> _rows = [];
     private readonly Lazy<PlanState> _plan;
     private readonly string _worktreePath;
     private readonly string _goalId;
@@ -91,10 +91,9 @@ internal sealed class AcceptanceTestReuseShadow
     {
         try
         {
-            var plan = _plan.Value;
             foreach (var path in result.TestResultPaths ?? [])
             {
-                try { ObserveTrx(check, path, plan); }
+                try { ObserveTrx(check, path); }
                 catch (Exception ex) { Log($"TEST_REUSE_SHADOW_UNAVAILABLE trx:{ex.GetType().Name}"); }
             }
         }
@@ -104,7 +103,7 @@ internal sealed class AcceptanceTestReuseShadow
         }
     }
 
-    private void ObserveTrx(AcceptanceManifestCheck check, string path, PlanState plan)
+    private void ObserveTrx(AcceptanceManifestCheck check, string path)
     {
         var document = XDocument.Load(path, LoadOptions.None);
         var definitions = document.Descendants().Where(element => element.Name.LocalName == "UnitTest")
@@ -127,17 +126,13 @@ internal sealed class AcceptanceTestReuseShadow
             if (identity is null || ReduceToClass(identity) is not { Length: > 0 } className)
                 continue;
 
-            var reason = plan.Status != "resolved" ?
-                (plan.Status.StartsWith("unavailable:", StringComparison.Ordinal) ? "selection-degraded:unavailable" : plan.Status) :
-                plan.AllInfrastructureSelected || plan.Selected.Contains(className) ? "selected" :
-                check.ExclusiveResourceKeys.Count > 0 ? "exclusive-resource-lane" : "unselected";
-            var row = new ClassRow(className, check.Name, reason == "unselected" ? "would-skip" : "run",
-                reason, failed ? "failed" : "passed");
+            var row = new AcceptanceTestReuseShadowObservation(className, check.Name, failed,
+                check.ExclusiveResourceKeys.Count > 0);
             lock (_gate)
             {
                 var key = (className, check.Name);
-                if (_rows.TryGetValue(key, out var prior) && prior.Outcome == "failed")
-                    row = row with { Outcome = "failed" };
+                if (_rows.TryGetValue(key, out var prior) && prior.Failed)
+                    row = row with { Failed = true };
                 _rows[key] = row;
             }
         }
@@ -162,10 +157,19 @@ internal sealed class AcceptanceTestReuseShadow
         try
         {
             var plan = _plan.Value;
-            ClassRow[] rows;
+            AcceptanceTestReuseShadowObservation[] observations;
             lock (_gate)
-                rows = _rows.Values.OrderBy(row => row.Check, StringComparer.Ordinal)
-                    .ThenBy(row => row.Class, StringComparer.Ordinal).ToArray();
+                observations = _rows.Values.ToArray();
+            var rows = observations.Select(observation =>
+            {
+                var reason = plan.Status != "resolved" ?
+                    (plan.Status.StartsWith("unavailable:", StringComparison.Ordinal) ? "selection-degraded:unavailable" : plan.Status) :
+                    plan.AllInfrastructureSelected || plan.Selected.Contains(observation.Class) ? "selected" :
+                    observation.ExclusiveResourceLane ? "exclusive-resource-lane" : "unselected";
+                return new ClassRow(observation.Class, observation.Check, reason == "unselected" ? "would-skip" : "run",
+                    reason, observation.Failed ? "failed" : "passed");
+            }).OrderBy(row => row.Check, StringComparer.Ordinal)
+                .ThenBy(row => row.Class, StringComparer.Ordinal).ToArray();
             var skipped = rows.Where(row => row.Decision == "would-skip").ToArray();
             var failed = skipped.Where(row => row.Outcome == "failed").ToArray();
             var record = new ShadowRecord(_mainSha, _candidateTreeSha, plan.ChangedFileCount, plan.Status, rows,

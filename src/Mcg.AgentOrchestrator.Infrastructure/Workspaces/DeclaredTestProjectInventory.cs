@@ -1,10 +1,11 @@
 using static Mcg.AgentOrchestrator.Infrastructure.AcceptancePolicyShardPlanner;
+using AcceptanceManifestCheck = Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier.AcceptanceManifestCheck;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
 /// <summary>
 /// Single authoritative source of the test projects that focused evidence may target.
-/// Every entry is derived from the acceptance manifest's declared <c>engine.mtpInvocations</c>;
+/// Entries derive from <c>engine.mtpInvocations</c> and explicitly supplied <c>dotnet-test</c> checks;
 /// this type deliberately declares no project constants of its own so no parallel census can drift.
 /// </summary>
 internal static class DeclaredTestProjectInventory
@@ -51,7 +52,9 @@ internal static class DeclaredTestProjectInventory
     /// <summary>
     /// The declared, eligible test projects in manifest order, each as its candidate-relative path.
     /// </summary>
-    internal static IReadOnlyList<string> DeclaredProjects(AcceptanceGateEngineSettings? engineSettings)
+    internal static IReadOnlyList<string> DeclaredProjects(
+        AcceptanceGateEngineSettings? engineSettings,
+        IReadOnlyList<AcceptanceManifestCheck>? checks = null)
     {
         var declared = new List<string>();
         foreach (var invocation in engineSettings?.MtpInvocations ?? [])
@@ -66,6 +69,14 @@ internal static class DeclaredTestProjectInventory
             declared.Add(normalized!);
         }
 
+        foreach (var project in CheckDeclaredTestProjects.Projects(checks))
+        {
+            if (!declared.Contains(project, StringComparer.OrdinalIgnoreCase))
+            {
+                declared.Add(project);
+            }
+        }
+
         return declared;
     }
 
@@ -77,7 +88,8 @@ internal static class DeclaredTestProjectInventory
     internal static bool TryResolve(
         string? alias,
         AcceptanceGateEngineSettings? engineSettings,
-        out string project)
+        out string project,
+        IReadOnlyList<AcceptanceManifestCheck>? checks = null)
     {
         project = string.Empty;
         var normalizedAlias = NormalizePath(alias);
@@ -86,7 +98,7 @@ internal static class DeclaredTestProjectInventory
             return false;
         }
 
-        foreach (var declared in DeclaredProjects(engineSettings))
+        foreach (var declared in DeclaredProjects(engineSettings, checks))
         {
             var fileName = Path.GetFileName(declared);
             if (normalizedAlias.Equals(declared, StringComparison.OrdinalIgnoreCase) ||
@@ -101,6 +113,21 @@ internal static class DeclaredTestProjectInventory
             }
         }
 
+        // Check names are additional bare aliases; path-bearing requests must match a declared path.
+        if (!normalizedAlias.Contains('/') && !normalizedAlias.Contains(':') &&
+            normalizedAlias is not "." and not "..")
+        {
+            var declaringCheck = (checks ?? []).FirstOrDefault(check =>
+                CheckDeclaredTestProjects.IsEligible(check) &&
+                normalizedAlias.Equals(check.Name, StringComparison.OrdinalIgnoreCase));
+            if (declaringCheck is not null)
+            {
+                project = DeclaredProjects(engineSettings, checks).First(declared =>
+                    declared.Equals(NormalizePath(declaringCheck.Project), StringComparison.OrdinalIgnoreCase));
+                return true;
+            }
+        }
+
         return false;
     }
 
@@ -108,19 +135,31 @@ internal static class DeclaredTestProjectInventory
     /// The worker-visible accepted-project text: the legacy aliases the resolver still honours,
     /// followed by the labels actually declared in this candidate's manifest.
     /// </summary>
-    internal static string DescribeSupportedProjectForms(AcceptanceGateEngineSettings? engineSettings)
+    internal static string DescribeSupportedProjectForms(
+        AcceptanceGateEngineSettings? engineSettings,
+        IReadOnlyList<AcceptanceManifestCheck>? checks = null)
     {
         var declaredLabels = DeclaredProjects(engineSettings)
             .Select(ProjectLabel)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(label => label, StringComparer.Ordinal)
             .ToArray();
-        return declaredLabels.Length == 0
+        var described = declaredLabels.Length == 0
             ? LegacyAliasProjectForms
             : LegacyAliasProjectForms +
                 "; test projects declared in engine.mtpInvocations also accept their project label, " +
                 "file name, or full .csproj path (declared: " +
                 string.Join(", ", declaredLabels) +
                 ")";
+        var checkLabels = CheckDeclaredTestProjects.Projects(checks)
+            .Except(DeclaredProjects(engineSettings), StringComparer.OrdinalIgnoreCase)
+            .Select(CheckDeclaredTestProjects.Label)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(label => label, StringComparer.Ordinal)
+            .ToArray();
+        return checkLabels.Length == 0
+            ? described
+            : described + "; test projects declared as dotnet-test checks also accept their project label, " +
+                "file name, or full .csproj path (declared: " + string.Join(", ", checkLabels) + ")";
     }
 }

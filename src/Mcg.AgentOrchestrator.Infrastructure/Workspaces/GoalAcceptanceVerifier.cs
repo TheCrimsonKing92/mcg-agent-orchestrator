@@ -318,7 +318,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     internal const int MaxFocusedEvidenceFilterLength = 1024;
     internal static string FocusedEvidenceSupportedProjectForms(
         AcceptanceGateEngineSettings? engineSettings) =>
-        DeclaredTestProjectInventory.DescribeSupportedProjectForms(engineSettings);
+        DeclaredTestProjectInventory.DescribeSupportedProjectForms(engineSettings, engineSettings?.DeclaredDotnetTestChecks);
     internal const int FocusedEvidenceShortTimeoutTargetLimit = 4;
     internal const int MaxFailureAttributionFocusedEvidenceIdentities = FocusedEvidenceShortTimeoutTargetLimit;
     public const string AcceptanceAttemptTrxPrefixVariable = "MCG_ACCEPTANCE_GATE_ATTEMPT_TRX_PREFIX";
@@ -793,10 +793,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         phaseAccountant.TransitionTo(AcceptanceGatePhaseNames.PolicySynthesis);
-        if (partitionVerdictCache?.CompleteAttempt() is { } partitionCacheReceipt)
-        {
-            checks.Add(partitionCacheReceipt);
-        }
+        if (partitionVerdictCache?.CompleteAttempt() is { } partitionCacheReceipt) checks.Add(partitionCacheReceipt);
         partitionVerdictCache?.RecordSemanticDeduplications(effectivePlan.SemanticDeduplications);
 
         if (effectivePlan.DotnetShardDisposition == DotnetShardDisposition.RunDotnetShards)
@@ -920,6 +917,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             executionOwner.MarkSuccessful();
         }
 
+        if (partitionVerdictCache?.HasPendingShadows == true)
+            phaseAccountant.TransitionTo(AcceptanceGatePhaseNames.ShadowObservation);
+        partitionVerdictCache?.CompleteShadows();
         phaseAccountant.MarkCompleted(verification.Passed);
         return verification;
         }
@@ -1525,7 +1525,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             }
             catch (IOException ex)
             {
-                var evidenceFailure = BuildRetryEvidenceRetentionFailure(original, retainedDiagnostic, ex);
+                var evidenceFailure = AcceptanceRetryEvidenceRetentionFailure.Build(original, retainedDiagnostic, ex);
                 cacheContext.RecordExecution(check, evidenceFailure);
                 return (evidenceFailure, false);
             }
@@ -1559,38 +1559,30 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 cacheContext.SelectPartitionVerdict(check, original, rerunResult), rerunResult), true);
         }
 
-        cacheContext?.RecordExecution(check, fresh.Result);
+        if (cacheContext is not null && _testOverrides.PartitionVerdictWithinAttemptRerunEnabled &&
+            fresh.Result.CompletionDecision?.FailedPredicate == AcceptanceShardCompletionPredicates.FailingTrx)
+        {
+            var finalResult = await AcceptanceLaneTestFailureRerun.ForAttempt(cacheContext, worktreePath).RunAsync(
+                check, fresh.Result, async () =>
+                {
+                    var invocation = AllocateTestTelemetryInvocation(check);
+                    var rerun = await RunCheckWithCancellationProbeAsync(check, worktreePath, goalId,
+                        stableSlotIndex, stableSlotLease, dotnetTestBuildPhase, cancellationToken,
+                        testResultsDirectoryOverride, invocation).ConfigureAwait(false);
+                    var decision = rerun.Result.CompletionDecision ?? InferPartitionCompletionDecision(rerun.Result);
+                    return cacheContext.ObserveSharedApparatusEvidence(check, rerun.Result with
+                    {
+                        TestResultAttemptId = currentAttemptId, CompletionDecision = decision,
+                        FailureClassification = rerun.Result.FailureClassification ?? decision.FailedPredicate
+                    });
+                }, result => BuildInvocationIdentity(check, result.TestResultRunOrdinal, currentAttemptId),
+                cacheContext.SharedApparatusInvalidation is not null, cancellationToken).ConfigureAwait(false);
+            fresh = (finalResult, fresh.Retried || finalResult.LaneRerun is not null);
+        }
+        cacheContext?.RecordExecution(check, fresh.Result,
+            fresh.Result.LaneRerun?.Outcome == AcceptanceLaneRerunEvidence.Flake ? "lane_rerun_pass" : "first_run");
 
         return fresh;
-    }
-
-    private static AcceptanceCheckResult BuildRetryEvidenceRetentionFailure(
-        AcceptanceCheckResult original,
-        AcceptanceRetainedDiagnostic? retainedDiagnostic,
-        IOException exception)
-    {
-        var detail =
-            $"Within-attempt retry refused: {AcceptanceFailureClassifications.RetryEvidenceRetentionFailed}; " +
-            $"{exception.Message}" +
-            (retainedDiagnostic is null
-                ? string.Empty
-                : $" Retained diagnostic remains at '{retainedDiagnostic.Path}' (sha256={retainedDiagnostic.Sha256}).");
-        return original with
-        {
-            Passed = false,
-            OutputTail = string.IsNullOrWhiteSpace(original.OutputTail)
-                ? detail
-                : $"{original.OutputTail}{Environment.NewLine}{detail}",
-            ResultSummary = AcceptanceDotnetBuildPhase.PrefixResultSummary(detail, original.ResultSummary),
-            FailureClassification = AcceptanceFailureClassifications.RetryEvidenceRetentionFailed,
-            CompletionDecision = original.CompletionDecision is null
-                ? null
-                : original.CompletionDecision with
-                {
-                    PolicySignal = AcceptanceFailureClassifications.RetryEvidenceRetentionFailed
-                },
-            ProcessStderrPath = retainedDiagnostic?.Path ?? original.ProcessStderrPath
-        };
     }
 
     private async Task<(AcceptanceCheckResult Result, bool Retried)> RunCheckWithCancellationProbeAsync(

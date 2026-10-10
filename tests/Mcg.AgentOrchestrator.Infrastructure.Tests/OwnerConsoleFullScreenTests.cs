@@ -175,6 +175,42 @@ public sealed class OwnerConsoleFullScreenTests
         Assert.Equal(string.Empty, harness.Output.Text);
     }
 
+    [Fact]
+    public async Task CommandEditing_ShowsVerbsAndUnknownCommandListsThem()
+    {
+        var harness = Harness();
+        var dialogs = new Dialogs();
+        using IApplication app = Terminal.Gui.App.Application.Create();
+        using var view = new OwnerConsoleFullScreenView(app, Controller(harness, dialogs), () => Task.CompletedTask);
+        var model = await Model(harness);
+        view.Render(model);
+        view.FocusDecisions();
+        var paneHint = view.HintText;
+        Assert.NotEmpty(OwnerConsoleKeyHints.Commands);
+
+        await view.HandleKeyAsync(new Key(':'));
+        Assert.True(view.CommandLine.HasFocus);
+        foreach (var command in OwnerConsoleKeyHints.Commands) Assert.Contains(command.Command, view.HintText);
+        view.CommandLine.Text = "frobnicate";
+        view.Render(model);
+        Assert.Equal("frobnicate", view.CommandLine.Text);
+        foreach (var command in OwnerConsoleKeyHints.Commands) Assert.Contains(command.Command, view.HintText);
+        await view.HandleKeyAsync(Key.Esc);
+        Assert.Equal(paneHint, view.HintText);
+        Assert.Equal(string.Empty, view.CommandLine.Text);
+        Assert.Empty(dialogs.Texts);
+
+        await view.HandleKeyAsync(new Key(':'));
+        view.CommandLine.Text = "frobnicate";
+        await view.HandleKeyAsync(Key.Enter);
+        var output = Assert.Single(dialogs.Texts);
+        Assert.StartsWith("unknown command", output);
+        foreach (var command in OwnerConsoleKeyHints.Commands)
+            Assert.True(output.IndexOf(command.Command, StringComparison.Ordinal) > output.IndexOf("unknown command", StringComparison.Ordinal));
+        Assert.Equal(paneHint, view.HintText);
+        Assert.Equal(string.Empty, harness.Output.Text);
+    }
+
     [Theory]
     [InlineData(0, "[00:05:00] digest first")]
     [InlineData(-6, "[18:05:00] digest first")]

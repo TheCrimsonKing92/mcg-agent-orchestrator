@@ -13,6 +13,74 @@ public sealed class AcceptancePartitionVerdictCacheTestReuseShadowTests : IDispo
     private readonly string _root = Path.Combine(Path.GetTempPath(), "mcg-shadow-tests", Guid.NewGuid().ToString("N"));
 
     [Fact]
+    public void CompleteAttempt_LeavesShadowRecordToCompleteShadows()
+    {
+        var root = CreateRoot("candidate");
+        var check = Partition("ShadowA");
+        var calls = 0;
+        var cache = CreateCache(root, [check], (_, _, _) => { calls++; return [SelectedPath]; });
+        cache.RecordExecution(check, Result(check, Trx(new TrxCase("Ns.SelectedShadowFixtureTests"))));
+        Assert.NotNull(cache.CompleteAttempt());
+        Assert.Equal(0, calls);
+        Assert.False(File.Exists(RecordPath(root)));
+        Assert.True(cache.HasPendingShadows);
+        cache.CompleteShadows();
+        Assert.Equal(1, calls);
+        Assert.True(File.Exists(RecordPath(root)));
+        Assert.False(cache.HasPendingShadows);
+        cache.CompleteShadows();
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public void Observe_NeverResolvesPlanUntilCompleteShadows()
+    {
+        var root = CreateRoot("candidate");
+        var first = Partition("ShadowA");
+        var second = Partition("ShadowB");
+        var calls = 0;
+        var cache = CreateCache(root, [first, second], (_, _, _) => { calls++; return [SelectedPath]; });
+        cache.RecordExecution(first, Result(first, Trx(new TrxCase("Ns.SelectedShadowFixtureTests"))) with
+        {
+            TestResultPaths = [Trx(new TrxCase("Ns.SelectedShadowFixtureTests")),
+                Trx(new TrxCase("Ns.UnselectedShadowFixtureTests", "Failed"))]
+        });
+        cache.RecordExecution(second, Result(second, Trx(new TrxCase("Ns.OtherShadowFixtureTests"))));
+        Assert.Equal(0, calls);
+        cache.CompleteAttempt();
+        Assert.Equal(0, calls);
+        cache.CompleteShadows();
+        Assert.Equal(1, calls);
+        using var record = ReadRecord(root);
+        Assert.Equal(3, record.RootElement.GetProperty("classes").GetArrayLength());
+    }
+
+    [Fact]
+    public void ThrowingResolver_ObserveKeepsRowsAndCompleteShadowsRecordsUnavailable()
+    {
+        var root = CreateRoot("candidate");
+        var check = Partition("ShadowA");
+        var calls = 0;
+        var cache = CreateCache(root, [check], (_, _, _) =>
+        {
+            calls++;
+            throw new InvalidOperationException("changed files unavailable");
+        });
+        cache.RecordExecution(check, Result(check, Trx(new TrxCase("Ns.SelectedShadowFixtureTests"),
+            new TrxCase("Ns.UnselectedShadowFixtureTests", "Failed")), false));
+        Assert.Equal(0, calls);
+        cache.CompleteAttempt();
+        Assert.Null(Record.Exception(cache.CompleteShadows));
+        Assert.Equal(1, calls);
+        using var record = ReadRecord(root);
+        Assert.Equal("unavailable:changed-files:InvalidOperationException", record.RootElement.GetProperty("plan_status").GetString());
+        Assert.Equal(JsonValueKind.Null, record.RootElement.GetProperty("changed_file_count").ValueKind);
+        Assert.Equal(2, record.RootElement.GetProperty("classes").GetArrayLength());
+        AssertRow(record.RootElement, "SelectedShadowFixtureTests", check.Name, "run", "selection-degraded:unavailable", "passed");
+        AssertRow(record.RootElement, "UnselectedShadowFixtureTests", check.Name, "run", "selection-degraded:unavailable", "failed");
+    }
+
+    [Fact]
     public void CompleteAttempt_RecordsSelectedAndUnselectedExecutedClasses()
     {
         var root = CreateRoot("candidate");
@@ -29,6 +97,7 @@ public sealed class AcceptancePartitionVerdictCacheTestReuseShadowTests : IDispo
         cache.RecordExecution(first, Result(first, Trx(new TrxCase("Ns.SelectedShadowFixtureTests"))));
         cache.RecordExecution(second, Result(second, Trx(new TrxCase("Ns.UnselectedShadowFixtureTests"))));
         Assert.NotNull(cache.CompleteAttempt());
+        cache.CompleteShadows();
 
         using var record = ReadRecord(root);
         var json = record.RootElement;
@@ -59,6 +128,7 @@ public sealed class AcceptancePartitionVerdictCacheTestReuseShadowTests : IDispo
         cache.RecordExecution(first, Result(first, Trx(new TrxCase("Ns.UnselectedShadowFixtureTests", outcome)), false));
         cache.RecordExecution(exclusive, Result(exclusive, Trx(new TrxCase("Ns.ExclusiveShadowFixtureTests"))));
         Assert.NotNull(cache.CompleteAttempt());
+        cache.CompleteShadows();
 
         using var record = ReadRecord(root);
         AssertRow(record.RootElement, "UnselectedShadowFixtureTests", first.Name, "would-skip", "unselected", "failed");
@@ -84,6 +154,7 @@ public sealed class AcceptancePartitionVerdictCacheTestReuseShadowTests : IDispo
             new("Ns.SkippedShadowFixtureTests", "NotExecuted"),
             new("Ns.UnknownShadowFixtureTests", "Unknown"))));
         cache.CompleteAttempt();
+        cache.CompleteShadows();
 
         using var record = ReadRecord(root);
         AssertRow(record.RootElement, "OuterShadowFixtureTests", check.Name, "run", "selected", "passed");
@@ -104,6 +175,7 @@ public sealed class AcceptancePartitionVerdictCacheTestReuseShadowTests : IDispo
         cache.RecordExecution(first, Result(first, Trx(new TrxCase("Ns.UnselectedShadowFixtureTests"))));
         cache.RecordExecution(second, Result(second, failed, false));
         cache.CompleteAttempt();
+        cache.CompleteShadows();
 
         using var record = ReadRecord(root);
         Assert.Equal(2, record.RootElement.GetProperty("classes").GetArrayLength());
@@ -147,6 +219,8 @@ public sealed class AcceptancePartitionVerdictCacheTestReuseShadowTests : IDispo
         cache.RecordExecution(check, result);
         control.RecordExecution(check, result);
         AssertSameReceipt(cache.CompleteAttempt(), control.CompleteAttempt());
+        cache.CompleteShadows();
+        control.CompleteShadows();
         AssertSameReuse(root, baseline, check, Resolve);
 
         using var record = ReadRecord(root);
@@ -166,6 +240,7 @@ public sealed class AcceptancePartitionVerdictCacheTestReuseShadowTests : IDispo
         var cache = CreateCache(root, [check], (_, _, _) => ["src/Mcg.AgentOrchestrator.Infrastructure/Shadow.cs"]);
         cache.RecordExecution(check, Result(check, Trx(new TrxCase("Ns.UnselectedShadowFixtureTests"))));
         cache.CompleteAttempt();
+        cache.CompleteShadows();
         using var record = ReadRecord(root);
         Assert.Equal("resolved", record.RootElement.GetProperty("plan_status").GetString());
         AssertRow(record.RootElement, "UnselectedShadowFixtureTests", check.Name, "run", "selected", "passed");
@@ -189,6 +264,8 @@ public sealed class AcceptancePartitionVerdictCacheTestReuseShadowTests : IDispo
         cache.RecordExecution(check, result);
         control.RecordExecution(check, result);
         AssertSameReceipt(cache.CompleteAttempt(), control.CompleteAttempt());
+        cache.CompleteShadows();
+        control.CompleteShadows();
         AssertSameReuse(root, baseline, check, SelectedFiles, passed);
         Assert.False(File.Exists(RecordPath(root)));
         Assert.Equal("block directory creation", File.ReadAllText(blockedPath));
@@ -210,6 +287,7 @@ public sealed class AcceptancePartitionVerdictCacheTestReuseShadowTests : IDispo
             TestResultPaths = [Path.Combine(_root, "missing.trx"), valid]
         });
         cache.CompleteAttempt();
+        cache.CompleteShadows();
         using var record = ReadRecord(root);
         AssertRow(record.RootElement, "UnselectedShadowFixtureTests", check.Name, "would-skip", "unselected", "passed");
     }
@@ -224,6 +302,7 @@ public sealed class AcceptancePartitionVerdictCacheTestReuseShadowTests : IDispo
         var cache = CreateCache(worktree, [check], SelectedFiles);
         cache.RecordExecution(check, Result(check, Trx(new TrxCase("Ns.SelectedShadowFixtureTests"))));
         cache.CompleteAttempt();
+        cache.CompleteShadows();
         using var record = ReadRecord(host);
         AssertRow(record.RootElement, "SelectedShadowFixtureTests", check.Name, "run", "selected", "passed");
         Assert.False(File.Exists(RecordPath(worktree)));

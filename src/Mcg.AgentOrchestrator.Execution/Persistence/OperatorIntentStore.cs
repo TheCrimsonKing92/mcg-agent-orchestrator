@@ -57,6 +57,11 @@ public interface IOperatorIntentStore
         string claimOwner,
         CancellationToken cancellationToken = default);
 
+    Task<OperatorIntentRecord?> ClaimNextPendingAsync(
+        string goalId,
+        string claimOwner,
+        CancellationToken cancellationToken = default);
+
     Task<OperatorIntentRecord?> ClaimNextByVerbAsync(
         string goalId,
         string verb,
@@ -190,6 +195,12 @@ public sealed class SqliteOperatorIntentStore : IOperatorIntentStore
         CancellationToken cancellationToken = default) =>
         await ClaimNextCoreAsync(goalId, null, claimOwner, cancellationToken);
 
+    public async Task<OperatorIntentRecord?> ClaimNextPendingAsync(
+        string goalId,
+        string claimOwner,
+        CancellationToken cancellationToken = default) =>
+        await ClaimNextCoreAsync(goalId, null, claimOwner, cancellationToken, pendingOnly: true);
+
     public async Task<OperatorIntentRecord?> ClaimNextByVerbAsync(
         string goalId,
         string verb,
@@ -204,7 +215,8 @@ public sealed class SqliteOperatorIntentStore : IOperatorIntentStore
         string goalId,
         string? verb,
         string claimOwner,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool pendingOnly = false)
     {
         EnsureWritable();
         ArgumentException.ThrowIfNullOrWhiteSpace(goalId);
@@ -212,7 +224,7 @@ public sealed class SqliteOperatorIntentStore : IOperatorIntentStore
 
         await using var conn = OpenConnection();
         await using var tx = conn.BeginTransaction();
-        var intent = await ReadNextActionableAsync(conn, tx, goalId, verb, claimOwner, cancellationToken);
+        var intent = await ReadNextActionableAsync(conn, tx, goalId, verb, claimOwner, cancellationToken, pendingOnly);
         if (intent is null)
         {
             await tx.CommitAsync(cancellationToken);
@@ -478,7 +490,8 @@ public sealed class SqliteOperatorIntentStore : IOperatorIntentStore
         string goalId,
         string? verb,
         string claimOwner,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool pendingOnly)
     {
         await using var cmd = conn.CreateCommand();
         cmd.Transaction = tx;
@@ -486,7 +499,7 @@ public sealed class SqliteOperatorIntentStore : IOperatorIntentStore
             {SelectColumns}
             WHERE goal_id = $goal_id
               AND ($verb IS NULL OR verb = $verb)
-              AND (status = $pending OR (status = $claimed AND claim_owner = $claim_owner))
+              AND (status = $pending OR ($pending_only = 0 AND status = $claimed AND claim_owner = $claim_owner))
             ORDER BY CASE status WHEN 'Claimed' THEN 0 ELSE 1 END, created_at, id
             LIMIT 1
             """;
@@ -495,6 +508,7 @@ public sealed class SqliteOperatorIntentStore : IOperatorIntentStore
         cmd.Parameters.AddWithValue("$pending", OperatorIntentStatus.Pending.ToString());
         cmd.Parameters.AddWithValue("$claimed", OperatorIntentStatus.Claimed.ToString());
         cmd.Parameters.AddWithValue("$claim_owner", claimOwner);
+        cmd.Parameters.AddWithValue("$pending_only", pendingOnly ? 1 : 0);
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken) ? ReadIntent(reader) : null;
     }

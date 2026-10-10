@@ -90,6 +90,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         _decisions.ValueChanged += (_, _) =>
         {
             if (!_rendering && _decisions.SelectedItem is { } index) _controller.SelectIndex(index);
+            if (!_rendering) RenderHints();
         };
         _board.ValueChanged += (_, args) =>
         {
@@ -98,6 +99,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         _decisions.HasFocusChanged += (_, _) => PaneFocusChanged(_decisions, OwnerConsolePane.Decisions);
         _board.HasFocusChanged += (_, _) => PaneFocusChanged(_board, OwnerConsolePane.Board);
         _activity.HasFocusChanged += (_, _) => PaneFocusChanged(_activity, OwnerConsolePane.Activity);
+        _command.HasFocusChanged += (_, _) => RenderHints();
         _activity.ViewportChanged += (_, _) => Fit(_activity.Viewport.Width, _boardTitleWidth);
         _board.ViewportChanged += (_, _) => Fit(_activityWidth, 0);
         _decisions.ViewportChanged += (_, _) =>
@@ -257,6 +259,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
             _commandReturnFocus = PaneView(FocusedPane);
             _editingCommand = true;
             _command.SetFocus();
+            RenderHints();
             return;
         }
         var character = char.ToLowerInvariant((char)key.AsRune.Value);
@@ -306,6 +309,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
             if (pane == OwnerConsolePane.Board) SelectBoard(target);
             else if (pane == OwnerConsolePane.Activity) { _activity.SelectedItem = target; _activity.EnsureSelectedItemVisible(); }
             else { _controller.SelectIndex(target); _decisions.SelectedItem = target; _decisions.EnsureSelectedItemVisible(); }
+            RenderHints();
             return;
         }
         if (key == Key.CursorUp || key == Key.CursorDown)
@@ -328,6 +332,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
             {
                 await _controller.HandleKeyAsync(delta < 0 ? ConsoleKey.UpArrow : ConsoleKey.DownArrow, cancellationToken: _token);
                 _decisions.SelectedItem = _controller.SelectedIndex < 0 ? null : _controller.SelectedIndex;
+                RenderHints();
             }
             return;
         }
@@ -351,6 +356,8 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
             if (ActionRunning) return;
             if (pane == OwnerConsolePane.Decisions && _controller.SelectedIndex >= 0)
                 await ActAsync(ct => _controller.HandleKeyAsync(0, character, _operation, ct));
+            else if (pane != OwnerConsolePane.Decisions)
+                ShowRefreshFailure(OwnerConsoleKeyHints.UnavailableKey(character, pane));
         }
     }
 
@@ -359,6 +366,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         _editingCommand = false;
         _command.Text = string.Empty;
         (_commandReturnFocus ?? _decisions).SetFocus();
+        RenderHints();
     }
 
     private async Task ActAsync(Func<CancellationToken, Task> action)
@@ -398,7 +406,10 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         RenderHints();
     }
 
-    private void RenderHints() => _hints.Text = OwnerConsoleKeyHints.Hint(FocusedPane);
+    private void RenderHints() => _hints.Text = _editingCommand || _command.HasFocus
+        ? OwnerConsoleKeyHints.CommandLineHint
+        : OwnerConsoleKeyHints.Hint(FocusedPane,
+            _controller.SelectedDecision is { } decision && OwnerConsoleScreenController.AnswersInConsole(decision));
 
     private void SelectBoard(int index)
     {

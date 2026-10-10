@@ -193,6 +193,7 @@ public sealed class OperatorIntentStatusWaitTests
 
         public Task<OperatorIntentRecord> EnqueueAsync(OperatorIntentRecord intent, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<OperatorIntentRecord?> ClaimNextAsync(string goalId, string claimOwner, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<OperatorIntentRecord?> ClaimNextPendingAsync(string goalId, string claimOwner, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<OperatorIntentRecord?> ClaimNextByVerbAsync(string goalId, string verb, string claimOwner, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task CompleteAsync(string intentId, string claimOwner, OperatorIntentStatus status, string outcome, DateTimeOffset completedAt, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<IReadOnlyList<OperatorIntentRecord>> ListForGoalAsync(string goalId, int limit = 20, CancellationToken cancellationToken = default) => throw new NotSupportedException();

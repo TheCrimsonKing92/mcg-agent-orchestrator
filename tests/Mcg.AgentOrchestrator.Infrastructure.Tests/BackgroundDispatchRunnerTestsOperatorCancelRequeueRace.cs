@@ -145,6 +145,9 @@ internal sealed class CancelDispatchIntentTestStore : IOperatorIntentStore
         return Task.FromResult<OperatorIntentRecord?>(_items[index]);
     }
 
+    public Task<OperatorIntentRecord?> ClaimNextPendingAsync(string goalId, string claimOwner, CancellationToken cancellationToken = default) =>
+        ClaimNextAsync(goalId, claimOwner, cancellationToken);
+
     public Task<OperatorIntentRecord?> ClaimNextByVerbAsync(string goalId, string verb, string claimOwner, CancellationToken cancellationToken = default) =>
         Task.FromResult<OperatorIntentRecord?>(null);
 

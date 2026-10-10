@@ -117,6 +117,9 @@ public sealed class OperatorIntentCoordinatorTerminalCompletionTests
         public Task<OperatorIntentRecord?> ClaimNextByVerbAsync(string goalId, string verb, string claimOwner, CancellationToken cancellationToken = default) =>
             inner.ClaimNextByVerbAsync(goalId, verb, claimOwner, cancellationToken);
 
+        public Task<OperatorIntentRecord?> ClaimNextPendingAsync(string goalId, string claimOwner, CancellationToken cancellationToken = default) =>
+            inner.ClaimNextPendingAsync(goalId, claimOwner, cancellationToken);
+
         public Task CompleteAsync(string intentId, string claimOwner, OperatorIntentStatus status, string outcome,
             DateTimeOffset completedAt, CancellationToken cancellationToken = default) =>
             FailCompletion

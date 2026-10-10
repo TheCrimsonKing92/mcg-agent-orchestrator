@@ -145,9 +145,12 @@ internal sealed partial class OperatorIntentCoordinator
         var mutated = false;
         var rejectedAdjudication = false;
         var lines = new List<string>();
+        var appliedVerbs = new List<string>();
         for (var count = 0; count < MaxIntentsPerGoalPerTick; count++)
         {
-            var intent = _store.ClaimNextAsync(goal.Id.Value, ClaimOwner).GetAwaiter().GetResult();
+            var intent = (appliedVerbs.Count == 0
+                ? _store.ClaimNextAsync(goal.Id.Value, ClaimOwner)
+                : _store.ClaimNextPendingAsync(goal.Id.Value, ClaimOwner)).GetAwaiter().GetResult();
             if (intent is null)
             {
                 break;
@@ -173,6 +176,12 @@ internal sealed partial class OperatorIntentCoordinator
                     _utcNow()).GetAwaiter().GetResult();
                 lines.Add($"OPERATOR_INTENT id={intent.Id} verb={intent.Verb} goal={goal.Id.Value[..8]} result=applied-recovered");
                 continue;
+            }
+
+            if (appliedVerbs.Count > 0 && !OperatorIntentBatchPolicy.CanShareTick(intent.Verb))
+            {
+                // Keep the claim for the next tick, after this batch is durable.
+                break;
             }
 
             try
@@ -218,7 +227,11 @@ internal sealed partial class OperatorIntentCoordinator
                 AddPendingCompletion(goal.Id.Value, intent.Id, outcome);
                 lines.Add($"OPERATOR_INTENT id={intent.Id} verb={intent.Verb} goal={goal.Id.Value[..8]} result={(retryClarification == RetryClarificationHandling.Resumed ? "retry-resumed-pending-commit" : "applied-pending-commit")}");
                 mutated = true;
-                break;
+                appliedVerbs.Add(intent.Verb);
+                if (!OperatorIntentBatchPolicy.CanShareTick(intent.Verb))
+                {
+                    break;
+                }
             }
             catch (AnswerApplicationRetryException ex) when (intent.Verb == OperatorIntentVerbs.Answer)
             {

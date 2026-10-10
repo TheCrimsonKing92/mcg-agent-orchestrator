@@ -117,7 +117,7 @@ public sealed class OwnerConsoleFullScreenPaneTests
         using var view = new OwnerConsoleFullScreenView(app, Controller(harness, dialogs), () => Task.CompletedTask);
         view.Render(await Model(harness));
         const string common = "  Home/End first/last  PgUp/PgDn page  Tab/Shift+Tab pane  : command  ? help  q quit";
-        Assert.Equal("Enter detail  a accept default  r answer" + common, view.HintText);
+        Assert.Equal("Enter detail" + common, view.HintText);
         await view.HandleKeyAsync(Key.Tab);
         Assert.Equal(OwnerConsolePane.Board, view.FocusedPane);
         Assert.Equal("Enter goal detail" + common, view.HintText);
@@ -126,7 +126,7 @@ public sealed class OwnerConsoleFullScreenPaneTests
         Assert.Equal("Up/Down scroll  Enter what this means" + common, view.HintText);
         await view.HandleKeyAsync(Key.Tab);
         Assert.Equal(OwnerConsolePane.Decisions, view.FocusedPane);
-        Assert.Equal("Enter detail  a accept default  r answer" + common, view.HintText);
+        Assert.Equal("Enter detail" + common, view.HintText);
 
         await view.HandleKeyAsync(new Key('?'));
 
@@ -303,6 +303,109 @@ public sealed class OwnerConsoleFullScreenPaneTests
             Assert.DoesNotContain("unknown command", dialogs.Texts[^1].Text);
             Assert.DoesNotContain("usage:", dialogs.Texts[^1].Text);
         }
+    }
+
+    [Fact]
+    public async Task SelectedDecision_HintsFollowAnswerabilityAndBoardBindings()
+    {
+        var harness = new OwnerConsoleHarness();
+        harness.AddGoal("11111111-first", "First", AgentRole.Developer);
+        harness.Questions.Items.Add(new("q1", "11111111-first", OwnerQuestionKind.HumanInput, "Ship?", ProposedDefault: "ship"));
+        harness.Questions.Items.Add(new("q2", "11111111-first", OwnerQuestionKind.StewardHold, "Review hold"));
+        var dialogs = new Dialogs();
+        var controller = Controller(harness, dialogs);
+        using IApplication app = Terminal.Gui.App.Application.Create();
+        using var view = new OwnerConsoleFullScreenView(app, controller, () => Task.CompletedTask);
+        var model = await Model(harness);
+        Assert.Equal(2, model.Decisions.Length);
+        view.Render(model);
+        view.FocusDecisions();
+        Assert.Equal("q1", controller.SelectedDecisionId);
+        Assert.Contains("a accept default", view.HintText);
+        Assert.Contains("r answer", view.HintText);
+
+        await view.HandleKeyAsync(Key.CursorDown);
+        Assert.Equal("q2", controller.SelectedDecisionId);
+        Assert.DoesNotContain("a accept default", view.HintText);
+        Assert.DoesNotContain("r answer", view.HintText);
+        foreach (var character in new[] { 'a', 'r' })
+        {
+            await view.HandleKeyAsync(new Key(character));
+            Assert.Equal("View only", dialogs.Texts[^1].Title);
+            Assert.Contains("use the CLI", dialogs.Texts[^1].Text);
+        }
+        Assert.Equal(0, dialogs.InputCalls);
+        Assert.Empty(harness.Answers.Calls);
+
+        await view.HandleKeyAsync(Key.Home);
+        Assert.Equal("q1", controller.SelectedDecisionId);
+        Assert.Contains("a accept default", view.HintText);
+        Assert.Contains("r answer", view.HintText);
+        view.DecisionsPane.SelectedItem = 1; // Mouse/list selection uses ValueChanged.
+        Assert.Equal("q2", controller.SelectedDecisionId);
+        Assert.DoesNotContain("a accept default", view.HintText);
+        Assert.DoesNotContain("r answer", view.HintText);
+        view.Render(model with { Decisions = [model.Decisions[0]] });
+        Assert.Equal("q1", controller.SelectedDecisionId);
+        Assert.Contains("a accept default", view.HintText);
+        Assert.Contains("r answer", view.HintText);
+
+        await view.HandleKeyAsync(Key.Tab);
+        Assert.Equal(OwnerConsolePane.Board, view.FocusedPane);
+        Assert.Equal("Enter goal detail  Home/End first/last  PgUp/PgDn page  Tab/Shift+Tab pane  : command  ? help  q quit", view.HintText);
+        Assert.DoesNotContain("a accept default", view.HintText);
+        Assert.DoesNotContain("r answer", view.HintText);
+    }
+
+    [Fact]
+    public async Task SwallowedActionKeys_BoardAndActivityShowNoticeWithoutDialogOrAnswer()
+    {
+        var harness = new OwnerConsoleHarness();
+        harness.AddGoal("11111111-first", "First", AgentRole.Developer);
+        harness.Questions.Items.Add(new("q1", "11111111-first", OwnerQuestionKind.HumanInput, "Ship?", ProposedDefault: "ship"));
+        var dialogs = new Dialogs();
+        using IApplication app = Terminal.Gui.App.Application.Create();
+        using var view = new OwnerConsoleFullScreenView(app, Controller(harness, dialogs), () => Task.CompletedTask);
+        view.Render(await Model(harness));
+        view.FocusDecisions();
+        foreach (var pane in new[] { OwnerConsolePane.Board, OwnerConsolePane.Activity })
+        {
+            await view.HandleKeyAsync(Key.Tab);
+            Assert.Equal(pane, view.FocusedPane);
+            foreach (var character in new[] { 'a', 'r' })
+            {
+                var before = view.Notices.Count;
+                var key = new Key(character);
+                await view.HandleKeyAsync(key);
+                Assert.True(key.Handled);
+                Assert.Equal(before + 1, view.Notices.Count);
+                Assert.Contains("not available here", view.Notices[0]);
+                Assert.StartsWith(character + ":", view.Notices[0]);
+                Assert.Contains(pane.ToString().ToUpperInvariant(), view.Notices[0]);
+                Assert.Contains(view.Notices[0], view.ActivityLines[0]);
+                Assert.Empty(dialogs.Texts);
+                Assert.Equal(0, dialogs.InputCalls);
+                Assert.Empty(harness.Answers.Calls);
+            }
+        }
+    }
+
+    [Fact]
+    public void Help_EpicKeysAreListedIndividuallyWithTheirModes()
+    {
+        var lines = OwnerConsoleKeyHints.HelpText.Split('\n');
+        // Bindings handled in OwnerConsoleEpicDialog.HandleKeyAsync, by mode.
+        foreach (var binding in new[] { "Epic list Up:", "Epic list Down:", "Epic list Enter:", "Epic list Esc:",
+            "Epic detail Up:", "Epic detail Down:", "Epic detail PgUp:", "Epic detail PgDn:", "Epic detail Esc:",
+            "Epic view w (list and detail):", "Epic view r (list and detail):" })
+            Assert.Single(lines.Where(line => line.StartsWith(binding, StringComparison.Ordinal)));
+        Assert.Contains("failed load", lines.Single(line => line.StartsWith("Epic view r", StringComparison.Ordinal)));
+        Assert.Contains("e: Open the epic view (any pane).", lines);
+        Assert.Contains(":epics: Open the epic view (same as e).", lines);
+        Assert.Contains("Tab: Next pane (DECISIONS, BOARD, ACTIVITY).", lines);
+        Assert.Contains("Shift+Tab: Previous pane (ACTIVITY, BOARD, DECISIONS).", lines);
+        foreach (var command in OwnerConsoleKeyHints.Commands)
+            Assert.Contains(lines, line => line.StartsWith(":" + command.Command + ":", StringComparison.Ordinal));
     }
 
     private static OwnerConsoleScreenController Controller(OwnerConsoleHarness harness, Dialogs dialogs, IGoalEventTail? tail = null) =>
