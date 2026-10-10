@@ -44,16 +44,23 @@ public sealed class CliOperatorIntentRouteTestsCriterionBatch : CliTaskQueryTest
         Assert.Equal(output, CaptureConsole(() => Assert.Equal(0, CliOperatorIntentRoute.Run(args, fixture.Workspace))));
         Assert.Equal(3, (await fixture.Store.ListForGoalAsync(fixture.Goal.Id.Value)).Count);
         var coordinator = new OperatorIntentCoordinator(fixture.Store);
-        // The consumer stops after each mutation until the goal is persisted and its intent completed.
-        for (var tick = 0; tick < intents.Count; tick++)
-        {
-            Assert.True(coordinator.ExecutePending(fixture.Kernel, fixture.Goal).MutatedGoalState);
-            Assert.Equal(tick + 1, fixture.Goal.CriterionEvidenceObligations.Count);
-            await new SqliteOrchestratorStateRepository(fixture.Workspace.SqliteStatePath).SaveAsync(fixture.Kernel);
-            coordinator.CompletePersisted([fixture.Goal.Id]);
-        }
-        Assert.Equal(new[] { "criterion-v1-0", "criterion-v1-1", "criterion-v1-2" },
+        // Compatible map intents share a tick; completion follows persistence of the entire batch.
+        var repository = new SqliteOrchestratorStateRepository(fixture.Workspace.SqliteStatePath);
+        var expectedIds = new[] { "criterion-v1-0", "criterion-v1-1", "criterion-v1-2" };
+        Assert.True(coordinator.ExecutePending(fixture.Kernel, fixture.Goal).MutatedGoalState);
+        Assert.Equal(expectedIds,
             fixture.Goal.CriterionEvidenceObligations.Select(obligation => obligation.Id).OrderBy(id => id, StringComparer.Ordinal));
+        foreach (var intent in intents)
+            Assert.Equal(OperatorIntentStatus.Claimed, (await fixture.Store.GetAsync(intent.Id))!.Status);
+        var beforeSave = await repository.LoadGoalAsync(fixture.Goal.Id);
+        Assert.NotNull(beforeSave);
+        Assert.Empty(beforeSave.CriterionEvidenceObligations);
+        await repository.SaveAsync(fixture.Kernel);
+        var persisted = await repository.LoadGoalAsync(fixture.Goal.Id);
+        Assert.NotNull(persisted);
+        Assert.Equal(expectedIds,
+            persisted.CriterionEvidenceObligations.Select(obligation => obligation.Id).OrderBy(id => id, StringComparer.Ordinal));
+        coordinator.CompletePersisted([fixture.Goal.Id]);
         foreach (var intent in intents)
             Assert.Equal(OperatorIntentStatus.Applied, (await fixture.Store.GetAsync(intent.Id))!.Status);
     }
