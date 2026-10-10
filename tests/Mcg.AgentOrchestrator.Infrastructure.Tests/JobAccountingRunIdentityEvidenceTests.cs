@@ -23,8 +23,6 @@ public sealed class JobAccountingRunIdentityEvidenceTests
             [(typeof(GoalAcceptanceVerifierTestsProcessInvokerEquivalence), "job")] = AnonymousJob,
             [(typeof(GoalAcceptanceVerifierTestsCmdCommandLineLimit), "job")] = AnonymousJob,
             [(typeof(HermeticVerificationEnvironmentTestsSystemLocations), "job")] = AnonymousJob,
-            [(typeof(GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteExecutorClaim), "occupancy")] = ScenarioRoot,
-            [(typeof(GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteExecutorSlots), "occupancy")] = ScenarioRoot,
             [(typeof(GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLanePolicy), "occupancy")] = ScenarioRoot,
         };
 
@@ -56,14 +54,7 @@ public sealed class JobAccountingRunIdentityEvidenceTests
                 foreach (var site in CreationSites(declaration))
                 {
                     count++;
-                    var proof = site.Kind switch
-                    {
-                        "slot" => UsesFixtureStorage(site.Node, type),
-                        "registry" or "path" => site.Identity is not null &&
-                            IsRunPath(site.Identity, site.Node, declaration),
-                        "dispatch" or "job" => IsRegistryScoped(site, declaration),
-                        _ => false
-                    };
+                    var proof = Proves(site, declaration, type);
                     if (proof)
                     {
                         proved.Add(site.Kind);
@@ -135,6 +126,69 @@ public sealed class JobAccountingRunIdentityEvidenceTests
     }
 
     [Xunit.Fact]
+    public void Occupancy_evidence_accepts_factory_host_root_and_rejects_fixed_or_bare_roots()
+    {
+        var rootedSyntax = CSharpSyntaxTree.ParseText("""
+            class Probe {
+                sealed class Scenario {
+                    internal string Root { get; }
+                    internal string HostRoot => AcceptancePartitionVerdictCache.ResolveHostStateRoot(Root);
+                    internal Scenario() { Root = CreateManifestWorkspace("{}"); }
+                }
+                void Test() {
+                    var scenario = new Scenario();
+                    using var claim = RemoteExecutorOccupancy.TryClaimExclusive(scenario.HostRoot, "one");
+                }
+            }
+            """).GetRoot();
+        var rootedDeclaration = Assert.Single(rootedSyntax.DescendantNodes().OfType<ClassDeclarationSyntax>(),
+            node => node.Identifier.ValueText == "Probe");
+        var rootedSite = Assert.Single(CreationSites(rootedDeclaration));
+        Assert.Equal("occupancy", rootedSite.Kind);
+        Assert.NotNull(rootedSite.Identity);
+        Assert.True(Proves(rootedSite, rootedDeclaration, GetType()));
+
+        var fixedSyntax = CSharpSyntaxTree.ParseText("""
+            class Probe {
+                sealed class Scenario {
+                    internal string Root { get; }
+                    internal string HostRoot => AcceptancePartitionVerdictCache.ResolveHostStateRoot(Root);
+                    internal Scenario() { Root = Path.Combine(Path.GetTempPath(), "fixed"); }
+                }
+                void Test() {
+                    var scenario = new Scenario();
+                    using var claim = RemoteExecutorOccupancy.TryClaimExclusive(scenario.HostRoot, "one");
+                }
+            }
+            """).GetRoot();
+        var fixedDeclaration = Assert.Single(fixedSyntax.DescendantNodes().OfType<ClassDeclarationSyntax>(),
+            node => node.Identifier.ValueText == "Probe");
+        var fixedSite = Assert.Single(CreationSites(fixedDeclaration));
+        Assert.Equal("occupancy", fixedSite.Kind);
+        Assert.NotNull(fixedSite.Identity);
+        Assert.False(Proves(fixedSite, fixedDeclaration, GetType()));
+
+        var bareSyntax = CSharpSyntaxTree.ParseText("""
+            class Probe {
+                sealed class Scenario {
+                    internal string Root { get; }
+                    internal string HostRoot => AcceptancePartitionVerdictCache.ResolveHostStateRoot(Root);
+                    internal Scenario() { Root = CreateManifestWorkspace("{}"); }
+                    void Test() {
+                        using var claim = RemoteExecutorOccupancy.TryClaimExclusive(Root, "one");
+                    }
+                }
+            }
+            """).GetRoot();
+        var bareDeclaration = Assert.Single(bareSyntax.DescendantNodes().OfType<ClassDeclarationSyntax>(),
+            node => node.Identifier.ValueText == "Probe");
+        var bareSite = Assert.Single(CreationSites(bareDeclaration));
+        Assert.Equal("occupancy", bareSite.Kind);
+        Assert.NotNull(bareSite.Identity);
+        Assert.False(Proves(bareSite, bareDeclaration, GetType()));
+    }
+
+    [Xunit.Fact]
     public void Registry_scope_evidence_rejects_unscoped_dispatch_and_accepts_scoped_dispatch()
     {
         const string dispatch = "new BackgroundDispatchRunner().StartLatestDispatch(kernel, goal, task, logs);";
@@ -154,6 +208,16 @@ public sealed class JobAccountingRunIdentityEvidenceTests
     }
 
     private sealed record Site(string Kind, SyntaxNode Node, ExpressionSyntax? Identity = null);
+
+    private static bool Proves(Site site, ClassDeclarationSyntax declaration, Type type) => site.Kind switch
+    {
+        "slot" => UsesFixtureStorage(site.Node, type),
+        "registry" or "path" => site.Identity is not null &&
+            IsRunPath(site.Identity, site.Node, declaration),
+        "dispatch" or "job" => IsRegistryScoped(site, declaration),
+        "occupancy" => site.Identity is not null && IsScenarioHostRoot(site.Identity, declaration),
+        _ => false
+    };
 
     private static IEnumerable<Site> CreationSites(ClassDeclarationSyntax declaration)
     {
@@ -196,6 +260,31 @@ public sealed class JobAccountingRunIdentityEvidenceTests
         declaration.DescendantNodes().OfType<InvocationExpressionSyntax>()
             .Any(call => call.Expression.ToString() == "WorkerProcessJobs.UseRegistryScopeForTests");
 
+    private static bool IsScenarioHostRoot(ExpressionSyntax identity, ClassDeclarationSyntax declaration)
+    {
+        if (identity is not MemberAccessExpressionSyntax member || member.Name.Identifier.ValueText != "HostRoot")
+            return false;
+        var scenarios = declaration.Members.OfType<ClassDeclarationSyntax>()
+            .Where(node => node.Identifier.ValueText == "Scenario").ToArray();
+        if (scenarios.Length != 1) return false;
+        var scenario = scenarios[0];
+        if (!scenario.Members.OfType<PropertyDeclarationSyntax>().Any(property =>
+                property.Identifier.ValueText == "HostRoot" && property.ExpressionBody is { } body &&
+                SyntaxFactory.AreEquivalent(body.Expression,
+                    SyntaxFactory.ParseExpression("AcceptancePartitionVerdictCache.ResolveHostStateRoot(Root)"))))
+            return false;
+        var assignments = scenario.DescendantNodes().OfType<AssignmentExpressionSyntax>()
+            .Where(assignment => assignment.Left is IdentifierNameSyntax name && name.Identifier.ValueText == "Root")
+            .ToArray();
+        return assignments.Any(assignment => assignment.Ancestors().OfType<ConstructorDeclarationSyntax>()
+                   .Any(constructor => constructor.Parent == scenario)) &&
+               assignments.All(assignment => assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) &&
+                   assignment.Right is InvocationExpressionSyntax call && IsNamedRunFactory(call.Expression.ToString()));
+    }
+
+    private static bool IsNamedRunFactory(string name) => name.Split('.').Last() is
+        "CreateManifestWorkspace" or "CreateTrackedManifestShapeWorkspace" or "CreateTwoLaneShardManifestWorkspace";
+
     private static bool UsesFixtureStorage(SyntaxNode node, Type type)
     {
         if (!LaneIsolatedRootScanner.IsIsolatedCollection(type) || node is not InvocationExpressionSyntax call)
@@ -228,8 +317,7 @@ public sealed class JobAccountingRunIdentityEvidenceTests
                      args.Skip(1).Any(arg => HasGuid(arg.Expression)));
             }
             if (name.Split('.').Last() == "CreateTempDirectory") return true; // SharedTestSupport checked below.
-            if (name.Split('.').Last() is "CreateManifestWorkspace" or "CreateTrackedManifestShapeWorkspace" or
-                "CreateTwoLaneShardManifestWorkspace") return true; // Named scenario constructors checked below.
+            if (IsNamedRunFactory(name)) return true; // Named scenario constructors checked below.
             var local = declaration.Members.OfType<MethodDeclarationSyntax>()
                 .Where(method => method.Identifier.ValueText == name).ToArray();
             // A same-class factory is one hop and must return the GUID-rooted local it created.
