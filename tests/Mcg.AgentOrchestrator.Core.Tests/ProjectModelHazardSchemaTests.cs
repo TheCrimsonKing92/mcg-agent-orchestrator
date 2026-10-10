@@ -12,8 +12,8 @@ public sealed class ProjectModelHazardSchemaTests
         var model = Snapshot();
         var json = ProjectModelJson.Serialize(model);
         var restored = ProjectModelJson.Deserialize(json);
-        Assert.Equal(3, ProjectModel.CurrentSchemaVersion);
-        Assert.Equal(3, restored.SchemaVersion);
+        Assert.Equal(4, ProjectModel.CurrentSchemaVersion);
+        Assert.Equal(4, restored.SchemaVersion);
         Assert.Equal(json, ProjectModelJson.Serialize(restored));
         Assert.Equal(2, restored.Hazards.Count);
         for (var index = 0; index < model.Hazards.Count; index++)
@@ -33,7 +33,7 @@ public sealed class ProjectModelHazardSchemaTests
     {
         var legacy = LegacySnapshot();
         var restored = ProjectModelJson.Deserialize(legacy.ToJsonString());
-        Assert.Equal(3, restored.SchemaVersion);
+        Assert.Equal(4, restored.SchemaVersion);
         Assert.Empty(restored.Hazards);
         var upgraded = JsonNode.Parse(ProjectModelJson.Serialize(restored))!.AsObject();
         foreach (var field in legacy.Where(field => field.Key != "schemaVersion"))
@@ -49,7 +49,7 @@ public sealed class ProjectModelHazardSchemaTests
             File.WriteAllText(path, LegacySnapshot().ToJsonString());
             var before = File.ReadAllBytes(path);
             var model = ProjectModelJson.Deserialize(File.ReadAllText(path));
-            Assert.Equal(3, model.SchemaVersion);
+            Assert.Equal(4, model.SchemaVersion);
             Assert.Empty(model.Hazards);
             Assert.Equal(before, File.ReadAllBytes(path));
         }
@@ -62,13 +62,13 @@ public sealed class ProjectModelHazardSchemaTests
     [Theory]
     [InlineData(0)]
     [InlineData(1)]
-    [InlineData(4)]
+    [InlineData(5)]
     public void UnsupportedVersion_CompleteSnapshot_ThrowsSchemaError(int version)
     {
         var document = JsonNode.Parse(ProjectModelJson.Serialize(Snapshot()))!.AsObject();
         document["schemaVersion"] = version;
         var exception = Assert.Throws<JsonException>(() => ProjectModelJson.Deserialize(document.ToJsonString()));
-        Assert.Equal("A project model requires schema version 3 and all snapshot lists.", exception.Message);
+        Assert.Equal("A project model requires schema version 4 and all snapshot lists.", exception.Message);
     }
 
     [Theory]

@@ -31,7 +31,7 @@ public sealed class ProjectModelJsonRoundTripTests
         Assert.Equal(model.Dependencies[0], Assert.Single(restored.Dependencies));
         Assert.Equal(model.TestSetups[0], Assert.Single(restored.TestSetups));
         Assert.Equal(model.OwnerQuestions[0], Assert.Single(restored.OwnerQuestions));
-        Assert.Equal(3, restored.SchemaVersion);
+        Assert.Equal(4, restored.SchemaVersion);
         Assert.Equal(model.Commands, restored.Commands);
         Assert.Equal(model.EnvironmentNeeds, restored.EnvironmentNeeds);
         Assert.Equal(model.Measurements, restored.Measurements);
