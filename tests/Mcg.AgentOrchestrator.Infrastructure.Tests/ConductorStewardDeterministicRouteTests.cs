@@ -39,6 +39,38 @@ public sealed class ConductorStewardDeterministicRouteTests
     }
 
     [Xunit.Theory]
+    [Xunit.InlineData("target citation '.config/dotnet-tools.json' does not exist and is not marked as a new file; source span [11365..11390).\nOffending citation: '.config/dotnet-tools.json'", "dotnet-tools")]
+    // The original e987ee5c span was not packaged; use the validator format with a span matching the citation length.
+    [Xunit.InlineData("target citation '{runStamp:yyyyMMddTHHmmssZ}-sample-{n}.raw.txt' does not exist and is not marked as a new file; source span [1..47).\nOffending citation: '{runStamp:yyyyMMddTHHmmssZ}-sample-{n}.raw.txt'", "{runStamp:yyyyMMddTHHmmssZ}-sample-{n}.raw")]
+    public void Missing_citation_without_tracked_matches_offers_prose_or_new_file(string rejection, string stem)
+    {
+        var lister = new NoFiles();
+        var output = new ConductorStewardDeterministicRoute(lister).TryBuild(Trigger(rejection), "unused");
+
+        Xunit.Assert.NotNull(output);
+        var route = ConductorStewardAdjudicationParser.Parse(output);
+        Xunit.Assert.Equal(stem, lister.Stem);
+        Xunit.Assert.Contains($"No tracked file matches the cited stem '{stem}'.", route.Text);
+        Xunit.Assert.Contains("not a repository file", route.Text);
+        Xunit.Assert.Contains("remove the backticks and describe it in prose", route.Text);
+        Xunit.Assert.Contains("mark it as a new file if the plan creates it", route.Text);
+    }
+
+    [Xunit.Fact]
+    public void Missing_citation_with_tracked_matches_does_not_offer_prose()
+    {
+        var output = new ConductorStewardDeterministicRoute(new FixedFiles()).TryBuild(Trigger(
+            "target citation 'src/Foo*.cs' does not exist and is not marked as a new file; source span [1..12).\n" +
+            "Offending citation: 'src/Foo*.cs'"), "unused");
+
+        Xunit.Assert.NotNull(output);
+        var route = ConductorStewardAdjudicationParser.Parse(output);
+        Xunit.Assert.Contains("Tracked files matching the cited stem 'Foo': src/FooOne.cs, src/FooTwo.cs.", route.Text);
+        Xunit.Assert.DoesNotContain("describe it in prose", route.Text);
+        Xunit.Assert.DoesNotContain("not a repository file", route.Text);
+    }
+
+    [Xunit.Theory]
     [Xunit.InlineData("Program.cs")]
     [Xunit.InlineData("Program.cs:472")]
     public void Ambiguous_citation_uses_diagnostic_candidates_without_file_lookup(string citation)
@@ -139,6 +171,16 @@ public sealed class ConductorStewardDeterministicRouteTests
         {
             Stem = stem;
             return ["src/FooOne.cs", "src/FooTwo.cs"];
+        }
+    }
+
+    private sealed class NoFiles : IConductorStewardTrackedFileLister
+    {
+        internal string? Stem { get; private set; }
+        public IReadOnlyList<string> MatchingFiles(string worktree, string stem)
+        {
+            Stem = stem;
+            return [];
         }
     }
 

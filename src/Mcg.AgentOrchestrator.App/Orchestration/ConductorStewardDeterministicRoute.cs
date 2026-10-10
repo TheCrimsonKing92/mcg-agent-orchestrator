@@ -88,7 +88,7 @@ internal sealed class ConductorStewardDeterministicRoute(
             catch (Exception) { return null; }
             corrections.Add($"Offending target citation: '{path}'. {ConcreteFileRule} {SameLineRule} " +
                 (matches.Count == 0
-                    ? $"No tracked file matches the cited stem '{stem}'."
+                    ? $"No tracked file matches the cited stem '{stem}'. That means the cited text is not a repository file: remove the backticks and describe it in prose, or mark it as a new file if the plan creates it."
                     : $"Tracked files matching the cited stem '{stem}': {string.Join(", ", matches)}."));
         }
         foreach (Match ambiguous in AmbiguousCitation.Matches(evidence))
