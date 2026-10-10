@@ -43,8 +43,24 @@ public sealed partial class CollaborationItemStore : ICollaborationItemStore
         _readOnly = readOnly;
         if (!readOnly)
         {
-            EnsureSchema();
+            Setup(dbPath);
         }
     }
+
+    public static CollaborationItemStore OpenReadOnly(string dbPath)
+    {
+        if (!File.Exists(dbPath))
+            throw SchemaSetupRequired(dbPath, StoreSchemaState.Missing);
+
+        var store = new CollaborationItemStore(dbPath, readOnly: true);
+        using var conn = store.OpenConnection();
+        var state = StoreSchemaVersions.Verify(conn, StoreSchemaRegistry.CollaborationItems);
+        if (state != StoreSchemaState.Current)
+            throw SchemaSetupRequired(dbPath, state);
+        return store;
+    }
+
+    private static InvalidOperationException SchemaSetupRequired(string dbPath, StoreSchemaState state) =>
+        new($"Collaboration items store '{dbPath}' schema is {state} (expected version {StoreSchemaRegistry.CollaborationItems.CurrentVersion}); run setup.");
 
 }

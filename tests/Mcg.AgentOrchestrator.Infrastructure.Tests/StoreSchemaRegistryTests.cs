@@ -24,7 +24,7 @@ public sealed class StoreSchemaRegistryTests
             Assert.False(string.IsNullOrWhiteSpace(entry.Family));
         });
         Assert.Equal(new[] { StoreSchemaRegistry.Portfolio, StoreSchemaRegistry.Experiments, StoreSchemaRegistry.Backlog, StoreSchemaRegistry.OperatorIntents, StoreSchemaRegistry.OperatorLessons,
-            StoreSchemaRegistry.OperatorEscapes, StoreSchemaRegistry.MergeTrainAcceptance, StoreSchemaRegistry.FollowerGateAcceptance, StoreSchemaRegistry.DogfoodLog, StoreSchemaRegistry.ProgressiveReviewGlanceCircuit, StoreSchemaRegistry.ProgressiveReviewSteering }, entries.Where(entry => entry.CurrentVersion.HasValue).ToArray());
+            StoreSchemaRegistry.OperatorEscapes, StoreSchemaRegistry.MergeTrainAcceptance, StoreSchemaRegistry.FollowerGateAcceptance, StoreSchemaRegistry.CollaborationItems, StoreSchemaRegistry.DogfoodLog, StoreSchemaRegistry.ProgressiveReviewGlanceCircuit, StoreSchemaRegistry.ProgressiveReviewSteering }, entries.Where(entry => entry.CurrentVersion.HasValue).ToArray());
         Assert.Equal(1, StoreSchemaRegistry.FollowerGateAcceptance.CurrentVersion);
         Assert.Equal(1, StoreSchemaRegistry.Experiments.CurrentVersion);
         Assert.Equal("experiments.db", StoreSchemaRegistry.Experiments.Database);
@@ -33,6 +33,8 @@ public sealed class StoreSchemaRegistryTests
         Assert.Equal("progressive-review-steering.db", StoreSchemaRegistry.ProgressiveReviewSteering.Database);
         Assert.Equal(1, StoreSchemaRegistry.ProgressiveReviewGlanceCircuit.CurrentVersion);
         Assert.Equal("progressive-review-glance-circuit.db", StoreSchemaRegistry.ProgressiveReviewGlanceCircuit.Database);
+        Assert.Equal(1, StoreSchemaRegistry.CollaborationItems.CurrentVersion);
+        Assert.Equal("collaboration-items.db", StoreSchemaRegistry.CollaborationItems.Database);
         Assert.Equal(1, StoreSchemaRegistry.MergeTrainAcceptance.CurrentVersion);
         Assert.Equal("merge-train-acceptance.db", StoreSchemaRegistry.MergeTrainAcceptance.Database);
         Assert.Equal(1, StoreSchemaRegistry.DogfoodLog.CurrentVersion);

@@ -45,6 +45,9 @@ public sealed class StoreSetupRunnerTests
         var glanceCircuit = Assert.Single(results, result => result.StoreName == "progressive-review-glance-circuit");
         Assert.Equal(Path.Combine(workspace.OrchestratorDirectory, "progressive-review-glance-circuit.db"), glanceCircuit.DatabasePath);
         Assert.Equal(1, glanceCircuit.Version);
+        var collaborationItems = Assert.Single(results, result => result.StoreName == "collaboration-items");
+        Assert.Equal(Path.Combine(workspace.OrchestratorDirectory, "collaboration-items.db"), collaborationItems.DatabasePath);
+        Assert.Equal(1, collaborationItems.Version);
         using var connection = Open(workspace.PortfolioStorePath, SqliteOpenMode.ReadOnly);
         Assert.Equal(2, StoreSchemaVersions.Read(connection, portfolio.StoreName));
         Assert.All(Directory.GetFiles(workspace.OrchestratorDirectory), path =>
@@ -52,6 +55,7 @@ public sealed class StoreSetupRunnerTests
                 "experiments.db", "backlog.db", "backlog.db-wal", "backlog.db-shm",
                 "operator-intents.db", "operator-intents.db-wal", "operator-intents.db-shm",
                 "operator-lessons.db", "operator-escapes.db", "merge-train-acceptance.db", "follower-gate-acceptance.db",
+                "collaboration-items.db", "collaboration-items.db-wal", "collaboration-items.db-shm",
                 "dogfood-log.db", "dogfood-log.db-wal", "dogfood-log.db-shm", "progressive-review-glance-circuit.db", "progressive-review-steering.db" }));
         Assert.Empty(await DogfoodLogStore.OpenReadOnly(workspace.DogfoodLogStorePath).ListRecentAsync());
         Assert.Empty(await ExperimentStore.OpenReadOnly(workspace.ExperimentStorePath).ListAllAsync());

@@ -29,6 +29,7 @@ public sealed class ConductorVerbSetupTests
                 $"operator-escapes: version 1 ({workspace.OperatorEscapesStorePath}){Environment.NewLine}" +
                 $"merge-train-acceptance: version 1 ({Path.Combine(workspace.OrchestratorDirectory, "merge-train-acceptance.db")}){Environment.NewLine}" +
                 $"follower-gate-acceptance: version 1 ({Path.Combine(workspace.OrchestratorDirectory, "follower-gate-acceptance.db")}){Environment.NewLine}" +
+                $"collaboration-items: version 1 ({Path.Combine(workspace.OrchestratorDirectory, "collaboration-items.db")}){Environment.NewLine}" +
                 $"dogfood-log: version 1 ({workspace.DogfoodLogStorePath}){Environment.NewLine}" +
                 $"progressive-review-glance-circuit: version 1 ({Path.Combine(workspace.OrchestratorDirectory, "progressive-review-glance-circuit.db")}){Environment.NewLine}" +
                 $"progressive-review-steering: version 1 ({Path.Combine(workspace.OrchestratorDirectory, "progressive-review-steering.db")}){Environment.NewLine}", output.ToString());
@@ -37,6 +38,8 @@ public sealed class ConductorVerbSetupTests
             Assert.NotNull(FollowerGateAcceptanceStore.OpenReadOnly(
                 Path.Combine(workspace.OrchestratorDirectory, StoreSchemaRegistry.FollowerGateAcceptance.Database)));
             Assert.NotNull(DogfoodLogStore.OpenReadOnly(workspace.DogfoodLogStorePath));
+            Assert.NotNull(CollaborationItemStore.OpenReadOnly(
+                Path.Combine(workspace.OrchestratorDirectory, StoreSchemaRegistry.CollaborationItems.Database)));
             Assert.NotNull(SqliteProgressiveReviewGlanceCircuitStore.OpenReadOnly(
                 Path.Combine(workspace.OrchestratorDirectory, StoreSchemaRegistry.ProgressiveReviewGlanceCircuit.Database)));
             Assert.NotNull(MergeTrainAcceptanceStore.OpenReadOnly(
