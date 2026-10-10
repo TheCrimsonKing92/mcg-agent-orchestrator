@@ -1,10 +1,92 @@
 using Mcg.AgentOrchestrator.App.OwnerConsole;
 using Terminal.Gui.App;
 using Terminal.Gui.Input;
+using Timeout = System.Threading.Timeout;
 
 // Parallel-safe: each test owns its clock, strip and uninitialized application.
 public sealed class OwnerConsoleNoticeStripTests
 {
+    [Fact]
+    public void RepeatedRefreshFailureCoalescesWithoutRemovingOtherSources()
+    {
+        var clock = new OwnerConsoleTestClock();
+        var strip = new OwnerConsoleNoticeStrip(clock);
+        strip.Raise("unavailable", OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Action);
+        strip.Raise("queued", OwnerConsoleNoticeSeverity.Success, OwnerConsoleNoticeSource.Action);
+        strip.Raise("unavailable", OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Refresh);
+        clock.Now += TimeSpan.FromSeconds(1);
+        for (var i = 0; i < OwnerConsoleNoticeStrip.MaxEntries * 2; i++)
+            strip.Raise("unavailable", OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Refresh);
+
+        var entries = strip.Visible;
+        Assert.Equal(3, entries.Count);
+        Assert.Equal(clock.GetLocalNow(), entries[0].RaisedAt);
+        Assert.Equal(OwnerConsoleNoticeSource.Refresh, entries[0].Source);
+        Assert.Equal("queued", entries[1].Text);
+        Assert.Equal(OwnerConsoleNoticeSource.Action, entries[2].Source);
+        strip.RefreshSucceeded();
+        Assert.Equal(["queued", "unavailable"], strip.Visible.Select(entry => entry.Text));
+    }
+
+    [Fact]
+    public void DistinctFailuresStayBoundedAndRetainNewestEntries()
+    {
+        var strip = new OwnerConsoleNoticeStrip(new OwnerConsoleTestClock());
+        for (var i = 0; i < OwnerConsoleNoticeStrip.MaxEntries * 2; i++)
+            strip.Raise($"failure {i}", OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Refresh);
+
+        Assert.Equal(Enumerable.Range(OwnerConsoleNoticeStrip.MaxEntries, OwnerConsoleNoticeStrip.MaxEntries)
+            .Reverse().Select(i => $"failure {i}"), strip.Visible.Select(entry => entry.Text));
+    }
+
+    [Fact]
+    public async Task EarlyExpiryTimerRearmsAndClearsRenderedNoticeWithoutRefresh()
+    {
+        var clock = new OwnerConsoleTestClock();
+        var scheduled = new List<TimeSpan>();
+        clock.TimerChanged = scheduled.Add;
+        var harness = new OwnerConsoleHarness();
+        harness.Questions.Items.Add(new("q1", "11111111", OwnerQuestionKind.HumanInput, "Ship?"));
+        using IApplication app = Application.Create();
+        using var controller = new OwnerConsoleScreenController(harness.Questions, harness.Answers,
+            new OnHelp(() => { }), harness.State, harness.Tail, harness.Conductor,
+            harness.DigestReport, harness.Digest, clock);
+        using var view = new OwnerConsoleFullScreenView(app, controller, () => Task.CompletedTask, clock: clock);
+        view.Render(await new OwnerConsoleViewModelBuilder(harness.State, harness.Questions,
+            harness.Liveness, new Epics(), clock).BuildAsync(new(clock.Now, null, [], 0)));
+        var history = Assert.Single(view.ActivityLines);
+        view.ShowNotice("queued", OwnerConsoleNoticeSeverity.Success, OwnerConsoleNoticeSource.Action);
+        Assert.Equal("00:05:00 queued", view.NoticeText);
+        Assert.Equal([history], view.ActivityLines);
+        Assert.Equal(history, Assert.Single(view.ActivityPane.Source!.ToList().Cast<string>()));
+        Assert.Equal(OwnerConsoleNoticeStrip.SuccessLifetime, scheduled[^1]);
+
+        var remainder = TimeSpan.FromMilliseconds(1);
+        clock.Now += OwnerConsoleNoticeStrip.SuccessLifetime - remainder;
+        clock.Advance(OwnerConsoleNoticeStrip.SuccessLifetime); // Timer fires before the wall clock reaches expiry.
+        Assert.Equal("00:05:00 queued", view.NoticeText);
+        Assert.Equal(remainder, scheduled[^1]);
+
+        clock.Now += remainder;
+        clock.Advance(remainder);
+        Assert.Empty(view.NoticeText); // Read rendered UI before Visible can prune the model.
+        Assert.Empty(view.NoticeStrip.Visible);
+        Assert.Equal(Timeout.InfiniteTimeSpan, scheduled[^1]);
+
+        view.ShowNotice("first", OwnerConsoleNoticeSeverity.Success, OwnerConsoleNoticeSource.Action);
+        clock.Now += TimeSpan.FromSeconds(1);
+        clock.Advance(TimeSpan.FromSeconds(1));
+        view.ShowNotice("second", OwnerConsoleNoticeSeverity.Success, OwnerConsoleNoticeSource.Action);
+        Assert.Equal(OwnerConsoleNoticeStrip.SuccessLifetime - TimeSpan.FromSeconds(1), scheduled[^1]);
+        clock.Now += OwnerConsoleNoticeStrip.SuccessLifetime - TimeSpan.FromSeconds(1);
+        clock.Advance(OwnerConsoleNoticeStrip.SuccessLifetime - TimeSpan.FromSeconds(1));
+        Assert.Equal("00:05:06 second", view.NoticeText);
+        clock.Now += TimeSpan.FromSeconds(1);
+        clock.Advance(TimeSpan.FromSeconds(1));
+        Assert.Empty(view.NoticeText);
+        Assert.Equal([history], view.ActivityLines);
+    }
+
     [Fact]
     public void SuccessExpiresWhileFailuresWaitForTheirOwnRecovery()
     {

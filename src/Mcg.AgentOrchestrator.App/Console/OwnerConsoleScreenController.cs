@@ -199,7 +199,8 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
         if (submission is not null && operation is not null)
         {
             Notify(message);
-            _answerTracking.Track(submission.IntentId, decision.Number, decision.GoalPrefix, Notify, cancellationToken);
+            _answerTracking.Track(submission.IntentId, decision.Number, decision.GoalPrefix, Notify, cancellationToken,
+                text => { operation.ReportFailure(text); notice?.Invoke(text); });
             return;
         }
         await ShowNoticeAsync(title, message);

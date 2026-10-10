@@ -40,7 +40,7 @@ internal sealed class AnswerIntentStatusTracker : IDisposable
         $"Answer still queued for question {number}; the conductor has not applied it yet";
 
     internal void Track(string? intentId, int number, string prefix, Action<string> notify,
-        CancellationToken lifetime = default)
+        CancellationToken lifetime = default, Action<string>? failure = null)
     {
         if (string.IsNullOrWhiteSpace(intentId)) return;
         lock (_gate)
@@ -52,7 +52,7 @@ internal sealed class AnswerIntentStatusTracker : IDisposable
             {
                 using (cancellation)
                 {
-                    try { await WatchAsync(intentId, number, prefix, notify, deadline, cancellation.Token).ConfigureAwait(false); }
+                    try { await WatchAsync(intentId, number, prefix, notify, failure ?? notify, deadline, cancellation.Token).ConfigureAwait(false); }
                     catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
                 }
             });
@@ -71,7 +71,7 @@ internal sealed class AnswerIntentStatusTracker : IDisposable
         lock (_gate) return Task.WhenAll(_inFlight.ToArray());
     }
 
-    private async Task WatchAsync(string intentId, int number, string prefix, Action<string> notify,
+    private async Task WatchAsync(string intentId, int number, string prefix, Action<string> notify, Action<string> failure,
         DateTimeOffset deadline, CancellationToken token)
     {
         while (!token.IsCancellationRequested)
@@ -91,19 +91,19 @@ internal sealed class AnswerIntentStatusTracker : IDisposable
             catch (Exception) { /* A failed status read is transient, not a rejected answer. */ }
             finally { readStop.Cancel(); }
             if (status is { Status: OperatorIntentStatus.Applied })
-            { Publish(Applied(number, prefix)); return; }
+            { Publish(Applied(number, prefix), notify); return; }
             if (status is not null && status.Status is not (OperatorIntentStatus.Pending or OperatorIntentStatus.Claimed))
-            { Publish(Rejected(number, prefix, status.Outcome)); return; }
+            { Publish(Rejected(number, prefix, status.Outcome), failure); return; }
             remaining = deadline - _clock.GetUtcNow();
             if (remaining <= TimeSpan.Zero) break;
             await _delay(remaining < _pollInterval ? remaining : _pollInterval, token).ConfigureAwait(false);
         }
-        Publish(StillQueued(number));
+        Publish(StillQueued(number), notify);
 
-        void Publish(string message)
+        void Publish(string message, Action<string> sink)
         {
             lock (_gate)
-                if (!_disposed && !token.IsCancellationRequested) notify(message);
+                if (!_disposed && !token.IsCancellationRequested) sink(message);
         }
     }
 

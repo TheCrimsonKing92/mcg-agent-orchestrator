@@ -4,6 +4,7 @@ using Terminal.Gui.App;
 using Terminal.Gui.Input;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
+using Timeout = System.Threading.Timeout;
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
@@ -15,6 +16,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     private readonly Func<Task> _refresh;
     private readonly CancellationToken _token;
     private readonly CancellationTokenSource _lifetime;
+    private readonly ITimer _noticeExpiryTimer;
     private readonly Label _status = new() { Width = Dim.Fill(), Height = 1 };
     private readonly Label _notice = new() { Y = Pos.AnchorEnd(3), Width = Dim.Fill(), Height = 1 };
     private readonly ListView _decisions = new() { Width = Dim.Fill(), Height = Dim.Fill() };
@@ -69,6 +71,11 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         _token = _lifetime.Token;
         _clock = clock ?? TimeProvider.System;
         NoticeStrip = new(_clock);
+        _noticeExpiryTimer = _clock.CreateTimer(_ =>
+        {
+            if (!_token.IsCancellationRequested)
+                Invoke(() => { if (!_token.IsCancellationRequested) RenderNotices(); });
+        }, null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         _refreshInterval = (options ?? OwnerConsoleLoopOptions.Default).RefreshInterval;
         if (_refreshInterval <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(options), "Refresh interval must be positive.");
         _operation = new(_clock,
@@ -185,20 +192,18 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     {
         NoticeStrip.Raise(message, severity, source);
         RenderNotices();
-        if (severity == OwnerConsoleNoticeSeverity.Success) _ = RepaintAfterExpiryAsync();
     }
 
-    private void RenderNotices() => _notice.Text = NoticeStrip.Format(_notice.Viewport.Width);
-
-    private async Task RepaintAfterExpiryAsync()
+    private void RenderNotices()
     {
-        try
-        {
-            await Task.Delay(OwnerConsoleNoticeStrip.SuccessLifetime, _clock, _token);
-            if (!_token.IsCancellationRequested)
-                Invoke(() => { if (!_token.IsCancellationRequested) RenderNotices(); });
-        }
-        catch (OperationCanceledException) when (_token.IsCancellationRequested) { }
+        if (_token.IsCancellationRequested) return;
+        _notice.Text = NoticeStrip.Format(_notice.Viewport.Width);
+        // An uninitialized real application has no UI dispatcher. Injected clocks let
+        // headless callers drive callbacks themselves rather than mutating UI on a timer thread.
+        if (!_app.Initialized && ReferenceEquals(_clock, TimeProvider.System)) return;
+        // Recheck the clock at each callback: an early timer must rearm for the remainder.
+        _noticeExpiryTimer.Change(NoticeStrip.UntilNextSuccessExpiry ?? Timeout.InfiniteTimeSpan,
+            Timeout.InfiniteTimeSpan);
     }
 
     private void RenderStatus()
@@ -459,6 +464,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     public void Dispose()
     {
         _lifetime.Cancel();
+        _noticeExpiryTimer.Dispose();
         _controller.Dispose();
         if (_keyboard is not null) _keyboard.KeyDown -= OnKeyDown;
         Window.Dispose();
