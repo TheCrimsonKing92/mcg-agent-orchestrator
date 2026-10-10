@@ -122,7 +122,6 @@ public sealed class OperatorIntentStatusWaitTests
     [Theory]
     [InlineData("--wait", "0")]
     [InlineData("--wait", "-1")]
-    [InlineData("--wait", "nonsense")]
     [InlineData("--wait", "2147483648")]
     [InlineData("--wait", "--wait")]
     [InlineData("--wait=", null)]

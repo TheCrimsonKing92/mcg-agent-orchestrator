@@ -1,6 +1,5 @@
 using System.Runtime.CompilerServices;
 using System.Globalization;
-using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using static Mcg.AgentOrchestrator.Infrastructure.AcceptancePolicyShardPlanner;
 
@@ -15,7 +14,7 @@ public sealed partial class GoalAcceptanceVerifier
     private readonly ConditionalWeakTable<AcceptancePartitionVerdictCache, RemoteLaneCoordinator> _remoteLaneCoordinators = new();
     private RemoteLaneCoordinator? _cachelessRemoteLaneCoordinator;
     private readonly ConditionalWeakTable<RemoteLaneCoordinator, RemoteLaneOfferPlan> _remoteLaneOfferPlans = new();
-    internal const int RemoteLaneOfferHistoryLineLimit = 500;
+    internal const int RemoteLaneOfferHistoryLineLimit = RemoteLaneOfferHistoryReader.LineLimit;
 
     private (AcceptancePartitionVerdictCache? Cache, RemoteLaneCoordinator? RemoteLanes)
         CreatePartitionVerdictCacheAndRemoteLanes(
@@ -118,48 +117,7 @@ public sealed partial class GoalAcceptanceVerifier
     }
 
     internal static IReadOnlyDictionary<(string Lane, string Filter), RemoteExecutorLaneSeconds>
-        ReadRemoteLaneOfferHistory(string path)
-    {
-        var rows = new List<RemoteExecutorOutcomeRow>();
-        var keys = new Dictionary<string, (string Lane, string Filter)>(StringComparer.Ordinal);
-        try
-        {
-            // Retain and parse only the tail, including malformed and non-accepted lines in the limit.
-            foreach (var line in SharedJsonlFile.ReadLines(path).TakeLast(RemoteLaneOfferHistoryLineLimit))
-            {
-                try
-                {
-                    using var document = JsonDocument.Parse(line);
-                    var root = document.RootElement;
-                    if (root.GetProperty("outcome").GetString() != "accepted") continue;
-                    var lane = root.GetProperty("lane").GetString();
-                    var filter = root.GetProperty("expected").GetProperty("filter").GetString();
-                    if (string.IsNullOrWhiteSpace(lane) || string.IsNullOrWhiteSpace(filter)) continue;
-                    var attempt = root.GetProperty("attempt");
-                    double? seconds = null;
-                    if (attempt.TryGetProperty("steps", out var steps) && steps.ValueKind == JsonValueKind.Array &&
-                        attempt.TryGetProperty("fetches", out var fetches) && fetches.ValueKind == JsonValueKind.Array)
-                    {
-                        var starts = steps.EnumerateArray().Select(step => step.GetProperty("started_at").GetDateTimeOffset()).ToArray();
-                        var ends = fetches.EnumerateArray().Select(step => step.GetProperty("ended_at").GetDateTimeOffset()).ToArray();
-                        if (starts.Length > 0 && ends.Length > 0) seconds = (ends.Max() - starts.Min()).TotalSeconds;
-                    }
-                    if (seconds is not > 0 && attempt.TryGetProperty("last_status", out var status) &&
-                        status.ValueKind == JsonValueKind.Object && status.TryGetProperty("seconds", out var duration) &&
-                        duration.TryGetDouble(out var fallback)) seconds = fallback;
-                    if (seconds is not { } total || !double.IsFinite(total) || total <= 0) continue;
-                    var key = JsonSerializer.Serialize(new[] { lane, filter });
-                    keys[key] = (lane, filter);
-                    // One aggregate executor combines all hosts; no interval is needed for the report median.
-                    rows.Add(new(DateTimeOffset.MinValue, "offer-history", "", key, "accepted", null, total));
-                }
-                catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException or KeyNotFoundException) { }
-            }
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
-        return RemoteExecutorReport.Build([], rows, []).Executors.SelectMany(executor => executor.Lanes)
-            .ToDictionary(lane => keys[lane.Lane]);
-    }
+        ReadRemoteLaneOfferHistory(string path) => RemoteLaneOfferHistoryReader.Read(path);
 
     private sealed class RemoteLaneOfferPlan(IReadOnlyDictionary<string, RemoteLaneOfferInputs> inputs)
     {
@@ -237,7 +195,7 @@ public sealed partial class GoalAcceptanceVerifier
             : 1;
         var pendingShards = orderedShards.ToList();
         var activeResourceKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var activeShards = new List<(Task Task, IReadOnlyList<string> ResourceKeys)>();
+        var activeShards = new List<(IndexedShard Shard, Task Task, IReadOnlyList<string> ResourceKeys)>();
         var activeRemote = new List<(IndexedShard Shard, Task<RemoteLaneOutcome> Task)>();
         var reuseConsulted = new System.Collections.Concurrent.ConcurrentDictionary<int, bool>();
         var fallbackOutcomes = new System.Collections.Concurrent.ConcurrentDictionary<int, RemoteLaneOutcome>();
@@ -248,8 +206,14 @@ public sealed partial class GoalAcceptanceVerifier
             remote = _cachelessRemoteLaneCoordinator;
         var shardConcurrency = new GateShardConcurrencyCounter();
         var failures = new List<Exception>();
+        AcceptanceLaneEarlyStop? earlyStop = null;
+        var laneStopEnabled = cacheContext is not null && _testOverrides.PartitionVerdictWithinAttemptRerunEnabled;
         using var sharedApparatusCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, stopToken);
         using var remoteCancellation = sharedApparatusCancellation.Token.Register(() => remote?.AbandonAll());
+
+        bool IsConfirmedLocalFailure(IndexedShard shard, Task task) =>
+            laneStopEnabled && task.IsCompleted &&
+            outcomes[shard.Index]?.Result.LaneRerun?.Outcome == AcceptanceLaneRerunEvidence.ConfirmedFailure;
 
         async Task RunShardAsync(IndexedShard shard)
         {
@@ -313,11 +277,13 @@ public sealed partial class GoalAcceptanceVerifier
             if (stopToken.IsCancellationRequested)
                 pendingShards.Clear();
             // Offer remote work before filling local slots; these tasks never enter the local budget.
-            if (remote is not null && !sharedApparatusCancellation.IsCancellationRequested)
+            if (remote is not null && !sharedApparatusCancellation.IsCancellationRequested &&
+                !activeShards.Any(active => IsConfirmedLocalFailure(active.Shard, active.Task)))
             {
                 for (var index = 0; index < pendingShards.Count; index++)
                 {
                     var shard = pendingShards[index];
+                    if (activeShards.Any(active => IsConfirmedLocalFailure(active.Shard, active.Task))) break;
                     if (reuseConsulted.ContainsKey(shard.Index) || !remote.IsEligible(shard.Check)) continue;
                     if (!_remoteLaneOfferPlans.GetValue(remote, _ => throw new InvalidOperationException("Remote lane offer plan missing."))
                         .Decide(shard.Check.Name, allShardsUseMtp ? maxConcurrentShards : 1, ReportRemoteLanePolicy).Offer) continue;
@@ -338,6 +304,8 @@ public sealed partial class GoalAcceptanceVerifier
             }
             while (!cancellationToken.IsCancellationRequested &&
                    !stopToken.IsCancellationRequested &&
+                   !sharedApparatusCancellation.IsCancellationRequested &&
+                   !activeShards.Any(active => IsConfirmedLocalFailure(active.Shard, active.Task)) &&
                    activeShards.Count < maxConcurrentExecutions)
             {
                 var runnableIndex = pendingShards.FindIndex(shard =>
@@ -362,7 +330,7 @@ public sealed partial class GoalAcceptanceVerifier
                     }
                 }
 
-                activeShards.Add((RunShardAsync(shard), resourceKeys));
+                activeShards.Add((shard, RunShardAsync(shard), resourceKeys));
             }
 
             if (activeShards.Count >= maxConcurrentExecutions)
@@ -378,8 +346,11 @@ public sealed partial class GoalAcceptanceVerifier
                     "Infrastructure shard scheduler has pending work but no runnable or active shard.");
             }
 
-            var completedTask = await Task.WhenAny(
-                activeShards.Select(active => active.Task).Concat(activeRemote.Select(active => (Task)active.Task))).ConfigureAwait(false);
+            // Observe a confirmed local failure before replenishing capacity from other completions.
+            var completedTask = activeShards
+                .Where(active => IsConfirmedLocalFailure(active.Shard, active.Task))
+                .Select(active => active.Task).FirstOrDefault() ?? await Task.WhenAny(
+                    activeShards.Select(active => active.Task).Concat(activeRemote.Select(active => (Task)active.Task))).ConfigureAwait(false);
             var remoteIndex = activeRemote.FindIndex(active => active.Task == completedTask);
             if (remoteIndex >= 0)
             {
@@ -412,11 +383,12 @@ public sealed partial class GoalAcceptanceVerifier
                 catch (Exception exception)
                 {
                     if (exception is not OperationCanceledException ||
-                        (cacheContext?.SharedApparatusInvalidation is null && !stopToken.IsCancellationRequested)) failures.Add(exception);
+                        (earlyStop is null && cacheContext?.SharedApparatusInvalidation is null && !stopToken.IsCancellationRequested)) failures.Add(exception);
                 }
                 continue;
             }
             var completedIndex = activeShards.FindIndex(active => active.Task == completedTask);
+            var completedShard = activeShards[completedIndex].Shard;
             var completedResourceKeys = activeShards[completedIndex].ResourceKeys;
             activeShards.RemoveAt(completedIndex);
             try
@@ -426,7 +398,7 @@ public sealed partial class GoalAcceptanceVerifier
             catch (Exception exception)
             {
                 if (exception is not OperationCanceledException ||
-                    (cacheContext?.SharedApparatusInvalidation is null && !stopToken.IsCancellationRequested))
+                    (earlyStop is null && cacheContext?.SharedApparatusInvalidation is null && !stopToken.IsCancellationRequested))
                 {
                     failures.Add(exception);
                 }
@@ -443,7 +415,26 @@ public sealed partial class GoalAcceptanceVerifier
                 }
             }
 
-            if (cacheContext?.SharedApparatusInvalidation is not null)
+            if (earlyStop is null && cacheContext?.SharedApparatusInvalidation is null &&
+                !sharedApparatusCancellation.IsCancellationRequested && IsConfirmedLocalFailure(completedShard, completedTask))
+            {
+                earlyStop = new AcceptanceLaneEarlyStop(
+                    completedShard.Check.Name,
+                    pendingShards.OrderBy(shard => shard.Index).Select(shard => shard.Check.Name).ToArray(),
+                    activeShards.Where(active => outcomes[active.Shard.Index] is null)
+                        .OrderBy(active => active.Shard.Index).Select(active => active.Shard.Check.Name).ToArray(),
+                    activeRemote.Where(active => outcomes[active.Shard.Index] is null &&
+                            !(active.Task.IsCompletedSuccessfully && active.Task.Result.Accepted is not null))
+                        .OrderBy(active => active.Shard.Index).Select(active => active.Shard.Check.Name).ToArray());
+                pendingShards.Clear();
+                await sharedApparatusCancellation.CancelAsync().ConfigureAwait(false);
+                var now = _timeProvider.GetUtcNow();
+                EmitGateProgress(new AcceptanceGateProgress(goalId?.Value, "lane-early-stop", earlyStop.ConfirmingLane,
+                    primarySlotIndex, Environment.ProcessId, null, now, now, now,
+                    _timeProvider.GetElapsedTime(wallClock), 0, string.Empty),
+                    $"confirming_lane={QuoteProgressToken(earlyStop.ConfirmingLane)} lanes_stopped={earlyStop.StoppedCount}");
+            }
+            else if (cacheContext?.SharedApparatusInvalidation is not null)
             {
                 pendingShards.Clear();
                 await sharedApparatusCancellation.CancelAsync().ConfigureAwait(false);
@@ -461,7 +452,7 @@ public sealed partial class GoalAcceptanceVerifier
         AcceptanceGatePhaseAccountant.RecordCurrentLaneExecution(wallElapsed);
         AcceptanceGatePhaseAccountant.TransitionCurrent(AcceptanceGatePhaseNames.CheckExecution);
         if (outcomes.Any(outcome => outcome is null) &&
-            cacheContext?.SharedApparatusInvalidation is null && !stopToken.IsCancellationRequested)
+            earlyStop is null && cacheContext?.SharedApparatusInvalidation is null && !stopToken.IsCancellationRequested)
         {
             throw new InvalidOperationException(
                 "Concurrent infrastructure shard execution completed without a verdict for every shard.");
@@ -475,12 +466,15 @@ public sealed partial class GoalAcceptanceVerifier
             wallElapsed,
             shardConcurrency.Count,
             _storageRoot, EmitGateProgress);
-        var completed = outcomes.Where(outcome => outcome is not null).Select(outcome => outcome!).ToArray();
-        return new CheckBatchResult(
-            cacheContext?.ApplySharedApparatusInvalidation(
+        var completed = outcomes.Where(outcome => outcome is not null &&
+                earlyStop?.CancelledMidRun.Contains(outcome.Result.Name, StringComparer.Ordinal) != true)
+            .Select(outcome => outcome!).ToArray();
+        var results = cacheContext?.ApplySharedApparatusInvalidation(
                 completed.Select(outcome => outcome.Result).ToArray()) ??
-                completed.Select(outcome => outcome.Result).ToArray(),
-            completed.Any(outcome => outcome.Retried));
+                completed.Select(outcome => outcome.Result).ToArray();
+        return new CheckBatchResult(
+            earlyStop is null ? results : [.. results, earlyStop.ToReceiptCheck()],
+            completed.Any(outcome => outcome.Retried), earlyStop);
     }
 
 }

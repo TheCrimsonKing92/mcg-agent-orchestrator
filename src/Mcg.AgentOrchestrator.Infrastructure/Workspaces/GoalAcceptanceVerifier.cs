@@ -899,6 +899,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         if (ownerProtectedDecision.Pass is { } ownerProtectedPass) checks.Add(ownerProtectedPass);
         var failedCheck = checks.FirstOrDefault(check => !check.Advisory && !check.Passed);
+        var partialCoverage = checks.FirstOrDefault(check => check.Name == AcceptanceLaneEarlyStop.ReceiptName);
         var artifactsPath = checks.LastOrDefault(check => !string.IsNullOrWhiteSpace(check.ArtifactsPath))?.ArtifactsPath;
         var testResultPaths = CollectTestResultPaths(checks);
 
@@ -906,7 +907,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             Passed: failedCheck is null,
             Skipped: false,
             ExitCode: failedCheck?.ExitCode ?? 0,
-            OutputTail: failedCheck?.OutputTail,
+            OutputTail: partialCoverage is null ? failedCheck?.OutputTail :
+                AcceptanceDotnetBuildPhase.PrefixResultSummary(partialCoverage.ResultSummary!, failedCheck?.OutputTail),
             Retried: retried,
             ArtifactsPath: artifactsPath,
             Checks: checks,
@@ -5016,7 +5018,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private sealed record CheckBatchResult(
         IReadOnlyList<AcceptanceCheckResult> Results,
-        bool Retried);
+        bool Retried,
+        AcceptanceLaneEarlyStop? EarlyStop = null);
 
     internal readonly record struct TransientBuildLockWaitResult(long WaitedMilliseconds, bool Released);
 

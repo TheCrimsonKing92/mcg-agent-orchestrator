@@ -8,43 +8,41 @@ internal static partial class CliCriterionEvidenceIntents
     internal static int PrintStatus(IReadOnlyList<string> args, IOperatorIntentStore store,
         TextWriter output, TimeProvider clock, TimeSpan pollInterval, Action<TimeSpan> delay)
     {
-        var (intentId, wait) = ParseStatusArguments(args);
+        var (intentIds, wait) = ParseStatusArguments(args);
         if (wait is not null && pollInterval <= TimeSpan.Zero)
         {
             throw new ArgumentOutOfRangeException(nameof(pollInterval));
         }
 
         var deadline = wait is { } duration ? clock.GetUtcNow() + duration : (DateTimeOffset?)null;
+        var intents = new OperatorIntentRecord?[intentIds.Count];
         while (true)
         {
-            var intent = store.GetAsync(intentId).GetAwaiter().GetResult()
-                ?? throw new KeyNotFoundException($"Operator intent '{intentId}' was not found.");
-            if (deadline is null)
+            for (var index = 0; index < intentIds.Count; index++)
             {
-                output.WriteLine(FormatStatusLine(intent));
-                return 0;
+                if (intents[index]?.Status is OperatorIntentStatus.Applied or OperatorIntentStatus.Rejected)
+                    continue;
+                var intentId = intentIds[index];
+                intents[index] = store.GetAsync(intentId).GetAwaiter().GetResult()
+                    ?? throw new KeyNotFoundException($"Operator intent '{intentId}' was not found.");
             }
 
-            if (intent.Status is OperatorIntentStatus.Applied or OperatorIntentStatus.Rejected)
+            var pending = intents.Any(intent => intent!.Status is not (OperatorIntentStatus.Applied or OperatorIntentStatus.Rejected));
+            var remaining = deadline is null || !pending ? TimeSpan.Zero : deadline.Value - clock.GetUtcNow();
+            if (deadline is null || !pending || remaining <= TimeSpan.Zero)
             {
-                output.WriteLine(FormatStatusLine(intent));
-                return intent.Status == OperatorIntentStatus.Applied ? 0 : 2;
-            }
-
-            var remaining = deadline.Value - clock.GetUtcNow();
-            if (remaining <= TimeSpan.Zero)
-            {
-                output.WriteLine(FormatStatusLine(intent));
-                return 3;
+                foreach (var intent in intents)
+                    output.WriteLine(FormatStatusLine(intent!));
+                return deadline is null ? 0 : intents.Any(intent => intent!.Status == OperatorIntentStatus.Rejected) ? 2 : pending ? 3 : 0;
             }
 
             delay(remaining < pollInterval ? remaining : pollInterval);
         }
     }
 
-    private static (string IntentId, TimeSpan? Wait) ParseStatusArguments(IReadOnlyList<string> args)
+    private static (IReadOnlyList<string> IntentIds, TimeSpan? Wait) ParseStatusArguments(IReadOnlyList<string> args)
     {
-        string? intentId = null;
+        var intentIds = new List<string>();
         TimeSpan? wait = null;
         for (var index = 1; index < args.Count; index++)
         {
@@ -61,11 +59,10 @@ internal static partial class CliCriterionEvidenceIntents
                     if (!int.TryParse(arg[7..], NumberStyles.Integer, CultureInfo.InvariantCulture, out seconds))
                         throw new ArgumentException(CliCommandHelp.OperatorIntentStatusUsage);
                 }
-                else if (index + 1 < args.Count && int.TryParse(args[index + 1],
-                    NumberStyles.Integer, CultureInfo.InvariantCulture, out var suppliedSeconds))
+                else if (index + 1 < args.Count && IsIntegerToken(args[index + 1]))
                 {
-                    seconds = suppliedSeconds;
-                    index++;
+                    if (!int.TryParse(args[++index], NumberStyles.Integer, CultureInfo.InvariantCulture, out seconds))
+                        throw new ArgumentException(CliCommandHelp.OperatorIntentStatusUsage);
                 }
 
                 if (seconds <= 0)
@@ -74,13 +71,22 @@ internal static partial class CliCriterionEvidenceIntents
             }
             else
             {
-                if (intentId is not null || arg.StartsWith("--", StringComparison.Ordinal))
+                if (arg.StartsWith("--", StringComparison.Ordinal))
                     throw new ArgumentException(CliCommandHelp.OperatorIntentStatusUsage);
-                intentId = arg;
+                intentIds.Add(arg);
             }
         }
 
-        return (intentId ?? throw new ArgumentException(CliCommandHelp.OperatorIntentStatusUsage), wait);
+        if (intentIds.Count == 0)
+            throw new ArgumentException(CliCommandHelp.OperatorIntentStatusUsage);
+        return (intentIds, wait);
+    }
+
+    private static bool IsIntegerToken(string value)
+    {
+        var digits = value.AsSpan().Trim();
+        if (digits.Length > 0 && digits[0] is '+' or '-') digits = digits[1..];
+        return digits.Length > 0 && !digits.ContainsAnyExceptInRange('0', '9');
     }
 
     private static string FormatStatusLine(OperatorIntentRecord intent) =>
