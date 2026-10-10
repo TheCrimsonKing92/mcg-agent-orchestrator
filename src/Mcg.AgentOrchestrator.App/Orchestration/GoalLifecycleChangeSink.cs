@@ -15,8 +15,7 @@ internal static class GoalLifecycleChangeSink
             var detail = commit.EventType;
             if (commit.TaskId is not null) detail += $" task={commit.TaskId}";
             if (commit.Role is not null) detail += $" role={commit.Role}";
-            try { writer.Append("goal-lifecycle", commit.GoalId.Value, detail, commit.Timestamp); }
-            catch (UnauthorizedAccessException) { /* The source line is already committed. */ }
+            writer.Append("goal-lifecycle", commit.GoalId.Value, detail, commit.Timestamp);
         };
     }
 }

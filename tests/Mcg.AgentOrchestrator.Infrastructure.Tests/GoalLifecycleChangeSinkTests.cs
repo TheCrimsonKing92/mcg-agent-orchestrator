@@ -140,12 +140,13 @@ public sealed class GoalLifecycleChangeSinkTests : IDisposable
     }
 
     [Fact]
-    public void Append_StreamAccessFailurePreservesSourceCommit()
+    public void Append_StreamAccessFailurePropagatesAfterSourceCommit()
     {
         Directory.CreateDirectory(Changes);
         var writer = CreateWriter(GoalLifecycleChangeSink.Create(Workspace));
-        writer.AppendTaskDispatched(Goal, Task, AgentRole.Developer, Secret);
+        Assert.Throws<UnauthorizedAccessException>(() => writer.AppendTaskDispatched(Goal, Task, AgentRole.Developer, Secret));
         Assert.Single(File.ReadAllLines(writer.EventFilePath(Goal)));
+        AssertCursors(writer, 0);
     }
 
     private static void AssertCursors(GoalLifecycleEventWriter writer, params int[] expected)
