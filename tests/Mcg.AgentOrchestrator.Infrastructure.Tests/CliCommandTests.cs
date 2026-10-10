@@ -406,13 +406,7 @@ public abstract class CliCommandTestBase : HostCapacityBoundTestBase
     private protected static string CreateAcceptanceRepository()
     {
         var root = CreateTempDirectory();
-        RunGit(root, "init", "-b", "main");
-        RunGit(root, "config", "user.email", "tests@example.com");
-        RunGit(root, "config", "user.name", "CLI Tests");
-        File.WriteAllText(Path.Combine(root, "DOGFOOD_LOG.md"), "# Dogfood Log" + Environment.NewLine);
-        File.WriteAllText(Path.Combine(root, "seed.txt"), "seed");
-        RunGit(root, "add", "-A");
-        RunGit(root, "commit", "-m", "Seed");
+        CliAcceptanceGitRepositoryTemplate.CopyTo(root);
         return root;
     }
 
@@ -422,13 +416,7 @@ public abstract class CliCommandTestBase : HostCapacityBoundTestBase
         Directory.CreateDirectory(baseDirectory);
         var root = Path.Combine(baseDirectory, Guid.NewGuid().ToString("N")[..12]);
         Directory.CreateDirectory(root);
-        RunGit(root, "init", "-b", "main");
-        RunGit(root, "config", "user.email", "tests@example.com");
-        RunGit(root, "config", "user.name", "CLI Tests");
-        File.WriteAllText(Path.Combine(root, "DOGFOOD_LOG.md"), "# Dogfood Log" + Environment.NewLine);
-        File.WriteAllText(Path.Combine(root, "seed.txt"), "seed");
-        RunGit(root, "add", "-A");
-        RunGit(root, "commit", "-m", "Seed");
+        CliAcceptanceGitRepositoryTemplate.CopyTo(root);
         return root;
     }
 

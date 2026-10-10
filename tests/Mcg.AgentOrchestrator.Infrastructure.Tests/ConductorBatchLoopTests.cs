@@ -232,13 +232,7 @@ public abstract class ConductorBatchLoopTests
     {
         var path = Path.Combine(Path.GetTempPath(), $"mcg-batch-loop-{Guid.NewGuid():N}");
         Directory.CreateDirectory(path);
-        RunGit(path, "init");
-        RunGit(path, "checkout", "-b", "main");
-        RunGit(path, "config", "user.email", "tests@example.com");
-        RunGit(path, "config", "user.name", "Batch Loop Tests");
-        File.WriteAllText(Path.Combine(path, "seed.txt"), "seed");
-        RunGit(path, "add", "-A");
-        RunGit(path, "commit", "-m", "Seed");
+        BatchLoopGitRepositoryTemplate.CopyTo(path);
         return path;
     }
 
