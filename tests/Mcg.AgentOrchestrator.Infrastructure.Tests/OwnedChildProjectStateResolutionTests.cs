@@ -20,7 +20,9 @@ public sealed class OwnedChildProjectStateResolutionTests
     public async Task NamedProjectRecordLoadsParentGoalWithoutTargetState(string kind)
     {
         using var fixture = new Fixture();
-        var parent = fixture.Registry.CreateProject("alpha", fixture.Target, "trunk").ResolveWorkspace();
+        var besideRegistry = new OrchestratorProjectRegistry(
+            OrchestratorDataRoot.FromDirectory(fixture.Data).ProjectsDirectory, fixture.Data);
+        var parent = besideRegistry.CreateProject("alpha", fixture.Target, "trunk").ResolveWorkspace();
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Owned child reads project state");
         await CreateMigratedStateRepository(parent.SqliteStatePath).SaveAsync(kernel);
@@ -153,6 +155,94 @@ public sealed class OwnedChildProjectStateResolutionTests
         Assert.Contains("Unknown project", unknown.Message);
         Assert.False(Directory.Exists(Path.Combine(fixture.Target, ".orchestrator")));
         Assert.False(File.Exists(parent.SqliteStatePath));
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task NamedProject_RecordedState_UsesBesideRegistry(bool grouped, bool injectedHasProject)
+    {
+        using var fixture = new Fixture();
+        var besideRegistry = new OrchestratorProjectRegistry(
+            OrchestratorDataRoot.FromDirectory(fixture.Data).ProjectsDirectory, fixture.Data);
+        // The registry supplies only the branch, even when its checkout differs from the attempt.
+        besideRegistry.CreateProject("alpha", fixture.Root, "develop");
+        var parent = OrchestratorWorkspace.ForProject("alpha", fixture.Target,
+            integrationBranch: "recorded-branch", dataRootDirectory: fixture.Data);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Read beside registry");
+        await CreateMigratedStateRepository(parent.SqliteStatePath).SaveAsync(kernel);
+        var injected = new OrchestratorProjectRegistry(Path.Combine(fixture.Root, "empty-default"),
+            Path.Combine(fixture.Root, "other-data"));
+        if (injectedHasProject)
+            injected.CreateProject("alpha", fixture.Target, "injected-branch");
+        Assert.True(File.Exists(besideRegistry.RegistryPath));
+        Assert.True(File.Exists(parent.SqliteStatePath));
+
+        var child = grouped
+            ? OwnedChildWorkspaceResolver.ForGroupedGateAttempt(WriteGroupedAttempt(parent, goal, "cohort"), injected)
+            : OwnedChildWorkspaceResolver.ForParallelAcceptanceAttempt(WriteParallelAttempt(parent, goal, "gate"), injected);
+
+        Assert.Equal(parent.SqliteStatePath, child.SqliteStatePath);
+        Assert.Equal(parent.OrchestratorDirectory, child.OrchestratorDirectory);
+        Assert.Equal(fixture.Target, child.RootDirectory);
+        Assert.Equal("develop", child.IntegrationBranch);
+        if (!injectedHasProject)
+            Assert.False(Directory.Exists(injected.RegistryDirectory));
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task NamedProject_RegistryUnavailable_UsesRecordedBranch(bool malformed, bool injectedHasProject)
+    {
+        using var fixture = new Fixture();
+        var parent = OrchestratorWorkspace.ForProject("alpha", fixture.Target,
+            integrationBranch: "recorded-branch", dataRootDirectory: fixture.Data);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Recorded branch fallback");
+        await CreateMigratedStateRepository(parent.SqliteStatePath).SaveAsync(kernel);
+        var registryPath = Path.Combine(OrchestratorDataRoot.FromDirectory(fixture.Data).ProjectsDirectory, "projects.json");
+        if (malformed)
+            File.WriteAllText(registryPath, "{invalid-json");
+        if (injectedHasProject)
+            fixture.Registry.CreateProject("alpha", fixture.Target, "injected-branch");
+        var record = WriteParallelAttempt(parent, goal, "gate");
+
+        var child = OwnedChildWorkspaceResolver.ForParallelAcceptanceAttempt(record, fixture.Registry);
+
+        Assert.Equal(parent.SqliteStatePath, child.SqliteStatePath);
+        Assert.Equal("recorded-branch", child.IntegrationBranch);
+        AssertRegistryUnchanged();
+
+        // Grouped attempts carry no branch, so they must retain the derived lookup failure.
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            OwnedChildWorkspaceResolver.ForGroupedGateAttempt(WriteGroupedAttempt(parent, goal, "cohort"), fixture.Registry));
+        AssertDiagnostic(error, parent.OrchestratorDirectory, parent.SqliteStatePath);
+        if (malformed)
+            Assert.IsType<JsonException>(error.InnerException);
+        else
+            Assert.Contains("Unknown project", Assert.IsType<ArgumentException>(error.InnerException).Message);
+        foreach (var blank in new[] { "", " " })
+        {
+            var blankError = Assert.Throws<InvalidOperationException>(() =>
+                OwnedChildWorkspaceResolver.ForParallelAcceptanceAttempt(record with { IntegrationBranch = blank }, fixture.Registry));
+            AssertDiagnostic(blankError, parent.OrchestratorDirectory, parent.SqliteStatePath);
+            Assert.Equal(error.InnerException!.GetType(), blankError.InnerException!.GetType());
+        }
+        AssertRegistryUnchanged();
+
+        void AssertRegistryUnchanged()
+        {
+            if (malformed)
+                Assert.Equal("{invalid-json", File.ReadAllText(registryPath));
+            else
+                Assert.False(File.Exists(registryPath));
+        }
     }
 
     private static void AssertDiagnostic(InvalidOperationException error, string recordedDirectory, string statePath)
