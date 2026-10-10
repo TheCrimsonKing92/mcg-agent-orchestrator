@@ -16,10 +16,10 @@ public static class CandidateTreeProbe
         if (!Path.IsPathFullyQualified(repositoryRoot))
             throw new ArgumentException("The repository root must be an absolute path.", nameof(repositoryRoot));
 
-        // Git metadata and a top-level solution distinguish a candidate tree from a partial fixture.
+        // Git metadata plus a top-level solution or nearby project distinguish a candidate tree from a partial fixture.
         return (File.Exists(Path.Combine(repositoryRoot, ".git")) ||
                 Directory.Exists(Path.Combine(repositoryRoot, ".git"))) &&
-            HasTopLevelSolution(repositoryRoot)
+            (HasTopLevelSolution(repositoryRoot) || HasProjectFileWithin(repositoryRoot, depth: 2))
                 ? new FileSystemTree(repositoryRoot)
                 : AssumeAllPresent;
     }
@@ -31,6 +31,25 @@ public static class CandidateTreeProbe
             return Directory.EnumerateFiles(repositoryRoot).Any(path =>
                 Path.GetExtension(path).Equals(".sln", StringComparison.OrdinalIgnoreCase) ||
                 Path.GetExtension(path).Equals(".slnx", StringComparison.OrdinalIgnoreCase));
+        }
+        catch (IOException) { return false; }
+        catch (UnauthorizedAccessException) { return false; }
+    }
+
+    private static bool HasProjectFileWithin(string directory, int depth)
+    {
+        try
+        {
+            if (Directory.EnumerateFiles(directory).Any(path =>
+                Path.GetExtension(path).Equals(".csproj", StringComparison.OrdinalIgnoreCase) ||
+                Path.GetExtension(path).Equals(".fsproj", StringComparison.OrdinalIgnoreCase) ||
+                Path.GetExtension(path).Equals(".vbproj", StringComparison.OrdinalIgnoreCase)))
+                return true;
+
+            return depth > 0 && Directory.EnumerateDirectories(directory).Any(child =>
+                !Path.GetFileName(child).Equals("bin", StringComparison.OrdinalIgnoreCase) &&
+                !Path.GetFileName(child).Equals("obj", StringComparison.OrdinalIgnoreCase) &&
+                HasProjectFileWithin(child, depth - 1));
         }
         catch (IOException) { return false; }
         catch (UnauthorizedAccessException) { return false; }

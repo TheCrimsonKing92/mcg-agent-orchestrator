@@ -1,0 +1,81 @@
+namespace Mcg.AgentOrchestrator.Core.Tests;
+
+public sealed class RepositoryTestImpactPlannerForeignTreeTests
+{
+    private const string SourcePath = "src/Domain/Widget.cs";
+    private const string ManifestNotice =
+        "the checks to run are the ones the project's acceptance manifest declares";
+
+    [Xunit.Fact]
+    public void ForeignTreeNamesManifestChecksInsteadOfAbsentBuiltInProjects()
+    {
+        var plan = Plan([SourcePath], new PresentOnlyTree(SourcePath));
+
+        Assert.Contains("none of this tool's built-in test projects", plan.Summary);
+        Assert.Contains(ManifestNotice, plan.Summary);
+        Assert.DoesNotContain("tests/Mcg.", plan.Summary);
+        Assert.DoesNotContain("skipped absent test project", plan.Summary);
+        Assert.NotEmpty(plan.Checks);
+        Assert.All(plan.Checks, check =>
+        {
+            Assert.Null(check.TestProject);
+            Assert.Empty(check.Command);
+            Assert.Contains(ManifestNotice, check.Reason);
+            Assert.DoesNotContain("tests/Mcg.", check.Reason);
+            Assert.DoesNotContain("skipped absent test project", check.Reason);
+        });
+    }
+
+    [Xunit.Fact]
+    public void ForeignTreeStillNamesRemovedChangedPaths()
+    {
+        const string removedPath = "src/Domain/Removed.cs";
+        var plan = Plan([SourcePath, removedPath], new PresentOnlyTree(SourcePath));
+        var removedClause = $"skipped removed path: {removedPath} (absent from candidate tree)";
+
+        Assert.Contains(ManifestNotice, plan.Summary);
+        Assert.Contains(removedClause, plan.Summary);
+        Assert.All(plan.Checks, check => Assert.Contains(removedClause, check.Reason));
+    }
+
+    [Xunit.Fact]
+    public void OnlyWholeBuiltInSetAbsenceReplacesBuiltInChecks()
+    {
+        var foreignPlan = Plan([SourcePath], new PresentOnlyTree(SourcePath));
+        var absentProject = RepositoryTestImpactPlanner.BuiltInTestProjectPaths.First();
+        var plan = Plan([SourcePath], new AbsentOnlyTree(absentProject));
+        var skippedClause = $"skipped absent test project: {absentProject} (absent from candidate tree)";
+
+        Assert.Contains(ManifestNotice, foreignPlan.Summary);
+        Assert.Contains(skippedClause, plan.Summary);
+        Assert.DoesNotContain("acceptance manifest", plan.Summary);
+        Assert.Equal(Enum.GetValues<RepositoryTestProject>().Length - 1, plan.Checks.Count);
+        Assert.All(plan.Checks, check =>
+        {
+            Assert.Contains(skippedClause, check.Reason);
+            Assert.DoesNotContain(absentProject, check.Command);
+        });
+        var allPresentPlan = Plan([SourcePath], CandidateTreeProbe.AssumeAllPresent);
+        var expectedProjects = Enum.GetValues<RepositoryTestProject>();
+
+        Assert.Equal(expectedProjects.Length, allPresentPlan.Checks.Count);
+        foreach (var project in expectedProjects)
+            Assert.Single(allPresentPlan.Checks, check => check.TestProject == project);
+        Assert.DoesNotContain("acceptance manifest", allPresentPlan.Summary);
+        Assert.DoesNotContain("skipped absent test project", allPresentPlan.Summary);
+    }
+
+    private static RepositoryTestImpactPlan Plan(string[] paths, ICandidateTreeProbe tree) =>
+        RepositoryTestImpactPlanner.Plan(RepositoryChangeClassifier.Classify(paths),
+            UnavailableTestClassDeclarationReader.Instance, tree);
+
+    private sealed class PresentOnlyTree(params string[] presentPaths) : ICandidateTreeProbe
+    {
+        public bool Exists(string path) => presentPaths.Contains(path, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private sealed class AbsentOnlyTree(string absentPath) : ICandidateTreeProbe
+    {
+        public bool Exists(string path) => !path.Equals(absentPath, StringComparison.OrdinalIgnoreCase);
+    }
+}
