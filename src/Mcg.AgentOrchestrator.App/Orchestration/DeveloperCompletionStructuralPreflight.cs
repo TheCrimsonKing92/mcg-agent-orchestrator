@@ -21,7 +21,7 @@ internal static class DeveloperCompletionStructuralPreflight
         {
             return new DeveloperCompletionStructuralFindings(
                 true,
-                $"config/acceptance-manifest.json: {exception.Message}");
+                $"{AcceptanceManifestDisplayPathResolver.Resolve(worktreePath, projectHomeDirectory)}: {exception.Message}");
         }
 
         return new DeveloperCompletionStructuralFindings(
