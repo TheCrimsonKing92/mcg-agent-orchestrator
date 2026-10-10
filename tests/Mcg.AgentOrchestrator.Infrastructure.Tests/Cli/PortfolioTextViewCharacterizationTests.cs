@@ -175,7 +175,7 @@ public sealed class PortfolioTextViewCharacterizationTests
             new("cluster2-extra", "empty", "Empty cluster", "No members", [], [], Timestamp)
         ];
         var expected = Lines(
-            "cluster1 signal=shared-path goals=goal0001,g2 backlog=backlog01,backlog02 title=Renderer work",
+            "cluster1 signal=shared-path goals=goal0001,g2 backlog=backlog0,backlog0 title=Renderer work",
             "  evidence: Same source path",
             "cluster2 signal=empty goals=none backlog=none title=Empty cluster",
             "  evidence: No members");
