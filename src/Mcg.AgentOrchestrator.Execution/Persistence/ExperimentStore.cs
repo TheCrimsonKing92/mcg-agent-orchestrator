@@ -5,13 +5,14 @@ using Microsoft.Data.Sqlite;
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public enum ExperimentInterventionKind { ConfigFlag = 1, Policy, BriefOrPromptChange, ModelSwap, EvidenceOnlyCodeSpike }
-public enum ExperimentBaselineKind { BeforeAfterWindow = 1, AlternatingGates, TwinGoal }
+public enum ExperimentBaselineKind { BeforeAfterWindow = 1, AlternatingGates, TwinGoal, GoalCohort }
 public enum ExperimentStopUnit { Gates = 1, Goals, Ticks }
 public enum ExperimentOutcomeState { Open = 1, Confirmed, Refuted, Inconclusive }
 
 public sealed record ExperimentIntervention(ExperimentInterventionKind Kind, string Description, ExperimentFlagTarget? FlagTarget = null);
 public sealed record ExperimentBaseline(ExperimentBaselineKind Kind, DateTimeOffset? Since = null,
-    DateTimeOffset? Until = null, string? TwinGoalId = null, string? ComparisonGoalId = null);
+    DateTimeOffset? Until = null, string? TwinGoalId = null, string? ComparisonGoalId = null,
+    IReadOnlyList<string>? BaselineGoalIds = null, IReadOnlyList<string>? ComparisonGoalIds = null);
 public sealed record ExperimentStopRule(int Count, ExperimentStopUnit Unit);
 public sealed record ExperimentCondition(string Metric, string Op, [property: JsonRequired] double ChangePercent);
 public sealed record ExperimentDecisionRule(IReadOnlyList<ExperimentCondition> KeepIf, IReadOnlyList<ExperimentCondition> RevertIf);

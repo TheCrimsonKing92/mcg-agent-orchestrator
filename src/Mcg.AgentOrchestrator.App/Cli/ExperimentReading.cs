@@ -9,7 +9,7 @@ internal sealed record ExperimentMetricReading(string Metric, double? Before, do
 
 internal sealed record ExperimentReadingResult(int? ObservedCount, ExperimentStopRule StopRule,
     bool StopRuleMet, IReadOnlyList<ExperimentMetricReading> Metrics, string Verdict, string Reason,
-    bool GuardrailBreached, string? Goals = null);
+    bool GuardrailBreached, string? Goals = null, string? GoalsLabel = null);
 
 internal static class ExperimentGoals
 {
@@ -51,6 +51,11 @@ internal static class ExperimentReading
             twin = ExperimentTwinReading.Compute(spec.Baseline, goals, intents);
             values = twin.Values;
         }
+        else if (spec.Baseline.Kind == ExperimentBaselineKind.GoalCohort)
+        {
+            twin = ExperimentCohortReading.Compute(spec.Baseline, goals, intents);
+            values = twin.Values;
+        }
         else
         {
             var since = spec.Baseline.Since!.Value;
@@ -90,7 +95,7 @@ internal static class ExperimentReading
             return new(observed, spec.StopRule, stopRuleMet, metrics, "inconclusive",
                 $"unavailable comparison or zero baseline: {string.Join(", ", missing)}" +
                 (twin is { Diagnostics.Count: > 0 } ? $"; {string.Join("; ", twin.Diagnostics)}" : ""),
-                guardrail == true, twin?.Goals);
+                guardrail == true, twin?.Goals, spec.Baseline.Kind == ExperimentBaselineKind.GoalCohort ? "cohort goals" : null);
         }
         var keepHolds = keep.All(v => v == true);
         var revertHolds = revert.All(v => v == true);
@@ -102,7 +107,8 @@ internal static class ExperimentReading
             var value = values[spec.Guardrail.Metric];
             reason += $"; guardrail breached: {spec.Guardrail.Metric} baseline={Format(value.Before)} comparison={Format(value.After)}";
         }
-        return new(observed, spec.StopRule, stopRuleMet, metrics, verdict, reason, guardrail == true, twin?.Goals);
+        return new(observed, spec.StopRule, stopRuleMet, metrics, verdict, reason, guardrail == true, twin?.Goals,
+            spec.Baseline.Kind == ExperimentBaselineKind.GoalCohort ? "cohort goals" : null);
     }
 
     internal static DateTimeOffset ComparisonStart(ExperimentRecord record) => record.Spec.Baseline.Until ?? record.CreatedAt;
@@ -112,7 +118,7 @@ internal static class ExperimentReading
         var progress = result.ObservedCount is { } count ? $"{count} of {result.StopRule.Count}" : $"unavailable of {result.StopRule.Count}";
         var met = result.ObservedCount is not null ? result.StopRuleMet ? "met" : "not met" : "progress unavailable";
         Console.WriteLine($"stop rule: {progress} {Name(result.StopRule.Unit)} ({met})");
-        if (result.Goals is not null) Console.WriteLine($"twin goals: {result.Goals}");
+        if (result.Goals is not null) Console.WriteLine($"{result.GoalsLabel ?? "twin goals"}: {result.Goals}");
         foreach (var metric in result.Metrics)
             Console.WriteLine($"{metric.Metric.Replace('-', ' ')}: baseline={Format(metric.Before)} comparison={Format(metric.After)}");
         Console.WriteLine($"reading: {result.Verdict} ({result.Reason})");
