@@ -1589,7 +1589,8 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
                 failure = Assert.Throws<CliExitException>(() =>
                     GoalRefinementWorkOutcomeReporter.Report(
                         new GoalRefinementWorkProcessResult(goalId.Value, Claimed: false, Attached: false),
-                        workspace))));
+                        workspace,
+                        new SqliteOrchestratorStateRepository(workspace.SqliteStatePath)))));
 
         Assert.NotNull(failure);
         Assert.NotEqual(0, failure.ExitCode);
