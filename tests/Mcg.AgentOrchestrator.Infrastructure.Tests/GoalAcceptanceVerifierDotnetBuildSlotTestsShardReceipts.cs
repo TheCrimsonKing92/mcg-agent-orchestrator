@@ -194,11 +194,12 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsShardReceipts : Go
             Path.GetTempPath(),
             $"mcg-shard-attempt-{Guid.NewGuid():N}");
         var attemptPrefix = Path.Combine(attemptDirectory, "attempt-123");
+        var slotRoot = Path.Combine(Path.GetTempPath(), $"mcg-shard-slot-{Guid.NewGuid():N}");
         var environment = new DotnetBuildEnvironment(
             "run-slot-1",
-            Path.Combine(Path.GetTempPath(), "slot-1"),
-            Path.Combine(Path.GetTempPath(), "slot-1", "artifacts"),
-            Path.Combine(Path.GetTempPath(), "slot-1", "lease.lock"),
+            slotRoot,
+            Path.Combine(slotRoot, "artifacts"),
+            Path.Combine(slotRoot, "build-slots", "slot-1.lock"),
             [],
             "slot-1");
         var resultsDirectory = GoalAcceptanceVerifier.ResolveInfrastructureShardResultsDirectory(

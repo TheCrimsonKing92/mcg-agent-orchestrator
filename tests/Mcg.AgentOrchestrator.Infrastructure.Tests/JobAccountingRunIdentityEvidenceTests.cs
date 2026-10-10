@@ -26,8 +26,6 @@ public sealed class JobAccountingRunIdentityEvidenceTests
             [(typeof(GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteExecutorClaim), "occupancy")] = ScenarioRoot,
             [(typeof(GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteExecutorSlots), "occupancy")] = ScenarioRoot,
             [(typeof(GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLanePolicy), "occupancy")] = ScenarioRoot,
-            [(typeof(GoalAcceptanceVerifierDotnetBuildSlotTestsShardReceipts), "path")] =
-                "ShardReceiptsUseAttemptArtifactsInsteadOfReleasableSlot supplies a fixed temp/slot-1/lease.lock as a path-only DotnetBuildEnvironment input; it does not acquire that lock. Other helper root parameters require caller tracing."
         };
 
     [Xunit.Fact]
@@ -113,6 +111,27 @@ public sealed class JobAccountingRunIdentityEvidenceTests
         var variable = declaration.DescendantNodes().OfType<VariableDeclaratorSyntax>()
             .Single(node => node.Identifier.ValueText == "path");
         Assert.Equal(expected, IsRunPath(variable.Initializer!.Value, variable, declaration));
+    }
+
+    [Xunit.Fact]
+    public void Path_evidence_rejects_fixed_temp_slot_lock_and_accepts_guid_rooted_slot_lock()
+    {
+        var fixedSyntax = CSharpSyntaxTree.ParseText(
+            "class Probe { void Test() { var path = Path.Combine(Path.GetTempPath(), \"slot-1\", \"lease.lock\"); } }").GetRoot();
+        var fixedDeclaration = Assert.Single(fixedSyntax.DescendantNodes().OfType<ClassDeclarationSyntax>());
+        var fixedSite = Assert.Single(CreationSites(fixedDeclaration));
+        Assert.Equal("path", fixedSite.Kind);
+        Assert.NotNull(fixedSite.Identity);
+        Assert.False(IsRunPath(fixedSite.Identity!, fixedSite.Node, fixedDeclaration));
+
+        var rootedSyntax = CSharpSyntaxTree.ParseText(
+            "class Probe { void Test() { var slotRoot = Path.Combine(Path.GetTempPath(), $\"x-{Guid.NewGuid():N}\"); " +
+            "var path = Path.Combine(slotRoot, \"slot-1\", \"lease.lock\"); } }").GetRoot();
+        var rootedDeclaration = Assert.Single(rootedSyntax.DescendantNodes().OfType<ClassDeclarationSyntax>());
+        var rootedSite = Assert.Single(CreationSites(rootedDeclaration));
+        Assert.Equal("path", rootedSite.Kind);
+        Assert.NotNull(rootedSite.Identity);
+        Assert.True(IsRunPath(rootedSite.Identity!, rootedSite.Node, rootedDeclaration));
     }
 
     [Xunit.Fact]
