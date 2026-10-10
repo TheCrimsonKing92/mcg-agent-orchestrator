@@ -146,20 +146,35 @@ public sealed class OwnerConsoleActivityOutcomeTests
     }
 
     [Fact]
-    public async Task EnterOnNoticeOrUnavailableRowDoesNotExplainADifferentEvent()
+    public async Task EnterWithNoticeExplainsFirstMiddleLastHistoryRows()
     {
         using var scene = new Scene();
-        await scene.Render([new(scene.Harness.Clock.GetUtcNow(), "loop-start", null, "LOOP_START")]);
-        scene.View.ShowRefreshFailure("questions unavailable");
+        scene.AddGoals();
+        var time = scene.Harness.Clock.GetUtcNow();
+        await scene.Render([
+            new(time, "acceptance", "11111111", "result=passed"),
+            new(time.AddSeconds(1), "acceptance", "22222222", "result=passed"),
+            new(time.AddSeconds(2), "acceptance", "33333333", "result=passed")]);
+        Assert.Equal(3, scene.View.ActivityLines.Count);
+        scene.View.ShowNotice("questions unavailable", OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Refresh);
         await scene.View.HandleKeyAsync(Key.Tab);
         await scene.View.HandleKeyAsync(Key.Tab);
-        scene.View.ActivityPane.SelectedItem = 0;
-        await scene.View.HandleKeyAsync(Key.Enter);
-        Assert.Empty(scene.Dialogs.Messages);
+        foreach (var row in new[] { 0, scene.View.ActivityLines.Count / 2, scene.View.ActivityLines.Count - 1 })
+        {
+            scene.View.ActivityPane.SelectedItem = row;
+            var before = scene.Dialogs.Messages.Count;
+            await scene.View.HandleKeyAsync(Key.Enter);
+            Assert.Equal(before + 1, scene.Dialogs.Messages.Count);
+            var dialog = scene.Dialogs.Messages[^1];
+            Assert.Equal("What this means", dialog.Title);
+            Assert.StartsWith("What happened: " + scene.View.ActivityLines[row] + "\n", dialog.Text);
+            Assert.Contains("questions unavailable", scene.View.NoticeText);
+        }
+        var opened = scene.Dialogs.Messages.Count;
         scene.View.Render(scene.Controller.Model! with { ActivityState = new(Error: "log unavailable") });
         await scene.View.HandleKeyAsync(Key.CursorDown);
         await scene.View.HandleKeyAsync(Key.Enter);
-        Assert.Empty(scene.Dialogs.Messages);
+        Assert.Equal(opened, scene.Dialogs.Messages.Count);
     }
 
     [Fact]

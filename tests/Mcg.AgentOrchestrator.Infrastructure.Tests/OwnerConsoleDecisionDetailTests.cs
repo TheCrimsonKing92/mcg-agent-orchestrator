@@ -27,7 +27,8 @@ public sealed class OwnerConsoleDecisionDetailTests
         Assert.Equal(("q1", "owner answer"), Assert.Single(session.Harness.Answers.Calls));
         var queued = AnswerIntentStatusTracker.Queued(1, "11111111");
         Assert.Equal(queued, dialog.NoticeText);
-        Assert.Equal(queued, Assert.Single(session.View.Notices));
+        Assert.Equal(queued, Assert.Single(session.View.NoticeStrip.Visible).Text);
+        Assert.Contains(queued, session.View.NoticeText);
         Assert.Equal(1, session.Dialogs.PromptCalls);
         Assert.False(session.OpenTask.IsCompleted);
     }
@@ -185,7 +186,8 @@ public sealed class OwnerConsoleDecisionDetailTests
         var expected = status == OperatorIntentStatus.Applied ? AnswerIntentStatusTracker.Applied(1, "11111111") :
             AnswerIntentStatusTracker.Rejected(1, "11111111", "duplicate answer");
         Assert.Equal(expected, session.Dialog.NoticeText);
-        Assert.Contains(expected, session.View.Notices);
+        Assert.Contains(session.View.NoticeStrip.Visible, entry => entry.Text == expected);
+        Assert.Contains(expected, session.View.NoticeText);
         Assert.False(session.OpenTask.IsCompleted);
     }
 
@@ -266,7 +268,7 @@ public sealed class OwnerConsoleDecisionDetailTests
             Tracker = new(answers.ReadStatusAsync, Harness.Clock);
             Controller = new(Harness.Questions, answers, Dialogs, Harness.State, Scene.Tail,
                 Harness.Conductor, Harness.DigestReport, Harness.Digest, Harness.Clock, answerTracking: Tracker, resolutions: Scene.Reader);
-            View = new(App, Controller, () => Task.CompletedTask);
+            View = new(App, Controller, () => Task.CompletedTask, clock: new OwnerConsoleTestClock());
         }
         internal void AddQuestion(string id, string text, string? proposedDefault = null,
             OwnerQuestionKind kind = OwnerQuestionKind.HumanInput) =>

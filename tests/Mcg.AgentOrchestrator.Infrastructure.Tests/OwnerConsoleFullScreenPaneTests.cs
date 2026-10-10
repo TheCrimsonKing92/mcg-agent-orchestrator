@@ -99,7 +99,7 @@ public sealed class OwnerConsoleFullScreenPaneTests
             Assert.Equal(board, view.SelectedGoalId);
             Assert.Equal(hints, view.HintText);
             Assert.Equal(calls, harness.State.Calls);
-            Assert.Empty(view.Notices);
+            Assert.Empty(view.NoticeStrip.Visible);
             Assert.Empty(dialogs.Texts);
             Assert.Equal(0, dialogs.InputCalls);
             Assert.Empty(harness.Answers.Calls);
@@ -232,18 +232,21 @@ public sealed class OwnerConsoleFullScreenPaneTests
         harness.Questions.Items.Add(new("q1", "11111111", OwnerQuestionKind.HumanInput, "Ship?", ProposedDefault: "ship"));
         var dialogs = new Dialogs();
         using IApplication app = Terminal.Gui.App.Application.Create();
-        using var view = new OwnerConsoleFullScreenView(app, Controller(harness, dialogs), () => Task.CompletedTask);
+        var clock = new OwnerConsoleTestClock();
+        using var view = new OwnerConsoleFullScreenView(app, Controller(harness, dialogs), () => Task.CompletedTask, clock: clock);
         view.Render(await Model(harness));
         var ownerQuestionLine = Assert.Single(view.ActivityLines);
         Assert.Contains("Needs you: 11111111 Ship?", ownerQuestionLine);
-        view.ShowRefreshFailure("older notice");
-        Assert.Equal(1, view.ActivityPane.SelectedItem);
+        view.ShowNotice("older notice", OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Refresh);
+        Assert.Equal(0, view.ActivityPane.SelectedItem);
         Assert.Equal(ownerQuestionLine, view.ActivityLines[view.ActivityPane.SelectedItem!.Value]);
-        view.ActivityPane.SelectedItem = 0;
-        Assert.EndsWith("older notice", view.ActivityLines[view.ActivityPane.SelectedItem!.Value]);
-        view.ShowRefreshFailure("newer notice");
-        Assert.Equal(1, view.ActivityPane.SelectedItem);
-        Assert.EndsWith("older notice", view.ActivityLines[view.ActivityPane.SelectedItem!.Value]);
+        clock.Now = clock.Now.AddSeconds(1);
+        view.ShowNotice("newer notice", OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Refresh);
+        Assert.Equal(0, view.ActivityPane.SelectedItem);
+        Assert.Equal([ownerQuestionLine], view.ActivityLines);
+        Assert.Equal(1, view.ActivityPane.Source!.Count);
+        Assert.Equal(ownerQuestionLine, view.ActivityPane.Source.ToList()[0]);
+        Assert.Equal("00:05:01 newer notice | 00:05:00 older notice", view.NoticeText);
         await view.HandleKeyAsync(Key.Tab);
         await view.HandleKeyAsync(new Key('a'));
         await view.HandleKeyAsync(new Key('r'));
@@ -251,13 +254,13 @@ public sealed class OwnerConsoleFullScreenPaneTests
         await view.HandleKeyAsync(Key.Home);
         Assert.Equal(0, view.ActivityPane.SelectedItem);
         await view.HandleKeyAsync(Key.CursorDown);
-        Assert.Equal(1, view.ActivityPane.SelectedItem);
+        Assert.Equal(0, view.ActivityPane.SelectedItem);
         await view.HandleKeyAsync(Key.CursorUp);
         Assert.Equal(0, view.ActivityPane.SelectedItem);
         await view.HandleKeyAsync(Key.Enter);
         await view.HandleKeyAsync(new Key('a'));
         await view.HandleKeyAsync(new Key('r'));
-        Assert.Empty(dialogs.Texts);
+        Assert.Contains("What happened: " + ownerQuestionLine, Assert.Single(dialogs.Texts).Text);
         Assert.Equal(0, dialogs.InputCalls);
         Assert.Empty(harness.Answers.Calls);
     }
@@ -374,15 +377,16 @@ public sealed class OwnerConsoleFullScreenPaneTests
             Assert.Equal(pane, view.FocusedPane);
             foreach (var character in new[] { 'a', 'r' })
             {
-                var before = view.Notices.Count;
                 var key = new Key(character);
                 await view.HandleKeyAsync(key);
                 Assert.True(key.Handled);
-                Assert.Equal(before + 1, view.Notices.Count);
-                Assert.Contains("not available here", view.Notices[0]);
-                Assert.StartsWith(character + ":", view.Notices[0]);
-                Assert.Contains(pane.ToString().ToUpperInvariant(), view.Notices[0]);
-                Assert.Contains(view.Notices[0], view.ActivityLines[0]);
+                var notice = Assert.Single(view.NoticeStrip.Visible);
+                Assert.Equal(OwnerConsoleNoticeSeverity.Failure, notice.Severity);
+                Assert.Contains("not available here", notice.Text);
+                Assert.StartsWith(character + ":", notice.Text);
+                Assert.Contains(pane.ToString().ToUpperInvariant(), notice.Text);
+                Assert.Contains(notice.Text, view.NoticeText);
+                Assert.DoesNotContain(view.ActivityLines, line => line.Contains(notice.Text, StringComparison.Ordinal));
                 Assert.Empty(dialogs.Texts);
                 Assert.Equal(0, dialogs.InputCalls);
                 Assert.Empty(harness.Answers.Calls);

@@ -2,7 +2,7 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 // A timed-out operation keeps ownership until its underlying task has really ended.
 internal sealed class OwnerConsoleScreenOperation(TimeProvider clock, Action<string?> working,
-    Action<string> report, OwnerConsoleLoopOptions? options = null)
+    Action<string> report, OwnerConsoleLoopOptions? options = null, Action<string>? notify = null)
 {
     private readonly object _gate = new();
     private Task? _operation;
@@ -10,7 +10,8 @@ internal sealed class OwnerConsoleScreenOperation(TimeProvider clock, Action<str
 
     internal bool IsRunning { get { lock (_gate) return _operation is { IsCompleted: false }; } }
     internal Task Completion { get { lock (_gate) return _operation ?? Task.CompletedTask; } }
-    internal void Notify(string message) => report(message);
+    internal void Notify(string message) => (notify ?? report)(message);
+    internal void ReportFailure(string message) => report(message);
 
     internal async Task<bool> RunAsync(string label, Func<CancellationToken, Task> action,
         CancellationToken cancellationToken = default)
