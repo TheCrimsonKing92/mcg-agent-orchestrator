@@ -446,7 +446,8 @@ internal static class SourceSizeRatchet
             // Goal 1a8bb30d extracts portfolio output (slice 11): measured 3102 lines in 38 partials; no headroom.
             // Goal c860b9ff extracts verification and acceptance command advice (slice 12, first family): measured 3047 lines in 38 partials; no headroom.
             // Goal ed7254a6 extracts next-action command advice (slice 12, family 2): measured 2930 lines in 38 partials; no headroom.
-            new SourceClassCeiling("ConsoleViews", 2930, 38),
+            // Goal b50fdb00 extracts environment health inspection (slice 13 step 2): measured 2865 lines in 38 partials; no headroom.
+            new SourceClassCeiling("ConsoleViews", 2865, 38),
         });
 
     internal static IReadOnlyList<SourceSizeViolation> EvaluateClasses(
