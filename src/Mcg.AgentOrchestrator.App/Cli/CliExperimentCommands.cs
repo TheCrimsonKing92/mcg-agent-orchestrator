@@ -125,9 +125,13 @@ internal static class CliExperimentCommands
         {
             if (spec.Intervention.Kind != ExperimentInterventionKind.ConfigFlag)
                 throw new ArgumentException("intervention.flagTarget: only config-flag interventions can name a flag target.");
-            if (target.FileKind != ExperimentFlagFileKind.ConductorPolicy)
-                throw new ArgumentException("intervention.flagTarget.fileKind: expected conductor-policy.");
-            if (!ConductorPolicyBooleanFlags.IsAllowed(target.PropertyName))
+            var allowed = target.FileKind switch
+            {
+                ExperimentFlagFileKind.ConductorPolicy => ConductorPolicyBooleanFlags.IsAllowed(target.PropertyName),
+                ExperimentFlagFileKind.RemoteLaneExecutors => RemoteLaneExecutorFlags.IsAllowed(target.PropertyName),
+                _ => throw new ArgumentException("intervention.flagTarget.fileKind: expected conductor-policy or remote-lane-executors.")
+            };
+            if (!allowed)
                 throw new ArgumentException($"intervention.flagTarget.propertyName: property-not-allowlisted {target.PropertyName}");
             if (target.PriorValue is not null)
                 throw new ArgumentException("intervention.flagTarget.priorValue: captured by apply; must not be supplied.");

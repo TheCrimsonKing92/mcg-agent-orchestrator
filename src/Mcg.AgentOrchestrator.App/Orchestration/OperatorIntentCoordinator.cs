@@ -122,7 +122,8 @@ internal sealed partial class OperatorIntentCoordinator
                     : [],
                 id => HasGoalLandedEvent(workspace.GoalLifecycleEventsDirectory, id)),
             ExperimentFlags = new ExperimentFlagIntentHandler(workspace.ExperimentStorePath,
-                Path.Combine(workspace.OrchestratorDirectory, "conductor-policy.json"))
+                Path.Combine(workspace.OrchestratorDirectory, "conductor-policy.json"),
+                RemoteLaneExecutorConfiguration.ResolveStorePath(workspace.ExecutionDirectory))
         };
     }
 

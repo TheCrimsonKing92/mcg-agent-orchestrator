@@ -80,11 +80,13 @@ internal sealed class ConductorExperimentWatch
             var intents = File.Exists(Path.Combine(_workspace.OrchestratorDirectory, SqliteOperatorIntentStore.DatabaseFileName))
                 ? CliOwnerDigestRetryIntents.Read(_workspace, asOf) : [];
             var policyPath = Path.Combine(_workspace.OrchestratorDirectory, "conductor-policy.json");
+            var flags = new ExperimentFlagStateReader(policyPath,
+                RemoteLaneExecutorConfiguration.ResolveStorePath(_workspace.ExecutionDirectory));
             var reverts = new ConductorExperimentFlagRevertController(experiments,
                 () => SqliteOperatorIntentStore.ForDirectories(_workspace.OrchestratorDirectory, _workspace.LogDirectory),
-                policyPath);
+                flags);
             var keeps = new ConductorExperimentFlagKeepController(experiments,
-                () => new BacklogStore(_workspace.BacklogStorePath), policyPath);
+                () => new BacklogStore(_workspace.BacklogStorePath), flags);
             foreach (var record in open)
             {
                 try
