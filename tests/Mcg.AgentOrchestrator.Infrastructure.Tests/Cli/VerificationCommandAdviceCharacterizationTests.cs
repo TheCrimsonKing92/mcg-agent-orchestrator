@@ -99,8 +99,7 @@ public sealed class VerificationCommandAdviceCharacterizationTests
             Assert.DoesNotContain(oldMethods, method => method.Name == name);
         Assert.DoesNotContain(oldMethods, method => method.Name == "BuildStageSuggestedCommand" &&
             method.GetParameters()[0].ParameterType == typeof(int));
-        Assert.Single(oldMethods, method => method.Name == "BuildStageSuggestedCommand" &&
-            method.GetParameters()[0].ParameterType == typeof(Goal));
+        Assert.DoesNotContain(oldMethods, method => method.Name == "BuildStageSuggestedCommand");
 
         foreach (var path in Directory.EnumerateFiles(cliRoot, "*.cs"))
         {

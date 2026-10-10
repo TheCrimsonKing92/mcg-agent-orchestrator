@@ -387,7 +387,7 @@ internal static class GoalBoardCommand
             var action = kernel.BuildNextActions(goal.Id).Items.FirstOrDefault();
             return action is null
                 ? $"next {Prefix(goal.Id.Value)} --full"
-                : ConsoleViews.BuildSuggestedCommand(goal, action);
+                : NextActionCommandAdvice.BuildSuggestedCommand(goal, action);
         }
         catch (InvalidOperationException)
         {

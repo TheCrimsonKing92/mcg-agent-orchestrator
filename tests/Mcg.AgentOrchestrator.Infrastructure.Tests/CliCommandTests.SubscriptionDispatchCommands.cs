@@ -133,7 +133,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
             20000));
         var action = kernel.BuildNextActions(goal.Id).Items.Single();
 
-        var command = ConsoleViews.BuildSuggestedCommand(goal, action);
+        var command = NextActionCommandAdvice.BuildSuggestedCommand(goal, action);
 
         Xunit.Assert.Equal("execute-dispatch 1 --confirm-dispatch-start --confirm-large-paid-subscription-start", command);
     }
@@ -161,7 +161,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         kernel.ActivateGoal(goal.Id, [agent]);
         var action = kernel.BuildNextActions(goal.Id).Items.Single();
 
-        var command = ConsoleViews.BuildSuggestedCommand(goal, action, [agent]);
+        var command = NextActionCommandAdvice.BuildSuggestedCommand(goal, action, [agent]);
 
         Xunit.Assert.Equal("run 1 --confirm-paid-api-run --confirm-large-paid-api-prompt", command);
     }
@@ -184,7 +184,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         kernel.ActivateGoal(goal.Id, [agent]);
         var action = kernel.BuildNextActions(goal.Id).Items.Single();
 
-        var command = ConsoleViews.BuildSuggestedCommand(goal, action, [agent]);
+        var command = NextActionCommandAdvice.BuildSuggestedCommand(goal, action, [agent]);
 
         Xunit.Assert.Equal("run 1 --confirm-paid-api-run --confirm-large-paid-api-prompt", command);
     }
@@ -207,7 +207,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         kernel.ActivateGoal(goal.Id, [agent]);
         var action = kernel.BuildNextActions(goal.Id).Items.Single();
 
-        var command = ConsoleViews.BuildSuggestedCommand(goal, action, [agent]);
+        var command = NextActionCommandAdvice.BuildSuggestedCommand(goal, action, [agent]);
 
         Xunit.Assert.Equal("subscription-dispatch 1", command);
     }
