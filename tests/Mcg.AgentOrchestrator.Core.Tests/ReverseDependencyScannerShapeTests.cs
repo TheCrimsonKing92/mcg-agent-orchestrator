@@ -14,11 +14,11 @@ public sealed class ReverseDependencyScannerShapeTests
         repository.Write(path, declaration);
         repository.AddConsumer("ProbeConsumerTests", "Probe");
 
-        var result = ReverseDependencyTestImpactReaderLookup.Find(repository.Root, [path]);
+        var selection = ReverseDependencyTestImpactReader.Read(repository.Root, [path]);
 
-        Assert.True(result.Resolved, result.Reason);
-        Assert.Null(result.DegradationKind);
-        Assert.Equal(["ProbeConsumerTests"], result.TestClassNames);
+        Assert.True(selection.Outcome == ReverseDependencySelectionOutcome.Resolved, selection.Reason);
+        Assert.Null(selection.DegradationKind);
+        Assert.Equal(["ProbeConsumerTests"], selection.TestClassNames);
     }
 
     [Theory]
@@ -36,11 +36,11 @@ public sealed class ReverseDependencyScannerShapeTests
             : "internal sealed record ProbeRow(ProbeFailure Failure);");
         repository.AddConsumer("ProbeRowTests", generic ? "ProbeRow<string>" : "ProbeRow");
 
-        var result = ReverseDependencyTestImpactReaderLookup.Find(repository.Root, [changedPath]);
+        var selection = ReverseDependencyTestImpactReader.Read(repository.Root, [changedPath]);
 
-        Assert.True(result.Resolved, result.Reason);
-        Assert.Null(result.DegradationKind);
-        Assert.Equal(["ProbeRowTests"], result.TestClassNames);
+        Assert.True(selection.Outcome == ReverseDependencySelectionOutcome.Resolved, selection.Reason);
+        Assert.Null(selection.DegradationKind);
+        Assert.Equal(["ProbeRowTests"], selection.TestClassNames);
     }
 
     [Fact]
@@ -53,11 +53,11 @@ public sealed class ReverseDependencyScannerShapeTests
             "internal sealed class ProbeFailure(string message) : FailureBase;");
         repository.AddConsumer("ProbeFailureTests", "ProbeFailure");
 
-        var result = ReverseDependencyTestImpactReaderLookup.Find(repository.Root, [path]);
+        var selection = ReverseDependencyTestImpactReader.Read(repository.Root, [path]);
 
-        Assert.True(result.Resolved, result.Reason);
-        Assert.Null(result.DegradationKind);
-        Assert.Equal(["ProbeFailureTests"], result.TestClassNames);
+        Assert.True(selection.Outcome == ReverseDependencySelectionOutcome.Resolved, selection.Reason);
+        Assert.Null(selection.DegradationKind);
+        Assert.Equal(["ProbeFailureTests"], selection.TestClassNames);
     }
 
     [Theory]
@@ -71,11 +71,11 @@ public sealed class ReverseDependencyScannerShapeTests
         repository.Write("src/Fixture/ProbeExtra.cs", $"internal partial record {kind} Probe {{ }}");
         repository.AddConsumer("ProbeConsumerTests", "Probe");
 
-        var result = ReverseDependencyTestImpactReaderLookup.Find(repository.Root, [path]);
+        var selection = ReverseDependencyTestImpactReader.Read(repository.Root, [path]);
 
-        Assert.True(result.Resolved, result.Reason);
-        Assert.Null(result.DegradationKind);
-        Assert.Equal(["ProbeConsumerTests"], result.TestClassNames);
+        Assert.True(selection.Outcome == ReverseDependencySelectionOutcome.Resolved, selection.Reason);
+        Assert.Null(selection.DegradationKind);
+        Assert.Equal(["ProbeConsumerTests"], selection.TestClassNames);
     }
 
     [Fact]
@@ -87,11 +87,11 @@ public sealed class ReverseDependencyScannerShapeTests
         repository.Write("src/Fixture/OtherDuplicate.cs", "public class ShadowDuplicate { }");
         repository.AddConsumer("ShadowDuplicateTests", "ShadowDuplicate");
 
-        var result = ReverseDependencyTestImpactReaderLookup.Find(repository.Root, [path]);
+        var selection = ReverseDependencyTestImpactReader.Read(repository.Root, [path]);
 
-        Assert.False(result.Resolved);
-        Assert.Equal("AmbiguousDeclaration", result.DegradationKind);
-        Assert.Empty(result.TestClassNames);
+        Assert.NotEqual(ReverseDependencySelectionOutcome.Resolved, selection.Outcome);
+        Assert.Equal(ReverseDependencyDegradationKind.AmbiguousDeclaration, selection.DegradationKind);
+        Assert.Empty(selection.TestClassNames);
     }
 
     [Theory]
@@ -107,11 +107,11 @@ public sealed class ReverseDependencyScannerShapeTests
         repository.Write(path, source);
         repository.AddConsumer("MarkerTests", "Marker");
 
-        var result = ReverseDependencyTestImpactReaderLookup.Find(repository.Root, [path]);
+        var selection = ReverseDependencyTestImpactReader.Read(repository.Root, [path]);
 
-        Assert.False(result.Resolved);
-        Assert.Equal("Unreadable", result.DegradationKind);
-        Assert.Empty(result.TestClassNames);
+        Assert.NotEqual(ReverseDependencySelectionOutcome.Resolved, selection.Outcome);
+        Assert.Equal(ReverseDependencyDegradationKind.Unreadable, selection.DegradationKind);
+        Assert.Empty(selection.TestClassNames);
     }
 
     private sealed class Repository : IDisposable
