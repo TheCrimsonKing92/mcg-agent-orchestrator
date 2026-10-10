@@ -271,12 +271,9 @@ internal sealed partial class ConductorDriver
         _parallelAcceptanceEnabled = true;
         _cohortCleanupHooks = cleanupHooks ?? new GoalWorktreeCleanupHooks();
         _workerBuildArtifactsPath = goalId => DotnetBuildEnvironmentManager.GoalArtifactsPath(goalId, _cohortCleanupHooks.BuildStorageRoot);
-        _parallelAcceptanceAttemptCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts"), _integrationBranch,
-            dir,
-            tryRunPreSlot: RunParallelLandingAcceptancePreSlot,
-            runInline: runAcceptanceAttemptsInCurrentProcess,
-            buildStorageRoot: _cohortCleanupHooks.BuildStorageRoot);
+        _parallelAcceptanceAttemptCoordinator = OwnedChildAttemptCoordinatorFactory.CreateGate(
+            workspace, _cohortCleanupHooks.BuildStorageRoot,
+            RunParallelLandingAcceptancePreSlot, runAcceptanceAttemptsInCurrentProcess);
         _apparatusRedGate = new ApparatusRedGate(
             Path.Combine(
                 workspace.OrchestratorDirectory,
@@ -284,11 +281,8 @@ internal sealed partial class ConductorDriver
                 AcceptanceFailingTestIndex.FileName),
             goal => GoalWorktrees.TryResolve(dir, goal.Id) ?? dir);
         (_acceptanceEventSink, _noTickAcceptancePollDelay, _noTickAcceptancePollTimeout) = CreateProductionAcceptanceWaitConfiguration(workspace);
-        _focusedEvidenceAttemptCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
-            Path.Combine(workspace.OrchestratorDirectory, "pre-review-evidence-attempts"), _integrationBranch,
-            dir,
-            conductEventLogWriter: new ConductEventLogWriter(workspace.ConductEventsLogPath),
-            buildStorageRoot: _cohortCleanupHooks.BuildStorageRoot);
+        _focusedEvidenceAttemptCoordinator = OwnedChildAttemptCoordinatorFactory.CreateFocusedEvidence(
+            workspace, _cohortCleanupHooks.BuildStorageRoot);
         var eventWriter = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, integrationBranch: workspace.IntegrationBranch);
         _cohortKernel = kernel;
         ConfigureCandidateIdentity(kernel, workspace.ConductEventsLogPath);
