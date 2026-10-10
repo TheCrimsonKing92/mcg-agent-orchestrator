@@ -265,6 +265,13 @@ internal sealed class GoalEvidenceOperationCoordinator
 
         if (!GoalEvidenceOperationOwner.TryParse(lease.Owner, out var owner) || owner is null)
         {
+            if (pidProbe is not null &&
+                LegacyGoalEvidenceOwner.TryParse(lease.Owner, out var operation, out var pid, out var instance))
+            {
+                return new GoalEvidenceLeaseFact(goal.Id.Value, lease.Owner, operation, instance,
+                    lease.AcquiredAtUtc, LegacyGoalEvidenceOwner.ProbeStatus(pidProbe, pid));
+            }
+
             return new GoalEvidenceLeaseFact(
                 goal.Id.Value,
                 lease.Owner,

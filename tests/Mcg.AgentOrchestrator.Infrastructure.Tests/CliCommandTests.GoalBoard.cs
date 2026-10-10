@@ -687,7 +687,7 @@ public sealed class CliCommandTestsGoalBoard : CliCommandTestBase
                 "Pre-upgrade goal-evidence lease");
             var store = new ReconcileSweepRemediationStore(workspace.SqliteStatePath);
             const string owner =
-                "goal-evidence:conductor:developer-branch-integration:32972:a3b675d01a2349aaa8aee97aff86f334";
+                "goal-evidence:conductor:developer-branch-integration:no-pid:a3b675d01a2349aaa8aee97aff86f334";
             Xunit.Assert.True(store.TryClaimAcceptanceLease(
                 goal.Id.Value,
                 owner,
