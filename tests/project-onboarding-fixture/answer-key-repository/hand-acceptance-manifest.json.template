@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "engine": {
+    "maxParallelChecks": 2,
+    "defaultTimeoutSeconds": 120
+  },
+  "forbiddenChangedPathGlobs": [],
+  "checks": [
+    {
+      "name": "core-tests",
+      "type": "dotnet-test",
+      "project": "tests/AnswerKey.Core.Tests/AnswerKey.Core.Tests.csproj",
+      "runner": "vstest"
+    },
+    {
+      "name": "app-tests",
+      "type": "dotnet-test",
+      "project": "tests/AnswerKey.App.Tests/AnswerKey.App.Tests.csproj"
+    }
+  ]
+}

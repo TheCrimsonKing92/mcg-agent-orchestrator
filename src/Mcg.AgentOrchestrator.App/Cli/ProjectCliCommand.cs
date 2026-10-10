@@ -51,8 +51,11 @@ internal static class ProjectCliCommand
                 Discover(parts, registry, defaultRootDirectory, activeProjectOverride, discoveryOutput ?? Console.Out, measurerFactory);
                 return 0;
 
+            case "compare-manifest":
+                return ProjectCompareManifestCommand.Execute(parts, registry, defaultRootDirectory, activeProjectOverride, discoveryOutput ?? Console.Out);
+
             default:
-                throw new ArgumentException("Usage: project list|show [name]|discover [name] [--root <path>] [--measure build|test|all]|create <name> --root <path> [--integration-branch <name>] [--relocate-state]|select <name>|move-default-state [--undo] [--dry-run]");
+                throw new ArgumentException("Usage: project list|show [name]|discover [name] [--root <path>] [--measure build|test|all]|compare-manifest [name] [--root <path>] --manifest <path>|create <name> --root <path> [--integration-branch <name>] [--relocate-state]|select <name>|move-default-state [--undo] [--dry-run]");
         }
     }
 
