@@ -143,7 +143,7 @@ public sealed class OrchestratorHomeRootSeparationTests
         Assert.Equal(legacy.PowerShellPath, staging.PowerShellPath);
     }
 
-    private sealed class Fixture : IDisposable
+    internal sealed class Fixture : IDisposable
     {
         internal string Root { get; } = Path.Combine(Path.GetTempPath(), "home-roots-" + Guid.NewGuid().ToString("N"));
 

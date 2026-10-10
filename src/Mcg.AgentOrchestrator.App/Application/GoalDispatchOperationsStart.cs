@@ -41,6 +41,7 @@ internal sealed partial class GoalDispatchOperations
         var retryReplayTasks = kernel.ExportGoalSnapshot(goal.Id).Tasks
             .Where(task => safeBatch.TaskIds.Contains(new TaskId(task.Id)) && task.LatestRetryAt is not null)
             .ToDictionary(task => new TaskId(task.Id));
+        var home = _resolveHome(workspace);
         var batch = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
             kernel,
             goal,
@@ -58,7 +59,8 @@ internal sealed partial class GoalDispatchOperations
             plannerSampleCount: ResolvePlannerSampleCount(workspace, plannerSampleCount, conductorPolicy),
             cascadeTesterCheapFirst: ResolveCascadeTesterCheapFirst(workspace, cascadeTesterCheapFirst, conductorPolicy),
             cascadeCheapModelAlias: ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy), cascadeMechanicalReworkCheap: ResolveCascadeMechanicalReworkCheap(workspace, cascadeMechanicalReworkCheap, conductorPolicy),
-            orchestratorSkillDirectory: ResolveOrchestratorSkillDirectory(workspace), integrationBranch: workspace.IntegrationBranch);
+            orchestratorSkillDirectory: ResolveOrchestratorSkillDirectory(home), integrationBranch: workspace.IntegrationBranch,
+            targetHome: new WorkerTargetHome(home.IsHome(workspace)));
         // Validate recovery authority before admission can hydrate a whole durable snapshot.
         // The runner repeats this guard immediately before launch to cover later state changes.
         var rejectedRecoveryIds = batch.Dispatches
