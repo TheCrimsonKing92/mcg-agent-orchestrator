@@ -33,7 +33,7 @@ internal static class GateStatusTextView
                 $"heartbeat={status.Path} verdict={verdict.Label}");
         }
 
-        var hostVerdict = stalled > 0 ? "STALLED" : running > 0 ? "RUNNING" : "NONE";
+        var hostVerdict = GateHostVerdict.Label(running, stalled);
         Console.WriteLine(
             $"host: verdict={hostVerdict} running={running} stalled={stalled} slots={statuses.Count}; covers per-goal and cohort gates alike" +
             (hostVerdict == "NONE" ? "; no gate running on any build slot; no process check needed" : ""));

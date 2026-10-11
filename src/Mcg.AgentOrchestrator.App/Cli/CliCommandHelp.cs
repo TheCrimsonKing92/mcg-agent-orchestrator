@@ -84,7 +84,7 @@ internal static class CliCommandHelp
     public const string PortfolioUsage = "Usage: portfolio | portfolio-view";
     public const string DogfoodLogUsage = "Usage: dogfood-log list [--limit <n>] | dogfood-log add [goal-prefix]";
     public const string OperatorCommandsUsage = "Usage: operator-commands [--help]";
-    public const string GateStatusUsage = "Usage: gate-status";
+    public const string GateStatusUsage = "Usage: gate-status [--json]";
     public const string TrialCompareUsage = "Usage: trial-compare --spec <path> [--receipts <directory>] [--timeout-seconds <seconds>] [--format text|json]. Spec source: explicit baseCommit + canonical workload, or historical goal/task/dispatch selector (mutually exclusive).";
     public const string AcceptanceEngineUsage = "Usage: acceptance-engine status | acceptance-engine clear <repair-or-operator-note>";
     public const string RunEventsMaintenanceUsage = "Usage: run-events-maintenance [--tick-max-age-days <days>] [--keep-tick-rows <count>] [--payload-max-bytes <bytes>] [--batch-size <rows>] [--legacy-purge-oversized-ticks] [--vacuum]";
@@ -573,7 +573,7 @@ internal static class CliCommandHelp
 
     private static readonly CommandHelpEntry GateStatus = new(
         GateStatusUsage,
-        "List acceptance gate heartbeat status for stable build slots.",
+        "List acceptance gate heartbeat status for stable build slots. --json prints the versioned mcg.gate-status envelope.",
         ["--help", "-h"]);
 
     private static readonly CommandHelpEntry AcceptanceEngine = new(
@@ -847,7 +847,8 @@ internal static class CliCommandHelp
 
     internal static void ThrowIfInvalidFlags(IReadOnlyList<string> args)
     {
-        if (CliAttentionShowJsonQueryCommand.IsAttentionShowJsonCommand(args) ||
+        if (CliGateStatusJsonQueryCommand.IsGateStatusJsonCommand(args) ||
+            CliAttentionShowJsonQueryCommand.IsAttentionShowJsonCommand(args) ||
             CliAttentionJsonQueryCommand.IsAttentionJsonCommand(args))
             return;
 
