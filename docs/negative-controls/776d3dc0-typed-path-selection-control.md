@@ -36,7 +36,7 @@ Actual:   ···" base: baseline\r\nChanged entries: fixture wording;"···
 ```
 
 Retained TRX directory (shared with GREEN):
-`C:\Users\miles\vcs\mcg-agent-orchestrator\.orchestrator\pre-review-evidence-attempts\776d3dc0ae09442a8b4828ef17bf6fe4`.
+`.orchestrator\pre-review-evidence-attempts\776d3dc0ae09442a8b4828ef17bf6fe4` (relative to the repository root).
 RED TRX filenames in that directory:
 
 ```text
