@@ -8,7 +8,6 @@ public sealed partial class AgentOrchestratorKernel
 {
     private const int FailureReceiptMaxChars = 2000;
     private const int FailureReceiptStreamTailChars = 700;
-    private const int ReviewerChangedFileScopeMaxLines = 120;
     private const int AccumulatedRetryFeedbackMaxEntries = 8;
     private const int AccumulatedRetryFeedbackMaxChars = 3500;
     private static readonly JsonSerializerOptions GoalOperationJsonOptions = new()
@@ -439,9 +438,9 @@ public sealed partial class AgentOrchestratorKernel
             reviewerScopeChangedFiles,
             reviewerRoundTouchedAnchors,
             reviewerRoundTouchProofDiagnostic);
-        if (reviewerConvergenceScope.Count > 0)
+        if (reviewerConvergenceScope is not null)
         {
-            segments.Add(TaskBriefSegment.Fixed(reviewerConvergenceScope));
+            segments.Add(reviewerConvergenceScope);
         }
 
         var practiceLines = EngineeringPracticePromptRenderer.RenderBriefSection(
@@ -458,7 +457,7 @@ public sealed partial class AgentOrchestratorKernel
             segments.Add(TaskBriefSegment.Fixed(standingRuleLines));
         }
 
-        var reviewerChangedFileScope = BuildReviewerChangedFileScopeBriefBlock(
+        var reviewerChangedFileScope = ReviewerChangedFileScopeBriefSection.Build(
             task,
             reviewerScopeChangedFiles,
             reviewerScopeMergeBase,
@@ -466,9 +465,9 @@ public sealed partial class AgentOrchestratorKernel
             reviewerMergeTreeClean,
             reviewerMergeTreeConflictPaths,
             reviewerMergeTreeTotalConflictPathCount);
-        if (reviewerChangedFileScope.Count > 0)
+        if (reviewerChangedFileScope is not null)
         {
-            segments.Add(TaskBriefSegment.Fixed(reviewerChangedFileScope));
+            segments.Add(reviewerChangedFileScope);
         }
 
         if (!string.IsNullOrWhiteSpace(task.VerificationPlan))
@@ -1256,7 +1255,7 @@ public sealed partial class AgentOrchestratorKernel
         return $"Include a final model-selection note: {ModelFitEvidence.BuildNoteTemplate(target)}.";
     }
 
-    private static IReadOnlyList<string> BuildReviewerConvergenceScopeBriefBlock(
+    private static TaskBriefSegment? BuildReviewerConvergenceScopeBriefBlock(
         Goal goal,
         TaskSpec task,
         IReadOnlyList<string>? changedFiles,
@@ -1265,14 +1264,14 @@ public sealed partial class AgentOrchestratorKernel
     {
         if (task.RequiredRole is not (AgentRole.Reviewer or AgentRole.Tester))
         {
-            return [];
+            return null;
         }
 
         var state = ReplayStoredReviewFindingRounds(goal, task.RequiredRole, out _);
 
         if (state.Count == 0)
         {
-            return [];
+            return null;
         }
 
         var open = state.Where(finding => finding.State == ReviewFindingState.Open).ToArray();
@@ -1305,6 +1304,7 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         lines.Add("GOAL_DIFF_CHANGED_FILES (context only; file membership does not prove a structural anchor was touched):");
+        var firstListLineIndex = lines.Count;
         foreach (var file in changedFiles ?? [])
         {
             lines.Add($"- {file}");
@@ -1313,82 +1313,9 @@ public sealed partial class AgentOrchestratorKernel
         lines.Add("Actively check OPEN_ACTIVE_RECHECK, RESOLVED_CARRIED anchors listed in ROUND_DIFF_TOUCHED_ANCHORS, and net-new code. The touched-anchor set also authorizes a persistent open finding to keep its stable ID at the defect's current location. Carry every other resolved finding forward as resolved.");
         lines.Add("Output contract: emit exactly one findings entry for every OPEN_ACTIVE_RECHECK stable_id (`resolved` with concrete closure evidence if fixed, otherwise `open`). Narrative does not update the convergence ledger; omission leaves the finding open.");
         lines.Add(string.Empty);
-        return lines;
-    }
-
-    private static IReadOnlyList<string> BuildReviewerChangedFileScopeBriefBlock(
-        TaskSpec task,
-        IReadOnlyList<string>? changedFiles,
-        string? mergeBase,
-        int? totalChangedFileCount,
-        bool? mergeTreeClean,
-        IReadOnlyList<string>? mergeTreeConflictPaths,
-        int? totalMergeTreeConflictPathCount)
-    {
-        if (task.RequiredRole != AgentRole.Reviewer || (changedFiles is null && !mergeTreeClean.HasValue))
-        {
-            return [];
-        }
-
-        var boundedChangedFiles = (changedFiles ?? [])
-            .Where(path => !string.IsNullOrWhiteSpace(path))
-            .Take(ReviewerChangedFileScopeMaxLines)
-            .ToArray();
-        var total = Math.Max(totalChangedFileCount ?? boundedChangedFiles.Length, boundedChangedFiles.Length);
-        var lines = new List<string>
-        {
-            "## Reviewer Changed-File Scope",
-            "Authoritative dispatch-preparation scope: git diff --name-only main...HEAD using three-dot merge-base semantics against current main.",
-            $"Merge base: {(string.IsNullOrWhiteSpace(mergeBase) ? "unknown" : mergeBase.Trim())}",
-            $"Changed files: {total}; showing {boundedChangedFiles.Length}."
-        };
-
-        if (mergeTreeClean is true)
-        {
-            lines.Add("Merge-tree status: clean against current main (git merge-tree --write-tree --name-only main HEAD).");
-        }
-        else if (mergeTreeClean is false)
-        {
-            var boundedConflictPaths = (mergeTreeConflictPaths ?? [])
-                .Where(path => !string.IsNullOrWhiteSpace(path))
-                .Take(ReviewerChangedFileScopeMaxLines)
-                .ToArray();
-            var conflictTotal = Math.Max(totalMergeTreeConflictPathCount ?? boundedConflictPaths.Length, boundedConflictPaths.Length);
-            lines.Add("Merge-tree status: conflicted against current main (git merge-tree --write-tree --name-only main HEAD).");
-            lines.Add($"Conflicting paths: {conflictTotal}; showing {boundedConflictPaths.Length}.");
-            foreach (var path in boundedConflictPaths)
-            {
-                lines.Add($"- conflict: {path}");
-            }
-
-            if (boundedConflictPaths.Length < conflictTotal)
-            {
-                lines.Add($"- Omitted {conflictTotal - boundedConflictPaths.Length} additional conflict path(s) to preserve prompt budget.");
-            }
-        }
-
-        lines.Add("Staleness policy: branch-behind-main alone is NOT a blocker; the deterministic acceptance gate rebases and verifies the integrated result. Staleness may block only with concrete integration-risk evidence: merge-tree conflicts, semantic overlap with landed changes in the same files, or a diff that no longer applies. Otherwise record staleness as advisory.");
-
-        if (boundedChangedFiles.Length == 0)
-        {
-            lines.Add("- No changed files reported by git diff --name-only main...HEAD.");
-        }
-        else
-        {
-            foreach (var path in boundedChangedFiles)
-            {
-                lines.Add($"- {path}");
-            }
-        }
-
-        if (boundedChangedFiles.Length < total)
-        {
-            lines.Add($"- Omitted {total - boundedChangedFiles.Length} additional changed file(s) to preserve prompt budget.");
-        }
-
-        lines.Add("Independent scope checks must use git diff main...HEAD. Do not use two-dot diffs such as main..HEAD, git diff HEAD, git status, or working-tree-only comparisons as scope verdict evidence.");
-        lines.Add(string.Empty);
-        return lines;
+        return new TaskBriefSegment(lines, ConvergenceChangedFiles: new TaskBriefPathList(
+            changedFiles ?? [], (changedFiles ?? []).Count, null,
+            firstListLineIndex, (changedFiles ?? []).Count, lines.Count));
     }
 
     private static bool IsAccumulatedRetryFeedbackEvent(ProgressEvent evt)

@@ -15,7 +15,10 @@ public sealed record TaskBriefSegment(
     IReadOnlyList<string>? CollapsedLines = null,
     int CollapsePriority = int.MaxValue,
     LogicalArtifactIdentity? TypedProjectionIdentity = null,
-    IReadOnlyList<AgentRole>? RoleVisibility = null)
+    IReadOnlyList<AgentRole>? RoleVisibility = null,
+    TaskBriefPathList? ReviewerChangedFiles = null,
+    TaskBriefPathList? MergeConflictPaths = null,
+    TaskBriefPathList? ConvergenceChangedFiles = null)
 {
     public static TaskBriefSegment Fixed(IReadOnlyList<string> lines) => new(lines);
 
