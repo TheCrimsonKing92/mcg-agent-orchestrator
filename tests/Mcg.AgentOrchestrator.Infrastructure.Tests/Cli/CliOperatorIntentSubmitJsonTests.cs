@@ -54,39 +54,50 @@ public sealed class CliOperatorIntentSubmitJsonTests : CliTaskQueryTestSupport
     }
 
     [Theory]
-    [InlineData(false, false)]
-    [InlineData(true, false)]
-    [InlineData(false, true)]
-    [InlineData(true, true)]
-    public async Task Attention_InlineJson_PreservesAnswerAndMetadata(bool repl, bool scoped)
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public async Task Attention_InlineJson_MatchesHumanRecord(bool repl, bool scoped, bool trailing)
     {
         using var fixture = await SubmitFixture.Create(CreateTempDirectory(), "answer");
         var target = scoped
             ? new[] { fixture.Goal.Id.Value[..8], fixture.Request!.Id.Value[..8] }
             : new[] { fixture.Request!.Id.Value[..8] };
-        string[] args = ["attention", "answer", "--json", .. target, "Use", "selected", "scope",
+        string[] args = ["attention", "answer", .. target, "Use", "\"selected   scope\"", "today",
             "--operator-actor", "agent-one", "--actor-kind", "Agent", "--evidence", "receipt-1",
             "--precedent", "rule-1", "--idempotency-key", "inline-key"];
-        var normalized = repl ? CliArgumentParser.SplitCommand(string.Join(' ', args)) : CliArgumentParser.NormalizeArgs(args);
-        var result = fixture.Run(normalized.ToArray(), fixture.JsonWorkspace, normalize: false);
+        string[] jsonArgs = trailing ? [.. args, "--json"] : [args[0], args[1], "--json", .. args.Skip(2)];
+        var humanParts = repl ? CliArgumentParser.SplitCommand(string.Join(' ', args)) : CliArgumentParser.NormalizeArgs(args);
+        var jsonParts = repl ? CliArgumentParser.SplitCommand(string.Join(' ', jsonArgs)) : CliArgumentParser.NormalizeArgs(jsonArgs);
+        Assert.Equal(humanParts.ToArray(), jsonParts.Where(part => part != "--json").ToArray());
+        var human = fixture.Run(humanParts.ToArray(), fixture.TextWorkspace, normalize: false);
+        Assert.Empty(human.Error);
+        var textRecord = Assert.Single(await fixture.Intents(fixture.TextWorkspace).ListForGoalAsync(fixture.Goal.Id.Value));
+        var result = fixture.Run(jsonParts.ToArray(), fixture.JsonWorkspace, normalize: false);
         var intent = Assert.Single(await fixture.Intents(fixture.JsonWorkspace).ListForGoalAsync(fixture.Goal.Id.Value));
         AssertEnvelope(result, intent);
         var payload = JsonSerializer.Deserialize<AnswerOperatorIntentPayload>(intent.PayloadJson, OperatorIntentJson.Options)!;
-        Assert.Equal("Use selected scope", payload.Text);
+        Assert.Equal("Use \"selected   scope\" today --operator-actor agent-one --actor-kind Agent " +
+            "--evidence receipt-1 --precedent rule-1 --idempotency-key inline-key", payload.Text);
         Assert.Equal(fixture.Request!.Id.Value, payload.TargetId);
-        Assert.Equal(OperatorActorKind.Agent, intent.ActorKind);
-        Assert.Equal("agent-one", intent.Actor);
-        Assert.Equal("inline-key", intent.IdempotencyKey);
-        Assert.Equal(new[] { "receipt-1" }, payload.EvidenceReferences);
-        Assert.Equal("rule-1", payload.Precedent);
+        // Inline metadata remains answer text in the existing parser, so the default key is the new id.
+        Assert.Equal(textRecord.Id, textRecord.IdempotencyKey);
+        Assert.Equal(intent.Id, intent.IdempotencyKey);
+        Assert.Equal(JsonSerializer.Serialize(textRecord with { Id = "", IdempotencyKey = "", CreatedAt = default }),
+            JsonSerializer.Serialize(intent with { Id = "", IdempotencyKey = "", CreatedAt = default }));
     }
 
     [Fact]
-    public void Attention_JsonFollowingEvidenceFlag_RequiresEvidenceValue()
+    public void Attention_JsonFollowingInlineEvidence_KeepsHumanParsing()
     {
-        var error = Assert.Throws<ArgumentException>(() => CliArgumentParser.NormalizeArgs(
-            ["attention", "answer", "12345678", "Use scope", "--evidence", "--json"]));
-        Assert.Equal("--evidence requires a value.", error.Message);
+        string[] args = ["attention", "answer", "12345678", "Use scope", "--evidence"];
+        Assert.Equal(CliArgumentParser.NormalizeArgs(args).ToArray(),
+            CliArgumentParser.NormalizeArgs([.. args, "--json"]).SkipLast(1).ToArray());
     }
 
     [Theory]

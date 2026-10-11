@@ -119,9 +119,12 @@ public static IReadOnlyList<string> SplitCommand(string line)
     {
         if (remainder.StartsWith("answer ", StringComparison.OrdinalIgnoreCase))
         {
-            string[] answerArgs = [command, .. TokenizeQuotedArguments(remainder)];
-            if (answerArgs.Any(arg => arg.Equals("--json", StringComparison.OrdinalIgnoreCase)))
-                return NormalizeArgs(answerArgs);
+            var jsonFlag = System.Text.RegularExpressions.Regex.Matches(remainder,
+                "\"(?:\\\\.|[^\"\\\\])*\"|(?<json>(?:^|\\s)--json(?=\\s|$))",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+                .FirstOrDefault(match => match.Groups["json"].Success);
+            if (jsonFlag is not null)
+                return [.. SplitCommand($"{command} {remainder.Remove(jsonFlag.Index, jsonFlag.Length)}"), "--json"];
         }
 
         if (remainder.StartsWith("answer ", StringComparison.OrdinalIgnoreCase) &&
