@@ -50,8 +50,6 @@ All seven logical openers route through `SharedJsonlFile` and therefore use the 
 
 | File and symbol | Access mode or disposition |
 | --- | --- |
-| `scripts/Extract-GoalFactsV2.ps1` — journal loop | Open/Read with `FileShare.ReadWrite | FileShare.Delete` |
-| `scripts/Extract-GoalVelocity.ps1` — `Read-SharedJournalLines` | Open/Read with `FileShare.ReadWrite | FileShare.Delete`; both the content and line-count call sites use it |
 | `scripts/Analyze-ExcessWorkerRounds.ps1` — `Open-SharedReadStream` | Open/Read with `FileShare.ReadWrite | FileShare.Delete`; journal content, initial hash, and revalidation hash all route through it |
 | `scripts/Backup-OrchestratorState.ps1` — recursive `Copy-Item` | Copy participant with no caller-selectable share mode. It remains a documented residual; a collision is bounded by the append acquisition retry rather than swallowed |
 | `src/Mcg.AgentOrchestrator.App/Orchestration/StorageRetentionMaintenance.cs` — `ArchiveGoalJournals` | `File.Move` rename participant. Shared handles permit the rename; remaining `IOException` or `UnauthorizedAccessException` is caught and deferred to the next retention sweep |
