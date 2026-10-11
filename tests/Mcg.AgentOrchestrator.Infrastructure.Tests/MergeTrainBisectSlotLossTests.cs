@@ -49,11 +49,11 @@ public sealed class MergeTrainBisectSlotLossTests : AcceptanceCohortWorkflowTest
                     ConductorAutonomyPolicy.Permissive, gateOnly: true);
                 receipt = Assert.IsType<MergeTrainReceipt>(run.RecordedReceipt);
                 Assert.Null(run.Receipt);
-                Assert.Empty(run.MemberResults);
+                AssertHeldVerified(scenario, run);
                 var ejection = Assert.Single(run.Ejections);
                 Assert.Equal(scenario.Goals[0].Id, ejection.GoalId);
                 Assert.Equal(MergeTrainEjectionReason.RedAttributedMember, ejection.Reason);
-                Assert.Contains(nameof(DotnetBuildSlotsBusyException), run.Detail, StringComparison.Ordinal);
+                Assert.StartsWith("outcome=deferred-slots-busy ", run.Detail);
             }
             Assert.Equal(MergeTrainGateOutcome.Failed, receipt.Outcome);
             Assert.Equal(receipt.ReceiptId, scenario.Store.TryReadReceipt(receipt.Identity.Value)?.ReceiptId);
@@ -73,13 +73,14 @@ public sealed class MergeTrainBisectSlotLossTests : AcceptanceCohortWorkflowTest
             Assert.Equal(1, scenario.Verifier.Inner.RunCount);
             Assert.Equal(Paths, Assert.Single(scenario.Verifier.Inner.ChangedFiles));
             Assert.Equal(mainBefore, RunGitOutput(scenario.Repo, "rev-parse", "main").Trim());
+            AssertRecordedRows(scenario, 1, 1);
         });
     }
 
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void BusyFirstLease_WithoutReceiptStillThrowsAndHostRecordsError(bool grouped)
+    public void BusyFirstLease_WithoutReceiptDefersAndHostCompletes(bool grouped)
     {
         WithTrain("fatal", scenario =>
         {
@@ -87,25 +88,27 @@ public sealed class MergeTrainBisectSlotLossTests : AcceptanceCohortWorkflowTest
             if (grouped)
             {
                 var attempt = Launch(scenario);
-                Assert.Equal(1, ConductorGroupedGateAttemptHost.Run(attempt.MetadataPath,
+                Assert.Equal(0, ConductorGroupedGateAttemptHost.Run(attempt.MetadataPath,
                     scenario.Driver.RunGroupedGateAttemptBody, (_, _) => new NoConsoleRedirection()));
                 using var document = JsonDocument.Parse(File.ReadAllText(attempt.ResultPath));
                 var result = document.RootElement;
-                Assert.Equal("failed", result.GetProperty("Status").GetString());
-                Assert.Equal(nameof(DotnetBuildSlotsBusyException), result.GetProperty("ErrorType").GetString());
-                Assert.Contains("slots busy", result.GetProperty("Error").GetString()!, StringComparison.OrdinalIgnoreCase);
-                Assert.False(result.TryGetProperty("ReceiptId", out _));
+                Assert.Equal("completed", result.GetProperty("Status").GetString());
+                Assert.Equal("deferred-slots-busy", result.GetProperty("Verdict").GetString());
+                Assert.Equal("", result.GetProperty("ReceiptId").GetString());
+                Assert.False(result.TryGetProperty("ErrorType", out _));
             }
             else
-                Assert.Throws<DotnetBuildSlotsBusyException>(() => scenario.Driver.RunMergeTrain(
-                    scenario.Selection, scenario.Goals, ConductorAutonomyPolicy.Permissive, gateOnly: true));
+            {
+                var run = scenario.Driver.RunMergeTrain(scenario.Selection, scenario.Goals,
+                    ConductorAutonomyPolicy.Permissive, gateOnly: true);
+                Assert.StartsWith("outcome=deferred-slots-busy ", run.Detail);
+                Assert.Null(run.RecordedReceipt);
+                Assert.Empty(run.Ejections);
+                AssertHeldVerified(scenario, run);
+            }
             Assert.Equal(0, scenario.Verifier.Inner.RunCount);
             Assert.Empty(scenario.Driver.ReadTrainImplicatedMemberKeys());
-            using var connection = new SqliteConnection($"Data Source={scenario.DatabasePath}");
-            connection.Open();
-            using var command = connection.CreateCommand();
-            command.CommandText = "SELECT COUNT(*) FROM merge_train_receipts;";
-            Assert.Equal(0L, (long)command.ExecuteScalar()!);
+            AssertRecordedRows(scenario, 0, 0);
         });
     }
 
@@ -126,7 +129,7 @@ public sealed class MergeTrainBisectSlotLossTests : AcceptanceCohortWorkflowTest
             var run = scenario.Driver.RunMergeTrain(scenario.Selection, scenario.Goals,
                 ConductorAutonomyPolicy.Permissive, gateOnly: true);
             Assert.Empty(scenario.Driver.ReadTrainImplicatedMemberKeys());
-            Assert.Empty(run.MemberResults);
+            if (evidence != "unattributed") Assert.Empty(run.MemberResults);
             if (evidence == "unreadable")
             {
                 var receipt = Assert.IsType<MergeTrainReceipt>(run.RecordedReceipt);
@@ -152,7 +155,9 @@ public sealed class MergeTrainBisectSlotLossTests : AcceptanceCohortWorkflowTest
                 var ejection = Assert.Single(run.Ejections);
                 Assert.Equal(scenario.Goals[^1].Id, ejection.GoalId);
                 Assert.Equal(MergeTrainEjectionReason.RedNewestMember, ejection.Reason);
-                Assert.Contains(nameof(DotnetBuildSlotsBusyException), run.Detail, StringComparison.Ordinal);
+                Assert.StartsWith("outcome=deferred-slots-busy ", run.Detail);
+                AssertHeldVerified(scenario, run);
+                AssertRecordedRows(scenario, 1, 1);
                 Assert.Equal("Ns.UnchangedTests.Fails",
                     Assert.Single(MergeTrainRedAttribution.ReadFatalFailures(receipt.GateTestResultPaths)).TestName);
             }
@@ -199,7 +204,12 @@ public sealed class MergeTrainBisectSlotLossTests : AcceptanceCohortWorkflowTest
                 new(true, false, 0, null, TestResultPaths: [WritePassingTrx(repo, "remainder.trx")])]));
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
                 Path.Combine(workspace.OrchestratorDirectory, "parallel-attempts"), workspace.IntegrationBranch,
-                buildStorageRoot: cleanup.BuildStorageRoot);
+                buildStorageRoot: cleanup.BuildStorageRoot,
+                acquireCohortStableSlotRound: (_, label, token) =>
+                    DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
+                        TimeSpan.Zero, storageRoot: cleanup.BuildStorageRoot, holderLabel: label,
+                        cancellationToken: token),
+                cohortStableSlotRoundDelay: (_, _) => Task.CompletedTask);
             var driver = new ConductorDriver(kernel, workspace, verifier, AgentCatalog.Default().Agents,
                 WorkerProfileCatalog.Default(), coordinator, cleanup);
             var selection = ProjectTrainSelection(driver, goals);
@@ -223,6 +233,30 @@ public sealed class MergeTrainBisectSlotLossTests : AcceptanceCohortWorkflowTest
         {
             foreach (var lease in leases) lease.Dispose();
             DeleteDirectory(repo);
+        }
+    }
+
+    private static void AssertHeldVerified(Scenario scenario, ConductorMergeTrainRunResult run)
+    {
+        Assert.Equal(scenario.Goals.Length, run.MemberResults.Count);
+        Assert.All(scenario.Goals, goal =>
+        {
+            Assert.Equal(GoalStatus.Verified, goal.Status);
+            Assert.Equal(GoalLifecycleState.Verified,
+                Assert.IsType<ConductorAdvanceOutcome.Held>(run.MemberResults[goal.Id.Value].Outcome).State);
+        });
+    }
+
+    private static void AssertRecordedRows(Scenario scenario, long receipts, long ejections)
+    {
+        using var connection = new SqliteConnection($"Data Source={scenario.DatabasePath}");
+        connection.Open();
+        foreach (var (table, count) in new[] { ("merge_train_receipts", receipts),
+            ("merge_train_landings", 0L), ("merge_train_ejections", ejections) })
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText = $"SELECT COUNT(*) FROM {table};";
+            Assert.Equal(count, (long)command.ExecuteScalar()!);
         }
     }
 

@@ -201,10 +201,8 @@ internal sealed partial class ConductorDriver
                 DotnetBuildEnvironmentLease? stableSlotLease = null;
                 try
                 {
-                    stableSlotLease = gateOnly
-                        ? _parallelAcceptanceAttemptCoordinator.AcquireCohortStableSlotLease(identity.Value, cancellationToken)
-                        : _parallelAcceptanceAttemptCoordinator.AcquireCohortStableSlotLeaseInRounds(
-                            identity.Value, $"merge-train:{trainKey}", CohortStableSlotRoundCount, cancellationToken);
+                    stableSlotLease = _parallelAcceptanceAttemptCoordinator.AcquireCohortStableSlotLeaseInRounds(
+                        identity.Value, $"merge-train:{trainKey}", CohortStableSlotRoundCount, cancellationToken);
                     if (stableSlotLease is null)
                     {
                         var detail = $"outcome={CohortStableSlotAcquisitionRounds.DeferredVerdict} train={identity.Value}";

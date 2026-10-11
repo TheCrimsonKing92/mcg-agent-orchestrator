@@ -138,7 +138,8 @@ public sealed class AcceptanceCohortSlotsBusyDeferralTests : AcceptanceCohortWor
     [InlineData("identity", "failed", "deferred-slots-busy", "", "cohort", false)]
     [InlineData("identity", "completed", "unknown", "", "cohort", false)]
     [InlineData("identity", "completed", "deferred-slots-busy", "receipt", "cohort", false)]
-    [InlineData("identity", "completed", "deferred-slots-busy", "", "train", false)]
+    [InlineData("identity", "completed", "deferred-slots-busy", "", "train", true)]
+    [InlineData("identity", "completed", "deferred-slots-busy", "", "follower", false)]
     [InlineData("identity", "completed", "deferred-slots-busy", "", "cohort", true)]
     public void RecoveryRequiresMatchingCompletedDeferral(
         string identity, string status, string verdict, string receipt, string kind, bool expected)

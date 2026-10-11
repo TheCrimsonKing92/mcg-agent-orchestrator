@@ -297,7 +297,8 @@ internal sealed partial class ConductorDriver
                 ConductorAutonomyPolicy.ParseJson(attempt.PolicyJson, attempt.MetadataPath),
                 gateOnly: true, expectedGateIdentity: attempt.IdentityValue);
             return result.RecordedReceipt is { } receipt
-                ? ToGroupedGateOutcome(receipt.Outcome, receipt.ReceiptId) : null;
+                ? ToGroupedGateOutcome(receipt.Outcome, receipt.ReceiptId) : result.Detail.StartsWith(
+                    $"outcome={CohortStableSlotAcquisitionRounds.DeferredVerdict} ", StringComparison.Ordinal) ? CohortStableSlotAcquisitionRounds.DeferredGroupedOutcome : null;
         }
         else if (attempt.Kind == "follower")
         {
