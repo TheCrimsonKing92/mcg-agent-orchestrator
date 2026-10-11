@@ -16,23 +16,23 @@ internal static partial class CliCommandHandlers
             .ToList();
     }
 
-    private static List<CollaborationItem> AllClarifications(CollaborationItemStore store)
+    internal static List<CollaborationItem> AllClarifications(CollaborationItemStore store)
     {
         return store.ListAsync().GetAwaiter().GetResult()
             .Where(IsSpecClarification)
             .ToList();
     }
 
-    private static List<CollaborationItem> AllClarificationsForGoal(CollaborationItemStore store, Goal goal) =>
+    internal static List<CollaborationItem> AllClarificationsForGoal(CollaborationItemStore store, Goal goal) =>
         AllClarifications(store)
             .Where(item => string.Equals(item.GoalId, goal.Id.Value, StringComparison.OrdinalIgnoreCase))
             .ToList();
 
-    private static bool IsSpecClarification(CollaborationItem item) =>
+    internal static bool IsSpecClarification(CollaborationItem item) =>
         !string.IsNullOrWhiteSpace(item.CorrelationKey) &&
         item.CorrelationKey!.StartsWith("spec-clarification:", StringComparison.Ordinal);
 
-    private static Goal ResolveAttentionGoal(AgentOrchestratorKernel kernel, string goalPrefix)
+    internal static Goal ResolveAttentionGoal(AgentOrchestratorKernel kernel, string goalPrefix)
     {
         var matches = kernel.Goals
             .Where(goal => goal.Id.Value.StartsWith(goalPrefix, StringComparison.OrdinalIgnoreCase))
@@ -203,7 +203,7 @@ internal static partial class CliCommandHandlers
     // Use the complete trailing topic segment when its shape is unambiguous to the CLI parser. For a true
     // topic collision or a single-token topic, display the full correlation key as the stable escape hatch.
     // The identity universe includes resolved history, so answering a peer never changes the remaining id.
-    private static string ClarificationId(
+    internal static string ClarificationId(
         CollaborationItem clarification,
         IReadOnlyList<CollaborationItem> identityUniverse)
     {
