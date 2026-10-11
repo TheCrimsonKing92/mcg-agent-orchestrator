@@ -100,8 +100,9 @@ public sealed class AcceptanceCohortWorkflowTestsTrainImpactAttribution : Accept
             AddAcceptanceManifest(repo);
             Write(repo, "src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\" />");
             Write(repo, "src/Mcg.AgentOrchestrator.Core/Application/CandidateTreeProbe.cs", "public class CandidateTreeProbe { }");
+            // Separate ownership subsystems let both sources enter a train while impacting ProbeTests.
             if (ambiguousImpact)
-                Write(repo, "src/Mcg.AgentOrchestrator.Core/Application/OtherService.cs", "public class OtherService { }");
+                Write(repo, "src/Mcg.AgentOrchestrator.Core/Domain/OtherService.cs", "public class OtherService { }");
             Write(repo, "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
                 "<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup>" +
                 "<ProjectReference Include=\"../../src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj\" />" +
@@ -115,7 +116,7 @@ public sealed class AcceptanceCohortWorkflowTestsTrainImpactAttribution : Accept
             RunGit(repo, "commit", "-m", "Add impact fixture projects and unchanged test");
             var kernel = new AgentOrchestratorKernel();
             string[] paths = [ownership ? test : "src/Mcg.AgentOrchestrator.Core/Application/CandidateTreeProbe.cs",
-                ambiguousImpact ? "src/Mcg.AgentOrchestrator.Core/Application/OtherService.cs"
+                ambiguousImpact ? "src/Mcg.AgentOrchestrator.Core/Domain/OtherService.cs"
                     : "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/OtherMemberTests.cs",
                 "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/NewestMemberTests.cs"];
             string[] contents = [ownership
