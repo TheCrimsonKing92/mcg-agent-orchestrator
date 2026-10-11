@@ -102,9 +102,10 @@ public sealed class AcceptanceCohortWorkflowTestsTrainImpactAttribution : Accept
                 return goal;
             }).ToArray();
             var path = Path.Combine(repo, "red.trx");
-            new XDocument(new XElement("TestRun", new XElement("Results", new XElement("UnitTestResult",
+            XNamespace trxNamespace = "http://microsoft.com/schemas/VisualStudio/TeamTest/2010";
+            new XDocument(new XElement(trxNamespace + "TestRun", new XElement(trxNamespace + "Results", new XElement(trxNamespace + "UnitTestResult",
                 new XAttribute("testName", "Ns.ProbeTests.Fails"), new XAttribute("outcome", "Failed"))),
-                new XElement("ResultSummary", new XAttribute("outcome", "Failed"), new XElement("Counters",
+                new XElement(trxNamespace + "ResultSummary", new XAttribute("outcome", "Failed"), new XElement(trxNamespace + "Counters",
                     new XAttribute("total", 1), new XAttribute("executed", 1), new XAttribute("passed", 0), new XAttribute("failed", 1))))).Save(path);
             var red = new AcceptanceVerificationResult(false, false, 1, "train failed",
                 Checks: [new AcceptanceCheckResult("train", false, 1, "train failed")], TestResultPaths: [path]);
