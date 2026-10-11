@@ -50,7 +50,7 @@ internal static class LaneIsolatedRootScanner
     {
         var classes = ResolveLaneClasses(repository, laneName, assembly);
         VerifyCollections(classes, isIsolated, collectionExceptions, expectedCollection);
-        var sources = AcceptanceTestClassSourceScanner.ScanSources(repository).ToDictionary(item => item.FullName);
+        var sources = AcceptanceTestClassSourcesMemo.Get(repository).ToDictionary(item => item.FullName);
         var usedChildExceptions = new HashSet<(Type, string)>();
         foreach (var type in classes)
         {
@@ -61,7 +61,7 @@ internal static class LaneIsolatedRootScanner
                 hierarchy.Add(parent.FullName!);
             foreach (var path in source.SourcePaths)
             {
-                var syntax = CSharpSyntaxTree.ParseText(File.ReadAllText(Path.Combine(repository, path))).GetRoot();
+                var syntax = RepositorySourceSnapshotCache.Get(repository).GetSyntaxTree(path).GetRoot();
                 Assert.False(syntax.GetDiagnostics().Any(item => item.Severity == DiagnosticSeverity.Error),
                     $"Cannot parse source for {type.FullName}: {path}.");
                 foreach (var declaration in syntax.DescendantNodes().OfType<ClassDeclarationSyntax>()

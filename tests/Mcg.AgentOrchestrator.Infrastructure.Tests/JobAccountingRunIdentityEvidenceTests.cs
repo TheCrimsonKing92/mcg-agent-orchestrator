@@ -19,7 +19,7 @@ public sealed class JobAccountingRunIdentityEvidenceTests
         var classes = new[] { "Goal acceptance verifier", "Goal acceptance build slots" }
             .SelectMany(lane => LaneIsolatedRootScanner.ResolveLaneClasses(repository, lane, GetType().Assembly))
             .Distinct().ToArray();
-        var sources = AcceptanceTestClassSourceScanner.ScanSources(repository).ToDictionary(item => item.FullName);
+        var sources = AcceptanceTestClassSourcesMemo.Get(repository).ToDictionary(item => item.FullName);
         VerifyIdentityHelpers(repository);
         var used = new HashSet<(Type, string)>();
         var count = 0;
