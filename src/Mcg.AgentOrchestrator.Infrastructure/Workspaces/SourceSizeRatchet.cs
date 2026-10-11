@@ -418,14 +418,19 @@ internal static class SourceSizeRatchet
             // Goal 87740668 adds three lines of member-objective wiring at the train gate options boundary;
             // removal parsing and union logic live in MemberDeclaredTestRemovals. Measured 15269 across
             // the same 70 partial files; no extra headroom.
-            new SourceClassCeiling("ConductorDriver", 15269, 70),
+            // Goal 3068f4ce adds nine lines of ownership-first impact fallback wiring and attribution-source
+            // propagation through the existing bisection/event lifecycle; impact analysis remains separately
+            // owned by MergeTrainImpactAttribution. Measured 15278 across the same 70 partial files; no extra headroom.
+            new SourceClassCeiling("ConductorDriver", 15278, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
             // Goal cb35d012 extracts epic list/show validation, reads and rendering into EpicProgressCommands;
             // goals 69c9d936 (+6 integration-branch call-site lines) and f1045cfb (+5 dogfood-log missing-file lines) add to it.
             // Measured 12228 total lines across the same 30 partial files after all three; no extra headroom.
-            new SourceClassCeiling("CliCommandHandlers", 12228, 30),
+            // Goal e8cccefa extracts loop store setup and policy resolution into CliConductLoopStartup.
+            // Measured 12139 total lines across the same 30 partial files; no extra headroom.
+            new SourceClassCeiling("CliCommandHandlers", 12139, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
             new SourceClassCeiling("GoalAcceptanceVerifier", 9053, 32),
@@ -453,7 +458,8 @@ internal static class SourceSizeRatchet
             // Goal ed7254a6 extracts next-action command advice (slice 12, family 2): measured 2930 lines in 38 partials; no headroom.
             // Goal b50fdb00 extracts environment health inspection (slice 13 step 2): measured 2865 lines in 38 partials; no headroom.
             // Goal f968e488 extracts supervisor and acceptance queue output (slice 14): measured 2804 lines in 36 partials; no headroom.
-            new SourceClassCeiling("ConsoleViews", 2804, 36),
+            // Goal 85702c95 extracts gate-status rendering to GateStatusTextView; measured 2767 lines in 36 partials, no headroom.
+            new SourceClassCeiling("ConsoleViews", 2767, 36),
         });
 
     internal static IReadOnlyList<SourceSizeViolation> EvaluateClasses(

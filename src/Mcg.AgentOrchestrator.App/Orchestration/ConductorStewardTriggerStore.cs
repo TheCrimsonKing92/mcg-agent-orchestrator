@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
@@ -17,13 +18,19 @@ internal sealed record ConductorStewardStoredTrigger(
 internal sealed record ConductorStewardReadyRound(
     ConductorStewardStoredTrigger Stored, string Output, long ClaimedGoalVersion);
 
-internal sealed class ConductorStewardTriggerStore(string path)
+internal sealed class ConductorStewardTriggerStore
 {
-    private readonly string _connectionString = new SqliteConnectionStringBuilder
+    private readonly string _connectionString;
+
+    public ConductorStewardTriggerStore(string path)
     {
-        DataSource = path,
-        Pooling = false
-    }.ToString();
+        StewardTriggerStoreSetup.Setup(path);
+        _connectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = path,
+            Pooling = false
+        }.ToString();
+    }
 
     internal static string KeyFor(ConductorStewardTrigger trigger) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(trigger.Identity))).ToLowerInvariant();
@@ -276,18 +283,6 @@ internal sealed class ConductorStewardTriggerStore(string path)
         Directory.CreateDirectory(Path.GetDirectoryName(databasePath)!);
         var connection = new SqliteConnection(_connectionString);
         connection.Open();
-        using var command = connection.CreateCommand();
-        command.CommandText = """
-            CREATE TABLE IF NOT EXISTS steward_triggers (
-              key TEXT PRIMARY KEY, goal_id TEXT NOT NULL, task_id TEXT NOT NULL,
-              candidate_sha TEXT NOT NULL, kind TEXT NOT NULL, trigger_json TEXT NOT NULL,
-              first_occurrence TEXT NOT NULL, status TEXT NOT NULL, claimed_at TEXT,
-              outcome TEXT, intent_id TEXT, repeat_question_raised INTEGER NOT NULL DEFAULT 0);
-            CREATE INDEX IF NOT EXISTS steward_triggers_queue ON steward_triggers(status, first_occurrence);
-            CREATE TABLE IF NOT EXISTS steward_ready_rounds (
-              key TEXT PRIMARY KEY, output TEXT NOT NULL, claimed_goal_version INTEGER NOT NULL);
-            """;
-        command.ExecuteNonQuery();
         return connection;
     }
 

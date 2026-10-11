@@ -32,6 +32,8 @@ public static class StoreSetupRunner
                 directory => Path.Combine(directory, StoreSchemaRegistry.MergeTrainAcceptance.Database)),
             [StoreSchemaRegistry.DogfoodLog.StoreName] = new(DogfoodLogStore.Setup,
                 directory => Path.Combine(directory, StoreSchemaRegistry.DogfoodLog.Database)),
+            [StoreSchemaRegistry.StewardTriggers.StoreName] = new(StewardTriggerStoreSetup.Setup,
+                directory => Path.Combine(directory, StoreSchemaRegistry.StewardTriggers.Database)),
             [StoreSchemaRegistry.ProgressiveReviewGlanceCircuit.StoreName] = new(SqliteProgressiveReviewGlanceCircuitStore.Setup,
                 directory => Path.Combine(directory, StoreSchemaRegistry.ProgressiveReviewGlanceCircuit.Database)),
             [StoreSchemaRegistry.ProgressiveReviewSteering.StoreName] = new(ProgressiveReviewSteeringStoreSetup.Setup,

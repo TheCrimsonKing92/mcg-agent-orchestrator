@@ -109,6 +109,7 @@ internal sealed class TerminalGoalSweepCache
     internal int Count => _terminalFingerprints.Count;
     internal string? ObservedMainSha => _integrationEvidenceMainSha;
     internal GoalBranchContentStateCache BranchContentStates { get; } = new();
+    internal GoalGitFactSnapshotCache GitFactSnapshots { get; } = new();
 
     internal IGoalIntegrationEvidenceResolver GetIntegrationEvidenceResolver(
         string executionDirectory, string integrationBranch,
@@ -449,7 +450,7 @@ internal static partial class TerminalGoalSweep
         var ownedRoots = ConductorTickStepLedger.Measure("owned-root-reap", () => ReapOwnedBuildRoots(workspace.SqliteStatePath, reclaimGoalRoots));
         ownedRootTiming.Stop();
         var gitIndexTiming = System.Diagnostics.Stopwatch.StartNew();
-        var branchFactIndex = GoalGitFactIndex.Build(executionDirectory, integrationBranch, gitRunner, cache?.BranchContentStates);
+        var branchFactIndex = GoalGitFactIndex.Build(executionDirectory, integrationBranch, gitRunner, cache?.BranchContentStates, cache?.GitFactSnapshots);
         gitIndexTiming.Stop();
         var evidenceTiming = System.Diagnostics.Stopwatch.StartNew();
         integrationEvidenceResolver ??= cache?.GetIntegrationEvidenceResolver(executionDirectory, integrationBranch, branchFactIndex.MainSha, gitRunnerIdentity, gitRunner)

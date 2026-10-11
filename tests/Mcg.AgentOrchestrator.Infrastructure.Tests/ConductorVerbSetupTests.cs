@@ -31,6 +31,7 @@ public sealed class ConductorVerbSetupTests
                 $"follower-gate-acceptance: version 1 ({Path.Combine(workspace.OrchestratorDirectory, "follower-gate-acceptance.db")}){Environment.NewLine}" +
                 $"collaboration-items: version 1 ({Path.Combine(workspace.OrchestratorDirectory, "collaboration-items.db")}){Environment.NewLine}" +
                 $"dogfood-log: version 1 ({workspace.DogfoodLogStorePath}){Environment.NewLine}" +
+                $"steward-triggers: version 1 ({Path.Combine(workspace.OrchestratorDirectory, "steward-triggers.db")}){Environment.NewLine}" +
                 $"progressive-review-glance-circuit: version 1 ({Path.Combine(workspace.OrchestratorDirectory, "progressive-review-glance-circuit.db")}){Environment.NewLine}" +
                 $"progressive-review-steering: version 1 ({Path.Combine(workspace.OrchestratorDirectory, "progressive-review-steering.db")}){Environment.NewLine}", output.ToString());
             Assert.NotNull(SqliteProgressiveReviewSteeringStore.OpenReadOnly(
