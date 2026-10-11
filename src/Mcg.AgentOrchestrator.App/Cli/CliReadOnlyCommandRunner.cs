@@ -19,6 +19,7 @@ internal static class CliReadOnlyCommandRunner
         CliStatusQueryCommand.IsStatusQueryCommand(args) ||
         CliReadinessQueryCommand.IsReadinessQueryCommand(args) ||
         CliGoalEventsQueryCommand.IsGoalEventsQueryCommand(args) ||
+        CliAttentionShowJsonQueryCommand.IsAttentionShowJsonCommand(args) ||
         CliAttentionJsonQueryCommand.IsAttentionJsonCommand(args) ||
         CliAttentionQueryCommand.IsAttentionQueryCommand(args) ||
         CliNextFullQueryCommand.IsNextFullQueryCommand(args) ||
@@ -120,6 +121,13 @@ internal static class CliReadOnlyCommandRunner
         if (CliGoalEventsQueryCommand.IsGoalEventsQueryCommand(args))
         {
             CliGoalEventsQueryCommand.Execute(args, stateRepository, workspace);
+            changed = false;
+            return true;
+        }
+
+        if (CliAttentionShowJsonQueryCommand.IsAttentionShowJsonCommand(args))
+        {
+            CliAttentionShowJsonQueryCommand.Execute(args, stateRepository, workspace);
             changed = false;
             return true;
         }
