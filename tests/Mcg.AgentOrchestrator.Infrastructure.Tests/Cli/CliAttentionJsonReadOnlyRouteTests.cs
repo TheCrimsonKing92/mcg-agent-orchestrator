@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Cli;
@@ -119,8 +120,9 @@ public sealed class CliAttentionJsonReadOnlyRouteTests : CliTaskQueryTestSupport
             var providers = new InMemoryModelProviderRegistry([]);
             Assert.False(CliAttentionQueryCommand.TryExecute(["attention"], repository, workspace,
                 providers, null, ref agents, ref profiles, ref currentGoal));
-            var before = Directory.GetFiles(root, "*", SearchOption.AllDirectories)
-                .ToDictionary(path => path, File.ReadAllBytes);
+            // Only this existing store is read; an absent store gets no sidecar exemption.
+            string[] allowedReadSidecars = File.Exists(database) ? [database + "-wal", database + "-shm"] : [];
+            var before = Snapshot(root, allowedReadSidecars);
             var startup = await CliReadOnlyStartupHydration.PrepareStartupAsync(args, repository);
             Assert.False(startup.Hydrated);
             var declines = 0;
@@ -135,8 +137,9 @@ public sealed class CliAttentionJsonReadOnlyRouteTests : CliTaskQueryTestSupport
             Assert.Equal(wait.Id.Value, Assert.Single(payload.GetProperty("waits").EnumerateArray())
                 .GetProperty("id").GetString());
             Assert.Empty(payload.GetProperty("items").EnumerateArray());
-            Assert.Equal(before.Keys.Order(), Directory.GetFiles(root, "*", SearchOption.AllDirectories).Order());
-            foreach (var (path, bytes) in before) Assert.Equal(bytes, File.ReadAllBytes(path));
+            var after = Snapshot(root, allowedReadSidecars);
+            Assert.Equal(before.Keys.Order(), after.Keys.Order());
+            foreach (var (path, hash) in before) Assert.Equal(hash, after[path]);
             Assert.Equal(parked, File.Exists(database));
             AssertNoWrites(repository);
             if (store is not null)
@@ -216,6 +219,12 @@ public sealed class CliAttentionJsonReadOnlyRouteTests : CliTaskQueryTestSupport
         }
         finally { Directory.Delete(root, true); }
     }
+
+    private static Dictionary<string, string> Snapshot(string root, IReadOnlyCollection<string> allowedReadSidecars) =>
+        Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
+            .Where(path => !allowedReadSidecars.Contains(path))
+            .ToDictionary(path => Path.GetRelativePath(root, path),
+                path => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))));
 
     private static void AssertNoWrites(ProbeStateRepository repository)
     {
