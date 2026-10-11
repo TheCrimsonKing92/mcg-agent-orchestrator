@@ -4,5 +4,6 @@ public enum ManifestFactResultKind
 {
     Match,
     DiffersFromGateDefault,
-    NotConsumed
+    NotConsumed,
+    DiffersFromHand
 }

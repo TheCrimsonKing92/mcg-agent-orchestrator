@@ -55,7 +55,7 @@ internal static class ProjectCliCommand
                 return ProjectCompareManifestCommand.Execute(parts, registry, defaultRootDirectory, activeProjectOverride, discoveryOutput ?? Console.Out);
 
             case "compare-manifest-engine":
-                return ProjectCompareManifestEngineCommand.Execute(parts, discoveryOutput ?? Console.Out);
+                return ProjectCompareManifestEngineCommand.Execute(parts, registry, defaultRootDirectory, activeProjectOverride, discoveryOutput ?? Console.Out);
 
             case "compare-integration-branch":
                 return ProjectCompareIntegrationBranchCommand.Execute(parts, registry, defaultRootDirectory, activeProjectOverride, discoveryOutput ?? Console.Out);

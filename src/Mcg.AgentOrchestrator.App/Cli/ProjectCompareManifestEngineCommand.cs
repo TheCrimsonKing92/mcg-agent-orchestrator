@@ -1,3 +1,5 @@
+using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using System.Text.Json;
 
@@ -7,14 +9,16 @@ internal static class ProjectCompareManifestEngineCommand
 {
     internal const string Usage = "Usage: project compare-manifest-engine [name] [--root <path>] --manifest <path>";
 
-    internal static int Execute(IReadOnlyList<string> parts, TextWriter output)
+    internal static int Execute(IReadOnlyList<string> parts, OrchestratorProjectRegistry registry,
+        string defaultRootDirectory, string? activeProjectOverride, TextWriter output)
     {
-        var manifestPath = ParseOptions(parts);
+        var (rootOverride, manifestPath) = ParseOptions(parts);
+        var learned = TryReadLearnedSettings(parts, registry, defaultRootDirectory, activeProjectOverride, rootOverride);
         IReadOnlyList<ManifestFactComparison> comparisons;
         try
         {
             var manifestJson = File.ReadAllText(Path.GetFullPath(manifestPath));
-            comparisons = ManifestEngineSettingsComparer.Compare(manifestJson);
+            comparisons = ManifestEngineSettingsComparer.Compare(manifestJson, learned);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or
             NotSupportedException or ArgumentException or JsonException or InvalidDataException)
@@ -24,10 +28,46 @@ internal static class ProjectCompareManifestEngineCommand
 
         foreach (var comparison in comparisons)
             output.WriteLine($"{comparison.Kind} {comparison.Fact} hand={comparison.Hand} learned={comparison.Learned} ({comparison.Reason})");
-        return comparisons.Any(comparison => comparison.Kind == ManifestFactResultKind.DiffersFromGateDefault) ? 1 : 0;
+        if (learned is not null)
+            foreach (var question in learned.OwnerQuestions)
+                output.WriteLine($"OwnerQuestion {question.FactKey} {question.Question}");
+        return comparisons.Any(comparison => comparison.Kind is ManifestFactResultKind.DiffersFromGateDefault
+            or ManifestFactResultKind.DiffersFromHand) ? 1 : 0;
     }
 
-    private static string ParseOptions(IReadOnlyList<string> parts)
+    private static LearnedEngineSettings? TryReadLearnedSettings(IReadOnlyList<string> parts,
+        OrchestratorProjectRegistry registry, string defaultRootDirectory, string? activeProjectOverride, string? rootOverride)
+    {
+        try
+        {
+            var name = parts.Count > 2 && !parts[2].StartsWith("--", StringComparison.Ordinal)
+                ? OrchestratorProjectSelection.NormalizeProjectName(parts[2]) : null;
+            var activeName = name is null ? activeProjectOverride ?? registry.ReadSelectedProjectName() : null;
+            if (name is null && string.IsNullOrWhiteSpace(activeName)) return null;
+            var project = name is null ? registry.ResolveActiveProject(defaultRootDirectory, activeName)
+                : name.Equals(OrchestratorWorkspace.DefaultProjectName, StringComparison.OrdinalIgnoreCase)
+                    ? new OrchestratorProject(OrchestratorWorkspace.DefaultProjectName, Path.GetFullPath(defaultRootDirectory))
+                    : registry.GetRequiredProject(name);
+            var directory = ProjectDiscoveryModelLocation.ResolveDirectory(project, rootOverride, defaultRootDirectory,
+                registry.DataRootDirectory);
+            var modelPath = Path.Combine(directory, "project-model.json");
+            if (!File.Exists(modelPath)) return null;
+            var learned = LearnedEngineSettingsDeriver.Derive(ProjectModelJson.Deserialize(File.ReadAllText(modelPath)));
+            return learned with
+            {
+                MaxConcurrentShardsReason = $"learned from project-model.json: {learned.MaxConcurrentShardsReason}",
+                DefaultTimeoutReason = $"learned from project-model.json: {learned.DefaultTimeoutReason}"
+            };
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or
+            NotSupportedException or ArgumentException or JsonException or InvalidOperationException)
+        {
+            // An unresolved project or unreadable snapshot preserves the original gate-default report.
+            return null;
+        }
+    }
+
+    private static (string? Root, string Manifest) ParseOptions(IReadOnlyList<string> parts)
     {
         string? root = null;
         string? manifest = null;
@@ -49,6 +89,6 @@ internal static class ProjectCompareManifestEngineCommand
             else
                 throw new ArgumentException(Usage);
         }
-        return manifest ?? throw new ArgumentException(Usage);
+        return (root, manifest ?? throw new ArgumentException(Usage));
     }
 }
