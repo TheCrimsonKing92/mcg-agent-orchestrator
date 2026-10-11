@@ -421,7 +421,9 @@ internal static class SourceSizeRatchet
             // Goal 3068f4ce adds nine lines of ownership-first impact fallback wiring and attribution-source
             // propagation through the existing bisection/event lifecycle; impact analysis remains separately
             // owned by MergeTrainImpactAttribution. Measured 15278 across the same 70 partial files; no extra headroom.
-            new SourceClassCeiling("ConductorDriver", 15278, 70),
+            // Goal 943427e4 extracts cohort verification classification into AcceptanceCohortVerificationClassifier.
+            // Measured 15205 lines across the same 70 partial files; no extra headroom.
+            new SourceClassCeiling("ConductorDriver", 15205, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
@@ -447,7 +449,9 @@ internal static class SourceSizeRatchet
             // Goal 7b54219d retains only the nine startup-wiring lines needed to load before LOOP_START;
             // persistence is separately owned. Measured 9267 total lines across the same 56 partial files.
             // Goal 8cc45279 extracts drain hold policy and polling to a separately owned type; measured 9263 across the same 56 partials.
-            new SourceClassCeiling("ConductorBatchLoop", 9263, 56),
+            // Goal 943427e4 extracts cohort exit formatting into AcceptanceCohortExitDiagnostic.
+            // Measured 9246 lines across 55 partial files; no extra headroom.
+            new SourceClassCeiling("ConductorBatchLoop", 9246, 55),
             // Goal ec8903af moved the goal-prefix parser to CliGoalPrefixArguments.
             new SourceClassCeiling("CliPersistentStateRunner", 5975, 18),
             // Goal 5935c270 extracts subscription-plan output into SubscriptionPlanTextView

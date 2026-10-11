@@ -2,9 +2,9 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-internal sealed partial class ConductorBatchLoop
+internal static class AcceptanceCohortExitDiagnostic
 {
-    private static (string Outcome, string Reason) DescribeAcceptanceCohortExit(
+    internal static (string Outcome, string Reason) Describe(
         ConductorAcceptanceCohortRunResult cohortRun)
     {
         var outcome = cohortRun.Receipt?.Outcome.ToString() ??

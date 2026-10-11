@@ -63,6 +63,7 @@ internal static class ConductorMergeTrainSelector
                 projection.ResourceKeys.Count == 0 ||
                 GoalAcceptanceVerifier.ClassifyDotnetShardDisposition(projection.LandingPaths) ==
                     DotnetShardDisposition.DocsTreeOnlyCandidate ||
+                OwnerProtectedLandingPaths.Contains(projection.LandingPaths) ||
                 (selected.Count > 0 && !projection.MainRevision.Equals(selected[0].MainRevision, StringComparison.Ordinal)) ||
                 selected.Any(existing => Overlaps(existing, projection) ||
                     suppressedPairFingerprints?.Contains(

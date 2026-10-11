@@ -426,6 +426,8 @@ internal sealed partial class ConductorDriver
                 cancellationToken,
                 executionOptions);
             gateExitCode = verification.ExitCode;
+            if (OwnerProtectedGateDiagnostic.Find(verification) is { } ownerProtectedCheck)
+                OwnerProtectedGateDiagnostic.Write(Console.Out, identity.Value, ownerProtectedCheck);
             var classifiedVerification = ClassifyCohortVerificationResultWithPaths(verification);
             classification = classifiedVerification.Classification;
             gateTestResultPaths = classifiedVerification.NormalizedTestResultPaths;

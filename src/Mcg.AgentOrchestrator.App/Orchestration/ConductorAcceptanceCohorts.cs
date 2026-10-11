@@ -17,7 +17,8 @@ internal enum ConductorAcceptanceCohortPairExclusionReason
     SerializedResourceOverlap,
     SuppressedInteraction,
     AttributedMember,
-    TrainImplicatedMember
+    TrainImplicatedMember,
+    OwnerProtectedMember
 }
 
 internal sealed record ConductorAcceptanceCohortPairExclusion(
@@ -171,6 +172,14 @@ internal static class ConductorAcceptanceCohortSelector
                     candidate.GoalId, candidate.GoalId,
                     ConductorAcceptanceCohortPairExclusionReason.TrainImplicatedMember,
                     $"candidate={projected.Projection.CandidateRevision}"));
+                continue;
+            }
+            if (OwnerProtectedLandingPaths.Contains(projected.Projection.LandingPaths))
+            {
+                exclusions.Add(new ConductorAcceptanceCohortPairExclusion(
+                    candidate.GoalId, candidate.GoalId,
+                    ConductorAcceptanceCohortPairExclusionReason.OwnerProtectedMember,
+                    $"goal={candidate.GoalId.Value}"));
                 continue;
             }
             ready.Add(projected.Projection);

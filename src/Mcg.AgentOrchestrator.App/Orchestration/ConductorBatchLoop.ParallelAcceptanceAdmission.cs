@@ -451,7 +451,7 @@ internal sealed partial class ConductorBatchLoop
                     }
                     (exitOutcome, exitReason) = gateFault is { } backgroundFault
                         ? DescribeAcceptanceCohortGateFault(backgroundFault)
-                        : DescribeAcceptanceCohortExit(cohortRun);
+                        : AcceptanceCohortExitDiagnostic.Describe(cohortRun);
                 }
                 catch (Exception cohortGateException)
                 {

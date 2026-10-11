@@ -211,6 +211,7 @@ public static class AcceptanceCohortInfrastructureReasonCodes
     public const string ExitCodeMissing = "exit-code-missing";
     public const string ResultPathInvalid = "result-path-invalid";
     public const string TrxEvidenceIncoherent = "trx-evidence-incoherent";
+    public const string OwnerProtectedConfiguration = "owner-protected-configuration";
     public const string DotnetBuildSlotsBusy = "dotnet-build-slots-busy";
     public const string BuildLockBlocked = "build-lock-blocked";
     public const string OperationCancelled = "operation-cancelled";

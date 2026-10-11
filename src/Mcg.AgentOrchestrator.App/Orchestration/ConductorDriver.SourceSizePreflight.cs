@@ -116,10 +116,4 @@ internal sealed partial class ConductorDriver
             GateTestResultPaths: [],
             ValidForLanding: false));
     }
-
-    private static bool IsSourceSizeContentFailure(AcceptanceVerificationResult result) =>
-        result.Checks?.Any(check =>
-            !check.Passed &&
-            !check.Advisory &&
-            string.Equals(check.Name, SourceSizeRatchetPreflight.CheckName, StringComparison.Ordinal)) == true;
 }
