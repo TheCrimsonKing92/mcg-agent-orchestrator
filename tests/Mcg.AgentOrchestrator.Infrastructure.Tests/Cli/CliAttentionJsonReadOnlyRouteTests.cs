@@ -49,10 +49,13 @@ public sealed class CliAttentionJsonReadOnlyRouteTests : CliTaskQueryTestSupport
         string[] help = ["attention", "--json", "--help"];
         Assert.False(CliAttentionJsonQueryCommand.IsAttentionJsonCommand(help));
         Assert.Equal(CliCommandCapability.QueryOnly, CliCommandCapabilities.Classify(help));
+        string[] answer = ["attention", "answer", "abc10000", "wait-id", "answer", "--json"];
+        CliCommandHelp.ThrowIfInvalidFlags(answer);
+        Assert.False(CliAttentionJsonQueryCommand.IsAttentionJsonCommand(answer));
+        Assert.Equal(CliCommandCapability.Execution, CliCommandCapabilities.Classify(answer));
         foreach (var args in new[]
         {
             new[] { "attention", "show", "--all", "abc10000", "--json" },
-            new[] { "attention", "answer", "abc10000", "wait-id", "--json" },
             new[] { "attention", "dismiss", "--item", "item-id", "--json" },
             new[] { "attention", "--json", "extra" }
         })
