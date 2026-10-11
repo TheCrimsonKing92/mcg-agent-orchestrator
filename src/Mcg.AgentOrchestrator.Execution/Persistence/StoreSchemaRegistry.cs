@@ -42,7 +42,7 @@ public static class StoreSchemaRegistry
         new("dogfood-log", Persistence + "DogfoodLogStore.cs", "dogfood-log.db", "collaboration", 1);
 
     public static StoreSchemaEntry AuthorClaims { get; } =
-        new("author-claims", Persistence + "AuthorClaimStoreSetup.cs", "author-claims.db", "conductor", 1);
+        new("author-claims", Conductor + "ConductorAuthorClaimStore.cs", "author-claims.db", "conductor", 1);
 
     public static StoreSchemaEntry StewardTriggers { get; } =
         new("steward-triggers", Persistence + "StewardTriggerStoreSetup.cs", "steward-triggers.db", "conductor", 1);
