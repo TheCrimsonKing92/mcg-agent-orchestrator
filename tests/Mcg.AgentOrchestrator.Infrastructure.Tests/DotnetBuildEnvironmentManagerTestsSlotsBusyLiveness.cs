@@ -26,7 +26,8 @@ public sealed class DotnetBuildEnvironmentManagerTestsSlotsBusyLiveness : Dotnet
 
             Assert.NotNull(fault);
             Assert.Contains(fault.SlotsBusy.BusySlots,
-                slot => slot.SlotIndex == 0 && slot.OwnerProcessId == Environment.ProcessId);
+                slot => slot.SlotIndex == 0 && slot.OwnerProcessId == Environment.ProcessId &&
+                    slot.LeaseId == heldEnvironment.LeaseId);
             Assert.DoesNotContain(fault.SlotsBusy.BusySlots, slot => slot.SlotIndex == 1);
             Assert.Contains($"slot-0:pid-{Environment.ProcessId}", output, StringComparison.Ordinal);
             Assert.DoesNotContain("slot-1:", output, StringComparison.Ordinal);
@@ -35,6 +36,23 @@ public sealed class DotnetBuildEnvironmentManagerTestsSlotsBusyLiveness : Dotnet
         {
             DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = null;
         }
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    public void FreeWorkerSlotAcquiresWithoutSleeping(int slot)
+    {
+        var environment = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, slot);
+        var clock = new RecordingTimeProvider();
+        var sleeps = new List<TimeSpan>();
+        using var worker = DotnetBuildEnvironmentManager.AcquireLeaseExecutionPermit(environment,
+            timeProvider: clock, sleep: duration => { sleeps.Add(duration); clock.Advance(duration); },
+            timeout: TimeSpan.FromSeconds(1));
+
+        Assert.Equal(slot, worker.Environment.BuildPermitIndex);
+        Assert.True(worker.IsExecutionLockHeld);
+        Assert.Empty(sleeps);
     }
 
     [Fact]
