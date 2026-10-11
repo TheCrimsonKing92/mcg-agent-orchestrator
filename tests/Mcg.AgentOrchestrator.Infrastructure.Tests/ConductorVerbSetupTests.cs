@@ -33,6 +33,7 @@ public sealed class ConductorVerbSetupTests
                 $"dogfood-log: version 1 ({workspace.DogfoodLogStorePath}){Environment.NewLine}" +
                 $"author-claims: version 1 ({Path.Combine(workspace.OrchestratorDirectory, "author-claims.db")}){Environment.NewLine}" +
                 $"steward-triggers: version 1 ({Path.Combine(workspace.OrchestratorDirectory, "steward-triggers.db")}){Environment.NewLine}" +
+                $"judge-panel: version 1 ({Path.Combine(workspace.OrchestratorDirectory, "judge-panel.db")}){Environment.NewLine}" +
                 $"board-fill: version 1 ({Path.Combine(workspace.OrchestratorDirectory, "board-fill.db")}){Environment.NewLine}" +
                 $"progressive-review-glance-circuit: version 1 ({Path.Combine(workspace.OrchestratorDirectory, "progressive-review-glance-circuit.db")}){Environment.NewLine}" +
                 $"progressive-review-steering: version 1 ({Path.Combine(workspace.OrchestratorDirectory, "progressive-review-steering.db")}){Environment.NewLine}", output.ToString());
