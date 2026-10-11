@@ -298,7 +298,8 @@ internal static class TestCoverageInvariant
         IReadOnlyList<string>? deletedTestFiles = null,
         string? currentAttemptId = null,
         IReadOnlyDictionary<string, string>? mainDiscoveredTestSourceFiles = null,
-        IReadOnlyList<string>? sanctionedRemovedTests = null)
+        IReadOnlyList<string>? sanctionedRemovedTests = null,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? declaredRemovalDisplayNames = null)
     {
         if (candidateDiscoveredTests.Count == 0)
         {
@@ -409,9 +410,12 @@ internal static class TestCoverageInvariant
                 .Where(identity => !string.IsNullOrWhiteSpace(identity))
                 .Distinct(StringComparer.OrdinalIgnoreCase))
             {
+                IReadOnlyList<string>? displayNames = null;
+                declaredRemovalDisplayNames?.TryGetValue(declaredIdentity, out displayNames);
                 var corroboratedTests = mainDiscoveredTests
                     .Where(mainTest =>
-                        DeclaredIdentityMatchesDiscoveredTest(mainTest, declaredIdentity) &&
+                        (DeclaredIdentityMatchesDiscoveredTest(mainTest, declaredIdentity) ||
+                            MatchesResolvedDisplayName(mainTest, displayNames)) &&
                         !candidateDiscoveredTests.Any(candidateTest => IdentitiesMatch(mainTest, candidateTest)))
                     .ToArray();
                 creditedMainTests.UnionWith(corroboratedTests);
@@ -599,6 +603,14 @@ internal static class TestCoverageInvariant
         return normalizedLeft.Equals(normalizedRight, StringComparison.OrdinalIgnoreCase) ||
             normalizedLeft.EndsWith($".{normalizedRight}", StringComparison.OrdinalIgnoreCase) ||
             normalizedRight.EndsWith($".{normalizedLeft}", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool MatchesResolvedDisplayName(string discoveredIdentity, IReadOnlyList<string>? displayNames)
+    {
+        return displayNames is not null && displayNames.Any(displayName =>
+            discoveredIdentity.Equals(displayName, StringComparison.OrdinalIgnoreCase) ||
+            (discoveredIdentity.StartsWith(displayName + "(", StringComparison.OrdinalIgnoreCase) &&
+                discoveredIdentity.EndsWith(")", StringComparison.Ordinal)));
     }
 
     private static bool DeclaredIdentityMatchesDiscoveredTest(string discoveredIdentity, string declaredIdentity)
