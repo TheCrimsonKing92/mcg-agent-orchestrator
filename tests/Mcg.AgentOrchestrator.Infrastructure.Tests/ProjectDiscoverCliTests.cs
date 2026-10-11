@@ -142,7 +142,7 @@ public sealed class ProjectDiscoverCliTests
         Assert.Equal(1, creations);
         var modelPath = Path.Combine(OrchestratorWorkspace.ForDirectory(fixture.Root).OrchestratorDirectory, "project-model.json");
         var model = ProjectModelJson.Deserialize(File.ReadAllText(modelPath));
-        Assert.Equal(3, model.SchemaVersion);
+        Assert.Equal(4, model.SchemaVersion);
         Assert.Equal(2, model.Commands.Count);
         Assert.Single(model.EnvironmentNeeds);
         Assert.Equal(2, model.Measurements.Count);
