@@ -117,6 +117,6 @@ public sealed class VerificationCommandAdviceCharacterizationTests
                     segment.Equals("obj", StringComparison.OrdinalIgnoreCase)))
             .Where(path => Regex.IsMatch(File.ReadAllText(path), @"\bpartial\s+class\s+ConsoleViews\b",
                 RegexOptions.CultureInvariant));
-        Assert.Equal(38, partials.Count());
+        Assert.True(partials.Count() <= 38);
     }
 }

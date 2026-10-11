@@ -146,7 +146,7 @@ public sealed class NextActionCommandAdviceCharacterizationTests
         var ceiling = Assert.Single(SourceSizeRatchet.SeededClassCeilings,
             row => row.ClassName == "ConsoleViews");
         Assert.True(ceiling.MaximumTotalLineCount <= 2930);
-        Assert.Equal(38, ceiling.MaximumPartialFileCount);
+        Assert.True(ceiling.MaximumPartialFileCount <= 38);
         Assert.Empty(SourceSizeRatchet.EvaluateClasses(VerifiedRepositoryRoot.Find(), [ceiling]));
     }
 
@@ -174,7 +174,7 @@ public sealed class NextActionCommandAdviceCharacterizationTests
             .Select(File.ReadAllText)
             .Where(text => Regex.IsMatch(text, @"\bpartial\s+class\s+ConsoleViews\b", RegexOptions.CultureInvariant))
             .ToArray();
-        Assert.Equal(38, partials.Length);
+        Assert.True(partials.Length <= 38);
         foreach (var text in partials)
         {
             Assert.DoesNotMatch(@"\bstatic\s+\S+\s+(?:BuildSuggestedCommand|BuildStageSuggestedCommand|BuildRunAssignedTaskCommand|ResolveAssignedAgent)\s*\(", text);
