@@ -6,21 +6,10 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 [Xunit.Collection("IsolatedProcessSpawning")]
 public sealed class JobAccountingRunIdentityEvidenceTests
 {
-    private const string AnonymousJob =
-        "OwnedProcessGroup creates an anonymous CreateJobObjectW handle (null name); its kernel handle is unique, not a GUID-derived name. This source audit does not prove child exit or handle cleanup.";
-
     // Keyed by class AND site kind: an anonymous-job waiver never exempts that class's PID paths.
     private static readonly IReadOnlyDictionary<(Type Class, string Kind), string> Exceptions =
         new Dictionary<(Type, string), string>
         {
-            [(typeof(GoalAcceptanceVerifierDotnetBuildSlotTestsSlotGateJobResources), "job")] = AnonymousJob,
-            [(typeof(GoalAcceptanceVerifierDotnetBuildSlotTestsSharedApparatusInvalidation), "job")] = AnonymousJob,
-            [(typeof(GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCache), "job")] = AnonymousJob,
-            [(typeof(GoalAcceptanceVerifierTestsCaptureTempRoot), "job")] = AnonymousJob,
-            [(typeof(GoalAcceptanceVerifierTestsFocusedCaptureLimit), "job")] = AnonymousJob,
-            [(typeof(GoalAcceptanceVerifierTestsProcessInvokerEquivalence), "job")] = AnonymousJob,
-            [(typeof(GoalAcceptanceVerifierTestsCmdCommandLineLimit), "job")] = AnonymousJob,
-            [(typeof(HermeticVerificationEnvironmentTestsSystemLocations), "job")] = AnonymousJob,
         };
 
     [Xunit.Fact]
@@ -252,6 +241,108 @@ public sealed class JobAccountingRunIdentityEvidenceTests
         Assert.True(IsRegistryScoped(scopedSite, scopedClass));
     }
 
+    // These probes prove the seam rule accepts job sites only for the three exact calls and only while
+    // the lane scan anchors the invoker chain's release and dispose in finally. This proves handle
+    // release and the absence of a fixed job name; it does not prove child exit.
+    [Xunit.Fact]
+    public void Job_evidence_accepts_only_exact_process_invoker_seams_and_rejects_other_job_creation()
+    {
+        var syntax = CSharpSyntaxTree.ParseText("""
+            class Probe
+            {
+                void Test()
+                {
+                    GoalAcceptanceVerifier.RunProcessForTestsAsync(args);
+                    GoalAcceptanceVerifier.RunProcessWithHeartbeatForTestsAsync(args);
+                    GoalAcceptanceVerifier.RunProcessWithCaptureLimitForTestsAsync(args);
+                }
+            }
+            """).GetRoot();
+        var declaration = Assert.Single(syntax.DescendantNodes().OfType<ClassDeclarationSyntax>());
+        var sites = CreationSites(declaration).ToArray();
+        Assert.Equal(3, sites.Length);
+        Assert.All(sites, site =>
+        {
+            Assert.Equal("job", site.Kind);
+            Assert.True(Proves(site, declaration, GetType()));
+        });
+
+        foreach (var creation in new[]
+                 {
+                     "new OwnedProcessGroup();",
+                     "GoalAcceptanceVerifier.RunProcessLeakyForTestsAsync(args);",
+                     "CreateJobObjectW(IntPtr.Zero, null);",
+                     "CreateKillOnCloseJob();",
+                     "WorkerProcessJobs.TryRegister(process);"
+                 })
+        {
+            var rejectedSyntax = CSharpSyntaxTree.ParseText("class Probe { void Test() { " + creation + " } }").GetRoot();
+            var rejectedClass = Assert.Single(rejectedSyntax.DescendantNodes().OfType<ClassDeclarationSyntax>());
+            var site = Assert.Single(CreationSites(rejectedClass));
+            Assert.Equal("job", site.Kind);
+            Assert.False(Proves(site, rejectedClass, GetType()));
+        }
+    }
+
+    [Xunit.Fact]
+    public void Process_invoker_chain_evidence_requires_dispose_in_finally()
+    {
+        const string invoker = """
+            class AcceptanceCheckProcessInvoker
+            {
+                void RunAsync()
+                {
+                    RegisteredOwnedProcess? process = null;
+                    var stdoutPipeName = $"capture-{Guid.NewGuid():N}-out";
+                    var stderrPipeName = $"capture-{Guid.NewGuid():N}-err";
+                    try { RunChild(); }
+                    finally
+                    {
+                        try { process.Release(out accounting); }
+                        finally { process.Dispose(); }
+                    }
+                }
+            }
+            """;
+        const string processRunner = """
+            class GoalAcceptanceVerifier
+            {
+                void RunProcessForTestsAsync() => RunProcessAsync();
+                void RunProcessWithHeartbeatForTestsAsync() => RunProcessWithHeartbeatForTestsAsync(null);
+                void RunProcessWithHeartbeatForTestsAsync(object observer) => RunProcessAsync();
+                void RunProcessAsync() => RunProcessAsync(null);
+                void RunProcessAsync(object observer) => AcceptanceCheckProcessInvoker.RunAsync();
+            }
+            """;
+        const string captureLimit = """
+            class GoalAcceptanceVerifier
+            {
+                void RunProcessWithCaptureLimitForTestsAsync() => RunProcessAsync();
+            }
+            """;
+        const string workerProcessJobs = """
+            class RegisteredOwnedProcess
+            {
+                void Dispose() => Release(out accounting);
+            }
+            """;
+        const string ownedProcessGroup = """
+            class OwnedProcessGroup
+            {
+                void Dispose() => _jobHandle?.Dispose();
+            }
+            """;
+
+        Assert.True(ProcessInvokerChainReleasesInFinally(invoker, processRunner, captureLimit,
+            workerProcessJobs, ownedProcessGroup, out var failure), failure);
+        Assert.False(ProcessInvokerChainReleasesInFinally(invoker.Replace("process.Dispose();", ""),
+            processRunner, captureLimit, workerProcessJobs, ownedProcessGroup, out _));
+        var disposeInTry = invoker.Replace("process.Dispose();", "")
+            .Replace("try { RunChild(); }", "try { RunChild(); process.Dispose(); }");
+        Assert.False(ProcessInvokerChainReleasesInFinally(disposeInTry, processRunner, captureLimit,
+            workerProcessJobs, ownedProcessGroup, out _));
+    }
+
     private sealed record Site(string Kind, SyntaxNode Node, ExpressionSyntax? Identity = null);
 
     private static bool Proves(Site site, ClassDeclarationSyntax declaration, Type type) => site.Kind switch
@@ -259,7 +350,8 @@ public sealed class JobAccountingRunIdentityEvidenceTests
         "slot" => UsesFixtureStorage(site.Node, type),
         "registry" or "path" => site.Identity is not null &&
             IsRunPath(site.Identity, site.Node, declaration),
-        "dispatch" or "job" => IsRegistryScoped(site, declaration),
+        "dispatch" => IsRegistryScoped(site, declaration),
+        "job" => IsRegistryScoped(site, declaration) || IsOwnedByProcessInvokerSeam(site.Node),
         "occupancy" => site.Identity is not null &&
             (IsScenarioHostRoot(site.Identity, declaration) || IsScenarioConstructorRunScopedRoot(site, declaration)),
         _ => false
@@ -305,6 +397,12 @@ public sealed class JobAccountingRunIdentityEvidenceTests
             invocation.Expression.ToString() == "WorkerProcessJobs.TryRegister") &&
         declaration.DescendantNodes().OfType<InvocationExpressionSyntax>()
             .Any(call => call.Expression.ToString() == "WorkerProcessJobs.UseRegistryScopeForTests");
+
+    private static bool IsOwnedByProcessInvokerSeam(SyntaxNode node) =>
+        node is InvocationExpressionSyntax call && call.Expression.ToString() is
+            "GoalAcceptanceVerifier.RunProcessForTestsAsync" or
+            "GoalAcceptanceVerifier.RunProcessWithHeartbeatForTestsAsync" or
+            "GoalAcceptanceVerifier.RunProcessWithCaptureLimitForTestsAsync";
 
     private static bool IsScenarioHostRoot(ExpressionSyntax identity, ClassDeclarationSyntax declaration)
     {
@@ -486,6 +584,94 @@ public sealed class JobAccountingRunIdentityEvidenceTests
             "ConfigureRegistry", "new SpawnRegistry(dbPath)", "Registry = registry");
         RequireMethod(repository, "src/Mcg.AgentOrchestrator.Execution/Processes/WorkerProcessJobs.RegistryScope.cs",
             "UseRegistryScopeForTests", "ScopedRegistry.Value = new RegistryScopeState");
+        Assert.True(ProcessInvokerChainReleasesInFinally(
+            File.ReadAllText(Path.Combine(repository, "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCheckProcessInvoker.cs")),
+            File.ReadAllText(Path.Combine(repository, "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.ProcessRunner.cs")),
+            File.ReadAllText(Path.Combine(repository, "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.CaptureLimit.cs")),
+            File.ReadAllText(Path.Combine(repository, "src/Mcg.AgentOrchestrator.Execution/Processes/WorkerProcessJobs.cs")),
+            File.ReadAllText(Path.Combine(repository, "src/Mcg.AgentOrchestrator.Execution/Processes/OwnedProcessGroup.cs")),
+            out var failure), failure);
+    }
+
+    private static bool ProcessInvokerChainReleasesInFinally(string invoker, string processRunner,
+        string captureLimit, string workerProcessJobs, string ownedProcessGroup, out string? failure)
+    {
+        var sources = new[]
+        {
+            (Name: "AcceptanceCheckProcessInvoker", Text: invoker),
+            (Name: "GoalAcceptanceVerifier.ProcessRunner", Text: processRunner),
+            (Name: "GoalAcceptanceVerifier.CaptureLimit", Text: captureLimit),
+            (Name: "RegisteredOwnedProcess", Text: workerProcessJobs),
+            (Name: "OwnedProcessGroup", Text: ownedProcessGroup)
+        };
+        var roots = sources.Select(source => CSharpSyntaxTree.ParseText(source.Text).GetRoot()).ToArray();
+        for (var index = 0; index < roots.Length; index++)
+        {
+            if (!roots[index].GetDiagnostics().Any(item => item.Severity == DiagnosticSeverity.Error)) continue;
+            failure = $"Cannot parse process ownership source: {sources[index].Name}.";
+            return false;
+        }
+
+        static IEnumerable<MethodDeclarationSyntax> Methods(SyntaxNode root, string className, string methodName) =>
+            root.DescendantNodes().OfType<ClassDeclarationSyntax>()
+                .Where(node => node.Identifier.ValueText == className)
+                .SelectMany(node => node.Members.OfType<MethodDeclarationSyntax>())
+                .Where(node => node.Identifier.ValueText == methodName);
+
+        var checks = new[]
+        {
+            (Name: "GoalAcceptanceVerifier.RunProcessForTestsAsync -> RunProcessAsync",
+                Passed: Methods(roots[1], "GoalAcceptanceVerifier", "RunProcessForTestsAsync")
+                    .Any(method => HasTokens(method, "RunProcessAsync("))),
+            (Name: "GoalAcceptanceVerifier.RunProcessWithHeartbeatForTestsAsync -> RunProcessAsync",
+                Passed: Methods(roots[1], "GoalAcceptanceVerifier", "RunProcessWithHeartbeatForTestsAsync")
+                    .Any(method => HasTokens(method, "RunProcessAsync("))),
+            (Name: "GoalAcceptanceVerifier.RunProcessWithCaptureLimitForTestsAsync -> RunProcessAsync",
+                Passed: Methods(roots[2], "GoalAcceptanceVerifier", "RunProcessWithCaptureLimitForTestsAsync")
+                    .Any(method => HasTokens(method, "RunProcessAsync("))),
+            (Name: "GoalAcceptanceVerifier.RunProcessAsync -> AcceptanceCheckProcessInvoker.RunAsync",
+                Passed: Methods(roots[1], "GoalAcceptanceVerifier", "RunProcessAsync")
+                    .Any(method => HasTokens(method, "AcceptanceCheckProcessInvoker.RunAsync("))),
+            (Name: "AcceptanceCheckProcessInvoker.RunAsync: owned process, GUID capture pipes, finally release/dispose",
+                Passed: Methods(roots[0], "AcceptanceCheckProcessInvoker", "RunAsync").Any(method =>
+                    method.DescendantNodes().OfType<LocalDeclarationStatementSyntax>()
+                        .Any(local => HasTokens(local, "RegisteredOwnedProcess? process")) &&
+                    new[] { "stdoutPipeName", "stderrPipeName" }.All(name =>
+                        method.DescendantNodes().OfType<VariableDeclaratorSyntax>().Any(variable =>
+                            variable.Identifier.ValueText == name && variable.Initializer is { } initializer &&
+                            HasGuid(initializer.Value))) &&
+                    method.DescendantNodes().OfType<FinallyClauseSyntax>().Any(clause =>
+                        clause.DescendantNodes().OfType<InvocationExpressionSyntax>().Any(call =>
+                            call.Expression.ToString() == "process.Release" &&
+                            call.ArgumentList.Arguments.FirstOrDefault()?.RefKindKeyword.IsKind(SyntaxKind.OutKeyword) == true)) &&
+                    method.DescendantNodes().OfType<FinallyClauseSyntax>().Any(clause =>
+                        clause.DescendantNodes().OfType<InvocationExpressionSyntax>().Any(call =>
+                            call.Expression.ToString() == "process.Dispose" && call.ArgumentList.Arguments.Count == 0)))),
+            (Name: "RegisteredOwnedProcess.Dispose -> Release(out",
+                Passed: Methods(roots[3], "RegisteredOwnedProcess", "Dispose")
+                    .Any(method => HasTokens(method, "Release(out"))),
+            (Name: "OwnedProcessGroup.Dispose -> _jobHandle?.Dispose()",
+                Passed: Methods(roots[4], "OwnedProcessGroup", "Dispose")
+                    .Any(method => HasTokens(method, "_jobHandle?.Dispose()")))
+        };
+        foreach (var check in checks)
+        {
+            if (check.Passed) continue;
+            failure = $"Process ownership anchor changed: {check.Name}.";
+            return false;
+        }
+        failure = null;
+        return true;
+    }
+
+    private static bool HasTokens(SyntaxNode source, string anchor)
+    {
+        var expected = CSharpSyntaxTree.ParseText(anchor).GetRoot().DescendantTokens()
+            .Where(token => !token.IsMissing && !token.IsKind(SyntaxKind.EndOfFileToken))
+            .Select(token => token.Text).ToArray();
+        var actual = source.DescendantTokens().Select(token => token.Text).ToArray();
+        return expected.Length > 0 && Enumerable.Range(0, Math.Max(0, actual.Length - expected.Length + 1))
+            .Any(start => actual.Skip(start).Take(expected.Length).SequenceEqual(expected));
     }
 
     private static void RequireMethod(string repository, string path, string name, params string[] anchors)
