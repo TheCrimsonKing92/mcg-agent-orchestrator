@@ -63,9 +63,6 @@ internal static class WorkerContextRenderer
         {
             if (segment.TypedProjectionIdentity is not null)
             {
-                // Legacy ingress removes the closing marker's text and CR, retaining its LF.
-                // Preserve that separator directly from the typed segment identity.
-                output.Append('\n');
                 continue;
             }
 

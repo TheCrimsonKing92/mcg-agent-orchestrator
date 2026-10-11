@@ -72,8 +72,13 @@ were rerun for this documentation repair.
 
 `TaskBriefPathList` and its line coordinates are per-dispatch in-memory data. Legacy boundary
 emission, artifact formats, role visibility and artifact materialization are unchanged. The
-capped-scope role theory compares the complete Reviewer artifact hashes against the legacy
-package and independently serialized expected bytes. Developer and Tester artifact identity/hash
-maps are unchanged; Tester convergence paths remain complete. Literal-bearing user text is
-preserved by the typed path, so Reviewer `brief/current.md` and its derived manifest intentionally
-have different hashes from the legacy path on that adversarial fixture.
+capped-scope role theory compares the complete Reviewer artifact hashes against the pre-change
+typed-output baseline and independently serialized expected bytes. The baseline removes projected
+segments before passing the remaining text to the legacy preview policy, matching comparison
+base `7bda161742796d9b02bc5ca435e3c74e856e1ea1` rather than legacy marker-removal separators.
+The separator theory also pins the pre-change current-brief bytes for all three roles, with and
+without removal flags. Developer and Tester artifact identity/hash maps equal that baseline;
+Tester convergence paths remain complete. Literal-bearing user text is preserved by the typed
+path, so Reviewer `brief/current.md` and its derived manifest intentionally have different hashes
+from the pre-change text policy on that adversarial fixture. The receipts above remain evidence
+for their recorded candidate; execution of the revised equivalence tests is deferred to Tester.

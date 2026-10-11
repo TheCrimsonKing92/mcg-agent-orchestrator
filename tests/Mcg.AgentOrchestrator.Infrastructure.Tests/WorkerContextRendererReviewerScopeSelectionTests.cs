@@ -15,26 +15,23 @@ public sealed class WorkerContextRendererReviewerScopeSelectionTests : WorkerDis
     [Xunit.InlineData(125, 126, false)]
     [Xunit.InlineData(125, 0, true)]
     [Xunit.InlineData(0, 125, false)]
-    public void TypedSelectionMatchesLegacyForOrdinaryScopes(int changedTotal, int conflictTotal, bool clean)
+    public void TypedSelectionMatchesPreChangeForOrdinaryScopes(int changedTotal, int conflictTotal, bool clean)
     {
         var changed = Enumerable.Range(0, changedTotal).Select(i => $"src/changed-{i}.cs").ToArray();
         var conflicts = Enumerable.Range(0, conflictTotal).Select(i => $"src/conflict-{i}.cs").ToArray();
         var fixture = CreateFixture(AgentRole.Reviewer);
         var source = BuildSource(fixture, changed, conflicts, clean);
         Assert.NotNull(Assert.Single(source.Segments, s => s.ConvergenceChangedFiles is not null).ConvergenceChangedFiles);
-        var legacyText = source.ProjectLegacyMarkedTextV1(true).Content;
         Assert.Equal(
-            WorkerContextProjectionResidual.ParseLegacyMarkedTextV1(legacyText, AgentRole.Reviewer).CurrentBrief,
+            PreChangeCurrentBrief(source),
             WorkerContextRenderer.CreateCurrentBrief(source));
 
         // Exercise each independent flag as well as the dispatch-selected combination.
         foreach (var removeChanged in new[] { false, true })
         foreach (var removeConflicts in new[] { false, true })
         {
-            var legacy = WorkerContextProjectionResidual.ParseLegacyMarkedTextV1(legacyText, AgentRole.Reviewer,
-                removeReviewerChangedPaths: removeChanged, removeReviewerConflictPaths: removeConflicts);
             var typed = WorkerContextRenderer.CreateCurrentBrief(source, removeChanged, removeConflicts);
-            Assert.Equal(legacy.CurrentBrief, typed);
+            Assert.Equal(PreChangeCurrentBrief(source, removeChanged, removeConflicts), typed);
             if (removeChanged)
             {
                 Assert.Contains(CountOnly("Changed files", changedTotal), typed, StringComparison.Ordinal);
@@ -51,7 +48,7 @@ public sealed class WorkerContextRendererReviewerScopeSelectionTests : WorkerDis
     [Xunit.InlineData(AgentRole.Developer)]
     [Xunit.InlineData(AgentRole.Tester)]
     [Xunit.InlineData(AgentRole.Reviewer)]
-    public void RemovedArtifactSegmentsPreserveLegacySeparators(AgentRole role)
+    public void RemovedArtifactSegmentsPreservePreChangeSeparators(AgentRole role)
     {
         var fixture = CreateFixture(role);
         var source = BuildSource(fixture, [], [], true) with
@@ -67,22 +64,17 @@ public sealed class WorkerContextRendererReviewerScopeSelectionTests : WorkerDis
             ]
         };
         var newline = Environment.NewLine;
-        var expected = $"## Instructions{newline}keep{newline}\n\n{newline}## Kept section{newline}tail";
+        var expected = $"## Instructions{newline}keep{newline}{newline}## Kept section{newline}tail";
         foreach (var removePaths in new[] { false, true })
         {
-            var expectedCurrent = role == AgentRole.Reviewer && removePaths
-                ? expected.Replace("\r\n", "\n", StringComparison.Ordinal).Replace("\n", newline, StringComparison.Ordinal)
-                : expected;
             var typed = WorkerContextRenderer.CreateCurrentBrief(source, removePaths, removePaths);
-            Assert.Equal(expectedCurrent, typed);
-            Assert.Equal(WorkerContextProjectionResidual.ParseLegacyMarkedTextV1(
-                source.ProjectLegacyMarkedTextV1(true).Content, role,
-                removeReviewerChangedPaths: removePaths, removeReviewerConflictPaths: removePaths).CurrentBrief, typed);
+            Assert.Equal(expected, typed);
+            Assert.Equal(PreChangeCurrentBrief(source, removePaths, removePaths), typed);
         }
     }
 
     [Xunit.Fact]
-    public void EmptyPreviewWithLargerTotalMatchesLegacyCountOnly()
+    public void EmptyPreviewWithLargerTotalMatchesPreChangeCountOnly()
     {
         var fixture = CreateFixture(AgentRole.Reviewer);
         var source = fixture.Kernel.BuildTaskBriefSource(fixture.Goal.Id, fixture.Task.Id,
@@ -90,9 +82,7 @@ public sealed class WorkerContextRendererReviewerScopeSelectionTests : WorkerDis
             reviewerMergeTreeClean: false, reviewerMergeTreeConflictPaths: [],
             reviewerMergeTreeTotalConflictPathCount: 126);
         var typed = WorkerContextRenderer.CreateCurrentBrief(source, true, true);
-        Assert.Equal(WorkerContextProjectionResidual.ParseLegacyMarkedTextV1(
-            source.ProjectLegacyMarkedTextV1(true).Content, AgentRole.Reviewer,
-            removeReviewerChangedPaths: true, removeReviewerConflictPaths: true).CurrentBrief, typed);
+        Assert.Equal(PreChangeCurrentBrief(source, true, true), typed);
         Assert.Contains(CountOnly("Changed files", 125), typed, StringComparison.Ordinal);
         Assert.Contains(CountOnly("Conflicting paths", 126), typed, StringComparison.Ordinal);
         Assert.DoesNotContain("- No changed files", typed, StringComparison.Ordinal);
@@ -127,22 +117,22 @@ public sealed class WorkerContextRendererReviewerScopeSelectionTests : WorkerDis
             {
                 Segments = source.Segments.Append(new TaskBriefSegment([userText], RoleVisibility: [role])).ToArray()
             };
-            var legacy = source.ProjectLegacyMarkedTextV1(true);
+            var preChangeBrief = PreChangeTypedProjection(source);
             WorkerContextPackage Package(bool typed) => WorkerProfileDispatcher.BuildContextPackage(
-                fixture.Goal, fixture.Task, root, contextDirectory, legacy,
+                fixture.Goal, fixture.Task, root, contextDirectory, preChangeBrief,
                 reviewerScopeChangedFiles: changed, reviewerScopeMergeBase: "baseline",
                 reviewerScopeTotalChangedFileCount: changed.Length, reviewerMergeTreeClean: false,
                 reviewerMergeTreeConflictPaths: conflicts, reviewerMergeTreeTotalConflictPathCount: conflicts.Length,
                 typedSource: typed ? source : null);
             var typedPackage = Package(true);
-            var legacyPackage = Package(false);
+            var preChangePackage = Package(false);
             var current = Text(typedPackage, "brief/current.md");
             Assert.Equal(WorkerContextRenderer.CreateCurrentBrief(source, true, true), current);
             Assert.Contains(userText, current, StringComparison.Ordinal);
             Assert.All(source.Segments, s => Assert.Equal(new[] { role }, s.RoleVisibility));
             Assert.All(typedPackage.Artifacts, a => Assert.Contains(role, a.RoleVisibility));
             Assert.Equal(
-                legacyPackage.Artifacts.Select(a => a.Identity.Value).Order(StringComparer.Ordinal),
+                preChangePackage.Artifacts.Select(a => a.Identity.Value).Order(StringComparer.Ordinal),
                 typedPackage.Artifacts.Select(a => a.Identity.Value).Order(StringComparer.Ordinal));
 
             if (role == AgentRole.Reviewer)
@@ -155,17 +145,17 @@ public sealed class WorkerContextRendererReviewerScopeSelectionTests : WorkerDis
                     Assert.DoesNotContain($"- {path}", current, StringComparison.Ordinal);
                     Assert.DoesNotContain($"- conflict: {path}", current, StringComparison.Ordinal);
                 }
-                AssertScopeArtifact(root, typedPackage, legacyPackage, "reviewer/changed-files.v1.json",
+                AssertScopeArtifact(root, typedPackage, preChangePackage, "reviewer/changed-files.v1.json",
                     "git-diff-name-only-main-three-dot-head", "baseline", changed);
-                AssertScopeArtifact(root, typedPackage, legacyPackage, "reviewer/merge-conflict-paths.v1.json",
+                AssertScopeArtifact(root, typedPackage, preChangePackage, "reviewer/merge-conflict-paths.v1.json",
                     "git-merge-tree-write-tree-name-only-main-head", null, conflicts);
                 // The corrected user-text selection changes only current.md and its derived manifest.
-                Assert.Equal(ContentIdentities(legacyPackage, excludeCurrent: true), ContentIdentities(typedPackage, excludeCurrent: true));
+                Assert.Equal(ContentIdentities(preChangePackage, excludeCurrent: true), ContentIdentities(typedPackage, excludeCurrent: true));
             }
             else
             {
                 Assert.DoesNotContain(typedPackage.Artifacts, a => a.Identity.Value.StartsWith("reviewer/", StringComparison.Ordinal));
-                Assert.Equal(ContentIdentities(legacyPackage), ContentIdentities(typedPackage));
+                Assert.Equal(ContentIdentities(preChangePackage), ContentIdentities(typedPackage));
                 if (role == AgentRole.Tester)
                 {
                     Assert.All(changed, p => Assert.Contains($"- {p}", current, StringComparison.Ordinal));
@@ -244,6 +234,22 @@ public sealed class WorkerContextRendererReviewerScopeSelectionTests : WorkerDis
     private static string CountOnly(string label, int count) =>
         $"{label}: {count}; complete path list is delivered only by its typed MandatoryFile artifact.";
 
+    // Comparison base 7bda1617 CreateCurrentBrief skipped projected segments before joining
+    // their lines, then applied the text preview policy. Remove those segments first so the
+    // legacy ingress supplies only that policy, never its different marker-removal separators.
+    private static TaskBrief PreChangeTypedProjection(TaskBriefSource source) =>
+        (source with
+        {
+            Segments = source.Segments.Where(s => s.TypedProjectionIdentity is null).ToArray()
+        }).ProjectLegacyMarkedTextV1(true);
+
+    private static string PreChangeCurrentBrief(TaskBriefSource source,
+        bool removeChangedPaths = false, bool removeConflictPaths = false) =>
+        WorkerContextProjectionResidual.ParseLegacyMarkedTextV1(
+            PreChangeTypedProjection(source).Content, source.Role,
+            removeReviewerChangedPaths: removeChangedPaths,
+            removeReviewerConflictPaths: removeConflictPaths).CurrentBrief;
+
     private static string Text(WorkerContextPackage package, string identity) => Encoding.UTF8.GetString(
         Assert.Single(package.Artifacts, a => a.Identity.Value == identity).AuthoritativeBytes!);
 
@@ -252,11 +258,11 @@ public sealed class WorkerContextRendererReviewerScopeSelectionTests : WorkerDis
                 (a.Identity.Value != "brief/current.md" && a.Identity.Value != "context/manifest.v1.json"))
             .Select(a => $"{a.Identity.Value}:{a.ContentHash}").Order(StringComparer.Ordinal).ToArray();
 
-    private static void AssertScopeArtifact(string root, WorkerContextPackage typed, WorkerContextPackage legacy,
+    private static void AssertScopeArtifact(string root, WorkerContextPackage typed, WorkerContextPackage preChange,
         string identity, string command, string? baseline, string[] paths)
     {
         var artifact = Assert.Single(typed.Artifacts, a => a.Identity.Value == identity);
-        var prior = Assert.Single(legacy.Artifacts, a => a.Identity.Value == identity);
+        var prior = Assert.Single(preChange.Artifacts, a => a.Identity.Value == identity);
         var ordered = paths.Select(p => p.Trim().Replace('\\', '/').Normalize(NormalizationForm.FormC))
             .Order(StringComparer.Ordinal).ToArray();
         var expectedBytes = JsonSerializer.SerializeToUtf8Bytes(new
