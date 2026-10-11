@@ -425,7 +425,9 @@ internal static class SourceSizeRatchet
             // Goal cb35d012 extracts epic list/show validation, reads and rendering into EpicProgressCommands;
             // goals 69c9d936 (+6 integration-branch call-site lines) and f1045cfb (+5 dogfood-log missing-file lines) add to it.
             // Measured 12228 total lines across the same 30 partial files after all three; no extra headroom.
-            new SourceClassCeiling("CliCommandHandlers", 12228, 30),
+            // Goal e8cccefa extracts loop store setup and policy resolution into CliConductLoopStartup.
+            // Measured 12139 total lines across the same 30 partial files; no extra headroom.
+            new SourceClassCeiling("CliCommandHandlers", 12139, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
             new SourceClassCeiling("GoalAcceptanceVerifier", 9053, 32),
