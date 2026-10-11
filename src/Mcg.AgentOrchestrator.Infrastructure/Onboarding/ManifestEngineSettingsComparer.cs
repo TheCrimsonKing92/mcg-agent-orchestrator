@@ -7,12 +7,12 @@ using AcceptanceManifestCheck = Mcg.AgentOrchestrator.Infrastructure.GoalAccepta
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-/// <summary>Reports resolved manifest facts against the gate's undeclared defaults.</summary>
+/// <summary>Reports manifest facts against learned settings where available, otherwise gate defaults.</summary>
 public static class ManifestEngineSettingsComparer
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
 
-    public static IReadOnlyList<ManifestFactComparison> Compare(string manifestJson)
+    public static IReadOnlyList<ManifestFactComparison> Compare(string manifestJson, LearnedEngineSettings? learned = null)
     {
         using var document = JsonDocument.Parse(manifestJson);
         var root = document.RootElement;
@@ -20,17 +20,23 @@ public static class ManifestEngineSettingsComparer
             throw new JsonException("Acceptance manifest must be a JSON object.");
 
         var hand = AcceptanceGateEngineSettings.Parse(manifestJson);
-        var learned = new AcceptanceGateEngineSettings();
+        var defaults = new AcceptanceGateEngineSettings();
         var facts = new List<ManifestFactComparison>
         {
-            CompareValue("engine.maxConcurrentShards", hand.MaxConcurrentShards, learned.MaxConcurrentShards),
-            CompareValue("engine.enforceStructuralCoverage", hand.EnforceStructuralCoverage, learned.EnforceStructuralCoverage),
-            CompareValue("engine.timeouts.defaultMinutes", hand.ResolveCheckTimeout(null).TotalMinutes,
-                learned.ResolveCheckTimeout(null).TotalMinutes),
+            learned is null
+                ? CompareValue("engine.maxConcurrentShards", hand.MaxConcurrentShards, defaults.MaxConcurrentShards)
+                : CompareLearned("engine.maxConcurrentShards", hand.MaxConcurrentShards, learned.MaxConcurrentShards,
+                    learned.MaxConcurrentShardsReason),
+            CompareValue("engine.enforceStructuralCoverage", hand.EnforceStructuralCoverage, defaults.EnforceStructuralCoverage),
+            learned?.DefaultTimeoutMinutes is int timeout
+                ? CompareLearned("engine.timeouts.defaultMinutes", hand.ResolveCheckTimeout(null).TotalMinutes,
+                    (double)timeout, learned.DefaultTimeoutReason)
+                : CompareValue("engine.timeouts.defaultMinutes", hand.ResolveCheckTimeout(null).TotalMinutes,
+                    defaults.ResolveCheckTimeout(null).TotalMinutes),
             CompareValue("engine.timeouts.buildServerShutdownMinutes", hand.ResolveBuildServerShutdownTimeout().TotalMinutes,
-                learned.ResolveBuildServerShutdownTimeout().TotalMinutes),
+                defaults.ResolveBuildServerShutdownTimeout().TotalMinutes),
             CompareValue("engine.timeouts.discoveryMinutes", hand.ResolveDiscoveryTimeout().TotalMinutes,
-                learned.ResolveDiscoveryTimeout().TotalMinutes)
+                defaults.ResolveDiscoveryTimeout().TotalMinutes)
         };
 
         if (root.TryGetProperty("engine", out var engine) && engine.ValueKind == JsonValueKind.Object)
@@ -132,6 +138,12 @@ public static class ManifestEngineSettingsComparer
 
     private static ManifestFactComparison CompareValue<T>(string fact, T hand, T learned) =>
         CompareRendered(fact, Render(hand), Render(learned), EqualityComparer<T>.Default.Equals(hand, learned));
+
+    private static ManifestFactComparison CompareLearned<T>(string fact, T hand, T learned, string reason) =>
+        new(fact, EqualityComparer<T>.Default.Equals(hand, learned) ? ManifestFactResultKind.Match : ManifestFactResultKind.DiffersFromHand,
+            Render(hand), Render(learned), EqualityComparer<T>.Default.Equals(hand, learned)
+                ? $"Agrees with the learned model: {reason}"
+                : $"The learned model derives {Render(learned)}: {reason}. The hand manifest declares {Render(hand)}.");
 
     private static ManifestFactComparison CompareRendered(string fact, string hand, string learned, bool match) =>
         new(fact, match ? ManifestFactResultKind.Match : ManifestFactResultKind.DiffersFromGateDefault, hand, learned,
