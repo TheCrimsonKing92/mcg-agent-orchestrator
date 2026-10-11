@@ -30,7 +30,8 @@ internal sealed class OwnerConsoleActivityLoader(string conductPath, string life
                 token.ThrowIfCancellationRequested();
                 foreach (var item in lifecycle) OwnerConsoleStartupActivity.Append(recent, item, OwnerConsoleStartupActivity.MaxRawEvents);
                 token.ThrowIfCancellationRequested();
-                return Task.FromResult(new OwnerConsoleActivityLoad(recent, history.LastActivity ?? Events.LastActivity, history.LandedToday));
+                return Task.FromResult(new OwnerConsoleActivityLoad(recent, history.LastActivity ?? Events.LastActivity,
+                    Math.Max(OwnerConsoleLandedToday.Count(lifecycleDirectory, clock), history.LandedToday)));
             }
             catch (OperationCanceledException)
             {
