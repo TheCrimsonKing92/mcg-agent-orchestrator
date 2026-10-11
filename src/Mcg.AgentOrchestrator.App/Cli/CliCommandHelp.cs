@@ -15,12 +15,12 @@ internal static class CliCommandHelp
     public const string GoalBoardUsage = GoalBoardOptions.Usage;
     public const string GoalReplaceUsage = "Usage: goal-replace <predecessor-goal-id> --brief-file <path> --reason-file <path> --request-id <guid> --disposition <zero-work-correction|abandon-failed-attempt|supersede-unlanded-attempt> --confirm-goal-replace [--pipeline <auto|scout|five-role|developer-reviewer|developer-only>] [--ideation <agent>|--researcher <agent>|--planner <agent>|--developer <agent>|--tester <agent>|--reviewer <agent>]";
     public const string AddTaskUsage = "Usage: add-task [--goal <goal-prefix>] <role> <description> [--before-role <role>] | add-task [--goal <goal-prefix>] <role> --text-file <path> [--before-role <role>]";
-    public const string RetryUsage = "Usage: retry [--goal <goal-prefix>] <task-number> <message> [--cause <cause>] [--goal <goal-prefix>] [--mechanical] | retry [--goal <goal-prefix>] <task-number> --text-file <path> [--cause <cause>] [--goal <goal-prefix>] [--mechanical]";
+    public const string RetryUsage = "Usage: retry [--goal <goal-prefix>] <task-number> <message> [--cause <cause>] [--goal <goal-prefix>] [--mechanical] [--json] | retry [--goal <goal-prefix>] <task-number> --text-file <path> [--cause <cause>] [--goal <goal-prefix>] [--mechanical] [--json]";
     public const string NoteUsage = "Usage: note <task-number> <message> [--gate-deliverable <id>...] | note <goal-prefix> <task-number> <message> [--gate-deliverable <id>...] | note --goal <goal-prefix> <task-number> <message> [--gate-deliverable <id>...] | note <task-number> --text-file <path> [--gate-deliverable <id>...]";
-    public const string ProgressUsage = "Usage: progress [--goal <goal-prefix>] <task-number> <status> <message> [--goal <goal-prefix>] | progress [--goal <goal-prefix>] <task-number> <status> --text-file <path> [--goal <goal-prefix>]";
-    public const string VerifyManualUsage = "Usage: verify-manual [--goal <goal-prefix>] <task-number> <passed|failed> <note> [--goal <goal-prefix>] | verify-manual [--goal <goal-prefix>] <task-number> <passed|failed> --text-file <path> [--goal <goal-prefix>]";
+    public const string ProgressUsage = "Usage: progress [--goal <goal-prefix>] <task-number> <status> <message> [--goal <goal-prefix>] [--json] | progress [--goal <goal-prefix>] <task-number> <status> --text-file <path> [--goal <goal-prefix>] [--json]";
+    public const string VerifyManualUsage = "Usage: verify-manual [--goal <goal-prefix>] <task-number> <passed|failed> <note> [--goal <goal-prefix>] [--json] | verify-manual [--goal <goal-prefix>] <task-number> <passed|failed> --text-file <path> [--goal <goal-prefix>] [--json]";
     public const string AdjudicateUsage = "Usage: adjudicate [--goal <goal-prefix>] <task-number> <close|reopen-regate|route> --text-file <path> --evidence <ref>... [--cause <cause>] [--reversibility <reversible|reversible-with-cost|irreversible>] [--precedent <decision-id|rule>] [--actor-kind <human|agent>] [--json]";
-    public const string ApprovePolicyChangeUsage = "Usage: approve-policy-change <goal-prefix> <full-candidate-sha> --text-file <reason-path> [--idempotency-key <key>]";
+    public const string ApprovePolicyChangeUsage = "Usage: approve-policy-change <goal-prefix> <full-candidate-sha> --text-file <reason-path> [--idempotency-key <key>] [--json]";
     public const string RecoverUsage = "Usage: recover <goal-prefix> <note> | recover <goal-prefix> --text-file <path>";
     public const string AcceptanceRetryUsage = "Usage: acceptance-retry <goal-prefix> <reason> --confirm-acceptance-retry";
     public const string GoalAmendUsage = "Usage: goal-amend <goal-prefix> --waive <criterion-number|exact-text> --reason <reason> [--disposition <criterion-reference>=<prose>] [--disposition-file <criterion-reference>=<path>] [--actor <name>] | goal-amend <goal-prefix> --waive <criterion-number|exact-text> --reason-file <path> [--disposition <criterion-reference>=<prose>] [--disposition-file <criterion-reference>=<path>] [--actor <name>]";
@@ -234,7 +234,7 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry Retry = new(
         RetryUsage,
         "Retry a task with operator feedback.",
-        ["--goal", "--text-file", "--cause", "--mechanical", "--autonomy", "--autonomy-policy", "--idempotency-key", "--operator-actor", "--actor-kind", "--help", "-h"]);
+        ["--goal", "--text-file", "--cause", "--mechanical", "--autonomy", "--autonomy-policy", "--idempotency-key", "--operator-actor", "--actor-kind", "--json", "--help", "-h"]);
 
     private static readonly CommandHelpEntry Note = new(
         NoteUsage,
@@ -244,12 +244,12 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry Progress = new(
         ProgressUsage,
         "Record task progress.",
-        ["--goal", "--text-file", "--idempotency-key", "--operator-actor", "--actor-kind", "--help", "-h"]);
+        ["--goal", "--text-file", "--idempotency-key", "--operator-actor", "--actor-kind", "--json", "--help", "-h"]);
 
     private static readonly CommandHelpEntry VerifyManual = new(
         VerifyManualUsage,
         "Record manual verification evidence for a task.",
-        ["--goal", "--text-file", "--idempotency-key", "--operator-actor", "--actor-kind", "--help", "-h"]);
+        ["--goal", "--text-file", "--idempotency-key", "--operator-actor", "--actor-kind", "--json", "--help", "-h"]);
 
     private static readonly CommandHelpEntry Adjudicate = new(
         AdjudicateUsage,
@@ -259,7 +259,7 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry ApprovePolicyChange = new(
         ApprovePolicyChangeUsage,
         "Record a human candidate-bound approval for acceptance policy changes.",
-        ["--text-file", "--idempotency-key", "--operator-actor", "--actor-kind", "--help", "-h"]);
+        ["--text-file", "--idempotency-key", "--operator-actor", "--actor-kind", "--json", "--help", "-h"]);
 
     public const string CriterionEvidenceMapUsage = "Usage: criterion-evidence-map --goal <goal-prefix> --criterion <brief-number>[,<brief-number>...] [--version <criterion-version>] <acceptance|operator> <required-scope> <finding-stable-id> <candidate-sha> [--idempotency-key <key>] [--operator-actor <actor>]";
     public const string CriterionEvidenceRecordUsage = "Usage: criterion-evidence-record --goal <goal-prefix> <obligation-id> operator <candidate-sha> <receipt-id> <scope> <passed|failed> <detail> [--idempotency-key <key>] [--operator-actor <actor>]";
@@ -742,7 +742,7 @@ internal static class CliCommandHelp
             ["start-dispatches"] = BatchStartFlags(includeGoal: true),
             ["refresh-dispatches"] = Flags("--autonomy", "--autonomy-policy", "--goal"),
             ["logs"] = GoalScopedTaskFlags(),
-            ["cancel-dispatch"] = Flags("--goal", "--idempotency-key", "--operator-actor", "--actor-kind"),
+            ["cancel-dispatch"] = Flags("--goal", "--idempotency-key", "--operator-actor", "--actor-kind", "--json"),
             ["accept"] = Flags(
                 "--autonomy", "--autonomy-policy", "--keep-workspace", "--no-record", "--skip-verify")
         };
@@ -1670,7 +1670,9 @@ internal static class CliCommandHelp
             // is intentionally open. Those tokens are not orchestrator flags and cannot be enumerated here.
             var forwardsArbitraryDotnetOptions = command.Equals("stable-slot-dotnet", StringComparison.OrdinalIgnoreCase);
             return new CommandHelpEntry(
-                $"Usage: {command} [options]",
+                command.Equals("cancel-dispatch", StringComparison.OrdinalIgnoreCase)
+                    ? $"Usage: {command} [options] [--json]"
+                    : $"Usage: {command} [options]",
                 "Run this operator command.",
                 GenericCommandFlags.TryGetValue(command, out var flags) ? flags : CliCommandHelp.Flags(),
                 [],

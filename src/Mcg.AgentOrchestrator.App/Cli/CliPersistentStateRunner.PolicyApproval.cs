@@ -15,6 +15,7 @@ internal static partial class CliPersistentStateRunner
         OperatorIntentSubmissionSource submissionSource)
     {
         CliCommandHelp.ThrowIfInvalidFlags(args);
+        args = OperatorIntentSubmissionOutput.StripJsonFlag(args, out var emitAgentReadEnvelope);
         if (args.Count < 4 || args[1].StartsWith("--", StringComparison.Ordinal) ||
             !AcceptancePolicyChangeDecision.IsFullSha(args[2]))
             throw new ArgumentException(CliCommandHelp.ApprovePolicyChangeUsage);
@@ -36,9 +37,8 @@ internal static partial class CliPersistentStateRunner
             attribution.AuthenticationAssurance, DateTimeOffset.UtcNow, ActorKind: attribution.ActorKind);
         var persisted = SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory)
             .EnqueueAsync(record).GetAwaiter().GetResult();
-        Console.WriteLine($"Operator intent queued: id={persisted.Id} verb={persisted.Verb} goal={goalId.Value} status={persisted.Status}; poll with operator-intent-status {persisted.Id} (or add --wait).");
-        if (!ConductorLoopLease.IsActive(workspace.OrchestratorDirectory))
-            Console.WriteLine(ConductorLoopLease.InactiveWarning);
+        OperatorIntentSubmissionOutput.PrintAnswer(persisted, workspace.OrchestratorDirectory,
+            goalId.Value, emitAgentReadEnvelope);
         return false;
     }
 }

@@ -101,9 +101,6 @@ public sealed class CliOperatorIntentSubmitJsonTests : CliTaskQueryTestSupport
     }
 
     [Theory]
-    [InlineData("retry")]
-    [InlineData("progress")]
-    [InlineData("verify-manual")]
     [InlineData("attention")]
     public void OtherSubmits_Json_RemainsUnknownOption(string command)
     {
@@ -112,20 +109,6 @@ public sealed class CliOperatorIntentSubmitJsonTests : CliTaskQueryTestSupport
             : [command, "1", "--json"];
         var error = Assert.Throws<ArgumentException>(() => CliCommandHelp.ThrowIfInvalidFlags(args));
         Assert.Contains("Unknown option '--json'", error.Message);
-    }
-
-    [Fact]
-    public async Task Retry_Json_EmitsNoEnvelopeAndQueuesNothing()
-    {
-        using var fixture = await SubmitFixture.Create(CreateTempDirectory(), "adjudicate");
-        var output = CaptureConsole(() =>
-        {
-            var error = Assert.Throws<ArgumentException>(() => fixture.Run(
-                ["retry", "1", "--json"], fixture.JsonWorkspace));
-            Assert.Contains("Unknown option '--json'", error.Message);
-        });
-        Assert.Empty(output);
-        Assert.Empty(await fixture.Intents(fixture.JsonWorkspace).ListForGoalAsync(fixture.Goal.Id.Value));
     }
 
     private static void AssertEnvelope(SubmitResult result, OperatorIntentRecord intent)

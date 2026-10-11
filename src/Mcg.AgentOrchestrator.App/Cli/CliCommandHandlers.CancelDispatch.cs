@@ -13,6 +13,7 @@ internal static partial class CliCommandHandlers
         IOperatorIntentStore? intentStore = null,
         Action<TaskProcessRecord>? stopProcessTree = null)
     {
+        parts = OperatorIntentSubmissionOutput.StripJsonFlag(parts, out var emitAgentReadEnvelope);
         var task = ResolveDispatchCommandTask(parts, context,
             "cancel-dispatch <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number>");
         var goal = context.CurrentGoal!;
@@ -50,13 +51,10 @@ internal static partial class CliCommandHandlers
             .EnqueueAsync(intent).GetAwaiter().GetResult();
 
         (stopProcessTree ?? new BackgroundDispatchRunner().StopProcessTree)(process);
-        Console.WriteLine($"Operator intent queued: id={persisted.Id} verb={persisted.Verb} " +
-            $"goal={goal.Id.Value} task={task.Id.Value} status={persisted.Status}; " +
-            $"poll with operator-intent-status {persisted.Id} (or add --wait).");
-        Console.WriteLine($"Next step once applied: {OperatorIntentCoordinator.BuildCancelDispatchRecoveryCommand(goal, task)} " +
-            "(close and reopen-regate do not apply to a cancelled task).");
-        if (!ConductorLoopLease.IsActive(context.Workspace.OrchestratorDirectory))
-            Console.WriteLine(ConductorLoopLease.InactiveWarning);
+        OperatorIntentSubmissionOutput.PrintCancelDispatch(persisted, context.Workspace.OrchestratorDirectory,
+            goal.Id.Value, task.Id.Value,
+            $"Next step once applied: {OperatorIntentCoordinator.BuildCancelDispatchRecoveryCommand(goal, task)} " +
+            "(close and reopen-regate do not apply to a cancelled task).", emitAgentReadEnvelope);
         return false;
     }
 }

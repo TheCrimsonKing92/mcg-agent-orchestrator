@@ -261,7 +261,7 @@ internal static partial class CliPersistentStateRunner
             if (args[0].Equals(OperatorIntentVerbs.ApprovePolicyChange, StringComparison.OrdinalIgnoreCase)) return SubmitPolicyChangeApprovalIntent(args, stateRepository, workspace, ref currentGoal, operatorIntentSubmissionSource);
             if (IsInboxBackedGoalScopedTaskMutationCommand(args))
             {
-                var submitArgs = OperatorIntentSubmissionOutput.PrepareAdjudicationArguments(
+                var submitArgs = OperatorIntentSubmissionOutput.PrepareOperatorIntentArguments(
                     args, out var emitAgentReadEnvelope);
                 return SubmitGoalScopedTaskOperatorIntent(
                     submitArgs,
