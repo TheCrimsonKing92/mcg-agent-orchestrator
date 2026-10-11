@@ -15,7 +15,7 @@ internal static class CliInspectionQueryCommand
         {
             "goals" => args.Count == 1 || (args.Count == 2 && args[1] == "--json"),
             "model-outcomes" or "architecture" or "backlog-view" => args.Count == 1,
-            "config" => args.Count == 2 && args[1].ToLowerInvariant() is "agents" or "profiles" or "policy",
+            "config" => args.Count == 2 && args[1].ToLowerInvariant() is "agents" or "profiles" or "policy" or "doctor",
             _ => false
         };
     }

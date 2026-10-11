@@ -13,6 +13,7 @@ public sealed class CliInspectionReadOnlyRouteTests : CliTaskQueryTestSupport
     [Xunit.InlineData("config", "agents")]
     [Xunit.InlineData("config", "profiles")]
     [Xunit.InlineData("config", "policy")]
+    [Xunit.InlineData("config", "doctor")]
     [Xunit.InlineData("backlog-view")]
     [Xunit.InlineData("GOALS")]
     [Xunit.InlineData("MODEL-OUTCOMES")]
@@ -20,10 +21,12 @@ public sealed class CliInspectionReadOnlyRouteTests : CliTaskQueryTestSupport
     [Xunit.InlineData("CONFIG", "AGENTS")]
     [Xunit.InlineData("CONFIG", "PROFILES")]
     [Xunit.InlineData("CONFIG", "POLICY")]
+    [Xunit.InlineData("CONFIG", "DOCTOR")]
     [Xunit.InlineData("BACKLOG-VIEW")]
     public void ExactForms_ClassifyAndNeverLoadGoalsOrWrite(params string[] args)
     {
         Xunit.Assert.True(CliReadOnlyCommandRunner.IsReadOnlyCommand(args));
+        Xunit.Assert.Equal(CliCommandCapability.QueryOnly, CliCommandCapabilities.Classify(args));
         var root = CreateTempDirectory();
         try
         {
@@ -61,7 +64,6 @@ public sealed class CliInspectionReadOnlyRouteTests : CliTaskQueryTestSupport
     [Xunit.InlineData("model-outcomes", "extra")]
     [Xunit.InlineData("architecture", "extra")]
     [Xunit.InlineData("config")]
-    [Xunit.InlineData("config", "doctor")]
     [Xunit.InlineData("config", "bogus")]
     [Xunit.InlineData("backlog-view", "extra")]
     public void OtherShapes_KeepTheirExistingRoute(params string[] args) => AssertDeclined(args);
@@ -76,6 +78,39 @@ public sealed class CliInspectionReadOnlyRouteTests : CliTaskQueryTestSupport
 
         Xunit.Assert.False(CliInspectionQueryCommand.IsInspectionQueryCommand(["goals", "--board"]));
         Xunit.Assert.True(CliReadOnlyCommandRunner.IsReadOnlyCommand(["goals", "--board"]));
+    }
+
+    [Xunit.Fact]
+    public void ConfigDoctor_ReadOnlyRoute_MatchesDispatcherOutput()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var kernel = new AgentOrchestratorKernel();
+            var repository = new ProbeStateRepository(kernel) { ThrowOnOutbox = true };
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var profiles = WorkerProfileCatalog.Default();
+            var providers = new InMemoryModelProviderRegistry([]);
+            Goal? currentGoal = null;
+            string[] args = ["config", "doctor"];
+            var queryOutput = CaptureConsole(() =>
+            {
+                Xunit.Assert.True(CliReadOnlyCommandRunner.TryExecute(
+                    args, repository, workspace, providers, null,
+                    ref agents, ref profiles, ref currentGoal, out var changed));
+                Xunit.Assert.False(changed);
+            });
+            var dispatcherOutput = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+                args, kernel, workspace, ref agents, providers, ref profiles, ref currentGoal));
+
+            Xunit.Assert.Equal(dispatcherOutput, queryOutput);
+            Xunit.Assert.Contains("Ready:", queryOutput);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     private static void AssertDeclined(string[] args)
@@ -109,7 +144,7 @@ public sealed class CliInspectionReadOnlyRouteTests : CliTaskQueryTestSupport
     internal static string[][] ExactForms() =>
     [
         ["goals"], ["model-outcomes"], ["architecture"],
-        ["config", "agents"], ["config", "profiles"], ["config", "policy"], ["backlog-view"]
+        ["config", "agents"], ["config", "profiles"], ["config", "policy"], ["config", "doctor"], ["backlog-view"]
     ];
 
     internal static AgentOrchestratorKernel CreateInspectionSeed()

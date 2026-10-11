@@ -18,7 +18,7 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteConvention
             ["remote-executors"] = [["remote-executors"]],
             ["round-value"] = [["round-value"]],
             ["architecture"] = [["architecture"]],
-            ["config"] = [["config", "agents"], ["config", "profiles"], ["config", "policy"]],
+            ["config"] = [["config", "agents"], ["config", "profiles"], ["config", "policy"], ["config", "doctor"]],
             ["model-outcomes"] = [["model-outcomes"]],
             ["backlog-list"] = [["backlog-list"]],
             ["backlog-show"] = [["backlog-show", "abc10000"]],
