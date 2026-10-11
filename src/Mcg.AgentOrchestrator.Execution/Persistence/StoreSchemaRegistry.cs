@@ -47,6 +47,9 @@ public static class StoreSchemaRegistry
     public static StoreSchemaEntry StewardTriggers { get; } =
         new("steward-triggers", Persistence + "StewardTriggerStoreSetup.cs", "steward-triggers.db", "conductor", 1);
 
+    public static StoreSchemaEntry BoardFill { get; } =
+        new("board-fill", Conductor + "ConductorBoardFillDraftStore.cs", "board-fill.db", "conductor", 1);
+
     public static StoreSchemaEntry ProgressiveReviewGlanceCircuit { get; } =
         new("progressive-review-glance-circuit", Persistence + "ProgressiveReviewGlanceCircuitStore.cs", "progressive-review-glance-circuit.db", "review", 1);
 
@@ -78,7 +81,7 @@ public static class StoreSchemaRegistry
         StewardTriggers,
         new("steward-triage-receipts", Comms + "StewardTriageReceiptStore.cs", "steward-triage-receipts.db", "conductor", null),
         new("judge-panel", Conductor + "ConductorJudgePanelCaseStore.Schema.cs", "judge-panel.db", "conductor", null),
-        new("board-fill", Conductor + "ConductorBoardFillDraftStore.cs", "board-fill.db", "conductor", null),
+        BoardFill,
         ProgressiveReviewGlanceCircuit,
         ProgressiveReviewSteering,
         new("reconcile-sweep-remediation", Persistence + "ReconcileSweepRemediationStore.cs", "state.db", "review", null),

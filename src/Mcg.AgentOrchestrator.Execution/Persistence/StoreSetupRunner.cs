@@ -36,6 +36,8 @@ public static class StoreSetupRunner
                 directory => Path.Combine(directory, StoreSchemaRegistry.AuthorClaims.Database)),
             [StoreSchemaRegistry.StewardTriggers.StoreName] = new(StewardTriggerStoreSetup.Setup,
                 directory => Path.Combine(directory, StoreSchemaRegistry.StewardTriggers.Database)),
+            [StoreSchemaRegistry.BoardFill.StoreName] = new(BoardFillStoreSetup.Setup,
+                directory => Path.Combine(directory, StoreSchemaRegistry.BoardFill.Database)),
             [StoreSchemaRegistry.ProgressiveReviewGlanceCircuit.StoreName] = new(SqliteProgressiveReviewGlanceCircuitStore.Setup,
                 directory => Path.Combine(directory, StoreSchemaRegistry.ProgressiveReviewGlanceCircuit.Database)),
             [StoreSchemaRegistry.ProgressiveReviewSteering.StoreName] = new(ProgressiveReviewSteeringStoreSetup.Setup,

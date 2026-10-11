@@ -112,7 +112,11 @@ internal sealed partial class ConductorBoardFillDraftStore(string path)
 
     private SqliteConnection Open(bool readOnly = false)
     {
-        if (!readOnly) Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
+        if (!readOnly)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
+            BoardFillStoreSetup.Setup(path);
+        }
         var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
             DataSource = path, Mode = readOnly ? SqliteOpenMode.ReadOnly : SqliteOpenMode.ReadWriteCreate, Pooling = false
@@ -120,12 +124,6 @@ internal sealed partial class ConductorBoardFillDraftStore(string path)
         try
         {
             connection.Open();
-            if (!readOnly)
-            {
-                using var command = connection.CreateCommand();
-                command.CommandText = "CREATE TABLE IF NOT EXISTS board_fill_rounds(round_id TEXT PRIMARY KEY, payload TEXT NOT NULL)";
-                command.ExecuteNonQuery();
-            }
             return connection;
         }
         catch { connection.Dispose(); throw; }
