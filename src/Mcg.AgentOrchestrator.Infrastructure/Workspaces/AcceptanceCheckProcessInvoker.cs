@@ -249,8 +249,8 @@ internal static class AcceptanceCheckProcessInvoker
                     progressSink,
                     progressInterval ?? DefaultProgressInterval,
                     runningObserver: laneStall is null ? null : laneStall.Observe);
-                heartbeatTask = heartbeat.RunAsync(
-                    heartbeatInterval ?? DefaultHeartbeatInterval, heartbeatCts.Token);
+                heartbeatTask = WriteGateHeartbeatLoopAsync(
+                    heartbeat, heartbeatCts.Token, heartbeatInterval ?? DefaultHeartbeatInterval);
             }
 
             using var timeoutCts = timeoutSignal.CanBeCanceled
@@ -464,6 +464,19 @@ internal static class AcceptanceCheckProcessInvoker
                 TryDeleteFile(stdoutPath);
                 TryDeleteFile(stderrPath);
             }
+        }
+    }
+
+    private static async Task WriteGateHeartbeatLoopAsync(
+        GateHeartbeatRuntime heartbeat, CancellationToken cancellationToken, TimeSpan heartbeatInterval)
+    {
+        heartbeat.WriteRunning(emitProgress: true);
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try { await Task.Delay(heartbeatInterval, cancellationToken).ConfigureAwait(false); }
+            catch (OperationCanceledException) { break; }
+
+            heartbeat.WriteRunning(emitProgress: false);
         }
     }
 
