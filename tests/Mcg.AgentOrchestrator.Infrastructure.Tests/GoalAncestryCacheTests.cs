@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
 using AncestryFixture = TerminalGoalSweepAncestryReuseTests.AncestryFixture;
 
 // Parallel-safe: cache state and metadata fixtures are private to each test.
@@ -128,6 +129,40 @@ public sealed class GoalAncestryCacheTests
         Assert.True(cache.Ancestry.TryGet(fixture.Metadata.MainSha, fixture.Metadata.TipSha, out var fact));
         Assert.False(fact);
         fixture.AssertPending();
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false, false, "failed to start git process")]
+    [Xunit.InlineData(false, false, "")]
+    [Xunit.InlineData(true, true, "")]
+    [Xunit.InlineData(true, false, "git runner threw")]
+    public void Run_ExitOneRunnerFault_RetriesInsteadOfCachingFalse(
+        bool processStarted, bool drainTimedOut, string error)
+    {
+        using var fixture = new AncestryFixture
+        {
+            AncestryResult = new GitCli.GitResult(1, string.Empty, error,
+                DrainTimedOut: drainTimedOut, ProcessStarted: processStarted)
+        };
+        fixture.AddObligation();
+        var cache = new TerminalGoalSweepCache();
+        fixture.Run(cache);
+        Assert.Equal(1, fixture.AncestrySpawnCount);
+        Assert.Equal(0, cache.Ancestry.Count);
+        Assert.False(cache.Ancestry.TryGet(fixture.Metadata.MainSha, fixture.Metadata.TipSha, out _));
+        fixture.AssertPending();
+
+        fixture.Run(cache);
+        Assert.Equal(2, fixture.AncestrySpawnCount);
+        Assert.Equal(0, cache.Ancestry.Count);
+        fixture.AssertPending();
+
+        fixture.AncestryResult = null;
+        fixture.ExitCode = 0;
+        fixture.WriteAttempt("passed", fixture.Metadata.TipSha);
+        fixture.Run(cache);
+        Assert.Equal(3, fixture.AncestrySpawnCount);
+        AssertRecorded(fixture, fixture.Metadata.TipSha);
     }
 
     [Xunit.Fact]

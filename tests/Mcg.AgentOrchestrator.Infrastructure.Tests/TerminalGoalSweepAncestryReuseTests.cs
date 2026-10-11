@@ -132,6 +132,7 @@ public sealed class TerminalGoalSweepAncestryReuseTests
         private readonly GoalId _goalId;
         internal Goal Goal => Kernel.GetGoal(_goalId);
         internal int ExitCode { get; set; } = 1;
+        internal GitCli.GitResult? AncestryResult { get; set; }
         internal Dictionary<string, int> CandidateExitCodes { get; } = new(StringComparer.Ordinal);
         private readonly Func<string, IReadOnlyList<string>, GitCli.GitResult> _runner;
         internal int AncestrySpawnCount => Metadata.Commands.Count(IsAncestryCommand);
@@ -197,7 +198,7 @@ public sealed class TerminalGoalSweepAncestryReuseTests
             Assert.Equal(Metadata.Root, directory);
             Assert.Equal(4, args.Count);
             Metadata.Commands.Add(string.Join(" ", args));
-            return new(CandidateExitCodes.GetValueOrDefault(args[2], ExitCode), string.Empty, string.Empty);
+            return AncestryResult ?? new(CandidateExitCodes.GetValueOrDefault(args[2], ExitCode), string.Empty, string.Empty);
         }
 
         internal void WriteAttempt(string attemptId, string candidate)

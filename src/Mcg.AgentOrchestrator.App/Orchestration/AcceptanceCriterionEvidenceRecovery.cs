@@ -209,10 +209,13 @@ internal static partial class AcceptanceCriterionEvidenceRecovery
         if (ancestryCache is not null && ancestryCache.TryGet(mainSha, candidateSha, out var isAncestor))
             return isAncestor;
 
-        var exitCode = gitRunner(executionDirectory, ["merge-base", "--is-ancestor", candidateSha, mainSha]).ExitCode;
-        if (exitCode is 0 or 1)
-            ancestryCache?.Store(mainSha, candidateSha, exitCode == 0);
-        return exitCode == 0;
+        var result = gitRunner(executionDirectory, ["merge-base", "--is-ancestor", candidateSha, mainSha]);
+        // Exit 1 proves negative ancestry only when the git query completed without a runner fault.
+        if (result.ExitCode == 0 ||
+            (result.ExitCode == 1 && result.ProcessStarted && !result.DrainTimedOut &&
+             string.IsNullOrWhiteSpace(result.Error)))
+            ancestryCache?.Store(mainSha, candidateSha, result.ExitCode == 0);
+        return result.ExitCode == 0;
     }
 
     private static bool IsPendingAcceptanceObligation(CriterionEvidenceObligation obligation) =>
