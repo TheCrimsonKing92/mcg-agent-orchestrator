@@ -59,6 +59,24 @@ internal sealed class GateHeartbeatRuntime
         }
     }
 
+    public async Task RunAsync(TimeSpan heartbeatInterval, CancellationToken cancellationToken)
+    {
+        WriteRunning(emitProgress: true);
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(heartbeatInterval, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+
+            WriteRunning(emitProgress: false);
+        }
+    }
+
     // Mirror only the live beat. WriteFinal removes this run's uniquely keyed mirror, leaving any
     // concurrent sibling visible and preventing completed state from accumulating indefinitely.
     private void MirrorToStableSlot(GateHeartbeatSnapshot snapshot)
