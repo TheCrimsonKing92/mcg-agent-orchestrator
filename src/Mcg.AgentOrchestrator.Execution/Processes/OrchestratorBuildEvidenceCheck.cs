@@ -89,6 +89,8 @@ public static class OrchestratorBuildEvidenceCheck
         var receiptReason = receipt.Matches
             ? $"projects-incomplete; missing_projects={string.Join(", ", missingProjects)}"
             : receipt.Reason;
+        if (!receipt.Matches && !string.IsNullOrWhiteSpace(receipt.Detail))
+            receiptReason += $"; digest_detail={receipt.Detail}";
         OrchestratorBuildCheckResult result;
         try
         {

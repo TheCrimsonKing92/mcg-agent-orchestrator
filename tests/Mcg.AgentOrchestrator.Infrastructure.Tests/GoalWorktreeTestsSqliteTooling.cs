@@ -15,6 +15,9 @@ using Microsoft.Data.Sqlite;
 
 public sealed partial class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
 {
+    // Guards against a script hang; this failsafe is not an assertion about speed.
+    private const int RepoScriptHangFailsafeMilliseconds = 300_000;
+
     [Xunit.Fact(DisplayName = "InvokeRepoScript_runs_FindOrchestratorLocks_without_synthetic_argument")]
     public void InvokeRepoScriptRunsFindOrchestratorLocksWithoutSyntheticArgument()
     {
@@ -37,7 +40,8 @@ public sealed partial class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBas
         startInfo.ArgumentList.Add("scripts\\Find-OrchestratorLocks.ps1");
         startInfo.Environment["MCG_ORCHESTRATOR_APP_OUTPUT"] = appOutput.Path;
 
-        var result = RunRedirectedProcess(startInfo, "Find-OrchestratorLocks.ps1");
+        var result = RunRedirectedProcess(startInfo, "Find-OrchestratorLocks.ps1",
+            timeoutMs: RepoScriptHangFailsafeMilliseconds);
         var stderr = result.Stderr;
         var stdout = result.Stdout;
 
@@ -328,7 +332,7 @@ public sealed partial class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBas
                 var first = RunRedirectedProcess(
                     CreateRepoProcessHelperStartInfo(repo, helperScript, appOutput.Path),
                     $"first {helperScript}",
-                    timeoutMs: 30000);
+                    timeoutMs: RepoScriptHangFailsafeMilliseconds);
 
                 AssertRepoProcessHelperResult(helperScript, first);
                 Assert.False(first.TimedOut);
@@ -336,7 +340,7 @@ public sealed partial class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBas
                 var second = RunRedirectedProcess(
                     CreateRepoProcessHelperStartInfo(repo, helperScript, appOutput.Path),
                     $"second {helperScript}",
-                    timeoutMs: 30000);
+                    timeoutMs: RepoScriptHangFailsafeMilliseconds);
 
                 AssertRepoProcessHelperResult(helperScript, second);
                 Assert.False(second.TimedOut);
