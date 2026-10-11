@@ -620,6 +620,8 @@ For a project whose trunk has another name, register it with `project create <na
 
 Durable state lives in stores, never in `.scratch`.
 
+`project emit-manifest [name] --out <path>` writes a new acceptance manifest from the stored project model and owner answers. Choose a scratch path outside the repository and project model directory with an existing parent; existing destinations and the name `acceptance-manifest.json` are refused. Unanswered gate facts print `Refused:`, `Blocked` and open engine `OwnerQuestion` lines; record those answers with `project answer` and retry. After emission, run `project compare-manifest <name> --manifest <emitted>` and `project compare-manifest-engine <name> --manifest <emitted>` before any installation. For net-health phase 1 evidence, use a scratch path outside the data root too, run both comparisons again against the untouched hand manifest, and record the exact output lines.
+
 | Location | What |
 |---|---|
 | `.orchestrator/state.db` | the kernel plus goal-intake request ledger: goals, tasks, dispatches, verifications, and keyed `still-committing`/`created`/`failed` receipts (SQLite, single-writer) |

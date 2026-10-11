@@ -1,0 +1,80 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using Mcg.AgentOrchestrator.Core;
+
+namespace Mcg.AgentOrchestrator.Infrastructure;
+
+/// <summary>Builds a gate artifact from snapshot facts and live owner answers, without I/O.</summary>
+public static class LearnedAcceptanceManifest
+{
+    public static LearnedAcceptanceManifestResult Build(ProjectModel model, IReadOnlyList<OwnerAnswer> answers)
+    {
+        ArgumentNullException.ThrowIfNull(model);
+        ArgumentNullException.ThrowIfNull(answers);
+        var (checks, unresolved) = LearnedTestCheckDeriver.Derive(model);
+        var learned = LearnedEngineSettingsDeriver.Derive(model);
+        var applied = OwnerAnswerApplier.Apply(model, answers.OrderBy(answer => answer.FactKey, StringComparer.Ordinal)
+            .ThenBy(answer => answer.RecordedUtc).ThenBy(answer => answer.Value, StringComparer.Ordinal).ToArray());
+        var settings = OwnerAnsweredEngineSettings.Overlay(learned, applied);
+        var questions = settings.OwnerQuestions.Concat(applied.OpenQuestions)
+            .Where(question => question.FactKey.StartsWith("engine/", StringComparison.Ordinal))
+            .DistinctBy(question => question.FactKey, StringComparer.Ordinal).ToList();
+
+        // A removed question is not proof that the required numeric fact was materialized.
+        EnsureTimeoutQuestion(OwnerAnswerValidator.DefaultTimeoutKey, settings.DefaultTimeoutMinutes);
+        EnsureTimeoutQuestion(OwnerAnswerValidator.BuildServerShutdownKey, settings.BuildServerShutdownMinutes);
+        EnsureTimeoutQuestion(OwnerAnswerValidator.DiscoveryKey, settings.DiscoveryMinutes);
+
+        var blockers = unresolved.Select(unit => new ManifestBlocker(unit.FactKey,
+            $"no confident VSTest or MTP runner for {unit.UnitId}")).ToList();
+        blockers.AddRange(checks.Where(check => check.Runner == "mtp").Select(check =>
+            new ManifestBlocker("engine/mtpInvocations",
+                $"the gate needs an engine.mtpInvocations declaration for {check.ProjectPath} that this slice cannot derive")));
+        blockers.AddRange(questions.Select(question => new ManifestBlocker(question.FactKey, question.Question)));
+        if (blockers.Count > 0)
+            return new(null, blockers.AsReadOnly(), questions.AsReadOnly());
+
+        var emittedChecks = new JsonArray();
+        foreach (var check in checks.OrderBy(check => check.ProjectPath.Replace('\\', '/'), StringComparer.Ordinal))
+        {
+            var path = check.ProjectPath.Replace('\\', '/');
+            emittedChecks.Add(new JsonObject
+            {
+                ["name"] = Path.GetFileNameWithoutExtension(path),
+                ["type"] = "dotnet-test",
+                ["runner"] = check.Runner,
+                ["project"] = path,
+                ["arguments"] = new JsonArray()
+            });
+        }
+        var manifest = new JsonObject
+        {
+            ["version"] = 1,
+            ["engine"] = new JsonObject
+            {
+                ["maxConcurrentShards"] = settings.MaxConcurrentShards,
+                ["enforceStructuralCoverage"] = false,
+                ["timeouts"] = new JsonObject
+                {
+                    ["defaultMinutes"] = settings.DefaultTimeoutMinutes,
+                    ["buildServerShutdownMinutes"] = settings.BuildServerShutdownMinutes,
+                    ["discoveryMinutes"] = settings.DiscoveryMinutes
+                }
+            },
+            ["checks"] = emittedChecks,
+            ["forbiddenChangedPathGlobs"] = new JsonArray()
+        };
+        var json = manifest.ToJsonString(new JsonSerializerOptions
+        {
+            WriteIndented = true, IndentSize = 2, NewLine = "\n"
+        }) + "\n";
+        return new(json, blockers.AsReadOnly(), questions.AsReadOnly());
+
+        void EnsureTimeoutQuestion(string key, int? minutes)
+        {
+            if (minutes is > 0 || questions.Any(question => question.FactKey == key))
+                return;
+            questions.Add(learned.OwnerQuestions.First(question => question.FactKey == key));
+        }
+    }
+}
