@@ -54,6 +54,9 @@ internal static class ProjectCliCommand
             case "compare-manifest":
                 return ProjectCompareManifestCommand.Execute(parts, registry, defaultRootDirectory, activeProjectOverride, discoveryOutput ?? Console.Out);
 
+            case "compare-manifest-engine":
+                return ProjectCompareManifestEngineCommand.Execute(parts, discoveryOutput ?? Console.Out);
+
             case "compare-integration-branch":
                 return ProjectCompareIntegrationBranchCommand.Execute(parts, registry, defaultRootDirectory, activeProjectOverride, discoveryOutput ?? Console.Out);
 
@@ -61,7 +64,7 @@ internal static class ProjectCliCommand
                 return ProjectUseLearnedBranchCommand.Execute(parts, registry, discoveryOutput ?? Console.Out);
 
             default:
-                throw new ArgumentException("Usage: project list|show [name]|discover [name] [--root <path>] [--measure build|test|all]|compare-manifest [name] [--root <path>] --manifest <path>|compare-integration-branch [name] [--root <path>]|create <name> --root <path> [--integration-branch <name>] [--relocate-state]|select <name>|move-default-state [--undo] [--dry-run]|use-learned-branch <name> [--off]");
+                throw new ArgumentException("Usage: project list|show [name]|discover [name] [--root <path>] [--measure build|test|all]|compare-manifest [name] [--root <path>] --manifest <path>|compare-manifest-engine [name] [--root <path>] --manifest <path>|compare-integration-branch [name] [--root <path>]|create <name> --root <path> [--integration-branch <name>] [--relocate-state]|select <name>|move-default-state [--undo] [--dry-run]|use-learned-branch <name> [--off]");
         }
     }
 

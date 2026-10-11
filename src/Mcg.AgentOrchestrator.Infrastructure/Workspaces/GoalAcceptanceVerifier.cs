@@ -4901,7 +4901,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         IReadOnlyList<AcceptanceManifestCheck> Checks,
         IReadOnlyList<string> UndeclaredProjects);
 
-    private sealed class AcceptanceManifest
+    internal sealed class AcceptanceManifest
     {
         private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
 
