@@ -18,7 +18,7 @@ internal sealed partial class ConductorDriver
     }
 
     private void RecordTrainImplicatedMember(
-        MergeTrainMemberBinding dropped, MergeTrainReceipt redReceipt, IReadOnlyList<string> subjects)
+        MergeTrainMemberBinding dropped, MergeTrainReceipt redReceipt, IReadOnlyList<string> subjects, string attributionSource)
     {
         if (!MergeTrainRedAttribution.IsGenuineTrainRed(redReceipt, subjects.Count == 0 ? null : dropped)) return;
         _mergeTrainAcceptanceStore!.RecordTrainImplicatedCandidate(
@@ -30,7 +30,8 @@ internal sealed partial class ConductorDriver
             var writer = new ConductEventLogWriter(_cohortWorkspace.ConductEventsLogPath);
             TryAppendGateProgressEvent(writer, dropped.GoalId.Value,
                 $"TRAIN_IMPLICATED train={redReceipt.Identity.Value} member={dropped.GoalId.Value} " +
-                $"candidate_revision={dropped.CandidateRevision} subjects={string.Join(',', subjects)}",
+                $"candidate_revision={dropped.CandidateRevision} subjects={string.Join(',', subjects)} attribution={attributionSource}" +
+                (attributionSource == "impact" ? $" failing_test_classes={string.Join(',', subjects)}" : string.Empty),
                 eventKind: "train-attribution");
         }
         catch (Exception) { /* Event-log setup is observational. */ }
