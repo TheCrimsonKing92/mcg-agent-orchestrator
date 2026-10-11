@@ -9,6 +9,7 @@ internal sealed class GateHeartbeatRuntime
     private readonly TimeSpan _timeout;
     private readonly Action<AcceptanceGateProgress>? _progressSink;
     private readonly TimeSpan _progressInterval;
+    private readonly Action<GateHeartbeatSnapshot>? _runningObserver;
     private readonly DateTimeOffset _startedAt = DateTimeOffset.UtcNow;
     private DateTimeOffset _lastProgressAt;
     private DateTimeOffset _lastProgressEmittedAt = DateTimeOffset.MinValue;
@@ -21,7 +22,8 @@ internal sealed class GateHeartbeatRuntime
         string stderrPath,
         TimeSpan timeout,
         Action<AcceptanceGateProgress>? progressSink = null,
-        TimeSpan? progressInterval = null)
+        TimeSpan? progressInterval = null,
+        Action<GateHeartbeatSnapshot>? runningObserver = null)
     {
         _context = context;
         _processId = processId;
@@ -30,6 +32,7 @@ internal sealed class GateHeartbeatRuntime
         _timeout = timeout;
         _progressSink = progressSink;
         _progressInterval = progressInterval ?? TimeSpan.FromSeconds(30);
+        _runningObserver = runningObserver;
         _lastProgressAt = _startedAt;
     }
 
@@ -43,6 +46,7 @@ internal sealed class GateHeartbeatRuntime
             _lastProgressEmittedAt = snapshot.LastObservedAt;
             _progressSink?.Invoke(ToProgress(snapshot));
         }
+        _runningObserver?.Invoke(snapshot);
     }
 
     public void WriteFinal(string state, int? childPid, int? exitCode)

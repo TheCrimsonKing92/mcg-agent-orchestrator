@@ -11,6 +11,8 @@ public sealed class AcceptanceGateHeartbeatTypesOwnershipTests
         "RunClass { get; init; }", "RunId { get; init; }")]
     [InlineData("GateHeartbeatRuntime.cs", "internal sealed class GateHeartbeatRuntime")]
     [InlineData("CaptureLimitStop.cs", "internal sealed class CaptureLimitStop(")]
+    [InlineData("AcceptanceLaneStallPolicy.cs", "internal static class AcceptanceLaneStallPolicy")]
+    [InlineData("AcceptanceLaneStallMonitor.cs", "internal sealed class AcceptanceLaneStallMonitor")]
     public void Types_AfterExtraction_HaveIndependentOwners(string filename, params string[] declarations)
     {
         var path = Path.Combine(FindRepositoryRoot(), WorkspaceDirectory, filename);

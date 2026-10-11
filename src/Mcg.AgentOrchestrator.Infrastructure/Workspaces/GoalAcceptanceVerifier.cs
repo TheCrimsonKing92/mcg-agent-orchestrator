@@ -307,7 +307,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         int? ChildProcessId = null,
         DateTimeOffset? ChildProcessStartedAt = null,
         bool CaptureLimited = false,
-        long? CaptureLimitBytes = null);
+        long? CaptureLimitBytes = null,
+        TimeSpan? LaneStallSilence = null,
+        TimeSpan? LaneStallLimit = null);
 
     internal static readonly Encoding StrictUtf8 = new UTF8Encoding(false, true);
     internal static readonly Encoding StrictUtf16LittleEndian = new UnicodeEncoding(false, true, true);
@@ -4295,7 +4297,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static string BuildTimeoutSummary(CommandResult result)
     {
         var fallback = new AcceptanceGateEngineSettings().ResolveCheckTimeout(null);
-        return $"elapsed={FormatTimeout(result.Elapsed ?? result.Timeout ?? fallback)} budget={FormatTimeout(result.Timeout ?? fallback)}";
+        return $"elapsed={FormatTimeout(result.Elapsed ?? result.Timeout ?? fallback)} budget={FormatTimeout(result.Timeout ?? fallback)}"
+            + AcceptanceLaneStallPolicy.FormatStallSuffix(result.LaneStallSilence, result.LaneStallLimit);
     }
 
     private static string BuildTimeoutFailureName(AcceptanceManifestCheck check, CommandResult result) =>

@@ -57,6 +57,7 @@ internal static class AcceptanceCheckProcessInvoker
         var commandLine = string.Join(' ', arguments.Select(QuoteForDisplay));
         var timedOut = false;
         using var captureLimitStop = new CaptureLimitStop(stopOnCaptureLimit);
+        using var laneStall = AcceptanceLaneStallMonitor.ForHeartbeat(heartbeatContext, TimeProvider.System);
         var elapsed = Stopwatch.StartNew();
         CancellationTokenSource? heartbeatCts = null;
         Task? heartbeatTask = null;
@@ -246,7 +247,8 @@ internal static class AcceptanceCheckProcessInvoker
                     stderrPath,
                     commandTimeout,
                     progressSink,
-                    progressInterval ?? DefaultProgressInterval);
+                    progressInterval ?? DefaultProgressInterval,
+                    runningObserver: laneStall is null ? null : laneStall.Observe);
                 heartbeatTask = WriteGateHeartbeatLoopAsync(
                     heartbeat,
                     heartbeatCts.Token,
@@ -254,8 +256,8 @@ internal static class AcceptanceCheckProcessInvoker
             }
 
             using var timeoutCts = timeoutSignal.CanBeCanceled
-                ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutSignal, captureLimitStop.Token)
-                : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, captureLimitStop.Token);
+                ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutSignal, captureLimitStop.Token, laneStall?.Token ?? CancellationToken.None)
+                : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, captureLimitStop.Token, laneStall?.Token ?? CancellationToken.None);
             if (!timeoutSignal.CanBeCanceled)
             {
                 timeoutCts.CancelAfter(commandTimeout);
@@ -267,6 +269,7 @@ internal static class AcceptanceCheckProcessInvoker
             }
             catch (OperationCanceledException)
             {
+                laneStall?.Complete();
                 try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
                 if (cancellationToken.IsCancellationRequested)
                     throw;
@@ -274,6 +277,10 @@ internal static class AcceptanceCheckProcessInvoker
                 timedOut = !captureLimitStop.Stopped;
                 if (captureLimitStop.Stopped)
                     await process.WaitForExitAsync(CancellationToken.None).WaitAsync(CaptureDrainTimeout).ConfigureAwait(false);
+            }
+            finally
+            {
+                laneStall?.Complete();
             }
 
             var captureResults = await CompleteCaptureDrainsAsync(
@@ -385,7 +392,9 @@ internal static class AcceptanceCheckProcessInvoker
                 completedProcessId,
                 completedProcessStartedAt,
                 captureLimited,
-                captureLimited ? engineSettings.OutputCaptureLimitBytes : null);
+                captureLimited ? engineSettings.OutputCaptureLimitBytes : null,
+                LaneStallSilence: timedOut && laneStall is { Stopped: true } ? laneStall.Silent : null,
+                LaneStallLimit: timedOut && laneStall is { Stopped: true } ? laneStall.Limit : null);
         }
         finally
         {
