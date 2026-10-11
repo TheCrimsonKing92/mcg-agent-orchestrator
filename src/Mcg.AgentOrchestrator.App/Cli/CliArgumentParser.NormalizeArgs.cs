@@ -19,11 +19,23 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
 
     if (command.Equals("progress", StringComparison.OrdinalIgnoreCase))
     {
+        if (args.Any(arg => arg.Equals("--json", StringComparison.OrdinalIgnoreCase)))
+        {
+            var withoutJson = args.Where(arg => !arg.Equals("--json", StringComparison.OrdinalIgnoreCase)).ToArray();
+            return [.. NormalizeArgs(withoutJson), "--json"];
+        }
+
         return NormalizeTaskTargetArgs(args, trailingArgumentCount: 2, allowTextFile: true);
     }
 
     if (command.Equals("retry", StringComparison.OrdinalIgnoreCase))
     {
+        if (args.Any(arg => arg.Equals("--json", StringComparison.OrdinalIgnoreCase)))
+        {
+            var withoutJson = args.Where(arg => !arg.Equals("--json", StringComparison.OrdinalIgnoreCase)).ToArray();
+            return [.. NormalizeArgs(withoutJson), "--json"];
+        }
+
         return NormalizeRetryTaskTargetArgs(args);
     }
 
@@ -186,6 +198,12 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
 
     if (command.Equals("verify-manual", StringComparison.OrdinalIgnoreCase))
     {
+        if (args.Any(arg => arg.Equals("--json", StringComparison.OrdinalIgnoreCase)))
+        {
+            var withoutJson = args.Where(arg => !arg.Equals("--json", StringComparison.OrdinalIgnoreCase)).ToArray();
+            return [.. NormalizeArgs(withoutJson), "--json"];
+        }
+
         return NormalizeTaskTargetArgs(args, trailingArgumentCount: 2, allowTextFile: true);
     }
 
