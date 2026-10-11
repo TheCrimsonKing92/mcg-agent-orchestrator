@@ -1,5 +1,4 @@
 using System.Text.Json;
-using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -95,13 +94,7 @@ internal static partial class CliCommandHandlers
         var persisted = SqliteOperatorIntentStore.ForDirectories(
             context.Workspace.OrchestratorDirectory, context.Workspace.LogDirectory)
             .EnqueueAsync(intent).GetAwaiter().GetResult();
-        if (emitAgentReadEnvelope)
-            Console.WriteLine(OperatorIntentAgentReadView.Render(persisted));
-        else
-            Console.WriteLine($"Operator intent queued: id={persisted.Id} verb={persisted.Verb} " +
-                $"goal={goal.Id.Value} status={persisted.Status}; poll with operator-intent-status {persisted.Id} (or add --wait).");
-        if (!ConductorLoopLease.IsActive(context.Workspace.OrchestratorDirectory))
-            (emitAgentReadEnvelope ? Console.Error : Console.Out).WriteLine(ConductorLoopLease.InactiveWarning);
+        OperatorIntentSubmissionOutput.PrintAnswer(persisted, context.Workspace.OrchestratorDirectory, goal.Id.Value, emitAgentReadEnvelope);
         return false;
     }
 

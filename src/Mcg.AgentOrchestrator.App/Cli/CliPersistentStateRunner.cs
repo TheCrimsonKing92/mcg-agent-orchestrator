@@ -261,11 +261,8 @@ internal static partial class CliPersistentStateRunner
             if (args[0].Equals(OperatorIntentVerbs.ApprovePolicyChange, StringComparison.OrdinalIgnoreCase)) return SubmitPolicyChangeApprovalIntent(args, stateRepository, workspace, ref currentGoal, operatorIntentSubmissionSource);
             if (IsInboxBackedGoalScopedTaskMutationCommand(args))
             {
-                var emitAgentReadEnvelope = args[0].Equals(OperatorIntentVerbs.Adjudicate, StringComparison.OrdinalIgnoreCase) &&
-                    args.Any(arg => arg.Equals("--json", StringComparison.OrdinalIgnoreCase));
-                var submitArgs = emitAgentReadEnvelope
-                    ? args.Where(arg => !arg.Equals("--json", StringComparison.OrdinalIgnoreCase)).ToArray()
-                    : args;
+                var submitArgs = OperatorIntentSubmissionOutput.PrepareAdjudicationArguments(
+                    args, out var emitAgentReadEnvelope);
                 return SubmitGoalScopedTaskOperatorIntent(
                     submitArgs,
                     stateRepository,
@@ -1892,17 +1889,8 @@ internal static partial class CliPersistentStateRunner
             .GetAwaiter()
             .GetResult();
         currentGoal = goal;
-        if (emitAgentReadEnvelope)
-            Console.WriteLine(OperatorIntentAgentReadView.Render(persisted));
-        else
-            Console.WriteLine(
-                $"Operator intent queued: id={persisted.Id} verb={persisted.Verb} " +
-                $"selector={preparedCommand.SuppliedGoalSelector ?? "current"} goal={goal.Id.Value} " +
-                $"task={task.Id.Value} status={persisted.Status}; poll with operator-intent-status {persisted.Id} (or add --wait).");
-        if (!ConductorLoopLease.IsActive(workspace.OrchestratorDirectory))
-        {
-            (emitAgentReadEnvelope ? Console.Error : Console.Out).WriteLine(ConductorLoopLease.InactiveWarning);
-        }
+        OperatorIntentSubmissionOutput.PrintTask(persisted, workspace.OrchestratorDirectory,
+            preparedCommand.SuppliedGoalSelector, goal.Id.Value, task.Id.Value, emitAgentReadEnvelope);
 
         return false;
     }
