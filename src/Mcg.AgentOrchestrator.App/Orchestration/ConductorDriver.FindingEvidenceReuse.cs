@@ -238,7 +238,7 @@ internal sealed partial class ConductorDriver
                     findingRoundFingerprint,
                     StringComparison.Ordinal) &&
                 IsReusableGreenFindingEvidenceReceipt(receipt, candidateSha, executionBasisIdentity) &&
-                TryGetFindingEvidenceCoverage(receipt.Request, out var executedCoverage) &&
+                TryGetFindingEvidenceCoverage(FindingEvidenceExecutedCoverage.ExecutedRequest(receipt, FormatFindingEvidenceSelection), out var executedCoverage) &&
                 requestedCoverage.SetEquals(executedCoverage) &&
                 (string.Equals(BuildFindingEvidenceIdentity(receipt.Request), identity, StringComparison.Ordinal) ||
                     (receipt.RequestDispositions ?? []).Any(disposition =>
@@ -334,7 +334,7 @@ internal sealed partial class ConductorDriver
                 } ||
                 (candidateReceipt.Arms ?? []).Any(arm => arm.Disposition is
                     FindingEvidenceArmDisposition.ApparatusFailure or FindingEvidenceArmDisposition.Inconclusive) ||
-                !TryGetFindingEvidenceCoverage(candidateReceipt.Request, out var executedCoverage) ||
+                !TryGetFindingEvidenceCoverage(FindingEvidenceExecutedCoverage.ExecutedRequest(candidateReceipt, FormatFindingEvidenceSelection), out var executedCoverage) ||
                 !requestedCoverage.SetEquals(executedCoverage) ||
                 !HasContentBoundRedTrxCoverage(
                     candidateArm,
@@ -519,13 +519,13 @@ internal sealed partial class ConductorDriver
                 if (!string.Equals(receipt.FindingRoundFingerprint, executedRoundFingerprint, StringComparison.Ordinal) ||
                     !string.Equals(receipt.CandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase) ||
                     !string.Equals(receipt.ExecutionBasisIdentity, executionBasisIdentity, StringComparison.Ordinal) ||
-                    !TryGetFindingEvidenceCoverage(receipt.Request, out var receiptCoverage) ||
+                    !TryGetFindingEvidenceCoverage(FindingEvidenceExecutedCoverage.ExecutedRequest(receipt, FormatFindingEvidenceSelection), out var receiptCoverage) ||
                     !receiptCoverage.Overlaps(requestedCoverage))
                 {
                     continue;
                 }
 
-                // Preserve main's authority rule: the newest receipt which requested a selection
+                // Preserve main's authority rule: the newest receipt which executed a selection
                 // wins even when it is RED, incomplete, rejected, or otherwise non-reusable.
                 foreach (var selection in receiptCoverage.Where(requestedCoverage.Contains))
                 {
@@ -569,7 +569,7 @@ internal sealed partial class ConductorDriver
         }
         else
         {
-            _ = TryGetFindingEvidenceCoverage(reusableReceipts[0].Request, out var sourceCoverage);
+            _ = TryGetFindingEvidenceCoverage(FindingEvidenceExecutedCoverage.ExecutedRequest(reusableReceipts[0], FormatFindingEvidenceSelection), out var sourceCoverage);
             coverageReason = requestedCoverage.SetEquals(sourceCoverage) ? "exact" : "subset";
         }
 
@@ -641,7 +641,7 @@ internal sealed partial class ConductorDriver
         return required.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
-    private static FindingEvidenceArmReceipt CreateFindingEvidenceArmReceipt(FocusedEvidenceArmRunResult arm)
+    internal static FindingEvidenceArmReceipt CreateFindingEvidenceArmReceipt(FocusedEvidenceArmRunResult arm)
     {
         var testResultPaths = NormalizeFindingEvidenceTestResultPaths(
             arm.Checks.SelectMany(check => check.TestResultPaths ?? []));
@@ -664,7 +664,7 @@ internal sealed partial class ConductorDriver
                 .ToArray(),
             TryGetExecutedTestCount(arm.Checks),
             testResultPaths,
-            receiptArtifacts, arm.RestoredPaths, arm.DroppedPaths);
+            receiptArtifacts, arm.RestoredPaths, arm.DroppedPaths, arm.NotRunSelections);
     }
 
     private static IReadOnlyList<string> NormalizeFindingEvidenceTestResultPaths(IEnumerable<string> paths)
