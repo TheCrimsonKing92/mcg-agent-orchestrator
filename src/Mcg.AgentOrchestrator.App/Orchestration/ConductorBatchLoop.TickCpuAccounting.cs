@@ -1,3 +1,5 @@
+using Mcg.AgentOrchestrator.Infrastructure;
+
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorBatchLoop
@@ -8,21 +10,12 @@ internal sealed partial class ConductorBatchLoop
     private readonly Func<TimeSpan> _processCpuTime;
     private TimeSpan _lastCpuReading;
     private TimeSpan _tickCpuStart;
-    private long _tickCpuSweepMs;
-    private long _tickCpuPrewalkMs;
-    private long _tickCpuWalkMs;
+    private long _tickCpuSweepMs, _tickCpuPrewalkMs, _tickCpuWalkMs;
 
     private TimeSpan ReadProcessCpu()
     {
-        try
-        {
-            _lastCpuReading = _processCpuTime();
-        }
-        catch (Exception)
-        {
-            // Telemetry must not fault a tick; reuse the last successful reading.
-        }
-
+        try { _lastCpuReading = _processCpuTime(); }
+        catch (Exception) { /* Telemetry must not fault a tick; reuse the last successful reading. */ }
         return _lastCpuReading;
     }
 
@@ -44,4 +37,11 @@ internal sealed partial class ConductorBatchLoop
 
     private string FormatTickCpuSummary() =>
         $" cpu_ms={CpuDeltaMs(_tickCpuStart, ReadProcessCpu())} cpu_sweep_ms={_tickCpuSweepMs} cpu_prewalk_ms={_tickCpuPrewalkMs} cpu_walk_ms={_tickCpuWalkMs}";
+
+    private static bool ShouldEmitTickSummary(int changedCount, int parkedExcludedCount, int tick) =>
+        changedCount > 0 || parkedExcludedCount > 0 || tick % QuietSummaryEveryTicks == 0;
+
+    private void AppendTickCpuLedger(int tick, bool hadGoalChanges) => TickCpuLedger.TryAppend(
+        _workspace?.ExecutionDirectory, tick, CpuDeltaMs(_tickCpuStart, _lastCpuReading),
+        _tickCpuSweepMs, _tickCpuPrewalkMs, _tickCpuWalkMs, hadGoalChanges);
 }

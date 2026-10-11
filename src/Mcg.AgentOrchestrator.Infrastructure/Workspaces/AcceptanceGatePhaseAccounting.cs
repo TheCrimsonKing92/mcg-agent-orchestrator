@@ -133,6 +133,8 @@ internal sealed class AcceptanceGatePhaseAccountant : IDisposable
     private long _longestLaneTicks;
     private int _remoteLaneCount;
     private long _longestRemoteLaneTicks;
+    private long _localLaneTicksTotal;
+    private long _remoteLaneTicksTotal;
     private TimeSpan? _slotWaitDuration;
     private int _shardPermitBudget;
     private long _shardPermitWaitTicks;
@@ -140,6 +142,7 @@ internal sealed class AcceptanceGatePhaseAccountant : IDisposable
     private TimeSpan? _structuralCoveragePreparationWaitDuration;
     private string _outcome = "faulted";
     private string? _hostHealthLedgerPath;
+    private string? _gateLaneLedgerPath;
     private string? _gateAttemptId;
     private bool _disposed;
 
@@ -273,6 +276,7 @@ internal sealed class AcceptanceGatePhaseAccountant : IDisposable
     internal void RecordLaneSample(TimeSpan duration)
     {
         var candidate = duration.Ticks;
+        Interlocked.Add(ref _localLaneTicksTotal, candidate);
         var observed = Volatile.Read(ref _longestLaneTicks);
         while (candidate > observed)
         {
@@ -286,6 +290,7 @@ internal sealed class AcceptanceGatePhaseAccountant : IDisposable
     internal void RecordRemoteLaneSample(TimeSpan duration)
     {
         var candidate = duration.Ticks;
+        Interlocked.Add(ref _remoteLaneTicksTotal, candidate);
         var observed = Volatile.Read(ref _longestRemoteLaneTicks);
         while (candidate > observed)
         {
@@ -318,6 +323,7 @@ internal sealed class AcceptanceGatePhaseAccountant : IDisposable
         {
             _hostHealthLedgerPath = GateHostHealthLedger.ResolveStorePath(worktreePath);
             _gateAttemptId = gateAttemptId ?? Guid.NewGuid().ToString("N");
+            _gateLaneLedgerPath = GateLaneTimeLedger.ResolveStorePath(worktreePath);
         }
         catch { /* Host-health instrumentation cannot replace the gate verdict. */ }
     }
@@ -352,6 +358,18 @@ internal sealed class AcceptanceGatePhaseAccountant : IDisposable
                         hostHealth.PagedPoolMb.Value, FileCachePagedPoolMb: hostHealth.FileCachePagedPoolMb?.Value));
                 }
                 catch { /* Ledger failure must not suppress the breakdown or change the verdict. */ }
+            }
+            if (_gateLaneLedgerPath is { } laneLedgerPath)
+            {
+                try
+                {
+                    GateLaneTimeLedger.Append(laneLedgerPath, new GateLaneTimeLedgerRecord(
+                        observedAt, _gateAttemptId!, _goalId, breakdown.Outcome, breakdown.TotalDuration.TotalMilliseconds,
+                        TimeSpan.FromTicks(Interlocked.Read(ref _localLaneTicksTotal)).TotalMilliseconds,
+                        TimeSpan.FromTicks(Interlocked.Read(ref _remoteLaneTicksTotal)).TotalMilliseconds,
+                        Volatile.Read(ref _remoteLaneCount)));
+                }
+                catch { /* Lane ledger failure must not suppress the breakdown or change the verdict. */ }
             }
             _emit(new AcceptanceGateProgress(
                 _goalId,

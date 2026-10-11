@@ -1473,9 +1473,7 @@ internal sealed partial class ConductorBatchLoop
             totalRetried   += tickRetried;
             totalDone      += tickDone;
 
-            var emitTickSummary = changedGoalLines.Count > 0
-                || parkedExcludedCount > 0
-                || totalTicks % QuietSummaryEveryTicks == 0;
+            var emitTickSummary = ShouldEmitTickSummary(changedGoalLines.Count, parkedExcludedCount, totalTicks);
             if (watchInterval is not null)
             {
                 EmitWatchProgress(eligible, quiet, policy, watchInterval, stallWarningThreshold,
@@ -1500,6 +1498,7 @@ internal sealed partial class ConductorBatchLoop
                 Console.WriteLine($"[conduct --loop] Tick {totalTicks} summary: advanced={tickAdvanced} held={tickHeld} escalated={tickEscalated} retried={tickRetried} done={tickDone}");
             }
 
+            AppendTickCpuLedger(totalTicks, changedGoalLines.Count > 0);
             CaptureLandingTickChanges(changedGoalIds, pendingSelfRelaunch is not null);
             // Durably checkpoint this tick's progress (dispatches started, reconcile results, escalations).
             // Without this the loop's mutations live only in memory until the whole command returns, so a
