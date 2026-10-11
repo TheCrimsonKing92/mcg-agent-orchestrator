@@ -398,7 +398,7 @@ internal sealed partial class ConductorDriver
         var gateProgressEventWriter = new ConductEventLogWriter(
             workspace.ConductEventsLogPath);
         var executionOptions = CreateCohortGateExecutionOptions(gateProgressEventWriter, identity, bindings,
-            workspace.ProjectHomeDirectoryOrNull);
+            workspace.ProjectHomeDirectoryOrNull, CohortMemberTestRemovalSelection.FromBatch(_cohortKernel?.Goals ?? [], bindings));
 
         var gateClock = Stopwatch.StartNew();
         AcceptanceCohortGateClassification? classification = null;
