@@ -41,6 +41,9 @@ public static class StoreSchemaRegistry
     public static StoreSchemaEntry DogfoodLog { get; } =
         new("dogfood-log", Persistence + "DogfoodLogStore.cs", "dogfood-log.db", "collaboration", 1);
 
+    public static StoreSchemaEntry AuthorClaims { get; } =
+        new("author-claims", Persistence + "AuthorClaimStoreSetup.cs", "author-claims.db", "conductor", 1);
+
     public static StoreSchemaEntry StewardTriggers { get; } =
         new("steward-triggers", Persistence + "StewardTriggerStoreSetup.cs", "steward-triggers.db", "conductor", 1);
 
@@ -71,7 +74,7 @@ public static class StoreSchemaRegistry
         new("run-events", Persistence + "RunEventStore.cs", "run-events.db", "collaboration", null),
         DogfoodLog,
         new("practice-registry", Persistence + "PracticeRegistryStore.cs", "state.db", "collaboration", null),
-        new("author-claims", Conductor + "ConductorAuthorClaimStore.cs", "author-claims.db", "conductor", null),
+        AuthorClaims,
         StewardTriggers,
         new("steward-triage-receipts", Comms + "StewardTriageReceiptStore.cs", "steward-triage-receipts.db", "conductor", null),
         new("judge-panel", Conductor + "ConductorJudgePanelCaseStore.Schema.cs", "judge-panel.db", "conductor", null),

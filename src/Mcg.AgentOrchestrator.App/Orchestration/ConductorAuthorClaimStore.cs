@@ -1,14 +1,21 @@
 using Microsoft.Data.Sqlite;
 using System.Text.Json;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-internal sealed class ConductorAuthorClaimStore(string path)
+internal sealed class ConductorAuthorClaimStore
 {
-    private readonly string _connectionString = new SqliteConnectionStringBuilder
+    private readonly string _connectionString;
+
+    public ConductorAuthorClaimStore(string path)
     {
-        DataSource = path, Pooling = false
-    }.ToString();
+        AuthorClaimStoreSetup.Setup(path);
+        _connectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = path, Pooling = false
+        }.ToString();
+    }
 
     internal bool TryClaim(ConductorAuthorItem item, DateTimeOffset now)
     {
@@ -84,33 +91,8 @@ internal sealed class ConductorAuthorClaimStore(string path)
 
     private SqliteConnection Open()
     {
-        var directory = Path.GetDirectoryName(path);
-        if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
         var connection = new SqliteConnection(_connectionString);
         connection.Open();
-        using var schema = connection.CreateCommand();
-        schema.CommandText = """
-            CREATE TABLE IF NOT EXISTS author_claims (
-                identity TEXT PRIMARY KEY,
-                claimed_at TEXT NOT NULL,
-                outcome TEXT NOT NULL,
-                intent_id TEXT NULL,
-                item_json TEXT NOT NULL,
-                output TEXT NULL,
-                attempt INTEGER NOT NULL DEFAULT 1
-            )
-            """;
-        schema.ExecuteNonQuery();
-        schema.CommandText = "PRAGMA table_info(author_claims)";
-        var hasAttempt = false;
-        using (var reader = schema.ExecuteReader())
-            while (reader.Read())
-                hasAttempt |= reader.GetString(1) == "attempt";
-        if (!hasAttempt)
-        {
-            schema.CommandText = "ALTER TABLE author_claims ADD COLUMN attempt INTEGER NOT NULL DEFAULT 1";
-            schema.ExecuteNonQuery();
-        }
         return connection;
     }
 }
