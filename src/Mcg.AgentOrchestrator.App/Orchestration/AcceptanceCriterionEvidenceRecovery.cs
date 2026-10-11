@@ -29,13 +29,14 @@ internal static partial class AcceptanceCriterionEvidenceRecovery
         string? currentBranchSha,
         MergeTrainAcceptanceStore mergeTrainStore,
         CohortAcceptanceStore cohortStore,
-        Func<string, IReadOnlyList<string>, GitCli.GitResult> gitRunner)
+        Func<string, IReadOnlyList<string>, GitCli.GitResult> gitRunner,
+        GoalAncestryCache? ancestryCache = null)
     {
         if (goal.Status != GoalStatus.Verified ||
             string.IsNullOrWhiteSpace(mainSha) ||
+            !goal.OutstandingCriterionEvidenceObligations.Any(IsPendingAcceptanceObligation) ||
             (!string.IsNullOrWhiteSpace(currentBranchSha) &&
-             !IsAncestor(executionDirectory, currentBranchSha, mainSha, gitRunner)) ||
-            !goal.OutstandingCriterionEvidenceObligations.Any(IsPendingAcceptanceObligation))
+             !IsAncestor(executionDirectory, currentBranchSha, mainSha, gitRunner, ancestryCache)))
         {
             return null;
         }
@@ -43,7 +44,7 @@ internal static partial class AcceptanceCriterionEvidenceRecovery
         foreach (var receipt in mergeTrainStore.ReadPassedReceiptsForGoal(goal.Id))
         {
             var member = receipt.Identity.Members.Single(item => item.GoalId == goal.Id);
-            if (!IsAncestor(executionDirectory, member.CandidateRevision, mainSha, gitRunner))
+            if (!IsAncestor(executionDirectory, member.CandidateRevision, mainSha, gitRunner, ancestryCache))
             {
                 continue;
             }
@@ -54,13 +55,13 @@ internal static partial class AcceptanceCriterionEvidenceRecovery
                 "merge-train-receipt",
                 receipt.ReceiptId,
                 member.CandidateRevision,
-                executionDirectory, integrationBranch, mainSha, gitRunner);
+                executionDirectory, integrationBranch, mainSha, gitRunner, ancestryCache);
         }
 
         foreach (var receipt in cohortStore.ReadPassedReceiptsForGoal(goal.Id))
         {
             var member = receipt.Identity.Members.Single(item => item.GoalId == goal.Id);
-            if (!IsAncestor(executionDirectory, member.CandidateRevision, mainSha, gitRunner))
+            if (!IsAncestor(executionDirectory, member.CandidateRevision, mainSha, gitRunner, ancestryCache))
             {
                 continue;
             }
@@ -71,7 +72,7 @@ internal static partial class AcceptanceCriterionEvidenceRecovery
                 "cohort-receipt",
                 receipt.ReceiptId,
                 member.CandidateRevision,
-                executionDirectory, integrationBranch, mainSha, gitRunner);
+                executionDirectory, integrationBranch, mainSha, gitRunner, ancestryCache);
         }
 
         var attempts = GoalTerminalReconciliationEvidenceResolver.ResolveForGoal(
@@ -89,7 +90,7 @@ internal static partial class AcceptanceCriterionEvidenceRecovery
             .ThenByDescending(item => item.AttemptId, StringComparer.Ordinal);
         foreach (var attempt in attempts)
         {
-            if (!IsAncestor(executionDirectory, attempt.CandidateSha, mainSha, gitRunner))
+            if (!IsAncestor(executionDirectory, attempt.CandidateSha, mainSha, gitRunner, ancestryCache))
             {
                 continue;
             }
@@ -100,7 +101,7 @@ internal static partial class AcceptanceCriterionEvidenceRecovery
                 "acceptance-attempt",
                 attempt.AttemptId,
                 attempt.CandidateSha,
-                executionDirectory, integrationBranch, mainSha, gitRunner);
+                executionDirectory, integrationBranch, mainSha, gitRunner, ancestryCache);
         }
 
         return null;
@@ -114,10 +115,11 @@ internal static partial class AcceptanceCriterionEvidenceRecovery
         string candidateSha,
         string executionDirectory,
         string integrationBranch, string mainSha,
-        Func<string, IReadOnlyList<string>, GitCli.GitResult> gitRunner)
+        Func<string, IReadOnlyList<string>, GitCli.GitResult> gitRunner,
+        GoalAncestryCache? ancestryCache)
     {
         var usedLandingCarryRecord = TryApplyRecordedLandingCarry(
-            kernel, goal, candidateSha, mainSha, executionDirectory, gitRunner);
+            kernel, goal, candidateSha, mainSha, executionDirectory, gitRunner, ancestryCache);
         var diagnostic = AcceptanceCriterionEvidence.RebindRecordAndDescribeOutstanding(
             goal,
             candidateSha,
@@ -201,8 +203,17 @@ internal static partial class AcceptanceCriterionEvidenceRecovery
         string executionDirectory,
         string candidateSha,
         string mainSha,
-        Func<string, IReadOnlyList<string>, GitCli.GitResult> gitRunner) =>
-        gitRunner(executionDirectory, ["merge-base", "--is-ancestor", candidateSha, mainSha]).ExitCode == 0;
+        Func<string, IReadOnlyList<string>, GitCli.GitResult> gitRunner,
+        GoalAncestryCache? ancestryCache = null)
+    {
+        if (ancestryCache is not null && ancestryCache.TryGet(mainSha, candidateSha, out var isAncestor))
+            return isAncestor;
+
+        var exitCode = gitRunner(executionDirectory, ["merge-base", "--is-ancestor", candidateSha, mainSha]).ExitCode;
+        if (exitCode is 0 or 1)
+            ancestryCache?.Store(mainSha, candidateSha, exitCode == 0);
+        return exitCode == 0;
+    }
 
     private static bool IsPendingAcceptanceObligation(CriterionEvidenceObligation obligation) =>
         obligation.Owner == CriterionEvidenceOwner.Acceptance &&
