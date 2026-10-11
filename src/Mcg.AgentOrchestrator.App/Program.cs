@@ -218,6 +218,12 @@ if (Mcg.AgentOrchestrator.App.OwnerConsole.OwnerConsoleVerb.IsCommand(startupArg
 if (CliOperatorIntentRoute.IsServed(startupArgs))
     return ExitCompletedStartupCommand(CliOperatorIntentRoute.Run(startupArgs, workspace));
 
+if (CliGateStatusJsonQueryCommand.IsGateStatusJsonCommand(startupArgs))
+{
+    CliGateStatusJsonQueryCommand.Execute();
+    return ExitCompletedStartupCommand(0);
+}
+
 if (ConductorContinuitySupervisor.ShouldSupervise(
         startupArgs,
         ProgramStartupLifecycle.IsAuthorityTransferRequested(startupArgs)))
