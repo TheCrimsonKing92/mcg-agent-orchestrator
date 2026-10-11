@@ -56,17 +56,47 @@ internal static class WorkerContextRenderer
         bool removeReviewerConflictPaths = false)
     {
         var instructionIndex = FindInstructionSegment(source);
+        var selectReviewerPaths = source.Role == AgentRole.Reviewer &&
+            (removeReviewerChangedPaths || removeReviewerConflictPaths);
         var lines = source.Segments
             .Skip(instructionIndex)
             .Where(segment => segment.TypedProjectionIdentity is null)
-            .SelectMany(segment => segment.Lines);
+            .SelectMany(segment => selectReviewerPaths
+                ? SelectReviewerLines(segment, removeReviewerChangedPaths, removeReviewerConflictPaths)
+                : segment.Lines);
         var current = string.Join(Environment.NewLine, lines).Trim();
-        return source.Role == AgentRole.Reviewer
-            ? ApplyReviewerPreviewPolicy(
-                current,
-                removeReviewerChangedPaths,
-                removeReviewerConflictPaths)
+        // Preserve the legacy policy's newline normalization when a projection is requested.
+        return selectReviewerPaths
+            ? string.Join(Environment.NewLine, current.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n')).Trim()
             : current;
+    }
+
+    private static IEnumerable<string> SelectReviewerLines(
+        TaskBriefSegment segment,
+        bool removeChangedPaths,
+        bool removeConflictPaths)
+    {
+        // Selection flags are supplied by dispatch preparation. Coordinates, counts and labels
+        // belong to the typed source; no rendered line participates in the decision.
+        var lists = new[]
+        {
+            removeChangedPaths ? segment.ReviewerChangedFiles : null,
+            removeConflictPaths ? segment.MergeConflictPaths : null,
+            removeChangedPaths ? segment.ConvergenceChangedFiles : null
+        };
+        for (var index = 0; index < segment.Lines.Count; index++)
+        {
+            if (lists.Any(list => list is not null &&
+                index >= list.FirstListLineIndex && index - list.FirstListLineIndex < list.ListLineCount))
+            {
+                continue;
+            }
+
+            var countList = lists.FirstOrDefault(list => list?.CountLineIndex == index);
+            yield return countList is null
+                ? segment.Lines[index]
+                : $"{countList.CountLabel}: {countList.Total}; complete path list is delivered only by its typed MandatoryFile artifact.";
+        }
     }
 
     internal static string Render(
@@ -182,92 +212,6 @@ internal static class WorkerContextRenderer
         }
 
         throw new InvalidOperationException("Typed context brief is missing its Instructions source boundary.");
-    }
-
-    internal static string ApplyReviewerPreviewPolicy(
-        string content,
-        bool removeChangedPaths,
-        bool removeConflictPaths)
-    {
-        if (!removeChangedPaths && !removeConflictPaths)
-        {
-            return content;
-        }
-
-        var lines = content.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
-        var output = new List<string>(lines.Length);
-        var inChangedFileScope = false;
-        var inChangedPathList = false;
-        var inConflictPathList = false;
-        var inConvergenceChangedFiles = false;
-        foreach (var line in lines)
-        {
-            if (line.StartsWith("## ", StringComparison.Ordinal))
-            {
-                inChangedFileScope = line.Equals("## Reviewer Changed-File Scope", StringComparison.Ordinal);
-                inChangedPathList = false;
-                inConflictPathList = false;
-                inConvergenceChangedFiles = false;
-            }
-
-            if (inChangedFileScope)
-            {
-                if (removeConflictPaths && line.StartsWith("Conflicting paths:", StringComparison.Ordinal))
-                {
-                    output.Add(ReplaceShowingCount(line));
-                    inConflictPathList = true;
-                    continue;
-                }
-                if (line.StartsWith("Staleness policy:", StringComparison.Ordinal))
-                {
-                    inConflictPathList = false;
-                    inChangedPathList = removeChangedPaths;
-                }
-                if (line.StartsWith("Independent scope checks", StringComparison.Ordinal))
-                {
-                    inChangedPathList = false;
-                }
-                if (removeChangedPaths && line.StartsWith("Changed files:", StringComparison.Ordinal))
-                {
-                    output.Add(ReplaceShowingCount(line));
-                    continue;
-                }
-                if ((inConflictPathList &&
-                     (line.StartsWith("- conflict: ", StringComparison.Ordinal) ||
-                      line.Contains("additional conflict path", StringComparison.Ordinal))) ||
-                    (inChangedPathList && line.StartsWith("- ", StringComparison.Ordinal)))
-                {
-                    continue;
-                }
-            }
-
-            if (removeChangedPaths && line.StartsWith("GOAL_DIFF_CHANGED_FILES ", StringComparison.Ordinal))
-            {
-                inConvergenceChangedFiles = true;
-                output.Add(line);
-                continue;
-            }
-            if (inConvergenceChangedFiles && line.StartsWith("Actively check ", StringComparison.Ordinal))
-            {
-                inConvergenceChangedFiles = false;
-            }
-            if (inConvergenceChangedFiles && line.StartsWith("- ", StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            output.Add(line);
-        }
-
-        return string.Join(Environment.NewLine, output).Trim();
-    }
-
-    private static string ReplaceShowingCount(string line)
-    {
-        var separator = line.IndexOf(';');
-        return separator < 0
-            ? line
-            : line[..separator] + "; complete path list is delivered only by its typed MandatoryFile artifact.";
     }
 
     private static string RemoveMarkedBriefBlock(string content, string startMarker, string endMarker)

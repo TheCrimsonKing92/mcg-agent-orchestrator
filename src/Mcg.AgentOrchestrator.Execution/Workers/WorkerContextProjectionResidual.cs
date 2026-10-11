@@ -3,7 +3,7 @@ using System.Text;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-internal static class WorkerContextProjectionResidual
+internal static partial class WorkerContextProjectionResidual
 {
     internal const string IngressVersion = "worker-context-legacy-marked-text-ingress-v1";
 
@@ -31,7 +31,7 @@ internal static class WorkerContextProjectionResidual
         var current = RemoveProjectionBlocks(content[instructions..], identities).Trim();
         if (targetRole == AgentRole.Reviewer)
         {
-            current = WorkerContextRenderer.ApplyReviewerPreviewPolicy(
+            current = ApplyReviewerPreviewPolicy(
                 current,
                 removeReviewerChangedPaths,
                 removeReviewerConflictPaths);
