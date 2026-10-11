@@ -58,13 +58,27 @@ internal static class WorkerContextRenderer
         var instructionIndex = FindInstructionSegment(source);
         var selectReviewerPaths = source.Role == AgentRole.Reviewer &&
             (removeReviewerChangedPaths || removeReviewerConflictPaths);
-        var lines = source.Segments
-            .Skip(instructionIndex)
-            .Where(segment => segment.TypedProjectionIdentity is null)
-            .SelectMany(segment => selectReviewerPaths
+        var output = new StringBuilder();
+        foreach (var segment in source.Segments.Skip(instructionIndex))
+        {
+            if (segment.TypedProjectionIdentity is not null)
+            {
+                // Legacy ingress removes the closing marker's text and CR, retaining its LF.
+                // Preserve that separator directly from the typed segment identity.
+                output.Append('\n');
+                continue;
+            }
+
+            var lines = selectReviewerPaths
                 ? SelectReviewerLines(segment, removeReviewerChangedPaths, removeReviewerConflictPaths)
-                : segment.Lines);
-        var current = string.Join(Environment.NewLine, lines).Trim();
+                : segment.Lines;
+            foreach (var line in lines)
+            {
+                output.Append(line).Append(Environment.NewLine);
+            }
+        }
+
+        var current = output.ToString().Trim();
         // Preserve the legacy policy's newline normalization when a projection is requested.
         return selectReviewerPaths
             ? string.Join(Environment.NewLine, current.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n')).Trim()

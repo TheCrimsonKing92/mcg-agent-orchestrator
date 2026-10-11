@@ -47,6 +47,40 @@ public sealed class WorkerContextRendererReviewerScopeSelectionTests : WorkerDis
         }
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData(AgentRole.Developer)]
+    [Xunit.InlineData(AgentRole.Tester)]
+    [Xunit.InlineData(AgentRole.Reviewer)]
+    public void RemovedArtifactSegmentsPreserveLegacySeparators(AgentRole role)
+    {
+        var fixture = CreateFixture(role);
+        var source = BuildSource(fixture, [], [], true) with
+        {
+            Segments =
+            [
+                new TaskBriefSegment(["## Instructions", "keep"], RoleVisibility: [role]),
+                TaskBriefSegment.Projected("fixture/first.md", ["hidden first"]),
+                TaskBriefSegment.Projected("fixture/second.md", ["hidden second"]),
+                TaskBriefSegment.Fixed([]),
+                new TaskBriefSegment(["", "## Kept section", "tail"], RoleVisibility: [role]),
+                TaskBriefSegment.Projected("fixture/trailing.md", ["hidden trailing"])
+            ]
+        };
+        var newline = Environment.NewLine;
+        var expected = $"## Instructions{newline}keep{newline}\n\n{newline}## Kept section{newline}tail";
+        foreach (var removePaths in new[] { false, true })
+        {
+            var expectedCurrent = role == AgentRole.Reviewer && removePaths
+                ? expected.Replace("\r\n", "\n", StringComparison.Ordinal).Replace("\n", newline, StringComparison.Ordinal)
+                : expected;
+            var typed = WorkerContextRenderer.CreateCurrentBrief(source, removePaths, removePaths);
+            Assert.Equal(expectedCurrent, typed);
+            Assert.Equal(WorkerContextProjectionResidual.ParseLegacyMarkedTextV1(
+                source.ProjectLegacyMarkedTextV1(true).Content, role,
+                removeReviewerChangedPaths: removePaths, removeReviewerConflictPaths: removePaths).CurrentBrief, typed);
+        }
+    }
+
     [Xunit.Fact]
     public void EmptyPreviewWithLargerTotalMatchesLegacyCountOnly()
     {
