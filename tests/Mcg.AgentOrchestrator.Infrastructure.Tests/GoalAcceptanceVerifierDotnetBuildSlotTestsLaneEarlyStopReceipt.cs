@@ -46,7 +46,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsLaneEarlyStopRecei
             async Task<GoalAcceptanceVerifier.CommandResult> Runner(string[] args, string _, CancellationToken token)
             {
                 if (!IsInfrastructurePartitionTestCall(args)) return BuildResult(args);
-                var index = LaneIndex(args, 5);
+                var index = args.Contains("--filter-method") ? roles.Single(pair => pair.Value == 1).Key : LaneIndex(args, 5);
                 Assert.NotEqual(0, index); // This lane is offloaded, never a local fallback after the stop.
                 if (!roles.TryGetValue(index, out var role))
                 {

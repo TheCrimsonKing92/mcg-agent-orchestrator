@@ -26,7 +26,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsLaneEarlyStop : Go
             async Task<GoalAcceptanceVerifier.CommandResult> Runner(string[] args, string _, CancellationToken token)
             {
                 if (!IsInfrastructurePartitionTestCall(args)) return BuildResult(args);
-                var index = LaneIndex(args, 4);
+                var index = args.Contains("--filter-method") ? confirmer : LaneIndex(args, 4);
                 var first = Interlocked.CompareExchange(ref confirmer, index, -1);
                 if (first == -1 || index == confirmer)
                 {
@@ -104,7 +104,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsLaneEarlyStop : Go
             {
                 if (!IsInfrastructurePartitionTestCall(args)) return Task.FromResult(BuildResult(args));
                 token.ThrowIfCancellationRequested();
-                var index = LaneIndex(args, 3);
+                var index = args.Contains("--filter-method") ? confirmer : LaneIndex(args, 3);
                 var first = Interlocked.CompareExchange(ref confirmer, index, -1);
                 var alpha = first == -1 || index == confirmer;
                 var run = alpha ? Interlocked.Increment(ref alphaRuns) : 1;
@@ -112,8 +112,12 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsLaneEarlyStop : Go
                 var fails = alpha && (run == 1 || scenario != "flake");
                 // Missing TRX has its own apparatus-loss stop. A valid green TRX plus a nonzero
                 // exit isolates a failure that carries no test-failure rerun marker.
-                WriteMtpTrx(args, fails && scenario != "not-rerun-predicate" ? MtpFailureFixturePath() : null);
-                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(fails ? 1 : 0, fails ? "Fixture failure." : "Passed: 1"));
+                var methods = args.Select((arg, index) => (arg, index)).Where(pair => pair.arg == "--filter-method")
+                    .Select(pair => args[pair.index + 1].Trim('*')).ToArray();
+                if (!fails && methods.Length > 0) WriteMtpTrx(args, methods.Length, methods);
+                else WriteMtpTrx(args, fails && scenario != "not-rerun-predicate" ? MtpFailureFixturePath() : null);
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(fails ? 1 : 0,
+                    fails ? "Fixture failure." : $"Passed: {Math.Max(1, methods.Length)}"));
             }
 
             AcceptanceVerificationResult? result = null;

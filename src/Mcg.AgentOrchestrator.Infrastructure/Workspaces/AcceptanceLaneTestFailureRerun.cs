@@ -36,7 +36,7 @@ internal sealed class AcceptanceLaneTestFailureRerun
     internal async Task<AcceptanceCheckResult> RunAsync(
         AcceptanceManifestCheck check,
         AcceptanceCheckResult firstRun,
-        Func<Task<AcceptanceCheckResult>> rerunLane,
+        Func<AcceptanceManifestCheck, Task<AcceptanceCheckResult>> rerunLane,
         Func<AcceptanceCheckResult, string> invocationId,
         bool sharedApparatusInvalidated = false,
         CancellationToken cancellationToken = default)
@@ -51,18 +51,21 @@ internal sealed class AcceptanceLaneTestFailureRerun
             return firstRun;
         }
 
-        var rerun = await rerunLane().ConfigureAwait(false);
-        var outcome = rerun.Passed ? AcceptanceLaneRerunEvidence.Flake : AcceptanceLaneRerunEvidence.ConfirmedFailure;
+        var plan = AcceptanceLaneRerunNarrowing.Select(check, firstRun.FailingTestIdentities);
+        var rerun = await rerunLane(AcceptanceLaneRerunNarrowing.BuildRerunCheck(check, plan)).ConfigureAwait(false);
+        var passed = AcceptanceLaneRerunNarrowing.Passed(plan, rerun);
+        var outcome = passed ? AcceptanceLaneRerunEvidence.Flake : AcceptanceLaneRerunEvidence.ConfirmedFailure;
+        var mode = AcceptanceLaneRerunNarrowing.ModeText(plan);
         var evidence = new AcceptanceLaneRerunEvidence(
             invocationId(firstRun), firstRun.TestResultPaths?.ToArray() ?? [],
             firstRun.FailingTestIdentities.ToArray(), firstRun.CompletionDecision.FailedPredicate!,
             invocationId(rerun), rerun.TestResultPaths?.ToArray() ?? [],
             rerun.FailingTestIdentities?.ToArray() ?? [], rerun.CompletionDecision?.FailedPredicate, outcome);
-        var result = rerun with
+        var result = AcceptanceLaneRerunNarrowing.ComposeResult(plan, firstRun, rerun, passed) with
         {
             LaneRerun = evidence,
             ResultSummary = AcceptanceDotnetBuildPhase.PrefixResultSummary(
-                $"lane rerun: first_run=failed({evidence.FirstPredicate}) rerun={(rerun.Passed ? "passed" : "failed")} outcome={outcome}",
+                $"lane rerun: first_run=failed({evidence.FirstPredicate}) rerun={(rerun.Passed ? "passed" : "failed")} outcome={outcome} {mode}",
                 rerun.ResultSummary)
         };
 
@@ -76,7 +79,7 @@ internal sealed class AcceptanceLaneTestFailureRerun
             _emit($"LANE_FLAKE_LEDGER_WRITE_FAILED lane=\"{check.Name}\" error={ex.Message.ReplaceLineEndings(" ")}");
         }
 
-        _emit($"LANE_RERUN lane=\"{check.Name}\" outcome={outcome} first_invocation={evidence.FirstInvocationId} rerun_invocation={evidence.RerunInvocationId}");
+        _emit($"LANE_RERUN lane=\"{check.Name}\" outcome={outcome} first_invocation={evidence.FirstInvocationId} rerun_invocation={evidence.RerunInvocationId} {mode}");
         return result;
     }
 }

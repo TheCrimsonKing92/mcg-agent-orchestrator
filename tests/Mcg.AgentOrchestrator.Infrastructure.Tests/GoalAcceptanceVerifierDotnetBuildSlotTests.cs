@@ -302,18 +302,18 @@ public abstract class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanc
         AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count(
             lane => !lane.RequiresBuildSystemChange);
 
-    // A partition shard for Infrastructure.Tests appears as exactly one command per shard, in one of
+    // A partition shard for Infrastructure.Tests appears as an initial call and optional rerun, in one of
     // two runner shapes depending on how the check was synthesized:
     //   * runner=mtp (impact-plan / policy-synthesized checks): the managed test assembly through the
     //     shared dotnet host, with a
-    //     translated class filter (--filter-class / --filter-not-class). The preceding `dotnet build`
-    //     call carries no class filter and is excluded.
+    //     translated class filter (--filter-class / --filter-not-class) or a rerun --filter-method.
+    //     The preceding `dotnet build` call carries no test filter and is excluded.
     //   * runner=vstest (manifest-loaded checks that omit an explicit runner): `dotnet test <csproj>`
     //     with a raw `--filter`.
-    // Either way there is one matching call per shard, so assertions derive counts from the lane schema.
+    // Assertions derive initial shard counts from the lane schema and rerun counts from the scenario.
     private protected static bool IsInfrastructurePartitionTestCall(string[] args) =>
         (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests") &&
-            (args.Contains("--filter-class") || args.Contains("--filter-not-class"))) ||
+            (args.Contains("--filter-class") || args.Contains("--filter-not-class") || args.Contains("--filter-method"))) ||
         (args.Length > 2 &&
             args[0] == "dotnet" &&
             args[1] == "test" &&
