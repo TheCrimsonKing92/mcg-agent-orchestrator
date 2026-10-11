@@ -32,7 +32,7 @@ public sealed class CliAttentionJsonReadOnlyRouteTests : CliTaskQueryTestSupport
     [InlineData("attention", "--json", "extra")]
     [InlineData("attention", "list", "--json", "extra")]
     [InlineData("--json", "attention")]
-    [InlineData("attention", "show", "--json")]
+    [InlineData("attention", "show", "--all", "--json")]
     [InlineData("attention", "--JSON")]
     [InlineData("attention", "answer", "--json")]
     [InlineData("attention", "dismiss", "--json")]
@@ -51,7 +51,7 @@ public sealed class CliAttentionJsonReadOnlyRouteTests : CliTaskQueryTestSupport
         Assert.Equal(CliCommandCapability.QueryOnly, CliCommandCapabilities.Classify(help));
         foreach (var args in new[]
         {
-            new[] { "attention", "show", "abc10000", "--json" },
+            new[] { "attention", "show", "--all", "abc10000", "--json" },
             new[] { "attention", "answer", "abc10000", "wait-id", "--json" },
             new[] { "attention", "dismiss", "--item", "item-id", "--json" },
             new[] { "attention", "--json", "extra" }
