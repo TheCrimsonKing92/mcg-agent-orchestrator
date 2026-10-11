@@ -28,6 +28,7 @@ internal static class CliCommandCapabilities
             return CliCommandCapability.Execution;
 
         return QueryCommands.Contains(args[0]) ||
+               CliAttentionJsonQueryCommand.IsAttentionJsonCommand(args) ||
                CliCommandHelp.IsCommandSpecificHelp(args)
             ? CliCommandCapability.QueryOnly
             : CliCommandCapability.Execution;

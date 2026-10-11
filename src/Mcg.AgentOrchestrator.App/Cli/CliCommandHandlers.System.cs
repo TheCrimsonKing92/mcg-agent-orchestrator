@@ -64,7 +64,7 @@ internal static partial class CliCommandHandlers
         };
     }
 
-    private static IReadOnlyList<HumanInputRequest> HumanWaitsForAttention(
+    internal static IReadOnlyList<HumanInputRequest> HumanWaitsForAttention(
         AgentOrchestratorKernel kernel,
         GoalId? goalId,
         bool includeHistory)
@@ -77,7 +77,7 @@ internal static partial class CliCommandHandlers
             .ToList();
     }
 
-    private static IReadOnlyList<CollaborationItem> CollaborationItemsForAttention(
+    internal static IReadOnlyList<CollaborationItem> CollaborationItemsForAttention(
         IReadOnlyList<CollaborationItem> items,
         AgentOrchestratorKernel kernel,
         GoalId? goalId,
