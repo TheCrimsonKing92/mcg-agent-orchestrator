@@ -12,10 +12,9 @@ public sealed class BuildServerShutdownSourceGuardTests
     public void ShutdownProcessArgumentsAppearOnlyInAttributedCompilerLockRecovery()
     {
         var root = InfrastructureTestSupport.FindRepositoryRoot();
-        var callers = Directory.EnumerateFiles(Path.Combine(root, "src"), "*.cs", SearchOption.AllDirectories)
-            .Where(path => !path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-                .Any(segment => segment is "bin" or "obj" or ".scratch" or ".orchestrator-prototype"))
-            .Where(path => ShutdownArguments.IsMatch(File.ReadAllText(path)))
+        var snapshot = RepositorySourceSnapshotCache.Get(root);
+        var callers = SourceFiles(root)
+            .Where(path => IsShutdown(snapshot.GetText(path)))
             .Select(path => Path.GetRelativePath(root, path).Replace('\\', '/'))
             .Order(StringComparer.Ordinal)
             .ToArray();
@@ -38,4 +37,10 @@ public sealed class BuildServerShutdownSourceGuardTests
     [InlineData("value.Contains(\"build-server\", StringComparison.Ordinal)")]
     public void DetectorIgnoresAdviceAndCommandText(string source) =>
         Assert.False(ShutdownArguments.IsMatch(source));
+
+    internal static IEnumerable<string> SourceFiles(string root) =>
+        RepositorySourceSnapshotCache.Get(root).EnumerateFiles(Path.Combine(root, "src"))
+            .Where(path => !SourceGuardFileFilter.BuildOutputAndScratch.Excludes(path));
+
+    internal static bool IsShutdown(string source) => ShutdownArguments.IsMatch(source);
 }

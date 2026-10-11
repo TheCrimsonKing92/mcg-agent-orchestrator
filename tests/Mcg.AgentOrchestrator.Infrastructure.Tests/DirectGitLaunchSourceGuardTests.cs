@@ -14,11 +14,9 @@ public sealed class DirectGitLaunchSourceGuardTests
         var root = Path.Combine(
             InfrastructureTestSupport.FindRepositoryRoot(),
             "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests");
-        var violations = Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
-            .Where(path => !Path.GetFileName(path).Equals("InfrastructureTestSupport.cs", StringComparison.Ordinal))
-            .Where(path => !path.Split(Path.DirectorySeparatorChar).Any(segment =>
-                segment is "bin" or "obj" or ".scratch" or ".orchestrator-prototype"))
-            .SelectMany(path => FindDirectLaunches(path, File.ReadAllText(path)))
+        var snapshot = RepositorySourceSnapshotCache.Get(Path.GetDirectoryName(Path.GetDirectoryName(root))!);
+        var violations = SourceFiles(root)
+            .SelectMany(path => FindDirectLaunches(path, snapshot.GetText(path)))
             .ToArray();
 
         Assert.True(violations.Length == 0, "Direct git launches outside InfrastructureTestSupport.cs:\n" + string.Join("\n", violations));
@@ -41,7 +39,12 @@ public sealed class DirectGitLaunchSourceGuardTests
         Assert.Equal(["fixture.cs:1", "fixture.cs:2", "fixture.cs:3"], matches);
     }
 
-    private static IEnumerable<string> FindDirectLaunches(string path, string source)
+    internal static IEnumerable<string> SourceFiles(string root) =>
+        RepositorySourceSnapshotCache.Get(Path.GetDirectoryName(Path.GetDirectoryName(root))!).EnumerateFiles(root)
+            .Where(path => !Path.GetFileName(path).Equals("InfrastructureTestSupport.cs", StringComparison.Ordinal))
+            .Where(path => !SourceGuardFileFilter.BuildOutputAndScratch.Excludes(path));
+
+    internal static IEnumerable<string> FindDirectLaunches(string path, string source)
     {
         foreach (Match match in DirectLaunch.Matches(source))
         {

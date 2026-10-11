@@ -13,19 +13,18 @@ public sealed class DashboardRemnantSourceGuardTests
             "dashboard source survey", "dashboard APIs"
         ];
         var root = VerifiedRepositoryRoot.Find();
-        var files = Directory.EnumerateFiles(Path.Combine(root, "src"), "*.cs", SearchOption.AllDirectories)
-            .Where(file => !Path.GetRelativePath(root, file)
-                .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-                .Any(segment => segment is "bin" or "obj" or ".scratch" or ".orchestrator-prototype"
-                    or ".orchestrator-worktrees" or "TestResults" or "playwright-report"))
-            .ToArray();
+        var snapshot = RepositorySourceSnapshotCache.Get(root);
+        var files = SourceFiles(root).ToArray();
         Assert.NotEmpty(files);
         foreach (var file in files)
         {
-            var source = File.ReadAllText(file);
+            var source = snapshot.GetText(file);
             foreach (var literal in forbidden)
                 Assert.False(source.Contains(literal, StringComparison.OrdinalIgnoreCase),
                     $"Removed literal '{literal}' in {Path.GetRelativePath(root, file)}");
         }
     }
+    internal static IEnumerable<string> SourceFiles(string root) =>
+        RepositorySourceSnapshotCache.Get(root).EnumerateFiles(Path.Combine(root, "src"))
+            .Where(file => !SourceGuardFileFilter.WorkspaceAndReports.Excludes(Path.GetRelativePath(root, file)));
 }

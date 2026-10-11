@@ -71,20 +71,19 @@ public sealed class ExecutionWorkspacesReferenceGuardTests
             Assert.Single(violations));
     }
 
-    private static IReadOnlyDictionary<string, string[]> BuildDeclarationIndex()
+    private static IReadOnlyDictionary<string, string[]> BuildDeclarationIndex() =>
+        BuildDeclarationIndex(InfrastructureTestSupport.FindRepositoryRoot());
+
+    internal static IReadOnlyDictionary<string, string[]> BuildDeclarationIndex(string root)
     {
-        var root = InfrastructureTestSupport.FindRepositoryRoot();
         var folder = Path.Combine(root, "src", "Mcg.AgentOrchestrator.Infrastructure");
         Assert.True(Directory.Exists(folder), $"Missing Infrastructure source directory: {folder}");
+        var snapshot = RepositorySourceSnapshotCache.Get(root);
         var index = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
-        foreach (var file in Directory.EnumerateFiles(folder, "*.cs", SearchOption.AllDirectories)
-            .Concat(Directory.EnumerateFiles(Path.Combine(root, "src", "Mcg.AgentOrchestrator.Execution"),
-                "*.cs", SearchOption.AllDirectories)))
+        foreach (var file in DeclarationFiles(root))
         {
             var path = Path.GetRelativePath(root, file).Replace('\\', '/');
-            if (path.Split('/').Any(segment => segment is "bin" or "obj" or "artifacts"))
-                continue;
-            var syntax = CSharpSyntaxTree.ParseText(File.ReadAllText(file), path: file).GetRoot();
+            var syntax = snapshot.GetSyntaxTree(file).GetRoot();
             foreach (var declaration in syntax.DescendantNodes()
                 .Where(node => node is BaseTypeDeclarationSyntax or DelegateDeclarationSyntax))
             {
@@ -108,7 +107,19 @@ public sealed class ExecutionWorkspacesReferenceGuardTests
             pair => pair.Value.Order(StringComparer.Ordinal).ToArray(), StringComparer.Ordinal);
     }
 
-    private static string[] EvaluateBoundary(IReadOnlyDictionary<string, string[]> declarations,
+    internal static IEnumerable<string> DeclarationFiles(string root)
+    {
+        var snapshot = RepositorySourceSnapshotCache.Get(root);
+        return snapshot.EnumerateFiles(Path.Combine(root, "src", "Mcg.AgentOrchestrator.Infrastructure"))
+            .Concat(snapshot.EnumerateFiles(Path.Combine(root, "src", "Mcg.AgentOrchestrator.Execution")))
+            .Where(file => !SourceGuardFileFilter.BuildOutputAndArtifacts.Excludes(Path.GetRelativePath(root, file)));
+    }
+
+    internal static IEnumerable<string> AreaFiles(string root, string directory) =>
+        RepositorySourceSnapshotCache.Get(root).EnumerateFiles(directory)
+            .Where(file => !SourceGuardFileFilter.WorkspaceAndReports.Excludes(Path.GetRelativePath(root, file)));
+
+    internal static string[] EvaluateBoundary(IReadOnlyDictionary<string, string[]> declarations,
         IEnumerable<(string Source, string Target)> pairs)
     {
         var violations = new HashSet<string>(StringComparer.Ordinal);
@@ -173,17 +184,12 @@ public sealed class ExecutionWorkspacesReferenceGuardTests
         {
             var directory = Path.Combine(root, "src", "Mcg.AgentOrchestrator.Execution", area);
             Assert.True(Directory.Exists(directory), $"Missing source directory: {directory}");
-            var files = Directory.EnumerateFiles(directory, "*.cs", SearchOption.AllDirectories)
-                .Where(file => !Path.GetRelativePath(root, file)
-                    .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-                    .Any(segment => segment is "bin" or "obj" or ".scratch" or ".orchestrator-prototype"
-                        or ".orchestrator-worktrees" or "TestResults" or "playwright-report"))
-                .ToArray();
+            var files = AreaFiles(root, directory).ToArray();
             Assert.NotEmpty(files);
             offenders.AddRange(files
                 .Where(file =>
                 {
-                    var source = File.ReadAllText(file);
+                    var source = RepositorySourceSnapshotCache.Get(root).GetText(file);
                     return source.Contains("DotnetBuildEnvironmentManager.", StringComparison.Ordinal) ||
                         source.Contains("GoalAcceptanceVerifier.", StringComparison.Ordinal);
                 })
@@ -206,16 +212,11 @@ public sealed class ExecutionWorkspacesReferenceGuardTests
         foreach (var directory in directories)
         {
             Assert.True(Directory.Exists(directory), $"Missing source directory: {directory}");
-            var files = Directory.EnumerateFiles(directory, "*.cs", SearchOption.AllDirectories)
-                .Where(file => !Path.GetRelativePath(root, file)
-                    .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-                    .Any(segment => segment is "bin" or "obj" or ".scratch" or ".orchestrator-prototype"
-                        or ".orchestrator-worktrees" or "TestResults" or "playwright-report"))
-                .ToArray();
+            var files = AreaFiles(root, directory).ToArray();
             Assert.NotEmpty(files);
             foreach (var file in files)
             {
-                var source = File.ReadAllText(file);
+                var source = RepositorySourceSnapshotCache.Get(root).GetText(file);
                 foreach (var token in tokens)
                 {
                     if (source.Contains(token, StringComparison.Ordinal))
@@ -239,15 +240,10 @@ public sealed class ExecutionWorkspacesReferenceGuardTests
         {
             var directory = Path.Combine(root, "src", "Mcg.AgentOrchestrator.Execution", area);
             Assert.True(Directory.Exists(directory), $"Missing source directory: {directory}");
-            var files = Directory.EnumerateFiles(directory, "*.cs", SearchOption.AllDirectories)
-                .Where(file => !Path.GetRelativePath(root, file)
-                    .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-                    .Any(segment => segment is "bin" or "obj" or ".scratch" or ".orchestrator-prototype"
-                        or ".orchestrator-worktrees" or "TestResults" or "playwright-report"))
-                .ToArray();
+            var files = AreaFiles(root, directory).ToArray();
             Assert.NotEmpty(files);
             offenders.AddRange(files
-                .Where(file => File.ReadAllText(file).Contains("GoalWorktrees.", StringComparison.Ordinal))
+                .Where(file => RepositorySourceSnapshotCache.Get(root).GetText(file).Contains("GoalWorktrees.", StringComparison.Ordinal))
                 .Select(file => Path.GetRelativePath(root, file)));
         }
 

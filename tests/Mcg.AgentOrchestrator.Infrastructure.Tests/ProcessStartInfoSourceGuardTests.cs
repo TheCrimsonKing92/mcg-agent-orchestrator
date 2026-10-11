@@ -4,17 +4,13 @@ public sealed class ProcessStartInfoSourceGuardTests
     public void TestProcessStartsOptOutOfVisibleConsoleWindows()
     {
         var testRoot = FindTestRoot();
+        var snapshot = RepositorySourceSnapshotCache.Get(Path.GetDirectoryName(Path.GetDirectoryName(testRoot))!);
         var offenders = new List<string>();
 
-        foreach (var file in Directory.EnumerateFiles(testRoot, "*.cs", SearchOption.AllDirectories))
+        foreach (var file in SourceFiles(testRoot))
         {
-            if (Path.GetFileName(file).Equals(nameof(ProcessStartInfoSourceGuardTests) + ".cs", StringComparison.Ordinal))
-            {
-                continue;
-            }
-
             var relativePath = Path.GetRelativePath(testRoot, file);
-            var lines = File.ReadAllLines(file);
+            var lines = snapshot.GetLines(file);
             offenders.AddRange(FindOffenders(relativePath, lines));
         }
 
@@ -23,6 +19,10 @@ public sealed class ProcessStartInfoSourceGuardTests
             "Test-side process starts must set CreateNoWindow=true or request a hidden/no-new PowerShell window. Offenders: " + string.Join(", ", offenders) +
             " C# launch code that a test compiles and runs must live in a real .cs file under the test tree; launch patterns inside string literals or comments are not scanned.");
     }
+
+    internal static IEnumerable<string> SourceFiles(string testRoot) =>
+        RepositorySourceSnapshotCache.Get(Path.GetDirectoryName(Path.GetDirectoryName(testRoot))!).EnumerateFiles(testRoot)
+            .Where(file => !Path.GetFileName(file).Equals(nameof(ProcessStartInfoSourceGuardTests) + ".cs", StringComparison.Ordinal));
 
     internal static IEnumerable<string> FindOffenders(string relativePath, IReadOnlyList<string> lines)
     {

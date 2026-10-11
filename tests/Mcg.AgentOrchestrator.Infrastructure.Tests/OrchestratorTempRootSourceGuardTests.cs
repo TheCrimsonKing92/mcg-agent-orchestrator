@@ -25,9 +25,9 @@ public sealed class OrchestratorTempRootSourceGuardTests
     {
         var root = FindRepositoryRoot();
         var src = Path.Combine(root, "src");
-        var lines = Directory.EnumerateFiles(src, "*.cs", SearchOption.AllDirectories)
-            .Where(path => !path.Split(Path.DirectorySeparatorChar).Any(part => part is "bin" or "obj"))
-            .SelectMany(path => File.ReadAllLines(path).Select((line, index) =>
+        var snapshot = RepositorySourceSnapshotCache.Get(root);
+        var lines = SourceFiles(root)
+            .SelectMany(path => snapshot.GetLines(path).Select((line, index) =>
                 (Path: Path.GetRelativePath(src, path).Replace('\\', '/'), Line: line.Trim(), Number: index + 1)))
             .ToArray();
         var errors = new List<string>();
@@ -59,7 +59,11 @@ public sealed class OrchestratorTempRootSourceGuardTests
         Assert.False(IsAllowed("new.cs", source));
     }
 
-    private static bool IsAllowed(string path, string line) =>
+    internal static IEnumerable<string> SourceFiles(string root) =>
+        RepositorySourceSnapshotCache.Get(root).EnumerateFiles(Path.Combine(root, "src"))
+            .Where(path => !SourceGuardFileFilter.BuildOutput.Excludes(path));
+
+    internal static bool IsAllowed(string path, string line) =>
         Allowed.Any(allowed => allowed.Path == path &&
             line.Equals(allowed.Snippet, StringComparison.Ordinal));
 

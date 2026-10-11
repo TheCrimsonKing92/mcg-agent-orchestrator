@@ -42,12 +42,11 @@ public sealed class RedirectedStreamDrainSourceGuardTests(Xunit.ITestOutputHelpe
             "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests");
         var matched = new HashSet<(string File, string Method)>();
         var failures = new List<string>();
-        foreach (var path in Directory.EnumerateFiles(testRoot, "*.cs", SearchOption.AllDirectories))
+        var snapshot = RepositorySourceSnapshotCache.Get(Path.GetDirectoryName(Path.GetDirectoryName(testRoot))!);
+        foreach (var path in SourceFiles(testRoot))
         {
             var file = Path.GetRelativePath(testRoot, path).Replace('\\', '/');
-            if (file.Split('/').Any(part => part is "bin" or "obj" or ".scratch" or ".orchestrator-prototype"))
-                continue;
-            foreach (var (method, reason) in FindOffenders(File.ReadAllText(path)))
+            foreach (var (method, reason) in FindOffenders(snapshot.GetSyntaxTree(path)))
             {
                 var key = (file, method);
                 if (AllowList.Contains(key))
@@ -76,9 +75,16 @@ public sealed class RedirectedStreamDrainSourceGuardTests(Xunit.ITestOutputHelpe
         Assert.Empty(FindOffenders(literal));
     }
 
-    private static IReadOnlyList<(string Method, string Reason)> FindOffenders(string source)
+    internal static IEnumerable<string> SourceFiles(string testRoot) =>
+        RepositorySourceSnapshotCache.Get(Path.GetDirectoryName(Path.GetDirectoryName(testRoot))!).EnumerateFiles(testRoot)
+            .Where(path => !SourceGuardFileFilter.BuildOutputAndScratch.Excludes(Path.GetRelativePath(testRoot, path)));
+
+    private static IReadOnlyList<(string Method, string Reason)> FindOffenders(string source) =>
+        FindOffenders(CSharpSyntaxTree.ParseText(source));
+
+    internal static IReadOnlyList<(string Method, string Reason)> FindOffenders(Microsoft.CodeAnalysis.SyntaxTree tree)
     {
-        var root = CSharpSyntaxTree.ParseText(source).GetRoot();
+        var root = tree.GetRoot();
         var findings = new List<(string Method, string Reason)>();
         foreach (var method in root.DescendantNodes().OfType<MethodDeclarationSyntax>())
         {

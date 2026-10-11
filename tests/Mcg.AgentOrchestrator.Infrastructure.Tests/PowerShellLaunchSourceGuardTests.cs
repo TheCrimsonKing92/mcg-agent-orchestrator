@@ -18,12 +18,11 @@ public sealed class PowerShellLaunchSourceGuardTests
             "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests");
         var violations = new List<string>();
         var foundSelectors = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var path in Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories))
+        var snapshot = RepositorySourceSnapshotCache.Get(Path.GetDirectoryName(Path.GetDirectoryName(root))!);
+        foreach (var path in SourceFiles(root))
         {
             var relative = Path.GetRelativePath(root, path).Replace('\\', '/');
-            if (relative.Split('/').Any(part => part is "bin" or "obj" or ".scratch" or ".orchestrator-prototype") ||
-                relative == nameof(PowerShellLaunchSourceGuardTests) + ".cs") continue;
-            foreach (var (line, selector) in FindLaunches(File.ReadAllText(path)))
+            foreach (var (line, selector) in FindLaunches(snapshot.GetSyntaxTree(path)))
             {
                 var key = selector is null ? null : $"{relative}:{selector}";
                 if (key is not null && AllowedTheorySelectors.Contains(key)) foundSelectors.Add(key);
@@ -46,9 +45,16 @@ public sealed class PowerShellLaunchSourceGuardTests
         Assert.Equal(6, FindLaunches(source).Count());
     }
 
-    private static IEnumerable<(int Line, string? Selector)> FindLaunches(string source)
+    internal static IEnumerable<string> SourceFiles(string root) =>
+        RepositorySourceSnapshotCache.Get(Path.GetDirectoryName(Path.GetDirectoryName(root))!).EnumerateFiles(root)
+            .Where(path => !SourceGuardFileFilter.BuildOutputAndScratch.Excludes(Path.GetRelativePath(root, path)) &&
+                Path.GetRelativePath(root, path).Replace('\\', '/') != nameof(PowerShellLaunchSourceGuardTests) + ".cs");
+
+    private static IEnumerable<(int Line, string? Selector)> FindLaunches(string source) =>
+        FindLaunches(CSharpSyntaxTree.ParseText(source));
+
+    internal static IEnumerable<(int Line, string? Selector)> FindLaunches(Microsoft.CodeAnalysis.SyntaxTree tree)
     {
-        var tree = CSharpSyntaxTree.ParseText(source);
         foreach (var literal in tree.GetRoot().DescendantNodes().OfType<LiteralExpressionSyntax>()
                      .Where(node => node.Token.ValueText is "pwsh" or "pwsh.exe"))
         {

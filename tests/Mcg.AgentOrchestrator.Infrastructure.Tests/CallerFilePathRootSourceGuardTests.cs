@@ -26,6 +26,7 @@ public sealed class CallerFilePathRootSourceGuardTests
     public void CallerPathRootDiscoveryUsesVerifiedRepositoryRoot()
     {
         var repositoryRoot = VerifiedRepositoryRoot.Find();
+        var snapshot = RepositorySourceSnapshotCache.Get(repositoryRoot);
         var activeExceptions = new HashSet<string>(StringComparer.Ordinal);
         var violations = new List<string>();
         foreach (var project in new[]
@@ -35,15 +36,10 @@ public sealed class CallerFilePathRootSourceGuardTests
                  })
         {
             var projectRoot = Path.Combine(repositoryRoot, "tests", project);
-            foreach (var path in Directory.EnumerateFiles(projectRoot, "*.cs", SearchOption.AllDirectories))
+            foreach (var path in SourceFiles(repositoryRoot, projectRoot))
             {
                 var relative = Path.GetRelativePath(repositoryRoot, path).Replace('\\', '/');
-                if (relative.Split('/').Any(part => part is "bin" or "obj" or "artifacts" or ".scratch" or "TestResults"))
-                    continue;
-                if (HelperPaths.Contains(relative))
-                    continue;
-
-                var methods = CallerPathMethods(File.ReadAllText(path));
+                var methods = CallerPathMethods(snapshot.GetSyntaxTree(path));
                 if (Exceptions.ContainsKey(relative))
                 {
                     if (methods.Count != 0)
@@ -77,20 +73,29 @@ public sealed class CallerFilePathRootSourceGuardTests
     public void HelperCopiesStayIdentical()
     {
         var repositoryRoot = VerifiedRepositoryRoot.Find();
-        var expected = File.ReadAllText(Path.Combine(repositoryRoot, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests", "VerifiedRepositoryRoot.cs"))
+        var snapshot = RepositorySourceSnapshotCache.Get(repositoryRoot);
+        var expected = snapshot.GetText(Path.Combine(repositoryRoot, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests", "VerifiedRepositoryRoot.cs"))
             .Replace("\r\n", "\n", StringComparison.Ordinal);
         foreach (var path in new[]
                  {
                      Path.Combine(repositoryRoot, "tests", "Mcg.AgentOrchestrator.Core.Tests", "VerifiedRepositoryRoot.cs"),
                      Path.Combine(repositoryRoot, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests", "Cli", "CliVerifiedRepositoryRoot.cs")
                  })
-            Assert.Equal(expected, File.ReadAllText(path)
+            Assert.Equal(expected, snapshot.GetText(path)
                 .Replace("\r\n", "\n", StringComparison.Ordinal)
                 .Replace("CliVerifiedRepositoryRoot", "VerifiedRepositoryRoot", StringComparison.Ordinal));
     }
 
     private static IReadOnlyList<MethodDeclarationSyntax> CallerPathMethods(string source) =>
-        CSharpSyntaxTree.ParseText(source).GetRoot().DescendantNodes()
+        CallerPathMethods(CSharpSyntaxTree.ParseText(source));
+
+    internal static IEnumerable<string> SourceFiles(string repositoryRoot, string projectRoot) =>
+        RepositorySourceSnapshotCache.Get(repositoryRoot).EnumerateFiles(projectRoot)
+            .Where(path => !SourceGuardFileFilter.CallerPathScan.Excludes(Path.GetRelativePath(repositoryRoot, path)) &&
+                !HelperPaths.Contains(Path.GetRelativePath(repositoryRoot, path).Replace('\\', '/')));
+
+    internal static IReadOnlyList<MethodDeclarationSyntax> CallerPathMethods(Microsoft.CodeAnalysis.SyntaxTree tree) =>
+        tree.GetRoot().DescendantNodes()
             .OfType<MethodDeclarationSyntax>()
             .Where(method => method.ParameterList.Parameters.Any(parameter =>
                 parameter.AttributeLists.SelectMany(list => list.Attributes).Any(attribute =>

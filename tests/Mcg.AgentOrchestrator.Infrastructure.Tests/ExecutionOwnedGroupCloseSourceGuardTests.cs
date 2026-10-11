@@ -9,11 +9,8 @@ public sealed class ExecutionOwnedGroupCloseSourceGuardTests
         var root = InfrastructureTestSupport.FindRepositoryRoot();
         var productionRoot = Path.Combine(root, "src", "Mcg.AgentOrchestrator.Execution");
         Assert.True(Directory.Exists(productionRoot), productionRoot);
-        var files = Directory.EnumerateFiles(productionRoot, "*.cs", SearchOption.AllDirectories)
-            .Where(path => !Path.GetRelativePath(productionRoot, path)
-                .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-                .Any(segment => segment is "bin" or "obj" or "artifacts"))
-            .ToArray();
+        var snapshot = RepositorySourceSnapshotCache.Get(root);
+        var files = SourceFiles(root).ToArray();
         Assert.NotEmpty(files);
         Assert.Contains(files, path => path.EndsWith(Path.Combine("Processes", "WorkerProcessJobs.cs"),
             StringComparison.OrdinalIgnoreCase));
@@ -27,7 +24,7 @@ public sealed class ExecutionOwnedGroupCloseSourceGuardTests
         {
             if (path.EndsWith("OwnedProcessGroup.cs", StringComparison.OrdinalIgnoreCase))
                 continue;
-            var lines = File.ReadAllLines(path);
+            var lines = snapshot.GetLines(path).ToArray();
             var isJobs = path.EndsWith(Path.Combine("Processes", "WorkerProcessJobs.cs"),
                 StringComparison.OrdinalIgnoreCase);
             var start = Array.FindIndex(lines, line => line.Contains(
@@ -46,5 +43,11 @@ public sealed class ExecutionOwnedGroupCloseSourceGuardTests
             }
         }
         Assert.True(offenders.Count == 0, string.Join(Environment.NewLine, offenders));
+    }
+    internal static IEnumerable<string> SourceFiles(string root)
+    {
+        var productionRoot = Path.Combine(root, "src", "Mcg.AgentOrchestrator.Execution");
+        return RepositorySourceSnapshotCache.Get(root).EnumerateFiles(productionRoot)
+            .Where(path => !SourceGuardFileFilter.BuildOutputAndArtifacts.Excludes(Path.GetRelativePath(productionRoot, path)));
     }
 }

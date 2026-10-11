@@ -22,11 +22,7 @@ public sealed class ParallelSharedStateSourceGuardTests
     public void TestSourcesDoNotMutateAcceptancePolicyOrClearParallelRegistry()
     {
         var testsRoot = FindTestsRoot();
-        var sources = Directory.EnumerateFiles(testsRoot, "*.cs", SearchOption.AllDirectories)
-            .Where(path => !path.Split(Path.DirectorySeparatorChar).Any(segment => segment is "bin" or "obj"))
-            .Where(path => !Path.GetFileName(path).Equals(nameof(ParallelSharedStateSourceGuardTests) + ".cs", StringComparison.Ordinal))
-            .Select(path => (Path: Path.GetRelativePath(testsRoot, path), Text: File.ReadAllText(path)))
-            .ToArray();
+        var sources = ReadSources(testsRoot);
 
         Assert.Contains(sources, source => source.Path.Replace('\\', '/').EndsWith(
             "/AcceptancePolicyShardPlannerTests.cs", StringComparison.Ordinal));
@@ -52,7 +48,17 @@ public sealed class ParallelSharedStateSourceGuardTests
         Assert.Contains(offenders, offender => offender.StartsWith("PlannerSamplingDispatchTests.cs:", StringComparison.Ordinal));
     }
 
-    private static List<string> FindOffenders(IEnumerable<(string Path, string Text)> sources)
+    internal static (string Path, string Text)[] ReadSources(string testsRoot)
+    {
+        var snapshot = RepositorySourceSnapshotCache.Get(Path.GetDirectoryName(testsRoot)!);
+        return snapshot.EnumerateFiles(testsRoot)
+            .Where(path => !SourceGuardFileFilter.BuildOutput.Excludes(path))
+            .Where(path => !Path.GetFileName(path).Equals(nameof(ParallelSharedStateSourceGuardTests) + ".cs", StringComparison.Ordinal))
+            .Select(path => (Path: Path.GetRelativePath(testsRoot, path), Text: snapshot.GetText(path)))
+            .ToArray();
+    }
+
+    internal static List<string> FindOffenders(IEnumerable<(string Path, string Text)> sources)
     {
         var files = sources.ToArray();
         var serialCollections = files

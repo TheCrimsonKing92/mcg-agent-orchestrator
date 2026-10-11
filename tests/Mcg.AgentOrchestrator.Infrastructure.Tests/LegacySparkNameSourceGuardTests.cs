@@ -5,12 +5,9 @@ public sealed class LegacySparkNameSourceGuardTests
     public void SourceFiles_RetiredSpellings_AppearOnlyInReadAliasHome()
     {
         var root = VerifiedRepositoryRoot.Find();
-        var files = Directory.EnumerateFiles(Path.Combine(root, "src"), "*.cs", SearchOption.AllDirectories)
-            .Where(file => !Path.GetRelativePath(root, file)
-                .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-                .Any(segment => segment is "bin" or "obj" or ".scratch" or ".orchestrator-prototype"
-                    or ".orchestrator-worktrees" or "TestResults" or "playwright-report"))
-            .ToDictionary(file => Path.GetRelativePath(root, file).Replace('\\', '/'), File.ReadAllText);
+        var snapshot = RepositorySourceSnapshotCache.Get(root);
+        var files = SourceFiles(root)
+            .ToDictionary(file => Path.GetRelativePath(root, file).Replace('\\', '/'), snapshot.GetText);
 
         const string aliasPath = "src/Mcg.AgentOrchestrator.Core/Domain/LunaLaneNames.cs";
         const string runnerPath = "src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs";
@@ -29,4 +26,7 @@ public sealed class LegacySparkNameSourceGuardTests
                 Assert.False(source.Contains(spelling, StringComparison.Ordinal), $"Retired spelling '{spelling}' in {path}");
         }
     }
+    internal static IEnumerable<string> SourceFiles(string root) =>
+        RepositorySourceSnapshotCache.Get(root).EnumerateFiles(Path.Combine(root, "src"))
+            .Where(file => !SourceGuardFileFilter.WorkspaceAndReports.Excludes(Path.GetRelativePath(root, file)));
 }
