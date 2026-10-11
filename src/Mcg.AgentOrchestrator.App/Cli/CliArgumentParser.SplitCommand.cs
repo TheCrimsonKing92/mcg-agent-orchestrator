@@ -117,6 +117,13 @@ public static IReadOnlyList<string> SplitCommand(string line)
 
     if (command.Equals("attention", StringComparison.OrdinalIgnoreCase))
     {
+        if (remainder.StartsWith("answer ", StringComparison.OrdinalIgnoreCase))
+        {
+            string[] answerArgs = [command, .. TokenizeQuotedArguments(remainder)];
+            if (answerArgs.Any(arg => arg.Equals("--json", StringComparison.OrdinalIgnoreCase)))
+                return NormalizeArgs(answerArgs);
+        }
+
         if (remainder.StartsWith("answer ", StringComparison.OrdinalIgnoreCase) &&
             IndexOfAnyFileFlag(remainder, "--text-file") >= 0)
         {

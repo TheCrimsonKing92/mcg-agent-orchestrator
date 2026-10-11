@@ -10,6 +10,9 @@ internal static partial class CliCommandHandlers
     private static bool HandleAttentionAnswer(
         IReadOnlyList<string> parts, CliExecutionContext context, CollaborationItemStore store)
     {
+        var emitAgentReadEnvelope = parts.Any(part => part.Equals("--json", StringComparison.OrdinalIgnoreCase));
+        if (emitAgentReadEnvelope)
+            parts = parts.Where(part => !part.Equals("--json", StringComparison.OrdinalIgnoreCase)).ToArray();
         var answerParts = WithoutAnswerMetadataFlags(parts);
         if (answerParts.Count < 4)
             throw new ArgumentException(CliCommandHelp.AttentionUsage);
@@ -92,10 +95,13 @@ internal static partial class CliCommandHandlers
         var persisted = SqliteOperatorIntentStore.ForDirectories(
             context.Workspace.OrchestratorDirectory, context.Workspace.LogDirectory)
             .EnqueueAsync(intent).GetAwaiter().GetResult();
-        Console.WriteLine($"Operator intent queued: id={persisted.Id} verb={persisted.Verb} " +
-            $"goal={goal.Id.Value} status={persisted.Status}; poll with operator-intent-status {persisted.Id} (or add --wait).");
+        if (emitAgentReadEnvelope)
+            Console.WriteLine(OperatorIntentAgentReadView.Render(persisted));
+        else
+            Console.WriteLine($"Operator intent queued: id={persisted.Id} verb={persisted.Verb} " +
+                $"goal={goal.Id.Value} status={persisted.Status}; poll with operator-intent-status {persisted.Id} (or add --wait).");
         if (!ConductorLoopLease.IsActive(context.Workspace.OrchestratorDirectory))
-            Console.WriteLine(ConductorLoopLease.InactiveWarning);
+            (emitAgentReadEnvelope ? Console.Error : Console.Out).WriteLine(ConductorLoopLease.InactiveWarning);
         return false;
     }
 

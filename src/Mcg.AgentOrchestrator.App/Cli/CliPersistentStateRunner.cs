@@ -261,8 +261,13 @@ internal static partial class CliPersistentStateRunner
             if (args[0].Equals(OperatorIntentVerbs.ApprovePolicyChange, StringComparison.OrdinalIgnoreCase)) return SubmitPolicyChangeApprovalIntent(args, stateRepository, workspace, ref currentGoal, operatorIntentSubmissionSource);
             if (IsInboxBackedGoalScopedTaskMutationCommand(args))
             {
+                var emitAgentReadEnvelope = args[0].Equals(OperatorIntentVerbs.Adjudicate, StringComparison.OrdinalIgnoreCase) &&
+                    args.Any(arg => arg.Equals("--json", StringComparison.OrdinalIgnoreCase));
+                var submitArgs = emitAgentReadEnvelope
+                    ? args.Where(arg => !arg.Equals("--json", StringComparison.OrdinalIgnoreCase)).ToArray()
+                    : args;
                 return SubmitGoalScopedTaskOperatorIntent(
-                    args,
+                    submitArgs,
                     stateRepository,
                     workspace,
                     agents,
@@ -270,7 +275,8 @@ internal static partial class CliPersistentStateRunner
                     workerProfiles,
                     ref currentGoal,
                     channel,
-                    operatorIntentSubmissionSource);
+                    operatorIntentSubmissionSource,
+                    emitAgentReadEnvelope);
             }
 
             return ExecuteGoalScopedTaskMutationCommand(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
@@ -1820,7 +1826,8 @@ internal static partial class CliPersistentStateRunner
         WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal,
         IOperatorChannel? channel,
-        OperatorIntentSubmissionSource submissionSource)
+        OperatorIntentSubmissionSource submissionSource,
+        bool emitAgentReadEnvelope)
     {
         var target = CliArgumentParser.ParseGoalScopedTaskTargetArgs(args);
         var hasInlineGoalPrefix = HasInlineGoalPrefixForGoalScopedTaskMutation(stateRepository, target.Parts);
@@ -1885,13 +1892,16 @@ internal static partial class CliPersistentStateRunner
             .GetAwaiter()
             .GetResult();
         currentGoal = goal;
-        Console.WriteLine(
-            $"Operator intent queued: id={persisted.Id} verb={persisted.Verb} " +
-            $"selector={preparedCommand.SuppliedGoalSelector ?? "current"} goal={goal.Id.Value} " +
-            $"task={task.Id.Value} status={persisted.Status}; poll with operator-intent-status {persisted.Id} (or add --wait).");
+        if (emitAgentReadEnvelope)
+            Console.WriteLine(OperatorIntentAgentReadView.Render(persisted));
+        else
+            Console.WriteLine(
+                $"Operator intent queued: id={persisted.Id} verb={persisted.Verb} " +
+                $"selector={preparedCommand.SuppliedGoalSelector ?? "current"} goal={goal.Id.Value} " +
+                $"task={task.Id.Value} status={persisted.Status}; poll with operator-intent-status {persisted.Id} (or add --wait).");
         if (!ConductorLoopLease.IsActive(workspace.OrchestratorDirectory))
         {
-            Console.WriteLine(ConductorLoopLease.InactiveWarning);
+            (emitAgentReadEnvelope ? Console.Error : Console.Out).WriteLine(ConductorLoopLease.InactiveWarning);
         }
 
         return false;

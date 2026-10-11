@@ -97,6 +97,10 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
 
     if (command.Equals("attention", StringComparison.OrdinalIgnoreCase))
     {
+        if (args[1].Equals("answer", StringComparison.OrdinalIgnoreCase) &&
+            args.Any(arg => arg.Equals("--json", StringComparison.OrdinalIgnoreCase)))
+            return NormalizeAttentionAnswerJsonArgs(args);
+
         if (args.Length >= 4 &&
             args[1].Equals("answer", StringComparison.OrdinalIgnoreCase) &&
             args.Any(arg => arg.Equals("--text-file", StringComparison.OrdinalIgnoreCase)))
@@ -290,6 +294,31 @@ private static IReadOnlyList<string> NormalizeAttentionAnswerWithFileFlag(string
         ? 4
         : 3;
     return NormalizeTargetTextCommandWithFileFlags(args, textStartIndex - 1, "--text-file");
+}
+
+private static IReadOnlyList<string> NormalizeAttentionAnswerJsonArgs(string[] args)
+{
+    var answerArgs = new List<string>();
+    var metadata = new List<string>();
+    var withoutJson = args.Where(arg => !arg.Equals("--json", StringComparison.OrdinalIgnoreCase)).ToArray();
+    for (var index = 0; index < withoutJson.Length; index++)
+    {
+        var token = withoutJson[index];
+        if (token.Equals("--operator-actor", StringComparison.OrdinalIgnoreCase) ||
+            token.Equals("--actor-kind", StringComparison.OrdinalIgnoreCase) ||
+            token.Equals("--evidence", StringComparison.OrdinalIgnoreCase) ||
+            token.Equals("--precedent", StringComparison.OrdinalIgnoreCase) ||
+            token.Equals("--idempotency-key", StringComparison.OrdinalIgnoreCase))
+        {
+            if (++index >= withoutJson.Length || withoutJson[index].StartsWith("--", StringComparison.Ordinal))
+                throw new ArgumentException($"{token} requires a value.");
+            metadata.Add(token.ToLowerInvariant());
+            metadata.Add(withoutJson[index]);
+        }
+        else
+            answerArgs.Add(token);
+    }
+    return [.. NormalizeArgs(answerArgs.ToArray()), .. metadata, "--json"];
 }
 
 private static IReadOnlyList<string> NormalizeTargetCommandWithValueFlags(string[] args, int targetIndex, params string[] valueFlags)

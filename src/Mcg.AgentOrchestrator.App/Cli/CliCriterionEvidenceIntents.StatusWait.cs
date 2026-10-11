@@ -8,7 +8,7 @@ internal static partial class CliCriterionEvidenceIntents
     internal static int PrintStatus(IReadOnlyList<string> args, IOperatorIntentStore store,
         TextWriter output, TimeProvider clock, TimeSpan pollInterval, Action<TimeSpan> delay)
     {
-        var (intentIds, wait) = ParseStatusArguments(args);
+        var (intentIds, wait) = ParseStatusArguments(args, out var json);
         if (wait is not null && pollInterval <= TimeSpan.Zero)
         {
             throw new ArgumentOutOfRangeException(nameof(pollInterval));
@@ -31,8 +31,11 @@ internal static partial class CliCriterionEvidenceIntents
             var remaining = deadline is null || !pending ? TimeSpan.Zero : deadline.Value - clock.GetUtcNow();
             if (deadline is null || !pending || remaining <= TimeSpan.Zero)
             {
-                foreach (var intent in intents)
-                    output.WriteLine(FormatStatusLine(intent!));
+                if (json)
+                    output.WriteLine(OperatorIntentAgentReadView.Render(intents[0]!, clock));
+                else
+                    foreach (var intent in intents)
+                        output.WriteLine(FormatStatusLine(intent!));
                 return deadline is null ? 0 : intents.Any(intent => intent!.Status == OperatorIntentStatus.Rejected) ? 2 : pending ? 3 : 0;
             }
 
@@ -41,7 +44,12 @@ internal static partial class CliCriterionEvidenceIntents
     }
 
     private static (IReadOnlyList<string> IntentIds, TimeSpan? Wait) ParseStatusArguments(IReadOnlyList<string> args)
+        => ParseStatusArguments(args, out _);
+
+    private static (IReadOnlyList<string> IntentIds, TimeSpan? Wait) ParseStatusArguments(
+        IReadOnlyList<string> args, out bool json)
     {
+        json = false;
         var intentIds = new List<string>();
         TimeSpan? wait = null;
         for (var index = 1; index < args.Count; index++)
@@ -69,6 +77,12 @@ internal static partial class CliCriterionEvidenceIntents
                     throw new ArgumentException(CliCommandHelp.OperatorIntentStatusUsage);
                 wait = TimeSpan.FromSeconds(seconds);
             }
+            else if (arg.Equals("--json", StringComparison.OrdinalIgnoreCase))
+            {
+                if (json)
+                    throw new ArgumentException(CliCommandHelp.OperatorIntentStatusUsage);
+                json = true;
+            }
             else
             {
                 if (arg.StartsWith("--", StringComparison.Ordinal))
@@ -77,7 +91,7 @@ internal static partial class CliCriterionEvidenceIntents
             }
         }
 
-        if (intentIds.Count == 0)
+        if (intentIds.Count == 0 || json && intentIds.Count != 1)
             throw new ArgumentException(CliCommandHelp.OperatorIntentStatusUsage);
         return (intentIds, wait);
     }

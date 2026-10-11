@@ -11,7 +11,7 @@ internal static class CliCommandHelp
     public const string AcceptanceUsage = "Usage: acceptance [goal-id-prefix] [--skip-verify] [--keep-workspace] [--no-record] [--autonomy <policy>]";
     public const string RunGoalUsage = "Usage: run-goal [goal-id-prefix] --confirm-batch-start [--confirm-large-paid-subscription-start] [--confirm-readiness-risk] [--autonomy <policy>]";
     public const string GoalIntakeStatusUsage = "Usage: goal-intake-status <request-key>";
-    public const string OperatorIntentStatusUsage = "Usage: operator-intent-status <intent-id> [<intent-id> ...] [--wait [seconds]] (default 300 seconds; with --wait: exit 0 all Applied, 2 any Rejected, 3 any Pending/Claimed at shared deadline; Rejected takes precedence; without --wait: one read per id, exit 0)";
+    public const string OperatorIntentStatusUsage = "Usage: operator-intent-status <intent-id> [<intent-id> ...] [--json] [--wait [seconds]] (with --json: exactly one id, mcg.operator-intent envelope; default 300 seconds; with --wait: exit 0 all Applied, 2 any Rejected, 3 any Pending/Claimed at shared deadline; Rejected takes precedence; without --wait: one read per id, exit 0)";
     public const string GoalBoardUsage = GoalBoardOptions.Usage;
     public const string GoalReplaceUsage = "Usage: goal-replace <predecessor-goal-id> --brief-file <path> --reason-file <path> --request-id <guid> --disposition <zero-work-correction|abandon-failed-attempt|supersede-unlanded-attempt> --confirm-goal-replace [--pipeline <auto|scout|five-role|developer-reviewer|developer-only>] [--ideation <agent>|--researcher <agent>|--planner <agent>|--developer <agent>|--tester <agent>|--reviewer <agent>]";
     public const string AddTaskUsage = "Usage: add-task [--goal <goal-prefix>] <role> <description> [--before-role <role>] | add-task [--goal <goal-prefix>] <role> --text-file <path> [--before-role <role>]";
@@ -19,7 +19,7 @@ internal static class CliCommandHelp
     public const string NoteUsage = "Usage: note <task-number> <message> [--gate-deliverable <id>...] | note <goal-prefix> <task-number> <message> [--gate-deliverable <id>...] | note --goal <goal-prefix> <task-number> <message> [--gate-deliverable <id>...] | note <task-number> --text-file <path> [--gate-deliverable <id>...]";
     public const string ProgressUsage = "Usage: progress [--goal <goal-prefix>] <task-number> <status> <message> [--goal <goal-prefix>] | progress [--goal <goal-prefix>] <task-number> <status> --text-file <path> [--goal <goal-prefix>]";
     public const string VerifyManualUsage = "Usage: verify-manual [--goal <goal-prefix>] <task-number> <passed|failed> <note> [--goal <goal-prefix>] | verify-manual [--goal <goal-prefix>] <task-number> <passed|failed> --text-file <path> [--goal <goal-prefix>]";
-    public const string AdjudicateUsage = "Usage: adjudicate [--goal <goal-prefix>] <task-number> <close|reopen-regate|route> --text-file <path> --evidence <ref>... [--cause <cause>] [--reversibility <reversible|reversible-with-cost|irreversible>] [--precedent <decision-id|rule>] [--actor-kind <human|agent>]";
+    public const string AdjudicateUsage = "Usage: adjudicate [--goal <goal-prefix>] <task-number> <close|reopen-regate|route> --text-file <path> --evidence <ref>... [--cause <cause>] [--reversibility <reversible|reversible-with-cost|irreversible>] [--precedent <decision-id|rule>] [--actor-kind <human|agent>] [--json]";
     public const string ApprovePolicyChangeUsage = "Usage: approve-policy-change <goal-prefix> <full-candidate-sha> --text-file <reason-path> [--idempotency-key <key>]";
     public const string RecoverUsage = "Usage: recover <goal-prefix> <note> | recover <goal-prefix> --text-file <path>";
     public const string AcceptanceRetryUsage = "Usage: acceptance-retry <goal-prefix> <reason> --confirm-acceptance-retry";
@@ -28,7 +28,7 @@ internal static class CliCommandHelp
     public const string AnswerUsage = "Usage: answer <request-id> <answer> [--gate-deliverable <id>...] | answer <request-id> --text-file <path> [--gate-deliverable <id>...]";
     public const string SupersedeUsage = "Usage: supersede <goal-id> <clarification-id> <answer> | supersede <goal-id> <clarification-id> --text-file <path>";
     public const string GateSatisfiedUsage = "Usage: gate-satisfied <request-id|task-note-record-id> <deliverable-id> <evidence> | gate-satisfied <request-id|task-note-record-id> <deliverable-id> --text-file <path>";
-    public const string AttentionUsage = "Usage: attention [list] --json | attention show [--goal] [<goal-id-prefix>] --json | attention show [--all|--include-parked] [--goal] <goal-id-prefix> | attention dismiss --item <item-id> | attention dismiss [--goal] <goal-id-prefix> | attention answer [<goal-id-prefix>] <clarification-id|human-wait-request-id> <answer> | attention answer [<goal-id-prefix>] <clarification-id|human-wait-request-id> --text-file <path> [--operator-actor <id>] [--actor-kind Human|Agent] [--evidence <ref>] [--precedent <ref>] [--idempotency-key <key>]";
+    public const string AttentionUsage = "Usage: attention [list] --json | attention show [--goal] [<goal-id-prefix>] --json | attention show [--all|--include-parked] [--goal] <goal-id-prefix> | attention dismiss --item <item-id> | attention dismiss [--goal] <goal-id-prefix> | attention answer [<goal-id-prefix>] <clarification-id|human-wait-request-id> <answer> [--json] | attention answer [<goal-id-prefix>] <clarification-id|human-wait-request-id> --text-file <path> [--operator-actor <id>] [--actor-kind Human|Agent] [--evidence <ref>] [--precedent <ref>] [--idempotency-key <key>] [--json]";
     public const string AbandonGoalUsage = "Usage: abandon-goal <goal-id-prefix> <reason> [--confirm-goal-abandon] | abandon-goal <goal-id-prefix> --text-file <path> [--confirm-goal-abandon]";
     public const string CancelGoalUsage = "Usage: cancel-goal <goal-id-prefix> <reason> [--confirm-goal-stop] | cancel-goal <goal-id-prefix> --text-file <path> [--confirm-goal-stop]";
     public const string SupersedeGoalUsage = "Usage: supersede-goal <goal-id-prefix> <reason> [--confirm-goal-stop] | supersede-goal <goal-id-prefix> --text-file <path> [--confirm-goal-stop]";
@@ -201,7 +201,7 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry OperatorIntentStatus = new(
         OperatorIntentStatusUsage,
         "Read an operator intent once, or wait silently for Applied, Rejected or the deadline. Accepts --wait=seconds.",
-        ["--wait", "--help", "-h"]);
+        ["--wait", "--json", "--help", "-h"]);
 
     private static readonly CommandHelpEntry GoalReplace = new(
         GoalReplaceUsage,
@@ -254,7 +254,7 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry Adjudicate = new(
         AdjudicateUsage,
         "Atomically close, reopen for a gate, or route a task with decision evidence. Evidence may be ref or id=hash.",
-        ["--goal", "--text-file", "--evidence", "--cause", "--reversibility", "--precedent", "--idempotency-key", "--operator-actor", "--actor-kind", "--help", "-h"]);
+        ["--goal", "--text-file", "--evidence", "--cause", "--reversibility", "--precedent", "--idempotency-key", "--operator-actor", "--actor-kind", "--json", "--help", "-h"]);
 
     private static readonly CommandHelpEntry ApprovePolicyChange = new(
         ApprovePolicyChangeUsage,
@@ -871,6 +871,10 @@ internal static class CliCommandHelp
             }
 
             var option = GetOptionName(arg);
+            if (option.Equals("--json", StringComparison.OrdinalIgnoreCase) &&
+                args.Count > 1 && args[0].Equals("attention", StringComparison.OrdinalIgnoreCase) &&
+                args[1].Equals("answer", StringComparison.OrdinalIgnoreCase))
+                continue;
             if (!entry.Flags.Contains(option))
             {
                 var previousOption = index > 1 ? GetOptionName(args[index - 1]) : null;
