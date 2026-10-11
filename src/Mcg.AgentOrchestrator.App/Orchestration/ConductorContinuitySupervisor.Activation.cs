@@ -42,6 +42,7 @@ internal sealed partial class ConductorContinuitySupervisor
         private int _ticks;
         private int? _lastTick;
         private DateTimeOffset? _lastTickEndAt;
+        private DateTimeOffset? _lastDrainAt;
         private DateTimeOffset _lastLineAt;
         private DateTimeOffset? _loopReadyAt;
         private TaskCompletionSource _changed = NewSignal();
@@ -77,6 +78,11 @@ internal sealed partial class ConductorContinuitySupervisor
                         CultureInfo.InvariantCulture, out var tick) ? tick : null;
                     _lastTickEndAt = _utcNow();
                 }
+                else if (_started && line.StartsWith("LOOP_RELAUNCH_DRAIN ", StringComparison.Ordinal))
+                {
+                    _lastDrainAt = _utcNow();
+                    return;
+                }
                 else if (_started || _loopReadyAt is null || !nonBlank)
                 {
                     return;
@@ -101,6 +107,14 @@ internal sealed partial class ConductorContinuitySupervisor
             lock (_gate)
             {
                 return (_lastTick, _lastTickEndAt);
+            }
+        }
+
+        internal DateTimeOffset? LastDrainAt()
+        {
+            lock (_gate)
+            {
+                return _lastDrainAt;
             }
         }
 
@@ -150,6 +164,7 @@ internal sealed partial class ConductorContinuitySupervisor
         TimeSpan tickGapTimeout,
         CancellationToken cancellationToken)
     {
+        TimeSpan? drainWait = null;
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -174,7 +189,7 @@ internal sealed partial class ConductorContinuitySupervisor
             }
 
             var timeout = !snapshot.Started ? _readinessTimeout :
-                snapshot.Ticks == 0 ? _activationStallTimeout : tickGapTimeout;
+                snapshot.Ticks == 0 ? _activationStallTimeout : drainWait ?? tickGapTimeout;
             var loopReadyAt = !snapshot.Started ? monitor.LoopReadyAt() : null;
             var ceilingReached = false;
             if (loopReadyAt is { } readyAt)
@@ -193,6 +208,7 @@ internal sealed partial class ConductorContinuitySupervisor
                 deadlineCts.Cancel();
                 if (completed == snapshot.Changed || completed == runTask)
                 {
+                    drainWait = null;
                     continue;
                 }
             }
@@ -201,6 +217,7 @@ internal sealed partial class ConductorContinuitySupervisor
             if (runTask.IsCompleted || current.Started != snapshot.Started ||
                 (!ceilingReached && current.Changed != snapshot.Changed))
             {
+                drainWait = null;
                 continue;
             }
 
@@ -210,6 +227,15 @@ internal sealed partial class ConductorContinuitySupervisor
                 ceilingReached = ConductorStartupProgressDeadline.Compute(
                     deadlineReadyAt, monitor.LastLineAt(), _timeProvider.GetUtcNow(), _readinessTimeout)
                     .CeilingReached;
+            }
+            if (snapshot.Started && snapshot.Ticks > 0)
+            {
+                drainWait = ActivationDrainStallDecision.Evaluate(_timeProvider.GetUtcNow(),
+                    monitor.LastTickEnd().EndedAt, monitor.LastDrainAt(), tickGapTimeout, _tickStallBudget);
+                if (drainWait is not null)
+                {
+                    continue;
+                }
             }
             processCts.Cancel();
             var stopped = await ObserveStoppedSuccessor(runTask).ConfigureAwait(false);
