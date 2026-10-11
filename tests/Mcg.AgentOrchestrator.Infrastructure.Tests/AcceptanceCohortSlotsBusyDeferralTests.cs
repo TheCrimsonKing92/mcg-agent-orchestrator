@@ -107,6 +107,7 @@ public sealed class AcceptanceCohortSlotsBusyDeferralTests : AcceptanceCohortWor
             DotnetBuildEnvironmentLease? acquired = null;
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
                 Path.Combine(workspace.OrchestratorDirectory, "parallel-attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
+                buildStorageRoot: cleanup.BuildStorageRoot,
                 acquireCohortStableSlotRound: (_, label, _) =>
                 {
                     if (++acquisitions == 1)

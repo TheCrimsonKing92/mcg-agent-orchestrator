@@ -577,7 +577,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
 
     internal DotnetBuildEnvironmentLease? AcquireCohortStableSlotLeaseInRounds(
         string cohortId, string holderLabel, int roundCount, CancellationToken cancellationToken) =>
-        new CohortStableSlotAcquisitionRounds(roundCount, _cohortStableSlotRoundDelay).Acquire(
+        new CohortStableSlotAcquisitionRounds(roundCount, _cohortStableSlotRoundDelay,
+            _buildStorageRoot ?? DotnetBuildEnvironmentManager.CaptureStorageRoot(), _timeProvider).Acquire(
             cohortId, token => _acquireCohortStableSlotRound(cohortId, holderLabel, token), cancellationToken);
 
     internal ConductorParallelAcceptanceAttemptDecision EvaluateFocusedEvidence(

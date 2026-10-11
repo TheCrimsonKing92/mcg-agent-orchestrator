@@ -69,6 +69,7 @@ public sealed record DotnetBuildStableSlotWait(
     string? FailureOperation = null)
 {
     public string? HolderLabel { get; init; }
+    public string? LeaseId { get; init; }
 }
 
 internal sealed record DotnetBuildServerShutdownOutcome(
@@ -1373,6 +1374,16 @@ public static class DotnetBuildEnvironmentManager
         return Path.Combine(storageRoot.RootPath, "build-slots", $"build-{slotIndex}.lock");
     }
 
+    internal static string AcceptancePriorityLockPath(int slotIndex, DotnetBuildStorageRoot storageRoot) =>
+        BuildSlotExecutionLockPath(slotIndex, storageRoot) + ".acceptance-priority.lock";
+
+    internal static IReadOnlyList<string> ReadStableSlotBusyLeaseIds(DotnetBuildStorageRoot storageRoot) =>
+        BuildBusySlotSnapshot(slot => CreateStableSlotEnvironment(slot, storageRoot, createArtifactsDirectory: false))
+            .Select(slot => slot.LeaseId)
+            .OfType<string>()
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
     private static DotnetBuildEnvironment WithBuildPermit(DotnetBuildEnvironment environment, int permitIndex)
     {
         var permitDirectory = Path.GetDirectoryName(Path.GetFullPath(environment.ExecutionLockPath))!;
@@ -1504,7 +1515,11 @@ public static class DotnetBuildEnvironmentManager
             unavailable?.Name,
             unavailable?.Status ?? snapshot.Failure?.Status,
             snapshot.Failure?.NativeError,
-            snapshot.Failure?.Operation) { HolderLabel = held ? metadata?.HolderLabel : null };
+            snapshot.Failure?.Operation)
+        {
+            HolderLabel = held ? metadata?.HolderLabel : null,
+            LeaseId = held ? metadata?.LeaseId : null
+        };
     }
 
     private static bool IsExecutionLockHeld(string path)
@@ -2532,6 +2547,15 @@ public static class DotnetBuildEnvironmentManager
 
         Console.WriteLine(
             $"{receipt} pid={Environment.ProcessId} slot={ReceiptSlotName(environment)} lease={environment.LeaseId} reclaimedPid={reclaimedProcessId?.ToString(CultureInfo.InvariantCulture) ?? "unknown"} decision={reclaimDecision} reason={integrity.Reason} triggerPath=\"{integrity.TriggerPath}\" journal=\"{journalPath}\" journalStatus={(journalWritten ? "written" : "pending")} path={environment.ExecutionLockPath}");
+    }
+
+    internal static void TryAppendGateSlotWaitJournal(DotnetBuildStorageRoot storageRoot, GateSlotWaitRecord wait)
+    {
+        var entry = new LeaseJournalEntry(1, DateTimeOffset.UtcNow, GateSlotWaitRecord.EventName,
+            Environment.ProcessId, wait.AcquiredSlot?.ToString(CultureInfo.InvariantCulture) ?? "none",
+            wait.GateIdentity, null, wait.Outcome, wait.FormatDetails(), "");
+        TryAppendLeaseJournal(Path.Combine(storageRoot.RootPath, "build-slots", LeaseJournalFileName),
+            JsonSerializer.Serialize(entry, LeaseJournalJsonOptions) + Environment.NewLine);
     }
 
     private static bool TryAppendLeaseJournal(string journalPath, string serializedEntry)
