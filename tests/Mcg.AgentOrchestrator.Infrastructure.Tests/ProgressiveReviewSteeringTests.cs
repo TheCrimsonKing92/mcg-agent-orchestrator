@@ -1540,12 +1540,7 @@ public sealed class ProgressiveReviewSteeringTests
     {
         var root = Path.Combine(Path.GetTempPath(), $"{prefix}-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
-        Assert.True(GitCli.Run(root, "init").Succeeded);
-        Assert.True(GitCli.Run(root, "config", "user.email", "test@example.test").Succeeded);
-        Assert.True(GitCli.Run(root, "config", "user.name", "Test User").Succeeded);
-        File.WriteAllText(Path.Combine(root, "README.md"), "test");
-        Assert.True(GitCli.Run(root, "add", "README.md").Succeeded);
-        Assert.True(GitCli.Run(root, "commit", "-m", "initial").Succeeded);
+        ProgressiveReviewSteeringRepositoryTemplate.CopyTo(root);
         return root;
     }
 
