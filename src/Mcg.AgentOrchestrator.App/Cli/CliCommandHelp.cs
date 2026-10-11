@@ -222,9 +222,9 @@ internal static class CliCommandHelp
         ["--board", "--limit", "--all", "--help", "-h"]);
 
     private static readonly CommandHelpEntry Goals = new(
-        "Usage: goals [--epic <id-or-title>]",
-        "List goals, optionally restricted to members of an epic.",
-        ["--epic", "--help", "-h"]);
+        "Usage: goals [--epic <id-or-title>] [--json]",
+        "List goals, optionally restricted to members of an epic. --json (bare form only) emits the mcg.goals agent envelope.",
+        ["--epic", "--json", "--help", "-h"]);
 
     private static readonly CommandHelpEntry AddTask = new(
         AddTaskUsage,

@@ -40,9 +40,10 @@ public sealed class CliRemoteExecutorsReadOnlyRouteTestsLaneSeconds : CliTaskQue
             Assert.Equal(CliCommandCapability.QueryOnly, CliCommandCapabilities.Classify(["remote-executors", "--json"]));
             var table = Run(["remote-executors"], workspace, repository);
             using var json = JsonDocument.Parse(Run(["remote-executors", "--json"], workspace, repository));
-            Assert.Equal(0, json.RootElement.GetProperty("unreadableOutcomeLines").GetInt32());
+            var payload = json.RootElement.GetProperty("payload");
+            Assert.Equal(0, payload.GetProperty("unreadableOutcomeLines").GetInt32());
             Assert.Contains("unreadable_outcome_lines=0\tunreadable_probe_lines=0", table);
-            var rows = json.RootElement.GetProperty("executors").EnumerateArray().ToArray();
+            var rows = payload.GetProperty("executors").EnumerateArray().ToArray();
             Assert.Equal(new[] { "one", "zero" }, rows.Select(row => row.GetProperty("executorId").GetString()));
             var one = rows[0];
             Assert.Equal(2, one.GetProperty("configuredSlots").GetInt32());
