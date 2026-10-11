@@ -33,10 +33,16 @@ public static class ManifestEngineSettingsComparer
                     (double)timeout, learned.DefaultTimeoutReason)
                 : CompareValue("engine.timeouts.defaultMinutes", hand.ResolveCheckTimeout(null).TotalMinutes,
                     defaults.ResolveCheckTimeout(null).TotalMinutes),
-            CompareValue("engine.timeouts.buildServerShutdownMinutes", hand.ResolveBuildServerShutdownTimeout().TotalMinutes,
-                defaults.ResolveBuildServerShutdownTimeout().TotalMinutes),
-            CompareValue("engine.timeouts.discoveryMinutes", hand.ResolveDiscoveryTimeout().TotalMinutes,
-                defaults.ResolveDiscoveryTimeout().TotalMinutes)
+            learned?.BuildServerShutdownMinutes is int shutdown
+                ? CompareLearned("engine.timeouts.buildServerShutdownMinutes", hand.ResolveBuildServerShutdownTimeout().TotalMinutes,
+                    (double)shutdown, learned.BuildServerShutdownReason!)
+                : CompareValue("engine.timeouts.buildServerShutdownMinutes", hand.ResolveBuildServerShutdownTimeout().TotalMinutes,
+                    defaults.ResolveBuildServerShutdownTimeout().TotalMinutes),
+            learned?.DiscoveryMinutes is int discovery
+                ? CompareLearned("engine.timeouts.discoveryMinutes", hand.ResolveDiscoveryTimeout().TotalMinutes,
+                    (double)discovery, learned.DiscoveryReason!)
+                : CompareValue("engine.timeouts.discoveryMinutes", hand.ResolveDiscoveryTimeout().TotalMinutes,
+                    defaults.ResolveDiscoveryTimeout().TotalMinutes)
         };
 
         if (root.TryGetProperty("engine", out var engine) && engine.ValueKind == JsonValueKind.Object)

@@ -51,6 +51,9 @@ internal static class ProjectCliCommand
                 Discover(parts, registry, defaultRootDirectory, activeProjectOverride, discoveryOutput ?? Console.Out, measurerFactory);
                 return 0;
 
+            case "answer":
+                return ProjectAnswerCommand.Execute(parts, registry, defaultRootDirectory, activeProjectOverride, discoveryOutput ?? Console.Out);
+
             case "compare-manifest":
                 return ProjectCompareManifestCommand.Execute(parts, registry, defaultRootDirectory, activeProjectOverride, discoveryOutput ?? Console.Out);
 
@@ -64,7 +67,7 @@ internal static class ProjectCliCommand
                 return ProjectUseLearnedBranchCommand.Execute(parts, registry, discoveryOutput ?? Console.Out);
 
             default:
-                throw new ArgumentException("Usage: project list|show [name]|discover [name] [--root <path>] [--measure build|test|all]|compare-manifest [name] [--root <path>] --manifest <path>|compare-manifest-engine [name] [--root <path>] --manifest <path>|compare-integration-branch [name] [--root <path>]|create <name> --root <path> [--integration-branch <name>] [--relocate-state]|select <name>|move-default-state [--undo] [--dry-run]|use-learned-branch <name> [--off]");
+                throw new ArgumentException("Usage: project list|show [name]|discover [name] [--root <path>] [--measure build|test|all]|compare-manifest [name] [--root <path>] --manifest <path>|compare-manifest-engine [name] [--root <path>] --manifest <path>|compare-integration-branch [name] [--root <path>]|create <name> --root <path> [--integration-branch <name>] [--relocate-state]|select <name>|move-default-state [--undo] [--dry-run]|use-learned-branch <name> [--off]|answer [name] <fact-key> <value> [--reason <text>]");
         }
     }
 
@@ -112,8 +115,14 @@ internal static class ProjectCliCommand
             : "";
         output.WriteLine(branch is null ? "Integration branch: not learned"
             : $"Integration branch: {branch.Value} ({branch.Confidence}{branchSource})");
-        foreach (var question in model.OwnerQuestions)
+        var (answers, answerError) = ProjectAnswerCommand.ReadAnswersForOutput(workspaceDirectory);
+        var applied = answers.Count == 0 ? null : OwnerAnswerApplier.Apply(model, answers);
+        foreach (var question in applied?.OpenQuestions ?? model.OwnerQuestions)
             output.WriteLine($"Owner question: {question.Question}");
+        if (applied is not null)
+            ProjectAnswerCommand.WriteAnswerLines(output, applied);
+        if (answerError is not null)
+            output.WriteLine($"Owner answers unreadable: {answerError}");
     }
 
     private static (string? Root, UnitCommandKinds? Kinds) ParseDiscoveryOptions(IReadOnlyList<string> parts)

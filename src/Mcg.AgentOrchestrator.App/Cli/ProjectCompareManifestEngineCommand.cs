@@ -13,7 +13,20 @@ internal static class ProjectCompareManifestEngineCommand
         string defaultRootDirectory, string? activeProjectOverride, TextWriter output)
     {
         var (rootOverride, manifestPath) = ParseOptions(parts);
-        var learned = TryReadLearnedSettings(parts, registry, defaultRootDirectory, activeProjectOverride, rootOverride);
+        var snapshot = TryReadLearnedSettings(parts, registry, defaultRootDirectory, activeProjectOverride, rootOverride);
+        var learned = snapshot?.Settings;
+        AppliedOwnerAnswers? applied = null;
+        string? answerError = null;
+        if (snapshot is { } stored)
+        {
+            var read = ProjectAnswerCommand.ReadAnswersForOutput(stored.Directory);
+            answerError = read.Error;
+            if (read.Answers.Count > 0)
+            {
+                applied = OwnerAnswerApplier.Apply(stored.Model, read.Answers);
+                learned = OwnerAnsweredEngineSettings.Overlay(stored.Settings, applied);
+            }
+        }
         IReadOnlyList<ManifestFactComparison> comparisons;
         try
         {
@@ -31,11 +44,15 @@ internal static class ProjectCompareManifestEngineCommand
         if (learned is not null)
             foreach (var question in learned.OwnerQuestions)
                 output.WriteLine($"OwnerQuestion {question.FactKey} {question.Question}");
+        if (applied is not null)
+            ProjectAnswerCommand.WriteAnswerLines(output, applied);
+        if (answerError is not null)
+            output.WriteLine($"Owner answers unreadable: {answerError}");
         return comparisons.Any(comparison => comparison.Kind is ManifestFactResultKind.DiffersFromGateDefault
             or ManifestFactResultKind.DiffersFromHand) ? 1 : 0;
     }
 
-    private static LearnedEngineSettings? TryReadLearnedSettings(IReadOnlyList<string> parts,
+    private static (LearnedEngineSettings Settings, ProjectModel Model, string Directory)? TryReadLearnedSettings(IReadOnlyList<string> parts,
         OrchestratorProjectRegistry registry, string defaultRootDirectory, string? activeProjectOverride, string? rootOverride)
     {
         try
@@ -52,12 +69,13 @@ internal static class ProjectCompareManifestEngineCommand
                 registry.DataRootDirectory);
             var modelPath = Path.Combine(directory, "project-model.json");
             if (!File.Exists(modelPath)) return null;
-            var learned = LearnedEngineSettingsDeriver.Derive(ProjectModelJson.Deserialize(File.ReadAllText(modelPath)));
-            return learned with
+            var model = ProjectModelJson.Deserialize(File.ReadAllText(modelPath));
+            var learned = LearnedEngineSettingsDeriver.Derive(model);
+            return (learned with
             {
                 MaxConcurrentShardsReason = $"learned from project-model.json: {learned.MaxConcurrentShardsReason}",
                 DefaultTimeoutReason = $"learned from project-model.json: {learned.DefaultTimeoutReason}"
-            };
+            }, model, directory);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or
             NotSupportedException or ArgumentException or JsonException or InvalidOperationException)

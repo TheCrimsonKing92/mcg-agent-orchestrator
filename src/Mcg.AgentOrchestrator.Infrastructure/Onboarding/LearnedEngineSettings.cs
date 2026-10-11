@@ -8,4 +8,10 @@ public sealed record LearnedEngineSettings(
     string MaxConcurrentShardsReason,
     int? DefaultTimeoutMinutes,
     string DefaultTimeoutReason,
-    IReadOnlyList<ProjectOwnerQuestion> OwnerQuestions);
+    IReadOnlyList<ProjectOwnerQuestion> OwnerQuestions)
+{
+    public int? BuildServerShutdownMinutes { get; init; }
+    public string? BuildServerShutdownReason { get; init; }
+    public int? DiscoveryMinutes { get; init; }
+    public string? DiscoveryReason { get; init; }
+}
