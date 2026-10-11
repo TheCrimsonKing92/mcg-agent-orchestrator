@@ -46,6 +46,7 @@ public sealed class CliServedFormsSqliteStoreEffectsTests : CliTaskQueryTestSupp
         WithWorkspace((workspace, kernel) =>
         {
             Assert.False(File.Exists(workspace.PortfolioStorePath));
+            new PortfolioStore(workspace.PortfolioStorePath).AddEpicAsync("Board").GetAwaiter().GetResult();
             var before = SnapshotDatabases(workspace.OrchestratorDirectory);
             Assert.NotEmpty(before);
             ExecuteReadOnly(args, workspace, kernel);
