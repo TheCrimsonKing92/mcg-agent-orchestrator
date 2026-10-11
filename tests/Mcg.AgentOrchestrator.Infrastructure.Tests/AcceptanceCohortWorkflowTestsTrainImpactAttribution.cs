@@ -46,6 +46,33 @@ public sealed class AcceptanceCohortWorkflowTestsTrainImpactAttribution : Accept
     }
 
     [Fact]
+    public void AmbiguousImpactRed_RecordsNoImplicationAndDropsNewestMember()
+    {
+        WithTrain(ownership: false, (repo, driver, selection, goals, result, verifier) =>
+        {
+            Assert.Equal(2, verifier.RunCount);
+            var ejection = Assert.Single(result.Ejections);
+            Assert.Equal(goals[^1].Id, ejection.GoalId);
+            Assert.Equal(MergeTrainEjectionReason.RedNewestMember, ejection.Reason);
+            Assert.Equal(selection.Members.SelectMany(member => member.LandingPaths), verifier.ChangedFiles[0]);
+            Assert.Equal(selection.Members.Take(2).SelectMany(member => member.LandingPaths), verifier.ChangedFiles[1]);
+            Assert.Null(result.Receipt);
+            var red = Assert.IsType<MergeTrainReceipt>(result.RecordedReceipt);
+            Assert.Equal(MergeTrainGateOutcome.Failed, red.Outcome);
+            Assert.Equal(goals.Take(2).Select(goal => goal.Id), red.Identity.Members.Select(member => member.GoalId));
+            Assert.Empty(result.MemberResults);
+            Assert.Contains("attempts=2 fallback=ordinary", result.Detail, StringComparison.Ordinal);
+
+            var keys = driver.ReadTrainImplicatedMemberKeys();
+            Assert.Empty(keys);
+            var next = ConductorMergeTrainSelector.Select(selection.Members.Select(Candidate).ToArray(),
+                trainImplicatedMemberKeys: keys);
+            Assert.Equal(goals.Select(goal => goal.Id), Assert.IsType<ConductorMergeTrainSelection>(next).Members.Select(member => member.GoalId));
+            Assert.Empty(File.Exists(OrchestratorWorkspace.ForDirectory(repo).ConductEventsLogPath) ? AttributionEvents(repo) : []);
+        }, ambiguousImpact: true);
+    }
+
+    [Fact]
     public void OwnershipEvent_AddsOnlySourceMarkerToExistingDetail()
     {
         WithTrain(ownership: true, (repo, driver, selection, goals, result, verifier) =>
@@ -63,7 +90,8 @@ public sealed class AcceptanceCohortWorkflowTestsTrainImpactAttribution : Accept
     }
 
     private void WithTrain(bool ownership,
-        Action<string, ConductorDriver, ConductorMergeTrainSelection, Goal[], ConductorMergeTrainRunResult, SequenceAcceptanceVerifier> assert)
+        Action<string, ConductorDriver, ConductorMergeTrainSelection, Goal[], ConductorMergeTrainRunResult, SequenceAcceptanceVerifier> assert,
+        bool ambiguousImpact = false)
     {
         var repo = CreateReducedAcceptanceCohortRepository();
         var cleanup = CreateIsolatedCleanupContext(repo);
@@ -72,23 +100,29 @@ public sealed class AcceptanceCohortWorkflowTestsTrainImpactAttribution : Accept
             AddAcceptanceManifest(repo);
             Write(repo, "src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\" />");
             Write(repo, "src/Mcg.AgentOrchestrator.Core/Application/CandidateTreeProbe.cs", "public class CandidateTreeProbe { }");
+            if (ambiguousImpact)
+                Write(repo, "src/Mcg.AgentOrchestrator.Core/Application/OtherService.cs", "public class OtherService { }");
             Write(repo, "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
                 "<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup>" +
                 "<ProjectReference Include=\"../../src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj\" />" +
                 "</ItemGroup></Project>");
             Write(repo, "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\" />");
             const string test = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProbeTests.cs";
-            Write(repo, test, "public class ProbeTests { private CandidateTreeProbe probe = new(); [Xunit.Fact] public void Fails() { } }");
+            Write(repo, test, "public class ProbeTests { private CandidateTreeProbe probe = new(); " +
+                (ambiguousImpact ? "private OtherService other = new(); " : string.Empty) +
+                "[Xunit.Fact] public void Fails() { } }");
             RunGit(repo, "add", "src", "tests");
             RunGit(repo, "commit", "-m", "Add impact fixture projects and unchanged test");
             var kernel = new AgentOrchestratorKernel();
             string[] paths = [ownership ? test : "src/Mcg.AgentOrchestrator.Core/Application/CandidateTreeProbe.cs",
-                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/OtherMemberTests.cs",
+                ambiguousImpact ? "src/Mcg.AgentOrchestrator.Core/Application/OtherService.cs"
+                    : "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/OtherMemberTests.cs",
                 "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/NewestMemberTests.cs"];
             string[] contents = [ownership
                 ? "public class ProbeTests { private CandidateTreeProbe probe = new(); [Xunit.Fact] public void Fails() { } } // changed"
                 : "public class CandidateTreeProbe { public bool Changed => true; }",
-                "public class OtherMemberTests { [Xunit.Fact] public void Runs() { } }",
+                ambiguousImpact ? "public class OtherService { public bool Changed => true; }"
+                    : "public class OtherMemberTests { [Xunit.Fact] public void Runs() { } }",
                 "public class NewestMemberTests { [Xunit.Fact] public void Runs() { } }"];
             var goals = Enumerable.Range(0, 3).Select(index =>
             {
@@ -110,7 +144,8 @@ public sealed class AcceptanceCohortWorkflowTestsTrainImpactAttribution : Accept
             var red = new AcceptanceVerificationResult(false, false, 1, "train failed",
                 Checks: [new AcceptanceCheckResult("train", false, 1, "train failed")], TestResultPaths: [path]);
             Assert.Equal(AcceptanceCohortGateOutcome.Failed, ConductorDriver.ClassifyCohortVerification(red));
-            var verifier = new SequenceAcceptanceVerifier([red, new AcceptanceVerificationResult(true, false, 0, null,
+            // A still-red remainder supplies no isolation proof against the dropped member.
+            var verifier = new SequenceAcceptanceVerifier([red, ambiguousImpact ? red : new AcceptanceVerificationResult(true, false, 0, null,
                 Checks: [new AcceptanceCheckResult("remainder", true, 0, null)], TestResultPaths: [WritePassingTrx(repo, "pass.trx")])]);
             var driver = new ConductorDriver(kernel, OrchestratorWorkspace.ForDirectory(repo), verifier,
                 AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(), cleanupHooks: cleanup.Hooks);
@@ -122,6 +157,20 @@ public sealed class AcceptanceCohortWorkflowTestsTrainImpactAttribution : Accept
                 Assert.Null(MergeTrainRedAttribution.TryAttribute([path], memberTree, selection.BindMembers(), out _));
                 Assert.Contains(RepositoryTestImpactPlanner.Plan(selection.Members[0].LandingPaths, memberTree).Checks,
                     check => check.TestClassSelections?.Contains("ProbeTests") == true);
+                if (ambiguousImpact)
+                {
+                    var members = selection.BindMembers();
+                    foreach (var member in members.Take(2))
+                    {
+                        var plan = RepositoryTestImpactPlanner.Plan(member.LandingPaths, memberTree);
+                        Assert.False(plan.RequiresBroadVerification);
+                        Assert.Null(plan.ReverseDependencyDegradation);
+                        Assert.Contains(plan.Checks, check => check.TestClassSelections?.Contains("ProbeTests") == true);
+                        Assert.Same(member, MergeTrainImpactAttribution.TryAttribute([path], memberTree, [member], out _));
+                    }
+                    Assert.Null(MergeTrainImpactAttribution.TryAttribute([path], memberTree, members, out var classes));
+                    Assert.Empty(classes);
+                }
             }
             var result = driver.RunMergeTrain(selection, goals, ConductorAutonomyPolicy.Permissive, gateOnly: true);
             assert(repo, driver, selection, goals, result, verifier);
