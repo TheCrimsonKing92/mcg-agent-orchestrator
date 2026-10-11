@@ -29,7 +29,8 @@ internal sealed class GoalGitFactIndex(
     IReadOnlySet<string> registeredWorktreePaths,
     string? mainSha,
     bool evidenceAvailable = true,
-    Func<string, IReadOnlyList<string>, GitCli.GitResult>? gitRunner = null)
+    Func<string, IReadOnlyList<string>, GitCli.GitResult>? gitRunner = null,
+    GoalBranchContentStateCache? branchContentStateCache = null)
 {
     private readonly Dictionary<string, GoalBranchContentState> branchContentStates = new(StringComparer.Ordinal);
     private readonly Func<string, IReadOnlyList<string>, GitCli.GitResult> _gitRunner = gitRunner ?? GitRunner;
@@ -39,14 +40,15 @@ internal sealed class GoalGitFactIndex(
 
     public static GoalGitFactIndex Build(
         string executionDirectory, string integrationBranch,
-        Func<string, IReadOnlyList<string>, GitCli.GitResult>? gitRunner = null)
+        Func<string, IReadOnlyList<string>, GitCli.GitResult>? gitRunner = null,
+        GoalBranchContentStateCache? branchContentStateCache = null)
     {
         gitRunner ??= GitRunner;
         var fullExecutionDirectory = Path.GetFullPath(executionDirectory);
         var branchResult = RunGit(gitRunner, fullExecutionDirectory, "for-each-ref", "--format=%(refname:short) %(objectname)", "refs/heads/goal/");
         if (branchResult.ExitCode != 0)
         {
-            return new GoalGitFactIndex(fullExecutionDirectory, false, EmptyTipMap(), EmptySet(), EmptyPathSet(), null, evidenceAvailable: false, gitRunner);
+            return new GoalGitFactIndex(fullExecutionDirectory, false, EmptyTipMap(), EmptySet(), EmptyPathSet(), null, evidenceAvailable: false, gitRunner, branchContentStateCache);
         }
 
         var mergedResult = RunGit(gitRunner, fullExecutionDirectory, "for-each-ref", "--format=%(refname:short)", "--merged", "HEAD", "refs/heads/goal/");
@@ -66,7 +68,8 @@ internal sealed class GoalGitFactIndex(
             evidenceAvailable: mergedResult.ExitCode == 0 &&
                                worktreeResult.ExitCode == 0 &&
                                resolvedMainSha is not null,
-            gitRunner);
+            gitRunner,
+            branchContentStateCache);
     }
 
     public bool HasGoalBranch(string branchName) => isGitWorkTree && goalBranchTips.ContainsKey(branchName);
@@ -152,10 +155,24 @@ internal sealed class GoalGitFactIndex(
             return cached;
         }
 
+        goalBranchTips.TryGetValue(branch, out var tipSha);
+        if (branchContentStateCache is not null &&
+            !string.IsNullOrEmpty(mainSha) && !string.IsNullOrEmpty(tipSha) &&
+            branchContentStateCache.TryGet(mainSha, branch, tipSha, out cached))
+        {
+            branchContentStates[branch] = cached;
+            return cached;
+        }
+
         var state = mainSha is null
             ? GoalBranchContentState.Inconclusive
             : ClassifyCherryResult(RunGit(_gitRunner, executionDirectory, "cherry", mainSha, branch));
         branchContentStates[branch] = state;
+        if (branchContentStateCache is not null &&
+            !string.IsNullOrEmpty(mainSha) && !string.IsNullOrEmpty(tipSha))
+        {
+            branchContentStateCache.Store(mainSha, branch, tipSha, state);
+        }
         return state;
     }
 
