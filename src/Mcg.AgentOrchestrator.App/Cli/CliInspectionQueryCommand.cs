@@ -13,7 +13,8 @@ internal static class CliInspectionQueryCommand
 
         return args[0].ToLowerInvariant() switch
         {
-            "goals" or "model-outcomes" or "architecture" or "backlog-view" => args.Count == 1,
+            "goals" => args.Count == 1 || (args.Count == 2 && args[1] == "--json"),
+            "model-outcomes" or "architecture" or "backlog-view" => args.Count == 1,
             "config" => args.Count == 2 && args[1].ToLowerInvariant() is "agents" or "profiles" or "policy",
             _ => false
         };
@@ -31,6 +32,11 @@ internal static class CliInspectionQueryCommand
         switch (args[0].ToLowerInvariant())
         {
             case "goals":
+                if (args.Count == 2 && args[1] == "--json")
+                {
+                    Console.WriteLine(GoalsAgentReadView.Serialize(stateRepository.ListGoalMetadataAsync().GetAwaiter().GetResult()));
+                    return;
+                }
                 ConsoleViews.PrintGoals(stateRepository.ListGoalMetadataAsync().GetAwaiter().GetResult());
                 var debtHooks = WorktreeCleanupContext.Load(
                     attentionStoreDirectory: workspace.OrchestratorDirectory).Hooks;

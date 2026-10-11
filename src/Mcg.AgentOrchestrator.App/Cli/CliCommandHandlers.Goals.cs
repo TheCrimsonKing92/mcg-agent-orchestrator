@@ -1198,11 +1198,11 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     context.Agents,
                     context.Workspace,
                     supervisorPolicy);
-                ConsoleViews.PrintGoalSupervisorPlan(result.Plan, result.AppliedActions);
+                GoalSupervisorTextView.PrintGoalSupervisorPlan(result.Plan, result.AppliedActions);
                 return result.AppliedActions.Count > 0;
             }
 
-            ConsoleViews.PrintGoalSupervisorPlan(GoalSupervisor.Build(
+            GoalSupervisorTextView.PrintGoalSupervisorPlan(GoalSupervisor.Build(
                 context.Kernel,
                 context.CurrentGoal,
                 context.Agents,

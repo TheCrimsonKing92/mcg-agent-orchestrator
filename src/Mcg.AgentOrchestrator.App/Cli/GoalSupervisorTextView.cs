@@ -2,7 +2,7 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
-internal static partial class ConsoleViews
+internal static class GoalSupervisorTextView
 {
     public static void PrintGoalSupervisorPlan(GoalSupervisorPlan plan, IReadOnlyList<string>? appliedActions = null)
     {

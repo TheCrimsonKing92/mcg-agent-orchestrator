@@ -54,10 +54,11 @@ public sealed class CliRemoteExecutorsReadOnlyRouteTests : CliTaskQueryTestSuppo
             var workspace = OrchestratorWorkspace.ForDirectory(root, tenantName: "report");
             var table = Run(["remote-executors"], workspace, repository);
             using var json = JsonDocument.Parse(Run(["remote-executors", "--json"], workspace, repository));
-            Assert.Equal(2, json.RootElement.GetProperty("unreadableOutcomeLines").GetInt32());
-            Assert.Equal(1, json.RootElement.GetProperty("unreadableProbeLines").GetInt32());
+            var payload = json.RootElement.GetProperty("payload");
+            Assert.Equal(2, payload.GetProperty("unreadableOutcomeLines").GetInt32());
+            Assert.Equal(1, payload.GetProperty("unreadableProbeLines").GetInt32());
             Assert.Contains("unreadable_outcome_lines=2\tunreadable_probe_lines=1", table);
-            var rows = json.RootElement.GetProperty("executors").EnumerateArray().ToArray();
+            var rows = payload.GetProperty("executors").EnumerateArray().ToArray();
             Assert.Equal(new[] { "one", "zero" }, rows.Select(row => row.GetProperty("executorId").GetString()));
             var tableRows = table.Split('\n').Where(line => line.StartsWith("one\t") || line.StartsWith("zero\t")).ToArray();
             foreach (var row in rows)

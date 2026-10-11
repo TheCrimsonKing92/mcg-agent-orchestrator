@@ -162,7 +162,7 @@ private static void HandleAcceptanceQueue(CliExecutionContext context, IReadOnly
     var policy = ResolveCliAutonomyPolicy(parts);
     var apply = HasCliConfirmation(parts, "--apply");
     var plan = AcceptanceQueuePlanner.Build(context.Kernel, context.Workspace.ExecutionDirectory, policy, context.Workspace.IntegrationBranch);
-    ConsoleViews.PrintAcceptanceQueuePlan(plan);
+    AcceptanceQueueTextView.PrintAcceptanceQueuePlan(plan);
     if (!apply)
     {
         return;
