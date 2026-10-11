@@ -70,10 +70,21 @@ public sealed class OrchestratorProjectRegistry
     {
         var file = LoadFile();
         return file.Projects
-            .Select(entry => new OrchestratorProject(entry.Name, Path.GetFullPath(entry.RootDirectory))
+            .Select(entry =>
             {
-                IntegrationBranch = ResolveStoredBranch(entry),
-                DataRootDirectory = DataRootDirectory
+                _ = ResolveStoredBranch(entry);
+                var resolution = LearnedIntegrationBranchResolver.Resolve(
+                    entry.IntegrationBranch, entry.UseLearnedIntegrationBranch == true,
+                    entry.UseLearnedIntegrationBranch == true
+                        ? Path.Combine(OrchestratorDataRoot.FromDirectory(DataRootDirectory).ProjectDirectory(entry.Name), "project-model.json")
+                        : string.Empty);
+                return new OrchestratorProject(entry.Name, Path.GetFullPath(entry.RootDirectory))
+                {
+                    IntegrationBranch = resolution.Branch,
+                    IntegrationBranchSource = resolution.Source,
+                    IntegrationBranchNote = resolution.Note,
+                    DataRootDirectory = DataRootDirectory
+                };
             })
             .OrderBy(project => project.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -163,6 +174,22 @@ public sealed class OrchestratorProjectRegistry
 
         _ = GetRequiredProject(normalizedName);
         File.WriteAllText(CurrentProjectPath, normalizedName + Environment.NewLine);
+    }
+
+    public void SetUseLearnedIntegrationBranch(string name, bool value)
+    {
+        var normalizedName = OrchestratorProjectSelection.NormalizeProjectName(name);
+        if (normalizedName.Equals(OrchestratorWorkspace.DefaultProjectName, StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("The default project is implicit and cannot use a learned integration branch.");
+
+        var file = LoadFile();
+        var entry = file.Projects.FirstOrDefault(project =>
+            project.Name.Equals(normalizedName, StringComparison.OrdinalIgnoreCase));
+        if (entry is null)
+            throw new ArgumentException($"Unknown project '{normalizedName}'. Create it with: project create {normalizedName} --root <path>");
+
+        entry.UseLearnedIntegrationBranch = value ? true : null;
+        SaveFile(file);
     }
 
     public string? ReadSelectedProjectName()
@@ -288,5 +315,7 @@ public sealed class OrchestratorProjectRegistry
         public string RootDirectory { get; set; }
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public string? IntegrationBranch { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public bool? UseLearnedIntegrationBranch { get; set; }
     }
 }

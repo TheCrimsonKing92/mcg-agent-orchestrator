@@ -5,6 +5,8 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 public sealed record OrchestratorProject(string Name, string RootDirectory)
 {
     public string IntegrationBranch { get; init; } = TrunkBranchName.Default;
+    public string IntegrationBranchSource { get; init; } = IntegrationBranchResolution.Default;
+    public string? IntegrationBranchNote { get; init; }
     public string? DataRootDirectory { get; init; }
 
     public OrchestratorWorkspace ResolveWorkspace(string? tenantName = null) =>
