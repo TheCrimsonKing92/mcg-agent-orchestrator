@@ -8,8 +8,6 @@ public sealed class JobAccountingRunIdentityEvidenceTests
 {
     private const string AnonymousJob =
         "OwnedProcessGroup creates an anonymous CreateJobObjectW handle (null name); its kernel handle is unique, not a GUID-derived name. This source audit does not prove child exit or handle cleanup.";
-    private const string ScenarioRoot =
-        "The private Scenario passes Root/HostRoot through its constructor and resolver; following those caller/constructor edges exceeds this audit's one-helper boundary. Overlap/cleanup evidence remains owed.";
 
     // Keyed by class AND site kind: an anonymous-job waiver never exempts that class's PID paths.
     private static readonly IReadOnlyDictionary<(Type Class, string Kind), string> Exceptions =
@@ -23,7 +21,6 @@ public sealed class JobAccountingRunIdentityEvidenceTests
             [(typeof(GoalAcceptanceVerifierTestsProcessInvokerEquivalence), "job")] = AnonymousJob,
             [(typeof(GoalAcceptanceVerifierTestsCmdCommandLineLimit), "job")] = AnonymousJob,
             [(typeof(HermeticVerificationEnvironmentTestsSystemLocations), "job")] = AnonymousJob,
-            [(typeof(GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLanePolicy), "occupancy")] = ScenarioRoot,
         };
 
     [Xunit.Fact]
@@ -188,6 +185,54 @@ public sealed class JobAccountingRunIdentityEvidenceTests
         Assert.False(Proves(bareSite, bareDeclaration, GetType()));
     }
 
+    // Proves the constructor-argument occupancy root only when every creation site passes a run-scoped path.
+    [Xunit.Fact]
+    public void Occupancy_evidence_accepts_constructor_assigned_root_only_when_every_creation_passes_a_run_path()
+    {
+        const string rootedSource = """
+            class Probe {
+                sealed class Scenario {
+                    internal string Root { get; }
+                    internal Scenario(Probe owner, string root) { Root = root; }
+                    void Use() {
+                        using var claim = RemoteExecutorOccupancy.TryClaimExclusive(Root, "one");
+                    }
+                }
+                void Test() {
+                    var root = CreateManifestWorkspace("{}");
+                    var scenario = new Scenario(this, root);
+                }
+            }
+            """;
+        var rootedSyntax = CSharpSyntaxTree.ParseText(rootedSource).GetRoot();
+        var rootedDeclaration = Assert.Single(rootedSyntax.DescendantNodes().OfType<ClassDeclarationSyntax>(),
+            node => node.Identifier.ValueText == "Probe");
+        var rootedSite = Assert.Single(CreationSites(rootedDeclaration));
+        Assert.Equal("occupancy", rootedSite.Kind);
+        Assert.NotNull(rootedSite.Identity);
+        Assert.True(Proves(rootedSite, rootedDeclaration, GetType()));
+
+        const string creation = "var scenario = new Scenario(this, root);";
+        const string fixedCreation = "var fixedScenario = new Scenario(this, Path.Combine(Path.GetTempPath(), \"fixed\"));";
+        var rejectedSources = new[]
+        {
+            rootedSource.Replace(creation, fixedCreation),
+            rootedSource.Replace(creation, creation + fixedCreation),
+            rootedSource.Replace("Root = root;", "Root = root; Root = Path.Combine(Path.GetTempPath(), \"fixed\");"),
+            rootedSource.Replace(creation, "")
+        };
+        foreach (var source in rejectedSources)
+        {
+            var syntax = CSharpSyntaxTree.ParseText(source).GetRoot();
+            var declaration = Assert.Single(syntax.DescendantNodes().OfType<ClassDeclarationSyntax>(),
+                node => node.Identifier.ValueText == "Probe");
+            var site = Assert.Single(CreationSites(declaration));
+            Assert.Equal("occupancy", site.Kind);
+            Assert.NotNull(site.Identity);
+            Assert.False(Proves(site, declaration, GetType()));
+        }
+    }
+
     [Xunit.Fact]
     public void Registry_scope_evidence_rejects_unscoped_dispatch_and_accepts_scoped_dispatch()
     {
@@ -215,7 +260,8 @@ public sealed class JobAccountingRunIdentityEvidenceTests
         "registry" or "path" => site.Identity is not null &&
             IsRunPath(site.Identity, site.Node, declaration),
         "dispatch" or "job" => IsRegistryScoped(site, declaration),
-        "occupancy" => site.Identity is not null && IsScenarioHostRoot(site.Identity, declaration),
+        "occupancy" => site.Identity is not null &&
+            (IsScenarioHostRoot(site.Identity, declaration) || IsScenarioConstructorRunScopedRoot(site, declaration)),
         _ => false
     };
 
@@ -280,6 +326,46 @@ public sealed class JobAccountingRunIdentityEvidenceTests
                    .Any(constructor => constructor.Parent == scenario)) &&
                assignments.All(assignment => assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) &&
                    assignment.Right is InvocationExpressionSyntax call && IsNamedRunFactory(call.Expression.ToString()));
+    }
+
+    private static bool IsScenarioConstructorRunScopedRoot(Site site, ClassDeclarationSyntax declaration)
+    {
+        if (site.Identity is not IdentifierNameSyntax identity || identity.Identifier.ValueText != "Root")
+            return false;
+        var scenario = site.Node.Ancestors().OfType<ClassDeclarationSyntax>().FirstOrDefault();
+        if (scenario is null || scenario.Identifier.ValueText != "Scenario" || scenario.Parent != declaration ||
+            declaration.DescendantNodes().OfType<ClassDeclarationSyntax>()
+                .Count(node => node.Identifier.ValueText == "Scenario") != 1)
+            return false;
+        var constructors = scenario.Members.OfType<ConstructorDeclarationSyntax>().ToArray();
+        if (constructors.Length != 1 || constructors[0].Body is not { } body ||
+            scenario.DescendantNodes().OfType<PropertyDeclarationSyntax>().Any(property =>
+                property.Identifier.ValueText == "Root" &&
+                (property.Initializer is not null || property.ExpressionBody is not null)))
+            return false;
+        var assignments = scenario.DescendantNodes().OfType<AssignmentExpressionSyntax>()
+            .Where(assignment => assignment.Left is IdentifierNameSyntax name && name.Identifier.ValueText == "Root" ||
+                assignment.Left is MemberAccessExpressionSyntax member && member.Expression is ThisExpressionSyntax &&
+                member.Name.Identifier.ValueText == "Root").ToArray();
+        if (assignments.Length != 1 || !assignments[0].IsKind(SyntaxKind.SimpleAssignmentExpression) ||
+            assignments[0].Left is not IdentifierNameSyntax || !body.Span.Contains(assignments[0].Span) ||
+            assignments[0].Right is not IdentifierNameSyntax source)
+            return false;
+        var parameters = constructors[0].ParameterList.Parameters;
+        var parameter = parameters.FirstOrDefault(node => node.Identifier.ValueText == source.Identifier.ValueText);
+        if (parameter?.Type is not PredefinedTypeSyntax parameterType ||
+            !parameterType.Keyword.IsKind(SyntaxKind.StringKeyword) ||
+            body.DescendantNodes().OfType<AssignmentExpressionSyntax>().Any(assignment =>
+                assignment.Left is IdentifierNameSyntax name && name.Identifier.ValueText == source.Identifier.ValueText))
+            return false;
+        var parameterIndex = parameters.IndexOf(parameter);
+        var creations = declaration.DescendantNodes().OfType<ObjectCreationExpressionSyntax>()
+            .Where(creation => creation.Type.ToString().Split('.').Last() == "Scenario").ToArray();
+        return creations.Length > 0 && creations.All(creation =>
+            creation.ArgumentList is { } arguments && arguments.Arguments.Count > parameterIndex &&
+            arguments.Arguments.Take(parameterIndex + 1).All(argument => argument.NameColon is null &&
+                argument.RefKindKeyword.IsKind(SyntaxKind.None)) &&
+            IsRunPath(arguments.Arguments[parameterIndex].Expression, creation, declaration));
     }
 
     private static bool IsNamedRunFactory(string name) => name.Split('.').Last() is
