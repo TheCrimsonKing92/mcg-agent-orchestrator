@@ -27,7 +27,8 @@ internal static class RunEventMaintenanceCadence
         OrchestratorWorkspace? workspace = null,
         string? mtpResultsRootOverride = null,
         Func<OrchestratorWorkspace, IReadOnlyCollection<StorageRetentionGoal>, DateTimeOffset, string?, StorageRetentionResult>?
-            artifactRetentionOperation = null)
+            artifactRetentionOperation = null,
+        Func<DateTimeOffset, int>? goalSnapshotArchiveOperation = null)
     {
         var now = (utcNow ?? (() => DateTimeOffset.UtcNow))();
         var cadenceKey = Path.GetFullPath(runEventStorePath);
@@ -83,10 +84,12 @@ internal static class RunEventMaintenanceCadence
                 return SkippedResult();
             }
 
-            var retentionGoals = workspace is null
+            var stateRepository = workspace is null
                 ? null
-                : StorageRetentionMaintenance.LoadPersistedGoals(
-                    new SqliteOrchestratorStateRepository(workspace.SqliteStatePath));
+                : new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            var retentionGoals = stateRepository is null
+                ? null
+                : StorageRetentionMaintenance.LoadPersistedGoals(stateRepository);
             var terminalGoalIds = retentionGoals is null
                 ? null
                 : StorageRetentionMaintenance.SelectGoalOperationPrunableIds(retentionGoals.Goals);
@@ -139,6 +142,13 @@ internal static class RunEventMaintenanceCadence
                     journal.AppendRequired("storage-retention-sweep", null, failedReceipt, now);
                     throw;
                 }
+
+                var archiveResult = GoalSnapshotArchiveCadence.Run(
+                    goalSnapshotArchiveOperation ?? (cutoff =>
+                        stateRepository!.ArchiveTerminalGoalSnapshotsAsync(cutoff).GetAwaiter().GetResult()), now);
+                var archiveLine = GoalSnapshotArchiveCadence.Format(archiveResult);
+                Console.WriteLine(archiveLine);
+                TryAppendJournal(journal, "goal-snapshot-archive", archiveLine, now);
             }
             if (result.Disposition != SqliteMaintenanceDisposition.Deferred)
             {
