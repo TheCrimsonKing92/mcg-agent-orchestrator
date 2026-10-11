@@ -24,8 +24,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteOfferOrder :
             fake.Requests.Select(request => request.Lane));
         AssertPolicyOrder(scenario, remainder.FullName, "infrastructure tests: Short A",
             "infrastructure tests: Short B", "infrastructure tests: Short C");
-        // Sorting uses 605 seconds while the unchanged policy still sees the 62-second seed.
-        Assert.Contains("decision=offer reason=fits L=62 Ln=0", scenario.PolicyLines.First());
+        // Sorting and the policy both use the 605 second name-level median.
+        Assert.Contains("decision=offer reason=fits L=605 Ln=5", scenario.PolicyLines.First());
     }
 
     [Fact]
@@ -46,11 +46,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteOfferOrder :
     }
 
     [Fact]
-    public async Task KeepLocalLane_RankedFirst_IsNeverAssigned()
+    public async Task KeepLocalLane_ShortNameHistory_IsNeverAssigned()
     {
         using var scenario = CreateScenario(includeKeepLocalLane: true);
         var tiny = scenario.Lanes.Single(lane => lane.Name == "Tiny");
-        scenario.SeedOldFilterDurations(tiny, [890, 900, 905, 910, 920]);
+        scenario.SeedOldFilterDurations(tiny, [20, 25, 30, 35, 40]);
         var fake = HoldRemoteResultsUntilLocalStart(scenario);
         TestOverrides.RemoteLaneExecutorForTests = fake;
 
@@ -58,11 +58,67 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteOfferOrder :
 
         Assert.True(result.Passed, JsonSerializer.Serialize(result.Checks));
         Assert.Equal(2, fake.Requests.Count);
-        AssertPolicyOrder(scenario, tiny.FullName, "infrastructure tests: Short A",
-            "infrastructure tests: Short B", "infrastructure tests: Short C", "infrastructure tests: Remainder");
-        Assert.Contains("decision=keep-local reason=short L=30 Ln=0", scenario.PolicyLines.First());
+        AssertPolicyOrder(scenario, "infrastructure tests: Short A", "infrastructure tests: Short B",
+            "infrastructure tests: Short C", "infrastructure tests: Remainder", tiny.FullName);
+        Assert.Contains("decision=keep-local reason=short L=30 Ln=5", scenario.PolicyLines.Last());
         Assert.DoesNotContain(fake.Requests, request => request.Lane == tiny.FullName);
         Assert.Contains(tiny.FullName, scenario.LocalStarts);
+    }
+
+    [Fact]
+    public async Task ShortManifest_LongNameHistory_IsOfferedToExecutor()
+    {
+        using var scenario = CreateScenario(includeKeepLocalLane: true);
+        var tiny = scenario.Lanes.Single(lane => lane.Name == "Tiny");
+        scenario.SeedOldFilterDurations(tiny, [590, 600, 605, 610, 620]);
+        var fake = HoldRemoteResultsUntilLocalStart(scenario);
+        TestOverrides.RemoteLaneExecutorForTests = fake;
+
+        var result = await RunToCompletion(scenario);
+
+        Assert.True(result.Passed, JsonSerializer.Serialize(result.Checks));
+        Assert.Equal(2, fake.Requests.Count);
+        Assert.Equal(tiny.FullName, fake.Requests.First().Lane);
+        Assert.StartsWith($"REMOTE_LANE_POLICY lane=\"{tiny.FullName}\" ", scenario.PolicyLines.First());
+        Assert.Contains("decision=offer reason=fits L=605 Ln=5", scenario.PolicyLines.First());
+        Assert.DoesNotContain("keep-local reason=short", scenario.PolicyLines.First());
+    }
+
+    [Fact]
+    public async Task TwoNameLevelSamples_UsesManifestEstimate()
+    {
+        using var scenario = CreateScenario();
+        var remainder = scenario.Lanes.Single(lane => lane.Name == "Remainder");
+        scenario.SeedOldFilterDurations(remainder, [600]);
+        scenario.SeedCurrentFilterDurations(remainder, [605]);
+        var fake = HoldRemoteResultsUntilLocalStart(scenario);
+        TestOverrides.RemoteLaneExecutorForTests = fake;
+
+        var result = await RunToCompletion(scenario);
+
+        Assert.True(result.Passed, JsonSerializer.Serialize(result.Checks));
+        Assert.StartsWith($"REMOTE_LANE_POLICY lane=\"{remainder.FullName}\" ", scenario.PolicyLines.Last());
+        Assert.Contains("decision=offer reason=fits L=62 Ln=1", scenario.PolicyLines.Last());
+    }
+
+    [Fact]
+    public async Task EmptyJournal_PolicyLinesReportManifestEstimates()
+    {
+        using var scenario = CreateScenario();
+        Assert.False(File.Exists(AcceptanceLaneDurationStore.ResolveStorePath(scenario.Root)));
+        var fake = HoldRemoteResultsUntilLocalStart(scenario);
+        TestOverrides.RemoteLaneExecutorForTests = fake;
+
+        var result = await RunToCompletion(scenario);
+
+        Assert.True(result.Passed, JsonSerializer.Serialize(result.Checks));
+        Assert.Equal(2, fake.Requests.Count);
+        var expected = scenario.Lanes.OrderByDescending(lane => lane.Estimate).ToArray();
+        Assert.Equal(expected.Take(2).Select(lane => lane.FullName), fake.Requests.Select(request => request.Lane));
+        AssertPolicyOrder(scenario, expected.Select(lane => lane.FullName).ToArray());
+        var lines = scenario.PolicyLines.ToArray();
+        for (var index = 0; index < expected.Length; index++)
+            Assert.Contains($"decision=offer reason=fits L={expected[index].Estimate} Ln=0 ", lines[index]);
     }
 
     private Scenario CreateScenario(bool includeKeepLocalLane = false)
@@ -220,9 +276,14 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteOfferOrder :
             }));
         }
 
-        internal void SeedOldFilterDurations(Lane lane, IReadOnlyList<double> samples)
+        internal void SeedOldFilterDurations(Lane lane, IReadOnlyList<double> samples) =>
+            SeedDurations(lane.Check("FullyQualifiedName~Old" + lane.TestClass), samples);
+
+        internal void SeedCurrentFilterDurations(Lane lane, IReadOnlyList<double> samples) =>
+            SeedDurations(lane.Check(lane.Filter), samples);
+
+        private void SeedDurations(GoalAcceptanceVerifier.AcceptanceManifestCheck check, IReadOnlyList<double> samples)
         {
-            var check = lane.Check("FullyQualifiedName~Old" + lane.TestClass);
             using var scope = AcceptanceLaneDurationStore.PushRecordingScope(Root);
             foreach (var seconds in samples)
                 AcceptanceLaneDurationStore.Record(check, new AcceptanceCheckResult(check.Name, true, 0, null), TimeSpan.FromSeconds(seconds));

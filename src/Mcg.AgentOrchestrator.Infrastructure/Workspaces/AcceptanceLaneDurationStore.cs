@@ -44,6 +44,9 @@ internal static class AcceptanceLaneDurationStore
     internal static (double? MedianSeconds, int Samples) ResolveObservedSeconds(AcceptanceManifestCheck check) =>
         CurrentScope.Value?.ResolveObservedSeconds(check) ?? (null, 0);
 
+    internal static (double? MedianSeconds, int Samples) ResolveLocalEstimate(AcceptanceManifestCheck check) =>
+        CurrentScope.Value?.ResolveLocalEstimate(check) ?? (null, 0);
+
     internal static void Record(
         AcceptanceManifestCheck check,
         AcceptanceCheckResult result,
@@ -167,6 +170,12 @@ internal static class AcceptanceLaneDurationStore
             return (TryResolve(key, out var seconds) ? seconds : null, values.Count);
         }
 
+        internal (double? MedianSeconds, int Samples) ResolveLocalEstimate(LaneKey key)
+        {
+            var current = ResolveObservedSeconds(key);
+            return AcceptanceLaneLocalEstimate.Resolve(current.MedianSeconds, current.Samples, NameSamples(key.LaneName));
+        }
+
         internal bool TryResolve(LaneKey key, out double seconds)
         {
             seconds = default;
@@ -195,6 +204,9 @@ internal static class AcceptanceLaneDurationStore
 
         internal (double? MedianSeconds, int Samples) ResolveObservedSeconds(AcceptanceManifestCheck check) =>
             TryCreateKey(check, out var key) ? snapshot.ResolveObservedSeconds(key) : (null, 0);
+
+        internal (double? MedianSeconds, int Samples) ResolveLocalEstimate(AcceptanceManifestCheck check) =>
+            TryCreateKey(check, out var key) ? snapshot.ResolveLocalEstimate(key) : (null, 0);
 
         internal double ResolveSortSeconds(AcceptanceManifestCheck check) =>
             TryCreateKey(check, out var key)
