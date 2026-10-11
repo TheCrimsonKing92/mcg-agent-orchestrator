@@ -112,6 +112,7 @@ public sealed class DotnetProjectDiscoveryAdapter : IProjectDiscoveryAdapter
         var environment = DotnetEnvironmentNeedReader.Read(root, commands, questions);
         var measurements = UnitMeasurementCollector.Collect(root, commands, measurer, measuredKinds, questions);
         var hazards = DotnetSharedStateHazardReader.Read(root, units, dependencies, questions);
+        var learned = IntegrationBranchReader.Read(root);
         // Paths in the snapshot are relative to its logical root, independent of the discovery host.
         return new ProjectModel(ProjectModel.CurrentSchemaVersion, ".", units,
             dependencies.GroupBy(edge => (edge.FromUnit, edge.ToUnit))
@@ -119,7 +120,7 @@ public sealed class DotnetProjectDiscoveryAdapter : IProjectDiscoveryAdapter
                 .Select(group => group.OrderByDescending(edge => edge.Confidence).First())
                 .OrderBy(edge => edge.FromUnit, StringComparer.Ordinal).ThenBy(edge => edge.ToUnit, StringComparer.Ordinal).ToArray(),
             setups, questions.DistinctBy(question => question.FactKey)
-                .OrderBy(question => question.FactKey, StringComparer.Ordinal).ToArray(), commands, environment, measurements, hazards);
+                .OrderBy(question => question.FactKey, StringComparer.Ordinal).ToArray(), commands, environment, measurements, hazards, learned.Branch);
     }
 
     private static ProjectFact<bool?> DiscoverTestStatus(string id, Declaration[] properties,
