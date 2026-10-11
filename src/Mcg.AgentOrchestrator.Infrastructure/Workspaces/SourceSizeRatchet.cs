@@ -429,7 +429,9 @@ internal static class SourceSizeRatchet
             // Goal d647b5f3 extracts premise-invalid clarification construction to PremiseInvalidClarification.
             // Goal 439c80ae extracts Reviewer evidence brief projection to ReviewerEvidenceBriefSection;
             // measured 9319 total lines across the existing 27 partial files, with no extra headroom.
-            new SourceClassCeiling("AgentOrchestratorKernel", 9319, 27),
+            // Goal 776d3dc0 extracts changed-file and conflict preview emission and typed coordinates
+            // into ReviewerChangedFileScopeBriefSection. Measured 9246 lines across the same 27 partial files.
+            new SourceClassCeiling("AgentOrchestratorKernel", 9246, 27),
             // Goal d6033045 extracted the pre-admission receipt pass to PassedMergeTrainReceiptAdmission; goal 1d0f2317
             // adds one admission predicate to exclude stream-complete children before slot reservation. Measured 9255.
             // Goal 679eee57 added a one-line tick call to the separately owned ConductorExperimentWatch (+1); goal 80de5cb2 extracted
