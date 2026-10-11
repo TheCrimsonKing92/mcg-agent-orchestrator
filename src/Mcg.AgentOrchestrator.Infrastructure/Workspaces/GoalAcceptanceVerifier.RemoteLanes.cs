@@ -88,7 +88,7 @@ public sealed partial class GoalAcceptanceVerifier
         var decisionTime = clock.GetUtcNow();
         var inputs = lanes.ToDictionary(check => check.Name, check =>
         {
-            var local = AcceptanceLaneDurationStore.ResolveObservedSeconds(check);
+            var local = AcceptanceLaneDurationStore.ResolveLocalEstimate(check);
             TryGetInfrastructurePartitionId(check, out _, out var filter);
             history.TryGetValue((check.Name, ShortHash(filter)), out var remote);
             failures.TryGetValue((check.Name, ShortHash(filter)), out var streak);

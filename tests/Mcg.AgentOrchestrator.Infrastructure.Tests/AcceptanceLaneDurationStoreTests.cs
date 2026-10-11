@@ -202,6 +202,121 @@ public sealed class AcceptanceLaneDurationStoreTests : IDisposable
             SharedJsonlFile.ReadAllLines(AcceptanceLaneDurationStore.ResolveStorePath(_root)).Length);
     }
 
+    [Fact]
+    public void LocalEstimate_FiveOldOneNew_UsesNameMedianAndFiveSamples()
+    {
+        var original = Check("Remainder", "FullyQualifiedName~OriginalTests", seed: 50);
+        var changed = Check("Remainder", "FullyQualifiedName~ChangedTests", seed: 50);
+        foreach (var seconds in new double[] { 100, 200, 300, 400, 500 })
+            AppendSample(original, seconds);
+        AppendSample(changed, 600);
+
+        using var scope = AcceptanceLaneDurationStore.PushRecordingScope(_root);
+        var estimate = AcceptanceLaneDurationStore.ResolveLocalEstimate(changed);
+        Assert.Equal(((double?)400d, 5), estimate);
+        Assert.Equal(estimate.MedianSeconds, AcceptanceLaneDurationStore.ResolveSortSeconds(changed));
+        Assert.Equal(((double?)null, 1), AcceptanceLaneDurationStore.ResolveObservedSeconds(changed));
+    }
+
+    [Fact]
+    public void LocalEstimate_ThreeCurrentSamples_IgnoresOlderHash()
+    {
+        var original = Check("Remainder", "FullyQualifiedName~OriginalTests", seed: 50);
+        var changed = Check("Remainder", "FullyQualifiedName~ChangedTests", seed: 50);
+        foreach (var seconds in new double[] { 900, 900, 900 })
+            AppendSample(original, seconds);
+        foreach (var seconds in new double[] { 1, 2, 3 })
+            AppendSample(changed, seconds);
+
+        using var scope = AcceptanceLaneDurationStore.PushRecordingScope(_root);
+        var estimate = AcceptanceLaneDurationStore.ResolveLocalEstimate(changed);
+        Assert.Equal(((double?)2d, 3), estimate);
+        Assert.Equal(estimate.MedianSeconds, AcceptanceLaneDurationStore.ResolveSortSeconds(changed));
+        Assert.Equal(estimate, AcceptanceLaneDurationStore.ResolveObservedSeconds(changed));
+    }
+
+    [Fact]
+    public void LocalEstimate_NoSamples_ReturnsNullAndZero()
+    {
+        var check = Check("Empty", "FullyQualifiedName~EmptyTests", seed: 50);
+        using var scope = AcceptanceLaneDurationStore.PushRecordingScope(_root);
+
+        Assert.Equal(((double?)null, 0), AcceptanceLaneDurationStore.ResolveLocalEstimate(check));
+        Assert.Equal(check.EstimatedSerialSeconds, AcceptanceLaneDurationStore.ResolveSortSeconds(check));
+    }
+
+    [Fact]
+    public void LocalEstimate_TwoNameSamples_KeepsCurrentHashCount()
+    {
+        var original = Check("Sparse", "FullyQualifiedName~OriginalTests", seed: 50);
+        var changed = Check("Sparse", "FullyQualifiedName~ChangedTests", seed: 50);
+        AppendSample(original, 100);
+        AppendSample(changed, 200);
+        using var scope = AcceptanceLaneDurationStore.PushRecordingScope(_root);
+
+        Assert.Equal(((double?)null, 1), AcceptanceLaneDurationStore.ResolveLocalEstimate(changed));
+        Assert.Equal(changed.EstimatedSerialSeconds, AcceptanceLaneDurationStore.ResolveSortSeconds(changed));
+    }
+
+    [Fact]
+    public void LocalEstimate_NoRecordingScope_ReturnsNullAndZero()
+    {
+        var check = Check("Unscoped", "FullyQualifiedName~UnscopedTests", seed: 50);
+        AppendSample(check, 100);
+        AppendSample(check, 200);
+        AppendSample(check, 300);
+
+        Assert.Equal(((double?)null, 0), AcceptanceLaneDurationStore.ResolveLocalEstimate(check));
+    }
+
+    [Fact]
+    public void LocalEstimate_InvalidNameSamples_DoNotCountTowardMinimum()
+    {
+        double[] sparse = [double.NaN, 0, -1, double.PositiveInfinity, double.NegativeInfinity, 10, 20];
+        double[] sufficient = [double.NaN, 0, -1, double.PositiveInfinity, double.NegativeInfinity, 30, 10, 20];
+
+        Assert.Equal(((double?)null, 2), AcceptanceLaneLocalEstimate.Resolve(null, 2, sparse));
+        Assert.Equal(((double?)20d, 3), AcceptanceLaneLocalEstimate.Resolve(null, 2, sufficient));
+        Assert.Equal(50d, AcceptanceLaneSortEstimate.Resolve(null, sparse, 50));
+        Assert.Equal(AcceptanceLaneSortEstimate.Resolve(null, sufficient, 50),
+            AcceptanceLaneLocalEstimate.Resolve(null, 2, sufficient).MedianSeconds);
+    }
+
+    [Theory]
+    [InlineData(double.NaN)]
+    [InlineData(double.PositiveInfinity)]
+    [InlineData(double.NegativeInfinity)]
+    [InlineData(0d)]
+    [InlineData(-1d)]
+    public void LocalEstimate_InvalidCurrentMedian_UsesValidNameSamples(double invalid)
+    {
+        double[] samples = [30, 10, 20];
+
+        var estimate = AcceptanceLaneLocalEstimate.Resolve(invalid, 1, samples);
+
+        Assert.Equal(((double?)20d, 3), estimate);
+        Assert.Equal(AcceptanceLaneSortEstimate.Resolve(invalid, samples, 50), estimate.MedianSeconds);
+    }
+
+    [Fact]
+    public void LocalEstimate_ValidCurrentMedian_PreservesCurrentCount()
+    {
+        Assert.Equal(((double?)2d, 4), AcceptanceLaneLocalEstimate.Resolve(2, 4, [900, 900, 900]));
+    }
+
+    [Fact]
+    public void LocalEstimate_FourNameSamples_UsesSortMedianWithoutMutatingInput()
+    {
+        double[] samples = [40, 10, 30, 20];
+        var original = samples.ToArray();
+
+        var estimate = AcceptanceLaneLocalEstimate.Resolve(null, 1, samples);
+
+        Assert.Equal(((double?)25d, 4), estimate);
+        Assert.Equal(AcceptanceLaneSortEstimate.Resolve(null, samples, 50), estimate.MedianSeconds);
+        Assert.Equal(original, samples);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_root))
