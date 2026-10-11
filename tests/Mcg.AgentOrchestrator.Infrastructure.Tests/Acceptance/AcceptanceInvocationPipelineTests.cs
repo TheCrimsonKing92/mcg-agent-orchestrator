@@ -12,7 +12,7 @@ public sealed class AcceptanceInvocationPipelineTests
         var root = CreateTempRoot();
         await using var owner = CreateOwner(root, "attempt-normal");
         var invocation = owner.CreateInvocation("normal-check");
-        var verifier = CreateVerifier((_, _, _, _) =>
+        var verifier = CreateVerifier(root, (_, _, _, _) =>
             Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "ok")));
 
         var run = await owner.RunInvocationForTestsAsync(
@@ -34,7 +34,7 @@ public sealed class AcceptanceInvocationPipelineTests
         var root = CreateTempRoot();
         await using var owner = CreateOwner(root, "attempt-timeout");
         var invocation = owner.CreateInvocation("timeout-check");
-        var verifier = CreateVerifier((_, _, timeout, _) =>
+        var verifier = CreateVerifier(root, (_, _, timeout, _) =>
             Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
                 -1,
                 "timed out",
@@ -59,7 +59,6 @@ public sealed class AcceptanceInvocationPipelineTests
     public async Task Stall_and_clock_timeout_share_completion_and_rerun_routing()
     {
         var root = CreateTempRoot();
-        await using var owner = CreateOwner(root, "attempt-stall-shape");
         var check = CreateDotnetCommandCheck("infrastructure tests: Remainder");
         var clockResult = new GoalAcceptanceVerifier.CommandResult(
             -1, "stopped", TimedOut: true, Timeout: TimeSpan.FromMinutes(40), Elapsed: TimeSpan.FromMinutes(25));
@@ -69,18 +68,28 @@ public sealed class AcceptanceInvocationPipelineTests
             LaneStallLimit = AcceptanceLaneStallPolicy.StallLimit
         };
 
-        async Task<AcceptanceCheckResult> Run(GoalAcceptanceVerifier.CommandResult commandResult)
+        async Task<AcceptanceCheckResult> Run(GoalAcceptanceVerifier.CommandResult commandResult, string attemptId)
         {
+            await using var owner = CreateOwner(root, attemptId);
             var invocation = owner.CreateInvocation(check.Name);
             var run = await owner.RunInvocationForTestsAsync(
-                CreateVerifier((_, _, _, _) => Task.FromResult(commandResult)),
+                CreateVerifier(root, (_, _, _, _) => Task.FromResult(commandResult)),
                 invocation, check, root, owner.CancellationToken);
             Assert.Equal(invocation.Ordinal, run.Result.TestResultRunOrdinal);
+            Assert.StartsWith(Path.Combine(root, "dotnet") + Path.DirectorySeparatorChar,
+                run.Result.ArtifactsPath, StringComparison.OrdinalIgnoreCase);
+            var storageRoot = new DotnetBuildStorageRoot(Path.Combine(root, "dotnet"));
+            for (var slot = 0; slot < DotnetBuildEnvironmentManager.BuildConcurrencySlotCount; slot++)
+            {
+                Assert.True(DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(slot, storageRoot),
+                    $"{attemptId} retained build permit {slot} after returning its timeout result.");
+            }
+            await owner.DrainAsync();
             return run.Result;
         }
 
-        var clock = await Run(clockResult);
-        var stall = await Run(stallResult);
+        var clock = await Run(clockResult, "attempt-clock-shape");
+        var stall = await Run(stallResult, "attempt-stall-shape");
         Assert.False(stall.Passed);
         Assert.StartsWith("acceptance-check-timeout: infrastructure-tests-remainder ", stall.Name, StringComparison.Ordinal);
         Assert.Contains("reason=lane-stalled silent=603 limit=600", stall.Name, StringComparison.Ordinal);
@@ -113,7 +122,6 @@ public sealed class AcceptanceInvocationPipelineTests
         Assert.True(cache.ShouldRerunWithinAttempt(partition, stallDecision));
         Assert.Equal(cache.ShouldRerunWithinAttempt(partition, clockDecision),
             cache.ShouldRerunWithinAttempt(partition, stallDecision));
-        await owner.DrainAsync();
     }
 
     [Fact]
@@ -123,7 +131,7 @@ public sealed class AcceptanceInvocationPipelineTests
         await using var owner = CreateOwner(root, "attempt-cancel");
         var invocation = owner.CreateInvocation("cancel-check");
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var verifier = CreateVerifier(async (_, _, _, cancellationToken) =>
+        var verifier = CreateVerifier(root, async (_, _, _, cancellationToken) =>
         {
             started.SetResult();
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
@@ -149,7 +157,7 @@ public sealed class AcceptanceInvocationPipelineTests
         var root = CreateTempRoot();
         await using var owner = CreateOwner(root, "attempt-stale");
         var invocation = owner.CreateInvocation("stale-check");
-        var verifier = CreateVerifier((_, _, _, _) =>
+        var verifier = CreateVerifier(root, (_, _, _, _) =>
             Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "ok")));
 
         var run = await owner.RunInvocationForTestsAsync(
@@ -184,8 +192,12 @@ public sealed class AcceptanceInvocationPipelineTests
     }
 
     private static GoalAcceptanceVerifier CreateVerifier(
+        string root,
         Func<string[], string, TimeSpan, CancellationToken, Task<GoalAcceptanceVerifier.CommandResult>> runner) =>
-        new(runner);
+        new(new GoalAcceptanceVerifierTestOverrides
+        {
+            BuildStorageRootForTests = new DotnetBuildStorageRoot(Path.Combine(root, "dotnet"))
+        }, runner);
 
     private static GoalAcceptanceVerifier.AcceptanceManifestCheck CreateDotnetCommandCheck(string name) =>
         new()
