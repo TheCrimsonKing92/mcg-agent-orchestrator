@@ -294,6 +294,92 @@ public sealed class AcceptanceLaneMembershipTests
         }
     }
 
+    // These facts prove the carved lane takes exactly the named classes and is offerable
+    // by the placement policy from a cold start.
+    [Xunit.Fact]
+    public void CarvedRemainderClassesBelongOnlyToTheMergeTrainAndRatchetLane()
+    {
+        var lanes = AcceptanceGateEngineSettings.Load(InfrastructureTestSupport.FindRepositoryRoot()).InfrastructureTestLanes;
+        var resolved = AcceptanceLaneMembership.ResolveOwnedCollections(lanes, RunnableClasses());
+        var expectedTypes = new[]
+        {
+            typeof(CliBacklogUpdateDescriptionRoundTripTests),
+            typeof(SourceSizeRatchetRetightenerTests),
+            typeof(BackgroundMergeTrainGateTests),
+            typeof(GoalWorktreeTestsRebaseRatchetRetighten),
+            typeof(AcceptanceCriterionEvidenceRecoveryTests),
+            typeof(SatisfiedAcceptancePatchCarryTests),
+            typeof(PassedMergeTrainReceiptHoldTests),
+            typeof(MergeTrainBisectSlotLossTests),
+            typeof(GoalWorktreeTestsRebaseRegistryAwareMerge),
+            typeof(GoalWorktreeTestsFollowerWorkspace),
+            typeof(RuntimeAssemblyArchitectureTests),
+            typeof(TesterCascadeDispatchTests),
+            typeof(FollowerGateAcceptanceStoreTests),
+            typeof(AcceptanceCohortPartitionSlotsBusyDeferralTests)
+        };
+
+        foreach (var membership in new[] { lanes, resolved })
+        foreach (var type in expectedTypes)
+        {
+            Xunit.Assert.Equal("Remainder merge train and ratchet", Xunit.Assert.Single(
+                AcceptanceLaneMembership.LanesIncluding(membership, type.FullName!)).Name);
+        }
+    }
+
+    [Xunit.Fact]
+    public void UnlistedProbeClassStaysInRemainderOnly()
+    {
+        var lanes = AcceptanceGateEngineSettings.Load(InfrastructureTestSupport.FindRepositoryRoot()).InfrastructureTestLanes;
+        Xunit.Assert.Equal("Remainder", Xunit.Assert.Single(
+            AcceptanceLaneMembership.LanesIncluding(lanes, "QuokkaHarborUnlistedProbeTests")).Name);
+    }
+
+    [Xunit.Fact]
+    public void CarvedLaneSubstringSiblingsFollowTheSubstringRule()
+    {
+        var lanes = AcceptanceGateEngineSettings.Load(InfrastructureTestSupport.FindRepositoryRoot()).InfrastructureTestLanes;
+        var resolved = AcceptanceLaneMembership.ResolveOwnedCollections(lanes, RunnableClasses());
+        foreach (var membership in new[] { lanes, resolved })
+        {
+            Xunit.Assert.Equal("Remainder merge train and ratchet", Xunit.Assert.Single(
+                AcceptanceLaneMembership.LanesIncluding(membership,
+                    typeof(AcceptanceCriterionEvidenceRecoveryTestsLandingCarry).FullName!)).Name);
+            Xunit.Assert.Equal("Remainder", Xunit.Assert.Single(
+                AcceptanceLaneMembership.LanesIncluding(membership,
+                    typeof(GoalAcceptanceLaneIsolatedRootGuardTests).FullName!)).Name);
+        }
+    }
+
+    [Xunit.Fact]
+    public void CarvedRemainderLaneDeclaresNoExclusiveResourcesOrOwnedCollections()
+    {
+        var lanes = AcceptanceGateEngineSettings.Load(InfrastructureTestSupport.FindRepositoryRoot()).InfrastructureTestLanes;
+        var lane = Xunit.Assert.Single(lanes, lane => lane.Name == "Remainder merge train and ratchet");
+        Xunit.Assert.Empty(lane.ExclusiveResourceKeys);
+        Xunit.Assert.Empty(lane.OwnedCollections);
+        Xunit.Assert.False(lane.RequiresBuildSystemChange);
+    }
+
+    [Xunit.Fact]
+    public void CarvedRemainderLaneIsOfferableFromAColdStart()
+    {
+        var lanes = AcceptanceGateEngineSettings.Load(InfrastructureTestSupport.FindRepositoryRoot()).InfrastructureTestLanes;
+        var lane = Xunit.Assert.Single(lanes, lane => lane.Name == "Remainder merge train and ratchet");
+        Xunit.Assert.Equal(145.0, lane.EstimatedSerialSeconds);
+        var carved = RemoteLaneOfferPolicy.Decide(new RemoteLaneOfferInputs(
+            "infrastructure tests: " + lane.Name, null, 0, lane.EstimatedSerialSeconds, null, 0, 800));
+        Xunit.Assert.True(carved.Offer);
+        Xunit.Assert.Equal("fits", carved.Reason);
+        Xunit.Assert.Equal(305.0, carved.RemoteSeconds);
+
+        var preCarve = RemoteLaneOfferPolicy.Decide(new RemoteLaneOfferInputs(
+            "infrastructure tests: Remainder", null, 0, 576, null, 0, 800));
+        Xunit.Assert.False(preCarve.Offer);
+        Xunit.Assert.Equal("remote-slower", preCarve.Reason);
+        Xunit.Assert.Equal(1167.0, preCarve.RemoteSeconds);
+    }
+
     private static AcceptanceTestClassDescriptor[] RunnableClasses() =>
         typeof(AcceptanceLaneMembershipTests).Assembly.GetTypes()
             .Where(type => type is { IsClass: true, IsAbstract: false } &&
