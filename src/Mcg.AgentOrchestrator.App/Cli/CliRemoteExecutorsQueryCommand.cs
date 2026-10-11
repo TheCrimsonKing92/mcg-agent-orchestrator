@@ -33,7 +33,12 @@ internal static class CliRemoteExecutorsQueryCommand
             }
         }
         var report = RemoteExecutorReportReader.Read(workspace, since, last);
-        if (json) { Console.WriteLine(JsonSerializer.Serialize(report, new JsonSerializerOptions(JsonSerializerDefaults.Web))); return; }
+        if (json)
+        {
+            Console.WriteLine(AgentReadEnvelope.Serialize(AgentReadEnvelope.RemoteExecutorsSchema,
+                AgentReadEnvelope.RemoteExecutorsSchemaVersion, report, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+            return;
+        }
         Console.WriteLine($"unreadable_outcome_lines={report.UnreadableOutcomeLines}\tunreadable_probe_lines={report.UnreadableProbeLines}");
         Console.WriteLine("executor\tattempts\toutcomes\taccepted_share\tlast_success\tlast_probe");
         foreach (var row in report.Executors)
