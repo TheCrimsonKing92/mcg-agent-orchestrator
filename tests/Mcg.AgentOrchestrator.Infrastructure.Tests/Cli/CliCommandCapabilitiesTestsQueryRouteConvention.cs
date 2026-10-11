@@ -12,7 +12,7 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteConvention
             ["status"] = [["status", "abc10000"], ["status"],
                 ["status", "abc10000", "--tasks-only"], ["status", "--tasks-only", "abc10000"], ["status", "--tasks-only"]],
             ["readiness"] = [["readiness", "abc10000"], ["readiness"]],
-            ["goals"] = [["goals"]],
+            ["goals"] = [["goals"], ["goals", "--epic", "Board"], ["goals", "--epic=Board"]],
             ["failure-clusters"] = [["failure-clusters"]],
             ["lane-reuse-shadow"] = [["lane-reuse-shadow"]],
             ["remote-executors"] = [["remote-executors"]],

@@ -17,7 +17,7 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteNoWriterEffects : CliTa
             ["status"] = [["status", "abc10000"], ["status"],
                 ["status", "abc10000", "--tasks-only"], ["status", "--tasks-only", "abc10000"], ["status", "--tasks-only"]],
             ["readiness"] = [["readiness", "abc10000"], ["readiness"]],
-            ["goals"] = [["goals"]],
+            ["goals"] = [["goals"], ["goals", "--epic", "Board"], ["goals", "--epic=Board"]],
             ["failure-clusters"] = [["failure-clusters"]],
             ["lane-reuse-shadow"] = [["lane-reuse-shadow"]],
             ["remote-executors"] = [["remote-executors"]],
@@ -179,6 +179,7 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteNoWriterEffects : CliTa
     private static AgentOrchestratorKernel CreateSeed(OrchestratorWorkspace workspace)
     {
         StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+        new PortfolioStore(workspace.PortfolioStorePath).AddEpicAsync("Board").GetAwaiter().GetResult();
         _ = new BacklogStore(workspace.BacklogStorePath);
         using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
