@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -32,33 +33,60 @@ internal sealed class GoalGitFactIndex(
     Func<string, IReadOnlyList<string>, GitCli.GitResult>? gitRunner = null,
     GoalBranchContentStateCache? branchContentStateCache = null)
 {
+    internal const string GoalBranchRefPrefix = "refs/heads/goal/";
     private readonly Dictionary<string, GoalBranchContentState> branchContentStates = new(StringComparer.Ordinal);
     private readonly Func<string, IReadOnlyList<string>, GitCli.GitResult> _gitRunner = gitRunner ?? GitRunner;
 
     internal static Func<string, IReadOnlyList<string>, GitCli.GitResult> GitRunner { get; set; } =
         (workingDirectory, args) => GitCli.Run(workingDirectory, args.ToArray());
 
+    internal GoalGitFactSnapshot Snapshot => new(
+        isGitWorkTree,
+        goalBranchTips.ToFrozenDictionary(StringComparer.Ordinal),
+        mergedGoalBranches.ToFrozenSet(StringComparer.Ordinal),
+        registeredWorktreePaths.ToFrozenSet(StringComparer.OrdinalIgnoreCase),
+        mainSha,
+        evidenceAvailable);
+
+    internal static GoalGitFactIndex FromSnapshot(
+        GoalGitFactSnapshot snapshot, string executionDirectory,
+        Func<string, IReadOnlyList<string>, GitCli.GitResult> gitRunner,
+        GoalBranchContentStateCache? branchContentStateCache = null) =>
+        new(executionDirectory, snapshot.IsGitWorkTree, snapshot.GoalBranchTips,
+            snapshot.MergedGoalBranches, snapshot.RegisteredWorktreePaths, snapshot.MainSha,
+            snapshot.EvidenceAvailable, gitRunner, branchContentStateCache);
+
     public static GoalGitFactIndex Build(
         string executionDirectory, string integrationBranch,
         Func<string, IReadOnlyList<string>, GitCli.GitResult>? gitRunner = null,
-        GoalBranchContentStateCache? branchContentStateCache = null)
+        GoalBranchContentStateCache? branchContentStateCache = null,
+        GoalGitFactSnapshotCache? snapshotCache = null)
     {
         gitRunner ??= GitRunner;
         var fullExecutionDirectory = Path.GetFullPath(executionDirectory);
-        var branchResult = RunGit(gitRunner, fullExecutionDirectory, "for-each-ref", "--format=%(refname:short) %(objectname)", "refs/heads/goal/");
+        var fingerprint = snapshotCache is null
+            ? null
+            : GoalGitRefFingerprintReader.TryRead(fullExecutionDirectory, integrationBranch);
+        if (snapshotCache is not null &&
+            snapshotCache.TryGet(fullExecutionDirectory, integrationBranch, fingerprint, out var snapshot))
+        {
+            return FromSnapshot(snapshot, fullExecutionDirectory, gitRunner, branchContentStateCache);
+        }
+
+        var branchResult = RunGit(gitRunner, fullExecutionDirectory, "for-each-ref", "--format=%(refname:short) %(objectname)", GoalBranchRefPrefix);
         if (branchResult.ExitCode != 0)
         {
             return new GoalGitFactIndex(fullExecutionDirectory, false, EmptyTipMap(), EmptySet(), EmptyPathSet(), null, evidenceAvailable: false, gitRunner, branchContentStateCache);
         }
 
-        var mergedResult = RunGit(gitRunner, fullExecutionDirectory, "for-each-ref", "--format=%(refname:short)", "--merged", "HEAD", "refs/heads/goal/");
+        var mergedResult = RunGit(gitRunner, fullExecutionDirectory, "for-each-ref", "--format=%(refname:short)", "--merged", "HEAD", GoalBranchRefPrefix);
         var worktreeResult = RunGit(gitRunner, fullExecutionDirectory, "worktree", "list", "--porcelain");
         var mainResult = RunGit(gitRunner, fullExecutionDirectory, "rev-parse", "--verify", $"refs/heads/{integrationBranch}");
         var resolvedMainSha = mainResult.ExitCode == 0 && IsSingleToken(mainResult.Output.Trim())
             ? mainResult.Output.Trim()
             : null;
 
-        return new GoalGitFactIndex(
+        var index = new GoalGitFactIndex(
             fullExecutionDirectory,
             true,
             ParseBranchTips(branchResult.Output),
@@ -70,6 +98,11 @@ internal sealed class GoalGitFactIndex(
                                resolvedMainSha is not null,
             gitRunner,
             branchContentStateCache);
+        if (snapshotCache is not null && fingerprint is not null)
+        {
+            snapshotCache.Store(fullExecutionDirectory, integrationBranch, fingerprint, index.Snapshot);
+        }
+        return index;
     }
 
     public bool HasGoalBranch(string branchName) => isGitWorkTree && goalBranchTips.ContainsKey(branchName);
