@@ -7,6 +7,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 internal sealed class AcceptanceGateEngineSettings
 {
     private const int DefaultPartitionVerdictFullRerunEveryN = 5;
+    internal const int DefaultBuildPhaseTimeoutMinutes = 20;
     internal const long DefaultOutputCaptureLimitBytes = 1024L * 1024 * 1024;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -71,6 +72,16 @@ internal sealed class AcceptanceGateEngineSettings
         timeoutMinutes is > 0
             ? TimeSpan.FromMinutes(timeoutMinutes.Value)
             : AcceptanceCheckTimeouts.Resolve(Timeouts.DefaultMinutes);
+
+    public TimeSpan ResolveBuildPhaseTimeout(int? checkTimeoutMinutes)
+    {
+        var checkTimeout = ResolveCheckTimeout(checkTimeoutMinutes);
+        var buildTimeout = TimeSpan.FromMinutes(Timeouts.BuildPhaseMinutes is > 0
+            ? Timeouts.BuildPhaseMinutes.Value
+            : DefaultBuildPhaseTimeoutMinutes);
+        // Preserve existing longer gate bounds while giving short focused builds their own budget.
+        return buildTimeout > checkTimeout ? buildTimeout : checkTimeout;
+    }
 
     public TimeSpan ResolveBuildServerShutdownTimeout() =>
         AcceptanceCheckTimeouts.Resolve(Timeouts.BuildServerShutdownMinutes ?? Timeouts.DefaultMinutes);
@@ -167,6 +178,7 @@ internal sealed class AcceptanceGateEngineSettings
 internal sealed class AcceptanceGateTimeoutSettings
 {
     public int? DefaultMinutes { get; init; }
+    public int? BuildPhaseMinutes { get; init; }
     public int? BuildServerShutdownMinutes { get; init; }
     public int? DiscoveryMinutes { get; init; }
 }

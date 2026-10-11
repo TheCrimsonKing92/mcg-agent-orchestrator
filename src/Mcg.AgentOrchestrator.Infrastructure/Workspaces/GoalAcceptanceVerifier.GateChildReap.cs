@@ -115,13 +115,14 @@ public sealed partial class GoalAcceptanceVerifier
         AcceptanceManifestCheck check, string[] arguments, string worktreePath, GoalId? goalId,
         int? stableSlotIndex, DotnetBuildEnvironmentLease? stableSlotLease, string attemptName,
         CancellationToken cancellationToken, Action<DotnetBuildEnvironment>? afterLeasePrepared = null,
-        DotnetBuildEnvironment? executionEnvironment = null, bool waitForPermit = false)
+        DotnetBuildEnvironment? executionEnvironment = null, bool waitForPermit = false,
+        TimeSpan? commandTimeout = null)
     {
         try
         {
             return await RunManagedDotnetCheckCoreAsync(check, arguments, worktreePath, goalId,
                 stableSlotIndex, stableSlotLease, attemptName, cancellationToken, afterLeasePrepared,
-                executionEnvironment, waitForPermit).ConfigureAwait(false);
+                executionEnvironment, waitForPermit, commandTimeout).ConfigureAwait(false);
         }
         catch (GateChildStillAliveException ex)
         {

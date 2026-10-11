@@ -405,7 +405,8 @@ internal static class FocusedEvidenceExecution
     {
         if (checks.Any(check => check.FailureClassification is
                 AcceptanceFailureClassifications.FocusedSelectionApparatusFailure or
-                AcceptanceFailureClassifications.FocusedSelectionReceiptUnreadable))
+                AcceptanceFailureClassifications.FocusedSelectionReceiptUnreadable or
+                AcceptanceFailureClassifications.BuildPhaseTimeout))
         {
             return FindingEvidenceArmDisposition.ApparatusFailure;
         }
