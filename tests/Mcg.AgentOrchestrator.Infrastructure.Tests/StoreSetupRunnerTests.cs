@@ -42,6 +42,10 @@ public sealed class StoreSetupRunnerTests
         var dogfood = Assert.Single(results, result => result.StoreName == "dogfood-log");
         Assert.Equal(workspace.DogfoodLogStorePath, dogfood.DatabasePath);
         Assert.Equal(1, dogfood.Version);
+        var authorClaims = Assert.Single(results, result => result.StoreName == "author-claims");
+        Assert.Equal(Path.Combine(workspace.OrchestratorDirectory, "author-claims.db"), authorClaims.DatabasePath);
+        Assert.True(File.Exists(authorClaims.DatabasePath));
+        Assert.Equal(1, authorClaims.Version);
         var steward = Assert.Single(results, result => result.StoreName == "steward-triggers");
         Assert.Equal(Path.Combine(workspace.OrchestratorDirectory, "steward-triggers.db"), steward.DatabasePath);
         Assert.True(File.Exists(steward.DatabasePath));
@@ -60,7 +64,7 @@ public sealed class StoreSetupRunnerTests
                 "operator-intents.db", "operator-intents.db-wal", "operator-intents.db-shm",
                 "operator-lessons.db", "operator-escapes.db", "merge-train-acceptance.db", "follower-gate-acceptance.db",
                 "collaboration-items.db", "collaboration-items.db-wal", "collaboration-items.db-shm",
-                "dogfood-log.db", "dogfood-log.db-wal", "dogfood-log.db-shm", "steward-triggers.db", "progressive-review-glance-circuit.db", "progressive-review-steering.db" }));
+                "dogfood-log.db", "dogfood-log.db-wal", "dogfood-log.db-shm", "author-claims.db", "steward-triggers.db", "progressive-review-glance-circuit.db", "progressive-review-steering.db" }));
         Assert.Empty(await DogfoodLogStore.OpenReadOnly(workspace.DogfoodLogStorePath).ListRecentAsync());
         Assert.Empty(await ExperimentStore.OpenReadOnly(workspace.ExperimentStorePath).ListAllAsync());
         Assert.Empty(await PortfolioStore.OpenReadOnly(workspace.PortfolioStorePath).ListProjectsAsync());
