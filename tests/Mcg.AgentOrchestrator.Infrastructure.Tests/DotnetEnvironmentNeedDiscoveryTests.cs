@@ -9,6 +9,7 @@ public sealed class DotnetEnvironmentNeedDiscoveryTests
     public void SdkAndEveryManifestToolHavePinnedValuesAndSources()
     {
         using var fixture = new ProjectOnboardingFixture("solution");
+        ProjectOnboardingFixture.SeedRemoteDefault(fixture.Root);
         var model = new DotnetProjectDiscoveryAdapter().Discover(fixture.Root);
         string[] expectedNames = ["dotnet-sdk", "dotnet-ef", "sample-tool"];
         string[] expectedVersions = ["10.0.100", "10.0.0", "1.2.3"];
@@ -93,6 +94,7 @@ public sealed class DotnetEnvironmentNeedDiscoveryTests
     public void Utf8PreamblesDoNotHideSdkOrToolPins()
     {
         using var fixture = new ProjectOnboardingFixture("solution");
+        ProjectOnboardingFixture.SeedRemoteDefault(fixture.Root);
         foreach (var relative in new[] { "global.json", ".config/dotnet-tools.json" })
         {
             var path = Path.Combine(fixture.Root, relative);

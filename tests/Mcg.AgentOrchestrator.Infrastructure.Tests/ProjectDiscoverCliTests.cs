@@ -18,6 +18,7 @@ public sealed class ProjectDiscoverCliTests
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllText(path, "<Project />");
         }
+        ProjectOnboardingFixture.SeedRemoteDefault(sourceFixture.Root);
         var registry = new OrchestratorProjectRegistry(Path.Combine(workspaceFixture.Root, "registry"), Path.Combine(workspaceFixture.Root, "data"));
         var workspace = OrchestratorWorkspace.ForDirectory(workspaceFixture.Root);
         var protectedPaths = SeedConfiguration(workspaceFixture.Root, workspace.WorkerProfilePath)
@@ -45,7 +46,8 @@ public sealed class ProjectDiscoverCliTests
         Assert.Equal(8, model.OwnerQuestions.Count);
         var lines = output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
         Assert.Equal($"Project model: {modelPath}", lines[0]);
-        Assert.Equal(model.OwnerQuestions.Select(question => $"Owner question: {question.Question}"), lines.Skip(1));
+        Assert.Equal("Integration branch: trunk (High, .git/refs/remotes/origin/HEAD:1)", lines[1]);
+        Assert.Equal(model.OwnerQuestions.Select(question => $"Owner question: {question.Question}"), lines.Skip(2));
         foreach (var (path, snapshot) in snapshots)
         {
             Assert.Equal(snapshot.Bytes, File.ReadAllBytes(path));
@@ -63,6 +65,7 @@ public sealed class ProjectDiscoverCliTests
     {
         using var defaultFixture = new ProjectOnboardingFixture("no-solution");
         using var selectedFixture = new ProjectOnboardingFixture("solution");
+        ProjectOnboardingFixture.SeedRemoteDefault(selectedFixture.Root);
         var registry = new OrchestratorProjectRegistry(Path.Combine(defaultFixture.Root, "registry"), Path.Combine(defaultFixture.Root, "data"));
         registry.CreateProject("sample", selectedFixture.Root);
         registry.SelectProject("sample");
@@ -80,6 +83,37 @@ public sealed class ProjectDiscoverCliTests
         Assert.Empty(model.OwnerQuestions);
         Assert.Equal(selection, File.ReadAllBytes(registry.CurrentProjectPath));
         Assert.False(File.Exists(Path.Combine(OrchestratorWorkspace.ForDirectory(defaultFixture.Root).OrchestratorDirectory, "project-model.json")));
+    }
+
+    [Theory]
+    [InlineData(true, "Integration branch: trunk (High, .git/refs/remotes/origin/HEAD:1)")]
+    [InlineData(false, "Integration branch: not learned")]
+    public void DiscoveryPrintsBranchBeforeOwnerQuestions(bool learned, string expectedBranchLine)
+    {
+        using var fixture = new ProjectOnboardingFixture("solution");
+        if (learned)
+            ProjectOnboardingFixture.SeedRemoteDefault(fixture.Root);
+        var registry = new OrchestratorProjectRegistry(Path.Combine(fixture.Root, "registry"));
+        using var output = new StringWriter();
+
+        Assert.Equal(0, ProjectCliCommand.Execute(["project", "discover"], registry, fixture.Root, null, output));
+
+        var modelPath = Path.Combine(OrchestratorWorkspace.ForDirectory(fixture.Root).OrchestratorDirectory, "project-model.json");
+        var model = ProjectModelJson.Deserialize(File.ReadAllText(modelPath));
+        var lines = output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal($"Project model: {modelPath}", lines[0]);
+        Assert.Equal(expectedBranchLine, lines[1]);
+        Assert.Equal(model.OwnerQuestions.Select(question => $"Owner question: {question.Question}"), lines.Skip(2));
+        if (learned)
+        {
+            Assert.Equal(FactConfidence.High, model.IntegrationBranch!.Confidence);
+            Assert.DoesNotContain(model.OwnerQuestions, question => question.FactKey == LearnedIntegrationBranch.OwnerQuestionKey);
+        }
+        else
+        {
+            Assert.Null(model.IntegrationBranch);
+            Assert.Single(model.OwnerQuestions.Where(question => question.FactKey == LearnedIntegrationBranch.OwnerQuestionKey));
+        }
     }
 
     [Fact(DisplayName = "An explicit project name determines the workspace while root selects the source")]
@@ -150,8 +184,11 @@ public sealed class ProjectDiscoverCliTests
         Assert.All(model.Measurements, unit => Assert.Equal(12.5, unit.BuildSeconds!.Value));
         Assert.Contains(model.OwnerQuestions, question => question.FactKey.StartsWith("commands/", StringComparison.Ordinal));
         Assert.Contains(model.OwnerQuestions, question => question.FactKey == "environment/dotnet-sdk");
+        var lines = output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal($"Project model: {modelPath}", lines[0]);
+        Assert.Equal("Integration branch: not learned", lines[1]);
         Assert.Equal(model.OwnerQuestions.Select(question => $"Owner question: {question.Question}"),
-            output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries).Skip(1));
+            lines.Skip(2));
     }
 
     [Fact]

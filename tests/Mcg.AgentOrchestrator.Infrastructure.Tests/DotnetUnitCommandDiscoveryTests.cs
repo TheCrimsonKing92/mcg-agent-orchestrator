@@ -9,6 +9,7 @@ public sealed class DotnetUnitCommandDiscoveryTests
     public void CommandsAreExactAndSourcesIdentifyDeclarations()
     {
         using var fixture = new ProjectOnboardingFixture("solution");
+        ProjectOnboardingFixture.SeedRemoteDefault(fixture.Root);
         var model = new DotnetProjectDiscoveryAdapter().Discover(fixture.Root);
         Assert.Equal(model.Units.Select(unit => unit.Id), model.Commands.Select(unit => unit.UnitId));
         string[] expectedBuilds = [

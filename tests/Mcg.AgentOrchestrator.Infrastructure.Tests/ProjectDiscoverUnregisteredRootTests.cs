@@ -14,6 +14,7 @@ public sealed class ProjectDiscoverUnregisteredRootTests
         using var home = new ProjectOnboardingFixture("solution");
         using var fixture = new ProjectOnboardingFixture("plain-library");
         var root = Path.Combine(fixture.Root, "sample-repo");
+        ProjectOnboardingFixture.SeedRemoteDefault(root);
         var registry = new OrchestratorProjectRegistry(Path.Combine(home.Root, "registry"), Path.Combine(home.Root, ".orchestrator"));
         var workspace = OrchestratorWorkspace.ForDirectory(home.Root);
         Directory.CreateDirectory(workspace.OrchestratorDirectory);
@@ -31,7 +32,8 @@ public sealed class ProjectDiscoverUnregisteredRootTests
         Assert.Equal(Path.Combine(OrchestratorWorkspace.ForProject("sample-repo", root,
             dataRootDirectory: registry.DataRootDirectory).OrchestratorDirectory, "project-model.json"), modelPath);
         Assert.True(File.Exists(modelPath));
-        Assert.Equal($"Project model: {modelPath}{Environment.NewLine}", output.ToString());
+        Assert.Equal($"Project model: {modelPath}{Environment.NewLine}" +
+            $"Integration branch: trunk (High, .git/refs/remotes/origin/HEAD:1){Environment.NewLine}", output.ToString());
         var model = ProjectModelJson.Deserialize(File.ReadAllText(modelPath));
         Assert.Equal(2, model.Units.Count);
         Assert.False(model.Units.Single(unit => unit.Id == "src/Plain.Library/Plain.Library.csproj").IsTest.Value);
@@ -56,6 +58,7 @@ public sealed class ProjectDiscoverUnregisteredRootTests
     public void OwnRootKeepsTopLevelWorkspace(bool explicitRoot)
     {
         using var home = new ProjectOnboardingFixture("solution");
+        ProjectOnboardingFixture.SeedRemoteDefault(home.Root);
         var registry = new OrchestratorProjectRegistry(Path.Combine(home.Root, "registry"), Path.Combine(home.Root, "data"));
         using var output = new StringWriter();
         string[] parts = explicitRoot
@@ -66,7 +69,8 @@ public sealed class ProjectDiscoverUnregisteredRootTests
 
         var modelPath = Path.Combine(OrchestratorWorkspace.ForDirectory(home.Root).OrchestratorDirectory, "project-model.json");
         Assert.True(File.Exists(modelPath));
-        Assert.Equal($"Project model: {modelPath}{Environment.NewLine}", output.ToString());
+        Assert.Equal($"Project model: {modelPath}{Environment.NewLine}" +
+            $"Integration branch: trunk (High, .git/refs/remotes/origin/HEAD:1){Environment.NewLine}", output.ToString());
         Assert.Equal(3, ProjectModelJson.Deserialize(File.ReadAllText(modelPath)).Units.Count);
         Assert.False(Directory.Exists(Path.Combine(home.Root, ".orchestrator", "projects")));
     }
@@ -83,6 +87,7 @@ public sealed class ProjectDiscoverUnregisteredRootTests
         using var fixture = new ProjectOnboardingFixture("plain-library");
         var root = Path.Combine(fixture.Root, name);
         Directory.Move(Path.Combine(fixture.Root, "sample-repo"), root);
+        ProjectOnboardingFixture.SeedRemoteDefault(root);
         var registry = new OrchestratorProjectRegistry(Path.Combine(home.Root, "registry"), Path.Combine(home.Root, "data"));
         using var output = new StringWriter();
 
@@ -91,7 +96,8 @@ public sealed class ProjectDiscoverUnregisteredRootTests
 
         var modelPath = Path.Combine(registry.DataRootDirectory, "projects", name, "project-model.json");
         Assert.True(File.Exists(modelPath));
-        Assert.Equal($"Project model: {modelPath}{Environment.NewLine}", output.ToString());
+        Assert.Equal($"Project model: {modelPath}{Environment.NewLine}" +
+            $"Integration branch: trunk (High, .git/refs/remotes/origin/HEAD:1){Environment.NewLine}", output.ToString());
         Assert.Equal(2, ProjectModelJson.Deserialize(File.ReadAllText(modelPath)).Units.Count);
         Assert.False(Directory.Exists(OrchestratorWorkspace.ForDirectory(home.Root).OrchestratorDirectory));
         Assert.False(File.Exists(registry.RegistryPath));

@@ -34,14 +34,18 @@ public sealed class DotnetProjectDiscoveryIntegrationBranchTests
         Assert.Equal("develop", model.IntegrationBranch.Value);
         Assert.Equal(FactConfidence.Medium, model.IntegrationBranch.Confidence);
         Assert.Equal(new FactSource(".git/HEAD", 1), model.IntegrationBranch.Source);
-        Assert.DoesNotContain(model.OwnerQuestions, question => question.FactKey == LearnedIntegrationBranch.OwnerQuestionKey);
+        var question = Assert.Single(model.OwnerQuestions.Where(question => question.FactKey == LearnedIntegrationBranch.OwnerQuestionKey));
+        Assert.Equal(model.IntegrationBranch.Source, question.Source);
+        Assert.Contains("Confirm", question.Question);
+        Assert.Contains(model.IntegrationBranch.Value, question.Question);
+        Assert.Contains("checked-out branch hint", question.Question);
     }
 
     [Theory]
     [InlineData("detached")]
     [InlineData("missing")]
     [InlineData("pointer")]
-    public void Discover_UnlearnedBranch_RemainsNullWithoutOwnerQuestion(string scenario)
+    public void Discover_UnlearnedBranch_RemainsNullAndAsksTheOwner(string scenario)
     {
         using var fixture = new ProjectOnboardingFixture("answer-key-repository");
         switch (scenario)
@@ -57,7 +61,10 @@ public sealed class DotnetProjectDiscoveryIntegrationBranchTests
         var model = new DotnetProjectDiscoveryAdapter().Discover(fixture.Root);
 
         Assert.Null(model.IntegrationBranch);
-        Assert.DoesNotContain(model.OwnerQuestions, question => question.FactKey == LearnedIntegrationBranch.OwnerQuestionKey);
+        var question = Assert.Single(model.OwnerQuestions.Where(question => question.FactKey == LearnedIntegrationBranch.OwnerQuestionKey));
+        Assert.Contains(IntegrationBranchReader.Read(fixture.Root).Reason, question.Question);
+        // The reader first examines the root's metadata entry, including missing and pointer entries.
+        Assert.Equal(new FactSource(".git", 1), question.Source);
     }
 
     private static void WriteReference(ProjectOnboardingFixture fixture, string relativePath, string text)

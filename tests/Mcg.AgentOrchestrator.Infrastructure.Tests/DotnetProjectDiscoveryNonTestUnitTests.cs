@@ -13,6 +13,7 @@ public sealed class DotnetProjectDiscoveryNonTestUnitTests
     {
         using var fixture = new ProjectOnboardingFixture("plain-library");
         var root = Path.Combine(fixture.Root, "sample-repo");
+        ProjectOnboardingFixture.SeedRemoteDefault(root);
         var adapter = new DotnetProjectDiscoveryAdapter();
         var model = adapter.Discover(root);
 
@@ -54,6 +55,7 @@ public sealed class DotnetProjectDiscoveryNonTestUnitTests
     {
         using var fixture = new ProjectOnboardingFixture("plain-library");
         var root = Path.Combine(fixture.Root, "sample-repo");
+        ProjectOnboardingFixture.SeedRemoteDefault(root);
         var adapter = new DotnetProjectDiscoveryAdapter();
         var markerFreeModel = adapter.Discover(root);
         var markerFreeStatus = markerFreeModel.Units.Single(unit => unit.Id == Library).IsTest;

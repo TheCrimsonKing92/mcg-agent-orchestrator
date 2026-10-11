@@ -113,6 +113,13 @@ public sealed class DotnetProjectDiscoveryAdapter : IProjectDiscoveryAdapter
         var measurements = UnitMeasurementCollector.Collect(root, commands, measurer, measuredKinds, questions);
         var hazards = DotnetSharedStateHazardReader.Read(root, units, dependencies, questions);
         var learned = IntegrationBranchReader.Read(root);
+        if (learned.Branch is null)
+            Ask(LearnedIntegrationBranch.OwnerQuestionKey, $"What is the integration branch? {learned.Reason}",
+                new FactSource(".git", 1), questions);
+        else if (learned.Branch.Confidence != FactConfidence.High)
+            Ask(LearnedIntegrationBranch.OwnerQuestionKey,
+                $"Confirm that '{learned.Branch.Value}' is the integration branch learned from the checked-out branch hint.",
+                learned.Branch.Source, questions);
         // Paths in the snapshot are relative to its logical root, independent of the discovery host.
         return new ProjectModel(ProjectModel.CurrentSchemaVersion, ".", units,
             dependencies.GroupBy(edge => (edge.FromUnit, edge.ToUnit))

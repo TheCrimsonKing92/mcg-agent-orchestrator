@@ -100,6 +100,12 @@ internal static class ProjectCliCommand
         }
 
         output.WriteLine($"Project model: {modelPath}");
+        var branch = model.IntegrationBranch;
+        var branchSource = branch?.Source.Path is { } sourcePath
+            ? $", {sourcePath}" + (branch.Source.Line is { } sourceLine ? $":{sourceLine}" : "")
+            : "";
+        output.WriteLine(branch is null ? "Integration branch: not learned"
+            : $"Integration branch: {branch.Value} ({branch.Confidence}{branchSource})");
         foreach (var question in model.OwnerQuestions)
             output.WriteLine($"Owner question: {question.Question}");
     }

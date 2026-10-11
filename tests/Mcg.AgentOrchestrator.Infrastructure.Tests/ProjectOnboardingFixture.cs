@@ -16,5 +16,12 @@ internal sealed class ProjectOnboardingFixture : IDisposable
         }
     }
 
+    public static void SeedRemoteDefault(string root)
+    {
+        var path = Path.Combine(root, ".git", "refs", "remotes", "origin", "HEAD");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, "ref: refs/remotes/origin/trunk");
+    }
+
     public void Dispose() => Directory.Delete(Root, recursive: true);
 }

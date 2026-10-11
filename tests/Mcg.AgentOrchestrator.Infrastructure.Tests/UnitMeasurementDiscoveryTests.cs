@@ -20,6 +20,7 @@ public sealed class UnitMeasurementDiscoveryTests
     public void FixedDurationsProduceExactCallsAndMeasurementReferences()
     {
         using var fixture = new ProjectOnboardingFixture("solution");
+        ProjectOnboardingFixture.SeedRemoteDefault(fixture.Root);
         var fake = new RecordingUnitCommandMeasurer();
         var model = new DotnetProjectDiscoveryAdapter().Discover(fixture.Root, measurer: fake);
         Assert.Equal(new[] {

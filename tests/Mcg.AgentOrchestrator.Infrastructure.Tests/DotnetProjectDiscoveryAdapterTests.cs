@@ -13,6 +13,7 @@ public sealed class DotnetProjectDiscoveryAdapterTests
     public void SolutionProducesExactGraphAndTestSetups()
     {
         using var fixture = new ProjectOnboardingFixture("solution");
+        ProjectOnboardingFixture.SeedRemoteDefault(fixture.Root);
         IProjectDiscoveryAdapter adapter = new DotnetProjectDiscoveryAdapter();
         var model = adapter.Discover(fixture.Root);
 
@@ -53,6 +54,7 @@ public sealed class DotnetProjectDiscoveryAdapterTests
     public void NoSolutionLeavesUnknownFrameworkAndRunnerUndetermined()
     {
         using var fixture = new ProjectOnboardingFixture("no-solution");
+        ProjectOnboardingFixture.SeedRemoteDefault(fixture.Root);
         var model = new DotnetProjectDiscoveryAdapter().Discover(fixture.Root);
 
         Assert.Equal(2, model.Units.Count);
@@ -85,6 +87,7 @@ public sealed class DotnetProjectDiscoveryAdapterTests
     public void XmlSolutionIsDiscovered()
     {
         using var fixture = new ProjectOnboardingFixture("solution");
+        ProjectOnboardingFixture.SeedRemoteDefault(fixture.Root);
         File.Delete(Path.Combine(fixture.Root, "Sample.sln"));
         File.WriteAllText(Path.Combine(fixture.Root, "Sample.slnx"), $"<Solution>\n<Project Path=\"{Library}\" />\n<Project Path=\"{Vstest}\" />\n<Project Path=\"{Mtp}\" />\n</Solution>");
         var model = new DotnetProjectDiscoveryAdapter().Discover(fixture.Root);
@@ -103,6 +106,7 @@ public sealed class DotnetProjectDiscoveryAdapterTests
     public void MultipleSolutionsLowerMembershipConfidence()
     {
         using var fixture = new ProjectOnboardingFixture("solution");
+        ProjectOnboardingFixture.SeedRemoteDefault(fixture.Root);
         File.Copy(Path.Combine(fixture.Root, "Sample.sln"), Path.Combine(fixture.Root, "Other.sln"));
         var model = new DotnetProjectDiscoveryAdapter().Discover(fixture.Root);
 
@@ -185,6 +189,7 @@ public sealed class DotnetProjectDiscoveryAdapterTests
     public void GeneratedProjectsAreSkipped()
     {
         using var fixture = new ProjectOnboardingFixture("solution");
+        ProjectOnboardingFixture.SeedRemoteDefault(fixture.Root);
         foreach (var directory in new[] { "bin", "obj", ".git" })
         {
             Directory.CreateDirectory(Path.Combine(fixture.Root, directory));
@@ -199,6 +204,7 @@ public sealed class DotnetProjectDiscoveryAdapterTests
     public void CallerExclusionsAreApplied()
     {
         using var fixture = new ProjectOnboardingFixture("solution");
+        ProjectOnboardingFixture.SeedRemoteDefault(fixture.Root);
         var directory = Path.Combine(fixture.Root, "owner-cache");
         Directory.CreateDirectory(directory);
         File.WriteAllText(Path.Combine(directory, "Noise.csproj"), "<Project />");
@@ -248,6 +254,7 @@ public sealed class DotnetProjectDiscoveryAdapterTests
     public void UnsupportedSolutionMemberProducesQuestion(bool xmlSolution)
     {
         using var fixture = new ProjectOnboardingFixture("solution");
+        ProjectOnboardingFixture.SeedRemoteDefault(fixture.Root);
         var solution = xmlSolution ? "Sample.slnx" : "Sample.sln";
         if (xmlSolution)
         {
