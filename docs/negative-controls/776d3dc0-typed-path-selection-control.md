@@ -18,21 +18,55 @@ remains intact, while it still strips the convergence paths under their unchange
 
 ## RED receipt
 
-Deferred to the Tester/Conductor evidence request selecting
+Conductor receipt: `finding-evidence-ef69b884ae123f44d11a27c1`, candidate
+`13505758f8dba6747846276da4cb191666439531`. The request selected
+`TaskBriefPathListEmissionTests`, `WorkerContextRendererDispatchPathTests` and
 `WorkerContextRendererReviewerScopeSelectionTests`, with `negative_control=revert-src` on the
-renderer path above. Required result: `negative-control-demonstrated`, with the failing assertion
-in `ProducerHeadingMutationCannotChangeTypedPathSelection` showing the unexpected path lines or
-missing count-only lines. A compile failure does not satisfy this control.
+renderer path above. Receipt outcome: `negative-control-demonstrated`.
 
-The Developer is prohibited from executing tests. No RED execution receipt exists in this round;
-the test-capable lane must retain its run identity, counts, exit code and failing assertion here.
+The source-reverted arm executed 32 tests: 17 passed, 15 failed; managed-runner exit code 2.
+Core passed 7/7; Infrastructure passed 10/25. This was an assertion failure, not a compile failure.
+The heading control failed at
+`WorkerContextRendererReviewerScopeSelectionTests.cs:198`:
+
+```text
+Assert.Equal() Failure: Strings differ
+Expected: ···" base: baseline\r\nChanged files: 125; complete path"···
+Actual:   ···" base: baseline\r\nChanged entries: fixture wording;"···
+```
+
+Retained TRX directory (shared with GREEN):
+`C:\Users\miles\vcs\mcg-agent-orchestrator\.orchestrator\pre-review-evidence-attempts\776d3dc0ae09442a8b4828ef17bf6fe4`.
+RED TRX filenames in that directory:
+
+```text
+776d3dc0-pre-review-20261011022537842-f010154e287a4ca883afa3f9a9783715-sourcereverted.reviewer-focused-evidence-core-tests-fullyqualifiedname-taskbriefpathlistemissiontests.trx
+776d3dc0-pre-review-20261011022537842-f010154e287a4ca883afa3f9a9783715-sourcereverted.reviewer-focused-evidence-infrastructure-tests-fullyqualifiedname-workercontextrendererdispat-4c86e03106e5ac65.trx
+```
+
+Their SHA-256 values match the receipt: Core
+`f365ae7929f04f7d79f078b58e717fc275bf761a73f9af9faee159920290d84a`; Infrastructure
+`793f5a6e98bcddee2180cedf22a5eff7ca9c6c5f80d294f29aefc2557f26c17d`.
 
 ## GREEN receipt
 
-Deferred to the same test-capable lane after restoring the candidate renderer. Run
-`WorkerContextRendererReviewerScopeSelectionTests` and `TaskBriefPathListEmissionTests`, along
-with the existing `WorkerContextRendererDispatchPathTests` identity-hash control. Retain the
-passing run identity, counts and exit code here. A worker build is compile evidence only.
+The candidate arm of the same receipt passed 32/32 tests with managed-runner exit code 0:
+`TaskBriefPathListEmissionTests` 7/7, `WorkerContextRendererDispatchPathTests` 10/10 and
+`WorkerContextRendererReviewerScopeSelectionTests` 15/15. GREEN TRX filenames in the retained
+directory above:
+
+```text
+776d3dc0-pre-review-20261011022537842-f010154e287a4ca883afa3f9a9783715-candidate.reviewer-focused-evidence-core-tests-fullyqualifiedname-taskbriefpathlistemissiontests.trx
+776d3dc0-pre-review-20261011022537842-f010154e287a4ca883afa3f9a9783715-candidate.reviewer-focused-evidence-infrastructure-tests-fullyqualifiedname-workercontextrendererdispatchpat-e46ac9647da5dcf5.trx
+```
+
+Their SHA-256 values match the receipt: Core
+`80c92a3180f46c69c50f3469ef77ab7f00d61e7100597ea0843360aab2712047`; Infrastructure
+`001d8923d5c6159556e78229d85ca3002e03912b19495abd0be7e3f849b49dee`.
+The receipt is packaged as
+`goal/review-finding-receipts/b3eba4c1d08fcaea64843bcbd03338a98e3da7eaad98324673ea7b8b2f6267b5.json`.
+The Developer inspected all four hash-matching TRX files when recording these receipts; no tests
+were rerun for this documentation repair.
 
 ## Stored-format stop-condition check
 
