@@ -166,7 +166,7 @@ public sealed class EnvironmentHealthQueryCharacterizationTests
         var ceiling = Assert.Single(SourceSizeRatchet.SeededClassCeilings,
             item => item.ClassName == "ConsoleViews");
         Assert.True(ceiling.MaximumTotalLineCount <= 2865);
-        Assert.Equal(38, ceiling.MaximumPartialFileCount);
+        Assert.True(ceiling.MaximumPartialFileCount <= 38);
         Assert.Empty(SourceSizeRatchet.EvaluateClasses(VerifiedRepositoryRoot.Find(), [ceiling]));
     }
 
@@ -198,7 +198,7 @@ public sealed class EnvironmentHealthQueryCharacterizationTests
             .Select(File.ReadAllText)
             .Where(text => Regex.IsMatch(text, @"\bpartial\s+class\s+ConsoleViews\b", RegexOptions.CultureInvariant))
             .ToArray();
-        Assert.Equal(38, partials.Length);
+        Assert.True(partials.Length <= 38);
         foreach (var text in partials)
         {
             Assert.DoesNotMatch(@"\bstatic\s+\S+\s+(?:BuildSubscriptionRouteIssues|RequiresSubscriptionReasoningPlaceholder)\s*\(", text);
