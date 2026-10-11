@@ -57,6 +57,7 @@ internal static class AcceptanceLaneDurationStore
         try
         {
             var samples = new Dictionary<LaneKey, Queue<double>>();
+            var nameSamples = new Dictionary<string, Queue<double>>(StringComparer.Ordinal);
             foreach (var line in SharedJsonlFile.ReadAllLines(path))
             {
                 if (TryDeserialize(line) is not { } observation ||
@@ -81,11 +82,28 @@ internal static class AcceptanceLaneDurationStore
                 }
 
                 trailing.Enqueue(observation.DurationSeconds);
+
+                if (!nameSamples.TryGetValue(observation.LaneName, out var nameTrailing))
+                {
+                    nameTrailing = new Queue<double>(TrailingSampleCount);
+                    nameSamples.Add(observation.LaneName, nameTrailing);
+                }
+
+                if (nameTrailing.Count == TrailingSampleCount)
+                {
+                    nameTrailing.Dequeue();
+                }
+
+                nameTrailing.Enqueue(observation.DurationSeconds);
             }
 
             return new Snapshot(samples.ToDictionary(
                 pair => pair.Key,
-                pair => (IReadOnlyList<double>)pair.Value.ToArray()));
+                pair => (IReadOnlyList<double>)pair.Value.ToArray()),
+                nameSamples.ToDictionary(
+                    pair => pair.Key,
+                    pair => (IReadOnlyList<double>)pair.Value.ToArray(),
+                    StringComparer.Ordinal));
         }
         catch (Exception exception) when (IsNonFatalStoreFailure(exception))
         {
@@ -132,10 +150,16 @@ internal static class AcceptanceLaneDurationStore
         double DurationSeconds,
         DateTimeOffset RecordedAt);
 
-    private sealed class Snapshot(IReadOnlyDictionary<LaneKey, IReadOnlyList<double>> samples)
+    private sealed class Snapshot(
+        IReadOnlyDictionary<LaneKey, IReadOnlyList<double>> samples,
+        IReadOnlyDictionary<string, IReadOnlyList<double>> nameSamples)
     {
         internal static Snapshot Empty { get; } = new(
-            new Dictionary<LaneKey, IReadOnlyList<double>>());
+            new Dictionary<LaneKey, IReadOnlyList<double>>(),
+            new Dictionary<string, IReadOnlyList<double>>(StringComparer.Ordinal));
+
+        internal IReadOnlyList<double> NameSamples(string laneName) =>
+            nameSamples.TryGetValue(laneName, out var values) ? values : [];
 
         internal (double? MedianSeconds, int Samples) ResolveObservedSeconds(LaneKey key)
         {
@@ -173,8 +197,11 @@ internal static class AcceptanceLaneDurationStore
             TryCreateKey(check, out var key) ? snapshot.ResolveObservedSeconds(key) : (null, 0);
 
         internal double ResolveSortSeconds(AcceptanceManifestCheck check) =>
-            TryCreateKey(check, out var key) && snapshot.TryResolve(key, out var observedSeconds)
-                ? observedSeconds
+            TryCreateKey(check, out var key)
+                ? AcceptanceLaneSortEstimate.Resolve(
+                    snapshot.TryResolve(key, out var observedSeconds) ? observedSeconds : null,
+                    snapshot.NameSamples(key.LaneName),
+                    check.EstimatedSerialSeconds)
                 : check.EstimatedSerialSeconds;
 
         internal void Record(

@@ -110,6 +110,7 @@ internal sealed class TerminalGoalSweepCache
     internal string? ObservedMainSha => _integrationEvidenceMainSha;
     internal GoalBranchContentStateCache BranchContentStates { get; } = new();
     internal GoalGitFactSnapshotCache GitFactSnapshots { get; } = new();
+    internal GoalAncestryCache Ancestry { get; } = new();
 
     internal IGoalIntegrationEvidenceResolver GetIntegrationEvidenceResolver(
         string executionDirectory, string integrationBranch,
@@ -544,7 +545,7 @@ internal static partial class TerminalGoalSweep
                 branchFactIndex.TryGetGoalBranchTip(goalPendingRecovery.Id),
                 mergeTrainAcceptanceStore,
                 cohortAcceptanceStore,
-                gitRunner);
+                gitRunner, cache?.Ancestry);
             if (recoveredCriterionEvidence is { CanComplete: false })
             {
                 repairs.Add(new TerminalGoalSweepRepair(

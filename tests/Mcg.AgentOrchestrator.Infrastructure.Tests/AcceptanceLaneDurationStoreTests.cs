@@ -40,7 +40,7 @@ public sealed class AcceptanceLaneDurationStoreTests : IDisposable
     }
 
     [Fact]
-    public void Resolve_ChangedFilter_UsesSeed()
+    public void Resolve_ChangedFilter_UsesNameLevelMedian()
     {
         var original = Check("Renamed", "FullyQualifiedName~OriginalTests", seed: 50);
         var changed = Check("Renamed", "FullyQualifiedName~ChangedTests", seed: 50);
@@ -49,7 +49,98 @@ public sealed class AcceptanceLaneDurationStoreTests : IDisposable
         AppendSample(original, 3);
 
         Assert.Equal(2d, Resolve(original));
+        Assert.Equal(2d, Resolve(changed));
+    }
+
+    [Fact]
+    public void Resolve_ChangedFilter_FiveOldOneNew_UsesNameLevelMedian()
+    {
+        var original = Check("Remainder", "FullyQualifiedName~OriginalTests", seed: 50);
+        var changed = Check("Remainder", "FullyQualifiedName~ChangedTests", seed: 50);
+        foreach (var seconds in new double[] { 100, 200, 300, 400, 500 })
+        {
+            AppendSample(original, seconds);
+        }
+        AppendSample(changed, 600);
+
+        // Journal order leaves 200, 300, 400, 500, 600 in the name-level window.
+        Assert.Equal(400d, Resolve(changed));
+        using var scope = AcceptanceLaneDurationStore.PushRecordingScope(_root);
+        Assert.Equal(((double?)null, 1), AcceptanceLaneDurationStore.ResolveObservedSeconds(changed));
+    }
+
+    [Fact]
+    public void Resolve_CurrentHashHasThreeSamples_IgnoresOlderHash()
+    {
+        var original = Check("Remainder", "FullyQualifiedName~OriginalTests", seed: 50);
+        var changed = Check("Remainder", "FullyQualifiedName~ChangedTests", seed: 50);
+        foreach (var seconds in new double[] { 900, 900, 900 })
+        {
+            AppendSample(original, seconds);
+        }
+        foreach (var seconds in new double[] { 1, 2, 3 })
+        {
+            AppendSample(changed, seconds);
+        }
+
+        // The name-level median is 3, but the current-hash median takes priority.
+        Assert.Equal(2d, Resolve(changed));
+        using var scope = AcceptanceLaneDurationStore.PushRecordingScope(_root);
+        Assert.Equal(((double?)2d, 3), AcceptanceLaneDurationStore.ResolveObservedSeconds(changed));
+    }
+
+    [Fact]
+    public void Resolve_NoSamples_UsesSeed()
+    {
+        Assert.Equal(50d, Resolve(Check("Empty", "FullyQualifiedName~EmptyTests", seed: 50)));
+    }
+
+    [Fact]
+    public void Resolve_TwoNameLevelSamplesAcrossHashes_UsesSeed()
+    {
+        var original = Check("Sparse", "FullyQualifiedName~OriginalTests", seed: 50);
+        var changed = Check("Sparse", "FullyQualifiedName~ChangedTests", seed: 50);
+        AppendSample(original, 100);
+        AppendSample(changed, 200);
+
         Assert.Equal(50d, Resolve(changed));
+    }
+
+    [Theory]
+    [InlineData(double.NaN)]
+    [InlineData(double.PositiveInfinity)]
+    [InlineData(double.NegativeInfinity)]
+    [InlineData(0d)]
+    [InlineData(-1d)]
+    public void SortEstimate_InvalidCurrentMedian_UsesValidNameSamples(double invalid)
+    {
+        Assert.Equal(20d, AcceptanceLaneSortEstimate.Resolve(invalid, [30, 10, 20], 50));
+    }
+
+    [Fact]
+    public void SortEstimate_InvalidNameSamples_DoNotCountTowardMinimum()
+    {
+        Assert.Equal(50d, AcceptanceLaneSortEstimate.Resolve(null, [double.NaN, 0, -1, 10, 20], 50));
+        Assert.Equal(20d, AcceptanceLaneSortEstimate.Resolve(null, [double.PositiveInfinity, 30, 10, 20, 0], 50));
+    }
+
+    [Fact]
+    public void SortEstimate_FourNameSamples_UsesMiddlePairMeanWithoutMutatingInput()
+    {
+        double[] samples = [40, 10, 30, 20];
+
+        Assert.Equal(25d, AcceptanceLaneSortEstimate.Resolve(null, samples, 50));
+        Assert.Equal(new double[] { 40, 10, 30, 20 }, samples);
+    }
+
+    [Theory]
+    [InlineData(0d)]
+    [InlineData(-1d)]
+    [InlineData(double.NaN)]
+    [InlineData(double.PositiveInfinity)]
+    public void SortEstimate_NoValidHistory_ReturnsManifestVerbatim(double manifest)
+    {
+        Assert.Equal(manifest, AcceptanceLaneSortEstimate.Resolve(null, [], manifest));
     }
 
     [Fact]

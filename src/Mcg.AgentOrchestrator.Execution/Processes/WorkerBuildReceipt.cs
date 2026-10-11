@@ -3,13 +3,17 @@ using System.Text.Json;
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal sealed record WorkerBuildReceiptVerdict(
-    bool Matches, string Reason, IReadOnlyList<string>? Projects = null);
+    bool Matches, string Reason, IReadOnlyList<string>? Projects = null, string? Detail = null);
 
 internal static class WorkerBuildReceipt
 {
     internal const string FileName = "worker-build-receipt.json";
 
     internal static WorkerBuildReceiptVerdict Evaluate(string path, string worktreeRoot)
+        => Evaluate(path, worktreeRoot, null);
+
+    internal static WorkerBuildReceiptVerdict Evaluate(string path, string worktreeRoot,
+        Func<string, Dictionary<string, string>?, string[], WorktreeTreeDigestGitStep>? gitRunner)
     {
         if (!File.Exists(path)) return new(false, "receipt-missing");
         JsonDocument document;
@@ -44,7 +48,8 @@ internal static class WorkerBuildReceipt
             }
             catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
             { return new(false, "receipt-malformed"); }
-            if (!WorktreeTreeDigest.TryCompute(worktreeRoot, out var currentDigest, out _)) return new(false, "digest-unavailable");
+            if (!WorktreeTreeDigest.TryCompute(worktreeRoot, out var currentDigest, out _, out var failure, gitRunner))
+                return new(false, "digest-unavailable", Detail: failure?.Describe());
             return string.Equals(recordedDigest, currentDigest, StringComparison.Ordinal)
                 ? new(true, "matched", projects.EnumerateArray().Select(project => project.GetString()!).ToArray())
                 : new(false, "digest-mismatch");

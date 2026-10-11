@@ -13,7 +13,8 @@ internal static partial class AcceptanceCriterionEvidenceRecovery
         string candidateSha,
         string mainSha,
         string executionDirectory,
-        Func<string, IReadOnlyList<string>, GitCli.GitResult> gitRunner)
+        Func<string, IReadOnlyList<string>, GitCli.GitResult> gitRunner,
+        GoalAncestryCache? ancestryCache)
     {
         var pending = goal.OutstandingCriterionEvidenceObligations
             .Where(IsPendingAcceptanceObligation)
@@ -30,7 +31,7 @@ internal static partial class AcceptanceCriterionEvidenceRecovery
                 !string.Equals(entry.Operation, LandingCarryOperation, StringComparison.Ordinal) ||
                 !TryReadCarryField(entry.Detail, "newHead", out var newHead) ||
                 !string.Equals(newHead, candidateSha, StringComparison.OrdinalIgnoreCase) ||
-                !IsAncestor(executionDirectory, newHead, mainSha, gitRunner) ||
+                !IsAncestor(executionDirectory, newHead, mainSha, gitRunner, ancestryCache) ||
                 !TryReadCarryField(entry.Detail, "oldHeads", out var oldHeads) ||
                 !TryReadCarryField(entry.Detail, "obligations", out var obligationIds) ||
                 !TryReadCarryField(entry.Detail, "equivalence", out var equivalence))
