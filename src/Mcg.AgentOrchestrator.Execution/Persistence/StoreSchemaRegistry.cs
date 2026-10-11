@@ -47,6 +47,9 @@ public static class StoreSchemaRegistry
     public static StoreSchemaEntry StewardTriggers { get; } =
         new("steward-triggers", Persistence + "StewardTriggerStoreSetup.cs", "steward-triggers.db", "conductor", 1);
 
+    public static StoreSchemaEntry JudgePanel { get; } =
+        new("judge-panel", Conductor + "ConductorJudgePanelCaseStore.Schema.cs", "judge-panel.db", "conductor", 1);
+
     public static StoreSchemaEntry BoardFill { get; } =
         new("board-fill", Conductor + "ConductorBoardFillDraftStore.cs", "board-fill.db", "conductor", 1);
 
@@ -80,7 +83,7 @@ public static class StoreSchemaRegistry
         AuthorClaims,
         StewardTriggers,
         new("steward-triage-receipts", Comms + "StewardTriageReceiptStore.cs", "steward-triage-receipts.db", "conductor", null),
-        new("judge-panel", Conductor + "ConductorJudgePanelCaseStore.Schema.cs", "judge-panel.db", "conductor", null),
+        JudgePanel,
         BoardFill,
         ProgressiveReviewGlanceCircuit,
         ProgressiveReviewSteering,

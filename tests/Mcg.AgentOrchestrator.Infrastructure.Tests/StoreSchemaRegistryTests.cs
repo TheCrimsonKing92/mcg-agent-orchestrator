@@ -18,6 +18,8 @@ public sealed class StoreSchemaRegistryTests
         // These entries register their owning stores; CREATE statements live in extracted setup types.
         Assert.Equal(sources, entries.Select(entry => entry == StoreSchemaRegistry.AuthorClaims
             ? "src/Mcg.AgentOrchestrator.Execution/Persistence/AuthorClaimStoreSetup.cs"
+            : entry == StoreSchemaRegistry.JudgePanel
+                ? "src/Mcg.AgentOrchestrator.Execution/Persistence/JudgePanelStoreSetup.cs"
             : entry == StoreSchemaRegistry.BoardFill
                 ? "src/Mcg.AgentOrchestrator.Execution/Persistence/BoardFillStoreSetup.cs"
             : entry.SourceFile).Order(StringComparer.Ordinal).ToArray());
@@ -29,13 +31,18 @@ public sealed class StoreSchemaRegistryTests
             Assert.False(string.IsNullOrWhiteSpace(entry.Family));
         });
         Assert.Equal(new[] { StoreSchemaRegistry.Portfolio, StoreSchemaRegistry.Experiments, StoreSchemaRegistry.Backlog, StoreSchemaRegistry.OperatorIntents, StoreSchemaRegistry.OperatorLessons,
-            StoreSchemaRegistry.OperatorEscapes, StoreSchemaRegistry.MergeTrainAcceptance, StoreSchemaRegistry.FollowerGateAcceptance, StoreSchemaRegistry.CollaborationItems, StoreSchemaRegistry.DogfoodLog, StoreSchemaRegistry.AuthorClaims, StoreSchemaRegistry.StewardTriggers, StoreSchemaRegistry.BoardFill, StoreSchemaRegistry.ProgressiveReviewGlanceCircuit, StoreSchemaRegistry.ProgressiveReviewSteering }, entries.Where(entry => entry.CurrentVersion.HasValue).ToArray());
+            StoreSchemaRegistry.OperatorEscapes, StoreSchemaRegistry.MergeTrainAcceptance, StoreSchemaRegistry.FollowerGateAcceptance, StoreSchemaRegistry.CollaborationItems, StoreSchemaRegistry.DogfoodLog, StoreSchemaRegistry.AuthorClaims, StoreSchemaRegistry.StewardTriggers, StoreSchemaRegistry.JudgePanel, StoreSchemaRegistry.BoardFill, StoreSchemaRegistry.ProgressiveReviewGlanceCircuit, StoreSchemaRegistry.ProgressiveReviewSteering }, entries.Where(entry => entry.CurrentVersion.HasValue).ToArray());
         Assert.Equal(1, StoreSchemaRegistry.AuthorClaims.CurrentVersion);
         Assert.Equal("author-claims.db", StoreSchemaRegistry.AuthorClaims.Database);
         Assert.Equal("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorAuthorClaimStore.cs",
             StoreSchemaRegistry.AuthorClaims.SourceFile);
         Assert.Equal(1, StoreSchemaRegistry.StewardTriggers.CurrentVersion);
         Assert.Equal("steward-triggers.db", StoreSchemaRegistry.StewardTriggers.Database);
+        Assert.Equal(1, StoreSchemaRegistry.JudgePanel.CurrentVersion);
+        Assert.Equal("judge-panel.db", StoreSchemaRegistry.JudgePanel.Database);
+        Assert.Equal("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorJudgePanelCaseStore.Schema.cs",
+            StoreSchemaRegistry.JudgePanel.SourceFile);
+        Assert.Contains(StoreSchemaRegistry.JudgePanel, entries);
         Assert.Equal(1, StoreSchemaRegistry.BoardFill.CurrentVersion);
         Assert.Equal("board-fill.db", StoreSchemaRegistry.BoardFill.Database);
         Assert.Equal("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBoardFillDraftStore.cs",
