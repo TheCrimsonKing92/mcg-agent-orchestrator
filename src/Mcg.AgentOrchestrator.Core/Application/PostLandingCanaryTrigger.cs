@@ -61,6 +61,7 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneEarlyStop",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneMembership",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneRerunEvidence",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneStallPolicy",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneTestFailureRerun",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceManifestLocator",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceManifestPartitionEquivalence",
