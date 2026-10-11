@@ -344,7 +344,7 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
 
     internal static bool IsSlotsBusyDeferral(ConductorGroupedGateAttempt attempt)
     {
-        if (attempt.Kind != "cohort") return false;
+        if (attempt.Kind is not ("cohort" or "train")) return false;
         try
         {
             using var document = JsonDocument.Parse(File.ReadAllText(attempt.ResultPath));
