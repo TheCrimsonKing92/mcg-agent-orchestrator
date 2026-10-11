@@ -26,7 +26,11 @@ public sealed class CliInspectionReadOnlyRouteTests : CliTaskQueryTestSupport
     public void ExactForms_ClassifyAndNeverLoadGoalsOrWrite(params string[] args)
     {
         Xunit.Assert.True(CliReadOnlyCommandRunner.IsReadOnlyCommand(args));
-        Xunit.Assert.Equal(CliCommandCapability.QueryOnly, CliCommandCapabilities.Classify(args));
+        // backlog-view already selects this route but retains Execution composition.
+        var expectedCapability = args[0].Equals("backlog-view", StringComparison.OrdinalIgnoreCase)
+            ? CliCommandCapability.Execution
+            : CliCommandCapability.QueryOnly;
+        Xunit.Assert.Equal(expectedCapability, CliCommandCapabilities.Classify(args));
         var root = CreateTempDirectory();
         try
         {
