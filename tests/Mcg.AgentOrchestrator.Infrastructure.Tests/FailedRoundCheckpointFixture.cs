@@ -23,25 +23,8 @@ internal sealed class FailedRoundCheckpointFixture : WorkerDispatchTestSupport, 
     {
         Repository = Path.Combine(_root, "repository");
         Directory.CreateDirectory(Repository);
-        Git(Repository, "init", "-b", "main");
-        Git(Repository, "config", "user.email", "test@example.test");
-        Git(Repository, "config", "user.name", "Checkpoint Test");
-        Git(Repository, "config", "commit.gpgsign", "false");
-        // Assertion probes disable host Git config; production Git inherits it.
-        // Pin checkout conversion locally so both see the same tracked-file state.
-        Git(Repository, "config", "core.autocrlf", "false");
-        Git(Repository, "config", "core.hooksPath", Path.Combine(_root, "no-hooks"));
-        File.WriteAllText(Path.Combine(Repository, "seed.txt"), "seed");
-        File.WriteAllText(Path.Combine(Repository, ".gitignore"), "ignored.txt\n");
-        Git(Repository, "add", ".");
-        var initial = InfrastructureTestSupport.RunGitProbe(Repository, ["commit", "-m", "Seed"],
-            new Dictionary<string, string>
-            {
-                ["GIT_AUTHOR_DATE"] = "2026-01-01T00:00:00Z",
-                ["GIT_COMMITTER_DATE"] = "2026-01-01T00:00:00Z"
-            });
-        Assert.Equal(0, initial.ExitCode);
-        DispatchedAt = DateTimeOffset.Parse(Git(Repository, "log", "-1", "--format=%cI")).AddSeconds(1);
+        FailedRoundCheckpointRepositoryTemplate.CopyTo(Repository, Path.Combine(_root, "no-hooks"));
+        DispatchedAt = FailedRoundCheckpointRepositoryTemplate.PinnedCommitDate.AddSeconds(1);
         var clock = new TestClock(DispatchedAt.AddMinutes(1));
         Clock = clock;
         Kernel = new AgentOrchestratorKernel(clock);
