@@ -192,7 +192,8 @@ public sealed class AcceptanceInvocationPipelineTests
         {
             Name = name,
             Type = "command",
-            Command = "dotnet --info"
+            Command = "dotnet",
+            Arguments = ["--info"]
         };
 
     private static AcceptanceAttemptExecutionOwner CreateOwner(string root, string attemptId) =>
