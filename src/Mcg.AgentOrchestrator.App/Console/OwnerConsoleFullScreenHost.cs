@@ -83,7 +83,8 @@ internal static class OwnerConsoleFullScreenHost
                         foreach (var lifecycle in activityLoader.ReadNew(boardIds, scope ?? OwnerConsoleRefreshScope.All)) OwnerConsoleStartupActivity.Append(recent, builder.EnrichEvent(lifecycle), OwnerConsoleStartupActivity.MaxRawEvents);
                         var (decisions, hidden) = await builder.ReadDecisionsAsync(stepToken);
                         var model = builder.WithActivity(builder.WithDecisions(board, decisions, hidden),
-                            inputs with { RecentEvents = recent.ToArray() });
+                            inputs with { RecentEvents = recent.ToArray(),
+                                LandedToday = Math.Max(landings, OwnerConsoleLandedToday.Count(workspace.GoalLifecycleEventsDirectory, clock)) });
                         stepToken.ThrowIfCancellationRequested();
                         app.Invoke(() => { if (!token.IsCancellationRequested) view!.Render(model); });
                     }, token);
