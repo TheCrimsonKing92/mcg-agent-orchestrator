@@ -1573,10 +1573,10 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             fresh.Result.CompletionDecision?.FailedPredicate == AcceptanceShardCompletionPredicates.FailingTrx)
         {
             var finalResult = await AcceptanceLaneTestFailureRerun.ForAttempt(cacheContext, worktreePath).RunAsync(
-                check, fresh.Result, async () =>
+                check, fresh.Result, async rerunCheck =>
                 {
                     var invocation = AllocateTestTelemetryInvocation(check);
-                    var rerun = await RunCheckWithCancellationProbeAsync(check, worktreePath, goalId,
+                    var rerun = await RunCheckWithCancellationProbeAsync(rerunCheck, worktreePath, goalId,
                         stableSlotIndex, stableSlotLease, dotnetTestBuildPhase, cancellationToken,
                         testResultsDirectoryOverride, invocation).ConfigureAwait(false);
                     var decision = rerun.Result.CompletionDecision ?? InferPartitionCompletionDecision(rerun.Result);

@@ -55,9 +55,9 @@ public sealed class AcceptanceLaneFlakeLedgerTests : IDisposable
         var writes = 0;
         var ledger = new AcceptanceLaneFlakeLedger(_root, _ => { writes++; throw new IOException("injected write failure"); });
         var actual = await new AcceptanceLaneTestFailureRerun(ledger, emit: lines.Add).RunAsync(
-            check, first, () => Task.FromResult(second), r => $"invocation-{r.TestResultRunOrdinal}");
+            check, first, _ => Task.FromResult(second), r => $"invocation-{r.TestResultRunOrdinal}");
         var expected = await new AcceptanceLaneTestFailureRerun(emit: _ => { }).RunAsync(
-            check, first, () => Task.FromResult(second), r => $"invocation-{r.TestResultRunOrdinal}");
+            check, first, _ => Task.FromResult(second), r => $"invocation-{r.TestResultRunOrdinal}");
 
         Assert.Equal(1, writes);
         Assert.Equal(expected.ResultSummary, actual.ResultSummary);

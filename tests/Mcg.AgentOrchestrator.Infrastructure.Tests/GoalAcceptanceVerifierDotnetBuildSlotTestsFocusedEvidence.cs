@@ -602,6 +602,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedEvidence : 
         var focusedCalls = new System.Collections.Concurrent.ConcurrentBag<string[]>();
         var focusedWorkingDirectories = new System.Collections.Concurrent.ConcurrentBag<string>();
         var focusedBuildCalls = new System.Collections.Concurrent.ConcurrentBag<string[]>();
+        var laneRerunSelections = new System.Collections.Concurrent.ConcurrentBag<string[]>();
         try
         {
             AssertGitSucceeded(root, "init", "-b", "main");
@@ -623,7 +624,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedEvidence : 
                 }
 
                 var methodIndex = Array.IndexOf(args, "--filter-method");
-                if (methodIndex >= 0)
+                if (methodIndex >= 0 &&
+                    workingDirectory.Contains("mcg-focused-evidence-baselines", StringComparison.OrdinalIgnoreCase))
                 {
                     focusedCalls.Add(args);
                     focusedWorkingDirectories.Add(workingDirectory);
@@ -635,10 +637,16 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedEvidence : 
                 }
 
                 var filterIndex = Array.IndexOf(args, "--filter-class");
-                var identities = filterIndex >= 0 &&
-                    args[filterIndex + 1].Contains("FirstAttributionTests", StringComparison.Ordinal)
-                    ? firstIdentities
-                    : secondIdentities;
+                var identities = methodIndex >= 0
+                    ? args.Select((argument, index) => (argument, index))
+                        .Where(pair => pair.argument == "--filter-method")
+                        .Select(pair => args[pair.index + 1].Trim('*')).ToArray()
+                    : filterIndex >= 0 &&
+                      args[filterIndex + 1].Contains("FirstAttributionTests", StringComparison.Ordinal)
+                        ? firstIdentities
+                        : secondIdentities;
+                if (methodIndex >= 0)
+                    laneRerunSelections.Add(identities);
                 WriteFailedMtpTrx(args, identities);
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
                     1,
@@ -654,6 +662,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedEvidence : 
                 focusedCalls.Count);
             Assert.Single(focusedWorkingDirectories.Distinct(StringComparer.OrdinalIgnoreCase));
             Assert.Single(focusedBuildCalls);
+            Assert.Equal(2, laneRerunSelections.Count);
+            Assert.Contains(laneRerunSelections, identities => identities.SequenceEqual(firstIdentities));
+            Assert.Contains(laneRerunSelections, identities => identities.SequenceEqual(secondIdentities));
             var attributions = result.Checks!
                 .Where(check => !check.Passed)
                 .SelectMany(check => check.FailingTestAttributions ?? [])

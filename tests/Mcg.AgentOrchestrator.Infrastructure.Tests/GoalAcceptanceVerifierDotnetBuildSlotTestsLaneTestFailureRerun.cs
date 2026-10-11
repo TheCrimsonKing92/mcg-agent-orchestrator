@@ -54,7 +54,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsLaneTestFailureRer
 
                 if (!IsInfrastructurePartitionTestCall(args))
                     return new(0, string.Empty);
-                var alpha = HasArgumentPair(args, "--filter-class", "*AlphaShardTests*");
+                var alpha = HasArgumentPair(args, "--filter-class", "*AlphaShardTests*") || args.Contains("--filter-method");
                 var run = alpha ? Interlocked.Increment(ref alphaRuns) : 1;
                 if (!alpha)
                     await alphaStarted.Task.WaitAsync(TimeSpan.FromSeconds(60), token);
@@ -72,8 +72,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsLaneTestFailureRer
                 }
 
                 var fails = alpha && (run == 1 || scenario != "flake");
-                WriteMtpTrx(args, fails ? MtpFailureFixturePath() : null);
-                return new(fails ? 1 : 0, fails ? "Fixture test failure." : "Passed: 1");
+                var methods = args.Select((arg, index) => (arg, index)).Where(pair => pair.arg == "--filter-method")
+                    .Select(pair => args[pair.index + 1].Trim('*')).ToArray();
+                if (!fails && methods.Length > 0) WriteMtpTrx(args, methods.Length, methods);
+                else WriteMtpTrx(args, fails ? MtpFailureFixturePath() : null);
+                return new(fails ? 1 : 0, fails ? "Fixture test failure." : $"Passed: {Math.Max(1, methods.Length)}");
             }
 
             AcceptanceVerificationResult? result = null;
@@ -108,7 +111,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsLaneTestFailureRer
             Assert.NotEqual(firstTrx, rerunTrx);
             Assert.True(File.Exists(firstTrx), "First-run failure receipt was not retained.");
             Assert.True(File.Exists(rerunTrx), "Rerun receipt was not retained.");
-            Assert.Equal(evidence.RerunTestResultPaths, lane.TestResultPaths);
+            Assert.Equal([firstTrx, rerunTrx], lane.TestResultPaths);
             Assert.Equal(evidence.RerunFailingTestIdentities, lane.FailingTestIdentities);
             Assert.NotEmpty(evidence.FirstFailingTestIdentities);
             Assert.Equal("failing-trx", evidence.FirstPredicate);
@@ -118,7 +121,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsLaneTestFailureRer
             if (scenario == "confirmed-failure")
                 Assert.NotEmpty(evidence.RerunFailingTestIdentities);
             Assert.Contains(rerunTrx, result.TestResultPaths!);
-            Assert.DoesNotContain(firstTrx, result.TestResultPaths!);
+            Assert.Contains(firstTrx, result.TestResultPaths!);
             var row = Assert.Single(ledger.Read(lane.Name));
             Assert.Equal(goal, row.GoalId);
             Assert.Equal(lane.TestResultAttemptId, row.AttemptId);
