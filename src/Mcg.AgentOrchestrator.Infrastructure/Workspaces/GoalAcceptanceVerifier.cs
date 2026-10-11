@@ -123,6 +123,7 @@ public static class AcceptanceFailureClassifications
     public const string SeededRepositoryApparatus = "seeded-repository-apparatus";
     public const string SharedGateApparatusInvalidated = "shared-gate-apparatus-invalidated";
     public const string AssemblyCleanupFailure = "assembly-cleanup-failure";
+    public const string BuildPhaseTimeout = "build-phase-timeout";
 
     public static bool IsEnvironmentalApparatus(string? classification) =>
         classification is GateEnvironmentInterference or
@@ -132,6 +133,7 @@ public static class AcceptanceFailureClassifications
             SeededRepositoryProcessOutputApparatus or
             SeededRepositoryApparatus or
             AssemblyCleanupFailure or
+            BuildPhaseTimeout or
             SharedGateApparatusInvalidated;
 }
 
@@ -2722,11 +2724,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             cancellationToken).ConfigureAwait(false);
         if (!buildRun.Run.Result.Passed)
         {
-            return (buildRun.Run.Result with
-            {
-                Name = check.Name,
-                ResultSummary = AcceptanceDotnetBuildPhase.PrefixResultSummary("build phase failed", buildRun.Run.Result.ResultSummary)
-            }, buildRun.Run.Retried);
+            return (BuildPhaseFailureResult(check, buildRun.Run.Result), buildRun.Run.Retried);
         }
 
         var testRun = await RunManagedMtpExecutableCheckAsync(
@@ -2887,7 +2885,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     stableSlotIndex,
                     stableSlotLease,
                     $"{attemptName}-build",
-                    cancellationToken).ConfigureAwait(false),
+                    cancellationToken,
+                    commandTimeout: EngineSettings.ResolveBuildPhaseTimeout(check.TimeoutMinutes)).ConfigureAwait(false),
                 ContributesToCheck: true)
             : await EnsureDotnetTestBuildPhaseAsync(
                 dotnetTestBuildPhase,
@@ -2900,11 +2899,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 cancellationToken).ConfigureAwait(false);
         if (!buildRun.Run.Result.Passed)
         {
-            return (buildRun.Run.Result with
-            {
-                Name = check.Name,
-                ResultSummary = AcceptanceDotnetBuildPhase.PrefixResultSummary("build phase failed", buildRun.Run.Result.ResultSummary)
-            }, buildRun.Run.Retried);
+            return (BuildPhaseFailureResult(check, buildRun.Run.Result), buildRun.Run.Retried);
         }
 
         var testRun = await RunManagedDotnetCheckAsync(
@@ -2934,6 +2929,23 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }, buildRun.Run.Retried || testRun.Retried);
     }
 
+    private static AcceptanceCheckResult BuildPhaseFailureResult(
+        AcceptanceManifestCheck check, AcceptanceCheckResult buildResult)
+    {
+        var timedOut = buildResult.CompletionDecision?.TimedOut == true &&
+            !IsCaptureLimitFailureName(buildResult.Name);
+        return buildResult with
+        {
+            Name = check.Name,
+            FailureClassification = timedOut
+                ? AcceptanceFailureClassifications.BuildPhaseTimeout
+                : buildResult.FailureClassification,
+            ResultSummary = AcceptanceDotnetBuildPhase.PrefixResultSummary(
+                timedOut ? "build phase timed out (build-phase budget)" : "build phase failed",
+                buildResult.ResultSummary)
+        };
+    }
+
     private Task<DotnetTestBuildPhaseResult> EnsureDotnetTestBuildPhaseAsync(
         DotnetTestBuildPhase phase,
         AcceptanceManifestCheck check,
@@ -2946,7 +2958,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         AcceptanceDotnetBuildPhase.EnsureAsync(phase, attemptName, new AcceptanceDotnetBuildPhaseHooks(
             (arguments, name, afterLeasePrepared, executionEnvironment) => RunManagedDotnetCheckAsync(
                 check, arguments, worktreePath, goalId, stableSlotIndex, stableSlotLease, name,
-                cancellationToken, afterLeasePrepared, executionEnvironment),
+                cancellationToken, afterLeasePrepared, executionEnvironment,
+                commandTimeout: EngineSettings.ResolveBuildPhaseTimeout(check.TimeoutMinutes)),
             name => ResolveExecutionEnvironment(goalId, name, stableSlotIndex, stableSlotLease),
             Slug,
             () => _testOverrides.BaseBuildCacheForTests ?? DotnetBaseBuildCache.Default(_storageRoot)));
@@ -2968,9 +2981,11 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         CancellationToken cancellationToken,
         Action<DotnetBuildEnvironment>? afterLeasePrepared = null,
         DotnetBuildEnvironment? executionEnvironment = null,
-        bool waitForPermit = false)
+        bool waitForPermit = false,
+        TimeSpan? commandTimeout = null)
     {
         var elapsed = Stopwatch.StartNew();
+        var timeout = commandTimeout ?? EngineSettings.ResolveCheckTimeout(check.TimeoutMinutes);
         var environment = executionEnvironment ?? ResolveExecutionEnvironment(
             goalId,
             attemptName,
@@ -2992,7 +3007,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 worktreePath,
                 goalId,
                 stableSlotIndex,
-                EngineSettings.ResolveCheckTimeout(check.TimeoutMinutes),
+                timeout,
                 cancellationToken).ConfigureAwait(false);
 
             if (IsBuildLockFailure(result, environment, check, out var attribution))
@@ -3021,7 +3036,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                         environment = nextEnvironment;
                         leaseLock = AcquireCheckPermit(environment, goalId, waitForPermit, cancellationToken);
                     },
-                    cancellationToken).ConfigureAwait(false);
+                    cancellationToken, timeout).ConfigureAwait(false);
             }
 
             if (IsBuildLockFailure(result, environment, check, out var finalAttribution))
@@ -3113,7 +3128,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     _testOverrides.OnBuildArtifactIoRetryLeaseReleasedForTests?.Invoke();
                     leaseLock = AcquireCheckPermit(environment, goalId, waitForPermit, cancellationToken);
                 },
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken, timeout).ConfigureAwait(false);
 
             if (IsBuildLockFailure(result, environment, check, out var finalAttribution))
             {
@@ -3210,7 +3225,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string attemptName,
         BuildLockAttribution attribution,
         Action<DotnetBuildEnvironment> reacquireLease,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        TimeSpan commandTimeout)
     {
         if (compilerLockRemediationRequired)
         {
@@ -3229,7 +3245,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 currentEnvironment,
                 attribution,
                 reacquireLease,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken, commandTimeout).ConfigureAwait(false);
         }
 
         var retryEnvironment = currentEnvironment;
@@ -3245,7 +3261,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 worktreePath,
                 goalId,
                 stableSlotIndex,
-                EngineSettings.ResolveCheckTimeout(check.TimeoutMinutes),
+                commandTimeout,
                 cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (IsBuildArtifactIoException(ex))
@@ -3273,7 +3289,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 retryEnvironment,
                 retryAttribution,
                 reacquireLease,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken, commandTimeout).ConfigureAwait(false);
         }
 
         var killed = false;
@@ -3305,7 +3321,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 worktreePath,
                 goalId,
                 stableSlotIndex,
-                EngineSettings.ResolveCheckTimeout(check.TimeoutMinutes),
+                commandTimeout,
                 cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (IsBuildArtifactIoException(ex))
@@ -3336,7 +3352,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         DotnetBuildEnvironment currentEnvironment,
         BuildLockAttribution attribution,
         Action<DotnetBuildEnvironment> reacquireLease,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        TimeSpan commandTimeout)
     {
         var retryEnvironment = currentEnvironment;
         var cycleAttribution = attribution;
@@ -3382,7 +3399,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     worktreePath,
                     goalId,
                     stableSlotIndex,
-                    EngineSettings.ResolveCheckTimeout(check.TimeoutMinutes),
+                    commandTimeout,
                     cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex) when (IsBuildArtifactIoException(ex))

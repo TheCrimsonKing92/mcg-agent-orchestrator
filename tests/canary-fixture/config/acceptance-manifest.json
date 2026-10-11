@@ -6,6 +6,7 @@
     "enforceStructuralCoverage": false,
     "timeouts": {
       "defaultMinutes": 2,
+      "buildPhaseMinutes": 2,
       "buildServerShutdownMinutes": 1,
       "discoveryMinutes": 1
     },

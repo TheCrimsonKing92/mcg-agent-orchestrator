@@ -364,6 +364,20 @@ public sealed class AcceptanceGateEngineSettingsTests
         Xunit.Assert.Contains("does not match any runnable test class", error.Message, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "PostLandingCanary_fixture_preserves_two_minute_build_and_test_bounds")]
+    public void PostLandingCanaryFixturePreservesTwoMinuteBuildAndTestBounds()
+    {
+        var fixtureRoot = Path.Combine(
+            InfrastructureTestSupport.FindRepositoryRoot(), "tests", "canary-fixture");
+        var settings = AcceptanceGateEngineSettings.Load(fixtureRoot);
+        var check = Xunit.Assert.Single(settings.DeclaredDotnetTestChecks);
+
+        Xunit.Assert.Equal("core tests", check.Name);
+        Xunit.Assert.Null(check.TimeoutMinutes);
+        Xunit.Assert.Equal(TimeSpan.FromMinutes(2), settings.ResolveCheckTimeout(check.TimeoutMinutes));
+        Xunit.Assert.Equal(TimeSpan.FromMinutes(2), settings.ResolveBuildPhaseTimeout(check.TimeoutMinutes));
+    }
+
     [Xunit.Fact(DisplayName = "PostLandingCanary_collection_is_nonparallel_and_owns_canary_tests")]
     public void PostLandingCanaryCollectionIsNonParallelAndOwnsCanaryTests()
     {
