@@ -57,8 +57,11 @@ internal static class ProjectCliCommand
             case "compare-integration-branch":
                 return ProjectCompareIntegrationBranchCommand.Execute(parts, registry, defaultRootDirectory, activeProjectOverride, discoveryOutput ?? Console.Out);
 
+            case "use-learned-branch":
+                return ProjectUseLearnedBranchCommand.Execute(parts, registry, discoveryOutput ?? Console.Out);
+
             default:
-                throw new ArgumentException("Usage: project list|show [name]|discover [name] [--root <path>] [--measure build|test|all]|compare-manifest [name] [--root <path>] --manifest <path>|compare-integration-branch [name] [--root <path>]|create <name> --root <path> [--integration-branch <name>] [--relocate-state]|select <name>|move-default-state [--undo] [--dry-run]");
+                throw new ArgumentException("Usage: project list|show [name]|discover [name] [--root <path>] [--measure build|test|all]|compare-manifest [name] [--root <path>] --manifest <path>|compare-integration-branch [name] [--root <path>]|create <name> --root <path> [--integration-branch <name>] [--relocate-state]|select <name>|move-default-state [--undo] [--dry-run]|use-learned-branch <name> [--off]");
         }
     }
 
@@ -639,6 +642,8 @@ internal static class ProjectCliCommand
         var workspace = project.ResolveWorkspace();
         Console.WriteLine($"Project: {project.Name}");
         Console.WriteLine($"Integration branch: {project.IntegrationBranch}");
+        Console.WriteLine($"Integration branch source: {project.IntegrationBranchSource}");
+        if (project.IntegrationBranchNote is not null) Console.WriteLine(project.IntegrationBranchNote);
         Console.WriteLine($"Active: {project.Name.Equals(active.Name, StringComparison.OrdinalIgnoreCase)}");
         Console.WriteLine($"Root: {project.RootDirectory}");
         Console.WriteLine($"Workspace: {workspace.OrchestratorDirectory}");
