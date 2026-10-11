@@ -34,7 +34,8 @@ internal sealed record AcceptanceStructuralCoveragePrepared(
     GoalAcceptanceVerifier.CommandResult? BaselineDiscovery,
     Exception? BaselineDiscoveryIoException,
     TestDiscoverySnapshot? BaselineSnapshot,
-    bool BaselineLockRemediationApplied);
+    bool BaselineLockRemediationApplied,
+    IReadOnlyDictionary<string, IReadOnlyList<string>>? DeclaredRemovalDisplayNames = null);
 
 internal sealed class AcceptanceStructuralCoverageEvaluator
 {
@@ -142,7 +143,11 @@ internal sealed class AcceptanceStructuralCoverageEvaluator
             baselineDiscovery,
             null,
             baselineSnapshot,
-            baseline?.LockRemediationApplied == true);
+            baseline?.LockRemediationApplied == true,
+            MainTestDisplayNameResolver.ResolveAll(
+                baseline?.RepositoryRoot,
+                baselineSnapshot?.SourceFilesByTest?.Values ?? [],
+                request.SanctionedRemovedTests));
     }
 
     internal async Task<(GoalAcceptanceVerifier.CommandResult? Discovery, Exception? IoException,
@@ -191,7 +196,8 @@ internal sealed class AcceptanceStructuralCoverageEvaluator
             deletedTestFiles,
             request.CurrentAttemptId,
             baselineSnapshot?.SourceFilesByTest,
-            request.SanctionedRemovedTests);
+            request.SanctionedRemovedTests,
+            prepared.DeclaredRemovalDisplayNames);
         if (coverage.CountComparison?.IsShortfall == true &&
             coverage.EmptyPartitions.Count == 0 &&
             coverage.MissingTests.Count == 1 &&
@@ -229,7 +235,13 @@ internal sealed class AcceptanceStructuralCoverageEvaluator
                         deletedTestFiles,
                         request.CurrentAttemptId,
                         containedSnapshot.SourceFilesByTest,
-                        request.SanctionedRemovedTests);
+                        request.SanctionedRemovedTests,
+                        contained.UseObservedBaseline
+                            ? prepared.DeclaredRemovalDisplayNames
+                            : MainTestDisplayNameResolver.ResolveAll(
+                                contained.Baseline?.RepositoryRoot,
+                                containedSnapshot.SourceFilesByTest?.Values ?? [],
+                                request.SanctionedRemovedTests));
                     var disposition = coverage.Passed ? "integration-stale" : "coverage-shortfall";
                     var receipt =
                         $"cross-generation-staleness:contained={ShortSha(contained.ContainedMainSha)},observed-main={ShortSha(contained.ObservedMainSha)},candidate={candidateSnapshot.Tests.Count},contained-minimum={coverage.CountComparison?.MinimumCandidateCount ?? containedSnapshot.Tests.Count},observed-main-count={observedMainCount},disposition={disposition}";
