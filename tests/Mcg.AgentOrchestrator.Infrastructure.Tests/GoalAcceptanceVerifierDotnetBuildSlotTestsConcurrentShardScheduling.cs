@@ -1156,7 +1156,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsConcurrentShardSch
         var root = CreateLaneOrderingWorkspace("FullyQualifiedName~LightFirstRenamedTests");
         try
         {
-            SeedLaneDurations(root, sampleCount: 3,
+            SeedLaneDurations(root, sampleCount: 2,
                 ("Light first", "FullyQualifiedName~LightFirstTests", 500));
             var changed = LaneCheck(
                 "Light first",
