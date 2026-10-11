@@ -899,6 +899,13 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
             Xunit.Assert.Contains("target=WorkerDispatchTests", output);
             Xunit.Assert.Contains("child_pid=222", output);
             Xunit.Assert.Contains("output_bytes=15", output);
+            var slotLines = output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(line => line.StartsWith("slot-", StringComparison.Ordinal)).ToArray();
+            Xunit.Assert.NotEmpty(slotLines);
+            Xunit.Assert.All(slotLines, line => Xunit.Assert.Contains(" verdict=", line));
+            Xunit.Assert.EndsWith(" verdict=RUNNING", Xunit.Assert.Single(slotLines, line => line.StartsWith("slot-1:", StringComparison.Ordinal)));
+            Xunit.Assert.Contains("host: verdict=RUNNING running=1 stalled=0", output);
+            Xunit.Assert.Contains("covers per-goal and cohort gates alike", output);
         }
         finally
         {
@@ -906,6 +913,67 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         }
     }
 
+
+    [Xunit.Fact]
+    public void CliGateStatusSilentHeartbeatMakesHostStalledEvenWithMovingSlot()
+    {
+        var root = CreateTempDirectory();
+        var storageRoot = new DotnetBuildStorageRoot(Path.Combine(root, ".orchestrator", "test-dotnet"));
+        try
+        {
+            var now = DateTimeOffset.UtcNow;
+            var snapshot = new GateHeartbeatSnapshot(
+                "abcdef12abcdef12abcdef12abcdef12", "verification-check", "WorkerDispatchTests",
+                1, 111, 222, "running", now.AddSeconds(-30), now.AddSeconds(-1),
+                now - GateLivenessVerdict.SilenceBound - TimeSpan.FromMinutes(1), 12, 3, 15);
+            GateHeartbeatArtifacts.Write(GateHeartbeatArtifacts.GetStableSlotPath(1, storageRoot), snapshot);
+            GateHeartbeatArtifacts.Write(GateHeartbeatArtifacts.GetStableSlotPath(0, storageRoot),
+                snapshot with { SlotIndex = 0, LastProgressAt = now });
+            _ = CreateRefinedWorkspace(root);
+
+            var result = RunAppCommand(root, "gate-status");
+
+            Xunit.Assert.True(result.ExitCode == 0, result.Stderr);
+            var slotLines = result.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(line => line.StartsWith("slot-", StringComparison.Ordinal)).ToArray();
+            Xunit.Assert.NotEmpty(slotLines);
+            Xunit.Assert.All(slotLines, line => Xunit.Assert.Contains(" verdict=", line));
+            Xunit.Assert.EndsWith(" verdict=STALLED", Xunit.Assert.Single(slotLines, line => line.StartsWith("slot-1:", StringComparison.Ordinal)));
+            Xunit.Assert.EndsWith(" verdict=RUNNING", Xunit.Assert.Single(slotLines, line => line.StartsWith("slot-0:", StringComparison.Ordinal)));
+            Xunit.Assert.Contains("host: verdict=STALLED running=1 stalled=1", result.Stdout);
+            Xunit.Assert.Contains("covers per-goal and cohort gates alike", result.Stdout);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact]
+    public void CliGateStatusWithoutHeartbeatsMakesHostNoneWithoutProcessCheck()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            _ = CreateRefinedWorkspace(root);
+
+            var result = RunAppCommand(root, "gate-status");
+
+            Xunit.Assert.True(result.ExitCode == 0, result.Stderr);
+            Xunit.Assert.Contains("Gate status:", result.Stdout);
+            var slotLines = result.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(line => line.StartsWith("slot-", StringComparison.Ordinal)).ToArray();
+            Xunit.Assert.NotEmpty(slotLines);
+            Xunit.Assert.All(slotLines, line => Xunit.Assert.EndsWith(" verdict=NONE", line));
+            Xunit.Assert.Contains("host: verdict=NONE running=0 stalled=0", result.Stdout);
+            Xunit.Assert.Contains("no process check needed", result.Stdout);
+            Xunit.Assert.Contains("covers per-goal and cohort gates alike", result.Stdout);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
 
     [Xunit.Fact(DisplayName = "Cli_backlog_add_body_file_creates_item_with_file_content")]
     public async Task CliBacklogAddBodyFileCreatesItemWithFileContent()

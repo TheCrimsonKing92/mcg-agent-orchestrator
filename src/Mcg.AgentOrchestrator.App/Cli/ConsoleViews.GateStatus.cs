@@ -4,14 +4,23 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static partial class ConsoleViews
 {
-    public static void PrintGateStatus(IReadOnlyList<GateHeartbeatStatus> statuses)
+    public static void PrintGateStatus(IReadOnlyList<GateHeartbeatStatus> statuses, DateTimeOffset? observedAt = null)
     {
         Console.WriteLine("Gate status:");
+        var now = observedAt ?? DateTimeOffset.UtcNow;
+        var running = 0;
+        var stalled = 0;
         foreach (var status in statuses)
         {
+            var verdict = GateLivenessVerdict.Classify(status, now);
+            if (verdict.Liveness == GateLiveness.Running)
+                running++;
+            else if (verdict.Liveness == GateLiveness.Stalled)
+                stalled++;
+
             if (!status.IsAvailable || status.Snapshot is null)
             {
-                Console.WriteLine($"slot-{status.SlotIndex}: unavailable reason={status.UnavailableReason ?? "unknown"} heartbeat={status.Path}");
+                Console.WriteLine($"slot-{status.SlotIndex}: unavailable reason={status.UnavailableReason ?? "unknown"} heartbeat={status.Path} verdict={verdict.Label}");
                 continue;
             }
 
@@ -21,8 +30,13 @@ internal static partial class ConsoleViews
                 $"elapsed={FormatGateDuration(status.HeartbeatAge is null ? TimeSpan.Zero : snapshot.LastObservedAt - snapshot.StartedAt)} " +
                 $"target={Quote(snapshot.CurrentTarget)} child_pid={snapshot.ChildPid?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"} " +
                 $"heartbeat_age={FormatGateDuration(status.HeartbeatAge)} idle_for={FormatGateDuration(status.IdleDuration)} output_bytes={snapshot.OutputBytes} " +
-                $"heartbeat={status.Path}");
+                $"heartbeat={status.Path} verdict={verdict.Label}");
         }
+
+        var hostVerdict = stalled > 0 ? "STALLED" : running > 0 ? "RUNNING" : "NONE";
+        Console.WriteLine(
+            $"host: verdict={hostVerdict} running={running} stalled={stalled} slots={statuses.Count}; covers per-goal and cohort gates alike" +
+            (hostVerdict == "NONE" ? "; no gate running on any build slot; no process check needed" : ""));
     }
 
     private static string ShortGateGoal(string? goalId) =>
