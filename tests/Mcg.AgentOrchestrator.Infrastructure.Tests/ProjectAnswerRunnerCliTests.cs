@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
@@ -34,8 +35,15 @@ public sealed class ProjectAnswerRunnerCliTests
         Assert.Equal(0, emitted.Exit);
         Assert.Equal($"Emitted manifest: {project.Destination} (1 checks)", Assert.Single(emitted.Lines));
         var bytes = File.ReadAllBytes(project.Destination);
-        var settings = AcceptanceGateEngineSettings.Parse(File.ReadAllText(project.Destination));
-        Assert.Equal(Unit, Assert.Single(settings.DeclaredDotnetTestChecks).Project);
+        var json = File.ReadAllText(project.Destination);
+        var manifest = JsonSerializer.Deserialize<GoalAcceptanceVerifier.AcceptanceManifest>(json,
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        Assert.NotNull(manifest);
+        var check = Assert.Single(manifest.Checks);
+        Assert.Equal("dotnet-test", check.Type);
+        Assert.Equal(Unit, check.Project);
+        Assert.Equal("vstest", check.Runner);
+        _ = AcceptanceGateEngineSettings.Parse(json);
 
         var installed = project.Execute(["project", "install-manifest", "sample", "--from", project.Destination]);
         Assert.Equal(0, installed.Exit);
