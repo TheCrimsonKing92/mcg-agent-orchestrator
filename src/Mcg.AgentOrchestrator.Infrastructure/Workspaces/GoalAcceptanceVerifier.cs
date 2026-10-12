@@ -2819,7 +2819,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var durableTestResultPaths = GoalAcceptanceVerifierTestTelemetry.CopyCompletedTestReceiptsToAttemptFolder(
             telemetry.Paths,
             _executionContext?.ResultsPrefix);
-        PreserveLaunchLockSummary(result, telemetry.Paths[0], AcceptanceAttemptResultsPrefix);
+        AcceptanceLaunchLockSummary.Preserve(result.Output, result.Stderr, telemetry.Paths[0], AcceptanceAttemptResultsPrefix);
         var apparatusDetail = unreadableReceipts.Count > 0
             ? $"'{check.Name}' could not read test receipt(s): {string.Join(", ", unreadableReceipts)}."
             : executedTestCount == 0
