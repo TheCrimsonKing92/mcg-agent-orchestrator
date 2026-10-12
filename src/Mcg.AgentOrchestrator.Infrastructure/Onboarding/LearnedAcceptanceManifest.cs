@@ -7,7 +7,8 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 /// <summary>Builds a gate artifact from snapshot facts and live owner answers, without I/O.</summary>
 public static class LearnedAcceptanceManifest
 {
-    public static LearnedAcceptanceManifestResult Build(ProjectModel model, IReadOnlyList<OwnerAnswer> answers)
+    public static LearnedAcceptanceManifestResult Build(ProjectModel model, IReadOnlyList<OwnerAnswer> answers,
+        IReadOnlyDictionary<string, string>? mtpLayoutRefusals = null)
     {
         ArgumentNullException.ThrowIfNull(model);
         ArgumentNullException.ThrowIfNull(answers);
@@ -27,9 +28,9 @@ public static class LearnedAcceptanceManifest
 
         var blockers = unresolved.Select(unit => new ManifestBlocker(unit.FactKey,
             $"no confident VSTest or MTP runner for {unit.UnitId}")).ToList();
-        blockers.AddRange(checks.Where(check => check.Runner == "mtp").Select(check =>
-            new ManifestBlocker("engine/mtpInvocations",
-                $"the gate needs an engine.mtpInvocations declaration for {check.ProjectPath} that this slice cannot derive")));
+        foreach (var check in checks.Where(check => check.Runner == "mtp"))
+            if (mtpLayoutRefusals?.TryGetValue(check.ProjectPath, out var reason) == true)
+                blockers.Add(new ManifestBlocker("engine/mtpInvocations", reason));
         blockers.AddRange(questions.Select(question => new ManifestBlocker(question.FactKey, question.Question)));
         if (blockers.Count > 0)
             return new(null, blockers.AsReadOnly(), questions.AsReadOnly());
@@ -64,6 +65,13 @@ public static class LearnedAcceptanceManifest
             ["checks"] = emittedChecks,
             ["forbiddenChangedPathGlobs"] = new JsonArray()
         };
+        var mtpInvocations = new JsonArray();
+        foreach (var check in checks.Where(check => check.Runner == "mtp")
+            .OrderBy(check => check.ProjectPath, StringComparer.Ordinal))
+            mtpInvocations.Add(MtpInvocationDeriver.Derive(check.ProjectPath));
+        if (mtpInvocations.Count > 0)
+            manifest["engine"]!["mtpInvocations"] = mtpInvocations;
+
         var json = manifest.ToJsonString(new JsonSerializerOptions
         {
             WriteIndented = true, IndentSize = 2, NewLine = "\n"

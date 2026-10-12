@@ -436,14 +436,18 @@ internal static class SourceSizeRatchet
             // Measured 12228 total lines across the same 30 partial files after all three; no extra headroom.
             // Goal e8cccefa extracts loop store setup and policy resolution into CliConductLoopStartup.
             // Measured 12139 total lines across the same 30 partial files; no extra headroom.
-            new SourceClassCeiling("CliCommandHandlers", 12138, 30),
+            // Goal 5b573f47 keeps shared human/JSON status and label rules in the scoped diagnostic helpers;
+            // read-only lifecycle reads replace the writable monitoring path without changing human status text.
+            // Measured 12156 total lines across the same 30 partial files; no extra headroom.
+            new SourceClassCeiling("CliCommandHandlers", 12156, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
             // Goal 03580ad1 extracts source-mutation edits to AcceptanceSourceMutation; measured 8938 lines in 31 partials.
             // Goal 140fb304 extracts hermetic git configuration to AcceptanceHermeticGitConfiguration; measured 8848 lines in 30 partials.
             // Goal 80b085c6 extracts owner-protected fingerprints to AcceptanceOwnerProtectedFingerprint; measured 8774 lines in 29 partials.
             // Goal c2c58d62 extracts launch-lock summary preservation to AcceptanceLaunchLockSummary; measured 8725 lines in 28 partials.
-            new SourceClassCeiling("GoalAcceptanceVerifier", 8725, 28),
+            // Goal b6d32304 extracts generated names to AcceptanceArtifactFileNames; measured 8685 lines in 28 partials.
+            new SourceClassCeiling("GoalAcceptanceVerifier", 8685, 28),
             // Goal d647b5f3 extracts premise-invalid clarification construction to PremiseInvalidClarification.
             // Goal 439c80ae extracts Reviewer evidence brief projection to ReviewerEvidenceBriefSection;
             // measured 9319 total lines across the existing 27 partial files, with no extra headroom.

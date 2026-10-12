@@ -128,7 +128,7 @@ internal static string? ResolveGoalFriendlyLabel(Goal goal, string backlogStoreP
 
     try
     {
-        var item = new BacklogStore(backlogStorePath)
+        var item = BacklogStore.OpenReadOnly(backlogStorePath)
             .GetByExactIdAsync(goal.SourceBacklogItemId)
             .GetAwaiter()
             .GetResult();
@@ -420,9 +420,29 @@ private static bool TryResolveIntegrationCommitAuthoredAt(
     return false;
 }
 
-private static string ResolveGoalStatusText(OrchestratorWorkspace workspace, Goal goal)
+internal static string ResolveGoalStatusText(OrchestratorWorkspace workspace, Goal goal)
 {
-    var lifecycle = GoalLifecycle.ResolveState(goal, GoalMonitoringSubscriptionCommand.ReadLifecycleFacts(workspace, goal));
+    // Keep the monitoring lifecycle facts, but read clarification items without creating a store.
+    var executionDirectory = workspace.ExecutionDirectory;
+    var workspaceExists = GoalWorktrees.TryResolve(executionDirectory, goal.Id) is not null;
+    var journal = GoalOperationJournal.Read(executionDirectory, goal.Id);
+    var collaborationPath = Path.Combine(workspace.OrchestratorDirectory, "collaboration-items.db");
+    var items = File.Exists(collaborationPath)
+        ? CollaborationItemStore.OpenReadOnly(collaborationPath)
+            .ListAsync(goal.Id.Value).GetAwaiter().GetResult()
+        : Array.Empty<CollaborationItem>();
+    var hasOpenClarification = GoalRefinementService.HasOpenClarification(items);
+    var isBlocked = GoalAcceptanceStatusProjector.HasCurrentBlockingAcceptanceState(goal, executionDirectory, journal) ||
+        journal.LatestByOperation.Any(entry =>
+            entry.Status == GoalOperationStatus.Failed &&
+            (entry.Operation.Contains("land", StringComparison.OrdinalIgnoreCase) ||
+             entry.Operation.Contains("cleanup", StringComparison.OrdinalIgnoreCase) ||
+             entry.Operation.Contains("workspace:remove", StringComparison.OrdinalIgnoreCase)));
+    var facts = new GoalLifecycleFacts(workspaceExists, isBlocked,
+        GoalOperationJournal.HasCompletedLandingEvidence(journal),
+        GoalOperationJournal.HasCompletedRecordEvidence(journal),
+        GoalOperationJournal.HasCompletedCleanupEvidence(journal), hasOpenClarification);
+    var lifecycle = GoalLifecycle.ResolveState(goal, facts);
     return ApplicationGoalStatusText.Resolve(goal.Status, lifecycle);
 }
 }

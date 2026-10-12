@@ -848,6 +848,7 @@ internal static class CliCommandHelp
     internal static void ThrowIfInvalidFlags(IReadOnlyList<string> args)
     {
         if (CliGateStatusJsonQueryCommand.IsGateStatusJsonCommand(args) ||
+            CliStatusJsonQueryCommand.IsStatusJsonCommand(args) ||
             CliConductorStatusJsonQueryCommand.IsConductorStatusJsonCommand(args) ||
             CliAttentionShowJsonQueryCommand.IsAttentionShowJsonCommand(args) ||
             CliAttentionJsonQueryCommand.IsAttentionJsonCommand(args))
