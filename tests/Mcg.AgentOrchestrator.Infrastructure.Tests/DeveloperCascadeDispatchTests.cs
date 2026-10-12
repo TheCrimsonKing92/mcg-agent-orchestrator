@@ -5,7 +5,8 @@ using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Xunit;
 
-// Parallel-safe: isolated temporary repositories, injected launcher probe, no worker launch or environment mutation.
+// Parallel-safe: each class owns its shared repository; xunit runs its cases sequentially.
+// Per-test kernels/workspaces, injected launcher probe, no worker launch or environment mutation.
 public sealed class DeveloperCascadeDispatchTests : WorkerDispatchTestSupport
 {
     private const string CatalogJson = """
@@ -14,14 +15,14 @@ public sealed class DeveloperCascadeDispatchTests : WorkerDispatchTestSupport
     private const string OffJson = """
         {"name":"PermissiveCap5Rollback","maxConcurrentPaidWorkers":4,"acceptanceWidth":1,"maxTotalBudget":20.00,"maxCriterionRetries":2,"plannerSampleCount":1,"perProviderBudgetCaps":null,"autoPromoteRiskThreshold":"Broad","cascadeMechanicalReworkCheap":false,"transitionMap":{"Created":"Auto","AwaitingClarification":"Auto","WorkspaceReady":"Auto","Dispatched":"Auto","Running":"Auto","AwaitingVerification":"Auto","Verifying":"Auto","Verified":"Auto","AcceptanceFailed":"Auto","Merged":"Auto","Recorded":"Auto","CleanedUp":"Auto","Failed":"Auto","Blocked":"Auto","AwaitingHumanInput":"Auto"}}
         """;
-    private const string Prefix = "developer-completion structural pre-check failed: ";
+    internal const string Prefix = "developer-completion structural pre-check failed: ";
     private const string FirstPath = "src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs";
     private const string SecondPath = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacement.cs";
     private const string OtherPath = "src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs";
-    private const string FirstLine = FirstPath + " has 4931 lines, exceeding the recorded ceiling of 4863. Extract behavior to a collaborator and lower the ceiling for this entry, or raise the recorded ceiling for this entry deliberately with justification in the same change by editing SourceSizeRatchet.SeededCeilings. See docs/god-class-decomposition-plan.md.";
+    internal const string FirstLine = FirstPath + " has 4931 lines, exceeding the recorded ceiling of 4863. Extract behavior to a collaborator and lower the ceiling for this entry, or raise the recorded ceiling for this entry deliberately with justification in the same change by editing SourceSizeRatchet.SeededCeilings. See docs/god-class-decomposition-plan.md.";
     private const string SecondLine = SecondPath + " has 2825 lines, exceeding the recorded ceiling of 2780. Extract behavior to a collaborator and lower the ceiling for this entry, or raise the recorded ceiling for this entry deliberately with justification in the same change by editing SourceSizeRatchet.SeededCeilings. See docs/god-class-decomposition-plan.md.";
-    private const string OtherLine = OtherPath + " has 5313 lines, exceeding the recorded ceiling of 5310. Extract behavior to a collaborator and lower the ceiling for this entry, or raise the recorded ceiling for this entry deliberately with justification in the same change by editing SourceSizeRatchet.SeededCeilings. See docs/god-class-decomposition-plan.md.";
-    private const string RatchetRetry = Prefix + FirstLine + "\n" + SecondLine;
+    internal const string OtherLine = OtherPath + " has 5313 lines, exceeding the recorded ceiling of 5310. Extract behavior to a collaborator and lower the ceiling for this entry, or raise the recorded ceiling for this entry deliberately with justification in the same change by editing SourceSizeRatchet.SeededCeilings. See docs/god-class-decomposition-plan.md.";
+    internal const string RatchetRetry = Prefix + FirstLine + "\n" + SecondLine;
     private const string ReviewRetry = "auto-review-retry round 1 convergence brief: Reviewer task 0a1b2c3d blocking findings open; retry upstream Developer task.";
     private static readonly WorkerSandboxOptions Sandbox = new(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
 
@@ -107,7 +108,7 @@ public sealed class DeveloperCascadeDispatchTests : WorkerDispatchTestSupport
     [Fact]
     public void PolicyFile_DeveloperOffLeavesTesterCheap()
     {
-        using var f = new Fixture();
+        using var f = new Fixture(perTestRepository: true);
         f.Prepare();
         f.Retry(RatchetRetry);
         Directory.CreateDirectory(f.Workspace.OrchestratorDirectory);
@@ -133,7 +134,7 @@ public sealed class DeveloperCascadeDispatchTests : WorkerDispatchTestSupport
     [Fact]
     public void Refresh_PreservesFullPreparedMarker()
     {
-        using var f = new Fixture();
+        using var f = new Fixture(perTestRepository: true);
         f.PrepareCheap();
         var marker = f.Task.LastDispatch!.ModelSelectionReason;
         new GoalDispatchOperations().RefreshPreparedDispatchBeforeStart(f.Kernel, f.Workspace, f.Goal, f.Task,
@@ -218,7 +219,7 @@ public sealed class DeveloperCascadeDispatchTests : WorkerDispatchTestSupport
     [Fact]
     public void ExplicitSwitch_OverridesPassedPolicyAndFileDuringBatchAndRefresh()
     {
-        using var f = new Fixture();
+        using var f = new Fixture(perTestRepository: true);
         f.Prepare();
         f.Retry(RatchetRetry);
         Directory.CreateDirectory(f.Workspace.OrchestratorDirectory);
@@ -243,9 +244,44 @@ public sealed class DeveloperCascadeDispatchTests : WorkerDispatchTestSupport
         Assert.EndsWith($"cascade={decision} rule={rule}" + (ids is null ? "" : " ids=" + ids), dispatch.ModelSelectionReason);
     }
 
-    private sealed class Fixture : IDisposable
+    internal static class SharedWorktree<TOwner>
     {
-        internal string Root { get; } = CreateSeededDispatchRepository();
+        private static readonly Lazy<SharedWorktreeResource> Resource = new(Create);
+        private static int _creationCount;
+        internal static int CreationCount => Volatile.Read(ref _creationCount);
+        internal static SharedWorktreeResource Value => Resource.Value;
+
+        private static SharedWorktreeResource Create()
+        {
+            Interlocked.Increment(ref _creationCount);
+            var root = CreateSeededDispatchRepository();
+            try
+            {
+                var resource = new SharedWorktreeResource(root, GoalWorktrees.Ensure(root, GoalId.New()));
+                // The closed owner type isolates classes that xunit can run concurrently.
+                // Keep the linked worktree for all cases and delete its owning repository at exit.
+                AppDomain.CurrentDomain.ProcessExit += (_, _) => DeleteOwnedDirectory(resource.Root);
+                return resource;
+            }
+            catch
+            {
+                DeleteOwnedDirectory(root);
+                throw;
+            }
+        }
+    }
+
+    internal sealed record SharedWorktreeResource(string Root, string WorkingDirectory);
+
+    private static void DeleteOwnedDirectory(string root)
+    {
+        if (!GoalWorktrees.DeleteDirectoryWithRetry(root))
+            throw new InvalidOperationException($"Could not delete cascade fixture directory: {root}");
+    }
+
+    internal sealed class Fixture : IDisposable
+    {
+        internal string Root { get; }
         internal string WorkingDirectory { get; }
         internal OrchestratorWorkspace Workspace { get; }
         internal AgentOrchestratorKernel Kernel { get; } = new();
@@ -253,19 +289,32 @@ public sealed class DeveloperCascadeDispatchTests : WorkerDispatchTestSupport
         internal Goal Goal { get; }
         internal IReadOnlyList<AgentDefinition> Agents { get; }
         internal DateTimeOffset At { get; } = DateTimeOffset.Parse("2026-10-05T12:00:00Z");
+        private readonly bool _shared;
         private int _round;
 
-        internal Fixture(bool withReviewer = false)
+        internal Fixture(bool withReviewer = false, bool perTestRepository = false,
+            SharedWorktreeResource? sharedWorktree = null)
         {
-            Workspace = InfrastructureTestSupport.CreateRefinedWorkspace(Root);
-            var path = Path.Combine(Root, "catalog.json");
-            File.WriteAllText(path, CatalogJson);
-            Agents = withReviewer ? [.. AgentCatalogStore.Load(path).Agents, AgentCatalog.Default().GetRequired(AgentRole.Reviewer)]
-                : AgentCatalogStore.Load(path).Agents;
-            Goal = Kernel.CreateGoal("Focused implementation.", withReviewer ? [Task, new(TaskId.New(), "Review changes.", AgentRole.Reviewer)] : [Task]);
-            InfrastructureTestSupport.MarkGoalRefined(Kernel, Goal);
-            Kernel.ActivateGoal(Goal.Id, Agents);
-            WorkingDirectory = GoalWorktrees.Ensure(Root, Goal.Id);
+            _shared = !perTestRepository;
+            Root = perTestRepository ? CreateSeededDispatchRepository() : InfrastructureTestSupport.CreateTempDirectory();
+            try
+            {
+                Workspace = InfrastructureTestSupport.CreateRefinedWorkspace(Root);
+                var path = Path.Combine(Root, "catalog.json");
+                File.WriteAllText(path, CatalogJson);
+                Agents = withReviewer ? [.. AgentCatalogStore.Load(path).Agents, AgentCatalog.Default().GetRequired(AgentRole.Reviewer)]
+                    : AgentCatalogStore.Load(path).Agents;
+                Goal = Kernel.CreateGoal("Focused implementation.", withReviewer ? [Task, new(TaskId.New(), "Review changes.", AgentRole.Reviewer)] : [Task]);
+                InfrastructureTestSupport.MarkGoalRefined(Kernel, Goal);
+                Kernel.ActivateGoal(Goal.Id, Agents);
+                WorkingDirectory = perTestRepository ? GoalWorktrees.Ensure(Root, Goal.Id)
+                    : (sharedWorktree ?? SharedWorktree<DeveloperCascadeDispatchTests>.Value).WorkingDirectory;
+            }
+            catch
+            {
+                DeleteOwnedDirectory(Root);
+                throw;
+            }
         }
 
         internal void Prepare(WorkerProfileCatalog? profiles = null) => WorkerProfileDispatcher.PrepareSubscriptionTask(
@@ -284,6 +333,25 @@ public sealed class DeveloperCascadeDispatchTests : WorkerDispatchTestSupport
                 Kernel.ReportTaskProgress(Goal.Id, Task.Id, WorkTaskStatus.Failed, "Round requires rework.");
             Kernel.RetryTask(Goal.Id, Task.Id, message);
         }
-        public void Dispose() => GoalWorktrees.DeleteDirectoryWithRetry(Root);
+        internal GitCli.WorktreeStatusInspection InspectWorktree() => GitCli.InspectWorktreeStatus(WorkingDirectory);
+
+        internal void AssertWorktreeClean()
+        {
+            var status = InspectWorktree();
+            Assert.True(status.Succeeded, $"Shared worktree inspection failed: {status.Error}");
+            Assert.False(status.IsDirty, $"Shared worktree has dirty paths: {string.Join(", ", status.CommitWorthyPaths)}");
+        }
+
+        public void Dispose()
+        {
+            try
+            {
+                if (_shared) AssertWorktreeClean();
+            }
+            finally
+            {
+                DeleteOwnedDirectory(Root);
+            }
+        }
     }
 }

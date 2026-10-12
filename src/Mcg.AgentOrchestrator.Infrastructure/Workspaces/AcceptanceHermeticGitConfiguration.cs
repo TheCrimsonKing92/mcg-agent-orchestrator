@@ -3,26 +3,26 @@ using System.Text;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-public sealed partial class GoalAcceptanceVerifier
+internal static class AcceptanceHermeticGitConfiguration
 {
-    internal const string HermeticGateGitConfig =
+    internal const string GateConfig =
         "[core]\n\tautocrlf = true\n\tsymlinks = false\n\tfscache = true\n[init]\n\tdefaultBranch = master\n";
 
-    private static void ConfigureHermeticGitConfiguration(
+    internal static void Configure(
         IDictionary<string, string?> environment,
         string profileRoot)
     {
         environment["GIT_CONFIG_NOSYSTEM"] = "1";
         environment["GIT_TERMINAL_PROMPT"] = "0";
         environment["GCM_INTERACTIVE"] = "never";
-        environment["GIT_CONFIG_GLOBAL"] = EnsureHermeticGateGitConfig(profileRoot);
+        environment["GIT_CONFIG_GLOBAL"] = EnsureConfigFile(profileRoot);
     }
 
-    internal static string EnsureHermeticGateGitConfig(string profileRoot)
+    internal static string EnsureConfigFile(string profileRoot)
     {
         var directory = Path.Combine(profileRoot, "git");
         var destination = Path.Combine(directory, "gate-gitconfig");
-        var expected = new UTF8Encoding(false).GetBytes(HermeticGateGitConfig);
+        var expected = new UTF8Encoding(false).GetBytes(GateConfig);
         var identity = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(destination).ToUpperInvariant())));
         using var mutex = new Mutex(false, "mcg-gate-gitconfig-" + identity);
         try

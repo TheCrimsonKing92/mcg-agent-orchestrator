@@ -56,6 +56,7 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceGateCancellationMonitor",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceGatePhaseAccounting",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceGitTextResolver",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceHermeticGitConfiguration",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceIdenticalTreeReuseRule",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneDurationStore",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneEarlyStop",

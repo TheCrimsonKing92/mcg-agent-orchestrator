@@ -4630,7 +4630,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         environment["GIT_AUTHOR_EMAIL"] = HermeticGitIdentityEmail;
         environment["GIT_COMMITTER_NAME"] = HermeticGitIdentityName;
         environment["GIT_COMMITTER_EMAIL"] = HermeticGitIdentityEmail;
-        ConfigureHermeticGitConfiguration(environment, profileRoot);
+        AcceptanceHermeticGitConfiguration.Configure(environment, profileRoot);
         // A relocated DOTNET_CLI_HOME reads as a first use, and the SDK responds by PERSISTING
         // "$DOTNET_CLI_HOME\.dotnet\tools" into the operator's HKCU\Environment\Path. That is ambient
         // state written by a function whose entire purpose is to write none, so it must be suppressed
