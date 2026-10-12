@@ -16,6 +16,7 @@ internal static class CliReadOnlyCommandRunner
         CliTimelineQueryCommand.IsTimelineQueryCommand(args) ||
         CliGoalReportQueryCommand.IsGoalReportQueryCommand(args) ||
         CliSingleGoalReportQueryCommand.IsSingleGoalReportQueryCommand(args) ||
+        CliStatusJsonQueryCommand.IsStatusJsonCommand(args) ||
         CliStatusQueryCommand.IsStatusQueryCommand(args) ||
         CliReadinessQueryCommand.IsReadinessQueryCommand(args) ||
         CliGoalEventsQueryCommand.IsGoalEventsQueryCommand(args) ||
@@ -100,6 +101,13 @@ internal static class CliReadOnlyCommandRunner
         {
             CliSingleGoalReportQueryCommand.Execute(args, stateRepository, workspace, providers, channel,
                 ref agents, ref workerProfiles, ref currentGoal, diagnosticsClock);
+            changed = false;
+            return true;
+        }
+
+        if (CliStatusJsonQueryCommand.IsStatusJsonCommand(args))
+        {
+            CliStatusJsonQueryCommand.Execute(args, stateRepository, workspace);
             changed = false;
             return true;
         }

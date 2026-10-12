@@ -28,9 +28,22 @@ internal static class CliStatusQueryCommand
         var prefix = CliStatusTasksOnlyForm.IsForm(args)
             ? CliStatusTasksOnlyForm.ResolveGoalPrefix(args)
             : args.Count == 2 ? args[1] : null;
+        var (kernel, goal) = ResolveGoal(stateQueries, prefix, currentGoal?.Id);
+        var commandCurrentGoal = goal;
+        var changed = CliCommandDispatcher.ExecuteCommand(args, kernel, workspace, ref agents,
+            providers, ref workerProfiles, ref commandCurrentGoal, channel);
+        if (changed)
+            throw new InvalidOperationException("Status query attempted to mutate orchestrator state through its read-only route.");
+
+        currentGoal = commandCurrentGoal;
+    }
+
+    internal static (AgentOrchestratorKernel Kernel, Goal Goal) ResolveGoal(
+        IOrchestratorStateQueries stateQueries, string? prefix, GoalId? currentGoalId = null)
+    {
         GoalId goalId;
         if (prefix is null)
-            goalId = CliCurrentGoalSelector.Select(stateQueries, currentGoal?.Id);
+            goalId = CliCurrentGoalSelector.Select(stateQueries, currentGoalId);
         else
         {
             var matches = stateQueries.ListGoalIdStatusesAsync().GetAwaiter().GetResult()
@@ -46,12 +59,6 @@ internal static class CliStatusQueryCommand
         var kernel = stateQueries.LoadGoalsAsync([goalId]).GetAwaiter().GetResult();
         var goal = kernel.Goals.SingleOrDefault(candidate => candidate.Id == goalId)
             ?? throw new KeyNotFoundException($"Goal '{goalId.Value}' was not found.");
-        var commandCurrentGoal = goal;
-        var changed = CliCommandDispatcher.ExecuteCommand(args, kernel, workspace, ref agents,
-            providers, ref workerProfiles, ref commandCurrentGoal, channel);
-        if (changed)
-            throw new InvalidOperationException("Status query attempted to mutate orchestrator state through its read-only route.");
-
-        currentGoal = commandCurrentGoal;
+        return (kernel, goal);
     }
 }

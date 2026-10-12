@@ -20,6 +20,8 @@ internal static class AgentReadEnvelope
     public const int ConductorStatusSchemaVersion = 1;
     public const string OperatorIntentSchema = "mcg.operator-intent";
     public const int OperatorIntentSchemaVersion = 1;
+    public const string StatusSchema = "mcg.status";
+    public const int StatusSchemaVersion = 1;
 
     internal static string Serialize<T>(string schema, int schemaVersion, T payload,
         JsonSerializerOptions payloadOptions, TimeProvider? time = null)
