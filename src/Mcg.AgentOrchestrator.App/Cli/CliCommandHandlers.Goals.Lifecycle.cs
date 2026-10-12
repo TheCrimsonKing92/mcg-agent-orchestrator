@@ -47,9 +47,7 @@ private static void HandleLifecycleGoal(CliExecutionContext context, IReadOnlyLi
     PrintClosedSourceBacklogWarning(sourceBacklogLink);
 
     var existingGoalId = GoalOperationJournal.TryFindLifecycleGoal(context.Workspace.ExecutionDirectory, commandName, objective);
-    var existingGoal = existingGoalId is null
-        ? null
-        : context.Kernel.Goals.FirstOrDefault(goal => goal.Id == existingGoalId);
+    var existingGoal = context.Kernel.Goals.FirstOrDefault(goal => goal.Id == existingGoalId);
     context.CurrentGoal = existingGoal is not null
         ? existingGoal
         : simple
