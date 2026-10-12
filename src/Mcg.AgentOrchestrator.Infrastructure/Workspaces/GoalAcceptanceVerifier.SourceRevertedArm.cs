@@ -99,7 +99,9 @@ public sealed partial class GoalAcceptanceVerifier
             var fields = diff.Output.Split('\0', StringSplitOptions.RemoveEmptyEntries);
             if (fields.Length % 2 != 0)
                 return InconclusiveSourceReverted(candidateSha, "malformed source name-status diff");
-            if (mutation is not null && ValidateSourceMutation(mutation, fields, candidatePath, candidateSha, mergeBase, checks, declared) is { } mutationRejection)
+            if (mutation is not null && AcceptanceSourceMutation.Validate(mutation, fields, candidatePath, candidateSha, mergeBase, checks, declared,
+                path => ValidateSourceRevertPaths([path], fields, declared: declared),
+                path => ValidateSelectedTestClassPaths([path], fields, candidatePath, candidateSha, mergeBase, checks, declared) is not null) is { } mutationRejection)
                 return InconclusiveSourceReverted(candidateSha,
                     FindingEvidenceRevertPathsRejectionJsonConverter.ToWireValue(mutationRejection), mutationRejection);
             var selected = revertPaths is null ? null : FindingEvidenceRevertPaths.Canonicalize(revertPaths);
@@ -137,7 +139,7 @@ public sealed partial class GoalAcceptanceVerifier
             droppedPaths = [];
             if (TryLabelFocusedEvidenceBaselineWorktree(revertedPath) is { } integrityFailure)
                 return WithSourceRevertedPathReceipt(InconclusiveSourceReverted(candidateSha, integrityFailure), restoredPaths, droppedPaths);
-            if (mutation is not null) ApplySourceMutation(revertedPath, mutation);
+            if (mutation is not null) AcceptanceSourceMutation.Apply(revertedPath, mutation);
             if (restore.Count > 0)
             {
                 // NUL pathspecs preserve whitespace/newlines; literal mode prevents wildcard expansion.

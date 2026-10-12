@@ -1,16 +1,18 @@
 using System.Text;
 using Mcg.AgentOrchestrator.Core;
+using AcceptanceManifestCheck = Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier.AcceptanceManifestCheck;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-public sealed partial class GoalAcceptanceVerifier
+internal static class AcceptanceSourceMutation
 {
-    private static FindingEvidenceRevertPathsRejection? ValidateSourceMutation(
+    internal static FindingEvidenceRevertPathsRejection? Validate(
         FindingEvidenceMutation mutation, string[] diff, string candidatePath, string candidateSha, string mergeBase,
-        IReadOnlyList<AcceptanceManifestCheck> checks, IReadOnlySet<string>? declared)
+        IReadOnlyList<AcceptanceManifestCheck> checks, IReadOnlySet<string>? declared,
+        Func<string, FindingEvidenceRevertPathsRejection?> validatePath, Func<string, bool> isSelectedTestClass)
     {
         var path = FindingEvidenceRevertPaths.Normalize(mutation.Path);
-        var pathRejection = ValidateSourceRevertPaths([path], diff, declared: declared);
+        var pathRejection = validatePath(path);
         if (pathRejection is not null)
             return pathRejection switch
             {
@@ -19,27 +21,27 @@ public sealed partial class GoalAcceptanceVerifier
                 FindingEvidenceRevertPathsRejection.NotChangedByGoal => FindingEvidenceRevertPathsRejection.MutationNotChangedByGoal,
                 _ => throw new InvalidOperationException("Unexpected mutation path rejection.")
             };
-        if (ValidateSelectedTestClassPaths([path], diff, candidatePath, candidateSha, mergeBase, checks, declared) is not null)
+        if (isSelectedTestClass(path))
             return FindingEvidenceRevertPathsRejection.MutationSelectedTestClass;
         if (string.IsNullOrEmpty(mutation.OldText)) return FindingEvidenceRevertPathsRejection.MutationEmptyOldText;
-        if (string.Equals(NormalizeSourceMutationLineBreaks(mutation.OldText),
-            NormalizeSourceMutationLineBreaks(mutation.NewText ?? string.Empty), StringComparison.Ordinal))
+        if (string.Equals(NormalizeLineBreaks(mutation.OldText),
+            NormalizeLineBreaks(mutation.NewText ?? string.Empty), StringComparison.Ordinal))
             return FindingEvidenceRevertPathsRejection.MutationUnchangedText;
-        var target = ResolveSourceMutationTarget(candidatePath, path);
+        var target = ResolveTarget(candidatePath, path);
         if (!File.Exists(target)) return FindingEvidenceRevertPathsRejection.MutationOldTextNotFound;
-        var (_, _, text) = ReadSourceMutationFile(target);
-        return FindSourceMutationSpan(text, mutation.OldText, out _);
+        var (_, _, text) = ReadFile(target);
+        return FindSpan(text, mutation.OldText, out _);
     }
 
-    private static FindingEvidenceRevertPathsRejection? FindSourceMutationSpan(string text, string oldText, out int start) =>
-        FindSourceMutationSpan(text, oldText, out start, out _);
+    private static FindingEvidenceRevertPathsRejection? FindSpan(string text, string oldText, out int start) =>
+        FindSpan(text, oldText, out start, out _);
 
-    private static FindingEvidenceRevertPathsRejection? FindSourceMutationSpan(
+    private static FindingEvidenceRevertPathsRejection? FindSpan(
         string text, string oldText, out int start, out int length)
     {
         // Break-free needles retain exact matching, even a lone CR at the edge of a CRLF.
-        var comparison = oldText.Contains('\n') ? NormalizeSourceMutationLineBreaks(text) : text;
-        var needle = NormalizeSourceMutationLineBreaks(oldText);
+        var comparison = oldText.Contains('\n') ? NormalizeLineBreaks(text) : text;
+        var needle = NormalizeLineBreaks(oldText);
         start = comparison.IndexOf(needle, StringComparison.Ordinal);
         length = needle.Length;
         if (start < 0) return FindingEvidenceRevertPathsRejection.MutationOldTextNotFound;
@@ -60,20 +62,20 @@ public sealed partial class GoalAcceptanceVerifier
         return null;
     }
 
-    private static string NormalizeSourceMutationLineBreaks(string text) => text.Replace("\r\n", "\n", StringComparison.Ordinal);
+    private static string NormalizeLineBreaks(string text) => text.Replace("\r\n", "\n", StringComparison.Ordinal);
 
     // Called only after the detached candidate worktree has been created and labelled.
-    private static void ApplySourceMutation(string revertedPath, FindingEvidenceMutation mutation)
+    internal static void Apply(string revertedPath, FindingEvidenceMutation mutation)
     {
-        var target = ResolveSourceMutationTarget(revertedPath, FindingEvidenceRevertPaths.Normalize(mutation.Path));
-        var (bytes, encoding, text) = ReadSourceMutationFile(target);
-        if (FindSourceMutationSpan(text, mutation.OldText, out var start, out var length) is not null)
+        var target = ResolveTarget(revertedPath, FindingEvidenceRevertPaths.Normalize(mutation.Path));
+        var (bytes, encoding, text) = ReadFile(target);
+        if (FindSpan(text, mutation.OldText, out var start, out var length) is not null)
             throw new InvalidDataException("Mutation no longer has exactly one old_text occurrence in the temporary worktree.");
         var preambleLength = bytes.Length - encoding.GetByteCount(text);
         var byteStart = preambleLength + encoding.GetByteCount(text.AsSpan(0, start));
         var matchedSpan = text.AsSpan(start, length);
         var byteEnd = byteStart + encoding.GetByteCount(matchedSpan);
-        var replacementText = NormalizeSourceMutationLineBreaks(mutation.NewText ?? string.Empty);
+        var replacementText = NormalizeLineBreaks(mutation.NewText ?? string.Empty);
         if (matchedSpan.Contains("\r\n", StringComparison.Ordinal))
             replacementText = replacementText.Replace("\n", "\r\n", StringComparison.Ordinal);
         var replacement = encoding.GetBytes(replacementText);
@@ -84,7 +86,7 @@ public sealed partial class GoalAcceptanceVerifier
         File.WriteAllBytes(target, result);
     }
 
-    private static (byte[] Bytes, Encoding Encoding, string Text) ReadSourceMutationFile(string target)
+    private static (byte[] Bytes, Encoding Encoding, string Text) ReadFile(string target)
     {
         var bytes = File.ReadAllBytes(target);
         using var reader = new StreamReader(new MemoryStream(bytes), new UTF8Encoding(false, true), detectEncodingFromByteOrderMarks: true);
@@ -98,7 +100,7 @@ public sealed partial class GoalAcceptanceVerifier
         return (bytes, encoding, encoding.GetString(bytes, offset, bytes.Length - offset));
     }
 
-    private static string ResolveSourceMutationTarget(string worktreePath, string path)
+    private static string ResolveTarget(string worktreePath, string path)
     {
         var root = Path.GetFullPath(worktreePath);
         var target = Path.GetFullPath(Path.Combine(root, path));
