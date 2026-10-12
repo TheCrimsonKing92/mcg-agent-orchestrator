@@ -79,6 +79,8 @@ public sealed class CompletionBuildEvidenceIdentityTests
     [InlineData("foreign")]
     [InlineData("malformed")]
     [InlineData("nonzero-success")]
+    [InlineData("null-worker-process")]
+    [InlineData("null-projects")]
     public void InvalidTerminalReceiptCannotResumeCompletion(string kind)
     {
         var fixture = new CompletionBuildEvidenceFixture();
@@ -90,11 +92,17 @@ public sealed class CompletionBuildEvidenceIdentityTests
             System.Text.Json.JsonSerializer.Serialize(operation with
             {
                 Id = kind == "foreign" ? "another-operation" : operation.Id,
-                Phase = CompletionBuildEvidencePhase.Success, BuildExitCode = kind == "nonzero-success" ? 1 : 0
+                Phase = CompletionBuildEvidencePhase.Success, BuildExitCode = kind == "nonzero-success" ? 1 : 0,
+                WorkerProcess = kind == "null-worker-process" ? null! : operation.WorkerProcess,
+                Projects = kind == "null-projects" ? null! : operation.Projects
             }));
         runner.RefreshLatestProcess(fixture.Kernel, fixture.GoalId, fixture.TaskId);
         Assert.Equal(CompletionBuildEvidencePhase.ApparatusFailure, fixture.Task.CompletionBuildEvidence!.Phase);
         Assert.NotEqual(WorkTaskStatus.Completed, fixture.Task.Status);
         Assert.Null(fixture.Task.LastDispatch!.ResultCommit);
+        Assert.False(fixture.Task.LastVerification!.Succeeded);
+        runner.RefreshLatestProcess(fixture.Kernel, fixture.GoalId, fixture.TaskId);
+        Assert.Equal(1, fixture.Launches);
+        Assert.Single(fixture.Task.VerificationHistory);
     }
 }

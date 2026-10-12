@@ -172,6 +172,7 @@ internal sealed class CompletionBuildEvidenceCoordinator : ICompletionBuildEvide
     }
 
     internal static bool MatchesResult(CompletionBuildEvidenceOperation expected, CompletionBuildEvidenceOperation result) =>
+        result.WorkerProcess is not null && result.Projects is not null &&
         result.Id == expected.Id && result.GoalId == expected.GoalId && result.TaskId == expected.TaskId &&
         result.DispatchId == expected.DispatchId && result.DispatchAt == expected.DispatchAt &&
         result.TreeDigest == expected.TreeDigest && result.WorktreeRoot == expected.WorktreeRoot &&

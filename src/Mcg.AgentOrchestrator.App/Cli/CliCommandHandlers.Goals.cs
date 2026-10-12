@@ -1879,11 +1879,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 var watchMaxDurationDeferralCeiling = AcceptanceGateEngineSettings
                     .Load(context.Workspace.ExecutionDirectory)
                     .ResolveCheckTimeout(null);
-                var watchReaper = new BackgroundDispatchRunner
-                {
-                    OperatorIntents = SqliteOperatorIntentStore.ForDirectories(
-                        context.Workspace.OrchestratorDirectory, context.Workspace.LogDirectory)
-                };
+                var watchReaper = OperatorCancelAwareDispatchRunner.ForWorkspace(
+                    context.Workspace, context.CompletionBuildEvidence);
                 var suppressWatchRefinementForMaxDurationDeferral = false;
                 Action<AgentOrchestratorKernel> watchSweep = wk =>
                 {

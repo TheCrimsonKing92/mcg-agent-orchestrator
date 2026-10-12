@@ -151,6 +151,8 @@ public IGoalAcceptanceVerifier AcceptanceVerifier { get; init; } = new GoalAccep
 
 public bool RunInjectedAcceptanceVerifierInCurrentProcess { get; init; }
 
+public ICompletionBuildEvidenceOperation? CompletionBuildEvidence { get; init; }
+
     private ICliGoalWorktreeService? worktrees;
 
     public ICliGoalWorktreeService Worktrees
