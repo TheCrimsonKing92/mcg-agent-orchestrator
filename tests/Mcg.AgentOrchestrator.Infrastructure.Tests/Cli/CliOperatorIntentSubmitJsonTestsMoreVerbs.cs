@@ -131,7 +131,19 @@ public sealed class CliOperatorIntentSubmitJsonTestsMoreVerbs : CliTaskQueryTest
             TextWorkspace = OrchestratorWorkspace.ForDirectory(Path.Combine(root, "text-state")) with { RootDirectory = root };
             JsonWorkspace = OrchestratorWorkspace.ForDirectory(Path.Combine(root, "json-state")) with { RootDirectory = root };
             if (verb == "cancel-dispatch")
-                (_kernel, Goal, _) = BackgroundDispatchRunnerTestsOperatorCancelRequeueRace.RunningTask();
+            {
+                _kernel = new AgentOrchestratorKernel();
+                Goal = _kernel.CreateGoal("Submit envelope", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+                _kernel.ActivateGoal(Goal.Id, AgentCatalog.Default().Agents);
+                var task = Goal.Tasks.Single();
+                var startedAt = DateTimeOffset.UtcNow;
+                _kernel.RecordTaskDispatch(Goal.Id, task.Id,
+                    new TaskDispatchRecord("worker", "worker command", root, startedAt));
+                _kernel.RecordTaskProcessStarted(Goal.Id, task.Id,
+                    new TaskProcessRecord(4242, "worker command", root, Path.Combine(root, "out.log"),
+                        Path.Combine(root, "err.log"), Path.Combine(root, "missing-cancel-exit"),
+                        startedAt, null, null));
+            }
             else
             {
                 _kernel = new AgentOrchestratorKernel();
