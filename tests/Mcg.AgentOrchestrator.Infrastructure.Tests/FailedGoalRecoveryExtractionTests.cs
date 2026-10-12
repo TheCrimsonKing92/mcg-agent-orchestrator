@@ -31,7 +31,6 @@ public sealed class FailedGoalRecoveryExtractionTests
         Assert.Contains("decision.WarningMessage", File.ReadAllText(Path.Combine(
             root, "src", "Mcg.AgentOrchestrator.App", "Orchestration", "FailedGoalRetryApplicationExecutor.cs")), StringComparison.Ordinal);
     }
-
     [Fact]
     public void DriverDoesNotOwnRungEightSelection()
     {
