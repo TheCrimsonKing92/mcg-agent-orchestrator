@@ -292,7 +292,10 @@ internal static class SourceSizeRatchet
             // Goal 28397f6a adds the store-only epic command routes; retain the runner's
             // shared dispatch seam and account for its two-line net increase.
             // Goal ec8903af moved the goal-prefix parser to CliGoalPrefixArguments.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 4804),
+            // Goal cd1f6380 adds four transaction-boundary wiring lines for post-commit actions;
+            // ordered registration/execution lives in the separate PostCommitActions type.
+            // Both transaction branches must register here and run only after commit; no extra headroom.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 4808),
             // Goal 03aaf13e adds the explicit-root isolation fact at the verifier's existing execution-
             // environment seam; the production verifier remains at its prior ceiling.
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs", 1611),
@@ -439,7 +442,10 @@ internal static class SourceSizeRatchet
             // Goal 5b573f47 keeps shared human/JSON status and label rules in the scoped diagnostic helpers;
             // read-only lifecycle reads replace the writable monitoring path without changing human status text.
             // Measured 12156 total lines across the same 30 partial files; no extra headroom.
-            new SourceClassCeiling("CliCommandHandlers", 12156, 30),
+            // Goal cd1f6380 adds five lifecycle call-site lines for early epic validation and
+            // new-goal-only inheritance; resolution and assignment stay in EpicAtCreation.
+            // These checks belong beside lifecycle creation/reuse; same 30 partial files, no extra headroom.
+            new SourceClassCeiling("CliCommandHandlers", 12161, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
             // Goal 03580ad1 extracts source-mutation edits to AcceptanceSourceMutation; measured 8938 lines in 31 partials.
@@ -468,7 +474,10 @@ internal static class SourceSizeRatchet
             // Measured 9265 across the same 55 partial files; no extra headroom or drain changes.
             new SourceClassCeiling("ConductorBatchLoop", 9265, 55),
             // Goal ec8903af moved the goal-prefix parser to CliGoalPrefixArguments.
-            new SourceClassCeiling("CliPersistentStateRunner", 5973, 18),
+            // Goal cd1f6380 adds four lines at the owning transaction boundary, forwarding both
+            // registrars and invoking actions after commit; list behavior lives in PostCommitActions.
+            // Same 18 partial files; no extra headroom beyond the required transaction wiring.
+            new SourceClassCeiling("CliPersistentStateRunner", 5977, 18),
             // Goal 5935c270 extracts subscription-plan output into SubscriptionPlanTextView
             // (2026-10-09 console architecture review, finding 4, taming slice 13).
             // Goal c0ff6203 extracts six small text views (taming slice 14).
