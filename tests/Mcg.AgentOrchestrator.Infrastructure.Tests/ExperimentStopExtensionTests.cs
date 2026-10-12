@@ -70,12 +70,12 @@ public sealed class ExperimentStopExtensionTests
             var kernel = Seed(workspace);
             var store = new ExperimentStore(workspace.ExperimentStorePath);
             var record = store.AddAsync(Spec()).GetAwaiter().GetResult();
-            var before = ExperimentReading.Evaluate(record, kernel.Goals, new Dictionary<string, DateTimeOffset>(), [], At, null);
+            var before = ExperimentReading.Evaluate(record, kernel.Goals, new Dictionary<string, DateTimeOffset>(), [], At, null, ExperimentHostLedgers.Empty);
             Assert.Equal(2, before.ObservedCount);
             Assert.True(before.StopRuleMet);
             Assert.True(store.ExtendStopRuleAsync(record.Id, 5, "More goals", At).GetAwaiter().GetResult());
             var updated = store.ResolveAsync(record.Id).GetAwaiter().GetResult()!;
-            var after = ExperimentReading.Evaluate(updated, kernel.Goals, new Dictionary<string, DateTimeOffset>(), [], At, null);
+            var after = ExperimentReading.Evaluate(updated, kernel.Goals, new Dictionary<string, DateTimeOffset>(), [], At, null, ExperimentHostLedgers.Empty);
             Assert.Equal(before.ObservedCount, after.ObservedCount);
             Assert.False(after.StopRuleMet);
             // Keep the prescribed main-file revert compilable so it fails on behavior.

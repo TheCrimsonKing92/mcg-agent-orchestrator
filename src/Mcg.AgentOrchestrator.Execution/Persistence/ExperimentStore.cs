@@ -28,7 +28,8 @@ public static class ExperimentMetrics
 {
     public static IReadOnlyList<string> Menu { get; } = Array.AsReadOnly(new[]
     {
-        "rounds-per-landing", "productive-rounds", "expected-overhead-rounds", "wasted-rounds", "landings-per-hour"
+        "rounds-per-landing", "productive-rounds", "expected-overhead-rounds", "wasted-rounds", "landings-per-hour",
+        "gate-seconds", "tick-cpu-ms"
     });
 }
 

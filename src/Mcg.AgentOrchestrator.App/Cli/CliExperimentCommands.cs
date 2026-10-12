@@ -94,7 +94,8 @@ internal static class CliExperimentCommands
                 ExperimentReading.ComparisonStart(record), asOf)
             : (int?)null;
         ExperimentReading.Render(ExperimentReading.Evaluate(record, goals, ExperimentLandingTimes.Read(context.Workspace.GoalLifecycleEventsDirectory),
-            CliOwnerDigestRetryIntents.Read(context.Workspace, asOf), asOf, gateCount));
+            CliOwnerDigestRetryIntents.Read(context.Workspace, asOf), asOf, gateCount,
+            ExperimentHostLedgers.Read(context.Workspace.ExecutionDirectory)));
         Console.WriteLine($"outcome: {ExperimentReading.Name(record.Outcome)}");
         var overlaps = ExperimentOverlap.Find(record, store.ListAllAsync().GetAwaiter().GetResult());
         if (overlaps.Count == 0) Console.WriteLine("overlaps: none");

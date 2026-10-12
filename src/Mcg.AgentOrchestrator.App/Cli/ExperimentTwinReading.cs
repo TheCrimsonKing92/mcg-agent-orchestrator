@@ -23,8 +23,8 @@ internal static class ExperimentTwinReading
             after = null;
         }
         var values = ExperimentMetrics.Menu.ToDictionary(metric => metric, metric => (
-            Before: metric == "landings-per-hour" ? null : ExperimentReading.TotalsValue(metric, before),
-            After: metric == "landings-per-hour" ? null : ExperimentReading.TotalsValue(metric, after)));
+            Before: ExperimentReading.IsWindowMetric(metric) ? null : ExperimentReading.TotalsValue(metric, before),
+            After: ExperimentReading.IsWindowMetric(metric) ? null : ExperimentReading.TotalsValue(metric, after)));
         return new(values, diagnostics,
             $"baseline={twin?.Id.Value ?? baseline.TwinGoalId ?? "none"} comparison={comparison?.Id.Value ?? baseline.ComparisonGoalId ?? "none"}");
 

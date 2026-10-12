@@ -27,7 +27,7 @@ internal static class ExperimentReading
 {
     internal static ExperimentReadingResult Evaluate(ExperimentRecord record, IReadOnlyCollection<Goal> goals,
         IReadOnlyDictionary<string, DateTimeOffset> landings, IReadOnlyCollection<AppliedRetryIntent> intents,
-        DateTimeOffset asOf, int? observedGateCount)
+        DateTimeOffset asOf, int? observedGateCount, ExperimentHostLedgers hostLedgers)
     {
         var spec = record.Spec;
         var start = ComparisonStart(record);
@@ -64,8 +64,8 @@ internal static class ExperimentReading
             var baseline = RoundValueReport.Build(goals, since, until, intents).Window;
             var comparison = asOf > until ? RoundValueReport.Build(goals, until, asOf, intents).Window : null;
             values = ExperimentMetrics.Menu.ToDictionary(metric => metric, metric => (
-                Before: Value(metric, baseline, goals, landings, since, until),
-                After: Value(metric, comparison, goals, landings, until, asOf)));
+                Before: Value(metric, baseline, goals, landings, since, until, hostLedgers),
+                After: Value(metric, comparison, goals, landings, until, asOf, hostLedgers)));
         }
         var metrics = spec.Metrics.Append(spec.Guardrail.Metric).Select(metric =>
         {
@@ -114,6 +114,8 @@ internal static class ExperimentReading
 
     internal static DateTimeOffset ComparisonStart(ExperimentRecord record) => record.Spec.Baseline.Until ?? record.CreatedAt;
 
+    internal static bool IsWindowMetric(string metric) => metric is "landings-per-hour" or "gate-seconds" or "tick-cpu-ms";
+
     internal static void Render(ExperimentReadingResult result)
     {
         var target = result.StopTarget ?? ExperimentStopTarget.Effective(result.StopRule);
@@ -127,7 +129,8 @@ internal static class ExperimentReading
     }
 
     private static double? Value(string metric, RoundValueTotals? totals, IReadOnlyCollection<Goal> goals,
-        IReadOnlyDictionary<string, DateTimeOffset> landings, DateTimeOffset since, DateTimeOffset until)
+        IReadOnlyDictionary<string, DateTimeOffset> landings, DateTimeOffset since, DateTimeOffset until,
+        ExperimentHostLedgers hostLedgers)
     {
         if (metric == "landings-per-hour")
         {
@@ -135,6 +138,8 @@ internal static class ExperimentReading
                 && at >= since && at < until);
             return until <= since || count == 0 ? null : count / (until - since).TotalHours;
         }
+        if (metric == "gate-seconds") return hostLedgers.GateSeconds(since, until);
+        if (metric == "tick-cpu-ms") return hostLedgers.TickCpuMs(since, until);
         return TotalsValue(metric, totals);
     }
 
