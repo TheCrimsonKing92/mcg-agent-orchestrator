@@ -6,6 +6,83 @@ using System.Net.Sockets;
 
 public sealed class AgentCatalogTests
 {
+    [Xunit.Theory]
+    [Xunit.InlineData("primary", false)]
+    [Xunit.InlineData("backup", false)]
+    [Xunit.InlineData("absent-fallback", false)]
+    [Xunit.InlineData("corrupt-fallback", false)]
+    [Xunit.InlineData("primary", true)]
+    [Xunit.InlineData("backup", true)]
+    [Xunit.InlineData("absent-fallback", true)]
+    [Xunit.InlineData("corrupt-fallback", true)]
+    public void RetiredAssignmentsNormalizeAcrossReadPathsWithoutRewritingFiles(string readPath, bool staleRepair)
+    {
+        var path = Path.Combine(CreateTempDirectory(), "agents.json");
+        var agent = new AgentDefinition(new AgentId("custom-worker"), "Custom worker", AgentRole.Developer,
+            new ModelProfile("oPeNaI", "GpT-6-SoL", ModelCapability.Text | ModelCapability.Code, SubscriptionMode.ApiKey, "low", 1234),
+            ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
+            Subscription: new SubscriptionLaunchProfile(staleRepair ? "codex-cli" : "custom-profile",
+                staleRepair ? "gpt-5.3-codex" : "GPT-6-SOL", "medium"),
+            ComplexModel: new ModelProfile("OpenAI", "gpt-6-sol", ModelCapability.ToolUse, SubscriptionMode.ApiKey, "high", 5678),
+            ReasoningEffortPolicy: new ReasoningEffortPolicy(4, "xhigh"), IsProviderRoutingConstrained: true);
+        var catalog = new AgentCatalog([agent]);
+        if (readPath is "primary" or "backup")
+            AgentCatalogStore.Save(path, catalog);
+        if (readPath == "backup")
+        {
+            AgentCatalogStore.Save(path, AgentCatalog.Default());
+            File.WriteAllText(path, "{corrupt}");
+        }
+        if (readPath == "corrupt-fallback")
+            File.WriteAllText(path, "{corrupt}");
+        var primaryText = File.Exists(path) ? File.ReadAllText(path) : null;
+        var backupText = File.Exists(path + ".bak") ? File.ReadAllText(path + ".bak") : null;
+
+        var restored = Assert.Single(AgentCatalogStore.Load(path, catalog).Agents);
+
+        Assert.Equal(agent with
+        {
+            Model = agent.Model with { ModelName = "gpt-6.1-sol" },
+            ComplexModel = agent.ComplexModel! with { ModelName = "gpt-6.1-sol" },
+            Subscription = agent.Subscription! with { ModelAlias = "gpt-6.1-sol" }
+        }, restored);
+        Assert.Equal(primaryText, File.Exists(path) ? File.ReadAllText(path) : null);
+        Assert.Equal(backupText, File.Exists(path + ".bak") ? File.ReadAllText(path + ".bak") : null);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("Anthropic", "gpt-6-sol", "gpt-6-sol")]
+    [Xunit.InlineData("CustomOpenAI", "gpt-6-sol", "gpt-6-sol")]
+    [Xunit.InlineData("OpenAI", "gpt-6-luna", "gpt-6-luna")]
+    [Xunit.InlineData("OpenAI", "gpt-6-astra", "gpt-6-astra")]
+    [Xunit.InlineData("OpenAI", "my-gpt-6-sol", "my-gpt-6-sol")]
+    [Xunit.InlineData("OpenAI", "gpt-6-sol ", "gpt-6-sol ")]
+    [Xunit.InlineData("OpenAI", null, null)]
+    public void RetirementPreservesOtherAssignments(string provider, string? alias, string? expected)
+    {
+        var path = Path.Combine(CreateTempDirectory(), "agents.json");
+        var agent = new AgentDefinition(new AgentId("control"), "Control", AgentRole.Developer,
+            new ModelProfile(provider, alias ?? "api-custom", ModelCapability.Text, SubscriptionMode.ApiKey, "low", 123),
+            ExecutionPolicy: AgentExecutionPolicy.ApiOnly,
+            Subscription: new SubscriptionLaunchProfile("custom-profile", alias, "high"),
+            IsProviderRoutingConstrained: false);
+        AgentCatalogStore.Save(path, new AgentCatalog([agent]));
+        var restored = Assert.Single(AgentCatalogStore.Load(path).Agents);
+        Assert.Equal(agent, restored);
+        Assert.Equal(expected, restored.Subscription!.ModelAlias);
+    }
+
+    [Xunit.Fact]
+    public void RetirementNormalizesDormantSubscriptionWithoutChangingExecutionPolicy()
+    {
+        var agent = new AgentDefinition(new AgentId("dormant"), "Dormant", AgentRole.Developer,
+            new ModelProfile("OpenAI", "api-custom", ModelCapability.Text, SubscriptionMode.ApiKey, "low", 123),
+            ExecutionPolicy: AgentExecutionPolicy.ApiOnly,
+            Subscription: new SubscriptionLaunchProfile("custom-profile", "gpt-6-sol"), IsProviderRoutingConstrained: true);
+        var catalog = AgentCatalogStore.Load(Path.Combine(CreateTempDirectory(), "absent.json"), new AgentCatalog([agent]));
+        Assert.Equal(agent with { Subscription = agent.Subscription! with { ModelAlias = "gpt-6.1-sol" } }, Assert.Single(catalog.Agents));
+    }
+
     [Xunit.Theory(DisplayName = "AgentCatalog_subscription_reasoning_defaults_are_pinned_by_model")]
     [Xunit.InlineData(AgentCatalog.OpenAiSubscriptionModelAlias, "low")]
     [Xunit.InlineData(AgentCatalog.OpenAiSolSubscriptionModelAlias, "low")]
@@ -376,7 +453,7 @@ public sealed class AgentCatalogTests
     var restored = AgentCatalogStore.Load(path);
 
     Assert.Equal(AgentCatalog.OpenAiSubscriptionModelAlias, restored.GetRequired(AgentRole.Developer).Subscription!.ModelAlias);
-    Assert.Equal(AgentCatalog.OpenAiGpt6SolSubscriptionModelAlias, restored.GetRequired(AgentRole.Planner).Subscription!.ModelAlias);
+    Assert.Equal(AgentCatalog.OpenAiGpt61SolSubscriptionModelAlias, restored.GetRequired(AgentRole.Planner).Subscription!.ModelAlias);
     Assert.Equal(AgentCatalog.StaleOpenAiCodexSubscriptionModelAlias, restored.GetRequired(AgentRole.Reviewer).Subscription!.ModelAlias);
 }
 

@@ -238,6 +238,12 @@ internal sealed partial class GoalDispatchOperations
             }
             var task = goal.Tasks.Single(task => task.Id == item.TaskId);
             var recoveringPreparedReservation = HasRecoverablePreparedReservation(task);
+            if (RequiresRetiredPreparedDispatchRefresh(task) && !refreshBeforeStart)
+            {
+                startRefusals.Add(new DispatchProcessStartRefusal(task.Id,
+                    "Retired OpenAI model in an unstarted dispatch requires preparation refresh before start."));
+                continue;
+            }
             if (ShouldRefreshPreparedDispatchBeforeStart(task, refreshBeforeStart))
             {
                 resolvedAgents ??= agents ?? AgentCatalogStore.Load(workspace.AgentCatalogPath).Agents;
@@ -303,6 +309,15 @@ internal sealed partial class GoalDispatchOperations
             }
 
 
+            // Durable admission can hydrate a different prepared command. Refuse an old unclaimed
+            // attempt here rather than editing an authoritative receipt or command in place.
+            task = kernel.GetTask(goal.Id, item.TaskId);
+            if (RequiresRetiredPreparedDispatchRefresh(task))
+            {
+                startRefusals.Add(new DispatchProcessStartRefusal(task.Id,
+                    "Retired OpenAI model in an unstarted dispatch requires preparation refresh before start."));
+                continue;
+            }
             var startReceipt = admission?.Receipt ?? task.RetryAdmissionHistory.LastOrDefault(receipt =>
                 receipt.LinkedDispatchAt == task.LastDispatch?.DispatchedAt &&
                 receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation);
@@ -516,9 +531,23 @@ internal sealed partial class GoalDispatchOperations
     /// Instance rather than static because the recoverable-reservation check consults this
     /// instance's process-liveness probe.
     /// </remarks>
-    internal bool ShouldRefreshPreparedDispatchBeforeStart(TaskSpec task, bool refreshBeforeStart) =>
-        refreshBeforeStart &&
-        (!HasRecoverablePreparedReservation(task) || !PreparedDispatchMatchesAcknowledgedAssignment(task));
+    internal bool ShouldRefreshPreparedDispatchBeforeStart(TaskSpec task, bool refreshBeforeStart)
+    {
+        if (HasRetiredPreparedModel(task))
+            return refreshBeforeStart && RequiresRetiredPreparedDispatchRefresh(task);
+        return refreshBeforeStart &&
+            (!HasRecoverablePreparedReservation(task) || !PreparedDispatchMatchesAcknowledgedAssignment(task));
+    }
+
+    private static bool HasRetiredPreparedModel(TaskSpec task) =>
+        task.LastDispatch is { } dispatch &&
+        EffectiveModelAssignment.Normalize(dispatch.ProviderName, dispatch.ModelName) != dispatch.ModelName;
+
+    private static bool RequiresRetiredPreparedDispatchRefresh(TaskSpec task) =>
+        HasRetiredPreparedModel(task) && task.LastProcess is null &&
+        !task.RetryAdmissionHistory.Any(receipt =>
+            receipt.LinkedDispatchAt == task.LastDispatch!.DispatchedAt &&
+            (receipt.WorkerStartClaimedAt is not null || receipt.WorkerStartedAt is not null));
 
     private static bool PreparedDispatchMatchesAcknowledgedAssignment(TaskSpec task) =>
         task.LastDispatch is { } preparedDispatch &&
