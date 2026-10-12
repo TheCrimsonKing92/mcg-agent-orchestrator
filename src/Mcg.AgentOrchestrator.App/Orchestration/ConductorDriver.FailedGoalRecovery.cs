@@ -118,32 +118,18 @@ internal sealed partial class ConductorDriver
         ApplyPendingFailedGoalNotes(goal, pendingNotes);
         var targetTaskId = decision.Identity.TaskId ??
             throw new InvalidOperationException($"Recovery action {decision.Action} must identify a target task.");
-        if (!string.IsNullOrWhiteSpace(decision.WarningMessage))
-            _recordTaskNote(goal.Id, targetTaskId, decision.WarningMessage);
-        if (decision.Action == FailedGoalRecoveryAction.CriterionRetry)
-        {
-            _recordCriterionRetryFeedback(
-                goal.Id,
-                targetTaskId,
-                BuildCriterionRetryFeedback(goal, targetTaskId, decision));
-        }
-
-        try
-        {
-            _retryTask(
-                goal.Id,
-                targetTaskId,
-                decision.Reason,
-                decision.RoundKind,
-                decision.RetryCause ?? throw new InvalidOperationException(
-                    $"Recovery action {decision.Action} must carry a typed retry cause."));
-        }
-        catch (InvalidOperationException ex) when (
-            decision.Reason.StartsWith("ACTIONABLE_CANDIDATE_RED", StringComparison.Ordinal) &&
-            ex.Message.Contains("running process", StringComparison.OrdinalIgnoreCase))
+        var conflictMessage = FailedGoalRetryApplicationExecutor.Apply(
+            goal.Id,
+            targetTaskId,
+            decision,
+            () => BuildCriterionRetryFeedback(goal, targetTaskId, decision),
+            _recordTaskNote,
+            _recordCriterionRetryFeedback,
+            _retryTask);
+        if (conflictMessage is not null)
         {
             var conflictReason = $"ACTIONABLE_CANDIDATE_RED_LIFECYCLE_CONFLICT: {decision.Reason} " +
-                $"Developer retry was not applied because {ex.Message} No additional downstream dispatch was started.";
+                $"Developer retry was not applied because {conflictMessage} No additional downstream dispatch was started.";
             var escalated = Escalate(goal, goalPrefix, policy, state, conflictReason);
             return escalated with
             {

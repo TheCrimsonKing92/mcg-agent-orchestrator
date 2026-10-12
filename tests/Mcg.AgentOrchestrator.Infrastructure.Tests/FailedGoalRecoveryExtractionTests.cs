@@ -28,7 +28,8 @@ public sealed class FailedGoalRecoveryExtractionTests
         Assert.DoesNotContain("TryBuildReviewContractRepairRetry", driver, StringComparison.Ordinal);
         Assert.DoesNotContain("TryBuildVerifyingFindingAutoRetry", driver, StringComparison.Ordinal);
         Assert.DoesNotContain("var runningSibling = goal.Tasks.FirstOrDefault", driver, StringComparison.Ordinal);
-        Assert.Contains("decision.WarningMessage", interpreter, StringComparison.Ordinal);
+        Assert.Contains("decision.WarningMessage", File.ReadAllText(Path.Combine(
+            root, "src", "Mcg.AgentOrchestrator.App", "Orchestration", "FailedGoalRetryApplicationExecutor.cs")), StringComparison.Ordinal);
     }
 
     [Fact]
