@@ -109,6 +109,7 @@ internal static class CliExperimentCommands
                 Console.WriteLine($"  {overlap.Other.Id} {state} shared: {string.Join(", ", overlap.SharedMetrics)}");
             }
         }
+        foreach (var line in ExperimentGateAudit.Lines(record, hostLedgers, asOf)) Console.WriteLine(line);
         return false;
     }
 
