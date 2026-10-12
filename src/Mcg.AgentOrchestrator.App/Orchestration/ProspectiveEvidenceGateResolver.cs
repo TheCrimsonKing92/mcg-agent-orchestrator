@@ -26,6 +26,11 @@ internal static class ProspectiveEvidenceGateResolver
         foreach (var wait in waits)
         {
             var names = wait.TestNames!.Distinct(StringComparer.Ordinal).ToArray();
+            if (names.Any(string.IsNullOrWhiteSpace))
+            {
+                unresolved.Add(new(wait.Id, names));
+                continue;
+            }
             IReadOnlyList<string> missing = names;
             string? submissionFailure = null;
             foreach (var attempt in attempts)

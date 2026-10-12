@@ -824,6 +824,16 @@ internal static partial class PlannerOutputContract
 
             if (inheritedNewFileMarker || IsMarkedAsNewFile(targetSection, match))
             {
+                if (citation.IndexOfAny(['*', '?']) >= 0 || candidate.IndexOfAny(['*', '?']) >= 0)
+                {
+                    var wildcardCitationStart = targetHeading.Index + match.Groups["citation"].Index;
+                    diagnostic =
+                        $"target citation '{citation}' cannot be marked as a new file because its path contains a wildcard; source span [{wildcardCitationStart}..{wildcardCitationStart + citation.Length})." +
+                        $"{Environment.NewLine}Offending citation: '{citation}'" +
+                        $" {DescribeOffendingPlanLine(plan, wildcardCitationStart)}";
+                    return false;
+                }
+
                 continue;
             }
 

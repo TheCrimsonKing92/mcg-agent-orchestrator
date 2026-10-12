@@ -5,6 +5,8 @@ public sealed class ProspectiveEvidenceGateResolverScopeTests
 {
     [Theory]
     [InlineData("operator", "names", HumanWaitKind.ProspectiveAcceptanceEvidence)]
+    [InlineData("Acceptance", "names", HumanWaitKind.ProspectiveAcceptanceEvidence)]
+    [InlineData("Acceptance", "null", HumanWaitKind.ProspectiveAcceptanceEvidence)]
     [InlineData(null, "names", HumanWaitKind.ProspectiveAcceptanceEvidence)]
     [InlineData("acceptance-gate", "empty", HumanWaitKind.ProspectiveAcceptanceEvidence)]
     [InlineData("acceptance-gate", "null", HumanWaitKind.ProspectiveAcceptanceEvidence)]

@@ -71,6 +71,14 @@ internal static partial class LandingExecutor
             }
         }
 
+        var pendingInput = DescribeGroupedPendingHumanInput(kernel, goals, workspace.OrchestratorDirectory,
+            goalId => receipt.Identity.Members.Single(member => member.GoalId == goalId).CandidateRevision);
+        if (pendingInput is not null)
+        {
+            return new AcceptanceCohortLandingResult(AcceptanceCohortLandingOutcome.RetryableHold,
+                $"Merge train landing held before mutation because {pendingInput}");
+        }
+
         foreach (var goal in goals)
         {
             var gap = AcceptanceCriterionEvidence.DescribeTrainOperatorEvidenceGap(goal);
@@ -149,6 +157,9 @@ internal static partial class LandingExecutor
         }
 
         blockReason = mutationBlocker?.Invoke();
+        if (string.IsNullOrWhiteSpace(blockReason))
+            blockReason = DescribeGroupedPendingHumanInput(kernel, goals, workspace.OrchestratorDirectory,
+                goalId => receipt.Identity.Members.Single(member => member.GoalId == goalId).CandidateRevision);
         if (!string.IsNullOrWhiteSpace(blockReason))
         {
             foreach (var goal in goals)

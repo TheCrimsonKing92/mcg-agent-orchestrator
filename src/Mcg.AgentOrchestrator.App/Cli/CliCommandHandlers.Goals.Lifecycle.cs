@@ -14,6 +14,9 @@ internal static partial class CliCommandHandlers
 private static void HandleLifecycleGoal(CliExecutionContext context, IReadOnlyList<string> parts, bool simple)
 {
     var commandName = simple ? "lifecycle-simple-goal" : "lifecycle-goal";
+    var requestedEpic = EpicAtCreation.HasArgument(parts)
+        ? EpicAtCreation.ResolveRequested(context.Workspace, GetFlagValue(parts, "--epic"))
+        : null;
     var policy = ResolveCliAutonomyPolicy(parts);
     Console.WriteLine($"Autonomy policy: {policy.Name}");
     policy.ThrowIfDisallowed(AutonomyAction.DispatchStart, commandName);
@@ -44,17 +47,19 @@ private static void HandleLifecycleGoal(CliExecutionContext context, IReadOnlyLi
     PrintClosedSourceBacklogWarning(sourceBacklogLink);
 
     var existingGoalId = GoalOperationJournal.TryFindLifecycleGoal(context.Workspace.ExecutionDirectory, commandName, objective);
-    context.CurrentGoal = existingGoalId is not null &&
-        context.Kernel.Goals.FirstOrDefault(goal => goal.Id == existingGoalId) is { } existingGoal
+    var existingGoal = context.Kernel.Goals.FirstOrDefault(goal => goal.Id == existingGoalId);
+    context.CurrentGoal = existingGoal is not null
         ? existingGoal
         : simple
             ? GoalLifecycleCommands.CreateAndActivateSimpleGoal(context.Kernel, context.Agents, objective, context.Workspace, context.Providers, context.EventWriter)
             : GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, context.Agents, objective, context.Workspace, context.Providers, context.EventWriter);
     var goal = context.CurrentGoal;
     ApplySourceBacklogItemLink(context, goal, sourceBacklogLink);
+    if (existingGoal is null)
+        EpicAtCreation.InheritAfterCommit(context, goal, requestedEpic, sourceBacklogLink?.Item.Id);
     var goalPrefix = goal.Id.Value[..8];
     Console.WriteLine($"Lifecycle goal: {goal.Id.Value}");
-    if (existingGoalId is not null && existingGoalId == goal.Id)
+    if (existingGoal is not null)
     {
         Console.WriteLine(simple ? "Stage simple-goal: reused existing idempotent goal." : "Stage goal: reused existing idempotent goal.");
         var journal = GoalOperationJournal.Read(context.Workspace.ExecutionDirectory, goal.Id);

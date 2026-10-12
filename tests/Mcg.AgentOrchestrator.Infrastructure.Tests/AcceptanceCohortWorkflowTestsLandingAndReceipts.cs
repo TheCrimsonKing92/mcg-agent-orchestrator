@@ -697,8 +697,12 @@ public sealed class AcceptanceCohortWorkflowTestsLandingAndReceipts : Acceptance
         }
     }
 
-    [Fact]
-    public void RetryableLandingHold_PreservesPassingReceipt_AndLaterRelandsIdenticalState()
+    [Theory]
+    [InlineData("mutation-blocker")]
+    [InlineData("legacy")]
+    [InlineData("late-legacy")]
+    [InlineData("typed-with-legacy")]
+    public void RetryableLandingHold_PreservesPassingReceipt_AndLaterRelandsIdenticalState(string scenario)
     {
         var repo = CreateReducedAcceptanceCohortRepository();
         try
@@ -748,7 +752,36 @@ public sealed class AcceptanceCohortWorkflowTestsLandingAndReceipts : Acceptance
                 GateTestResultPaths: [WritePassingTrx(repo, "retryable-hold-receipt.trx")],
                 ValidForLanding: true));
 
-            driver.LandingMutationBlocker = () => "operator-controlled landing pause";
+            var unrelated = kernel.CreateGoal("Unrelated pending evidence");
+            var unrelatedWait = kernel.RequestHumanInputDeduplicated(unrelated.Id, null,
+                "Other goal receipt", kind: HumanWaitKind.ProspectiveAcceptanceEvidence,
+                evidenceOwner: "Acceptance").Request;
+            HumanInputRequest? wait = null;
+            HumanInputRequest? typed = null;
+            HumanInputRequest CreateLegacyWait() => kernel.RequestHumanInputDeduplicated(secondGoal.Id, null,
+                "Required legacy receipt", kind: HumanWaitKind.ProspectiveAcceptanceEvidence,
+                evidenceOwner: "Acceptance").Request;
+            if (scenario is "legacy" or "typed-with-legacy") wait = CreateLegacyWait();
+            if (scenario == "typed-with-legacy")
+            {
+                typed = kernel.RequestHumanInputDeduplicated(firstGoal.Id, null,
+                    "Named passing receipt", kind: HumanWaitKind.ProspectiveAcceptanceEvidence,
+                    evidenceOwner: "acceptance-gate", testNames: [ProspectiveEvidenceGateFixture.IncidentClass]).Request;
+                ProspectiveEvidenceGateFixture.WriteAttempt(workspace.OrchestratorDirectory, firstGoal,
+                    firstRevision, ProspectiveEvidenceGateFixture.PassingRows);
+            }
+            var callbacks = 0;
+            driver.LandingMutationBlocker = () =>
+            {
+                if (scenario == "mutation-blocker") return "operator-controlled landing pause";
+                if (scenario == "late-legacy" && ++callbacks == 2) wait = CreateLegacyWait();
+                return null;
+            };
+            var landings = new List<ConductorLandingReceipt>();
+            driver.SuccessfulLandingSink = landings.Add;
+            var statuses = new[] { firstGoal.Status, secondGoal.Status };
+            var integrationBefore = RunGitOutput(repo, "for-each-ref", "--format=%(objectname)",
+                $"refs/heads/{LandingExecutor.IntegrationBranchName}");
             var held = driver.RunAcceptanceCohort(
                 selection,
                 [firstGoal, secondGoal],
@@ -756,8 +789,37 @@ public sealed class AcceptanceCohortWorkflowTestsLandingAndReceipts : Acceptance
 
             Assert.Equal(AcceptanceCohortGateOutcome.Passed, held.Receipt?.Outcome);
             Assert.True(held.Receipt?.ValidForLanding);
+            Assert.True(held.Receipt?.HasAuthoritativeLandingEvidence);
+            Assert.Equal("retryable-hold-receipt", held.Receipt?.ReceiptId);
             Assert.All(held.MemberResults.Values, result => Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome));
             Assert.Equal(identity.ObservedMainRevision, RunGitOutput(repo, "rev-parse", "main").Trim());
+            Assert.Equal(integrationBefore, RunGitOutput(repo, "for-each-ref", "--format=%(objectname)",
+                $"refs/heads/{LandingExecutor.IntegrationBranchName}"));
+            Assert.Equal(statuses, new[] { firstGoal.Status, secondGoal.Status });
+            Assert.Empty(landings);
+            Assert.All(new[] { firstGoal, secondGoal }, goal => Assert.DoesNotContain(
+                GoalOperationJournal.Read(repo, goal.Id).Entries,
+                operation => operation.Operation == "conductor:land" && operation.Status == GoalOperationStatus.Completed));
+            using (var connection = new SqliteConnection($"Data Source={Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db")}"))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = "SELECT COUNT(*) FROM cohort_members WHERE landed=1;";
+                Assert.Equal(0L, (long)command.ExecuteScalar()!);
+            }
+            if (wait is not null)
+            {
+                Assert.False(wait.IsCompleted);
+                Assert.Null(wait.Answer);
+                Assert.Contains(wait.Id.Value, held.Detail, StringComparison.Ordinal);
+                Assert.Contains(secondGoal.Id.Value, held.Detail, StringComparison.Ordinal);
+                kernel.SubmitHumanInput(wait.Id, "Operator verified required receipt", supersedeSiblings: false);
+            }
+            if (typed is not null)
+            {
+                Assert.True(typed.IsCompleted);
+                Assert.Equal(HumanInputAnswerOrigin.Worker, typed.AuthoritativeAnswer!.Origin);
+            }
 
             driver.LandingMutationBlocker = null;
             var landed = driver.RunAcceptanceCohort(
@@ -767,7 +829,12 @@ public sealed class AcceptanceCohortWorkflowTestsLandingAndReceipts : Acceptance
 
             Assert.Equal(AcceptanceCohortGateOutcome.Passed, landed.Receipt?.Outcome);
             Assert.True(landed.Receipt?.ValidForLanding);
+            Assert.Equal(held.Receipt?.ReceiptId, landed.Receipt?.ReceiptId);
+            Assert.Equal(identity.Value, landed.Receipt?.Identity.Value);
             Assert.All(landed.MemberResults.Values, result => Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome));
+            Assert.Equal(2, landings.Count);
+            Assert.False(unrelatedWait.IsCompleted);
+            if (wait is not null) Assert.Equal("Operator verified required receipt", wait.Answer);
             Assert.Equal(identity.CombinedTreeRevision, RunGitOutput(repo, "rev-parse", "main^{tree}").Trim());
             Assert.Equal(0, verifier.RunCount);
             Assert.Equal(firstRevision, RunGitOutput(repo, "rev-parse", $"refs/heads/{GoalWorktrees.BranchName(firstGoal.Id)}").Trim());

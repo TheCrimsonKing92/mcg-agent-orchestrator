@@ -311,6 +311,7 @@ internal static partial class CliPersistentStateRunner
         var currentGoalId = currentGoal?.Id.Value;
         Goal? nextCurrentGoal = currentGoal;
         string? postCommitFailure = null;
+        var postCommitActions = new PostCommitActions();
         IReadOnlyList<GoalId> pendingRefinementGoalIds = [];
         var isAcceptanceRetry = args.Count > 0 &&
             args[0].Equals("acceptance-retry", StringComparison.OrdinalIgnoreCase);
@@ -338,7 +339,8 @@ internal static partial class CliPersistentStateRunner
                             channel,
                             () => stateRepository.LoadAsync().GetAwaiter().GetResult(),
                             registerStateOutboxMessage: outboxMessages.Add,
-                            registerPostCommitFailure: failure => postCommitFailure ??= failure);
+                            registerPostCommitFailure: failure => postCommitFailure ??= failure,
+                            registerPostCommitAction: postCommitActions.Register);
 
                         nextAgents = commandAgents;
                         nextWorkerProfiles = commandProfiles;
@@ -389,7 +391,8 @@ internal static partial class CliPersistentStateRunner
                             ref commandGoal,
                             channel,
                             () => stateRepository.LoadAsync().GetAwaiter().GetResult(),
-                            registerPostCommitFailure: failure => postCommitFailure ??= failure);
+                            registerPostCommitFailure: failure => postCommitFailure ??= failure,
+                            registerPostCommitAction: postCommitActions.Register);
 
                         nextAgents = commandAgents;
                         nextWorkerProfiles = commandProfiles;
@@ -404,6 +407,7 @@ internal static partial class CliPersistentStateRunner
         agents = nextAgents;
         workerProfiles = nextWorkerProfiles;
         currentGoal = nextCurrentGoal;
+        postCommitActions.Run();
         if (postCommitFailure is not null)
         {
             throw new InvalidOperationException(postCommitFailure);
