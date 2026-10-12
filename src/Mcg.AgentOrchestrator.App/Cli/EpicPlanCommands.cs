@@ -78,7 +78,10 @@ internal static class EpicPlanCommands
         Console.WriteLine($"Bar: {view.Plan.Bar ?? "(no bar)"}");
         Console.WriteLine("Plan:");
         foreach (var item in view.Items)
+        {
             Console.WriteLine($"{item.Item.Position}. {item.Subject} — {item.Render()}");
+            if (item.SourceFacts is { } facts) Console.WriteLine($"  {facts.Render()}");
+        }
         Console.WriteLine("Decisions (newest first):");
         foreach (var decision in view.Plan.Decisions)
             Console.WriteLine($"  {decision.DecidedAt.UtcDateTime:O}" + (decision.DecidedBy is null ? "" : $" by {decision.DecidedBy}") + $": {decision.Text}");

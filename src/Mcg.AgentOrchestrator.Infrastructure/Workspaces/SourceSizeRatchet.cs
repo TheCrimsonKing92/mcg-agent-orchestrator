@@ -368,7 +368,9 @@ internal static class SourceSizeRatchet
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsDispatchRecovery.cs", 455),
             // Raised for goal 8b6de491: the slice-batch preview test needs an available Developer agent in
             // its roster now that creating a batch requires one, and the roster is declared inline.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacement.cs", 2744),
+            // Raised for goal 152bd7c9: source-claim replacement regressions add 7 lines of assertions;
+            // the broader intake/replacement suite remains scheduled for decomposition.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacement.cs", 2751),
             // Raised for goal a2289b27: the strict-checkpoint fixture explicitly names its initial
             // branch main before provisioning a goal worktree, so it works with non-main Git defaults.
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsGoalQueriesAndLanding.cs", 984),
