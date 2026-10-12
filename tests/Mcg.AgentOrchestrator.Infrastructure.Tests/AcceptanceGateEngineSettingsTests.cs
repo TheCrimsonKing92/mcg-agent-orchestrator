@@ -17,7 +17,7 @@ public sealed class AcceptanceGateEngineSettingsTests
         Xunit.Assert.Equal(5, settings.MaxConcurrentShards);
         Xunit.Assert.Equal(5, settings.PartitionVerdictFullRerunEveryN);
         Xunit.Assert.Equal(AcceptanceGateEngineSettings.DefaultOutputCaptureLimitBytes, settings.OutputCaptureLimitBytes);
-        Xunit.Assert.Equal(25, settings.InfrastructureTestLanes.Count);
+        Xunit.Assert.Equal(26, settings.InfrastructureTestLanes.Count);
         Xunit.Assert.Equal(8, startupContract.ManifestCheckCount);
         using var manifestDocument = System.Text.Json.JsonDocument.Parse(
             File.ReadAllText(Path.Combine(repositoryRoot, "config", "acceptance-manifest.json")));
@@ -42,7 +42,7 @@ public sealed class AcceptanceGateEngineSettingsTests
                 $"Checked-in lane '{lane.Name}' must carry a positive finite serial-duration estimate."));
         AssertLaneSetPreservesCoverage(
             settings,
-            ["Goal lifecycle commands", "Goal worktree cleanup", "Goal worktree parallel"],
+            ["Goal lifecycle commands", "Goal worktree cleanup cohort", "Goal worktree cleanup git", "Goal worktree parallel"],
             [
                 "AcceptanceCohortWorkflowTests",
                 "AcceptanceVerdictCarryForwardTests",
@@ -77,7 +77,10 @@ public sealed class AcceptanceGateEngineSettingsTests
             .Single(lane => lane.Name == "Goal lifecycle commands")
             .ExclusiveResourceKeys);
         Xunit.Assert.Empty(settings.InfrastructureTestLanes
-            .Single(lane => lane.Name == "Goal worktree cleanup")
+            .Single(lane => lane.Name == "Goal worktree cleanup cohort")
+            .ExclusiveResourceKeys);
+        Xunit.Assert.Empty(settings.InfrastructureTestLanes
+            .Single(lane => lane.Name == "Goal worktree cleanup git")
             .ExclusiveResourceKeys);
         AssertLaneSetPreservesCoverage(
             settings,
