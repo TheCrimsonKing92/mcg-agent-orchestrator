@@ -31,10 +31,31 @@ internal static class ProjectCompareManifestCommand
                 : registry.GetRequiredProject(name);
         var model = new DotnetProjectDiscoveryAdapter().Discover(rootOverride ?? project.RootDirectory,
             RepositorySourceInventory.ExcludedDirectoryNames, null, UnitCommandKinds.None);
+        string? answerDirectory = null;
+        try
+        {
+            answerDirectory = ProjectDiscoveryModelLocation.ResolveDirectory(project, rootOverride, defaultRootDirectory,
+                registry.DataRootDirectory);
+        }
+        catch (ArgumentException)
+        {
+            // An unresolved answer directory preserves comparison without owner answers.
+        }
+
+        AppliedOwnerAnswers? applied = null;
+        string? answerError = null;
+        if (answerDirectory is not null)
+        {
+            var read = ProjectAnswerCommand.ReadAnswersForOutput(answerDirectory);
+            answerError = read.Error;
+            if (read.Answers.Count > 0)
+                applied = OwnerAnswerApplier.Apply(model, read.Answers);
+        }
         IReadOnlyList<ManifestCheckComparison> comparisons;
         try
         {
-            comparisons = ManifestCheckComparer.Compare(model, manifestJson);
+            comparisons = applied is null ? ManifestCheckComparer.Compare(model, manifestJson)
+                : ManifestCheckComparer.Compare(model, manifestJson, applied);
         }
         catch (JsonException exception)
         {
@@ -46,6 +67,8 @@ internal static class ProjectCompareManifestCommand
             var reason = string.IsNullOrEmpty(comparison.Reason) ? "" : $" ({comparison.Reason})";
             output.WriteLine($"{comparison.Kind} {comparison.ProjectPath} learned={comparison.LearnedRunner ?? "-"} manifest={comparison.ManifestRunner ?? "-"}{reason}");
         }
+        if (answerError is not null)
+            output.WriteLine($"Owner answers unreadable: {answerError}");
 
         return comparisons.All(comparison => comparison.Kind == ManifestCheckResultKind.Match) ? 0 : 1;
     }
