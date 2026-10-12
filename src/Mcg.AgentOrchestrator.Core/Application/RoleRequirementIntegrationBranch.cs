@@ -6,13 +6,12 @@ namespace Mcg.AgentOrchestrator.Core;
 internal static class RoleRequirementIntegrationBranch
 {
     private static readonly Regex ScopeTokens = new(
-        @"\bmain(?:\.\.\.HEAD|\.\.HEAD)\b|--name-only main HEAD\b|\bcurrent main\b|\b(?:Branch|branch)-behind-main\b",
+        @"\b(?<branch>main)(?:\.\.\.HEAD|\.\.HEAD)\b|--name-only (?<branch>main) HEAD\b|\bcurrent (?<branch>main)\b|\b(?:Branch|branch)-behind-(?<branch>main)\b",
         RegexOptions.CultureInvariant);
 
     public static IReadOnlyList<string> Apply(IReadOnlyList<string> lines, string? integrationBranch)
     {
-        if (string.IsNullOrWhiteSpace(integrationBranch) ||
-            string.Equals(integrationBranch, "main", StringComparison.Ordinal))
+        if (string.IsNullOrWhiteSpace(integrationBranch))
             return lines;
 
         string[]? rewritten = null;
@@ -20,7 +19,11 @@ internal static class RoleRequirementIntegrationBranch
         {
             // A single pass and evaluator keep inserted branch text literal, even when it contains tokens.
             var line = ScopeTokens.Replace(lines[index], match =>
-                match.Value.Replace("main", integrationBranch, StringComparison.Ordinal));
+            {
+                var branch = match.Groups["branch"];
+                var offset = branch.Index - match.Index;
+                return match.Value[..offset] + integrationBranch + match.Value[(offset + branch.Length)..];
+            });
             if (string.Equals(line, lines[index], StringComparison.Ordinal))
                 continue;
 
