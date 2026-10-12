@@ -169,7 +169,8 @@ public sealed partial class AgentOrchestratorKernel
                 $"worker_result_log={verification.StandardOutputPath ?? "unavailable"} reason=missing-or-unparseable-worker-result");
         }
 
-        var parsedHumanInput = AgentOutputDirectives.ParseHumanInputRequest(verification.StandardOutput, task.RequiredRole);
+        var parsedHumanInput = AgentOutputDirectives.ParseHumanInputRequest(
+            verification.AuthoritativeStandardOutput ?? verification.StandardOutput, task.RequiredRole);
         var humanInputQuestion = verification.HumanInputQuestion ?? parsedHumanInput.Directive?.Question;
         if (humanInputQuestion is not null)
         {
@@ -202,7 +203,8 @@ public sealed partial class AgentOrchestratorKernel
                 recordDuplicateSuppression: verification.WorkerResultPresent,
                 evidenceOwner: verification.HumanInputEvidenceOwner
                     ?? parsedHumanInput.Directive?.EvidenceOwner,
-                storeReference: verification.HumanInputStoreReference ?? parsedHumanInput.Directive?.StoreReference);
+                storeReference: verification.HumanInputStoreReference ?? parsedHumanInput.Directive?.StoreReference,
+                testNames: parsedHumanInput.Directive?.TestNames);
             if (verification.WorkerResultPresent &&
                 requestResult.WasSuppressedByAnswer &&
                 WorkerResultBlockers.TryGetBlockersStatus(verification, out var blockersStatus) &&

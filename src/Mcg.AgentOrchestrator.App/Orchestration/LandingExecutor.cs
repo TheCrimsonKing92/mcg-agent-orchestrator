@@ -126,13 +126,23 @@ internal static partial class LandingExecutor
         }
 
         var changedFiles = changedFilesResult.Files;
+        var prospectiveEvidence = ProspectiveEvidenceGateResolver.Resolve(
+            kernel, goal, workspace.OrchestratorDirectory, ResolveRef(executionDirectory, goalBranch));
         var acceptance = GoalAcceptanceStatusProjector.Build(kernel, goal, workspace.ExecutionDirectory, workspace.IntegrationBranch);
+        var acceptanceAccepted = acceptance.IsAccepted && prospectiveEvidence.UnresolvedWaits.Count == 0;
         landingFacts = landingFacts with
         {
-            AcceptanceAccepted = acceptance.IsAccepted,
-            AcceptanceHoldDescription = acceptance.AcceptanceHoldDescription
+            AcceptanceAccepted = acceptanceAccepted,
+            AcceptanceHoldDescription = prospectiveEvidence.UnresolvedWaits.Count == 0
+                ? acceptance.AcceptanceHoldDescription
+                : acceptance.AcceptanceHoldDescription + string.Concat(
+                    prospectiveEvidence.UnresolvedWaits.Select(wait =>
+                        $"  {HumanWaitKind.ProspectiveAcceptanceEvidence} {wait.RequestId.Value[..8]} " +
+                        (wait.SubmissionFailure is { } failure
+                            ? $"submission failed: {failure}"
+                            : $"missing: {string.Join(", ", wait.MissingOrFailedTestNames)}")))
         };
-        if (!acceptance.IsAccepted)
+        if (!acceptanceAccepted)
         {
             // A sibling landing path can complete after this attempt's initial journal read.
             // Re-read at the decision point so an irreversible landing is not reported as

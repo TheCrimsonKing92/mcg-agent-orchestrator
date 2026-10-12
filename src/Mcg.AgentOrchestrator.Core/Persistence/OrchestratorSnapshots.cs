@@ -321,7 +321,8 @@ public sealed record HumanInputRequestSnapshot(
     int SuppressionAnswerRevision = 0,
     long SuppressionRevision = 0,
     string? EvidenceOwner = null,
-    PlannerEvidenceStoreReference? StoreReference = null);
+    PlannerEvidenceStoreReference? StoreReference = null,
+    IReadOnlyList<string>? TestNames = null);
 
 public static class VerificationTextBounds
 {

@@ -29,7 +29,8 @@ public sealed class HumanInputRequest
         int suppressionAnswerRevision = 0,
         long suppressionRevision = 0,
         string? evidenceOwner = null,
-        PlannerEvidenceStoreReference? storeReference = null)
+        PlannerEvidenceStoreReference? storeReference = null,
+        IReadOnlyList<string>? testNames = null)
     {
         Id = id;
         GoalId = goalId;
@@ -59,6 +60,7 @@ public sealed class HumanInputRequest
         SuppressionRevision = Math.Max(0, suppressionRevision);
         EvidenceOwner = string.IsNullOrWhiteSpace(evidenceOwner) ? null : evidenceOwner.Trim();
         StoreReference = storeReference;
+        TestNames = testNames is null ? null : Array.AsReadOnly(testNames.ToArray());
     }
 
     public HumanInputRequestId Id { get; }
@@ -94,6 +96,8 @@ public sealed class HumanInputRequest
     public string? EvidenceOwner { get; }
 
     public PlannerEvidenceStoreReference? StoreReference { get; }
+
+    public IReadOnlyList<string>? TestNames { get; }
 
     public string? DerivedBlockerEvidence
     {
@@ -316,7 +320,8 @@ public sealed class HumanInputRequest
             SuppressionAnswerRevision,
             SuppressionRevision,
             EvidenceOwner,
-            StoreReference);
+            StoreReference,
+            TestNames);
     }
 
     internal static HumanInputRequest FromSnapshot(HumanInputRequestSnapshot snapshot)
@@ -341,7 +346,8 @@ public sealed class HumanInputRequest
             snapshot.SuppressionAnswerRevision,
             snapshot.SuppressionRevision,
             snapshot.EvidenceOwner,
-            snapshot.StoreReference);
+            snapshot.StoreReference,
+            snapshot.TestNames);
 
         if (snapshot.IsCompleted)
         {

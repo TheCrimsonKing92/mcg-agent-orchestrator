@@ -1821,7 +1821,8 @@ public sealed partial class AgentOrchestratorKernel
         string? workerResultLogReference = null,
         bool recordDuplicateSuppression = true,
         string? evidenceOwner = null,
-        PlannerEvidenceStoreReference? storeReference = null)
+        PlannerEvidenceStoreReference? storeReference = null,
+        IReadOnlyList<string>? testNames = null)
     {
         var goal = GetGoal(goalId);
         if (HumanWaitPolicyDefaults.BlocksActiveWork(kind))
@@ -1928,7 +1929,8 @@ public sealed partial class AgentOrchestratorKernel
                 effectiveQuestionFingerprint,
                 blockerFingerprint,
                 evidenceOwner: evidenceOwner,
-                storeReference: storeReference);
+                storeReference: storeReference,
+                testNames: testNames);
             _humanInputRequests.Add(request.Id, request);
 
             HoldTaskForExistingHumanInput(goal, taskId, request.Kind);
@@ -2096,7 +2098,9 @@ public sealed partial class AgentOrchestratorKernel
     public void SubmitHumanInput(
         HumanInputRequestId requestId,
         string answer,
-        IReadOnlyList<string>? gatedDeliverableIds = null)
+        IReadOnlyList<string>? gatedDeliverableIds = null,
+        HumanInputAnswerOrigin origin = HumanInputAnswerOrigin.Operator,
+        bool supersedeSiblings = true)
     {
         lock (_humanInputRequestLock)
         {
@@ -2113,15 +2117,38 @@ public sealed partial class AgentOrchestratorKernel
 
             var goal = GetGoal(request.GoalId);
             var answeredAt = _clock.UtcNow;
+            if (!supersedeSiblings && request.Kind == HumanWaitKind.ProspectiveAcceptanceEvidence &&
+                string.Equals(request.EvidenceOwner, "acceptance-gate", StringComparison.OrdinalIgnoreCase) &&
+                request.TestNames is { Count: > 0 })
+            {
+                // Gate evidence does not resume tasks or supersede sibling waits. Validate
+                // and finish any fallible status work before publishing its completion.
+                var deliverableIds = gatedDeliverableIds?.ToArray();
+                var prepared = HumanInputRequest.FromSnapshot(request.ToSnapshot());
+                prepared.Complete(answer, answeredAt, deliverableIds, origin, goal.AuthoritativeBrief.Version);
+                if (request.TaskId is not null) goal.FindTask(request.TaskId);
+                RefreshGoalStatus(goal);
+                var receipt = new ProgressEvent(goal.Id, request.TaskId,
+                    ProgressKind.HumanInputReceived, answer, answeredAt);
+                _eventWriter.AppendTimelineEvent(receipt);
+
+                // No fallible writer operation follows the state change. If persistence
+                // throws, the original request and its answer history remain pending.
+                request.Complete(answer, answeredAt, deliverableIds, origin, goal.AuthoritativeBrief.Version);
+                goal.Append(receipt);
+                return;
+            }
             request.Complete(
                 answer,
                 answeredAt,
                 gatedDeliverableIds,
+                origin,
                 briefVersion: goal.AuthoritativeBrief.Version);
             if (request.TaskId is not null)
                 RecordRetryAdmissionRecoveryEvidence(goal, goal.FindTask(request.TaskId), request, answeredAt);
             var siblings = _humanInputRequests.Values
                 .Where(candidate =>
+                    supersedeSiblings &&
                     candidate.Id != request.Id &&
                     candidate.GoalId == request.GoalId &&
                     candidate.TaskId == request.TaskId &&

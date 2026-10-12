@@ -8,7 +8,8 @@ public sealed record HumanInputDirective(
     string? BlockerFingerprint = null,
     HumanWaitKind Kind = HumanWaitKind.SpecClarification,
     string? EvidenceOwner = null,
-    PlannerEvidenceStoreReference? StoreReference = null);
+    PlannerEvidenceStoreReference? StoreReference = null,
+    IReadOnlyList<string>? TestNames = null);
 
 public sealed record HumanInputDirectiveParseResult(HumanInputDirective? Directive, string? Diagnostic)
 {
@@ -56,6 +57,7 @@ public static class AgentOutputDirectives
                 "For evidence that was never recorded, prefer an undecidable mapping; if operator action is still required, use availability=never-recorded and omit store. " +
                 "Evidence needed to decide or plan now is a blocking prerequisite; evidence that can only be produced after the candidate exists is prospective acceptance evidence. " +
                 "For the latter, use availability=post-implementation with owner and omit store; retain the exact criterion obligation without claiming the check was executed. " +
+                "For evidence the acceptance gate produces from test runs, use owner=acceptance-gate and list the test class, Class.Method, or exact theory row names in a non-empty tests array. " +
                 "backticked verification commands with TEST-VERIFIABLE or REAL-WORLD-DEPENDENT, and explicit stop conditions. " +
                 "Cited repository paths must exist unless explicitly marked as a new file to create. " +
                 "Cite every path as a concrete repository-relative file, never a wildcard pattern, and before finishing confirm each cited path exists, for example with `git ls-files <path>`, unless it is marked as a new file. " +
@@ -223,6 +225,18 @@ public static class AgentOutputDirectives
                     "criterion_index must be positive and evidence_key, availability, needed, and reason must be non-empty");
             }
 
+            IReadOnlyList<string>? testNames = null;
+            if (root.TryGetProperty("tests", out var tests))
+            {
+                if (!availability.Equals("post-implementation", StringComparison.OrdinalIgnoreCase))
+                    return MalformedEvidenceRequest("tests requires availability=post-implementation");
+                if (tests.ValueKind != JsonValueKind.Array || tests.GetArrayLength() == 0 ||
+                    tests.EnumerateArray().Any(test =>
+                        test.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(test.GetString())))
+                    return MalformedEvidenceRequest("tests must be a non-empty array of non-empty strings");
+                testNames = tests.EnumerateArray().Select(test => test.GetString()!).ToArray();
+            }
+
             PlannerEvidenceStoreReference? storeReference = null;
             if (root.TryGetProperty("store_ref", out var storeRef))
             {
@@ -282,7 +296,7 @@ public static class AgentOutputDirectives
                 $"Availability: {availabilityText}. Reason: {reason}";
             var fingerprint = HumanInputRequest.BuildPlannerEvidenceFingerprint(criterionIndex, evidenceKey);
             return new HumanInputDirectiveParseResult(
-                new HumanInputDirective(question, fingerprint, fingerprint, kind, evidenceOwner, storeReference),
+                new HumanInputDirective(question, fingerprint, fingerprint, kind, evidenceOwner, storeReference, testNames),
                 null);
         }
         catch (JsonException error)
