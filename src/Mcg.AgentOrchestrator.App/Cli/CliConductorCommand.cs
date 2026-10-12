@@ -18,7 +18,7 @@ internal static class CliConductorCommand
         TextWriter? output = null, TextWriter? error = null,
         Func<OrchestratorWorkspace, ITransactionalOrchestratorStateRepository>? stateRepository = null,
         OrchestratorHome? home = null,
-        Func<string, IReadOnlyList<StoreSetupResult>>? storeSetup = null)
+        Func<string, IReadOnlyList<StoreSetupResult>>? storeSetup = null, TimeProvider? time = null)
     {
         output ??= Console.Out;
         error ??= Console.Error;
@@ -26,7 +26,8 @@ internal static class CliConductorCommand
         if (args.Count < 2 || args.Count > 3 ||
             args.Count == 3 && !(args[1].Equals("start", StringComparison.OrdinalIgnoreCase) &&
                 args[2].Equals("--clear-stop", StringComparison.OrdinalIgnoreCase)) &&
-                !args[1].Equals("apply-intents", StringComparison.OrdinalIgnoreCase))
+                !args[1].Equals("apply-intents", StringComparison.OrdinalIgnoreCase) &&
+                !CliConductorStatusJsonQueryCommand.IsConductorStatusJsonCommand(args))
         {
             error.WriteLine(CliCommandHelp.ConductorUsage);
             return 1;
@@ -51,9 +52,13 @@ internal static class CliConductorCommand
                     return Start(workspace, owner, args.Count == 3, launcher ?? new SystemConductorProcessLauncher(),
                         output, error, home ?? OrchestratorHome.ResolveForProcess(), storeSetup);
                 case "status":
-                    CliConductorStatusReader.Print(workspace, owner,
-                        (bootTime ?? (() => DateTimeOffset.UtcNow - TimeSpan.FromMilliseconds(Environment.TickCount64)))(), output,
+                    var snapshot = ConductorStatusSnapshotReader.Read(workspace, owner,
+                        (bootTime ?? (() => DateTimeOffset.UtcNow - TimeSpan.FromMilliseconds(Environment.TickCount64)))(),
                         mainCommit ?? (() => ResolveMainCommit(workspace)));
+                    if (CliConductorStatusJsonQueryCommand.IsConductorStatusJsonCommand(args))
+                        output.WriteLine(ConductorStatusAgentReadView.Render(snapshot, time ?? TimeProvider.System));
+                    else
+                        CliConductorStatusReader.Print(snapshot, output);
                     return 0;
                 case "stop":
                     if (owner is null)
