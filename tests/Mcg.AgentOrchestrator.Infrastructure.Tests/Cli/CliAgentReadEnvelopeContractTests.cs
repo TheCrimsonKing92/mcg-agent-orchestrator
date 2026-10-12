@@ -151,7 +151,7 @@ public sealed class CliAgentReadEnvelopeContractTests : CliTaskQueryTestSupport
     {
         var output = CaptureConsole(() => Assert.True(CliCommandHelp.TryPrintStartupHelp(["goals", "--help"])));
         Assert.Contains("Usage: goals [--epic <id-or-title>] [--json]", output);
-        Assert.Contains("--json (bare form only) emits the mcg.goals agent envelope.", output);
+        Assert.Contains("--json emits the mcg.goals agent envelope for the bare form and the --epic <ref> form.", output);
     }
 
     private static JsonElement AssertEnvelope(JsonElement envelope, string schema, int version)
