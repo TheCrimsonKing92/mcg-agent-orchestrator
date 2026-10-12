@@ -15,6 +15,7 @@ public static class LearnedAcceptanceManifest
         var applied = OwnerAnswerApplier.Apply(model, answers.OrderBy(answer => answer.FactKey, StringComparer.Ordinal)
             .ThenBy(answer => answer.RecordedUtc).ThenBy(answer => answer.Value, StringComparer.Ordinal).ToArray());
         var (checks, unresolved) = LearnedTestCheckDeriver.Derive(model, applied);
+        var checkNames = LearnedCheckNames.Assign(checks.Select(check => check.ProjectPath).ToArray());
         var learned = LearnedEngineSettingsDeriver.Derive(model);
         var settings = OwnerAnsweredEngineSettings.Overlay(learned, applied);
         var questions = settings.OwnerQuestions.Concat(applied.OpenQuestions)
@@ -32,6 +33,9 @@ public static class LearnedAcceptanceManifest
             if (mtpLayoutRefusals?.TryGetValue(check.ProjectPath, out var reason) == true)
                 blockers.Add(new ManifestBlocker("engine/mtpInvocations", reason));
         blockers.AddRange(questions.Select(question => new ManifestBlocker(question.FactKey, question.Question)));
+        if (checkNames.Collisions.Count > 0)
+            blockers.Add(new ManifestBlocker("checks/names",
+                $"Two or more test projects produce the same check name: {string.Join(", ", checkNames.Collisions)}."));
         if (blockers.Count > 0)
             return new(null, blockers.AsReadOnly(), questions.AsReadOnly());
 
@@ -42,7 +46,7 @@ public static class LearnedAcceptanceManifest
             var path = check.ProjectPath.Replace('\\', '/');
             var emittedCheck = new JsonObject
             {
-                ["name"] = Path.GetFileNameWithoutExtension(path),
+                ["name"] = checkNames.Names[path],
                 ["type"] = "dotnet-test",
                 ["runner"] = check.Runner,
                 ["project"] = path
