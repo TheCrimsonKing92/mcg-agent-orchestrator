@@ -18,6 +18,21 @@ public sealed record HumanInputDirectiveParseResult(HumanInputDirective? Directi
 
 public static class AgentOutputDirectives
 {
+    internal static IReadOnlyList<string>? ResolveHumanInputTestNames(
+        string? authoritativeOutput, AgentRole role, string question, IReadOnlyList<string>? parsedNames)
+    {
+        // Full stdout may include an ingested Planner plan. Recover names only for the
+        // request already identified in the worker decision stream, never a new request.
+        if (authoritativeOutput is { } fullOutput)
+        {
+            var fullDirective = ParseHumanInputRequest(fullOutput, role).Directive;
+            if (fullDirective is { Kind: HumanWaitKind.ProspectiveAcceptanceEvidence } &&
+                string.Equals(fullDirective.Question, question, StringComparison.Ordinal))
+                return fullDirective.TestNames;
+        }
+        return parsedNames;
+    }
+
     public const string PlannerStandingRules =
         "The literal text `disposition=` may appear only on mapping lines. " +
         "Only mapping lines may begin with a digit and a period. " +
