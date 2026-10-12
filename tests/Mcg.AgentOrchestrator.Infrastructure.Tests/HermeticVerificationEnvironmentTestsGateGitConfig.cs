@@ -27,7 +27,7 @@ public sealed class HermeticVerificationEnvironmentTestsGateGitConfig : GoalAcce
         Assert.Equal(Path.Combine(environment["USERPROFILE"]!, "git", "gate-gitconfig"), path);
         Assert.NotEqual(@"C:\operator\.gitconfig", path);
         Assert.NotEqual(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".gitconfig"), path);
-        Assert.Equal(ExpectedConfig, GoalAcceptanceVerifier.HermeticGateGitConfig);
+        Assert.Equal(ExpectedConfig, AcceptanceHermeticGitConfiguration.GateConfig);
         Assert.Equal(new UTF8Encoding(false).GetBytes(ExpectedConfig), File.ReadAllBytes(path));
         Assert.True(File.GetAttributes(path).HasFlag(FileAttributes.ReadOnly));
 
@@ -54,7 +54,7 @@ public sealed class HermeticVerificationEnvironmentTestsGateGitConfig : GoalAcce
             Task<string> StartWriter() => Task.Factory.StartNew(() =>
             {
                 gate.SignalAndWait();
-                return GoalAcceptanceVerifier.EnsureHermeticGateGitConfig(profileRoot);
+                return AcceptanceHermeticGitConfiguration.EnsureConfigFile(profileRoot);
             }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
             var first = StartWriter();
             var second = StartWriter();
@@ -70,7 +70,7 @@ public sealed class HermeticVerificationEnvironmentTestsGateGitConfig : GoalAcce
             File.SetAttributes(path, File.GetAttributes(path) & ~FileAttributes.ReadOnly);
             File.SetLastWriteTimeUtc(path, sentinel);
             File.SetAttributes(path, File.GetAttributes(path) | FileAttributes.ReadOnly);
-            Assert.Equal(path, GoalAcceptanceVerifier.EnsureHermeticGateGitConfig(profileRoot));
+            Assert.Equal(path, AcceptanceHermeticGitConfiguration.EnsureConfigFile(profileRoot));
             Assert.Equal(sentinel, File.GetLastWriteTimeUtc(path));
             Assert.True(File.GetAttributes(path).HasFlag(FileAttributes.ReadOnly));
         }
