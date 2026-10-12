@@ -752,7 +752,7 @@ public sealed class AcceptanceCohortWorkflowTestsLandingAndReceipts : Acceptance
                 GateTestResultPaths: [WritePassingTrx(repo, "retryable-hold-receipt.trx")],
                 ValidForLanding: true));
 
-            var unrelated = kernel.CreateGoal("Unrelated pending evidence", []);
+            var unrelated = kernel.CreateGoal("Unrelated pending evidence");
             var unrelatedWait = kernel.RequestHumanInputDeduplicated(unrelated.Id, null,
                 "Other goal receipt", kind: HumanWaitKind.ProspectiveAcceptanceEvidence,
                 evidenceOwner: "Acceptance").Request;

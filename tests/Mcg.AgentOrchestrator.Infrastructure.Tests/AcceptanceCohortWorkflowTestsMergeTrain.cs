@@ -116,7 +116,7 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrain : AcceptanceCohortWo
             var landings = new List<ConductorLandingReceipt>();
             driver.SuccessfulLandingSink = landings.Add;
 
-            var unrelated = kernel.CreateGoal("Unrelated train wait", []);
+            var unrelated = kernel.CreateGoal("Unrelated train wait");
             var unrelatedWait = kernel.RequestHumanInputDeduplicated(unrelated.Id, null,
                 "Other goal receipt", kind: HumanWaitKind.ProspectiveAcceptanceEvidence,
                 evidenceOwner: "Acceptance").Request;
