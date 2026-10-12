@@ -9,10 +9,12 @@ public enum ExperimentBaselineKind { BeforeAfterWindow = 1, AlternatingGates, Tw
 public enum ExperimentStopUnit { Gates = 1, Goals, Ticks }
 public enum ExperimentOutcomeState { Open = 1, Confirmed, Refuted, Inconclusive }
 
-public sealed record ExperimentIntervention(ExperimentInterventionKind Kind, string Description, ExperimentFlagTarget? FlagTarget = null);
+public sealed record ExperimentIntervention(ExperimentInterventionKind Kind, string Description, ExperimentFlagTarget? FlagTarget = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? AppliedCommit = null);
 public sealed record ExperimentBaseline(ExperimentBaselineKind Kind, DateTimeOffset? Since = null,
     DateTimeOffset? Until = null, string? TwinGoalId = null, string? ComparisonGoalId = null,
-    IReadOnlyList<string>? BaselineGoalIds = null, IReadOnlyList<string>? ComparisonGoalIds = null);
+    IReadOnlyList<string>? BaselineGoalIds = null, IReadOnlyList<string>? ComparisonGoalIds = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? MinGateSeconds = null);
 public sealed record ExperimentStopRule(int Count, ExperimentStopUnit Unit, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<ExperimentStopExtension>? Extensions = null);
 public sealed record ExperimentCondition(string Metric, string Op, [property: JsonRequired] double ChangePercent);
 public sealed record ExperimentDecisionRule(IReadOnlyList<ExperimentCondition> KeepIf, IReadOnlyList<ExperimentCondition> RevertIf);
