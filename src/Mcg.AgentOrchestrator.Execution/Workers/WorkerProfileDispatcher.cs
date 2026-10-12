@@ -228,7 +228,9 @@ public static partial class WorkerProfileDispatcher
             effectiveReviewRetryCap,
             measureWithTypedSourceBoundaries: usesTypedContextPackage,
             changedExistingTests: changedExistingTests.Entries,
-            changedExistingTestsDiagnostic: changedExistingTests.Diagnostic, acceptanceManifestPromptPath: WorkerAcceptanceManifestDisplayPath.ForPrompt(targetHome, workingDirectory));
+            changedExistingTestsDiagnostic: changedExistingTests.Diagnostic,
+            acceptanceManifestPromptPath: WorkerAcceptanceManifestDisplayPath.ForPrompt(targetHome, workingDirectory),
+            integrationBranchPromptName: integrationBranch);
         var brief = usesTypedContextPackage
             ? briefSource.ToTaskBrief(string.Empty)
             : briefSource.ProjectLegacyMarkedTextV1(emitTypedSourceBoundaries: false);

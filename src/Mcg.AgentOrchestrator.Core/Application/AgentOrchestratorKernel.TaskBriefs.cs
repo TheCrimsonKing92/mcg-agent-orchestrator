@@ -174,7 +174,8 @@ public sealed partial class AgentOrchestratorKernel
         ReviewRetryCapReceipt? reviewRetryCap = null,
         bool measureWithTypedSourceBoundaries = false,
         IReadOnlyList<ChangedExistingTest>? changedExistingTests = null,
-        string? changedExistingTestsDiagnostic = null, string? acceptanceManifestPromptPath = null)
+        string? changedExistingTestsDiagnostic = null, string? acceptanceManifestPromptPath = null,
+        string? integrationBranchPromptName = null)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
@@ -396,7 +397,7 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         var roleLines = new List<string>();
-        roleLines.AddRange(RoleRequirementManifestPath.Apply(isScoutPlanner
+        roleLines.AddRange(RoleRequirementIntegrationBranch.Apply(RoleRequirementManifestPath.Apply(isScoutPlanner
             ? SdlcRolePromptRequirements.BuildScout(
                 complexity,
                 SdlcRolePromptRequirements.HasHighRiskOrComplexIntakeRiskLabel(goal))
@@ -404,7 +405,7 @@ public sealed partial class AgentOrchestratorKernel
                 task.RequiredRole,
                 complexity,
                 SdlcRolePromptRequirements.HasHighRiskOrComplexIntakeRiskLabel(goal),
-                hasDurableResearch), acceptanceManifestPromptPath));
+                hasDurableResearch), acceptanceManifestPromptPath), integrationBranchPromptName));
         if (!string.IsNullOrWhiteSpace(contextDirectory))
             CriteriaSelfCheckPromptContext.Externalize(roleLines, task.RequiredRole, includeReference: false);
         roleLines.Add(string.Empty);
@@ -467,7 +468,10 @@ public sealed partial class AgentOrchestratorKernel
             reviewerMergeTreeTotalConflictPathCount);
         if (reviewerChangedFileScope is not null)
         {
-            segments.Add(reviewerChangedFileScope);
+            segments.Add(reviewerChangedFileScope with
+            {
+                Lines = RoleRequirementIntegrationBranch.Apply(reviewerChangedFileScope.Lines, integrationBranchPromptName)
+            });
         }
 
         if (!string.IsNullOrWhiteSpace(task.VerificationPlan))
