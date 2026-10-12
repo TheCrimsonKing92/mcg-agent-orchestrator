@@ -47,8 +47,8 @@ internal sealed partial class AcceptancePartitionVerdictCache
         if (latest is null)
             return PartitionVerdictMissReasons.NoPriorGreenForLane;
 
-        var manifestDiffers = !latest.ManifestIdentity.Equals(ManifestIdentity, StringComparison.Ordinal);
-        var closureDiffers = !latest.ClosureHash.Equals(closureHash, StringComparison.OrdinalIgnoreCase);
+        var manifestDiffers = !string.Equals(latest.ManifestIdentity, ManifestIdentity, StringComparison.Ordinal);
+        var closureDiffers = !string.Equals(latest.ClosureHash, closureHash, StringComparison.OrdinalIgnoreCase);
         return (manifestDiffers, closureDiffers) switch
         {
             (true, true) => PartitionVerdictMissReasons.ManifestAndClosureDiffer,

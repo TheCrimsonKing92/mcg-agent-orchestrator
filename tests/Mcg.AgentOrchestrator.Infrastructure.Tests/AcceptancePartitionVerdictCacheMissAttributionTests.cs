@@ -36,6 +36,24 @@ public sealed class AcceptancePartitionVerdictCacheMissAttributionTests
         AssertMiss(context, "manifest-and-closure-differ");
     }
 
+    [Theory]
+    [InlineData(null, "closure-a", "manifest-identity-differs")]
+    [InlineData("manifest-a", null, "closure-hash-differs")]
+    [InlineData(null, null, "manifest-and-closure-differ")]
+    public void TryReuse_NullStoredLookupFields_ReportsMissAndAllowsExecution(
+        string? manifest, string? closure, string code)
+    {
+        using var context = new CacheContext();
+        var record = new AcceptanceClosureVerdictRecord(1, manifest!, context.FilterHash,
+            closure!, "malformed-green", [], DateTimeOffset.UtcNow);
+        var path = Path.Combine(context.Root, ".orchestrator", "acceptance-closure-verdicts.jsonl");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path,
+            JsonSerializer.Serialize(record, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+
+        AssertMiss(context, code);
+    }
+
     [Fact]
     public void TryReuse_MatchingGreen_ReusesClosureAcrossCandidateKeys()
     {
