@@ -99,23 +99,95 @@ public sealed class LearnedAcceptanceManifestTests
         };
         var result = LearnedAcceptanceManifest.Build(model, []);
         Assert.Null(result.Json);
-        Assert.Equal(new[] { $"commands/{B}/test", "engine/mtpInvocations", ShutdownKey, DiscoveryKey },
+        Assert.Equal(new[] { $"commands/{B}/test", ShutdownKey, DiscoveryKey },
             result.Blockers.Select(blocker => blocker.FactKey));
-        Assert.Contains(A.Replace('\\', '/'), result.Blockers[1].Reason);
         Assert.DoesNotContain(result.OwnerQuestions, question => question.FactKey == "engine/mtpInvocations");
     }
 
     [Fact]
-    public void Build_MultipleMtpChecks_BlocksEachInvocationEvenWithAllAnswers()
+    public void Build_MultipleMtpChecks_EmitsInvocationsInProjectOrder()
     {
         var model = Model() with { TestSetups = [new(B, Fact("xunit"), Fact("MTP")), new(A, Fact("xunit"), Fact("MTP"))] };
         var result = LearnedAcceptanceManifest.Build(model, Answers());
-        Assert.Null(result.Json);
-        Assert.Equal(new[] { "engine/mtpInvocations", "engine/mtpInvocations" },
-            result.Blockers.Select(blocker => blocker.FactKey));
-        Assert.Contains(B.Replace('\\', '/'), result.Blockers[0].Reason);
-        Assert.Contains(A.Replace('\\', '/'), result.Blockers[1].Reason);
+        Assert.NotNull(result.Json);
+        Assert.Empty(result.Blockers);
         Assert.Empty(result.OwnerQuestions);
+        using var document = JsonDocument.Parse(result.Json);
+        var projects = document.RootElement.GetProperty("engine").GetProperty("mtpInvocations")
+            .EnumerateArray().Select(invocation => invocation.GetProperty("project").GetString()).ToArray();
+        Assert.Equal(new[] { A.Replace('\\', '/'), B.Replace('\\', '/') }, projects);
+        Assert.Equal(document.RootElement.GetProperty("checks").EnumerateArray()
+            .Select(check => check.GetProperty("project").GetString()), projects);
+    }
+
+    [Fact]
+    public void Build_OneMtpCheck_EmitsOneInvocation()
+    {
+        var model = Model() with { TestSetups = [new(B, Fact("xunit"), Fact("VSTest")), new(A, Fact("xunit"), Fact("MTP"))] };
+        var result = LearnedAcceptanceManifest.Build(model, Answers());
+        Assert.NotNull(result.Json);
+        Assert.Empty(result.Blockers);
+        using var document = JsonDocument.Parse(result.Json);
+        var invocation = Assert.Single(document.RootElement.GetProperty("engine").GetProperty("mtpInvocations").EnumerateArray());
+        Assert.Equal(A.Replace('\\', '/'), invocation.GetProperty("project").GetString());
+    }
+
+    [Fact]
+    public void Build_RefusedMtpLayout_BlocksWithSuppliedReason()
+    {
+        var model = Model() with { TestSetups = [new(B, Fact("xunit"), Fact("MTP")), new(A, Fact("xunit"), Fact("MTP"))] };
+        const string reason = "MTP project tests/A.Tests/A.Tests.csproj: file Directory.Build.props declares layout element OutputPath";
+        var result = LearnedAcceptanceManifest.Build(model, Answers(),
+            new Dictionary<string, string> { [A.Replace('\\', '/')] = reason });
+        Assert.Null(result.Json);
+        var blocker = Assert.Single(result.Blockers);
+        Assert.Equal("engine/mtpInvocations", blocker.FactKey);
+        Assert.Equal(reason, blocker.Reason);
+        Assert.Empty(result.OwnerQuestions);
+    }
+
+    [Fact]
+    public void Build_VstestOnly_MatchesPreMtpJsonBytes()
+    {
+        // Baseline from the existing VSTest composition: two shards and a measured ten-minute timeout.
+        const string expected = """
+            {
+              "version": 1,
+              "engine": {
+                "maxConcurrentShards": 2,
+                "enforceStructuralCoverage": false,
+                "timeouts": {
+                  "defaultMinutes": 10,
+                  "buildServerShutdownMinutes": 3,
+                  "discoveryMinutes": 4
+                }
+              },
+              "checks": [
+                {
+                  "name": "A.Tests",
+                  "type": "dotnet-test",
+                  "runner": "vstest",
+                  "project": "tests/A.Tests/A.Tests.csproj",
+                  "arguments": []
+                },
+                {
+                  "name": "B.Tests",
+                  "type": "dotnet-test",
+                  "runner": "vstest",
+                  "project": "tests/B.Tests/B.Tests.csproj",
+                  "arguments": []
+                }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """;
+        var result = LearnedAcceptanceManifest.Build(Model(), Answers());
+        Assert.NotNull(result.Json);
+        Assert.Equal(System.Text.Encoding.UTF8.GetBytes(expected.Replace("\r\n", "\n") + "\n"),
+            System.Text.Encoding.UTF8.GetBytes(result.Json));
+        Assert.Equal(result.Json, LearnedAcceptanceManifest.Build(Model(), Answers().Reverse().ToArray()).Json);
+        using var document = JsonDocument.Parse(result.Json);
+        Assert.False(document.RootElement.GetProperty("engine").TryGetProperty("mtpInvocations", out _));
     }
 
     [Fact]

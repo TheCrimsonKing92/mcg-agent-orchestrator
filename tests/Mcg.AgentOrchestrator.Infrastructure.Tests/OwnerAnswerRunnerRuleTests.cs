@@ -167,13 +167,15 @@ public sealed class OwnerAnswerRunnerRuleTests
     }
 
     [Fact]
-    public void Build_MtpAnswer_BlocksOnlyInvocationDeclaration()
+    public void Build_MtpAnswer_EmitsOneInvocationDeclaration()
     {
         using var fixture = new ProjectOnboardingFixture("no-solution");
         var model = new DotnetProjectDiscoveryAdapter().Discover(fixture.Root);
         var result = LearnedAcceptanceManifest.Build(model, [.. TimeoutAnswers(), Answer(Key, "MTP")]);
-        Assert.Null(result.Json);
-        Assert.Equal("engine/mtpInvocations", Assert.Single(result.Blockers).FactKey);
+        Assert.Empty(result.Blockers);
+        Assert.NotNull(result.Json);
+        using var document = JsonDocument.Parse(result.Json);
+        Assert.Single(document.RootElement.GetProperty("engine").GetProperty("mtpInvocations").EnumerateArray());
     }
 
     private static OwnerAnswer Answer(string key, string value) => new(key, value, "owner choice", Recorded);

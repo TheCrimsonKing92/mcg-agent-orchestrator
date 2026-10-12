@@ -67,7 +67,12 @@ internal static class ProjectInstallManifestCommand
             output.WriteLine($"Owner answers unreadable: {error}");
             return 1;
         }
-        var result = LearnedAcceptanceManifest.Build(model, answers);
+        var mtpLayoutRefusals = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var check in LearnedTestCheckDeriver.Derive(model, OwnerAnswerApplier.Apply(model, answers)).Checks
+            .Where(check => check.Runner == "mtp"))
+            if (MtpBuildLayoutReader.ReadRefusal(project.RootDirectory, check.ProjectPath) is { } reason)
+                mtpLayoutRefusals[check.ProjectPath] = reason;
+        var result = LearnedAcceptanceManifest.Build(model, answers, mtpLayoutRefusals);
         if (result.Blockers.Count > 0)
         {
             output.WriteLine($"Refused: {result.Blockers.Count} facts the gate needs are unanswered");
