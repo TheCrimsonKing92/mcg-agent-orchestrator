@@ -1,3 +1,7 @@
+using System.Reflection;
+using System.Runtime.CompilerServices;
+using System.Runtime.Loader;
+
 [Xunit.Collection(TestCollections.EnvMutation)]
 public sealed class WorkerProcessJobsTestsBuildOutputLocator
 {
@@ -102,8 +106,95 @@ public sealed class WorkerProcessJobsTestsBuildOutputLocator
         Assert.Equal([sibling, output], found.TriedPaths);
     }
 
+    [Fact]
+    public void FixtureProbe_CopiedClosureFindsDllInExportedBuildRoot()
+    {
+        using var fixture = new LocatorFixture();
+        var output = fixture.CreateOutput("bin");
+        File.WriteAllText(Path.Combine(output, Project + ".dll"), "probe");
+        Environment.SetEnvironmentVariable(TestBuildOutputLocator.BuildOutputRootVariable,
+            Path.Combine(fixture.Root, "bin"));
+
+        fixture.WithCopiedAnchor(anchor =>
+            Assert.Equal(output, FixtureProbeLocator.FindDirectory(anchor, Project, Project + ".dll")));
+    }
+
+    [Fact]
+    public void FixtureProbe_CopiedClosureFindsCompleteOutputInExportedBuildRoot()
+    {
+        using var fixture = new LocatorFixture();
+        var output = fixture.CreateOutput("bin");
+        string[] requiredFiles = [Project + ".dll", Project + ".exe",
+            Project + ".deps.json", Project + ".runtimeconfig.json"];
+        foreach (var name in requiredFiles)
+            File.WriteAllText(Path.Combine(output, name), "probe");
+        Environment.SetEnvironmentVariable(TestBuildOutputLocator.BuildOutputRootVariable,
+            Path.Combine(fixture.Root, "bin"));
+
+        fixture.WithCopiedAnchor(anchor =>
+            Assert.Equal(output, FixtureProbeLocator.FindDirectory(anchor, Project, requiredFiles)));
+    }
+
+    [Fact]
+    public void FixtureProbe_UnsetBuildRootReportsOnlySiblingPath()
+    {
+        using var fixture = new LocatorFixture();
+        var output = fixture.CreateOutput("bin");
+        File.WriteAllText(Path.Combine(output, Project + ".dll"), "probe");
+
+        fixture.WithCopiedAnchor(anchor =>
+        {
+            Assert.Null(FixtureProbeLocator.FindDirectory(anchor, Project, Project + ".dll"));
+            Assert.Equal([Path.Combine(fixture.Root, "summary", Project, Configuration)],
+                FixtureProbeLocator.TriedPaths(anchor, Project, Project + ".dll"));
+        });
+    }
+
+    [Fact]
+    public void FixtureProbe_IncompleteOutputIsRejectedEvenWhenDllExists()
+    {
+        using var fixture = new LocatorFixture();
+        var output = fixture.CreateOutput("bin");
+        string[] requiredFiles = [Project + ".dll", Project + ".exe",
+            Project + ".deps.json", Project + ".runtimeconfig.json"];
+        foreach (var name in requiredFiles.Take(3))
+            File.WriteAllText(Path.Combine(output, name), "probe");
+        Environment.SetEnvironmentVariable(TestBuildOutputLocator.BuildOutputRootVariable,
+            Path.Combine(fixture.Root, "bin"));
+        Assert.True(File.Exists(Path.Combine(output, requiredFiles[0])));
+        Assert.False(File.Exists(Path.Combine(output, requiredFiles[3])));
+
+        fixture.WithCopiedAnchor(anchor =>
+        {
+            Assert.Null(FixtureProbeLocator.FindDirectory(anchor, Project, requiredFiles));
+            Assert.Equal([Path.Combine(fixture.Root, "summary", Project, Configuration), output],
+                FixtureProbeLocator.TriedPaths(anchor, Project, requiredFiles));
+        });
+    }
+
+    [Fact]
+    public void FixtureProbe_CompleteSiblingOutputRetainsPrecedence()
+    {
+        using var fixture = new LocatorFixture();
+        var sibling = fixture.CreateOutput("summary");
+        string[] requiredFiles = [Project + ".dll", Project + ".exe",
+            Project + ".deps.json", Project + ".runtimeconfig.json"];
+        foreach (var name in requiredFiles)
+            File.WriteAllText(Path.Combine(sibling, name), "probe");
+        fixture.CreateOutput("bin");
+        Environment.SetEnvironmentVariable(TestBuildOutputLocator.BuildOutputRootVariable,
+            Path.Combine(fixture.Root, "bin"));
+
+        fixture.WithCopiedAnchor(anchor =>
+        {
+            Assert.Equal(sibling, FixtureProbeLocator.FindDirectory(anchor, Project, requiredFiles));
+            Assert.Equal([sibling], FixtureProbeLocator.TriedPaths(anchor, Project, requiredFiles));
+        });
+    }
+
     private sealed class LocatorFixture : IDisposable
     {
+        private WeakReference? _copiedContext;
         private readonly string? _original = Environment.GetEnvironmentVariable(
             TestBuildOutputLocator.BuildOutputRootVariable);
         internal string Root { get; } = Directory.CreateTempSubdirectory("mcg-output-locator-").FullName;
@@ -123,9 +214,39 @@ public sealed class WorkerProcessJobsTestsBuildOutputLocator
         internal string CreateOutput(string binRoot)
             => Directory.CreateDirectory(Path.Combine(Root, binRoot, Project, Configuration)).FullName;
 
+        // Keep collectible types off the caller's stack before Dispose collects the context.
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        internal void WithCopiedAnchor(Action<Type> assertion)
+        {
+            var closure = Directory.CreateDirectory(Path.Combine(Root, "summary", ".c", "closure-token")).FullName;
+            var original = typeof(WorkerProcessJobsTestsBuildOutputLocator);
+            var copy = Path.Combine(closure, Path.GetFileName(original.Assembly.Location));
+            File.Copy(original.Assembly.Location, copy);
+            var context = new AssemblyLoadContext("fixture-probe-anchor", isCollectible: true);
+            _copiedContext = new WeakReference(context, trackResurrection: true);
+            try
+            {
+                var anchor = context.LoadFromAssemblyPath(copy).GetType(original.FullName!, throwOnError: true)!;
+                Assert.Equal(copy, anchor.Assembly.Location);
+                Assert.Equal(Configuration, anchor.Assembly.GetCustomAttribute<AssemblyConfigurationAttribute>()!.Configuration);
+                assertion(anchor);
+            }
+            finally
+            {
+                context.Unload();
+            }
+        }
+
         public void Dispose()
         {
             Environment.SetEnvironmentVariable(TestBuildOutputLocator.BuildOutputRootVariable, _original);
+            for (var attempt = 0; _copiedContext?.IsAlive == true && attempt < 10; attempt++)
+            {
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+            }
+            Assert.False(_copiedContext?.IsAlive == true,
+                "The copied anchor context must unload before deleting its closure.");
             Directory.Delete(Root, recursive: true);
         }
     }
