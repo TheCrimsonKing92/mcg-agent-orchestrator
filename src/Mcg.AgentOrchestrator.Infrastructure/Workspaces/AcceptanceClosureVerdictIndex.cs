@@ -29,7 +29,16 @@ internal sealed class AcceptanceClosureVerdictIndex
     internal AcceptanceClosureVerdictRecord? FindLatest(
         string manifestIdentity,
         string filterHash,
-        string closureHash)
+        string closureHash) =>
+        FindLatest(record =>
+            record.ManifestIdentity.Equals(manifestIdentity, StringComparison.Ordinal) &&
+            record.PartitionFilterHash.Equals(filterHash, StringComparison.OrdinalIgnoreCase) &&
+            record.ClosureHash.Equals(closureHash, StringComparison.OrdinalIgnoreCase));
+
+    internal AcceptanceClosureVerdictRecord? FindLatestForFilter(string filterHash) =>
+        FindLatest(record => record.PartitionFilterHash.Equals(filterHash, StringComparison.OrdinalIgnoreCase));
+
+    private AcceptanceClosureVerdictRecord? FindLatest(Func<AcceptanceClosureVerdictRecord, bool> matches)
     {
         try
         {
@@ -40,9 +49,7 @@ internal sealed class AcceptanceClosureVerdictIndex
                     .Where(record =>
                         record is not null &&
                         record.Version == CurrentVersion &&
-                        record.ManifestIdentity.Equals(manifestIdentity, StringComparison.Ordinal) &&
-                        record.PartitionFilterHash.Equals(filterHash, StringComparison.OrdinalIgnoreCase) &&
-                        record.ClosureHash.Equals(closureHash, StringComparison.OrdinalIgnoreCase))
+                        matches(record))
                     .OrderBy(record => record!.RecordedAt)
                     .LastOrDefault();
             }

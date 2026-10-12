@@ -47,7 +47,13 @@ public sealed partial class GoalAcceptanceVerifier
                 () => executionOwner.Identity.AttemptId,
                 resolveManifestIdentity,
                 () => EngineSettings.EnforceStructuralCoverage,
-                () => TempRootApparatusLossReceiptStore.Read(executionOwner.ApparatusReceiptPath), ResolveClosureHash: _testOverrides.ResolvePartitionVerdictClosureHashForTests, ResolveChangedFiles: _testOverrides.ResolvePartitionVerdictChangedFilesForTests, IdenticalTreeChecks: [.. effectiveChecks.Where(check => AcceptanceIdenticalTreeReuseRule.TryGetCheckIdentity(check, out _))]));
+                () => TempRootApparatusLossReceiptStore.Read(executionOwner.ApparatusReceiptPath), ResolveClosureHash: _testOverrides.ResolvePartitionVerdictClosureHashForTests, ResolveChangedFiles: _testOverrides.ResolvePartitionVerdictChangedFilesForTests, IdenticalTreeChecks: [.. effectiveChecks.Where(check => AcceptanceIdenticalTreeReuseRule.TryGetCheckIdentity(check, out _))]),
+            out var unavailableReason);
+        if (partitionVerdictCache is null)
+        {
+            Console.WriteLine($"PARTITION_VERDICT_CACHE status=unavailable reason={unavailableReason}");
+            Console.Out.Flush();
+        }
         RemoteLaneCandidateIdentity? cohortIdentity = null;
         if (partitionVerdictCache is null && executionOwner.CohortRemoteLanes)
         {

@@ -52,7 +52,7 @@ public sealed class AcceptancePartitionVerdictCacheMissReasonTests
             closureHash: "closure-x");
         Assert.Null(noVerdict.TryReuse(lane));
         Assert.Equal(new PartitionVerdictMissReceipt("alpha",
-            PartitionVerdictMissReasons.NoGreenVerdictForClosure, "closure-x"),
+            PartitionVerdictMissReasons.NoGreenVerdictForClosure, "closure-x", "no-prior-green-for-lane"),
             Assert.Single(noVerdict.Misses));
 
         var noCoverage = context.Create("no-coverage", [lane], enforceStructuralCoverage: true);

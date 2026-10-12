@@ -8,6 +8,10 @@ internal static class PartitionVerdictMissReasons
     internal const string ForcedFullRerun = "forced-full-rerun";
     internal const string ClosureHashUnavailable = "closure-hash-unavailable";
     internal const string NoGreenVerdictForClosure = "no-green-verdict-for-closure";
+    internal const string NoPriorGreenForLane = "no-prior-green-for-lane";
+    internal const string ManifestIdentityDiffers = "manifest-identity-differs";
+    internal const string ClosureHashDiffers = "closure-hash-differs";
+    internal const string ManifestAndClosureDiffer = "manifest-and-closure-differ";
     internal const string NoGreenVerdictForIdenticalTree = "no-green-verdict-for-identical-tree";
     internal const string NoGreenVerdictForWholeProjectClosure = "no-green-verdict-for-whole-project-closure";
     internal const string IdenticalTreeClosureHashMismatch = "identical-tree-closure-hash-mismatch";
@@ -36,6 +40,23 @@ internal sealed partial class AcceptancePartitionVerdictCache
         var escapedLaneId = Uri.EscapeDataString(laneId);
         lock (_gate)
             _misses.TryAdd(escapedLaneId, new PartitionVerdictMissReceipt(escapedLaneId, reason, closureHash, reasonCode));
+    }
+
+    private string? ClosureMissReasonCode(AcceptanceClosureVerdictRecord? latest, string closureHash)
+    {
+        if (latest is null)
+            return PartitionVerdictMissReasons.NoPriorGreenForLane;
+
+        var manifestDiffers = !latest.ManifestIdentity.Equals(ManifestIdentity, StringComparison.Ordinal);
+        var closureDiffers = !latest.ClosureHash.Equals(closureHash, StringComparison.OrdinalIgnoreCase);
+        return (manifestDiffers, closureDiffers) switch
+        {
+            (true, true) => PartitionVerdictMissReasons.ManifestAndClosureDiffer,
+            (true, false) => PartitionVerdictMissReasons.ManifestIdentityDiffers,
+            (false, true) => PartitionVerdictMissReasons.ClosureHashDiffers,
+            // A concurrent append can become visible after the exact lookup missed.
+            (false, false) => null
+        };
     }
 
     // Called while RecordExecution holds _gate.

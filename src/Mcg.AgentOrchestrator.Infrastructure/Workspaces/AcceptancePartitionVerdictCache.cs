@@ -188,10 +188,18 @@ internal sealed partial class AcceptancePartitionVerdictCache
         get { lock (_gate) return _sharedApparatusInvalidation; }
     }
 
-    internal static AcceptancePartitionVerdictCache? Create(AcceptancePartitionVerdictCacheOptions options)
+    internal static AcceptancePartitionVerdictCache? Create(AcceptancePartitionVerdictCacheOptions options) =>
+        Create(options, out _);
+
+    internal static AcceptancePartitionVerdictCache? Create(
+        AcceptancePartitionVerdictCacheOptions options, out string? unavailableReason)
     {
+        unavailableReason = null;
         if (options.GoalId is null)
+        {
+            unavailableReason = "goal-id-unknown";
             return null;
+        }
 
         var partitionCount = options.EffectiveChecks.Count(check =>
             GoalAcceptanceVerifier.TryGetInfrastructurePartitionId(check, out _, out _));
@@ -203,15 +211,22 @@ internal sealed partial class AcceptancePartitionVerdictCache
             return identity;
         }).ToHashSet(StringComparer.Ordinal);
         if (partitionCount == 0 && identicalTreeChecks.Length == 0)
+        {
+            unavailableReason = "no-cacheable-checks";
             return null;
+        }
 
         var candidateTreeSha = options.ResolveCandidateTreeSha(options.WorktreePath);
         var mainSha = options.ResolveMainSha(options.WorktreePath);
         var verifyingCommitSha = options.ResolveVerifyingCommitSha(options.WorktreePath);
-        if (string.IsNullOrWhiteSpace(candidateTreeSha) ||
-            string.IsNullOrWhiteSpace(mainSha) ||
-            string.IsNullOrWhiteSpace(verifyingCommitSha))
+        if (string.IsNullOrWhiteSpace(candidateTreeSha))
         {
+            unavailableReason = "candidate-tree-unresolved";
+            return null;
+        }
+        if (string.IsNullOrWhiteSpace(mainSha) || string.IsNullOrWhiteSpace(verifyingCommitSha))
+        {
+            unavailableReason = "revision-unresolved";
             return null;
         }
 
@@ -296,7 +311,8 @@ internal sealed partial class AcceptancePartitionVerdictCache
             }
             if (_closureIndex.FindLatest(ManifestIdentity, filterHash, closureHash) is not { } contentVerdict)
             {
-                RecordMiss(partitionId, PartitionVerdictMissReasons.NoGreenVerdictForClosure, closureHash);
+                RecordMiss(partitionId, PartitionVerdictMissReasons.NoGreenVerdictForClosure, closureHash,
+                    ClosureMissReasonCode(_closureIndex.FindLatestForFilter(filterHash), closureHash));
                 return null;
             }
             cached = new PartitionVerdictRecord(
