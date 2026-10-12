@@ -2,6 +2,7 @@ using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Microsoft.Data.Sqlite;
 using Xunit;
 
 // Parallel-safe: each case owns all stores and targeted host files.
@@ -54,8 +55,6 @@ public sealed class ExperimentFlagToggleIntentTests
         {
             "property" => spec with { Intervention = spec.Intervention with
                 { FlagTarget = spec.Intervention.FlagTarget! with { PropertyName = "maxConcurrentPaidWorkers" } } },
-            "file-kind" => spec with { Intervention = spec.Intervention with
-                { FlagTarget = spec.Intervention.FlagTarget! with { FileKind = (ExperimentFlagFileKind)999 } } },
             "baseline" => spec with { Baseline = new(ExperimentBaselineKind.BeforeAfterWindow) },
             "not-config" => spec with { Intervention = new(ExperimentInterventionKind.Policy, "policy") },
             "unapplied" => spec with { Intervention = spec.Intervention with
@@ -63,6 +62,22 @@ public sealed class ExperimentFlagToggleIntentTests
             _ => spec
         };
         var record = fixture.Add(spec);
+        if (failure == "file-kind")
+        {
+            // Missing fileKind deserializes as the unsupported zero value; undefined enums cannot be serialized.
+            var intervention = JsonSerializer.SerializeToNode(spec.Intervention, ExperimentStore.JsonOptions)!;
+            intervention["flagTarget"]!.AsObject().Remove("fileKind");
+            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+                { DataSource = fixture.Workspace.ExperimentStorePath, Pooling = false }.ToString());
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "UPDATE experiments SET intervention_json=$json WHERE id=$id";
+            command.Parameters.AddWithValue("$json", intervention.ToJsonString());
+            command.Parameters.AddWithValue("$id", record.Id);
+            Assert.Equal(1, command.ExecuteNonQuery());
+            Assert.Equal((ExperimentFlagFileKind)0,
+                fixture.Experiments.ResolveAsync(record.Id).GetAwaiter().GetResult()!.Spec.Intervention.FlagTarget!.FileKind);
+        }
         if (failure == "decided") fixture.Experiments.DecideAsync(record.Id, ExperimentOutcomeState.Confirmed,
             "test", "keep").GetAwaiter().GetResult();
         File.WriteAllText(fixture.PolicyPath, ExperimentFlagTestFixture.PolicyJson(enabled: true));
