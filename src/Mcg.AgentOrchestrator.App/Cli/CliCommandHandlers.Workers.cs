@@ -453,12 +453,12 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             return refreshed.Tasks.Count > 0;
 
         case "logs":
-            // Peel the optional stream keyword from the end before goal-prefix resolution so that
-            // "logs 1 stdout" does not misinterpret "1" as a goal prefix.
-            var logStreamArg = parts.Count >= 3 && IsLogStreamKeyword(parts[^1]) ? parts[^1] : null;
+            var logStreamArg = parts.Count >= 3 && IsLogStreamKeyword(parts[^1]) ? parts[^1] : null; // Peel stream before goal resolution.
             var logCoreParts = logStreamArg != null ? (IReadOnlyList<string>)parts.Take(parts.Count - 1).ToList() : parts;
             var logTask = ResolveDispatchCommandTask(logCoreParts, context, "logs <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> [stdout|stderr|exit|all]");
-            ConsoleViews.PrintProcessLogs(logTask, logStreamArg != null ? CliArgumentParser.ParseProcessLogStream(logStreamArg) : ProcessLogStream.All);
+            var logStream = logStreamArg != null ? CliArgumentParser.ParseProcessLogStream(logStreamArg) : ProcessLogStream.All;
+            var logProcess = logTask.LastProcess ?? throw new InvalidOperationException("Task has no background process logs.");
+            ProcessLogsTextView.PrintProcessLogs(ProcessLogReader.Read(logProcess), logStream);
             return false;
 
         case "cancel-dispatch":

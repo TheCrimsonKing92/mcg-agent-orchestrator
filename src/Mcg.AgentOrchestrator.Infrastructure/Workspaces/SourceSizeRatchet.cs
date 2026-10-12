@@ -489,7 +489,8 @@ internal static class SourceSizeRatchet
             // Goal b50fdb00 extracts environment health inspection (slice 13 step 2): measured 2865 lines in 38 partials; no headroom.
             // Goal f968e488 extracts supervisor and acceptance queue output (slice 14): measured 2804 lines in 36 partials; no headroom.
             // Goal 85702c95 extracts gate-status rendering to GateStatusTextView; measured 2767 lines in 36 partials, no headroom.
-            new SourceClassCeiling("ConsoleViews", 2767, 36),
+            // Goal 7ba60507 extracts process-log presentation to ProcessLogsTextView; measured 2727 lines in 35 partials, no headroom.
+            new SourceClassCeiling("ConsoleViews", 2727, 35),
         });
 
     internal static IReadOnlyList<SourceSizeViolation> EvaluateClasses(

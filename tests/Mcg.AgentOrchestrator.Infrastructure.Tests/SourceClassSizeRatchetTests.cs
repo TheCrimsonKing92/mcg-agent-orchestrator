@@ -34,6 +34,11 @@ public sealed class SourceClassSizeRatchetTests
                 $"{row.ClassName} has {totalLineCount} lines, exceeding its ceiling of {row.MaximumTotalLineCount}.");
             Assert.True(partials.Length <= row.MaximumPartialFileCount,
                 $"{row.ClassName} has {partials.Length} partial files, exceeding its ceiling of {row.MaximumPartialFileCount}.");
+            if (row.ClassName == "ConsoleViews")
+            {
+                Assert.Equal(totalLineCount, row.MaximumTotalLineCount);
+                Assert.Equal(partials.Length, row.MaximumPartialFileCount);
+            }
         }
     }
 
