@@ -55,6 +55,37 @@ internal static class RepositoryLayoutConventions
         IEnumerable<string> multiPublicTypeFiles,
         IEnumerable<string> dottedFileNames,
         IEnumerable<string> ambientRepositoryRootFiles)
+        => EvaluateCore(
+            repositoryRoot,
+            Directory.EnumerateFiles(Path.Combine(repositoryRoot, "tests"), "*.cs", SearchOption.AllDirectories),
+            File.ReadAllText,
+            static (path, source) => CSharpSyntaxTree.ParseText(source, path: path),
+            multiPublicTypeFiles,
+            dottedFileNames,
+            ambientRepositoryRootFiles);
+
+    internal static IReadOnlyList<RepositoryLayoutViolation> Evaluate(
+        RepositorySourceSnapshot snapshot,
+        IEnumerable<string> multiPublicTypeFiles,
+        IEnumerable<string> dottedFileNames,
+        IEnumerable<string> ambientRepositoryRootFiles)
+        => EvaluateCore(
+            snapshot.Root,
+            snapshot.EnumerateFiles(Path.Combine(snapshot.Root, "tests")),
+            snapshot.GetText,
+            (path, _) => snapshot.GetSyntaxTree(path),
+            multiPublicTypeFiles,
+            dottedFileNames,
+            ambientRepositoryRootFiles);
+
+    private static IReadOnlyList<RepositoryLayoutViolation> EvaluateCore(
+        string repositoryRoot,
+        IEnumerable<string> sourcePaths,
+        Func<string, string> getText,
+        Func<string, string, SyntaxTree> getSyntaxTree,
+        IEnumerable<string> multiPublicTypeFiles,
+        IEnumerable<string> dottedFileNames,
+        IEnumerable<string> ambientRepositoryRootFiles)
     {
         var multiTypeInventory = multiPublicTypeFiles.ToHashSet(StringComparer.Ordinal);
         var dottedNameInventory = dottedFileNames.ToHashSet(StringComparer.Ordinal);
@@ -64,10 +95,8 @@ internal static class RepositoryLayoutConventions
         var activeAmbientRootViolations = new HashSet<string>(StringComparer.Ordinal);
         var unreadableFiles = new HashSet<string>(StringComparer.Ordinal);
         var violations = new List<RepositoryLayoutViolation>();
-        var testsRoot = Path.Combine(repositoryRoot, "tests");
 
-        foreach (var sourcePath in Directory.EnumerateFiles(testsRoot, "*.cs", SearchOption.AllDirectories)
-                     .OrderBy(path => path, StringComparer.Ordinal))
+        foreach (var sourcePath in sourcePaths.OrderBy(path => path, StringComparer.Ordinal))
         {
             var relativePath = NormalizePath(Path.GetRelativePath(repositoryRoot, sourcePath));
             if (IsGeneratedOrArtifactPath(relativePath))
@@ -75,7 +104,8 @@ internal static class RepositoryLayoutConventions
                 continue;
             }
 
-            if (!TryReadTestSource(sourcePath, relativePath, violations, out var syntaxRoot, out var typeNames))
+            if (!TryReadTestSource(sourcePath, relativePath, getText, getSyntaxTree, violations,
+                    out var syntaxRoot, out var typeNames))
             {
                 unreadableFiles.Add(relativePath);
                 continue;
@@ -156,14 +186,17 @@ internal static class RepositoryLayoutConventions
     private static bool TryReadTestSource(
         string sourcePath,
         string relativePath,
+        Func<string, string> getText,
+        Func<string, string, SyntaxTree> getSyntaxTree,
         ICollection<RepositoryLayoutViolation> violations,
         out CompilationUnitSyntax syntaxRoot,
         out IReadOnlyList<string> typeNames)
     {
-        string source;
+        SyntaxTree syntaxTree;
         try
         {
-            source = File.ReadAllText(sourcePath);
+            var source = getText(sourcePath);
+            syntaxTree = getSyntaxTree(sourcePath, source);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
@@ -177,7 +210,6 @@ internal static class RepositoryLayoutConventions
             return false;
         }
 
-        var syntaxTree = CSharpSyntaxTree.ParseText(source, path: sourcePath);
         var errors = syntaxTree.GetDiagnostics()
             .Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)
             .Select(diagnostic => diagnostic.ToString())

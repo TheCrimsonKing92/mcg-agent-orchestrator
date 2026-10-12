@@ -16,7 +16,7 @@ public sealed class RepositoryLayoutConventionTests
             RepositoryLayoutConventions.SeededAmbientRepositoryRootFiles.Distinct(StringComparer.Ordinal).Count());
 
         AssertNoViolations(RepositoryLayoutConventions.Evaluate(
-            RepositoryRoot(),
+            RepositorySourceSnapshotCache.Get(RepositoryRoot()),
             RepositoryLayoutConventions.SeededMultiPublicTypeFiles,
             RepositoryLayoutConventions.SeededDottedFileNames,
             RepositoryLayoutConventions.SeededAmbientRepositoryRootFiles));
