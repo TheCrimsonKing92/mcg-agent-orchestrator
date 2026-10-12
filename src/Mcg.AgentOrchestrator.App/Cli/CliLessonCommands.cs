@@ -35,6 +35,7 @@ internal static class CliLessonCommands
                                 : $" | reason={lesson.RetireReason}"));
                 return 0;
             }
+            args = OperatorIntentSubmissionOutput.StripJsonFlag(args, out var emitAgentReadEnvelope);
             if (args.Count < 2) throw new ArgumentException(CliCommandHelp.LessonUsage);
             var action = args[1].ToLowerInvariant();
             object payload;
@@ -73,9 +74,8 @@ internal static class CliLessonCommands
                 DateTimeOffset.UtcNow, ActorKind: attribution.ActorKind);
             var persisted = SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory,
                 workspace.LogDirectory).EnqueueAsync(intent).GetAwaiter().GetResult();
-            writer.WriteLine($"Operator intent queued: id={persisted.Id} verb={persisted.Verb} scope=workspace status={persisted.Status}; poll with operator-intent-status {persisted.Id} (or add --wait).");
-            if (!ConductorLoopLease.IsActive(workspace.OrchestratorDirectory))
-                writer.WriteLine(ConductorLoopLease.InactiveWarning);
+            OperatorIntentSubmissionOutput.PrintWorkspace(persisted, workspace.OrchestratorDirectory,
+                emitAgentReadEnvelope, writer);
             return 0;
         }
         catch (Exception ex)

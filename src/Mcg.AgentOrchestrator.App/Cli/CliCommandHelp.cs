@@ -64,7 +64,7 @@ internal static class CliCommandHelp
     public const string ExperimentShowUsage = "Usage: experiment-show <experiment> [--as-of <timestamp-with-offset>]";
     public const string ExperimentDecideUsage = "Usage: experiment-decide <experiment> --outcome <confirmed|refuted|inconclusive> --evidence <reference> --action <text>";
     public const string ExperimentExtendUsage = "Usage: experiment-extend <experiment> --count <n> --reason <text>";
-    public const string ExperimentApplyFlagUsage = "Usage: experiment-apply-flag <experiment> [--operator-actor <actor>] [--actor-kind <human|agent>] [--idempotency-key <key>]";
+    public const string ExperimentApplyFlagUsage = "Usage: experiment-apply-flag <experiment> [--operator-actor <actor>] [--actor-kind <human|agent>] [--idempotency-key <key>] [--json]";
     public const string EpicRenameUsage = "Usage: epic-rename <epic> <new-title>";
     public const string EpicDescribeUsage = "Usage: epic-describe <epic> <text> | epic-describe <epic> --text-file <path>";
     public const string EpicPlanUsage = "Usage: epic-plan <epic>";
@@ -97,9 +97,9 @@ internal static class CliCommandHelp
     public const string RemoteExecutorsUsage = "Usage: remote-executors [--since <ISO-8601>] [--last <N>] [--json]";
     public const string RemoteLaneSelfTestUsage = "Usage: remote-lane-selftest --executor <id> [--timeout-minutes <n>]";
     public const string RoundValueUsage = "Usage: round-value [--since <ISO-8601-with-offset>] [--until <ISO-8601-with-offset>] [--json] [--by-skill] [--by-check] [--baseline-since <ISO-8601-with-offset> --baseline-until <ISO-8601-with-offset>]";
-    public const string LessonUsage = "Usage: lesson record --situation <text> --rule <text> --evidence <ref>... [--applies-to <tag>...] [--goal <goal-prefix>] [--until-goal <goal-prefix>] [--actor-kind human|agent] | lesson retire <lesson-id> --reason <text> [--evidence <ref>...]";
+    public const string LessonUsage = "Usage: lesson record --situation <text> --rule <text> --evidence <ref>... [--applies-to <tag>...] [--goal <goal-prefix>] [--until-goal <goal-prefix>] [--actor-kind human|agent] [--json] | lesson retire <lesson-id> --reason <text> [--evidence <ref>...] [--json]";
     public const string LessonsUsage = "Usage: lessons [--all] [--applies-to <tag>] [--json]";
-    public const string EscapeUsage = "Usage: escape record --goal <landed-goal-prefix> --reason <text> --evidence <ref>... [--found-by-goal <goal-prefix>] [--actor-kind human|agent]";
+    public const string EscapeUsage = "Usage: escape record --goal <landed-goal-prefix> --reason <text> --evidence <ref>... [--found-by-goal <goal-prefix>] [--actor-kind human|agent] [--json]";
     public const string ContextUsageUsage = "Usage: context-usage [--since <ISO-8601-with-offset>] [--role <role>] [--json]";
     public const string AuthorDraftUsage = "Usage: author-draft <backlog-id-prefix>";
     public const string HostExclusionsUsage = "Usage: host-exclusions [--apply]";
@@ -472,7 +472,7 @@ internal static class CliCommandHelp
         ExperimentExtendUsage, "Record a longer stop target and reason on an open experiment.", ["--count", "--reason", "--help", "-h"]);
     private static readonly CommandHelpEntry ExperimentApplyFlag = new(
         ExperimentApplyFlagUsage, "Queue a workspace Mutate-tier intent to apply a boolean policy flag. The conductor captures its prior value; an eligible keep reading at the stop rule records confirmed and files a make-permanent backlog item.",
-        ["--operator-actor", "--actor-kind", "--idempotency-key", "--help", "-h"]);
+        ["--operator-actor", "--actor-kind", "--idempotency-key", "--json", "--help", "-h"]);
 
     private static readonly CommandHelpEntry EpicAdd = new(
         EpicAddUsage,
@@ -637,13 +637,13 @@ internal static class CliCommandHelp
         LessonUsage,
         "Queue an evidence-backed lesson record or retirement for the conductor tick.",
         ["--situation", "--rule", "--evidence", "--applies-to", "--goal", "--until-goal", "--actor-kind",
-         "--operator-actor", "--idempotency-key", "--reason", "--help", "-h"]);
+         "--operator-actor", "--idempotency-key", "--reason", "--json", "--help", "-h"]);
 
     private static readonly CommandHelpEntry Escape = new(
         EscapeUsage,
         "Queue an evidence-backed post-landing escape record for the conductor tick.",
         ["--goal", "--reason", "--evidence", "--found-by-goal", "--actor-kind",
-         "--operator-actor", "--idempotency-key", "--help", "-h"]);
+         "--operator-actor", "--idempotency-key", "--json", "--help", "-h"]);
 
     private static readonly CommandHelpEntry Lessons = new(
         LessonsUsage,

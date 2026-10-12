@@ -10,6 +10,7 @@ internal static class CliExperimentFlagCommands
     internal static bool SubmitApply(IReadOnlyList<string> parts, OrchestratorWorkspace workspace)
     {
         CliCommandHelp.ThrowIfInvalidFlags(parts);
+        parts = OperatorIntentSubmissionOutput.StripJsonFlag(parts, out var emitAgentReadEnvelope);
         if (parts.Count < 2 || parts[1].StartsWith('-'))
             throw new ArgumentException(CliCommandHelp.ExperimentApplyFlagUsage);
         var options = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -35,8 +36,8 @@ internal static class CliExperimentFlagCommands
                 JsonSerializer.Serialize(new ExperimentApplyFlagOperatorIntentPayload(record.Id), OperatorIntentJson.Options),
                 [], attribution.Actor, attribution.Channel, attribution.AuthenticationAssurance, DateTimeOffset.UtcNow,
                 ActorKind: attribution.ActorKind)).GetAwaiter().GetResult();
-        Console.WriteLine($"Operator intent queued: id={persisted.Id} verb={persisted.Verb} scope=workspace status={persisted.Status}; poll with operator-intent-status {persisted.Id} (or add --wait).");
-        if (!ConductorLoopLease.IsActive(workspace.OrchestratorDirectory)) Console.WriteLine(ConductorLoopLease.InactiveWarning);
+        OperatorIntentSubmissionOutput.PrintWorkspace(persisted, workspace.OrchestratorDirectory,
+            emitAgentReadEnvelope);
         return false;
     }
 }

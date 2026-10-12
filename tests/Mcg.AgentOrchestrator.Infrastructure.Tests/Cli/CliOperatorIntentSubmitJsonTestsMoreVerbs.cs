@@ -81,8 +81,6 @@ public sealed class CliOperatorIntentSubmitJsonTestsMoreVerbs : CliTaskQueryTest
     }
 
     [Theory]
-    [InlineData("lesson", "record")]
-    [InlineData("escape", "record")]
     [InlineData("criterion-evidence-map", "--goal")]
     [InlineData("criterion-evidence-record", "--goal")]
     public void OtherSubmits_Json_RemainsUnknownOption(string verb, string subcommand)
