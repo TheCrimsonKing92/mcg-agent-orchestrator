@@ -726,6 +726,13 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
         Xunit.Assert.Equal(2, restored.Goals.Count);
         var successor = Xunit.Assert.Single(restored.Goals, goal => goal.Id != predecessor.Id);
         Xunit.Assert.Equal(item.Id, successor.SourceBacklogItemId);
+        var sourceFacts = EpicPlanGoalClaimSnapshot.Read(workspace.SqliteStatePath).Resolve(item);
+        Xunit.Assert.Equal(EpicPlanOwnershipResolution.Persisted, sourceFacts.Resolution);
+        Xunit.Assert.Equal(successor.Id.Value, sourceFacts.OwnerGoalId);
+        Xunit.Assert.Equal(SourceBacklogCoverage.Full, sourceFacts.Coverage);
+        Xunit.Assert.Equal(2, sourceFacts.LinkedGoals.Count);
+        Xunit.Assert.Empty(sourceFacts.DeliveredGoals);
+        Xunit.Assert.False(sourceFacts.AutomaticIntakeEligible);
         Xunit.Assert.Equal(
             pipeline == "scout"
                 ? (AgentRole[])[AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer]

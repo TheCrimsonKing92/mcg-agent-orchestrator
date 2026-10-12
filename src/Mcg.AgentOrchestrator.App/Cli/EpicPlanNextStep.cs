@@ -18,7 +18,7 @@ internal static class EpicPlanNextStep
         var step = ordered.FirstOrDefault(item => item.Item.Kind == EpicPlanItemKind.Step && !item.Item.Done);
         if (step is not null) return new(Describe(step), false);
         var incomplete = ordered.Any(item => item.Item.Kind == EpicPlanItemKind.Step ? !item.Item.Done :
-            item.Status is not (EpicPlanSliceStatus.Landed or EpicPlanSliceStatus.Done or EpicPlanSliceStatus.Superseded));
+            !item.ScopeComplete);
         return incomplete ? new(StalledText, true) : new(items.Count == 0 ? "no plan" : "complete", false);
     }
 
@@ -26,7 +26,8 @@ internal static class EpicPlanNextStep
     {
         var next = Compute(items);
         var slices = items.Count(item => item.Item.Kind == EpicPlanItemKind.Slice && item.Status != EpicPlanSliceStatus.Superseded);
-        var landed = items.Count(item => item.Status is EpicPlanSliceStatus.Landed or EpicPlanSliceStatus.Done);
+        var landed = items.Count(item => item.Item.Kind == EpicPlanItemKind.Slice && item.ScopeComplete &&
+            item.Status != EpicPlanSliceStatus.Superseded);
         return $"{landed} of {slices} slices landed; " + (next.IsStalled ? next.Text : $"next: {next.Text}");
     }
 
