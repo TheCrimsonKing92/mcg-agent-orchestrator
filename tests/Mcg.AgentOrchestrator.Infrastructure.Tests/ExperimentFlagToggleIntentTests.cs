@@ -9,6 +9,58 @@ using Xunit;
 public sealed class ExperimentFlagToggleIntentTests
 {
     [Theory]
+    [InlineData(false, true)]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    [InlineData(true, false)]
+    public void ClaimedToggle_AfterWriteAndFailedCompletion_ReplaysSameDestination(bool remote, bool startsOn)
+    {
+        using var fixture = new ExperimentFlagTestFixture();
+        var record = Apply(fixture, remote);
+        var target = record.Spec.Intervention.FlagTarget!;
+        if (!startsOn)
+        {
+            var first = Submit(fixture, record.Id);
+            fixture.Tick();
+            Assert.Equal(OperatorIntentStatus.Applied, fixture.Result(first).Status);
+        }
+        Assert.Equal(startsOn, fixture.Flags.Read(target));
+        var intent = Submit(fixture, record.Id);
+        var failingStore = new FailingToggleCompletionStore(fixture.Intents, intent.Id);
+        var interrupted = Coordinator(fixture, failingStore);
+
+        var failure = Assert.Throws<IOException>(() =>
+            interrupted.ExecuteWorkspacePending(new AgentOrchestratorKernel()));
+        Assert.Equal("toggle completion interrupted after host write", failure.Message);
+        Assert.Equal(1, failingStore.CompletionAttempts);
+        Assert.Equal(!startsOn, fixture.Flags.Read(target));
+        var claimed = fixture.Result(intent);
+        Assert.Equal(OperatorIntentStatus.Claimed, claimed.Status);
+        Assert.Equal(OperatorIntentCoordinator.ClaimOwner, claimed.ClaimOwner);
+        Assert.Null(claimed.CompletedAt);
+        var flagPath = remote ? fixture.ExecutorsPath : fixture.PolicyPath;
+        var afterWrite = File.ReadAllBytes(flagPath);
+
+        // Reopen durable state and rebuild every service, as a restarted conductor would.
+        var recoveredStore = SqliteOperatorIntentStore.ForDirectories(
+            fixture.Workspace.OrchestratorDirectory, fixture.Workspace.LogDirectory);
+        Assert.Equal(intent.Id, recoveredStore.ClaimNextAsync(OperatorIntentScopes.Workspace,
+            OperatorIntentCoordinator.ClaimOwner).GetAwaiter().GetResult()!.Id);
+        var recovered = Coordinator(fixture, recoveredStore);
+        var lines = recovered.ExecuteWorkspacePending(new AgentOrchestratorKernel());
+        Assert.Contains($"id={intent.Id}", Assert.Single(lines));
+        var completed = recoveredStore.GetAsync(intent.Id).GetAwaiter().GetResult()!;
+        Assert.Equal(OperatorIntentStatus.Applied, completed.Status);
+        Assert.Equal("Applied experiment-toggle-flag; tier=Mutate; replayed=True.", completed.Outcome);
+        Assert.Equal(!startsOn, fixture.Flags.Read(target));
+        Assert.Equal(afterWrite, File.ReadAllBytes(flagPath));
+        var experiment = fixture.Experiments.ResolveAsync(record.Id).GetAwaiter().GetResult()!;
+        Assert.Equal(ExperimentOutcomeState.Open, experiment.Outcome);
+        Assert.Null(experiment.Decision);
+        Assert.Equal(target, experiment.Spec.Intervention.FlagTarget);
+    }
+
+    [Theory]
     [InlineData(false, "local-process")]
     [InlineData(true, "local-process")]
     [InlineData(false, "steward")]
@@ -169,5 +221,46 @@ public sealed class ExperimentFlagToggleIntentTests
         Assert.Equal(OperatorIntentStatus.Rejected, result.Status);
         Assert.Equal($"Rejected {intent.Verb}: {reason}", result.Outcome);
         Assert.Equal(before, File.ReadAllBytes(fixture.PolicyPath));
+    }
+
+    private static OperatorIntentCoordinator Coordinator(ExperimentFlagTestFixture fixture, IOperatorIntentStore store) =>
+        new(store, utcNow: () => ExperimentFlagTestFixture.Now)
+        {
+            ExperimentFlags = new ExperimentFlagIntentHandler(fixture.Workspace.ExperimentStorePath,
+                fixture.PolicyPath, fixture.ExecutorsPath)
+        };
+
+    private sealed class FailingToggleCompletionStore(IOperatorIntentStore inner, string interruptedId) : IOperatorIntentStore
+    {
+        internal int CompletionAttempts { get; private set; }
+
+        public Task<OperatorIntentRecord> EnqueueAsync(OperatorIntentRecord intent, CancellationToken cancellationToken = default) =>
+            inner.EnqueueAsync(intent, cancellationToken);
+        public Task<OperatorIntentRecord?> ClaimNextAsync(string goalId, string claimOwner, CancellationToken cancellationToken = default) =>
+            inner.ClaimNextAsync(goalId, claimOwner, cancellationToken);
+        public Task<OperatorIntentRecord?> ClaimNextPendingAsync(string goalId, string claimOwner, CancellationToken cancellationToken = default) =>
+            inner.ClaimNextPendingAsync(goalId, claimOwner, cancellationToken);
+        public Task<OperatorIntentRecord?> ClaimNextByVerbAsync(string goalId, string verb, string claimOwner,
+            CancellationToken cancellationToken = default) => inner.ClaimNextByVerbAsync(goalId, verb, claimOwner, cancellationToken);
+        public Task CompleteAsync(string intentId, string claimOwner, OperatorIntentStatus status, string outcome,
+            DateTimeOffset completedAt, CancellationToken cancellationToken = default)
+        {
+            if (intentId == interruptedId && status == OperatorIntentStatus.Applied)
+            {
+                CompletionAttempts++;
+                return Task.FromException(new IOException("toggle completion interrupted after host write"));
+            }
+            return inner.CompleteAsync(intentId, claimOwner, status, outcome, completedAt, cancellationToken);
+        }
+        public Task<OperatorIntentRecord?> GetAsync(string intentId, CancellationToken cancellationToken = default) =>
+            inner.GetAsync(intentId, cancellationToken);
+        public Task<IReadOnlyList<OperatorIntentRecord>> ListForGoalAsync(string goalId, int limit = 20,
+            CancellationToken cancellationToken = default) => inner.ListForGoalAsync(goalId, limit, cancellationToken);
+        public Task<IReadOnlyList<string>> ListActionableGoalIdsAsync(CancellationToken cancellationToken = default) =>
+            inner.ListActionableGoalIdsAsync(cancellationToken);
+        public Task<IReadOnlyDictionary<string, ActionableOperatorIntentSummary>> ListActionableSummariesAsync(
+            IReadOnlyCollection<string> goalIds, CancellationToken cancellationToken = default) =>
+            inner.ListActionableSummariesAsync(goalIds, cancellationToken);
+        public void AcknowledgeWake(string intentId) => inner.AcknowledgeWake(intentId);
     }
 }

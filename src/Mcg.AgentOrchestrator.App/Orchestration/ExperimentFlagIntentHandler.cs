@@ -3,6 +3,7 @@ using System.Text;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Microsoft.Data.Sqlite;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -38,9 +39,61 @@ internal sealed class ExperimentFlagIntentHandler(string experimentStorePath, st
         var target = record.Spec.Intervention.FlagTarget ?? throw new InvalidOperationException("flag-target-missing");
         if (target.PriorValue is null) throw new InvalidOperationException("flag-not-applied");
         RequireAllowed(target);
-        bool Desired(bool current) => current == target.ValueToApply ? target.PriorValue.Value : target.ValueToApply;
+        bool? destination = null;
+        bool Desired(bool current) => destination ??= PersistToggleDestination(intent, record.Id, target,
+            current == target.ValueToApply ? target.PriorValue.Value : target.ValueToApply);
         var candidate = ReadAndPrepare(target, Desired);
         return WriteCandidate(target, candidate, Desired(candidate.Current));
+    }
+
+    private bool PersistToggleDestination(OperatorIntentRecord intent, string experimentId,
+        ExperimentFlagTarget target, bool proposed)
+    {
+        // Commit the destination before the host write. An unfinished intent can be reclaimed after
+        // that write, so its destination must survive both a new handler and a process restart.
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = experimentStorePath, Mode = SqliteOpenMode.ReadWrite, Pooling = false
+        }.ToString());
+        connection.Open();
+        using (var durability = connection.CreateCommand())
+        {
+            durability.CommandText = "PRAGMA synchronous=FULL";
+            durability.ExecuteNonQuery();
+        }
+        using var transaction = connection.BeginTransaction();
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            CREATE TABLE IF NOT EXISTS experiment_flag_toggle_destinations (
+                intent_id TEXT PRIMARY KEY, idempotency_key TEXT NOT NULL,
+                experiment_id TEXT NOT NULL, target_json TEXT NOT NULL,
+                destination INTEGER NOT NULL CHECK(destination IN (0,1)));
+            INSERT OR IGNORE INTO experiment_flag_toggle_destinations
+                (intent_id, idempotency_key, experiment_id, target_json, destination)
+            VALUES ($intent, $key, $experiment, $target, $destination);
+            """;
+        var targetJson = JsonSerializer.Serialize(target, ExperimentStore.JsonOptions);
+        command.Parameters.AddWithValue("$intent", intent.Id);
+        command.Parameters.AddWithValue("$key", intent.IdempotencyKey);
+        command.Parameters.AddWithValue("$experiment", experimentId);
+        command.Parameters.AddWithValue("$target", targetJson);
+        command.Parameters.AddWithValue("$destination", proposed ? 1 : 0);
+        command.ExecuteNonQuery();
+        command.CommandText = """
+            SELECT idempotency_key, experiment_id, target_json, destination
+            FROM experiment_flag_toggle_destinations WHERE intent_id=$intent
+            """;
+        bool destination;
+        using (var reader = command.ExecuteReader())
+        {
+            if (!reader.Read() || reader.GetString(0) != intent.IdempotencyKey ||
+                reader.GetString(1) != experimentId || reader.GetString(2) != targetJson)
+                throw new InvalidOperationException("toggle-destination-binding-mismatch");
+            destination = reader.GetInt32(3) == 1;
+        }
+        transaction.Commit();
+        return destination;
     }
 
     private bool Execute(OperatorIntentRecord intent, bool revert)
