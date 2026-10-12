@@ -160,6 +160,39 @@ public sealed class LifecycleGoalEpicInheritanceTests : CliCommandTestBase
     [Theory]
     [InlineData("lifecycle-goal")]
     [InlineData("lifecycle-simple-goal")]
+    public void StaleJournal_RecreatedGoal_DefersEpicInheritance(string command)
+    {
+        using var fixture = new Fixture(command);
+        var (portfolio, epic, item) = fixture.SeedEpic();
+        var parts = Parts(command, item.Id);
+        var discarded = new Goal(new GoalId(Guid.NewGuid().ToString("N")), parts[1], []);
+        // A lifecycle transaction can roll back after its journal index is written.
+        GoalOperationJournal.RecordLifecycleGoal(fixture.Root, discarded, command, discarded.Objective);
+        Assert.Equal(discarded.Id, GoalOperationJournal.TryFindLifecycleGoal(fixture.Root, command, parts[1]));
+        Assert.Empty(fixture.Context.Kernel.Goals);
+
+        var output = CaptureConsole(() => Assert.True(CliCommandHandlers.Execute(parts, fixture.Context)));
+
+        var goal = Assert.Single(fixture.Context.Kernel.Goals);
+        Assert.NotEqual(discarded.Id, goal.Id);
+        Assert.Equal(item.Id, goal.SourceBacklogItemId);
+        Assert.Equal(GoalStatus.Completed, goal.Status);
+        Assert.Equal(goal.Id, GoalOperationJournal.TryFindLifecycleGoal(fixture.Root, command, parts[1]));
+        Assert.Contains("created and activated", output);
+        Assert.DoesNotContain("reused existing idempotent goal", output);
+        var action = Assert.Single(fixture.Actions);
+        Assert.Null(portfolio.GetGoalMembershipAsync(goal.Id.Value).GetAwaiter().GetResult());
+        Assert.DoesNotContain("Assigned goal", output);
+
+        var assigned = CaptureConsole(action);
+
+        Assert.Equal(epic.Id, portfolio.GetGoalMembershipAsync(goal.Id.Value).GetAwaiter().GetResult()!.EpicId);
+        Assert.Contains($"Assigned goal {goal.Id.Value[..8]} to epic {epic.Id[..8]}", assigned);
+    }
+
+    [Theory]
+    [InlineData("lifecycle-goal")]
+    [InlineData("lifecycle-simple-goal")]
     public void ReadinessFailure_RollsBackGoalAndSkipsEpicAssignment(string command)
     {
         using var fixture = new Fixture(command);
