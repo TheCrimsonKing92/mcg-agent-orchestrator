@@ -12,7 +12,18 @@ public static class ManifestCheckComparer
         return Compare(checks, unresolved, manifestJson);
     }
 
+    public static IReadOnlyList<ManifestCheckComparison> Compare(ProjectModel model, string manifestJson,
+        AppliedOwnerAnswers applied)
+    {
+        var (checks, unresolved) = LearnedTestCheckDeriver.Derive(model, applied);
+        return CompareChecks(checks, unresolved, manifestJson);
+    }
+
     public static IReadOnlyList<ManifestCheckComparison> Compare(IReadOnlyList<LearnedTestCheck> checks,
+        IReadOnlyList<UnresolvedTestUnit> unresolved, string manifestJson) =>
+        CompareChecks(checks, unresolved, manifestJson);
+
+    private static IReadOnlyList<ManifestCheckComparison> CompareChecks(IReadOnlyList<LearnedTestCheck> checks,
         IReadOnlyList<UnresolvedTestUnit> unresolved, string manifestJson)
     {
         var learned = checks.ToDictionary(check => NormalizePath(check.ProjectPath), StringComparer.OrdinalIgnoreCase);

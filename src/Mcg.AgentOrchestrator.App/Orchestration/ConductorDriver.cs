@@ -1593,16 +1593,7 @@ internal sealed partial class ConductorDriver
                     new ConductorAdvanceOutcome.Held(fromState, decision.Reason) { Decision = decision.ToRecord() });
         }
 
-        var exitedUnappliedTaskIds = goal.Tasks
-            .Where(task => task.LastProcess is { } process &&
-                           DispatchProcessCompletionState.IsExitedWithoutAppliedCompletion(task, process))
-            .Select(task => task.Id)
-            .ToArray();
-        foreach (var taskId in exitedUnappliedTaskIds)
-        {
-            _reconcileExitedDispatch(goal, taskId);
-            goal = GetCurrentGoal(goal);
-        }
+        goal = ExitedDispatchReconciliationExecutor.Execute(goal, _reconcileExitedDispatch, GetCurrentGoal);
 
         var unreconciledTask = goal.Tasks.FirstOrDefault(task =>
             task.LastProcess is { } process &&
