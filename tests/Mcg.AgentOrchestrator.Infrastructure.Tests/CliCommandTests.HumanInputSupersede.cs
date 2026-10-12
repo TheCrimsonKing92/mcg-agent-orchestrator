@@ -201,8 +201,8 @@ public sealed class CliCommandTestsHumanInputSupersede : CliCommandTestBase
         var raised = await store.RaiseAsync(
             CollaborationItemType.Clarification,
             goal.Id.Value,
-            "Billing provider",
-            "Stripe or Paddle?",
+            "Spec clarification needed: Stripe or Paddle?",
+            "Fork kind: external-contract\nQuestion: Stripe or Paddle?",
             correlationKey);
         Assert.True(await store.TryResolveAsync(
             correlationKey,

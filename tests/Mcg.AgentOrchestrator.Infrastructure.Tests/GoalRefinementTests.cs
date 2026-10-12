@@ -1524,18 +1524,12 @@ public sealed class GoalRefinementTests
 
         var result = await service.RefineAsync(kernel, goalId);
 
-        // Should auto-refine because the precedent answers the fork without asking
-        Xunit.Assert.Equal(RefinementOutcome.AutoRefined, result.Outcome);
-        Xunit.Assert.Empty(collab.Items); // no new clarification raised
+        // An unlinked precedent without an origin cannot answer the fork.
+        Xunit.Assert.Equal(RefinementOutcome.AwaitingClarification, result.Outcome);
+        Xunit.Assert.Single(collab.Items);
         var goal = kernel.GetGoal(goalId);
-        Xunit.Assert.False(goal.RefinedSpec!.HasOpenQuestions);
-        // The decision should record the precedent answer
-        Xunit.Assert.Single(goal.RefinedSpec!.Decisions);
-        Xunit.Assert.Equal("Stripe", goal.RefinedSpec!.Decisions[0].Choice);
-        Xunit.Assert.Contains(
-            "Unlinked legacy precedent",
-            goal.RefinedSpec.Decisions[0].Rationale,
-            StringComparison.Ordinal);
+        Xunit.Assert.True(goal.RefinedSpec!.HasOpenQuestions);
+        Xunit.Assert.Empty(goal.RefinedSpec.Decisions);
     }
 
     [Xunit.Fact(DisplayName = "GoalRefinementService_linked_precedent_with_missing_origin_fails_closed")]
