@@ -90,7 +90,7 @@ internal sealed partial class OperatorIntentCoordinator
                 try
                 {
                     var path = GoalWorktrees.TryResolve(workspace.ExecutionDirectory, goalId);
-                    return path is null ? null : GoalAcceptanceVerifier.ComputeOwnerProtectedChangeFingerprintForCandidate(path, sha, workspace.IntegrationBranch);
+                    return path is null ? null : AcceptanceOwnerProtectedFingerprint.ComputeForCandidate(path, sha, workspace.IntegrationBranch);
                 }
                 catch
                 {
