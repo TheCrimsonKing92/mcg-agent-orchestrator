@@ -12,11 +12,44 @@ internal sealed class ExperimentFlagIntentHandler(string experimentStorePath, st
     internal bool Apply(OperatorIntentRecord intent) => Execute(intent, revert: false);
     internal bool Revert(OperatorIntentRecord intent) => Execute(intent, revert: true);
 
+    internal bool Toggle(OperatorIntentRecord intent)
+    {
+        if (intent.AuthenticationAssurance == OperatorIntentAdjudication.StewardAssurance &&
+            (intent.ActorKind != OperatorActorKind.Agent || intent.Actor != "conductor" ||
+             intent.Channel != "conductor-experiment-toggle"))
+            throw new InvalidOperationException("steward-capability-boundary");
+        RequireMutate(intent);
+        string? experimentId;
+        try
+        {
+            experimentId = JsonSerializer.Deserialize<ExperimentToggleFlagOperatorIntentPayload>(intent.PayloadJson,
+                OperatorIntentJson.Options)?.ExperimentId;
+        }
+        catch (JsonException error) { throw new ArgumentException("invalid-payload", error); }
+        if (string.IsNullOrWhiteSpace(experimentId)) throw new ArgumentException("invalid-payload");
+        if (!File.Exists(experimentStorePath)) throw new InvalidOperationException("experiment-not-found");
+        var store = new ExperimentStore(experimentStorePath);
+        var record = store.ResolveAsync(experimentId).GetAwaiter().GetResult()
+            ?? throw new InvalidOperationException("experiment-not-found");
+        if (record.Outcome != ExperimentOutcomeState.Open) throw new InvalidOperationException("experiment-decided");
+        if (record.Spec.Baseline.Kind != ExperimentBaselineKind.AlternatingGates)
+            throw new InvalidOperationException("not-alternating-gates");
+        if (record.Spec.Intervention.Kind != ExperimentInterventionKind.ConfigFlag)
+            throw new InvalidOperationException("not-config-flag");
+        var target = record.Spec.Intervention.FlagTarget ?? throw new InvalidOperationException("flag-target-missing");
+        if (target.PriorValue is null) throw new InvalidOperationException("flag-not-applied");
+        RequireAllowed(target);
+        bool? destination = null;
+        bool Desired(bool current) => destination ??= store.GetOrRecordFlagToggleDestination(intent.Id,
+            intent.IdempotencyKey, record.Id, target,
+            current == target.ValueToApply ? target.PriorValue.Value : target.ValueToApply);
+        var candidate = ReadAndPrepare(target, Desired);
+        return WriteCandidate(target, candidate, Desired(candidate.Current));
+    }
+
     private bool Execute(OperatorIntentRecord intent, bool revert)
     {
-        if (!DecisionAuthorization.Meets(OperatorIntentAdjudication.ResolveAuthorizationTier(intent.AuthenticationAssurance),
-                AuthorizationTier.Mutate))
-            throw new InvalidOperationException("tier-below-mutate");
+        RequireMutate(intent);
         if (intent.AuthenticationAssurance == OperatorIntentAdjudication.StewardAssurance &&
             (!revert || intent.ActorKind != OperatorActorKind.Agent || intent.Actor != "conductor" ||
              intent.Channel != "conductor-experiment-revert"))
@@ -39,6 +72,31 @@ internal sealed class ExperimentFlagIntentHandler(string experimentStorePath, st
         if (record.Spec.Intervention.Kind != ExperimentInterventionKind.ConfigFlag)
             throw new InvalidOperationException("not-config-flag");
         var target = record.Spec.Intervention.FlagTarget ?? throw new InvalidOperationException("flag-target-missing");
+        RequireAllowed(target);
+        if (revert && target.PriorValue is null) throw new InvalidOperationException("flag-not-applied");
+        var candidate = ReadAndPrepare(target, _ => revert ? target.PriorValue!.Value : target.ValueToApply);
+
+        if (!revert && target.PriorValue is null)
+        {
+            store.RecordFlagPriorAsync(record.Id, candidate.Current).GetAwaiter().GetResult();
+            record = store.ResolveAsync(record.Id).GetAwaiter().GetResult()!;
+            if (record.Outcome != ExperimentOutcomeState.Open) throw new InvalidOperationException("experiment-decided");
+            target = record.Spec.Intervention.FlagTarget!;
+            if (target.PriorValue is null) throw new InvalidOperationException("flag-prior-capture-failed");
+        }
+        var desired = revert ? target.PriorValue!.Value : target.ValueToApply;
+        return WriteCandidate(target, candidate, desired);
+    }
+
+    private static void RequireMutate(OperatorIntentRecord intent)
+    {
+        if (!DecisionAuthorization.Meets(OperatorIntentAdjudication.ResolveAuthorizationTier(intent.AuthenticationAssurance),
+                AuthorizationTier.Mutate))
+            throw new InvalidOperationException("tier-below-mutate");
+    }
+
+    private static void RequireAllowed(ExperimentFlagTarget target)
+    {
         var allowed = target.FileKind switch
         {
             ExperimentFlagFileKind.ConductorPolicy => ConductorPolicyBooleanFlags.IsAllowed(target.PropertyName),
@@ -47,53 +105,53 @@ internal sealed class ExperimentFlagIntentHandler(string experimentStorePath, st
         };
         if (!allowed)
             throw new InvalidOperationException($"property-not-allowlisted {target.PropertyName}");
-        if (revert && target.PriorValue is null) throw new InvalidOperationException("flag-not-applied");
+    }
 
-        string? json = null;
+    private (bool Current, string? Json, byte[]? Executors) ReadAndPrepare(ExperimentFlagTarget target, Func<bool, bool> desired)
+        => target.FileKind == ExperimentFlagFileKind.RemoteLaneExecutors ? ReadExecutors(target, desired) : ReadPolicy(target);
+
+    private (bool Current, string? Json, byte[]? Executors) ReadExecutors(ExperimentFlagTarget target, Func<bool, bool> desired)
+    {
         byte[]? executorsCandidate = null;
         bool current;
-        if (target.FileKind == ExperimentFlagFileKind.RemoteLaneExecutors)
+        if (!File.Exists(executorsPath)) throw new InvalidOperationException("executors-file-missing");
+        try
         {
-            if (!File.Exists(executorsPath)) throw new InvalidOperationException("executors-file-missing");
-            try
-            {
-                var original = File.ReadAllBytes(executorsPath);
-                var configuration = RemoteLaneExecutorConfiguration.LoadForFocusedEvidence(executorsPath);
-                if (configuration.DisabledReason is not null || configuration.FocusedEvidence.FaultReason is not null)
-                    throw new InvalidOperationException("executors-file-invalid");
-                current = configuration.FocusedEvidence.Mode == "shadow";
-                executorsCandidate = RemoteLaneExecutorFlags.Rewrite(original, target.PropertyName,
-                    revert ? target.PriorValue!.Value : target.ValueToApply);
-            }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException)
-            { throw new InvalidOperationException("executors-file-invalid", error); }
-            if (executorsCandidate is null) throw new InvalidOperationException("focused-evidence-mode-absent");
+            var original = File.ReadAllBytes(executorsPath);
+            var configuration = RemoteLaneExecutorConfiguration.LoadForFocusedEvidence(executorsPath);
+            if (configuration.DisabledReason is not null || configuration.FocusedEvidence.FaultReason is not null)
+                throw new InvalidOperationException("executors-file-invalid");
+            current = configuration.FocusedEvidence.Mode == "shadow";
+            executorsCandidate = RemoteLaneExecutorFlags.Rewrite(original, target.PropertyName, desired(current));
         }
-        else
-        {
-            if (!File.Exists(policyPath)) throw new InvalidOperationException("policy-file-missing");
-            try
-            {
-                json = File.ReadAllText(policyPath);
-                var policy = ConductorAutonomyPolicy.ParseJson(json);
-                current = ConductorPolicyBooleanFlags.Read(policy, target.PropertyName);
-            }
-            catch (Exception error) when (error is JsonException or FormatException or InvalidOperationException)
-            { throw new InvalidOperationException("policy-file-invalid", error); }
-        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException)
+        { throw new InvalidOperationException("executors-file-invalid", error); }
+        if (executorsCandidate is null) throw new InvalidOperationException("focused-evidence-mode-absent");
+        return (current, null, executorsCandidate);
+    }
 
-        if (!revert && target.PriorValue is null)
+    private (bool Current, string? Json, byte[]? Executors) ReadPolicy(ExperimentFlagTarget target)
+    {
+        string json;
+        bool current;
+        if (!File.Exists(policyPath)) throw new InvalidOperationException("policy-file-missing");
+        try
         {
-            store.RecordFlagPriorAsync(record.Id, current).GetAwaiter().GetResult();
-            record = store.ResolveAsync(record.Id).GetAwaiter().GetResult()!;
-            if (record.Outcome != ExperimentOutcomeState.Open) throw new InvalidOperationException("experiment-decided");
-            target = record.Spec.Intervention.FlagTarget!;
-            if (target.PriorValue is null) throw new InvalidOperationException("flag-prior-capture-failed");
+            json = File.ReadAllText(policyPath);
+            var policy = ConductorAutonomyPolicy.ParseJson(json);
+            current = ConductorPolicyBooleanFlags.Read(policy, target.PropertyName);
         }
-        var desired = revert ? target.PriorValue!.Value : target.ValueToApply;
-        if (current == desired) return true;
-        if (executorsCandidate is not null)
-            WriteAtomically(executorsPath, executorsCandidate, temporary =>
+        catch (Exception error) when (error is JsonException or FormatException or InvalidOperationException)
+        { throw new InvalidOperationException("policy-file-invalid", error); }
+        return (current, json, null);
+    }
+
+    private bool WriteCandidate(ExperimentFlagTarget target,
+        (bool Current, string? Json, byte[]? Executors) candidate, bool desired)
+    {
+        if (candidate.Current == desired) return true;
+        if (candidate.Executors is not null)
+            WriteAtomically(executorsPath, candidate.Executors, temporary =>
             {
                 var configuration = RemoteLaneExecutorConfiguration.LoadForFocusedEvidence(temporary);
                 if (configuration.DisabledReason is not null || configuration.FocusedEvidence.FaultReason is not null ||
@@ -102,9 +160,9 @@ internal sealed class ExperimentFlagIntentHandler(string experimentStorePath, st
             });
         else
         {
-            var candidate = ExperimentPolicyPropertyRewrite.Rewrite(json!, target.PropertyName, desired);
-            ConductorAutonomyPolicy.ParseJson(candidate);
-            WriteAtomically(policyPath, Encoding.UTF8.GetBytes(candidate));
+            var json = ExperimentPolicyPropertyRewrite.Rewrite(candidate.Json!, target.PropertyName, desired);
+            ConductorAutonomyPolicy.ParseJson(json);
+            WriteAtomically(policyPath, Encoding.UTF8.GetBytes(json));
         }
         return false;
     }
