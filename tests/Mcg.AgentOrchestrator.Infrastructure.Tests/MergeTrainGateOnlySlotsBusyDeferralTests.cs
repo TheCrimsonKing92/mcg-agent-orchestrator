@@ -5,8 +5,9 @@ using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 
-// Parallel-safe: each case owns its repositories, database and build-slot storage root.
-public sealed class MergeTrainGateOnlySlotsBusyDeferralTests : AcceptanceCohortWorkflowTests
+// Parallel-safe: each class owns its repository; cases reset its mutable state.
+public sealed class MergeTrainGateOnlySlotsBusyDeferralTests(MergeTrainDeferralSharedFixture fixture)
+    : AcceptanceCohortWorkflowTests, IClassFixture<MergeTrainDeferralSharedFixture>
 {
     [Theory]
     [InlineData(2)]
@@ -134,30 +135,19 @@ public sealed class MergeTrainGateOnlySlotsBusyDeferralTests : AcceptanceCohortW
 
     private void WithTrain(Action<Scenario> assert)
     {
-        var repo = CreateReducedAcceptanceCohortRepository();
+        fixture.Reset();
+        var repo = fixture.Repository;
+        Scenario? activeScenario = null;
         try
         {
-            AddAcceptanceManifest(repo);
-            var kernel = new AgentOrchestratorKernel();
-            var paths = new[] { "tests/Mcg.AgentOrchestrator.Core.Tests/First.cs",
-                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Second.cs",
-                "tests/Mcg.AgentOrchestrator.Dashboard.Tests/Third.cs" };
-            var goals = paths.Select((path, index) =>
-            {
-                var goal = CreateCompletedGoal(kernel, $"Train member {index}", repo);
-                var candidate = CreateWorktreeCandidate(repo, goal.Id, path, $"member {index}");
-                kernel.RecordGoalRefinement(goal.Id, new RefinedSpec(goal.Objective,
-                    ["The full acceptance gate passes"], VerificationClass.TestVerifiable, [], [])
-                    { AcceptanceGateOwnedAcceptanceCriteria = ["The full acceptance gate passes"] });
-                kernel.MapCriterionEvidenceOwner(goal.Id, 0, 1, CriterionEvidenceOwner.Acceptance,
-                    "test", CriterionEvidenceScopes.FullAcceptanceGate, expectedCandidateSha: candidate);
-                return goal;
-            }).ToArray();
+            var kernel = fixture.Kernel;
+            var goals = fixture.Goals;
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var cleanup = CreateIsolatedCleanupContext(repo).Hooks;
             var verifier = new GateVerifier(new(true, false, 0, null,
                 TestResultPaths: [WritePassingTrx(repo, "train-green.trx")]));
             var scenario = new Scenario(repo, goals, workspace, verifier);
+            activeScenario = scenario;
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
                 Path.Combine(workspace.OrchestratorDirectory, "parallel-attempts"), workspace.IntegrationBranch,
                 buildStorageRoot: cleanup.BuildStorageRoot,
@@ -185,7 +175,7 @@ public sealed class MergeTrainGateOnlySlotsBusyDeferralTests : AcceptanceCohortW
             assert(scenario);
             AssertNoMergeTrainWorkspaces(repo);
         }
-        finally { DeleteDirectory(repo); }
+        finally { activeScenario?.Lease?.Dispose(); }
     }
 
     private static void AssertNoRecordedOutcome(Scenario scenario)
