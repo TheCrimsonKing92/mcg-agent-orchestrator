@@ -167,6 +167,55 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLanePolicy :
     }
 
     [Xunit.Fact]
+    public async Task Policy_ExpiredThreeFailureHoldOffersPriorForReprobe()
+    {
+        using var scenario = CreateScenario([45, 300, 150]);
+        var binding = new RemoteLaneBinding("seed-executor", Lane(2), "commit", "tree", "main",
+            GoalAcceptanceVerifier.ShortHash(Filter(2)), "manifest");
+        for (var index = 0; index < 3; index++)
+            RemoteExecutorHealthLedger.Append(scenario.History,
+                new(scenario.Clock.GetUtcNow().AddHours(-7), binding.ExecutorId, "seed-attempt", Lane(2),
+                    RemoteLaneOutcomeCode.RemoteRed, null, binding, null));
+        scenario.HoldRemoteUntilLocalStarts = true;
+
+        var result = await scenario.RunAsync();
+
+        Assert.True(result.Passed, JsonSerializer.Serialize(result.Checks));
+        Assert.Equal(Lane(2), Assert.Single(scenario.Fake.Requests).Lane);
+        Assert.Equal(new[] { 0, 1 }, scenario.LocalStarts.Order().ToArray());
+        Assert.Equal(new[]
+        {
+            $"REMOTE_LANE_POLICY lane=\"{Lane(0)}\" decision=keep-local reason=short L=45 Ln=3 R=105 Rn=0 F=300 Fn=0",
+            $"REMOTE_LANE_POLICY lane=\"{Lane(1)}\" decision=keep-local reason=remote-slower L=300 Ln=3 R=615 Rn=0 F=300 Fn=0",
+            $"REMOTE_LANE_POLICY lane=\"{Lane(2)}\" decision=offer reason=fits-reprobe L=150 Ln=3 R=315 Rn=0 F=300 Fn=3"
+        }, scenario.Progress.Where(line => line.StartsWith("REMOTE_LANE_POLICY ")).Order(StringComparer.Ordinal).ToArray());
+    }
+
+    [Xunit.Fact]
+    public async Task Policy_TwoExpiredFailuresKeepPriorLocal()
+    {
+        using var scenario = CreateScenario([45, 300, 150]);
+        var binding = new RemoteLaneBinding("seed-executor", Lane(2), "commit", "tree", "main",
+            GoalAcceptanceVerifier.ShortHash(Filter(2)), "manifest");
+        for (var index = 0; index < 2; index++)
+            RemoteExecutorHealthLedger.Append(scenario.History,
+                new(scenario.Clock.GetUtcNow().AddHours(-7), binding.ExecutorId, "seed-attempt", Lane(2),
+                    RemoteLaneOutcomeCode.RemoteRed, null, binding, null));
+
+        var result = await scenario.RunAsync();
+
+        Assert.True(result.Passed, JsonSerializer.Serialize(result.Checks));
+        Assert.Empty(scenario.Fake.Requests);
+        Assert.Equal(new[] { 0, 1, 2 }, scenario.LocalStarts.Order().ToArray());
+        Assert.Equal(new[]
+        {
+            $"REMOTE_LANE_POLICY lane=\"{Lane(0)}\" decision=keep-local reason=short L=45 Ln=3 R=105 Rn=0 F=300 Fn=0",
+            $"REMOTE_LANE_POLICY lane=\"{Lane(1)}\" decision=keep-local reason=remote-slower L=300 Ln=3 R=615 Rn=0 F=300 Fn=0",
+            $"REMOTE_LANE_POLICY lane=\"{Lane(2)}\" decision=keep-local reason=remote-slower L=150 Ln=3 R=315 Rn=0 F=300 Fn=2"
+        }, scenario.Progress.Where(line => line.StartsWith("REMOTE_LANE_POLICY ")).Order(StringComparer.Ordinal).ToArray());
+    }
+
+    [Xunit.Fact]
     public async Task Wildcard_AllInfrastructureLanesStillHonorExclusiveKeys()
     {
         using var scenario = CreateScenario([120, 120, 120], keyed: true, lanes: ["*"]);
