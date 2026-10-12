@@ -1,11 +1,14 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal sealed record TickCpuLedgerRecord(
     DateTimeOffset ObservedAt, int Tick, long CpuMs, long CpuSweepMs, long CpuPrewalkMs,
-    long CpuWalkMs, bool HadGoalChanges, int Version = 1);
+    long CpuWalkMs, bool HadGoalChanges, int Version = 1,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    IReadOnlyDictionary<string, string>? ExperimentArms = null);
 
 internal static class TickCpuLedger
 {
@@ -23,8 +26,10 @@ internal static class TickCpuLedger
         try
         {
             var path = ResolveStorePath(executionDirectory);
+            var arms = ExperimentArmStamp.Resolve(executionDirectory);
             var record = new TickCpuLedgerRecord(DateTimeOffset.UtcNow, tick, cpuMs,
-                cpuSweepMs, cpuPrewalkMs, cpuWalkMs, hadGoalChanges);
+                cpuSweepMs, cpuPrewalkMs, cpuWalkMs, hadGoalChanges,
+                Version: arms is { Count: > 0 } ? 2 : 1, ExperimentArms: arms);
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
             (AppenderOverride.Value ?? SharedJsonlFile.AppendLine)(path, JsonSerializer.Serialize(record, JsonOptions));
         }

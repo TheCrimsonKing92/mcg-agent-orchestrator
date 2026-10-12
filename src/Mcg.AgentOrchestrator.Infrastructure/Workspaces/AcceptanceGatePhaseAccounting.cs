@@ -363,11 +363,13 @@ internal sealed class AcceptanceGatePhaseAccountant : IDisposable
             {
                 try
                 {
+                    var arms = ExperimentArmStamp.Resolve(Path.GetDirectoryName(Path.GetDirectoryName(laneLedgerPath))!);
                     GateLaneTimeLedger.Append(laneLedgerPath, new GateLaneTimeLedgerRecord(
                         observedAt, _gateAttemptId!, _goalId, breakdown.Outcome, breakdown.TotalDuration.TotalMilliseconds,
                         TimeSpan.FromTicks(Interlocked.Read(ref _localLaneTicksTotal)).TotalMilliseconds,
                         TimeSpan.FromTicks(Interlocked.Read(ref _remoteLaneTicksTotal)).TotalMilliseconds,
-                        Volatile.Read(ref _remoteLaneCount)));
+                        Volatile.Read(ref _remoteLaneCount),
+                        Version: arms is { Count: > 0 } ? 2 : 1, ExperimentArms: arms));
                 }
                 catch { /* Lane ledger failure must not suppress the breakdown or change the verdict. */ }
             }
