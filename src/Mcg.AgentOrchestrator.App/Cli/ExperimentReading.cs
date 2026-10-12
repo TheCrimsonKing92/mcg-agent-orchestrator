@@ -57,12 +57,12 @@ internal static class ExperimentReading
         }
         else if (spec.Baseline.Kind == ExperimentBaselineKind.TwinGoal)
         {
-            twin = ExperimentTwinReading.Compute(spec.Baseline, goals, intents);
+            twin = ExperimentTwinReading.Compute(spec.Baseline, goals, intents, landings);
             values = twin.Values;
         }
         else if (spec.Baseline.Kind == ExperimentBaselineKind.GoalCohort)
         {
-            twin = ExperimentCohortReading.Compute(spec.Baseline, goals, intents);
+            twin = ExperimentCohortReading.Compute(spec.Baseline, goals, intents, landings);
             values = twin.Values;
         }
         else
@@ -142,6 +142,7 @@ internal static class ExperimentReading
         IReadOnlyDictionary<string, DateTimeOffset> landings, DateTimeOffset since, DateTimeOffset until,
         ExperimentHostLedgers hostLedgers)
     {
+        if (metric == "hours-to-land") return null;
         if (metric == "landings-per-hour")
         {
             var count = goals.Count(g => g.Status == GoalStatus.Completed && landings.TryGetValue(g.Id.Value, out var at)

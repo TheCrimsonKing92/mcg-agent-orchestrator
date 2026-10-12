@@ -10,7 +10,7 @@ internal sealed record ExperimentTwinValues(
 internal static class ExperimentTwinReading
 {
     internal static ExperimentTwinValues Compute(ExperimentBaseline baseline, IReadOnlyCollection<Goal> goals,
-        IReadOnlyCollection<AppliedRetryIntent> intents)
+        IReadOnlyCollection<AppliedRetryIntent> intents, IReadOnlyDictionary<string, DateTimeOffset> landings)
     {
         var diagnostics = new List<string>();
         var twin = Resolve(baseline.TwinGoalId, "baseline");
@@ -23,8 +23,11 @@ internal static class ExperimentTwinReading
             after = null;
         }
         var values = ExperimentMetrics.Menu.ToDictionary(metric => metric, metric => (
-            Before: ExperimentReading.IsWindowMetric(metric) ? null : ExperimentReading.TotalsValue(metric, before),
-            After: ExperimentReading.IsWindowMetric(metric) ? null : ExperimentReading.TotalsValue(metric, after)));
+            Before: metric == "hours-to-land" || ExperimentReading.IsWindowMetric(metric) ? null : ExperimentReading.TotalsValue(metric, before),
+            After: metric == "hours-to-land" || ExperimentReading.IsWindowMetric(metric) ? null : ExperimentReading.TotalsValue(metric, after)));
+        values["hours-to-land"] = (
+            before is null ? null : ExperimentHoursToLand.Mean([twin!], landings, diagnostics, "baseline"),
+            after is null ? null : ExperimentHoursToLand.Mean([comparison!], landings, diagnostics, "comparison"));
         return new(values, diagnostics,
             $"baseline={twin?.Id.Value ?? baseline.TwinGoalId ?? "none"} comparison={comparison?.Id.Value ?? baseline.ComparisonGoalId ?? "none"}");
 

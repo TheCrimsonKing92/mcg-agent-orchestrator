@@ -6,7 +6,7 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 internal static class ExperimentCohortReading
 {
     internal static ExperimentTwinValues Compute(ExperimentBaseline baseline, IReadOnlyCollection<Goal> goals,
-        IReadOnlyCollection<AppliedRetryIntent> intents)
+        IReadOnlyCollection<AppliedRetryIntent> intents, IReadOnlyDictionary<string, DateTimeOffset> landings)
     {
         var diagnostics = new List<string>();
         var before = Totals(baseline.BaselineGoalIds, "baseline", out var baselineGoals, out var baselineLabels);
@@ -18,8 +18,12 @@ internal static class ExperimentCohortReading
             after = null;
         }
         var values = ExperimentMetrics.Menu.ToDictionary(metric => metric, metric => (
-            Before: ExperimentReading.IsWindowMetric(metric) ? null : ExperimentReading.TotalsValue(metric, before),
-            After: ExperimentReading.IsWindowMetric(metric) ? null : ExperimentReading.TotalsValue(metric, after)));
+            Before: metric == "hours-to-land" || ExperimentReading.IsWindowMetric(metric) ? null : ExperimentReading.TotalsValue(metric, before),
+            After: metric == "hours-to-land" || ExperimentReading.IsWindowMetric(metric) ? null : ExperimentReading.TotalsValue(metric, after)));
+        // Landing-time diagnostics must not affect the round totals' availability checks.
+        values["hours-to-land"] = (
+            before is null ? null : ExperimentHoursToLand.Mean(baselineGoals, landings, diagnostics, "baseline"),
+            after is null ? null : ExperimentHoursToLand.Mean(comparisonGoals, landings, diagnostics, "comparison"));
         return new(values, diagnostics,
             $"baseline={string.Join(",", baselineLabels)} comparison={string.Join(",", comparisonLabels)}");
 
