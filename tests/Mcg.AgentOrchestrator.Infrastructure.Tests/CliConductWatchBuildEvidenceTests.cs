@@ -11,14 +11,7 @@ public sealed class CliConductWatchBuildEvidenceTests : CliCommandTestBase
     public void WatchLaunchesMissingBuildAndResumesPersistedPendingCompletionExactlyOnce()
     {
         var fixture = new CompletionBuildEvidenceFixture();
-        var workspace = CreateRefinedWorkspace(fixture.Root) with { SqliteStatePath = fixture.StatePath };
-        // Manual escalates Running and reaps the pending build. Allow only the running hold;
-        // later stages still require operator action, so this fixture cannot start a worker or gate.
-        var transitions = ConductorAutonomyPolicy.Manual.TransitionMap.ToDictionary(pair => pair.Key, pair => pair.Value);
-        transitions[GoalLifecycleState.Running] = ConductorTransitionDecision.Auto;
-        var policy = ConductorAutonomyPolicy.Manual with { Name = "WatchBuildEvidence", TransitionMap = transitions };
-        var policyPath = Path.Combine(workspace.OrchestratorDirectory, "conductor-policy.json");
-        File.WriteAllText(policyPath, policy.ToJson());
+        var workspace = CreateWatchWorkspace(fixture);
         var stdout = File.ReadAllText(fixture.Task.LastProcess!.StandardOutputPath);
         var dispatchAt = fixture.Task.LastDispatch!.DispatchedAt;
         var receiptPath = Path.Combine(DotnetBuildStorageLayout.GoalArtifactsPath(fixture.GoalId), WorkerBuildReceipt.FileName);
@@ -38,7 +31,7 @@ public sealed class CliConductWatchBuildEvidenceTests : CliCommandTestBase
             var operationId = fixture.Task.CompletionBuildEvidence.Id;
 
             fixture.Reload();
-            RunOneWatchTick(fixture, workspace);
+            Assert.Equal(0, RunOneWatchTick(fixture, workspace));
             Assert.Equal(operationId, fixture.Task.CompletionBuildEvidence!.Id);
             Assert.Equal(1, fixture.Launches);
             Assert.True(fixture.Live);
@@ -79,7 +72,52 @@ public sealed class CliConductWatchBuildEvidenceTests : CliCommandTestBase
         }
     }
 
-    private static void RunOneWatchTick(CompletionBuildEvidenceFixture fixture, OrchestratorWorkspace workspace)
+    [Fact]
+    public void WatchPendingHold_CheckpointStopProtocol_FailsBeforeSleep()
+    {
+        var fixture = new CompletionBuildEvidenceFixture();
+        var workspace = CreateWatchWorkspace(fixture);
+        try
+        {
+            RunOneWatchTick(fixture, workspace);
+            fixture.Reload();
+            var operationId = fixture.Task.CompletionBuildEvidence!.Id;
+
+            // Negative control: reproduce the original stop protocol. The tick observer
+            // rejects its missing signal synchronously, before the watch loop can sleep.
+            var failure = Assert.Throws<InvalidOperationException>(() =>
+                RunOneWatchTick(fixture, workspace, stopFromCheckpoint: true));
+            Assert.Equal("Checkpoint stop protocol missed unchanged tick; checkpoints=0.", failure.Message);
+            Assert.False(File.Exists(workspace.ConductorStopFilePath));
+            Assert.Equal(operationId, fixture.Task.CompletionBuildEvidence!.Id);
+            Assert.Equal(CompletionBuildEvidencePhase.Pending, fixture.Task.CompletionBuildEvidence.Phase);
+            Assert.Equal(1, fixture.Launches);
+            Assert.Equal(1, fixture.Authorizations);
+            Assert.True(fixture.Live);
+            Assert.Equal(0, fixture.Stops);
+            Assert.Null(fixture.Task.LastVerification);
+            Assert.Null(fixture.Task.LastDispatch!.ResultCommit);
+        }
+        finally
+        {
+            File.Delete(workspace.ConductorStopFilePath);
+        }
+    }
+
+    private static OrchestratorWorkspace CreateWatchWorkspace(CompletionBuildEvidenceFixture fixture)
+    {
+        var workspace = CreateRefinedWorkspace(fixture.Root) with { SqliteStatePath = fixture.StatePath };
+        // Manual escalates Running and reaps the pending build. Allow only the running hold;
+        // later stages still require operator action, so this fixture cannot start a worker or gate.
+        var transitions = ConductorAutonomyPolicy.Manual.TransitionMap.ToDictionary(pair => pair.Key, pair => pair.Value);
+        transitions[GoalLifecycleState.Running] = ConductorTransitionDecision.Auto;
+        var policy = ConductorAutonomyPolicy.Manual with { Name = "WatchBuildEvidence", TransitionMap = transitions };
+        File.WriteAllText(Path.Combine(workspace.OrchestratorDirectory, "conductor-policy.json"), policy.ToJson());
+        return workspace;
+    }
+
+    private static int RunOneWatchTick(CompletionBuildEvidenceFixture fixture, OrchestratorWorkspace workspace,
+        bool stopFromCheckpoint = false)
     {
         var policy = CliConductLoopStartup.ResolveConductorPolicy(null, workspace.OrchestratorDirectory).Policy;
         Assert.Equal(ConductorTransitionDecision.Auto, policy.GetTransitionDecision(GoalLifecycleState.Running));
@@ -87,22 +125,41 @@ public sealed class CliConductWatchBuildEvidenceTests : CliCommandTestBase
             pair => Assert.Equal(ConductorTransitionDecision.Escalate, pair.Value));
         File.Delete(workspace.ConductorStopFilePath);
         var checkpoints = 0;
+        int? checkpointsAtTick = null;
         void Checkpoint(AgentOrchestratorKernel kernel)
         {
             new SqliteOrchestratorStateRepository(fixture.StatePath).SaveAsync(kernel).GetAwaiter().GetResult();
             checkpoints++;
-            // The checkpoint is the release signal; no elapsed-time pacing or live workers.
-            File.WriteAllText(workspace.ConductorStopFilePath, "controlled watch tick complete");
+            if (stopFromCheckpoint)
+                File.WriteAllText(workspace.ConductorStopFilePath, "checkpoint stop protocol");
         }
         var context = new CliExecutionContext(fixture.Kernel, workspace, new InMemoryModelProviderRegistry([]),
             [], WorkerProfileCatalog.Default(), fixture.Goal,
             persistKernel: Checkpoint, persistGoalKernel: (kernel, _) => Checkpoint(kernel))
         {
             CompletionBuildEvidence = fixture.Coordinator(),
+            ConductorTickObserver = tick =>
+            {
+                Assert.Equal(1, tick.Tick);
+                Assert.Null(checkpointsAtTick);
+                checkpointsAtTick = checkpoints;
+                if (stopFromCheckpoint)
+                {
+                    if (!File.Exists(workspace.ConductorStopFilePath))
+                        throw new InvalidOperationException(
+                            $"Checkpoint stop protocol missed unchanged tick; checkpoints={checkpoints}.");
+                }
+                else
+                {
+                    // Every tick signals completion, including a hold with no state changes.
+                    File.WriteAllText(workspace.ConductorStopFilePath, "controlled watch tick complete");
+                }
+            },
             CleanupContext = CreateIsolatedCleanupContext(workspace)
         };
         CaptureConsole(() => CliCommandHandlers.Execute(
             ["conduct", fixture.GoalId.Value, "--watch"], context));
-        Assert.True(checkpoints > 0);
+        Assert.NotNull(checkpointsAtTick);
+        return checkpointsAtTick.Value;
     }
 }

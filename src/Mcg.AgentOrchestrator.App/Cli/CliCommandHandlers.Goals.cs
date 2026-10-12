@@ -1932,7 +1932,11 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     .WithStoreEvidence(ConductorStoreEvidenceStep.CreateDefault(context.Workspace)).Run(
                     context.Kernel, conductDriver, conductPolicy, watchStopPath,
                     watchInterval: TimeSpan.FromSeconds(watchPollSeconds),
-                    onTick: ConductorTickPusher.CreateStoreCallback(context.Workspace.RunEventStorePath),
+                    onTick: tick =>
+                    {
+                        ConductorTickPusher.TryRecord(context.Workspace.RunEventStorePath, tick);
+                        context.ConductorTickObserver?.Invoke(tick);
+                    },
                     wakeSignal: watchWakeSignal,
                     maxDuration: watchMax,
                     onlyGoalId: watchGoalId, persistTick: context.PersistCheckpoint,
