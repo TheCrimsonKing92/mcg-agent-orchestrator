@@ -18,7 +18,7 @@ public sealed partial class GoalAcceptanceVerifier
 
     private static string BuildInterruptedFailureName(AcceptanceManifestCheck check, CommandResult result) =>
         result.CaptureLimited
-            ? $"acceptance-check-capture-limit: {Slug(check.Name)} {BuildTimeoutSummary(result)}"
+            ? $"acceptance-check-capture-limit: {AcceptanceArtifactFileNames.Slug(check.Name)} {BuildTimeoutSummary(result)}"
             : BuildTimeoutFailureName(check, result);
 
     private static string BuildInterruptedOutput(CommandResult result) =>

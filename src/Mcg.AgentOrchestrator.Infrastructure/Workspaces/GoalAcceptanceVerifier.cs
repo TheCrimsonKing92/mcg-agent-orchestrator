@@ -496,8 +496,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     {
         var attemptPrefix = AcceptanceAttemptResultsPrefix;
         var stem = string.IsNullOrWhiteSpace(attemptPrefix)
-            ? Slug(check.Name)
-            : $"{Path.GetFileName(attemptPrefix)}.{Slug(check.Name)}";
+            ? AcceptanceArtifactFileNames.Slug(check.Name)
+            : $"{Path.GetFileName(attemptPrefix)}.{AcceptanceArtifactFileNames.Slug(check.Name)}";
         return (_executionContext ?? throw new InvalidOperationException("Test invocation allocation requires an execution owner."))
             .CreateInvocation(stem);
     }
@@ -1524,7 +1524,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 retainedDiagnostic = AcceptanceAttemptArtifactCustody.RetainRetryDiagnostic(
                     AcceptanceAttemptResultsPrefix,
                     original.ArtifactsPath,
-                    $"{Slug(check.Name)}-run-{original.TestResultRunOrdinal.ToString(System.Globalization.CultureInfo.InvariantCulture)}",
+                    $"{AcceptanceArtifactFileNames.Slug(check.Name)}-run-{original.TestResultRunOrdinal.ToString(System.Globalization.CultureInfo.InvariantCulture)}",
                     original.ProcessStderrPath,
                     original.ProcessStderr,
                     JsonSerializer.Serialize(original.CompletionDecision));
@@ -1641,7 +1641,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         AcceptanceManifestCheck check,
         int ordinal,
         string? attemptId) =>
-        $"{attemptId ?? "manual"}:{Slug(check.Name)}:{ordinal.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+        $"{attemptId ?? "manual"}:{AcceptanceArtifactFileNames.Slug(check.Name)}:{ordinal.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
 
     private static AcceptanceShardCompletionDecision InferPartitionCompletionDecision(AcceptanceCheckResult result) =>
         AcceptanceShardCompletionAdjudicator.InferPartition(result, IsCaptureLimitFailureName(result.Name));
@@ -2324,7 +2324,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return false;
         }
 
-        partitionId = Slug(partitionName);
+        partitionId = AcceptanceArtifactFileNames.Slug(partitionName);
         return true;
     }
 
@@ -2598,7 +2598,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     stableSlotIndex,
                     stableSlotLease,
                     dotnetTestBuildPhase,
-                    $"acceptance-{Slug(check.Name)}",
+                    $"acceptance-{AcceptanceArtifactFileNames.Slug(check.Name)}",
                     cancellationToken).ConfigureAwait(false);
             }
 
@@ -2609,7 +2609,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 goalId,
                 stableSlotIndex,
                 stableSlotLease,
-                $"acceptance-{Slug(check.Name)}",
+                $"acceptance-{AcceptanceArtifactFileNames.Slug(check.Name)}",
                 cancellationToken).ConfigureAwait(false);
         }
 
@@ -2684,7 +2684,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 goalId,
                 stableSlotIndex,
                 stableSlotLease,
-                $"acceptance-{Slug(check.Name)}",
+                $"acceptance-{AcceptanceArtifactFileNames.Slug(check.Name)}",
                 cancellationToken).ConfigureAwait(false);
         }
 
@@ -2697,7 +2697,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             stableSlotIndex,
             stableSlotLease,
             dotnetTestBuildPhase,
-            $"acceptance-{Slug(check.Name)}",
+            $"acceptance-{AcceptanceArtifactFileNames.Slug(check.Name)}",
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -2711,7 +2711,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         CancellationToken cancellationToken,
         string? testResultsDirectoryOverride = null)
     {
-        var attemptName = $"acceptance-{Slug(check.Name)}";
+        var attemptName = $"acceptance-{AcceptanceArtifactFileNames.Slug(check.Name)}";
         var effectiveBuildPhase = dotnetTestBuildPhase ??
             new DotnetTestBuildPhase(BuildDotnetTestBuildArguments(check), cachePlan: null);
         var buildRun = await EnsureDotnetTestBuildPhaseAsync(
@@ -2962,7 +2962,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 cancellationToken, afterLeasePrepared, executionEnvironment,
                 commandTimeout: EngineSettings.ResolveBuildPhaseTimeout(check.TimeoutMinutes)),
             name => ResolveExecutionEnvironment(goalId, name, stableSlotIndex, stableSlotLease),
-            Slug,
+            AcceptanceArtifactFileNames.Slug,
             () => _testOverrides.BaseBuildCacheForTests ?? DotnetBaseBuildCache.Default(_storageRoot)));
 
     private DotnetBuildEnvironmentLease AcquireCheckPermit(DotnetBuildEnvironment environment, GoalId? goalId, bool wait, CancellationToken ct) =>
@@ -4157,10 +4157,10 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         var filePrefix = string.IsNullOrWhiteSpace(attemptPrefix)
-            ? $"{environment.LeaseId}.{Slug(check.Name)}"
-            : $"{Path.GetFileName(attemptPrefix)}.{Slug(check.Name)}";
+            ? $"{environment.LeaseId}.{AcceptanceArtifactFileNames.Slug(check.Name)}"
+            : $"{Path.GetFileName(attemptPrefix)}.{AcceptanceArtifactFileNames.Slug(check.Name)}";
         filePrefix = AppendTestTelemetryInvocationSuffix(filePrefix, invocationOrdinal);
-        var fileName = BoundFileName(SanitizeFileName(filePrefix), ".trx");
+        var fileName = AcceptanceArtifactFileNames.BoundFileName(AcceptanceArtifactFileNames.SanitizeFileName(filePrefix), ".trx");
         var path = Path.Combine(directory, fileName);
         return new DotnetTestTelemetry([path], []);
     }
@@ -4220,13 +4220,6 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     internal static string? FirstNonEmptyLine(string? value) =>
         AcceptanceTrxOutcomeTaxonomy.FirstNonEmptyLine(value);
 
-    private static string SanitizeFileName(string value)
-    {
-        var invalid = Path.GetInvalidFileNameChars();
-        var sanitized = new string(value.Select(ch => invalid.Contains(ch) ? '-' : ch).ToArray()).Trim('-', '.');
-        return string.IsNullOrWhiteSpace(sanitized) ? "acceptance-test-results" : sanitized;
-    }
-
     private static bool IsDotnetCommand(string[] arguments) =>
         AcceptanceCheckCommandBuilder.IsDotnetCommand(arguments);
 
@@ -4238,39 +4231,6 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         return [check.Command, .. check.Arguments];
-    }
-
-    private static string Slug(string value)
-    {
-        var slug = Regex.Replace(value.ToLowerInvariant(), "[^a-z0-9]+", "-").Trim('-');
-        return string.IsNullOrWhiteSpace(slug) ? "check" : slug;
-    }
-
-    // A check names its own artifacts, and a focused-evidence check is named after its entire filter
-    // expression, so the generated name grows with the request rather than staying bounded. Windows raises
-    // ERROR_INVALID_NAME - "The filename, directory name, or volume label syntax is incorrect" - once a single
-    // path component passes the 255-character NTFS limit, and a four-class evidence request produced a
-    // 324-character TRX name. That killed the run inside MTP's TRX writer, where the IOException is unhandled:
-    // the host exited 0xE0434352 and the gate booked the crash as a test failure. Bound every generated
-    // component here rather than at the callers, and keep a stable hash of the full name so two long names
-    // still land on two files.
-    //
-    // The 200 leaves headroom under 255 for suffixes callers append to a resolved path, the widest being the
-    // ".{guid:N}.tmp" staging name used when copying receipts into an attempt folder.
-    private const int MaxGeneratedFileNameLength = 200;
-
-    private static string BoundFileName(string stem, string suffix)
-    {
-        if (stem.Length + suffix.Length <= MaxGeneratedFileNameLength)
-        {
-            return stem + suffix;
-        }
-
-        var hash = ShortHash(stem);
-        var keep = MaxGeneratedFileNameLength - suffix.Length - hash.Length - 1;
-        return keep <= 0
-            ? hash + suffix
-            : $"{stem[..keep].TrimEnd('-', '.')}-{hash}{suffix}";
     }
 
     private static bool GlobMatches(string glob, string path)
@@ -4320,7 +4280,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     }
 
     private static string BuildTimeoutFailureName(AcceptanceManifestCheck check, CommandResult result) =>
-        $"acceptance-check-timeout: {Slug(check.Name)} {BuildTimeoutSummary(result)}";
+        $"acceptance-check-timeout: {AcceptanceArtifactFileNames.Slug(check.Name)} {BuildTimeoutSummary(result)}";
 
     private static string BuildTimeoutOutput(CommandResult result)
     {
@@ -4449,11 +4409,11 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         if (!string.IsNullOrWhiteSpace(attemptPrefix))
         {
             var attemptDirectory = Path.GetDirectoryName(attemptPrefix);
-            var stem = $"{Path.GetFileName(attemptPrefix)}.{Slug(check.Name)}-{ShortHash(check.Name)}";
+            var stem = $"{Path.GetFileName(attemptPrefix)}.{AcceptanceArtifactFileNames.Slug(check.Name)}-{ShortHash(check.Name)}";
             stem = AppendTestTelemetryInvocationSuffix(
                 stem,
                 invocationOrdinal);
-            var heartbeatFileName = BoundFileName(stem, $".{GateHeartbeatArtifacts.FileName}");
+            var heartbeatFileName = AcceptanceArtifactFileNames.BoundFileName(stem, $".{GateHeartbeatArtifacts.FileName}");
             return string.IsNullOrWhiteSpace(attemptDirectory)
                 ? heartbeatFileName
                 : Path.Combine(attemptDirectory, heartbeatFileName);

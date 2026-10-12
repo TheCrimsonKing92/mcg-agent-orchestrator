@@ -49,6 +49,7 @@ public static class AcceptanceEngineSurfaceRegistry
         ]),
         new("attempt-artifact-custody", ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceAttemptArtifactCustody"]),
         new("acceptance-collaborators", [
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceArtifactFileNames",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCheckCommandBuilder",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCheckProcessInvoker",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceContainedGenerationBaseline",
