@@ -31,21 +31,39 @@ internal sealed class AdditiveConflictGitFixture : GoalWorktreeTestBase, IDispos
         this.lineEnding = lineEnding;
         try
         {
-            RunGit(Repository, "config", "core.autocrlf", "false");
-            RunGit(Repository, "config", "commit.gpgSign", "false");
+            File.AppendAllText(Path.Combine(Repository, ".git", "config"),
+                "\n[core]\n\tautocrlf = false\n[commit]\n\tgpgSign = false\n");
             files ??= [new(WidgetPath, BaseText, MainText, GoalText)];
+            var basePaths = new List<string>();
             foreach (var file in files)
-                if (file.Base is not null) Write(Repository, file.Path, file.Base);
-            if (attributes is not null) Write(Repository, ".gitattributes", attributes);
+            {
+                if (file.Base is null) continue;
+                Write(Repository, file.Path, file.Base);
+                basePaths.Add(file.Path);
+            }
+            if (attributes is not null)
+            {
+                Write(Repository, ".gitattributes", attributes);
+                basePaths.Add(".gitattributes");
+            }
+            if (basePaths.Count > 0)
+                RunGit(Repository, ["add", "-f", "--", .. basePaths]);
             // An add/add fixture intentionally has no file at the base commit.
             RunGit(Repository, "commit", "--allow-empty", "-m", "Fixture base");
             Worktree = GoalWorktrees.Ensure(Repository, GoalId);
+            var paths = files.Select(file => file.Path).ToArray();
             foreach (var file in files) Write(Worktree, file.Path, file.Goal);
-            Commit(Worktree, "Goal changes");
-            OriginalHead = Git(Worktree, "rev-parse", "HEAD").Trim();
+            RunGit(Worktree, ["add", "-f", "--", .. paths]);
+            RunGit(Worktree, "commit", "-m", "Goal changes");
+            OriginalHead = InfrastructureTestSupport.TryReadGitHeadInProcess(Worktree, out var originalHead) && originalHead is not null
+                ? originalHead
+                : Git(Worktree, "rev-parse", "HEAD").Trim();
             foreach (var file in files) Write(Repository, file.Path, file.Main);
-            Commit(Repository, "Main changes");
-            MainHead = Git(Repository, "rev-parse", "HEAD").Trim();
+            RunGit(Repository, ["add", "-f", "--", .. paths]);
+            RunGit(Repository, "commit", "-m", "Main changes");
+            MainHead = InfrastructureTestSupport.TryReadGitHeadInProcess(Repository, out var mainHead) && mainHead is not null
+                ? mainHead
+                : Git(Repository, "rev-parse", "HEAD").Trim();
         }
         catch
         {
@@ -84,8 +102,6 @@ internal sealed class AdditiveConflictGitFixture : GoalWorktreeTestBase, IDispos
         var fullPath = Path.Combine(root, path);
         Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
         File.WriteAllText(fullPath, text.ReplaceLineEndings(lineEnding), encoding);
-        // Stage only this fixture input, including paths ignored by the seeded repository.
-        RunGit(root, "add", "-f", "--", path);
     }
 
     public void Dispose() => DeleteDirectory(Repository);
