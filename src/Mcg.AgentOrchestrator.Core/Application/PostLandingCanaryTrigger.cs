@@ -67,6 +67,7 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceManifestLocator",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceManifestPartitionEquivalence",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceOverlappedCheckRunner",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceOwnerProtectedFingerprint",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptancePartitionVerdictCache",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptancePartitionVerdictCache.MissReasons",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptancePartitionVerdictCache.RemoteLaneIdentity",
