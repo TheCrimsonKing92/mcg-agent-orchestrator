@@ -56,11 +56,13 @@ public sealed class ConductorFallbackBuildResponsivenessTests : ConductorBatchLo
         var driver = MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
             dispatchAndStart: _ => { developerStarts++; return DispatchStartOutcome.EmptyBatch("No new worker required."); },
             runAcceptance: _ => throw new InvalidOperationException("The completed gate must reconcile without another gate run."),
+            runAcceptanceWithSlot: (_, _) => throw new InvalidOperationException("The completed gate must reconcile without another gate run."),
             getLandingFileScopes: goal => goal.Id == gate.Id ? gateScope : ["src/Feature/Feature.cs"],
             parallelAcceptanceAttemptCoordinator: gates,
             resolveAcceptanceHeads: _ => (branchSha, mainSha),
             land: goal => { if (goal.Id == pending.GoalId) landings++; return new LandingResult(
                 goal.Id.Value, goal.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "Landed"); });
+        Assert.True(driver.ParallelAcceptanceEnabled);
         new ConductorBatchLoop(operatorIntents: intents,
             refreshGoalDispatchesBeforeAdvance: (kernel, goal) =>
                 goal.Id == pending.GoalId || goal.Id == completed.GoalId ? operations.RefreshDispatches(kernel, goal, runner) : null)

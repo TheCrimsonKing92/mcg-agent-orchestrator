@@ -1460,6 +1460,7 @@ public sealed partial class BackgroundDispatchRunner
             authoritativeStandardOutput);
         var hasCommittedChanges = false;
         var orchestratorCommitted = false;
+        var buildEvidenceAllowsResultCommit = true;
         InterruptedWorkCheckpointDisposition? checkpointDisposition = null;
         FailedRoundCheckpointReceipt? failedRoundReceipt = null;
         var completedWorktreeInspection = RequiresFileChangeEvidence(task)
@@ -1561,6 +1562,7 @@ public sealed partial class BackgroundDispatchRunner
                     processRecord with { CompletedAt = processRecord.CompletedAt ?? _clock.UtcNow, ExitCode = observedExitCode }, null,
                     PendingBuildEvidence: buildEvidence.Operation);
 
+            buildEvidenceAllowsResultCommit = !failedWorkerBuildCheck && !buildEvidence.FailsRound;
             checkpointDisposition = buildEvidence.FailsRound
                 ? new InterruptedWorkCheckpointDisposition(InterruptedWorkCheckpointDispositionKind.NotApplicable,
                     "completion-build-evidence-not-certified", string.Empty)
@@ -1611,6 +1613,7 @@ public sealed partial class BackgroundDispatchRunner
                 {
                     shouldCommitDirtyWorktree = false;
                     missingWorkerBuildEvidence = true;
+                    buildEvidenceAllowsResultCommit = false;
                     exitCode = 1;
                     kernel.RecordCompletionBuildEvidence(goalId, taskId, built with
                     { Phase = CompletionBuildEvidencePhase.StaleCandidate, Diagnostic = "Build candidate evidence changed before commit authorization." });
@@ -1861,10 +1864,10 @@ public sealed partial class BackgroundDispatchRunner
         };
 
         // Capture resultCommit after all orchestrator commits — the right boundary for file attribution.
-        var resultCommit = checkpointDisposition?.IsCheckpoint == true
+        var resultCommit = !buildEvidenceAllowsResultCommit || checkpointDisposition?.IsCheckpoint == true
             ? null
             : TryGetWorktreeHead(processRecord.WorkingDirectory);
-        var resultCommitProvenance = hasCommittedChanges
+        var resultCommitProvenance = resultCommit is not null && hasCommittedChanges
             ? orchestratorCommitted ? "orchestrator" : "worker"
             : null;
 

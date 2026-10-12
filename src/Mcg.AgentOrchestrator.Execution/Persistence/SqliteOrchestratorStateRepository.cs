@@ -2215,7 +2215,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             LastDispatch = attemptAuthority is null ? PickTickOwned(baseline.LastDispatch, stored.LastDispatch, current.LastDispatch) : attemptAuthority.LastDispatch,
             LastProcess = attemptAuthority is null ? PickSameAttemptProcess(baseline.LastProcess, stored.LastProcess, current.LastProcess) : attemptAuthority.LastProcess,
             CompletionBuildEvidence = attemptAuthority is null
-                ? MergeCompletionBuildEvidence(stored.CompletionBuildEvidence, current.CompletionBuildEvidence)
+                ? MergeCompletionBuildEvidence(baseline.CompletionBuildEvidence, stored.CompletionBuildEvidence, current.CompletionBuildEvidence)
                 : attemptAuthority.CompletionBuildEvidence,
             VerificationPlan = PickStoreOwned(baseline.VerificationPlan, stored.VerificationPlan, current.VerificationPlan),
             SubscriptionRetryAfter = PickStoreOwned(baseline.SubscriptionRetryAfter, stored.SubscriptionRetryAfter, current.SubscriptionRetryAfter),
@@ -2253,7 +2253,8 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
     }
 
     private static CompletionBuildEvidenceOperation? MergeCompletionBuildEvidence(
-        CompletionBuildEvidenceOperation? stored, CompletionBuildEvidenceOperation? current)
+        CompletionBuildEvidenceOperation? baseline, CompletionBuildEvidenceOperation? stored,
+        CompletionBuildEvidenceOperation? current)
     {
         if (stored is null) return current;
         if (current is null) return stored;
@@ -2264,6 +2265,10 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         if (stored.Applied || stored.Phase == CompletionBuildEvidencePhase.Cancelled) return stored;
         if (current.Applied || current.Phase == CompletionBuildEvidencePhase.Cancelled) return current;
         if (!stored.IsPending) return stored;
+        // An unchanged tick snapshot must not undo progress checkpointed by the operation owner.
+        if (SnapshotEquals(baseline, current)) return stored;
+        // Even a changed diagnostic cannot move an authorized child back into the launch path.
+        if (stored.ChildPid is not null && current.ChildPid is null && current.IsPending) return stored;
         return current.Phase == CompletionBuildEvidencePhase.Launching ? stored : current;
     }
 
