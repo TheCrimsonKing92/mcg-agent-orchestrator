@@ -172,7 +172,9 @@ internal static class SourceSizeRatchet
             // Goal 7b54219d adds nine startup-wiring lines: the injectable load seam and its invocation
             // belong before LOOP_START; hash-keyed persistence remains in TrxCoherenceVerdictStore.
             // Goal 8cc45279 extracts live-gate drain hold policy and polling to ConductorSelfRelaunchDrainHold; measured 2694.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2694),
+            // Goal f8d371e2 adds the tick-local live suppression closure and admission checks where
+            // pendingSelfRelaunch is owned; hold formatting remains separately owned. Measured 2707, no headroom.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2707),
             // Goal 354522f1 tick persistence partial measured at 467 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.TickPersistence.cs", 467),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.DependencyReadmission.cs", 375),
@@ -180,7 +182,9 @@ internal static class SourceSizeRatchet
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.ParallelAcceptanceCompletion.cs", 465),
             // Goal 6e664238 conduct-event partial measured at 260 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.ConductEvents.cs", 260),
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.ParallelAcceptanceAdmission.cs", 799), // def5cd48: conflict escalation before width admission.
+            // Goal f8d371e2 threads live suppression through the existing admission phases and rechecks
+            // it between inline solo completions, preserving in-flight gates. Measured 804, no headroom.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.ParallelAcceptanceAdmission.cs", 804), // def5cd48: conflict escalation before width admission.
             // Raised for goal 18afe5f2: missing-build-evidence rejection and commit suppression
             // must run where parsed worker results and authoritative changed paths meet. Raised again
             // for goal 0d39b5a3, which adds the narrow Planner sample launch and completion-selection
@@ -453,7 +457,10 @@ internal static class SourceSizeRatchet
             // Goal 8cc45279 extracts drain hold policy and polling to a separately owned type; measured 9263 across the same 56 partials.
             // Goal 943427e4 extracts cohort exit formatting into AcceptanceCohortExitDiagnostic.
             // Measured 9246 lines across 55 partial files; no extra headroom.
-            new SourceClassCeiling("ConductorBatchLoop", 9246, 55),
+            // Goal f8d371e2 keeps pending-relaunch observation and once-per-tick emission at the owning
+            // loop seam, with live checks at each admission phase; formatter stays in its own static type.
+            // Measured 9265 across the same 55 partial files; no extra headroom or drain changes.
+            new SourceClassCeiling("ConductorBatchLoop", 9265, 55),
             // Goal ec8903af moved the goal-prefix parser to CliGoalPrefixArguments.
             new SourceClassCeiling("CliPersistentStateRunner", 5973, 18),
             // Goal 5935c270 extracts subscription-plan output into SubscriptionPlanTextView

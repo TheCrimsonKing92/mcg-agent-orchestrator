@@ -1109,6 +1109,17 @@ internal sealed partial class ConductorBatchLoop
             var tickDone = 0;
             var dispatchRecordWriteSkippedGoals = new HashSet<string>(StringComparer.Ordinal);
             var dispatchRecordWriteBoundGoalIds = new HashSet<GoalId>();
+            var selfRelaunchAdmissionHoldEmitted = false;
+            bool SuppressNewAcceptanceAdmission()
+            {
+                if (pendingSelfRelaunch is not null && !selfRelaunchAdmissionHoldEmitted)
+                {
+                    selfRelaunchAdmissionHoldEmitted = true;
+                    EmitProgress(ConductorSelfRelaunchAdmissionHold.Format(totalTicks));
+                }
+
+                return isDeferringMaxDurationStop || pendingSelfRelaunch is not null;
+            }
             var parallelLandingResults = RunParallelAcceptanceBatch(
                 eligible,
                 scopedGoals,
@@ -1122,7 +1133,7 @@ internal sealed partial class ConductorBatchLoop
                 totalTicks,
                 changedGoalLines,
                 changedGoalIds,
-                suppressNewAcceptanceAdmission: isDeferringMaxDurationStop);
+                suppressNewAcceptanceAdmission: SuppressNewAcceptanceAdmission);
 
             var previousPhaseTimingSink = driver.PhaseTimingSink;
             var perGoalPhaseTimingLines = new List<string>();
@@ -2162,7 +2173,7 @@ internal sealed partial class ConductorBatchLoop
         int tick,
         List<string> changedGoalLines,
         HashSet<GoalId> changedGoalIds,
-        bool suppressNewAcceptanceAdmission)
+        Func<bool> suppressNewAcceptanceAdmission)
     {
         var configuredAcceptanceWidth = policy.AcceptanceWidth;
         if (configuredAcceptanceWidth < ConductorAutonomyPolicy.MinimumAcceptanceWidth)
@@ -2179,14 +2190,17 @@ internal sealed partial class ConductorBatchLoop
             state, eligible, scopedGoals, verifiedGoalIdsAtTickStart, preWalkIntentChangedGoalIds,
             kernel, driver, policy, completedGoals, escalatedGoals, tick, changedGoalLines,
             suppressNewAcceptanceAdmission);
-        AdmitMergeTrain(state, driver, policy, tick, changedGoalLines);
+        if (!suppressNewAcceptanceAdmission())
+            AdmitMergeTrain(state, driver, policy, tick, changedGoalLines);
         AdmitPairCohort(state, kernel, driver, policy, tick, changedGoalLines, changedGoalIds,
             suppressNewAcceptanceAdmission);
         HoldCohortMembers(state, driver, policy, tick, changedGoalLines);
-        if (suppressNewAcceptanceAdmission) return state.Results;
+        if (suppressNewAcceptanceAdmission()) return state.Results;
         HoldLoneReadyGoalForInReviewCohortPartner(kernel, scopedGoals, state.OrderedEligible, state.ProductionCandidates,
             state.AcceptanceCensus, driver, policy, state.Results, tick, changedGoalLines);
-        AdmitSoloAcceptance(state, kernel, driver, policy, tick, changedGoalLines, changedGoalIds);
+        if (!suppressNewAcceptanceAdmission())
+            AdmitSoloAcceptance(state, kernel, driver, policy, tick, changedGoalLines, changedGoalIds,
+                suppressNewAcceptanceAdmission);
         SummarizeAcceptanceDeferrals(state, tick, changedGoalLines);
 
         return state.Results;

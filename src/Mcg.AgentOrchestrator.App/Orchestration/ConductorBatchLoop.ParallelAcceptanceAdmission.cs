@@ -265,7 +265,7 @@ internal sealed partial class ConductorBatchLoop
         HashSet<string> escalatedGoals,
         int tick,
         List<string> changedGoalLines,
-        bool suppressNewAcceptanceAdmission)
+        Func<bool> suppressNewAcceptanceAdmission)
     {
         foreach (var (receipt, partitions) in driver.ConsumeTerminalFailedCohortReceipts())
             RecordParallelAcceptanceProgress(ConductorDriver.FormatTerminalFailedCohortReceipt(tick, receipt, partitions), changedGoalLines);
@@ -309,7 +309,7 @@ internal sealed partial class ConductorBatchLoop
                 $"ADMISSION tick={tick} result=escalated reason=pre-landing-merge-conflict goal={goal.Id.Value[..8]}", changedGoalLines);
         }
         var trainAdmission = DecideLiveAcceptanceAdmission(state.AcceptanceCensus, state.ConfiguredAcceptanceWidth);
-        if (!suppressNewAcceptanceAdmission &&
+        if (!suppressNewAcceptanceAdmission() &&
             driver.AcceptanceCohortsEnabled &&
             state.CohortEligible.Length >= ConductorAcceptanceCohortSelector.CohortSize &&
             !state.CohortEligible.Any(goal => IsAcceptanceEngineCircuitHoldRequired(
@@ -321,10 +321,10 @@ internal sealed partial class ConductorBatchLoop
         (state.CohortEligible, state.ProductionCandidates) = LandPassedMergeTrainReceiptsBeforeAdmission(
             driver, policy, state.CohortEligible, state.ProductionCandidates, scopedGoals, state.Results, tick, changedGoalLines);
         CarryFollowerGateReceipts(state, driver, policy, tick, changedGoalLines);
-        state.OldestWaiterObservation = suppressNewAcceptanceAdmission
+        state.OldestWaiterObservation = suppressNewAcceptanceAdmission()
             ? new ParallelAcceptanceOldestWaiterObservation(null, 0)
             : ObserveOldestParallelAcceptanceWaiter(state.OrderedEligible, state.LiveAttemptGoalIds);
-        state.TransientRetryPriorityGoal = !suppressNewAcceptanceAdmission &&
+        state.TransientRetryPriorityGoal = !suppressNewAcceptanceAdmission() &&
             (driver.MergeTrainsEnabled || driver.AcceptanceCohortsEnabled)
             ? SelectTransientRetryPriorityGoal(kernel, driver, state.CohortEligible, policy,
                 state.AcceptanceCensus, state.ConfiguredAcceptanceWidth, state.ActiveAttemptSlotIndexes,
@@ -342,7 +342,7 @@ internal sealed partial class ConductorBatchLoop
             .Where(candidate => !interactionOnlyGoalIds.Contains(candidate.GoalId.Value)).ToArray();
         state.InteractionOnlyPriorityGoal = SelectInteractionOnlyPriorityGoal(state, interactionOnlyGoalIds, kernel, driver, policy,
             tick, changedGoalLines, suppressNewAcceptanceAdmission);
-        state.GroupedAdmissionOpen = !suppressNewAcceptanceAdmission &&
+        state.GroupedAdmissionOpen = !suppressNewAcceptanceAdmission() &&
             state.TransientRetryPriorityGoal is null && state.InteractionOnlyPriorityGoal is null &&
             trainAdmission.IsAdmitted &&
             driver.MergeTrainsEnabled &&
@@ -405,11 +405,11 @@ internal sealed partial class ConductorBatchLoop
         int tick,
         List<string> changedGoalLines,
         HashSet<GoalId> changedGoalIds,
-        bool suppressNewAcceptanceAdmission)
+        Func<bool> suppressNewAcceptanceAdmission)
     {
         state.ForcedCohortPriority = null;
         var cohortAdmission = DecideLiveAcceptanceAdmission(state.AcceptanceCensus, state.ConfiguredAcceptanceWidth);
-        if (!suppressNewAcceptanceAdmission &&
+        if (!suppressNewAcceptanceAdmission() &&
             state.TransientRetryPriorityGoal is null && state.InteractionOnlyPriorityGoal is null &&
             cohortAdmission.IsAdmitted &&
             driver.AcceptanceCohortsEnabled &&
@@ -548,13 +548,17 @@ internal sealed partial class ConductorBatchLoop
         ConductorAutonomyPolicy policy,
         int tick,
         List<string> changedGoalLines,
-        HashSet<GoalId> changedGoalIds)
+        HashSet<GoalId> changedGoalIds,
+        Func<bool> suppressNewAcceptanceAdmission)
     {
+        if (suppressNewAcceptanceAdmission()) return;
         AdmitFollowerGate(state, kernel, driver, policy, tick, changedGoalLines);
         var oldestWaiter = state.OldestWaiterObservation.Waiter;
         var oldestServedThisTick = false;
         foreach (var goal in state.OrderedEligible)
         {
+            // An inline completion can schedule a relaunch before the next candidate.
+            if (suppressNewAcceptanceAdmission()) break;
             if (state.Results.ContainsKey(goal.Id.Value))
             {
                 continue;
@@ -781,6 +785,7 @@ internal sealed partial class ConductorBatchLoop
                     $"ADMISSION tick={tick} result=escalated reason=parallel-acceptance-fault goal={goal.Id.Value[..8]} detail={SanitizeReason(reason)}",
                     changedGoalLines);
             }
+            if (suppressNewAcceptanceAdmission()) break;
         }
     }
 
