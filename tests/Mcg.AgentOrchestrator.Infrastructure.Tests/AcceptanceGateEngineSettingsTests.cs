@@ -17,7 +17,7 @@ public sealed class AcceptanceGateEngineSettingsTests
         Xunit.Assert.Equal(5, settings.MaxConcurrentShards);
         Xunit.Assert.Equal(5, settings.PartitionVerdictFullRerunEveryN);
         Xunit.Assert.Equal(AcceptanceGateEngineSettings.DefaultOutputCaptureLimitBytes, settings.OutputCaptureLimitBytes);
-        Xunit.Assert.Equal(26, settings.InfrastructureTestLanes.Count);
+        Xunit.Assert.Equal(27, settings.InfrastructureTestLanes.Count);
         Xunit.Assert.Equal(8, startupContract.ManifestCheckCount);
         using var manifestDocument = System.Text.Json.JsonDocument.Parse(
             File.ReadAllText(Path.Combine(repositoryRoot, "config", "acceptance-manifest.json")));
@@ -2648,18 +2648,27 @@ public sealed class AcceptanceGateEngineSettingsTests
         {
             // The host-only split retains the sibling's lock because their static-hook
             // collection spans both processes, even though this lane owns no slot collection.
-            if (lane.Name != "Dotnet build slots local-only" || resourceKey != "xunit:DotnetBuildSlots" ||
-                !lane.ExclusiveResourceKeys.Contains("host:DotnetBuildSlotsHostOnly"))
+            // The host-bound classes keep the sibling's lock so they never run beside Process spawning on the host.
+            (string LaneName, string SharedKey, string HostKey, string OwnerLaneName, string OwnerCollection)[] splits =
+            [
+                ("Dotnet build slots local-only", "xunit:DotnetBuildSlots", "host:DotnetBuildSlotsHostOnly",
+                    "Dotnet build slots", TestCollections.DotnetBuildSlots),
+                ("Process spawning host-bound", "xunit:ProcessSpawning", "host:ProcessSpawningHostBound",
+                    "Process spawning", TestCollections.ProcessSpawning)
+            ];
+            var split = splits.SingleOrDefault(candidate =>
+                candidate.LaneName == lane.Name && candidate.SharedKey == resourceKey);
+            if (split.LaneName is null || !lane.ExclusiveResourceKeys.Contains(split.HostKey))
             {
                 return false;
             }
 
             var owner = settings.InfrastructureTestLanes.SingleOrDefault(candidate =>
-                candidate.Name == "Dotnet build slots" &&
-                candidate.OwnedCollections.Contains(TestCollections.DotnetBuildSlots) &&
+                candidate.Name == split.OwnerLaneName &&
+                candidate.OwnedCollections.Contains(split.OwnerCollection) &&
                 candidate.ExclusiveResourceKeys.Contains(resourceKey));
             if (owner is null || !classesByLane[owner.Name].Any(type =>
-                    type.GetCustomAttribute<Xunit.CollectionAttribute>(inherit: true)?.Name == TestCollections.DotnetBuildSlots))
+                    type.GetCustomAttribute<Xunit.CollectionAttribute>(inherit: true)?.Name == split.OwnerCollection))
             {
                 return false;
             }
@@ -2673,7 +2682,11 @@ public sealed class AcceptanceGateEngineSettingsTests
                 .Where(definition => definition is { DisableParallelization: true })
                 .Select(definition => definition!.Name)
                 .ToHashSet(StringComparer.Ordinal);
-            return classesByLane[lane.Name].Any(type =>
+            return lane.OwnedCollections.Count != 0
+                ? classesByLane[lane.Name].All(type =>
+                    type.GetCustomAttribute<Xunit.CollectionAttribute>(inherit: true)?.Name is { } collection &&
+                    lane.OwnedCollections.Contains(collection) && disabledCollections.Contains(collection))
+                : classesByLane[lane.Name].Any(type =>
                 type.GetCustomAttribute<Xunit.CollectionAttribute>(inherit: true)?.Name is { } collection &&
                 ownerCollections.Contains(collection) && disabledCollections.Contains(collection));
         }

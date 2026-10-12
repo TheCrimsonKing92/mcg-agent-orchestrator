@@ -6,7 +6,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // Serialized: these facts launch real redirected powershell children and canary capture fixtures, so
 // they must not overlap another class's process spawning in the same host. An unrelated concurrent
 // CreateProcess with inherited handles is exactly the condition two of them deliberately create.
-[Xunit.Collection(TestCollections.ProcessSpawning)]
+[Xunit.Collection("ProcessSpawningHostBound")]
 public sealed class PostLandingCanaryCaptureAvailabilityTests
 {
     [Xunit.Fact]

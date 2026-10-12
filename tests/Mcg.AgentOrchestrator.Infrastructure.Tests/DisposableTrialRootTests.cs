@@ -2,7 +2,7 @@ using System.Diagnostics;
 
 namespace Mcg.AgentOrchestrator.Infrastructure.Tests;
 
-[Xunit.Collection(TestCollections.ProcessSpawning)]
+[Xunit.Collection("ProcessSpawningHostBound")]
 public sealed class DisposableTrialRootTests(Xunit.ITestOutputHelper output)
 {
     public static bool IsWindows => OperatingSystem.IsWindows();

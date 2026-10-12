@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 
-[Xunit.Collection(TestCollections.ProcessSpawning)]
+[Xunit.Collection("ProcessSpawningHostBound")]
 public sealed class MtpTestRunnerScriptTestsTimeoutPolicy
 {
     [Xunit.Fact]

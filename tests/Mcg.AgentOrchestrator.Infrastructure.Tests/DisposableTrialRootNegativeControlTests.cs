@@ -6,7 +6,7 @@ using Microsoft.Win32.SafeHandles;
 
 namespace Mcg.AgentOrchestrator.Infrastructure.Tests;
 
-[Xunit.Collection(TestCollections.ProcessSpawning)]
+[Xunit.Collection("ProcessSpawningHostBound")]
 public sealed class DisposableTrialRootNegativeControlTests
 {
     private const string DisableLowIntegrityMutation = "MCG_TRIAL_TEST_DISABLE_LOW_INTEGRITY";

@@ -78,10 +78,17 @@
       },
       {
         "name": "Process spawning",
-        "filter": "FullyQualifiedName~GoalWorktreeIsolatedDotnetTests|FullyQualifiedName~ConductorSelfRelaunchTests|FullyQualifiedName~ConductorSuccessorSelfCheckTests|FullyQualifiedName~DispatchProcessHostTests|FullyQualifiedName~DisposableTrialRootTests|FullyQualifiedName~DisposableTrialRootNegativeControlTests|FullyQualifiedName~LauncherScriptTests|(FullyQualifiedName~MtpTestRunnerScriptTests&FullyQualifiedName!~MtpTestRunnerScriptTestsManagedProjectRebuild)|FullyQualifiedName~OwnedProcessExitObservationTests|FullyQualifiedName~ProcessTreeGuiSuppressionTests|FullyQualifiedName~GitCliThreadPoolSaturationTests|FullyQualifiedName~HermesAcpTrialTests|FullyQualifiedName~HermesExecutableIdentityTests|FullyQualifiedName~IcaclsIntegrityLabelerTests|FullyQualifiedName~ConsoleIoPreservationTests|FullyQualifiedName~RunGoalServiceProcessContractTests|FullyQualifiedName~PostLandingCanaryCaptureAvailabilityTests",
+        "filter": "FullyQualifiedName~GoalWorktreeIsolatedDotnetTests|FullyQualifiedName~DispatchProcessHostTests|FullyQualifiedName~LauncherScriptTests|(FullyQualifiedName~MtpTestRunnerScriptTests&FullyQualifiedName!~MtpTestRunnerScriptTestsManagedProjectRebuild&FullyQualifiedName!~MtpTestRunnerScriptTestsTimeoutPolicy)|FullyQualifiedName~OwnedProcessExitObservationTests|FullyQualifiedName~ProcessTreeGuiSuppressionTests|FullyQualifiedName~GitCliThreadPoolSaturationTests|FullyQualifiedName~HermesAcpTrialTests|FullyQualifiedName~HermesExecutableIdentityTests|FullyQualifiedName~IcaclsIntegrityLabelerTests|FullyQualifiedName~ConsoleIoPreservationTests|FullyQualifiedName~RunGoalServiceProcessContractTests",
         "ownedCollections": [ "ProcessSpawning" ],
-        "estimatedSerialSeconds": 335.0,
+        "estimatedSerialSeconds": 275,
         "exclusiveResourceKeys": [ "xunit:ProcessSpawning" ]
+      },
+      {
+        "name": "Process spawning host-bound",
+        "filter": "FullyQualifiedName~ConductorSelfRelaunchTests|FullyQualifiedName~ConductorSuccessorSelfCheckTests|FullyQualifiedName~DisposableTrialRootTests|FullyQualifiedName~DisposableTrialRootNegativeControlTests|FullyQualifiedName~PostLandingCanaryCaptureAvailabilityTests|FullyQualifiedName~MtpTestRunnerScriptTestsTimeoutPolicy",
+        "ownedCollections": [ "ProcessSpawningHostBound" ],
+        "estimatedSerialSeconds": 170,
+        "exclusiveResourceKeys": [ "xunit:ProcessSpawning", "host:ProcessSpawningHostBound" ]
       },
       {
         "name": "Process spawning process-local",
@@ -182,7 +189,7 @@
       {
         "name": "Conductor",
         "description": "Conductor watch, build-slot, and process-spawning coverage.",
-        "laneNames": [ "Conduct watch sweep scoping", "Dotnet build slots", "Dotnet build slots local-only", "Process spawning", "Process spawning process-local", "Mtp managed project rebuild", "Process spawning parallel" ]
+        "laneNames": [ "Conduct watch sweep scoping", "Dotnet build slots", "Dotnet build slots local-only", "Process spawning", "Process spawning host-bound", "Process spawning process-local", "Mtp managed project rebuild", "Process spawning parallel" ]
       },
       {
         "name": "ChaosGate",
