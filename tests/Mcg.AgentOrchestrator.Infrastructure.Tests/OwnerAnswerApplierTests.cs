@@ -97,6 +97,39 @@ public sealed class OwnerAnswerApplierTests
         Assert.Equal(validation.Message, stale.Reason);
     }
 
+    [Theory]
+    [InlineData("test", true)]
+    [InlineData("production", false)]
+    [InlineData("missing", false)]
+    [InlineData("undetermined", false)]
+    public void Apply_UnitTimeout_IsLiveOnlyForKnownTestUnits(string unit, bool live)
+    {
+        var model = Model(false) with
+        {
+            Units = [new("test", Fact("test"), Fact("test.csproj"), Fact<bool?>(true)),
+                new("production", Fact("production"), Fact("production.csproj"), Fact<bool?>(false)),
+                new("undetermined", Fact("undetermined"), Fact("undetermined.csproj"), Fact<bool?>(null))]
+        };
+        var answer = new OwnerAnswer($"commands/{unit}/timeoutMinutes", "025", null, Recorded);
+
+        var applied = OwnerAnswerApplier.Apply(model, [answer]);
+
+        if (live)
+        {
+            var fact = Assert.Single(applied.AnsweredFacts);
+            Assert.Equal(answer.FactKey, fact.FactKey);
+            Assert.Equal("25", fact.Fact.Value);
+            Assert.Empty(applied.StaleAnswers);
+        }
+        else
+        {
+            Assert.Empty(applied.AnsweredFacts);
+            var stale = Assert.Single(applied.StaleAnswers);
+            Assert.Same(answer, stale.Answer);
+            Assert.Equal(OwnerAnswerApplier.NotLiveReason, stale.Reason);
+        }
+    }
+
     private static ProjectOwnerQuestion Question(string key) => new(key, "question " + key, Source());
     private static FactSource Source() => new(measurementReference: "fixture");
     private static ProjectFact<T> Fact<T>(T value) => new(value, Source(), FactConfidence.High);

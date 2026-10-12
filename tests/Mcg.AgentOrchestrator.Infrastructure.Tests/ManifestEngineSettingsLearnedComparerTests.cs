@@ -69,6 +69,81 @@ public sealed class ManifestEngineSettingsLearnedComparerTests
             fact => Assert.Equal("Agrees with the gate default.", fact.Reason));
     }
 
+    [Theory]
+    [InlineData(25, ManifestFactResultKind.Match)]
+    [InlineData(30, ManifestFactResultKind.DiffersFromHand)]
+    public void Compare_AnsweredCheckTimeout_UsesLearnedMinutesAndReason(int minutes,
+        ManifestFactResultKind kind)
+    {
+        const string project = "tests/A/A.csproj";
+        var settings = Settings() with
+        {
+            CheckTimeouts = new Dictionary<string, (int Minutes, string Reason)>(StringComparer.Ordinal)
+            {
+                [project] = (minutes, "owner timeout choice")
+            }
+        };
+        var fact = ManifestEngineSettingsComparer.Compare(CheckManifest(project, 25), settings)
+            .Single(fact => fact.Fact == $"check[{project}].timeoutMinutes");
+        Assert.Equal(kind, fact.Kind);
+        Assert.Equal("25", fact.Hand);
+        Assert.Equal(minutes.ToString(), fact.Learned);
+        Assert.Contains("owner timeout choice", fact.Reason);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("tests/B/B.csproj")]
+    [InlineData("tests/a/A.csproj")]
+    public void Compare_UnansweredCheckTimeout_PreservesGateDefault(string? answeredProject)
+    {
+        const string project = "tests/A/A.csproj";
+        var settings = Settings();
+        if (answeredProject is not null)
+            settings = settings with
+            {
+                CheckTimeouts = new Dictionary<string, (int Minutes, string Reason)>(StringComparer.Ordinal)
+                {
+                    [answeredProject] = (25, "another answer")
+                }
+            };
+        var manifest = CheckManifest(project, 25);
+        var fact = ManifestEngineSettingsComparer.Compare(manifest, settings)
+            .Single(fact => fact.Fact == $"check[{project}].timeoutMinutes");
+        Assert.Equal(ManifestFactResultKind.DiffersFromGateDefault, fact.Kind);
+        Assert.Equal("25", fact.Hand);
+        Assert.Equal("none", fact.Learned);
+        Assert.Equal(ManifestEngineSettingsComparer.Compare(manifest)
+            .Single(baseline => baseline.Fact == fact.Fact), fact);
+    }
+
+    [Theory]
+    [InlineData(25, ManifestFactResultKind.Match, "25")]
+    [InlineData(null, ManifestFactResultKind.DiffersFromHand, "none")]
+    public void Compare_BackslashCheckPath_NormalizesLearnedLookup(int? hand,
+        ManifestFactResultKind kind, string renderedHand)
+    {
+        const string project = "tests\\A\\A.csproj";
+        var settings = Settings() with
+        {
+            CheckTimeouts = new Dictionary<string, (int Minutes, string Reason)>(StringComparer.Ordinal)
+            {
+                ["tests/A/A.csproj"] = (25, "owner timeout choice")
+            }
+        };
+        var fact = ManifestEngineSettingsComparer.Compare(CheckManifest(project, hand), settings)
+            .Single(fact => fact.Fact == $"check[{project}].timeoutMinutes");
+        Assert.Equal(kind, fact.Kind);
+        Assert.Equal(renderedHand, fact.Hand);
+        Assert.Equal("25", fact.Learned);
+        Assert.Contains("owner timeout choice", fact.Reason);
+    }
+
+    private static string CheckManifest(string project, int? timeout) => JsonSerializer.Serialize(new
+    {
+        checks = new[] { new { type = "dotnet-test", project, timeoutMinutes = timeout, arguments = Array.Empty<string>() } }
+    }, new JsonSerializerOptions { DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull });
+
     private static LearnedEngineSettings Settings() =>
         new(2, "3 test units, cap 2", 10, "slow measured 200 seconds, multiplier 3, bounds 5..60", []);
 }

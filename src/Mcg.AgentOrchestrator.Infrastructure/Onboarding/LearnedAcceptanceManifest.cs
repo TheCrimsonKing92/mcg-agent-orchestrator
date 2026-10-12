@@ -36,17 +36,21 @@ public static class LearnedAcceptanceManifest
             return new(null, blockers.AsReadOnly(), questions.AsReadOnly());
 
         var emittedChecks = new JsonArray();
+        var checkTimeouts = OwnerAnsweredCheckTimeouts.Read(applied);
         foreach (var check in checks.OrderBy(check => check.ProjectPath.Replace('\\', '/'), StringComparer.Ordinal))
         {
             var path = check.ProjectPath.Replace('\\', '/');
-            emittedChecks.Add(new JsonObject
+            var emittedCheck = new JsonObject
             {
                 ["name"] = Path.GetFileNameWithoutExtension(path),
                 ["type"] = "dotnet-test",
                 ["runner"] = check.Runner,
-                ["project"] = path,
-                ["arguments"] = new JsonArray()
-            });
+                ["project"] = path
+            };
+            if (checkTimeouts.TryGetValue(path, out var timeout))
+                emittedCheck["timeoutMinutes"] = timeout.Minutes;
+            emittedCheck["arguments"] = new JsonArray();
+            emittedChecks.Add(emittedCheck);
         }
         var manifest = new JsonObject
         {

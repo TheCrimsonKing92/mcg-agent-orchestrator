@@ -14,6 +14,8 @@ public static class OwnerAnswerApplier
         ArgumentNullException.ThrowIfNull(answers);
         var liveKeys = model.OwnerQuestions.Concat(LearnedEngineSettingsDeriver.Derive(model).OwnerQuestions)
             .Select(question => question.FactKey).ToHashSet(StringComparer.Ordinal);
+        liveKeys.UnionWith(model.Units.Where(unit => unit.IsTest?.Value == true)
+            .Select(unit => $"commands/{unit.Id}/timeoutMinutes"));
         var facts = new List<AppliedOwnerAnswers.AnsweredFact>();
         var stale = new List<AppliedOwnerAnswers.StaleAnswer>();
         foreach (var answer in answers)

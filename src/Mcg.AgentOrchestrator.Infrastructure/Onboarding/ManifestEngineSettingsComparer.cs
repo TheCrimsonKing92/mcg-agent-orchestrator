@@ -76,14 +76,15 @@ public static class ManifestEngineSettingsComparer
                 if (check is null)
                     throw new JsonException("Acceptance manifest checks must contain objects.");
                 if (check.Type?.Trim().Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) == true)
-                    AddCheckFacts(facts, check);
+                    AddCheckFacts(facts, check, learned);
             }
         }
 
         return facts;
     }
 
-    private static void AddCheckFacts(List<ManifestFactComparison> facts, AcceptanceManifestCheck check)
+    private static void AddCheckFacts(List<ManifestFactComparison> facts, AcceptanceManifestCheck check,
+        LearnedEngineSettings? learned)
     {
         var defaults = new AcceptanceManifestCheck();
         var key = $"check[{(string.IsNullOrWhiteSpace(check.Project) ? check.Name : check.Project)}]";
@@ -93,7 +94,10 @@ public static class ManifestEngineSettingsComparer
         var (handFilter, forwarded) = ExtractArguments(check.Arguments, mtp);
         var (learnedFilter, defaultArguments) = ExtractArguments(defaults.Arguments, mtp);
         facts.Add(CompareValue($"{key}.filter", handFilter, learnedFilter));
-        facts.Add(CompareValue($"{key}.timeoutMinutes", check.TimeoutMinutes, defaults.TimeoutMinutes));
+        facts.Add(learned is not null && check.Project is not null &&
+            learned.CheckTimeouts.TryGetValue(check.Project.Replace('\\', '/'), out var timeout)
+                ? CompareLearned<int?>($"{key}.timeoutMinutes", check.TimeoutMinutes, timeout.Minutes, timeout.Reason)
+                : CompareValue($"{key}.timeoutMinutes", check.TimeoutMinutes, defaults.TimeoutMinutes));
         facts.Add(CompareValue($"{key}.advisory", check.Advisory, defaults.Advisory));
         facts.Add(CompareValue($"{key}.estimatedSerialSeconds", check.EstimatedSerialSeconds, defaults.EstimatedSerialSeconds));
         facts.Add(new($"{key}.arguments", ManifestFactResultKind.Match, RenderList(forwarded, " "),

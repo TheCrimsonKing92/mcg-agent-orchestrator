@@ -19,7 +19,10 @@ public static class OwnerAnswerValidator
     public static string Validate(string factKey, string value)
     {
         value ??= "";
-        if (factKey is DefaultTimeoutKey or BuildServerShutdownKey or DiscoveryKey)
+        if (factKey is DefaultTimeoutKey or BuildServerShutdownKey or DiscoveryKey ||
+            (factKey.StartsWith("commands/", StringComparison.Ordinal) &&
+             factKey.EndsWith("/timeoutMinutes", StringComparison.Ordinal) &&
+             factKey.Length > "commands/".Length + "/timeoutMinutes".Length))
         {
             if (value.Length == 0 || value.Any(character => character is < '0' or > '9') ||
                 !int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var minutes) ||
@@ -44,6 +47,6 @@ public static class OwnerAnswerValidator
             throw new ArgumentException($"{factKey} requires VSTest or MTP with no surrounding whitespace.");
         }
 
-        throw new ArgumentException($"{factKey} has no answer rule in this slice. Known keys: {DefaultTimeoutKey}, {BuildServerShutdownKey}, {DiscoveryKey}, {DotnetSdkKey}, commands/<unit>/test.");
+        throw new ArgumentException($"{factKey} has no answer rule in this slice. Known keys: {DefaultTimeoutKey}, {BuildServerShutdownKey}, {DiscoveryKey}, {DotnetSdkKey}, commands/<unit>/test, commands/<unit>/timeoutMinutes.");
     }
 }
