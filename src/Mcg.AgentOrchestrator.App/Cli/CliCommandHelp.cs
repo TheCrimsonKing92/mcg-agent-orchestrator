@@ -223,7 +223,7 @@ internal static class CliCommandHelp
 
     private static readonly CommandHelpEntry Goals = new(
         "Usage: goals [--epic <id-or-title>] [--json]",
-        "List goals, optionally restricted to members of an epic. --json (bare form only) emits the mcg.goals agent envelope.",
+        "List goals, optionally restricted to members of an epic. --json emits the mcg.goals agent envelope for the bare form and the --epic <ref> form.",
         ["--epic", "--json", "--help", "-h"]);
 
     private static readonly CommandHelpEntry AddTask = new(

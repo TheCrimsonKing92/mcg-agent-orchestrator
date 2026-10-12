@@ -894,7 +894,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
 
             if (EpicProgressReadModel.IsEpicGoalsListing(parts))
             {
-                ConsoleViews.PrintGoals(EpicProgressReadModel.ListMemberGoals(context.Workspace, GetFlagValue(parts, "--epic")));
+                CliGoalsEpicQueryCommand.PrintGoals(context.Workspace, parts, GetFlagValue(parts, "--epic"));
                 return false;
             }
             ConsoleViews.PrintGoals(context.Kernel);
