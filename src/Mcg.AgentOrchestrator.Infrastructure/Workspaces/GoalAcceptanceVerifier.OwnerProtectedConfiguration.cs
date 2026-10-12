@@ -15,7 +15,7 @@ public sealed partial class GoalAcceptanceVerifier
         if (HasOwnerPolicyApprovalForCandidate(goalId, candidateSha)) return true;
         if (goalId is null || _ownerPolicyDecisionStoreDirectory is null ||
             !Directory.Exists(_ownerPolicyDecisionStoreDirectory)) return false;
-        var fingerprint = ComputeOwnerProtectedChangeFingerprint(worktreePath, changedFiles,
+        var fingerprint = AcceptanceOwnerProtectedFingerprint.Compute(worktreePath, changedFiles,
             AcceptanceGitTextResolver.Resolve, "HEAD", readCommittedCandidate: false, IntegrationBranch);
         return fingerprint is not null && AcceptancePolicyChangeDecision.IsApprovedForFingerprintAsync(
             CollaborationItemStore.ForDirectory(_ownerPolicyDecisionStoreDirectory), goalId.Value, fingerprint)
@@ -62,7 +62,7 @@ public sealed partial class GoalAcceptanceVerifier
         var failure = TryClassifyManifestTrustCore(worktreePath, changedFiles, resolveGitText, TrunkBranchName.Default);
         if (failure is null || HasOwnerPolicyApprovalForTests(decisions, goalId, candidateSha))
             return null;
-        var fingerprint = ComputeOwnerProtectedChangeFingerprint(
+        var fingerprint = AcceptanceOwnerProtectedFingerprint.Compute(
             worktreePath, changedFiles, resolveGitText, "HEAD", readCommittedCandidate: false, TrunkBranchName.Default);
         return fingerprint is not null && AcceptancePolicyChangeDecision.IsApprovedForFingerprintAsync(
             decisions, goalId.Value, fingerprint).GetAwaiter().GetResult() ? null : failure;
@@ -85,7 +85,7 @@ public sealed partial class GoalAcceptanceVerifier
             !File.Exists(candidateManifestPath);
         var details = new List<string>();
 
-        foreach (var rawPath in SelectOwnerProtectedPolicyPaths(worktreePath, changedFiles, resolveGitText, "HEAD", integrationBranch))
+        foreach (var rawPath in AcceptanceOwnerProtectedFingerprint.SelectPolicyPaths(worktreePath, changedFiles, resolveGitText, "HEAD", integrationBranch))
         {
             var path = NormalizePath(rawPath);
             var fullPath = Path.GetFullPath(Path.Combine(worktreePath, path.Replace('/', Path.DirectorySeparatorChar)));

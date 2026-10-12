@@ -3,9 +3,9 @@ using static Mcg.AgentOrchestrator.Infrastructure.AcceptancePolicyShardPlanner;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-public sealed partial class GoalAcceptanceVerifier
+internal static class AcceptanceOwnerProtectedFingerprint
 {
-    private static IReadOnlyList<string> SelectOwnerProtectedPolicyPaths(
+    internal static IReadOnlyList<string> SelectPolicyPaths(
         string worktreePath, IReadOnlyList<string> changedFiles,
         Func<string, string[], string?> resolveGitText, string candidateRef, string integrationBranch)
     {
@@ -23,7 +23,7 @@ public sealed partial class GoalAcceptanceVerifier
             .ToArray();
     }
 
-    private static string? ComputeOwnerProtectedChangeFingerprint(
+    internal static string? Compute(
         string worktreePath, IReadOnlyList<string>? changedFiles,
         Func<string, string[], string?> resolveGitText, string candidateRef,
         bool readCommittedCandidate, string integrationBranch)
@@ -31,7 +31,7 @@ public sealed partial class GoalAcceptanceVerifier
         if (changedFiles is null) return null;
         const string manifestPath = "config/acceptance-manifest.json";
         var inputs = new List<(string File, string? Trusted, string? Candidate)>();
-        var paths = SelectOwnerProtectedPolicyPaths(worktreePath, changedFiles, resolveGitText, candidateRef, integrationBranch).ToList();
+        var paths = SelectPolicyPaths(worktreePath, changedFiles, resolveGitText, candidateRef, integrationBranch).ToList();
         var manifestChanged = changedFiles.Any(path =>
             NormalizePath(path).Equals(manifestPath, StringComparison.OrdinalIgnoreCase));
         var candidateManifest = readCommittedCandidate
@@ -61,14 +61,14 @@ public sealed partial class GoalAcceptanceVerifier
         return RepositoryChangeClassifier.ComputeOwnerProtectedChangeFingerprint(inputs);
     }
 
-    internal static string? ComputeOwnerProtectedChangeFingerprintForCandidate(string worktreePath, string candidateSha, string integrationBranch)
+    internal static string? ComputeForCandidate(string worktreePath, string candidateSha, string integrationBranch)
     {
         if (!AcceptancePolicyChangeDecision.IsFullSha(candidateSha)) return null;
         var changed = AcceptanceGitTextResolver.Resolve(worktreePath,
             ["diff", "--name-only", "--no-renames", $"{integrationBranch}...{candidateSha}", "--"]);
         if (changed is null) return null;
         var changedFiles = changed.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        return ComputeOwnerProtectedChangeFingerprint(worktreePath, changedFiles,
+        return Compute(worktreePath, changedFiles,
             AcceptanceGitTextResolver.Resolve, candidateSha, readCommittedCandidate: true, integrationBranch);
     }
 }

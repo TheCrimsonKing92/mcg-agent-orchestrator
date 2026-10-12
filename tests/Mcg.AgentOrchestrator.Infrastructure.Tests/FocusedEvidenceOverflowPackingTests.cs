@@ -41,6 +41,8 @@ public sealed class FocusedEvidenceOverflowPackingTests
         nameof(WorkerDispatchTestsModelSelection)
     ];
 
+    internal static IReadOnlyList<string> SyntheticClassNames { get; } = Array.AsReadOnly(ClassNames);
+
     [Xunit.Fact]
     public void WideRequest_PacksBoundedChecksAndPreservesEverySelectionAndTarget()
     {
@@ -164,7 +166,7 @@ public sealed class FocusedEvidenceOverflowPackingTests
         IEnumerable<string> targets, out FocusedEvidenceCoverage coverage)
     {
         var accepted = GoalAcceptanceVerifier.TryBuildFocusedEvidenceChecks(
-            string.Join("; ", targets), new AcceptanceGateEngineSettings(), InfrastructureTestSupport.FindRepositoryRoot(),
+            string.Join("; ", targets), new AcceptanceGateEngineSettings(), FocusedEvidenceOverflowSyntheticRoot.Root,
             out var checks, out coverage, out var rejection);
         Assert.True(accepted, $"{rejection.Code}: {rejection.Detail}");
         Assert.NotEmpty(checks);
