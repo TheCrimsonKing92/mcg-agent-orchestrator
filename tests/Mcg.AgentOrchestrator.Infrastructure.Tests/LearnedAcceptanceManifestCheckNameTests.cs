@@ -22,7 +22,9 @@ public sealed class LearnedAcceptanceManifestCheckNameTests
         Assert.Equal(new[] { "tests.A.Tests", "tests.B.Tests", "Other" }, names);
         Assert.Equal(3, names.Select(AcceptanceArtifactFileNames.Slug).Distinct(StringComparer.Ordinal).Count());
         var settings = AcceptanceGateEngineSettings.Parse(result.Json);
-        Assert.Equal(3, settings.DeclaredDotnetTestChecks.Count);
+        Assert.Equal(TimeSpan.FromMinutes(17), settings.ResolveCheckTimeout(null));
+        Assert.Equal(TimeSpan.FromMinutes(3), settings.ResolveBuildServerShutdownTimeout());
+        Assert.Equal(TimeSpan.FromMinutes(4), settings.ResolveDiscoveryTimeout());
     }
 
     [Fact]
