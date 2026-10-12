@@ -3,6 +3,67 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class RemoteLaneOfferPolicyTests
 {
     [Xunit.Theory]
+    [Xunit.InlineData(330, true, "fits-slack")]
+    [Xunit.InlineData(345, true, "fits-slack")]
+    [Xunit.InlineData(348, false, "remote-slower")]
+    [Xunit.InlineData(300, true, "fits")]
+    [Xunit.InlineData(250, true, "fits")]
+    public void MeasuredSlack_OffersWithinFifteenPercentOfFinish(double remote, bool offer, string reason)
+    {
+        var inputs = new RemoteLaneOfferInputs("lane", 300, 3, 999, remote, 3, 300);
+        var decision = RemoteLaneOfferPolicy.Decide(inputs);
+        Assert.Equal(offer, decision.Offer);
+        Assert.Equal(reason, decision.Reason);
+        Assert.Equal(remote, decision.RemoteSeconds);
+        Assert.Equal(inputs, decision.Inputs);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(300, 615)]
+    [Xunit.InlineData(150, 315)]
+    public void MeasuredSlack_TooFewRemoteSamplesNeverOffersPrior(double local, double prior)
+    {
+        var inputs = new RemoteLaneOfferInputs("lane", local, 3, 999, 330, 2, 300);
+        var decision = RemoteLaneOfferPolicy.Decide(inputs);
+        Assert.False(decision.Offer);
+        Assert.Equal("remote-slower", decision.Reason);
+        Assert.Equal(prior, decision.RemoteSeconds);
+        Assert.Equal(inputs, decision.Inputs);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(null)]
+    [Xunit.InlineData(double.NaN)]
+    [Xunit.InlineData(double.PositiveInfinity)]
+    [Xunit.InlineData(double.NegativeInfinity)]
+    [Xunit.InlineData(0d)]
+    [Xunit.InlineData(-1d)]
+    public void MeasuredSlack_InvalidRemoteMedianNeverOffersPrior(double? remote)
+    {
+        var inputs = new RemoteLaneOfferInputs("lane", 150, 3, 999, remote, 3, 300);
+        var decision = RemoteLaneOfferPolicy.Decide(inputs);
+        Assert.False(decision.Offer);
+        Assert.Equal("remote-slower", decision.Reason);
+        Assert.Equal(315, decision.RemoteSeconds);
+        Assert.Equal(inputs, decision.Inputs);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(300, "remote-failing")]
+    [Xunit.InlineData(45, "short")]
+    public void MeasuredSlack_ShortAndRecentFailuresTakePrecedence(double local, string reason)
+    {
+        var now = DateTimeOffset.Parse("2026-10-08T12:00:00Z");
+        var inputs = new RemoteLaneOfferInputs("lane", local, 3, 999, 330, 3, 300,
+            3, now.AddHours(-1), now);
+        var decision = RemoteLaneOfferPolicy.Decide(inputs);
+        Assert.False(decision.Offer);
+        Assert.Equal(reason, decision.Reason);
+        Assert.Equal(330, decision.RemoteSeconds);
+        Assert.Equal(inputs, decision.Inputs);
+    }
+
+    [Xunit.Theory]
     [Xunit.InlineData(345, 3, false, "remote-failing")]
     [Xunit.InlineData(345, 2, true, "fits")]
     [Xunit.InlineData(45, 3, false, "short")]
