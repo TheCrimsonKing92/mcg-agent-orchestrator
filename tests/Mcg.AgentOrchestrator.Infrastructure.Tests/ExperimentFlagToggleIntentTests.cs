@@ -8,6 +8,71 @@ using Xunit;
 // Parallel-safe: each case owns all stores and targeted host files.
 public sealed class ExperimentFlagToggleIntentTests
 {
+    [Fact]
+    public void ToggleDestination_CurrentExperimentStore_InitializesJournalAndPreservesReplay()
+    {
+        using var fixture = new ExperimentFlagTestFixture();
+        var record = Apply(fixture);
+        var target = record.Spec.Intervention.FlagTarget!;
+        var path = fixture.Workspace.ExperimentStorePath;
+        string versionBefore;
+        using (var connection = OpenExperimentDatabase(path))
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = "SELECT count(*) FROM sqlite_schema WHERE name='experiment_flag_toggle_destinations'";
+            Assert.Equal(0L, command.ExecuteScalar());
+            command.CommandText = "SELECT version || ':' || applied_at FROM store_schema_versions WHERE store_name='experiments'";
+            versionBefore = Assert.IsType<string>(command.ExecuteScalar());
+        }
+
+        Assert.False(fixture.Experiments.GetOrRecordFlagToggleDestination("intent", "key", record.Id, target, false));
+        var reopened = new ExperimentStore(path);
+        Assert.False(reopened.GetOrRecordFlagToggleDestination("intent", "key", record.Id, target, true));
+        using (var connection = OpenExperimentDatabase(path))
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = "SELECT count(*) FROM experiment_flag_toggle_destinations";
+            Assert.Equal(1L, command.ExecuteScalar());
+            command.CommandText = "SELECT version || ':' || applied_at FROM store_schema_versions WHERE store_name='experiments'";
+            Assert.Equal(versionBefore, command.ExecuteScalar());
+        }
+        var persisted = ExperimentStore.OpenReadOnly(path).ResolveAsync(record.Id).GetAwaiter().GetResult()!;
+        Assert.Equal(JsonSerializer.Serialize(record, ExperimentStore.JsonOptions),
+            JsonSerializer.Serialize(persisted, ExperimentStore.JsonOptions));
+        Assert.True(fixture.Flags.Read(target));
+    }
+
+    [Theory]
+    [InlineData("key")]
+    [InlineData("experiment")]
+    [InlineData("target")]
+    public void ToggleDestination_ReplayBindingMismatch_RejectsWithoutChangingDestination(string mismatch)
+    {
+        using var fixture = new ExperimentFlagTestFixture();
+        var record = Apply(fixture);
+        var target = record.Spec.Intervention.FlagTarget!;
+        Assert.False(fixture.Experiments.GetOrRecordFlagToggleDestination("intent", "key", record.Id, target, false));
+
+        var reopened = new ExperimentStore(fixture.Workspace.ExperimentStorePath);
+        var error = Assert.Throws<InvalidOperationException>(() => reopened.GetOrRecordFlagToggleDestination(
+            "intent", mismatch == "key" ? "different" : "key",
+            mismatch == "experiment" ? "different" : record.Id,
+            mismatch == "target" ? target with { ValueToApply = false } : target, true));
+        Assert.Equal("toggle-destination-binding-mismatch", error.Message);
+        Assert.False(reopened.GetOrRecordFlagToggleDestination("intent", "key", record.Id, target, true));
+        Assert.True(fixture.Flags.Read(target));
+    }
+
+    private static SqliteConnection OpenExperimentDatabase(string path)
+    {
+        var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = path, Mode = SqliteOpenMode.ReadOnly, Pooling = false
+        }.ToString());
+        connection.Open();
+        return connection;
+    }
+
     [Theory]
     [InlineData(false, true)]
     [InlineData(false, false)]

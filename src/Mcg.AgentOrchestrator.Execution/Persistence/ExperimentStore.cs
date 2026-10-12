@@ -191,6 +191,49 @@ public sealed class ExperimentStore
         return await write.ExecuteNonQueryAsync(cancellationToken) == 1;
     }
 
+    /// <summary>Commit a bound toggle destination before the host write, and reuse it on intent replay.</summary>
+    public bool GetOrRecordFlagToggleDestination(string intentId, string idempotencyKey, string experimentId,
+        ExperimentFlagTarget target, bool proposed)
+    {
+        using var connection = Open();
+        RunNonQuery(connection, "PRAGMA synchronous=FULL");
+        using var transaction = connection.BeginTransaction();
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        // This optional replay journal is initialized on first toggle. It does not change the
+        // versioned experiment-record schema or require read-only experiment consumers to upgrade.
+        command.CommandText = """
+            CREATE TABLE IF NOT EXISTS experiment_flag_toggle_destinations (
+                intent_id TEXT PRIMARY KEY, idempotency_key TEXT NOT NULL,
+                experiment_id TEXT NOT NULL, target_json TEXT NOT NULL,
+                destination INTEGER NOT NULL CHECK(destination IN (0,1)));
+            INSERT OR IGNORE INTO experiment_flag_toggle_destinations
+                (intent_id, idempotency_key, experiment_id, target_json, destination)
+            VALUES ($intent, $key, $experiment, $target, $destination);
+            """;
+        var targetJson = JsonSerializer.Serialize(target, JsonOptions);
+        command.Parameters.AddWithValue("$intent", intentId);
+        command.Parameters.AddWithValue("$key", idempotencyKey);
+        command.Parameters.AddWithValue("$experiment", experimentId);
+        command.Parameters.AddWithValue("$target", targetJson);
+        command.Parameters.AddWithValue("$destination", proposed ? 1 : 0);
+        command.ExecuteNonQuery();
+        command.CommandText = """
+            SELECT idempotency_key, experiment_id, target_json, destination
+            FROM experiment_flag_toggle_destinations WHERE intent_id=$intent
+            """;
+        bool destination;
+        using (var reader = command.ExecuteReader())
+        {
+            if (!reader.Read() || reader.GetString(0) != idempotencyKey ||
+                reader.GetString(1) != experimentId || reader.GetString(2) != targetJson)
+                throw new InvalidOperationException("toggle-destination-binding-mismatch");
+            destination = reader.GetInt32(3) == 1;
+        }
+        transaction.Commit();
+        return destination;
+    }
+
     public async Task<bool> ExtendStopRuleAsync(string id, int newCount, string reason, DateTimeOffset at,
         CancellationToken cancellationToken = default)
     {
