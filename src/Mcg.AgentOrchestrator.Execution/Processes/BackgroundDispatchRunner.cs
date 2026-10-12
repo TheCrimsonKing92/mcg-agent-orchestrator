@@ -1863,13 +1863,9 @@ public sealed partial class BackgroundDispatchRunner
             ExitArtifactReason = exitArtifact?.Reason
         };
 
-        // Capture resultCommit after all orchestrator commits — the right boundary for file attribution.
-        var resultCommit = !buildEvidenceAllowsResultCommit || checkpointDisposition?.IsCheckpoint == true
-            ? null
-            : TryGetWorktreeHead(processRecord.WorkingDirectory);
-        var resultCommitProvenance = resultCommit is not null && hasCommittedChanges
-            ? orchestratorCommitted ? "orchestrator" : "worker"
-            : null;
+        var (resultCommit, resultCommitProvenance) = CaptureResultCommit(
+            processRecord.WorkingDirectory, buildEvidenceAllowsResultCommit,
+            checkpointDisposition?.IsCheckpoint == true, hasCommittedChanges, orchestratorCommitted);
 
         // Worker-self-reported stdout bytes from the heartbeat — a flush-race-proof signal of real output.
         var heartbeatStdoutBytes = _recoveryService.TryReadHeartbeat(GetHeartbeatPath(processRecord), out var completionHeartbeat)

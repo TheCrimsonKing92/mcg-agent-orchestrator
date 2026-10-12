@@ -48,7 +48,7 @@ public sealed class CliConductWatchBuildEvidenceTests : CliCommandTestBase
         }
         finally
         {
-            File.Delete(receiptPath);
+            if (File.Exists(receiptPath)) File.Delete(receiptPath);
             File.Delete(workspace.ConductorStopFilePath);
         }
     }

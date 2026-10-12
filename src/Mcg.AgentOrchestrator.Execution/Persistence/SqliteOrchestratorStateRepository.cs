@@ -2214,9 +2214,10 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             VerificationHistory = PickStoreOwnedList(baseline.VerificationHistory, stored.VerificationHistory, current.VerificationHistory),
             LastDispatch = attemptAuthority is null ? PickTickOwned(baseline.LastDispatch, stored.LastDispatch, current.LastDispatch) : attemptAuthority.LastDispatch,
             LastProcess = attemptAuthority is null ? PickSameAttemptProcess(baseline.LastProcess, stored.LastProcess, current.LastProcess) : attemptAuthority.LastProcess,
-            CompletionBuildEvidence = attemptAuthority is null
-                ? MergeCompletionBuildEvidence(baseline.CompletionBuildEvidence, stored.CompletionBuildEvidence, current.CompletionBuildEvidence)
-                : attemptAuthority.CompletionBuildEvidence,
+            // Operation ownership is independent of the worker-attempt snapshot. A stale tick may
+            // advance other attempt fields while the persisted owner has already launched its child.
+            CompletionBuildEvidence = MergeCompletionBuildEvidence(
+                baseline.CompletionBuildEvidence, stored.CompletionBuildEvidence, current.CompletionBuildEvidence),
             VerificationPlan = PickStoreOwned(baseline.VerificationPlan, stored.VerificationPlan, current.VerificationPlan),
             SubscriptionRetryAfter = PickStoreOwned(baseline.SubscriptionRetryAfter, stored.SubscriptionRetryAfter, current.SubscriptionRetryAfter),
             SubscriptionDeferralReleasedAt = PickStoreOwned(baseline.SubscriptionDeferralReleasedAt, stored.SubscriptionDeferralReleasedAt, current.SubscriptionDeferralReleasedAt),
