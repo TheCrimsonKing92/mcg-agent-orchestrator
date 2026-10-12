@@ -20,7 +20,7 @@ public sealed class RemoteLaneOfferPolicyTests
 
     [Xunit.Theory]
     [Xunit.InlineData(300, 615)]
-    [Xunit.InlineData(150, 315)]
+    [Xunit.InlineData(180, 375)]
     public void MeasuredSlack_TooFewRemoteSamplesNeverOffersPrior(double local, double prior)
     {
         var inputs = new RemoteLaneOfferInputs("lane", local, 3, 999, 330, 2, 300);
@@ -132,7 +132,7 @@ public sealed class RemoteLaneOfferPolicyTests
     }
 
     [Xunit.Theory]
-    [Xunit.InlineData(400, false)]
+    [Xunit.InlineData(350, false)]
     [Xunit.InlineData(420, true)]
     public void TooFewRemoteSamples_UsesPrior(double finish, bool offer)
     {

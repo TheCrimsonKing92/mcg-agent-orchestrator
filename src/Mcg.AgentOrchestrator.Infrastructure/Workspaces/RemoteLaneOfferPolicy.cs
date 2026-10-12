@@ -18,6 +18,7 @@ internal static class RemoteLaneOfferPolicy
     internal const double PriorRemoteMultiplier = 2;
     internal const double PriorRemoteOverheadSeconds = 15;
     internal const double MeasuredSlackFraction = 0.15;
+    internal const double ProbeSlackFraction = 0.15;
     internal const int FailingThreshold = 3;
     internal static readonly TimeSpan FailingHold = TimeSpan.FromHours(6);
 
@@ -44,8 +45,11 @@ internal static class RemoteLaneOfferPolicy
             inputs.DecisionTime - newest < FailingHold ? "remote-failing" :
             measured && remote > inputs.ExpectedLocalFinishSeconds &&
             remote <= inputs.ExpectedLocalFinishSeconds * (1 + MeasuredSlackFraction) ? "fits-slack" :
+            inputs.RemoteSamples < MinimumSamples && inputs.ConsecutiveRemoteFailures == 0 &&
+            remote > inputs.ExpectedLocalFinishSeconds &&
+            remote <= inputs.ExpectedLocalFinishSeconds * (1 + ProbeSlackFraction) ? "fits-probe" :
             remote > inputs.ExpectedLocalFinishSeconds ? "remote-slower" : "fits";
-        return new(reason is "fits" or "fits-slack", reason, local, remote, inputs);
+        return new(reason is "fits" or "fits-slack" or "fits-probe", reason, local, remote, inputs);
     }
 
     internal static string FailureFields(RemoteLaneOfferDecision decision) =>
