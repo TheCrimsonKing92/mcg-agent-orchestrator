@@ -76,7 +76,9 @@ public sealed class FocusedEvidenceSiblingClassResolverTests
         var siblings = FocusedEvidenceSiblingClassResolver.ResolveSiblingTestClassNames(
             root,
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
-            "GoalAcceptanceVerifierTests");
+            "GoalAcceptanceVerifierTests",
+            readText: path => RepositorySourceSnapshotCache.Get(root).GetText(path),
+            parse: (path, _) => RepositorySourceSnapshotCache.Get(root).GetSyntaxTree(path));
 
         Assert.Contains("GoalAcceptanceVerifierDotnetBuildSlotTestsGateHeartbeat", siblings);
         Assert.Contains("RealProcessShardAlphaSmokeTests", siblings);

@@ -1,3 +1,4 @@
+using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
@@ -9,10 +10,21 @@ internal static class FocusedEvidenceSiblingClassResolver
         string worktreePath,
         string project,
         string requestedClass)
+        => ResolveSiblingTestClassNames(
+            worktreePath, project, requestedClass,
+            File.ReadAllText,
+            (path, text) => CSharpSyntaxTree.ParseText(text, path: path));
+
+    internal static IReadOnlyList<string> ResolveSiblingTestClassNames(
+        string worktreePath,
+        string project,
+        string requestedClass,
+        Func<string, string> readText,
+        Func<string, string, SyntaxTree> parse)
     {
         try
         {
-            return ResolveSiblingTestClassNamesCore(worktreePath, project, requestedClass);
+            return ResolveSiblingTestClassNamesCore(worktreePath, project, requestedClass, readText, parse);
         }
         catch
         {
@@ -24,7 +36,9 @@ internal static class FocusedEvidenceSiblingClassResolver
     private static IReadOnlyList<string> ResolveSiblingTestClassNamesCore(
         string worktreePath,
         string project,
-        string requestedClass)
+        string requestedClass,
+        Func<string, string> readText,
+        Func<string, string, SyntaxTree> parse)
     {
         var normalizedRequestedClass = requestedClass.Trim();
         if (normalizedRequestedClass.Length == 0)
@@ -70,13 +84,13 @@ internal static class FocusedEvidenceSiblingClassResolver
         // concrete test descendants of an abstract base declared beside it.
         foreach (var path in sourcePaths)
         {
-            var source = File.ReadAllText(path);
+            var source = readText(path);
             if (!source.Contains(requestedSimpleName, StringComparison.Ordinal))
             {
                 continue;
             }
 
-            var syntaxTree = CSharpSyntaxTree.ParseText(source, path: path);
+            var syntaxTree = parse(path, source);
             if (syntaxTree.GetDiagnostics().Any(diagnostic =>
                 diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error))
             {
@@ -112,7 +126,7 @@ internal static class FocusedEvidenceSiblingClassResolver
             foreach (var path in sourcePaths.Where(path =>
                          !path.Equals(declaringRoot.SyntaxTree.FilePath, StringComparison.OrdinalIgnoreCase)))
             {
-                var syntaxTree = CSharpSyntaxTree.ParseText(File.ReadAllText(path), path: path);
+                var syntaxTree = parse(path, readText(path));
                 if (!syntaxTree.GetDiagnostics().Any(diagnostic =>
                         diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error))
                 {
