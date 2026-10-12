@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.App.OwnerConsole;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
@@ -602,9 +603,9 @@ internal static class CliCommandHelp
         ["--min-goals", "--since", "--help", "-h"]);
 
     private static readonly CommandHelpEntry OwnerConsole = new(
-        "Usage: console [--plain]",
-        "Open the owner console; --plain uses line mode (also selected for redirected input or output).",
-        ["--plain", "--help", "-h"]);
+        OwnerConsoleInputTraceOptions.Usage,
+        "Open the owner console; --plain uses line mode (also selected for redirected input or output). --input-trace writes bounded input/draw diagnostics to a new JSON file after exit (interactive mode only).",
+        ["--plain", "--input-trace", "--help", "-h"]);
 
     private static readonly CommandHelpEntry OwnerDigest = new(
         OwnerDigestUsage,
