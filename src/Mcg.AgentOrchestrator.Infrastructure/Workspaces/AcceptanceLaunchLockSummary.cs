@@ -1,11 +1,12 @@
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-public sealed partial class GoalAcceptanceVerifier
+internal static class AcceptanceLaunchLockSummary
 {
     private const string LaunchLockSummaryPrefix = "LAUNCH_LOCK_SUMMARY ";
 
-    private static void PreserveLaunchLockSummary(
-        CommandResult result,
+    internal static void Preserve(
+        string output,
+        string? stderr,
         string trxPath,
         string? attemptPrefix)
     {
@@ -19,9 +20,9 @@ public sealed partial class GoalAcceptanceVerifier
         var summaryPath = Path.Combine(
             attemptDirectory,
             Path.GetFileNameWithoutExtension(trxPath) + ".launch-lock-summary.txt");
-        var output = string.IsNullOrEmpty(result.Stderr) ? result.Output : result.Stderr;
+        var selectedOutput = string.IsNullOrEmpty(stderr) ? output : stderr;
         string? summary = null;
-        using var reader = new StringReader(output);
+        using var reader = new StringReader(selectedOutput);
         while (reader.ReadLine() is { } line)
         {
             if (!line.StartsWith(LaunchLockSummaryPrefix, StringComparison.Ordinal))

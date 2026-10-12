@@ -442,7 +442,8 @@ internal static class SourceSizeRatchet
             // Goal 03580ad1 extracts source-mutation edits to AcceptanceSourceMutation; measured 8938 lines in 31 partials.
             // Goal 140fb304 extracts hermetic git configuration to AcceptanceHermeticGitConfiguration; measured 8848 lines in 30 partials.
             // Goal 80b085c6 extracts owner-protected fingerprints to AcceptanceOwnerProtectedFingerprint; measured 8774 lines in 29 partials.
-            new SourceClassCeiling("GoalAcceptanceVerifier", 8774, 29),
+            // Goal c2c58d62 extracts launch-lock summary preservation to AcceptanceLaunchLockSummary; measured 8725 lines in 28 partials.
+            new SourceClassCeiling("GoalAcceptanceVerifier", 8725, 28),
             // Goal d647b5f3 extracts premise-invalid clarification construction to PremiseInvalidClarification.
             // Goal 439c80ae extracts Reviewer evidence brief projection to ReviewerEvidenceBriefSection;
             // measured 9319 total lines across the existing 27 partial files, with no extra headroom.
