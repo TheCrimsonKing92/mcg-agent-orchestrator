@@ -190,7 +190,10 @@ public sealed class ConsoleIoPreservationTests
         }
 
         var probe = candidates.FirstOrDefault(File.Exists);
-        Assert.False(string.IsNullOrWhiteSpace(probe), $"Console I/O probe was not built. Tried: {string.Join("; ", candidates)}");
+        if (probe is null && FixtureProbeLocator.FindDirectory(typeof(ConsoleIoPreservationTests),
+            "Mcg.AgentOrchestrator.ConsoleIoProbe", assemblyName) is { } directory)
+            probe = Path.Combine(directory, assemblyName);
+        Assert.False(string.IsNullOrWhiteSpace(probe), $"Console I/O probe was not built. Tried: {string.Join("; ", candidates)}. Locator tried: {string.Join("; ", FixtureProbeLocator.TriedPaths(typeof(ConsoleIoPreservationTests), "Mcg.AgentOrchestrator.ConsoleIoProbe", assemblyName))}");
         return probe!;
     }
 

@@ -2668,6 +2668,21 @@ public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray()
             : [];
+        if (candidates.Length == 0)
+        {
+            string[] requiredFiles = [$"{ProbeProjectName}.exe", $"{ProbeProjectName}.dll"];
+            if (FixtureProbeLocator.FindDirectory(typeof(GoalWorktreeIsolatedDotnetTests), ProbeProjectName, requiredFiles) is { } directory)
+                return directory;
+            try
+            {
+                return Assert.Single(candidates)!;
+            }
+            catch (Xunit.Sdk.SingleException exception)
+            {
+                throw new Xunit.Sdk.XunitException($"{exception.Message}{Environment.NewLine}Locator tried: " +
+                    string.Join("; ", FixtureProbeLocator.TriedPaths(typeof(GoalWorktreeIsolatedDotnetTests), ProbeProjectName, requiredFiles)));
+            }
+        }
         return Assert.Single(candidates)!;
     }
 
