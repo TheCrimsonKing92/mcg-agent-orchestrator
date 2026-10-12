@@ -15,9 +15,8 @@ public sealed class GoalWorktreeTestsGitCommitLaunchCount : GoalWorktreeTestBase
     });
 
     [Xunit.Fact]
-    public void SecondCommitLaunchesGitOnce() => WithRepository((repo, _) =>
+    public void SecondCommitLaunchesGitOnce() => WithSeededRepository((repo, _) =>
     {
-        CommitSeed(repo);
         StageChange(repo, "second");
         using var launches = InfrastructureTestSupport.CountGitProbeLaunches();
 
@@ -27,7 +26,7 @@ public sealed class GoalWorktreeTestsGitCommitLaunchCount : GoalWorktreeTestBase
     });
 
     [Xunit.Fact]
-    public void LinkedWorktreeCommitLaunchesGitOnce() => WithRepository((repo, root) =>
+    public void LinkedWorktreeCommitLaunchesGitOnce() => WithSeededRepository((repo, root) =>
     {
         var linked = AddLinkedWorktree(repo, root);
         Assert.True(File.Exists(Path.Combine(linked, ".git")));
@@ -50,9 +49,8 @@ public sealed class GoalWorktreeTestsGitCommitLaunchCount : GoalWorktreeTestBase
     });
 
     [Xunit.Fact]
-    public void NothingToCommitThrowsWithStdoutAndTwoLaunches() => WithRepository((repo, _) =>
+    public void NothingToCommitThrowsWithStdoutAndTwoLaunches() => WithSeededRepository((repo, _) =>
     {
-        CommitSeed(repo);
         var expectedExit = RunGitExitCode(repo, ["commit", "-m", "Empty"], out var stdout, out _);
         Assert.NotEqual(0, expectedExit);
         Assert.Contains("nothing to commit", stdout, StringComparison.Ordinal);
@@ -86,9 +84,8 @@ public sealed class GoalWorktreeTestsGitCommitLaunchCount : GoalWorktreeTestBase
     });
 
     [Xunit.Fact]
-    public void BlankCommitFailureRetriesOnceThenThrowsLastAttempt() => WithRepository((repo, _) =>
+    public void BlankCommitFailureRetriesOnceThenThrowsLastAttempt() => WithSeededRepository((repo, _) =>
     {
-        CommitSeed(repo);
         var calls = 0;
 
         var exception = Assert.Throws<InvalidOperationException>(() =>
@@ -164,22 +161,20 @@ public sealed class GoalWorktreeTestsGitCommitLaunchCount : GoalWorktreeTestBase
         AssertHeadReadMatchesProbe(repo, unborn: true));
 
     [Xunit.Fact]
-    public void BranchHeadMatchesProbeWithoutLaunching() => WithRepository((repo, _) =>
+    public void BranchHeadMatchesProbeWithoutLaunching() => WithSeededRepository((repo, _) =>
     {
-        CommitSeed(repo);
         AssertHeadReadMatchesProbe(repo);
     });
 
     [Xunit.Fact]
-    public void DetachedHeadMatchesProbeWithoutLaunching() => WithRepository((repo, _) =>
+    public void DetachedHeadMatchesProbeWithoutLaunching() => WithSeededRepository((repo, _) =>
     {
-        CommitSeed(repo);
         RunGit(repo, "checkout", "--detach");
         AssertHeadReadMatchesProbe(repo);
     });
 
     [Xunit.Fact]
-    public void LinkedWorktreeHeadMatchesProbeWithoutLaunching() => WithRepository((repo, root) =>
+    public void LinkedWorktreeHeadMatchesProbeWithoutLaunching() => WithSeededRepository((repo, root) =>
     {
         var linked = AddLinkedWorktree(repo, root);
         Assert.True(File.Exists(Path.Combine(linked, ".git")));
@@ -187,9 +182,8 @@ public sealed class GoalWorktreeTestsGitCommitLaunchCount : GoalWorktreeTestBase
     });
 
     [Xunit.Fact]
-    public void PackedBranchHeadMatchesProbeWithoutLaunching() => WithRepository((repo, _) =>
+    public void PackedBranchHeadMatchesProbeWithoutLaunching() => WithSeededRepository((repo, _) =>
     {
-        CommitSeed(repo);
         var loose = Path.Combine(repo, ".git", "refs", "heads", "main");
         Assert.True(File.Exists(loose));
         RunGit(repo, "pack-refs", "--all");
@@ -288,7 +282,6 @@ public sealed class GoalWorktreeTestsGitCommitLaunchCount : GoalWorktreeTestBase
 
     private static string AddLinkedWorktree(string repo, string root)
     {
-        CommitSeed(repo);
         var linked = Path.Combine(root, "linked");
         RunGit(repo, "worktree", "add", "-b", "linked", linked, "HEAD");
         return linked;
@@ -300,12 +293,6 @@ public sealed class GoalWorktreeTestsGitCommitLaunchCount : GoalWorktreeTestBase
         RunGit(repo, "add", "--all");
     }
 
-    private static void CommitSeed(string repo)
-    {
-        StageChange(repo);
-        RunGit(repo, "commit", "-m", "Seed");
-    }
-
     private static void WithRepository(Action<string, string> test)
     {
         var root = Path.Combine(Path.GetTempPath(), "mcg-git-commit-launch-" + Guid.NewGuid().ToString("n"));
@@ -314,6 +301,22 @@ public sealed class GoalWorktreeTestsGitCommitLaunchCount : GoalWorktreeTestBase
         try
         {
             GitCommitLaunchCountRepositoryTemplate.CopyTo(repo);
+            test(repo, root);
+        }
+        finally
+        {
+            DeleteDirectory(root);
+        }
+    }
+
+    private static void WithSeededRepository(Action<string, string> test)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcg-git-commit-launch-" + Guid.NewGuid().ToString("n"));
+        var repo = Path.Combine(root, "repo");
+        Directory.CreateDirectory(repo);
+        try
+        {
+            GitCommitLaunchCountSeededRepositoryTemplate.CopyTo(repo);
             test(repo, root);
         }
         finally
