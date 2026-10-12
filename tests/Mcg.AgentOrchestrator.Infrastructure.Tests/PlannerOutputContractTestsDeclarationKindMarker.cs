@@ -55,8 +55,8 @@ public sealed class PlannerOutputContractTestsDeclarationKindMarker : WorkerDisp
         const string heading = "## Target seams and symbols";
         var bodyStart = plan.IndexOf(heading, StringComparison.Ordinal) + heading.Length;
         var bodyEnd = plan.IndexOf("\n## ", bodyStart, StringComparison.Ordinal);
-        // Short markers still need a substantive section body; keep their suffix unchanged.
-        var sectionLine = line.Length < 40 ? "Target seam: " + line : line;
-        return plan[..bodyStart] + "\n\n" + sectionLine + "\n" + plan[bodyEnd..];
+        // Supply a substantive section body without changing the citation line or marker suffix.
+        const string context = "Validate declaration markers against the absent target path.";
+        return plan[..bodyStart] + "\n\n" + context + "\n" + line + "\n" + plan[bodyEnd..];
     }
 }
