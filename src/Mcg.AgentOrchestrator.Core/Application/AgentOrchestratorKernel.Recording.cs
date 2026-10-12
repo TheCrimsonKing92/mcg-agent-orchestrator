@@ -170,10 +170,21 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         var parsedHumanInput = AgentOutputDirectives.ParseHumanInputRequest(
-            verification.AuthoritativeStandardOutput ?? verification.StandardOutput, task.RequiredRole);
+            verification.StandardOutput, task.RequiredRole);
         var humanInputQuestion = verification.HumanInputQuestion ?? parsedHumanInput.Directive?.Question;
         if (humanInputQuestion is not null)
         {
+            var testNames = parsedHumanInput.Directive?.TestNames;
+            // Full stdout may include an ingested Planner plan. Recover names only for the
+            // request already identified in the worker decision stream, never a new request.
+            if (verification.AuthoritativeStandardOutput is { } fullOutput)
+            {
+                var fullDirective = AgentOutputDirectives.ParseHumanInputRequest(fullOutput, task.RequiredRole).Directive;
+                if (fullDirective is { Kind: HumanWaitKind.ProspectiveAcceptanceEvidence } &&
+                    string.Equals(fullDirective.Question, humanInputQuestion, StringComparison.Ordinal))
+                    testNames = fullDirective.TestNames;
+            }
+
             var rawQuestion = humanInputQuestion;
             string? accompanyingBlocker = null;
             if (WorkerResultBlockers.TryFindBlocker(verification, out accompanyingBlocker))
@@ -204,7 +215,7 @@ public sealed partial class AgentOrchestratorKernel
                 evidenceOwner: verification.HumanInputEvidenceOwner
                     ?? parsedHumanInput.Directive?.EvidenceOwner,
                 storeReference: verification.HumanInputStoreReference ?? parsedHumanInput.Directive?.StoreReference,
-                testNames: parsedHumanInput.Directive?.TestNames);
+                testNames: testNames);
             if (verification.WorkerResultPresent &&
                 requestResult.WasSuppressedByAnswer &&
                 WorkerResultBlockers.TryGetBlockersStatus(verification, out var blockersStatus) &&
