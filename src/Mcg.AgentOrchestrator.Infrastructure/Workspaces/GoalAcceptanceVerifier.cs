@@ -243,7 +243,8 @@ public sealed record FocusedEvidenceArmRunResult(
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     [property: System.Text.Json.Serialization.JsonConverter(typeof(FindingEvidenceRevertPathsRejectionJsonConverter))]
     FindingEvidenceRevertPathsRejection? RevertPathsRejection = null,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string>? RestoredPaths = null, [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string>? DroppedPaths = null);
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string>? RestoredPaths = null, [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string>? DroppedPaths = null,
+    IReadOnlyList<FindingEvidenceSelection>? NotRunSelections = null);
 
 public sealed record FocusedEvidenceTargetCoverage(
     string Target,

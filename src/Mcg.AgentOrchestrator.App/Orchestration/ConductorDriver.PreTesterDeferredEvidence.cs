@@ -20,7 +20,7 @@ internal sealed partial class ConductorDriver
             goal, tester?.Id ?? requestingTask.Id, candidateSha);
         if (receipt is not { Outcome: "green" }) return false;
 
-        var covered = receipt.Selections.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var covered = FindingEvidenceExecutedCoverage.ExecutedSelections(receipt.Selections, receipt.NotRun).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var settings = _getFindingEvidenceEngineSettings(goal);
         var normalizedRequests = new List<FindingEvidenceRequest>();
         foreach (var finding in requestingFindings)

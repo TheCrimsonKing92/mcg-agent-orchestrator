@@ -140,6 +140,7 @@ internal static class FocusedEvidenceExecution
                 stableSlotLease,
                 executionEnvironment: null,
                 cancellationToken: executionOwner.CancellationToken,
+                continueAfterFailure: true,
                 executionOwner: executionOwner).ConfigureAwait(false);
         }
         catch (Exception ex) when (runBaselineArm)
@@ -265,6 +266,9 @@ internal static class FocusedEvidenceExecution
             worktreePath, focusedChecks, goalId, stableSlotIndex, stableSlotLease,
             executionEnvironment, cancellationToken, continueAfterFailure, executionOwner).ConfigureAwait(false);
         var disposition = ClassifyFocusedEvidenceArm(checks);
+        var notRun = FocusedEvidenceNotRunPlan.Compare(focusedChecks, checks, coverage, continueAfterFailure);
+        if (notRun.Checks.Count > 0 && disposition == FindingEvidenceArmDisposition.Green)
+            disposition = FindingEvidenceArmDisposition.Inconclusive;
         var failed = checks.FirstOrDefault(check => !check.Passed);
         var receiptPaths = checks
             .SelectMany(check => check.TestResultPaths ?? [])
@@ -278,6 +282,7 @@ internal static class FocusedEvidenceExecution
             : disposition == FindingEvidenceArmDisposition.ApparatusFailure
                 ? $"focused selection apparatus failure: {failed.Name}{captureLimitDetail(failed)}; {planSummary}; receipts: {GoalAcceptanceVerifier.FormatReceiptPaths(receiptPaths)}"
             : $"{failed.Name}{captureLimitDetail(failed)} exit {failed.ExitCode}; {planSummary}; receipts: {GoalAcceptanceVerifier.FormatReceiptPaths(receiptPaths)}";
+        summary = notRun.AppendSummary(summary);
         return new FocusedEvidenceArmRunResult(
             arm,
             sha,
@@ -285,7 +290,7 @@ internal static class FocusedEvidenceExecution
             Accepted: true,
             Passed: disposition == FindingEvidenceArmDisposition.Green,
             summary,
-            checks);
+            checks, NotRunSelections: notRun.Selections);
     }
 
     internal static async Task<FocusedEvidenceArmRunResult> RunBaselineFocusedEvidenceArmAsync(
