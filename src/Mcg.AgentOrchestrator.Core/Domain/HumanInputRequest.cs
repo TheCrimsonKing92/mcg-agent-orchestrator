@@ -449,3 +449,46 @@ public sealed record HumanInputRequestCreationResult(
 }
 
 public sealed record HumanInputRequestCounts(int Total, int Open);
+
+// Owns submission preconditions and receipt-before-completion publication for gate evidence.
+internal static class HumanInputSubmission
+{
+    internal static HumanInputRequest GetPendingRequest(
+        IReadOnlyDictionary<HumanInputRequestId, HumanInputRequest> requests,
+        HumanInputRequestId requestId)
+    {
+        if (!requests.TryGetValue(requestId, out var request))
+            throw new KeyNotFoundException($"Human input request '{requestId}' was not found.");
+        if (request.IsCompleted)
+            throw new InvalidOperationException(
+                $"Human input request '{requestId}' has already been answered — use supersede to correct it.");
+        return request;
+    }
+
+    internal static bool TryCompleteGateEvidence(
+        HumanInputRequest request, Goal goal, string answer, DateTimeOffset answeredAt,
+        IReadOnlyList<string>? gatedDeliverableIds, HumanInputAnswerOrigin origin,
+        bool supersedeSiblings, IGoalLifecycleEventWriter eventWriter, Action refreshGoalStatus)
+    {
+        if (supersedeSiblings || request.Kind != HumanWaitKind.ProspectiveAcceptanceEvidence ||
+            !string.Equals(request.EvidenceOwner, "acceptance-gate", StringComparison.OrdinalIgnoreCase) ||
+            request.TestNames is not { Count: > 0 })
+            return false;
+
+        // Gate evidence does not resume tasks or supersede sibling waits. Validate
+        // and finish any fallible status work before publishing its completion.
+        var deliverableIds = gatedDeliverableIds?.ToArray();
+        var prepared = HumanInputRequest.FromSnapshot(request.ToSnapshot());
+        prepared.Complete(answer, answeredAt, deliverableIds, origin, goal.AuthoritativeBrief.Version);
+        if (request.TaskId is not null) goal.FindTask(request.TaskId);
+        refreshGoalStatus();
+        var receipt = new ProgressEvent(goal.Id, request.TaskId,
+            ProgressKind.HumanInputReceived, answer, answeredAt);
+        eventWriter.AppendTimelineEvent(receipt);
+
+        // If persistence throws, the original request and its answer history remain pending.
+        request.Complete(answer, answeredAt, deliverableIds, origin, goal.AuthoritativeBrief.Version);
+        goal.Append(receipt);
+        return true;
+    }
+}

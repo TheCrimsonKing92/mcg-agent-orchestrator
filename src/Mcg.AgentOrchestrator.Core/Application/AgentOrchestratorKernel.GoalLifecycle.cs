@@ -2104,40 +2104,12 @@ public sealed partial class AgentOrchestratorKernel
     {
         lock (_humanInputRequestLock)
         {
-            if (!_humanInputRequests.TryGetValue(requestId, out var request))
-            {
-                throw new KeyNotFoundException($"Human input request '{requestId}' was not found.");
-            }
-
-            if (request.IsCompleted)
-            {
-                throw new InvalidOperationException(
-                    $"Human input request '{requestId}' has already been answered — use supersede to correct it.");
-            }
-
+            var request = HumanInputSubmission.GetPendingRequest(_humanInputRequests, requestId);
             var goal = GetGoal(request.GoalId);
             var answeredAt = _clock.UtcNow;
-            if (!supersedeSiblings && request.Kind == HumanWaitKind.ProspectiveAcceptanceEvidence &&
-                string.Equals(request.EvidenceOwner, "acceptance-gate", StringComparison.OrdinalIgnoreCase) &&
-                request.TestNames is { Count: > 0 })
-            {
-                // Gate evidence does not resume tasks or supersede sibling waits. Validate
-                // and finish any fallible status work before publishing its completion.
-                var deliverableIds = gatedDeliverableIds?.ToArray();
-                var prepared = HumanInputRequest.FromSnapshot(request.ToSnapshot());
-                prepared.Complete(answer, answeredAt, deliverableIds, origin, goal.AuthoritativeBrief.Version);
-                if (request.TaskId is not null) goal.FindTask(request.TaskId);
-                RefreshGoalStatus(goal);
-                var receipt = new ProgressEvent(goal.Id, request.TaskId,
-                    ProgressKind.HumanInputReceived, answer, answeredAt);
-                _eventWriter.AppendTimelineEvent(receipt);
-
-                // No fallible writer operation follows the state change. If persistence
-                // throws, the original request and its answer history remain pending.
-                request.Complete(answer, answeredAt, deliverableIds, origin, goal.AuthoritativeBrief.Version);
-                goal.Append(receipt);
+            if (HumanInputSubmission.TryCompleteGateEvidence(request, goal, answer, answeredAt,
+                    gatedDeliverableIds, origin, supersedeSiblings, _eventWriter, () => RefreshGoalStatus(goal)))
                 return;
-            }
             request.Complete(
                 answer,
                 answeredAt,
