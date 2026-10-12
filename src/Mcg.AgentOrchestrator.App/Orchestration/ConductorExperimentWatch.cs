@@ -93,6 +93,9 @@ internal sealed class ConductorExperimentWatch
                 flags);
             var keeps = new ConductorExperimentFlagKeepController(writableExperiments,
                 () => new BacklogStore(_workspace.BacklogStorePath), flags);
+            var toggles = new ConductorExperimentFlagToggleController(
+                () => SqliteOperatorIntentStore.ForDirectories(_workspace.OrchestratorDirectory, _workspace.LogDirectory),
+                flags, () => GateLoadContextProbe.CaptureLiveGateOccupants().Any(occupant => occupant.CountsAsAcceptanceOccupant));
             foreach (var record in open)
             {
                 try
@@ -113,6 +116,8 @@ internal sealed class ConductorExperimentWatch
                     try { if (reverts.TryRevert(record, reading, asOf)) continue; }
                     catch (Exception error) { LogFailure(error); }
                     try { if (keeps.TryKeep(record, reading, asOf)) continue; }
+                    catch (Exception error) { LogFailure(error); }
+                    try { toggles.TryToggle(record, hostLedgers, asOf); }
                     catch (Exception error) { LogFailure(error); }
                     foreach (var trigger in Triggers)
                     {

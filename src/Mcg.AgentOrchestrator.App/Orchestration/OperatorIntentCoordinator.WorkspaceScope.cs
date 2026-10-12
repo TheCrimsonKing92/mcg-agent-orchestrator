@@ -42,6 +42,7 @@ internal sealed partial class OperatorIntentCoordinator
                         Escapes ?? throw new InvalidOperationException("Escape intent services are unavailable.")),
                     OperatorIntentVerbs.ExperimentApplyFlag => (ExperimentFlags ?? throw new InvalidOperationException("Experiment intent services are unavailable.")).Apply(intent),
                     OperatorIntentVerbs.ExperimentRevertFlag => (ExperimentFlags ?? throw new InvalidOperationException("Experiment intent services are unavailable.")).Revert(intent),
+                    OperatorIntentVerbs.ExperimentToggleFlag => (ExperimentFlags ?? throw new InvalidOperationException("Experiment intent services are unavailable.")).Toggle(intent),
                     OperatorIntentVerbs.ExperimentDecide => (ExperimentDecisions ?? throw new InvalidOperationException("Experiment intent services are unavailable.")).Apply(intent),
                     _ => throw new OperatorLessonRejectedException($"unsupported-workspace-verb {intent.Verb}")
                 };
@@ -55,7 +56,7 @@ internal sealed partial class OperatorIntentCoordinator
                 continue;
             }
             _store.CompleteAsync(intent.Id, ClaimOwner, OperatorIntentStatus.Applied,
-                intent.Verb is OperatorIntentVerbs.ExperimentApplyFlag or OperatorIntentVerbs.ExperimentRevertFlag
+                intent.Verb is OperatorIntentVerbs.ExperimentApplyFlag or OperatorIntentVerbs.ExperimentRevertFlag or OperatorIntentVerbs.ExperimentToggleFlag
                     ? $"Applied {intent.Verb}; tier=Mutate; replayed={replayed}."
                     : replayed ? $"Applied; recovered lesson intent {intent.Id}." : $"Applied {intent.Verb}.",
                 _utcNow()).GetAwaiter().GetResult();

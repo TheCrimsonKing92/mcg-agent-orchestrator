@@ -1,0 +1,158 @@
+using System.Text.Json;
+using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
+using Xunit;
+
+// Parallel-safe: each case owns all stores and targeted host files.
+public sealed class ExperimentFlagToggleIntentTests
+{
+    [Theory]
+    [InlineData(false, "local-process")]
+    [InlineData(true, "local-process")]
+    [InlineData(false, "steward")]
+    [InlineData(true, "steward")]
+    public void AppliedFlag_TogglesBothDirectionsWithoutChangingExperiment(bool remote, string assurance)
+    {
+        using var fixture = new ExperimentFlagTestFixture();
+        var record = Apply(fixture, remote);
+        var target = record.Spec.Intervention.FlagTarget!;
+        Assert.False(target.PriorValue);
+        Assert.True(fixture.Flags.Read(target));
+
+        foreach (var expected in new[] { false, true })
+        {
+            var intent = Submit(fixture, record.Id, assurance);
+            fixture.Tick();
+            var result = fixture.Result(intent);
+            Assert.Equal(OperatorIntentStatus.Applied, result.Status);
+            Assert.Equal("Applied experiment-toggle-flag; tier=Mutate; replayed=False.", result.Outcome);
+            Assert.Equal(expected, fixture.Flags.Read(target));
+            var persisted = fixture.Experiments.ResolveAsync(record.Id).GetAwaiter().GetResult()!;
+            Assert.Equal(ExperimentOutcomeState.Open, persisted.Outcome);
+            Assert.Null(persisted.Decision);
+            Assert.Equal(target, persisted.Spec.Intervention.FlagTarget);
+        }
+    }
+
+    [Theory]
+    [InlineData("property", "property-not-allowlisted maxConcurrentPaidWorkers")]
+    [InlineData("file-kind", "file-kind-unsupported")]
+    [InlineData("baseline", "not-alternating-gates")]
+    [InlineData("decided", "experiment-decided")]
+    [InlineData("not-config", "not-config-flag")]
+    [InlineData("unapplied", "flag-not-applied")]
+    public void InvalidTargetOrState_RejectsWithoutWriting(string failure, string reason)
+    {
+        using var fixture = new ExperimentFlagTestFixture();
+        var spec = AlternatingSpec() with
+        {
+            Intervention = new(ExperimentInterventionKind.ConfigFlag, "toggle",
+                new(ExperimentFlagFileKind.ConductorPolicy, "followerGatesEnabled", true, false))
+        };
+        spec = failure switch
+        {
+            "property" => spec with { Intervention = spec.Intervention with
+                { FlagTarget = spec.Intervention.FlagTarget! with { PropertyName = "maxConcurrentPaidWorkers" } } },
+            "file-kind" => spec with { Intervention = spec.Intervention with
+                { FlagTarget = spec.Intervention.FlagTarget! with { FileKind = (ExperimentFlagFileKind)999 } } },
+            "baseline" => spec with { Baseline = new(ExperimentBaselineKind.BeforeAfterWindow) },
+            "not-config" => spec with { Intervention = new(ExperimentInterventionKind.Policy, "policy") },
+            "unapplied" => spec with { Intervention = spec.Intervention with
+                { FlagTarget = spec.Intervention.FlagTarget! with { PriorValue = null } } },
+            _ => spec
+        };
+        var record = fixture.Add(spec);
+        if (failure == "decided") fixture.Experiments.DecideAsync(record.Id, ExperimentOutcomeState.Confirmed,
+            "test", "keep").GetAwaiter().GetResult();
+        File.WriteAllText(fixture.PolicyPath, ExperimentFlagTestFixture.PolicyJson(enabled: true));
+        var before = File.ReadAllBytes(fixture.PolicyPath);
+        var intent = Submit(fixture, record.Id);
+        fixture.Tick();
+        AssertRejected(fixture, intent, reason, before);
+    }
+
+    [Theory]
+    [InlineData("other", "conductor-experiment-toggle", OperatorActorKind.Agent)]
+    [InlineData("conductor", "cli", OperatorActorKind.Agent)]
+    [InlineData("conductor", "conductor-experiment-toggle", OperatorActorKind.Human)]
+    [InlineData("conductor", "conductor-experiment-revert", OperatorActorKind.Agent)]
+    public void StewardToggle_RejectsEveryUnboundCaller(string actor, string channel, OperatorActorKind kind)
+    {
+        using var fixture = new ExperimentFlagTestFixture();
+        var record = Apply(fixture);
+        var before = File.ReadAllBytes(fixture.PolicyPath);
+        var intent = Submit(fixture, record.Id, OperatorIntentAdjudication.StewardAssurance, actor, channel, kind);
+        fixture.Tick();
+        AssertRejected(fixture, intent, "steward-capability-boundary", before);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void StewardApplyAndRevert_RejectToggleChannel(bool revert)
+    {
+        using var fixture = new ExperimentFlagTestFixture();
+        var record = Apply(fixture);
+        var before = File.ReadAllBytes(fixture.PolicyPath);
+        var intent = fixture.Submit(record.Id, revert, OperatorIntentAdjudication.StewardAssurance,
+            actor: "conductor", channel: "conductor-experiment-toggle", actorKind: OperatorActorKind.Agent);
+        fixture.Tick();
+        AssertRejected(fixture, intent, "steward-capability-boundary", before);
+    }
+
+    [Theory]
+    [InlineData("steward", "steward-capability-boundary")]
+    [InlineData("unverified", "tier-below-mutate")]
+    public void CapabilityChecks_PrecedeExperimentState(string assurance, string reason)
+    {
+        using var fixture = new ExperimentFlagTestFixture();
+        var record = Apply(fixture);
+        fixture.Experiments.DecideAsync(record.Id, ExperimentOutcomeState.Confirmed, "test", "keep").GetAwaiter().GetResult();
+        var before = File.ReadAllBytes(fixture.PolicyPath);
+        var intent = Submit(fixture, record.Id, assurance, actor: "other");
+        fixture.Tick();
+        AssertRejected(fixture, intent, reason, before);
+    }
+
+    private static ExperimentSpec AlternatingSpec(ExperimentFlagTarget? target = null) => ExperimentFlagTestFixture.Spec(target) with
+    {
+        Baseline = new(ExperimentBaselineKind.AlternatingGates),
+        Metrics = ["gate-seconds"],
+        Guardrail = new("tick-cpu-ms", new("tick-cpu-ms", ">", 100)),
+        StopRule = new(99, ExperimentStopUnit.Gates),
+        DecisionRule = new([new("gate-seconds", "<", 0)], [new("gate-seconds", ">", 0)])
+    };
+
+    private static ExperimentRecord Apply(ExperimentFlagTestFixture fixture, bool remote = false)
+    {
+        if (remote) File.WriteAllText(fixture.ExecutorsPath, ExperimentFlagTestFixture.ExecutorsJson());
+        var record = fixture.Add(AlternatingSpec(remote ? new(ExperimentFlagFileKind.RemoteLaneExecutors,
+            RemoteLaneExecutorFlags.FocusedEvidenceShadow, true) : null));
+        var apply = fixture.Submit(record.Id);
+        fixture.Tick();
+        Assert.Equal(OperatorIntentStatus.Applied, fixture.Result(apply).Status);
+        return fixture.Experiments.ResolveAsync(record.Id).GetAwaiter().GetResult()!;
+    }
+
+    private static OperatorIntentRecord Submit(ExperimentFlagTestFixture fixture, string experimentId,
+        string assurance = "local-process", string? actor = null, string? channel = null, OperatorActorKind? kind = null)
+    {
+        var id = Guid.NewGuid().ToString("n");
+        var steward = assurance == OperatorIntentAdjudication.StewardAssurance;
+        return fixture.Intents.EnqueueAsync(new OperatorIntentRecord(id, id, OperatorIntentVerbs.ExperimentToggleFlag,
+            OperatorIntentScopes.Workspace, null,
+            JsonSerializer.Serialize(new ExperimentToggleFlagOperatorIntentPayload(experimentId), OperatorIntentJson.Options),
+            [], actor ?? (steward ? "conductor" : "owner"), channel ?? (steward ? "conductor-experiment-toggle" : "cli"),
+            assurance, ExperimentFlagTestFixture.Now, ActorKind: kind ?? (steward ? OperatorActorKind.Agent : OperatorActorKind.Human)))
+            .GetAwaiter().GetResult();
+    }
+
+    private static void AssertRejected(ExperimentFlagTestFixture fixture, OperatorIntentRecord intent, string reason, byte[] before)
+    {
+        var result = fixture.Result(intent);
+        Assert.Equal(OperatorIntentStatus.Rejected, result.Status);
+        Assert.Equal($"Rejected {intent.Verb}: {reason}", result.Outcome);
+        Assert.Equal(before, File.ReadAllBytes(fixture.PolicyPath));
+    }
+}
