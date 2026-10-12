@@ -148,9 +148,9 @@ internal sealed partial class ConductorBatchLoop
     private Goal? SelectInteractionOnlyPriorityGoal(
         ParallelAcceptanceBatchState state, IReadOnlySet<string> interactionOnlyGoalIds,
         AgentOrchestratorKernel kernel, ConductorDriver driver,
-        ConductorAutonomyPolicy policy, int tick, List<string> changedGoalLines, bool suppressNewAcceptanceAdmission)
+        ConductorAutonomyPolicy policy, int tick, List<string> changedGoalLines, Func<bool> suppressNewAcceptanceAdmission)
     {
-        if (suppressNewAcceptanceAdmission || !(driver.MergeTrainsEnabled || driver.AcceptanceCohortsEnabled)) return null;
+        if (suppressNewAcceptanceAdmission() || !(driver.MergeTrainsEnabled || driver.AcceptanceCohortsEnabled)) return null;
         foreach (var goal in state.OrderedEligible)
         {
             if (!interactionOnlyGoalIds.Contains(goal.Id.Value) || state.Results.ContainsKey(goal.Id.Value)) continue;
