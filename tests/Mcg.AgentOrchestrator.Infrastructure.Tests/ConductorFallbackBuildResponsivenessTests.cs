@@ -78,6 +78,7 @@ public sealed class ConductorFallbackBuildResponsivenessTests : ConductorBatchLo
         Assert.Equal(0, developerStarts);
         Assert.Equal(0, landings);
         Assert.Equal(WorkTaskStatus.Running, pending.Task.Status);
+        Assert.Equal(GoalLifecycleState.Running, GoalLifecycle.ResolveState(pending.Goal));
         Assert.Null(pending.Task.LastVerification);
         Assert.Null(pending.Task.LastDispatch!.ResultCommit);
         Assert.Same(originalDispatch, pending.Task.LastDispatch);

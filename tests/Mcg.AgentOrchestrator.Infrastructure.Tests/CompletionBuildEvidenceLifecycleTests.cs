@@ -5,6 +5,28 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // Parallel-safe: injected child lifecycle/clock and unique SQLite/journal roots.
 public sealed class CompletionBuildEvidenceLifecycleTests
 {
+    [Theory]
+    [InlineData(CompletionBuildEvidencePhase.Launching)]
+    [InlineData(CompletionBuildEvidencePhase.WaitingForLease)]
+    [InlineData(CompletionBuildEvidencePhase.Pending)]
+    public void PendingCompletionBuildKeepsExitedWorkerInRunningLifecycle(CompletionBuildEvidencePhase phase)
+    {
+        var fixture = new CompletionBuildEvidenceFixture();
+        fixture.Runner().RefreshLatestProcess(fixture.Kernel, fixture.GoalId, fixture.TaskId);
+        var operation = fixture.Task.CompletionBuildEvidence!;
+        fixture.Kernel.RecordCompletionBuildEvidence(fixture.GoalId, fixture.TaskId, operation with { Phase = phase });
+
+        Assert.False(fixture.Task.LastProcess!.IsRunning);
+        Assert.Equal(WorkTaskStatus.Running, fixture.Task.Status);
+        Assert.Equal(GoalLifecycleState.Running, GoalLifecycle.ResolveState(fixture.Goal));
+        Assert.Null(fixture.Task.LastVerification);
+        Assert.Null(fixture.Task.LastDispatch!.ResultCommit);
+
+        fixture.Kernel.RecordCompletionBuildEvidence(fixture.GoalId, fixture.TaskId,
+            operation with { Phase = CompletionBuildEvidencePhase.Cancelled });
+        Assert.Equal(GoalLifecycleState.Dispatched, GoalLifecycle.ResolveState(fixture.Goal));
+    }
+
     [Fact]
     public void DeadlineStopsOwnedChildAndReleasesLeaseWithoutProductTestVerdict()
     {

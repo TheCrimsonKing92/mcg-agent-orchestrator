@@ -31,6 +31,8 @@ public sealed class CliConductWatchBuildEvidenceTests : CliCommandTestBase
             Assert.True(fixture.Live);
             Assert.Equal(0, fixture.Stops);
             Assert.Equal(WorkTaskStatus.Running, fixture.Task.Status);
+            Assert.False(fixture.Task.LastProcess!.IsRunning);
+            Assert.Equal(GoalLifecycleState.Running, GoalLifecycle.ResolveState(fixture.Goal));
             Assert.Null(fixture.Task.LastVerification);
             Assert.Null(fixture.Task.LastDispatch!.ResultCommit);
             var operationId = fixture.Task.CompletionBuildEvidence.Id;
@@ -41,6 +43,7 @@ public sealed class CliConductWatchBuildEvidenceTests : CliCommandTestBase
             Assert.Equal(1, fixture.Launches);
             Assert.True(fixture.Live);
             Assert.Equal(0, fixture.Stops);
+            Assert.Equal(GoalLifecycleState.Running, GoalLifecycle.ResolveState(fixture.Goal));
             Assert.Null(fixture.Task.LastVerification);
             Assert.Null(fixture.Task.LastDispatch!.ResultCommit);
 
@@ -55,6 +58,16 @@ public sealed class CliConductWatchBuildEvidenceTests : CliCommandTestBase
             Assert.NotNull(fixture.Task.LastDispatch!.ResultCommit);
             Assert.Equal(dispatchAt, fixture.Task.LastDispatch.DispatchedAt);
             Assert.Equal(stdout, File.ReadAllText(fixture.Task.LastProcess!.StandardOutputPath));
+            Assert.Equal(1, fixture.Launches);
+            Assert.Equal(1, fixture.Authorizations);
+            Assert.Equal(0, fixture.Stops);
+
+            var resultCommit = fixture.Task.LastDispatch.ResultCommit;
+            fixture.Reload();
+            RunOneWatchTick(fixture, workspace);
+            Assert.Equal(WorkTaskStatus.Completed, fixture.Task.Status);
+            Assert.Equal(resultCommit, fixture.Task.LastDispatch!.ResultCommit);
+            Assert.Single(fixture.Task.VerificationHistory);
             Assert.Equal(1, fixture.Launches);
             Assert.Equal(1, fixture.Authorizations);
             Assert.Equal(0, fixture.Stops);
