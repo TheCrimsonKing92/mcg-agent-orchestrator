@@ -80,20 +80,6 @@ public sealed class CliOperatorIntentSubmitJsonTestsMoreVerbs : CliTaskQueryTest
         }
     }
 
-    [Theory]
-    [InlineData("criterion-evidence-map", "--goal")]
-    [InlineData("criterion-evidence-record", "--goal")]
-    public void OtherSubmits_Json_RemainsUnknownOption(string verb, string subcommand)
-    {
-        var output = CaptureConsole(() =>
-        {
-            var error = Assert.Throws<ArgumentException>(() =>
-                CliCommandHelp.ThrowIfInvalidFlags([verb, subcommand, "target", "--json"]));
-            Assert.Contains("Unknown option '--json'", error.Message);
-        });
-        Assert.Empty(output);
-    }
-
     private static void AssertEnvelope(SubmitResult result, OperatorIntentRecord intent, string nextStepLine)
     {
         Assert.Equal($"{nextStepLine}{Warning}{Environment.NewLine}", result.Error);

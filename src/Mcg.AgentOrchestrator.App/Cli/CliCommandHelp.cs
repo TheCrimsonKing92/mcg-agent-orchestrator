@@ -261,24 +261,24 @@ internal static class CliCommandHelp
         "Record a human candidate-bound approval for acceptance policy changes.",
         ["--text-file", "--idempotency-key", "--operator-actor", "--actor-kind", "--json", "--help", "-h"]);
 
-    public const string CriterionEvidenceMapUsage = "Usage: criterion-evidence-map --goal <goal-prefix> --criterion <brief-number>[,<brief-number>...] [--version <criterion-version>] <acceptance|operator> <required-scope> <finding-stable-id> <candidate-sha> [--idempotency-key <key>] [--operator-actor <actor>]";
-    public const string CriterionEvidenceRecordUsage = "Usage: criterion-evidence-record --goal <goal-prefix> <obligation-id> operator <candidate-sha> <receipt-id> <scope> <passed|failed> <detail> [--idempotency-key <key>] [--operator-actor <actor>]";
-    public const string CriterionEvidenceRepairUsage = "Usage: criterion-evidence-repair --goal <goal-prefix> <malformed-obligation-id> --criterion <brief-number> [--version <criterion-version>] <acceptance|operator> <required-scope> <finding-stable-id> <candidate-sha> <reason> [--idempotency-key <key>] [--operator-actor <actor>]";
+    public const string CriterionEvidenceMapUsage = "Usage: criterion-evidence-map --goal <goal-prefix> --criterion <brief-number>[,<brief-number>...] [--version <criterion-version>] <acceptance|operator> <required-scope> <finding-stable-id> <candidate-sha> [--idempotency-key <key>] [--operator-actor <actor>] [--json]";
+    public const string CriterionEvidenceRecordUsage = "Usage: criterion-evidence-record --goal <goal-prefix> <obligation-id> operator <candidate-sha> <receipt-id> <scope> <passed|failed> <detail> [--idempotency-key <key>] [--operator-actor <actor>] [--json]";
+    public const string CriterionEvidenceRepairUsage = "Usage: criterion-evidence-repair --goal <goal-prefix> <malformed-obligation-id> --criterion <brief-number> [--version <criterion-version>] <acceptance|operator> <required-scope> <finding-stable-id> <candidate-sha> <reason> [--idempotency-key <key>] [--operator-actor <actor>] [--json]";
 
     private static readonly CommandHelpEntry CriterionEvidenceMap = new(
         CriterionEvidenceMapUsage,
         "Queue a candidate-bound criterion ownership mapping for the conductor.",
-        ["--goal", "--criterion", "--version", "--idempotency-key", "--operator-actor", "--help", "-h"]);
+        ["--goal", "--criterion", "--version", "--idempotency-key", "--operator-actor", "--help", "-h", "--json"]);
 
     private static readonly CommandHelpEntry CriterionEvidenceRecord = new(
         CriterionEvidenceRecordUsage,
         "Queue operator evidence for a mapped criterion. Acceptance evidence comes from the acceptance executor.",
-        ["--goal", "--idempotency-key", "--operator-actor", "--help", "-h"]);
+        ["--goal", "--idempotency-key", "--operator-actor", "--help", "-h", "--json"]);
 
     private static readonly CommandHelpEntry CriterionEvidenceRepair = new(
         CriterionEvidenceRepairUsage,
         "Queue an attributed repair that rebinds one malformed Unknown claim; the replacement remains pending until valid evidence arrives.",
-        ["--goal", "--criterion", "--version", "--idempotency-key", "--operator-actor", "--help", "-h"]);
+        ["--goal", "--criterion", "--version", "--idempotency-key", "--operator-actor", "--help", "-h", "--json"]);
 
     private static readonly CommandHelpEntry Recover = new(
         RecoverUsage,
