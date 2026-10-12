@@ -220,6 +220,68 @@ public sealed class LearnedAcceptanceManifestTests
         Assert.DoesNotContain("removed-branch", settled.Json);
     }
 
+    [Fact]
+    public void Build_OneUnitTimeout_EmitsNumberOnlyOnAnsweredCheck()
+    {
+        var result = LearnedAcceptanceManifest.Build(Model(),
+            [.. Answers(), Answer($"commands/{A}/timeoutMinutes", "025")]);
+        Assert.Empty(result.Blockers);
+        Assert.NotNull(result.Json);
+        using var document = JsonDocument.Parse(result.Json);
+        var checks = document.RootElement.GetProperty("checks").EnumerateArray().ToArray();
+        Assert.Equal(2, checks.Length);
+        var answered = Assert.Single(checks.Where(check => check.GetProperty("project").GetString() == A.Replace('\\', '/')));
+        Assert.Equal(25, answered.GetProperty("timeoutMinutes").GetInt32());
+        Assert.Equal(new[] { "name", "type", "runner", "project", "timeoutMinutes", "arguments" }, Keys(answered));
+        var unanswered = Assert.Single(checks.Where(check => check.GetProperty("project").GetString() == B.Replace('\\', '/')));
+        Assert.False(unanswered.TryGetProperty("timeoutMinutes", out _));
+        Assert.Equal(new[] { "name", "type", "runner", "project", "arguments" }, Keys(unanswered));
+    }
+
+    [Fact]
+    public void Build_NoUnitTimeout_PreservesDeterministicBaselineBytes()
+    {
+        const string expected = """
+            {
+              "version": 1,
+              "engine": {
+                "maxConcurrentShards": 2,
+                "enforceStructuralCoverage": false,
+                "timeouts": {
+                  "defaultMinutes": 10,
+                  "buildServerShutdownMinutes": 3,
+                  "discoveryMinutes": 4
+                }
+              },
+              "checks": [
+                {
+                  "name": "A.Tests",
+                  "type": "dotnet-test",
+                  "runner": "vstest",
+                  "project": "tests/A.Tests/A.Tests.csproj",
+                  "arguments": []
+                },
+                {
+                  "name": "B.Tests",
+                  "type": "dotnet-test",
+                  "runner": "vstest",
+                  "project": "tests/B.Tests/B.Tests.csproj",
+                  "arguments": []
+                }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """;
+        var result = LearnedAcceptanceManifest.Build(Model(), Answers());
+        Assert.Empty(result.Blockers);
+        Assert.NotNull(result.Json);
+        Assert.Equal(System.Text.Encoding.UTF8.GetBytes(expected.Replace("\r\n", "\n") + "\n"),
+            System.Text.Encoding.UTF8.GetBytes(result.Json));
+        var reordered = LearnedAcceptanceManifest.Build(Model(), Answers().Reverse().ToArray());
+        Assert.NotNull(reordered.Json);
+        Assert.Equal(System.Text.Encoding.UTF8.GetBytes(result.Json), System.Text.Encoding.UTF8.GetBytes(reordered.Json));
+    }
+
     private const string A = "tests\\A.Tests\\A.Tests.csproj";
     private const string B = "tests\\B.Tests\\B.Tests.csproj";
     private static ProjectModel Model(bool measured = true) => new(ProjectModel.CurrentSchemaVersion, ".",

@@ -29,7 +29,10 @@ public static class OwnerAnsweredEngineSettings
             }
             answeredKeys.Add(answer.FactKey);
         }
-        return answeredKeys.Count == 0 ? learned : result with
+        var checkTimeouts = OwnerAnsweredCheckTimeouts.Read(applied);
+        if (checkTimeouts.Count > 0)
+            result = result with { CheckTimeouts = checkTimeouts };
+        return answeredKeys.Count == 0 ? result : result with
         {
             OwnerQuestions = learned.OwnerQuestions.Where(question => !answeredKeys.Contains(question.FactKey)).ToArray()
         };
