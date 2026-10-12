@@ -204,76 +204,41 @@ internal sealed partial class ConductorDriver
             return false;
         }
 
-        if (_tryBeginDeveloperIntegrationEvidenceOperation is not null)
+        var operationStart = _tryBeginDeveloperIntegrationEvidenceOperation?.Invoke(goal);
+        using var operationScope = operationStart?.Scope;
+        using var lease = operationStart is null
+            ? _tryAcquireEvidenceMutationLease(goal, "conductor:developer-branch-integration")
+            : null;
+        var integrationExecution = DeveloperDispatchIntegrationExecutor.Execute(
+            goal,
+            operationStart,
+            lease,
+            g => _integrateMainBeforeReadOnlyDispatch(g, role),
+            _recordPreDispatchIntegrationReceipt);
+        switch (integrationExecution.RefusalKind)
         {
-            var operationStart = _tryBeginDeveloperIntegrationEvidenceOperation(goal);
-            if (operationStart.Scope is null)
-            {
-                var status = operationStart.LeaseFact is { } leaseFact
-                    ? GoalEvidenceLeaseRecoveryStatuses.Format(leaseFact.RecoveryStatus)
-                    : "state-unavailable";
+            case DeveloperDispatchIntegrationRefusalKind.OperationHeld:
+                var status = integrationExecution.LeaseRecoveryStatus;
                 result = DispatchStartResult(goal, goalPrefix, policy, fromState, new DispatchStartFacts(goal.Id.Value)
                 {
                     ReadOnlyIntegrationHoldReason = $"Goal evidence mutation is held for {goal.Id.Value}; lease-recovery={status}."
                 });
                 return true;
-            }
-
-            using (operationStart.Scope)
-            {
-                DeveloperBranchIntegrationResult integration;
-                try
-                {
-                    integration = _integrateMainBeforeReadOnlyDispatch(goal, role);
-                    _recordPreDispatchIntegrationReceipt(goal, integration);
-                }
-                catch (OperationCanceledException ex)
-                {
-                    operationStart.Scope.Abort(ex.Message);
-                    throw;
-                }
-                catch (Exception ex)
-                {
-                    operationStart.Scope.Fail(ex.Message);
-                    throw;
-                }
-
-                if (integration.CanDispatch)
-                {
-                    operationStart.Scope.Complete(integration.Message);
-                }
-                else
-                {
-                    operationStart.Scope.Fail(integration.Message);
-                    result = Escalate(goal, goalPrefix, policy, fromState, integration.Message);
-                    return true;
-                }
-            }
-        }
-        else
-        {
-            using var integrationEvidenceMutationLease = _tryAcquireEvidenceMutationLease(
-                goal,
-                "conductor:developer-branch-integration");
-            if (integrationEvidenceMutationLease is null)
-            {
+            case DeveloperDispatchIntegrationRefusalKind.LeaseRefused:
                 result = DispatchStartResult(goal, goalPrefix, policy, fromState, new DispatchStartFacts(goal.Id.Value)
                 {
                     ReadOnlyIntegrationHoldReason = $"Goal evidence mutation is blocked by concurrent acceptance or replacement for {goal.Id.Value}."
                 });
                 return true;
-            }
-
-            var integration = _integrateMainBeforeReadOnlyDispatch(goal, role);
-            _recordPreDispatchIntegrationReceipt(goal, integration);
-            if (!integration.CanDispatch)
-            {
+            case DeveloperDispatchIntegrationRefusalKind.IntegrationRefused:
+                var integration = integrationExecution.Integration!;
                 result = Escalate(goal, goalPrefix, policy, fromState, integration.Message);
                 return true;
-            }
+            case DeveloperDispatchIntegrationRefusalKind.None:
+                return false;
+            default:
+                throw new InvalidOperationException("Unknown Developer integration refusal kind.");
         }
-
-        return false;
     }
 
     private ConductorAdvanceResult DispatchStartResult(
