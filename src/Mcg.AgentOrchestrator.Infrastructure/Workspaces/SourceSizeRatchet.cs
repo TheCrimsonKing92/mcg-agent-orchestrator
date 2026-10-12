@@ -435,7 +435,8 @@ internal static class SourceSizeRatchet
             new SourceClassCeiling("CliCommandHandlers", 12138, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
-            new SourceClassCeiling("GoalAcceptanceVerifier", 9053, 32),
+            // Goal 03580ad1 extracts source-mutation edits to AcceptanceSourceMutation; measured 8938 lines in 31 partials.
+            new SourceClassCeiling("GoalAcceptanceVerifier", 8938, 31),
             // Goal d647b5f3 extracts premise-invalid clarification construction to PremiseInvalidClarification.
             // Goal 439c80ae extracts Reviewer evidence brief projection to ReviewerEvidenceBriefSection;
             // measured 9319 total lines across the existing 27 partial files, with no extra headroom.
