@@ -45,8 +45,19 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrain : AcceptanceCohortWo
         }
     }
 
-    [Fact]
-    public void ExactTestedMergeTrainCommit_LandsThreeGoalsWithPerGoalCoverage()
+    [Theory]
+    [InlineData("none")]
+    [InlineData("legacy")]
+    [InlineData("late-legacy")]
+    [InlineData("typed")]
+    [InlineData("typed-with-legacy")]
+    [InlineData("failed")]
+    [InlineData("missing")]
+    [InlineData("stale")]
+    [InlineData("mismatched")]
+    [InlineData("unreadable")]
+    [InlineData("submission-failure")]
+    public void ExactTestedMergeTrainCommit_LandsThreeGoalsWithPerGoalCoverage(string scenario)
     {
         var repo = CreateReducedAcceptanceCohortRepository();
         var cleanupContext = CreateIsolatedCleanupContext(repo);
@@ -105,10 +116,113 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrain : AcceptanceCohortWo
             var landings = new List<ConductorLandingReceipt>();
             driver.SuccessfulLandingSink = landings.Add;
 
+            var unrelated = kernel.CreateGoal("Unrelated train wait", []);
+            var unrelatedWait = kernel.RequestHumanInputDeduplicated(unrelated.Id, null,
+                "Other goal receipt", kind: HumanWaitKind.ProspectiveAcceptanceEvidence,
+                evidenceOwner: "Acceptance").Request;
+            HumanInputRequest? wait = null;
+            HumanInputRequest? legacy = null;
+            HumanInputRequest CreateLegacyWait() => kernel.RequestHumanInputDeduplicated(secondGoal.Id, null,
+                "Required legacy train receipt", kind: HumanWaitKind.ProspectiveAcceptanceEvidence,
+                evidenceOwner: "Acceptance").Request;
+            if (scenario == "legacy") wait = CreateLegacyWait();
+            else if (scenario is not "none" and not "late-legacy")
+            {
+                wait = kernel.RequestHumanInputDeduplicated(secondGoal.Id, null,
+                    "Required named train receipt", kind: HumanWaitKind.ProspectiveAcceptanceEvidence,
+                    evidenceOwner: "acceptance-gate", testNames: [ProspectiveEvidenceGateFixture.IncidentClass]).Request;
+                var rows = scenario switch
+                {
+                    "failed" => ProspectiveEvidenceGateFixture.IncidentRows.Select(name => (name, "Failed")),
+                    "missing" => new[] { ("OtherTests.Check", "Passed") },
+                    _ => ProspectiveEvidenceGateFixture.PassingRows
+                };
+                var attempt = ProspectiveEvidenceGateFixture.WriteAttempt(workspace.OrchestratorDirectory,
+                    scenario == "mismatched" ? firstGoal : secondGoal,
+                    scenario == "stale" ? new string('a', 40) : second, rows);
+                if (scenario == "unreadable") File.Delete(attempt.TrxPath);
+                if (scenario == "typed-with-legacy") legacy = CreateLegacyWait();
+            }
+            var callbacks = 0;
+            driver.LandingMutationBlocker = () =>
+            {
+                if (scenario == "late-legacy" && ++callbacks == 2) wait = CreateLegacyWait();
+                if (scenario == "submission-failure")
+                {
+                    var blockedPath = Path.Combine(workspace.OrchestratorDirectory, "blocked-answer-events");
+                    if (!File.Exists(blockedPath)) File.WriteAllText(blockedPath, "Not an event directory");
+                    kernel.SetEventWriter(new GoalLifecycleEventWriter(blockedPath));
+                }
+                return null;
+            };
+            var statuses = new[] { firstGoal.Status, secondGoal.Status, thirdGoal.Status };
+            var integrationBefore = RunGitOutput(repo, "for-each-ref", "--format=%(objectname)",
+                $"refs/heads/{LandingExecutor.IntegrationBranchName}");
+
             var result = driver.RunMergeTrain(
                 selection,
                 [firstGoal, secondGoal, thirdGoal],
                 ConductorAutonomyPolicy.Permissive);
+
+            if (scenario is not "none" and not "typed")
+            {
+                var blockedWait = legacy ?? Assert.IsType<HumanInputRequest>(wait);
+                Assert.Equal(MergeTrainGateOutcome.Passed, result.Receipt?.Outcome);
+                Assert.True(result.Receipt?.HasAuthoritativeLandingEvidence);
+                Assert.True(result.Receipt?.ValidForLanding);
+                Assert.All(result.MemberResults.Values, member => Assert.IsType<ConductorAdvanceOutcome.Held>(member.Outcome));
+                Assert.Contains(secondGoal.Id.Value, result.Detail, StringComparison.Ordinal);
+                Assert.Contains(blockedWait.Id.Value, result.Detail, StringComparison.Ordinal);
+                Assert.False(blockedWait.IsCompleted);
+                Assert.Null(blockedWait.Answer);
+                Assert.Equal(main, RunGitOutput(repo, "rev-parse", "main").Trim());
+                Assert.Equal(integrationBefore, RunGitOutput(repo, "for-each-ref", "--format=%(objectname)",
+                    $"refs/heads/{LandingExecutor.IntegrationBranchName}"));
+                Assert.Equal(statuses, new[] { firstGoal.Status, secondGoal.Status, thirdGoal.Status });
+                Assert.Empty(landings);
+                Assert.All(new[] { firstGoal, secondGoal, thirdGoal }, goal => Assert.DoesNotContain(
+                    GoalOperationJournal.Read(repo, goal.Id).Entries,
+                    operation => operation.Operation == "conductor:land" && operation.Status == GoalOperationStatus.Completed));
+                var storePath = Path.Combine(workspace.OrchestratorDirectory, "merge-train-acceptance.db");
+                var retained = new MergeTrainAcceptanceStore(storePath).TryReadReceipt(result.Receipt!.Identity.Value);
+                Assert.NotNull(retained);
+                Assert.True(retained.HasAuthoritativeLandingEvidence);
+                Assert.Equal(result.Receipt.ReceiptId, retained.ReceiptId);
+                using (var connection = new SqliteConnection($"Data Source={storePath}"))
+                {
+                    connection.Open();
+                    using var command = connection.CreateCommand();
+                    command.CommandText = "SELECT COUNT(*) FROM merge_train_landings WHERE state='finalized';";
+                    Assert.Equal(0L, (long)command.ExecuteScalar()!);
+                }
+                if (scenario == "submission-failure")
+                {
+                    Assert.Contains("submission failed:", result.Detail, StringComparison.Ordinal);
+                    Assert.Empty(blockedWait.AnswerHistory);
+                }
+                if (scenario == "typed-with-legacy")
+                {
+                    Assert.True(wait!.IsCompleted);
+                    Assert.Equal(HumanInputAnswerOrigin.Worker, wait.AuthoritativeAnswer!.Origin);
+                }
+                kernel.SetEventWriter(null);
+                driver.LandingMutationBlocker = null;
+                kernel.SubmitHumanInput(blockedWait.Id, "Operator verified train receipt", supersedeSiblings: false);
+                var heldReceipt = result.Receipt;
+                result = driver.RunMergeTrain(selection, [firstGoal, secondGoal, thirdGoal], ConductorAutonomyPolicy.Permissive);
+                Assert.Equal(heldReceipt.ReceiptId, result.Receipt?.ReceiptId);
+                Assert.Equal(heldReceipt.Identity.Value, result.Receipt?.Identity.Value);
+                Assert.Equal(heldReceipt.GateTestResultPaths, result.Receipt?.GateTestResultPaths);
+                Assert.Equal("Operator verified train receipt", blockedWait.Answer);
+            }
+            if (scenario == "typed")
+            {
+                Assert.True(wait!.IsCompleted);
+                Assert.Equal(HumanInputAnswerOrigin.Worker, wait.AuthoritativeAnswer!.Origin);
+                Assert.Contains("Satisfied by gate attempt", wait.Answer, StringComparison.Ordinal);
+                Assert.Empty(kernel.GetPendingHumanInput(secondGoal.Id));
+            }
+            Assert.False(unrelatedWait.IsCompleted);
 
             Assert.Equal(1, verifier.RunCount);
             Assert.Equal(MergeTrainGateOutcome.Passed, result.Receipt?.Outcome);

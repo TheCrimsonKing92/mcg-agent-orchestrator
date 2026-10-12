@@ -126,8 +126,8 @@ internal static partial class LandingExecutor
         }
 
         var changedFiles = changedFilesResult.Files;
-        var prospectiveEvidence = ProspectiveEvidenceGateResolver.Resolve(
-            kernel, goal, workspace.OrchestratorDirectory, ResolveRef(executionDirectory, goalBranch));
+        var prospectiveEvidence = EvaluatePendingHumanInput(
+            kernel, goal, workspace.OrchestratorDirectory, ResolveRef(executionDirectory, goalBranch)).Resolution;
         var acceptance = GoalAcceptanceStatusProjector.Build(kernel, goal, workspace.ExecutionDirectory, workspace.IntegrationBranch);
         var acceptanceAccepted = acceptance.IsAccepted && prospectiveEvidence.UnresolvedWaits.Count == 0;
         landingFacts = landingFacts with
@@ -316,6 +316,9 @@ internal static partial class LandingExecutor
         }
 
         var publicationBlockReason = mutationBlocker?.Invoke();
+        if (string.IsNullOrWhiteSpace(publicationBlockReason))
+            publicationBlockReason = EvaluatePendingHumanInput(
+                kernel, goal, workspace.OrchestratorDirectory, evidenceCandidateSha).HoldDescription;
         if (!string.IsNullOrWhiteSpace(publicationBlockReason))
         {
             GoalOperationJournal.TombstoneLandingIntent(
@@ -715,6 +718,14 @@ internal static partial class LandingExecutor
             }
         }
 
+        var pendingInput = DescribeGroupedPendingHumanInput(kernel, goals, workspace.OrchestratorDirectory,
+            goalId => receipt.Identity.Members.Single(member => member.GoalId == goalId).CandidateRevision);
+        if (pendingInput is not null)
+        {
+            return new AcceptanceCohortLandingResult(AcceptanceCohortLandingOutcome.RetryableHold,
+                $"Cohort landing held before mutation because {pendingInput}");
+        }
+
         var evidenceDiagnostic = AcceptanceCriterionEvidence.RebindRecordAndDescribeOutstanding(
             goals,
             goalId => receipt.Identity.Members.Single(member => member.GoalId == goalId).CandidateRevision,
@@ -774,6 +785,9 @@ internal static partial class LandingExecutor
         }
 
         blockReason = mutationBlocker?.Invoke();
+        if (string.IsNullOrWhiteSpace(blockReason))
+            blockReason = DescribeGroupedPendingHumanInput(kernel, goals, workspace.OrchestratorDirectory,
+                goalId => receipt.Identity.Members.Single(member => member.GoalId == goalId).CandidateRevision);
         if (!string.IsNullOrWhiteSpace(blockReason))
         {
             foreach (var goal in goals)

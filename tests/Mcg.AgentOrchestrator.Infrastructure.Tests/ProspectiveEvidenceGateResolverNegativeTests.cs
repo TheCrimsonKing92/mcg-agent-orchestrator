@@ -6,6 +6,24 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class ProspectiveEvidenceGateResolverNegativeTests
 {
     [Theory]
+    [InlineData("")]
+    [InlineData(" ")]
+    [InlineData(null)]
+    public void BlankSelectorCannotResolveEvenWithMatchingPassedRow(string? blank)
+    {
+        using var fixture = new ProspectiveEvidenceGateFixture();
+        var wait = fixture.CreateWait([ProspectiveEvidenceGateFixture.IncidentClass, blank!]);
+        fixture.WriteAttempt(ProspectiveEvidenceGateFixture.PassingRows.Append(($"{blank}.Check", "Passed")));
+
+        var result = fixture.Resolve();
+
+        Assert.False(wait.IsCompleted);
+        Assert.Null(wait.Answer);
+        Assert.Empty(result.ResolvedRequestIds);
+        Assert.Equal(wait.Id, Assert.Single(result.UnresolvedWaits).RequestId);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public void Resolve_WriterFails_WaitStaysPendingAndRetryCanComplete(bool blockEventFile)

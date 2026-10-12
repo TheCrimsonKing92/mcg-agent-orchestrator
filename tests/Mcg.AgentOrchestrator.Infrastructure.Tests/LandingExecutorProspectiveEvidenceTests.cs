@@ -5,6 +5,42 @@ using Mcg.AgentOrchestrator.Infrastructure;
 [Collection(TestCollections.LandingGitRunner)]
 public sealed class LandingExecutorProspectiveEvidenceTests
 {
+    [Fact]
+    public void WaitIntroducedAtFinalCallbackPreventsIndividualRefPublication()
+    {
+        var repo = LandingExecutorTests.CreateGitRepository();
+        try
+        {
+            var (workspace, kernel, goal) = LandingExecutorTests.CreateAcceptedCandidate(repo, "src/late-wait.txt");
+            var mainBefore = LandingExecutorTests.ReadGit(repo, "rev-parse", "main");
+            var integrationBefore = LandingExecutorTests.ReadGit(repo, "for-each-ref", "--format=%(objectname)", "refs/heads/integration");
+            HumanInputRequest? wait = null;
+            var callbacks = 0;
+
+            var result = LandingExecutor.Execute(kernel, goal, workspace, mutationBlocker: () =>
+            {
+                if (++callbacks == 2)
+                    wait = kernel.RequestHumanInputDeduplicated(goal.Id, null, "Late required evidence",
+                        kind: HumanWaitKind.ProspectiveAcceptanceEvidence, evidenceOwner: "Acceptance").Request;
+                return null;
+            });
+
+            Assert.Equal(2, callbacks);
+            Assert.NotNull(wait);
+            Assert.False(result.MainAdvanced);
+            Assert.Contains(wait.Id.Value, result.Message, StringComparison.Ordinal);
+            Assert.False(wait.IsCompleted);
+            Assert.Equal(mainBefore, LandingExecutorTests.ReadGit(repo, "rev-parse", "main"));
+            Assert.Equal(integrationBefore, LandingExecutorTests.ReadGit(repo, "for-each-ref", "--format=%(objectname)", "refs/heads/integration"));
+            Assert.DoesNotContain(GoalOperationJournal.Read(repo, goal.Id).Entries,
+                entry => entry.Operation == "conductor:land" && entry.Status == GoalOperationStatus.Completed);
+        }
+        finally
+        {
+            LandingExecutorTests.TryDeleteDirectory(repo);
+        }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

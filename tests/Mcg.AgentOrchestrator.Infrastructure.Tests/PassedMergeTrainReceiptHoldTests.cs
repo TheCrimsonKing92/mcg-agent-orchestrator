@@ -9,6 +9,48 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class PassedMergeTrainReceiptHoldTests(ITestOutputHelper output) : AcceptanceCohortWorkflowTests
 {
     [Fact]
+    public void PendingHumanInputHoldsReceiptOnlyReplayUntilKernelAnswer()
+    {
+        using var fixture = CreatePassedTrain(materializeReceipt: true);
+        var goal = fixture.Goals[1];
+        var wait = fixture.Kernel.RequestHumanInputDeduplicated(goal.Id, null,
+            "Required legacy receipt", kind: HumanWaitKind.ProspectiveAcceptanceEvidence,
+            evidenceOwner: "Acceptance").Request;
+        var selection = ProjectTrainSelection(fixture.Driver, fixture.Goals);
+        var landings = new List<ConductorLandingReceipt>();
+        fixture.Driver.SuccessfulLandingSink = landings.Add;
+        var held = fixture.Driver.RunMergeTrain(selection, fixture.Goals, ConductorAutonomyPolicy.Permissive,
+            landFromReceiptOnly: true, expectedGateIdentity: fixture.Receipt.Identity.Value);
+
+        Assert.Equal(fixture.Receipt.ReceiptId, held.Receipt?.ReceiptId);
+        Assert.True(held.Receipt?.HasAuthoritativeLandingEvidence);
+        Assert.All(held.MemberResults.Values, member => Assert.IsType<ConductorAdvanceOutcome.Held>(member.Outcome));
+        Assert.Contains(goal.Id.Value, held.Detail, StringComparison.Ordinal);
+        Assert.Contains(wait.Id.Value, held.Detail, StringComparison.Ordinal);
+        Assert.Equal(fixture.Receipt.Identity.ObservedMainRevision, RunGitOutput(fixture.Repo, "rev-parse", "main").Trim());
+        Assert.Empty(RunGitOutput(fixture.Repo, "for-each-ref", "--format=%(objectname)", "refs/heads/integration").Trim());
+        Assert.Empty(landings);
+        Assert.All(fixture.Goals, member => Assert.Equal(GoalStatus.Verified, member.Status));
+        Assert.False(wait.IsCompleted);
+        Assert.Equal(0, fixture.Verifier.RunCount);
+        Assert.Equal(0, fixture.Pending.StartCount);
+
+        fixture.Kernel.SubmitHumanInput(wait.Id, "Operator verified the required receipt", supersedeSiblings: false);
+        var landed = fixture.Driver.RunMergeTrain(selection, fixture.Goals, ConductorAutonomyPolicy.Permissive,
+            landFromReceiptOnly: true, expectedGateIdentity: fixture.Receipt.Identity.Value);
+
+        Assert.Equal(held.Receipt?.ReceiptId, landed.Receipt?.ReceiptId);
+        Assert.Equal(fixture.Receipt.Identity.Value, landed.Receipt?.Identity.Value);
+        Assert.Equal(fixture.Receipt.GateTestResultPaths, landed.Receipt?.GateTestResultPaths);
+        Assert.All(landed.MemberResults.Values, member => Assert.IsType<ConductorAdvanceOutcome.Executed>(member.Outcome));
+        Assert.Equal(3, landings.Count);
+        Assert.Equal(fixture.Receipt.Identity.TrainTreeRevision, RunGitOutput(fixture.Repo, "rev-parse", "main^{tree}").Trim());
+        Assert.Equal("Operator verified the required receipt", wait.Answer);
+        Assert.Equal(0, fixture.Verifier.RunCount);
+        Assert.Equal(0, fixture.Pending.StartCount);
+    }
+
+    [Fact]
     [Trait("Category", "CrossTick")]
     public void CurrentBlockedReceipt_HoldsReadyMembersThenLandsWhenMemberBecomesReady()
     {
