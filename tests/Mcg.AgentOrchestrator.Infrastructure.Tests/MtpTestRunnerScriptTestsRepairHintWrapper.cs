@@ -76,7 +76,14 @@ public sealed class MtpTestRunnerScriptTestsRepairHintWrapper
             File.Exists(Path.Combine(Path.GetDirectoryName(candidate)!, name + ".exe")) &&
             File.Exists(Path.Combine(Path.GetDirectoryName(candidate)!, name + ".deps.json")) &&
             File.Exists(Path.Combine(Path.GetDirectoryName(candidate)!, name + ".runtimeconfig.json")));
-        Assert.False(string.IsNullOrWhiteSpace(probeDll), $"Missing isolated dotnet probe. Tried: {string.Join("; ", candidates)}");
+        string[] requiredFiles = [name + ".dll", name + ".exe", name + ".deps.json", name + ".runtimeconfig.json"];
+        if (probeDll is null && FixtureProbeLocator.FindDirectory(typeof(MtpTestRunnerScriptTestsRepairHintWrapper),
+            name, requiredFiles) is { } directory)
+            probeDll = Path.Combine(directory, name + ".dll");
+        if (string.IsNullOrWhiteSpace(probeDll))
+        {
+            Assert.Fail($"Missing isolated dotnet probe. Tried: {string.Join("; ", candidates)}. Locator tried: {string.Join("; ", FixtureProbeLocator.TriedPaths(typeof(MtpTestRunnerScriptTestsRepairHintWrapper), name, requiredFiles))}");
+        }
         var probeDirectory = Path.GetDirectoryName(probeDll!)!;
         foreach (var extension in new[] { ".dll", ".deps.json", ".runtimeconfig.json" })
             File.Copy(Path.Combine(probeDirectory, name + extension), Path.Combine(stubDirectory, name + extension));

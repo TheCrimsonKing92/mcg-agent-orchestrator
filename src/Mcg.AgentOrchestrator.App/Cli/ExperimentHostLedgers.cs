@@ -26,12 +26,16 @@ internal sealed record ExperimentHostLedgers(
     internal int CompletedGateCount(DateTimeOffset since, DateTimeOffset until, double? minSeconds = null) =>
         CompletedGates(since, until, minSeconds).Count();
 
-    private IEnumerable<GateLaneTimeLedgerRecord> CompletedGates(
+    internal IEnumerable<GateLaneTimeLedgerRecord> CompletedGates(
         DateTimeOffset since, DateTimeOffset until, double? minSeconds) =>
-        GateLaneTimes.Where(record =>
-            string.Equals(record.Outcome, "completed", StringComparison.OrdinalIgnoreCase) &&
-            record.ObservedAt >= since && record.ObservedAt < until &&
-            (minSeconds is null || record.TotalMs / 1000.0 >= minSeconds.Value));
+        GatesInWindow(since, until).Where(record => ExclusionReason(record, minSeconds) is null);
+
+    internal IEnumerable<GateLaneTimeLedgerRecord> GatesInWindow(DateTimeOffset since, DateTimeOffset until) =>
+        GateLaneTimes.Where(record => record.ObservedAt >= since && record.ObservedAt < until);
+
+    internal static string? ExclusionReason(GateLaneTimeLedgerRecord record, double? minSeconds) =>
+        !string.Equals(record.Outcome, "completed", StringComparison.OrdinalIgnoreCase) ? $"outcome-{record.Outcome}" :
+        !(minSeconds is null || record.TotalMs / 1000.0 >= minSeconds.Value) ? "below-min-gate-seconds" : null;
 
     internal double? TickCpuMs(DateTimeOffset since, DateTimeOffset until)
     {

@@ -223,6 +223,11 @@ internal static class ConsoleHostExperimentHarness
             candidates.Add(Path.Combine(project.FullName, "Fixtures", "ConsoleIoProbe", "bin", parent.Name, output.Name, name));
         if (parent?.Parent is { } artifacts)
             candidates.Add(Path.Combine(artifacts.FullName, "Mcg.AgentOrchestrator.ConsoleIoProbe", output.Name, name));
-        return candidates.FirstOrDefault(File.Exists) ?? throw new FileNotFoundException($"Console I/O probe was not built: {string.Join("; ", candidates)}");
+        var probe = candidates.FirstOrDefault(File.Exists);
+        if (probe is not null) return probe;
+        if (FixtureProbeLocator.FindDirectory(typeof(ProcessTreeGuiSuppressionTestsConsoleHostExperiment),
+            "Mcg.AgentOrchestrator.ConsoleIoProbe", name) is { } directory)
+            return Path.Combine(directory, name);
+        throw new FileNotFoundException($"Console I/O probe was not built: {string.Join("; ", candidates)}. Locator tried: {string.Join("; ", FixtureProbeLocator.TriedPaths(typeof(ProcessTreeGuiSuppressionTestsConsoleHostExperiment), "Mcg.AgentOrchestrator.ConsoleIoProbe", name))}");
     }
 }
