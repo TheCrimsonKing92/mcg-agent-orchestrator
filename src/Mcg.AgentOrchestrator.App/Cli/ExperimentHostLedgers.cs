@@ -14,11 +14,12 @@ internal sealed record ExperimentHostLedgers(
         ReadRecords<GateLaneTimeLedgerRecord>(GateLaneTimeLedger.ResolveStorePath(executionDirectory)),
         ReadRecords<TickCpuLedgerRecord>(TickCpuLedger.ResolveStorePath(executionDirectory)));
 
-    internal double? GateSeconds(DateTimeOffset since, DateTimeOffset until)
+    internal double? GateSeconds(DateTimeOffset since, DateTimeOffset until, double? minSeconds = null)
     {
         var values = GateLaneTimes.Where(record =>
                 string.Equals(record.Outcome, "completed", StringComparison.OrdinalIgnoreCase) &&
-                record.ObservedAt >= since && record.ObservedAt < until)
+                record.ObservedAt >= since && record.ObservedAt < until &&
+                (minSeconds is null || record.TotalMs / 1000.0 >= minSeconds.Value))
             .Select(record => record.TotalMs / 1000).Order().ToArray();
         if (values.Length == 0) return null;
         var middle = values.Length / 2;
