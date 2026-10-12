@@ -17,6 +17,7 @@ internal sealed class RemoteLaneFailureHistory
     internal IReadOnlyDictionary<(string Lane, string Filter), RemoteLaneFailureStreak> Read(string path)
     {
         var streaks = new Dictionary<(string Lane, string Filter), RemoteLaneFailureStreak>();
+        var countedAttempts = new HashSet<(string Attempt, string Lane)>();
         try
         {
             foreach (var line in SharedJsonlFile.ReadLines(path).TakeLast(GoalAcceptanceVerifier.RemoteLaneOfferHistoryLineLimit))
@@ -38,9 +39,14 @@ internal sealed class RemoteLaneFailureHistory
                         continue;
                     }
                     var observedAt = root.GetProperty("observed_at").GetDateTimeOffset();
+                    var attempt = root.TryGetProperty("gate_attempt_id", out var attemptValue) &&
+                        attemptValue.ValueKind == JsonValueKind.String ? attemptValue.GetString()?.Trim() : null;
+                    var late = string.Equals(outcome, "late-after-fallback", StringComparison.OrdinalIgnoreCase);
+                    if (late && !string.IsNullOrEmpty(attempt) && countedAttempts.Contains((attempt, lane))) continue;
                     streaks.TryGetValue(key, out var previous);
                     var newest = previous?.NewestFailureAt is { } prior && prior > observedAt ? prior : observedAt;
                     streaks[key] = new((previous?.Count ?? 0) + 1, newest);
+                    if (!late && !string.IsNullOrEmpty(attempt)) countedAttempts.Add((attempt, lane));
                 }
                 catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException or KeyNotFoundException) { }
             }

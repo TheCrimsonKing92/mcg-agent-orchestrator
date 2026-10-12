@@ -67,7 +67,7 @@ public sealed class RemoteLaneFailureHistoryTests : IDisposable
         foreach (var outcome in new[] { RemoteLaneOutcomeCode.RemoteRed, RemoteLaneOutcomeCode.LateAfterFallback,
             RemoteLaneOutcomeCode.TrxIncomplete, RemoteLaneOutcomeCode.LeaseExpired,
             RemoteLaneOutcomeCode.LaneTimeout, RemoteLaneOutcomeCode.UnexpectedNotExecuted })
-            Append(outcome, _now);
+            Append(outcome, _now, attempt: outcome == RemoteLaneOutcomeCode.LateAfterFallback ? "late-attempt" : "seed-attempt");
 
         Assert.Equal(new RemoteLaneFailureStreak(6, _now), Read()[("lane", "filter")]);
     }
@@ -94,11 +94,11 @@ public sealed class RemoteLaneFailureHistoryTests : IDisposable
     }
 
     private void Append(RemoteLaneOutcomeCode outcome, DateTimeOffset observedAt,
-        string lane = "lane", string filter = "filter")
+        string lane = "lane", string filter = "filter", string attempt = "seed-attempt")
     {
         var binding = new RemoteLaneBinding("executor", lane, "commit", "tree", "main", filter, "manifest");
         RemoteExecutorHealthLedger.Append(Ledger,
-            new(observedAt, binding.ExecutorId, "seed-attempt", lane, outcome, null, binding, null));
+            new(observedAt, binding.ExecutorId, attempt, lane, outcome, null, binding, null));
     }
 
     public void Dispose()
