@@ -286,7 +286,7 @@ public abstract class GoalWorktreeTestBase : HostCapacityBoundTestBase
     private protected static string CreateSeededRepository()
     {
         var root = CreateSeededGitRepository();
-        _ = CreateMigratedStateRepository(
+        SeededStateDatabaseTemplate.CopyTo(
             OrchestratorWorkspace.ForDirectory(root).SqliteStatePath);
         return root;
     }
@@ -294,7 +294,7 @@ public abstract class GoalWorktreeTestBase : HostCapacityBoundTestBase
     private protected static string CreateSeededRepository(string containerParent)
     {
         var root = CreateSeededGitRepository(containerParent: containerParent);
-        _ = CreateMigratedStateRepository(
+        SeededStateDatabaseTemplate.CopyTo(
             OrchestratorWorkspace.ForDirectory(root).SqliteStatePath);
         return root;
     }
@@ -312,25 +312,8 @@ public abstract class GoalWorktreeTestBase : HostCapacityBoundTestBase
         return repo;
     }
 
-    private static ImmutableArray<byte> CreateMigratedStateTemplate()
-    {
-        var root = Path.Combine(Path.GetTempPath(), $"mcg-state-template-{Guid.NewGuid():N}");
-        var statePath = Path.Combine(root, "state.db");
-        try
-        {
-            _ = CreateMigratedStateRepository(statePath);
-            if (!StateDbMigrations.IsUpToDate(statePath))
-            {
-                throw new InvalidOperationException("The reduced goal-worktree fixture state template is not fully migrated.");
-            }
-
-            return [.. File.ReadAllBytes(statePath)];
-        }
-        finally
-        {
-            DeleteDirectory(root);
-        }
-    }
+    private static ImmutableArray<byte> CreateMigratedStateTemplate() =>
+        [.. SeededStateDatabaseTemplate.Build()];
 
     private protected static bool HasCleanupNeededRecord(string repo, string cleanupPath, string reason)
     {
