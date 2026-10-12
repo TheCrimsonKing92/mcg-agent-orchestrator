@@ -81,6 +81,18 @@ public sealed partial class TaskSpec
 
     public TaskProcessRecord? LastProcess { get; private set; }
 
+    public CompletionBuildEvidenceOperation? CompletionBuildEvidence { get; private set; }
+
+    internal void RecordCompletionBuildEvidence(CompletionBuildEvidenceOperation operation)
+    {
+        if (operation.TaskId != Id.Value || operation.DispatchAt != LastDispatch?.DispatchedAt)
+            throw new InvalidOperationException("Completion build evidence does not belong to the current dispatch.");
+        if (CompletionBuildEvidence is { } previous && previous.Id == operation.Id &&
+            (!previous.IsPending && operation.IsPending || previous.Applied && !operation.Applied))
+            throw new InvalidOperationException("Completion build evidence cannot move backwards.");
+        CompletionBuildEvidence = operation;
+    }
+
     public string? InterruptedDispatchRecoveryId { get; private set; }
 
     public InterruptedWorkCheckpoint? PendingInterruptedWorkCheckpoint { get; private set; }
@@ -291,7 +303,8 @@ public sealed partial class TaskSpec
             LatestRoleInputRetryAt,
             CriterionRetryFeedbackRoundAt,
             LatestRetryInherited,
-            SubscriptionDeferralReleasedAt);
+            SubscriptionDeferralReleasedAt,
+            CompletionBuildEvidence);
     }
 
     internal static TaskSpec FromSnapshot(TaskSnapshot snapshot)
@@ -540,6 +553,7 @@ public sealed partial class TaskSpec
         task.InterruptedDispatchRecoveryId = snapshot.InterruptedDispatchRecoveryId;
         task.PendingInterruptedWorkCheckpoint = snapshot.PendingInterruptedWorkCheckpoint;
         task.WasCancelledByConductor = snapshot.WasCancelledByConductor;
+        task.CompletionBuildEvidence = snapshot.CompletionBuildEvidence;
         return task;
     }
 
@@ -913,6 +927,9 @@ public sealed partial class TaskSpec
 
     internal void RecordDispatch(TaskDispatchRecord dispatch)
     {
+        if (CompletionBuildEvidence is { IsPending: true })
+            throw new InvalidOperationException("A pending completion build must be cancelled before another dispatch.");
+        CompletionBuildEvidence = null;
         if (_dispatchHistory.Count > 0)
         {
             var latestAttemptAt = _dispatchHistory.Max(candidate => candidate.DispatchedAt);

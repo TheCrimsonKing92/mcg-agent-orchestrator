@@ -443,7 +443,8 @@ internal static partial class TerminalGoalSweep
             Path.Combine(orchestratorDirectory, "merge-train-acceptance.db"));
         cohortAcceptanceStore ??= new CohortAcceptanceStore(
             Path.Combine(orchestratorDirectory, "cohort-acceptance.db"));
-        var dispatchRunner = new BackgroundDispatchRunner
+        var dispatchRunner = new BackgroundDispatchRunner(completionBuildEvidence:
+            new CompletionBuildEvidenceCoordinator(workspace.SqliteStatePath, workspace.ExecutionDirectory))
         {
             OperatorIntents = SqliteOperatorIntentStore.ForDirectories(orchestratorDirectory, workspace.LogDirectory)
         };

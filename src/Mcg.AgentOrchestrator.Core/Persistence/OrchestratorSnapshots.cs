@@ -138,7 +138,8 @@ public sealed record TaskSnapshot(
     DateTimeOffset? LatestRoleInputRetryAt = null,
     DateTimeOffset? CriterionRetryFeedbackRoundAt = null,
     bool LatestRetryInherited = false,
-    DateTimeOffset? SubscriptionDeferralReleasedAt = null);
+    DateTimeOffset? SubscriptionDeferralReleasedAt = null,
+    CompletionBuildEvidenceOperation? CompletionBuildEvidence = null);
 
 public sealed record TaskExecutionSnapshot(
     string AgentId,

@@ -1550,11 +1550,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         loopPolicy),
                     remedy => GoalGitFactIndex.Build(context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch)
                         .TryGetGoalBranchTip(remedy.GoalId));
-                var loopReaper = new BackgroundDispatchRunner
-                {
-                    OperatorIntents = SqliteOperatorIntentStore.ForDirectories(
-                        context.Workspace.OrchestratorDirectory, context.Workspace.LogDirectory)
-                };
+                var loopReaper = OperatorCancelAwareDispatchRunner.ForWorkspace(context.Workspace);
                 var unappliedExitWatch = new ConductorUnappliedExitWatch();
                 var consoleCodePageWatch = new ConductorConsoleCodePageWatch();
                 var hostHealthMonitor = new ConductorHostHealthMonitor(
