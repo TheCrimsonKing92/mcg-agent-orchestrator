@@ -28,15 +28,12 @@ public sealed class ProcessSpawningCollectionSplitTests
 
     private static readonly Type[] SerialClasses =
     [
-        typeof(ConductorSelfRelaunchTests),
-        typeof(ConductorSuccessorSelfCheckTests),
         typeof(DispatchProcessHostTests),
         typeof(GoalWorktreeIsolatedDotnetTests),
         typeof(IcaclsIntegrityLabelerTests),
         typeof(LauncherScriptTests),
         typeof(MtpTestRunnerScriptTests),
         typeof(OwnedProcessExitObservationTests),
-        typeof(PostLandingCanaryCaptureAvailabilityTests),
         typeof(ProcessTreeGuiSuppressionTests),
         typeof(ConsoleIoPreservationTests),
         typeof(RunGoalServiceProcessContractTests)

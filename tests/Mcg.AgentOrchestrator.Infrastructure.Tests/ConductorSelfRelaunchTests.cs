@@ -2,7 +2,7 @@ using System.Diagnostics;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-[Xunit.Collection(TestCollections.ProcessSpawning)]
+[Xunit.Collection("ProcessSpawningHostBound")]
 public sealed class ConductorSelfRelaunchTests
 {
     [Xunit.Fact]

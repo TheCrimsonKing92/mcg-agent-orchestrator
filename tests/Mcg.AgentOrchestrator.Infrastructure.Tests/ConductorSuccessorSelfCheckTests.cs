@@ -1,6 +1,6 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
 
-[Xunit.Collection(TestCollections.ProcessSpawning)]
+[Xunit.Collection("ProcessSpawningHostBound")]
 public sealed class ConductorSuccessorSelfCheckTests
 {
     [Xunit.Fact(DisplayName = "ConductorSuccessorSelfCheck_rejects_incomplete_protocol_arguments")]
