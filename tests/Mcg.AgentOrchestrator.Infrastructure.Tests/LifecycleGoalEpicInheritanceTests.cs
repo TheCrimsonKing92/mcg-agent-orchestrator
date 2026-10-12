@@ -135,17 +135,21 @@ public sealed class LifecycleGoalEpicInheritanceTests : CliCommandTestBase
         fixture.Context.Worktrees.Remove(fixture.Root, goal.Id, fixture.Context.Kernel);
         GoalOperationJournal.Completed(fixture.Root, goal, "workspace:remove", "Fake workspace removed.");
         var requested = portfolio.AddEpicAsync("Another board").GetAwaiter().GetResult();
+        // The first run consumed the backlog item; reuse the journaled goal without
+        // requesting another promotion of that item.
+        parts = Parts(command);
         parts.AddRange(["--epic", requested.Title]);
 
         var output = CaptureConsole(() => Assert.True(CliCommandHandlers.Execute(parts, fixture.Context)));
 
         Assert.Same(goal, Assert.Single(fixture.Context.Kernel.Goals));
+        Assert.Equal(item.Id, goal.SourceBacklogItemId);
         Assert.Empty(fixture.Actions);
         Assert.Contains("reused existing idempotent goal", output);
         Assert.Equal(epic.Id, portfolio.GetGoalMembershipAsync(goal.Id.Value).GetAwaiter().GetResult()!.EpicId);
         Assert.DoesNotContain("Explicit epic ", output);
 
-        var invalid = Parts(command, item.Id);
+        var invalid = Parts(command);
         invalid.AddRange(["--epic", "Missing board"]);
         CaptureConsole(() => Assert.Throws<InvalidOperationException>(() =>
             CliCommandHandlers.Execute(invalid, fixture.Context)));
