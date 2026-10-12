@@ -5,6 +5,16 @@ internal static class ReviewerChangedFileScopeBriefSection
 {
     private const int ReviewerChangedFileScopeMaxLines = 120;
 
+    internal static void AppendTo(
+        ICollection<TaskBriefSegment> segments, TaskBriefSegment? scope, string? integrationBranch)
+    {
+        if (scope is null)
+            return;
+
+        // Substitution preserves line order/count, so the scope's typed coordinates remain valid.
+        segments.Add(scope with { Lines = RoleRequirementIntegrationBranch.Apply(scope.Lines, integrationBranch) });
+    }
+
     internal static TaskBriefSegment? Build(
         TaskSpec task,
         IReadOnlyList<string>? changedFiles,

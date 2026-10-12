@@ -466,13 +466,7 @@ public sealed partial class AgentOrchestratorKernel
             reviewerMergeTreeClean,
             reviewerMergeTreeConflictPaths,
             reviewerMergeTreeTotalConflictPathCount);
-        if (reviewerChangedFileScope is not null)
-        {
-            segments.Add(reviewerChangedFileScope with
-            {
-                Lines = RoleRequirementIntegrationBranch.Apply(reviewerChangedFileScope.Lines, integrationBranchPromptName)
-            });
-        }
+        ReviewerChangedFileScopeBriefSection.AppendTo(segments, reviewerChangedFileScope, integrationBranchPromptName);
 
         if (!string.IsNullOrWhiteSpace(task.VerificationPlan))
         {
