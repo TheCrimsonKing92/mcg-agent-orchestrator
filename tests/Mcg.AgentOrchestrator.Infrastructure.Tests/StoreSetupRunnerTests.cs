@@ -74,7 +74,7 @@ public sealed class StoreSetupRunnerTests
             Assert.Contains(Path.GetFileName(path), new[] { "portfolio.db", "portfolio.db-wal", "portfolio.db-shm",
                 "experiments.db", "backlog.db", "backlog.db-wal", "backlog.db-shm",
                 "operator-intents.db", "operator-intents.db-wal", "operator-intents.db-shm",
-                "operator-lessons.db", "operator-escapes.db", "merge-train-acceptance.db", "follower-gate-acceptance.db",
+                "operator-lessons.db", "operator-escapes.db", "cohort-acceptance.db", "merge-train-acceptance.db", "follower-gate-acceptance.db",
                 "collaboration-items.db", "collaboration-items.db-wal", "collaboration-items.db-shm",
                 "run-events.db", "run-events.db-wal", "run-events.db-shm",
                 "dogfood-log.db", "dogfood-log.db-wal", "dogfood-log.db-shm", "author-claims.db", "steward-triggers.db", "judge-panel.db", "board-fill.db", "progressive-review-glance-circuit.db", "progressive-review-steering.db" }));

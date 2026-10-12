@@ -27,6 +27,9 @@ public sealed class ConductorVerbSetupTests
                 $"operator-intents: version 1 ({Path.Combine(workspace.OrchestratorDirectory, SqliteOperatorIntentStore.DatabaseFileName)}){Environment.NewLine}" +
                 $"operator-lessons: version 1 ({workspace.OperatorLessonsStorePath}){Environment.NewLine}" +
                 $"operator-escapes: version 1 ({workspace.OperatorEscapesStorePath}){Environment.NewLine}" +
+                $"cohort-acceptance: version 1 ({Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db")}){Environment.NewLine}" +
+                $"cohort-attribution-retractions: version 1 ({Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db")}){Environment.NewLine}" +
+                $"cohort-solo-inherited-receipts: version 1 ({Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db")}){Environment.NewLine}" +
                 $"merge-train-acceptance: version 1 ({Path.Combine(workspace.OrchestratorDirectory, "merge-train-acceptance.db")}){Environment.NewLine}" +
                 $"follower-gate-acceptance: version 1 ({Path.Combine(workspace.OrchestratorDirectory, "follower-gate-acceptance.db")}){Environment.NewLine}" +
                 $"collaboration-items: version 1 ({Path.Combine(workspace.OrchestratorDirectory, "collaboration-items.db")}){Environment.NewLine}" +

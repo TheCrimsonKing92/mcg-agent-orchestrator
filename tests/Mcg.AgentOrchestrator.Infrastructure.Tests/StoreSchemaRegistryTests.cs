@@ -24,7 +24,10 @@ public sealed class StoreSchemaRegistryTests
                 ? "src/Mcg.AgentOrchestrator.Execution/Persistence/BoardFillStoreSetup.cs"
             : entry == StoreSchemaRegistry.RunEvents
                 ? "src/Mcg.AgentOrchestrator.Execution/Persistence/RunEventStoreSetup.cs"
-            : entry.SourceFile).Order(StringComparer.Ordinal).ToArray());
+            : entry == StoreSchemaRegistry.CohortAcceptance || entry == StoreSchemaRegistry.CohortAttributionRetractions ||
+                entry == StoreSchemaRegistry.CohortSoloInheritedReceipts
+                ? "src/Mcg.AgentOrchestrator.Execution/Persistence/CohortAcceptanceStoreSetup.cs"
+            : entry.SourceFile).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray());
         Assert.Equal(entries.Count, entries.Select(entry => entry.StoreName).Distinct(StringComparer.Ordinal).Count());
         Assert.All(entries, entry =>
         {
@@ -33,7 +36,7 @@ public sealed class StoreSchemaRegistryTests
             Assert.False(string.IsNullOrWhiteSpace(entry.Family));
         });
         Assert.Equal(new[] { StoreSchemaRegistry.Portfolio, StoreSchemaRegistry.Experiments, StoreSchemaRegistry.Backlog, StoreSchemaRegistry.OperatorIntents, StoreSchemaRegistry.OperatorLessons,
-            StoreSchemaRegistry.OperatorEscapes, StoreSchemaRegistry.MergeTrainAcceptance, StoreSchemaRegistry.FollowerGateAcceptance, StoreSchemaRegistry.CollaborationItems, StoreSchemaRegistry.RunEvents, StoreSchemaRegistry.DogfoodLog, StoreSchemaRegistry.AuthorClaims, StoreSchemaRegistry.StewardTriggers, StoreSchemaRegistry.JudgePanel, StoreSchemaRegistry.BoardFill, StoreSchemaRegistry.ProgressiveReviewGlanceCircuit, StoreSchemaRegistry.ProgressiveReviewSteering }, entries.Where(entry => entry.CurrentVersion.HasValue).ToArray());
+            StoreSchemaRegistry.OperatorEscapes, StoreSchemaRegistry.CohortAcceptance, StoreSchemaRegistry.CohortAttributionRetractions, StoreSchemaRegistry.CohortSoloInheritedReceipts, StoreSchemaRegistry.MergeTrainAcceptance, StoreSchemaRegistry.FollowerGateAcceptance, StoreSchemaRegistry.CollaborationItems, StoreSchemaRegistry.RunEvents, StoreSchemaRegistry.DogfoodLog, StoreSchemaRegistry.AuthorClaims, StoreSchemaRegistry.StewardTriggers, StoreSchemaRegistry.JudgePanel, StoreSchemaRegistry.BoardFill, StoreSchemaRegistry.ProgressiveReviewGlanceCircuit, StoreSchemaRegistry.ProgressiveReviewSteering }, entries.Where(entry => entry.CurrentVersion.HasValue).ToArray());
         Assert.Equal(1, StoreSchemaRegistry.RunEvents.CurrentVersion);
         Assert.Equal("run-events", StoreSchemaRegistry.RunEvents.StoreName);
         Assert.Equal("run-events.db", StoreSchemaRegistry.RunEvents.Database);

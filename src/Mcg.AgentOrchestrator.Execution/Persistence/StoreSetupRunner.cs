@@ -7,7 +7,8 @@ public sealed record StoreSetupResult(string StoreName, string DatabasePath, int
 // The inventory owns version eligibility; registrations own setup actions and workspace paths.
 public static class StoreSetupRunner
 {
-    private sealed record Registration(Action<string> Setup, Func<string, string> ResolvePath);
+    private sealed record Registration(Action<string> Setup, Func<string, string> ResolvePath,
+        params string[] AdditionalStoreNames);
 
     private static readonly IReadOnlyDictionary<string, Registration> Registrations =
         new Dictionary<string, Registration>(StringComparer.Ordinal)
@@ -24,6 +25,10 @@ public static class StoreSetupRunner
                 directory => Path.Combine(directory, StoreSchemaRegistry.OperatorEscapes.Database)),
             [StoreSchemaRegistry.OperatorIntents.StoreName] = new(SqliteOperatorIntentStore.Setup,
                 directory => Path.Combine(directory, SqliteOperatorIntentStore.DatabaseFileName)),
+            [StoreSchemaRegistry.CohortAcceptance.StoreName] = new(CohortAcceptanceStoreSetup.Setup,
+                directory => Path.Combine(directory, StoreSchemaRegistry.CohortAcceptance.Database),
+                StoreSchemaRegistry.CohortAttributionRetractions.StoreName,
+                StoreSchemaRegistry.CohortSoloInheritedReceipts.StoreName),
             [StoreSchemaRegistry.FollowerGateAcceptance.StoreName] = new(FollowerGateAcceptanceStoreSetup.Setup,
                 directory => Path.Combine(directory, StoreSchemaRegistry.FollowerGateAcceptance.Database)),
             [StoreSchemaRegistry.CollaborationItems.StoreName] = new(CollaborationItemStore.Setup,
@@ -48,23 +53,30 @@ public static class StoreSetupRunner
                 directory => Path.Combine(directory, StoreSchemaRegistry.ProgressiveReviewSteering.Database))
         };
 
+    private static readonly IReadOnlyDictionary<string, Registration> RegistrationsByStore =
+        Registrations.SelectMany(pair => new[] { pair.Key }.Concat(pair.Value.AdditionalStoreNames)
+            .Select(name => new KeyValuePair<string, Registration>(name, pair.Value)))
+            .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+
     public static IReadOnlyCollection<string> RegisteredStoreNames { get; } =
-        Array.AsReadOnly(Registrations.Keys.ToArray());
+        Array.AsReadOnly(RegistrationsByStore.Keys.ToArray());
 
     public static IReadOnlyList<StoreSetupResult> Run(string orchestratorDirectory)
     {
         var versioned = StoreSchemaRegistry.Inventory.Where(entry => entry.CurrentVersion.HasValue).ToArray();
-        var missing = versioned.Where(entry => !Registrations.ContainsKey(entry.StoreName))
+        var missing = versioned.Where(entry => !RegistrationsByStore.ContainsKey(entry.StoreName))
             .Select(entry => entry.StoreName).ToArray();
         if (missing.Length > 0)
             throw new InvalidOperationException($"No setup action registered for versioned stores: {string.Join(", ", missing)}.");
 
         var results = new List<StoreSetupResult>(versioned.Length);
+        var completed = new HashSet<Registration>();
         foreach (var entry in versioned)
         {
-            var registration = Registrations[entry.StoreName];
+            var registration = RegistrationsByStore[entry.StoreName];
             var path = registration.ResolvePath(orchestratorDirectory);
-            registration.Setup(path);
+            if (completed.Add(registration))
+                registration.Setup(path);
             using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
             {
                 DataSource = path,

@@ -64,20 +64,6 @@ public sealed partial class CohortAcceptanceStore
 
     private static void EnsureSoloInheritedReceiptSchema(SqliteConnection connection)
     {
-        using var command = connection.CreateCommand();
-        command.CommandText = """
-            CREATE TABLE IF NOT EXISTS solo_inherited_receipts(
-                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-                goal_id TEXT NOT NULL,
-                candidate_revision TEXT NOT NULL,
-                observed_main_revision TEXT NOT NULL,
-                merge_base_revision TEXT NOT NULL,
-                inherited_tests_json TEXT NOT NULL,
-                changed_paths_json TEXT NOT NULL,
-                UNIQUE(goal_id, candidate_revision, observed_main_revision));
-            CREATE INDEX IF NOT EXISTS ix_solo_inherited_receipts_main
-                ON solo_inherited_receipts(observed_main_revision, sequence);
-            """;
-        command.ExecuteNonQuery();
+        // CohortAcceptanceStoreSetup creates this schema during construction.
     }
 }
