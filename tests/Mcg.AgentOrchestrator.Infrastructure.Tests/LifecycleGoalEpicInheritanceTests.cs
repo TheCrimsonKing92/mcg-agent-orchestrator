@@ -165,7 +165,8 @@ public sealed class LifecycleGoalEpicInheritanceTests : CliCommandTestBase
         using var fixture = new Fixture(command);
         var (portfolio, epic, item) = fixture.SeedEpic();
         var parts = Parts(command, item.Id);
-        var discarded = new Goal(new GoalId(Guid.NewGuid().ToString("N")), parts[1], []);
+        var discarded = new Goal(new GoalId(Guid.NewGuid().ToString("N")), parts[1],
+            [new TaskSpec(new TaskId(Guid.NewGuid().ToString("N")), "Draft the board notes.", AgentRole.Developer)]);
         // A lifecycle transaction can roll back after its journal index is written.
         GoalOperationJournal.RecordLifecycleGoal(fixture.Root, discarded, command, discarded.Objective);
         Assert.Equal(discarded.Id, GoalOperationJournal.TryFindLifecycleGoal(fixture.Root, command, parts[1]));
