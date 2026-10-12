@@ -320,28 +320,26 @@ public sealed class GoalWorktreeTestsRebaseMergeMaterialization : GoalWorktreeTe
     [Xunit.Fact]
     public void OutputDrainTimeoutFailsClosedWithoutWriting()
     {
-        var repo = CreateSeededRepository();
+        var scenario = MaterializationScriptedScenarios.DrainTimeout();
+        var repo = scenario.Directory;
         try
         {
             var goalId = GoalId.New();
-            var fixture = PrepareRawDefect(repo, goalId);
+            var fixture = new MaterializationFixture(repo, scenario.FixturePath, "main", string.Empty);
             var bytesBefore = File.ReadAllBytes(fixture.FixturePath);
-            GitCli.GitResult Runner(string workingDirectory, string[] arguments) =>
-                arguments.SequenceEqual(["rev-parse", "HEAD"])
-                    ? new GitCli.GitResult(0, string.Empty, string.Empty, DrainTimedOut: true)
-                    : GitCli.Run(workingDirectory, arguments);
 
             var result = GoalWorktrees.ValidatePostRebaseMaterialization(
                 fixture.Worktree,
                 GoalWorktrees.BranchName(goalId),
                 fixture.BaseBranch,
                 goalId,
-                Runner);
+                scenario.Runner.Runner);
 
             Assert.Equal(GoalWorktreeRebaseStatus.IncompleteMaterialization, result.Status);
             Assert.Contains("output drain timed out", result.Message, StringComparison.Ordinal);
             Assert.Equal(bytesBefore, File.ReadAllBytes(fixture.FixturePath));
             Assert.Null(result.PreimageDirectory);
+            scenario.Runner.AssertConsumed();
         }
         finally
         {
@@ -352,29 +350,27 @@ public sealed class GoalWorktreeTestsRebaseMergeMaterialization : GoalWorktreeTe
     [Xunit.Fact]
     public void BytePreservingScanFailureFailsClosedWithoutWriting()
     {
-        var repo = CreateSeededRepository();
+        var scenario = MaterializationScriptedScenarios.ScanFailure();
+        var repo = scenario.Directory;
         try
         {
             var goalId = GoalId.New();
-            var fixture = PrepareRawDefect(repo, goalId);
+            var fixture = new MaterializationFixture(repo, scenario.FixturePath, "main", string.Empty);
             var bytesBefore = File.ReadAllBytes(fixture.FixturePath);
-            GitCli.GitResult Runner(string workingDirectory, string[] arguments) =>
-                arguments.SequenceEqual(["ls-files", "--eol", "-z"])
-                    ? new GitCli.GitResult(19, string.Empty, "injected tracked-file scan refusal")
-                    : GitCli.Run(workingDirectory, arguments);
 
             var result = GoalWorktrees.ValidatePostRebaseMaterialization(
                 fixture.Worktree,
                 GoalWorktrees.BranchName(goalId),
                 fixture.BaseBranch,
                 goalId,
-                Runner);
+                scenario.Runner.Runner);
 
             Assert.Equal(GoalWorktreeRebaseStatus.IncompleteMaterialization, result.Status);
             Assert.Contains("tracked-file scan", result.Message, StringComparison.Ordinal);
             Assert.Contains("exit=19", result.Message, StringComparison.Ordinal);
             Assert.Equal(bytesBefore, File.ReadAllBytes(fixture.FixturePath));
             Assert.Null(result.PreimageDirectory);
+            scenario.Runner.AssertConsumed();
         }
         finally
         {
@@ -385,28 +381,26 @@ public sealed class GoalWorktreeTestsRebaseMergeMaterialization : GoalWorktreeTe
     [Xunit.Fact]
     public void MalformedBytePreservingScanReceiptFailsClosedWithoutWriting()
     {
-        var repo = CreateSeededRepository();
+        var scenario = MaterializationScriptedScenarios.MalformedReceipt();
+        var repo = scenario.Directory;
         try
         {
             var goalId = GoalId.New();
-            var fixture = PrepareRawDefect(repo, goalId);
+            var fixture = new MaterializationFixture(repo, scenario.FixturePath, "main", string.Empty);
             var bytesBefore = File.ReadAllBytes(fixture.FixturePath);
-            GitCli.GitResult Runner(string workingDirectory, string[] arguments) =>
-                arguments.SequenceEqual(["ls-files", "--eol", "-z"])
-                    ? new GitCli.GitResult(0, "i/lf    w/crlf    malformed\tfixture.txt\0", string.Empty)
-                    : GitCli.Run(workingDirectory, arguments);
 
             var result = GoalWorktrees.ValidatePostRebaseMaterialization(
                 fixture.Worktree,
                 GoalWorktrees.BranchName(goalId),
                 fixture.BaseBranch,
                 goalId,
-                Runner);
+                scenario.Runner.Runner);
 
             Assert.Equal(GoalWorktreeRebaseStatus.IncompleteMaterialization, result.Status);
             Assert.Contains("malformed receipt", result.Message, StringComparison.Ordinal);
             Assert.Equal(bytesBefore, File.ReadAllBytes(fixture.FixturePath));
             Assert.Null(result.PreimageDirectory);
+            scenario.Runner.AssertConsumed();
         }
         finally
         {
