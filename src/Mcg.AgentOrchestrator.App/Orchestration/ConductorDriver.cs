@@ -1620,67 +1620,26 @@ internal sealed partial class ConductorDriver
         if (fromState == GoalLifecycleState.WorkspaceReady &&
             HasAssignedDeveloperReadyForDispatch(goal))
         {
-            if (_tryBeginDeveloperIntegrationEvidenceOperation is not null)
+            var integrationExecution = DeveloperDispatchIntegrationExecutor.Execute(
+                goal,
+                _tryBeginDeveloperIntegrationEvidenceOperation,
+                _tryAcquireEvidenceMutationLease,
+                _integrateMainBeforeDeveloperDispatch,
+                _recordPreDispatchIntegrationReceipt);
+            startFacts = integrationExecution.RefusalKind switch
             {
-                var operationStart = _tryBeginDeveloperIntegrationEvidenceOperation(goal);
-                if (operationStart.Scope is null)
-                {
-                    var status = operationStart.LeaseFact is { } leaseFact
-                        ? GoalEvidenceLeaseRecoveryStatuses.Format(leaseFact.RecoveryStatus)
-                        : "state-unavailable";
-                    return DispatchStartResult(goal, goalPrefix, policy, fromState,
-                        startFacts with { LeaseRecoveryStatus = status });
-                }
-
-                using (operationStart.Scope)
-                {
-                    DeveloperBranchIntegrationResult integration;
-                    try
-                    {
-                        integration = _integrateMainBeforeDeveloperDispatch(goal);
-                        _recordPreDispatchIntegrationReceipt(goal, integration);
-                        startFacts = WithIntegrationFacts(startFacts, integration);
-                    }
-                    catch (OperationCanceledException ex)
-                    {
-                        operationStart.Scope.Abort(ex.Message);
-                        throw;
-                    }
-                    catch (Exception ex)
-                    {
-                        operationStart.Scope.Fail(ex.Message);
-                        throw;
-                    }
-
-                    if (integration.CanDispatch)
-                    {
-                        operationStart.Scope.Complete(integration.Message);
-                    }
-                    else
-                    {
-                        operationStart.Scope.Fail(integration.Message);
-                        return DispatchStartResult(goal, goalPrefix, policy, fromState, startFacts);
-                    }
-                }
-            }
-            else
+                DeveloperDispatchIntegrationRefusalKind.OperationHeld => startFacts with
+                    { LeaseRecoveryStatus = integrationExecution.LeaseRecoveryStatus! },
+                DeveloperDispatchIntegrationRefusalKind.LeaseRefused => startFacts with
+                    { ConcurrentLeaseRefusal = "refused" },
+                DeveloperDispatchIntegrationRefusalKind.IntegrationRefused or
+                    DeveloperDispatchIntegrationRefusalKind.None =>
+                    WithIntegrationFacts(startFacts, integrationExecution.Integration!),
+                _ => throw new InvalidOperationException("Unknown Developer integration refusal kind.")
+            };
+            if (integrationExecution.RefusalKind != DeveloperDispatchIntegrationRefusalKind.None)
             {
-                using var integrationEvidenceMutationLease = _tryAcquireEvidenceMutationLease(
-                    goal,
-                    "conductor:developer-branch-integration");
-                if (integrationEvidenceMutationLease is null)
-                {
-                    return DispatchStartResult(goal, goalPrefix, policy, fromState,
-                        startFacts with { ConcurrentLeaseRefusal = "refused" });
-                }
-
-                var integration = _integrateMainBeforeDeveloperDispatch(goal);
-                _recordPreDispatchIntegrationReceipt(goal, integration);
-                startFacts = WithIntegrationFacts(startFacts, integration);
-                if (!integration.CanDispatch)
-                {
-                    return DispatchStartResult(goal, goalPrefix, policy, fromState, startFacts);
-                }
+                return DispatchStartResult(goal, goalPrefix, policy, fromState, startFacts);
             }
         }
 
