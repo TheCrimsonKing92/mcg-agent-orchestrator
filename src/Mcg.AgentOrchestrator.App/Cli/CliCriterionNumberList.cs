@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Text.Json;
-using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -26,8 +25,10 @@ internal static class CliCriterionNumberList
     }
 
     internal static bool TrySubmit(IReadOnlyList<string> args, OrchestratorWorkspace workspace,
-        Goal goal, CliPersistentStateRunner.OperatorIntentAttribution attribution)
+        Goal goal, CliPersistentStateRunner.OperatorIntentAttribution attribution, bool emitAgentReadEnvelope = false)
     {
+        args = OperatorIntentSubmissionOutput.StripJsonFlag(args, out var hasJsonFlag);
+        emitAgentReadEnvelope |= hasJsonFlag;
         if (!args[0].Equals(OperatorIntentVerbs.CriterionEvidenceMap, StringComparison.OrdinalIgnoreCase))
             return false;
         var criterionIndex = Array.FindIndex(args.ToArray(), value => value.Equals("--criterion", StringComparison.OrdinalIgnoreCase));
@@ -60,17 +61,14 @@ internal static class CliCriterionNumberList
         // Materialize and validate every request before opening the writable intents store.
         var store = SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory);
         var persisted = requests.Select(request => store.EnqueueAsync(request.Intent).GetAwaiter().GetResult()).ToArray();
-        foreach (var intent in persisted)
-            Console.WriteLine($"Operator intent queued: id={intent.Id} verb={intent.Verb} goal={goal.Id.Value} " +
-                $"status={intent.Status}; poll with operator-intent-status {intent.Id} (or add --wait).");
-        foreach (var request in requests)
+        var targetLines = requests.Select(request =>
         {
             var target = request.Target;
             var text = target.Text.Replace("\r\n", " ").Replace('\r', ' ').Replace('\n', ' ');
-            Console.WriteLine($"Target: {CriterionEvidenceObligation.DescribeCriterion(target.Version, target.Index)} {text[..Math.Min(80, text.Length)]}");
-        }
-        if (!ConductorLoopLease.IsActive(workspace.OrchestratorDirectory))
-            Console.WriteLine(ConductorLoopLease.InactiveWarning);
+            return $"Target: {CriterionEvidenceObligation.DescribeCriterion(target.Version, target.Index)} {text[..Math.Min(80, text.Length)]}";
+        }).ToArray();
+        OperatorIntentSubmissionOutput.PrintCriterionEvidenceBatch(persisted, workspace.OrchestratorDirectory,
+            goal.Id.Value, targetLines, emitAgentReadEnvelope);
         return true;
     }
 }

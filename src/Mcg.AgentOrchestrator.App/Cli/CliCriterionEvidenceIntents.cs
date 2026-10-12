@@ -14,7 +14,8 @@ internal static partial class CliCriterionEvidenceIntents
     public static void Submit(IReadOnlyList<string> args, OrchestratorWorkspace workspace,
         Goal goal, CliPersistentStateRunner.OperatorIntentAttribution attribution)
     {
-        if (CliCriterionNumberList.TrySubmit(args, workspace, goal, attribution)) return;
+        args = OperatorIntentSubmissionOutput.StripJsonFlag(args, out var emitAgentReadEnvelope);
+        if (CliCriterionNumberList.TrySubmit(args, workspace, goal, attribution, emitAgentReadEnvelope)) return;
         var verb = args[0].ToLowerInvariant();
         var target = verb is OperatorIntentVerbs.CriterionEvidenceMap or OperatorIntentVerbs.CriterionEvidenceRepair
             ? ResolveCriterionTarget(args, goal)
@@ -45,19 +46,14 @@ internal static partial class CliCriterionEvidenceIntents
             .EnqueueAsync(intent)
             .GetAwaiter()
             .GetResult();
-        Console.WriteLine(
-            $"Operator intent queued: id={persisted.Id} verb={persisted.Verb} goal={goal.Id.Value} " +
-            $"status={persisted.Status}; poll with operator-intent-status {persisted.Id} (or add --wait).");
+        string? targetLine = null;
         if (target is { } resolved)
         {
             var text = resolved.Text.Replace("\r\n", " ").Replace('\r', ' ').Replace('\n', ' ');
-            Console.WriteLine($"Target: {CriterionEvidenceObligation.DescribeCriterion(resolved.Version, resolved.Index)} {text[..Math.Min(80, text.Length)]}");
+            targetLine = $"Target: {CriterionEvidenceObligation.DescribeCriterion(resolved.Version, resolved.Index)} {text[..Math.Min(80, text.Length)]}";
         }
-        if (!ConductorLoopLease.IsActive(workspace.OrchestratorDirectory))
-        {
-            Console.WriteLine(ConductorLoopLease.InactiveWarning);
-        }
-
+        OperatorIntentSubmissionOutput.PrintCriterionEvidence(persisted, workspace.OrchestratorDirectory,
+            goal.Id.Value, targetLine, emitAgentReadEnvelope);
     }
 
     internal static (int Index, int Version, string Text) ResolveCriterionTarget(IReadOnlyList<string> args, Goal goal)
