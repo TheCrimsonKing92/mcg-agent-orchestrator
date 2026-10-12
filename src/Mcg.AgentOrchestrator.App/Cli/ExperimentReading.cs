@@ -72,8 +72,10 @@ internal static class ExperimentReading
             var baseline = RoundValueReport.Build(goals, since, until, intents).Window;
             var comparison = asOf > until ? RoundValueReport.Build(goals, until, asOf, intents).Window : null;
             values = ExperimentMetrics.Menu.ToDictionary(metric => metric, metric => (
-                Before: Value(metric, baseline, goals, landings, since, until, hostLedgers),
-                After: Value(metric, comparison, goals, landings, until, asOf, hostLedgers)));
+                Before: metric == "gate-seconds" ? hostLedgers.GateSeconds(since, until, spec.Baseline.MinGateSeconds) :
+                    Value(metric, baseline, goals, landings, since, until, hostLedgers),
+                After: metric == "gate-seconds" ? hostLedgers.GateSeconds(until, asOf, spec.Baseline.MinGateSeconds) :
+                    Value(metric, comparison, goals, landings, until, asOf, hostLedgers)));
         }
         var metrics = spec.Metrics.Append(spec.Guardrail.Metric).Select(metric =>
         {

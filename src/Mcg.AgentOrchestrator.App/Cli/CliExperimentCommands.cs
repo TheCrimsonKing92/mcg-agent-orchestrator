@@ -131,6 +131,9 @@ internal static class CliExperimentCommands
         if (string.IsNullOrWhiteSpace(spec.Hypothesis)) throw new ArgumentException("hypothesis: required non-empty text.");
         if (spec.Intervention is null || !Enum.IsDefined(spec.Intervention.Kind)) throw new ArgumentException("intervention.kind: unknown or missing kind.");
         if (string.IsNullOrWhiteSpace(spec.Intervention.Description)) throw new ArgumentException("intervention.description: required non-empty text.");
+        if (spec.Intervention.AppliedCommit is { } commit &&
+            (commit.Length is < 7 or > 40 || !commit.All(Uri.IsHexDigit)))
+            throw new ArgumentException("intervention.appliedCommit: expected 7 to 40 hexadecimal characters.");
         if (spec.Intervention.FlagTarget is { } target)
         {
             if (spec.Intervention.Kind != ExperimentInterventionKind.ConfigFlag)
@@ -150,6 +153,9 @@ internal static class CliExperimentCommands
         if (spec.Baseline.Kind == ExperimentBaselineKind.BeforeAfterWindow &&
             (spec.Baseline.Since is null || spec.Baseline.Until is null || spec.Baseline.Since >= spec.Baseline.Until))
             throw new ArgumentException("baseline: before-after-window requires since < until.");
+        if (spec.Baseline.MinGateSeconds is { } minimum &&
+            (spec.Baseline.Kind != ExperimentBaselineKind.BeforeAfterWindow || !double.IsFinite(minimum) || minimum <= 0))
+            throw new ArgumentException("baseline.minGateSeconds: requires a before-after-window baseline and a positive finite value.");
         if (spec.Baseline.Kind == ExperimentBaselineKind.TwinGoal && string.IsNullOrWhiteSpace(spec.Baseline.TwinGoalId))
             throw new ArgumentException("baseline.twinGoalId: required for twin-goal.");
         if (spec.Baseline.Kind == ExperimentBaselineKind.TwinGoal &&
@@ -226,11 +232,15 @@ internal static class CliExperimentCommands
         Console.WriteLine($"hypothesis: {spec.Hypothesis}");
         Console.WriteLine($"intervention kind: {ExperimentReading.Name(spec.Intervention.Kind)}");
         Console.WriteLine($"intervention description: {spec.Intervention.Description}");
+        if (spec.Intervention.AppliedCommit is { } commit)
+            Console.WriteLine($"intervention applied commit: {commit}");
         if (spec.Intervention.FlagTarget is { } target)
             Console.WriteLine($"intervention flag target: {JsonSerializer.Serialize(target, ExperimentStore.JsonOptions)}");
         Console.WriteLine($"baseline kind: {ExperimentReading.Name(spec.Baseline.Kind)}");
         Console.WriteLine($"baseline since: {spec.Baseline.Since:O}");
         Console.WriteLine($"baseline until: {spec.Baseline.Until:O}");
+        if (spec.Baseline.MinGateSeconds is { } minimum)
+            Console.WriteLine($"baseline min gate seconds: {minimum.ToString(CultureInfo.InvariantCulture)}");
         Console.WriteLine($"baseline twin goal: {spec.Baseline.TwinGoalId ?? "none"}");
         Console.WriteLine($"baseline comparison goal: {spec.Baseline.ComparisonGoalId ?? "none"}");
         if (spec.Baseline.Kind == ExperimentBaselineKind.GoalCohort)
