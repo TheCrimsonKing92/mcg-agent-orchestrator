@@ -160,9 +160,11 @@ internal sealed class RemoteLaneCoordinator : IDisposable
                         new GoalAcceptanceVerifier.CommandResult(result.ExitCode, ""), trx, requireTrxEvidence: true);
                     if (!decision.Passed)
                     {
+                        var reason = RemoteLaneRedEvidence.Retain(result.TestResultPaths, _attemptPrefix,
+                            entry.Id, check.Name, result.ExitCode);
                         var red = decision.FailedPredicate is AcceptanceShardCompletionPredicates.FailingTrx or
                             AcceptanceShardCompletionPredicates.AssemblyCleanupFailure or AcceptanceShardCompletionPredicates.NonzeroExit;
-                        return await Fallback(red ? RemoteLaneOutcomeCode.RemoteRed : RemoteLaneOutcomeCode.TrxIncomplete, result).ConfigureAwait(false);
+                        return await Fallback(red ? RemoteLaneOutcomeCode.RemoteRed : RemoteLaneOutcomeCode.TrxIncomplete, result, reason: reason).ConfigureAwait(false);
                     }
                     if (check.ExclusiveResourceKeys.Count > 0 && trx.NotExecutedTestCount is not 0)
                     {
