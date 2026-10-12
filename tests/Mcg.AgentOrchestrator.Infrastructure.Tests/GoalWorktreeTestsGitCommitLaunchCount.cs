@@ -313,10 +313,7 @@ public sealed class GoalWorktreeTestsGitCommitLaunchCount : GoalWorktreeTestBase
         Directory.CreateDirectory(repo);
         try
         {
-            RunGit(repo, "init", "--initial-branch=main");
-            RunGit(repo, "config", "user.email", "tests@example.com");
-            RunGit(repo, "config", "user.name", "Worktree Tests");
-            RunGit(repo, "config", "commit.gpgsign", "false");
+            GitCommitLaunchCountRepositoryTemplate.CopyTo(repo);
             test(repo, root);
         }
         finally
