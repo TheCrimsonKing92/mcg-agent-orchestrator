@@ -332,6 +332,8 @@ internal sealed partial class GoalRefinementService
                     var authoritativePrecedent = await ResolveAuthoritativePrecedentAsync(
                         precedent,
                         topicKey,
+                        goalId,
+                        normalizedQuestionKey,
                         cancellationToken);
                     if (authoritativePrecedent is not null)
                     {
@@ -458,8 +460,21 @@ internal sealed partial class GoalRefinementService
     private async Task<(string Choice, string Rationale)?> ResolveAuthoritativePrecedentAsync(
         SpecRefinerPrecedent precedent,
         string topicKey,
+        GoalId currentGoalId,
+        string normalizedQuestionKey,
         CancellationToken cancellationToken)
     {
+        bool IsSameGoal(CollaborationItem item) =>
+            string.Equals(item.GoalId?.Trim(), currentGoalId.Value.Trim(), StringComparison.OrdinalIgnoreCase);
+
+        bool IsApplicableOrigin(CollaborationItem item) =>
+            IsSameGoal(item) || string.Equals(
+                BuildNormalizedQuestionKey(
+                    ExtractForkKindFromBody(item.Body) ?? ExtractTopicKey(item.CorrelationKey!) ?? "other",
+                    ExtractQuestion(item)),
+                normalizedQuestionKey,
+                StringComparison.Ordinal);
+
         var effectivePrecedent = precedent;
         if (!precedent.HasAnyOriginReference)
         {
@@ -471,16 +486,15 @@ internal sealed partial class GoalRefinementService
                     string.Equals(
                         ExtractTopicKey(item.CorrelationKey),
                         precedent.ForkKind,
-                        StringComparison.OrdinalIgnoreCase))
+                        StringComparison.OrdinalIgnoreCase) &&
+                    IsApplicableOrigin(item))
                 .SelectMany(item => (item.AnswerHistory ?? [])
                     .Where(answer => string.Equals(answer.Text, precedent.Choice, StringComparison.Ordinal))
                     .Select(answer => (Item: item, Answer: answer)))
                 .ToArray();
             if (recoveredOrigins.Length == 0)
             {
-                return (
-                    precedent.Choice,
-                    $"Unlinked legacy precedent ({topicKey}): {precedent.Rationale}");
+                return null;
             }
             if (recoveredOrigins.Length != 1)
             {
@@ -525,6 +539,9 @@ internal sealed partial class GoalRefinementService
             return null;
         }
 
+        if (!IsApplicableOrigin(originItem))
+            return null;
+
         var history = originItem.AnswerHistory ?? [];
         var referencedAnswer = history.FirstOrDefault(answer =>
             string.Equals(answer.Id, effectivePrecedent.OriginAnswerId, StringComparison.Ordinal));
@@ -538,10 +555,18 @@ internal sealed partial class GoalRefinementService
         }
 
         var briefBasis = authoritativeAnswer.BriefVersion?.ToString() ?? "unknown";
+        var originGoal = originItem.GoalId?.Trim();
+        var originGoalPrefix = string.IsNullOrEmpty(originGoal) ? "unknown" : originGoal[..Math.Min(8, originGoal.Length)];
+        var rationalePrefix = IsSameGoal(originItem)
+            ? "Authoritative clarification precedent"
+            : $"Carried clarification precedent from goal {originGoalPrefix}";
+        var answerSegment = authoritativeAnswer.Id.StartsWith("legacy:", StringComparison.Ordinal)
+            ? ""
+            : $"answer: {authoritativeAnswer.Id}, ";
         return (
             authoritativeAnswer.Text,
-            $"Authoritative clarification precedent (topic: {topicKey}, item: {originItem.Id}, " +
-            $"answer: {authoritativeAnswer.Id}, brief: {briefBasis}).");
+            $"{rationalePrefix} (topic: {topicKey}, item: {originItem.Id}, " +
+            $"{answerSegment}brief: {briefBasis}).");
     }
 
     private static bool ReachesAuthoritativeAnswer(
