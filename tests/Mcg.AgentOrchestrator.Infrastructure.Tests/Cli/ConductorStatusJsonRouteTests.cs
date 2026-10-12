@@ -3,6 +3,7 @@ using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Xunit;
 
 // Parallel-safe: isolated workspace and local writers; rejected forms must never reach the injected probe.
 public sealed class ConductorStatusJsonRouteTests
@@ -42,7 +43,7 @@ public sealed class ConductorStatusJsonRouteTests
     [InlineData("status", "--JSON", null)]
     public void InvalidForms_ReturnUsageBeforeProbeOrActions(string verb, string flag, string? extra)
     {
-        using var fixture = new ConductorVerbStartTests.Fixture();
+        using var fixture = new Fixture();
         using var output = new StringWriter();
         using var error = new StringWriter();
         string[] args = extra is null ? ["conductor", verb, flag] : ["conductor", verb, flag, extra];
@@ -66,6 +67,20 @@ public sealed class ConductorStatusJsonRouteTests
         Assert.Equal(CliCommandCapabilities.Classify(["conductor", "status"]),
             CliCommandCapabilities.Classify(["conductor", "status", "--json"]));
         Assert.Contains("conductor status [--json]", CliCommandHelp.ConductorUsage);
+    }
+
+    private sealed class Fixture : IDisposable
+    {
+        private readonly string _root = Path.Combine(Path.GetTempPath(), "conductor-status-" + Guid.NewGuid().ToString("N"));
+        internal OrchestratorWorkspace Workspace { get; }
+
+        internal Fixture()
+        {
+            Directory.CreateDirectory(_root);
+            Workspace = OrchestratorWorkspace.ForDirectory(_root);
+        }
+
+        public void Dispose() => Directory.Delete(_root, recursive: true);
     }
 
     private sealed class RejectProbe : IConductorLockProbe

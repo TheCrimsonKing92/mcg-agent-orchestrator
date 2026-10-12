@@ -3,6 +3,7 @@ using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Xunit;
 
 // Parallel-safe: fixture-owned databases/logs, injected clock and probe, local writers.
 public sealed class CliConductorStatusAgentReadEnvelopeContractTests
@@ -21,7 +22,7 @@ public sealed class CliConductorStatusAgentReadEnvelopeContractTests
     [InlineData(1234, "abc123", "current")]
     public async Task SeededStatus_PinsOrderedContractValuesAndHumanParity(int? owner, string main, string generation)
     {
-        using var fixture = new ConductorVerbStartTests.Fixture();
+        using var fixture = new Fixture();
         await Seed(fixture.Workspace);
         using var json = JsonDocument.Parse(Status(fixture.Workspace, true, owner, main));
         var payload = AssertContract(json.RootElement);
@@ -73,7 +74,7 @@ public sealed class CliConductorStatusAgentReadEnvelopeContractTests
     [Fact]
     public void EmptyWorkspace_PinsUnavailableContractAndNulls()
     {
-        using var fixture = new ConductorVerbStartTests.Fixture();
+        using var fixture = new Fixture();
         using var json = JsonDocument.Parse(Status(fixture.Workspace, true, null, null));
         var payload = AssertContract(json.RootElement);
         Assert.Equal("stopped", Text(payload.GetProperty("conductor"), "state"));
@@ -103,7 +104,7 @@ public sealed class CliConductorStatusAgentReadEnvelopeContractTests
     [Fact]
     public async Task HostRestart_PreservesIndependentOwnerAndLifecycle()
     {
-        using var fixture = new ConductorVerbStartTests.Fixture();
+        using var fixture = new Fixture();
         await Seed(fixture.Workspace);
         using var json = JsonDocument.Parse(Status(fixture.Workspace, true, null, "abc123", Start.AddDays(1)));
         var payload = AssertContract(json.RootElement);
@@ -121,7 +122,7 @@ public sealed class CliConductorStatusAgentReadEnvelopeContractTests
     [InlineData(1234)]
     public void MissingLifecycle_ReportsOwnerIndependently(int? owner)
     {
-        using var fixture = new ConductorVerbStartTests.Fixture();
+        using var fixture = new Fixture();
         using var json = JsonDocument.Parse(Status(fixture.Workspace, true, owner, null));
         var payload = AssertContract(json.RootElement);
         Assert.Equal(owner is null ? "stopped" : "running", Text(payload.GetProperty("conductor"), "state"));
@@ -132,7 +133,7 @@ public sealed class CliConductorStatusAgentReadEnvelopeContractTests
     [Fact]
     public async Task StoreTickLaterThanLog_UsesStoreInstant()
     {
-        using var fixture = new ConductorVerbStartTests.Fixture();
+        using var fixture = new Fixture();
         await Seed(fixture.Workspace);
         var runs = new SqliteRunEventStore(fixture.Workspace.RunEventStorePath);
         await runs.AppendAsync(new(RunEventTypes.ConductorTick, null, "tick", "complete", "tick=6", null, Start.AddMinutes(75)));
@@ -216,11 +217,30 @@ public sealed class CliConductorStatusAgentReadEnvelopeContractTests
         using var output = new StringWriter();
         using var error = new StringWriter();
         Assert.Equal(0, CliConductorCommand.Run(json ? ["conductor", "status", "--json"] : ["conductor", "status"],
-            workspace, lockProbe: new ConductorVerbStartTests.FixedProbe(owner), bootTime: () => boot ?? Start.AddDays(-1),
+            workspace, lockProbe: new FixedProbe(owner), bootTime: () => boot ?? Start.AddDays(-1),
             mainCommit: () => main, output: output, error: error, time: new FixedTimeProvider()));
         Assert.Equal("", error.ToString());
         if (json) Assert.Single(output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
         return output.ToString();
+    }
+
+    private sealed class Fixture : IDisposable
+    {
+        private readonly string _root = Path.Combine(Path.GetTempPath(), "conductor-status-" + Guid.NewGuid().ToString("N"));
+        internal OrchestratorWorkspace Workspace { get; }
+
+        internal Fixture()
+        {
+            Directory.CreateDirectory(_root);
+            Workspace = OrchestratorWorkspace.ForDirectory(_root);
+        }
+
+        public void Dispose() => Directory.Delete(_root, recursive: true);
+    }
+
+    private sealed class FixedProbe(int? owner) : IConductorLockProbe
+    {
+        public int? ActiveOwnerPid(OrchestratorWorkspace workspace) => owner;
     }
 
     private sealed class FixedTimeProvider : TimeProvider
@@ -235,7 +255,8 @@ public sealed class CliConductorStatusAgentReadEnvelopeContractTests
         var second = kernel.CreateGoal(new GoalId(GoalC), "Goal C");
         kernel.RequestHumanInput(first.Id, first.Tasks[0].Id, "Which branch?");
         kernel.RequestHumanInput(second.Id, null, "Review risk?", HumanWaitKind.RiskReview);
-        await InfrastructureTestSupport.CreateMigratedStateRepository(workspace.SqliteStatePath).SaveAsync(kernel);
+        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+        await new SqliteOrchestratorStateRepository(workspace.SqliteStatePath).SaveAsync(kernel);
 
         Directory.CreateDirectory(workspace.LogDirectory);
         var events = new[]

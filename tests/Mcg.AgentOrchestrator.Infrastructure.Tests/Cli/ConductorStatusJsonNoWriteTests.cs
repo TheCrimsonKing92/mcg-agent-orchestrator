@@ -4,6 +4,7 @@ using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Xunit;
 
 // Parallel-safe: unique fixture root and private SQLite stores; no machine-wide state or console access.
 public sealed class ConductorStatusJsonNoWriteTests
@@ -16,7 +17,7 @@ public sealed class ConductorStatusJsonNoWriteTests
     [Fact]
     public async Task SeededStatus_PreservesEveryExistingFileAndCreatesOnlyStoreSidecars()
     {
-        using var fixture = new ConductorVerbStartTests.Fixture();
+        using var fixture = new Fixture();
         var workspace = fixture.Workspace;
         await Seed(workspace);
         var before = Inventory(workspace.RootDirectory);
@@ -49,7 +50,7 @@ public sealed class ConductorStatusJsonNoWriteTests
     [Fact]
     public void EmptyWorkspace_CreatesNoFile()
     {
-        using var fixture = new ConductorVerbStartTests.Fixture();
+        using var fixture = new Fixture();
         Assert.Empty(Inventory(fixture.Workspace.RootDirectory));
         ReadJson(fixture.Workspace);
         Assert.Empty(Inventory(fixture.Workspace.RootDirectory));
@@ -64,12 +65,31 @@ public sealed class ConductorStatusJsonNoWriteTests
         using var output = new StringWriter();
         using var error = new StringWriter();
         Assert.Equal(0, CliConductorCommand.Run(["conductor", "status", "--json"], workspace,
-            lockProbe: new ConductorVerbStartTests.FixedProbe(null), bootTime: () => Start.AddDays(-1),
+            lockProbe: new FixedProbe(null), bootTime: () => Start.AddDays(-1),
             mainCommit: () => "def456", output: output, error: error, time: new FixedTimeProvider()));
         Assert.Equal("", error.ToString());
         Assert.Single(output.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
         using var json = JsonDocument.Parse(output.ToString());
         Assert.Equal("mcg.conductor-status", json.RootElement.GetProperty("schema").GetString());
+    }
+
+    private sealed class Fixture : IDisposable
+    {
+        private readonly string _root = Path.Combine(Path.GetTempPath(), "conductor-status-" + Guid.NewGuid().ToString("N"));
+        internal OrchestratorWorkspace Workspace { get; }
+
+        internal Fixture()
+        {
+            Directory.CreateDirectory(_root);
+            Workspace = OrchestratorWorkspace.ForDirectory(_root);
+        }
+
+        public void Dispose() => Directory.Delete(_root, recursive: true);
+    }
+
+    private sealed class FixedProbe(int? owner) : IConductorLockProbe
+    {
+        public int? ActiveOwnerPid(OrchestratorWorkspace workspace) => owner;
     }
 
     private sealed class FixedTimeProvider : TimeProvider
@@ -84,7 +104,8 @@ public sealed class ConductorStatusJsonNoWriteTests
         var second = kernel.CreateGoal(new GoalId(GoalC), "Goal C");
         kernel.RequestHumanInput(first.Id, first.Tasks[0].Id, "Which branch?");
         kernel.RequestHumanInput(second.Id, null, "Review risk?", HumanWaitKind.RiskReview);
-        await InfrastructureTestSupport.CreateMigratedStateRepository(workspace.SqliteStatePath).SaveAsync(kernel);
+        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+        await new SqliteOrchestratorStateRepository(workspace.SqliteStatePath).SaveAsync(kernel);
 
         Directory.CreateDirectory(workspace.LogDirectory);
         var events = new[]
