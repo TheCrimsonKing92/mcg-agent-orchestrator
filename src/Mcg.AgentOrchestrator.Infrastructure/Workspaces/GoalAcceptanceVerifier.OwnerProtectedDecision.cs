@@ -97,7 +97,7 @@ public sealed partial class GoalAcceptanceVerifier
         if (candidateSha is null) return false;
         if (AcceptancePolicyChangeDecision.IsApprovedAsync(decisions, goalId.Value, candidateSha)
             .GetAwaiter().GetResult()) return true;
-        var fingerprint = ComputeOwnerProtectedChangeFingerprint(worktreePath, changedFiles, gitText,
+        var fingerprint = AcceptanceOwnerProtectedFingerprint.Compute(worktreePath, changedFiles, gitText,
             candidateRef, readCommittedCandidate, integrationBranch);
         return fingerprint is not null && AcceptancePolicyChangeDecision.IsApprovedForFingerprintAsync(
             decisions, goalId.Value, fingerprint).GetAwaiter().GetResult();
