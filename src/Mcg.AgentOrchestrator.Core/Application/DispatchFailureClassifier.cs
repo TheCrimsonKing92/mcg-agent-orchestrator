@@ -587,7 +587,9 @@ public static partial class DispatchFailureClassifier
                 null,
                 null,
                 RecoveryRecommendation.AutoRetry,
-                BuildEvidenceSummary(verification)));
+                CodexRawAuditStream.TryGetFailedTurnMessage(verification.StandardOutputPath, out var message)
+                    ? $"provider interruption: {message}"
+                    : BuildEvidenceSummary(verification)));
         }
 
         providerFailureKind = providerFailureKind == ProviderFailureKind.Unknown
@@ -2298,6 +2300,13 @@ public static partial class DispatchFailureClassifier
                 continue;
             }
 
+            var recordKind = ClassifyProviderTurnRecord(line);
+            hasCompletedTurn |= recordKind == ProviderTurnRecordKind.Completed;
+            hasFailedTurn |= recordKind == ProviderTurnRecordKind.Failed;
+        }
+
+        foreach (var line in CodexRawAuditStream.ReadLines(verification.StandardOutputPath))
+        {
             var recordKind = ClassifyProviderTurnRecord(line);
             hasCompletedTurn |= recordKind == ProviderTurnRecordKind.Completed;
             hasFailedTurn |= recordKind == ProviderTurnRecordKind.Failed;
