@@ -101,7 +101,11 @@ public sealed class ProcessTreeGuiSuppressionTestsBelowNormalInheritance
             candidates.Add(Path.Combine(artifactsDirectory.FullName, "Mcg.AgentOrchestrator.ConsoleIoProbe",
                 outputDirectory.Name, name));
         }
-        return candidates.FirstOrDefault(File.Exists)
-            ?? throw new FileNotFoundException($"Console I/O probe was not built: {string.Join("; ", candidates)}");
+        var probe = candidates.FirstOrDefault(File.Exists);
+        if (probe is not null) return probe;
+        if (FixtureProbeLocator.FindDirectory(typeof(ProcessTreeGuiSuppressionTestsBelowNormalInheritance),
+            "Mcg.AgentOrchestrator.ConsoleIoProbe", name) is { } directory)
+            return Path.Combine(directory, name);
+        throw new FileNotFoundException($"Console I/O probe was not built: {string.Join("; ", candidates)}. Locator tried: {string.Join("; ", FixtureProbeLocator.TriedPaths(typeof(ProcessTreeGuiSuppressionTestsBelowNormalInheritance), "Mcg.AgentOrchestrator.ConsoleIoProbe", name))}");
     }
 }

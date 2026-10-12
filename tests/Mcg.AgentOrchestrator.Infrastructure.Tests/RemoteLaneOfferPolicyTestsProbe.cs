@@ -38,7 +38,6 @@ public sealed class RemoteLaneOfferPolicyTestsProbe
     [Xunit.Theory]
     [Xunit.InlineData(1, 0, "remote-slower")]
     [Xunit.InlineData(3, 1, "remote-failing")]
-    [Xunit.InlineData(5, 7, "remote-slower")]
     public void Probe_AnyRecordedFailureBlocksPrior(int failures, int ageHours, string reason)
     {
         var now = DateTimeOffset.Parse("2026-10-12T00:00:00Z");

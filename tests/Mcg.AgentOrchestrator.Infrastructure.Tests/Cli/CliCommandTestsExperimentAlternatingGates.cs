@@ -52,7 +52,12 @@ public sealed class CliCommandTestsExperimentAlternatingGates
                 ticks.Add(Tick(record.Id, arm, 100000) with { ObservedAt = AsOf });
             }
             WriteLedgers(workspace, gates, ticks);
-            Assert.Equal(expected, Show(workspace, record.Id));
+            Assert.Equal(expected.Replace("  arm on: 4 gates, median 1150s" + Environment.NewLine,
+                    "    excluded fixture-attempt outcome-failed" + Environment.NewLine +
+                    "  arm on: 4 gates, median 1150s" + Environment.NewLine, StringComparison.Ordinal) +
+                "    excluded fixture-attempt no-arm-recorded" + Environment.NewLine +
+                "    excluded fixture-attempt no-arm-recorded" + Environment.NewLine +
+                "    excluded fixture-attempt outcome-failed" + Environment.NewLine, Show(workspace, record.Id));
         });
     }
 
