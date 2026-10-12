@@ -16,7 +16,8 @@ internal static class EpicPlanReadySliceSelector
     internal static IReadOnlyList<string> Order(IEnumerable<EpicPlanView> views) =>
         views.OrderBy(view => view.Plan.EpicId, StringComparer.Ordinal)
             .SelectMany(view => view.Items.OrderBy(item => item.Item.Position))
-            .Where(item => item.Item.Kind == EpicPlanItemKind.Slice && item.Status == EpicPlanSliceStatus.Ready)
+            .Where(item => item.Item.Kind == EpicPlanItemKind.Slice && item.Status == EpicPlanSliceStatus.Ready &&
+                (item.SourceFacts is null || item.SourceFacts.AutomaticIntakeEligible))
             .Select(item => item.Item.BacklogItemId!)
             .Distinct(StringComparer.Ordinal).ToArray();
 }

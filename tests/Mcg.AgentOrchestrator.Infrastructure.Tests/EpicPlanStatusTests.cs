@@ -53,7 +53,7 @@ public sealed class EpicPlanStatusTests : CliCommandTestBase
                 AssertStatus(workspace, epic.Id, slices[index], state switch
                 {
                     GoalStatus.Active => $"In flight ({ids[index].Value[..8]} Active)",
-                    GoalStatus.Verified => "Verified", _ => "Landed"
+                    GoalStatus.Verified => "Verified", _ => "Open: reconciliation required"
                 });
             Assert.Equal(before, File.ReadAllBytes(workspace.PortfolioStorePath));
             AssertNoStatusColumn(workspace.PortfolioStorePath);
@@ -62,9 +62,9 @@ public sealed class EpicPlanStatusTests : CliCommandTestBase
             Assert.DoesNotContain("Goal:", notInPlan);
         }
         await backlog.CloseAsync(slices[0].Id);
-        AssertStatus(workspace, epic.Id, slices[1], "Landed");
+        AssertStatus(workspace, epic.Id, slices[1], "Open: reconciliation required");
         Assert.Equal(before, File.ReadAllBytes(workspace.PortfolioStorePath));
-        Assert.Contains("3 of 3 slices landed; next: 4. Read the probe — open", Execute(workspace, "epic-list"));
+        Assert.Contains("1 of 3 slices landed; next: 4. Read the probe — open", Execute(workspace, "epic-list"));
     }
 
     [Fact]
@@ -96,8 +96,8 @@ public sealed class EpicPlanStatusTests : CliCommandTestBase
     [InlineData("Failed", "Failed (recorded reason)")]
     [InlineData("AcceptanceFailed", "Failed (recorded reason)")]
     [InlineData("Parked", "Parked (Goal parked: recorded reason)")]
-    [InlineData("Cancelled", "Ready")]
-    [InlineData("Superseded", "Ready")]
+    [InlineData("Cancelled", "Open: claimed")]
+    [InlineData("Superseded", "Open: claimed")]
     public async Task GoalOutcomes_UseRecordedReasons_AndClosedGoalsDoNotSupersedeBacklog(string state, string expected)
     {
         var workspace = CreateRefinedWorkspace(root);

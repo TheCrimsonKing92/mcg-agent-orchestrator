@@ -20,7 +20,7 @@ public sealed class BoardFillReadyItemSelectorTests
     }
 
     [Fact]
-    public void Linked_nonterminal_goal_blocks_but_terminal_goal_does_not()
+    public void Linked_goal_blocks_automatic_intake_including_terminal_owners()
     {
         var item = Item();
         var kernel = new AgentOrchestratorKernel();
@@ -28,7 +28,10 @@ public sealed class BoardFillReadyItemSelectorTests
         kernel.SetGoalSourceBacklogItemLink(goal.Id, item.Id, SourceBacklogCoverage.Full);
         Assert.Null(Select([item], kernel.Goals.ToArray()));
         kernel.CancelGoal(goal.Id, "Terminal fixture");
-        Assert.Same(item, Select([item], kernel.Goals.ToArray()));
+        Assert.Null(Select([item], kernel.Goals.ToArray()));
+        var independent = Item('b');
+        Assert.Same(independent, BoardFillReadyItemSelector.Select([item, independent], kernel.Goals.ToArray(),
+            None, Ready, preferredOrder: [item.Id, independent.Id]));
     }
 
     [Theory]
