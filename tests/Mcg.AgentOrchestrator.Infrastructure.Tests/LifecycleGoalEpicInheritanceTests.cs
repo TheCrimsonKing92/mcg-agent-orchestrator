@@ -265,6 +265,8 @@ public sealed class LifecycleGoalEpicInheritanceTests : CliCommandTestBase
         Action<Action>? registerPostCommitAction = null)
     {
         var workspace = OrchestratorWorkspace.ForDirectory(root);
+        // Direct contexts need the same migrated WAL state database as the persistent runner.
+        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
         var kernel = new AgentOrchestratorKernel();
         var agents = fiveRole ? EchoAgents() : [EchoDeveloper()];
         return new CliExecutionContext(kernel, workspace, SeedSpecRefiner(workspace), agents, EchoProfiles(), null, registerPostCommitAction: registerPostCommitAction)
