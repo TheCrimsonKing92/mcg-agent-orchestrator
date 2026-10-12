@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 // Parallel-safe: each operation has a unique journal root and an in-memory lease store.
@@ -12,8 +13,8 @@ public sealed class DeveloperDispatchIntegrationExecutorTests
         using var fixture = new OperationFixture();
         var integration = Integration(allowed: true);
 
-        var result = DeveloperDispatchIntegrationExecutor.Execute(
-            fixture.Goal, fixture.Begin, UnexpectedLease,
+        var result = ExecuteOperation(
+            fixture,
             goal =>
             {
                 Assert.Same(fixture.Goal, goal);
@@ -50,11 +51,8 @@ public sealed class DeveloperDispatchIntegrationExecutorTests
             Enum.Parse<GoalEvidenceLeaseRecoveryStatus>(status));
 
         var result = DeveloperDispatchIntegrationExecutor.Execute(
-            goal, candidate =>
-            {
-                Assert.Same(goal, candidate);
-                return new GoalEvidenceOperationStart(null, fact);
-            }, UnexpectedLease, UnexpectedIntegration, UnexpectedReceipt);
+            goal, new GoalEvidenceOperationStart(null, fact), null,
+            UnexpectedIntegration, UnexpectedReceipt);
 
         Assert.Equal(DeveloperDispatchIntegrationRefusalKind.OperationHeld, result.RefusalKind);
         Assert.Equal(expected, result.LeaseRecoveryStatus);
@@ -65,17 +63,9 @@ public sealed class DeveloperDispatchIntegrationExecutorTests
     public void Execute_NullLease_RefusesWithoutIntegration()
     {
         var (_, goal) = ConductorDriverTests.SimpleGoal();
-        var acquisitions = 0;
         var result = DeveloperDispatchIntegrationExecutor.Execute(
-            goal, null, (candidate, key) =>
-            {
-                Assert.Same(goal, candidate);
-                Assert.Equal("conductor:developer-branch-integration", key);
-                acquisitions++;
-                return null;
-            }, UnexpectedIntegration, UnexpectedReceipt);
+            goal, null, null, UnexpectedIntegration, UnexpectedReceipt);
 
-        Assert.Equal(1, acquisitions);
         Assert.Equal(DeveloperDispatchIntegrationRefusalKind.LeaseRefused, result.RefusalKind);
         Assert.Null(result.LeaseRecoveryStatus);
         Assert.Null(result.Integration);
@@ -87,8 +77,8 @@ public sealed class DeveloperDispatchIntegrationExecutorTests
         using var fixture = new OperationFixture();
         var integration = Integration(allowed: false);
         var receipts = 0;
-        var result = DeveloperDispatchIntegrationExecutor.Execute(
-            fixture.Goal, fixture.Begin, UnexpectedLease,
+        var result = ExecuteOperation(
+            fixture,
             _ => { fixture.Events.Add("integrate"); return integration; },
             (_, receipt) =>
             {
@@ -118,8 +108,8 @@ public sealed class DeveloperDispatchIntegrationExecutorTests
             ? new OperationCanceledException("integration cancelled")
             : new InvalidOperationException("integration faulted");
         var receipts = 0;
-        void Execute() => DeveloperDispatchIntegrationExecutor.Execute(
-            fixture.Goal, fixture.Begin, UnexpectedLease,
+        void Execute() => ExecuteOperation(
+            fixture,
             _ => receiptFault ? Integration(allowed: true) : throw fault,
             (_, _) => { receipts++; fixture.AssertNoTerminal(); throw fault; });
 
@@ -139,7 +129,7 @@ public sealed class DeveloperDispatchIntegrationExecutorTests
     [Xunit.InlineData("cancelled")]
     [Xunit.InlineData("integration-fault")]
     [Xunit.InlineData("receipt-fault")]
-    public void Execute_LegacyLease_DisposesOnEveryExit(string scenario)
+    public void Execute_LegacyLease_CallerDisposesOnEveryExit(string scenario)
     {
         var (_, goal) = ConductorDriverTests.SimpleGoal();
         var events = new List<string>();
@@ -151,26 +141,34 @@ public sealed class DeveloperDispatchIntegrationExecutorTests
             "integration-fault" or "receipt-fault" => new InvalidOperationException("faulted"),
             _ => null
         };
-        DeveloperDispatchIntegrationExecution Execute() => DeveloperDispatchIntegrationExecutor.Execute(
-            goal, null, (candidate, key) =>
+        DeveloperDispatchIntegrationExecution Execute()
+        {
+            events.Add("tryAcquireLease");
+            using (lease)
             {
-                Assert.Same(goal, candidate);
-                Assert.Equal("conductor:developer-branch-integration", key);
-                events.Add("tryAcquireLease");
-                return lease;
-            }, candidate =>
-            {
-                Assert.Same(goal, candidate);
-                events.Add("integrate");
-                if (fault is not null && scenario != "receipt-fault") throw fault;
-                return integration;
-            }, (candidate, receipt) =>
-            {
-                Assert.Same(goal, candidate);
-                Assert.Same(integration, receipt);
-                events.Add("recordReceipt");
-                if (scenario == "receipt-fault") throw fault!;
-            });
+                try
+                {
+                    return DeveloperDispatchIntegrationExecutor.Execute(
+                        goal, null, lease, candidate =>
+                        {
+                            Assert.Same(goal, candidate);
+                            events.Add("integrate");
+                            if (fault is not null && scenario != "receipt-fault") throw fault;
+                            return integration;
+                        }, (candidate, receipt) =>
+                        {
+                            Assert.Same(goal, candidate);
+                            Assert.Same(integration, receipt);
+                            events.Add("recordReceipt");
+                            if (scenario == "receipt-fault") throw fault!;
+                        });
+                }
+                finally
+                {
+                    Assert.Equal(0, lease.Disposals);
+                }
+            }
+        }
 
         if (fault is null)
         {
@@ -196,6 +194,88 @@ public sealed class DeveloperDispatchIntegrationExecutorTests
     }
 
     [Xunit.Fact]
+    public void Driver_OperationRefusal_EscalatesBeforeScopeDisposal() =>
+        AssertDriverRefusalLifetime(useOperation: true, disposalFault: false);
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void Driver_LeaseRefusal_EscalatesBeforeDisposalEvenWhenDisposalFaults(bool disposalFault) =>
+        AssertDriverRefusalLifetime(useOperation: false, disposalFault);
+
+    private static void AssertDriverRefusalLifetime(bool useOperation, bool disposalFault)
+    {
+        using var fixture = new OperationFixture();
+        var events = fixture.Events;
+        var integration = Integration(allowed: false);
+        var fault = new InvalidOperationException("lease disposal fault");
+        var lease = new RecordingLease(() =>
+        {
+            events.Add("dispose");
+            if (disposalFault) throw fault;
+        });
+        var driver = new ConductorDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            getRunningPaidWorkerCount: () => 0,
+            createWorkspace: _ => throw new InvalidOperationException("Unexpected workspace creation."),
+            dispatchAndStart: _ => throw new InvalidOperationException("Refused integration must not dispatch."),
+            startRecordedDispatches: null,
+            buildServerShutdown: null,
+            runAcceptanceVerification: _ => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
+            runAdvisorySemanticAcceptance: null,
+            retryTask: null,
+            recordTaskNote: null,
+            recordCriterionRetryFeedback: null,
+            clearCriterionRetryFeedback: null,
+            rebaseOntoMain: _ => throw new InvalidOperationException("Unexpected landing rebase."),
+            land: (_, _) => throw new InvalidOperationException("Unexpected landing."),
+            afterSuccessfulLanding: null,
+            record: _ => { },
+            cleanup: _ => throw new InvalidOperationException("Unexpected cleanup."),
+            writeEscalation: (_, _, reason) =>
+            {
+                Assert.Equal(integration.Message, reason);
+                if (useOperation) fixture.AssertLeaseHeld();
+                else Assert.Equal(0, lease.Disposals);
+                events.Add("escalate");
+            },
+            classifyChangeRisk: _ => null,
+            tryAcquireEvidenceMutationLease: (goal, key) =>
+            {
+                Assert.False(useOperation);
+                Assert.Same(fixture.Goal, goal);
+                Assert.Equal("conductor:developer-branch-integration", key);
+                events.Add("tryAcquireLease");
+                return lease;
+            },
+            integrateMainBeforeDeveloperDispatch: _ =>
+            {
+                events.Add("integrate");
+                return integration;
+            },
+            recordPreDispatchIntegrationReceipt: (_, receipt) =>
+            {
+                Assert.Same(integration, receipt);
+                events.Add("recordReceipt");
+            },
+            tryBeginDeveloperIntegrationEvidenceOperation: useOperation ? fixture.Begin : null);
+
+        if (disposalFault)
+            Assert.Same(fault, Assert.Throws<InvalidOperationException>(() =>
+                driver.AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Permissive)));
+        else
+            Assert.IsType<ConductorAdvanceOutcome.Escalated>(
+                driver.AdvanceOnce(fixture.Goal, ConductorAutonomyPolicy.Permissive).Outcome);
+
+        Assert.Equal(useOperation
+            ? new[] { "tryBeginOperation", "integrate", "recordReceipt", "escalate",
+                "Scope.Fail(integration rejected)" }
+            : new[] { "tryAcquireLease", "integrate", "recordReceipt", "escalate", "dispose" }, events);
+        if (useOperation) fixture.AssertTerminal(GoalOperationStatus.Failed, integration.Message);
+        else Assert.Equal(1, lease.Disposals);
+    }
+
+    [Xunit.Fact]
     public void Source_ExecutorBoundary_KeepsPolicyAndTerminalCallOwnership()
     {
         var directory = Path.Combine(VerifiedRepositoryRoot.Find(),
@@ -207,6 +287,12 @@ public sealed class DeveloperDispatchIntegrationExecutorTests
             Assert.DoesNotContain(forbidden, executor, StringComparison.Ordinal);
         Assert.Contains("DeveloperDispatchIntegrationExecutor.Execute(", driver, StringComparison.Ordinal);
         Assert.DoesNotContain("operationStart.Scope.Complete(integration.Message)", driver,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("using (", executor, StringComparison.Ordinal);
+        Assert.DoesNotContain("using var", executor, StringComparison.Ordinal);
+        Assert.DoesNotContain(".Dispose(", executor, StringComparison.Ordinal);
+        Assert.Contains("using var operationScope = operationStart?.Scope;", driver, StringComparison.Ordinal);
+        Assert.Contains("using var integrationEvidenceMutationLease = operationStart is null", driver,
             StringComparison.Ordinal);
 
         // The sealed scope ignores repeated terminal calls; source controls detect those too.
@@ -230,8 +316,26 @@ public sealed class DeveloperDispatchIntegrationExecutorTests
         allowed ? DeveloperBranchIntegrationStatus.Current : DeveloperBranchIntegrationStatus.Conflict,
         allowed ? "integration current" : "integration rejected", allowed ? [] : ["src/conflict.cs"]);
 
-    private static IDisposable? UnexpectedLease(Goal _, string __) =>
-        throw new InvalidOperationException("The operation branch must not acquire a legacy lease.");
+    private static DeveloperDispatchIntegrationExecution ExecuteOperation(
+        OperationFixture fixture,
+        Func<Goal, DeveloperBranchIntegrationResult> integrate,
+        Action<Goal, DeveloperBranchIntegrationResult> recordReceipt)
+    {
+        var start = fixture.Begin(fixture.Goal);
+        using (start.Scope)
+        {
+            try
+            {
+                return DeveloperDispatchIntegrationExecutor.Execute(fixture.Goal, start, null,
+                    integrate, recordReceipt);
+            }
+            finally
+            {
+                fixture.AssertLeaseHeld();
+            }
+        }
+    }
+
     private static DeveloperBranchIntegrationResult UnexpectedIntegration(Goal _) =>
         throw new InvalidOperationException("Refused acquisition must not integrate.");
     private static void UnexpectedReceipt(Goal _, DeveloperBranchIntegrationResult __) =>
@@ -281,6 +385,12 @@ public sealed class DeveloperDispatchIntegrationExecutorTests
         private GoalOperationJournalEntry[] Terminals() => GoalOperationJournal.Read(_root, Goal.Id).Entries
             .Where(entry => entry.Status != GoalOperationStatus.Begin).ToArray();
         public void AssertNoTerminal() => Assert.Empty(Terminals());
+        public void AssertLeaseHeld()
+        {
+            Assert.NotNull(_store.Owner);
+            Assert.Equal(0, _store.Releases);
+            Assert.Single(Terminals());
+        }
         public void AssertTerminal(GoalOperationStatus expected, string message)
         {
             var entry = Assert.Single(Terminals());

@@ -1620,10 +1620,15 @@ internal sealed partial class ConductorDriver
         if (fromState == GoalLifecycleState.WorkspaceReady &&
             HasAssignedDeveloperReadyForDispatch(goal))
         {
+            var operationStart = _tryBeginDeveloperIntegrationEvidenceOperation?.Invoke(goal);
+            using var operationScope = operationStart?.Scope;
+            using var integrationEvidenceMutationLease = operationStart is null
+                ? _tryAcquireEvidenceMutationLease(goal, "conductor:developer-branch-integration")
+                : null;
             var integrationExecution = DeveloperDispatchIntegrationExecutor.Execute(
                 goal,
-                _tryBeginDeveloperIntegrationEvidenceOperation,
-                _tryAcquireEvidenceMutationLease,
+                operationStart,
+                integrationEvidenceMutationLease,
                 _integrateMainBeforeDeveloperDispatch,
                 _recordPreDispatchIntegrationReceipt);
             startFacts = integrationExecution.RefusalKind switch
