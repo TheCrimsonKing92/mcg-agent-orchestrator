@@ -38,9 +38,14 @@
         "estimatedSerialSeconds": 267.1
       },
       {
-        "name": "Goal worktree cleanup",
-        "filter": "FullyQualifiedName~AcceptanceCohortWorkflowTests|FullyQualifiedName~AcceptanceVerdictCarryForwardTests|FullyQualifiedName~GoalWorktreeTestsAcceptanceLanding|FullyQualifiedName~GoalWorktreeTestsCleanupHookDelegates|FullyQualifiedName~GoalWorktreeTestsOrphanEphemeralSweep|FullyQualifiedName~GoalWorktreeTestsRebaseMerge|FullyQualifiedName~GoalWorktreeTestsRemoveCleanup",
-        "estimatedSerialSeconds": 330.9
+        "name": "Goal worktree cleanup cohort",
+        "filter": "FullyQualifiedName~AcceptanceCohortWorkflowTests",
+        "estimatedSerialSeconds": 266
+      },
+      {
+        "name": "Goal worktree cleanup git",
+        "filter": "FullyQualifiedName~AcceptanceVerdictCarryForwardTests|FullyQualifiedName~GoalWorktreeTestsAcceptanceLanding|FullyQualifiedName~GoalWorktreeTestsCleanupHookDelegates|FullyQualifiedName~GoalWorktreeTestsOrphanEphemeralSweep|FullyQualifiedName~GoalWorktreeTestsRebaseMerge|FullyQualifiedName~GoalWorktreeTestsRemoveCleanup",
+        "estimatedSerialSeconds": 192
       },
       {
         "name": "Goal worktree parallel",
@@ -172,7 +177,7 @@
       {
         "name": "GoalWorktree",
         "description": "Goal worktree and acceptance-verifier coverage.",
-        "laneNames": [ "Goal worktree cleanup", "Goal worktree parallel", "Goal acceptance verifier", "Goal acceptance build slots" ]
+        "laneNames": [ "Goal worktree cleanup cohort", "Goal worktree cleanup git", "Goal worktree parallel", "Goal acceptance verifier", "Goal acceptance build slots" ]
       },
       {
         "name": "Conductor",
