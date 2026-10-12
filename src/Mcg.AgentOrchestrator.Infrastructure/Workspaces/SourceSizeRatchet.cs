@@ -453,12 +453,7 @@ internal static class SourceSizeRatchet
             // measured 9319 total lines across the existing 27 partial files, with no extra headroom.
             // Goal 776d3dc0 extracts changed-file and conflict preview emission and typed coordinates
             // into ReviewerChangedFileScopeBriefSection. Measured 9246 lines across the same 27 partial files.
-            // Goal 0105c9fb adds six lines of test-name forwarding and answer-origin/sibling-scope
-            // plumbing at the existing human-input lifecycle seam; gate/TRX resolution lives in
-            // ProspectiveEvidenceGateResolver. The review repair adds 21 lines to persist the
-            // gate-answer receipt before completing the wait, preserving pending state on writer failure.
-            // Measured 9273 lines across the same 27 partials; no extra headroom.
-            new SourceClassCeiling("AgentOrchestratorKernel", 9273, 27),
+            new SourceClassCeiling("AgentOrchestratorKernel", 9246, 27),
             // Goal d6033045 extracted the pre-admission receipt pass to PassedMergeTrainReceiptAdmission; goal 1d0f2317
             // adds one admission predicate to exclude stream-complete children before slot reservation. Measured 9255.
             // Goal 679eee57 added a one-line tick call to the separately owned ConductorExperimentWatch (+1); goal 80de5cb2 extracted
