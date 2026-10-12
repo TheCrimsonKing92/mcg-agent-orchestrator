@@ -608,33 +608,7 @@ public sealed class SqliteRunEventStore : IRunEventStore
 
     private void EnsureSchema()
     {
-        var directory = Path.GetDirectoryName(_dbPath);
-        if (!string.IsNullOrEmpty(directory))
-            Directory.CreateDirectory(directory);
-
-        var isNewDatabase = !File.Exists(_dbPath) || new FileInfo(_dbPath).Length == 0;
-        using var conn = new SqliteConnection(ConnectionString);
-        conn.Open();
-        RunNonQuery(conn, "PRAGMA busy_timeout=30000");
-        if (isNewDatabase)
-            RunNonQuery(conn, "PRAGMA auto_vacuum=INCREMENTAL");
-        RunNonQuery(conn, "PRAGMA journal_mode=WAL");
-        RunNonQuery(conn, """
-            CREATE TABLE IF NOT EXISTS run_events (
-                seq          INTEGER PRIMARY KEY AUTOINCREMENT,
-                event_id     TEXT NOT NULL UNIQUE,
-                occurred_at  TEXT NOT NULL,
-                event_type   TEXT NOT NULL,
-                goal_id      TEXT NULL,
-                operation    TEXT NULL,
-                status       TEXT NULL,
-                detail       TEXT NULL,
-                payload_json TEXT NULL
-            )
-            """);
-        RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_run_events_goal_seq ON run_events(goal_id, seq)");
-        RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_run_events_type_seq ON run_events(event_type, seq)");
-        RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_run_events_type_operation_seq ON run_events(event_type, operation, seq)");
+        RunEventStoreSetup.Setup(_dbPath);
     }
 
     private static async Task<IReadOnlyList<RunEventRecord>> ReadRecordsAsync(

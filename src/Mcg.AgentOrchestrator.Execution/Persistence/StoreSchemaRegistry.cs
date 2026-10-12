@@ -62,6 +62,9 @@ public static class StoreSchemaRegistry
     public static StoreSchemaEntry CollaborationItems { get; } =
         new("collaboration-items", Persistence + "CollaborationItemStore.Storage.cs", "collaboration-items.db", "collaboration", 1);
 
+    public static StoreSchemaEntry RunEvents { get; } =
+        new("run-events", Persistence + "RunEventStore.cs", "run-events.db", "collaboration", 1);
+
     // Source fragments of one database are separate inventory entries, not separate databases.
     public static IReadOnlyList<StoreSchemaEntry> Inventory { get; } = Array.AsReadOnly<StoreSchemaEntry>(
     [
@@ -77,7 +80,7 @@ public static class StoreSchemaRegistry
         MergeTrainAcceptance,
         FollowerGateAcceptance,
         CollaborationItems,
-        new("run-events", Persistence + "RunEventStore.cs", "run-events.db", "collaboration", null),
+        RunEvents,
         DogfoodLog,
         new("practice-registry", Persistence + "PracticeRegistryStore.cs", "state.db", "collaboration", null),
         AuthorClaims,

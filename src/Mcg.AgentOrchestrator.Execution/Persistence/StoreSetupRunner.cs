@@ -28,6 +28,8 @@ public static class StoreSetupRunner
                 directory => Path.Combine(directory, StoreSchemaRegistry.FollowerGateAcceptance.Database)),
             [StoreSchemaRegistry.CollaborationItems.StoreName] = new(CollaborationItemStore.Setup,
                 directory => Path.Combine(directory, StoreSchemaRegistry.CollaborationItems.Database)),
+            [StoreSchemaRegistry.RunEvents.StoreName] = new(RunEventStoreSetup.Setup,
+                directory => Path.Combine(directory, StoreSchemaRegistry.RunEvents.Database)),
             [StoreSchemaRegistry.MergeTrainAcceptance.StoreName] = new(MergeTrainAcceptanceStore.Setup,
                 directory => Path.Combine(directory, StoreSchemaRegistry.MergeTrainAcceptance.Database)),
             [StoreSchemaRegistry.DogfoodLog.StoreName] = new(DogfoodLogStore.Setup,

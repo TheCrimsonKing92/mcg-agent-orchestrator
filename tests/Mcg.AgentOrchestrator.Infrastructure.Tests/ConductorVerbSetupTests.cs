@@ -30,6 +30,7 @@ public sealed class ConductorVerbSetupTests
                 $"merge-train-acceptance: version 1 ({Path.Combine(workspace.OrchestratorDirectory, "merge-train-acceptance.db")}){Environment.NewLine}" +
                 $"follower-gate-acceptance: version 1 ({Path.Combine(workspace.OrchestratorDirectory, "follower-gate-acceptance.db")}){Environment.NewLine}" +
                 $"collaboration-items: version 1 ({Path.Combine(workspace.OrchestratorDirectory, "collaboration-items.db")}){Environment.NewLine}" +
+                $"run-events: version 1 ({Path.Combine(workspace.OrchestratorDirectory, "run-events.db")}){Environment.NewLine}" +
                 $"dogfood-log: version 1 ({workspace.DogfoodLogStorePath}){Environment.NewLine}" +
                 $"author-claims: version 1 ({Path.Combine(workspace.OrchestratorDirectory, "author-claims.db")}){Environment.NewLine}" +
                 $"steward-triggers: version 1 ({Path.Combine(workspace.OrchestratorDirectory, "steward-triggers.db")}){Environment.NewLine}" +

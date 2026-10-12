@@ -64,6 +64,10 @@ public sealed class StoreSetupRunnerTests
         var collaborationItems = Assert.Single(results, result => result.StoreName == "collaboration-items");
         Assert.Equal(Path.Combine(workspace.OrchestratorDirectory, "collaboration-items.db"), collaborationItems.DatabasePath);
         Assert.Equal(1, collaborationItems.Version);
+        var runEvents = Assert.Single(results, result => result.StoreName == "run-events");
+        Assert.Equal(Path.Combine(workspace.OrchestratorDirectory, "run-events.db"), runEvents.DatabasePath);
+        Assert.True(File.Exists(runEvents.DatabasePath));
+        Assert.Equal(1, runEvents.Version);
         using var connection = Open(workspace.PortfolioStorePath, SqliteOpenMode.ReadOnly);
         Assert.Equal(2, StoreSchemaVersions.Read(connection, portfolio.StoreName));
         Assert.All(Directory.GetFiles(workspace.OrchestratorDirectory), path =>
@@ -72,6 +76,7 @@ public sealed class StoreSetupRunnerTests
                 "operator-intents.db", "operator-intents.db-wal", "operator-intents.db-shm",
                 "operator-lessons.db", "operator-escapes.db", "merge-train-acceptance.db", "follower-gate-acceptance.db",
                 "collaboration-items.db", "collaboration-items.db-wal", "collaboration-items.db-shm",
+                "run-events.db", "run-events.db-wal", "run-events.db-shm",
                 "dogfood-log.db", "dogfood-log.db-wal", "dogfood-log.db-shm", "author-claims.db", "steward-triggers.db", "judge-panel.db", "board-fill.db", "progressive-review-glance-circuit.db", "progressive-review-steering.db" }));
         Assert.Empty(await DogfoodLogStore.OpenReadOnly(workspace.DogfoodLogStorePath).ListRecentAsync());
         Assert.Empty(await ExperimentStore.OpenReadOnly(workspace.ExperimentStorePath).ListAllAsync());
