@@ -37,7 +37,8 @@ internal sealed class CliExecutionContext(
     Action<Goal, GoalReplacementCommand>? finalizeGoalReplacement = null,
     Action? reportGoalCreationProgress = null,
     Action<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>>? persistCriticalGoalKernel = null,
-    Action<GoalSnapshot>? recordDurableGoalBaseline = null)
+    Action<GoalSnapshot>? recordDurableGoalBaseline = null,
+    Action<Action>? registerPostCommitAction = null)
 {
 public AgentOrchestratorKernel Kernel { get; } = kernel;
 
@@ -127,6 +128,15 @@ public void FailAfterCommit(string failure)
     }
 
     registerPostCommitFailure(failure);
+}
+
+public void RunAfterCommit(Action action)
+{
+    ArgumentNullException.ThrowIfNull(action);
+    if (registerPostCommitAction is null)
+        action();
+    else
+        registerPostCommitAction(action);
 }
 
 public OrchestratorWorkspace Workspace { get; } = workspace;

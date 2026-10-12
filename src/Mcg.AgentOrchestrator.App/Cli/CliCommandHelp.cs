@@ -753,7 +753,7 @@ internal static class CliCommandHelp
     private static IReadOnlySet<string> LifecycleGoalFlags() =>
         Flags(
             "--autonomy", "--autonomy-policy", "--backlog-coverage", "--backlog-item", "--confirm-batch-start",
-            "--confirm-large-paid-subscription-start", "--confirm-readiness-risk");
+            "--confirm-large-paid-subscription-start", "--confirm-readiness-risk", "--epic");
 
     private static IReadOnlySet<string> GoalScopedTaskFlags() => Flags("--goal");
 
@@ -1672,7 +1672,10 @@ internal static class CliCommandHelp
             // is intentionally open. Those tokens are not orchestrator flags and cannot be enumerated here.
             var forwardsArbitraryDotnetOptions = command.Equals("stable-slot-dotnet", StringComparison.OrdinalIgnoreCase);
             return new CommandHelpEntry(
-                command.Equals("cancel-dispatch", StringComparison.OrdinalIgnoreCase)
+                command.Equals("lifecycle-goal", StringComparison.OrdinalIgnoreCase) ||
+                command.Equals("lifecycle-simple-goal", StringComparison.OrdinalIgnoreCase)
+                    ? $"Usage: {command} <objective> --confirm-batch-start [--confirm-large-paid-subscription-start] [--confirm-readiness-risk] [--backlog-item <id-prefix> --backlog-coverage <full|slice>] [--epic <id-or-title>] [--autonomy <policy>]"
+                    : command.Equals("cancel-dispatch", StringComparison.OrdinalIgnoreCase)
                     ? $"Usage: {command} [options] [--json]"
                     : $"Usage: {command} [options]",
                 "Run this operator command.",

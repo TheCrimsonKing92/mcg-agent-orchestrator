@@ -14,6 +14,9 @@ internal static partial class CliCommandHandlers
 private static void HandleLifecycleGoal(CliExecutionContext context, IReadOnlyList<string> parts, bool simple)
 {
     var commandName = simple ? "lifecycle-simple-goal" : "lifecycle-goal";
+    var requestedEpic = EpicAtCreation.HasArgument(parts)
+        ? EpicAtCreation.ResolveRequested(context.Workspace, GetFlagValue(parts, "--epic"))
+        : null;
     var policy = ResolveCliAutonomyPolicy(parts);
     Console.WriteLine($"Autonomy policy: {policy.Name}");
     policy.ThrowIfDisallowed(AutonomyAction.DispatchStart, commandName);
@@ -52,6 +55,8 @@ private static void HandleLifecycleGoal(CliExecutionContext context, IReadOnlyLi
             : GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, context.Agents, objective, context.Workspace, context.Providers, context.EventWriter);
     var goal = context.CurrentGoal;
     ApplySourceBacklogItemLink(context, goal, sourceBacklogLink);
+    if (existingGoalId is null)
+        EpicAtCreation.InheritAfterCommit(context, goal, requestedEpic, sourceBacklogLink?.Item.Id);
     var goalPrefix = goal.Id.Value[..8];
     Console.WriteLine($"Lifecycle goal: {goal.Id.Value}");
     if (existingGoalId is not null && existingGoalId == goal.Id)

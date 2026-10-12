@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
@@ -51,6 +52,15 @@ internal static class EpicAtCreation
             Console.WriteLine($"Explicit epic {requested.Id[..8]} overrides backlog item {backlogItemId} epic {inherited.EpicId[..8]}.");
         }
         return requested?.Id ?? inherited?.EpicId;
+    }
+
+    public static void InheritAfterCommit(
+        CliExecutionContext context, Goal goal, PortfolioEpic? requested, string? backlogItemId)
+    {
+        var epicId = ResolveGoalEpic(context.Workspace, requested, backlogItemId);
+        if (epicId is not null)
+            context.RunAfterCommit(() => AssignAfterCommit(
+                context.Workspace, PortfolioMemberKind.Goal, goal.Id.Value, epicId));
     }
 
     public static void AssignAfterCommit(
