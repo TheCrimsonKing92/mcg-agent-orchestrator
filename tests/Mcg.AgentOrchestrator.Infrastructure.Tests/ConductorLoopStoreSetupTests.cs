@@ -101,7 +101,10 @@ public sealed class ConductorLoopStoreSetupTests
         foreach (var result in first)
         {
             using var connection = Open(result.DatabasePath, SqliteOpenMode.ReadWrite);
-            Assert.Equal(1, Execute(connection, "UPDATE store_schema_versions SET applied_at = 'original'"));
+            using var command = connection.CreateCommand();
+            command.CommandText = "UPDATE store_schema_versions SET applied_at = 'original' WHERE store_name = $store";
+            command.Parameters.AddWithValue("$store", result.StoreName);
+            Assert.Equal(1, command.ExecuteNonQuery());
         }
 
         Assert.Equal(first, ConductorLoopStoreSetup.Run(directory));
@@ -110,7 +113,10 @@ public sealed class ConductorLoopStoreSetupTests
         {
             using var connection = Open(result.DatabasePath, SqliteOpenMode.ReadOnly);
             Assert.Equal(result.Version, StoreSchemaVersions.Read(connection, result.StoreName));
-            Assert.Equal("original", Scalar(connection, "SELECT applied_at FROM store_schema_versions"));
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT applied_at FROM store_schema_versions WHERE store_name = $store";
+            command.Parameters.AddWithValue("$store", result.StoreName);
+            Assert.Equal("original", command.ExecuteScalar());
         }
     }
 
