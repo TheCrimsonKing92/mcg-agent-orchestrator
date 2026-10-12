@@ -35,6 +35,15 @@ public static class OwnerAnswerValidator
             return value;
         }
 
-        throw new ArgumentException($"{factKey} has no answer rule in this slice. Known keys: {DefaultTimeoutKey}, {BuildServerShutdownKey}, {DiscoveryKey}, {DotnetSdkKey}.");
+        if (factKey.StartsWith("commands/", StringComparison.Ordinal) &&
+            factKey.EndsWith("/test", StringComparison.Ordinal) &&
+            factKey.Length > "commands/".Length + "/test".Length)
+        {
+            if (value.Equals("VSTest", StringComparison.OrdinalIgnoreCase)) return "VSTest";
+            if (value.Equals("MTP", StringComparison.OrdinalIgnoreCase)) return "MTP";
+            throw new ArgumentException($"{factKey} requires VSTest or MTP with no surrounding whitespace.");
+        }
+
+        throw new ArgumentException($"{factKey} has no answer rule in this slice. Known keys: {DefaultTimeoutKey}, {BuildServerShutdownKey}, {DiscoveryKey}, {DotnetSdkKey}, commands/<unit>/test.");
     }
 }

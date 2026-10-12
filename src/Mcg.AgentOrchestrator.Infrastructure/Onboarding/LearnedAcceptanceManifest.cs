@@ -11,10 +11,10 @@ public static class LearnedAcceptanceManifest
     {
         ArgumentNullException.ThrowIfNull(model);
         ArgumentNullException.ThrowIfNull(answers);
-        var (checks, unresolved) = LearnedTestCheckDeriver.Derive(model);
-        var learned = LearnedEngineSettingsDeriver.Derive(model);
         var applied = OwnerAnswerApplier.Apply(model, answers.OrderBy(answer => answer.FactKey, StringComparer.Ordinal)
             .ThenBy(answer => answer.RecordedUtc).ThenBy(answer => answer.Value, StringComparer.Ordinal).ToArray());
+        var (checks, unresolved) = LearnedTestCheckDeriver.Derive(model, applied);
+        var learned = LearnedEngineSettingsDeriver.Derive(model);
         var settings = OwnerAnsweredEngineSettings.Overlay(learned, applied);
         var questions = settings.OwnerQuestions.Concat(applied.OpenQuestions)
             .Where(question => question.FactKey.StartsWith("engine/", StringComparison.Ordinal))

@@ -87,7 +87,7 @@ internal static class ProjectEmitManifestCommand
         {
             if (File.Exists(temporary)) File.Delete(temporary);
         }
-        output.WriteLine($"Emitted manifest: {destination} ({LearnedTestCheckDeriver.Derive(model).Checks.Count} checks)");
+        output.WriteLine($"Emitted manifest: {destination} ({LearnedTestCheckDeriver.Derive(model, OwnerAnswerApplier.Apply(model, answers)).Checks.Count} checks)");
         return 0;
     }
 

@@ -5,14 +5,25 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 /// <summary>Derives checks from snapshot facts without inspecting the repository again.</summary>
 public static class LearnedTestCheckDeriver
 {
-    public static (IReadOnlyList<LearnedTestCheck> Checks, IReadOnlyList<UnresolvedTestUnit> Unresolved) Derive(ProjectModel model)
+    public static (IReadOnlyList<LearnedTestCheck> Checks, IReadOnlyList<UnresolvedTestUnit> Unresolved) Derive(ProjectModel model) =>
+        Derive(model, new AppliedOwnerAnswers([], [], []));
+
+    public static (IReadOnlyList<LearnedTestCheck> Checks, IReadOnlyList<UnresolvedTestUnit> Unresolved) Derive(
+        ProjectModel model, AppliedOwnerAnswers applied)
     {
         ArgumentNullException.ThrowIfNull(model);
+        ArgumentNullException.ThrowIfNull(applied);
         var checks = new List<LearnedTestCheck>();
         var unresolved = new List<UnresolvedTestUnit>();
         foreach (var unit in model.Units.Where(unit => unit.IsTest.Value == true))
         {
             var runner = model.TestSetups.FirstOrDefault(setup => setup.UnitId == unit.Id)?.Runner;
+            var key = $"commands/{unit.Id}/test";
+            // Owner answers settle only unresolved runners; confident discovery retains its provenance.
+            if (runner is not { Value: "VSTest" or "MTP", Confidence: FactConfidence.High or FactConfidence.Medium } &&
+                applied.AnsweredFacts.LastOrDefault(fact => fact.FactKey == key) is { } answered)
+                runner = new ProjectFact<string>(OwnerAnswerValidator.Validate(key, answered.Fact.Value),
+                    answered.Fact.Source, FactConfidence.High);
             if (runner is { Value: "VSTest" or "MTP", Confidence: FactConfidence.High or FactConfidence.Medium })
             {
                 checks.Add(new LearnedTestCheck(unit.Id.Replace('\\', '/'), runner.Value.ToLowerInvariant(),
@@ -20,7 +31,6 @@ public static class LearnedTestCheckDeriver
             }
             else
             {
-                var key = $"commands/{unit.Id}/test";
                 var question = model.OwnerQuestions.FirstOrDefault(question => question.FactKey == key);
                 unresolved.Add(new UnresolvedTestUnit(unit.Id, question?.FactKey ?? key));
             }
