@@ -86,7 +86,7 @@ public sealed class ProjectAnswerRunnerCliTests
     }
 
     [Fact]
-    public void Execute_MtpAnswer_BlocksInvocationsWithoutChangingAnswers()
+    public void Execute_MtpAnswer_EmitsWithoutChangingAnswers()
     {
         using var project = new TestProject("no-solution");
         Assert.Equal(0, project.Execute(["project", "discover", "sample"]).Exit);
@@ -96,13 +96,10 @@ public sealed class ProjectAnswerRunnerCliTests
         Assert.StartsWith($"Recorded owner answer: {Key} = MTP ", Assert.Single(answer.Lines));
         var prior = project.ReadAnswerBytes();
         Assert.NotNull(prior);
-        var refused = project.Emit();
-        Assert.Equal(1, refused.Exit);
-        Assert.Contains("Refused: 1 facts the gate needs are unanswered", refused.Lines);
-        var blocker = Assert.Single(refused.Lines.Where(line => line.StartsWith("Blocked ", StringComparison.Ordinal)));
-        Assert.StartsWith("Blocked engine/mtpInvocations ", blocker);
-        Assert.DoesNotContain(refused.Lines, line => line.StartsWith("Blocked commands/", StringComparison.Ordinal));
-        Assert.False(File.Exists(project.Destination));
+        var emitted = project.Emit();
+        Assert.Equal(0, emitted.Exit);
+        Assert.Equal($"Emitted manifest: {project.Destination} (1 checks)", Assert.Single(emitted.Lines));
+        Assert.True(File.Exists(project.Destination));
         project.AssertAnswersUnchanged(prior);
     }
 
