@@ -18,8 +18,8 @@ internal static class ExperimentCohortReading
             after = null;
         }
         var values = ExperimentMetrics.Menu.ToDictionary(metric => metric, metric => (
-            Before: metric == "landings-per-hour" ? null : ExperimentReading.TotalsValue(metric, before),
-            After: metric == "landings-per-hour" ? null : ExperimentReading.TotalsValue(metric, after)));
+            Before: ExperimentReading.IsWindowMetric(metric) ? null : ExperimentReading.TotalsValue(metric, before),
+            After: ExperimentReading.IsWindowMetric(metric) ? null : ExperimentReading.TotalsValue(metric, after)));
         return new(values, diagnostics,
             $"baseline={string.Join(",", baselineLabels)} comparison={string.Join(",", comparisonLabels)}");
 

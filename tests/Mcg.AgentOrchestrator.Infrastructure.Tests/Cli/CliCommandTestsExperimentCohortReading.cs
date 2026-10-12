@@ -285,7 +285,7 @@ public sealed class CliCommandTestsExperimentCohortReading
         RoundValueReport.Build(goals, DateTimeOffset.MinValue, DateTimeOffset.MaxValue).Window;
 
     private static ExperimentReadingResult Evaluate(ExperimentRecord record, IReadOnlyCollection<Goal> goals) =>
-        ExperimentReading.Evaluate(record, goals, new Dictionary<string, DateTimeOffset>(), [], AsOf, null);
+        ExperimentReading.Evaluate(record, goals, new Dictionary<string, DateTimeOffset>(), [], AsOf, null, ExperimentHostLedgers.Empty);
 
     private static string Show(OrchestratorWorkspace workspace, string id) =>
         CliCommandTestsExperiments.Execute(["experiment-show", id, "--as-of", AsOf.ToString("O")], workspace);

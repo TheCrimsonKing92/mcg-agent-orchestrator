@@ -80,7 +80,7 @@ public sealed class CliCommandTestsExperimentReading
             var record = CliCommandTestsExperiments.Add(workspace, spec);
             ExperimentReadingResult? result = null;
             var output = AsyncLocalConsoleRouter.Capture(() => result = ExperimentReading.Evaluate(record, kernel.Goals,
-                new Dictionary<string, DateTimeOffset>(), [], AsOf, null));
+                new Dictionary<string, DateTimeOffset>(), [], AsOf, null, ExperimentHostLedgers.Empty));
             Assert.Empty(output);
             Assert.NotNull(result);
             Assert.True(result.GuardrailBreached);
@@ -281,13 +281,13 @@ public sealed class CliCommandTestsExperimentReading
             };
             var record = CliCommandTestsExperiments.Add(workspace, spec);
             var goals = kernel.Goals.Append(other).ToArray();
-            var result = ExperimentReading.Evaluate(record, goals, new Dictionary<string, DateTimeOffset>(), [], AsOf, null);
+            var result = ExperimentReading.Evaluate(record, goals, new Dictionary<string, DateTimeOffset>(), [], AsOf, null, ExperimentHostLedgers.Empty);
             Assert.Equal("inconclusive", result.Verdict);
             Assert.Contains("rounds-per-landing", result.Reason);
             Assert.Contains("comparison goal 'cccc' is ambiguous", result.Reason);
             Assert.Null(result.Metrics.Single(m => m.Metric == "rounds-per-landing").After);
             var exact = record with { Spec = spec with { Baseline = spec.Baseline with { ComparisonGoalId = comparison.Id.Value } } };
-            result = ExperimentReading.Evaluate(exact, goals, new Dictionary<string, DateTimeOffset>(), [], AsOf, null);
+            result = ExperimentReading.Evaluate(exact, goals, new Dictionary<string, DateTimeOffset>(), [], AsOf, null, ExperimentHostLedgers.Empty);
             Assert.Equal("keep", result.Verdict);
             Assert.DoesNotContain("ambiguous", result.Reason);
         });

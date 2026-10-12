@@ -35,7 +35,7 @@ public sealed class CliCommandTestsExperimentGateProgress
 
             var count = ExperimentGateAttempts.Count(ExperimentGateAttempts.Read(workspace.ConductEventsLogPath),
                 ExperimentReading.ComparisonStart(record), AsOf);
-            var reading = ExperimentReading.Evaluate(record, [], new Dictionary<string, DateTimeOffset>(), [], AsOf, count);
+            var reading = ExperimentReading.Evaluate(record, [], new Dictionary<string, DateTimeOffset>(), [], AsOf, count, ExperimentHostLedgers.Empty);
             Assert.Equal(3, reading.ObservedCount);
             Assert.Equal(met, reading.StopRuleMet);
             var output = Show(workspace, record.Id);
@@ -168,7 +168,7 @@ public sealed class CliCommandTestsExperimentGateProgress
             var kernel = CliCommandTestsExperimentReading.Seed(workspace);
             var record = CliCommandTestsExperiments.Add(workspace, Gates(2) with { StopRule = new(2, unit) });
             var reading = ExperimentReading.Evaluate(record, kernel.Goals,
-                ExperimentLandingTimes.Read(workspace.GoalLifecycleEventsDirectory), [], AsOf, 5);
+                ExperimentLandingTimes.Read(workspace.GoalLifecycleEventsDirectory), [], AsOf, 5, ExperimentHostLedgers.Empty);
             var output = AsyncLocalConsoleRouter.Capture(() => ExperimentReading.Render(reading));
             if (unit == ExperimentStopUnit.Goals)
             {

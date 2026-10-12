@@ -79,6 +79,7 @@ internal sealed class ConductorExperimentWatch
             // same durable history as experiment-show, loaded afresh without a writer transaction.
             var goals = ExperimentGoals.Read(_workspace.SqliteStatePath);
             var landings = ExperimentLandingTimes.Read(_workspace.GoalLifecycleEventsDirectory);
+            var hostLedgers = ExperimentHostLedgers.Read(_workspace.ExecutionDirectory);
             IReadOnlyCollection<DateTimeOffset> gateAttempts = open.Any(record => record.Spec.StopRule.Unit == ExperimentStopUnit.Gates)
                 ? ExperimentGateAttempts.Read(_workspace.ConductEventsLogPath) : [];
             var intents = File.Exists(Path.Combine(_workspace.OrchestratorDirectory, SqliteOperatorIntentStore.DatabaseFileName))
@@ -97,7 +98,7 @@ internal sealed class ConductorExperimentWatch
                 try
                 {
                     var reading = ExperimentReading.Evaluate(record, goals, landings, intents, asOf,
-                        ExperimentGateAttempts.Count(gateAttempts, ExperimentReading.ComparisonStart(record), asOf));
+                        ExperimentGateAttempts.Count(gateAttempts, ExperimentReading.ComparisonStart(record), asOf), hostLedgers);
                     try
                     {
                         if (!reading.StopRuleMet && _raised.Contains((record.Id, "stop-rule")) &&
