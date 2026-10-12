@@ -302,10 +302,8 @@ public sealed class ConductorBatchLoopTestsPersistenceFailure : ConductorBatchLo
             DateTimeOffset.UtcNow);
         var intentEnqueued = false;
         var driverRan = false;
-        var priorOut = Console.Out;
         using var output = new StringWriter();
-        Console.SetOut(output);
-        try
+        AsyncLocalConsoleRouter.Out.CaptureLocal(() =>
         {
             new ConductorBatchLoop(
                 measuredSweep: currentKernel =>
@@ -357,11 +355,7 @@ public sealed class ConductorBatchLoopTestsPersistenceFailure : ConductorBatchLo
                             AttemptCount: 3,
                             ElapsedMilliseconds: 250)).ToArray();
                     });
-        }
-        finally
-        {
-            Console.SetOut(priorOut);
-        }
+        }, output);
 
         var text = output.ToString();
         Assert.Equal(1, text.Split("TICK_CHECKPOINT_HOLD ", StringSplitOptions.None).Length - 1);
