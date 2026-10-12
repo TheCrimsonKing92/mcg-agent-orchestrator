@@ -139,9 +139,13 @@ public sealed class CliStatusAgentReadEnvelopeContractTests : CliTaskQueryTestSu
     [Fact]
     public void EmptyGoal_KeepsNullLabelAndEmptyTasks()
     {
-        var kernel = new AgentOrchestratorKernel();
-        var goal = kernel.CreateGoal(TargetId, "Empty goal");
-        using var json = JsonDocument.Parse(StatusAgentReadView.Render(goal, null, "Created", new FixedTimeProvider()));
+        // Active goals require tasks; terminal metadata stubs are the taskless read model.
+        var kernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot(
+            [new GoalSnapshot(TargetId.Value, "Empty goal", GoalStatus.Completed, [], [], IsMetadataOnly: true)],
+            []));
+        var goal = kernel.GetGoal(TargetId);
+        Assert.Empty(goal.Tasks);
+        using var json = JsonDocument.Parse(StatusAgentReadView.Render(goal, null, "Completed", new FixedTimeProvider()));
         var payload = AssertEnvelope(json.RootElement);
         Assert.Equal(JsonValueKind.Null, payload.GetProperty("label").ValueKind);
         Assert.Equal(JsonValueKind.Array, payload.GetProperty("tasks").ValueKind);
