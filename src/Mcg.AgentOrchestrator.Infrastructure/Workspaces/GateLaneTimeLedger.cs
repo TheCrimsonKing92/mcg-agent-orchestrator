@@ -1,11 +1,14 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal sealed record GateLaneTimeLedgerRecord(
     DateTimeOffset ObservedAt, string GateAttemptId, string? GoalId, string Outcome,
-    double TotalMs, double LocalLaneMs, double RemoteLaneMs, int RemoteLaneCount, int Version = 1);
+    double TotalMs, double LocalLaneMs, double RemoteLaneMs, int RemoteLaneCount, int Version = 1,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    IReadOnlyDictionary<string, string>? ExperimentArms = null);
 
 internal static class GateLaneTimeLedger
 {

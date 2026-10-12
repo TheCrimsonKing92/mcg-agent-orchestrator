@@ -39,7 +39,11 @@ internal static class ExperimentReading
             : spec.StopRule.Unit == ExperimentStopUnit.Gates ? observedGateCount : (int?)null;
         var target = ExperimentStopTarget.Effective(spec.StopRule);
         var stopRuleMet = observed is { } n && n >= target;
-        if (spec.Baseline.Kind == ExperimentBaselineKind.AlternatingGates)
+        if (spec.Baseline.Kind == ExperimentBaselineKind.AlternatingGates &&
+            !spec.Metrics.Append(spec.Guardrail.Metric)
+                .Concat(spec.DecisionRule.KeepIf.Concat(spec.DecisionRule.RevertIf)
+                    .Append(spec.Guardrail.BreachIf).Select(condition => condition.Metric))
+                .All(metric => metric is "gate-seconds" or "tick-cpu-ms"))
         {
             return new(observed, spec.StopRule, stopRuleMet, [], "unavailable",
                 $"baseline kind {Name(spec.Baseline.Kind)} not computable in this slice", false, StopTarget: target);
@@ -47,7 +51,11 @@ internal static class ExperimentReading
 
         IReadOnlyDictionary<string, (double? Before, double? After)> values;
         ExperimentTwinValues? twin = null;
-        if (spec.Baseline.Kind == ExperimentBaselineKind.TwinGoal)
+        if (spec.Baseline.Kind == ExperimentBaselineKind.AlternatingGates)
+        {
+            values = ExperimentAlternatingGateReading.Compute(record.Id, hostLedgers, start, asOf);
+        }
+        else if (spec.Baseline.Kind == ExperimentBaselineKind.TwinGoal)
         {
             twin = ExperimentTwinReading.Compute(spec.Baseline, goals, intents);
             values = twin.Values;
