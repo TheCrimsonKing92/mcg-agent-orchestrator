@@ -43,6 +43,8 @@ internal sealed class CompletionBuildEvidenceFixture : WorkerDispatchTestSupport
         Kernel = fixture.Kernel;
         GoalId = fixture.Goal.Id;
         TaskId = fixture.Task.Id;
+        // This fixture owns the isolated bootstrap database; repositories never migrate implicitly.
+        _ = StateDbMigrations.EnsureUpToDate(StatePath);
         new SqliteOrchestratorStateRepository(StatePath).SaveAsync(Kernel).GetAwaiter().GetResult();
     }
 
