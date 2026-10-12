@@ -83,16 +83,6 @@ public sealed partial class CohortAcceptanceStore
 
     private static void EnsureRetractionSchema(SqliteConnection connection)
     {
-        using var command = connection.CreateCommand();
-        command.CommandText = """
-            CREATE TABLE IF NOT EXISTS cohort_attribution_retractions(
-                earlier_cohort_id TEXT NOT NULL REFERENCES cohort_receipts(cohort_id) ON DELETE CASCADE,
-                goal_id TEXT NOT NULL,
-                candidate_revision TEXT NOT NULL,
-                later_cohort_id TEXT NOT NULL,
-                failing_test_count INTEGER NOT NULL CHECK(failing_test_count>0),
-                PRIMARY KEY(earlier_cohort_id, goal_id, candidate_revision));
-            """;
-        command.ExecuteNonQuery();
+        // CohortAcceptanceStoreSetup creates this schema during construction.
     }
 }

@@ -100,7 +100,8 @@ public sealed class AcceptanceCohortWorkflowTestsSoloMainSuspect : AcceptanceCoh
         {
             connection.Open();
             using var command = connection.CreateCommand();
-            command.CommandText = "CREATE TABLE solo_inherited_receipts(broken TEXT);";
+            // Replace the eagerly initialized schema with the deliberate storage fault.
+            command.CommandText = "DROP TABLE IF EXISTS solo_inherited_receipts; CREATE TABLE solo_inherited_receipts(broken TEXT);";
             command.ExecuteNonQuery();
         }
 
