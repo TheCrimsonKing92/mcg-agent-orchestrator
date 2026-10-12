@@ -32,7 +32,7 @@ internal static class BoardFillReadyItemSelector
             !alreadyDrafted.Contains(item.Id) &&
             (rounds is null || rounds.Count(round => round.BacklogItemId == item.Id &&
                 BoardFillFailureKind.CountsTowardItem(round) && round.ChangeStamp >= ChangeStamp(item)) < MaxFailedRoundsPerChange) &&
-            !goals.Any(goal => goal.SourceBacklogItemId == item.Id && !goal.IsTerminal) &&
+            !goals.Any(goal => goal.SourceBacklogItemId == item.Id) &&
             !IsOwnerGated(item))
         .Select(item => (Item: item, Ready: readiness(item)))
         .Where(candidate => candidate.Ready.Eligible)

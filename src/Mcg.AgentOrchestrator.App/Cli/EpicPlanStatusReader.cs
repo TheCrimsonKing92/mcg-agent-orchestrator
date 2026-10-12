@@ -4,12 +4,23 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
-internal enum EpicPlanSliceStatus { Blocked, Ready, InFlight, Verified, Landed, Failed, Parked, Done, Superseded, Missing }
+internal enum EpicPlanSliceStatus { Blocked, Ready, InFlight, Verified, Landed, Failed, Parked, Done, Superseded, Missing, RemainingScope, ReconciliationRequired, Unresolved, Claimed }
 
-internal sealed record EpicPlanItemStatus(EpicPlanItem Item, EpicPlanSliceStatus? Status, string Subject, string? Detail = null)
+internal sealed record EpicPlanItemStatus(EpicPlanItem Item, EpicPlanSliceStatus? Status, string Subject, string? Detail = null,
+    EpicPlanSourceFacts? SourceFacts = null)
 {
+    internal bool ScopeComplete => SourceFacts?.ScopeComplete ??
+        Status is EpicPlanSliceStatus.Done or EpicPlanSliceStatus.Superseded;
     internal string Render() => Status is null ? (Item.Done ? "done" : "open") :
-        (Status == EpicPlanSliceStatus.InFlight ? "In flight" : Status.ToString())
+        (Status switch
+        {
+            EpicPlanSliceStatus.InFlight => "In flight",
+            EpicPlanSliceStatus.RemainingScope => "Open: remaining scope",
+            EpicPlanSliceStatus.ReconciliationRequired => "Open: reconciliation required",
+            EpicPlanSliceStatus.Unresolved => "Open: unresolved ownership",
+            EpicPlanSliceStatus.Claimed => "Open: claimed",
+            _ => Status.ToString()
+        })
         + (string.IsNullOrWhiteSpace(Detail) ? string.Empty : $" ({Detail})");
 }
 
@@ -32,7 +43,8 @@ internal static class EpicPlanStatusReader
         if (includeReasons && File.Exists(workspace.SqliteStatePath))
         {
             var plannedIds = plans.SelectMany(plan => plan.Items).Where(item => item.BacklogItemId is not null)
-                .Select(item => claims.ByBacklog.GetValueOrDefault(item.BacklogItemId!)).Where(id => id is not null)
+                .Where(item => backlog.ContainsKey(item.BacklogItemId!))
+                .Select(item => claims.Resolve(backlog[item.BacklogItemId!]).OwnerGoalId).Where(id => id is not null)
                 .Select(id => id!).Distinct(StringComparer.Ordinal)
                 .Where(id => goals.TryGetValue(id, out var goal) && goal.Status is "Failed" or "AcceptanceFailed" or "Parked").ToArray();
             if (plannedIds.Length > 0)
@@ -58,26 +70,32 @@ internal static class EpicPlanStatusReader
                 .Select(item => item.BacklogItemId!).ToHashSet(StringComparer.Ordinal);
             var unplanned = portfolio.ListEpicMembersAsync(plan.EpicId).GetAwaiter().GetResult().Where(member =>
                 member.Kind == PortfolioMemberKind.BacklogItem ? !plannedBacklog.Contains(member.MemberId) :
-                !claims.ByGoal.TryGetValue(member.MemberId, out var id) || !plannedBacklog.Contains(id)).ToArray();
-            return new EpicPlanView(plan, Compute(plan, backlog, goals, claims.ByBacklog, reasons), unplanned);
+                !(claims.ByGoal.TryGetValue(member.MemberId, out var id) && plannedBacklog.Contains(id)) &&
+                !claims.Persisted.Any(pair => pair.Value.OwnerGoalId == member.MemberId && plannedBacklog.Contains(pair.Key))).ToArray();
+            return new EpicPlanView(plan, Compute(plan, backlog, goals, claims, reasons), unplanned);
         }, StringComparer.Ordinal);
     }
 
     internal static IReadOnlyList<EpicPlanItemStatus> Compute(EpicPlan plan,
         IReadOnlyDictionary<string, BacklogItem> backlog, IReadOnlyDictionary<string, GoalSummary> goals,
-        IReadOnlyDictionary<string, string> claims, IReadOnlyDictionary<string, string>? reasons = null) =>
+        EpicPlanGoalClaims claims, IReadOnlyDictionary<string, string>? reasons = null) =>
         plan.Items.OrderBy(item => item.Position).Select(item => ComputeItem(item, backlog, goals, claims, reasons)).ToArray();
 
     private static EpicPlanItemStatus ComputeItem(EpicPlanItem item,
         IReadOnlyDictionary<string, BacklogItem> backlog, IReadOnlyDictionary<string, GoalSummary> goals,
-        IReadOnlyDictionary<string, string> claims, IReadOnlyDictionary<string, string>? reasons)
+        EpicPlanGoalClaims claims, IReadOnlyDictionary<string, string>? reasons)
     {
         if (item.Kind == EpicPlanItemKind.Step) return new(item, null, item.Text!);
         var id = item.BacklogItemId!;
         if (!backlog.TryGetValue(id, out var source)) return new(item, EpicPlanSliceStatus.Missing, Short(id));
         var subject = $"{Short(id)} {source.Title}";
-        if (source.Status == BacklogItemStatus.Superseded) return new(item, EpicPlanSliceStatus.Superseded, subject);
-        if (claims.TryGetValue(id, out var goalId) && goals.TryGetValue(goalId, out var goal))
+        var facts = claims.Resolve(source);
+        EpicPlanItemStatus Result(EpicPlanSliceStatus status, string? detail = null) => new(item, status, subject, detail, facts);
+        if (source.Status == BacklogItemStatus.Superseded) return Result(EpicPlanSliceStatus.Superseded);
+        if (source.Status == BacklogItemStatus.Done) return Result(EpicPlanSliceStatus.Done);
+        if (facts.Resolution is EpicPlanOwnershipResolution.Ambiguous or EpicPlanOwnershipResolution.MissingOwner or EpicPlanOwnershipResolution.InvalidCoverage)
+            return Result(EpicPlanSliceStatus.Unresolved, facts.Resolution.ToString());
+        if (facts.OwnerGoalId is { } goalId && goals.TryGetValue(goalId, out var goal))
         {
             if (!Enum.TryParse<GoalStatus>(goal.Status, out var state))
                 throw new InvalidOperationException($"Unknown goal status '{goal.Status}' for {goalId}.");
@@ -86,26 +104,26 @@ internal static class EpicPlanStatusReader
             {
                 case EpicProgressBucket.Active:
                 case EpicProgressBucket.Verifying:
-                    return new(item, EpicPlanSliceStatus.InFlight, subject,
+                    return Result(EpicPlanSliceStatus.InFlight,
                         $"{Short(goalId)} {goal.Status}" + (string.IsNullOrWhiteSpace(goal.Condition) ? "" : $" {goal.Condition}"));
-                case EpicProgressBucket.Verified: return new(item, EpicPlanSliceStatus.Verified, subject);
-                case EpicProgressBucket.Landed: return new(item, EpicPlanSliceStatus.Landed, subject);
-                case EpicProgressBucket.Failed: return new(item, EpicPlanSliceStatus.Failed, subject, reasons?.GetValueOrDefault(goalId));
-                case EpicProgressBucket.Parked: return new(item, EpicPlanSliceStatus.Parked, subject, reasons?.GetValueOrDefault(goalId));
+                case EpicProgressBucket.Verified: return Result(EpicPlanSliceStatus.Verified);
+                case EpicProgressBucket.Landed: return Result(facts.Coverage == SourceBacklogCoverage.Slice
+                    ? EpicPlanSliceStatus.RemainingScope : EpicPlanSliceStatus.ReconciliationRequired);
+                case EpicProgressBucket.Failed: return Result(EpicPlanSliceStatus.Failed, reasons?.GetValueOrDefault(goalId));
+                case EpicProgressBucket.Parked: return Result(EpicPlanSliceStatus.Parked, reasons?.GetValueOrDefault(goalId));
                 // Cancelled/superseded goals do not supersede their source backlog item.
-                case EpicProgressBucket.Closed: break;
+                case EpicProgressBucket.Closed: return Result(EpicPlanSliceStatus.Claimed);
                 default: throw new InvalidOperationException($"Unexpected goal bucket '{bucket}' for {goalId}.");
             }
         }
-        if (source.Status == BacklogItemStatus.Done) return new(item, EpicPlanSliceStatus.Done, subject);
         foreach (var dependency in source.Dependencies)
         {
             var open = dependency.TargetKind == BacklogDependencyTargetKind.Backlog
                 ? !backlog.TryGetValue(dependency.PrerequisiteId, out var prerequisite) || prerequisite.Status == BacklogItemStatus.Open
                 : !goals.TryGetValue(dependency.PrerequisiteId, out var prerequisiteGoal) || prerequisiteGoal.Status != nameof(GoalStatus.Completed);
-            if (open) return new(item, EpicPlanSliceStatus.Blocked, subject, $"blocked on {dependency.PrerequisiteId}");
+            if (open) return Result(EpicPlanSliceStatus.Blocked, $"blocked on {dependency.PrerequisiteId}");
         }
-        return new(item, EpicPlanSliceStatus.Ready, subject);
+        return Result(EpicPlanSliceStatus.Ready);
     }
 
     private static string Short(string id) => id[..Math.Min(8, id.Length)];

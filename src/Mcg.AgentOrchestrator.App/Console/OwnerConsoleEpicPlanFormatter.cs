@@ -16,7 +16,10 @@ internal static class OwnerConsoleEpicPlanFormatter
         lines.Add($"Bar: {view?.Plan.Bar ?? "(no bar)"}");
         if (items.Count == 0) lines.Add("(no plan)");
         foreach (var item in items.OrderBy(item => item.Item.Position))
+        {
             lines.Add($"{item.Item.Position}. {item.Subject} — {item.Render()}");
+            if (item.SourceFacts is { } facts) lines.Add($"  {facts.Render()}");
+        }
 
         lines.Add("Decisions (newest first):");
         var decisions = view?.Plan.Decisions ?? [];

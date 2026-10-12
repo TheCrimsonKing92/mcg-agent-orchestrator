@@ -36,6 +36,11 @@ public sealed class EpicPlanNextStepTests
     [InlineData("Parked")]
     [InlineData("Blocked")]
     [InlineData("Missing")]
+    [InlineData("RemainingScope")]
+    [InlineData("ReconciliationRequired")]
+    [InlineData("Unresolved")]
+    [InlineData("Claimed")]
+    [InlineData("Landed")]
     public void IncompleteWithoutRunnableWork_IsStalled(string status)
     {
         var items = new[] { Slice(1, Enum.Parse<EpicPlanSliceStatus>(status)), Step(2, true) };
@@ -46,9 +51,9 @@ public sealed class EpicPlanNextStepTests
     }
 
     [Fact]
-    public void LandedDoneAndSuperseded_AreComplete_EmptyIsNoPlan()
+    public void DoneAndSuperseded_AreComplete_EmptyIsNoPlan()
     {
-        var items = new[] { Slice(1, EpicPlanSliceStatus.Landed), Slice(2, EpicPlanSliceStatus.Done),
+        var items = new[] { Slice(1, EpicPlanSliceStatus.Done), Slice(2, EpicPlanSliceStatus.Done),
             Slice(3, EpicPlanSliceStatus.Superseded), Step(4, true) };
         Assert.Equal(new EpicPlanNextStepResult("complete", false), EpicPlanNextStep.Compute(items));
         Assert.Equal("2 of 2 slices landed; next: complete", EpicPlanNextStep.Summary(items));
