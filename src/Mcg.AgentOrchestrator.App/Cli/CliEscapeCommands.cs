@@ -16,6 +16,7 @@ internal static class CliEscapeCommands
         try
         {
             CliCommandHelp.ThrowIfInvalidFlags(args);
+            args = OperatorIntentSubmissionOutput.StripJsonFlag(args, out var emitAgentReadEnvelope);
             if (args.Count < 2 || !args[1].Equals("record", StringComparison.OrdinalIgnoreCase))
                 throw new ArgumentException(CliCommandHelp.EscapeUsage);
             var allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -49,10 +50,8 @@ internal static class CliEscapeCommands
                 ActorKind: attribution.ActorKind);
             var persisted = SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory,
                 workspace.LogDirectory).EnqueueAsync(intent).GetAwaiter().GetResult();
-            var writer = output ?? Console.Out;
-            writer.WriteLine($"Operator intent queued: id={persisted.Id} verb={persisted.Verb} scope=workspace status={persisted.Status}; poll with operator-intent-status {persisted.Id} (or add --wait).");
-            if (!ConductorLoopLease.IsActive(workspace.OrchestratorDirectory))
-                writer.WriteLine(ConductorLoopLease.InactiveWarning);
+            OperatorIntentSubmissionOutput.PrintWorkspace(persisted, workspace.OrchestratorDirectory,
+                emitAgentReadEnvelope, output);
             return 0;
         }
         catch (Exception ex)

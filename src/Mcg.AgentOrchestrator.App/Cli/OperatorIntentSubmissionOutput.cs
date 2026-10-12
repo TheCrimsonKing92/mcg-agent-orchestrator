@@ -44,13 +44,20 @@ internal static class OperatorIntentSubmissionOutput
             $"goal={goalId} task={taskId} status={persisted.Status}; " +
             $"poll with operator-intent-status {persisted.Id} (or add --wait).", nextStepLine);
 
+    internal static void PrintWorkspace(OperatorIntentRecord persisted, string orchestratorDirectory,
+        bool emitAgentReadEnvelope, TextWriter? output = null) =>
+        Print(persisted, orchestratorDirectory, emitAgentReadEnvelope,
+            $"Operator intent queued: id={persisted.Id} verb={persisted.Verb} scope=workspace status={persisted.Status}; poll with operator-intent-status {persisted.Id} (or add --wait).",
+            output: output);
+
     private static void Print(OperatorIntentRecord persisted, string orchestratorDirectory,
-        bool emitAgentReadEnvelope, string queuedLine, string? followUpLine = null)
+        bool emitAgentReadEnvelope, string queuedLine, string? followUpLine = null, TextWriter? output = null)
     {
-        Console.WriteLine(emitAgentReadEnvelope ? OperatorIntentAgentReadView.Render(persisted) : queuedLine);
+        var writer = output ?? Console.Out;
+        writer.WriteLine(emitAgentReadEnvelope ? OperatorIntentAgentReadView.Render(persisted) : queuedLine);
         if (followUpLine is not null)
-            (emitAgentReadEnvelope ? Console.Error : Console.Out).WriteLine(followUpLine);
+            (emitAgentReadEnvelope ? Console.Error : writer).WriteLine(followUpLine);
         if (!ConductorLoopLease.IsActive(orchestratorDirectory))
-            (emitAgentReadEnvelope ? Console.Error : Console.Out).WriteLine(ConductorLoopLease.InactiveWarning);
+            (emitAgentReadEnvelope ? Console.Error : writer).WriteLine(ConductorLoopLease.InactiveWarning);
     }
 }
