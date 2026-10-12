@@ -50,14 +50,11 @@ public sealed class CliGoalParkAttentionOutboxDeliveryTests : CliGoalEffectOutbo
         await SetRaisedAt(seed, "late", ParkedAt(message).AddMinutes(1));
         var late = await Item(seed, "late");
         var early = await Item(seed);
-        var previousError = Console.Error;
         using var errors = new StringWriter();
-        try
+        AsyncLocalConsoleRouter.Error.CaptureLocal(() =>
         {
-            Console.SetError(errors);
             Xunit.Assert.Null(ParkOther(seed).Error);
-        }
-        finally { Console.SetError(previousError); }
+        }, errors);
 
         Xunit.Assert.Null(await seed.Repository.GetOutboxStateAsync(message.Id));
         AssertItemUnchanged(early, await Item(seed));
