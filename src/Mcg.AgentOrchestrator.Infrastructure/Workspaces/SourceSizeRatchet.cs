@@ -226,7 +226,9 @@ internal static class SourceSizeRatchet
             // detach. 2707 is the measured size after integrating that handoff with the rows above; the
             // branch measured 2678 against a main that has since grown this file to 2684.
             // Goal 5077a6b8 extracted process reaping for the typed operator cancel path.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Processes/BackgroundDispatchRunner.cs", 2682),
+            // Goal 207369f1 keeps pending completion, candidate revalidation and cancellation at the dispatch seam;
+            // build lifecycle/lease/process behavior lives in CompletionBuildEvidenceCoordinator. Measured 2739; no headroom.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Processes/BackgroundDispatchRunner.cs", 2739),
             // Goal 5a75fed0 extracted typed projection parsing and literal restoration into
             // WorkerContextProjectionResidual, leaving the dispatcher to sequence package assembly.
             // Goal fd252fe4 adds retry fingerprints for the resolved provider, model, paid route, and
@@ -453,7 +455,9 @@ internal static class SourceSizeRatchet
             // measured 9319 total lines across the existing 27 partial files, with no extra headroom.
             // Goal 776d3dc0 extracts changed-file and conflict preview emission and typed coordinates
             // into ReviewerChangedFileScopeBriefSection. Measured 9246 lines across the same 27 partial files.
-            new SourceClassCeiling("AgentOrchestratorKernel", 9246, 27),
+            // Goal 207369f1 adds goal-validated completion-evidence recording and pending-aware refresh/cancel routing;
+            // operation state belongs to TaskSpec. Measured 9254 across the same 27 partial files; no extra headroom.
+            new SourceClassCeiling("AgentOrchestratorKernel", 9254, 27),
             // Goal d6033045 extracted the pre-admission receipt pass to PassedMergeTrainReceiptAdmission; goal 1d0f2317
             // adds one admission predicate to exclude stream-complete children before slot reservation. Measured 9255.
             // Goal 679eee57 added a one-line tick call to the separately owned ConductorExperimentWatch (+1); goal 80de5cb2 extracted
@@ -466,7 +470,9 @@ internal static class SourceSizeRatchet
             // Goal f8d371e2 keeps pending-relaunch observation and once-per-tick emission at the owning
             // loop seam, with live checks at each admission phase; formatter stays in its own static type.
             // Measured 9265 across the same 55 partial files; no extra headroom or drain changes.
-            new SourceClassCeiling("ConductorBatchLoop", 9265, 55),
+            // Goal 207369f1 counts pending completion builds in existing relaunch draining and prevents detaching them;
+            // lifecycle remains in CompletionBuildEvidenceCoordinator. Measured 9270 across the same 55 partials; no headroom.
+            new SourceClassCeiling("ConductorBatchLoop", 9270, 55),
             // Goal ec8903af moved the goal-prefix parser to CliGoalPrefixArguments.
             new SourceClassCeiling("CliPersistentStateRunner", 5973, 18),
             // Goal 5935c270 extracts subscription-plan output into SubscriptionPlanTextView
