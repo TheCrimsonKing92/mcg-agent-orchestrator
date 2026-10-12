@@ -436,7 +436,10 @@ internal static class SourceSizeRatchet
             // Measured 12228 total lines across the same 30 partial files after all three; no extra headroom.
             // Goal e8cccefa extracts loop store setup and policy resolution into CliConductLoopStartup.
             // Measured 12139 total lines across the same 30 partial files; no extra headroom.
-            new SourceClassCeiling("CliCommandHandlers", 12138, 30),
+            // Goal 5b573f47 keeps shared human/JSON status and label rules in the scoped diagnostic helpers;
+            // read-only lifecycle reads replace the writable monitoring path without changing human status text.
+            // Measured 12156 total lines across the same 30 partial files; no extra headroom.
+            new SourceClassCeiling("CliCommandHandlers", 12156, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
             // Goal 03580ad1 extracts source-mutation edits to AcceptanceSourceMutation; measured 8938 lines in 31 partials.
