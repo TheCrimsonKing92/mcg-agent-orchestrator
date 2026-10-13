@@ -31,7 +31,7 @@ public sealed class ApparatusRedGateSourceIndexTests
         fixture.WriteSource("tests/A/Tests.cs", "class Replacement {}");
         var next = fixture.Record(a with { FailingTestIdentities = ["N.Shared.Fact"] });
         Assert.Empty(Assert.Single(next.FailingTests).ResolvedSourcePaths);
-        Assert.Equal(2, fixture.ReadCounts[Path.Combine(fixture.Root, "tests/A/Tests.cs")]);
+        Assert.Equal(2, fixture.ReadCounts[Path.GetFullPath(Path.Combine(fixture.Root, "tests/A/Tests.cs"))]);
     }
 
     [Fact]
