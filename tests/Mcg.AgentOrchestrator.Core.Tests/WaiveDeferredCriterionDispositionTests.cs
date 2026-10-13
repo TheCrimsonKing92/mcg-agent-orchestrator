@@ -3,6 +3,63 @@ using Mcg.AgentOrchestrator.Core;
 
 public sealed class WaiveDeferredCriterionDispositionTests
 {
+    [Xunit.Theory]
+    [Xunit.InlineData(CriterionEvidenceOwner.Operator)]
+    [Xunit.InlineData(CriterionEvidenceOwner.Acceptance)]
+    [Xunit.InlineData(CriterionEvidenceOwner.Unknown)]
+    public void RestoredWaiverRetiresEveryOwnerWithoutChangingAuditRow(CriterionEvidenceOwner owner)
+    {
+        var (kernel, goal) = CreateGoalWithOutstandingCriteria(1);
+        kernel.WaiveAcceptanceCriterion(goal.Id, "2", "Observation retired.", "operator@example");
+        var snapshot = kernel.ExportSnapshot();
+        var source = snapshot.Goals[0];
+        var obligation = Xunit.Assert.Single(source.CriterionEvidenceObligations!) with { Owner = owner };
+        var waiver = Xunit.Assert.Single(source.EffectiveAcceptanceCriteriaCorrections!);
+        var restored = AgentOrchestratorKernel.FromSnapshot(snapshot with
+        {
+            Goals = [source with
+            {
+                CriterionEvidenceObligations = [obligation],
+                EffectiveAcceptanceCriteriaCorrections = [waiver with
+                {
+                    SupersededCriterion = $"  {waiver.SupersededCriterion.ToUpperInvariant()}  "
+                }]
+            }]
+        }).GetGoal(goal.Id);
+
+        Xunit.Assert.Empty(restored.OutstandingCriterionEvidenceObligations);
+        Xunit.Assert.Empty(restored.GetOutstandingCriterionEvidenceObligations("candidate-a"));
+        Xunit.Assert.Equal(obligation, Xunit.Assert.Single(restored.CriterionEvidenceObligations));
+        Xunit.Assert.Equal("operator@example", Xunit.Assert.Single(restored.EffectiveAcceptanceCriteriaCorrections).Actor);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void NonWaiverOrOtherCriterionCorrectionKeepsObligationOutstanding(bool otherCriterion)
+    {
+        var (kernel, goal) = CreateGoalWithOutstandingCriteria(1);
+        kernel.WaiveAcceptanceCriterion(goal.Id, "2", "Observation retired.");
+        var snapshot = kernel.ExportSnapshot();
+        var source = snapshot.Goals[0];
+        var correction = Xunit.Assert.Single(source.EffectiveAcceptanceCriteriaCorrections!);
+        var restored = AgentOrchestratorKernel.FromSnapshot(snapshot with
+        {
+            Goals = [source with
+            {
+                EffectiveAcceptanceCriteriaCorrections = [correction with
+                {
+                    IsWaiver = otherCriterion,
+                    SupersededCriterion = otherCriterion ? "Implement the mechanism." : correction.SupersededCriterion
+                }]
+            }]
+        }).GetGoal(goal.Id);
+
+        var obligation = Xunit.Assert.Single(restored.OutstandingCriterionEvidenceObligations);
+        Xunit.Assert.Equal("Measure the mechanism after landing.", obligation.Criterion);
+        Xunit.Assert.Equal(obligation, Xunit.Assert.Single(restored.GetOutstandingCriterionEvidenceObligations("candidate-a")));
+    }
+
     [Xunit.Fact]
     public void WaiveWithoutDispositionIsRefusedWhenAnotherCriterionHasOutstandingEvidence()
     {
