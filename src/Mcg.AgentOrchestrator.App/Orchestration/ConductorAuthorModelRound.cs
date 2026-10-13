@@ -32,7 +32,8 @@ internal sealed class ClaudeConductorAuthorModelRound(
         var model = ConductorRoundModelResolver.Resolve(catalog, ModelFunctionPurposes.ConductorAuthor);
         if (!model.IsValid)
         {
-            WriteReceipt(input.Item, null, null, null, model.InvalidReason, null);
+            WriteReceipt(input.Item, null, null, null, model.InvalidReason, null,
+                input.Lessons?.LessonIds ?? Array.Empty<string>());
             throw new ConductorModelRoundException(model.InvalidReason!, null);
         }
         var prompt = ConductorAuthorPrompt.Render(input);
@@ -42,11 +43,13 @@ internal sealed class ClaudeConductorAuthorModelRound(
             result = await _runProcessAsync(
                 new WorkerProcessRunRequest($"claude {model.ModelArguments} --permission-mode plan -p",
                     workingDirectory, TimeSpan.FromMinutes(10), prompt), cancellationToken);
-            WriteReceipt(input.Item, result.ExitCode, result.StandardOutput, result.StandardError, null, model.Alias);
+            WriteReceipt(input.Item, result.ExitCode, result.StandardOutput, result.StandardError, null, model.Alias,
+                input.Lessons?.LessonIds ?? Array.Empty<string>());
         }
         catch (Exception ex)
         {
-            WriteReceipt(input.Item, null, null, null, $"{ex.GetType().Name}: {ex.Message}", model.Alias);
+            WriteReceipt(input.Item, null, null, null, $"{ex.GetType().Name}: {ex.Message}", model.Alias,
+                input.Lessons?.LessonIds ?? Array.Empty<string>());
             throw;
         }
         if (result.ExitCode != 0)
@@ -55,14 +58,14 @@ internal sealed class ClaudeConductorAuthorModelRound(
     }
 
     private void WriteReceipt(ConductorAuthorItem item, int? exitCode,
-        string? stdout, string? stderr, string? failure, string? model)
+        string? stdout, string? stderr, string? failure, string? model, IReadOnlyList<string> lessonIds)
     {
         Directory.CreateDirectory(receiptDirectory);
         var path = Path.Combine(receiptDirectory, $"{DateTimeOffset.UtcNow:yyyyMMddTHHmmssfff}-{Guid.NewGuid():N}.json");
         File.WriteAllText(path, JsonSerializer.Serialize(new
         {
             item = item.Identity, completedAt = DateTimeOffset.UtcNow,
-            exitCode, stdout, stderr, failure, model
+            exitCode, stdout, stderr, failure, model, lessonIds = lessonIds.ToArray()
         }));
     }
 }
