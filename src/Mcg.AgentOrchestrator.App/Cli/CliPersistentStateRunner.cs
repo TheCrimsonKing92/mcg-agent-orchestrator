@@ -85,6 +85,10 @@ internal static partial class CliPersistentStateRunner
     {
         if (!skipReadOnlyRoute && CliReadOnlyCommandRunner.TryExecute(args, stateRepository, workspace, providers, channel, ref agents, ref workerProfiles, ref currentGoal, out var readOnlyResult))
             return readOnlyResult;
+        if (CliEpicOutcomeCommands.IsMutation(args))
+            return CliEpicOutcomeCommands.Submit(args, workspace, operatorIntentSubmissionSource);
+        if (args.Count > 0 && args[0].Equals("epic-bar", StringComparison.OrdinalIgnoreCase) && !CliCommandHelp.IsCommandSpecificHelp(args))
+            return CliEpicOutcomeCommands.ExecuteLegacyBar(args, workspace, operatorIntentSubmissionSource);
         using var writeOperationTag = SqliteOrchestratorStateRepository.UseWriteOperationTag(
             $"cli:{(args.Count == 0 ? "repl" : args[0].Trim().ToLowerInvariant())}");
         DrainAcceptanceRetryAuditOutbox(stateRepository, workspace);
@@ -580,7 +584,7 @@ internal static partial class CliPersistentStateRunner
             "help" or "model-functions" or "model-function-add" => true,
             "operator-listen" or "operator-channel" or "goal-intake-status" => true,
             // Portfolio views and writes use their own stores; goals read only metadata.
-            "epic-add" or "epic-assign" or "epic-assign-many" or "epic-list" or "epic-show" => true, _ when EpicProgressReadModel.IsEpicGoalsListing(args) => true,
+            "epic-add" or "epic-assign" or "epic-assign-many" or "epic-list" or "epic-show" or "epic-outcome-proposals" => true, _ when EpicProgressReadModel.IsEpicGoalsListing(args) => true,
             // These backlog commands operate solely on the independent BacklogStore, never the
             // orchestrator kernel/state.db. Running them with an empty kernel — no state load, no
             // write lock, no process sweep — keeps them fully concurrent with a running conductor
@@ -1924,24 +1928,7 @@ internal static partial class CliPersistentStateRunner
     {
         var actor = ResolveFlagValue(args, "--operator-actor");
         var actorKind = CliCommandHandlers.ParseOperatorActorKind(ResolveFlagValue(args, "--actor-kind"));
-        return submissionSource switch
-        {
-            OperatorIntentSubmissionSource.Cli => new OperatorIntentAttribution(
-                actor ?? "operator",
-                "cli",
-                "local-process",
-                actorKind),
-            OperatorIntentSubmissionSource.Discord => new OperatorIntentAttribution(
-                actor ?? throw new ArgumentException(
-                    "Discord operator intent submissions require an authenticated --operator-actor."),
-                "discord",
-                "discord-operator-allowlist",
-                actorKind),
-            _ => throw new ArgumentOutOfRangeException(
-                nameof(submissionSource),
-                submissionSource,
-                "Unsupported operator intent submission source.")
-        };
+        return CliOperatorIntentAttributionResolver.Resolve(submissionSource, actor, actorKind);
     }
 
     private static RetryOperatorIntentPayload BuildRetryPayload(

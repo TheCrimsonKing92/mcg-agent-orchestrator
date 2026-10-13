@@ -33,7 +33,7 @@ internal sealed record OwnerConsoleEpicViewModel(OwnerConsoleEpicWindow Window, 
         var goals = ids.Length == 0 ? new Dictionary<string, Goal>() :
             (await state.LoadGoalsAsync(ids, cancellationToken).ConfigureAwait(false)).Goals.ToDictionary(goal => goal.Id.Value);
         return new(row.Epic, inFlight.Select(Line).ToArray(), landed.Select(Line).ToArray(),
-            failed.Select(member => Trouble(member, true)).ToArray(), parked.Select(member => Trouble(member, false)).ToArray());
+            failed.Select(member => Trouble(member, true)).ToArray(), parked.Select(member => Trouble(member, false)).ToArray(), row.Plan);
 
         bool InWindow(EpicProgressMemberGoal member) => since is null || member.UpdatedAt >= since;
         GoalLine Line(EpicProgressMemberGoal member) => new(member.Id, member.Title,

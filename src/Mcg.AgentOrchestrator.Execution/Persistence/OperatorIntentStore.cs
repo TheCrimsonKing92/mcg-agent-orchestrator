@@ -308,6 +308,13 @@ public sealed class SqliteOperatorIntentStore : IOperatorIntentStore
         return await reader.ReadAsync(cancellationToken) ? ReadIntent(reader) : null;
     }
 
+    public async Task<OperatorIntentRecord?> GetByIdempotencyKeyAsync(string idempotencyKey,
+        CancellationToken cancellationToken = default)
+    {
+        await using var conn = OpenConnection();
+        return await ReadByIdempotencyKeyAsync(conn, null, idempotencyKey, cancellationToken);
+    }
+
     public async Task<IReadOnlyList<OperatorIntentRecord>> ListForGoalAsync(
         string goalId,
         int limit = 20,
@@ -515,7 +522,7 @@ public sealed class SqliteOperatorIntentStore : IOperatorIntentStore
 
     private static async Task<OperatorIntentRecord?> ReadByIdempotencyKeyAsync(
         SqliteConnection conn,
-        SqliteTransaction tx,
+        SqliteTransaction? tx,
         string idempotencyKey,
         CancellationToken cancellationToken)
     {

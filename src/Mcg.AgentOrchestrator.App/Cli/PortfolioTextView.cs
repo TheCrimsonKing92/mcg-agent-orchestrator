@@ -6,7 +6,7 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 internal static class PortfolioTextView
 {
     public static void PrintEpicRollups(IReadOnlyList<EpicProgressRollup> rollups, DateTimeOffset? since = null,
-        IReadOnlyDictionary<string, string>? summaries = null)
+        IReadOnlyDictionary<string, string>? summaries = null, bool includeOutcome = false)
     {
         if (since is not null)
             Console.WriteLine($"Window since {since.Value.UtcDateTime:O} (UTC)");
@@ -21,6 +21,7 @@ internal static class PortfolioTextView
             Console.WriteLine(FormatEpicRollupLine(row));
             if (summaries?.TryGetValue(row.Epic.Id, out var summary) == true)
                 Console.WriteLine($"  {summary}");
+            if (includeOutcome) PrintOutcome(row.Outcome, row.Plan);
         }
     }
 
@@ -32,7 +33,7 @@ internal static class PortfolioTextView
         return $"{row.Epic.Title} ({CliIdentifierText.ShortId(row.Epic.Id)}) project={project} goals={row.GoalCount} backlog={row.BacklogItemCount} active={row.ActiveCount} verified={row.VerifiedCount} parked={row.ParkedCount} landed={row.LandedCount} newest={FormatTimestamp(row.NewestUpdatedAt)} verifying={row.VerifyingCount} failed={row.FailedCount} closed={row.ClosedCount} missing={row.MissingCount} backlog-open={row.BacklogOpenCount} backlog-done={row.BacklogDoneCount}{window}";
     }
 
-    public static void PrintEpicShow(EpicProgressRollup row, string? summary = null)
+    public static void PrintEpicShow(EpicProgressRollup row, string? summary = null, bool includeOutcome = false)
     {
         Console.WriteLine($"Epic: {row.Epic.Title}");
         Console.WriteLine($"Id: {row.Epic.Id}");
@@ -49,6 +50,7 @@ internal static class PortfolioTextView
         PrintEpicMembers(row.Epic, row.Members);
         Console.WriteLine(FormatEpicRollupLine(row));
         if (summary is not null) Console.WriteLine($"  {summary}");
+        if (includeOutcome) PrintOutcome(row.Outcome, row.Plan);
         Console.WriteLine("Member goals:");
         foreach (var member in row.MemberGoals)
             Console.WriteLine($"  - {CliIdentifierText.ShortId(member.Id)} {member.Status} updated={FormatTimestamp(member.UpdatedAt)} {member.Title}");
@@ -67,7 +69,8 @@ internal static class PortfolioTextView
             Console.WriteLine($"  {member.Kind}: {member.MemberId}");
     }
 
-    public static void PrintPortfolio(IReadOnlyList<PortfolioEpicRollup> rollups, IReadOnlyList<PortfolioGoalRow> rows)
+    public static void PrintPortfolio(IReadOnlyList<PortfolioEpicRollup> rollups, IReadOnlyList<PortfolioGoalRow> rows,
+        IReadOnlyDictionary<string, EpicProgressRollup>? progress = null)
     {
         if (rollups.Count == 0)
         {
@@ -82,6 +85,7 @@ internal static class PortfolioTextView
             foreach (var epic in projectGroup.OrderBy(row => row.Epic.Title, StringComparer.OrdinalIgnoreCase))
             {
                 Console.WriteLine($"  Epic: {epic.Epic.Title} ({CliIdentifierText.ShortId(epic.Epic.Id)}) goals={epic.GoalCount} active={epic.ActiveCount} verified={epic.VerifiedCount} parked={epic.ParkedCount} landed={epic.LandedCount} newest={FormatTimestamp(epic.NewestTransitionAt)}");
+                if (progress?.TryGetValue(epic.Epic.Id, out var projected) == true) PrintOutcome(projected.Outcome, projected.Plan);
                 foreach (var goalRow in rows.Where(row => row.Epic.Id == epic.Epic.Id))
                 {
                     Console.WriteLine($"    - {CliIdentifierText.ShortId(goalRow.Goal.Id.Value)} [{goalRow.Goal.Status}] newest={FormatTimestamp(goalRow.NewestTransitionAt)} {OutputTextPreview.CreateSummary(goalRow.Goal.Objective).Text}");
@@ -105,6 +109,12 @@ internal static class PortfolioTextView
             Console.WriteLine($"{CliIdentifierText.ShortId(suggestion.Id)} signal={suggestion.Signal} goals={goals} backlog={backlog} title={suggestion.Title}");
             Console.WriteLine($"  evidence: {suggestion.Evidence}");
         }
+    }
+
+    internal static void PrintOutcome(EpicOutcomeProjection outcome, EpicPlanView? plan)
+    {
+        Console.WriteLine($"  {outcome.Render()}");
+        if (plan is not null) Console.WriteLine($"  Outcome next step: {EpicPlanNextStep.Compute(plan).Text}");
     }
 
     private static string FormatTimestamp(DateTimeOffset? value) =>

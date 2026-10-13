@@ -271,7 +271,8 @@ internal sealed class OwnerConsoleEpicDialog : FrameView
             _scroll = Math.Clamp(_scroll, 0, Math.Max(0, Lines.Count - 1));
             _body.SetSource(new ObservableCollection<string>(Lines));
             var row = ShowingDetail ? _scroll : _model?.Epics.Take(_selectedIndex)
-                .Sum(epic => 2 + OwnerConsoleEpicFormatter.Wrap(OwnerConsoleEpicFormatter.Summary(epic), width).Count()) ?? 0;
+                .Sum(epic => 2 + OwnerConsoleEpicFormatter.Wrap(OwnerConsoleEpicFormatter.Summary(epic), width).Count() +
+                    (epic.Plan is null ? 0 : OwnerConsoleEpicFormatter.Wrap(epic.Outcome.Render(), width).Count())) ?? 0;
             if (!ShowingDetail && _model is { } model && OwnerConsoleEpicFormatter.HasNoActivity(model))
                 row += OwnerConsoleEpicFormatter.Wrap(OwnerConsoleEpicFormatter.NoActivityLine(TimeWindow), width).Count();
             _body.SelectedItem = Lines.Count == 0 ? null : Math.Clamp(row, 0, Lines.Count - 1);

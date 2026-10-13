@@ -92,8 +92,9 @@ public sealed class StoreSchemaRegistryTests
     [InlineData(null, StoreSchemaState.Missing)]
     [InlineData(0, StoreSchemaState.Older)]
     [InlineData(1, StoreSchemaState.Older)]
-    [InlineData(2, StoreSchemaState.Current)]
-    [InlineData(3, StoreSchemaState.Newer)]
+    [InlineData(2, StoreSchemaState.Older)]
+    [InlineData(3, StoreSchemaState.Current)]
+    [InlineData(4, StoreSchemaState.Newer)]
     public void Verify_RecordedVersion_ClassifiesWithoutChangingRecord(int? version, StoreSchemaState expected)
     {
         using var conn = OpenMemory();
@@ -119,6 +120,8 @@ public sealed class StoreSchemaRegistryTests
     [InlineData(0)]
     [InlineData(1)]
     [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(4)]
     public void UpgradeToCurrent_ExistingRecord_UpgradesOnlyOlderAndPreservesOtherStores(int version)
     {
         using var conn = OpenMemory();

@@ -61,10 +61,14 @@ public sealed class CliCommandTestsEpicProgressViews : CliTaskQueryTestSupport, 
         var probe = new ProbeStateRepository(new AgentOrchestratorKernel());
 
         var output = Execute(["epic-list"], workspace, probe);
+        Assert.Contains("Outcome: unknown; bar version 0; outcome evidence required", output);
+        Assert.Contains("Outcome next step: unplanned active work requires reconciliation", output);
+        var scopeOutput = string.Join(Environment.NewLine, output.Split(Environment.NewLine)
+            .Where(line => !line.StartsWith("  Outcome", StringComparison.Ordinal)));
 
         Assert.Equal($"Board ({epic.Id[..8]}) project=unassigned goals=12 backlog=4 active=3 verified=1 parked=1 landed=1 newest={newest:O}"
             + $" verifying=1 failed=2 closed=2 missing=1 backlog-open=2 backlog-done=2{Environment.NewLine}"
-            + $"  0 of 0 slices landed; next: no plan{Environment.NewLine}", output);
+            + $"  0 of 0 slices landed; next: no plan{Environment.NewLine}", scopeOutput);
         AssertUnchanged(workspace, before, probe);
         Assert.Equal(16, store.ListEpicMembersAsync(epic.Id).GetAwaiter().GetResult().Count);
     }
