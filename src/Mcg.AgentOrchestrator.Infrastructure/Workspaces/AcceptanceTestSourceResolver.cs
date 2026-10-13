@@ -16,32 +16,7 @@ internal static class AcceptanceTestSourceResolver
     internal static IReadOnlyList<string> ResolveSourcePaths(
         string? rootPath,
         string? testProjectPath,
-        string? testIdentity)
-    {
-        if (string.IsNullOrWhiteSpace(rootPath) ||
-            string.IsNullOrWhiteSpace(testIdentity) ||
-            !Directory.Exists(rootPath))
-        {
-            return [];
-        }
-
-        var className = ExtractClassName(testIdentity);
-        if (string.IsNullOrWhiteSpace(className))
-        {
-            return [];
-        }
-
-        try
-        {
-            return ResolveCore(Path.GetFullPath(rootPath), testProjectPath, className);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or
-                                       ArgumentException or NotSupportedException or PathTooLongException)
-        {
-            // An unresolvable identity must read as "unknown", which the classifier treats as genuine.
-            return [];
-        }
-    }
+        string? testIdentity) => new Request(rootPath).ResolveSourcePaths(testProjectPath, testIdentity);
 
     /// <summary>
     /// The class portion of <c>Namespace.Class.Method</c>. Generic arity and xunit theory argument
@@ -67,48 +42,133 @@ internal static class AcceptanceTestSourceResolver
         return genericStart >= 0 ? className[..genericStart] : className;
     }
 
-    private static IReadOnlyList<string> ResolveCore(string rootPath, string? testProjectPath, string className)
+    /// <summary>One stable completion's source snapshot; never retained across candidates or requests.</summary>
+    internal sealed class Request
     {
-        var searchRoots = ResolveSearchRoots(rootPath, testProjectPath);
-        var matches = new List<string>();
-        foreach (var searchRoot in searchRoots)
+        private readonly string? _rootPath;
+        private readonly Func<string, IEnumerable<string>> _enumerate;
+        private readonly Func<string, string> _read;
+        private readonly Func<string, bool> _directoryExists;
+        private readonly Dictionary<string, Dictionary<string, string[]>?> _indexes = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, CompilationUnitSyntax?> _sources = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, IReadOnlySet<string>> _identifiers = new(StringComparer.OrdinalIgnoreCase);
+
+        internal Request(string? rootPath,
+            Func<string, IEnumerable<string>>? enumerate = null,
+            Func<string, string>? read = null,
+            Func<string, bool>? directoryExists = null)
         {
-            foreach (var path in Directory.EnumerateFiles(searchRoot, "*.cs", SearchOption.AllDirectories))
+            _enumerate = enumerate ?? (path => Directory.EnumerateFiles(path, "*.cs", SearchOption.AllDirectories));
+            _read = read ?? File.ReadAllText;
+            _directoryExists = directoryExists ?? Directory.Exists;
+            try
             {
-                if (HasGeneratedPathSegment(path))
+                if (!string.IsNullOrWhiteSpace(rootPath) && _directoryExists(rootPath))
                 {
-                    continue;
-                }
-
-                string source;
-                try
-                {
-                    source = File.ReadAllText(path);
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                {
-                    continue;
-                }
-
-                if (!source.Contains(className, StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                var root = CSharpSyntaxTree.ParseText(source, path: path).GetCompilationUnitRoot();
-                if (root.DescendantNodes()
-                    .OfType<TypeDeclarationSyntax>()
-                    .Any(declaration => declaration.Identifier.ValueText.Equals(className, StringComparison.Ordinal)))
-                {
-                    matches.Add(ToRepositoryRelativePath(rootPath, path));
+                    _rootPath = Path.GetFullPath(rootPath);
                 }
             }
+            catch (Exception ex) when (IsResolutionFailure(ex)) { }
         }
 
-        return matches.Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToArray();
+        internal int EnumerationCount { get; private set; }
+        internal int ReadCount { get; private set; }
+
+        internal IReadOnlyList<string> ResolveSourcePaths(string? testProjectPath, string? testIdentity)
+        {
+            if (_rootPath is null || string.IsNullOrWhiteSpace(testIdentity)) return [];
+            var className = ExtractClassName(testIdentity);
+            if (string.IsNullOrWhiteSpace(className)) return [];
+            try
+            {
+                var matches = new List<string>();
+                foreach (var searchRoot in ResolveSearchRoots(_rootPath, testProjectPath, _directoryExists))
+                {
+                    var index = GetIndex(searchRoot);
+                    // A late enumeration fault invalidates the whole scope, including earlier roots.
+                    if (index is null) return [];
+                    if (index.TryGetValue(className, out var paths)) matches.AddRange(paths);
+                }
+                return matches.Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToArray();
+            }
+            catch (Exception ex) when (IsResolutionFailure(ex)) { return []; }
+        }
+
+        internal CompilationUnitSyntax? ReadSyntax(string relativePath)
+        {
+            if (_rootPath is null) return null;
+            var path = Path.GetFullPath(Path.Combine(_rootPath, relativePath.Replace('/', Path.DirectorySeparatorChar)));
+            return IsWithinDirectory(path, _rootPath) && !HasGeneratedPathSegment(path)
+                ? ReadSource(path) : null;
+        }
+
+        internal IReadOnlySet<string> ReadIdentifiers(string relativePath)
+        {
+            if (_identifiers.TryGetValue(relativePath, out var cached)) return cached;
+            var syntax = ReadSyntax(relativePath);
+            var identifiers = syntax?.DescendantTokens().Where(token => token.RawKind == (int)SyntaxKind.IdentifierToken)
+                .Select(token => token.ValueText).ToHashSet(StringComparer.Ordinal) ?? new HashSet<string>(StringComparer.Ordinal);
+            _identifiers.Add(relativePath, identifiers);
+            return identifiers;
+        }
+
+        private CompilationUnitSyntax? ReadSource(string path)
+        {
+            if (_sources.TryGetValue(path, out var cached)) return cached;
+            CompilationUnitSyntax? syntax = null;
+            try
+            {
+                ReadCount++;
+                var source = _read(path);
+                syntax = CSharpSyntaxTree.ParseText(source, path: path).GetCompilationUnitRoot();
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            _sources.Add(path, syntax);
+            return syntax;
+        }
+
+        private Dictionary<string, string[]>? GetIndex(string searchRoot)
+        {
+            if (_indexes.TryGetValue(searchRoot, out var cached)) return cached;
+            try
+            {
+                var matches = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+                EnumerationCount++;
+                foreach (var discoveredPath in _enumerate(searchRoot))
+                {
+                    var path = Path.GetFullPath(discoveredPath);
+                    if (!IsWithinDirectory(path, searchRoot) || HasGeneratedPathSegment(path)) continue;
+                    var syntax = ReadSource(path);
+                    if (syntax is null) continue;
+                    var source = syntax.ToFullString();
+                    foreach (var name in syntax.DescendantNodes().OfType<TypeDeclarationSyntax>()
+                        .Select(declaration => declaration.Identifier.ValueText).Distinct(StringComparer.Ordinal))
+                    {
+                        // Preserve the original literal text prefilter (notably escaped identifiers).
+                        if (!source.Contains(name, StringComparison.Ordinal)) continue;
+                        if (!matches.TryGetValue(name, out var paths)) matches[name] = paths = [];
+                        paths.Add(ToRepositoryRelativePath(_rootPath!, path));
+                    }
+                }
+                var index = matches.ToDictionary(pair => pair.Key,
+                    pair => pair.Value.Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToArray(),
+                    StringComparer.Ordinal);
+                _indexes.Add(searchRoot, index);
+                return index;
+            }
+            catch (Exception ex) when (IsResolutionFailure(ex))
+            {
+                _indexes.Add(searchRoot, null);
+                return null;
+            }
+        }
     }
 
-    private static IReadOnlyList<string> ResolveSearchRoots(string rootPath, string? testProjectPath)
+    private static bool IsResolutionFailure(Exception ex) => ex is IOException or UnauthorizedAccessException or
+        ArgumentException or NotSupportedException;
+
+    private static IReadOnlyList<string> ResolveSearchRoots(string rootPath, string? testProjectPath,
+        Func<string, bool> directoryExists)
     {
         if (!string.IsNullOrWhiteSpace(testProjectPath))
         {
@@ -118,7 +178,7 @@ internal static class AcceptanceTestSourceResolver
             var projectDirectory = Path.GetDirectoryName(projectPath);
             if (!string.IsNullOrWhiteSpace(projectDirectory) &&
                 IsWithinDirectory(projectDirectory, rootPath) &&
-                Directory.Exists(projectDirectory))
+                directoryExists(projectDirectory))
             {
                 return [projectDirectory];
             }
@@ -128,7 +188,7 @@ internal static class AcceptanceTestSourceResolver
         // worktree, so the scan never walks .git or orchestrator state.
         return new[] { "tests", "src" }
             .Select(segment => Path.Combine(rootPath, segment))
-            .Where(Directory.Exists)
+            .Where(directoryExists)
             .ToArray();
     }
 

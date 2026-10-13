@@ -1592,6 +1592,10 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 cacheContext.SharedApparatusInvalidation is not null, cancellationToken).ConfigureAwait(false);
             fresh = (finalResult, fresh.Retried || finalResult.LaneRerun is not null);
         }
+        var attemptIdentity = (_executionContext as AcceptanceAttemptExecutionOwner)?.Identity;
+        fresh = (AcceptanceAssemblyCleanupAttributionReader.Attach(fresh.Result, goalId?.Value,
+            cacheContext?.VerifyingCommitSha ?? attemptIdentity?.VerifyingCommitSha,
+            cacheContext?.MainSha ?? attemptIdentity?.MainSha), fresh.Retried);
         cacheContext?.RecordExecution(check, fresh.Result,
             fresh.Result.LaneRerun?.Outcome == AcceptanceLaneRerunEvidence.Flake ? "lane_rerun_pass" : "first_run");
 
