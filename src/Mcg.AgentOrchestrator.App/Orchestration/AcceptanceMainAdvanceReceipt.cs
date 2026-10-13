@@ -4,6 +4,23 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal static class AcceptanceMainAdvanceReceipt
 {
+    internal static string BuildRevalidationHoldIdentity(
+        ConductorParallelAcceptanceCandidate candidate,
+        Func<Goal, (string? BranchHeadSha, string? MainHeadSha)> resolveHeads)
+    {
+        try
+        {
+            var current = resolveHeads(candidate.Goal);
+            return $"acceptance-revalidation:" +
+                $"{current.BranchHeadSha ?? candidate.BranchHeadSha ?? "unknown"}:" +
+                $"{current.MainHeadSha ?? candidate.MainHeadSha ?? "unknown"}";
+        }
+        catch
+        {
+            return $"acceptance-revalidation:{candidate.CandidateKey}";
+        }
+    }
+
     internal static string FormatCarryForward(
         AcceptanceMainAdvanceDisposition disposition,
         AcceptanceVerificationSummary acceptance,

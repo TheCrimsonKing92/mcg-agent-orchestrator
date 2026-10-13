@@ -95,7 +95,8 @@ internal sealed partial class ConductorDriver
                 new ConductorAdvanceOutcome.Held(
                     GoalLifecycleState.Verified,
                     $"{reason} {disposition.FormatReceipt()}",
-                    StableIdentity: BuildRevalidationHoldIdentity(candidate)));
+                    StableIdentity: AcceptanceMainAdvanceReceipt.BuildRevalidationHoldIdentity(
+                        candidate, _resolveAcceptanceHeads)));
         }
 
         return CompleteLandingAfterAcceptance(candidate.Goal, candidate.GoalPrefix, policy, acceptance);
@@ -210,21 +211,6 @@ internal sealed partial class ConductorDriver
             verified,
             postRebase,
             landed);
-    }
-
-    private string BuildRevalidationHoldIdentity(ConductorParallelAcceptanceCandidate candidate)
-    {
-        try
-        {
-            var current = _resolveAcceptanceHeads(candidate.Goal);
-            return $"acceptance-revalidation:" +
-                $"{current.BranchHeadSha ?? candidate.BranchHeadSha ?? "unknown"}:" +
-                $"{current.MainHeadSha ?? candidate.MainHeadSha ?? "unknown"}";
-        }
-        catch
-        {
-            return $"acceptance-revalidation:{candidate.CandidateKey}";
-        }
     }
 
     private void RecordMainAdvanceDiagnostic(

@@ -449,8 +449,9 @@ internal static class SourceSizeRatchet
             // Goal 33b9b7a6 extracts receipt application to a collaborator; replay custody uses the existing landing partial.
             // Goal 33b9b7a6 extracts Git ancestry/path evidence into AcceptanceMainAdvanceGitEvidence.
             // Goal 33b9b7a6 extracts bounded carry receipt formatting into AcceptanceMainAdvanceReceipt.
-            // Measured 14968 lines across the same 70 partial files; no extra headroom.
-            new SourceClassCeiling("ConductorDriver", 14968, 70),
+            // Goal 33b9b7a6 also extracts revalidation hold-identity formatting into that receipt owner.
+            // Measured 14962 lines across the same 70 partial files; no extra headroom.
+            new SourceClassCeiling("ConductorDriver", 14962, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
