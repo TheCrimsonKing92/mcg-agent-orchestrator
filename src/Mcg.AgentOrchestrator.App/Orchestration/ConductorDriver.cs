@@ -263,6 +263,7 @@ internal sealed partial class ConductorDriver
     {
         var dir = workspace.ExecutionDirectory;
         _executionDirectory = dir;
+        _readAcceptanceEngineHealth = () => PostLandingCanaryFactory.CreateCircuit(workspace).Read();
         _integrationBranch = workspace.IntegrationBranch;
         _resolveAcceptanceHeads = goal =>
             (TryResolveAcceptanceBranchHead(goal), TryResolveGitHead(dir));
@@ -1137,7 +1138,8 @@ internal sealed partial class ConductorDriver
         Func<GoalId, TaskId, string, TaskSpec>? workerBuildRecoveryRetry = null,
         Func<GoalId, string>? workerBuildArtifactsPath = null,
         Func<Goal, AgentRole, DeveloperBranchIntegrationResult>? integrateMainBeforeReadOnlyDispatch = null,
-        Action<Goal, GoalLifecycleState>? resolveParkedWaitEscalations = null)
+        Action<Goal, GoalLifecycleState>? resolveParkedWaitEscalations = null,
+        Func<AcceptanceEngineHealthSnapshot?>? readAcceptanceEngineHealth = null)
     {
         _apparatusRedGate = apparatusRedGate;
         _getFacts = getFacts;
@@ -1264,6 +1266,7 @@ internal sealed partial class ConductorDriver
         _resolveAcceptanceHeads = resolveAcceptanceHeads ?? (_ => (null, null));
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         _executionDirectory = executionDirectory;
+        _readAcceptanceEngineHealth = readAcceptanceEngineHealth ?? (() => null);
         _integrationBranch = TrunkBranchName.Default;
         _parallelAcceptanceEnabled =
             runAcceptanceVerificationWithSlot is not null ||

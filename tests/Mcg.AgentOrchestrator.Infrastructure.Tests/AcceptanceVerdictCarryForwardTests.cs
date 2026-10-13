@@ -40,6 +40,121 @@ public sealed class AcceptanceVerdictCarryForwardTests : HostCapacityBoundTestBa
         }
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void ReceiptReplay_DisjointMainAdvance_CarriesOriginalProof(bool alreadyRebased)
+    {
+        var repo = CreateGitRepository();
+        try
+        {
+            var fixture = CreateAcceptedCandidate(repo, "src/candidate-only.txt", "candidate");
+            var receipt = SeedReplayReceipt(fixture);
+            AppendCommit(repo, "src/unrelated-lane.txt", "racing landing");
+            var currentMain = ReadGit(repo, "rev-parse", "main");
+            if (alreadyRebased)
+                Assert.True(GoalWorktrees.TryRebaseOntoMain(repo, fixture.Goal.Id).UpdatedBranch);
+
+            var result = fixture.Driver.TryReplayPassedAcceptance(fixture.Goal, ConductorAutonomyPolicy.Conservative);
+
+            Assert.NotNull(result);
+            Assert.True(result.WasExecuted, result.Outcome.ToString());
+            Assert.Equal("candidate", ReadGit(repo, "show", "main:src/candidate-only.txt"));
+            var landedHead = ReadGit(repo, "rev-parse", "main");
+            // Landing publishes a --no-ff merge. Evidence binds to its rebased goal
+            // candidate (second parent), not the separately created publication commit.
+            var carriedCandidate = ReadGit(repo, "rev-parse", $"{landedHead}^2");
+            Assert.Equal(currentMain, ReadGit(repo, "rev-parse", $"{landedHead}^1"));
+            Assert.NotEqual(fixture.BranchHeadSha, carriedCandidate);
+            Assert.NotEqual(landedHead, carriedCandidate);
+            Assert.Equal(ReadGit(repo, "rev-parse", $"{landedHead}^{{tree}}"),
+                ReadGit(repo, "rev-parse", $"{carriedCandidate}^{{tree}}"));
+            var operatorEvidence = Assert.Single(fixture.Goal.CriterionEvidenceObligations);
+            Assert.Equal(CriterionEvidenceState.Satisfied, operatorEvidence.State);
+            Assert.Equal(carriedCandidate, operatorEvidence.ExpectedCandidateSha);
+            Assert.Equal(carriedCandidate, operatorEvidence.CandidateSha);
+            Assert.Equal($"operator-receipt:carried:{carriedCandidate}", operatorEvidence.ReceiptId);
+            var originalEvidence = Assert.Single(operatorEvidence.PriorReceipts!);
+            Assert.Equal(fixture.BranchHeadSha, originalEvidence.CandidateSha);
+            Assert.Equal("operator-receipt", originalEvidence.ReceiptId);
+            var journal = GoalOperationJournal.Read(repo, fixture.Goal.Id);
+            var evidenceCarry = Assert.Single(journal.Entries.Where(entry =>
+                entry.Operation == "conductor:criterion-evidence-patch-carry"));
+            Assert.Contains(fixture.BranchHeadSha, evidenceCarry.Detail, StringComparison.Ordinal);
+            Assert.Contains(carriedCandidate, evidenceCarry.Detail, StringComparison.Ordinal);
+            var carry = Assert.Single(journal.Entries.Where(entry =>
+                entry.Operation == "conductor:acceptance-main-advance-carry"));
+            Assert.Equal(currentMain, carry.MainHeadSha);
+            Assert.Contains($"verifiedMain={fixture.MainHeadSha}", carry.Detail, StringComparison.Ordinal);
+            var replay = Assert.Single(journal.Entries.Where(entry => entry.Operation == "conductor:acceptance-receipt-replay"));
+            Assert.Contains("gatesAvoided=1", replay.Detail, StringComparison.Ordinal);
+            Assert.Contains("greenToLandingMs=", replay.Detail, StringComparison.Ordinal);
+            var persisted = System.Text.Json.JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(
+                File.ReadAllText(receipt.MetadataPath),
+                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
+            Assert.Equal(receipt.AttemptId, persisted.AttemptId);
+            Assert.NotNull(persisted.ReconciledAt);
+            Assert.NotNull(persisted.ReplayLandedAt);
+            Assert.Single(Directory.GetFiles(Path.GetDirectoryName(receipt.MetadataPath)!, "*.attempt.json"));
+        }
+        finally { TryDeleteDirectory(repo); }
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("src/candidate-only.txt", false)]
+    [Xunit.InlineData("Directory.Build.props", false)]
+    [Xunit.InlineData("src/unrelated-lane.txt", true)]
+    public void ReceiptReplay_UnsafeMainAdvance_RequiresFreshGate(string changedPath, bool missingScope)
+    {
+        var repo = CreateGitRepository();
+        try
+        {
+            const string baseline = "base-1\nbase-2\nbase-3\nbase-4\nbase-5\nbase-6\nbase-7\nbase-8\nbase-9";
+            AppendCommit(repo, "src/candidate-only.txt", baseline);
+            var fixture = CreateAcceptedCandidate(repo, "src/candidate-only.txt",
+                baseline.Replace("base-1", "candidate-1", StringComparison.Ordinal));
+            var receipt = SeedReplayReceipt(fixture);
+            if (missingScope)
+                File.WriteAllText(receipt.MetadataPath, System.Text.Json.JsonSerializer.Serialize(
+                    receipt with { ReconciledAt = DateTimeOffset.UtcNow, ScopePaths = null }));
+            // Same-path disjoint text still integrates cleanly; the classifier, not a conflict,
+            // must refuse carry. Keep the baseline line and append independent content.
+            AppendCommit(repo, changedPath, changedPath == "src/candidate-only.txt"
+                ? baseline.Replace("base-9", "racing-9", StringComparison.Ordinal) : "racing landing");
+            var currentMain = ReadGit(repo, "rev-parse", "main");
+
+            var result = fixture.Driver.TryReplayPassedAcceptance(fixture.Goal, ConductorAutonomyPolicy.Conservative);
+
+            Assert.Null(result);
+            Assert.Equal(currentMain, ReadGit(repo, "rev-parse", "main"));
+            Assert.DoesNotContain(GoalOperationJournal.Read(repo, fixture.Goal.Id).Entries,
+                entry => entry.Operation == "conductor:acceptance-receipt-replay");
+            if (!missingScope)
+                Assert.Contains(GoalOperationJournal.Read(repo, fixture.Goal.Id).Entries,
+                    entry => entry.Operation == "conductor:acceptance-main-advance" &&
+                        entry.Detail.Contains("disposition=overlap", StringComparison.Ordinal));
+            Assert.Single(Directory.GetFiles(Path.GetDirectoryName(receipt.MetadataPath)!, "*.attempt.json"));
+        }
+        finally { TryDeleteDirectory(repo); }
+    }
+
+    private static ConductorParallelAcceptanceAttempt SeedReplayReceipt(CandidateFixture fixture)
+    {
+        fixture.Kernel.RecordGoalRefinement(fixture.Goal.Id, new RefinedSpec(
+            fixture.Goal.Objective, ["operator confirms"], VerificationClass.RealWorldDependent, [], []));
+        fixture.Kernel.MapCriterionEvidenceOwner(fixture.Goal.Id, 0, 1,
+            CriterionEvidenceOwner.Operator, "test", "operator observation", expectedCandidateSha: fixture.BranchHeadSha);
+        var obligation = Assert.Single(fixture.Goal.GetOutstandingCriterionEvidenceObligations(fixture.BranchHeadSha));
+        var seed = fixture.Driver.ParallelAcceptanceAttemptCoordinator.Evaluate(fixture.Candidate,
+            ConductorAutonomyPolicy.Conservative,
+            (candidate, _, _, _, _) => ConductorParallelAcceptanceRunResult.Accepted(candidate, fixture.Acceptance));
+        Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Completed, seed.Kind);
+        fixture.Driver.ParallelAcceptanceAttemptCoordinator.MarkReconciled(seed.Attempt);
+        fixture.Kernel.RecordCriterionEvidence(fixture.Goal.Id, obligation.Id, CriterionEvidenceOwner.Operator,
+            fixture.BranchHeadSha, "operator-receipt", "operator observation", true, "confirmed");
+        return seed.Attempt;
+    }
+
     [Xunit.Fact]
     public void CarryForward_Overlap_HoldsForRevalidationAndPreservesPriorReceipt()
     {
@@ -372,6 +487,7 @@ public sealed class AcceptanceVerdictCarryForwardTests : HostCapacityBoundTestBa
             new FakeAcceptanceVerifier(),
             DefaultAgents(),
             WorkerProfileCatalog.Default(),
+            runAcceptanceAttemptsInCurrentProcess: true,
             cleanupHooks: WorktreeCleanupContext.Load(
                 attentionStoreDirectory: workspace.OrchestratorDirectory,
                 buildStorageRoot: new DotnetBuildStorageRoot(

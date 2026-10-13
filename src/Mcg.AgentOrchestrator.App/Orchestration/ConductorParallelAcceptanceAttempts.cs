@@ -161,6 +161,9 @@ internal sealed record ConductorParallelAcceptanceAttempt(
     public string? IntegrationBranch { get; init; }
     public string? StateDirectory { get; init; }
     public string? ProjectName { get; init; }
+    public string? ReplayContextFingerprint { get; init; }
+    public string? ReplayResultFingerprint { get; init; }
+    public DateTimeOffset? ReplayLandedAt { get; init; }
 
     public string CandidateKey => $"{GoalId}:{BranchHeadSha ?? "unknown-branch"}:{MainHeadSha ?? "unknown-main"}";
 }
@@ -1456,7 +1459,9 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
     {
         try
         {
-            WriteResult(attempt.ResultPath, ToArtifact(run));
+            var artifact = ToArtifact(run);
+            WriteResult(attempt.ResultPath, artifact);
+            var resultFingerprint = HashReplayResult(JsonSerializer.Serialize(artifact, JsonOptions));
             _resultPublishedForTests?.Invoke(attempt);
             var outcome = OutcomeFor(run, attempt.Kind);
             var claimedTerminal = TryPersistTerminal(attempt, current => current with
@@ -1468,6 +1473,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                 LastHeartbeatAt = _utcNow(),
                 Detail = AcceptanceRunDetail(run),
                 TestResultPaths = ResultTestPaths(run),
+                ReplayResultFingerprint = resultFingerprint,
                 TransientFailureCount = IsBoundedTransientFailure(outcome, AcceptanceRunDetail(run))
                     ? CountConsecutiveTransientFailures(current) + 1
                     : current.TransientFailureCount
@@ -2094,7 +2100,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         {
             IntegrationBranch = _integrationBranch,
             StateDirectory = _stateDirectory,
-            ProjectName = _projectName
+            ProjectName = _projectName,
+            ReplayContextFingerprint = BuildReplayContextFingerprint(candidate.Goal)
         };
     }
 

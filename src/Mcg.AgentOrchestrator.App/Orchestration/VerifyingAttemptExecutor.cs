@@ -11,6 +11,22 @@ internal static class VerifyingAttemptExecutor
     internal const string ReconciliationOwnershipChanged = "reconciliation-ownership-changed";
     internal const string OwnershipChanged = "ownership-changed";
 
+    // Replay has no launch or polling effects, but uses the same writer-busy boundary.
+    internal static T? ExecuteReplay<T>(Func<T?> replay, out string? artifactWriterBusyMessage)
+        where T : class
+    {
+        artifactWriterBusyMessage = null;
+        try
+        {
+            return replay();
+        }
+        catch (AcceptanceArtifactWriterLeaseBusyException ex)
+        {
+            artifactWriterBusyMessage = ex.Message;
+            return null;
+        }
+    }
+
     internal static VerifyingAttemptExecution Execute(
         bool isConductorTick,
         Func<AcceptanceStableSlotExhaustionPolicy, ConductorParallelAcceptanceAttemptDecision> evaluate,
