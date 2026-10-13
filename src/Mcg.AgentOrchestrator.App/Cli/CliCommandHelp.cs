@@ -482,7 +482,7 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry EpicShow = new(
         EpicShowUsage,
         "Show an epic's description, members and progress rollup, followed by goal status, last update and title; in-flight goals come first.",
-        ["--help", "-h"]);
+        ["--json", "--help", "-h"]);
 
     private static readonly CommandHelpEntry EpicRename = new(
         EpicRenameUsage,
@@ -495,7 +495,7 @@ internal static class CliCommandHelp
         ["--text-file", "--help", "-h"]);
 
     private static readonly CommandHelpEntry EpicPlan = new(EpicPlanUsage,
-        "Show purpose, bar, ordered plan with current status, decisions, next step and unplanned members.", ["--help", "-h"]);
+        "Show purpose, bar, ordered plan with current status, decisions, next step and unplanned members.", ["--json", "--help", "-h"]);
     private static readonly CommandHelpEntry EpicPlanAdd = new(EpicPlanAddUsage,
         "Add a backlog slice or a step; --at is a 1-based insertion position, omitted to append.", ["--backlog", "--step-file", "--at", "--help", "-h"]);
     private static readonly CommandHelpEntry EpicPlanMove = new(EpicPlanMoveUsage,
@@ -507,7 +507,18 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry EpicDecide = new(EpicDecideUsage,
         "Append a decision dated with the current UTC time and optional attribution.", ["--text-file", "--by", "--help", "-h"]);
     private static readonly CommandHelpEntry EpicBar = new(EpicBarUsage,
-        "Set the condition that ends the epic; an empty file clears it.", ["--text-file", "--help", "-h"]);
+        "Set legacy bar text; changed text invalidates structured proof. An empty file clears it.", ["--text-file", "--operator-actor", "--actor-kind", "--help", "-h"]);
+    private static readonly CommandHelpEntry EpicOutcomeDefine = new(
+        "Usage: epic-outcome-define <epic> --text-file <definition.json> [--operator-actor <name>] [--actor-kind <human|agent>] [--idempotency-key <key>] [--json]",
+        "Queue a versioned outcome definition; application requires Mutate authorization. See docs/epic-outcome-migration.md for the strict JSON contract.",
+        ["--text-file", "--operator-actor", "--actor-kind", "--idempotency-key", "--json", "--help", "-h"]);
+    private static readonly CommandHelpEntry EpicOutcomeRecord = new(
+        "Usage: epic-outcome-record <epic> --text-file <evidence.json> [--operator-actor <name>] [--actor-kind <human|agent>] [--idempotency-key <key>] [--json]",
+        "Queue attributed evidence for an exact bar version and requirement; submission is pending until applied.",
+        ["--text-file", "--operator-actor", "--actor-kind", "--idempotency-key", "--json", "--help", "-h"]);
+    private static readonly CommandHelpEntry EpicOutcomeProposals = new(
+        "Usage: epic-outcome-proposals [--json]", "Read one migration proposal per actual epic; retain unknown until an explicit owner decision.",
+        ["--json", "--help", "-h"]);
 
     private static readonly CommandHelpEntry EpicAssign = new(
         EpicAssignUsage,
@@ -522,7 +533,7 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry EpicList = new(
         EpicListUsage,
         "List epics with every goal status bucket and open/done backlog counts; newest is the latest member-goal metadata update (UpdatedAt). Use --since with positive Nh or Nd durations (24h, 7d) or an absolute timestamp to show window counts. window-landed uses the goal update time until a landed-at timestamp exists.",
-        ["--since", "--help", "-h"]);
+        ["--since", "--json", "--help", "-h"]);
 
     private static readonly CommandHelpEntry EpicMembers = new(
         EpicMembersUsage,
@@ -1412,7 +1423,9 @@ internal static class CliCommandHelp
         {
             "epic-plan" => EpicPlan, "epic-plan-add" => EpicPlanAdd, "epic-plan-move" => EpicPlanMove,
             "epic-plan-remove" => EpicPlanRemove, "epic-plan-done" => EpicPlanDone,
-            "epic-decide" => EpicDecide, "epic-bar" => EpicBar, _ => null
+            "epic-decide" => EpicDecide, "epic-bar" => EpicBar,
+            "epic-outcome-define" => EpicOutcomeDefine, "epic-outcome-record" => EpicOutcomeRecord,
+            "epic-outcome-proposals" => EpicOutcomeProposals, _ => null
         };
         if (planEntry is { } resolvedPlanEntry) { entry = resolvedPlanEntry; return true; }
 

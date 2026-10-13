@@ -9,7 +9,8 @@ internal static class CandidateChangedTypeReferenceReader
 {
     internal static IReadOnlySet<string> ReadDeclaredTypeNames(
         string? sourceRoot,
-        IReadOnlyList<string> changedPaths)
+        IReadOnlyList<string> changedPaths,
+        AcceptanceTestSourceResolver.Request? request = null)
     {
         try
         {
@@ -42,7 +43,10 @@ internal static class CandidateChangedTypeReferenceReader
                     continue;
                 }
 
-                var syntax = CSharpSyntaxTree.ParseText(File.ReadAllText(path), path: path).GetCompilationUnitRoot();
+                var syntax = request is null
+                    ? CSharpSyntaxTree.ParseText(File.ReadAllText(path), path: path).GetCompilationUnitRoot()
+                    : request.ReadSyntax(normalized);
+                if (syntax is null) continue;
                 foreach (var declaration in syntax.DescendantNodes().OfType<BaseTypeDeclarationSyntax>())
                 {
                     names.Add(declaration.Identifier.ValueText);
@@ -61,7 +65,8 @@ internal static class CandidateChangedTypeReferenceReader
     internal static IReadOnlyList<string> MatchReferencedTypes(
         string? sourceRoot,
         IReadOnlyList<string> testSourcePaths,
-        IReadOnlySet<string> declaredTypes)
+        IReadOnlySet<string> declaredTypes,
+        AcceptanceTestSourceResolver.Request? request = null)
     {
         try
         {
@@ -74,6 +79,12 @@ internal static class CandidateChangedTypeReferenceReader
             var matches = new HashSet<string>(StringComparer.Ordinal);
             foreach (var testSourcePath in testSourcePaths)
             {
+                if (request is not null)
+                {
+                    var identifiers = request.ReadIdentifiers(testSourcePath);
+                    foreach (var name in declaredTypes.Where(identifiers.Contains)) matches.Add(name);
+                    continue;
+                }
                 var path = ResolveContainedPath(root, testSourcePath);
                 if (path is null || !File.Exists(path))
                 {

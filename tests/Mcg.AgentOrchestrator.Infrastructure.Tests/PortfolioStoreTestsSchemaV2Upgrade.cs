@@ -97,7 +97,7 @@ public sealed class PortfolioStoreTestsSchemaV2Upgrade : CliCommandTestBase
         { DataSource = workspace.PortfolioStorePath, Mode = SqliteOpenMode.ReadOnly, Pooling = false }.ToString()))
         {
             connection.Open();
-            Assert.Equal(2, StoreSchemaVersions.Read(connection, "portfolio"));
+            Assert.Equal(StoreSchemaRegistry.Portfolio.CurrentVersion, StoreSchemaVersions.Read(connection, "portfolio"));
         }
         var bytes = File.ReadAllBytes(workspace.PortfolioStorePath);
         var output = ExecuteCliAndCapture(["epic-plan", epic.Id], new AgentOrchestratorKernel(), workspace);

@@ -8,6 +8,9 @@ internal static class EpicPlanCommands
 {
     internal static bool Execute(string command, IReadOnlyList<string> parts, CliExecutionContext context)
     {
+        if (command == "epic-bar") return CliEpicOutcomeCommands.ExecuteLegacyBar(parts, context.Workspace);
+        var json = command == "epic-plan" && EpicProgressCommands.RequireJsonOnce(parts);
+        if (json) parts = parts.Where(part => part != "--json").ToArray();
         var (positions, flags) = Parse(parts);
         var expected = command == "epic-plan-move" ? 3 : command is "epic-plan-remove" or "epic-plan-done" ? 2 : 1;
         if (positions.Count != expected || string.IsNullOrWhiteSpace(positions[0]))
@@ -22,20 +25,23 @@ internal static class EpicPlanCommands
                 throw new ArgumentException("Supply exactly one of --backlog or --step-file.");
             if (flags.TryGetValue("--step-file", out var path)) text = ReadText(path, allowBlank: false);
         }
-        if (command is "epic-decide" or "epic-bar")
+        if (command == "epic-decide")
         {
             if (!flags.TryGetValue("--text-file", out var path)) throw new ArgumentException("--text-file is required.");
-            text = ReadText(path, allowBlank: command == "epic-bar");
+            text = ReadText(path, allowBlank: false);
         }
 
         if (!File.Exists(context.Workspace.PortfolioStorePath))
             throw new InvalidOperationException($"Epic '{positions[0]}' was not found.");
         if (command == "epic-plan")
         {
-            var portfolio = PortfolioStore.OpenReadOnly(context.Workspace.PortfolioStorePath);
-            var readEpic = portfolio.ResolveEpicAsync(positions[0]).GetAwaiter().GetResult()
-                ?? throw new InvalidOperationException($"Epic '{positions[0]}' was not found.");
-            PrintPlan(readEpic, EpicPlanStatusReader.Load(context.Workspace, [readEpic], includeReasons: true)[readEpic.Id]);
+            var row = EpicProgressReadModel.LoadEpic(context.Workspace, positions[0], includeReasons: true);
+            if (json) EpicProgressAgentReadView.Print([row]);
+            else
+            {
+                PrintPlan(row.Epic, row.Plan!);
+                PortfolioTextView.PrintOutcome(row.Outcome, row.Plan);
+            }
             return false;
         }
         var (epic, legacy) = EpicPlanWritePreparation.Resolve(context.Workspace.PortfolioStorePath, positions[0]);
@@ -54,6 +60,7 @@ internal static class EpicPlanCommands
             };
         }
         if (legacy) EpicPlanWritePreparation.ValidateLegacy(context.Workspace.PortfolioStorePath, epic, command, backlogId, at);
+        else EpicPlanWritePreparation.ValidateVersion2(context.Workspace.PortfolioStorePath, epic, command, backlogId, at, from, to);
         var store = new EpicPlanStore(context.Workspace.PortfolioStorePath);
         var write = command switch
         {
@@ -63,7 +70,6 @@ internal static class EpicPlanCommands
             "epic-plan-remove" => store.RemoveAsync(epic.Id, from),
             "epic-plan-done" => store.MarkStepDoneAsync(epic.Id, from),
             "epic-decide" => store.AddDecisionAsync(epic.Id, text!, flags.GetValueOrDefault("--by")),
-            "epic-bar" => store.SetBarAsync(epic.Id, text),
             _ => throw new InvalidOperationException($"Unknown plan command '{command}'.")
         };
         write.GetAwaiter().GetResult();

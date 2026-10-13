@@ -19,12 +19,17 @@ public static class OperatorIntentVerbs
     public const string ExperimentRevertFlag = "experiment-revert-flag";
     public const string ExperimentToggleFlag = "experiment-toggle-flag";
     public const string ExperimentDecide = "experiment-decide";
+    public const string EpicOutcomeDefine = "epic-outcome-define";
+    public const string EpicOutcomeRecord = "epic-outcome-record";
 }
 
 public static class OperatorIntentScopes
 {
     public const string Workspace = "@workspace";
 }
+
+public sealed record EpicOutcomeDefineOperatorIntentPayload(string EpicId, EpicOutcomeDefinition Definition);
+public sealed record EpicOutcomeRecordOperatorIntentPayload(string EpicId, EpicOutcomeEvidence Evidence);
 
 public enum OperatorActorKind
 {

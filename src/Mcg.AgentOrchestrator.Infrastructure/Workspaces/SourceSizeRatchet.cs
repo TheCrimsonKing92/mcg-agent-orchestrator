@@ -62,7 +62,9 @@ internal static class SourceSizeRatchet
             // Goal 936b5a43 extracted structural coverage inputs into AcceptanceStructuralCoverageInputs.
             // Goal 3b52938f extracted heartbeat context, heartbeat runtime and capture-limit stop into top-level types.
             // Goal 982098a9 moves build failure results and cache identity lifetime to AcceptanceDotnetBuildPhase; measured 4969 lines.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 4969),
+            // Goal b7ad094e adds four call-site lines binding cleanup attribution to the selected verdict's
+            // candidate/attempt before cache publication; inspection stays in AcceptanceAssemblyCleanupAttributionReader.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 4973),
             // Goal c0cfa8ae test telemetry collaborator measured at 423 lines.
             // Goal 402c1005 moved TRX completion inspection and shard decisions into AcceptanceShardCompletionAdjudicator.
             // Goal ad3fafc0 extracted run ownership publication and stale-receipt clearing into AcceptanceTestRunPreparation.
@@ -309,7 +311,9 @@ internal static class SourceSizeRatchet
             // Goal cd1f6380 adds four transaction-boundary wiring lines for post-commit actions;
             // ordered registration/execution lives in the separate PostCommitActions type.
             // Both transaction branches must register here and run only after commit; no extra headroom.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 4808),
+            // Goal 09a3023d adds four entry-point lines to preserve the authenticated submission source
+            // for outcome/compatibility mutations; parsing and application live in dedicated collaborators.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 4812),
             // Goal 03aaf13e adds the explicit-root isolation fact at the verifier's existing execution-
             // environment seam; the production verifier remains at its prior ceiling.
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs", 1611),
@@ -466,7 +470,9 @@ internal static class SourceSizeRatchet
             // Goal cd1f6380 adds five lifecycle call-site lines for early epic validation and
             // new-goal-only inheritance; resolution and assignment stay in EpicAtCreation.
             // These checks belong beside lifecycle creation/reuse; same 30 partial files, no extra headroom.
-            new SourceClassCeiling("CliCommandHandlers", 12161, 30),
+            // Goal 09a3023d extracts portfolio projection assembly into EpicProgressCommands.
+            // Measured 12157 total lines across the same 30 partial files; no extra headroom.
+            new SourceClassCeiling("CliCommandHandlers", 12157, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
             // Goal 03580ad1 extracts source-mutation edits to AcceptanceSourceMutation; measured 8938 lines in 31 partials.
@@ -476,7 +482,9 @@ internal static class SourceSizeRatchet
             // Goal b6d32304 extracts generated names to AcceptanceArtifactFileNames; measured 8685 lines in 28 partials.
             // Goal 982098a9 extracts build failure results into AcceptanceDotnetBuildPhase and cache identity lifetime
             // into DotnetBaseBuildCacheIdentityResolver; measured 8678 total lines in 28 partial files, no extra headroom.
-            new SourceClassCeiling("GoalAcceptanceVerifier", 8678, 28),
+            // Goal b7ad094e keeps the four cleanup-attribution binding lines at the verifier's verdict/cache
+            // boundary; receipt inspection is separately owned. Measured 8682 lines in the same 28 partials, no headroom.
+            new SourceClassCeiling("GoalAcceptanceVerifier", 8682, 28),
             // Goal d647b5f3 extracts premise-invalid clarification construction to PremiseInvalidClarification.
             // Goal 439c80ae extracts Reviewer evidence brief projection to ReviewerEvidenceBriefSection;
             // measured 9319 total lines across the existing 27 partial files, with no extra headroom.
@@ -512,7 +520,9 @@ internal static class SourceSizeRatchet
             // Goal cd1f6380 adds four lines at the owning transaction boundary, forwarding both
             // registrars and invoking actions after commit; list behavior lives in PostCommitActions.
             // Same 18 partial files; no extra headroom beyond the required transaction wiring.
-            new SourceClassCeiling("CliPersistentStateRunner", 5977, 18),
+            // Goal 09a3023d extracts transport attribution construction into CliOperatorIntentAttributionResolver.
+            // Measured 5964 total lines across the same 18 partial files; no extra headroom.
+            new SourceClassCeiling("CliPersistentStateRunner", 5964, 18),
             // Goal 5935c270 extracts subscription-plan output into SubscriptionPlanTextView
             // (2026-10-09 console architecture review, finding 4, taming slice 13).
             // Goal c0ff6203 extracts six small text views (taming slice 14).

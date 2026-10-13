@@ -204,6 +204,11 @@ private static bool? TryExecutePortfolioCommand(string command, IReadOnlyList<st
 
         case "epic-show":
             return EpicProgressCommands.ExecuteShow(context.Workspace, parts);
+        case "epic-outcome-define":
+        case "epic-outcome-record":
+            return CliEpicOutcomeCommands.Submit(parts, context.Workspace);
+        case "epic-outcome-proposals":
+            return EpicOutcomeMigrationProposals.Execute(parts, context.Workspace);
 
         case "epic-plan":
         case "epic-plan-add":
@@ -232,13 +237,7 @@ private static bool? TryExecutePortfolioCommand(string command, IReadOnlyList<st
 
         case "portfolio":
         case "portfolio-view":
-        {
-            var store = new PortfolioStore(context.Workspace.PortfolioStorePath);
-            var rollups = store.BuildEpicRollupsAsync(context.Kernel.Goals).GetAwaiter().GetResult();
-            var rows = store.BuildPortfolioGoalRowsAsync(context.Kernel.Goals).GetAwaiter().GetResult();
-            PortfolioTextView.PrintPortfolio(rollups, rows);
-            return false;
-        }
+            return EpicProgressCommands.ExecutePortfolio(context);
 
         case "epic-suggest":
         {
