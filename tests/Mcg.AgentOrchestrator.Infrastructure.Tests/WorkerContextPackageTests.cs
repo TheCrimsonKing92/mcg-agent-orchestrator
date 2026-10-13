@@ -9,6 +9,68 @@ public sealed class WorkerContextPackageTests(Xunit.ITestOutputHelper output)
     private const string InfrastructureTestProjectName = "Mcg.AgentOrchestrator.Infrastructure.Tests";
     private const string RealProcessShardProbeProjectName = "Mcg.AgentOrchestrator.RealProcessShardProbe";
 
+    [Xunit.Fact]
+    public void Planner_contract_retry_without_authoritative_rejected_output_fails_preparation()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            WriteEmptyRegistry(root);
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Correct evidence directive formatting", AgentRole.Planner);
+            var goal = kernel.CreateGoal("Preserve rejected research", [task]);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            kernel.RecordTaskVerification(goal.Id, task.Id,
+                new TaskVerificationRecord("worker", root, 1, "bounded preview", "contract rejection",
+                    DateTimeOffset.UtcNow.AddMinutes(-1), CompletionVerdictRule: "planner-output-contract-rejected",
+                    FullStandardOutputUnavailableReason: "capture-lost", StandardOutputIsAuthoritative: false));
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "failed");
+            kernel.RetryTaskWithAuthoritativeFeedback(goal.Id, task.Id, "Format repair", RetryCause.ContractClarification);
+
+            var error = Assert.Throws<WorkerContextPreparationException>(() => WorkerProfileDispatcher.BuildContextPackage(
+                goal, task, root, root, BriefFor(goal, task, "Repair the rejected plan")));
+
+            Assert.Equal("capture-lost", error.Reason);
+            Assert.Equal("task/rejected-planner/stdout", error.Identity.Value);
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("different-cause")]
+    [Xunit.InlineData("later-success")]
+    [Xunit.InlineData("later-unrelated-failure")]
+    [Xunit.InlineData("different-role")]
+    public void Context_does_not_deliver_an_older_or_unrelated_rejected_plan(string scenario)
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            WriteEmptyRegistry(root);
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Repair current input",
+                scenario == "different-role" ? AgentRole.Developer : AgentRole.Planner);
+            var goal = kernel.CreateGoal("Scope recovery evidence", [task]);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            kernel.RecordTaskVerification(goal.Id, task.Id,
+                new TaskVerificationRecord("worker", root, 1, "old rejected plan", "contract rejection",
+                    DateTimeOffset.UtcNow.AddMinutes(-2), CompletionVerdictRule: "planner-output-contract-rejected"));
+            if (scenario is "later-success" or "later-unrelated-failure")
+                kernel.RecordTaskVerification(goal.Id, task.Id,
+                    new TaskVerificationRecord("worker", root, scenario == "later-success" ? 0 : 1,
+                        "latest output", "", DateTimeOffset.UtcNow.AddMinutes(-1), CompletionVerdictRule: "another-rule"));
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "failed");
+            kernel.RetryTaskWithAuthoritativeFeedback(goal.Id, task.Id, "Repair latest input",
+                scenario == "different-cause" ? RetryCause.NewTestFinding : RetryCause.ContractClarification);
+
+            var package = WorkerProfileDispatcher.BuildContextPackage(
+                goal, task, root, root, BriefFor(goal, task, "Repair current input"));
+
+            Assert.DoesNotContain(package.Artifacts, artifact => artifact.Identity.Value == "task/rejected-planner/stdout");
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
     private static readonly AgentRole[] AllRoles =
     [
         AgentRole.Researcher,

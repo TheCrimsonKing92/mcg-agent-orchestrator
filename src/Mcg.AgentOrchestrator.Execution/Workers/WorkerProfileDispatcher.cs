@@ -2108,6 +2108,13 @@ public static partial class WorkerProfileDispatcher
             }
         }
 
+        var rejectedPlannerIdentity = new LogicalArtifactIdentity("task/rejected-planner/stdout");
+        if (WorkerVerificationEvidence.ProjectRejectedPlannerOutputForContext(task, targetRole, rejectedPlannerIdentity) is { } rejectedOutput)
+        {
+            AddSource(WorkerContextSemanticSource.LastVerificationOutput, rejectedPlannerIdentity.Value, ContextArtifactKind.RegisteredContext,
+                Encoding.UTF8.GetBytes(rejectedOutput), deliveryMode: ContextDeliveryMode.MandatoryFile);
+        }
+
         foreach (var priorTask in goal.Tasks.TakeWhile(candidate => candidate.Id != task.Id)
             .Where(candidate => candidate.LastVerification is not null))
         {
@@ -2308,11 +2315,6 @@ public static partial class WorkerProfileDispatcher
             manifestArtifact.Identity.Value));
         return builder.AppendFinalizedInlineArtifact(preparedWithoutManifest, manifestArtifact);
     }
-
-    private static string RequireAuthoritativeOutput(
-        TaskVerificationRecord verification,
-        LogicalArtifactIdentity identity) =>
-        WorkerVerificationEvidence.RequireAuthoritativeStandardOutput(verification, identity);
 
     private static RegistryArtifactSource ClassifyRegistryArtifact(string path) =>
         RegistryArtifactSources.TryGetValue(path, out var source)
