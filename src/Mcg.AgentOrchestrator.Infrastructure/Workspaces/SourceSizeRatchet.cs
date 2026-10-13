@@ -278,7 +278,10 @@ internal static class SourceSizeRatchet
             // projection moved to WorkerVerificationEvidence; 2605 is the measured post-extraction size.
             // Lowered for goal 81851438 after effective subscription alias selection and normalization
             // moved to WorkerSubscriptionModelResolver; 2603 is the measured integrated size, no headroom.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Workers/WorkerProfileDispatcher.cs", 2603),
+            // Raised one line for goal 139b8c97: finding-format failures must count as review history
+            // at the existing context-artifact selection seam so bounded repairs receive rejected findings.
+            // Finding projection remains in ReviewFindingContextProjector; 2606 is the measured size.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Workers/WorkerProfileDispatcher.cs", 2604),
             // Raised for goal fd252fe4: the single typed retry-cause argument belongs at the durable CLI
             // command-application boundary; classification and admission behavior remain elsewhere.
             // Goal 17d96426 classifies the stateless Hermes trial beside the existing stateless commands.
@@ -468,9 +471,14 @@ internal static class SourceSizeRatchet
             // measured 9319 total lines across the existing 27 partial files, with no extra headroom.
             // Goal 776d3dc0 extracts changed-file and conflict preview emission and typed coordinates
             // into ReviewerChangedFileScopeBriefSection. Measured 9246 lines across the same 27 partial files.
+            // Goal 139b8c97 extracts authoritative finding context attachment to ReviewFindingDispatchContext.
+            // Measured 9244 lines across the same 27 partial files; no extra headroom.
+            // Goal 139b8c97 adds one line to pass rejected-advisory diagnostics into existing coverage validation;
+            // parsing and coverage policy remain separately owned. Measured 9245 lines in the same 27 partials; no headroom.
             // Goal 207369f1 adds goal-validated completion-evidence recording and pending-aware refresh/cancel routing;
             // operation state belongs to TaskSpec. Measured 9254 across the same 27 partial files; no extra headroom.
-            new SourceClassCeiling("AgentOrchestratorKernel", 9254, 27),
+            // Integrated goal 139b8c97 with completion evidence: measured 9253 across 27 partial files, no headroom.
+            new SourceClassCeiling("AgentOrchestratorKernel", 9253, 27),
             // Goal d6033045 extracted the pre-admission receipt pass to PassedMergeTrainReceiptAdmission; goal 1d0f2317
             // adds one admission predicate to exclude stream-complete children before slot reservation. Measured 9255.
             // Goal 679eee57 added a one-line tick call to the separately owned ConductorExperimentWatch (+1); goal 80de5cb2 extracted

@@ -29,10 +29,11 @@ public sealed class FindingSeverityJsonConverter : JsonConverter<FindingSeverity
     {
         if (reader.TokenType == JsonTokenType.String)
         {
-            var value = reader.GetString();
-            return Enum.TryParse<FindingSeverity>(value, ignoreCase: true, out var severity) &&
-                   Enum.IsDefined(severity)
-                ? severity
+            var value = reader.GetString()?.Trim();
+            // Enum.TryParse also accepts comma-separated names, which can hide a blocker.
+            return string.Equals(value, nameof(FindingSeverity.Advisory), StringComparison.OrdinalIgnoreCase) ||
+                   value == "1"
+                ? FindingSeverity.Advisory
                 : FindingSeverity.Blocking;
         }
 
@@ -598,7 +599,7 @@ public static class ReviewFindings
         IReadOnlyList<(T Item, EffectiveAcceptanceCriteriaCorrection Correction)> Suppressed);
 }
 
-public static class ReviewFindingConvergence
+public static partial class ReviewFindingConvergence
 {
     public const string IdentityMovedViolationCode = "ERR_REVIEW_FINDING_IDENTITY_MOVED";
     public const string UntouchedReopenViolationCode = "ERR_REVIEW_FINDING_UNTOUCHED_REOPEN";
@@ -756,7 +757,8 @@ public static class ReviewFindingConvergence
     public static void ValidateExplicitOpenFindingCoverage(
         IReadOnlyList<ReviewFinding> previous,
         ReviewFindingRound nextRound,
-        IReadOnlyList<ReviewFindingIdentityCanonicalization>? canonicalizations = null)
+        IReadOnlyList<ReviewFindingIdentityCanonicalization>? canonicalizations = null,
+        IReadOnlyList<ReviewFindingParseDiagnostic>? advisoryRejections = null)
     {
         ArgumentNullException.ThrowIfNull(previous);
         ArgumentNullException.ThrowIfNull(nextRound);
@@ -768,10 +770,19 @@ public static class ReviewFindingConvergence
         {
             submittedIds.Add(canonicalization.PriorStableId);
         }
+        // A rejected advisory explains coverage of a prior advisory without authorizing
+        // any ledger transition. It cannot cover a prior blocker, resolve it, or downgrade it.
+        var rejectedAdvisoryIds = (advisoryRejections ?? [])
+            .Where(rejection => rejection.Severity == FindingSeverity.Advisory &&
+                !string.IsNullOrWhiteSpace(rejection.StableId))
+            .Select(rejection => rejection.StableId!)
+            .ToHashSet(StringComparer.Ordinal);
         var omitted = previous
             .Where(finding =>
                 finding.State == ReviewFindingState.Open &&
-                !submittedIds.Contains(finding.StableId))
+                !submittedIds.Contains(finding.StableId) &&
+                !(finding.Severity == FindingSeverity.Advisory &&
+                  rejectedAdvisoryIds.Contains(finding.StableId)))
             .OrderBy(finding => finding.StableId, StringComparer.Ordinal)
             .ToArray();
         if (omitted.Length == 0)
@@ -1250,35 +1261,10 @@ public static class ReviewFindingConvergence
         out ReviewFindingRound round,
         out string diagnostic)
     {
-        round = new ReviewFindingRound([], []);
-        diagnostic = string.Empty;
-        try
-        {
-            var options = new JsonSerializerOptions
-            {
-                PropertyNameCaseInsensitive = true
-            };
-            options.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower));
-
-            var findings = JsonSerializer.Deserialize<List<ReviewFinding>>(findingsJson, options);
-            var touchedAnchors = JsonSerializer.Deserialize<List<ReviewFindingLocation>>(touchedAnchorsJson, options);
-            if (findings is null || touchedAnchors is null)
-            {
-                diagnostic = "findings or touched_anchors JSON was null.";
-                return false;
-            }
-
-            ValidateFindings(findings);
-            ValidateAnchors(touchedAnchors);
-            ValidateUniqueStableIds(findings, "reviewer");
-            round = new ReviewFindingRound(findings, touchedAnchors);
-            return true;
-        }
-        catch (Exception ex) when (ex is JsonException or ArgumentException or InvalidOperationException)
-        {
-            diagnostic = ex.Message;
-            return false;
-        }
+        var result = ParseJson(findingsJson, touchedAnchorsJson);
+        round = result.FatalDiagnostic is null ? result.Round : new ReviewFindingRound([], []);
+        diagnostic = result.FatalDiagnostic?.Reason ?? string.Empty;
+        return result.FatalDiagnostic is null;
     }
 
     private static bool AnchorWasTouched(
@@ -1355,6 +1341,8 @@ public static class ReviewFindingConvergence
     {
         foreach (var finding in findings)
         {
+            if (finding is null)
+                throw new ArgumentException("Every review finding requires stable_id, state, location.file, location.region, and description.");
             if (finding.EvidenceRequest is { Mutation: not null, RevertPaths: not null })
                 throw new ArgumentException("mutation and revert_paths are mutually exclusive");
             if (finding.EvidenceRequest is { Mutation: not null, NegativeControl: null })
@@ -1375,7 +1363,7 @@ public static class ReviewFindingConvergence
     private static void ValidateAnchors(IEnumerable<ReviewFindingLocation> anchors)
     {
         if (anchors.Any(anchor =>
-            string.IsNullOrWhiteSpace(anchor.File) ||
+            anchor is null || string.IsNullOrWhiteSpace(anchor.File) ||
             string.IsNullOrWhiteSpace(anchor.Region)))
         {
             throw new ArgumentException("Every touched anchor requires file and region.");
