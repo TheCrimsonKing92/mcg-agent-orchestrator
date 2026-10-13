@@ -62,7 +62,9 @@ internal static class SourceSizeRatchet
             // Goal 936b5a43 extracted structural coverage inputs into AcceptanceStructuralCoverageInputs.
             // Goal 3b52938f extracted heartbeat context, heartbeat runtime and capture-limit stop into top-level types.
             // Goal 982098a9 moves build failure results and cache identity lifetime to AcceptanceDotnetBuildPhase; measured 4969 lines.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 4969),
+            // Goal b7ad094e adds four call-site lines binding cleanup attribution to the selected verdict's
+            // candidate/attempt before cache publication; inspection stays in AcceptanceAssemblyCleanupAttributionReader.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 4973),
             // Goal c0cfa8ae test telemetry collaborator measured at 423 lines.
             // Goal 402c1005 moved TRX completion inspection and shard decisions into AcceptanceShardCompletionAdjudicator.
             // Goal ad3fafc0 extracted run ownership publication and stale-receipt clearing into AcceptanceTestRunPreparation.
@@ -476,7 +478,9 @@ internal static class SourceSizeRatchet
             // Goal b6d32304 extracts generated names to AcceptanceArtifactFileNames; measured 8685 lines in 28 partials.
             // Goal 982098a9 extracts build failure results into AcceptanceDotnetBuildPhase and cache identity lifetime
             // into DotnetBaseBuildCacheIdentityResolver; measured 8678 total lines in 28 partial files, no extra headroom.
-            new SourceClassCeiling("GoalAcceptanceVerifier", 8678, 28),
+            // Goal b7ad094e keeps the four cleanup-attribution binding lines at the verifier's verdict/cache
+            // boundary; receipt inspection is separately owned. Measured 8682 lines in the same 28 partials, no headroom.
+            new SourceClassCeiling("GoalAcceptanceVerifier", 8682, 28),
             // Goal d647b5f3 extracts premise-invalid clarification construction to PremiseInvalidClarification.
             // Goal 439c80ae extracts Reviewer evidence brief projection to ReviewerEvidenceBriefSection;
             // measured 9319 total lines across the existing 27 partial files, with no extra headroom.
