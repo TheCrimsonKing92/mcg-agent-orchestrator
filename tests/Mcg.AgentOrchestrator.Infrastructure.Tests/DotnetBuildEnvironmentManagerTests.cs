@@ -170,8 +170,8 @@ public sealed partial class DotnetBuildEnvironmentManagerTests : DotnetBuildEnvi
             var staleFile = Path.Combine(warmArtifacts, "bin", "Mcg.AgentOrchestrator.Core", "debug_net10.0", "stale-extra.txt");
             File.WriteAllText(staleFile, "stale");
 
-            var publish = cache.Publish("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", coldArtifacts, [project]);
-            var restore = cache.Restore("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", warmArtifacts, [project]);
+            var publish = cache.Publish("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", coldArtifacts, [project], new("fixture-v1"));
+            var restore = cache.Restore("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", warmArtifacts, [project], new("fixture-v1"));
 
             Assert.Single(publish.Projects);
             Assert.True(restore.AllHit);
@@ -195,9 +195,9 @@ public sealed partial class DotnetBuildEnvironmentManagerTests : DotnetBuildEnvi
         try
         {
             WriteProjectArtifacts(artifacts, project, "sha-one");
-            cache.Publish("1111111111111111111111111111111111111111", artifacts, [project]);
+            cache.Publish("1111111111111111111111111111111111111111", artifacts, [project], new("fixture-v1"));
 
-            var restore = cache.Restore("2222222222222222222222222222222222222222", Path.Combine(root, "warm"), [project]);
+            var restore = cache.Restore("2222222222222222222222222222222222222222", Path.Combine(root, "warm"), [project], new("fixture-v1"));
 
             var receipt = Assert.Single(restore.Projects);
             Assert.Equal("miss", receipt.Status);
@@ -219,10 +219,10 @@ public sealed partial class DotnetBuildEnvironmentManagerTests : DotnetBuildEnvi
         try
         {
             WriteProjectArtifacts(sourceArtifacts, project, "slot");
-            cache.Publish("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", sourceArtifacts, [project]);
+            cache.Publish("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", sourceArtifacts, [project], new("fixture-v1"));
             var slot = RootedDotnetBuildEnvironmentManager.CreateStableSlotAttempt(StorageRoot, 0);
 
-            var restore = cache.Restore("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", slot.ArtifactsPath, [project]);
+            var restore = cache.Restore("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", slot.ArtifactsPath, [project], new("fixture-v1"));
 
             Assert.True(restore.AllHit);
             Assert.Contains(Path.Combine("runs", $"p{Environment.ProcessId}-build-0", "artifacts"), slot.ArtifactsPath, StringComparison.OrdinalIgnoreCase);
@@ -250,8 +250,7 @@ public sealed partial class DotnetBuildEnvironmentManagerTests : DotnetBuildEnvi
             {
                 TryDeleteDirectory(artifacts);
                 WriteProjectArtifacts(artifacts, project, $"entry-{index}");
-                cache.Publish($"{index}{new string('a', 39)}", artifacts, [project]);
-                Thread.Sleep(5);
+                cache.Publish($"{index}{new string('a', 39)}", artifacts, [project], new("fixture-v1"));
             }
 
             var entries = Directory.EnumerateDirectories(cacheRoot)

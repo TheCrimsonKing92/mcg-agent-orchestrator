@@ -37,25 +37,42 @@ internal sealed record AcceptanceDotnetBuildPhaseHooks(
     Func<string[], string, Action<DotnetBuildEnvironment>?, DotnetBuildEnvironment?, Task<(AcceptanceCheckResult Result, bool Retried)>> RunManagedCheckAsync,
     Func<string, DotnetBuildEnvironment> ResolveExecutionEnvironment,
     Func<string, string> AttemptSlug,
-    Func<DotnetBaseBuildCache> ResolveBaseBuildCache);
+    Func<DotnetBaseBuildCache> ResolveBaseBuildCache,
+    Func<DotnetTestBuildPhase, DotnetBuildEnvironment, Task<DotnetBaseBuildCacheIdentity?>> ResolveCacheIdentityAsync);
 
 internal sealed class AcceptanceDotnetBuildPhase
 {
-    private static readonly string[] CacheableProjects =
-    [
-        CoreProject,
-        ProvidersProject,
-        OperatorCommsProject,
-        InfrastructureProject,
-        AppProject,
-        CoreTestsProject,
-        InfrastructureTestsProject,
-        AcceptanceTestsProject,
-        ExecutionTestsProject,
-        TestSupportProject,
-        ProviderEnvironmentTestsProject,
-        CliTestsProject
-    ];
+    internal static AcceptanceCheckResult FailureResult(
+        BuildPhaseManifestCheck check, AcceptanceCheckResult buildResult, bool captureLimited)
+    {
+        var timedOut = buildResult.CompletionDecision?.TimedOut == true && !captureLimited;
+        return buildResult with
+        {
+            Name = check.Name,
+            FailureClassification = timedOut
+                ? AcceptanceFailureClassifications.BuildPhaseTimeout
+                : buildResult.FailureClassification,
+            ResultSummary = PrefixResultSummary(
+                timedOut ? "build phase timed out (build-phase budget)" : "build phase failed",
+                buildResult.ResultSummary)
+        };
+    }
+
+    internal static async Task<DotnetBaseBuildCacheIdentity?> ResolveIdentityAsync(
+        DotnetTestBuildPhase phase, DotnetBuildEnvironment environment, string worktreePath,
+        Func<IDisposable?> acquirePermit,
+        Func<string[], Task<GoalAcceptanceVerifier.CommandResult>> run,
+        Func<DotnetBaseBuildCacheIdentity?>? resolveForTests)
+    {
+        if (resolveForTests is not null) return resolveForTests();
+        using var permit = acquirePermit();
+        var processEnvironment = Environment.GetEnvironmentVariables().Cast<System.Collections.DictionaryEntry>()
+            .ToDictionary(entry => (string)entry.Key, entry => (string?)entry.Value);
+        GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(processEnvironment, worktreePath, environment.RootPath);
+        return await DotnetBaseBuildCacheIdentityResolver.ResolveAsync(
+            worktreePath, phase.CachePlan!.RestoreProjects, phase.BuildArguments, environment, run,
+            processEnvironment.ToDictionary(entry => entry.Key, entry => entry.Value ?? "")).ConfigureAwait(false);
+    }
 
     internal static DotnetTestBuildPhase Create(
         string worktreePath,
@@ -67,11 +84,8 @@ internal sealed class AcceptanceDotnetBuildPhase
         var dotnetTestChecks = checks
             .Where(check => check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase))
             .ToArray();
-        var cacheableProjects = CacheableProjects
-            .Where(project =>
-                (!ProjectMatches(project, AcceptanceTestsProject) &&
-                 !ProjectMatches(project, ExecutionTestsProject)) ||
-                dotnetTestChecks.Any(check => ProjectMatches(check.Project, project)))
+        var cacheableProjects = CacheEligibleProjects(
+            dotnetTestChecks.Select(check => NormalizePath(check.Project)!), policyShardPlan)
             .ToArray();
         DotnetBaseBuildCachePlan? cachePlan = TryCreateBaseBuildCachePlan(
             worktreePath,
@@ -116,9 +130,8 @@ internal sealed class AcceptanceDotnetBuildPhase
             return null;
         }
 
-        var buildProjects = policyShardPlan.DependencyClosure
-            .Where(project => cacheableProjects.Contains(project, StringComparer.OrdinalIgnoreCase))
-            .OrderBy(project => Array.IndexOf(cacheableProjects, project))
+        var buildProjects = cacheableProjects
+            .Where(project => policyShardPlan.DependencyClosure.Contains(project, StringComparer.OrdinalIgnoreCase))
             .ToArray();
         if (buildProjects.Length == 0 || buildProjects.Length == cacheableProjects.Length)
         {
@@ -206,56 +219,79 @@ internal sealed class AcceptanceDotnetBuildPhase
         }
 
         var wall = Stopwatch.StartNew();
-        var environment = hooks.ResolveExecutionEnvironment($"{attemptName}-cache");
+        var environment = phase.BuildEnvironment ?? throw new InvalidOperationException("Cache restoration requires an owned build environment.");
+        var identity = await hooks.ResolveCacheIdentityAsync(phase, environment).ConfigureAwait(false);
+        if (identity is null)
+        {
+            EmitBaseBuildCacheReceipt($"base-build-cache main_sha={plan.MainSha} status=miss reason=unresolved-build-inputs");
+            return null;
+        }
         var cache = hooks.ResolveBaseBuildCache();
-        var restore = cache.Probe(plan.MainSha, plan.RestoreProjects);
+        var restore = cache.Probe(plan.MainSha, plan.RestoreProjects, identity);
         var retried = false;
         var lockRemediationApplied = false;
         (AcceptanceCheckResult Result, bool Retried)? lastRun = null;
-        IReadOnlyList<string> builtProjects;
+        IReadOnlyList<string> builtProjects = plan.BuildProjects;
         DotnetBaseBuildCachePublishResult? publish = null;
 
         if (restore.AllHit)
         {
             builtProjects = plan.BuildProjects;
             var restoredIntoPreparedSlot = false;
-            foreach (var project in plan.BuildProjects)
+            try
             {
-                var projectRun = await hooks.RunManagedCheckAsync(
-                    BuildDotnetProjectBuildArguments(project, phase.BuildArguments),
-                    $"{attemptName}-build-{hooks.AttemptSlug(ProjectLabel(project))}",
-                    preparedEnvironment =>
-                    {
-                        if (restoredIntoPreparedSlot)
-                        {
-                            return;
-                        }
-
-                        restore = cache.Restore(plan.MainSha, preparedEnvironment.ArtifactsPath, plan.RestoreProjects);
-                        restoredIntoPreparedSlot = true;
-                    }, null).ConfigureAwait(false);
-                retried |= projectRun.Retried;
-                lockRemediationApplied |= projectRun.Result.LockRemediationApplied;
-                lastRun = projectRun;
-                if (!projectRun.Result.Passed)
+                foreach (var project in plan.BuildProjects)
                 {
-                    break;
+                    var projectRun = await hooks.RunManagedCheckAsync(
+                        BuildDotnetProjectBuildArguments(project, phase.BuildArguments),
+                        $"{attemptName}-build-{hooks.AttemptSlug(ProjectLabel(project))}",
+                        preparedEnvironment =>
+                        {
+                            if (restoredIntoPreparedSlot)
+                            {
+                                return;
+                            }
+
+                            restore = cache.Restore(plan.MainSha, preparedEnvironment.ArtifactsPath, plan.RestoreProjects, identity);
+                            if (!restore.AllHit)
+                            {
+                                cache.ClearRestoredProjects(preparedEnvironment.ArtifactsPath, plan.RestoreProjects);
+                                throw new BaseBuildCacheRestoreMissException();
+                            }
+                            restoredIntoPreparedSlot = true;
+                        }, environment).ConfigureAwait(false);
+                    retried |= projectRun.Retried;
+                    lockRemediationApplied |= projectRun.Result.LockRemediationApplied;
+                    lastRun = projectRun;
+                    if (!projectRun.Result.Passed)
+                    {
+                        break;
+                    }
                 }
             }
+            catch (BaseBuildCacheRestoreMissException)
+            {
+                // Probe is provisional; no focused build may run on a partial restore.
+                lastRun = null;
+            }
         }
-        else
+        if (!restore.AllHit)
         {
             builtProjects = plan.CacheableProjects;
             lastRun = await hooks.RunManagedCheckAsync(
                 phase.BuildArguments,
                 $"{attemptName}-build",
                 null,
-                null).ConfigureAwait(false);
+                environment).ConfigureAwait(false);
             retried |= lastRun.Value.Retried;
             lockRemediationApplied |= lastRun.Value.Result.LockRemediationApplied;
             if (lastRun.Value.Result.Passed)
             {
-                publish = cache.Publish(plan.MainSha, environment.ArtifactsPath, plan.RestoreProjects);
+                // Build targets may change inputs. Re-resolve before publication rather than
+                // labeling new outputs with a pre-build identity that is no longer current.
+                var afterBuildIdentity = await hooks.ResolveCacheIdentityAsync(phase, environment).ConfigureAwait(false);
+                if (afterBuildIdentity == identity)
+                    publish = cache.Publish(plan.MainSha, environment.ArtifactsPath, plan.RestoreProjects, identity);
             }
         }
 
@@ -270,6 +306,7 @@ internal sealed class AcceptanceDotnetBuildPhase
             restore,
             publish,
             builtProjects,
+            identity,
             (long)wall.Elapsed.TotalMilliseconds);
         EmitBaseBuildCacheReceipt(receiptSummary);
         return (lastRun.Value.Result with
@@ -280,11 +317,14 @@ internal sealed class AcceptanceDotnetBuildPhase
         }, retried);
     }
 
+    private sealed class BaseBuildCacheRestoreMissException : Exception;
+
     private static string BuildBaseBuildCacheSummary(
         DotnetBaseBuildCachePlan plan,
         DotnetBaseBuildCacheRestoreResult restore,
         DotnetBaseBuildCachePublishResult? publish,
         IReadOnlyList<string> builtProjects,
+        DotnetBaseBuildCacheIdentity identity,
         long buildPhaseMilliseconds)
     {
         var projectReceipts = plan.CacheableProjects
@@ -305,7 +345,7 @@ internal sealed class AcceptanceDotnetBuildPhase
             });
         var evictions = restore.Evictions.Concat(publish?.Evictions ?? []).ToArray();
         return
-            $"base-build-cache main_sha={plan.MainSha} build_phase_ms={buildPhaseMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} " +
+            $"base-build-cache main_sha={plan.MainSha} input_identity={identity.Fingerprint} build_phase_ms={buildPhaseMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} " +
             $"projects={string.Join(",", projectReceipts)} " +
             $"built_projects={string.Join(",", builtProjects.Select(ProjectLabel))} " +
             $"evictions={(evictions.Length == 0 ? "none" : string.Join(",", evictions))}";
