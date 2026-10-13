@@ -2949,8 +2949,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             name => ResolveExecutionEnvironment(goalId, name, stableSlotIndex, stableSlotLease),
             AcceptanceArtifactFileNames.Slug,
             () => _testOverrides.BaseBuildCacheForTests ?? DotnetBaseBuildCache.Default(_storageRoot),
-            (candidate, environment) => ResolveBaseBuildCacheIdentityAsync(
-                candidate, environment, worktreePath,
+            (candidate, environment) => DotnetBaseBuildCacheIdentityResolver.ResolveForBuildPhaseAsync(
+                candidate, environment, worktreePath, ConfigureHermeticVerificationEnvironment,
                 () => stableSlotLease?.IsExecutionLockHeld == true
                     ? null : AcquireCheckPermit(environment, goalId, wait: false, cancellationToken),
                 arguments => RunLaneTestHostWithShardPermitAsync(arguments, worktreePath,

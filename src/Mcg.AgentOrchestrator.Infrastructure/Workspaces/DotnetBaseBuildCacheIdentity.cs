@@ -10,6 +10,23 @@ internal sealed record DotnetBaseBuildCacheIdentity(string Fingerprint);
 
 internal static class DotnetBaseBuildCacheIdentityResolver
 {
+    internal static async Task<DotnetBaseBuildCacheIdentity?> ResolveForBuildPhaseAsync(
+        DotnetTestBuildPhase phase, DotnetBuildEnvironment environment, string worktreePath,
+        Action<IDictionary<string, string?>, string, string?> configureEnvironment,
+        Func<IDisposable?> acquirePermit,
+        Func<string[], Task<GoalAcceptanceVerifier.CommandResult>> run,
+        Func<DotnetBaseBuildCacheIdentity?>? resolveForTests)
+    {
+        if (resolveForTests is not null) return resolveForTests();
+        using var permit = acquirePermit();
+        var processEnvironment = Environment.GetEnvironmentVariables().Cast<DictionaryEntry>()
+            .ToDictionary(entry => (string)entry.Key, entry => (string?)entry.Value);
+        configureEnvironment(processEnvironment, worktreePath, environment.RootPath);
+        return await ResolveAsync(
+            worktreePath, phase.CachePlan!.RestoreProjects, phase.BuildArguments, environment, run,
+            processEnvironment.ToDictionary(entry => entry.Key, entry => entry.Value ?? "")).ConfigureAwait(false);
+    }
+
     private const string Properties = "Configuration,TargetFramework,TargetFrameworks,RuntimeIdentifier,NETCoreSdkVersion,MSBuildSDKsPath,ProjectAssetsFile,MSBuildAllProjects";
     private const string Items = "Compile,Analyzer,AdditionalFiles,EditorConfigFiles,GlobalAnalyzerConfigFiles,AnalyzerConfigFiles,EmbeddedResource,Content,None,ProjectReference,Reference";
 

@@ -466,8 +466,8 @@ internal static class SourceSizeRatchet
             // Goal 80b085c6 extracts owner-protected fingerprints to AcceptanceOwnerProtectedFingerprint; measured 8774 lines in 29 partials.
             // Goal c2c58d62 extracts launch-lock summary preservation to AcceptanceLaunchLockSummary; measured 8725 lines in 28 partials.
             // Goal b6d32304 extracts generated names to AcceptanceArtifactFileNames; measured 8685 lines in 28 partials.
-            // Goal 982098a9 extracts build failure results and cache identity lifetime into AcceptanceDotnetBuildPhase.
-            // Measured 8678 total lines across the same 28 partial files; no extra headroom.
+            // Goal 982098a9 extracts build failure results into AcceptanceDotnetBuildPhase and cache identity lifetime
+            // into DotnetBaseBuildCacheIdentityResolver; measured 8678 total lines in 28 partial files, no extra headroom.
             new SourceClassCeiling("GoalAcceptanceVerifier", 8678, 28),
             // Goal d647b5f3 extracts premise-invalid clarification construction to PremiseInvalidClarification.
             // Goal 439c80ae extracts Reviewer evidence brief projection to ReviewerEvidenceBriefSection;
