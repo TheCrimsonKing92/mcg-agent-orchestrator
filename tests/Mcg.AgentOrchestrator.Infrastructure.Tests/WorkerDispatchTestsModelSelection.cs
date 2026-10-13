@@ -3255,22 +3255,14 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
             worktree,
             DateTimeOffset.Parse("2026-08-08T10:01:00Z"));
         kernel.RecordDispatchBaseCommit(goal.Id, tester.Id, priorCommit);
-        kernel.RecordDispatchExecutionResult(
-            goal.Id,
-            tester.Id,
-            new TaskVerificationRecord(
-                tester.LastDispatch!.Command,
-                worktree,
-                0,
-                AfcTesterOutput(new ReviewFinding(
+        RecordAfcVerification(kernel, goal, tester,
+                AfcVerificationOutput(new ReviewFinding(
                     "reported-goals-may-lack-timeline-evidence",
                     ReviewFindingState.Open,
                     priorLocation,
                     "Reported goals may lack timeline evidence.",
-                    FindingSeverity.Advisory)),
-                string.Empty,
-                DateTimeOffset.Parse("2026-08-08T10:02:00Z"),
-                WorkerResultPresent: true));
+                    FindingSeverity.Advisory), tester.RequiredRole),
+                DateTimeOffset.Parse("2026-08-08T10:02:00Z"));
         Assert.Equal(WorkTaskStatus.Completed, tester.Status);
 
         var movedPath = Path.Combine(sourceDirectory, "TerminalGoalTimeline.cs");
@@ -3314,17 +3306,9 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         Assert.Contains(priorLocation.ToString(), File.ReadAllText(prepared.PromptPath), StringComparison.Ordinal);
         Assert.Null(tester.LastProcess);
         kernel.RecordDispatchBaseCommit(goal.Id, tester.Id, movedCommit);
-        kernel.RecordDispatchExecutionResult(
-            goal.Id,
-            tester.Id,
-            new TaskVerificationRecord(
-                tester.LastDispatch.Command,
-                worktree,
-                0,
-                AfcTesterOutput(movedFinding),
-                string.Empty,
-                DateTimeOffset.Parse("2026-08-08T10:05:00Z"),
-                WorkerResultPresent: true));
+        RecordAfcVerification(kernel, goal, tester,
+            AfcVerificationOutput(movedFinding, tester.RequiredRole),
+            DateTimeOffset.Parse("2026-08-08T10:05:00Z"));
 
         Assert.Equal(WorkTaskStatus.Completed, tester.Status);
         Assert.Null(tester.LastVerification!.ReviewFindingContractViolation);
@@ -3368,22 +3352,15 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
             worktree,
             DateTimeOffset.Parse("2026-08-08T11:01:00Z"));
         kernel.RecordDispatchBaseCommit(goal.Id, task.Id, unchangedCommit);
-        kernel.RecordDispatchExecutionResult(
-            goal.Id,
-            task.Id,
-            new TaskVerificationRecord(
-                task.LastDispatch!.Command,
-                worktree,
-                0,
-                AfcTesterOutput(new ReviewFinding(
+        RecordAfcVerification(kernel, goal, task,
+                AfcVerificationOutput(new ReviewFinding(
                     "reported-goals-may-lack-timeline-evidence",
                     ReviewFindingState.Open,
                     priorLocation,
                     "Reported goals may lack timeline evidence.",
-                    FindingSeverity.Advisory)),
-                string.Empty,
-                DateTimeOffset.Parse("2026-08-08T11:02:00Z"),
-                WorkerResultPresent: true));
+                    FindingSeverity.Advisory), role),
+                DateTimeOffset.Parse("2026-08-08T11:02:00Z"));
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
 
         kernel.RetryTask(goal.Id, task.Id, "Recheck without a Developer change.");
         WorkerProfileDispatcher.PrepareTask(
@@ -3399,22 +3376,14 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         Assert.Null(task.LastDispatch.ReviewFindingTouchProofDiagnostic);
         Assert.Null(task.LastProcess);
         kernel.RecordDispatchBaseCommit(goal.Id, task.Id, unchangedCommit);
-        kernel.RecordDispatchExecutionResult(
-            goal.Id,
-            task.Id,
-            new TaskVerificationRecord(
-                task.LastDispatch.Command,
-                worktree,
-                0,
-                AfcTesterOutput(new ReviewFinding(
+        RecordAfcVerification(kernel, goal, task,
+                AfcVerificationOutput(new ReviewFinding(
                     "reported-goals-may-lack-timeline-evidence",
                     ReviewFindingState.Open,
                     movedLocation,
                     "Reported goals may lack timeline evidence.",
-                    FindingSeverity.Advisory)),
-                string.Empty,
-                DateTimeOffset.Parse("2026-08-08T11:04:00Z"),
-                WorkerResultPresent: true));
+                    FindingSeverity.Advisory), role),
+                DateTimeOffset.Parse("2026-08-08T11:04:00Z"));
 
         Assert.Equal(WorkTaskStatus.Completed, task.Status);
         Assert.Equal(unchangedCommit, task.LastVerification!.ReviewedCommit);
@@ -3426,7 +3395,28 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
             item.Message.Contains("canonical_stable_id=reported-goals-may-lack-timeline-evidence", StringComparison.Ordinal));
     }
 
-    private static string AfcTesterOutput(ReviewFinding finding) => string.Join(
+    private static void RecordAfcVerification(
+        AgentOrchestratorKernel kernel, Goal goal, TaskSpec task, string stdout, DateTimeOffset completedAt)
+    {
+        // These fixtures intentionally prepare dispatches without starting a worker.
+        Assert.Null(task.LastProcess);
+        var dispatch = task.LastDispatch!;
+        Assert.True(completedAt > dispatch.DispatchedAt);
+        var verification = new TaskVerificationRecord(
+            dispatch.Command, dispatch.WorkingDirectory, 0, stdout, string.Empty, completedAt,
+            WorkerResultPresent: true,
+            FullStandardOutput: stdout,
+            DispatchStartedAt: dispatch.DispatchedAt,
+            EvidenceSource: VerificationEvidenceSource.Dispatch,
+            DispatchAttemptAt: dispatch.DispatchedAt);
+        Assert.Equal(VerificationTerminalContractStatus.Valid,
+            WorkerResultBlockers.AssessSubscriptionVerification(task, verification).Status);
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, verification);
+        Assert.Equal(VerificationTerminalContractStatus.Valid,
+            WorkerResultBlockers.AssessSubscriptionVerification(task, task.LastVerification!).Status);
+    }
+
+    private static string AfcVerificationOutput(ReviewFinding finding, AgentRole role) => string.Join(
         Environment.NewLine,
         "WORKER_RESULT:",
         "files: none",
@@ -3436,6 +3426,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         "blockers: none",
         $"findings: {JsonSerializer.Serialize(new[] { finding })}",
         "touched_anchors: []",
+        role == AgentRole.Reviewer ? "criteria_verdicts: []" : string.Empty,
         "verdict: pass",
         "model_fit: OpenAI/gpt-5.5 - adequate - focused test - fixture", // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
         "skills: none",
