@@ -261,7 +261,11 @@ public sealed class OperatorIntentStoreTests
             var outcome = await store.GetAsync(intent.Id);
 
             Xunit.Assert.True(result.MutatedGoalState);
-            Xunit.Assert.Equal(verification with { AcceptanceCriteriaVersionHash = "no-refined-spec" }, kernel.GetTask(goal.Id, task.Id).LastVerification);
+            Xunit.Assert.Equal(verification with
+            {
+                AcceptanceCriteriaVersionHash = "no-refined-spec",
+                EvidenceSource = VerificationEvidenceSource.Manual
+            }, kernel.GetTask(goal.Id, task.Id).LastVerification);
             Xunit.Assert.Equal(OperatorIntentStatus.Applied, outcome!.Status);
             Xunit.Assert.Equal("dashboard", outcome.Channel);
             Xunit.Assert.Equal("dashboard-operator-control", outcome.AuthenticationAssurance);

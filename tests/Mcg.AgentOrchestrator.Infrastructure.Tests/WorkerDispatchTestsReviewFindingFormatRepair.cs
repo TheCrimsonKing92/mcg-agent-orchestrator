@@ -31,9 +31,42 @@ public sealed class WorkerDispatchTestsReviewFindingFormatRepair : WorkerDispatc
         });
         var output = string.Join("\n", "WORKER_RESULT:", "files: none", "commands: none", "tests: pass",
             "commit: none", "blockers: none", "verdict: pass", "findings: " + rejected,
-            "touched_anchors: []", "END_WORKER_RESULT");
-        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id,
-            new(reviewer.LastDispatch.Command, root, 0, output, "", DateTimeOffset.UtcNow, WorkerResultPresent: true));
+            "touched_anchors: []", "criteria_verdicts: []",
+            "model_fit: fixture/model - adequate - finding format repair",
+            "skills: none", "confidence: high", "END_WORKER_RESULT");
+        var verification = new TaskVerificationRecord(reviewer.LastDispatch.Command, root, 0, output, "",
+            DateTimeOffset.UtcNow, WorkerResultPresent: true,
+            DispatchStartedAt: reviewer.LastDispatch.DispatchedAt,
+            DispatchAttemptAt: reviewer.LastDispatch.DispatchedAt,
+            EvidenceSource: VerificationEvidenceSource.Dispatch, ReviewedCommit: candidate);
+        Assert.False(WorkerResultBlockers.TryFindReviewFindingRound(verification, out _, out _, out _, out var violation));
+        Assert.NotNull(violation);
+        Assert.Equal(VerificationTerminalContractStatus.Malformed,
+            WorkerResultBlockers.AssessSubscriptionVerification(reviewer, verification).Status);
+        // Prompt delivery consumes a retained typed rejection. Actual subscription completion
+        // now routes this malformed contract to same-role repair before finding convergence.
+        var rejectedRound = new TaskVerificationSnapshot(verification.Command, root, 0, output, "",
+            verification.CompletedAt, ReviewedCommit: candidate, MergedReviewFindings: [],
+            WorkerResultPresent: true, ReviewFindingContractViolation: violation,
+            DispatchStartedAt: verification.DispatchStartedAt, AuthoritativeStandardOutput: output,
+            AuthoritativeStandardError: "", EvidenceSource: VerificationEvidenceSource.Dispatch,
+            DispatchAttemptAt: verification.DispatchAttemptAt);
+        var snapshot = kernel.ExportSnapshot();
+        var goalSnapshot = snapshot.Goals.Single();
+        kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with
+        {
+            Goals = [goalSnapshot with
+            {
+                Tasks = [goalSnapshot.Tasks.Single() with
+                {
+                    Status = WorkTaskStatus.Failed,
+                    LastVerification = rejectedRound,
+                    VerificationHistory = [rejectedRound]
+                }]
+            }]
+        });
+        goal = kernel.GetGoal(goal.Id);
+        reviewer = kernel.GetTask(goal.Id, reviewer.Id);
         Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
         Assert.Empty(reviewer.LastVerification!.MergedReviewFindings!);
         kernel.RetryTask(goal.Id, reviewer.Id, "review-finding contract-repair: attempt 1/1",

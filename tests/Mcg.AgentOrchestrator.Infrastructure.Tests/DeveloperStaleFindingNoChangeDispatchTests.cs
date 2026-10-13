@@ -124,10 +124,13 @@ public sealed class DeveloperStaleFindingNoChangeDispatchTests : WorkerDispatchT
         var output = WorkerResultBlock("none", "fixture check", "fail - candidate finding",
             commit: "none", blockers: "candidate finding remains");
         if (role == AgentRole.Reviewer) output = output.Replace("END_WORKER_RESULT",
-            "verdict: needs-work\nEND_WORKER_RESULT", StringComparison.Ordinal);
+            "verdict: needs-work\nfindings: []\ntouched_anchors: []\ncriteria_verdicts: []\nEND_WORKER_RESULT", StringComparison.Ordinal);
         scenario.Kernel.RecordDispatchExecutionResult(scenario.Goal.Id, raising.Id,
             new TaskVerificationRecord("fixture", scenario.Process.WorkingDirectory, 1, output,
-                string.Empty, scenario.Clock.UtcNow, WorkerResultPresent: true));
+                string.Empty, scenario.Clock.UtcNow, WorkerResultPresent: true,
+                DispatchStartedAt: raising.LastDispatch!.DispatchedAt));
+        Xunit.Assert.Equal(VerificationTerminalContractStatus.Valid,
+            WorkerResultBlockers.AssessSubscriptionVerification(raising, raising.LastVerification!).Status);
         Xunit.Assert.Equal(WorkTaskStatus.Failed, raising.Status);
         Xunit.Assert.Equal(reviewedCommit, raising.LastVerification!.ReviewedCommit);
         if (role == AgentRole.Reviewer)
@@ -237,4 +240,3 @@ public sealed class DeveloperStaleFindingNoChangeDispatchTests : WorkerDispatchT
         public void Refresh() => Runner.RefreshLatestProcess(Kernel, Goal.Id, Task.Id);
     }
 }
-
