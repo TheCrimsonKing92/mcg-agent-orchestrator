@@ -512,6 +512,276 @@ public sealed class MtpTestRunnerScriptTests
         Xunit.Assert.Contains("*GoalWorktreeTests*", arguments);
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData("success")]
+    [Xunit.InlineData("failed")]
+    public void NestedDiagnostics_RunExit_PreservesFilesAcrossCleanup(string behavior)
+    {
+        using var sandbox = ScriptSandbox.Create(behavior);
+        sandbox.AddNestedDiagnosticsToRunner();
+        var result = sandbox.RunPartition("GoalWorktree");
+        var terminal = TerminalSummary(result);
+        Assert.Equal(behavior == "success" ? 0 : 3, result.ExitCode);
+        var original = terminal.GetProperty("resultsDirectory").GetString()!;
+        var retained = behavior == "success" ? terminal.GetProperty("retainedEvidenceDirectory").GetString()! : original;
+        var diagnostics = Path.Combine(retained, "nested-managed-projects", "p-1234abcd");
+        Assert.Equal("nested build sentinel", File.ReadAllText(Path.Combine(diagnostics, "build.binlog")));
+        Assert.Equal("nested phase sentinel", File.ReadAllText(Path.Combine(diagnostics, "phases.jsonl")));
+        Assert.Equal("nested custody sentinel", File.ReadAllText(Path.Combine(diagnostics, ".mtp-run-ownership.json")));
+        Assert.True(File.Exists(Path.Combine(retained, ".mtp-run-ownership.json")));
+        Assert.Equal(behavior != "success", Directory.Exists(original));
+        if (behavior == "success")
+        {
+            using var receipt = JsonDocument.Parse(File.ReadAllText(Path.Combine(retained, "run-identity.json")));
+            var files = receipt.RootElement.GetProperty("nestedManagedProjects").EnumerateArray().ToArray();
+            Assert.Equal(3, files.Length);
+            foreach (var file in files)
+            {
+                var path = Path.Combine(retained, file.GetProperty("file").GetString()!);
+                Assert.Equal(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(path))),
+                    file.GetProperty("sha256").GetString());
+                Assert.Equal(new FileInfo(path).Length, file.GetProperty("bytes").GetInt64());
+            }
+        }
+    }
+
+    [Xunit.Fact]
+    public void NestedDiagnostics_InvalidLayout_FailsRetentionWithoutRemovingOriginal()
+    {
+        using var sandbox = ScriptSandbox.Create("success");
+        sandbox.AddNestedDiagnosticsToRunner(malformed: true);
+        var result = sandbox.RunPartition("GoalWorktree");
+        var terminal = TerminalSummary(result);
+        Assert.Equal("failed", terminal.GetProperty("outcome").GetString());
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.True(terminal.GetProperty("artifactsRetained").GetBoolean());
+        Assert.Contains("EVIDENCE RETENTION FAILURE", result.Stdout, StringComparison.Ordinal);
+        var original = terminal.GetProperty("resultsDirectory").GetString()!;
+        Assert.Equal("nested build sentinel", File.ReadAllText(Path.Combine(original,
+            "nested-managed-projects", "p-1234abcd", "build.binlog")));
+    }
+
+    [Xunit.Fact]
+    public void NestedDiagnostics_MissingOrDuplicateResultsArgument_FailsLoudly()
+    {
+        Assert.Throws<InvalidOperationException>(() => MtpManagedProjectDiagnostics.ResolveResultsDirectory([]));
+        Assert.Throws<InvalidOperationException>(() => MtpManagedProjectDiagnostics.ResolveResultsDirectory(["--results-directory"]));
+        Assert.Throws<InvalidOperationException>(() => MtpManagedProjectDiagnostics.ResolveResultsDirectory(
+            ["--results-directory", "first", "--results-directory", "second"]));
+    }
+
+    [Xunit.Fact]
+    public void NestedDiagnostics_DirectMtpTelemetry_ProvidesValidatedCustody()
+    {
+        using var sandbox = ScriptSandbox.Create("success");
+        var directory = Path.Combine(sandbox.ResultsRoot, "direct");
+        GoalAcceptanceVerifierTestTelemetry.PrepareTestTelemetryForRun(
+            new GoalAcceptanceVerifier.DotnetTestTelemetry([Path.Combine(directory, "case.trx")], []));
+        string diagnosticsPath;
+        using (var diagnostics = new MtpManagedProjectDiagnostics(directory, "project.csproj", "SelectedTests"))
+        {
+            diagnosticsPath = diagnostics.DirectoryPath;
+            diagnostics.Complete();
+        }
+        using var ownership = JsonDocument.Parse(File.ReadAllText(Path.Combine(directory, ".mtp-run-ownership.json")));
+        Assert.Equal(Environment.ProcessId, ownership.RootElement.GetProperty("ownerProcessId").GetInt32());
+        var records = File.ReadAllLines(Path.Combine(diagnosticsPath, "phases.jsonl"));
+        Assert.Equal(2, records.Length);
+        using var final = JsonDocument.Parse(records[1]);
+        Assert.Equal("project-exit", final.RootElement.GetProperty("kind").GetString());
+        Assert.Equal("passed", final.RootElement.GetProperty("outcome").GetString());
+    }
+
+    [Xunit.Fact]
+    public void NestedDiagnostics_ReusedOwnerPid_RejectsMismatchedStartTime()
+    {
+        using var sandbox = ScriptSandbox.Create("success");
+        File.WriteAllText(Path.Combine(sandbox.ResultsRoot, ".mtp-run-ownership.json"), JsonSerializer.Serialize(new
+        {
+            schemaVersion = 1, machineName = Environment.MachineName, ownerProcessId = Environment.ProcessId,
+            ownerProcessStartedAt = DateTimeOffset.UnixEpoch, runLabel = "stale"
+        }));
+        Assert.Throws<InvalidOperationException>(() =>
+            new MtpManagedProjectDiagnostics(sandbox.ResultsRoot, "project.csproj", "SelectedTests"));
+        Assert.False(Directory.Exists(Path.Combine(sandbox.ResultsRoot, "nested-managed-projects")));
+    }
+
+    [Xunit.Fact]
+    public void NestedDiagnostics_UnavailableOwner_RejectsWithoutReplacement()
+    {
+        using var sandbox = ScriptSandbox.Create("success");
+        var sidecar = Path.Combine(sandbox.ResultsRoot, ".mtp-run-ownership.json");
+        var original = JsonSerializer.Serialize(new
+        {
+            schemaVersion = 1, machineName = Environment.MachineName, ownerProcessId = Environment.ProcessId,
+            ownerProcessStartedAt = DateTimeOffset.UnixEpoch, runLabel = "unavailable-owner"
+        });
+        File.WriteAllText(sidecar, original);
+        var unavailable = new ArgumentException("The recorded owner is not running.");
+        var requestedOwner = 0;
+        var failure = Assert.Throws<InvalidOperationException>(() =>
+            new MtpManagedProjectDiagnostics(sandbox.ResultsRoot, "project.csproj", "SelectedTests",
+                resolveOwner: ownerId =>
+                {
+                    requestedOwner = ownerId;
+                    throw unavailable;
+                }));
+        Assert.Equal(Environment.ProcessId, requestedOwner);
+        Assert.Equal("Managed-project diagnostics require a live matching MTP run owner.", failure.Message);
+        Assert.Same(unavailable, failure.InnerException);
+        Assert.Equal(original, File.ReadAllText(sidecar));
+        Assert.False(Directory.Exists(Path.Combine(sandbox.ResultsRoot, "nested-managed-projects")));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void NestedDiagnostics_OldHostWithoutPublisher_RetainsProcessOwnedCustody(bool priorRunCustody)
+    {
+        using var sandbox = ScriptSandbox.Create("success");
+        var directory = Path.Combine(sandbox.ResultsRoot, "old-host");
+        Directory.CreateDirectory(directory);
+        var sidecar = Path.Combine(directory, ".mtp-run-ownership.json");
+        Assert.False(File.Exists(sidecar)); // No runner or telemetry publisher prepares this child.
+        var original = JsonSerializer.Serialize(new
+        {
+            schemaVersion = 1, machineName = Environment.MachineName, ownerProcessId = Environment.ProcessId,
+            ownerProcessStartedAt = DateTimeOffset.UnixEpoch, runLabel = "prior-run"
+        });
+        if (priorRunCustody) File.WriteAllText(sidecar, original);
+        var assembly = typeof(MtpTestRunnerScriptTests).Assembly.Location;
+        // MainModule can be unavailable immediately after spawn. Pin the executable we
+        // launch and compare it with the image validated and published by the child.
+        var childImage = Path.GetFullPath(ResolveDotnetHostPath());
+        Assert.True(File.Exists(childImage));
+        var start = new ProcessStartInfo(childImage)
+        {
+            UseShellExecute = false, CreateNoWindow = true,
+            RedirectStandardOutput = true, RedirectStandardError = true
+        };
+        string[] allowedNames = ["COMSPEC", "DOTNET_ROOT", "DOTNET_ROOT_X64", "PATH", "PATHEXT",
+            "PROGRAMDATA", "PROGRAMFILES", "PROGRAMFILES(X86)", "SYSTEMDRIVE", "SYSTEMROOT", "WINDIR"];
+        var allowed = start.Environment.Where(item => allowedNames.Contains(item.Key, StringComparer.OrdinalIgnoreCase)).ToArray();
+        start.Environment.Clear();
+        foreach (var item in allowed) start.Environment[item.Key] = item.Value;
+        foreach (var name in new[] { "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP" })
+        {
+            var path = Path.Combine(sandbox.Root, name);
+            Directory.CreateDirectory(path);
+            start.Environment[name] = path;
+        }
+        start.Environment["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = RepositoryRoot();
+        foreach (var argument in new[] { assembly, "--no-ansi", "--progress", "off",
+            "--filter-class", nameof(MtpTestRunnerScriptTests), "--filter-method",
+            $"{nameof(MtpTestRunnerScriptTests)}.{nameof(NestedDiagnostics_CurrentManagedRun_ProvidesCustody)}",
+            "--minimum-expected-tests", "1", "--results-directory", directory,
+            "--report-trx", "--report-trx-filename", "custody-compat.trx" })
+            start.ArgumentList.Add(argument);
+        var childId = 0;
+        DateTime childStart = default;
+        var result = Run(start, observeStarted: child =>
+        {
+            childId = child.Id;
+            childStart = child.StartTime.ToUniversalTime();
+        });
+        Assert.True(result.ExitCode == 0,
+            $"Managed custody probe exited {result.ExitCode}. stdout: {result.Stdout} stderr: {result.Stderr}");
+        var trx = XDocument.Load(Path.Combine(directory, "custody-compat.trx"));
+        var counters = Assert.Single(trx.Descendants().Where(element => element.Name.LocalName == "Counters"));
+        Assert.Equal("1", counters.Attribute("total")?.Value);
+        Assert.Equal("1", counters.Attribute("passed")?.Value);
+        // A current process claims only its fresh row; it neither adopts nor replaces runner custody.
+        if (priorRunCustody) Assert.Equal(original, File.ReadAllText(sidecar));
+        else Assert.False(File.Exists(sidecar));
+        var phases = Directory.GetFiles(Path.Combine(directory, "nested-managed-projects"), "phases.jsonl", SearchOption.AllDirectories);
+        var phaseFile = Assert.Single(phases);
+        var rowDirectory = Path.GetDirectoryName(phaseFile)!;
+        using var receipt = JsonDocument.Parse(File.ReadAllText(Path.Combine(rowDirectory, ".mtp-run-ownership.json")));
+        var ownership = receipt.RootElement;
+        Assert.Equal("managed-test-process", ownership.GetProperty("runLabel").GetString());
+        Assert.Equal(childId, ownership.GetProperty("ownerProcessId").GetInt32());
+        Assert.NotEqual(Environment.ProcessId, childId);
+        Assert.Equal(childStart, ownership.GetProperty("ownerProcessStartedAt").GetDateTimeOffset().UtcDateTime);
+        Assert.Equal(childImage, ownership.GetProperty("ownerProcessImage").GetString());
+        Assert.Equal(directory, ownership.GetProperty("resultsDirectory").GetString());
+        Assert.Equal(rowDirectory, ownership.GetProperty("diagnosticsDirectory").GetString());
+        Assert.Equal(assembly, ownership.GetProperty("managedAssembly").GetString());
+        var records = File.ReadAllLines(phaseFile);
+        using var final = JsonDocument.Parse(records[^1]);
+        Assert.Equal("passed", final.RootElement.GetProperty("outcome").GetString());
+        Assert.Contains("NESTED_MANAGED_PROJECT project-exit", result.Stdout, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void NestedDiagnostics_CurrentManagedRun_ProvidesCustody()
+    {
+        var directory = MtpManagedProjectDiagnostics.ResolveResultsDirectory(Environment.GetCommandLineArgs());
+        using var diagnostics = MtpManagedProjectDiagnostics.ForCurrentManagedRun("custody-probe.csproj", "SelectedTests");
+        using var receipt = JsonDocument.Parse(File.ReadAllText(Path.Combine(diagnostics.DirectoryPath, ".mtp-run-ownership.json")));
+        Assert.Equal(Environment.ProcessId, receipt.RootElement.GetProperty("ownerProcessId").GetInt32());
+        Assert.Equal(directory, receipt.RootElement.GetProperty("resultsDirectory").GetString());
+        Assert.True(File.Exists(Path.Combine(diagnostics.DirectoryPath, "phases.jsonl")));
+        diagnostics.Complete();
+    }
+
+    [Xunit.Fact]
+    public void NestedDiagnostics_MissingCustodyForForeignDirectory_RejectsPublication()
+    {
+        using var sandbox = ScriptSandbox.Create("success");
+        Assert.Throws<InvalidOperationException>(() =>
+            new MtpManagedProjectDiagnostics(sandbox.ResultsRoot, "project.csproj", "SelectedTests"));
+        Assert.False(File.Exists(Path.Combine(sandbox.ResultsRoot, ".mtp-run-ownership.json")));
+        Assert.False(Directory.Exists(Path.Combine(sandbox.ResultsRoot, "nested-managed-projects")));
+    }
+
+    [Xunit.Fact]
+    public void NestedDiagnostics_MalformedCustody_RejectsWithoutReplacement()
+    {
+        using var sandbox = ScriptSandbox.Create("success");
+        var path = Path.Combine(sandbox.ResultsRoot, ".mtp-run-ownership.json");
+        File.WriteAllText(path, "{malformed");
+        Assert.ThrowsAny<JsonException>(() =>
+            new MtpManagedProjectDiagnostics(sandbox.ResultsRoot, "project.csproj", "SelectedTests"));
+        Assert.Equal("{malformed", File.ReadAllText(path));
+        Assert.False(Directory.Exists(Path.Combine(sandbox.ResultsRoot, "nested-managed-projects")));
+    }
+
+    [Xunit.Fact]
+    public void NestedDiagnostics_LiveForeignOwner_RejectsWithoutReplacement()
+    {
+        using var sandbox = ScriptSandbox.Create("success");
+        var sidecar = Path.Combine(sandbox.ResultsRoot, ".mtp-run-ownership.json");
+        var start = new ProcessStartInfo("powershell.exe")
+        {
+            UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true,
+            RedirectStandardOutput = true, RedirectStandardError = true
+        };
+        foreach (var argument in new[] { "-NoProfile", "-NonInteractive", "-Command", "[void][Console]::In.ReadLine()" })
+            start.ArgumentList.Add(argument);
+        var checkedOwner = false;
+        var result = Run(start, observeStarted: child =>
+        {
+            try
+            {
+                var original = JsonSerializer.Serialize(new
+                {
+                    schemaVersion = 1, machineName = Environment.MachineName, ownerProcessId = child.Id,
+                    ownerProcessStartedAt = child.StartTime.ToUniversalTime().ToString("o"), runLabel = "foreign"
+                });
+                File.WriteAllText(sidecar, original);
+                Assert.False(child.HasExited); // The owner is live with the correct start time, but is not our owner.
+                Assert.Throws<InvalidOperationException>(() =>
+                    new MtpManagedProjectDiagnostics(sandbox.ResultsRoot, "project.csproj", "SelectedTests"));
+                Assert.Equal(original, File.ReadAllText(sidecar));
+                Assert.False(Directory.Exists(Path.Combine(sandbox.ResultsRoot, "nested-managed-projects")));
+                checkedOwner = true;
+            }
+            finally { child.StandardInput.Close(); }
+        });
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(checkedOwner);
+    }
+
     [Xunit.Fact(DisplayName = "MTP_local_partitions_preserve_CLI_help_and_dashboard_rendering_coverage")]
     public void MtpLocalPartitionsPreserveCliHelpAndDashboardRenderingCoverage()
     {
@@ -1750,7 +2020,9 @@ public sealed class MtpTestRunnerScriptTests
         TimeSpan? timeout = null,
         string? readinessPath = null,
         string? descendantPidPath = null,
-        (NamedPipeServerStream Stdout, NamedPipeServerStream Stderr)? capturePipes = null)
+        (NamedPipeServerStream Stdout, NamedPipeServerStream Stderr)? capturePipes = null,
+        Action<string, string>? observeOutput = null,
+        Action<Process>? observeStarted = null)
     {
         if (startInfo.RedirectStandardOutput && startInfo.StandardOutputEncoding is null)
         {
@@ -1761,21 +2033,26 @@ public sealed class MtpTestRunnerScriptTests
             startInfo.StandardErrorEncoding = Encoding.UTF8;
         }
         var guard = RealProcessSilenceGuard.Start();
+        Exception? observerFailure = null;
+        Process? process = null;
         using var captureCancellation = capturePipes is null ? null
             : new CancellationTokenSource(timeout ?? guard.Ceiling);
         var ownedStdout = capturePipes is { } outputPipes
-            ? ReadCaptureAsync(outputPipes.Stdout, captureCancellation!.Token) : null;
+            ? ReadCaptureAsync(outputPipes.Stdout, "stdout", captureCancellation!.Token) : null;
         var ownedStderr = capturePipes is { } errorPipes
-            ? ReadCaptureAsync(errorPipes.Stderr, captureCancellation!.Token) : null;
-        Process process;
+            ? ReadCaptureAsync(errorPipes.Stderr, "stderr", captureCancellation!.Token) : null;
         using (ProcessTreeGuiSuppression.AcquireErrorModeForChildSpawn())
         {
             process = Process.Start(startInfo)
                 ?? throw new InvalidOperationException($"Failed to start {startInfo.FileName}.");
         }
         using var processScope = process;
-        var stdout = ownedStdout ?? RealProcessSilenceGuard.ReadChunksAsync(process.StandardOutput, guard.Stamp);
-        var stderr = ownedStderr ?? RealProcessSilenceGuard.ReadChunksAsync(process.StandardError, guard.Stamp);
+        try { observeStarted?.Invoke(process); }
+        catch (Exception error) { ObserverFailed(error); }
+        var stdout = ownedStdout ?? RealProcessSilenceGuard.ReadChunksAsync(process.StandardOutput, guard.Stamp,
+            observeOutput: chunk => Forward("stdout", chunk));
+        var stderr = ownedStderr ?? RealProcessSilenceGuard.ReadChunksAsync(process.StandardError, guard.Stamp,
+            observeOutput: chunk => Forward("stderr", chunk));
         Process? descendant = null;
         if (readinessPath is not null)
         {
@@ -1821,13 +2098,32 @@ public sealed class MtpTestRunnerScriptTests
                 descendantExited);
         }
         descendant?.Dispose();
-        return new ProcessResult(process.ExitCode, stdout.GetAwaiter().GetResult(), stderr.GetAwaiter().GetResult());
+        var result = new ProcessResult(process.ExitCode, stdout.GetAwaiter().GetResult(), stderr.GetAwaiter().GetResult());
+        if (observerFailure is not null)
+            throw new InvalidOperationException(
+                $"Nested process observer failed; child exit={result.ExitCode}. stdout:{result.Stdout} stderr:{result.Stderr}", observerFailure);
+        return result;
 
-        async Task<string> ReadCaptureAsync(NamedPipeServerStream pipe, CancellationToken cancellationToken)
+        void ObserverFailed(Exception error)
+        {
+            // Keep draining both streams after a failed observer, but never leave its child running.
+            if (Interlocked.CompareExchange(ref observerFailure, error, null) is null && process is { HasExited: false })
+                process.Kill(entireProcessTree: true);
+        }
+
+        void Forward(string stream, string chunk)
+        {
+            if (observerFailure is not null) return;
+            try { observeOutput?.Invoke(stream, chunk); }
+            catch (Exception error) { ObserverFailed(error); }
+        }
+
+        async Task<string> ReadCaptureAsync(NamedPipeServerStream pipe, string stream, CancellationToken cancellationToken)
         {
             await pipe.WaitForConnectionAsync(cancellationToken).ConfigureAwait(false);
             using var reader = new StreamReader(pipe, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, leaveOpen: true);
-            return await RealProcessSilenceGuard.ReadChunksAsync(reader, guard.Stamp, cancellationToken).ConfigureAwait(false);
+            return await RealProcessSilenceGuard.ReadChunksAsync(reader, guard.Stamp, cancellationToken,
+                chunk => Forward(stream, chunk)).ConfigureAwait(false);
         }
     }
 
@@ -2203,6 +2499,21 @@ public sealed class MtpTestRunnerScriptTests
             return path;
         }
 
+        internal void AddNestedDiagnosticsToRunner(bool malformed = false)
+        {
+            var script = Path.Combine(Root, "scripts", "FakeRunner.ps1");
+            var insertion =
+                "$nested = Join-Path $Arguments[$resultsIndex + 1] 'nested-managed-projects/p-1234abcd'\n" +
+                "[void][IO.Directory]::CreateDirectory($nested)\n" +
+                "[IO.File]::WriteAllText((Join-Path $nested 'build.binlog'), 'nested build sentinel')\n" +
+                "[IO.File]::WriteAllText((Join-Path $nested 'phases.jsonl'), 'nested phase sentinel')\n" +
+                "[IO.File]::WriteAllText((Join-Path $nested '.mtp-run-ownership.json'), 'nested custody sentinel')\n" +
+                (malformed ? "[IO.File]::WriteAllText((Join-Path $nested 'unexpected.txt'), 'invalid')\n" : string.Empty);
+            File.WriteAllText(script, File.ReadAllText(script).Replace(
+                "$fileIndex = [Array]::IndexOf($Arguments, '--report-trx-filename')",
+                insertion + "$fileIndex = [Array]::IndexOf($Arguments, '--report-trx-filename')", StringComparison.Ordinal));
+        }
+
         private static string EscapeBatchPercent(string value) => value.Replace("%", "%%", StringComparison.Ordinal);
 
         public string CreateManagedAssemblyPlaceholder()
@@ -2561,10 +2872,293 @@ public sealed class MtpTestRunnerScriptTestsManagedProjectRebuild
     }
 }
 
+internal sealed class MtpManagedProjectDiagnostics : IDisposable
+{
+    private readonly object _sync = new();
+    private readonly StreamWriter _records;
+    private readonly StreamWriter _stdout;
+    private readonly StreamWriter _stderr;
+    private readonly string _project;
+    private readonly string _testClass;
+    private readonly Stopwatch _case = Stopwatch.StartNew();
+    private string _outcome = "incomplete";
+    private Exception? _failure;
+    internal string DirectoryPath { get; }
+
+    internal static string ResolveResultsDirectory(string[] arguments)
+    {
+        var indices = arguments.Select((value, index) => (value, index))
+            .Where(item => item.value == "--results-directory").Select(item => item.index).ToArray();
+        if (indices.Length != 1 || indices[0] + 1 >= arguments.Length)
+            throw new InvalidOperationException("Managed-project diagnostics require one explicit MTP --results-directory.");
+        return Path.GetFullPath(arguments[indices[0] + 1]);
+    }
+
+    internal MtpManagedProjectDiagnostics(string resultsDirectory, string project, string testClass,
+        Func<int, Process>? resolveOwner = null)
+        : this(resultsDirectory, project, testClass, resolveOwner, ownedRowDirectory: null)
+    {
+    }
+
+    internal static MtpManagedProjectDiagnostics ForCurrentManagedRun(string project, string testClass)
+    {
+        var resultsDirectory = ResolveResultsDirectory(Environment.GetCommandLineArgs());
+        ValidateCurrentManagedRun(resultsDirectory);
+        RejectLinks(resultsDirectory);
+        var nestedRoot = Path.Combine(resultsDirectory, "nested-managed-projects");
+        Directory.CreateDirectory(nestedRoot);
+        RejectLinks(nestedRoot);
+        var rowDirectory = Path.Combine(nestedRoot, "p-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(rowDirectory);
+        RejectLinks(rowDirectory);
+        // Run-wide retention custody may belong to an exited launcher from an earlier run.
+        // The actual managed test process owns only this new diagnostic row, proven below
+        // from its invocation and live identity; it never rewrites or adopts runner custody.
+        PublishCurrentRunOwnership(resultsDirectory, Path.Combine(rowDirectory, ".mtp-run-ownership.json"));
+        return new MtpManagedProjectDiagnostics(resultsDirectory, project, testClass, null, rowDirectory);
+    }
+
+    private MtpManagedProjectDiagnostics(string resultsDirectory, string project, string testClass,
+        Func<int, Process>? resolveOwner, string? ownedRowDirectory)
+    {
+        resultsDirectory = Path.GetFullPath(resultsDirectory);
+        RejectLinks(resultsDirectory);
+        var sidecar = Path.Combine(ownedRowDirectory ?? resultsDirectory, ".mtp-run-ownership.json");
+        if (!File.Exists(sidecar)) PublishCurrentRunOwnership(resultsDirectory, sidecar);
+        if ((File.GetAttributes(sidecar) & FileAttributes.ReparsePoint) != 0)
+            throw new InvalidOperationException("Managed-project diagnostics cannot use linked run ownership.");
+        using var receipt = JsonDocument.Parse(File.ReadAllText(sidecar));
+        var ownership = receipt.RootElement;
+        using var owner = ResolveRunOwner(ownership.GetProperty("ownerProcessId").GetInt32(),
+            resolveOwner ?? Process.GetProcessById);
+        if (ownership.GetProperty("schemaVersion").GetInt32() != 1 ||
+            ownership.GetProperty("machineName").GetString() != Environment.MachineName ||
+            string.IsNullOrWhiteSpace(ownership.GetProperty("runLabel").GetString()) || owner.HasExited ||
+            DateTimeOffset.Parse(ownership.GetProperty("ownerProcessStartedAt").GetString()!,
+                System.Globalization.CultureInfo.InvariantCulture).UtcDateTime != owner.StartTime.ToUniversalTime() ||
+            (ownedRowDirectory is not null && ownership.GetProperty("runLabel").GetString() != "managed-test-process") ||
+            !IsCurrentProcessOrAncestor(owner))
+            throw new InvalidOperationException("Managed-project diagnostics require a live matching MTP run owner.");
+        if (ownership.GetProperty("runLabel").GetString() == "managed-test-process")
+        {
+            var image = ValidateCurrentManagedRun(resultsDirectory);
+            if (owner.Id != Environment.ProcessId ||
+                ownership.GetProperty("ownerProcessImage").GetString() != image ||
+                ownership.GetProperty("resultsDirectory").GetString() != resultsDirectory ||
+                (ownedRowDirectory is not null && ownership.GetProperty("diagnosticsDirectory").GetString() != ownedRowDirectory) ||
+                ownership.GetProperty("managedAssembly").GetString() != typeof(MtpManagedProjectDiagnostics).Assembly.Location)
+                throw new InvalidOperationException("Managed-project diagnostics custody does not match this managed run.");
+        }
+        var nestedRoot = Path.Combine(resultsDirectory, "nested-managed-projects");
+        Directory.CreateDirectory(nestedRoot);
+        RejectLinks(nestedRoot);
+        DirectoryPath = ownedRowDirectory ?? Path.Combine(nestedRoot, "p-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(DirectoryPath);
+        _project = project;
+        _testClass = testClass;
+        _records = new StreamWriter(new FileStream(Path.Combine(DirectoryPath, "phases.jsonl"),
+            FileMode.CreateNew, FileAccess.Write, FileShare.Read), new UTF8Encoding(false)) { AutoFlush = true };
+        _stdout = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false));
+        _stderr = new StreamWriter(Console.OpenStandardError(), new UTF8Encoding(false));
+        try
+        {
+            Record(new { kind = "project-start", project, testClass, atUtc = DateTimeOffset.UtcNow });
+            Label($"project-start project={project} testClass={testClass} diagnostics={DirectoryPath}");
+        }
+        catch
+        {
+            _records.Dispose();
+            _stdout.Dispose();
+            _stderr.Dispose();
+            throw;
+        }
+    }
+
+    private static Process ResolveRunOwner(int ownerId, Func<int, Process> resolveOwner)
+    {
+        try { return resolveOwner(ownerId); }
+        catch (Exception error) when (error is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            throw new InvalidOperationException("Managed-project diagnostics require a live matching MTP run owner.", error);
+        }
+    }
+
+    private static string ValidateCurrentManagedRun(string resultsDirectory)
+    {
+        var arguments = Environment.GetCommandLineArgs();
+        var assembly = typeof(MtpManagedProjectDiagnostics).Assembly.Location;
+        using var current = Process.GetCurrentProcess();
+        var image = current.MainModule?.FileName;
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        if (!ResolveResultsDirectory(arguments).Equals(resultsDirectory, comparison) ||
+            !Path.GetFullPath(arguments[0]).Equals(assembly, comparison) ||
+            System.Reflection.Assembly.GetEntryAssembly()?.Location != assembly ||
+            string.IsNullOrWhiteSpace(image) || !image.Equals(Environment.ProcessPath, comparison) ||
+            !Path.GetFileName(image).Equals(OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet", comparison))
+            throw new InvalidOperationException("Managed-project diagnostics require the current managed MTP run's explicit results directory.");
+        return image;
+    }
+
+    private static void PublishCurrentRunOwnership(string resultsDirectory, string sidecar)
+    {
+        // Older trusted acceptance hosts prepare TRX paths but cannot publish custody. The
+        // candidate test process owns these diagnostics itself; no parent identity is asserted.
+        var image = ValidateCurrentManagedRun(resultsDirectory);
+        using var owner = Process.GetCurrentProcess();
+        var temporary = sidecar + ".tmp-" + Guid.NewGuid().ToString("N");
+        try
+        {
+            File.WriteAllText(temporary, JsonSerializer.Serialize(new
+            {
+                schemaVersion = 1, machineName = Environment.MachineName,
+                ownerProcessId = owner.Id, ownerProcessStartedAt = owner.StartTime.ToUniversalTime().ToString("o"),
+                ownerProcessImage = image, resultsDirectory,
+                diagnosticsDirectory = Path.GetDirectoryName(sidecar),
+                managedAssembly = typeof(MtpManagedProjectDiagnostics).Assembly.Location,
+                createdAt = DateTimeOffset.UtcNow, runLabel = "managed-test-process"
+            }));
+            try { File.Move(temporary, sidecar, overwrite: false); }
+            catch (IOException) when (File.Exists(sidecar) && Path.GetDirectoryName(sidecar) == resultsDirectory)
+            {
+                // Cases can share a run-wide record. An already claimed row must fail loudly.
+                // Validate a shared record below, never replace it.
+            }
+        }
+        finally { if (File.Exists(temporary)) File.Delete(temporary); }
+    }
+
+    private static bool IsCurrentProcessOrAncestor(Process owner)
+    {
+        using var current = Process.GetCurrentProcess();
+        var childId = current.Id;
+        var childStart = current.StartTime.ToUniversalTime();
+        var seen = new HashSet<int>();
+        for (var depth = 0; depth < 64 && seen.Add(childId); depth++)
+        {
+            if (childId == owner.Id) return !owner.HasExited && owner.StartTime.ToUniversalTime() == childStart;
+            var parentId = ProcessParentIdResolver.TryGetParentProcessId(childId);
+            if (parentId is null or <= 0) return false;
+            try
+            {
+                using var parent = Process.GetProcessById(parentId.Value);
+                var parentStart = parent.StartTime.ToUniversalTime();
+                if (parent.HasExited || parentStart > childStart) return false; // Recycled parent PID.
+                childId = parent.Id;
+                childStart = parentStart;
+            }
+            catch (Exception error) when (error is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
+            {
+                return false; // Unavailable ancestry cannot establish custody.
+            }
+        }
+        return false;
+    }
+
+    private static void RejectLinks(string path)
+    {
+        for (var directory = new DirectoryInfo(path); directory is not null; directory = directory.Parent)
+            if ((directory.Attributes & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidOperationException($"Managed-project diagnostics cannot use a linked directory: {directory.FullName}");
+    }
+
+    internal MtpTestRunnerScriptTests.ProcessResult RunPhase(string phase, ProcessStartInfo startInfo)
+    {
+        var elapsed = Stopwatch.StartNew();
+        object? identity = null;
+        object? lastOutput = null;
+        try
+        {
+            var result = MtpTestRunnerScriptTests.Run(startInfo,
+                timeout: MtpTestRunnerScriptTests.NativeMtpRealProcessHangGuard,
+                observeStarted: process =>
+                {
+                    identity = new { pid = process.Id, startedAtUtc = process.StartTime.ToUniversalTime(),
+                        image = process.MainModule?.FileName, command = startInfo.FileName, arguments = startInfo.ArgumentList.ToArray() };
+                    Record(new { kind = "phase-start", project = _project, phase, identity, atUtc = DateTimeOffset.UtcNow });
+                    Label($"phase-start project={_project} phase={phase} pid={process.Id}");
+                },
+                observeOutput: (stream, chunk) =>
+                {
+                    lock (_sync)
+                    {
+                        lastOutput = new { stream, text = chunk, elapsedMs = elapsed.Elapsed.TotalMilliseconds, atUtc = DateTimeOffset.UtcNow };
+                        Record(new { kind = "output", project = _project, phase, identity, output = lastOutput });
+                        // xUnit may replace Console.Out/Error with per-test capture. These writers
+                        // use the OS handles so actual chunks reach the enclosing runner immediately.
+                        var writer = stream == "stdout" ? _stdout : _stderr;
+                        writer.Write(chunk);
+                        writer.Flush();
+                    }
+                });
+            if (phase == "build" && result.ExitCode == 0 && !File.Exists(Path.Combine(DirectoryPath, "build.binlog")))
+                throw new IOException("Successful nested build did not retain its binlog.");
+            Record(new { kind = "phase-exit", project = _project, phase, identity, result.ExitCode,
+                elapsedMs = elapsed.Elapsed.TotalMilliseconds, lastOutput, atUtc = DateTimeOffset.UtcNow });
+            Label($"phase-exit project={_project} phase={phase} exit={result.ExitCode} elapsedMs={elapsed.Elapsed.TotalMilliseconds:F0}");
+            return result;
+        }
+        catch (Exception error)
+        {
+            Fail(error);
+            try
+            {
+                Record(new { kind = "phase-failure", project = _project, phase, identity,
+                    outcome = error is MtpTestRunnerScriptTests.RealProcessHangGuardException ? "timeout" : "exception",
+                    binlogStatus = phase == "build" ? "partial-or-unavailable" : null,
+                    error = error.ToString(), elapsedMs = elapsed.Elapsed.TotalMilliseconds, lastOutput, atUtc = DateTimeOffset.UtcNow });
+                Label($"phase-failure project={_project} phase={phase} error={error.GetType().Name} elapsedMs={elapsed.Elapsed.TotalMilliseconds:F0}");
+            }
+            catch (Exception retentionError)
+            {
+                throw new AggregateException("Nested phase failed and its diagnostic receipt could not be retained.", error, retentionError);
+            }
+            throw;
+        }
+    }
+
+    private void Record(object entry)
+    {
+        lock (_sync) _records.WriteLine(JsonSerializer.Serialize(entry));
+    }
+
+    internal void Complete() => _outcome = "passed";
+    internal void Fail(Exception error) => _failure = error;
+
+    private void Label(string text)
+    {
+        lock (_sync)
+        {
+            _stdout.WriteLine("NESTED_MANAGED_PROJECT " + text);
+            _stdout.Flush();
+        }
+    }
+
+    public void Dispose()
+    {
+        var errors = new List<Exception>();
+        try
+        {
+            Record(new { kind = "project-exit", project = _project, testClass = _testClass,
+                outcome = _outcome, elapsedMs = _case.Elapsed.TotalMilliseconds, atUtc = DateTimeOffset.UtcNow });
+            Label($"project-exit project={_project} outcome={_outcome} elapsedMs={_case.Elapsed.TotalMilliseconds:F0}");
+        }
+        catch (Exception error) { errors.Add(error); }
+        foreach (var writer in new[] { _records, _stdout, _stderr })
+        {
+            try { writer.Dispose(); }
+            catch (Exception error) { errors.Add(error); }
+        }
+        if (errors.Count == 0) return;
+        if (_failure is not null) errors.Insert(0, _failure);
+        throw new AggregateException("Nested diagnostic finalization failed; any original phase failure is preserved.", errors);
+    }
+}
+
 file static class MtpTestRunnerScriptTestSupport
 {
     public static void RunManagedProjectContract(string project, string testClass)
     {
+        using var diagnostics = MtpManagedProjectDiagnostics.ForCurrentManagedRun(project, testClass);
         var root = MtpTestRunnerScriptTests.RepositoryRoot();
         var goalId = new GoalId(Guid.NewGuid().ToString("N"));
         var testRoot = Path.Combine(Path.GetTempPath(), $"mtp-{Guid.NewGuid():N}"[..13]);
@@ -2600,15 +3194,14 @@ file static class MtpTestRunnerScriptTestSupport
                 $"--property:McgIsolatedArtifactsPath={artifactsPath}",
                 "--property:BuildInParallel=false",
                 "--verbosity",
-                "quiet"
+                "minimal",
+                $"-bl:{Path.Combine(diagnostics.DirectoryPath, "build.binlog")};ProjectImports=None"
             })
             {
                 buildStartInfo.ArgumentList.Add(argument);
             }
 
-            var buildResult = MtpTestRunnerScriptTests.Run(
-                buildStartInfo,
-                timeout: MtpTestRunnerScriptTests.NativeMtpRealProcessHangGuard);
+            var buildResult = diagnostics.RunPhase("build", buildStartInfo);
             Xunit.Assert.True(
                 buildResult.ExitCode == 0,
                 $"dotnet build {project} exited {buildResult.ExitCode}.{Environment.NewLine}" +
@@ -2650,9 +3243,7 @@ file static class MtpTestRunnerScriptTestSupport
             }
 
             Xunit.Assert.Equal(managedAssembly, testStartInfo.ArgumentList[0]);
-            var result = MtpTestRunnerScriptTests.Run(
-                testStartInfo,
-                timeout: MtpTestRunnerScriptTests.NativeMtpRealProcessHangGuard);
+            var result = diagnostics.RunPhase("test", testStartInfo);
 
             Xunit.Assert.True(
                 result.ExitCode == 0,
@@ -2660,6 +3251,12 @@ file static class MtpTestRunnerScriptTestSupport
                 $"stdout:{Environment.NewLine}{result.Stdout}{Environment.NewLine}" +
                 $"stderr:{Environment.NewLine}{result.Stderr}");
             leakProbe.AssertScopedTo(environment.RootPath, testRoot);
+            diagnostics.Complete();
+        }
+        catch (Exception error)
+        {
+            diagnostics.Fail(error);
+            throw;
         }
         finally
         {
