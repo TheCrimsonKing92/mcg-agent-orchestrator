@@ -696,7 +696,20 @@ public sealed class PortfolioStore
                 RunNonQuery(conn, "ALTER TABLE epics ADD COLUMN description TEXT NULL");
             if (!hasBar)
                 RunNonQuery(conn, "ALTER TABLE epics ADD COLUMN bar TEXT NULL");
-            EpicOutcomeSchema.Setup(conn);
+            RunNonQuery(conn, """
+                CREATE TABLE IF NOT EXISTS epic_outcome_revisions (
+                    epic_id TEXT NOT NULL REFERENCES epics(id), version INTEGER NOT NULL CHECK(version > 0),
+                    payload_json TEXT NOT NULL, PRIMARY KEY(epic_id, version));
+                CREATE TABLE IF NOT EXISTS epic_outcome_observations (
+                    epic_id TEXT NOT NULL, bar_version INTEGER NOT NULL, requirement_id TEXT NOT NULL,
+                    sequence INTEGER NOT NULL CHECK(sequence > 0), receipt_id TEXT NOT NULL UNIQUE,
+                    payload_json TEXT NOT NULL,
+                    PRIMARY KEY(epic_id, bar_version, requirement_id, sequence),
+                    FOREIGN KEY(epic_id, bar_version) REFERENCES epic_outcome_revisions(epic_id, version));
+                CREATE TABLE IF NOT EXISTS epic_outcome_applied_requests (
+                    request_id TEXT PRIMARY KEY, epic_id TEXT NOT NULL REFERENCES epics(id),
+                    request_hash TEXT NOT NULL);
+                """);
             StoreSchemaVersions.UpgradeToCurrent(conn, StoreSchemaRegistry.Portfolio);
             RunNonQuery(conn, "COMMIT");
         }
