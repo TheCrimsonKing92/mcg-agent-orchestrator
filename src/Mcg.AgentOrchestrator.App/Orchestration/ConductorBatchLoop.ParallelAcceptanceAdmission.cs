@@ -77,12 +77,11 @@ internal sealed partial class ConductorBatchLoop
         {
             try
             {
-            var sameGoalAttempts = driver.ParallelAcceptanceAttemptCoordinator.GetUnreconciledAttempts(
-                [goal.Id.Value]);
-            if (sameGoalAttempts.Count == 0)
-            {
+            var sameGoalAttempts = driver.ParallelAcceptanceAttemptCoordinator.GetUnreconciledAttempts([goal.Id.Value]);
+            if (PassedAcceptanceReceiptReplay.TryBeforeAdmission(sameGoalAttempts.Count, goal, driver, policy,
+                    () => _acceptanceEngineCircuit?.Read(), state.Results, changedGoalIds, tick, changedGoalLines,
+                    RecordParallelAcceptanceProgress))
                 continue;
-            }
 
             var observed = sameGoalAttempts
                 .Select(attempt =>
@@ -718,7 +717,7 @@ internal sealed partial class ConductorBatchLoop
                     var run = decision.Run ?? ConductorParallelAcceptanceRunResult.Fault(
                         candidate,
                         new InvalidOperationException("Completed acceptance attempt had no run result."));
-                    ReconcileParallelAcceptanceTerminalStateUnlessReused(kernel, goal, run, decision.Attempt);
+                    PassedAcceptanceReceiptReplay.ReconcileUnlessReused(kernel, goal, run, decision.Attempt);
                     var result = CompleteParallelAcceptanceRun(
                         driver,
                         policy,

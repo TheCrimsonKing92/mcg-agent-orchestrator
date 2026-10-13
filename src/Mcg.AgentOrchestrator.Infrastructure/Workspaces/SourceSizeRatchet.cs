@@ -181,12 +181,14 @@ internal static class SourceSizeRatchet
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.TickPersistence.cs", 467),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.DependencyReadmission.cs", 375),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.ParallelAcceptanceFairness.cs", 150),
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.ParallelAcceptanceCompletion.cs", 465),
+            // Goal 33b9b7a6 extracts reconciled-pass application to PassedAcceptanceReceiptReplay.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.ParallelAcceptanceCompletion.cs", 462),
             // Goal 6e664238 conduct-event partial measured at 260 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.ConductEvents.cs", 260),
             // Goal f8d371e2 threads live suppression through the existing admission phases and rechecks
             // it between inline solo completions, preserving in-flight gates. Measured 804, no headroom.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.ParallelAcceptanceAdmission.cs", 804), // def5cd48: conflict escalation before width admission.
+            // Goal 33b9b7a6 extracts receipt replay admission and progress to PassedAcceptanceReceiptReplay.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.ParallelAcceptanceAdmission.cs", 803), // def5cd48: conflict escalation before width admission.
             // Raised for goal 18afe5f2: missing-build-evidence rejection and commit suppression
             // must run where parsed worker results and authoritative changed paths meet. Raised again
             // for goal 0d39b5a3, which adds the narrow Planner sample launch and completion-selection
@@ -444,7 +446,10 @@ internal static class SourceSizeRatchet
             // owned by MergeTrainImpactAttribution. Measured 15278 across the same 70 partial files; no extra headroom.
             // Goal 943427e4 extracts cohort verification classification into AcceptanceCohortVerificationClassifier.
             // Measured 15205 lines across the same 70 partial files; no extra headroom.
-            new SourceClassCeiling("ConductorDriver", 15205, 70),
+            // Goal 33b9b7a6 extracts receipt application to a collaborator; replay custody uses the existing landing partial.
+            // Goal 33b9b7a6 extracts Git ancestry/path evidence into AcceptanceMainAdvanceGitEvidence.
+            // Measured 14982 lines across the same 70 partial files; no extra headroom.
+            new SourceClassCeiling("ConductorDriver", 14982, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
@@ -496,9 +501,11 @@ internal static class SourceSizeRatchet
             // Goal f8d371e2 keeps pending-relaunch observation and once-per-tick emission at the owning
             // loop seam, with live checks at each admission phase; formatter stays in its own static type.
             // Measured 9265 across the same 55 partial files; no extra headroom or drain changes.
+            // Goal 33b9b7a6 extracts replay admission, completion and reconciliation into PassedAcceptanceReceiptReplay.
             // Goal 207369f1 counts pending completion builds in existing relaunch draining and prevents detaching them;
             // lifecycle remains in CompletionBuildEvidenceCoordinator. Measured 9270 across the same 55 partials; no headroom.
-            new SourceClassCeiling("ConductorBatchLoop", 9270, 55),
+            // Integrated receipt replay and completion-build draining: measured 9239 across 54 partial files, no headroom.
+            new SourceClassCeiling("ConductorBatchLoop", 9239, 54),
             // Goal ec8903af moved the goal-prefix parser to CliGoalPrefixArguments.
             // Goal cd1f6380 adds four lines at the owning transaction boundary, forwarding both
             // registrars and invoking actions after commit; list behavior lives in PostCommitActions.

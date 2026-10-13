@@ -61,7 +61,10 @@ internal sealed partial class ConductorDriver
             return rebase;
         }
 
-        return rebaseStatus == GoalWorktreeRebaseStatus.Rebased
+        var heads = _resolveAcceptanceHeads(candidate.Goal);
+        return rebaseStatus == GoalWorktreeRebaseStatus.Rebased ||
+            (heads.MainHeadSha is not null && candidate.MainHeadSha is not null &&
+             !heads.MainHeadSha.Equals(candidate.MainHeadSha, StringComparison.OrdinalIgnoreCase))
             ? CompleteLandingAfterRacingLandingCarryForward(candidate, policy, acceptance)
             : CompleteLandingAfterAcceptance(candidate.Goal, candidate.GoalPrefix, policy, acceptance);
     }
@@ -179,23 +182,22 @@ internal sealed partial class ConductorDriver
 
         if (candidate.MainHeadSha.Equals(currentMainSha, StringComparison.OrdinalIgnoreCase))
         {
-            return new AcceptanceMainAdvanceDisposition.Unchanged();
+            return candidate.BranchHeadSha.Equals(currentBranchSha, StringComparison.OrdinalIgnoreCase)
+                ? new AcceptanceMainAdvanceDisposition.Unchanged()
+                : new AcceptanceMainAdvanceDisposition.Unknown("branch-changed-without-main-advance");
         }
 
-        var ancestry = GitCli.Run(
+        if (!AcceptanceMainAdvanceGitEvidence.IsAncestor(
             _executionDirectory,
-            "merge-base",
-            "--is-ancestor",
             candidate.MainHeadSha,
-            currentMainSha);
-        if (!GitSucceeded(ancestry))
+            currentMainSha))
         {
             return new AcceptanceMainAdvanceDisposition.Unknown("verified-main-not-ancestor-of-current-main");
         }
 
-        var landed = ReadChangedPaths(_executionDirectory, candidate.MainHeadSha, currentMainSha);
-        var verified = ReadChangedPaths(_executionDirectory, candidate.MainHeadSha, candidate.BranchHeadSha);
-        var postRebase = ReadChangedPaths(_executionDirectory, currentMainSha, currentBranchSha);
+        var landed = AcceptanceMainAdvanceGitEvidence.ReadChangedPaths(_executionDirectory, candidate.MainHeadSha, currentMainSha);
+        var verified = AcceptanceMainAdvanceGitEvidence.ReadChangedPaths(_executionDirectory, candidate.MainHeadSha, candidate.BranchHeadSha);
+        var postRebase = AcceptanceMainAdvanceGitEvidence.ReadChangedPaths(_executionDirectory, currentMainSha, currentBranchSha);
         if (landed is null || verified is null || postRebase is null)
         {
             return new AcceptanceMainAdvanceDisposition.Unknown("git-changed-paths-unavailable");
@@ -209,31 +211,6 @@ internal sealed partial class ConductorDriver
             postRebase,
             landed);
     }
-
-    private static IReadOnlyList<string>? ReadChangedPaths(
-        string workingDirectory,
-        string oldRevision,
-        string newRevision)
-    {
-        var result = GitCli.Run(
-            workingDirectory,
-            "diff",
-            "--name-only",
-            "-z",
-            "--no-renames",
-            oldRevision,
-            newRevision);
-        return GitSucceeded(result)
-            ? result.Output
-                .Split('\0', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Select(RepositoryPathOverlap.Normalize)
-                .Where(path => path.Length > 0)
-                .ToArray()
-            : null;
-    }
-
-    private static bool GitSucceeded(GitCli.GitResult result) =>
-        result.Succeeded && !result.DrainTimedOut;
 
     private string BuildRevalidationHoldIdentity(ConductorParallelAcceptanceCandidate candidate)
     {
