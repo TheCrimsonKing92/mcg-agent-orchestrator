@@ -1,7 +1,6 @@
 using System.Text;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
-using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 // Parallel-safe: each filesystem test owns unique temporary roots; source checks are read-only.
@@ -153,24 +152,62 @@ public sealed class AcceptanceSourceMutationTests
     public void SourceRevertedArm_ExtractedMutation_DelegatesToSeparateOwner()
     {
         var root = VerifiedRepositoryRoot.Find();
+        var snapshot = RepositorySourceSnapshotCache.Get(root);
         var workspaces = Path.Combine(root, "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces");
-        var arm = File.ReadAllText(Path.Combine(workspaces, "GoalAcceptanceVerifier.SourceRevertedArm.cs"));
+        var arm = snapshot.GetText(Path.Combine(workspaces, "GoalAcceptanceVerifier.SourceRevertedArm.cs"));
         Assert.Contains("AcceptanceSourceMutation.Validate", arm);
         Assert.Contains("AcceptanceSourceMutation.Apply", arm);
         Assert.False(File.Exists(Path.Combine(workspaces, "GoalAcceptanceVerifier.SourceMutation.cs")));
-        var files = Directory.EnumerateFiles(Path.Combine(root, "src"), "*.cs", SearchOption.AllDirectories)
-            .Where(path => !RepositorySourceInventory.IsExcludedRelativePath(Path.GetRelativePath(root, path)))
-            .Where(path => !string.Equals(Path.GetFullPath(path),
-                Path.GetFullPath(Path.Combine(workspaces, "AcceptanceSourceMutation.cs")), StringComparison.OrdinalIgnoreCase))
+        var files = snapshot.EnumerateFiles(Path.Combine(root, "src"))
+            .Where(path => IsNonOwnerSourceFile(root, workspaces, path))
             .ToArray();
         Assert.NotEmpty(files);
         foreach (var file in files)
         {
-            var declarations = CSharpSyntaxTree.ParseText(File.ReadAllText(file), path: file).GetRoot()
+            var declarations = snapshot.GetSyntaxTree(file).GetRoot()
                 .DescendantNodes().OfType<MethodDeclarationSyntax>();
-            Assert.DoesNotContain(declarations, declaration => declaration.Identifier.ValueText == "FindSourceMutationSpan");
+            AssertNoMutationFinder(declarations);
         }
     }
+
+    [Theory]
+    [InlineData("src/ZLast.cs")]
+    [InlineData("src/Other/AcceptanceSourceMutation.cs")]
+    [InlineData("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceSourceMutation.Other.cs")]
+    public void OwnershipScan_MisplacedFinderAfterOtherMethods_IsRejected(string misplacedPath)
+    {
+        using var fixture = new SourceSnapshotFixture();
+        const string workspacesPath = "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/";
+        const string finder = "class Outer { void Allowed() { } class Inner { void FindSourceMutationSpan() { } } }";
+        var owner = fixture.Write(workspacesPath + "AcceptanceSourceMutation.cs", finder);
+        fixture.Write("src/BIN/Generated.cs", finder);
+        fixture.Write("src/First.cs", "class First { void Allowed() { } }");
+        var misplaced = fixture.Write(misplacedPath, finder);
+        var snapshot = RepositorySourceSnapshotCache.Get(fixture.Root);
+        var workspaces = Path.Combine(fixture.Root, workspacesPath);
+        Assert.False(IsNonOwnerSourceFile(fixture.Root, workspaces, owner.ToUpperInvariant()));
+        var files = snapshot.EnumerateFiles(Path.Combine(fixture.Root, "src"))
+            .Where(path => IsNonOwnerSourceFile(fixture.Root, workspaces, path)).ToArray();
+        Assert.Equal(2, files.Length);
+        Assert.Equal(misplaced, files[^1]);
+        AssertNoMutationFinder(snapshot.GetSyntaxTree(files[0]).GetRoot()
+            .DescendantNodes().OfType<MethodDeclarationSyntax>());
+
+        Assert.ThrowsAny<Xunit.Sdk.XunitException>(() =>
+        {
+            foreach (var file in files)
+                AssertNoMutationFinder(snapshot.GetSyntaxTree(file).GetRoot()
+                    .DescendantNodes().OfType<MethodDeclarationSyntax>());
+        });
+    }
+
+    private static bool IsNonOwnerSourceFile(string root, string workspaces, string path) =>
+        !RepositorySourceInventory.IsExcludedRelativePath(Path.GetRelativePath(root, path)) &&
+        !string.Equals(Path.GetFullPath(path),
+            Path.GetFullPath(Path.Combine(workspaces, "AcceptanceSourceMutation.cs")), StringComparison.OrdinalIgnoreCase);
+
+    private static void AssertNoMutationFinder(IEnumerable<MethodDeclarationSyntax> declarations) =>
+        Assert.DoesNotContain(declarations, declaration => declaration.Identifier.ValueText == "FindSourceMutationSpan");
 
     [Fact]
     public void Canary_NewMutationOwner_TriggersAcceptanceCanary()
