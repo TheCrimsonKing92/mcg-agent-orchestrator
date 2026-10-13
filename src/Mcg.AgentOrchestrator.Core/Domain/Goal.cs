@@ -142,7 +142,10 @@ public sealed class Goal
             IsCurrentCriterionEvidenceObligation(obligation) && !obligation.HasSatisfiedEvidenceFor(candidateSha)).ToArray();
 
     private bool IsCurrentCriterionEvidenceObligation(CriterionEvidenceObligation obligation) =>
-        obligation.Owner == CriterionEvidenceOwner.Unknown
+        !_effectiveAcceptanceCriteriaCorrections.Any(correction =>
+            correction.IsWaiver && string.Equals(
+                correction.SupersededCriterion.Trim(), obligation.Criterion.Trim(), StringComparison.OrdinalIgnoreCase)) &&
+        (obligation.Owner == CriterionEvidenceOwner.Unknown
             ? CriterionObligationRetirementRule.FindSupersedingObligation(obligation, _criterionEvidenceObligations) is null &&
               (!obligation.Provenance.Contains("unresolved during refinement v", StringComparison.Ordinal) ||
               !_criterionEvidenceObligations.Any(item =>
@@ -152,7 +155,7 @@ public sealed class Goal
                       $"ownership carried from criterion-v{obligation.CriterionVersion}-{obligation.CriterionIndex} ",
                       StringComparison.Ordinal)))
             : !_refinedSpecVersions.Any(version =>
-                version.Version == obligation.CriterionVersion && version.IsSuperseded);
+                version.Version == obligation.CriterionVersion && version.IsSuperseded));
 
     public IReadOnlyCollection<GoalId> DependsOn => _dependsOn;
 
@@ -604,6 +607,27 @@ public sealed class Goal
                     CriterionEvidenceState.Pending,
                     acceptanceOwnershipEntries == 1 ? CriterionEvidenceScopes.FullAcceptanceGate : "ownership mapping required",
                     acceptanceOwnershipEntries == 1 ? "authoritative refined spec" : "ambiguous authoritative refined spec ownership",
+                    recordedAt));
+                continue;
+            }
+
+            // Legacy refined specs may declare ownership only in the criterion.
+            // Never infer authority from worker prose or overwrite a persisted claim.
+            var marker = AcceptanceCriterionOwnershipMarker.Classify(criterion);
+            if (marker.Classification == AcceptanceCriterionOwnershipClassification.OperatorOwned &&
+                marker.ConflictingDeclaredOwner is null &&
+                !_criterionEvidenceObligations.Any(existing =>
+                    existing.CriterionVersion == criterionVersion && existing.CriterionIndex == index))
+            {
+                _criterionEvidenceObligations.Add(new CriterionEvidenceObligation(
+                    id,
+                    index,
+                    criterionVersion,
+                    criterion,
+                    CriterionEvidenceOwner.Operator,
+                    CriterionEvidenceState.Pending,
+                    "operator observation",
+                    $"authoritative refined spec v{criterionVersion}; explicit operator ownership marker",
                     recordedAt));
             }
             // Worker verification stays on task verification records. This

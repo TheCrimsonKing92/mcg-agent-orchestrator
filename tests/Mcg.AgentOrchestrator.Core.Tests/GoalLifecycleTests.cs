@@ -880,6 +880,49 @@ public sealed class GoalLifecycleTests
     Assert.Equal(GoalLifecycleState.Verifying, GoalLifecycle.ResolveState(goal));
 }
 
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void CompleteGoalWaivedPendingOperatorObligationAllowsCompletion(bool restore)
+{
+    const string criterion = "Observe the deployment after candidate readiness.";
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Retire waived observation",
+        [new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer)]);
+    kernel.RecordGoalRefinement(goal.Id, new RefinedSpec(goal.Objective, [criterion],
+        VerificationClass.RealWorldDependent, [], []) { OperatorOwnedAcceptanceCriteria = [criterion] });
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.Single();
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Implemented.");
+    kernel.RecordTaskVerification(goal.Id, task.Id,
+        new TaskVerificationRecord("fixture", "C:\\repo", 0, "passed", "", DateTimeOffset.UtcNow));
+    var obligation = Xunit.Assert.Single(goal.OutstandingCriterionEvidenceObligations);
+    Xunit.Assert.Equal(CriterionEvidenceOwner.Operator, obligation.Owner);
+    Xunit.Assert.Equal(CriterionEvidenceState.Pending, obligation.State);
+    var error = Xunit.Assert.Throws<InvalidOperationException>(() => kernel.CompleteGoal(goal.Id, "Ready."));
+    Xunit.Assert.Contains("criterion evidence obligations remain outstanding", error.Message, StringComparison.Ordinal);
+
+    var waiver = kernel.WaiveAcceptanceCriterion(goal.Id, criterion, "Observation no longer required.", "operator@example");
+    if (restore)
+    {
+        kernel = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+        goal = kernel.GetGoal(goal.Id);
+    }
+
+    Xunit.Assert.Empty(goal.OutstandingCriterionEvidenceObligations);
+    Xunit.Assert.Empty(goal.GetOutstandingCriterionEvidenceObligations("candidate-a"));
+    Xunit.Assert.Empty(goal.GetOutstandingCriterionEvidenceObligations("candidate-b"));
+    Xunit.Assert.Equal(obligation, Xunit.Assert.Single(goal.CriterionEvidenceObligations));
+    var recordedWaiver = Xunit.Assert.Single(goal.EffectiveAcceptanceCriteriaCorrections);
+    Xunit.Assert.True(recordedWaiver.IsWaiver);
+    Xunit.Assert.Equal(waiver.SupersededCriterion, recordedWaiver.SupersededCriterion);
+    Xunit.Assert.Equal("operator@example", recordedWaiver.Actor);
+    Xunit.Assert.Null(obligation.ReceiptId);
+    Xunit.Assert.Null(obligation.CandidateSha);
+    var completed = kernel.CompleteGoal(goal.Id, "Operator waived observation; remaining work verified.");
+    Xunit.Assert.Equal(GoalStatus.Completed, completed.Status);
+}
+
     [Xunit.Fact(DisplayName = "CompleteGoal_from_Verifying_requires_every_task_to_remain_terminal")]
     public void CompleteGoalFromVerifyingRequiresEveryTaskToRemainTerminal()
 {

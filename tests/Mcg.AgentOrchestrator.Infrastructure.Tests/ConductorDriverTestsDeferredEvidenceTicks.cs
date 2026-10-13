@@ -9,9 +9,11 @@ using static ConductorDriverTests;
 public sealed class ConductorDriverTestsDeferredEvidenceTicks
 {
     [Xunit.Theory]
-    [Xunit.InlineData(false)]
-    [Xunit.InlineData(true)]
-    public void ContractValidDeferredReviewNeverRedispatchesAcrossUnchangedTicks(bool restart)
+    [Xunit.InlineData(false, false)]
+    [Xunit.InlineData(true, false)]
+    [Xunit.InlineData(false, true)]
+    [Xunit.InlineData(true, true)]
+    public void ContractValidDeferredReviewNeverRedispatchesAcrossUnchangedTicks(bool restart, bool waive)
     {
         var (kernel, goal) = SimpleGoal("Keep deferred evidence at its owner");
         var candidateSha = new string('a', 40);
@@ -62,9 +64,14 @@ public sealed class ConductorDriverTestsDeferredEvidenceTicks
         var starts = 0;
         var retries = 0;
         var landings = 0;
+        var acceptanceRuns = 0;
         var driver = MakeDriver(
             getFacts: _ => GoalLifecycleFacts.None,
-            runAcceptanceSummary: _ => new AcceptanceVerificationSummary(true, [], BranchHeadSha: candidateSha),
+            runAcceptanceSummary: _ =>
+            {
+                acceptanceRuns++;
+                return new AcceptanceVerificationSummary(true, [], BranchHeadSha: candidateSha);
+            },
             resolveAcceptanceHeads: _ => (candidateSha, new string('b', 40)),
             dispatchAndStart: _ => { starts++; return DispatchStartOutcome.Started(); },
             retryTaskWithRoundKind: (goalId, taskId, message, kind) =>
@@ -102,7 +109,35 @@ public sealed class ConductorDriverTestsDeferredEvidenceTicks
         Assert.Equal(0, starts);
         Assert.Equal(0, retries);
         Assert.Equal(0, landings);
+        Assert.True(acceptanceRuns > 0);
         Assert.Equal(CriterionEvidenceOwner.Operator, Assert.Single(goal.GetOutstandingCriterionEvidenceObligations(candidateSha)).Owner);
+
+        if (waive)
+        {
+            var operatorObligation = Assert.Single(goal.GetOutstandingCriterionEvidenceObligations(candidateSha));
+            kernel.WaiveAcceptanceCriterion(goal.Id, operatorObligation.Criterion,
+                "Operator observation is no longer required.", "operator@example");
+            if (restart)
+            {
+                kernel = AgentOrchestratorKernel.FromSnapshot(JsonSerializer.Deserialize<OrchestratorSnapshot>(
+                    JsonSerializer.Serialize(kernel.ExportSnapshot()))!);
+                goal = kernel.GetGoal(goal.Id);
+            }
+            Assert.Empty(goal.GetOutstandingCriterionEvidenceObligations(candidateSha));
+            Assert.Null(AcceptanceCriterionEvidence.RecordAndDescribeOutstanding(goal, candidateSha, kernel, "main"));
+            driver.BeginTick(kernel, 11);
+            var released = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+            Assert.IsType<ConductorAdvanceOutcome.Executed>(released.Outcome);
+            Assert.Equal(1, landings);
+            Assert.Equal(0, starts);
+            Assert.Equal(0, retries);
+            Assert.Equal(operatorObligation, Assert.Single(goal.CriterionEvidenceObligations,
+                item => item.Owner == CriterionEvidenceOwner.Operator));
+            Assert.Equal(CriterionEvidenceState.Pending, operatorObligation.State);
+            Assert.Null(operatorObligation.ReceiptId);
+            return;
+        }
 
         candidateSha = new string('c', 40);
         driver.BeginTick(kernel, 11);
