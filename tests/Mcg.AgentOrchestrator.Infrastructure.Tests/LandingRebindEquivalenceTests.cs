@@ -83,6 +83,72 @@ public sealed class LandingRebindEquivalenceTests : HostCapacityBoundTestBase
         }
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData(CriterionEvidenceOwner.Operator, false, true, true)]
+    [Xunit.InlineData(CriterionEvidenceOwner.Operator, true, true, true)]
+    [Xunit.InlineData(CriterionEvidenceOwner.Operator, false, false, true)]
+    [Xunit.InlineData(CriterionEvidenceOwner.Operator, false, true, false)]
+    [Xunit.InlineData(CriterionEvidenceOwner.Acceptance, false, true, true)]
+    [Xunit.InlineData(CriterionEvidenceOwner.Acceptance, true, true, true)]
+    [Xunit.InlineData(CriterionEvidenceOwner.Acceptance, false, true, false)]
+    public void RebindEvidence_ProvenReceiptsCarryAndUnprovenBindingsRemain(
+        CriterionEvidenceOwner owner, bool changedGoalLine, bool satisfied, bool hasExecutionDirectory)
+    {
+        var fixture = GoalOwnedLinesPatchEquivalenceTests.CreateConflictFixture(changedGoalLine);
+        try
+        {
+            var (kernel, goal) = SimpleGoal("Preserve reviewed evidence across landing rebind");
+            kernel.RecordGoalRefinement(goal.Id, new RefinedSpec(
+                goal.Objective, ["Full acceptance passes", "Prior evidence remains valid"],
+                VerificationClass.TestVerifiable, [], []));
+            kernel.MapCriterionEvidenceOwner(goal.Id, 0, 1, CriterionEvidenceOwner.Acceptance,
+                "reviewer", CriterionEvidenceScopes.FullAcceptanceGate, expectedCandidateSha: fixture.NewHead);
+            var scope = owner == CriterionEvidenceOwner.Acceptance
+                ? CriterionEvidenceScopes.FullAcceptanceGate : "operator observation";
+            var original = kernel.MapCriterionEvidenceOwner(goal.Id, 1, 1, owner,
+                "test", scope, expectedCandidateSha: fixture.OldHead);
+            if (satisfied)
+                original = kernel.RecordCriterionEvidence(goal.Id, original.Id, owner,
+                    fixture.OldHead, "old-receipt", scope, true, "Observed on the original candidate");
+
+            var diagnostic = AcceptanceCriterionEvidence.RebindRecordAndDescribeOutstanding(
+                goal, fixture.NewHead, kernel, "test", TrunkBranchName.Default,
+                hasExecutionDirectory ? fixture.Repository : null);
+
+            var evidence = Assert.Single(goal.CriterionEvidenceObligations, item => item.Id == original.Id);
+            var notes = GoalOperationJournal.Read(fixture.Repository, goal.Id).Entries
+                .Where(entry => entry.Operation == "conductor:criterion-evidence-patch-carry").ToArray();
+            if (satisfied && !changedGoalLine && hasExecutionDirectory)
+            {
+                Assert.Null(diagnostic);
+                Assert.Equal(CriterionEvidenceState.Satisfied, evidence.State);
+                Assert.Equal(fixture.NewHead, evidence.ExpectedCandidateSha);
+                Assert.Equal(fixture.NewHead, evidence.CandidateSha);
+                Assert.Equal(owner == CriterionEvidenceOwner.Operator
+                    ? $"old-receipt:carried:{fixture.NewHead}" : $"full-acceptance:{fixture.NewHead}", evidence.ReceiptId);
+                var prior = Assert.Single(evidence.PriorReceipts!);
+                Assert.Equal(fixture.OldHead, prior.CandidateSha);
+                Assert.Equal("old-receipt", prior.ReceiptId);
+                var note = Assert.Single(notes);
+                Assert.Contains(fixture.OldHead, note.Detail, StringComparison.Ordinal);
+                Assert.Contains(fixture.NewHead, note.Detail, StringComparison.Ordinal);
+                Assert.Contains("goal-owned lines", note.Detail, StringComparison.Ordinal);
+            }
+            else
+            {
+                Assert.NotNull(diagnostic);
+                Assert.Equal(original, evidence);
+                Assert.Empty(notes);
+                if (owner == CriterionEvidenceOwner.Operator && satisfied && !hasExecutionDirectory)
+                    Assert.Contains("reason=no-execution-directory", diagnostic, StringComparison.Ordinal);
+            }
+        }
+        finally
+        {
+            TryDeleteDirectory(fixture.Repository);
+        }
+    }
+
     private static GoalOperationJournalEntry[] LandingCarryEntries(string repository, Goal goal) =>
         GoalOperationJournal.Read(repository, goal.Id).Entries
             .Where(entry => entry.Operation == "conductor:criterion-evidence-landing-carry")

@@ -114,7 +114,7 @@ internal static partial class AcceptanceCriterionEvidence
             goal, normalizedCandidate, kernel, integrationBranch, executionDirectory);
         if (rebindDiagnostic is not null) return rebindDiagnostic;
 
-        var diagnostic = RecordFullAcceptanceEvidence(goal, normalizedCandidate, kernel, evidenceSource, integrationBranch, executionDirectory: null);
+        var diagnostic = RecordFullAcceptanceEvidence(goal, normalizedCandidate, kernel, evidenceSource, integrationBranch, executionDirectory);
         if (diagnostic is not null) return diagnostic;
         var outstanding = goal.GetOutstandingCriterionEvidenceObligations(normalizedCandidate)
             .Where(IsBoundOrNonAcceptanceObligation)
