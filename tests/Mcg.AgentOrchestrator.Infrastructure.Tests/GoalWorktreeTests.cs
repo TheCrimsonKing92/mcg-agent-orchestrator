@@ -515,10 +515,15 @@ public abstract class GoalWorktreeTestBase : HostCapacityBoundTestBase
             RedirectStandardError = true,
             CreateNoWindow = true
         };
+        var inheritedEnvironment = new Dictionary<string, string?>(startInfo.Environment, StringComparer.OrdinalIgnoreCase);
+        startInfo.Environment.Clear();
+        foreach (var name in new[] { "PATH", "SystemRoot", "WINDIR", "TEMP", "TMP", "DOTNET_ROOT", "DOTNET_ROOT_X64", "DOTNET_ROOT_X86" })
+        {
+            if (inheritedEnvironment.TryGetValue(name, out var value))
+                startInfo.Environment[name] = value;
+        }
         if (repositoryRootEnvironment is not null)
             startInfo.Environment[OrchestratorWorkspace.RepoRootEnvironmentVariable] = repositoryRootEnvironment;
-        else
-            startInfo.Environment.Remove(OrchestratorWorkspace.RepoRootEnvironmentVariable);
         startInfo.ArgumentList.Add(toolPath);
         foreach (var argument in arguments)
             startInfo.ArgumentList.Add(argument);
@@ -534,6 +539,9 @@ public abstract class GoalWorktreeTestBase : HostCapacityBoundTestBase
         var stdout = stdoutDrain.GetAwaiter().GetResult();
         var stderr = stderrDrain.GetAwaiter().GetResult();
         Assert.True(exited, "OrchestratorSqliteTools did not exit within 90 seconds.");
+        Assert.True(process.ExitCode is 0 or 1 or 2,
+            $"OrchestratorSqliteTools crashed: exit={process.ExitCode}; stdout={stdout}; stderr={stderr}");
+        Assert.DoesNotContain("Unhandled exception", stdout + stderr, StringComparison.OrdinalIgnoreCase);
         return (process.ExitCode, stdout, stderr);
     }
 
