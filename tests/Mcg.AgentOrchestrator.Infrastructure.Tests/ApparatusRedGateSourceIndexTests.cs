@@ -152,21 +152,22 @@ public sealed class ApparatusRedGateSourceIndexTests
     }
 
     [Fact]
+    public void ActualCopiedCompletionRecordsOneFailedDecisionAndNextGoalCanAdvance()
+    {
+        var mode = Environment.GetEnvironmentVariable(AcceptanceAttributionReplayFixture.ModeVariable);
+        var request = Environment.GetEnvironmentVariable(AcceptanceAttributionReplayFixture.RequestVariable);
+        if (mode is null && request is null) Assert.Skip("Actual-copy replay requires -AcceptanceAttributionReplayInput; normalized coverage is a separate test.");
+        var actual = AcceptanceAttributionReplayFixture.ReplayCopiedAttempt(mode!, request!);
+        Assert.Equal(1, actual.FailureDecisions);
+        Assert.True(actual.NextGoalAdvanced);
+        Assert.Equal(0, actual.SourceEnumerations);
+        Assert.Equal(0, actual.SourceReads);
+        Assert.IsType<Mcg.AgentOrchestrator.Core.Conductor.ConductorAdvanceOutcome.Held>(actual.Outcome);
+    }
+
+    [Fact]
     public void CompletionRecordsOneFailedDecisionAndNextGoalCanAdvance()
     {
-        // Only this test host consumes the input reference; it launches no descendants. Missing input
-        // still exercises the full normalized shape below, never claims an actual-copy replay.
-        var copiedInput = Environment.GetEnvironmentVariable(AcceptanceAttributionReplayFixture.InputVariable);
-        if (!string.IsNullOrWhiteSpace(copiedInput))
-        {
-            var actual = AcceptanceAttributionReplayFixture.ReplayCopiedAttempt(copiedInput);
-            Assert.Equal(1, actual.FailureDecisions);
-            Assert.True(actual.NextGoalAdvanced);
-            Assert.Equal(0, actual.SourceEnumerations);
-            Assert.Equal(0, actual.SourceReads);
-            Assert.IsType<Mcg.AgentOrchestrator.Core.Conductor.ConductorAdvanceOutcome.Held>(actual.Outcome);
-            return;
-        }
         using var fixture = new Fixture();
         var original = fixture.CleanupCheck(9532, 9529, 3);
         var replay = AcceptanceAttributionReplayFixture.Complete(fixture.Goal, fixture.Summary(original),
@@ -201,7 +202,7 @@ public sealed class ApparatusRedGateSourceIndexTests
         Assert.False(ConductorDriver.IsEnvironmentalApparatusAcceptanceRun(fixture.Summary(cleanup, real, aggregate)));
     }
 
-    private sealed class Fixture : IDisposable
+    internal sealed class Fixture : IDisposable
     {
         internal const string Attempt = "recorded-attempt";
         internal const string Candidate = "candidate-commit";

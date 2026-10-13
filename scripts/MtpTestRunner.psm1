@@ -2141,12 +2141,76 @@ function ConvertTo-MtpCommandLineArgument {
     return $quoted.ToString()
 }
 
+function Assert-MtpAttributionReplayInvocation {
+    param([object[]]$Projects, [string[]]$Filters, [int]$Repeat, [string]$RunnerPath)
+    $expectedFilter = 'FullyQualifiedName~ApparatusRedGateSourceIndexTests&Name~ActualCopiedCompletionRecordsOneFailedDecisionAndNextGoalCanAdvance'
+    if ($Projects.Count -ne 1 -or
+        [string]$Projects[0].project -ne 'tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj' -or
+        $Filters.Count -ne 1 -or $Filters[0] -cne $expectedFilter -or $Repeat -ne 1 -or
+        -not [string]::IsNullOrWhiteSpace($RunnerPath)) {
+        throw "Actual-copy replay requires the Infrastructure.Tests managed host, one invocation, and exact filter '$expectedFilter'."
+    }
+}
+
+function New-MtpAttributionReplayRequest {
+    param([string]$InputPath, [string]$RepositoryRoot, [string]$ManagedAssembly, [string]$ResultPath)
+    $root = [System.IO.Path]::GetFullPath($RepositoryRoot).TrimEnd('\', '/')
+    $inputFile = Get-Item -LiteralPath $InputPath -ErrorAction Stop
+    if ($inputFile.PSIsContainer -or $inputFile.Length -gt 1048576) { throw 'Replay input must be a bounded JSON file.' }
+    $inputBytes = [System.IO.File]::ReadAllBytes($inputFile.FullName)
+    $input = [System.Text.Encoding]::UTF8.GetString($inputBytes) | ConvertFrom-Json
+    $gitRoot = @(& git -C $root rev-parse --show-toplevel)
+    if ($LASTEXITCODE -ne 0 -or $gitRoot.Count -ne 1 -or
+        [System.IO.Path]::GetFullPath($gitRoot[0]).TrimEnd('\', '/') -ine $root) { throw 'Replay source root is not the candidate worktree root.' }
+    $head = @(& git -C $root rev-parse HEAD)
+    if ($LASTEXITCODE -ne 0 -or $head.Count -ne 1 -or $head[0] -notmatch '^[a-fA-F0-9]{40}$') { throw 'Replay candidate HEAD is unavailable.' }
+    $dirty = @(& git -C $root status --porcelain --untracked-files=no)
+    if ($LASTEXITCODE -ne 0 -or $dirty.Count -ne 0) { throw 'Actual-copy replay requires a committed, clean tracked candidate.' }
+    if ([string]::IsNullOrWhiteSpace([string]$input.sourceRoot) -or
+        [System.IO.Path]::GetFullPath([string]$input.sourceRoot).TrimEnd('\', '/') -ine $root -or
+        [string]$input.finalCandidateSha -ine $head[0]) { throw 'Replay input source root/final candidate does not match the executing candidate.' }
+    $sources = @('src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceTestSourceResolver.cs',
+        'src/Mcg.AgentOrchestrator.App/Orchestration/ApparatusRedGate.cs',
+        'tests/Mcg.AgentOrchestrator.Infrastructure.Tests/AcceptanceAttributionReplayFixture.cs',
+        'tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ApparatusRedGateSourceIndexTests.cs',
+        'scripts/MtpTestRunner.psm1', 'scripts/Invoke-TestSummary.ps1') | ForEach-Object {
+        [ordered]@{ file = $_; sha256 = Get-MtpSha256File -Path (Join-Path $root $_) }
+    }
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try { $inputHash = [System.BitConverter]::ToString($sha.ComputeHash($inputBytes)).Replace('-', '') }
+    finally { $sha.Dispose() }
+    return ([ordered]@{ schemaVersion = 1; requestId = [Guid]::NewGuid().ToString('N'); replayKind = 'actual-copy'
+        inputPath = $inputFile.FullName; inputSha256 = $inputHash; sourceRoot = $root; finalCandidateSha = $head[0]
+        assemblySha256 = Get-MtpSha256File -Path $ManagedAssembly; sources = @($sources); resultPath = $ResultPath
+    } | ConvertTo-Json -Depth 8 -Compress)
+}
+
+function Assert-MtpAttributionReplayResult {
+    param([string]$Request, [string]$ResultPath, [string[]]$ExecutedTestNames)
+    $requestObject = $Request | ConvertFrom-Json
+    if (-not (Test-Path -LiteralPath $ResultPath -PathType Leaf) -or (Get-Item -LiteralPath $ResultPath).Length -gt 1048576) {
+        throw 'Actual-copy replay did not publish its bounded result artifact; a normalized pass is insufficient.'
+    }
+    $result = Get-Content -LiteralPath $ResultPath -Raw | ConvertFrom-Json
+    if ($ExecutedTestNames.Count -ne 1 -or $ExecutedTestNames[0] -cne 'ApparatusRedGateSourceIndexTests.ActualCopiedCompletionRecordsOneFailedDecisionAndNextGoalCanAdvance' -or
+        $result.replayKind -cne 'actual-copy' -or
+        ($result.request | ConvertTo-Json -Depth 8 -Compress) -cne ($requestObject | ConvertTo-Json -Depth 8 -Compress) -or
+        [string]::IsNullOrWhiteSpace([string]$result.historicalAttemptId) -or
+        [string]::IsNullOrWhiteSpace([string]$result.originalTrxRunId) -or
+        [string]::IsNullOrWhiteSpace([string]$result.rerunTrxRunId) -or $result.originalTrxRunId -eq $result.rerunTrxRunId -or
+        $result.receipt.failureDecisions -ne 1 -or $result.receipt.nextGoalAdvanced -ne $true -or
+        $result.receipt.sourceEnumerations -ne 0 -or $result.receipt.sourceReads -ne 0) {
+        throw 'Actual-copy replay result is missing, stale, normalized, or bound to a different invocation.'
+    }
+}
+
 function New-MtpProcessStartInfo {
     param(
         [Parameter(Mandatory = $true)][string]$Executable,
         [Parameter(Mandatory = $true)][string[]]$Arguments,
         [string]$StartupHookPath,
-        [string]$BuildOutputRoot
+        [string]$BuildOutputRoot,
+        [string]$AcceptanceAttributionReplayRequest
     )
 
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
@@ -2201,6 +2265,12 @@ function New-MtpProcessStartInfo {
     }
     if (-not [string]::IsNullOrWhiteSpace($BuildOutputRoot)) {
         $startInfo.EnvironmentVariables['MCG_TEST_BUILD_OUTPUT_ROOT'] = $BuildOutputRoot
+    }
+    # A fixed, typed replay context belongs only to the selected test host. Never alter the
+    # caller environment or the hermetic allowlist (build/discovery must not inherit it).
+    if (-not [string]::IsNullOrWhiteSpace($AcceptanceAttributionReplayRequest)) {
+        $startInfo.EnvironmentVariables['MCG_ACCEPTANCE_ATTRIBUTION_REPLAY_MODE'] = 'actual-copy'
+        $startInfo.EnvironmentVariables['MCG_ACCEPTANCE_ATTRIBUTION_REPLAY_REQUEST'] = $AcceptanceAttributionReplayRequest
     }
     return $startInfo
 }
@@ -2319,6 +2389,7 @@ function Invoke-MtpAppHost {
         [Parameter(Mandatory = $true)][string]$OutputLog,
         [string]$StartupHookPath,
         [string]$BuildOutputRoot,
+        [string]$AcceptanceAttributionReplayRequest,
         [switch]$AllowBreakaway,
         [ValidateRange(1, 86400)][int]$TestHostTimeoutSeconds = 780,
         [pscustomobject]$TimeoutPolicy
@@ -2345,7 +2416,7 @@ function Invoke-MtpAppHost {
             $ownedJob = [McgMtpOwnedJob]::new($AllowBreakaway.IsPresent)
         }
         $process = [System.Diagnostics.Process]::new()
-        $process.StartInfo = New-MtpProcessStartInfo -Executable $Executable -Arguments $Arguments -StartupHookPath $StartupHookPath -BuildOutputRoot $BuildOutputRoot
+        $process.StartInfo = New-MtpProcessStartInfo -Executable $Executable -Arguments $Arguments -StartupHookPath $StartupHookPath -BuildOutputRoot $BuildOutputRoot -AcceptanceAttributionReplayRequest $AcceptanceAttributionReplayRequest
         $capture.Attach($process)
         if (-not [McgMtpSuppressedProcessStart]::Start($process)) {
             throw "Process.Start returned false for '$Executable'."
@@ -2551,7 +2622,8 @@ function Write-MtpRunEvidenceReceipt {
         [string[]]$ExecutedTestNames = @(),
         [object[]]$BuildSelections = @(),
         [scriptblock]$OwnershipWriter,
-        [string]$AttemptId
+        [string]$AttemptId,
+        [string]$AcceptanceAttributionReplayResult
     )
 
     $resultsRoot = Split-Path -Parent $RunDirectory
@@ -2572,6 +2644,14 @@ function Write-MtpRunEvidenceReceipt {
         throw "Could not write retention ownership sidecar for retained run evidence '$evidenceDirectory'. $removalOutcome; the original run directory remains available for diagnosis."
     }
     try {
+        $replayEvidence = $null
+        if (-not [string]::IsNullOrWhiteSpace($AcceptanceAttributionReplayResult)) {
+            $replayHash = Get-MtpSha256File -Path $AcceptanceAttributionReplayResult
+            $replayDestination = Join-Path $evidenceDirectory 'acceptance-attribution-replay.json'
+            Copy-Item -LiteralPath $AcceptanceAttributionReplayResult -Destination $replayDestination -ErrorAction Stop
+            if ((Get-MtpSha256File -Path $replayDestination) -ne $replayHash) { throw 'Replay result changed during retention.' }
+            $replayEvidence = [ordered]@{ file = 'acceptance-attribution-replay.json'; sha256 = $replayHash }
+        }
         $trxEvidence = [System.Collections.Generic.List[object]]::new()
         foreach ($trxPath in $TrxPaths) {
             $summary = Read-MtpTrxResult -Path $trxPath
@@ -2645,6 +2725,7 @@ function Write-MtpRunEvidenceReceipt {
             trx = $trxEvidence.ToArray()
             nestedManagedProjects = $nestedEvidence.ToArray()
         }
+        if ($null -ne $replayEvidence) { $evidence['acceptanceAttributionReplay'] = $replayEvidence }
         $evidence | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $evidenceDirectory 'run-identity.json') -Encoding UTF8 -ErrorAction Stop
     }
     catch {
@@ -2673,6 +2754,7 @@ function Invoke-MtpTestRun {
         [string]$ResultsRoot,
         [string]$RunnerPath,
         [string]$DotnetPath = 'dotnet',
+        [string]$AcceptanceAttributionReplayInput,
         [switch]$AllowBreakaway,
         [ValidateRange(1, 86400)][int]$TestHostTimeoutSeconds = 780,
         [scriptblock]$RetainedEvidenceOwnershipWriter
@@ -2694,6 +2776,9 @@ function Invoke-MtpTestRun {
             if (-not [string]::IsNullOrWhiteSpace($filter)) {
                 [void](ConvertTo-MtpFilterArguments -Filter $filter)
             }
+        }
+        if (-not [string]::IsNullOrWhiteSpace($AcceptanceAttributionReplayInput)) {
+            Assert-MtpAttributionReplayInvocation -Projects $projects -Filters $filterList -Repeat $Repeat -RunnerPath $RunnerPath
         }
     }
     catch {
@@ -2717,6 +2802,8 @@ function Invoke-MtpTestRun {
     $lastOwnedProcessId = $null
     $lastRunnerExitCode = $null
     $allExitsConfirmed = $true
+    $replayRequest = $null
+    $replayResultPath = $null
     $environmentSnapshot = Get-MtpEnvironmentSnapshot
     $timeoutPolicy = Get-MtpTimeoutPolicy -TestHostTimeoutSeconds $TestHostTimeoutSeconds
     # Captured before Set-MtpHermeticEnvironment strips it, so retained evidence written after the
@@ -2823,7 +2910,17 @@ function Invoke-MtpTestRun {
                 if ($usesManagedAssembly) {
                     $arguments = @($executable) + @($arguments)
                 }
-                $run = Invoke-MtpAppHost -Executable $executable -Arguments $arguments -OutputLog $outputLog -StartupHookPath $startupHookPath -BuildOutputRoot $buildOutputRoots[[string]$project.project] -AllowBreakaway:$AllowBreakaway -TestHostTimeoutSeconds $TestHostTimeoutSeconds -TimeoutPolicy $timeoutPolicy
+                if (-not [string]::IsNullOrWhiteSpace($AcceptanceAttributionReplayInput)) {
+                    try {
+                        $replayResultPath = Join-Path $runDirectory 'acceptance-attribution-replay.json'
+                        $replayRequest = New-MtpAttributionReplayRequest -InputPath $AcceptanceAttributionReplayInput -RepositoryRoot $RepositoryRoot -ManagedAssembly $managedAssembly -ResultPath $replayResultPath
+                    }
+                    catch {
+                        Write-Host "REPLAY INPUT FAILURE - $($_.Exception.Message)"
+                        return New-MtpTerminalResult -Outcome failed -ExitCode $script:ExitCodes.Runner -ResultsDirectory $runDirectory -ArtifactsRetained $true
+                    }
+                }
+                $run = Invoke-MtpAppHost -Executable $executable -Arguments $arguments -OutputLog $outputLog -StartupHookPath $startupHookPath -BuildOutputRoot $buildOutputRoots[[string]$project.project] -AcceptanceAttributionReplayRequest $replayRequest -AllowBreakaway:$AllowBreakaway -TestHostTimeoutSeconds $TestHostTimeoutSeconds -TimeoutPolicy $timeoutPolicy
                 $lastOwnedProcessId = $run.OwnedProcessId
                 $lastRunnerExitCode = $run.ExitCode
                 $allExitsConfirmed = $allExitsConfirmed -and [bool]$run.ExitConfirmed
@@ -2896,7 +2993,10 @@ function Invoke-MtpTestRun {
         }
 
         try {
-            $retainedEvidenceDirectory = Write-MtpRunEvidenceReceipt -RunDirectory $runDirectory -RunLabel $RunLabel -TrxPaths $trxPaths.ToArray() -RequestedFilters $filterList -ExecutedTestNames $executedTestNames.ToArray() -BuildSelections $buildSelections.ToArray() -OwnershipWriter $RetainedEvidenceOwnershipWriter -AttemptId $acceptanceAttemptId
+            if ($null -ne $replayRequest) {
+                Assert-MtpAttributionReplayResult -Request $replayRequest -ResultPath $replayResultPath -ExecutedTestNames $executedTestNames.ToArray()
+            }
+            $retainedEvidenceDirectory = Write-MtpRunEvidenceReceipt -RunDirectory $runDirectory -RunLabel $RunLabel -TrxPaths $trxPaths.ToArray() -RequestedFilters $filterList -ExecutedTestNames $executedTestNames.ToArray() -BuildSelections $buildSelections.ToArray() -OwnershipWriter $RetainedEvidenceOwnershipWriter -AttemptId $acceptanceAttemptId -AcceptanceAttributionReplayResult $replayResultPath
             Write-Host "Run identity and named TRX evidence retained: $retainedEvidenceDirectory"
         }
         catch {

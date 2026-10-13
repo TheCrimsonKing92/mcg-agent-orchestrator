@@ -14,8 +14,12 @@ using Mcg.AgentOrchestrator.Infrastructure;
 /// </summary>
 internal static class AcceptanceAttributionReplayFixture
 {
-    internal const string InputVariable = "MCG_ACCEPTANCE_ATTRIBUTION_REPLAY_INPUT";
+    internal const string ModeVariable = "MCG_ACCEPTANCE_ATTRIBUTION_REPLAY_MODE";
+    internal const string RequestVariable = "MCG_ACCEPTANCE_ATTRIBUTION_REPLAY_REQUEST";
     internal sealed record CopiedFile(string File, string Sha256);
+    internal sealed record ReplayRequest(int SchemaVersion, string RequestId, string ReplayKind,
+        string InputPath, string InputSha256, string SourceRoot, string FinalCandidateSha,
+        string AssemblySha256, CopiedFile[] Sources, string ResultPath);
     internal sealed record CopiedAttemptInput(string SourceRoot, string FinalCandidateSha,
         CopiedFile Attempt, CopiedFile Result, CopiedFile OriginalTrx, CopiedFile RerunTrx,
         CopiedFile OriginalHeartbeat, CopiedFile RerunHeartbeat);
@@ -24,13 +28,51 @@ internal static class AcceptanceAttributionReplayFixture
         bool NextGoalAdvanced, int SourceEnumerations, int SourceReads,
         double AttributionMilliseconds, double CompletionMilliseconds, string? CandidateSha, string? MainSha);
 
-    internal static Receipt ReplayCopiedAttempt(string inputPath)
+    internal static ReplayRequest ValidateRequest(string? mode, string? requestJson)
     {
+        if (mode != "actual-copy" || string.IsNullOrWhiteSpace(requestJson))
+            throw new InvalidOperationException("Actual-copy replay requires the explicit managed helper request.");
+        var request = JsonSerializer.Deserialize<ReplayRequest>(requestJson, new JsonSerializerOptions(JsonSerializerDefaults.Web)) ??
+            throw new InvalidOperationException("Replay request is missing.");
+        if (request.SchemaVersion != 1 || request.ReplayKind != "actual-copy" ||
+            !Guid.TryParseExact(request.RequestId, "N", out _) || !Path.IsPathFullyQualified(request.InputPath) ||
+            !Path.IsPathFullyQualified(request.SourceRoot) || !Path.IsPathFullyQualified(request.ResultPath) ||
+            request.FinalCandidateSha?.Length != 40 || request.Sources is not { Length: > 0 })
+            throw new InvalidOperationException("Replay request identity is invalid.");
+        ValidateHash(typeof(AcceptanceAttributionReplayFixture).Assembly.Location, request.AssemblySha256);
+        foreach (var source in request.Sources)
+        {
+            var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(request.SourceRoot));
+            var path = Path.GetFullPath(Path.Combine(root, source.File));
+            if (Path.IsPathRooted(source.File) || !path.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Replay source escapes the final candidate.");
+            ValidateHash(path, source.Sha256);
+        }
+        return request;
+    }
+
+    private static void ValidateHash(string path, string expected)
+    {
+        using var stream = File.OpenRead(path);
+        if (!Convert.ToHexString(SHA256.HashData(stream)).Equals(expected, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Replay source/assembly hash mismatch.");
+    }
+
+    internal static Receipt ReplayCopiedAttempt(string mode, string requestJson)
+    {
+        var request = ValidateRequest(mode, requestJson);
+        var inputPath = request.InputPath;
         var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
         options.Converters.Add(new JsonStringEnumConverter());
-        var input = JsonSerializer.Deserialize<CopiedAttemptInput>(File.ReadAllText(inputPath), options) ??
+        if (new FileInfo(inputPath).Length > 1048576) throw new InvalidOperationException("Replay input exceeds its bound.");
+        var inputBytes = File.ReadAllBytes(inputPath);
+        if (!Convert.ToHexString(SHA256.HashData(inputBytes)).Equals(request.InputSha256, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Replay input hash mismatch.");
+        var input = JsonSerializer.Deserialize<CopiedAttemptInput>(inputBytes, options) ??
             throw new InvalidOperationException("Replay input is missing.");
-        ArgumentException.ThrowIfNullOrWhiteSpace(input.FinalCandidateSha);
+        if (input.FinalCandidateSha != request.FinalCandidateSha ||
+            !Path.TrimEndingDirectorySeparator(Path.GetFullPath(input.SourceRoot)).Equals(request.SourceRoot, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Replay input final source/candidate binding mismatch.");
         var copyRoot = Path.GetDirectoryName(Path.GetFullPath(inputPath))!;
         byte[] ReadCopy(CopiedFile file)
         {
@@ -93,8 +135,16 @@ internal static class AcceptanceAttributionReplayFixture
         var isolatedGoal = new Goal(new GoalId(attempt.GoalId), "isolated recorded acceptance replay", []);
         var receipt = Complete(isolatedGoal, summary, input.SourceRoot,
             Path.Combine(copyRoot, Guid.NewGuid().ToString("N") + ".census.jsonl"), attempt.ScopePaths ?? []);
-        Console.WriteLine(JsonSerializer.Serialize(new { replayKind = "actual-copy", finalCandidateSha = input.FinalCandidateSha,
-            historicalAttemptId = attempt.AttemptId, originalTrxRunId = originalRun, rerunTrxRunId = rerunRun, receipt }, options));
+        if (receipt.FailureDecisions != 1 || !receipt.NextGoalAdvanced || receipt.SourceEnumerations != 0 || receipt.SourceReads != 0 ||
+            receipt.Outcome is not ConductorAdvanceOutcome.Held)
+            throw new InvalidOperationException("Replay completion did not retain its failed decision and bounded attribution.");
+        // A passing test's console output is not retained. Publish a fresh, bounded artifact that
+        // the helper validates and copies beside the retained TRX before clean-run cleanup.
+        using var report = new FileStream(request.ResultPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+        using var requestDocument = JsonDocument.Parse(requestJson);
+        JsonSerializer.Serialize(report, new { replayKind = "actual-copy", request = requestDocument.RootElement,
+            copiedReceipts = input, historicalAttemptId = attempt.AttemptId, originalTrxRunId = originalRun,
+            rerunTrxRunId = rerunRun, receipt }, options);
         return receipt;
     }
 
