@@ -183,9 +183,11 @@ public sealed partial class BackgroundDispatchRunner
         GoalId goalId,
         TaskId taskId,
         string logRoot,
-        Action<AgentOrchestratorKernel, GoalId, TaskId, DispatchRecordCheckpointPhase>? checkpointBeforeWorkerStart = null)
+        Action<AgentOrchestratorKernel, GoalId, TaskId, DispatchRecordCheckpointPhase>? checkpointBeforeWorkerStart = null,
+        TaskIntentAdmissionReference? taskIntentAdmission = null)
     {
-        var result = TryStartLatestDispatch(kernel, goalId, taskId, logRoot, checkpointBeforeWorkerStart);
+        var result = TryStartLatestDispatch(kernel, goalId, taskId, logRoot, checkpointBeforeWorkerStart,
+            taskIntentAdmission: taskIntentAdmission);
         if (result.RecoveryAction is { } action)
         {
             throw new InvalidOperationException(action.Reason);
@@ -209,11 +211,16 @@ public sealed partial class BackgroundDispatchRunner
         Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentState = null,
         WorkerSandboxOptions? sandboxOptions = null,
         Func<bool>? claimWorkerStart = null,
-        Func<bool>? confirmWorkerStart = null)
+        Func<bool>? confirmWorkerStart = null,
+        TaskIntentAdmissionReference? taskIntentAdmission = null)
     {
         var task = kernel.GetTask(goalId, taskId);
         var dispatch = task.LastDispatch
             ?? throw new InvalidOperationException($"Task '{taskId}' has no dispatch to start.");
+        if (taskIntentAdmission is { } intentReference &&
+            (intentReference.GoalId != goalId.Value || intentReference.TaskId != taskId.Value ||
+             intentReference.DispatchedAt != dispatch.DispatchedAt))
+            throw new InvalidOperationException("Task intent admission does not identify the current dispatch preparation.");
 
         if (DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, _clock.UtcNow, out var retryAfter))
         {
@@ -337,7 +344,9 @@ public sealed partial class BackgroundDispatchRunner
                     task.RequiredRole,
                     section.RoleVisibility))
                 .ToArray(),
-            ClaudeCredentialSelection: credentialSelection);
+            ClaudeCredentialSelection: credentialSelection,
+            TaskIntentAdmission: taskIntentAdmission,
+            StartGatePath: startGatePath);
         DispatchProcessHost.WriteParameters(parametersPath, runParameters);
 
         // Launch the native dispatch host detached: it outlives this CLI process, runs the worker
@@ -937,6 +946,12 @@ public sealed partial class BackgroundDispatchRunner
                 return;
             }
         }
+        if (outcome.IntentSuppression is { } suppression)
+        {
+            kernel.DiscardUnstartedDispatch(goalId, taskId, outcome.ProcessRecord,
+                $"TASK_INTENT_DISPATCH_SUPPRESSED goal={suppression.GoalId} task={suppression.TaskId} intent={suppression.IntentId} verb={suppression.Verb} task_version={suppression.TaskVersion}");
+            return;
+        }
         var previousProcess = task.LastProcess;
         var verification = outcome.Verification;
         if (outcome.ResultCommit is not null)
@@ -1215,6 +1230,9 @@ public sealed partial class BackgroundDispatchRunner
         string? orchestratorFailureReason = null)
     {
         var observedExitCode = exitCode;
+        if (TryReadIntentSuppression(goalId, taskId, processRecord, exitCode) is { } suppression)
+            return new DispatchRefreshOutcome(processRecord with { CompletedAt = _clock.UtcNow, ExitCode = exitCode },
+                null, IntentSuppression: suppression);
         var exitArtifactAlreadyExisted = File.Exists(processRecord.ExitCodePath);
         var task = kernel.GetTask(goalId, taskId);
         var dispatchAttempt = ResolveDispatchAttempt(task, processRecord);

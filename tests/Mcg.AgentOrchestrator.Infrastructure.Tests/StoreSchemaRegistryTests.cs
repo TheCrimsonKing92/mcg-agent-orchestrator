@@ -73,7 +73,7 @@ public sealed class StoreSchemaRegistryTests
         Assert.Equal("merge-train-acceptance.db", StoreSchemaRegistry.MergeTrainAcceptance.Database);
         Assert.Equal(1, StoreSchemaRegistry.DogfoodLog.CurrentVersion);
         Assert.Equal("dogfood-log.db", StoreSchemaRegistry.DogfoodLog.Database);
-        Assert.Equal(1, StoreSchemaRegistry.OperatorIntents.CurrentVersion);
+        Assert.Equal(2, StoreSchemaRegistry.OperatorIntents.CurrentVersion);
         Assert.Equal(SqliteOperatorIntentStore.DatabaseFileName, StoreSchemaRegistry.OperatorIntents.Database);
     }
 

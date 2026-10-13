@@ -894,6 +894,24 @@ public sealed partial class TaskSpec
         return true;
     }
 
+    internal void ReleaseUnstartedRetryAdmission(DateTimeOffset dispatchedAt, DateTimeOffset releasedAt)
+    {
+        for (var index = 0; index < _retryAdmissionHistory.Count; index++)
+        {
+            var receipt = _retryAdmissionHistory[index];
+            if (receipt.LinkedDispatchAt != dispatchedAt ||
+                receipt.Decision is not (RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation)) continue;
+            // The execution owner proved that no worker was created. Undo the supervisor's gate
+            // acknowledgement and expire this unspent reservation; retain the admission receipt.
+            _retryAdmissionHistory[index] = receipt with
+            {
+                WorkerStartedAt = null,
+                WorkerStartClaimedAt = null,
+                ReservationLeaseExpiresAt = releasedAt
+            };
+        }
+    }
+
     internal void RecordSubscriptionLimitReview(string? note, DateTimeOffset? reviewedAt, int failureCount)
     {
         SubscriptionLimitReviewNote = string.IsNullOrWhiteSpace(note) ? null : note.Trim();
