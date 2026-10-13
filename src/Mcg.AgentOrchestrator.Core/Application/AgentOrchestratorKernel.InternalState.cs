@@ -336,7 +336,8 @@ public sealed partial class AgentOrchestratorKernel
             return (ProcessBatchItemStatus.Skipped, "Task has no background process to refresh.");
         }
 
-        if (!task.LastProcess.IsRunning)
+        if (!task.LastProcess.IsRunning && (task.CompletionBuildEvidence is not { Applied: false } ||
+            task.CompletionBuildEvidence.Phase == CompletionBuildEvidencePhase.Cancelled))
         {
             return (ProcessBatchItemStatus.Skipped, $"Task process already completed with exit={task.LastProcess.ExitCode?.ToString() ?? "n/a"}.");
         }
@@ -351,7 +352,7 @@ public sealed partial class AgentOrchestratorKernel
             return (ProcessBatchItemStatus.Skipped, "Task has no background process to cancel.");
         }
 
-        if (!task.LastProcess.IsRunning)
+        if (!task.LastProcess.IsRunning && task.CompletionBuildEvidence is not { IsPending: true })
         {
             return (ProcessBatchItemStatus.Skipped, $"Task process already completed with exit={task.LastProcess.ExitCode?.ToString() ?? "n/a"}.");
         }

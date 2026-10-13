@@ -98,6 +98,8 @@ internal sealed partial class OperatorIntentCoordinator
                 }
             })
         {
+            CancelLatestProcess = (kernel, goalId, taskId) =>
+                OperatorCancelAwareDispatchRunner.ForWorkspace(workspace).CancelLatestProcess(kernel, goalId, taskId),
             Lessons = new OperatorLessonIntentServices(
                 new SqliteOperatorLessonStore(workspace.OperatorLessonsStorePath),
                 new AdjudicationEvidenceResolver(workspace.OrchestratorDirectory),

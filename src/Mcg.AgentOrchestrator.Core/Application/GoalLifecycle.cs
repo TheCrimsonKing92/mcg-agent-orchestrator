@@ -81,8 +81,10 @@ public static class GoalLifecycle
         if (goal.Tasks.All(t => t.Status == WorkTaskStatus.Completed))
             return GoalLifecycleState.AwaitingVerification;
 
-        // Live background process exists
-        if (goal.Tasks.Any(t => t.LastProcess is { IsRunning: true }))
+        // Completion evidence remains in flight after the worker exits. Hold this lifecycle
+        // while its owned build is pending, rather than admitting another worker dispatch.
+        if (goal.Tasks.Any(t => t.LastProcess is { IsRunning: true } ||
+            t.Status == WorkTaskStatus.Running && t.CompletionBuildEvidence is { IsPending: true }))
             return GoalLifecycleState.Running;
 
         // Dispatch record exists (Running task status, no live process yet = waiting for execute-dispatch)

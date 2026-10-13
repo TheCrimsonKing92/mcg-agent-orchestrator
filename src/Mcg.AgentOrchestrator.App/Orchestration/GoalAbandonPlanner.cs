@@ -185,9 +185,10 @@ internal static class GoalAbandonPlanner
             return before;
         }
 
-        foreach (var task in goal.Tasks.Where(task => task.LastProcess is { IsRunning: true }).ToArray())
+        foreach (var task in goal.Tasks.Where(task => task.LastProcess is { IsRunning: true } ||
+            task.CompletionBuildEvidence is { IsPending: true }).ToArray())
         {
-            _ = new BackgroundDispatchRunner().CancelLatestProcess(kernel, goal.Id, task.Id);
+            _ = OperatorCancelAwareDispatchRunner.ForWorkspace(workspace).CancelLatestProcess(kernel, goal.Id, task.Id);
         }
 
         if (!IsTerminal(goal.Status))

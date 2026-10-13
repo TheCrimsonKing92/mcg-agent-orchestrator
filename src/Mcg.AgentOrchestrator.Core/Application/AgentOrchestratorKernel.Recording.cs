@@ -1986,6 +1986,13 @@ public sealed partial class AgentOrchestratorKernel
         Append(goal, taskId, ProgressKind.TaskProcessStarted, $"Started process {process.ProcessId}: {process.Command}");
     }
 
+    public void RecordCompletionBuildEvidence(GoalId goalId, TaskId taskId, CompletionBuildEvidenceOperation operation)
+    {
+        if (operation.GoalId != goalId.Value)
+            throw new InvalidOperationException("Completion build evidence belongs to another goal.");
+        GetTask(goalId, taskId).RecordCompletionBuildEvidence(operation);
+    }
+
     public void RecordTaskProcessRefreshed(
         GoalId goalId,
         TaskId taskId,

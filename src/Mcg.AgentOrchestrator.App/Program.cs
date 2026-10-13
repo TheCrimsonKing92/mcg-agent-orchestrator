@@ -4,6 +4,11 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 CliProtectedProcessEnvironment.EnsureProtectedPid();
 
+if (args.Length >= 1 && args[0] == CompletionBuildEvidenceCoordinator.Subcommand)
+{
+    return CompletionBuildEvidenceCoordinator.RunChild(args);
+}
+
 // Hidden detached dispatch-host entrypoint (see DispatchProcessHost). Must run before any tenant,
 // workspace, or state setup so the detached worker process stays minimal and self-contained.
 if (args.Length >= 2 && args[0] == DispatchProcessHost.SubcommandName)

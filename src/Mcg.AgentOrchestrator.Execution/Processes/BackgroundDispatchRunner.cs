@@ -64,6 +64,7 @@ public sealed partial class BackgroundDispatchRunner
     private readonly Func<ProcessStartInfo, Process?> _startProcess;
     private readonly Func<OrchestratorBuildCheckRequest, OrchestratorBuildCheckResult> _runOrchestratorBuildCheck;
     private readonly Func<ProcessCommandLineSnapshot> _processCommandLineSnapshotFactory;
+    private readonly ICompletionBuildEvidenceOperation? _completionBuildEvidence;
 
     public BackgroundDispatchRunner(
         IClock? clock = null,
@@ -84,7 +85,8 @@ public sealed partial class BackgroundDispatchRunner
         Func<OrchestratorBuildCheckRequest, OrchestratorBuildCheckResult>? runOrchestratorBuildCheck = null,
         Func<int, (DateTimeOffset StartedAt, string ImagePath)?>? readProcessIdentity = null,
         Func<ProcessCommandLineSnapshot>? processCommandLineSnapshotFactory = null,
-        Func<GoalId, string>? resolveWorkerBuildReceiptPath = null)
+        Func<GoalId, string>? resolveWorkerBuildReceiptPath = null,
+        ICompletionBuildEvidenceOperation? completionBuildEvidence = null)
     {
         _clock = clock ?? new SystemClock();
         _postOutputIdleTimeout = postOutputIdleTimeout ?? DefaultPostOutputIdleTimeout;
@@ -124,7 +126,9 @@ public sealed partial class BackgroundDispatchRunner
             readCurrentIdentity: DispatchProcessIdentityEvidence.Adapt(readProcessIdentity));
         var launch = startProcess ?? Process.Start;
         _startProcess = startInfo => DispatchProcessStartObservation.Start(startInfo, launch);
-        _runOrchestratorBuildCheck = runOrchestratorBuildCheck ?? OrchestratorBuildEvidenceCheck.RunDefault;
+        _completionBuildEvidence = completionBuildEvidence;
+        _runOrchestratorBuildCheck = runOrchestratorBuildCheck ?? (_ =>
+            new(false, -1, "Completion build evidence coordinator is unavailable."));
         _processCommandLineSnapshotFactory = processCommandLineSnapshotFactory ?? ProcessCommandLines.SnapshotOperation;
     }
     private static bool IsDispatchStartDisabledByEnvironment()
@@ -717,6 +721,8 @@ public sealed partial class BackgroundDispatchRunner
         var task = kernel.GetTask(goalId, taskId);
         var processRecord = task.LastProcess
             ?? throw new InvalidOperationException($"Task '{taskId}' has no background process to refresh.");
+        if (task.CompletionBuildEvidence is { Phase: CompletionBuildEvidencePhase.Cancelled })
+            return new DispatchRefreshOutcome(processRecord, null);
         if (DispatchProcessCompletionState.HasAlreadyBeenApplied(task, processRecord))
         {
             return new DispatchRefreshOutcome(processRecord, null);
@@ -885,6 +891,12 @@ public sealed partial class BackgroundDispatchRunner
         DispatchRefreshOutcome outcome)
     {
         var task = GetTaskAfterReceiptlessUsage(kernel, goalId, taskId, outcome);
+        if (outcome.PendingBuildEvidence is { } pending)
+        {
+            kernel.RecordCompletionBuildEvidence(goalId, taskId, pending);
+            kernel.RecordTaskProcessRefreshed(goalId, taskId, outcome.ProcessRecord, null);
+            return;
+        }
         if (outcome.Verification is not null && outcome.DispatchAttemptAt is { } dispatchAttemptAt)
         {
             var dispatch = task.DispatchHistory.SingleOrDefault(candidate => candidate.DispatchedAt == dispatchAttemptAt)
@@ -942,6 +954,8 @@ public sealed partial class BackgroundDispatchRunner
             task.LastProcess?.WasCancelled != true && !outcome.ProcessRecord.WasCancelled)
             kernel.RecordFailedRoundCheckpointReceipt(goalId, taskId, failedReceipt);
         kernel.RecordTaskProcessRefreshed(goalId, taskId, outcome.ProcessRecord, verification, outcome.ProviderFailureKind);
+        if (verification is not null && task.CompletionBuildEvidence is { Applied: false } completedBuild)
+            kernel.RecordCompletionBuildEvidence(goalId, taskId, completedBuild with { Applied = true });
         if (verification is not null && outcome.ProcessRecord.ResourceAccounting is { } accounting)
         {
             kernel.RecordTaskNote(goalId, taskId, FormatResourceReceipt(goalId, taskId, accounting));
@@ -1446,6 +1460,7 @@ public sealed partial class BackgroundDispatchRunner
             authoritativeStandardOutput);
         var hasCommittedChanges = false;
         var orchestratorCommitted = false;
+        var buildEvidenceAllowsResultCommit = true;
         InterruptedWorkCheckpointDisposition? checkpointDisposition = null;
         FailedRoundCheckpointReceipt? failedRoundReceipt = null;
         var completedWorktreeInspection = RequiresFileChangeEvidence(task)
@@ -1530,7 +1545,28 @@ public sealed partial class BackgroundDispatchRunner
                     DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed));
             }
 
-            checkpointDisposition = _checkpointAuthorizer.AuthorizeAndCheckpoint(
+            var buildEvidence = OrchestratorBuildEvidenceCheck.Resolve(
+                processRecord.WorkingDirectory,
+                task.RequiredRole,
+                worktreeEvidence.ChangedPaths,
+                worktreeEvidence.DirtyPaths,
+                failedWorkerBuildCheck,
+                () => _completionClassifier.EvaluateWorkerBuildReceipt(processRecord.WorkingDirectory, goal.Id),
+                _runOrchestratorBuildCheck,
+                _completionBuildEvidence is null ? null : request => _completionBuildEvidence.Reconcile(
+                    kernel, goalId, taskId, request, processRecord with
+                    { CompletedAt = processRecord.CompletedAt ?? _clock.UtcNow, ExitCode = observedExitCode }),
+                task.CompletionBuildEvidence is not null);
+            if (buildEvidence.Pending)
+                return new DispatchRefreshOutcome(
+                    processRecord with { CompletedAt = processRecord.CompletedAt ?? _clock.UtcNow, ExitCode = observedExitCode }, null,
+                    PendingBuildEvidence: buildEvidence.Operation);
+
+            buildEvidenceAllowsResultCommit = !failedWorkerBuildCheck && !buildEvidence.FailsRound;
+            checkpointDisposition = buildEvidence.FailsRound
+                ? new InterruptedWorkCheckpointDisposition(InterruptedWorkCheckpointDispositionKind.NotApplicable,
+                    "completion-build-evidence-not-certified", string.Empty)
+                : _checkpointAuthorizer.AuthorizeAndCheckpoint(
                 new InterruptedWorkCheckpointRequest(
                     goalId,
                     task,
@@ -1548,14 +1584,6 @@ public sealed partial class BackgroundDispatchRunner
                     checkpointDisposition.Message);
             }
 
-            var buildEvidence = OrchestratorBuildEvidenceCheck.Resolve(
-                processRecord.WorkingDirectory,
-                task.RequiredRole,
-                worktreeEvidence.ChangedPaths,
-                worktreeEvidence.DirtyPaths,
-                failedWorkerBuildCheck,
-                () => _completionClassifier.EvaluateWorkerBuildReceipt(processRecord.WorkingDirectory, goal.Id),
-                _runOrchestratorBuildCheck);
             var missingWorkerBuildEvidence = buildEvidence.MissingEvidence;
             standardErrorDiagnostic = buildEvidence.AppendDiagnostic(standardErrorDiagnostic);
             if (buildEvidence.FailsRound)
@@ -1567,6 +1595,7 @@ public sealed partial class BackgroundDispatchRunner
                 task.LastDispatch.SandboxLowIntegrity != true &&
                 (successfulWorkerResult || worktreeEvidence.HasRelevantCommitAfterDispatch);
             var shouldCommitDirtyWorktree =
+                !buildEvidence.FailsRound &&
                 !missingWorkerBuildEvidence &&
                 checkpointDisposition?.IsCheckpoint != true &&
                 (recoveryDecision?.Action != DispatchRecoveryAction.PreserveInterruptedWork || reconcileWrapperExit) &&
@@ -1574,6 +1603,24 @@ public sealed partial class BackgroundDispatchRunner
                  reconcileWrapperExit ||
                  (task.LastDispatch.SandboxLowIntegrity && sandboxCommitOnBehalfEvidence) ||
                  (originalExitCode != 0 && successfulWorkerResult && !provider.Capabilities.CanSelfCommit && lowIntegrityConfinementEvidence));
+
+            if (buildEvidence.Operation is { Phase: CompletionBuildEvidencePhase.Success } built)
+            {
+                var currentReceipt = _completionClassifier.EvaluateWorkerBuildReceipt(processRecord.WorkingDirectory, goal.Id);
+                if (!WorktreeTreeDigest.TryCompute(processRecord.WorkingDirectory, out var currentDigest, out _) ||
+                    currentDigest != built.TreeDigest || !currentReceipt.Matches ||
+                    WorkerBuildReceiptCoverage.FindMissingProjects(built.Projects, currentReceipt.Projects).Count != 0)
+                {
+                    shouldCommitDirtyWorktree = false;
+                    missingWorkerBuildEvidence = true;
+                    buildEvidenceAllowsResultCommit = false;
+                    exitCode = 1;
+                    kernel.RecordCompletionBuildEvidence(goalId, taskId, built with
+                    { Phase = CompletionBuildEvidencePhase.StaleCandidate, Diagnostic = "Build candidate evidence changed before commit authorization." });
+                    standardErrorDiagnostic = AppendDiagnostic(standardErrorDiagnostic ?? string.Empty,
+                        DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing));
+                }
+            }
 
             if (!worktreeEvidence.IsClean &&
                 shouldCommitDirtyWorktree)
@@ -1816,13 +1863,9 @@ public sealed partial class BackgroundDispatchRunner
             ExitArtifactReason = exitArtifact?.Reason
         };
 
-        // Capture resultCommit after all orchestrator commits — the right boundary for file attribution.
-        var resultCommit = checkpointDisposition?.IsCheckpoint == true
-            ? null
-            : TryGetWorktreeHead(processRecord.WorkingDirectory);
-        var resultCommitProvenance = hasCommittedChanges
-            ? orchestratorCommitted ? "orchestrator" : "worker"
-            : null;
+        var (resultCommit, resultCommitProvenance) = CaptureResultCommit(
+            processRecord.WorkingDirectory, buildEvidenceAllowsResultCommit,
+            checkpointDisposition?.IsCheckpoint == true, hasCommittedChanges, orchestratorCommitted);
 
         // Worker-self-reported stdout bytes from the heartbeat — a flush-race-proof signal of real output.
         var heartbeatStdoutBytes = _recoveryService.TryReadHeartbeat(GetHeartbeatPath(processRecord), out var completionHeartbeat)
@@ -2162,6 +2205,19 @@ public sealed partial class BackgroundDispatchRunner
         var processRecord = task.LastProcess
             ?? throw new InvalidOperationException($"Task '{taskId}' has no background process to cancel.");
 
+        if (task.CompletionBuildEvidence is { IsPending: true })
+        {
+            if (_completionBuildEvidence is not null)
+                _completionBuildEvidence.Cancel(kernel, goalId, taskId);
+            else
+            {
+                var operation = task.CompletionBuildEvidence;
+                CompletionBuildEvidenceChildIdentity.Stop(operation);
+                kernel.RecordCompletionBuildEvidence(goalId, taskId, operation with
+                { Phase = CompletionBuildEvidencePhase.Cancelled, Diagnostic = "Operator cancelled completion build evidence." });
+            }
+        }
+
         var resourceAccounting = ReapForCancellation(processRecord, bypassTrackedJobRegistry);
         var cancelledAt = _clock.UtcNow;
         var cancelled = processRecord with
@@ -2216,7 +2272,7 @@ public sealed partial class BackgroundDispatchRunner
 
         foreach (var task in goal.Tasks)
         {
-            if (task.LastProcess is not { IsRunning: true })
+            if (task.LastProcess is not { IsRunning: true } && task.CompletionBuildEvidence is not { IsPending: true })
             {
                 continue;
             }

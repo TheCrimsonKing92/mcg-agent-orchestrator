@@ -15,8 +15,10 @@ public sealed record OrchestratorBuildCheckResult(
 internal sealed record OrchestratorBuildEvidenceResolution(
     bool MissingEvidence,
     bool BuildFailed,
-    string Diagnostic)
+    string Diagnostic,
+    CompletionBuildEvidenceOperation? Operation = null)
 {
+    public bool Pending => Operation?.IsPending == true;
     public bool FailsRound => MissingEvidence || BuildFailed;
 
     public string AppendDiagnostic(string? standardError)
@@ -61,7 +63,9 @@ public static class OrchestratorBuildEvidenceCheck
         IEnumerable<string> dirtyPaths,
         bool failedWorkerBuildCheck,
         Func<WorkerBuildReceiptVerdict> workerBuildReceipt,
-        Func<OrchestratorBuildCheckRequest, OrchestratorBuildCheckResult> runBuildCheck)
+        Func<OrchestratorBuildCheckRequest, OrchestratorBuildCheckResult> runBuildCheck,
+        Func<OrchestratorBuildCheckRequest, CompletionBuildEvidenceOperation>? reconcileOperation = null,
+        bool hasOperation = false)
     {
         if (failedWorkerBuildCheck)
         {
@@ -73,7 +77,7 @@ public static class OrchestratorBuildEvidenceCheck
             role,
             changedPaths,
             dirtyPaths);
-        if (projects.Count == 0)
+        if (projects.Count == 0 && !hasOperation)
         {
             return new(MissingEvidence: false, BuildFailed: false, Diagnostic: string.Empty);
         }
@@ -81,7 +85,7 @@ public static class OrchestratorBuildEvidenceCheck
         var missingProjects = receipt.Matches
             ? WorkerBuildReceiptCoverage.FindMissingProjects(projects, receipt.Projects)
             : [];
-        if (receipt.Matches && missingProjects.Count == 0)
+        if (receipt.Matches && missingProjects.Count == 0 && !hasOperation)
         {
             return new(MissingEvidence: false, BuildFailed: false, Diagnostic: string.Empty);
         }
@@ -91,6 +95,22 @@ public static class OrchestratorBuildEvidenceCheck
             : receipt.Reason;
         if (!receipt.Matches && !string.IsNullOrWhiteSpace(receipt.Detail))
             receiptReason += $"; digest_detail={receipt.Detail}";
+        if (reconcileOperation is not null)
+        {
+            var operation = reconcileOperation(new(worktreeRoot, projects, DefaultTimeout));
+            if (operation.IsPending)
+                return new(false, false, operation.Diagnostic, operation);
+            var finalReceipt = workerBuildReceipt();
+            var covered = finalReceipt.Matches &&
+                WorkerBuildReceiptCoverage.FindMissingProjects(projects, finalReceipt.Projects).Count == 0;
+            var success = operation.Phase == CompletionBuildEvidencePhase.Success && covered;
+            return new(
+                !success && operation.Phase != CompletionBuildEvidencePhase.CompilerFailure,
+                operation.Phase == CompletionBuildEvidencePhase.CompilerFailure,
+                $"worker_build_receipt={receiptReason}; build_evidence_producer=orchestrator; " +
+                $"build_evidence_operation={operation.Id}; build_evidence_outcome={operation.Phase}; " +
+                $"receipt_coverage={covered}; {operation.Diagnostic}", operation);
+        }
         OrchestratorBuildCheckResult result;
         try
         {
