@@ -31,7 +31,7 @@ internal static class RealProcessSilenceGuard
     }
 
     internal static async Task<string> ReadChunksAsync(TextReader reader, Action<string> stamp,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, Action<string>? observeOutput = null)
     {
         var captured = new StringBuilder();
         var buffer = new char[4096];
@@ -41,6 +41,7 @@ internal static class RealProcessSilenceGuard
             var chunk = new string(buffer, 0, count);
             captured.Append(chunk);
             stamp(chunk);
+            observeOutput?.Invoke(chunk);
         }
         return captured.ToString();
     }

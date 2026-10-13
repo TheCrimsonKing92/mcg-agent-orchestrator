@@ -42,30 +42,8 @@ internal static class GoalAcceptanceVerifierTestTelemetry
             invocationContext?.Ordinal ?? 0,
             resultsDirectoryOverride);
 
-    internal static void PrepareTestTelemetryForRun(DotnetTestTelemetry telemetry)
-    {
-        foreach (var path in telemetry.Paths)
-        {
-            if (!File.Exists(path))
-            {
-                continue;
-            }
-
-            try
-            {
-                File.Delete(path);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                throw new IOException($"Unable to clear stale TRX before the test run: {path}", ex);
-            }
-
-            if (File.Exists(path))
-            {
-                throw new IOException($"Unable to clear stale TRX before the test run: {path}");
-            }
-        }
-    }
+    internal static void PrepareTestTelemetryForRun(DotnetTestTelemetry telemetry) =>
+        AcceptanceTestRunPreparation.Prepare(telemetry.Paths);
 
     internal static IReadOnlyList<string>? CopyCompletedTestReceiptsToAttemptFolder(
         IReadOnlyList<string>? sourcePaths,

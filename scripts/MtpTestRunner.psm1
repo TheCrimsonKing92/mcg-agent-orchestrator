@@ -829,6 +829,7 @@ function Write-MtpRunOwnershipSidecar {
             attemptId = $attemptId
             machineName = [System.Environment]::MachineName
             ownerProcessId = $PID
+            ownerProcessStartedAt = (Get-Process -Id $PID -ErrorAction Stop).StartTime.ToUniversalTime().ToString('o')
             createdAt = [DateTimeOffset]::UtcNow.ToString('o')
             runLabel = $RunLabel
         }
@@ -2603,6 +2604,37 @@ function Write-MtpRunEvidenceReceipt {
                 identityCostMs = $_.IdentityCost
             }
         })
+        $nestedEvidence = [System.Collections.Generic.List[object]]::new()
+        $nestedRoot = Join-Path $RunDirectory 'nested-managed-projects'
+        if (Test-Path -LiteralPath $nestedRoot) {
+            # Only the bounded diagnostics layout is copied. Reject links and unexpected entries
+            # rather than following a fixture path or silently losing its evidence during cleanup.
+            $rows = @(Get-ChildItem -LiteralPath $nestedRoot -Force -ErrorAction Stop)
+            if (((Get-Item -LiteralPath $nestedRoot -Force).Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw 'Nested managed-project diagnostics root is not a bounded owned subtree.'
+            }
+            foreach ($row in $rows) {
+                if (-not $row.PSIsContainer -or $row.Name -notmatch '^p-[a-f0-9]{8}$' -or ($row.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+                    throw "Invalid nested managed-project diagnostics row '$($row.FullName)'."
+                }
+                $files = @(Get-ChildItem -LiteralPath $row.FullName -Force -ErrorAction Stop)
+                if (@($files | Where-Object { $_.PSIsContainer -or $_.Name -notin @('phases.jsonl', 'build.binlog', '.mtp-run-ownership.json') -or ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 }).Count -gt 0 -or
+                    -not (Test-Path -LiteralPath (Join-Path $row.FullName 'phases.jsonl') -PathType Leaf)) {
+                    throw "Invalid nested managed-project diagnostics files in '$($row.FullName)'."
+                }
+                $destination = Join-Path (Join-Path $evidenceDirectory 'nested-managed-projects') $row.Name
+                [void](New-Item -ItemType Directory -Path $destination -Force -ErrorAction Stop)
+                foreach ($file in $files) {
+                    $target = Join-Path $destination $file.Name
+                    Copy-Item -LiteralPath $file.FullName -Destination $target -ErrorAction Stop
+                    $sourceHash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256 -ErrorAction Stop).Hash
+                    if ((Get-FileHash -LiteralPath $target -Algorithm SHA256 -ErrorAction Stop).Hash -ne $sourceHash) {
+                        throw "Nested managed-project diagnostics copy changed '$($file.FullName)'."
+                    }
+                    $nestedEvidence.Add([ordered]@{ file = "nested-managed-projects/$($row.Name)/$($file.Name)"; sha256 = $sourceHash; bytes = $file.Length })
+                }
+            }
+        }
         $evidence = [ordered]@{
             schemaVersion = 1
             runLabel = $RunLabel
@@ -2611,6 +2643,7 @@ function Write-MtpRunEvidenceReceipt {
             executedTestNames = @($ExecutedTestNames | Sort-Object -Unique)
             selections = $selectionEvidence
             trx = $trxEvidence.ToArray()
+            nestedManagedProjects = $nestedEvidence.ToArray()
         }
         $evidence | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $evidenceDirectory 'run-identity.json') -Encoding UTF8 -ErrorAction Stop
     }
