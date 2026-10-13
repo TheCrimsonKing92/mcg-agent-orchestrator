@@ -61,6 +61,19 @@ public sealed class EpicPlanNextStepTests
         Assert.Equal("0 of 0 slices landed; next: no plan", EpicPlanNextStep.Summary([]));
     }
 
+    [Theory]
+    [InlineData("Unknown", "outcome evidence required")]
+    [InlineData("Unmet", "outcome unmet")]
+    [InlineData("Proven", "complete")]
+    public void Landed_scope_retains_counts_while_outcome_work_has_its_own_next_step(string state, string next)
+    {
+        var items = new[] { Slice(1, EpicPlanSliceStatus.Done), Step(2, true) };
+        var outcome = new EpicOutcomeProjection(Enum.Parse<EpicOutcomeState>(state), 1, "Outcome", [], []);
+        var view = new EpicPlanView(new("epic", null, items.Select(item => item.Item).ToArray(), []), items, [], outcome);
+        Assert.Equal("1 of 1 slices landed; next: complete", EpicPlanNextStep.Summary(items));
+        Assert.Equal(next, EpicPlanNextStep.Compute(view).Text);
+    }
+
     private static EpicPlanItemStatus Slice(int position, EpicPlanSliceStatus status) =>
         new(new(position, EpicPlanItemKind.Slice, "backlog" + position, null, false), status, "slice" + position,
             status == EpicPlanSliceStatus.InFlight ? "goal Active" : null);

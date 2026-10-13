@@ -6,6 +6,7 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static class AgentReadEnvelope
 {
+    public const string EpicProgressSchema = "mcg.epic-progress";
     public const string RemoteExecutorsSchema = "mcg.remote-executors";
     public const int RemoteExecutorsSchemaVersion = 1;
     public const string GoalsSchema = "mcg.goals";

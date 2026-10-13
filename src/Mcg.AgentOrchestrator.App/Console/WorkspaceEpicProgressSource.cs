@@ -7,8 +7,8 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 internal sealed class WorkspaceEpicProgressSource(OrchestratorWorkspace workspace) : IOwnerConsoleEpicSource
 {
     public Task<IReadOnlyList<EpicProgressRollup>> LoadAsync(DateTimeOffset? since, CancellationToken cancellationToken) =>
-        Task.Run(() => EpicProgressReadModel.Load(workspace, since), cancellationToken);
+        Task.Run(() => EpicProgressReadModel.Load(workspace, since, includeReasons: true), cancellationToken);
 
     public Task<EpicPlanView> LoadPlanAsync(PortfolioEpic epic, CancellationToken cancellationToken) =>
-        Task.Run(() => EpicPlanStatusReader.Load(workspace, [epic], includeReasons: true)[epic.Id], cancellationToken);
+        Task.Run(() => EpicProgressReadModel.LoadEpic(workspace, epic.Id, includeReasons: true).Plan!, cancellationToken);
 }

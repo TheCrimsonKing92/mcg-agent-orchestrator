@@ -696,6 +696,7 @@ public sealed class PortfolioStore
                 RunNonQuery(conn, "ALTER TABLE epics ADD COLUMN description TEXT NULL");
             if (!hasBar)
                 RunNonQuery(conn, "ALTER TABLE epics ADD COLUMN bar TEXT NULL");
+            EpicOutcomeSchema.Setup(conn);
             StoreSchemaVersions.UpgradeToCurrent(conn, StoreSchemaRegistry.Portfolio);
             RunNonQuery(conn, "COMMIT");
         }
