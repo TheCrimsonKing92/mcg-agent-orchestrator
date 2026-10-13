@@ -9,7 +9,7 @@ public sealed record CriterionVerdict(
     [property: JsonPropertyName("verdict")] string Verdict,
     [property: JsonPropertyName("evidence")] string Evidence);
 
-public static class WorkerResultBlockers
+public static partial class WorkerResultBlockers
 {
     public enum TestsStatus
     {
@@ -992,6 +992,12 @@ public static class WorkerResultBlockers
 
     private static IEnumerable<string> EnumerateEvidenceLines(TaskVerificationRecord verification)
     {
+        if (verification.EvidenceSource == VerificationEvidenceSource.Dispatch && verification.DispatchAttemptAt is not null)
+        {
+            foreach (var line in SplitRetainedLines(verification.AuthoritativeStandardOutput))
+                yield return line;
+            yield break;
+        }
         // A dispatch's stdout is the worker-authored response. Stderr can contain the
         // launcher prompt and upstream WORKER_RESULT blocks, so it is never an
         // authoritative source for the completed round's result.

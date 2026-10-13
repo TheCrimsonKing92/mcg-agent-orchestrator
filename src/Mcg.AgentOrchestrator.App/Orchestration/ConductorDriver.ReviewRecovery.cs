@@ -12,7 +12,9 @@ internal sealed partial class ConductorDriver
     {
         observation = FailedGoalFindingObservation.None;
         var candidate = FailedGoalRecoveryPolicy.SelectReviewContractCandidate(
-            goal.Tasks.Select(task => new FailedGoalReviewContractCandidate(
+            goal.Tasks.Where(task => task.LastVerification is null ||
+                WorkerResultBlockers.AssessSubscriptionVerification(task, task.LastVerification).AllowsCompletion)
+            .Select(task => new FailedGoalReviewContractCandidate(
                 task.Id,
                 task.RequiredRole,
                 task.Status,
@@ -127,7 +129,8 @@ internal sealed partial class ConductorDriver
         }
         if (trigger is null)
         {
-            foreach (var requestingTask in goal.Tasks.Where(task => task.LastVerification is not null))
+            foreach (var requestingTask in goal.Tasks.Where(task => task.LastVerification is not null &&
+                WorkerResultBlockers.AssessSubscriptionVerification(task, task.LastVerification).AllowsCompletion))
             {
                 if (TryBuildFindingEvidenceRequest(goal, requestingTask, policy, out observation))
                 {
@@ -302,6 +305,10 @@ internal sealed partial class ConductorDriver
         {
             return null;
         }
+
+        if (task.LastVerification is { } contractRecord &&
+            !WorkerResultBlockers.AssessSubscriptionVerification(task, contractRecord).AllowsCompletion)
+            return null;
 
         if (task.LastVerification is { } latestVerification &&
             !VerifyingFindingCurrency.IsCurrent(goal, task, latestVerification))

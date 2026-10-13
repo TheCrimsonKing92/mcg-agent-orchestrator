@@ -204,7 +204,9 @@ public sealed partial class TaskSpec
                     LastVerification.CandidateIdentity,
                     LastVerification.AcceptanceCriteriaVersionHash,
                     LastVerification.InconclusiveRoundInputs,
-                    LastVerification.HumanInputStoreReference),
+                    LastVerification.HumanInputStoreReference,
+                    LastVerification.EvidenceSource,
+                    LastVerification.DispatchAttemptAt),
             _verificationHistory
                 .Select(verification => new TaskVerificationSnapshot(
                     verification.Command,
@@ -238,7 +240,9 @@ public sealed partial class TaskSpec
                     verification.CandidateIdentity,
                     verification.AcceptanceCriteriaVersionHash,
                     verification.InconclusiveRoundInputs,
-                    verification.HumanInputStoreReference))
+                    verification.HumanInputStoreReference,
+                    verification.EvidenceSource,
+                    verification.DispatchAttemptAt))
                 .ToList(),
             LastDispatch is null
                 ? null
@@ -380,7 +384,9 @@ public sealed partial class TaskSpec
                     CandidateIdentity: verification.CandidateIdentity,
                     AcceptanceCriteriaVersionHash: verification.AcceptanceCriteriaVersionHash,
                     InconclusiveRoundInputs: verification.InconclusiveRoundInputs,
-                    HumanInputStoreReference: verification.HumanInputStoreReference));
+                    HumanInputStoreReference: verification.HumanInputStoreReference,
+                    EvidenceSource: verification.EvidenceSource,
+                    DispatchAttemptAt: verification.DispatchAttemptAt));
             }
         }
 
@@ -424,7 +430,9 @@ public sealed partial class TaskSpec
                 CandidateIdentity: snapshot.LastVerification.CandidateIdentity,
                 AcceptanceCriteriaVersionHash: snapshot.LastVerification.AcceptanceCriteriaVersionHash,
                 InconclusiveRoundInputs: snapshot.LastVerification.InconclusiveRoundInputs,
-                HumanInputStoreReference: snapshot.LastVerification.HumanInputStoreReference);
+                HumanInputStoreReference: snapshot.LastVerification.HumanInputStoreReference,
+                EvidenceSource: snapshot.LastVerification.EvidenceSource,
+                DispatchAttemptAt: snapshot.LastVerification.DispatchAttemptAt);
             var historyIndex = task._verificationHistory.FindLastIndex(
                 verification => verification.HasSameRoundIdentity(latestVerification));
             if (historyIndex < 0)
@@ -592,7 +600,8 @@ public sealed partial class TaskSpec
             DispatchOutcomeKind.LaunchFailure or
             DispatchOutcomeKind.EmptyOutputFlake or
             DispatchOutcomeKind.PreflightFailure or
-            DispatchOutcomeKind.VerificationInconclusive
+            DispatchOutcomeKind.VerificationInconclusive or
+            DispatchOutcomeKind.VerificationIncomplete
             ? EmptyOutputRetryCount + 1
             : 0;
         if (verification.ModelFitNote is null)
