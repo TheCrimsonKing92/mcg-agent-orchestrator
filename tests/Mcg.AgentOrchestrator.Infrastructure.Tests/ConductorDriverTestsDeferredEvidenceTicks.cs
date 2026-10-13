@@ -114,9 +114,14 @@ public sealed class ConductorDriverTestsDeferredEvidenceTicks
 
         if (waive)
         {
+            var acceptanceObligation = Assert.Single(goal.CriterionEvidenceObligations,
+                item => item.Owner == CriterionEvidenceOwner.Acceptance);
+            Assert.True(acceptanceObligation.HasSatisfiedEvidenceFor(candidateSha));
             var operatorObligation = Assert.Single(goal.GetOutstandingCriterionEvidenceObligations(candidateSha));
-            kernel.WaiveAcceptanceCriterion(goal.Id, operatorObligation.Criterion,
-                "Operator observation is no longer required.", "operator@example");
+            var waiver = kernel.WaiveAcceptanceCriterion(goal.Id, operatorObligation.Criterion,
+                "Operator observation is no longer required.", "operator@example",
+                currentCandidateSha: candidateSha);
+            Assert.Null(waiver.Dispositions);
             if (restart)
             {
                 kernel = AgentOrchestratorKernel.FromSnapshot(JsonSerializer.Deserialize<OrchestratorSnapshot>(
