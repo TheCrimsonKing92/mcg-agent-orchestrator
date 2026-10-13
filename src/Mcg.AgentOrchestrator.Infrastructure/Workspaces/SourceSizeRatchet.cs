@@ -230,7 +230,8 @@ internal static class SourceSizeRatchet
             // Goal 5077a6b8 extracted process reaping for the typed operator cancel path.
             // Goal 207369f1 keeps pending completion, candidate revalidation and cancellation at the dispatch seam;
             // build lifecycle/lease/process behavior lives in CompletionBuildEvidenceCoordinator. Measured 2739; no headroom.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Processes/BackgroundDispatchRunner.cs", 2739),
+            // Goal c5b71650 integrates terminal-contract enforcement and extracted apparatus holds; measured 2719.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Processes/BackgroundDispatchRunner.cs", 2719),
             // Goal 5a75fed0 extracted typed projection parsing and literal restoration into
             // WorkerContextProjectionResidual, leaving the dispatcher to sequence package assembly.
             // Goal fd252fe4 adds retry fingerprints for the resolved provider, model, paid route, and
@@ -390,7 +391,7 @@ internal static class SourceSizeRatchet
             // interruption cause and PID-identity evidence; owning-suite assertions preserve coverage.
             // Raised for goal 2dd0ece6: the real dispatch leak guard tests exercise the launched-host
             // ownership path without splitting this already consolidated classification fixture.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTestsWorkerResultClassification.cs", 4844),
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTestsWorkerResultClassification.cs", 4825),
             // Goal 46ff9f83 adds unequal logical-width/build-permit controls and the typed maximum diagnostic.
             // Goal 289b469d adds the per-stage registration-fault decision table, bounded-cap proof, durable
             // fault/verdict state distinction, and paid-round negative controls owned by this existing class.
@@ -480,8 +481,9 @@ internal static class SourceSizeRatchet
             // parsing and coverage policy remain separately owned. Measured 9245 lines in the same 27 partials; no headroom.
             // Goal 207369f1 adds goal-validated completion-evidence recording and pending-aware refresh/cancel routing;
             // operation state belongs to TaskSpec. Measured 9254 across the same 27 partial files; no extra headroom.
-            // Integrated goal 139b8c97 with completion evidence: measured 9253 across 27 partial files, no headroom.
-            new SourceClassCeiling("AgentOrchestratorKernel", 9253, 27),
+            // Goal c5b71650 integrates terminal contracts with advisory isolation using the shared dispatch-context owner.
+            // Measured 9266 lines across 27 partial files; no extra headroom.
+            new SourceClassCeiling("AgentOrchestratorKernel", 9266, 27),
             // Goal d6033045 extracted the pre-admission receipt pass to PassedMergeTrainReceiptAdmission; goal 1d0f2317
             // adds one admission predicate to exclude stream-complete children before slot reservation. Measured 9255.
             // Goal 679eee57 added a one-line tick call to the separately owned ConductorExperimentWatch (+1); goal 80de5cb2 extracted

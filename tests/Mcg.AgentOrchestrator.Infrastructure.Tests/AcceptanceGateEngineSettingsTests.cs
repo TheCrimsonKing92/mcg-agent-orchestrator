@@ -103,6 +103,7 @@ public sealed class AcceptanceGateEngineSettingsTests
                 "WorkerDispatchTestsModelSelectionEnvMutation",
                 "WorkerDispatchTestsSandboxLowIntegrity",
                 "WorkerDispatchTestsSubscriptionPreflight",
+                "WorkerDispatchTestsSubscriptionTerminalContract",
                 "WorkerDispatchTestsWorkerResultClassification",
                 "WorkerProcessJobsTests",
                 "WorkerProfileTests",

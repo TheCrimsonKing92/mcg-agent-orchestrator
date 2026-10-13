@@ -192,7 +192,9 @@ public sealed record TaskVerificationSnapshot(
     CandidateIdentity? CandidateIdentity = null,
     string? AcceptanceCriteriaVersionHash = null,
     FailedGoalInconclusiveRoundInputs? InconclusiveRoundInputs = null,
-    PlannerEvidenceStoreReference? HumanInputStoreReference = null)
+    PlannerEvidenceStoreReference? HumanInputStoreReference = null,
+    VerificationEvidenceSource EvidenceSource = VerificationEvidenceSource.Unspecified,
+    DateTimeOffset? DispatchAttemptAt = null)
 {
     public string StandardOutput { get; init; } = VerificationTextBounds.BoundText(StandardOutput, StandardOutputPath);
 

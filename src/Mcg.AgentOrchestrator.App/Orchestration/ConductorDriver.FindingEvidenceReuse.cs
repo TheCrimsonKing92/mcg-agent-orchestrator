@@ -13,7 +13,8 @@ internal sealed partial class ConductorDriver
     private VerifyingFindingTrigger? BuildTesterDeveloperOwnedFindingTrigger(Goal goal, TaskSpec task)
     {
         if (task is not { Status: WorkTaskStatus.Failed, RequiredRole: AgentRole.Tester } ||
-            task.LastVerification?.MergedReviewFindings is not { } mergedFindings)
+            task.LastVerification?.MergedReviewFindings is not { } mergedFindings ||
+            !WorkerResultBlockers.AssessSubscriptionVerification(task, task.LastVerification).AllowsCompletion)
         {
             return null;
         }

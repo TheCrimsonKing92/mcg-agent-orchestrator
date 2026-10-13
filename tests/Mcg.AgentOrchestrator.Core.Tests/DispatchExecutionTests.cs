@@ -504,7 +504,7 @@ public sealed class DispatchExecutionTests
     Assert.Equal(GoalStatus.WaitingForHuman, goal.Status);
     Assert.Equal(task.Id, request.TaskId);
     Assert.Equal("Which branch should I modify?", request.Question);
-    Assert.Equal(verification with { AcceptanceCriteriaVersionHash = "no-refined-spec" }, task.LastVerification);
+    Assert.Equal(verification with { AcceptanceCriteriaVersionHash = "no-refined-spec", EvidenceSource = VerificationEvidenceSource.Dispatch }, task.LastVerification);
     Assert.True(task.LastVerification!.StandardOutput.Length <= VerificationTextBounds.MaxRetainedChars);
     Assert.DoesNotContain("HUMAN_INPUT:", task.LastVerification.StandardOutput, StringComparison.Ordinal);
     Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskVerificationRecorded);
@@ -598,7 +598,8 @@ public sealed class DispatchExecutionTests
         {
             CompletionVerdictVerifiedSuccess = true,
             CompletionVerdictRule = "succeeded-dispatch-completion-evidence",
-            AcceptanceCriteriaVersionHash = "no-refined-spec"
+            AcceptanceCriteriaVersionHash = "no-refined-spec",
+            EvidenceSource = VerificationEvidenceSource.Dispatch
         },
         task.LastVerification);
     Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted);
@@ -668,7 +669,7 @@ public sealed class DispatchExecutionTests
                 string.Empty,
                 clock.UtcNow,
                 WorkerResultPresent: true,
-                HasCommittedChanges: false));
+                HasCommittedChanges: false, DispatchStartedAt: clock.UtcNow));
 
         var failure = Assert.Single(goal.Timeline.Where(evt =>
             evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskFailed));
@@ -1200,7 +1201,7 @@ public sealed class DispatchExecutionTests
             clock.UtcNow,
             WorkerResultPresent: true,
             HasCommittedChanges: false,
-            HeartbeatStandardOutputBytes: stdout.Length));
+            HeartbeatStandardOutputBytes: stdout.Length, DispatchStartedAt: clock.UtcNow));
 
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.NotNull(task.LastVerification);
@@ -1235,7 +1236,7 @@ public sealed class DispatchExecutionTests
             clock.UtcNow,
             WorkerResultPresent: true,
             HasCommittedChanges: false,
-            HeartbeatStandardOutputBytes: stdout.Length));
+            HeartbeatStandardOutputBytes: stdout.Length, DispatchStartedAt: clock.UtcNow));
 
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.NotNull(task.LastVerification);
@@ -1275,7 +1276,7 @@ public sealed class DispatchExecutionTests
                 clock.UtcNow,
                 WorkerResultPresent: true,
                 HasCommittedChanges: false,
-                HeartbeatStandardOutputBytes: stdout.Length));
+                HeartbeatStandardOutputBytes: stdout.Length, DispatchStartedAt: clock.UtcNow));
 
         Assert.Equal(WorkTaskStatus.Failed, task.Status);
         Assert.Equal(GoalStatus.Active, goal.Status);
@@ -1357,7 +1358,7 @@ public sealed class DispatchExecutionTests
             clock.UtcNow,
             WorkerResultPresent: true,
             HasCommittedChanges: false,
-            HeartbeatStandardOutputBytes: stdout.Length));
+            HeartbeatStandardOutputBytes: stdout.Length, DispatchStartedAt: clock.UtcNow));
 
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.Equal(DispatchOutcomeKind.UnknownFailure, DispatchFailureClassifier.Classify(task, task.LastVerification!).Kind);
@@ -1427,7 +1428,7 @@ public sealed class DispatchExecutionTests
             clock.UtcNow,
             WorkerResultPresent: true,
             HasCommittedChanges: false,
-            HeartbeatStandardOutputBytes: stdout.Length));
+            HeartbeatStandardOutputBytes: stdout.Length, DispatchStartedAt: clock.UtcNow));
 
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.Contains(goal.Timeline, evt =>
@@ -1454,7 +1455,7 @@ public sealed class DispatchExecutionTests
             """[{"stable_id":"F-1","state":"open","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Missing guard."}]""",
             "Missing guard.");
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
-            "review-1", "C:\\repo", 1, round1, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+            "review-1", "C:\\repo", 1, round1, string.Empty, clock.UtcNow, WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
 
         clock.Advance();
         kernel.RetryTask(goal.Id, reviewer.Id, "recheck");
@@ -1462,7 +1463,7 @@ public sealed class DispatchExecutionTests
             "codex-cli", "review-2", "C:\\repo", clock.UtcNow));
         var round2 = StructuredReviewerResult("pass", "[]", "none");
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
-            "review-2", "C:\\repo", 0, round2, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+            "review-2", "C:\\repo", 0, round2, string.Empty, clock.UtcNow, WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
 
         Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
         var violation = Assert.IsType<ReviewFindingContractViolation>(
@@ -1492,7 +1493,7 @@ public sealed class DispatchExecutionTests
             """[{"stable_id":"F-CAP","state":"open","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Missing guard.","severity":"blocking"}]""",
             "Missing guard.");
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
-            "review-1", "C:\\repo", 1, open, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+            "review-1", "C:\\repo", 1, open, string.Empty, clock.UtcNow, WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
 
         clock.Advance();
         kernel.RetryTask(goal.Id, reviewer.Id, "operator requested cap-round recheck");
@@ -1510,7 +1511,7 @@ public sealed class DispatchExecutionTests
             "none");
 
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
-            "review-2", "C:\\repo", 0, claimedResolved, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+            "review-2", "C:\\repo", 0, claimedResolved, string.Empty, clock.UtcNow, WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
 
         Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
         var violation = Assert.IsType<ReviewFindingContractViolation>(reviewer.LastVerification!.ReviewFindingContractViolation);
@@ -1542,7 +1543,7 @@ public sealed class DispatchExecutionTests
                 "Missing guard."),
             string.Empty,
             clock.UtcNow,
-            WorkerResultPresent: true));
+            WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
 
         clock.Advance();
         kernel.RetryTask(goal.Id, reviewer.Id, "cap-round recheck");
@@ -1564,7 +1565,7 @@ public sealed class DispatchExecutionTests
                 "none"),
             string.Empty,
             clock.UtcNow,
-            WorkerResultPresent: true));
+            WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
 
         Assert.Equal(2, reviewer.VerificationHistory.Count);
         Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
@@ -1602,7 +1603,7 @@ public sealed class DispatchExecutionTests
             """[{"stable_id":"F-CAP","state":"open","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Missing guard.","severity":"blocking"}]""",
             "Missing guard.");
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
-            "review-1", "C:\\repo", 1, open, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+            "review-1", "C:\\repo", 1, open, string.Empty, clock.UtcNow, WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
 
         clock.Advance();
         kernel.RetryTask(goal.Id, reviewer.Id, "cap-round recheck");
@@ -1619,7 +1620,7 @@ public sealed class DispatchExecutionTests
             """[{"stable_id":"F-CAP","state":"resolved","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Missing guard.","severity":"blocking"}]""",
             "none");
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
-            "review-2", "C:\\repo", 0, claimedResolved, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+            "review-2", "C:\\repo", 0, claimedResolved, string.Empty, clock.UtcNow, WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
         Assert.Equal(
             ReviewFindingConvergence.UnprovenResolutionAtCapViolationCode,
             reviewer.LastVerification!.ReviewFindingContractViolation?.Code);
@@ -1636,7 +1637,7 @@ public sealed class DispatchExecutionTests
             ReviewRetryCap: new ReviewRetryCapReceipt(7, 7)));
         var emptyPass = StructuredReviewerResult("pass", "[]", "none");
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
-            "review-3", "C:\\repo", 0, emptyPass, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+            "review-3", "C:\\repo", 0, emptyPass, string.Empty, clock.UtcNow, WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
 
         Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
         var retained = Assert.Single(reviewer.LastVerification!.MergedReviewFindings!);
@@ -1665,7 +1666,7 @@ public sealed class DispatchExecutionTests
             """[{"stable_id":"F-LEGACY-CAP","state":"open","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Missing guard.","severity":"blocking"}]""",
             "Missing guard.");
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
-            "review-1", "C:\\repo", 1, open, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+            "review-1", "C:\\repo", 1, open, string.Empty, clock.UtcNow, WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
 
         clock.Advance();
         kernel.RetryTask(goal.Id, reviewer.Id, "legacy snapshot recheck");
@@ -1682,7 +1683,7 @@ public sealed class DispatchExecutionTests
             "none");
 
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
-            "review-2", "C:\\repo", 0, claimedResolved, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+            "review-2", "C:\\repo", 0, claimedResolved, string.Empty, clock.UtcNow, WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
 
         Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
         var violation = Assert.IsType<ReviewFindingContractViolation>(reviewer.LastVerification!.ReviewFindingContractViolation);
@@ -1712,7 +1713,7 @@ public sealed class DispatchExecutionTests
             "F-EARLY-CAP - Missing guard.");
 
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
-            "review", "C:\\repo", 0, blocked, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+            "review", "C:\\repo", 0, blocked, string.Empty, clock.UtcNow, WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
 
         Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
         Assert.Contains(goal.Timeline, evt =>
@@ -1738,7 +1739,7 @@ public sealed class DispatchExecutionTests
             """[{"stable_id":"F-CAP","state":"open","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Missing guard.","severity":"blocking"}]""",
             "Missing guard.");
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
-            "review-1", "C:\\repo", 1, open, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+            "review-1", "C:\\repo", 1, open, string.Empty, clock.UtcNow, WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
 
         clock.Advance();
         kernel.RetryTask(goal.Id, reviewer.Id, "recheck changed anchor");
@@ -1756,7 +1757,7 @@ public sealed class DispatchExecutionTests
             "none");
 
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
-            "review-2", "C:\\repo", 0, resolved, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+            "review-2", "C:\\repo", 0, resolved, string.Empty, clock.UtcNow, WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
 
         Assert.Equal(WorkTaskStatus.Completed, reviewer.Status);
         Assert.Null(reviewer.LastVerification!.ReviewFindingContractViolation);
@@ -1786,7 +1787,7 @@ public sealed class DispatchExecutionTests
             "Missing guard.",
             """[{"criterion_index":0,"verdict":"not-met","evidence":"src/A.cs:10"}]""");
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
-            "review-1", "C:\\repo", 1, open, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+            "review-1", "C:\\repo", 1, open, string.Empty, clock.UtcNow, WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
 
         kernel.WaiveAcceptanceCriterion(goal.Id, "Missing guard.", "Operator accepts the known gap for this candidate.", "operator@example");
         clock.Advance();
@@ -1805,7 +1806,7 @@ public sealed class DispatchExecutionTests
             """[{"criterion_index":0,"verdict":"not-met","evidence":"Explicit operator waiver recorded."}]""");
 
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
-            "review-2", "C:\\repo", 0, waivedPass, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+            "review-2", "C:\\repo", 0, waivedPass, string.Empty, clock.UtcNow, WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
 
         Assert.Equal(WorkTaskStatus.Completed, reviewer.Status);
         Assert.Contains(goal.Timeline, evt =>
@@ -1833,10 +1834,11 @@ public sealed class DispatchExecutionTests
         kernel.ActivateGoal(goal.Id, DefaultAgents());
         kernel.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord(
             "codex-cli", "review-1", "C:\\repo", clock.UtcNow));
-        var missing = StructuredReviewerResult("pass", "[]", "none", criteriaVerdictsJson: null);
+        // The terminal field is present, but neither registered criterion is attested.
+        var missing = StructuredReviewerResult("pass", "[]", "none");
 
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
-            "review-1", "C:\\repo", 0, missing, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+            "review-1", "C:\\repo", 0, missing, string.Empty, clock.UtcNow, WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
 
         Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
         Assert.Contains(goal.Timeline, evt =>
@@ -1855,7 +1857,7 @@ public sealed class DispatchExecutionTests
             """[{"criterion_index":0,"verdict":"met","evidence":"src/A.cs:10"},{"criterion_index":1,"verdict":"met","evidence":"tests/A.cs:20"}]""");
 
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
-            "review-2", "C:\\repo", 0, complete, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+            "review-2", "C:\\repo", 0, complete, string.Empty, clock.UtcNow, WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
 
         Assert.Equal(WorkTaskStatus.Completed, reviewer.Status);
     }
@@ -1883,7 +1885,7 @@ public sealed class DispatchExecutionTests
             """[{"criterion_index":0,"verdict":"not-verifiable","evidence":"Required receipt is unavailable."}]""");
 
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
-            "review-pass", "C:\\repo", 0, invalidPass, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+            "review-pass", "C:\\repo", 0, invalidPass, string.Empty, clock.UtcNow, WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
 
         Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
         Assert.Contains(goal.Timeline, evt =>
@@ -1902,7 +1904,7 @@ public sealed class DispatchExecutionTests
             """[{"criterion_index":0,"verdict":"not-met","evidence":"src/A.cs has no guard."}]""");
 
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
-            "review-needs-work", "C:\\repo", 1, needsWork, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+            "review-needs-work", "C:\\repo", 1, needsWork, string.Empty, clock.UtcNow, WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
 
         Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
         var failure = goal.Timeline.Last(evt => evt.TaskId == reviewer.Id && evt.Kind == ProgressKind.TaskFailed);
@@ -1932,8 +1934,12 @@ public sealed class DispatchExecutionTests
             "[]",
             "none",
             """[{"criterion_index":0,"verdict":"not-verifiable","evidence":"Awaiting a real operator observation."}]""");
+        Assert.Equal(VerificationTerminalContractStatus.Valid,
+            WorkerResultBlockers.AssessSubscriptionVerification(reviewer, new TaskVerificationRecord(
+                "review", "C:\\repo", 0, result, string.Empty, clock.UtcNow,
+                DispatchStartedAt: clock.UtcNow)).Status);
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
-            "review", "C:\\repo", 0, result, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+            "review", "C:\\repo", 0, result, string.Empty, clock.UtcNow, WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
 
         Assert.Equal(WorkTaskStatus.Completed, reviewer.Status);
         var obligation = Assert.Single(goal.OutstandingCriterionEvidenceObligations);
@@ -1968,7 +1974,7 @@ public sealed class DispatchExecutionTests
             expectedCandidateSha: "candidate-123");
         kernel.ActivateGoal(goal.Id, DefaultAgents());
         kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
-            role.ToString(), "record-evidence", "C:\\repo", clock.UtcNow));
+            "codex-cli", "record-evidence", "C:\\repo", clock.UtcNow));
 
         var result = StructuredReviewerResult(
             "pass",
@@ -1977,9 +1983,13 @@ public sealed class DispatchExecutionTests
             role == AgentRole.Reviewer
                 ? """[{"criterion_index":0,"verdict":"not-verifiable","evidence":"The acceptance owner must run acceptance:full-core."}]"""
                 : "[]");
+        Assert.Equal(VerificationTerminalContractStatus.Valid,
+            WorkerResultBlockers.AssessSubscriptionVerification(task, new TaskVerificationRecord(
+                "record-evidence", "C:\\repo", 0, result, string.Empty, clock.UtcNow,
+                DispatchStartedAt: clock.UtcNow)).Status);
 
         kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
-            "record-evidence", "C:\\repo", 0, result, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+            "record-evidence", "C:\\repo", 0, result, string.Empty, clock.UtcNow, WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
 
         Assert.NotNull(task.LastVerification!.MergedReviewFindings);
         Assert.True(
@@ -2127,7 +2137,7 @@ public sealed class DispatchExecutionTests
             "review", "C:\\repo", 0,
             StructuredReviewerResult("pass", "[]", "none",
                 """[{"criterion_index":0,"verdict":"not-verifiable","evidence":"Ownership must be repaired."}]"""),
-            string.Empty, clock.UtcNow, WorkerResultPresent: true));
+            string.Empty, clock.UtcNow, WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
 
         Assert.Equal(WorkTaskStatus.Failed, restoredTask.Status);
         Assert.Contains(kernel.GetGoal(goal.Id).OutstandingCriterionEvidenceObligations,
@@ -2211,7 +2221,7 @@ public sealed class DispatchExecutionTests
             """[{"criterion_index":0,"verdict":"met","evidence":"tests/Registered.trx"},{"criterion_index":1,"verdict":"met","evidence":"tests/ExtraOne.trx"},{"criterion_index":2,"verdict":"met","evidence":"tests/ExtraTwo.trx"}]""");
 
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
-            "review", "C:\\repo", 0, passingSuperset, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+            "review", "C:\\repo", 0, passingSuperset, string.Empty, clock.UtcNow, WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
 
         Assert.Equal(WorkTaskStatus.Completed, reviewer.Status);
         Assert.Equal(GoalStatus.Verified, goal.Status);
@@ -2244,22 +2254,34 @@ public sealed class DispatchExecutionTests
             "needs-work",
             """[{"stable_id":"F-1","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"Missing guard."}]""",
             "Missing guard.");
+        var firstDispatchAt = reviewer.LastDispatch!.DispatchedAt;
+        // Keep completion timestamps equal while giving each dispatch its own identity.
+        clock.Advance();
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
-            "review-1", "C:\\repo", 1, round1, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+            "review-1", "C:\\repo", 1, round1, string.Empty, clock.UtcNow, WorkerResultPresent: true, DispatchStartedAt: firstDispatchAt));
 
         kernel.RetryTask(goal.Id, reviewer.Id, "recheck");
         kernel.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord(
             "codex-cli", "review-2", "C:\\repo", clock.UtcNow));
         var round2 = StructuredReviewerResult("pass", "[]", "none");
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
-            "review-2", "C:\\repo", 0, round2, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+            "review-2", "C:\\repo", 0, round2, string.Empty, clock.UtcNow, WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
 
+        Assert.Equal(2, reviewer.VerificationHistory.Count);
+        Assert.Equal(reviewer.VerificationHistory[0].CompletedAt, reviewer.VerificationHistory[1].CompletedAt);
+        Assert.NotEqual(reviewer.VerificationHistory[0].DispatchAttemptAt, reviewer.VerificationHistory[1].DispatchAttemptAt);
+        Assert.All(reviewer.VerificationHistory, record => Assert.Equal(
+            VerificationTerminalContractStatus.Valid,
+            WorkerResultBlockers.AssessStoredSubscriptionVerification(reviewer, record).Status));
         Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
         Assert.Equal("F-1", Assert.Single(reviewer.LastVerification!.MergedReviewFindings!).StableId);
+        Assert.Equal(ReviewFindingConvergence.OmittedOpenFindingViolationCode,
+            reviewer.LastVerification.ReviewFindingContractViolation?.Code);
         Assert.Contains(goal.Timeline, evt =>
             evt.TaskId == reviewer.Id &&
             evt.Kind == ProgressKind.TaskFailed &&
-            evt.Message.Contains("open blocking stable_id(s): F-1", StringComparison.Ordinal));
+            evt.Message.Contains("structured findings invalid", StringComparison.Ordinal) &&
+            evt.Message.Contains("F-1", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_reviewer_pass_accepts_and_records_open_advisory_findings")]
@@ -2282,7 +2304,7 @@ public sealed class DispatchExecutionTests
             "none");
 
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
-            "review", "C:\\repo", 0, result, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+            "review", "C:\\repo", 0, result, string.Empty, clock.UtcNow, WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
 
         Assert.Equal(WorkTaskStatus.Completed, reviewer.Status);
         Assert.Equal(3, reviewer.LastVerification!.MergedReviewFindings!.Count);
@@ -2317,7 +2339,7 @@ public sealed class DispatchExecutionTests
             """[{"criterion_index":0,"verdict":"met","evidence":"src/A.cs:1"},{"criterion_index":1,"verdict":"met","evidence":"src/B.cs:2"},{"criterion_index":2,"verdict":"met","evidence":"src/C.cs:3"},{"criterion_index":3,"verdict":"met","evidence":"src/D.cs:4"},{"criterion_index":4,"verdict":"met","evidence":"src/E.cs:5"}]""");
 
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
-            "review", "C:\\repo", 0, result, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+            "review", "C:\\repo", 0, result, string.Empty, clock.UtcNow, WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
 
         Assert.Equal(WorkTaskStatus.Completed, reviewer.Status);
         Assert.Equal(5, reviewer.LastVerification!.MergedReviewFindings!.Count);
@@ -2343,7 +2365,7 @@ public sealed class DispatchExecutionTests
             """[{"stable_id":"A-1","state":"open","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Readability suggestion.","severity":"advisory"}]""",
             "none");
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
-            "review-1", "C:\\repo", 0, accepted, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+            "review-1", "C:\\repo", 0, accepted, string.Empty, clock.UtcNow, WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
 
         clock.Advance();
         kernel.RetryTask(goal.Id, reviewer.Id, "recheck");
@@ -2356,7 +2378,7 @@ public sealed class DispatchExecutionTests
             "none");
 
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
-            "review-2", "C:\\repo", 0, moved, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+            "review-2", "C:\\repo", 0, moved, string.Empty, clock.UtcNow, WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
 
         Assert.Equal(WorkTaskStatus.Completed, reviewer.Status);
         Assert.Null(reviewer.LastVerification!.ReviewFindingContractViolation);
@@ -2403,7 +2425,7 @@ public sealed class DispatchExecutionTests
                 "none"),
             string.Empty,
             clock.UtcNow,
-            WorkerResultPresent: true));
+            WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
 
         clock.Advance();
         kernel.RetryTask(goal.Id, reviewer.Id, "recheck");
@@ -2420,7 +2442,7 @@ public sealed class DispatchExecutionTests
                 "none"),
             string.Empty,
             clock.UtcNow,
-            WorkerResultPresent: true));
+            WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
 
         Assert.Equal(2, reviewer.VerificationHistory.Count);
         Assert.Equal(WorkTaskStatus.Completed, reviewer.Status);
@@ -2459,7 +2481,7 @@ public sealed class DispatchExecutionTests
                 "none"),
             string.Empty,
             clock.UtcNow,
-            WorkerResultPresent: true));
+            WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
 
         clock.Advance();
         kernel.RetryTask(goal.Id, reviewer.Id, "recheck");
@@ -2476,7 +2498,7 @@ public sealed class DispatchExecutionTests
                 "none"),
             string.Empty,
             clock.UtcNow,
-            WorkerResultPresent: true));
+            WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
 
         Assert.Equal(2, reviewer.VerificationHistory.Count);
         Assert.Equal(WorkTaskStatus.Completed, reviewer.Status);
@@ -2525,7 +2547,7 @@ public sealed class DispatchExecutionTests
                 "none"),
             string.Empty,
             clock.UtcNow,
-            WorkerResultPresent: true));
+            WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
 
         clock.Advance();
         kernel.RetryTask(goal.Id, reviewer.Id, "recheck");
@@ -2542,7 +2564,7 @@ public sealed class DispatchExecutionTests
                 "none"),
             string.Empty,
             clock.UtcNow,
-            WorkerResultPresent: true));
+            WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
 
         Assert.Equal(WorkTaskStatus.Completed, reviewer.Status);
         Assert.Equal(
@@ -2587,7 +2609,7 @@ public sealed class DispatchExecutionTests
             """[{"stable_id":"A-1","state":"open","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Readability suggestion.","severity":"advisory"}]""",
             "none");
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
-            "review-1", "C:\\repo", 0, accepted, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+            "review-1", "C:\\repo", 0, accepted, string.Empty, clock.UtcNow, WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
 
         clock.Advance();
         kernel.RetryTask(goal.Id, reviewer.Id, "recheck");
@@ -2599,7 +2621,7 @@ public sealed class DispatchExecutionTests
             "none");
 
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
-            "review-2", "C:\\repo", 0, resolved, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+            "review-2", "C:\\repo", 0, resolved, string.Empty, clock.UtcNow, WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
 
         Assert.Equal(WorkTaskStatus.Completed, reviewer.Status);
         Assert.Equal("A-1", Assert.Single(reviewer.LastVerification!.MergedReviewFindings!).StableId);
@@ -2626,7 +2648,7 @@ public sealed class DispatchExecutionTests
             """[{"stable_id":"A-1","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"Readability suggestion.","severity":"advisory"}]""",
             "none");
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
-            "review-1", "C:\\repo", 0, accepted, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+            "review-1", "C:\\repo", 0, accepted, string.Empty, clock.UtcNow, WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
         Assert.Equal("A-1", Assert.Single(kernel.GetOpenAdvisoryReviewFindings(goal.Id)).StableId);
 
         clock.Advance();
@@ -2635,12 +2657,23 @@ public sealed class DispatchExecutionTests
             "codex-cli", "review-2", "C:\\repo", clock.UtcNow));
         var invalid = StructuredReviewerResult(
             "pass",
-            """[{"stable_id":"A-1","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"Readability suggestion.","severity":""}]""",
+            "[",
             "none");
+        Assert.Equal(VerificationTerminalContractStatus.Malformed,
+            WorkerResultBlockers.AssessTerminalVerificationOutput(AgentRole.Reviewer, invalid).Status);
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
-            "review-2", "C:\\repo", 0, invalid, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+            "review-2", "C:\\repo", 0, invalid, string.Empty, clock.UtcNow, WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
 
-        Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
+        // Malformed evidence requests same-role contract repair; it cannot restore
+        // the earlier advisory round or become an implementation finding.
+        Assert.Equal(WorkTaskStatus.Assigned, reviewer.Status);
+        var malformed = reviewer.VerificationHistory.Last();
+        Assert.Equal(DispatchOutcomeKind.VerificationIncomplete,
+            DispatchFailureClassifier.Classify(reviewer, malformed).Kind);
+        Assert.Equal(VerificationTerminalContractStatus.Malformed,
+            WorkerResultBlockers.AssessSubscriptionVerification(reviewer, malformed).Status);
+        Assert.False(malformed.CompletionVerdictVerifiedSuccess);
+        Assert.False(kernel.BuildVerificationGate(goal.Id).IsSatisfied);
         Assert.Empty(kernel.GetOpenAdvisoryReviewFindings(goal.Id));
     }
 
@@ -2660,7 +2693,7 @@ public sealed class DispatchExecutionTests
             "none");
 
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
-            "review", "C:\\repo", 0, result, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+            "review", "C:\\repo", 0, result, string.Empty, clock.UtcNow, WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
 
         Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
         Assert.Contains(goal.Timeline, evt =>
@@ -2689,7 +2722,7 @@ public sealed class DispatchExecutionTests
             "none");
 
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
-            "review", "C:\\repo", 0, result, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+            "review", "C:\\repo", 0, result, string.Empty, clock.UtcNow, WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
 
         Assert.Equal(WorkTaskStatus.Completed, reviewer.Status);
         Assert.Equal("W-1", Assert.Single(reviewer.LastVerification!.MergedReviewFindings!).StableId);
@@ -2737,7 +2770,7 @@ public sealed class DispatchExecutionTests
             "none");
 
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
-            "review", "C:\\repo", 0, result, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+            "review", "C:\\repo", 0, result, string.Empty, clock.UtcNow, WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
 
         Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
         Assert.Contains(goal.Timeline, evt =>
@@ -2765,8 +2798,23 @@ public sealed class DispatchExecutionTests
         var result = StructuredReviewerResult(verdict, "[]", "none");
 
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
-            "review", "C:\\repo", 0, result, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+            "review", "C:\\repo", 0, result, string.Empty, clock.UtcNow, WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
 
+        if (verdict == "reviewed")
+        {
+            // Unknown verdict vocabulary is malformed, rather than a valid nonpass report.
+            Assert.Equal(WorkTaskStatus.Assigned, reviewer.Status);
+            var malformed = Assert.Single(reviewer.VerificationHistory);
+            Assert.Equal(VerificationTerminalContractStatus.Malformed,
+                WorkerResultBlockers.AssessSubscriptionVerification(reviewer, malformed).Status);
+            Assert.Equal(DispatchOutcomeKind.VerificationIncomplete,
+                DispatchFailureClassifier.Classify(reviewer, malformed).Kind);
+            Assert.False(malformed.CompletionVerdictVerifiedSuccess);
+            Assert.False(kernel.BuildVerificationGate(goal.Id).IsSatisfied);
+            Assert.DoesNotContain(goal.Timeline, evt => evt.TaskId == reviewer.Id &&
+                evt.Kind is ProgressKind.TaskCompleted or ProgressKind.TaskFailed);
+            return;
+        }
         Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
         Assert.Contains(goal.Timeline, evt =>
             evt.TaskId == reviewer.Id &&
@@ -2799,7 +2847,7 @@ public sealed class DispatchExecutionTests
             firstRound,
             string.Empty,
             clock.UtcNow,
-            WorkerResultPresent: true));
+            WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
 
         clock.Advance();
         kernel.RetryTask(goal.Id, reviewer.Id, "review the updated candidate");
@@ -2822,7 +2870,7 @@ public sealed class DispatchExecutionTests
             secondRound,
             string.Empty,
             clock.UtcNow,
-            WorkerResultPresent: true));
+            WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
 
         Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
         Assert.DoesNotContain(goal.Timeline, evt =>
@@ -3120,7 +3168,7 @@ public sealed class DispatchExecutionTests
 
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.Equal(
-        verification with { CompletionVerdictRule = "unknown-failure", AcceptanceCriteriaVersionHash = "no-refined-spec" },
+        verification with { CompletionVerdictRule = "unknown-failure", AcceptanceCriteriaVersionHash = "no-refined-spec", EvidenceSource = VerificationEvidenceSource.Dispatch },
         task.LastVerification);
     Assert.Equal<DateTimeOffset?>(null, task.SubscriptionRetryAfter);
     Assert.False(DispatchFailureClassifier.IsRecoverableSubscriptionLimitFailure(verification));
@@ -3316,6 +3364,7 @@ private static string WorkerResultStdout(string files, string tests, string bloc
             ? """findings: [{"stable_id":"test-review-finding","state":"open","location":{"file":"src/Test.cs","region":"Test.Run"},"description":"Reviewer blocker."}]"""
             : "findings: []",
         "touched_anchors: []",
+        "criteria_verdicts: []",
         $"verdict: {(hasBlocker ? "needs-work" : "pass")}",
         "model_fit: OpenAI/gpt-5.5 - adequate - dispatch", // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
         "skills: dotnet-windows-build-hygiene",

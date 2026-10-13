@@ -77,6 +77,12 @@ public sealed partial class AgentOrchestratorKernel
                 VerificationGateReason.Passed);
         }
 
+        if (task.LastVerification is { } contractRecord &&
+            !WorkerResultBlockers.AssessSubscriptionVerification(task, contractRecord).AllowsCompletion)
+            return new TaskVerificationGate(task.Id, task.RequiredRole, task.Description, task.Status,
+                VerificationGateStatus.FailedVerification, "Subscription verification terminal contract is incomplete; retry the same role.",
+                VerificationGateReason.VerificationFailed);
+
         if (task.LastVerification is { Succeeded: false, CompletionVerdictVerifiedSuccess: false })
         {
             var isDirty = DispatchFailureClassifier.TryBuildDirtyDispatchRecovery(task, out var recovery);
@@ -109,7 +115,7 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         var onlyAuthoritativelyDeferredEvidence = task.Status == WorkTaskStatus.Completed &&
-            task.LastVerification is { } verified && HasOnlyAuthoritativelyDeferredAcceptanceFindings(goal, verified);
+            task.LastVerification is { } verified && VerificationFindingEvidencePolicy.HasOnlyAuthoritativelyDeferredAcceptanceFindings(goal, verified);
         if (!onlyAuthoritativelyDeferredEvidence &&
             WorkerResultBlockers.TryFindTesterWorkerResultBlocker(task, task.LastVerification, out var testerBlocker))
         {

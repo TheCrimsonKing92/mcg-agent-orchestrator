@@ -29,7 +29,8 @@ public enum DispatchOutcomeKind
     VerificationInconclusive,
     UnknownFailure,
     ProviderInterruption,
-    ProviderBudgetExhausted
+    ProviderBudgetExhausted,
+    VerificationIncomplete
 }
 
 public sealed record DispatchOutcome(
@@ -600,11 +601,52 @@ public static partial class DispatchFailureClassifier
         var exitCode = verification.ExitCode;
         var hasZeroByteOutput = HasZeroByteStandardOutput(verification);
 
+        var terminalContract = WorkerResultBlockers.AssessSubscriptionVerification(task, verification);
+        if (!terminalContract.AllowsCompletion)
+        {
+            // Preserve positively identified provider faults before diagnosing absent reporting.
+            if (providerFailureKind != ProviderFailureKind.Unknown ||
+                IsRecoverableSubscriptionLimitFailure(verification) ||
+                IsRecoverableProviderAuthenticationFailure(verification) ||
+                IsRecoverableProviderConnectivityFailure(verification))
+            {
+                if (IsRecoverableProviderAuthenticationFailure(verification))
+                    return BuildOutcome(TaskOutcomeRules.ProviderAuthentication, task, verification, false, hasCommittedChanges,
+                        new DispatchOutcome(DispatchOutcomeKind.ProviderAuthentication, exitCode, hasZeroByteOutput,
+                            null, null, RecoveryRecommendation.OperatorNeeded, BuildProviderAuthenticationEvidenceSummary(task, verification)));
+                var fault = providerFailureKind != ProviderFailureKind.Unknown ? providerFailureKind :
+                    IsRecoverableSubscriptionLimitFailure(verification) ? ProviderFailureKind.RateLimit :
+                    ProviderFailureKind.Connectivity;
+                var providerOutcome = ClassifyProviderFailure(fault, exitCode, hasZeroByteOutput, BuildEvidenceSummary(verification));
+                return IsRecoverableSubscriptionLimitFailure(verification)
+                    ? BuildOutcome(TaskOutcomeRules.SubscriptionLimit, task, verification, false, hasCommittedChanges, providerOutcome)
+                    : providerOutcome;
+            }
+            // Explicit current-attempt detachment retains its existing interruption retry owner.
+            if (terminalContract.Status == VerificationTerminalContractStatus.Missing &&
+                IsDetachedWithoutWorkerResult(task, verification, workerResultPresent))
+                return BuildDetachedWithoutWorkerResultOutcome(task, verification, workerResultPresent, hasCommittedChanges);
+            return BuildOutcome(TaskOutcomeRules.VerificationTerminalContractIncomplete,
+                task, verification, false, hasCommittedChanges,
+                new DispatchOutcome(DispatchOutcomeKind.VerificationIncomplete, exitCode, hasZeroByteOutput,
+                    null, null, RecoveryRecommendation.AutoRetry,
+                    $"terminal_contract={terminalContract.Status}; {terminalContract.Diagnostic}"));
+        }
+
+        if (terminalContract.Status == VerificationTerminalContractStatus.Valid &&
+            task.RequiredRole == AgentRole.Reviewer &&
+            (!WorkerResultBlockers.TryFindPassVerdict(verification) || WorkerResultBlockers.TryFindBlocker(verification, out _)))
+            return BuildOutcome(TaskOutcomeRules.UnknownFailure, task, verification, true, hasCommittedChanges,
+                new DispatchOutcome(DispatchOutcomeKind.UnknownFailure, exitCode, hasZeroByteOutput,
+                    null, null, RecoveryRecommendation.OperatorNeeded, "Reviewer terminal contract does not report an unblocked pass."));
+
         if (task.RequiredRole == AgentRole.Tester &&
             workerResultPresent &&
             !IsDirtyDispatchGuardFailure(verification) &&
             WorkerResultBlockers.TryGetTestsStatus(verification, out var inconclusiveStatus) &&
-            inconclusiveStatus == WorkerResultBlockers.TestsStatus.Inconclusive)
+            (inconclusiveStatus == WorkerResultBlockers.TestsStatus.Inconclusive ||
+             (terminalContract.Status == VerificationTerminalContractStatus.Valid && inconclusiveStatus == WorkerResultBlockers.TestsStatus.NotRun &&
+              WorkerResultBlockers.TryGetBlockersStatus(verification, out var notRunBlockers) && notRunBlockers == WorkerResultBlockers.BlockersStatus.None)))
         {
             WorkerResultBlockers.TryFindTests(verification, out var testsEvidence);
             var evidenceSummary = $"structured Tester verification is inconclusive: {testsEvidence}";
@@ -850,20 +892,7 @@ public static partial class DispatchFailureClassifier
 
         if (IsDetachedWithoutWorkerResult(task, verification, workerResultPresent))
         {
-            return BuildOutcome(
-                TaskOutcomeRules.DetachedWithoutWorkerResult,
-                task,
-                verification,
-                workerResultPresent,
-                hasCommittedChanges,
-                new DispatchOutcome(
-                DispatchOutcomeKind.ProviderInterruption,
-                exitCode,
-                hasZeroByteOutput,
-                null,
-                null,
-                RecoveryRecommendation.AutoRetry,
-                $"detached-without-worker-result: process {task.LastProcess!.ProcessId} was gracefully detached and exited 0 without a WORKER_RESULT block"));
+            return BuildDetachedWithoutWorkerResultOutcome(task, verification, workerResultPresent, hasCommittedChanges);
         }
 
         if (verification.Succeeded &&
@@ -1431,6 +1460,16 @@ public static partial class DispatchFailureClassifier
         bool includeRetainedText = true,
         bool includeArtifactText = true)
     {
+        if (verification.EvidenceSource == VerificationEvidenceSource.Dispatch && verification.DispatchAttemptAt is not null)
+        {
+            if (includeStandardOutput)
+                foreach (var line in SplitEvidenceLines(verification.AuthoritativeStandardOutput ?? string.Empty))
+                    yield return line;
+            if (includeStandardError)
+                foreach (var line in SplitEvidenceLines(verification.AuthoritativeStandardError ?? string.Empty))
+                    yield return line;
+            yield break;
+        }
         if (includeStandardOutput)
         {
             if (includeRetainedText)
@@ -2260,7 +2299,8 @@ public static partial class DispatchFailureClassifier
         var count = 0;
         for (var index = task.VerificationHistory.Count - 1; index >= 0; index--)
         {
-            if (!IsProviderInterruptionFailure(task.VerificationHistory[index]))
+            if (!IsProviderInterruptionFailure(task.VerificationHistory[index]) &&
+                task.VerificationHistory[index].CompletionVerdictRule != TaskOutcomeRules.VerificationTerminalContractIncomplete.Token)
             {
                 break;
             }
@@ -2273,8 +2313,12 @@ public static partial class DispatchFailureClassifier
 
     public static bool IsProviderInterruptionFailure(TaskVerificationRecord verification)
     {
+        if (verification.EvidenceSource == VerificationEvidenceSource.Dispatch && verification.DispatchAttemptAt is not null &&
+            HasExplicitProviderCancellation(verification.AuthoritativeStandardError ?? verification.StandardError))
+            return true;
         var hasCompletedTurn = false;
         var hasFailedTurn = false;
+        var lastProviderTurn = ProviderTurnRecordKind.Other;
         var inWorkerResultBlock = false;
 
         foreach (var rawLine in EnumerateEvidenceLines(
@@ -2303,6 +2347,26 @@ public static partial class DispatchFailureClassifier
             var recordKind = ClassifyProviderTurnRecord(line);
             hasCompletedTurn |= recordKind == ProviderTurnRecordKind.Completed;
             hasFailedTurn |= recordKind == ProviderTurnRecordKind.Failed;
+            if (recordKind != ProviderTurnRecordKind.Other)
+                lastProviderTurn = recordKind;
+        }
+
+        if (verification.EvidenceSource == VerificationEvidenceSource.Dispatch && verification.DispatchAttemptAt is not null)
+        {
+            // The streams are independently framed: an unfinished stdout result cannot
+            // hide a terminal provider event in stderr.
+            var inErrorResult = false;
+            var inErrorFence = false;
+            foreach (var line in SplitEvidenceLines(verification.AuthoritativeStandardError ?? string.Empty))
+            {
+                if (line.StartsWith("```", StringComparison.Ordinal)) { inErrorFence = !inErrorFence; continue; }
+                if (IsWorkerResultOpener(line)) { inErrorResult = true; continue; }
+                if (IsWorkerResultEndMarker(line)) { inErrorResult = false; continue; }
+                if (inErrorFence || inErrorResult) continue;
+                var recordKind = ClassifyProviderTurnRecord(line);
+                if (recordKind != ProviderTurnRecordKind.Other)
+                    lastProviderTurn = recordKind;
+            }
         }
 
         foreach (var line in CodexRawAuditStream.ReadLines(verification.StandardOutputPath))
@@ -2310,11 +2374,32 @@ public static partial class DispatchFailureClassifier
             var recordKind = ClassifyProviderTurnRecord(line);
             hasCompletedTurn |= recordKind == ProviderTurnRecordKind.Completed;
             hasFailedTurn |= recordKind == ProviderTurnRecordKind.Failed;
+            if (recordKind != ProviderTurnRecordKind.Other)
+                lastProviderTurn = recordKind;
         }
 
         // A fast exit with low CPU and memory is a useful operator diagnostic, but recorded event
         // structure is the authority. Resource timing and provider message text are not inputs.
-        return !hasCompletedTurn && hasFailedTurn;
+        return verification.EvidenceSource == VerificationEvidenceSource.Dispatch && verification.DispatchAttemptAt is not null
+            ? lastProviderTurn == ProviderTurnRecordKind.Failed
+            : !hasCompletedTurn && hasFailedTurn;
+    }
+
+    public static bool HasExplicitProviderCancellation(string standardError)
+    {
+        var inFence = false;
+        var inResult = false;
+        foreach (var line in standardError.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (line.StartsWith("```", StringComparison.Ordinal)) { inFence = !inFence; continue; }
+            if (IsWorkerResultOpener(line)) { inResult = true; continue; }
+            if (IsWorkerResultEndMarker(line)) { inResult = false; continue; }
+            if (!inFence && !inResult && Regex.IsMatch(line,
+                @"^(?:ERROR:|\[grok(?:-cli)?\])\s*(?:session ended[: ]+)?(?:reason=)?permission_cancelled\s*[.]?$",
+                RegexOptions.CultureInvariant | RegexOptions.IgnoreCase))
+                return true;
+        }
+        return false;
     }
 
     private static ProviderTurnRecordKind ClassifyProviderTurnRecord(string line)
@@ -2757,14 +2842,11 @@ public static partial class DispatchFailureClassifier
         return TimeSpan.FromSeconds(value);
     }
 
-    private static bool IsSubscriptionProviderCliDispatch(TaskSpec task)
-    {
-        var dispatch = task.LastDispatch;
-        if (dispatch is null)
-        {
-            return false;
-        }
+    public static bool IsSubscriptionProviderCliDispatch(TaskSpec task) =>
+        task.LastDispatch is { } dispatch && IsSubscriptionProviderCliDispatch(dispatch);
 
+    internal static bool IsSubscriptionProviderCliDispatch(TaskDispatchRecord dispatch)
+    {
         if (dispatch.WorkerProviderKind is
             ProviderKind.OpenAICodexCli or
             ProviderKind.AnthropicClaudeCli or

@@ -45,6 +45,8 @@ public sealed record TaskExecutionRecord(
 
 public sealed record AgentTaskRunResult(Goal Goal, TaskSpec Task, TaskExecutionRecord Execution);
 
+public enum VerificationEvidenceSource { Unspecified, Dispatch, Manual }
+
 public sealed record TaskVerificationRecord(
     string Command,
     string WorkingDirectory,
@@ -95,7 +97,9 @@ public sealed record TaskVerificationRecord(
     CandidateIdentity? CandidateIdentity = null,
     string? AcceptanceCriteriaVersionHash = null,
     FailedGoalInconclusiveRoundInputs? InconclusiveRoundInputs = null,
-    PlannerEvidenceStoreReference? HumanInputStoreReference = null)
+    PlannerEvidenceStoreReference? HumanInputStoreReference = null,
+    VerificationEvidenceSource EvidenceSource = VerificationEvidenceSource.Unspecified,
+    DateTimeOffset? DispatchAttemptAt = null)
 {
     public string? AuthoritativeStandardOutput { get; init; } = FullStandardOutput ??
         (StandardOutputIsAuthoritative && FullStandardOutputUnavailableReason is null ? StandardOutput : null);
@@ -113,6 +117,9 @@ public sealed record TaskVerificationRecord(
     {
         ArgumentNullException.ThrowIfNull(other);
         return CompletedAt == other.CompletedAt &&
+               (EvidenceSource == VerificationEvidenceSource.Unspecified || other.EvidenceSource == VerificationEvidenceSource.Unspecified ||
+                EvidenceSource == other.EvidenceSource) &&
+               (DispatchAttemptAt is null || other.DispatchAttemptAt is null || DispatchAttemptAt == other.DispatchAttemptAt) &&
                DispatchStartedAt == other.DispatchStartedAt &&
                ChildProcessId == other.ChildProcessId &&
                ChildExitCode == other.ChildExitCode &&
@@ -160,6 +167,8 @@ public sealed record TaskVerificationRecord(
             HumanInputKind = preferred.HumanInputKind ?? HumanInputKind,
             HumanInputEvidenceOwner = preferred.HumanInputEvidenceOwner ?? HumanInputEvidenceOwner,
             HumanInputStoreReference = preferred.HumanInputStoreReference ?? HumanInputStoreReference,
+            EvidenceSource = preferred.EvidenceSource == VerificationEvidenceSource.Unspecified ? EvidenceSource : preferred.EvidenceSource,
+            DispatchAttemptAt = preferred.DispatchAttemptAt ?? DispatchAttemptAt,
             ObservedRootExitCode = preferred.ObservedRootExitCode ?? ObservedRootExitCode,
             ReconciledToSuccess = ReconciledToSuccess || preferred.ReconciledToSuccess,
             ReconciliationOriginRule = preferred.ReconciliationOriginRule ?? ReconciliationOriginRule,

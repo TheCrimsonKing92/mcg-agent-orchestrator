@@ -252,11 +252,11 @@ public sealed class ConductorDriverTestsStaleFindingRouting
     [Xunit.Fact]
     public void StaleTesterFindingAfterOperatorCloseDoesNotReopenDeveloper()
     {
-        var (kernel, goal) = SoftwareGoal();
+        var startedAt = new DateTimeOffset(2026, 9, 4, 21, 30, 0, TimeSpan.Zero);
+        var (kernel, goal) = TimedSoftwareGoal(startedAt);
         var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
         var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
         var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
-        var startedAt = new DateTimeOffset(2026, 9, 4, 21, 30, 0, TimeSpan.Zero);
 
         RecordCommittedDeveloperPass(kernel, goal, developer, startedAt);
         RecordTesterFindings(kernel, goal, tester, startedAt.AddMinutes(3));
@@ -306,11 +306,11 @@ public sealed class ConductorDriverTestsStaleFindingRouting
     [Xunit.Fact]
     public void StaleTesterFindingAfterInvalidationDispatchesReviewerNotDeveloper()
     {
-        var (kernel, goal) = SoftwareGoal();
+        var startedAt = new DateTimeOffset(2026, 9, 4, 22, 45, 0, TimeSpan.Zero);
+        var (kernel, goal) = TimedSoftwareGoal(startedAt);
         var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
         var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
         var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
-        var startedAt = new DateTimeOffset(2026, 9, 4, 22, 45, 0, TimeSpan.Zero);
 
         var reviewedCandidate = RecordCommittedDeveloperPass(kernel, goal, developer, startedAt);
         RecordTesterFindings(kernel, goal, tester, startedAt.AddMinutes(3), reviewedCandidate);
@@ -356,10 +356,10 @@ public sealed class ConductorDriverTestsStaleFindingRouting
     [Xunit.Fact]
     public void ManualPassSupersedesTesterFindingWithoutNewDeveloperCompletion()
     {
-        var (kernel, goal) = SoftwareGoal();
+        var startedAt = new DateTimeOffset(2026, 9, 4, 21, 30, 0, TimeSpan.Zero);
+        var (kernel, goal) = TimedSoftwareGoal(startedAt);
         var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
         var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
-        var startedAt = new DateTimeOffset(2026, 9, 4, 21, 30, 0, TimeSpan.Zero);
 
         RecordCommittedDeveloperPass(kernel, goal, developer, startedAt);
         RecordTesterFindings(kernel, goal, tester, startedAt.AddMinutes(3));
@@ -380,10 +380,10 @@ public sealed class ConductorDriverTestsStaleFindingRouting
     [Xunit.Fact]
     public void ApparatusFailedTesterRerunDoesNotResolveItsCurrentFinding()
     {
-        var (kernel, goal) = SoftwareGoal();
+        var startedAt = new DateTimeOffset(2026, 9, 4, 21, 30, 0, TimeSpan.Zero);
+        var (kernel, goal) = TimedSoftwareGoal(startedAt);
         var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
         var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
-        var startedAt = new DateTimeOffset(2026, 9, 4, 21, 30, 0, TimeSpan.Zero);
 
         RecordCommittedDeveloperPass(kernel, goal, developer, startedAt);
         RecordTesterFindings(kernel, goal, tester, startedAt.AddMinutes(3));
@@ -404,10 +404,10 @@ public sealed class ConductorDriverTestsStaleFindingRouting
     [Xunit.Fact]
     public void RetriedVerifierDoesNotResurrectClearedFinding()
     {
-        var (kernel, goal) = SoftwareGoal();
+        var startedAt = new DateTimeOffset(2026, 9, 7, 8, 0, 0, TimeSpan.Zero);
+        var (kernel, goal) = TimedSoftwareGoal(startedAt);
         var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
         var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
-        var startedAt = new DateTimeOffset(2026, 9, 7, 8, 0, 0, TimeSpan.Zero);
         var candidate = RecordCommittedDeveloperPass(kernel, goal, developer, startedAt);
         RecordTesterFindings(kernel, goal, tester, startedAt.AddMinutes(1), candidate);
         var historicalFinding = tester.LastVerification!;
@@ -899,8 +899,9 @@ public sealed class ConductorDriverTestsStaleFindingRouting
             "confidence: high",
             "END_WORKER_RESULT");
 
-        DispatchTask(kernel, goal, tester, "test", baseCommit: reviewedCommit);
-        kernel.RecordDispatchExecutionResult(goal.Id, tester.Id, new TaskVerificationRecord(
+        kernel.RecordTaskDispatch(goal.Id, tester.Id, new TaskDispatchRecord(
+            "codex-cli", "test", "C:\\tmp", completedAt.AddSeconds(-1), BaseCommit: reviewedCommit));
+        var verification = new TaskVerificationRecord(
             "test",
             "C:\\tmp",
             1,
@@ -909,7 +910,16 @@ public sealed class ConductorDriverTestsStaleFindingRouting
             completedAt,
             StandardOutputPath: "C:\\tmp\\tester.out.log",
             WorkerResultPresent: true,
-            ReviewedCommit: reviewedCommit));
+            ReviewedCommit: reviewedCommit,
+            FullStandardOutput: stdout,
+            DispatchStartedAt: tester.LastDispatch!.DispatchedAt,
+            EvidenceSource: VerificationEvidenceSource.Dispatch,
+            DispatchAttemptAt: tester.LastDispatch.DispatchedAt);
+        Assert.Equal(VerificationTerminalContractStatus.Valid,
+            WorkerResultBlockers.AssessSubscriptionVerification(tester, verification).Status);
+        kernel.RecordDispatchExecutionResult(goal.Id, tester.Id, verification);
+        Assert.Equal(VerificationTerminalContractStatus.Valid,
+            WorkerResultBlockers.AssessSubscriptionVerification(tester, tester.LastVerification!).Status);
         Assert.Equal(2, tester.LastVerification!.MergedReviewFindings?.Count);
     }
 
@@ -927,8 +937,11 @@ public sealed class ConductorDriverTestsStaleFindingRouting
         DateTimeOffset completedAt,
         string command)
     {
-        DispatchTask(kernel, goal, task, command);
-        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
+        // Deliberately unstructured non-subscription failure: test finding currency,
+        // rather than subscription terminal-contract repair.
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+            "test-worker", command, "C:\\tmp", completedAt.AddSeconds(-1)));
+        var verification = new TaskVerificationRecord(
             command,
             "C:\\tmp",
             1,
@@ -939,6 +952,23 @@ public sealed class ConductorDriverTestsStaleFindingRouting
             string.Empty,
             completedAt,
             StandardOutputPath: "C:\\tmp\\reviewer.out.log",
-            WorkerResultPresent: false));
+            WorkerResultPresent: false,
+            DispatchStartedAt: task.LastDispatch!.DispatchedAt,
+            EvidenceSource: VerificationEvidenceSource.Dispatch,
+            DispatchAttemptAt: task.LastDispatch.DispatchedAt);
+        Assert.Equal(VerificationTerminalContractStatus.NotApplicable,
+            WorkerResultBlockers.AssessSubscriptionVerification(task, verification).Status);
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, verification);
+    }
+
+    private static (AgentOrchestratorKernel Kernel, Goal Goal) TimedSoftwareGoal(DateTimeOffset startedAt)
+    {
+        var kernel = new AgentOrchestratorKernel(new FixtureClock(startedAt));
+        return (kernel, GoalLifecycleCommands.CreateAndActivateGoal(kernel, DefaultAgents(), "Review retry goal"));
+    }
+
+    private sealed class FixtureClock(DateTimeOffset startedAt) : IClock
+    {
+        public DateTimeOffset UtcNow => startedAt;
     }
 }

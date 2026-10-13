@@ -24,8 +24,11 @@ public sealed class ReviewerAttestationCriterionNumberTests
             """[{"criterion_index":0,"verdict":"met","evidence":"First is implemented."},{"criterion_index":1,"verdict":"met","evidence":"Second is implemented."},{"criterion_index":1,"verdict":"met","evidence":"Second is repeated."},{"criterion_index":3,"verdict":"met","evidence":"Fourth is implemented."}]""");
 
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
-            "review-pass", "C:\\repo", 0, result, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+            "review-pass", "C:\\repo", 0, result, string.Empty, clock.UtcNow,
+            WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
 
+        Assert.Equal(VerificationTerminalContractStatus.Valid,
+            WorkerResultBlockers.AssessStoredSubscriptionVerification(reviewer, reviewer.LastVerification!).Status);
         Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
         var failure = Assert.Single(goal.Timeline.Where(evt =>
             evt.TaskId == reviewer.Id && evt.Kind == ProgressKind.TaskFailed));
@@ -57,8 +60,11 @@ public sealed class ReviewerAttestationCriterionNumberTests
             """[{"criterion_index":0,"verdict":"met","evidence":"First is implemented."},{"criterion_index":1,"verdict":"not-verifiable","evidence":"Required receipt is unavailable."}]""");
 
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
-            "review-pass", "C:\\repo", 0, result, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+            "review-pass", "C:\\repo", 0, result, string.Empty, clock.UtcNow,
+            WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
 
+        Assert.Equal(VerificationTerminalContractStatus.Valid,
+            WorkerResultBlockers.AssessStoredSubscriptionVerification(reviewer, reviewer.LastVerification!).Status);
         Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
         var failure = Assert.Single(goal.Timeline.Where(evt =>
             evt.TaskId == reviewer.Id && evt.Kind == ProgressKind.TaskFailed));
@@ -88,8 +94,11 @@ public sealed class ReviewerAttestationCriterionNumberTests
             """[{"criterion_index":0,"verdict":"met","evidence":"First is implemented."},{"criterion_index":1,"verdict":"met","evidence":"Second is implemented."},{"criterion_index":2,"verdict":"met","evidence":"Extra observation is satisfied."}]""");
 
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
-            "review-pass", "C:\\repo", 0, result, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+            "review-pass", "C:\\repo", 0, result, string.Empty, clock.UtcNow,
+            WorkerResultPresent: true, DispatchStartedAt: clock.UtcNow));
 
+        Assert.Equal(VerificationTerminalContractStatus.Valid,
+            WorkerResultBlockers.AssessStoredSubscriptionVerification(reviewer, reviewer.LastVerification!).Status);
         Assert.Equal(WorkTaskStatus.Completed, reviewer.Status);
         Assert.Contains(goal.Timeline, evt =>
             evt.TaskId == reviewer.Id && evt.Kind == ProgressKind.TaskNote &&

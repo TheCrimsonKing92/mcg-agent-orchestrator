@@ -48,6 +48,7 @@ public static class UnchangedCandidateRule
         .Where(task => task.RequiredRole == candidateTask.RequiredRole)
         .SelectMany(task => task.VerificationHistory.Select(verification => (task, verification)))
         .Where(pair => pair.verification.WorkerResultPresent &&
+            WorkerResultBlockers.AssessStoredSubscriptionVerification(pair.task, pair.verification).AllowsCompletion &&
             pair.verification.ProviderFailureKind == ProviderFailureKind.Unknown &&
             pair.verification.OrchestratorFailureReason is null)
         .OrderByDescending(pair => pair.verification.CompletedAt)
