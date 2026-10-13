@@ -17,6 +17,8 @@ public static class AcceptanceEngineSurfaceRegistry
     [
         new("acceptance-verifier", [
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier",
+            // Selection coverage is reached through the verifier's telemetry collaborator.
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/FocusedEvidenceSelectionCoverageInspector",
             // Cleanup evidence is reached through the independently owned failure-cause adjudicator.
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceAssemblyCleanupEvidence",
             // Process helpers are reached through the independently owned acceptance process invoker.

@@ -42,6 +42,20 @@ public class CanaryEngineSurfaceCoverageTests
     }
 
     [Fact]
+    public void Indirect_focused_selection_coverage_inspector_triggers_canary()
+    {
+        const string prefix =
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/FocusedEvidenceSelectionCoverageInspector";
+        var path = prefix + ".cs";
+        var result = PostLandingCanaryTrigger.Evaluate([path]);
+
+        Assert.True(result.ShouldRun);
+        Assert.Equal([path], result.TriggeringPaths);
+        Assert.Single(PostLandingCanaryTrigger.EnginePathPrefixes.Where(candidate => candidate == prefix));
+        Assert.False(CoveragePredicate(PostLandingCanaryTrigger.EnginePathPrefixes.Where(candidate => candidate != prefix))(path));
+    }
+
+    [Fact]
     public void Collaborator_surface_exactly_matches_preexisting_coverage_gap()
     {
         var surface = Assert.Single(AcceptanceEngineSurfaceRegistry.Surfaces,

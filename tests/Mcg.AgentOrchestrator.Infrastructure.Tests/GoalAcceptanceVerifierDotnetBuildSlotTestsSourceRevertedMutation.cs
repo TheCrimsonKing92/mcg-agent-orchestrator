@@ -157,8 +157,22 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSourceRevertedMuta
         Assert.True(result.Passed, result.Summary);
         Assert.Equal(expected, result.NegativeControlOutcome);
         Assert.Equal(mode == "compile-red" ? 0 : 1, revertedTestCalls);
-        Assert.Equal(mode == "green" ? FindingEvidenceArmDisposition.Green : FindingEvidenceArmDisposition.Inconclusive,
-            SourceReverted(result).Disposition);
+        var arm = SourceReverted(result);
+        var expectedDisposition = mode switch
+        {
+            "green" => FindingEvidenceArmDisposition.Green,
+            "host-crash" => FindingEvidenceArmDisposition.ApparatusFailure,
+            _ => FindingEvidenceArmDisposition.Inconclusive
+        };
+        Assert.Equal(expectedDisposition, arm.Disposition);
+        if (mode == "host-crash")
+        {
+            var check = Assert.Single(arm.Checks, check =>
+                check.FailureClassification == AcceptanceFailureClassifications.FocusedSelectionApparatusFailure);
+            Assert.False(check.Passed);
+            Assert.Null(check.ExecutedTestCount);
+            Assert.Empty(check.FailingTestIdentities!);
+        }
         if (mode == "compile-red") Assert.Contains("error CS0103", result.Summary, StringComparison.Ordinal);
     }
 
