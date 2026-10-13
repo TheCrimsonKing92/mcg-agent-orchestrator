@@ -6,6 +6,7 @@ using DotnetTestTelemetry = Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceV
 using FocusedEvidenceSelectionCoverage = Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier.FocusedEvidenceSelectionCoverage;
 using FocusedEvidenceIdentityExtraction = Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier.FocusedEvidenceIdentityExtraction;
 using FocusedEvidenceFilterToken = Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier.FocusedEvidenceFilterToken;
+using FocusedEvidenceTokenKind = Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier.FocusedEvidenceTokenKind;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -190,21 +191,8 @@ internal static class GoalAcceptanceVerifierTestTelemetry
 
     internal static FocusedEvidenceSelectionCoverage InspectFocusedEvidenceSelectionCoverage(
         IReadOnlyList<IReadOnlyList<FocusedEvidenceFilterToken>> selections,
-        IEnumerable<string>? trxPaths)
-    {
-        if (selections.Count <= 1)
-        {
-            return FocusedEvidenceSelectionCoverage.Empty;
-        }
-
-        var extraction = ExtractTrxExecutedTestIdentities(trxPaths);
-        var uncoveredSelections = selections
-            .Where(selection => !selection.Any(token =>
-                extraction.Identities.Any(identity => IsFocusedEvidenceIdentityMatch(identity, token.Value))))
-            .Select(selection => string.Join("|", selection.Select(token => token.CanonicalToken)))
-            .ToArray();
-        return new FocusedEvidenceSelectionCoverage(uncoveredSelections, extraction.UnreadableReceiptPaths);
-    }
+        IEnumerable<string>? trxPaths) =>
+        FocusedEvidenceSelectionCoverageInspector.Inspect(selections, trxPaths);
 
     internal static FocusedEvidenceIdentityExtraction ExtractTrxExecutedTestIdentities(IEnumerable<string>? trxPaths)
     {

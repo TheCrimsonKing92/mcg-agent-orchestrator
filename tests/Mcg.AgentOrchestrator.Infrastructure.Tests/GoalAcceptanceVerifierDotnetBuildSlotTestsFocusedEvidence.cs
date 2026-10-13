@@ -906,8 +906,19 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedEvidence : 
     public async Task FocusedEvidence_MethodPrefixCoverageUsesRunnerSubstringSemantics()
     {
         var (result, _) = await RunMappedEvidenceAsync(
-            "Infrastructure.Tests: GoalAcceptanceVerifierTests.FocusedEvidence_CompatibleBatchReports; " +
+            "Infrastructure.Tests: FullyQualifiedName~GoalAcceptanceVerifierTests.FocusedEvidence_CompatibleBatchReports; " +
             "Infrastructure.Tests: ConductorDriverTests",
+            configureWorkspace: root =>
+            {
+                var directory = Path.Combine(root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests");
+                Directory.CreateDirectory(directory);
+                File.WriteAllText(Path.Combine(directory, "GoalAcceptanceVerifierTests.cs"), """
+                    public class GoalAcceptanceVerifierTests
+                    {
+                        [Xunit.Fact] public void FocusedEvidence_CompatibleBatchReportsUncoveredSelectionAsApparatusFailure() { }
+                    }
+                    """);
+            },
             executedTestCount: 2,
             executedTestIdentities:
             [
@@ -1111,7 +1122,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedEvidence : 
 
                 if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests"))
                 {
-                    WriteMtpTrx(args);
+                    WriteMtpTrx(args, executedTestCount: 1, ["ProviderDefaultTests.ExecutedMember"]);
                     return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1"));
                 }
 
@@ -1186,7 +1197,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedEvidence : 
                 if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests") ||
                     IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests"))
                 {
-                    WriteMtpTrx(args);
+                    var identity = IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests")
+                        ? "GoalAcceptanceVerifierTests.ExecutedMember"
+                        : "ProviderDefaultTests.ExecutedMember";
+                    WriteMtpTrx(args, executedTestCount: 1, [identity]);
                     return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1"));
                 }
 
@@ -1560,7 +1574,16 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedEvidence : 
                             Elapsed: TimeSpan.FromMinutes(40)));
                     }
 
-                    WriteMtpTrx(args, executedTestCount, executedTestIdentities);
+                    var identities = executedTestIdentities ?? args
+                        .Select((argument, index) => (argument, index))
+                        .Where(pair => pair.argument is "--filter-class" or "--filter-method")
+                        .Select(pair => args[pair.index + 1].Trim('*') +
+                            (pair.argument == "--filter-class" ? ".Executed" : string.Empty))
+                        .ToArray();
+                    // A mapped-project launch has no selectors but still executes tests.
+                    if (executedTestIdentities is null && identities.Count == 0)
+                        identities = ["InjectedRunnerFixture.Passed"];
+                    WriteMtpTrx(args, executedTestCount ?? identities.Count, identities);
                     if (corruptTrx)
                     {
                         var resultsDirectoryIndex = Array.IndexOf(args, "--results-directory");
