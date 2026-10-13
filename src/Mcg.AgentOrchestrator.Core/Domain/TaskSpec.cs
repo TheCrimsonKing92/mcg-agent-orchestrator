@@ -840,6 +840,7 @@ public sealed partial class TaskSpec
     {
         var index = _retryAdmissionHistory.FindLastIndex(receipt =>
             receipt.LinkedDispatchAt == linkedDispatchAt &&
+            receipt.ReservationReleasedAt is null &&
             receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation);
         if (index >= 0)
             _retryAdmissionHistory[index] = _retryAdmissionHistory[index] with { WorkerStartedAt = workerStartedAt };
@@ -858,7 +859,7 @@ public sealed partial class TaskSpec
             return false;
 
         var receipt = _retryAdmissionHistory[index];
-        if (receipt.WorkerStartedAt is not null ||
+        if (receipt.ReservationReleasedAt is not null || receipt.WorkerStartedAt is not null ||
             receipt.WorkerStartClaimedAt is not null ||
             !string.Equals(receipt.ReservationOwnerId, reservationOwnerId, StringComparison.Ordinal))
         {
@@ -882,7 +883,7 @@ public sealed partial class TaskSpec
             return false;
 
         var receipt = _retryAdmissionHistory[index];
-        if (receipt.WorkerStartedAt is not null ||
+        if (receipt.ReservationReleasedAt is not null || receipt.WorkerStartedAt is not null ||
             receipt.WorkerStartClaimedAt is null ||
             !string.Equals(receipt.ReservationOwnerId, reservationOwnerId, StringComparison.Ordinal))
         {
@@ -907,7 +908,8 @@ public sealed partial class TaskSpec
             {
                 WorkerStartedAt = null,
                 WorkerStartClaimedAt = null,
-                ReservationLeaseExpiresAt = releasedAt
+                ReservationLeaseExpiresAt = releasedAt,
+                ReservationReleasedAt = releasedAt
             };
         }
     }

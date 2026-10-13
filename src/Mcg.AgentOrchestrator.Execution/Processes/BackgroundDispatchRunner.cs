@@ -1230,11 +1230,12 @@ public sealed partial class BackgroundDispatchRunner
         string? orchestratorFailureReason = null)
     {
         var observedExitCode = exitCode;
-        if (TryReadIntentSuppression(goalId, taskId, processRecord, exitCode) is { } suppression)
+        var task = kernel.GetTask(goalId, taskId);
+        if (TryReadIntentSuppression(goalId, taskId, task, processRecord, exitCode,
+                out var suppressedPrimaryWithStartedSamples) is { } suppression)
             return new DispatchRefreshOutcome(processRecord with { CompletedAt = _clock.UtcNow, ExitCode = exitCode },
                 null, IntentSuppression: suppression);
         var exitArtifactAlreadyExisted = File.Exists(processRecord.ExitCodePath);
-        var task = kernel.GetTask(goalId, taskId);
         var dispatchAttempt = ResolveDispatchAttempt(task, processRecord);
         if (task.RequiredRole is AgentRole.Reviewer or AgentRole.Tester &&
             DispatchFailureClassifier.IsSubscriptionProviderCliDispatch(task) &&
@@ -1341,7 +1342,8 @@ public sealed partial class BackgroundDispatchRunner
 
         PlannerCandidateDivergenceReceipt? plannerCandidateDivergence = null;
         var scoutResearchSourcePath = processRecord.StandardOutputPath;
-        if (task.RequiredRole == AgentRole.Planner && (exitCode == 0 || successfulChildResultAvailable))
+        if (task.RequiredRole == AgentRole.Planner &&
+            (exitCode == 0 || successfulChildResultAvailable || suppressedPrimaryWithStartedSamples))
         {
             var acceptanceCriteria = RequiresDurablePlanArtifact(goal, task)
                 ? goal.RefinedSpec?.AcceptanceCriteria ?? []
@@ -1368,6 +1370,8 @@ public sealed partial class BackgroundDispatchRunner
                     acceptanceCriteria);
                 plannerContract = selection.SelectedContract;
                 plannerCandidateDivergence = selection.Receipt;
+                if (suppressedPrimaryWithStartedSamples && plannerContract.Succeeded)
+                    exitCode = 0;
                 if (selection.Receipt.SelectedCandidateIndex is int selectedIndex)
                     scoutResearchSourcePath = candidates[selectedIndex].SourcePath
                         ?? throw new InvalidOperationException("Selected Planner candidate has no stdout source path.");

@@ -249,18 +249,28 @@ public sealed class TaskIntentDispatchAdmissionTests
         Xunit.Assert.Equal(0, seed.Store.CaptureAdmission(seed.Goal.Id.Value, seed.Task.Id.Value).Version);
     }
 
-    [Xunit.Fact]
-    public async Task SuppressedHost_Reconciliation_DoesNotCreateFailedOrPaidRetryRound()
+    [Xunit.Theory]
+    [Xunit.InlineData(1, true)]
+    [Xunit.InlineData(2, true)]
+    [Xunit.InlineData(2, false)]
+    public async Task SuppressedHost_Reconciliation_DoesNotCreateFailedOrPaidRetryRound(int sampleCount, bool everySampleDenied)
     {
-        using var seed = new Scenario();
+        using var seed = new Scenario(sampleCount > 1 ? AgentRole.Planner : AgentRole.Developer);
         var before = seed.Store.CaptureAdmission(seed.Goal.Id.Value, seed.Task.Id.Value);
-        seed.Kernel.RecordTaskDispatch(seed.Goal.Id, seed.Task.Id, new TaskDispatchRecord("probe", "probe", seed.Root, seed.Now));
+        seed.Kernel.RecordTaskDispatch(seed.Goal.Id, seed.Task.Id,
+            new TaskDispatchRecord("local", "probe", seed.Root, seed.Now, PlannerSampleCount: sampleCount));
         seed.Store.BindPreparedAdmission(before, seed.Now);
         var admission = seed.Store.GetPreparedAdmission(before.GoalId, before.TaskId, seed.Now);
         var parameters = seed.Parameters(admission, Path.Combine(seed.Root, "child"), Path.Combine(seed.Root, "gate"));
         DispatchProcessHost.WriteParameters(Path.Combine(seed.Root, "probe.dispatch.json"), parameters);
         var intent = await seed.Store.EnqueueAsync(seed.ManualVerification());
         Xunit.Assert.NotNull(seed.Store.RecordSuppression(admission, parameters.StdoutPath));
+        foreach (var sample in PlannerSampleDispatcher.CreateArtifacts(parameters.StdoutPath, sampleCount))
+        {
+            if (everySampleDenied) Xunit.Assert.NotNull(seed.Store.RecordSuppression(admission, sample.StandardOutputPath));
+            DispatchExitArtifacts.Write(sample.ExitCodePath,
+                DispatchExitArtifacts.Native(TaskIntentAdmission.SuppressedExitCode, "sample finished", seed.Now));
+        }
         DispatchExitArtifacts.Write(parameters.ExitCodePath, DispatchExitArtifacts.Native(TaskIntentAdmission.SuppressedExitCode, "suppressed", seed.Now));
         var process = new TaskProcessRecord(12345, "probe", seed.Root, parameters.StdoutPath, parameters.StderrPath,
             parameters.ExitCodePath, seed.Now, null, null, ProcessIdentityStartedAt: seed.Now);
@@ -274,6 +284,16 @@ public sealed class TaskIntentDispatchAdmissionTests
         new BackgroundDispatchRunner(isStillRunning: _ => false, readProcessIdentity: _ => null,
             processCommandLineSnapshotFactory: () => new ProcessCommandLineSnapshot(new Dictionary<int, string>()))
             .RefreshLatestProcess(seed.Kernel, seed.Goal.Id, seed.Task.Id);
+        if (!everySampleDenied)
+        {
+            // A terminal supervisor artifact without a durable child denial is not proof of no launch.
+            Xunit.Assert.NotNull(seed.Task.LastDispatch);
+            Xunit.Assert.NotNull(seed.Task.LastVerification);
+            var unreleased = Xunit.Assert.Single(seed.Task.RetryAdmissionHistory);
+            Xunit.Assert.NotNull(unreleased.WorkerStartedAt);
+            Xunit.Assert.Null(unreleased.ReservationReleasedAt);
+            return;
+        }
         Xunit.Assert.Equal(WorkTaskStatus.Assigned, seed.Task.Status);
         Xunit.Assert.Null(seed.Task.LastVerification);
         Xunit.Assert.Null(seed.Task.LastProcess);
@@ -283,6 +303,221 @@ public sealed class TaskIntentDispatchAdmissionTests
         Xunit.Assert.Null(reservation.WorkerStartClaimedAt);
         Xunit.Assert.Equal(retryCount, seed.Goal.Timeline.Count(item => item.Kind == ProgressKind.TaskRetried));
         Xunit.Assert.Equal(OperatorIntentStatus.Pending, (await seed.Store.GetAsync(intent.Id))!.Status);
+    }
+
+    [Xunit.Fact]
+    public void ExpiredPaidReservation_WithoutNoLaunchProof_PreventsFreshAdmission()
+    {
+        using var seed = new Scenario();
+        seed.Kernel.RetryTask(seed.Goal.Id, seed.Task.Id, "Provider interrupted", RetryCause.ProviderInterruption);
+        var fingerprint = new RetryContextFingerprint(1, "same-paid-context");
+        seed.Kernel.RecordTaskDispatch(seed.Goal.Id, seed.Task.Id, new TaskDispatchRecord("probe", "probe", seed.Root, seed.Now));
+        var allowed = seed.Kernel.RecordPreparedRetryAdmission(seed.Goal.Id, seed.Task.Id, fingerprint,
+            PaidRouteClassification.Paid, seed.Now, reservationOwnerId: "owner", reservationLeaseExpiresAt: seed.Now.AddMinutes(1));
+        Xunit.Assert.True(allowed.AllowsProcessStart);
+        var fresh = RetryAdmissionPolicy.Evaluate(seed.Task, fingerprint, PaidRouteClassification.Paid,
+            RetryCause.ProviderInterruption, seed.Now.AddMinutes(2), seed.Now.AddMinutes(2), reservationOwnerId: "new-owner");
+        Xunit.Assert.Equal(RetryAdmissionDecision.Prevented, fresh.Decision);
+        Xunit.Assert.Equal(RetryAdmissionRoute.ReservationLease, fresh.Receipt.Route);
+        Xunit.Assert.Null(allowed.Receipt.ReservationReleasedAt);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false, false)]
+    [Xunit.InlineData(false, true)]
+    [Xunit.InlineData(true, false)]
+    [Xunit.InlineData(true, true)]
+    public async Task SuppressedPaidRetry_TerminalIntentAndReload_AllowFreshAdmission(bool expireIntent, bool resumeReservation)
+    {
+        using var seed = new Scenario();
+        seed.Kernel.RetryTask(seed.Goal.Id, seed.Task.Id, "Provider interrupted", RetryCause.ProviderInterruption);
+        Xunit.Assert.NotNull(seed.Task.LatestRetryAt);
+        var fingerprint = new RetryContextFingerprint(1, "same-paid-context");
+        var before = seed.Store.CaptureAdmission(seed.Goal.Id.Value, seed.Task.Id.Value);
+        seed.Kernel.RecordTaskDispatch(seed.Goal.Id, seed.Task.Id,
+            new TaskDispatchRecord("probe", "probe", seed.Root, seed.Now,
+                RetryContextFingerprint: fingerprint, PaidRoute: PaidRouteClassification.Paid));
+        var allowed = seed.Kernel.RecordPreparedRetryAdmission(seed.Goal.Id, seed.Task.Id, fingerprint,
+            PaidRouteClassification.Paid, seed.Now, reservationOwnerId: "first-owner",
+            reservationLeaseExpiresAt: seed.Now.AddMinutes(1));
+        Xunit.Assert.Equal(RetryAdmissionDecision.Allowed, allowed.Decision);
+        if (resumeReservation)
+        {
+            allowed = seed.Kernel.RecordPreparedRetryAdmission(seed.Goal.Id, seed.Task.Id, fingerprint,
+                PaidRouteClassification.Paid, seed.Now.AddMinutes(1), reservationOwnerId: "owner",
+                reservationLeaseExpiresAt: seed.Now.AddMinutes(2), reservationRecoveryConfirmed: true);
+            Xunit.Assert.Equal(RetryAdmissionDecision.ResumedReservation, allowed.Decision);
+        }
+        ConfirmRetryStart(seed, allowed);
+        seed.Store.BindPreparedAdmission(before, seed.Now);
+        var admission = seed.Store.GetPreparedAdmission(before.GoalId, before.TaskId, seed.Now);
+        var parameters = seed.Parameters(admission, Path.Combine(seed.Root, "child"), Path.Combine(seed.Root, "gate"));
+        DispatchProcessHost.WriteParameters(Path.Combine(seed.Root, "probe.dispatch.json"), parameters);
+        var intent = await seed.Store.EnqueueAsync(seed.ManualVerification());
+        Xunit.Assert.NotNull(seed.Store.RecordSuppression(admission, parameters.StdoutPath));
+        DispatchExitArtifacts.Write(parameters.ExitCodePath,
+            DispatchExitArtifacts.Native(TaskIntentAdmission.SuppressedExitCode, "suppressed", seed.Now));
+        seed.Kernel.RecordTaskProcessStarted(seed.Goal.Id, seed.Task.Id,
+            new TaskProcessRecord(12345, "probe", seed.Root, parameters.StdoutPath, parameters.StderrPath,
+                parameters.ExitCodePath, seed.Now, null, null, ProcessIdentityStartedAt: seed.Now));
+        await seed.Repository.SaveAsync(seed.Kernel);
+        var baseline = seed.Kernel.ExportSnapshot();
+        var staleKernel = await seed.Repository.LoadAsync();
+        CreateCompletedRunner().RefreshLatestProcess(seed.Kernel, seed.Goal.Id, seed.Task.Id);
+        Xunit.Assert.Null(seed.Task.LastDispatch);
+        Xunit.Assert.Null(seed.Task.LastVerification);
+        Xunit.Assert.All(seed.Task.RetryAdmissionHistory, receipt =>
+        {
+            Xunit.Assert.NotNull(receipt.ReservationReleasedAt);
+            Xunit.Assert.Null(receipt.WorkerStartedAt);
+            Xunit.Assert.Null(receipt.WorkerStartClaimedAt);
+        });
+        // Exercise both merge directions: a current release beats a stored start acknowledgement,
+        // and a stale acknowledgement cannot resurrect a stored release.
+        staleKernel.RecordTaskNote(seed.Goal.Id, seed.Task.Id, "Concurrent unrelated note");
+        await seed.Repository.SaveAsync(staleKernel);
+        var released = seed.Kernel.ExportSnapshot();
+        Xunit.Assert.Single(await seed.Repository.SaveGoalSnapshotsWithMergeAsync(
+            [new GoalSnapshotSaveRequest(baseline.Goals.Single(), released.Goals.Single(), released.HumanInputRequests)]));
+        var staleCurrent = staleKernel.ExportSnapshot();
+        Xunit.Assert.Single(await seed.Repository.SaveGoalSnapshotsWithMergeAsync(
+            [new GoalSnapshotSaveRequest(baseline.Goals.Single(), staleCurrent.Goals.Single(), staleCurrent.HumanInputRequests)]));
+        var merged = await seed.Repository.LoadAsync();
+        Xunit.Assert.All(merged.GetTask(seed.Goal.Id, seed.Task.Id).RetryAdmissionHistory,
+            receipt => Xunit.Assert.NotNull(receipt.ReservationReleasedAt));
+        await seed.Store.ClaimNextAsync(seed.Goal.Id.Value, "intent-owner");
+        if (expireIntent)
+        {
+            seed.Now = seed.Now.AddMinutes(6);
+            new OperatorIntentCoordinator(seed.Reopen(), utcNow: () => seed.Now).ExecutePending(seed.Kernel, seed.Goal);
+        }
+        else
+            await seed.Store.CompleteAsync(intent.Id, "intent-owner", OperatorIntentStatus.Rejected, "stale", seed.Now);
+        Xunit.Assert.Equal(OperatorIntentStatus.Rejected, (await seed.Store.GetAsync(intent.Id))!.Status);
+        Xunit.Assert.Empty(seed.Reopen().ListHeldTaskIds(seed.Goal.Id.Value));
+        await seed.Repository.SaveAsync(seed.Kernel);
+        var restored = await seed.Repository.LoadAsync();
+        var restoredTask = restored.GetTask(seed.Goal.Id, seed.Task.Id);
+        Xunit.Assert.All(restoredTask.RetryAdmissionHistory, receipt => Xunit.Assert.NotNull(receipt.ReservationReleasedAt));
+        Xunit.Assert.False(RetryAdmissionSnapshotStartClaim.Apply(restored.ExportGoalSnapshot(seed.Goal.Id),
+            seed.Task.Id, allowed.Receipt.LinkedDispatchAt, allowed.Receipt.ReservationOwnerId!, seed.Now).Claimed);
+        var prepared = new TaskDispatchRecord("probe", "probe", seed.Root, seed.Now.AddMinutes(10),
+            RetryContextFingerprint: fingerprint, PaidRoute: PaidRouteClassification.Paid);
+        var fresh = await RetryAdmissionReservationStore.TryReserveAsync(seed.Workspace.SqliteStatePath,
+            seed.Goal.Id, seed.Task.Id, fingerprint, PaidRouteClassification.Paid, RetryCause.ProviderInterruption,
+            prepared, prepared.DispatchedAt, "fresh-owner", prepared.DispatchedAt.AddMinutes(1));
+        Xunit.Assert.NotNull(fresh);
+        Xunit.Assert.Equal(RetryAdmissionDecision.Allowed, fresh.Admission.Decision);
+        Xunit.Assert.True(fresh.Admission.AllowsProcessStart);
+        Xunit.Assert.Equal(prepared.DispatchedAt, fresh.Snapshot.Tasks.Single().LastDispatch!.DispatchedAt);
+        Xunit.Assert.Throws<ProbeReached>(() => TaskIntentAdmission.Launch(
+            seed.Reopen().CaptureAdmission(seed.Goal.Id.Value, seed.Task.Id.Value), "fresh-paid-launch", () => throw new ProbeReached()));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(true)]
+    [Xunit.InlineData(false)]
+    public async Task SampleStartsBeforeEnqueue_PrimaryDenied_ReconciliationPreservesStartedAttempt(bool validPlan)
+    {
+        using var seed = new Scenario(AgentRole.Planner);
+        using var sampleAdmitted = new ManualResetEventSlim();
+        using var releaseSample = new ManualResetEventSlim();
+        Task<int>? sampleHost = null;
+        var fingerprint = new RetryContextFingerprint(1, "sampled-paid-context");
+        seed.Kernel.RetryTask(seed.Goal.Id, seed.Task.Id, "Provider interrupted", RetryCause.ProviderInterruption);
+        var reference = seed.Store.CaptureAdmission(seed.Goal.Id.Value, seed.Task.Id.Value);
+        seed.Kernel.RecordTaskDispatch(seed.Goal.Id, seed.Task.Id,
+            new TaskDispatchRecord("local", "probe", seed.Root, seed.Now, PlannerSampleCount: 2,
+                RetryContextFingerprint: fingerprint, PaidRoute: PaidRouteClassification.Paid));
+        var allowed = seed.Kernel.RecordPreparedRetryAdmission(seed.Goal.Id, seed.Task.Id, fingerprint,
+            PaidRouteClassification.Paid, seed.Now, reservationOwnerId: "owner", reservationLeaseExpiresAt: seed.Now.AddMinutes(10));
+        Xunit.Assert.True(allowed.AllowsProcessStart);
+        ConfirmRetryStart(seed, allowed);
+        var primary = seed.Parameters(reference, Path.Combine(seed.Root, "primary-child"), Path.Combine(seed.Root, "primary-gate"));
+        DispatchProcessHost.WriteParameters(Path.Combine(seed.Root, "probe.dispatch.json"), primary);
+        var sample = Xunit.Assert.Single(PlannerSampleDispatcher.CreateArtifacts(primary.StdoutPath, 2));
+        var planPath = Path.Combine(seed.Root, "plan.txt");
+        File.WriteAllText(planPath, validPlan ? File.ReadAllText(Path.Combine(InfrastructureTestSupport.FindRepositoryRoot(),
+            "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests", "Fixtures", "PlannerOutputContract",
+            "658501ce-f6708f44-20260805012800.out.txt")) : "invalid sample plan");
+        var sampleParameters = primary with
+        {
+            Command = "$null = [Console]::In.ReadToEnd(); Get-Content -Raw -LiteralPath '" + planPath.Replace("'", "''") + "'",
+            StdoutPath = sample.StandardOutputPath, StderrPath = sample.StandardErrorPath,
+            ExitCodePath = sample.ExitCodePath, HeartbeatPath = sample.HeartbeatPath,
+            StartGatePath = sample.StartGatePath
+        };
+        File.WriteAllText(sample.StartGatePath, "go");
+        try
+        {
+            sampleHost = Task.Run(() => DispatchProcessHost.RunWithHeartbeatHooksForTests(sampleParameters,
+                new DispatchProcessHost.HeartbeatTestHooks
+                {
+                    BeforeTaskIntentAdmission = ConfigureProbeEnvironment,
+                    AfterTaskIntentAdmission = worker =>
+                    {
+                        Xunit.Assert.True(seed.Store.HasLaunch(sample.StandardOutputPath));
+                        Xunit.Assert.False(worker.HasExited); // sample waits on host-owned stdin
+                        sampleAdmitted.Set();
+                        if (!releaseSample.Wait(TimeSpan.FromSeconds(120)))
+                            throw new TimeoutException("Primary denial was not released after sample admission.");
+                    }
+                }));
+            Xunit.Assert.True(sampleAdmitted.Wait(TimeSpan.FromSeconds(120)), "Sample did not reach actual child admission.");
+            var intent = await seed.Store.EnqueueAsync(seed.ManualVerification());
+            File.WriteAllText(primary.StartGatePath!, "go");
+            Xunit.Assert.Equal(TaskIntentAdmission.SuppressedExitCode, DispatchProcessHost.RunWithHeartbeatHooksForTests(primary,
+                new DispatchProcessHost.HeartbeatTestHooks { BeforeTaskIntentAdmission = ConfigureProbeEnvironment }));
+            Xunit.Assert.False(File.Exists(Path.Combine(seed.Root, "primary-child")));
+            Xunit.Assert.Equal(intent.Id, seed.Store.GetSuppression(primary.StdoutPath)!.IntentId);
+            releaseSample.Set();
+            Xunit.Assert.Equal(0, await sampleHost.WaitAsync(TimeSpan.FromSeconds(120)));
+            seed.Kernel.RecordTaskProcessStarted(seed.Goal.Id, seed.Task.Id,
+                new TaskProcessRecord(12345, "probe", seed.Root, primary.StdoutPath, primary.StderrPath,
+                    primary.ExitCodePath, seed.Now, null, null, ProcessIdentityStartedAt: seed.Now));
+            CreateCompletedRunner().RefreshLatestProcess(seed.Kernel, seed.Goal.Id, seed.Task.Id);
+            Xunit.Assert.NotNull(seed.Task.LastDispatch);
+            Xunit.Assert.NotNull(seed.Task.LastVerification);
+            var divergence = Xunit.Assert.IsType<PlannerCandidateDivergenceReceipt>(seed.Task.LastVerification.PlannerCandidateDivergence);
+            var sampleEvidence = Xunit.Assert.Single(divergence.Candidates!, candidate => candidate.CandidateIndex == 1);
+            Xunit.Assert.Equal(PlannerCandidateTerminalState.Succeeded, sampleEvidence.TerminalState);
+            Xunit.Assert.Equal(validPlan ? 1 : (int?)null, divergence.SelectedCandidateIndex);
+            Xunit.Assert.Equal(validPlan, seed.Task.LastVerification.Succeeded);
+            var reservation = Xunit.Assert.Single(seed.Task.RetryAdmissionHistory);
+            Xunit.Assert.NotNull(reservation.WorkerStartedAt);
+            Xunit.Assert.Null(reservation.ReservationReleasedAt);
+            await seed.Repository.SaveAsync(seed.Kernel);
+            var restored = await seed.Repository.LoadAsync();
+            Xunit.Assert.NotNull(Xunit.Assert.Single(restored.GetTask(seed.Goal.Id, seed.Task.Id).RetryAdmissionHistory).WorkerStartedAt);
+        }
+        finally
+        {
+            releaseSample.Set();
+            if (sampleHost is not null) await sampleHost.WaitAsync(TimeSpan.FromSeconds(120));
+        }
+    }
+
+    private static BackgroundDispatchRunner CreateCompletedRunner() => new(isStillRunning: _ => false, readProcessIdentity: _ => null,
+        processCommandLineSnapshotFactory: () => new ProcessCommandLineSnapshot(new Dictionary<int, string>()));
+
+    private static void ConfirmRetryStart(Scenario seed, RetryAdmissionResult allowed)
+    {
+        var claimed = RetryAdmissionSnapshotStartClaim.Apply(seed.Kernel.ExportGoalSnapshot(seed.Goal.Id),
+            seed.Task.Id, allowed.Receipt.LinkedDispatchAt, allowed.Receipt.ReservationOwnerId!, seed.Now.AddSeconds(1));
+        Xunit.Assert.True(claimed.Claimed);
+        var confirmed = RetryAdmissionSnapshotStartConfirmation.Apply(claimed.Snapshot,
+            seed.Task.Id, allowed.Receipt.LinkedDispatchAt, allowed.Receipt.ReservationOwnerId!, seed.Now.AddSeconds(2));
+        Xunit.Assert.True(confirmed.Claimed);
+        seed.Kernel.ReplaceGoalWithSnapshot(confirmed.Snapshot);
+        seed.Goal = seed.Kernel.GetGoal(seed.Goal.Id);
+        seed.Task = seed.Goal.Tasks.Single();
+    }
+
+    private static void ConfigureProbeEnvironment(ProcessStartInfo start)
+    {
+        start.Environment.Clear();
+        foreach (var name in new[] { "PATH", "PATHEXT", "SystemRoot", "WINDIR", "COMSPEC", "TEMP", "TMP" })
+            if (Environment.GetEnvironmentVariable(name) is { } value) start.Environment[name] = value;
     }
 
     private static ProcessStartInfo ManagedHostStart(string root, string parametersPath)
@@ -305,22 +540,29 @@ public sealed class TaskIntentDispatchAdmissionTests
         internal readonly string Root = Path.Combine(Path.GetTempPath(), "mcg-intent-admission-" + Guid.NewGuid().ToString("N"));
         internal DateTimeOffset Now = DateTimeOffset.UtcNow;
         internal readonly AgentOrchestratorKernel Kernel = new();
-        internal readonly AgentDefinition[] Agents = [new(new AgentId("developer"), "Developer", AgentRole.Developer,
-            new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
-            ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
-            Subscription: new SubscriptionLaunchProfile("codex-cli", AgentCatalog.OpenAiSubscriptionModelAlias, "low"))];
+        internal readonly AgentDefinition[] Agents;
         internal readonly OrchestratorWorkspace Workspace;
         internal readonly SqliteOrchestratorStateRepository Repository;
         internal readonly SqliteOperatorIntentStore Store;
         internal readonly string StorePath;
-        internal readonly Goal Goal;
-        internal readonly TaskSpec Task;
-        internal Scenario()
+        internal Goal Goal;
+        internal TaskSpec Task;
+        internal Scenario(AgentRole role = AgentRole.Developer)
         {
+            Agents = [new(new AgentId("worker"), "Worker", role,
+                new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+                ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+                Subscription: new SubscriptionLaunchProfile("codex-cli", AgentCatalog.OpenAiSubscriptionModelAlias, "low"))];
             Directory.CreateDirectory(Root);
             Workspace = OrchestratorWorkspace.ForDirectory(Root);
             Repository = InfrastructureTestSupport.CreateMigratedStateRepository(Workspace.SqliteStatePath);
-            Goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(Kernel, Agents, "Task intent admission");
+            if (role == AgentRole.Developer)
+                Goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(Kernel, Agents, "Task intent admission");
+            else
+            {
+                Goal = Kernel.CreateGoal("Task intent admission", [new TaskSpec(TaskId.New(), "Plan", role)]);
+                Kernel.ActivateGoal(Goal.Id, Agents);
+            }
             Task = Goal.Tasks.Single();
             Kernel.SetGoalRefinedSpec(Goal.Id, new RefinedSpec("Task intent admission", ["Task intent wins admission"], VerificationClass.TestVerifiable, [], []));
             StorePath = Path.Combine(Workspace.OrchestratorDirectory, SqliteOperatorIntentStore.DatabaseFileName);
