@@ -28,6 +28,7 @@ internal sealed class DotnetBaseBuildCache
     private const string CacheDirectoryName = "base-build-cache";
     private const string StagingDirectoryName = "_staging";
     private const string ManifestFileName = "manifest.json";
+    private const int ManifestSchemaVersion = 2;
     private static readonly TimeSpan DefaultMaxAge = TimeSpan.FromDays(7);
     private const int DefaultMaxEntries = 48;
     private readonly string _rootPath;
@@ -58,41 +59,44 @@ internal sealed class DotnetBaseBuildCache
 
     public DotnetBaseBuildCacheRestoreResult Probe(
         string mainSha,
-        IReadOnlyList<string> projects)
+        IReadOnlyList<string> projects,
+        DotnetBaseBuildCacheIdentity identity)
     {
         Directory.CreateDirectory(_rootPath);
         var evictions = EvictExpiredAndOverflow();
         return new DotnetBaseBuildCacheRestoreResult(
             mainSha,
-            ReadProjectReceipts(mainSha, artifactsPath: null, projects),
+            ReadProjectReceipts(mainSha, artifactsPath: null, projects, identity),
             evictions);
     }
 
     public DotnetBaseBuildCacheRestoreResult Restore(
         string mainSha,
         string artifactsPath,
-        IReadOnlyList<string> projects)
+        IReadOnlyList<string> projects,
+        DotnetBaseBuildCacheIdentity identity)
     {
         Directory.CreateDirectory(_rootPath);
         Directory.CreateDirectory(artifactsPath);
         var evictions = EvictExpiredAndOverflow();
         return new DotnetBaseBuildCacheRestoreResult(
             mainSha,
-            ReadProjectReceipts(mainSha, artifactsPath, projects),
+            ReadProjectReceipts(mainSha, artifactsPath, projects, identity),
             evictions);
     }
 
     private IReadOnlyList<DotnetBaseBuildCacheProjectReceipt> ReadProjectReceipts(
         string mainSha,
         string? artifactsPath,
-        IReadOnlyList<string> projects)
+        IReadOnlyList<string> projects,
+        DotnetBaseBuildCacheIdentity identity)
     {
         var receipts = new List<DotnetBaseBuildCacheProjectReceipt>();
 
         foreach (var project in projects)
         {
             var projectKey = ProjectKey(project);
-            var entryPath = EntryPath(mainSha, projectKey);
+            var entryPath = EntryPath(mainSha, projectKey, identity);
             var manifest = TryReadManifest(entryPath);
             if (manifest is null)
             {
@@ -100,7 +104,26 @@ internal sealed class DotnetBaseBuildCache
                 continue;
             }
 
-            var currentHash = ResolveEntryHash(entryPath, manifest);
+            if (manifest.SchemaVersion != ManifestSchemaVersion ||
+                !string.Equals(manifest.CompatibilityFingerprint, identity.Fingerprint, StringComparison.Ordinal) ||
+                !string.Equals(manifest.MainSha, mainSha, StringComparison.Ordinal) ||
+                !string.Equals(manifest.Project, project, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(manifest.ProjectKey, projectKey, StringComparison.Ordinal))
+            {
+                receipts.Add(new DotnetBaseBuildCacheProjectReceipt(project, projectKey, "miss", "invalid", null));
+                continue;
+            }
+
+            string? currentHash;
+            try
+            {
+                currentHash = ResolveEntryHash(entryPath, manifest);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                receipts.Add(new DotnetBaseBuildCacheProjectReceipt(project, projectKey, "miss", "invalid", null));
+                continue;
+            }
             if (!string.Equals(currentHash, manifest.ContentHash, StringComparison.Ordinal))
             {
                 receipts.Add(new DotnetBaseBuildCacheProjectReceipt(project, projectKey, "miss", "invalid", currentHash));
@@ -109,8 +132,21 @@ internal sealed class DotnetBaseBuildCache
 
             if (artifactsPath is not null)
             {
-                ClearProjectArtifactRoots(artifactsPath, project);
-                CopyDirectory(entryPath, artifactsPath, skipRootManifest: true);
+                try
+                {
+                    ClearProjectArtifactRoots(artifactsPath, project);
+                    foreach (var sourceRoot in ProjectArtifactRoots(entryPath, project))
+                        CopyDirectory(sourceRoot, Path.Combine(artifactsPath, Path.GetRelativePath(entryPath, sourceRoot)));
+                    // Recheck the copy, not only the source; source publication/eviction can race it.
+                    if (!string.Equals(ProjectOutputHash(artifactsPath, project), manifest.ContentHash, StringComparison.Ordinal))
+                        throw new InvalidDataException("Restored base-build payload hash did not match.");
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+                {
+                    ClearProjectArtifactRoots(artifactsPath, project);
+                    receipts.Add(new DotnetBaseBuildCacheProjectReceipt(project, projectKey, "miss", "invalid", currentHash));
+                    continue;
+                }
             }
 
             receipts.Add(new DotnetBaseBuildCacheProjectReceipt(project, projectKey, "hit", null, currentHash));
@@ -122,7 +158,8 @@ internal sealed class DotnetBaseBuildCache
     public DotnetBaseBuildCachePublishResult Publish(
         string mainSha,
         string artifactsPath,
-        IReadOnlyList<string> projects)
+        IReadOnlyList<string> projects,
+        DotnetBaseBuildCacheIdentity identity)
     {
         Directory.CreateDirectory(_rootPath);
         var evictions = EvictExpiredAndOverflow();
@@ -133,7 +170,7 @@ internal sealed class DotnetBaseBuildCache
             var sourceRoots = ProjectArtifactRoots(artifactsPath, project)
                 .Where(Directory.Exists)
                 .ToArray();
-            if (sourceRoots.Length == 0)
+            if (sourceRoots.Length != 2 || sourceRoots.Any(root => !Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).Any()))
             {
                 receipts.Add(new DotnetBaseBuildCacheProjectReceipt(project, projectKey, "miss", "no-artifacts", null));
                 continue;
@@ -156,11 +193,28 @@ internal sealed class DotnetBaseBuildCache
                 File.WriteAllText(
                     Path.Combine(stagingPath, ManifestFileName),
                     JsonSerializer.Serialize(
-                        new CacheEntryManifest(mainSha, project, projectKey, hash, DateTimeOffset.UtcNow, files),
+                        new CacheEntryManifest(mainSha, project, projectKey, hash, DateTimeOffset.UtcNow, files, ManifestSchemaVersion, identity.Fingerprint),
                         new JsonSerializerOptions { WriteIndented = true }));
 
-                var finalPath = EntryPath(mainSha, projectKey);
+                var finalPath = EntryPath(mainSha, projectKey, identity);
                 Directory.CreateDirectory(Path.GetDirectoryName(finalPath)!);
+                if (Directory.Exists(finalPath))
+                {
+                    var existing = TryReadManifest(finalPath);
+                    if (existing is null || existing.SchemaVersion != ManifestSchemaVersion ||
+                        !string.Equals(existing.CompatibilityFingerprint, identity.Fingerprint, StringComparison.Ordinal) ||
+                        !string.Equals(existing.MainSha, mainSha, StringComparison.Ordinal) ||
+                        !string.Equals(existing.Project, project, StringComparison.OrdinalIgnoreCase) ||
+                        !string.Equals(existing.ProjectKey, projectKey, StringComparison.Ordinal) ||
+                        !string.Equals(ResolveEntryHash(finalPath, existing, verifyContent: true), existing.ContentHash, StringComparison.Ordinal))
+                    {
+                        if (!TryDeleteDirectory(finalPath))
+                        {
+                            receipts.Add(new DotnetBaseBuildCacheProjectReceipt(project, projectKey, "miss", "invalid", null));
+                            continue;
+                        }
+                    }
+                }
                 if (!Directory.Exists(finalPath))
                 {
                     Directory.Move(stagingPath, finalPath);
@@ -170,6 +224,11 @@ internal sealed class DotnetBaseBuildCache
                 {
                     receipts.Add(new DotnetBaseBuildCacheProjectReceipt(project, projectKey, "hit", "already-published", hash));
                 }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Cache publication cannot turn a successful cold build into a failed build.
+                receipts.Add(new DotnetBaseBuildCacheProjectReceipt(project, projectKey, "miss", "invalid", null));
             }
             finally
             {
@@ -273,8 +332,8 @@ internal sealed class DotnetBaseBuildCache
         }
     }
 
-    private string EntryPath(string mainSha, string projectKey) =>
-        Path.Combine(_rootPath, SanitizeSegment(mainSha), projectKey);
+    private string EntryPath(string mainSha, string projectKey, DotnetBaseBuildCacheIdentity identity) =>
+        Path.Combine(_rootPath, SanitizeSegment(mainSha), $"{projectKey}-{SanitizeSegment(identity.Fingerprint)}");
 
     private static IEnumerable<string> ProjectArtifactRoots(string artifactsPath, string project)
     {
@@ -292,6 +351,12 @@ internal sealed class DotnetBaseBuildCache
                 Directory.Delete(root, recursive: true);
             }
         }
+    }
+
+    internal void ClearRestoredProjects(string artifactsPath, IReadOnlyList<string> projects)
+    {
+        foreach (var project in projects)
+            ClearProjectArtifactRoots(artifactsPath, project);
     }
 
     private static string ProjectKey(string project)
@@ -330,18 +395,23 @@ internal sealed class DotnetBaseBuildCache
         }
     }
 
-    private string ResolveEntryHash(string entryPath, CacheEntryManifest manifest)
+    private string ResolveEntryHash(string entryPath, CacheEntryManifest manifest, bool verifyContent = false)
     {
-        if (manifest.Files is not null)
+        var roots = ProjectArtifactRoots(entryPath, manifest.Project).ToArray();
+        var files = EnumerateFiles(entryPath, excludeRootManifest: true).ToArray();
+        var validRoots = roots.All(root => Directory.Exists(root) && Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).Any()) &&
+            files.All(file => roots.Any(root => file.FullName.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)));
+        if (!verifyContent && manifest.Files is not null && manifest.Files.All(file => file is not null))
         {
             var currentFiles = TryStatDirectory(entryPath, excludeRootManifest: true);
             if (currentFiles is not null && FileStatsMatch(manifest.Files, currentFiles))
             {
-                return manifest.ContentHash;
+                return validRoots ? manifest.ContentHash : string.Empty;
             }
         }
 
-        return HashDirectory(entryPath, excludeRootManifest: true, _contentReader);
+        var hash = HashDirectory(entryPath, excludeRootManifest: true, _contentReader);
+        return validRoots ? hash : string.Empty;
     }
 
     private static IReadOnlyList<CachedFileStat>? TryStatDirectory(string path, bool excludeRootManifest)
@@ -459,7 +529,9 @@ internal sealed class DotnetBaseBuildCache
         string ProjectKey,
         string ContentHash,
         DateTimeOffset CreatedAt,
-        IReadOnlyList<CachedFileStat>? Files = null);
+        IReadOnlyList<CachedFileStat>? Files = null,
+        int SchemaVersion = 0,
+        string? CompatibilityFingerprint = null);
 
     private sealed record CachedFileStat(string Path, long Length, long LastWriteUtcTicks);
 }

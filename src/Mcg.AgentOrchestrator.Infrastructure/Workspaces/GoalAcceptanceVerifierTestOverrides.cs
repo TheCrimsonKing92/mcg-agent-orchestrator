@@ -9,6 +9,7 @@ internal sealed record GoalAcceptanceVerifierTestOverrides
     internal TimeSpan? TransientNoHolderBuildLockPollInterval { get; set; }
     internal int? TransientNoHolderBuildLockMaxRetryCycles { get; set; }
     internal Func<string, string?>? ResolveBaseBuildMainShaForTests { get; set; }
+    internal Func<DotnetBaseBuildCacheIdentity?>? ResolveBaseBuildIdentityForTests { get; set; }
     internal Func<string, string?>? ResolvePartitionVerdictCandidateTreeShaForTests { get; set; }
     internal Func<string, string?>? ResolvePartitionVerdictMainShaForTests { get; set; }
     internal Func<string, string?>? ResolvePartitionVerdictVerifyingCommitShaForTests { get; set; }
@@ -61,6 +62,7 @@ internal sealed record GoalAcceptanceVerifierTestOverrides
         TransientNoHolderBuildLockPollInterval = TransientNoHolderBuildLockPollInterval,
         TransientNoHolderBuildLockMaxRetryCycles = TransientNoHolderBuildLockMaxRetryCycles,
         ResolveBaseBuildMainShaForTests = ResolveBaseBuildMainShaForTests,
+        ResolveBaseBuildIdentityForTests = ResolveBaseBuildIdentityForTests,
         ResolvePartitionVerdictCandidateTreeShaForTests = ResolvePartitionVerdictCandidateTreeShaForTests,
         ResolvePartitionVerdictMainShaForTests = ResolvePartitionVerdictMainShaForTests,
         ResolvePartitionVerdictVerifyingCommitShaForTests = ResolvePartitionVerdictVerifyingCommitShaForTests,

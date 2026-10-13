@@ -19,22 +19,63 @@ internal static partial class AcceptancePolicyShardPlanner
     internal const string CliTestsProject = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj";
     internal const string ExecutionTestsProject = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Execution/Mcg.AgentOrchestrator.Infrastructure.Execution.Tests.csproj";
 
-    private static readonly Dictionary<string, string[]> ReferencingProjectsByProject = new(StringComparer.OrdinalIgnoreCase)
+    internal enum BaseCacheEligibility { Ineligible, Always, WhenTargeted }
+
+    internal sealed record ProjectTopologyEntry(BaseCacheEligibility CacheEligibility, string[] ReferencingProjects);
+
+    // This graph owns impact propagation and cache eligibility. Edges point to consumers.
+    internal static readonly IReadOnlyDictionary<string, ProjectTopologyEntry> ProjectTopology = new Dictionary<string, ProjectTopologyEntry>(StringComparer.OrdinalIgnoreCase)
     {
-        [CoreProject] = [ExecutionProject, ProvidersProject, OperatorCommsProject, InfrastructureProject, AppProject, CoreTestsProject, InfrastructureTestsProject, AcceptanceTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject, ExecutionTestsProject],
-        [ProvidersProject] = [ExecutionProject, InfrastructureProject, AppProject, InfrastructureTestsProject, ProviderEnvironmentTestsProject],
-        [OperatorCommsProject] = [AppProject, InfrastructureTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject],
-        [ExecutionProject] = [InfrastructureProject, AppProject, InfrastructureTestsProject, AcceptanceTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject, ExecutionTestsProject],
-        [InfrastructureProject] = [AppProject, InfrastructureTestsProject, AcceptanceTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject],
-        [AppProject] = [InfrastructureTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject],
-        [CoreTestsProject] = [],
-        [InfrastructureTestsProject] = [],
-        [AcceptanceTestsProject] = [],
-        [TestSupportProject] = [InfrastructureTestsProject],
-        [ProviderEnvironmentTestsProject] = [],
-        [CliTestsProject] = [],
-        [ExecutionTestsProject] = []
+        [CoreProject] = new(BaseCacheEligibility.Always, [ExecutionProject, ProvidersProject, OperatorCommsProject, InfrastructureProject, AppProject, CoreTestsProject, InfrastructureTestsProject, AcceptanceTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject, ExecutionTestsProject]),
+        [ProvidersProject] = new(BaseCacheEligibility.Always, [ExecutionProject, InfrastructureProject, AppProject, InfrastructureTestsProject, ProviderEnvironmentTestsProject]),
+        [OperatorCommsProject] = new(BaseCacheEligibility.Always, [AppProject, InfrastructureTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject]),
+        [ExecutionProject] = new(BaseCacheEligibility.Always, [InfrastructureProject, AppProject, InfrastructureTestsProject, AcceptanceTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject, ExecutionTestsProject]),
+        [InfrastructureProject] = new(BaseCacheEligibility.Always, [AppProject, InfrastructureTestsProject, AcceptanceTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject]),
+        [AppProject] = new(BaseCacheEligibility.Always, [InfrastructureTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject]),
+        [CoreTestsProject] = new(BaseCacheEligibility.Always, []),
+        [InfrastructureTestsProject] = new(BaseCacheEligibility.Always, []),
+        [AcceptanceTestsProject] = new(BaseCacheEligibility.WhenTargeted, []),
+        [TestSupportProject] = new(BaseCacheEligibility.Always, [InfrastructureTestsProject]),
+        [ProviderEnvironmentTestsProject] = new(BaseCacheEligibility.Always, []),
+        [CliTestsProject] = new(BaseCacheEligibility.Always, []),
+        [ExecutionTestsProject] = new(BaseCacheEligibility.WhenTargeted, [])
     };
+
+    internal static IReadOnlyList<string> CacheEligibleProjects(
+        IEnumerable<string> targetedProjects, PolicyShardPlan policyShardPlan)
+    {
+        var targeted = targetedProjects.Where(project => !string.IsNullOrWhiteSpace(project)).ToArray();
+        var ordered = OrderProjectTopology(ProjectTopology);
+        return ordered.Where(project => !policyShardPlan.IsAbsentProject(project) &&
+            (ProjectTopology[project].CacheEligibility == BaseCacheEligibility.Always ||
+             ProjectTopology[project].CacheEligibility == BaseCacheEligibility.WhenTargeted &&
+             targeted.Any(target => ProjectMatches(target, project))))
+            .ToArray();
+    }
+
+    internal static IReadOnlyList<string> OrderProjectTopology(IReadOnlyDictionary<string, ProjectTopologyEntry> topology)
+    {
+        var incoming = topology.Keys.ToDictionary(project => project, _ => 0, StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in topology.Values)
+        foreach (var consumer in entry.ReferencingProjects)
+        {
+            if (!incoming.ContainsKey(consumer))
+                throw new InvalidOperationException($"Project topology has an unknown consumer: {consumer}");
+            incoming[consumer]++;
+        }
+        var ready = new Queue<string>(topology.Keys.Where(project => incoming[project] == 0));
+        var ordered = new List<string>();
+        while (ready.TryDequeue(out var project))
+        {
+            ordered.Add(project);
+            foreach (var consumer in topology[project].ReferencingProjects)
+                if (--incoming[consumer] == 0)
+                    ready.Enqueue(consumer);
+        }
+        if (ordered.Count != topology.Count)
+            throw new InvalidOperationException("Project topology contains a dependency cycle.");
+        return ordered;
+    }
 
     internal static string? NormalizePath(string? path) =>
         string.IsNullOrWhiteSpace(path) ? path : path.Replace('\\', '/').Trim();
@@ -228,10 +269,10 @@ internal static partial class AcceptancePolicyShardPlanner
         while (pending.Count > 0)
         {
             var project = pending.Dequeue();
-            if (!ReferencingProjectsByProject.TryGetValue(project, out var referencingProjects))
+            if (!ProjectTopology.TryGetValue(project, out var entry))
                 continue;
 
-            foreach (var referencingProject in referencingProjects)
+            foreach (var referencingProject in entry.ReferencingProjects)
             {
                 if (closure.Add(referencingProject))
                     pending.Enqueue(referencingProject);

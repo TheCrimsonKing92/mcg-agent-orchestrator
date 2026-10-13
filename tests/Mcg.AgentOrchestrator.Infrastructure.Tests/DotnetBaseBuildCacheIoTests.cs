@@ -15,7 +15,7 @@ public sealed class DotnetBaseBuildCacheIoTests
         fixture.Publish();
         fixture.ResetContentReads();
 
-        var probe = fixture.Cache.Probe(MainSha, [Project]);
+        var probe = fixture.Cache.Probe(MainSha, [Project], new("fixture-v1"));
 
         Assert.True(probe.AllHit);
         Assert.Equal(0, fixture.ContentReads);
@@ -39,7 +39,7 @@ public sealed class DotnetBaseBuildCacheIoTests
         fixture.ResetContentReads();
 
         var restorePath = Path.Combine(fixture.RootPath, "restore");
-        var restore = fixture.Cache.Restore(MainSha, restorePath, [Project]);
+        var restore = fixture.Cache.Restore(MainSha, restorePath, [Project], new("fixture-v1"));
 
         var receipt = Assert.Single(restore.Projects);
         Assert.Equal("miss", receipt.Status);
@@ -58,7 +58,7 @@ public sealed class DotnetBaseBuildCacheIoTests
         File.WriteAllText(Path.Combine(fixture.EntryPath, "added.txt"), "added");
         fixture.ResetContentReads();
 
-        var probe = fixture.Cache.Probe(MainSha, [Project]);
+        var probe = fixture.Cache.Probe(MainSha, [Project], new("fixture-v1"));
 
         Assert.Equal("invalid", Assert.Single(probe.Projects).Reason);
         Assert.True(fixture.ContentReads > 0);
@@ -72,7 +72,7 @@ public sealed class DotnetBaseBuildCacheIoTests
         File.Delete(fixture.CachedFiles().First());
         fixture.ResetContentReads();
 
-        var probe = fixture.Cache.Probe(MainSha, [Project]);
+        var probe = fixture.Cache.Probe(MainSha, [Project], new("fixture-v1"));
 
         Assert.Equal("invalid", Assert.Single(probe.Projects).Reason);
         Assert.True(fixture.ContentReads > 0);
@@ -87,7 +87,7 @@ public sealed class DotnetBaseBuildCacheIoTests
         var expectedHash = fixture.RemoveFileStatsFromManifest();
         fixture.ResetContentReads();
 
-        var probe = fixture.Cache.Probe(MainSha, [Project]);
+        var probe = fixture.Cache.Probe(MainSha, [Project], new("fixture-v1"));
 
         var receipt = Assert.Single(probe.Projects);
         Assert.True(probe.AllHit);
@@ -103,7 +103,7 @@ public sealed class DotnetBaseBuildCacheIoTests
         fixture.Publish();
         var restorePath = Path.Combine(fixture.RootPath, "restore");
 
-        var restore = fixture.Cache.Restore(MainSha, restorePath, [Project]);
+        var restore = fixture.Cache.Restore(MainSha, restorePath, [Project], new("fixture-v1"));
 
         Assert.True(restore.AllHit);
         Assert.Equal(
@@ -167,7 +167,7 @@ public sealed class DotnetBaseBuildCacheIoTests
 
         public void Publish()
         {
-            var receipt = Assert.Single(Cache.Publish(MainSha, ArtifactsPath, [Project]).Projects);
+            var receipt = Assert.Single(Cache.Publish(MainSha, ArtifactsPath, [Project], new("fixture-v1")).Projects);
             Assert.Equal("published", receipt.Status);
         }
 

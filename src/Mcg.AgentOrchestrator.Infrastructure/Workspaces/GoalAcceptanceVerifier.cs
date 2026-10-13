@@ -2725,7 +2725,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             cancellationToken).ConfigureAwait(false);
         if (!buildRun.Run.Result.Passed)
         {
-            return (BuildPhaseFailureResult(check, buildRun.Run.Result), buildRun.Run.Retried);
+            return (AcceptanceDotnetBuildPhase.FailureResult(check, buildRun.Run.Result,
+                IsCaptureLimitFailureName(buildRun.Run.Result.Name)), buildRun.Run.Retried);
         }
 
         var testRun = await RunManagedMtpExecutableCheckAsync(
@@ -2900,7 +2901,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 cancellationToken).ConfigureAwait(false);
         if (!buildRun.Run.Result.Passed)
         {
-            return (BuildPhaseFailureResult(check, buildRun.Run.Result), buildRun.Run.Retried);
+            return (AcceptanceDotnetBuildPhase.FailureResult(check, buildRun.Run.Result,
+                IsCaptureLimitFailureName(buildRun.Run.Result.Name)), buildRun.Run.Retried);
         }
 
         var testRun = await RunManagedDotnetCheckAsync(
@@ -2930,23 +2932,6 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }, buildRun.Run.Retried || testRun.Retried);
     }
 
-    private static AcceptanceCheckResult BuildPhaseFailureResult(
-        AcceptanceManifestCheck check, AcceptanceCheckResult buildResult)
-    {
-        var timedOut = buildResult.CompletionDecision?.TimedOut == true &&
-            !IsCaptureLimitFailureName(buildResult.Name);
-        return buildResult with
-        {
-            Name = check.Name,
-            FailureClassification = timedOut
-                ? AcceptanceFailureClassifications.BuildPhaseTimeout
-                : buildResult.FailureClassification,
-            ResultSummary = AcceptanceDotnetBuildPhase.PrefixResultSummary(
-                timedOut ? "build phase timed out (build-phase budget)" : "build phase failed",
-                buildResult.ResultSummary)
-        };
-    }
-
     private Task<DotnetTestBuildPhaseResult> EnsureDotnetTestBuildPhaseAsync(
         DotnetTestBuildPhase phase,
         AcceptanceManifestCheck check,
@@ -2963,7 +2948,15 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 commandTimeout: EngineSettings.ResolveBuildPhaseTimeout(check.TimeoutMinutes)),
             name => ResolveExecutionEnvironment(goalId, name, stableSlotIndex, stableSlotLease),
             AcceptanceArtifactFileNames.Slug,
-            () => _testOverrides.BaseBuildCacheForTests ?? DotnetBaseBuildCache.Default(_storageRoot)));
+            () => _testOverrides.BaseBuildCacheForTests ?? DotnetBaseBuildCache.Default(_storageRoot),
+            (candidate, environment) => DotnetBaseBuildCacheIdentityResolver.ResolveForBuildPhaseAsync(
+                candidate, environment, worktreePath, ConfigureHermeticVerificationEnvironment,
+                () => stableSlotLease?.IsExecutionLockHeld == true
+                    ? null : AcquireCheckPermit(environment, goalId, wait: false, cancellationToken),
+                arguments => RunLaneTestHostWithShardPermitAsync(arguments, worktreePath,
+                    EngineSettings.ResolveBuildPhaseTimeout(check.TimeoutMinutes),
+                    CreateGateHeartbeatContext(check, arguments, worktreePath, goalId, stableSlotIndex, environment),
+                    cancellationToken), _testOverrides.ResolveBaseBuildIdentityForTests)));
 
     private DotnetBuildEnvironmentLease AcquireCheckPermit(DotnetBuildEnvironment environment, GoalId? goalId, bool wait, CancellationToken ct) =>
         wait ? StructuralCoveragePermitWait.Acquire(environment, goalId, _storageRoot, _testOverrides, EmitGateProgress,

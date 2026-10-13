@@ -1,7 +1,6 @@
-using System.Reflection;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-// Parallel-safe: pure planner inputs and read-only reflection; no ambient state changes.
+// Parallel-safe: pure planner inputs and read-only topology; no ambient state changes.
 public sealed class AcceptancePolicyShardPlannerTestsNestedProjectMapping
 {
     private const string AcceptanceProbePath =
@@ -77,11 +76,7 @@ public sealed class AcceptancePolicyShardPlannerTestsNestedProjectMapping
     [Fact]
     public void ProjectMappings_DependencyTableKeys_HaveExactlyOneDeclaredRow()
     {
-        var field = typeof(AcceptancePolicyShardPlanner).GetField(
-            "ReferencingProjectsByProject", BindingFlags.NonPublic | BindingFlags.Static);
-        Assert.NotNull(field);
-        var table = Assert.IsAssignableFrom<IReadOnlyDictionary<string, string[]>>(
-            field.GetValue(null));
+        var table = AcceptancePolicyShardPlanner.ProjectTopology;
         Assert.NotEmpty(table);
 
         var declaredProjects = ProjectMappings.Select(row => (string)row[0]).ToArray();

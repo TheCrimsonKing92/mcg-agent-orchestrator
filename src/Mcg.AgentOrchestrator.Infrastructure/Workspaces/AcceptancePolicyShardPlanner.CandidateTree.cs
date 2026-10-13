@@ -30,8 +30,8 @@ internal static partial class AcceptancePolicyShardPlanner
         }
         // Include manifest projects even outside the dependency closure: force-full and
         // focused manifest checks must obey the same absence rule as scoped selections.
-        var projects = ReferencingProjectsByProject.Keys.Concat(
-            ReferencingProjectsByProject.Values.SelectMany(projects => projects))
+        var projects = ProjectTopology.Keys.Concat(
+            ProjectTopology.Values.SelectMany(entry => entry.ReferencingProjects))
             .Concat(testProjects ?? [])
             .Select(project => NormalizePath(project)!)
             .Where(project => project.StartsWith("tests/", StringComparison.OrdinalIgnoreCase) &&
