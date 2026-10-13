@@ -19,8 +19,17 @@ public sealed class PortfolioStoreTestsVersionedSetup : IDisposable
         var newSchema = Schema(current);
 
         var additions = newSchema.Where(row => oldSchema.All(old => old.Name != row.Name)).ToArray();
+        // SQLite names implicit constraint indexes itself; verify their ownership rather than their names.
+        var addedTables = additions.Where(row => row.Type == "table").Select(row => row.Name).ToArray();
+        Assert.All(additions.Where(row => row.Sql is null), row =>
+        {
+            Assert.Equal("index", row.Type);
+            Assert.Contains(row.Table, addedTables);
+        });
         Assert.Equal(new[] { "idx_epic_decisions_epic", "idx_epic_plan_items_epic", "ux_epic_plan_items_slice",
-            "epic_decisions", "epic_plan_items", "sqlite_sequence", StoreSchemaVersions.TableName }, additions.Select(row => row.Name).ToArray());
+            "epic_decisions", "epic_outcome_applied_requests", "epic_outcome_observations", "epic_outcome_revisions",
+            "epic_plan_items", "sqlite_sequence", StoreSchemaVersions.TableName },
+            additions.Where(row => row.Sql is not null).Select(row => row.Name).ToArray());
         Assert.Equal(oldSchema.Where(row => row.Name != "epics").ToArray(),
             newSchema.Where(row => oldSchema.Any(old => old.Name == row.Name) && row.Name != "epics").ToArray());
         foreach (var table in oldSchema.Where(row => row.Type == "table"))

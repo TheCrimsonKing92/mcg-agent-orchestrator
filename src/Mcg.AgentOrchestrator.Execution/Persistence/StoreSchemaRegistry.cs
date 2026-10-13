@@ -15,7 +15,7 @@ public static class StoreSchemaRegistry
     private const string Comms = "src/Mcg.AgentOrchestrator.Infrastructure.OperatorComms/";
 
     public static StoreSchemaEntry Portfolio { get; } =
-        new("portfolio", Persistence + "PortfolioStore.cs", "portfolio.db", "portfolio", 2);
+        new("portfolio", Persistence + "PortfolioStore.cs", "portfolio.db", "portfolio", 3);
 
     public static StoreSchemaEntry Experiments { get; } =
         new("experiments", Persistence + "ExperimentStore.cs", "experiments.db", "experiment", 1);

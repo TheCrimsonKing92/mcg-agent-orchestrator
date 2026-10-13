@@ -22,6 +22,7 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteNoWriterEffects : CliTa
             ["lane-reuse-shadow"] = [["lane-reuse-shadow"]],
             ["remote-executors"] = [["remote-executors"]],
             ["round-value"] = [["round-value"]],
+            ["epic-outcome-proposals"] = [["epic-outcome-proposals"], ["epic-outcome-proposals", "--json"]],
             ["architecture"] = [["architecture"]],
             ["config"] = [["config", "agents"], ["config", "profiles"], ["config", "policy"], ["config", "doctor"]],
             ["model-outcomes"] = [["model-outcomes"]],

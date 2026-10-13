@@ -15,6 +15,7 @@ internal static class CliCommandCapabilities
         "lane-reuse-shadow",
         "remote-executors",
         "round-value",
+        "epic-outcome-proposals",
         "architecture", "config", "model-outcomes",
         "backlog-list", "backlog-show", "backlog-similar", "goal-events", "timeline",
         "owner-digest", "context-usage", "next", "readiness"

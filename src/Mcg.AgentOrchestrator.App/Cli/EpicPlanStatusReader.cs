@@ -24,20 +24,26 @@ internal sealed record EpicPlanItemStatus(EpicPlanItem Item, EpicPlanSliceStatus
         + (string.IsNullOrWhiteSpace(Detail) ? string.Empty : $" ({Detail})");
 }
 
-internal sealed record EpicPlanView(EpicPlan Plan, IReadOnlyList<EpicPlanItemStatus> Items, IReadOnlyList<PortfolioEpicMember> UnplannedMembers);
+internal sealed record EpicPlanView(EpicPlan Plan, IReadOnlyList<EpicPlanItemStatus> Items, IReadOnlyList<PortfolioEpicMember> UnplannedMembers,
+    EpicOutcomeProjection? Outcome = null, IReadOnlyList<PortfolioEpicMember>? UnplannedActiveMembers = null)
+{
+    internal EpicOutcomeProjection OutcomeProgress => Outcome ?? EpicOutcomeProjection.Unevaluated;
+}
 
 // Slice statuses are projections of backlog/goal state, never values written to portfolio.db.
 internal static class EpicPlanStatusReader
 {
     internal static IReadOnlyDictionary<string, EpicPlanView> Load(OrchestratorWorkspace workspace,
-        IReadOnlyList<PortfolioEpic> epics, bool includeReasons = false)
+        IReadOnlyList<PortfolioEpic> epics, bool includeReasons = false,
+        IReadOnlyList<BacklogItem>? backlogSnapshot = null, IReadOnlyList<GoalSummary>? goalSnapshot = null,
+        IReadOnlyList<PortfolioEpicMember>? memberSnapshot = null)
     {
         if (epics.Count == 0) return new Dictionary<string, EpicPlanView>();
         var planStore = EpicPlanStore.OpenReadOnly(workspace.PortfolioStorePath);
         var plans = epics.Select(epic => planStore.LoadAsync(epic.Id).GetAwaiter().GetResult()).ToArray();
         var portfolio = PortfolioStore.OpenReadOnly(workspace.PortfolioStorePath);
-        var backlog = BoardFillBacklogSnapshot.Read(workspace.BacklogStorePath).ToDictionary(item => item.Id, StringComparer.Ordinal);
-        var goals = EpicProgressReadModel.LoadGoalMetadata(workspace).ToDictionary(goal => goal.Id, StringComparer.Ordinal);
+        var backlog = (backlogSnapshot ?? BoardFillBacklogSnapshot.Read(workspace.BacklogStorePath)).ToDictionary(item => item.Id, StringComparer.Ordinal);
+        var goals = (goalSnapshot ?? EpicProgressReadModel.LoadGoalMetadata(workspace)).ToDictionary(goal => goal.Id, StringComparer.Ordinal);
         var claims = EpicPlanGoalClaimSnapshot.Read(workspace.SqliteStatePath);
         var reasons = new Dictionary<string, string>(StringComparer.Ordinal);
         if (includeReasons && File.Exists(workspace.SqliteStatePath))
@@ -68,11 +74,17 @@ internal static class EpicPlanStatusReader
         {
             var plannedBacklog = plan.Items.Where(item => item.Kind == EpicPlanItemKind.Slice)
                 .Select(item => item.BacklogItemId!).ToHashSet(StringComparer.Ordinal);
-            var unplanned = portfolio.ListEpicMembersAsync(plan.EpicId).GetAwaiter().GetResult().Where(member =>
+            var members = memberSnapshot?.Where(member => member.EpicId == plan.EpicId).ToArray() ??
+                portfolio.ListEpicMembersAsync(plan.EpicId).GetAwaiter().GetResult();
+            var unplanned = members.Where(member =>
                 member.Kind == PortfolioMemberKind.BacklogItem ? !plannedBacklog.Contains(member.MemberId) :
                 !(claims.ByGoal.TryGetValue(member.MemberId, out var id) && plannedBacklog.Contains(id)) &&
                 !claims.Persisted.Any(pair => pair.Value.OwnerGoalId == member.MemberId && plannedBacklog.Contains(pair.Key))).ToArray();
-            return new EpicPlanView(plan, Compute(plan, backlog, goals, claims, reasons), unplanned);
+            return new EpicPlanView(plan, Compute(plan, backlog, goals, claims, reasons), unplanned,
+                EpicOutcomeEvaluator.Evaluate(plan.Outcome, EpicOutcomeReceipts.Problem),
+                unplanned.Where(member => member.Kind == PortfolioMemberKind.Goal
+                    ? !goals.TryGetValue(member.MemberId, out var goal) || goal.Status is not ("Completed" or "Cancelled" or "Superseded")
+                    : !backlog.TryGetValue(member.MemberId, out var item) || item.Status is not (BacklogItemStatus.Done or BacklogItemStatus.Superseded)).ToArray());
         }, StringComparer.Ordinal);
     }
 

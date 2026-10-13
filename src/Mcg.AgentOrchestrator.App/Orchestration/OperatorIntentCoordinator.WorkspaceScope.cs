@@ -20,6 +20,7 @@ internal sealed partial class OperatorIntentCoordinator
     internal OperatorLessonIntentServices? Lessons { get; init; }
     internal ExperimentFlagIntentHandler? ExperimentFlags { get; init; }
     internal ExperimentDecideIntentHandler? ExperimentDecisions { get; init; }
+    internal EpicOutcomeIntentHandler? EpicOutcomes { get; init; }
 
     public IReadOnlyList<string> ExecuteWorkspacePending(AgentOrchestratorKernel kernel)
     {
@@ -44,6 +45,8 @@ internal sealed partial class OperatorIntentCoordinator
                     OperatorIntentVerbs.ExperimentRevertFlag => (ExperimentFlags ?? throw new InvalidOperationException("Experiment intent services are unavailable.")).Revert(intent),
                     OperatorIntentVerbs.ExperimentToggleFlag => (ExperimentFlags ?? throw new InvalidOperationException("Experiment intent services are unavailable.")).Toggle(intent),
                     OperatorIntentVerbs.ExperimentDecide => (ExperimentDecisions ?? throw new InvalidOperationException("Experiment intent services are unavailable.")).Apply(intent),
+                    OperatorIntentVerbs.EpicOutcomeDefine or OperatorIntentVerbs.EpicOutcomeRecord =>
+                        (EpicOutcomes ?? throw new InvalidOperationException("Epic outcome intent services are unavailable.")).Apply(intent),
                     _ => throw new OperatorLessonRejectedException($"unsupported-workspace-verb {intent.Verb}")
                 };
             }
@@ -56,7 +59,7 @@ internal sealed partial class OperatorIntentCoordinator
                 continue;
             }
             _store.CompleteAsync(intent.Id, ClaimOwner, OperatorIntentStatus.Applied,
-                intent.Verb is OperatorIntentVerbs.ExperimentApplyFlag or OperatorIntentVerbs.ExperimentRevertFlag or OperatorIntentVerbs.ExperimentToggleFlag
+                intent.Verb is OperatorIntentVerbs.ExperimentApplyFlag or OperatorIntentVerbs.ExperimentRevertFlag or OperatorIntentVerbs.ExperimentToggleFlag or OperatorIntentVerbs.EpicOutcomeDefine or OperatorIntentVerbs.EpicOutcomeRecord
                     ? $"Applied {intent.Verb}; tier=Mutate; replayed={replayed}."
                     : replayed ? $"Applied; recovered lesson intent {intent.Id}." : $"Applied {intent.Verb}.",
                 _utcNow()).GetAwaiter().GetResult();
