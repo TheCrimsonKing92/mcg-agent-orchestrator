@@ -1583,15 +1583,10 @@ public static partial class WorkerProfileDispatcher
     }
 
     internal static string ResolveEffectiveSubscriptionModelName(
-        AgentDefinition agent, SubscriptionModelSelection selection, string? dispatchProviderName = null)
-    {
-        var modelName = selection.UsesSubscriptionLaunchProfile
-            ? agent.Subscription?.ModelAlias ?? selection.Model.ModelName
-            : selection.Model.ModelName;
-        var providerName = dispatchProviderName ?? ResolveDispatchProviderName(
-            selection.Model.ProviderName, ResolveSubscriptionProfileName(agent, selection), null);
-        return EffectiveModelAssignment.Normalize(providerName, modelName);
-    }
+        AgentDefinition agent, SubscriptionModelSelection selection, string? dispatchProviderName = null) =>
+        WorkerSubscriptionModelResolver.ResolveEffectiveSubscriptionModelName(
+            agent, selection, dispatchProviderName ?? ResolveDispatchProviderName(
+                selection.Model.ProviderName, ResolveSubscriptionProfileName(agent, selection), null));
 
     private static string? ResolveEffectiveSubscriptionReasoningEffort(AgentDefinition agent, SubscriptionModelSelection selection)
     {
