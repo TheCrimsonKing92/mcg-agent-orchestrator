@@ -13,6 +13,81 @@ using System.Text.Json;
 [Xunit.Collection("IsolatedProcessSpawning")]
 public sealed class WorkerDispatchTestsModelSelection : WorkerDispatchTestSupport
 {
+    [Xunit.Theory]
+    [Xunit.InlineData("OpenAI", "custom-profile", "GpT-6-SoL", "none", "gpt-6.1-sol")]
+    [Xunit.InlineData("OpenAI", "custom-profile", "gpt-6-sol", "model", "gpt-6.1-sol")]
+    [Xunit.InlineData("Anthropic", "codex-cli", "GPT-6-SOL", "model", "gpt-6.1-sol")]
+    [Xunit.InlineData("OpenAI", "claude-cli", "gpt-6-sol", "model", "gpt-6-sol")]
+    [Xunit.InlineData("Anthropic", "codex-cli", "gpt-6-sol", "profile", "gpt-6.1-sol")]
+    [Xunit.InlineData("OpenAI", "claude-cli", "gpt-6-sol", "profile", "gpt-6-sol")]
+    [Xunit.InlineData("Anthropic", "custom-profile", "gpt-6-sol", "none", "gpt-6-sol")]
+    [Xunit.InlineData("OpenAI", "custom-profile", "gpt-6-luna", "none", "gpt-6-luna")]
+    [Xunit.InlineData("OpenAI", "custom-profile", "gpt-6-astra", "model", "gpt-6-astra")]
+    [Xunit.InlineData("OpenAI", "custom-profile", "custom-gpt-6-sol", "model", "custom-gpt-6-sol")]
+    public void RetirementKeepsPreflightTemplatesCommandAndMetadataConsistent(
+        string provider, string profileName, string alias, string overrideKind, string expected)
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Plan a small change.", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Plan a small change", [task]);
+        var agent = new AgentDefinition(new AgentId("custom-planner"), "Planner", AgentRole.Planner,
+            new ModelProfile(provider, alias, ModelCapability.Text, SubscriptionMode.ApiKey, "low", 123),
+            ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+            Subscription: new SubscriptionLaunchProfile(overrideKind == "none" ? profileName : "custom-agent-profile", alias, "low"),
+            IsProviderRoutingConstrained: true);
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var profiles = new WorkerProfileCatalog([
+            new WorkerProfile(profileName, "worker --model {subscriptionModelName} --api-model {apiModelName} --reasoning {subscriptionReasoningEffort} --prompt {promptPath}")]);
+        var modelOverride = overrideKind == "none" ? null : new DispatchModelOverride(profileName, overrideKind == "model" ? alias : null, "low");
+        var sandbox = new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
+        var at = DateTimeOffset.Parse("2026-10-12T12:00:00Z");
+        var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(goal, task, [agent], profiles, root, at, modelOverride,
+            sandboxOptions: sandbox, commandExists: _ => true, claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli);
+        WorkerProfileDispatcher.PrepareSubscriptionTask(kernel, goal, task, [agent], profiles,
+            Path.Combine(root, "prompts"), root, at, modelOverride,
+            sandboxOptions: sandbox, commandExists: _ => true, claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli);
+
+        var dispatch = task.LastDispatch!;
+        Assert.Equal(expected, dispatch.ModelName);
+        Assert.Equal("low", dispatch.ReasoningEffort);
+        Assert.Contains($"model: {dispatch.ProviderName}/{expected}", preflight.Findings);
+        Assert.Contains($"--model '{expected}'", dispatch.Command, StringComparison.Ordinal);
+        var apiModel = provider == "OpenAI" && alias.Equals("gpt-6-sol", StringComparison.OrdinalIgnoreCase) ? "gpt-6.1-sol" : alias;
+        Assert.Contains($"--api-model '{apiModel}'", dispatch.Command, StringComparison.Ordinal);
+        Assert.Contains($"Model fit: {dispatch.ProviderName}/{expected}", File.ReadAllText(dispatch.PromptPath!), StringComparison.Ordinal);
+        Assert.Equal(alias, agent.Model.ModelName);
+        Assert.Equal(alias, agent.Subscription!.ModelAlias);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("routine-alias", "routine-alias")]
+    [Xunit.InlineData(null, "gpt-6.1-sol")]
+    public void RetirementNormalizesComplexInMemorySelectionInReadyBatch(string? subscriptionAlias, string expectedSubscription)
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Build an end-to-end distributed integration with horizontal scaling.", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Build an end-to-end distributed integration with horizontal scaling", [task]);
+        var agent = new AgentDefinition(new AgentId("complex-planner"), "Planner", AgentRole.Planner,
+            new ModelProfile("OpenAI", "api-routine", ModelCapability.Text, SubscriptionMode.ApiKey, "low"),
+            ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+            Subscription: new SubscriptionLaunchProfile("custom-profile", subscriptionAlias, "low"),
+            ComplexModel: new ModelProfile("OpenAI", "GPT-6-SOL", ModelCapability.Text, SubscriptionMode.ApiKey, "high"),
+            IsProviderRoutingConstrained: true);
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var profiles = new WorkerProfileCatalog([
+            new WorkerProfile("custom-profile", "worker --model {subscriptionModelName} --api-model {apiModelName} --reasoning {subscriptionReasoningEffort} --prompt {promptPath}")]);
+        WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(kernel, goal, [agent], profiles,
+            Path.Combine(root, "prompts"), root, DateTimeOffset.UtcNow,
+            sandboxOptions: new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget),
+            commandExists: _ => true, claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli);
+        Assert.True(task.LastDispatch!.UsesComplexModel);
+        Assert.Equal(expectedSubscription, task.LastDispatch.ModelName);
+        Assert.Contains($"--model '{expectedSubscription}' --api-model 'gpt-6.1-sol'", task.LastDispatch.Command, StringComparison.Ordinal);
+        Assert.Equal("GPT-6-SOL", agent.ComplexModel!.ModelName);
+    }
+
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_falls_back_and_persists_when_assigned_agent_is_missing")]
     public void WorkerProfileDispatcherFallsBackAndPersistsWhenAssignedAgentIsMissing()
     {

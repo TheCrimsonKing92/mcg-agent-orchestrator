@@ -14,6 +14,47 @@ using System.Text.Json;
 
 public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestSupport
 {
+    [Xunit.Theory]
+    [Xunit.InlineData("unclaimed", true)]
+    [Xunit.InlineData("claimed", false)]
+    [Xunit.InlineData("started", false)]
+    public void RetirementRefreshesOnlyUnclaimedPreparedReservation(string phase, bool expectedRefresh)
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Plan a small change.", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Plan a small change", [task]);
+        var agent = SubscriptionPlannerAgent("planner", "Planner");
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var at = DateTimeOffset.UtcNow;
+        var fingerprint = RetryContextFingerprintBuilder.Build(new RetryContextFingerprintInput(
+            goal.Id.Value, task.Id.Value, AgentRole.Planner, "OpenAI", "gpt-6-sol",
+            PaidRouteClassification.Paid, "candidate", "criteria", [], [], [], [], "base", "main"));
+        var dispatch = new TaskDispatchRecord("codex-cli", "codex exec --model gpt-6-sol", "worktree", at,
+            ProviderName: "OpenAI", ModelName: "gpt-6-sol", RetryContextFingerprint: fingerprint,
+            PaidRoute: PaidRouteClassification.Paid, AssignedAgentId: agent.Id.Value);
+        kernel.RecordTaskDispatch(goal.Id, task.Id, dispatch);
+        kernel.RecordPreparedRetryAdmission(goal.Id, task.Id, fingerprint, PaidRouteClassification.Paid,
+            at, reservationOwnerId: "owner", reservationLeaseExpiresAt: at.AddMinutes(1));
+        if (phase != "unclaimed")
+        {
+            var claimed = RetryAdmissionSnapshotStartClaim.Apply(kernel.ExportGoalSnapshot(goal.Id), task.Id, at, "owner", at);
+            Assert.True(claimed.Claimed);
+            kernel.ReplaceGoalWithSnapshot(claimed.Snapshot);
+            if (phase == "started")
+            {
+                var confirmed = RetryAdmissionSnapshotStartConfirmation.Apply(claimed.Snapshot, task.Id, at, "owner", at);
+                Assert.True(confirmed.Claimed);
+                kernel.ReplaceGoalWithSnapshot(confirmed.Snapshot);
+            }
+        }
+        task = kernel.GetTask(goal.Id, task.Id);
+        var receipt = Assert.Single(task.RetryAdmissionHistory);
+        Assert.Equal(expectedRefresh, new GoalDispatchOperations().ShouldRefreshPreparedDispatchBeforeStart(task, true));
+        Assert.False(new GoalDispatchOperations().ShouldRefreshPreparedDispatchBeforeStart(task, false));
+        Assert.Equal(dispatch, task.LastDispatch);
+        Assert.Equal(receipt, Assert.Single(task.RetryAdmissionHistory));
+    }
+
     private static readonly WorkerSandboxOptions DisabledSandbox = new(
         Enabled: false,
         WorkerSandboxOptions.DefaultAccount,

@@ -142,9 +142,13 @@ public sealed class TesterCascadeDispatchTests : WorkerDispatchTestSupport
     }
 
     [Theory]
-    [InlineData(false, "gpt-6-luna")]
-    [InlineData(true, "gpt-6-sol")]
-    public void PolicyFile_ControlsSingleTaskBatchAndRefresh(bool enabled, string alias)
+    [InlineData(false, "gpt-6-luna", "gpt-6.1-sol")]
+    [InlineData(true, "gpt-6-sol", "gpt-6.1-sol")]
+    [InlineData(true, "GPT-6-SOL", "gpt-6.1-sol")]
+    [InlineData(true, "gpt-6-luna", "gpt-6-luna")]
+    [InlineData(true, "gpt-6-astra", "gpt-6-astra")]
+    [InlineData(true, "custom-sol", "custom-sol")]
+    public void PolicyFile_ControlsSingleTaskBatchAndRefresh(bool enabled, string alias, string effectiveAlias)
     {
         using var f = new Fixture();
         Directory.CreateDirectory(f.Workspace.OrchestratorDirectory);
@@ -153,16 +157,20 @@ public sealed class TesterCascadeDispatchTests : WorkerDispatchTestSupport
         File.WriteAllText(Path.Combine(f.Workspace.OrchestratorDirectory, "conductor-policy.json"), policy);
         var operations = new GoalDispatchOperations();
         operations.SubscriptionDispatchTask(f.Kernel, f.Workspace, f.Goal, f.Task, f.Agents, WorkerProfileCatalog.Default());
-        AssertRoute(f.Task, enabled ? "cheap" : "primary", enabled ? "tester-cheap-first" : "switched-off", alias);
+        AssertRoute(f.Task, enabled ? "cheap" : "primary", enabled ? "tester-cheap-first" : "switched-off", effectiveAlias);
         Assert.StartsWith("provider-constrained: Tester remains on OpenAI", f.Task.LastDispatch!.ModelSelectionReason);
         operations.RefreshPreparedDispatchBeforeStart(f.Kernel, f.Workspace, f.Goal, f.Task, f.Agents,
             WorkerProfileCatalog.Default(), sandboxOptions: Sandbox);
-        AssertRoute(f.Task, enabled ? "cheap" : "primary", enabled ? "tester-cheap-first" : "switched-off", alias);
+        AssertRoute(f.Task, enabled ? "cheap" : "primary", enabled ? "tester-cheap-first" : "switched-off", effectiveAlias);
         f.Fail("Prepare batch next.");
         f.Retry();
         Assert.Single(operations.SubscriptionDispatchReadyTasks(f.Kernel, f.Workspace, f.Goal, f.Agents,
             WorkerProfileCatalog.Default(), sandboxOptions: Sandbox));
-        AssertRoute(f.Task, enabled ? "cheap" : "primary", enabled ? "tester-cheap-first" : "switched-off", alias);
+        AssertRoute(f.Task, enabled ? "cheap" : "primary", enabled ? "tester-cheap-first" : "switched-off", effectiveAlias);
+        Assert.Contains($"--model '{effectiveAlias}'", f.Task.LastDispatch!.Command, StringComparison.Ordinal);
+        var preflightPath = Path.Combine(f.WorkingDirectory, ".orchestrator-context", f.Goal.Id.Value, "subscription-preflight.md");
+        Assert.Contains($"model: OpenAI/{effectiveAlias}", File.ReadAllText(preflightPath), StringComparison.Ordinal);
+        Assert.Equal(policy, File.ReadAllText(Path.Combine(f.Workspace.OrchestratorDirectory, "conductor-policy.json")));
     }
 
     [Fact]
@@ -175,7 +183,9 @@ public sealed class TesterCascadeDispatchTests : WorkerDispatchTestSupport
         var operations = new GoalDispatchOperations();
         operations.SubscriptionDispatchTask(f.Kernel, f.Workspace, f.Goal, f.Task, f.Agents,
             WorkerProfileCatalog.Default(), conductorPolicy: on);
-        AssertRoute(f.Task, "cheap", "tester-cheap-first", "gpt-6-sol");
+        AssertRoute(f.Task, "cheap", "tester-cheap-first", "gpt-6.1-sol");
+        Assert.Contains("--model 'gpt-6.1-sol'", f.Task.LastDispatch!.Command, StringComparison.Ordinal);
+        Assert.Equal("gpt-6-sol", on.CascadeCheapModelAlias);
         operations.RefreshPreparedDispatchBeforeStart(f.Kernel, f.Workspace, f.Goal, f.Task, f.Agents,
             WorkerProfileCatalog.Default(), sandboxOptions: Sandbox, conductorPolicy: on,
             cascadeTesterCheapFirst: false, cascadeCheapModelAlias: "gpt-6-luna");

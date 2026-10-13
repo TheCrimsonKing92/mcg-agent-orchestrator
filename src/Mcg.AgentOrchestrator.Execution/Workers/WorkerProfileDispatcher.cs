@@ -508,19 +508,18 @@ public static partial class WorkerProfileDispatcher
         var profile = modelOverride?.ProfileName is { Length: > 0 } overrideProfile
             ? profiles.GetRequired(overrideProfile)
             : ResolveSubscriptionProfile(agent, roleSelection, profiles);
+        var dispatchProviderName = ResolveDispatchProviderName(roleSelection.Model.ProviderName, profile.Name, modelOverride);
         var resolvedModelName = modelOverride?.ModelName is { Length: > 0 } overrideModel
-            ? overrideModel
-            : ResolveEffectiveSubscriptionModelName(agent, roleSelection);
+            ? EffectiveModelAssignment.Normalize(dispatchProviderName, overrideModel)
+            : ResolveEffectiveSubscriptionModelName(agent, roleSelection, dispatchProviderName);
         var resolvedReasoning = modelOverride?.ReasoningEffort is not null
             ? modelOverride.ReasoningEffort
             : ResolveEffectiveSubscriptionReasoningEffort(agent, roleSelection);
         var reasoningEffortReason = modelOverride?.ReasoningEffort is not null
             ? "override"
             : roleSelection.ReasoningEffortReason;
-        var dispatchProviderName = ResolveDispatchProviderName(roleSelection.Model.ProviderName, profile.Name, modelOverride);
         var variables = BuildSubscriptionTemplateVariables(agent, roleSelection);
-        if (modelOverride?.ModelName is { Length: > 0 })
-            variables["subscriptionModelName"] = resolvedModelName;
+        variables["subscriptionModelName"] = resolvedModelName;
         variables["subscriptionReasoningEffort"] = resolvedReasoning;
         variables["reasoningEffortSelectionReason"] = reasoningEffortReason;
         var preflight = PreflightSubscriptionTask(
@@ -614,10 +613,10 @@ public static partial class WorkerProfileDispatcher
             findings.Add($"model-selection: {roleSelection.Reason}");
             claudeCredentialSelection = WorkerSubscriptionPreflightFindings.AddClaudeLowIntegrityAuthFinding(
                 findings, task.RequiredRole, DefaultProviders.ResolveProfile(profile.Name), sandbox, claudeAuthProbe);
-            var effectiveModelName = modelOverride?.ModelName is { Length: > 0 } overrideModel
-                ? overrideModel
-                : ResolveEffectiveSubscriptionModelName(agent, roleSelection);
             var dispatchProviderName = ResolveDispatchProviderName(roleSelection.Model.ProviderName, profile.Name, modelOverride);
+            var effectiveModelName = modelOverride?.ModelName is { Length: > 0 } overrideModel
+                ? EffectiveModelAssignment.Normalize(dispatchProviderName, overrideModel)
+                : ResolveEffectiveSubscriptionModelName(agent, roleSelection, dispatchProviderName);
             findings.Add($"model: {dispatchProviderName}/{effectiveModelName}");
             findings.Add($"complexity: {roleSelection.Complexity}");
             AddDurableArtifactDependencyFindings(
@@ -1568,7 +1567,7 @@ public static partial class WorkerProfileDispatcher
         return new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
         {
             ["providerName"] = selection.Model.ProviderName,
-            ["apiModelName"] = selection.Model.ModelName,
+            ["apiModelName"] = EffectiveModelAssignment.Normalize(selection.Model.ProviderName, selection.Model.ModelName),
             ["apiReasoningEffort"] = selection.Model.ReasoningEffort,
             ["subscriptionModelName"] = ResolveEffectiveSubscriptionModelName(agent, selection),
             ["subscriptionReasoningEffort"] = ResolveEffectiveSubscriptionReasoningEffort(agent, selection),
@@ -1583,12 +1582,11 @@ public static partial class WorkerProfileDispatcher
         };
     }
 
-    internal static string ResolveEffectiveSubscriptionModelName(AgentDefinition agent, SubscriptionModelSelection selection)
-    {
-        return selection.UsesSubscriptionLaunchProfile
-            ? agent.Subscription?.ModelAlias ?? selection.Model.ModelName
-            : selection.Model.ModelName;
-    }
+    internal static string ResolveEffectiveSubscriptionModelName(
+        AgentDefinition agent, SubscriptionModelSelection selection, string? dispatchProviderName = null) =>
+        WorkerSubscriptionModelResolver.ResolveEffectiveSubscriptionModelName(
+            agent, selection, dispatchProviderName ?? ResolveDispatchProviderName(
+                selection.Model.ProviderName, ResolveSubscriptionProfileName(agent, selection), null));
 
     private static string? ResolveEffectiveSubscriptionReasoningEffort(AgentDefinition agent, SubscriptionModelSelection selection)
     {

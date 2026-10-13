@@ -31,7 +31,7 @@ public static class ModelFunctionCatalogStore
 
         if (catalog is not null)
         {
-            return catalog.Bindings.Count == 0 ? ModelFunctionCatalog.Empty : catalog;
+            return Normalize(catalog);
         }
 
         // Parse failure on existing file — try backup
@@ -44,7 +44,7 @@ public static class ModelFunctionCatalogStore
                 var bakCatalog = JsonSerializer.Deserialize<ModelFunctionCatalog>(File.ReadAllText(bak), _jsonOptions);
                 if (bakCatalog is not null)
                 {
-                    return bakCatalog.Bindings.Count == 0 ? ModelFunctionCatalog.Empty : bakCatalog;
+                    return Normalize(bakCatalog);
                 }
             }
             catch { }
@@ -57,6 +57,19 @@ public static class ModelFunctionCatalogStore
 
         return ModelFunctionCatalog.Empty;
     }
+
+    private static ModelFunctionCatalog Normalize(ModelFunctionCatalog catalog) =>
+        catalog.Bindings.Count == 0 ? ModelFunctionCatalog.Empty : new(catalog.Bindings.Select(binding => binding with
+        {
+            Model = binding.Model with
+            {
+                ModelName = EffectiveModelAssignment.Normalize(binding.Model.ProviderName, binding.Model.ModelName)
+            },
+            Subscription = binding.Subscription is null ? null : binding.Subscription with
+            {
+                ModelAlias = EffectiveModelAssignment.Normalize(binding.Model.ProviderName, binding.Subscription.ModelAlias)
+            }
+        }).ToArray());
 
     public static void Save(string path, ModelFunctionCatalog catalog)
     {

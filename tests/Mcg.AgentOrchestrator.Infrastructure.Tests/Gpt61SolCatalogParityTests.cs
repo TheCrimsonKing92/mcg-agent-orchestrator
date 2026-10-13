@@ -29,9 +29,14 @@ public sealed class Gpt61SolCatalogParityTests
     }
 
     [Theory]
-    [InlineData(AgentCatalog.OpenAiGpt61SolSubscriptionModelAlias, AgentCatalog.OpenAiGpt61SolSubscriptionModelAlias)]
-    [InlineData(AgentCatalog.StaleOpenAiCodexSubscriptionModelAlias, AgentCatalog.OpenAiGpt6SolSubscriptionModelAlias)]
-    public void LoadKeepsNewAliasAndRepairsOnlyStaleCodexAlias(string storedAlias, string expectedAlias)
+    [InlineData(AgentCatalog.OpenAiGpt61SolSubscriptionModelAlias, AgentCatalog.OpenAiGpt61SolSubscriptionModelAlias, "medium")]
+    [InlineData(AgentCatalog.StaleOpenAiCodexSubscriptionModelAlias, AgentCatalog.OpenAiGpt61SolSubscriptionModelAlias, "medium")]
+    [InlineData("GpT-6-SoL", AgentCatalog.OpenAiGpt61SolSubscriptionModelAlias, "medium")]
+    [InlineData("gpt-6-luna", "gpt-6-luna", "medium")]
+    [InlineData("gpt-6-astra", "gpt-6-astra", "medium")]
+    [InlineData("custom-gpt-6-sol", "custom-gpt-6-sol", "low")]
+    [InlineData(" gpt-6-sol", " gpt-6-sol", "low")]
+    public void LoadRetiresOldAliasAndRepairsStaleCodexAlias(string storedAlias, string expectedAlias, string expectedReasoning)
     {
         var path = Path.Combine(CreateTempDirectory(), "agents.json");
         AgentCatalogStore.Save(path, new AgentCatalog([
@@ -44,7 +49,7 @@ public sealed class Gpt61SolCatalogParityTests
 
         var subscription = AgentCatalogStore.Load(path).GetRequired(AgentRole.Developer).Subscription!;
         Assert.Equal(expectedAlias, subscription.ModelAlias);
-        Assert.Equal("medium", subscription.ReasoningEffort);
+        Assert.Equal(expectedReasoning, subscription.ReasoningEffort);
     }
 
 }
