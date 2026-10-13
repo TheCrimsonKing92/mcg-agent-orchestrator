@@ -15,13 +15,23 @@ public sealed class AcceptanceAttributionReplayRequestTests
     public void ActualModeMissingOrMalformedRequestFailsClosed(string? mode, string? request) =>
         Assert.Throws<InvalidOperationException>(() => AcceptanceAttributionReplayFixture.ValidateRequest(mode, request));
 
-    [Fact]
-    public void CopiedReplayPublishesBoundArtifactWithHistoricalAndFinalIdentities()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CopiedReplayPublishesBoundArtifactWithHistoricalAndFinalIdentities(bool historicalSummary)
     {
-        using var fixture = new CopiedFixture();
+        using var fixture = new CopiedFixture(historicalSummary);
         var receipt = AcceptanceAttributionReplayFixture.ReplayCopiedAttempt("actual-copy", fixture.RequestJson());
         Assert.Equal(1, receipt.FailureDecisions);
         Assert.True(receipt.NextGoalAdvanced);
+        Assert.Equal(historicalSummary ? 0 : 1, receipt.ProductFailureRecords);
+        Assert.Equal(historicalSummary
+            ? "landing-completion:Escalate:unmet-criteria-no-retry-task"
+            : "landing-completion:Hold:environmental-apparatus-hold", receipt.CompletionRoute);
+        if (historicalSummary)
+            Assert.IsType<Mcg.AgentOrchestrator.Core.Conductor.ConductorAdvanceOutcome.Escalated>(receipt.Outcome);
+        else
+            Assert.IsType<Mcg.AgentOrchestrator.Core.Conductor.ConductorAdvanceOutcome.Held>(receipt.Outcome);
         using var report = JsonDocument.Parse(File.ReadAllText(fixture.Request.ResultPath));
         var root = report.RootElement;
         Assert.Equal("actual-copy", root.GetProperty("replayKind").GetString());
@@ -32,6 +42,9 @@ public sealed class AcceptanceAttributionReplayRequestTests
         Assert.Equal(fixture.Input.OriginalTrx.Sha256, root.GetProperty("copiedReceipts").GetProperty("originalTrx").GetProperty("sha256").GetString());
         Assert.Equal(fixture.Request.Sources[0].Sha256, root.GetProperty("request").GetProperty("sources")[0].GetProperty("sha256").GetString());
         Assert.Equal(0, root.GetProperty("receipt").GetProperty("sourceReads").GetInt32());
+        Assert.Equal(1, root.GetProperty("receipt").GetProperty("failureDecisions").GetInt32());
+        Assert.Equal(receipt.CompletionRoute, root.GetProperty("receipt").GetProperty("completionRoute").GetString());
+        Assert.Equal(receipt.ProductFailureRecords, root.GetProperty("receipt").GetProperty("productFailureRecords").GetInt32());
         Assert.NotEqual(root.GetProperty("originalTrxRunId").GetString(), root.GetProperty("rerunTrxRunId").GetString());
     }
 
@@ -64,17 +77,26 @@ public sealed class AcceptanceAttributionReplayRequestTests
         internal AcceptanceAttributionReplayFixture.CopiedAttemptInput Input { get; }
         internal AcceptanceAttributionReplayFixture.ReplayRequest Request { get; set; }
         private readonly JsonSerializerOptions _options = new(JsonSerializerDefaults.Web) { Converters = { new JsonStringEnumConverter() } };
-        internal CopiedFixture()
+        internal CopiedFixture(bool historicalSummary = false)
         {
             Source.WriteSource("tests/A/A.cs", "class A {}");
-            var check = Source.CleanupCheck(2, 1, 0) with { TestResultRunOrdinal = 0 };
-            var rerun = Source.WriteTrx(0, 1, 0, "rerun");
+            var check = Source.CleanupCheck(historicalSummary ? 9532 : 2, historicalSummary ? 9529 : 1,
+                historicalSummary ? 3 : 0) with { TestResultRunOrdinal = 0 };
+            if (historicalSummary)
+                check = check with { FailureClassification = AcceptanceFailureClassifications.SharedGateApparatusInvalidated };
+            var rerun = Source.WriteTrx(0, historicalSummary ? 9529 : 1, historicalSummary ? 3 : 0, "rerun");
             var attempt = new ConductorParallelAcceptanceAttempt(ApparatusRedGateSourceIndexTests.Fixture.Attempt,
                 Source.Goal.Id.Value, "replay", 0, ApparatusRedGateSourceIndexTests.Fixture.Candidate,
                 ApparatusRedGateSourceIndexTests.Fixture.Main, Source.Now, Source.Now, 1,
                 ConductorParallelAcceptanceAttemptOutcome.Running, "", "", "", "", "", "", ScopePaths: ["src/Changed.cs"]);
+            // The historical aggregate is identityless and has no environmental classification.
+            // Keep that evidence intact rather than rewriting it to select the normalized hold route.
+            var summary = historicalSummary
+                ? Source.Summary(check, new AcceptanceCheckResult("infrastructure tests", false, 1, "aggregate failed",
+                    CoveredBy: [check.Name]))
+                : Source.Summary(check);
             var artifact = new ConductorParallelAcceptanceRunArtifact("accepted", null, null, null, null,
-                Source.Summary(check), attempt.BranchHeadSha, attempt.MainHeadSha, null, null);
+                summary, attempt.BranchHeadSha, attempt.MainHeadSha, null, null);
             var heartbeat = new GateHeartbeatSnapshot(attempt.GoalId, "tests", check.Name, 0, 1, 2, "completed",
                 Source.Now, Source.Now, Source.Now, 0, 0, 0, ExitCode: 2, RunId: attempt.AttemptId);
             Input = new(Source.Root, new string('a', 40), Write("attempt.json", attempt), Write("result.json", artifact),

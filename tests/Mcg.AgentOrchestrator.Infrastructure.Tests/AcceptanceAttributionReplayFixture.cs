@@ -26,7 +26,8 @@ internal static class AcceptanceAttributionReplayFixture
 
     internal sealed record Receipt(ConductorAdvanceOutcome Outcome, int FailureDecisions,
         bool NextGoalAdvanced, int SourceEnumerations, int SourceReads,
-        double AttributionMilliseconds, double CompletionMilliseconds, string? CandidateSha, string? MainSha);
+        double AttributionMilliseconds, double CompletionMilliseconds, string? CandidateSha, string? MainSha,
+        int ProductFailureRecords, bool SourceRequestCreated, string CompletionRoute);
 
     internal static ReplayRequest ValidateRequest(string? mode, string? requestJson)
     {
@@ -137,7 +138,7 @@ internal static class AcceptanceAttributionReplayFixture
         var receipt = Complete(isolatedGoal, summary, input.SourceRoot,
             Path.Combine(copyRoot, Guid.NewGuid().ToString("N") + ".census.jsonl"), attempt.ScopePaths ?? []);
         if (receipt.FailureDecisions != 1 || !receipt.NextGoalAdvanced || receipt.SourceEnumerations != 0 || receipt.SourceReads != 0 ||
-            receipt.Outcome is not ConductorAdvanceOutcome.Held)
+            receipt.Outcome is not (ConductorAdvanceOutcome.Held or ConductorAdvanceOutcome.Escalated))
             throw new InvalidOperationException("Replay completion did not retain its failed decision and bounded attribution.");
         // A passing test's console output is not retained. Publish a fresh, bounded artifact that
         // the helper validates and copies beside the retained TRX before clean-run cleanup.
@@ -159,6 +160,8 @@ internal static class AcceptanceAttributionReplayFixture
         var gate = new ApparatusRedGate(index, _ => finalCandidateSourceRoot,
             createSourceRequest: root => request = new(root));
         var failureDecisions = 0;
+        var productFailureRecords = 0;
+        string? recordedReason = null;
         var nextGoalAcceptanceRuns = 0;
         var (nextKernel, nextGoal) = ConductorDriverTests.SimpleGoal("isolated replay subsequent goal");
         ConductorDriverTests.PassVerification(nextKernel, nextGoal, nextGoal.Tasks.Single());
@@ -173,6 +176,13 @@ internal static class AcceptanceAttributionReplayFixture
             {
                 if (observed.Id != goal.Id || candidate != acceptance.BranchHeadSha || main != acceptance.MainHeadSha)
                     throw new InvalidOperationException("Replay completion lost its candidate identity.");
+                productFailureRecords++;
+            },
+            writeEscalation: (observed, state, reason) =>
+            {
+                if (observed.Id != goal.Id || state != GoalLifecycleState.Verified)
+                    throw new InvalidOperationException("Replay failed disposition lost its goal/state binding.");
+                recordedReason = reason;
                 failureDecisions++;
             },
             getLandingFileScopes: _ => changedPaths,
@@ -190,14 +200,32 @@ internal static class AcceptanceAttributionReplayFixture
         var result = driver.CompleteParallelLandingAcceptance(candidate, ConductorAutonomyPolicy.Conservative,
             acceptance, out var leaseHeld);
         completionClock.Stop();
-        if (leaseHeld || failureDecisions != 1 || request is null)
-            throw new InvalidOperationException("Replay did not reach exactly one completion disposition.");
-        if (reading.SourceReadCount != request.ReadCount || reading.SourceEnumerationCount != request.EnumerationCount)
+        var (decision, outcomeReason) = result.Outcome switch
+        {
+            ConductorAdvanceOutcome.Held held => (held.Decision, held.Reason),
+            ConductorAdvanceOutcome.Escalated escalated => (escalated.Decision, escalated.Reason),
+            _ => ((PolicyDecisionRecord?)null, (string?)null)
+        };
+        var route = $"{decision?.Stage ?? "none"}:{decision?.Action ?? "none"}:{decision?.DiscriminatingEvidence ?? "none"}";
+        var candidateBound = decision?.Facts.Any(fact =>
+            fact.Name is "branchSha" or "branchHeadSha" && fact.Value == acceptance.BranchHeadSha) == true &&
+            decision.Facts.Any(fact => fact.Name is "mainSha" or "mainHeadSha" && fact.Value == acceptance.MainHeadSha);
+        // The product-failure callback and the failed completion disposition are different records.
+        // An infrastructure/criteria escalation need not persist a product acceptance failure.
+        // A request may also remain absent on a path that never needs source attribution.
+        if (acceptance.Passed || leaseHeld || failureDecisions != 1 || productFailureRecords > 1 ||
+            !candidateBound || recordedReason != outcomeReason || result.GoalId != goal.Id.Value)
+            throw new InvalidOperationException($"Replay did not reach exactly one failed completion disposition: " +
+                $"leaseHeld={leaseHeld}; failureDecisions={failureDecisions}; productFailureRecords={productFailureRecords}; " +
+                $"sourceRequestCreated={request is not null}; acceptancePassed={acceptance.Passed}; " +
+                $"candidateBound={candidateBound}; outcome={result.Outcome.GetType().Name}; route={route}.");
+        if (reading.SourceReadCount != (request?.ReadCount ?? 0) || reading.SourceEnumerationCount != (request?.EnumerationCount ?? 0))
             throw new InvalidOperationException("Replay attribution and completion source counts differ.");
         var next = driver.AdvanceOnce(nextGoal, ConductorAutonomyPolicy.Conservative);
         return new(result.Outcome, failureDecisions,
             nextGoalAcceptanceRuns == 1 && next.Outcome is ConductorAdvanceOutcome.Executed,
-            request.EnumerationCount, request.ReadCount, attributionClock.Elapsed.TotalMilliseconds,
-            completionClock.Elapsed.TotalMilliseconds, acceptance.BranchHeadSha, acceptance.MainHeadSha);
+            request?.EnumerationCount ?? 0, request?.ReadCount ?? 0, attributionClock.Elapsed.TotalMilliseconds,
+            completionClock.Elapsed.TotalMilliseconds, acceptance.BranchHeadSha, acceptance.MainHeadSha,
+            productFailureRecords, request is not null, route);
     }
 }

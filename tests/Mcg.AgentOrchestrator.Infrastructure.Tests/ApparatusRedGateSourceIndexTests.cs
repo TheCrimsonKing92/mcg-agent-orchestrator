@@ -103,6 +103,7 @@ public sealed class ApparatusRedGateSourceIndexTests
     [InlineData("malformed-trx")]
     [InlineData("extra-unreadable-trx")]
     [InlineData("extra-identity")]
+    [InlineData("cross-attempt-reuse")]
     public void MissingOrStaleProofNeverExemptsFailingIdentities(string mutation)
     {
         using var fixture = new Fixture();
@@ -121,6 +122,7 @@ public sealed class ApparatusRedGateSourceIndexTests
             "hash" => check with { AssemblyCleanupAttribution = proof with { Receipts = [proof.Receipts[0] with { Sha256 = "other" }] } },
             "extra-unreadable-trx" => check with { TestResultPaths = [check.TestResultPaths![0], Path.Combine(fixture.Root, "missing.trx")] },
             "extra-identity" => check with { FailingTestIdentities = [.. check.FailingTestIdentities!, "Real.Failed.Fact"] },
+            "cross-attempt-reuse" => check with { TestResultIsExplicitCrossAttemptReuse = true },
             _ => check
         };
         if (mutation == "missing-trx") File.Delete(check.TestResultPaths![0]);
@@ -162,7 +164,9 @@ public sealed class ApparatusRedGateSourceIndexTests
         Assert.True(actual.NextGoalAdvanced);
         Assert.Equal(0, actual.SourceEnumerations);
         Assert.Equal(0, actual.SourceReads);
-        Assert.IsType<Mcg.AgentOrchestrator.Core.Conductor.ConductorAdvanceOutcome.Held>(actual.Outcome);
+        Assert.IsType<Mcg.AgentOrchestrator.Core.Conductor.ConductorAdvanceOutcome.Escalated>(actual.Outcome);
+        Assert.Equal(0, actual.ProductFailureRecords);
+        Assert.Equal("landing-completion:Escalate:unmet-criteria-no-retry-task", actual.CompletionRoute);
     }
 
     [Fact]
