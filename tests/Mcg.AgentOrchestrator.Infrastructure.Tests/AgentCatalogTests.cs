@@ -22,7 +22,7 @@ public sealed class AgentCatalogTests
             new ModelProfile("oPeNaI", "GpT-6-SoL", ModelCapability.Text | ModelCapability.Code, SubscriptionMode.ApiKey, "low", 1234),
             ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
             Subscription: new SubscriptionLaunchProfile(staleRepair ? "codex-cli" : "custom-profile",
-                staleRepair ? "gpt-5.3-codex" : "GPT-6-SOL", "medium"),
+                staleRepair ? AgentCatalog.StaleOpenAiCodexSubscriptionModelAlias : "GPT-6-SOL", "medium"),
             ComplexModel: new ModelProfile("OpenAI", "gpt-6-sol", ModelCapability.ToolUse, SubscriptionMode.ApiKey, "high", 5678),
             ReasoningEffortPolicy: new ReasoningEffortPolicy(4, "xhigh"), IsProviderRoutingConstrained: true);
         var catalog = new AgentCatalog([agent]);
