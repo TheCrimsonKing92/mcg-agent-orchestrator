@@ -1886,6 +1886,7 @@ public static partial class WorkerProfileDispatcher
         var clarificationAnswerHistory = goal.RefinedSpec?.ClarificationAnswerHistory ?? [];
         var hasReviewFindingHistory = goal.Tasks.Any(candidate => candidate.VerificationHistory.Any(verification =>
             (verification.MergedReviewFindings?.Count ?? 0) > 0 ||
+            verification.ReviewFindingContractViolation?.Code == ReviewFindingConvergence.FindingFormatViolationCode ||
             (verification.FindingEvidenceReceipts?.Count ?? 0) > 0));
         var codexPolicyAutoLoad = workerProfile?.HasCompleteRepositoryPolicyAutoLoadContract == true;
 

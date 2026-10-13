@@ -55,7 +55,7 @@ public sealed class ConductorDriverTestsUnparseableFindingBlockersRoute
     }
 
     [Xunit.Fact]
-    public void NeedsWorkWithBlockersAndEmptyFindingsRetriesDeveloperWithoutRedispatchingReviewer()
+    public void NeedsWork_MissingStructuredFields_RetriesDeveloperWithoutReviewerRedispatch()
     {
         var (kernel, goal) = SoftwareGoal();
         var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
@@ -78,8 +78,6 @@ public sealed class ConductorDriverTestsUnparseableFindingBlockersRoute
                 "commands: review",
                 "tests: fail - inspected evidence",
                 $"blockers: {blocker}",
-                "findings:",
-                "touched_anchors:",
                 "verdict: needs-work",
                 "END_WORKER_RESULT"),
             string.Empty,
@@ -87,6 +85,10 @@ public sealed class ConductorDriverTestsUnparseableFindingBlockersRoute
             StandardOutputPath: "C:\\tmp\\reviewer.out.log",
             WorkerResultPresent: true));
 
+        // Absent structured fields retain the substantive blockers-only fallback.
+        // Present but blank fields are a format error, covered by MalformedFindingRecovery.
+        Xunit.Assert.Null(reviewer.LastVerification!.ReviewFindingContractViolation);
+        Xunit.Assert.True(UnparseableFindingBlockersRoute.PrefersBlockersTextRoute(reviewer, blocker));
         var reviewerDispatchCount = reviewer.DispatchHistory.Count;
         TaskId? retriedTaskId = null;
         string? retryMessage = null;

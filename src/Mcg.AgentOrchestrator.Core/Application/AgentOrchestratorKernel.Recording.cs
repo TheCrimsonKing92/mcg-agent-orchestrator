@@ -12,7 +12,7 @@ public sealed partial class AgentOrchestratorKernel
         verification = PrepareReviewFindingRecord(
             goal,
             task,
-            AttachAuthoritativeReviewFindingContext(task, verification));
+            ReviewFindingDispatchContext.Attach(task, verification));
         verification = verification with
         {
             CandidateIdentity = verification.CandidateIdentity ?? ResolveCandidateIdentity(goal),
@@ -122,7 +122,7 @@ public sealed partial class AgentOrchestratorKernel
         verification = PrepareReviewFindingRecord(
             goal,
             task,
-            AttachAuthoritativeReviewFindingContext(task, verification));
+            ReviewFindingDispatchContext.Attach(task, verification));
         verification = verification with
         {
             CandidateIdentity = verification.CandidateIdentity ?? ResolveCandidateIdentity(goal),
@@ -777,8 +777,8 @@ public sealed partial class AgentOrchestratorKernel
                 return true;
             }
 
-            if (task.RequiredRole == AgentRole.Reviewer &&
-                violation.Code == ReviewFindingConvergence.OmittedOpenFindingViolationCode)
+            if (task.RequiredRole == AgentRole.Reviewer && violation.Code is
+                ReviewFindingConvergence.OmittedOpenFindingViolationCode or ReviewFindingConvergence.FindingFormatViolationCode)
             {
                 ReportWorkerTaskProgress(
                     goalId,
@@ -1163,24 +1163,6 @@ public sealed partial class AgentOrchestratorKernel
         return finalReviewRecord?.GetOpenAdvisoryFindings(goal.EffectiveAcceptanceCriteriaCorrections) ?? [];
     }
 
-    private static TaskVerificationRecord AttachAuthoritativeReviewFindingContext(
-        TaskSpec task,
-        TaskVerificationRecord verification)
-    {
-        if (task.RequiredRole is not (AgentRole.Reviewer or AgentRole.Tester) ||
-            !verification.WorkerResultPresent)
-        {
-            return verification;
-        }
-
-        return verification with
-        {
-            ReviewFindingTouchedAnchors = task.LastDispatch?.ReviewFindingTouchedAnchors ?? [],
-            ReviewFindingTouchProofDiagnostic = task.LastDispatch?.ReviewFindingTouchProofDiagnostic,
-            ReviewedCommit = task.LastDispatch?.BaseCommit
-        };
-    }
-
     private TaskVerificationRecord PrepareReviewFindingRecord(
         Goal goal,
         TaskSpec task,
@@ -1200,6 +1182,18 @@ public sealed partial class AgentOrchestratorKernel
             return verification;
         }
 
+        WorkerResultBlockers.TryFindReviewFindingRound(
+            verification, out _, out _, out var advisoryRejections, out _);
+        foreach (var rejection in advisoryRejections)
+        {
+            var warning = ReviewFindingParseRejectionNote.BuildAdvisoryWarning(task.RequiredRole, rejection);
+            var recordedForDispatch = goal.Timeline.Reverse()
+                .TakeWhile(evt => evt.TaskId != task.Id || evt.Kind != ProgressKind.TaskDispatchRecorded)
+                .Any(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskNote && evt.Message == warning);
+            if (!recordedForDispatch)
+                Append(goal, task.Id, ProgressKind.TaskNote, warning);
+        }
+
         if (!TryBuildMergedReviewFindingState(
                 goal,
                 task.RequiredRole,
@@ -1211,7 +1205,8 @@ public sealed partial class AgentOrchestratorKernel
                 out var identityTransitionSalvaged,
                 out var canonicalizations))
         {
-            if (violation is null && !string.IsNullOrWhiteSpace(diagnostic))
+            if ((violation is null || violation.Code == ReviewFindingConvergence.FindingFormatViolationCode) &&
+                !string.IsNullOrWhiteSpace(diagnostic))
             {
                 Append(
                     goal,
@@ -1226,6 +1221,7 @@ public sealed partial class AgentOrchestratorKernel
                 MergedReviewFindings = violation is not null &&
                     (ReviewFindingConvergence.IsRejectedCapResolutionRound(violation) ||
                      violation.Code == ReviewFindingConvergence.OmittedOpenFindingViolationCode ||
+                     violation.Code == ReviewFindingConvergence.FindingFormatViolationCode ||
                      identityTransitionSalvaged)
                     ? mergedFindings
                     : null
@@ -1284,11 +1280,13 @@ public sealed partial class AgentOrchestratorKernel
                 continue;
             }
 
-            if (!WorkerResultBlockers.TryFindReviewFindingRound(verification, out var round, out var parseDiagnostic))
+            if (!WorkerResultBlockers.TryFindReviewFindingRound(
+                    verification, out var round, out var parseDiagnostic, out var advisoryRejections, out var formatViolation))
             {
                 if (isCurrentRound)
                 {
                     diagnostic = parseDiagnostic;
+                    violation = formatViolation;
                     return false;
                 }
 
@@ -1320,7 +1318,8 @@ public sealed partial class AgentOrchestratorKernel
                     if (role == AgentRole.Reviewer &&
                         WorkerResultBlockers.TryFindPassVerdict(currentVerification))
                     {
-                        ReviewFindingConvergence.ValidateExplicitOpenFindingCoverage(state, round, canonicalizations);
+                        ReviewFindingConvergence.ValidateExplicitOpenFindingCoverage(
+                            state, round, canonicalizations, advisoryRejections);
                     }
                     if (role == AgentRole.Reviewer && reviewRetryCap is { IsAtCap: true })
                     {

@@ -189,10 +189,20 @@ public static class WorkerResultBlockers
     public static bool TryFindReviewFindingRound(
         TaskVerificationRecord? verification,
         out ReviewFindingRound round,
-        out string diagnostic)
+        out string diagnostic) =>
+        TryFindReviewFindingRound(verification, out round, out diagnostic, out _, out _);
+
+    public static bool TryFindReviewFindingRound(
+        TaskVerificationRecord? verification,
+        out ReviewFindingRound round,
+        out string diagnostic,
+        out IReadOnlyList<ReviewFindingParseDiagnostic> advisoryRejections,
+        out ReviewFindingContractViolation? formatViolation)
     {
         round = new ReviewFindingRound([], []);
         diagnostic = string.Empty;
+        advisoryRejections = [];
+        formatViolation = null;
         if (verification is null)
         {
             diagnostic = "reviewer verification is missing.";
@@ -204,14 +214,22 @@ public static class WorkerResultBlockers
         if (string.IsNullOrWhiteSpace(findingsJson) || string.IsNullOrWhiteSpace(touchedAnchorsJson))
         {
             diagnostic = "reviewer WORKER_RESULT must contain one-line findings and touched_anchors JSON arrays.";
+            if (findingsJson is not null || touchedAnchorsJson is not null)
+                formatViolation = new(ReviewFindingConvergence.FindingFormatViolationCode, diagnostic);
             return false;
         }
 
-        if (!ReviewFindingConvergence.TryParseJson(findingsJson, touchedAnchorsJson, out var reportedRound, out diagnostic))
+        var parsed = ReviewFindingConvergence.ParseJson(findingsJson, touchedAnchorsJson);
+        advisoryRejections = parsed.AdvisoryRejections;
+        if (parsed.FatalDiagnostic is { } fatal)
         {
+            diagnostic = fatal.Reason;
+            formatViolation = new(ReviewFindingConvergence.FindingFormatViolationCode, diagnostic,
+                SubmittedStableId: fatal.StableId);
             return false;
         }
 
+        var reportedRound = parsed.Round;
         round = reportedRound with
         {
             // Outcomes are Conductor-owned. A worker may request evidence but cannot forge a

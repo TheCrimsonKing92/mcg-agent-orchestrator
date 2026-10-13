@@ -354,7 +354,9 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
         var lines = new List<string>
         {
             $"review-finding contract-repair: attempt {attempt}/{maxAttempts}; avoided_developer_reopen=1; {reviewerTask.RequiredRole} task {reviewerTask.Id.Value[..8]}",
-            "produced a substantively valid result whose structured findings round was rejected by the review-finding identity contract. Re-submit the SAME conclusion; do not repeat the work and do not change your verdict.",
+            violation.Code == ReviewFindingConvergence.FindingFormatViolationCode
+                ? "produced a result whose structured findings round was rejected by the finding-format contract. Correct only the stated format error and re-submit the SAME substantive conclusion and verdict. Do not repeat the review or introduce new findings."
+                : "produced a substantively valid result whose structured findings round was rejected by the review-finding identity contract. Re-submit the SAME conclusion; do not repeat the work and do not change your verdict.",
             $"violation_count: {mismatches.Count}"
         };
         for (var index = 0; index < mismatches.Count; index++)
