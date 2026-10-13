@@ -2714,19 +2714,6 @@ public sealed partial class BackgroundDispatchRunner
         TaskProcessResourceAccounting accounting) =>
         $"RESOURCE goal={goalId.Value[..8]} task={taskId.Value[..8]} cpu_ms={accounting.CpuMilliseconds} peak_mem_bytes={accounting.PeakMemoryBytes} io_bytes={accounting.IoBytes} accounting_source={accounting.AccountingSource}{(accounting.Reaped ? " reaped=true" : string.Empty)}";
 
-    // The detached dispatch host is the App's __dispatch-run subcommand. The App assembly sits next
-    // to this Infrastructure assembly in every run context (the App output dir in production; the
-    // test output dir in tests, which reference the App project), so resolve it from the base dir.
-    private static string ResolveDispatchHostAssembly()
-    {
-        return Path.Combine(AppContext.BaseDirectory, "Mcg.AgentOrchestrator.App.dll");
-    }
-
-    private static bool IsLocalDispatch(TaskDispatchRecord dispatch)
-    {
-        return dispatch.WorkerName.Equals("local", StringComparison.OrdinalIgnoreCase);
-    }
-
     internal readonly record struct WrapperExitReconciliationEvidence(
         int ObservedRootExitCode,
         int? ChildExitCode,
