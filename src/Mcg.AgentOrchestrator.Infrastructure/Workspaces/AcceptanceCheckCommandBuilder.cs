@@ -284,6 +284,8 @@ internal static class AcceptanceCheckCommandBuilder
         var filter = ExtractMtpCompatibleArguments(check.Arguments, args);
         if (!string.IsNullOrWhiteSpace(filter))
         {
+            if (check.FocusedEvidenceTokens.Count > 0)
+                FocusedEvidenceRequestResolver.ValidateFocusedLaunch(filter, check.FocusedEvidenceTokens);
             args.AddRange(check.FocusedEvidenceTokens.Count > 0
                 ? TranslateFocusedEvidenceTokens(check.FocusedEvidenceTokens)
                 : translateCheckFilter(check, filter));
