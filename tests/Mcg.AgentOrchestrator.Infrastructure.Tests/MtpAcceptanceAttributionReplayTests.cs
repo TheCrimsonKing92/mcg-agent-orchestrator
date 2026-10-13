@@ -9,7 +9,7 @@ public sealed class MtpAcceptanceAttributionReplayTests
     [Fact]
     public void ChildReceivesScopedRequestAfterSanitizationWithoutChangingParentOrBuildEnvironment()
     {
-        using var sandbox = MtpTestRunnerScriptTests.ScriptSandbox.Create("passed");
+        using var sandbox = MtpTestRunnerScriptTests.ScriptSandbox.Create("success");
         var child = Path.Combine(sandbox.Root, "probe.ps1");
         var output = Path.Combine(sandbox.Root, "probe.json");
         File.WriteAllText(child, "$probe = @{ mode = $env:MCG_ACCEPTANCE_ATTRIBUTION_REPLAY_MODE; request = $env:MCG_ACCEPTANCE_ATTRIBUTION_REPLAY_REQUEST; secret = $env:MCG_REPLAY_UNRELATED }; $probe | ConvertTo-Json -Compress | Set-Content -LiteralPath '" + Quote(output) + "'");
@@ -36,7 +36,7 @@ public sealed class MtpAcceptanceAttributionReplayTests
     [Fact]
     public void InvocationAllowsOnlyExactManagedReplayAndRejectsBroadFiltersRepeatsOrOverrides()
     {
-        using var sandbox = MtpTestRunnerScriptTests.ScriptSandbox.Create("passed");
+        using var sandbox = MtpTestRunnerScriptTests.ScriptSandbox.Create("success");
         var result = RunModule(sandbox, $$"""
             $projects = @([pscustomobject]@{project='tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj'})
             Assert-MtpAttributionReplayInvocation -Projects $projects -Filters @('{{Filter}}') -Repeat 1
@@ -52,7 +52,7 @@ public sealed class MtpAcceptanceAttributionReplayTests
     [Fact]
     public void HelperBindsFinalGitCandidateInputAssemblyAndSourcesAndRejectsStaleOrDirtyRoot()
     {
-        using var sandbox = MtpTestRunnerScriptTests.ScriptSandbox.Create("passed");
+        using var sandbox = MtpTestRunnerScriptTests.ScriptSandbox.Create("success");
         var result = RunModule(sandbox, """
             $paths = @('src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceTestSourceResolver.cs',
                 'src/Mcg.AgentOrchestrator.App/Orchestration/ApparatusRedGate.cs',
@@ -98,7 +98,7 @@ public sealed class MtpAcceptanceAttributionReplayTests
     [InlineData("normalized", false)]
     public void SummaryTransmitsExplicitRequestAndRequiresBoundRetainedArtifact(string behavior, bool expectedPass)
     {
-        using var sandbox = MtpTestRunnerScriptTests.ScriptSandbox.Create("passed");
+        using var sandbox = MtpTestRunnerScriptTests.ScriptSandbox.Create("success");
         // Stub build/closure production only; exercise the public wrapper, sanitization, request
         // delivery, TRX checks, result validation, retention, and terminal decision in one run.
         // Real ProcessStartInfo delivery is independently exercised by the probe above.

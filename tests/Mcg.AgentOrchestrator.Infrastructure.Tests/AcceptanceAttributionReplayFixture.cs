@@ -132,7 +132,8 @@ internal static class AcceptanceAttributionReplayFixture
             FailureDetail: null, FailedChecks: summary.FailedChecks, BranchHeadSha: summary.BranchHeadSha,
             MainHeadSha: summary.MainHeadSha, TestResultPaths: [originalPath, rerunPath], CheckAttributions: summary.CheckAttributions,
             BaselineAttestation: summary.BaselineAttestation);
-        var isolatedGoal = new Goal(new GoalId(attempt.GoalId), "isolated recorded acceptance replay", []);
+        var isolatedGoal = new Goal(new GoalId(attempt.GoalId), "isolated recorded acceptance replay",
+            [new TaskSpec(TaskId.New(), "Replay recorded acceptance completion", AgentRole.Developer)]);
         var receipt = Complete(isolatedGoal, summary, input.SourceRoot,
             Path.Combine(copyRoot, Guid.NewGuid().ToString("N") + ".census.jsonl"), attempt.ScopePaths ?? []);
         if (receipt.FailureDecisions != 1 || !receipt.NextGoalAdvanced || receipt.SourceEnumerations != 0 || receipt.SourceReads != 0 ||
