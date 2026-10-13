@@ -1,7 +1,7 @@
 using System.Text.Json;
 
 [Xunit.Collection(TestCollections.ProcessSpawning)]
-public sealed class MtpAcceptanceAttributionReplayTests
+public sealed class MtpTestRunnerScriptTestsAcceptanceAttributionReplay
 {
     private const string Method = "ApparatusRedGateSourceIndexTests.ActualCopiedCompletionRecordsOneFailedDecisionAndNextGoalCanAdvance";
     private const string Filter = "FullyQualifiedName~ApparatusRedGateSourceIndexTests&Name~ActualCopiedCompletionRecordsOneFailedDecisionAndNextGoalCanAdvance";
