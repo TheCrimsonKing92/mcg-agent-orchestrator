@@ -385,14 +385,19 @@ public sealed class TaskIntentDispatchAdmissionTests
         var merged = await seed.Repository.LoadAsync();
         Xunit.Assert.All(merged.GetTask(seed.Goal.Id, seed.Task.Id).RetryAdmissionHistory,
             receipt => Xunit.Assert.NotNull(receipt.ReservationReleasedAt));
-        await seed.Store.ClaimNextAsync(seed.Goal.Id.Value, "intent-owner");
+        var claimed = await seed.Store.ClaimNextAsync(seed.Goal.Id.Value, OperatorIntentCoordinator.ClaimOwner);
+        Xunit.Assert.Equal(intent.Id, claimed!.Id);
         if (expireIntent)
         {
             seed.Now = seed.Now.AddMinutes(6);
-            new OperatorIntentCoordinator(seed.Reopen(), utcNow: () => seed.Now).ExecutePending(seed.Kernel, seed.Goal);
+            var coordinator = new OperatorIntentCoordinator(seed.Reopen(), utcNow: () => seed.Now);
+            coordinator.ExecutePending(seed.Kernel, seed.Goal);
+            coordinator.ExecutePending(seed.Kernel, seed.Goal);
+            Xunit.Assert.Equal("Rejected: task-intent-admission-expired.", (await seed.Store.GetAsync(intent.Id))!.Outcome);
+            Xunit.Assert.DoesNotContain(seed.Goal.Timeline, item => item.OperatorIntentApplied?.IntentId == intent.Id);
         }
         else
-            await seed.Store.CompleteAsync(intent.Id, "intent-owner", OperatorIntentStatus.Rejected, "stale", seed.Now);
+            await seed.Store.CompleteAsync(intent.Id, OperatorIntentCoordinator.ClaimOwner, OperatorIntentStatus.Rejected, "stale", seed.Now);
         Xunit.Assert.Equal(OperatorIntentStatus.Rejected, (await seed.Store.GetAsync(intent.Id))!.Status);
         Xunit.Assert.Empty(seed.Reopen().ListHeldTaskIds(seed.Goal.Id.Value));
         await seed.Repository.SaveAsync(seed.Kernel);
@@ -429,6 +434,8 @@ public sealed class TaskIntentDispatchAdmissionTests
         seed.Kernel.RecordTaskDispatch(seed.Goal.Id, seed.Task.Id,
             new TaskDispatchRecord("local", "probe", seed.Root, seed.Now, PlannerSampleCount: 2,
                 RetryContextFingerprint: fingerprint, PaidRoute: PaidRouteClassification.Paid));
+        Xunit.Assert.True(seed.Task.LastDispatch!.DispatchedAt >= seed.Task.LatestRetryAt!.Value,
+            "Sample reconciliation requires a dispatch from the current retry round.");
         var allowed = seed.Kernel.RecordPreparedRetryAdmission(seed.Goal.Id, seed.Task.Id, fingerprint,
             PaidRouteClassification.Paid, seed.Now, reservationOwnerId: "owner", reservationLeaseExpiresAt: seed.Now.AddMinutes(10));
         Xunit.Assert.True(allowed.AllowsProcessStart);
@@ -475,7 +482,9 @@ public sealed class TaskIntentDispatchAdmissionTests
             seed.Kernel.RecordTaskProcessStarted(seed.Goal.Id, seed.Task.Id,
                 new TaskProcessRecord(12345, "probe", seed.Root, primary.StdoutPath, primary.StderrPath,
                     primary.ExitCodePath, seed.Now, null, null, ProcessIdentityStartedAt: seed.Now));
-            CreateCompletedRunner().RefreshLatestProcess(seed.Kernel, seed.Goal.Id, seed.Task.Id);
+            var outcome = CreateCompletedRunner().RefreshLatestProcessWithOutcome(seed.Kernel, seed.Goal.Id, seed.Task.Id);
+            Xunit.Assert.Null(outcome.IntentSuppression);
+            Xunit.Assert.NotNull(outcome.Verification);
             Xunit.Assert.NotNull(seed.Task.LastDispatch);
             Xunit.Assert.NotNull(seed.Task.LastVerification);
             var divergence = Xunit.Assert.IsType<PlannerCandidateDivergenceReceipt>(seed.Task.LastVerification.PlannerCandidateDivergence);
@@ -535,11 +544,12 @@ public sealed class TaskIntentDispatchAdmissionTests
 
     private sealed class ProbeReached : Exception { }
 
-    private sealed class Scenario : IDisposable
+    private sealed class Scenario : IDisposable, IClock
     {
         internal readonly string Root = Path.Combine(Path.GetTempPath(), "mcg-intent-admission-" + Guid.NewGuid().ToString("N"));
         internal DateTimeOffset Now = DateTimeOffset.UtcNow;
-        internal readonly AgentOrchestratorKernel Kernel = new();
+        DateTimeOffset IClock.UtcNow => Now;
+        internal readonly AgentOrchestratorKernel Kernel;
         internal readonly AgentDefinition[] Agents;
         internal readonly OrchestratorWorkspace Workspace;
         internal readonly SqliteOrchestratorStateRepository Repository;
@@ -549,6 +559,8 @@ public sealed class TaskIntentDispatchAdmissionTests
         internal TaskSpec Task;
         internal Scenario(AgentRole role = AgentRole.Developer)
         {
+            // Retry markers and prepared attempts must share the intent store's controllable clock.
+            Kernel = new AgentOrchestratorKernel(this);
             Agents = [new(new AgentId("worker"), "Worker", role,
                 new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
                 ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
