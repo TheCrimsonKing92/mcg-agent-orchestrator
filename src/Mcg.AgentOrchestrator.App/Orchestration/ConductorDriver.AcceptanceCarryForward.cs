@@ -123,7 +123,7 @@ internal sealed partial class ConductorDriver
                     AcceptanceMainAdvanceCarryOperation,
                     currentBranchSha,
                     currentMainSha,
-                    BuildCarryForwardReceipt(disposition, acceptance, currentBranchSha!, currentMainSha!));
+                    AcceptanceMainAdvanceReceipt.FormatCarryForward(disposition, acceptance, currentBranchSha!, currentMainSha!));
             }
             else if (disposition is not AcceptanceMainAdvanceDisposition.Unchanged)
             {
@@ -133,7 +133,7 @@ internal sealed partial class ConductorDriver
         catch (Exception ex)
         {
             disposition = new AcceptanceMainAdvanceDisposition.Unknown(
-                $"exception-{ex.GetType().Name}:{Bound(ex.Message, 240)}");
+                $"exception-{ex.GetType().Name}:{AcceptanceMainAdvanceReceipt.Bound(ex.Message, 240)}");
             RecordMainAdvanceDiagnostic(candidate.Goal, disposition, currentMainSha);
         }
 
@@ -227,16 +227,6 @@ internal sealed partial class ConductorDriver
         }
     }
 
-    private static string BuildCarryForwardReceipt(
-        AcceptanceMainAdvanceDisposition disposition,
-        AcceptanceVerificationSummary acceptance,
-        string currentBranchSha,
-        string currentMainSha) =>
-        $"{disposition.FormatReceipt()} " +
-        $"verifiedBranch={Bound(acceptance.BranchHeadSha, 40)} " +
-        $"verifiedMain={Bound(acceptance.MainHeadSha, 40)} " +
-        $"currentBranch={Bound(currentBranchSha, 40)} currentMain={Bound(currentMainSha, 40)}";
-
     private void RecordMainAdvanceDiagnostic(
         Goal goal,
         AcceptanceMainAdvanceDisposition disposition,
@@ -260,11 +250,5 @@ internal sealed partial class ConductorDriver
         {
             // Diagnostics must not replace today's safe re-gate behavior when evidence storage is unavailable.
         }
-    }
-
-    private static string Bound(string? value, int maxLength)
-    {
-        var normalized = string.IsNullOrWhiteSpace(value) ? "unknown" : value.Trim();
-        return normalized.Length <= maxLength ? normalized : normalized[..maxLength];
     }
 }
