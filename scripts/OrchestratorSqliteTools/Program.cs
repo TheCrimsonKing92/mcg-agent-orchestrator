@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Text;
 using System.Text.Json.Nodes;
 using Mcg.AgentOrchestrator.Core;
 using Microsoft.Data.Sqlite;
@@ -18,21 +20,35 @@ internal static class OrchestratorSqliteTools
         string[] args,
         Func<SqliteConnection, Task>? beginWriteTransaction)
     {
-        if (args.Length == 0 || IsHelp(args[0]))
+        try
         {
-            PrintUsage();
-            return args.Length == 0 ? 1 : 0;
-        }
+            if (args.Length == 0 || IsHelp(args[0]))
+            {
+                PrintUsage();
+                return args.Length == 0 ? 1 : 0;
+            }
 
-        return args[0] switch
+            return args[0] switch
+            {
+                "list-goals" => await ListGoalsAsync(args[1..]),
+                "diagnostics" => await DiagnosticsAsync(args[1..]),
+                "set-goal-status" => await SetGoalStatusAsync(args[1..], beginWriteTransaction),
+                "requeue-task" => await RequeueTaskAsync(args[1..], beginWriteTransaction),
+                _ => Fail($"Unknown command: {args[0]}")
+            };
+        }
+        catch (CommandValidationException exception)
         {
-            "list-goals" => await ListGoalsAsync(args[1..]),
-            "diagnostics" => await DiagnosticsAsync(args[1..]),
-            "set-goal-status" => await SetGoalStatusAsync(args[1..], beginWriteTransaction),
-            "requeue-task" => await RequeueTaskAsync(args[1..], beginWriteTransaction),
-            _ => Fail($"Unknown command: {args[0]}")
-        };
+            return Fail(exception.Message);
+        }
+        catch (Exception exception)
+        {
+            return FailUnexpected(exception);
+        }
     }
+
+    // Only explicit command-input rejections use this type; storage and snapshot defects do not.
+    private sealed class CommandValidationException(string message) : Exception(message);
 
     private static async Task<int> ListGoalsAsync(string[] args)
     {
@@ -533,7 +549,7 @@ internal static class OrchestratorSqliteTools
         {
             var prefix = rawPrefix.Trim();
             if (prefix.Length == 0)
-                throw new ArgumentException("Goal prefix cannot be empty.");
+                throw new CommandValidationException("Goal prefix cannot be empty.");
 
             await using var cmd = conn.CreateCommand();
             cmd.CommandText = """
@@ -555,9 +571,9 @@ internal static class OrchestratorSqliteTools
             }
 
             if (matches.Count == 0)
-                throw new InvalidOperationException($"No goal matches prefix '{prefix}'.");
+                throw new CommandValidationException($"No goal matches prefix '{prefix}'.");
             if (matches.Count > 1)
-                throw new InvalidOperationException(
+                throw new CommandValidationException(
                     $"Goal prefix '{prefix}' is ambiguous: {string.Join(", ", matches.Select(match => Short(match.Id)))}");
 
             var match = matches[0];
@@ -571,7 +587,7 @@ internal static class OrchestratorSqliteTools
     private static string RequireValue(string[] args, ref int index, string option)
     {
         if (index + 1 >= args.Length)
-            throw new ArgumentException($"Missing value for {option}.");
+            throw new CommandValidationException($"Missing value for {option}.");
         index++;
         return args[index];
     }
@@ -734,6 +750,32 @@ internal static class OrchestratorSqliteTools
         Console.Error.WriteLine();
         PrintUsage();
         return 1;
+    }
+
+    private static int FailUnexpected(Exception exception)
+    {
+        const int diagnosticLimit = 4096;
+        const string truncation = "\n[diagnostic truncated]";
+        var diagnostic = new StringBuilder($"sqlite-tool: unexpected error ({exception.GetType().FullName})");
+        if (exception is SqliteException sqliteException)
+            diagnostic.Append($"; SQLite Error {sqliteException.SqliteErrorCode}, extended {sqliteException.SqliteExtendedErrorCode}");
+
+        // Put the utility origin before potentially long messages or library stack details.
+        var origin = new StackTrace(exception, fNeedFileInfo: true).GetFrames()
+            .FirstOrDefault(frame => frame.GetMethod()?.DeclaringType == typeof(OrchestratorSqliteTools)
+                || frame.GetMethod()?.DeclaringType?.DeclaringType == typeof(OrchestratorSqliteTools));
+        if (origin is not null)
+            diagnostic.AppendLine().Append("Origin: ").Append(origin.GetMethod()?.DeclaringType?.FullName)
+                .Append(' ').Append(origin.ToString().TrimEnd());
+        diagnostic.AppendLine().Append("Message: ").Append(exception.Message);
+        diagnostic.AppendLine().Append(exception.StackTrace);
+
+        var text = diagnostic.ToString();
+        var textLimit = diagnosticLimit - Console.Error.NewLine.Length;
+        if (text.Length > textLimit)
+            text = text[..(textLimit - truncation.Length)] + truncation;
+        Console.Error.WriteLine(text);
+        return 2;
     }
 
     private static int FailOpen(string dbPath, SqliteException exception)

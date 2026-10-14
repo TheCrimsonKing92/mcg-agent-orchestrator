@@ -247,50 +247,186 @@ public sealed partial class GoalWorktreeTestsSqliteTooling
         }
     }
 
-    [Xunit.Fact]
-    public async Task OrchestratorSqliteToolRejectedWriteOperationsLeaveRowUnchanged()
+    public static IEnumerable<object[]> RejectedCommandCases()
+    {
+        foreach (var dryRun in new[] { false, true })
+        {
+            foreach (var (selector, diagnostic) in new[]
+            {
+                ("not-a-goal", "No goal matches prefix 'not-a-goal'."),
+                ("a", "Goal prefix 'a' is ambiguous:"),
+                (" ", "Goal prefix cannot be empty.")
+            })
+            {
+                string[] statusArgs = ["set-goal-status", selector, "--status", "Active"];
+                string[] requeueArgs = ["requeue-task", selector, "--task-number", "1", "--note", "reject"];
+                yield return [dryRun ? statusArgs.Append("--dry-run").ToArray() : statusArgs, diagnostic];
+                yield return [dryRun ? requeueArgs.Append("--dry-run").ToArray() : requeueArgs, diagnostic];
+            }
+        }
+
+        yield return [new[] { "set-goal-status", "$goal" }, "Missing required --status <Status>."];
+        yield return [new[] { "set-goal-status", "$goal", "--status", "Impossible" }, "Unsupported goal status 'Impossible'"];
+        yield return [new[] { "set-goal-status", "--status", "Active" }, "Provide at least one goal id or unique prefix."];
+        yield return [new[] { "set-goal-status", "$goal", "--status" }, "Missing value for --status."];
+        yield return [new[] { "set-goal-status", "$goal", "--unknown" }, "Unknown option: --unknown"];
+        yield return [new[] { "requeue-task", "$goal", "--note", "reject" }, "Missing required --task-number <n>."];
+        yield return [new[] { "requeue-task", "$goal", "--task-number", "1" }, "Missing required --note <text>."];
+        yield return [new[] { "requeue-task", "--task-number", "1", "--note", "reject" }, "Missing goal prefix."];
+        yield return [new[] { "requeue-task", "$goal", "--task-number", "1", "--note" }, "Missing value for --note."];
+        yield return [new[] { "requeue-task", "$goal", "--task-number" }, "Missing value for --task-number."];
+        yield return [new[] { "requeue-task", "$goal", "--unknown" }, "Unknown option: --unknown"];
+        foreach (var number in new[] { "bad", "0", "-1", "2147483648", "99" })
+        {
+            var diagnostic = number == "99" ? "Task number 99 is out of range" : "--task-number must be a positive integer.";
+            yield return [new[] { "requeue-task", "$goal", "--task-number", number, "--note", "reject" }, diagnostic];
+        }
+        yield return [new[] { "requeue-task", "$goal", "--task-number", "99", "--note", "reject", "--dry-run" }, "Task number 99 is out of range"];
+        yield return [new[] { "unknown-command" }, "Unknown command: unknown-command"];
+        foreach (var command in new[] { "list-goals", "diagnostics", "set-goal-status", "requeue-task" })
+            yield return [new[] { command, "--db" }, "Missing value for --db."];
+        yield return [new[] { "diagnostics", "--repo-root" }, "Missing value for --repo-root."];
+        yield return [new[] { "list-goals", "--status" }, "Missing value for --status."];
+        yield return [new[] { "list-goals", "--status", "Impossible" }, "Unsupported goal status 'Impossible'"];
+        yield return [new[] { "list-goals", "--limit" }, "Missing value for --limit."];
+        foreach (var limit in new[] { "bad", "0", "-1", "2147483648" })
+            yield return [new[] { "list-goals", "--limit", limit }, "--limit must be a positive integer."];
+    }
+
+    [Xunit.Theory]
+    [Xunit.MemberData(nameof(RejectedCommandCases))]
+    public async Task RejectedCommand_InputFailure_ExitsNormallyWithoutWrites(string[] arguments, string diagnostic)
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var (kernel, goal) = CreateActivatedTwoTaskGoal(new GoalId("a0000000000000000000000000000001"));
+            kernel.CreateGoal(new GoalId("a0000000000000000000000000000002"), "Ambiguous peer");
+            kernel.CreateGoal(new GoalId("b0000000000000000000000000000001"), "Unrelated peer");
+            var stateRepository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+            await stateRepository.SaveAsync(kernel);
+            var before = ReadGoalRows(workspace.SqliteStatePath);
+            Assert.Equal(3, before.Length);
+
+            var result = RunOrchestratorSqliteTool(repo, repo,
+                arguments.Select(argument => argument == "$goal" ? goal.Id.Value : argument).ToArray());
+
+            Assert.Equal(1, result.ExitCode);
+            Assert.Contains(diagnostic, result.Stderr, StringComparison.Ordinal);
+            AssertNoMutationOutput(result.Stdout);
+            Assert.Equal(before, ReadGoalRows(workspace.SqliteStatePath));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public async Task RequeueTask_MissingTasks_ReportsUnexpectedFailureWithoutWrites(bool dryRun)
     {
         var repo = CreateSeededRepository();
         try
         {
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var (kernel, goal) = CreateActivatedTwoTaskGoal();
-            var ambiguousPrefix = goal.Id.Value[..1];
-            for (var attempt = 0; attempt < 256; attempt++)
+            kernel.CreateGoal("Unrelated peer");
+            await CreateMigratedStateRepository(workspace.SqliteStatePath).SaveAsync(kernel);
+            using (var writer = OpenWriteConnection(workspace.SqliteStatePath))
+                UpdateSnapshot(writer, goal.Id.Value, goal.Objective, snapshot => snapshot.Remove("Tasks"));
+            var before = ReadGoalRows(workspace.SqliteStatePath);
+            Assert.Equal(2, before.Length);
+            Assert.False(ReadGoalRow(workspace.SqliteStatePath, goal.Id.Value).Snapshot.ContainsKey("Tasks"));
+
+            string[] arguments = ["requeue-task", goal.Id.Value, "--task-number", "1", "--note", "reject"];
+            var result = RunOrchestratorSqliteTool(repo, repo,
+                dryRun ? arguments.Append("--dry-run").ToArray() : arguments);
+
+            Assert.Equal(2, result.ExitCode);
+            Assert.Contains("unexpected error (System.InvalidOperationException)", result.Stderr, StringComparison.Ordinal);
+            Assert.Contains("snapshot has no Tasks array.", result.Stderr, StringComparison.Ordinal);
+            Assert.Contains("TryBuildRequeuePlan", result.Stderr, StringComparison.Ordinal);
+            AssertNoMutationOutput(result.Stdout);
+            Assert.Equal(before, ReadGoalRows(workspace.SqliteStatePath));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task SetGoalStatus_LateSnapshotFailure_RollsBackEveryRow()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var kernel = new AgentOrchestratorKernel();
+            var first = kernel.CreateGoal("First update must roll back");
+            var corrupt = kernel.CreateGoal("Later snapshot defect");
+            kernel.CreateGoal("Unrelated peer");
+            await CreateMigratedStateRepository(workspace.SqliteStatePath).SaveAsync(kernel);
+            using (var writer = OpenWriteConnection(workspace.SqliteStatePath))
             {
-                var candidate = kernel.CreateGoal($"Ambiguous prefix candidate {attempt}");
-                if (candidate.Id.Value.StartsWith(ambiguousPrefix, StringComparison.Ordinal))
-                    break;
-                if (attempt == 255)
-                    throw new InvalidOperationException("Could not create a deterministic ambiguous-prefix fixture.");
+                using var update = writer.CreateCommand();
+                update.CommandText = "UPDATE goals SET snapshot_json = '[]' WHERE id = $id";
+                update.Parameters.AddWithValue("$id", corrupt.Id.Value);
+                Assert.Equal(1, update.ExecuteNonQuery());
             }
-            var stateRepository = CreateMigratedStateRepository(workspace.SqliteStatePath);
-            await stateRepository.SaveAsync(kernel);
-            var before = ReadGoalRow(workspace.SqliteStatePath, goal.Id.Value);
+            var before = ReadGoalRows(workspace.SqliteStatePath);
+            Assert.Equal(3, before.Length);
+            Assert.Equal("Draft", before.Single(row => row.Id == first.Id.Value).Status);
+            Assert.Equal("[]", before.Single(row => row.Id == corrupt.Id.Value).SnapshotJson);
 
-            var unsupported = RunOrchestratorSqliteTool(repo, repo, "set-goal-status", goal.Id.Value, "--status", "Impossible");
-            Assert.NotEqual(0, unsupported.ExitCode);
-            AssertRowUnchanged(before, ReadGoalRow(workspace.SqliteStatePath, goal.Id.Value));
+            // Selector order makes the valid UPDATE happen before the invalid snapshot is read.
+            var result = RunOrchestratorSqliteTool(repo, repo,
+                "set-goal-status", first.Id.Value, corrupt.Id.Value, "--status", "Active");
 
-            var missingStatus = RunOrchestratorSqliteTool(repo, repo, "set-goal-status", goal.Id.Value);
-            Assert.NotEqual(0, missingStatus.ExitCode);
-            AssertRowUnchanged(before, ReadGoalRow(workspace.SqliteStatePath, goal.Id.Value));
+            Assert.Equal(2, result.ExitCode);
+            Assert.Contains("unexpected error (System.InvalidOperationException)", result.Stderr, StringComparison.Ordinal);
+            Assert.Contains("SetGoalStatusAsync", result.Stderr, StringComparison.Ordinal);
+            Assert.Contains("Origin:", result.Stderr, StringComparison.Ordinal);
+            AssertNoMutationOutput(result.Stdout);
+            Assert.Equal(before, ReadGoalRows(workspace.SqliteStatePath));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
 
-            var missing = RunOrchestratorSqliteTool(repo, repo, "set-goal-status", "not-a-goal", "--status", "Active");
-            Assert.NotEqual(0, missing.ExitCode);
-            Assert.DoesNotContain("UPDATED", missing.Stdout, StringComparison.Ordinal);
-            AssertRowUnchanged(before, ReadGoalRow(workspace.SqliteStatePath, goal.Id.Value));
+    [Xunit.Fact]
+    public async Task SetGoalStatus_SqliteFailure_BoundsDiagnosticAndRetainsProvenance()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Rejected by database trigger");
+            await CreateMigratedStateRepository(workspace.SqliteStatePath).SaveAsync(kernel);
+            using (var writer = OpenWriteConnection(workspace.SqliteStatePath))
+                Execute(writer, $"CREATE TRIGGER reject_update BEFORE UPDATE ON goals BEGIN SELECT RAISE(ABORT, 'trigger-defect-{new string('x', 6000)}'); END");
+            var before = ReadGoalRows(workspace.SqliteStatePath);
+            Assert.Single(before);
 
-            var ambiguous = RunOrchestratorSqliteTool(repo, repo, "set-goal-status", ambiguousPrefix, "--status", "Active");
-            Assert.NotEqual(0, ambiguous.ExitCode);
-            Assert.Contains("ambiguous", ambiguous.Stderr, StringComparison.OrdinalIgnoreCase);
-            Assert.DoesNotContain("UPDATED", ambiguous.Stdout, StringComparison.Ordinal);
-            AssertRowUnchanged(before, ReadGoalRow(workspace.SqliteStatePath, goal.Id.Value));
+            var result = RunOrchestratorSqliteTool(repo, repo,
+                "set-goal-status", goal.Id.Value, "--status", "Active");
 
-            var outOfRange = RunOrchestratorSqliteTool(repo, repo, "requeue-task", goal.Id.Value, "--task-number", "99", "--note", "reject");
-            Assert.NotEqual(0, outOfRange.ExitCode);
-            Assert.DoesNotContain("REQUEUED", outOfRange.Stdout, StringComparison.Ordinal);
-            AssertRowUnchanged(before, ReadGoalRow(workspace.SqliteStatePath, goal.Id.Value));
+            Assert.Equal(2, result.ExitCode);
+            Assert.Contains("unexpected error (Microsoft.Data.Sqlite.SqliteException)", result.Stderr, StringComparison.Ordinal);
+            Assert.Contains("SQLite Error 19, extended 1811", result.Stderr, StringComparison.Ordinal);
+            Assert.Contains("trigger-defect-", result.Stderr, StringComparison.Ordinal);
+            Assert.Contains("Origin:", result.Stderr, StringComparison.Ordinal);
+            Assert.Contains("SetGoalStatusAsync", result.Stderr, StringComparison.Ordinal);
+            Assert.EndsWith("[diagnostic truncated]" + Environment.NewLine, result.Stderr, StringComparison.Ordinal);
+            Assert.InRange(result.Stderr.Length, 1, 4096);
+            AssertNoMutationOutput(result.Stdout);
+            Assert.Equal(before, ReadGoalRows(workspace.SqliteStatePath));
         }
         finally
         {
@@ -409,10 +545,11 @@ public sealed partial class GoalWorktreeTestsSqliteTooling
         return Assert.IsType<string>(select.ExecuteScalar());
     }
 
-    private static (AgentOrchestratorKernel Kernel, Goal Goal) CreateActivatedTwoTaskGoal()
+    private static (AgentOrchestratorKernel Kernel, Goal Goal) CreateActivatedTwoTaskGoal(GoalId? goalId = null)
     {
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal(
+            goalId ?? GoalId.New(),
             "Original objective",
             [
                 new TaskSpec(TaskId.New(), "Target task", AgentRole.Developer),
@@ -443,29 +580,41 @@ public sealed partial class GoalWorktreeTestsSqliteTooling
 
     private static void AssertRowUnchanged(GoalDatabaseRow expected, GoalDatabaseRow actual)
     {
-        Assert.Equal(expected.Status, actual.Status);
-        Assert.Equal(expected.Objective, actual.Objective);
-        Assert.Equal(expected.SnapshotJson, actual.SnapshotJson);
-        Assert.Equal(expected.Version, actual.Version);
+        Assert.Equal(expected, actual);
     }
 
-    private static GoalDatabaseRow ReadGoalRow(string databasePath, string goalId)
+    private static GoalDatabaseRow ReadGoalRow(string databasePath, string goalId) =>
+        Assert.Single(ReadGoalRows(databasePath), row => row.Id == goalId);
+
+    private static GoalDatabaseRow[] ReadGoalRows(string databasePath)
     {
         using var connection = new SqliteConnection($"Data Source={databasePath};Mode=ReadOnly;Pooling=False;");
         connection.Open();
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT status, objective, snapshot_json, version FROM goals WHERE id = $id";
-        command.Parameters.AddWithValue("$id", goalId);
+        command.CommandText = "SELECT id, status, objective, source_backlog_item_id, updated_at, snapshot_json, version FROM goals ORDER BY id";
         using var reader = command.ExecuteReader();
-        Assert.True(reader.Read());
-        return new GoalDatabaseRow(
-            reader.GetString(0),
-            reader.GetString(1),
-            reader.GetString(2),
-            JsonNode.Parse(reader.GetString(2)) as JsonObject
-                ?? throw new InvalidOperationException("Expected goal snapshot object."),
-            reader.GetInt64(3));
+        var rows = new List<GoalDatabaseRow>();
+        while (reader.Read())
+            rows.Add(new GoalDatabaseRow(
+                reader.GetString(0), reader.GetString(1), reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetString(4),
+                reader.GetString(5), reader.GetInt64(6)));
+        return rows.ToArray();
     }
 
-    private sealed record GoalDatabaseRow(string Status, string Objective, string SnapshotJson, JsonObject Snapshot, long Version);
+    private static void AssertNoMutationOutput(string stdout)
+    {
+        Assert.DoesNotContain("UPDATED", stdout, StringComparison.Ordinal);
+        Assert.DoesNotContain("REQUEUED", stdout, StringComparison.Ordinal);
+        Assert.DoesNotContain("DRY-RUN", stdout, StringComparison.Ordinal);
+    }
+
+    private sealed record GoalDatabaseRow(
+        string Id, string Status, string Objective, string? SourceBacklogItemId,
+        string UpdatedAt, string SnapshotJson, long Version)
+    {
+        // Keep parsing out of record equality and diagnostic printing for corrupt-row controls.
+        internal JsonObject Snapshot => JsonNode.Parse(SnapshotJson) as JsonObject
+            ?? throw new InvalidOperationException("Expected goal snapshot object.");
+    }
 }
