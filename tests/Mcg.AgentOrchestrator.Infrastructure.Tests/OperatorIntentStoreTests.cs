@@ -591,7 +591,7 @@ public sealed class OperatorIntentStoreTests
                     StoreSchemaVersions.UpgradeToCurrent(connection, StoreSchemaRegistry.OperatorIntents);
                     command.CommandText = schema == "missing-record"
                         ? "DELETE FROM store_schema_versions"
-                        : $"UPDATE store_schema_versions SET version = {(schema == "older" ? 0 : 2)}";
+                        : $"UPDATE store_schema_versions SET version = {(schema == "older" ? 0 : StoreSchemaRegistry.OperatorIntents.CurrentVersion!.Value + 1)}";
                     command.ExecuteNonQuery();
                 }
             }
@@ -601,7 +601,7 @@ public sealed class OperatorIntentStoreTests
             var error = Xunit.Assert.Throws<InvalidOperationException>(() =>
                 SqliteOperatorIntentStore.OpenExisting(root, wakeDirectory));
 
-            Xunit.Assert.Equal($"Operator intents store '{dbPath}' schema is {expected} (expected version 1); run setup.", error.Message);
+            Xunit.Assert.Equal($"Operator intents store '{dbPath}' schema is {expected} (expected version {StoreSchemaRegistry.OperatorIntents.CurrentVersion}); run setup.", error.Message);
             Xunit.Assert.False(Directory.Exists(wakeDirectory));
             Xunit.Assert.Equal(before, SnapshotDatabaseFiles(root));
         }

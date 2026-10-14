@@ -574,7 +574,10 @@ public sealed class GoalAdvancementOperations
             _dispatch.RefreshPreparedDispatchBeforeStart(kernel, workspace, goal, goal.Tasks.Single(task => task.Id == taskId));
         }
 
-        var startResult = new BackgroundDispatchRunner().TryStartLatestDispatch(kernel, goal.Id, taskId, workspace.LogDirectory);
+        var admission = SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory)
+            .GetPreparedAdmission(goal.Id.Value, taskId.Value, kernel.GetTask(goal.Id, taskId).LastDispatch!.DispatchedAt);
+        var startResult = new BackgroundDispatchRunner().TryStartLatestDispatch(kernel, goal.Id, taskId, workspace.LogDirectory,
+            taskIntentAdmission: admission);
         if (startResult.RecoveryAction is { } recoveryAction)
         {
             throw new InvalidOperationException(recoveryAction.Reason);

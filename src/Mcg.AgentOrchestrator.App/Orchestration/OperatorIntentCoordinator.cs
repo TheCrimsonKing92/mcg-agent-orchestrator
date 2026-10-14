@@ -185,6 +185,17 @@ internal sealed partial class OperatorIntentCoordinator
                 continue;
             }
 
+            // Reconcile persisted effects before expiry: a crash after goal persistence is Applied,
+            // even when its original admission deadline has passed. Only this goal-state owner expires
+            // requests; dispatch never drops protection while an applier could still mutate the goal.
+            if (intent.AdmissionExpiresAt is { } deadline && deadline <= _utcNow())
+            {
+                _store.CompleteAsync(intent.Id, ClaimOwner, OperatorIntentStatus.Rejected,
+                    "Rejected: task-intent-admission-expired.", _utcNow()).GetAwaiter().GetResult();
+                lines.Add($"OPERATOR_INTENT id={intent.Id} verb={intent.Verb} goal={goal.Id.Value[..8]} result=rejected reason=task-intent-admission-expired");
+                continue;
+            }
+
             if (appliedVerbs.Count > 0 && !OperatorIntentBatchPolicy.CanShareTick(intent.Verb))
             {
                 // Keep the claim for the next tick, after this batch is durable.

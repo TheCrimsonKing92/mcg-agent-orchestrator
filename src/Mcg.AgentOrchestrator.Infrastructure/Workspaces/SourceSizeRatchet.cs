@@ -235,10 +235,14 @@ internal static class SourceSizeRatchet
             // Goal 207369f1 keeps pending completion, candidate revalidation and cancellation at the dispatch seam;
             // build lifecycle/lease/process behavior lives in CompletionBuildEvidenceCoordinator. Measured 2739; no headroom.
             // Goal c5b71650 integrates terminal-contract enforcement and extracted apparatus holds; measured 2719.
+            // Goal 1d995e6d adds exact-preparation validation, admission-reference handoff and suppression
+            // reconciliation at the runner-owned start/completion boundaries. Store admission and receipt
+            // reading remain separately owned; moving these call sites would split dispatch lifecycle ownership.
             // Goal ffa0471e adds orphan completion-build cancellation routing before normal worker cancellation;
             // operation lifecycle/custody stays in CompletionBuildEvidenceCoordinator. Measured 2728; no headroom.
             // Goal ffa0471e extracts historical/current completion-build policy to its owning collaborator.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Processes/BackgroundDispatchRunner.cs", 2725),
+            // Integrated with the admission call sites: measured 2738 lines, no extra headroom.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Processes/BackgroundDispatchRunner.cs", 2738),
             // Goal 5a75fed0 extracted typed projection parsing and literal restoration into
             // WorkerContextProjectionResidual, leaving the dispatcher to sequence package assembly.
             // Goal fd252fe4 adds retry fingerprints for the resolved provider, model, paid route, and
@@ -477,9 +481,13 @@ internal static class SourceSizeRatchet
             // These checks belong beside lifecycle creation/reuse; same 30 partial files, no extra headroom.
             // Goal 09a3023d extracts portfolio projection assembly into EpicProgressCommands.
             // Measured 12157 total lines across the same 30 partial files; no extra headroom.
+            // Goal 1d995e6d passes the durable task admission reference at the existing manual-start call site;
+            // reservation/version behavior remains in SqliteOperatorIntentStore. The two added wiring lines
+            // keep manual dispatch on the same protected launch path.
             // Goal ffa0471e validates an exact completion-build selector and enqueues typed cancellation without
-            // stopping a historical worker; lifecycle remains in the coordinator. Measured 12165 in 30 partials; no headroom.
-            new SourceClassCeiling("CliCommandHandlers", 12165, 30),
+            // stopping a historical worker; lifecycle remains in the coordinator.
+            // Integrated size is 12167 lines in the same 30 partials; no extra headroom.
+            new SourceClassCeiling("CliCommandHandlers", 12167, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
             // Goal 03580ad1 extracts source-mutation edits to AcceptanceSourceMutation; measured 8938 lines in 31 partials.
@@ -505,7 +513,12 @@ internal static class SourceSizeRatchet
             // operation state belongs to TaskSpec. Measured 9254 across the same 27 partial files; no extra headroom.
             // Goal c5b71650 integrates terminal contracts with advisory isolation using the shared dispatch-context owner.
             // Measured 9266 lines across 27 partial files; no extra headroom.
-            new SourceClassCeiling("AgentOrchestratorKernel", 9266, 27),
+            // Goal 1d995e6d adds the UnstartedDispatch lifecycle partial: validate the current attempt identity,
+            // restore task/retry admission and refresh goal status when a paid child never started. These
+            // transitions require the kernel-owned clock, goal refresh and progress append; TaskSpec owns
+            // retry admission accounting and Execution owns persisted denial evidence. Keeping the transaction
+            // here preserves lifecycle ownership. Measured 9305 lines in 28 partials; no extra headroom.
+            new SourceClassCeiling("AgentOrchestratorKernel", 9305, 28),
             // Goal d6033045 extracted the pre-admission receipt pass to PassedMergeTrainReceiptAdmission; goal 1d0f2317
             // adds one admission predicate to exclude stream-complete children before slot reservation. Measured 9255.
             // Goal 679eee57 added a one-line tick call to the separately owned ConductorExperimentWatch (+1); goal 80de5cb2 extracted

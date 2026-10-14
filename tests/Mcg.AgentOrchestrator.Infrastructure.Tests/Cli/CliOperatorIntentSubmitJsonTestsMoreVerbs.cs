@@ -64,9 +64,11 @@ public sealed class CliOperatorIntentSubmitJsonTestsMoreVerbs : CliTaskQueryTest
         Assert.Equal(verb == "approve-policy-change" ? null : taskId, jsonRecord.TaskId);
         Assert.Equal(OperatorIntentStatus.Pending, jsonRecord.Status);
         Assert.NotEqual(textRecord.Id, jsonRecord.Id);
-        // Serialization checks every stored field; only generated identity and creation time differ.
-        Assert.Equal(JsonSerializer.Serialize(textRecord with { Id = "", CreatedAt = default }),
-            JsonSerializer.Serialize(jsonRecord with { Id = "", CreatedAt = default }));
+        Assert.Equal(verb != "approve-policy-change", textRecord.AdmissionExpiresAt.HasValue);
+        Assert.Equal(verb != "approve-policy-change", jsonRecord.AdmissionExpiresAt.HasValue);
+        // Check every stored field except generated identity and timestamps from separate enqueues.
+        Assert.Equal(JsonSerializer.Serialize(textRecord with { Id = "", CreatedAt = default, AdmissionExpiresAt = null }),
+            JsonSerializer.Serialize(jsonRecord with { Id = "", CreatedAt = default, AdmissionExpiresAt = null }));
         Assert.Equal("same-key", jsonRecord.IdempotencyKey);
 
         if (verb == "retry")

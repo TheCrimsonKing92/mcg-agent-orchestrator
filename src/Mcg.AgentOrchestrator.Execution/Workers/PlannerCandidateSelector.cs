@@ -64,6 +64,18 @@ internal static partial class PlannerCandidateSelector
 
         if (valid.Length < 2)
         {
+            // A durably denied primary never ran. Its absence must not invalidate the
+            // sole successful, contract-valid sample that actually consumed the attempt.
+            if (valid.Length == 1 && primary.Input.TerminalState == PlannerCandidateTerminalState.IntentSuppressed)
+            {
+                var soleValid = valid[0];
+                var contract = soleValid.Contract.IngestedPath is null && soleValid.SourcePath is not null
+                    ? soleValid.Contract with { IngestedPath = soleValid.SourcePath }
+                    : soleValid.Contract;
+                return new PlannerCandidateSelectionResult(contract,
+                    BuildReceipt(resolved, valid, soleValid.Index, new double[resolved.Length],
+                        "sole-valid-sample", "primary-intent-suppressed"));
+            }
             var selectedIndex = primary.Contract.Succeeded ? primary.Index : (int?)null;
             var insufficientFallbackCause = selectedIndex is null
                 ? "fewer-than-two-comparable-candidates-and-primary-invalid"

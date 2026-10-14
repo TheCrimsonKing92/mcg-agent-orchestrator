@@ -496,7 +496,9 @@ private static void LaunchLatestDispatch(CliExecutionContext context, Goal goal,
         context.Kernel,
         goal.Id,
         task.Id,
-        context.Workspace.LogDirectory);
+        context.Workspace.LogDirectory,
+        taskIntentAdmission: SqliteOperatorIntentStore.ForDirectories(context.Workspace.OrchestratorDirectory, context.Workspace.LogDirectory)
+            .GetPreparedAdmission(goal.Id.Value, task.Id.Value, task.LastDispatch!.DispatchedAt));
     if (startResult.RecoveryAction is { } recoveryAction)
     {
         throw new InvalidOperationException(recoveryAction.Reason);
