@@ -11,6 +11,8 @@ internal static class AgentReadEnvelope
     public const int RemoteExecutorsSchemaVersion = 1;
     public const string GoalsSchema = "mcg.goals";
     public const int GoalsSchemaVersion = 1;
+    public const string BacklogListSchema = "mcg.backlog-list";
+    public const int BacklogListSchemaVersion = 1;
     public const string AttentionSchema = "mcg.attention";
     public const int AttentionSchemaVersion = 1;
     public const string AttentionShowSchema = "mcg.attention-show";
