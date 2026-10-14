@@ -27,6 +27,11 @@ internal sealed partial class ConductorContinuitySupervisor
             record = seam.ReadRecord(inboundPath);
             if (!SameRunDirectory(record.AdoptedBuild.RunDirectory, supervisorHandoff.OwnBuild.RunDirectory))
                 throw new InvalidDataException("Inbound handoff targets a different run directory.");
+            if (string.IsNullOrWhiteSpace(record.Token) ||
+                record.AdoptedBuild.CommitSha != supervisorHandoff.OwnBuild.CommitSha ||
+                !seam.IsAlive(record.Incumbent) || !seam.IsOwner(record.Incumbent))
+                throw new InvalidDataException("Inbound handoff does not identify the current incumbent and build.");
+            cancellationToken.ThrowIfCancellationRequested();
             seam.WriteReady(record.ReadyPath,
                 new ConductorSupervisorReadyRecord(record.Token, seam.Self, supervisorHandoff.OwnBuild));
             var deadline = _timeProvider.GetUtcNow() + supervisorHandoff.Timeout;
@@ -100,23 +105,27 @@ internal sealed partial class ConductorContinuitySupervisor
             var launched = seam.Launch(request);
             launchedPid = launched.ProcessId;
             launchedIdentity = launched.SuccessorIdentity;
+            if (launched.StartedAt is null)
+                throw new InvalidDataException("Launched supervisor identity has no start time.");
             var deadline = _timeProvider.GetUtcNow() + supervisorHandoff.Timeout;
             ConductorSupervisorReadyRecord? ready;
             while ((ready = seam.ReadReady(readyPath)) is null)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (!seam.IsRunning(launchedPid))
+                if (!seam.IsAlive(launchedIdentity))
                     throw new InvalidOperationException("successor-exited");
                 if (_timeProvider.GetUtcNow() >= deadline)
                     throw new TimeoutException("readiness-timeout");
                 await _delay(supervisorHandoff.PollDelay, cancellationToken).ConfigureAwait(false);
             }
-            if (ready.Token != token || ready.Successor.ProcessId != launchedPid ||
+            if (ready.Token != token || ready.Successor != launchedIdentity ||
+                ready.Build.CommitSha != targetBuild.CommitSha ||
                 !SameRunDirectory(ready.Build.RunDirectory, target.StagedBuildId) ||
                 !seam.IsAlive(ready.Successor))
                 throw new InvalidDataException("Successor readiness identity did not match the launched build and pid.");
 
-            seam.Transfer(seam.Self, ready.Successor, targetBuild);
+            cancellationToken.ThrowIfCancellationRequested();
+            seam.Transfer(seam.Self, launchedIdentity, targetBuild);
             if (!seam.IsAlive(ready.Successor))
             {
                 seam.Transfer(ready.Successor, seam.Self, supervisorHandoff.OwnBuild);
@@ -126,11 +135,13 @@ internal sealed partial class ConductorContinuitySupervisor
                 new { fromCommit = supervisorHandoff.OwnBuild.CommitSha,
                     fromRunDir = supervisorHandoff.OwnBuild.RunDirectory,
                     toCommit = target.CommitSha, toRunDir = target.StagedBuildId,
-                    successorPid = launchedPid });
+                    successorPid = launchedPid, successorStartedAt = launchedIdentity.StartedAt,
+                    childPid = activeChild?.Process.ProcessId,
+                    childStartedAt = activeChild?.Process.StartedAt });
             _consecutiveSupervisorHandoffFailures = 0;
             return true;
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex)
         {
             if (!seam.IsOwner(seam.Self))
                 throw new InvalidOperationException("Supervisor lease left incumbent during failed handoff.", ex);
@@ -145,6 +156,8 @@ internal sealed partial class ConductorContinuitySupervisor
                             toCommit = target.CommitSha });
                 }
             }
+            if (ex is OperationCanceledException && cancellationToken.IsCancellationRequested)
+                throw;
             _consecutiveSupervisorHandoffFailures++;
             RecordSupervisorEvent("supervisor-handoff", "failed", "SUPERVISOR_HANDOFF_FAILED",
                 new { reason = $"{ex.GetType().Name}:{ex.Message}",

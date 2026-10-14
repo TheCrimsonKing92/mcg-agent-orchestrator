@@ -76,11 +76,17 @@ internal sealed class SupervisorHandoffFixture
     internal List<string> ConductEvents { get; } = [];
     internal Action<ProtectedProcessIdentity>? BindProtectedIdentity { get; set; }
 
-    internal Task<int> RunAsync()
+    internal Task<int> RunAsync(CancellationToken cancellationToken = default)
     {
         var supervisor = new ConductorContinuitySupervisor(Host, Events,
             timeProvider: _clock,
-            delay: (duration, _) => { _clock.Advance(duration); return Task.CompletedTask; },
+            delay: (duration, _) =>
+            {
+                _clock.Advance(duration);
+                if (Seam.IncomingRecordPath is not null)
+                    Seam.Acquire(new ConductorSupervisorBuildIdentity("commit-a", _ownRunDirectory));
+                return Task.CompletedTask;
+            },
             stageSuccessor: _ => ++_stageCalls == 1 ? BuildB : BuildAfterB(_stageCalls),
             appendConductEvent: (_, _, detail) => ConductEvents.Add(detail),
             dotnetPath: "dotnet-test",
@@ -90,7 +96,7 @@ internal sealed class SupervisorHandoffFixture
             bindProtectedIdentity: BindProtectedIdentity);
         return supervisor.RunAsync(["conduct", "--loop", "--max-duration", "60"],
             "C:\\repo", Path.Combine(Path.GetTempPath(), $"mcg-handoff-{Guid.NewGuid():N}"),
-            "default", "default");
+            "default", "default", cancellationToken: cancellationToken);
     }
 
     private static ConductorPreparedSuccessor BuildAfterB(int stageNumber)
@@ -153,6 +159,10 @@ internal sealed class SupervisorHandoffFixture
         private ConductorSupervisorHandoffRecord? _record;
         internal bool ThrowOnLaunch { get; set; }
         internal bool SuppressReadiness { get; set; }
+        internal Func<ConductorSupervisorReadyRecord, ConductorSupervisorReadyRecord>? TransformReady { get; set; }
+        internal Action? BeforeReadReady { get; set; }
+        internal int Transfers { get; private set; }
+        internal int ReadinessPublications { get; private set; }
         internal ConductorSupervisorProcessResult? InheritedChildResult { get; set; }
         internal bool InheritedChildMissingBeforeAttach { get; set; }
         internal bool InheritedChildWaitForCancellation { get; set; }
@@ -167,7 +177,8 @@ internal sealed class SupervisorHandoffFixture
         internal void PrepareInbound(string runDirectory)
         {
             IncomingRecordPath = "inbound.json";
-            Owner = Self;
+            Owner = new ConductorSupervisorProcessIdentity(700,
+                new DateTimeOffset(2026, 9, 25, 0, 0, 0, TimeSpan.Zero));
             _record = new ConductorSupervisorHandoffRecord(
                 "test-token", new ConductorSupervisorProcessIdentity(700,
                     new DateTimeOffset(2026, 9, 25, 0, 0, 0, TimeSpan.Zero)),
@@ -188,22 +199,29 @@ internal sealed class SupervisorHandoffFixture
         {
             Assert.Equal(Self, from);
             Assert.Equal(Successor, to);
+            Assert.Equal(from, Owner);
             Owner = to;
+            Transfers++;
             _transferObserved.TrySetResult();
         }
         public string WriteRecord(ConductorSupervisorHandoffRecord record)
         {
             _record = record;
+            Owner ??= record.Incumbent;
             return "record.json";
         }
         public ConductorSupervisorHandoffRecord ReadRecord(string path) =>
             _record ?? throw new InvalidOperationException("No handoff record.");
-        public void WriteReady(string path, ConductorSupervisorReadyRecord ready) { }
-        public ConductorSupervisorReadyRecord? ReadReady(string path) =>
-            SuppressReadiness || _record is null ? null :
-                new ConductorSupervisorReadyRecord(_record.Token, Successor,
-                    new ConductorSupervisorBuildIdentity(_record.AdoptedBuild.CommitSha,
-                        _record.AdoptedBuild.RunDirectory));
+        public void WriteReady(string path, ConductorSupervisorReadyRecord ready) => ReadinessPublications++;
+        public ConductorSupervisorReadyRecord? ReadReady(string path)
+        {
+            BeforeReadReady?.Invoke();
+            if (SuppressReadiness || _record is null) return null;
+            var ready = new ConductorSupervisorReadyRecord(_record.Token, Successor,
+                new ConductorSupervisorBuildIdentity(_record.AdoptedBuild.CommitSha,
+                    _record.AdoptedBuild.RunDirectory));
+            return TransformReady?.Invoke(ready) ?? ready;
+        }
         public ConductLoopLaunchResult Launch(ConductLoopLaunchRequest request)
         {
             Launches.Add(request);
