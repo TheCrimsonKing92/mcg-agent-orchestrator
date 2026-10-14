@@ -194,8 +194,14 @@ public sealed class DispatchProcessHostIntentAdmissionTests(Xunit.ITestOutputHel
         {
             if (child is not null)
             {
-                child.Group.Kill();
-                try { Xunit.Assert.True(child.WaitForOwnedExit(TimeSpan.FromSeconds(120)), "Suspended child did not exit during cleanup."); }
+                try
+                {
+                    // Close the kill-on-close job owned by StartSuspended, retaining the native
+                    // process handle until its exit is observed. No PID is reopened for cleanup.
+                    child.Group.Dispose();
+                    Xunit.Assert.True(child.HasOwnedExitObservation);
+                    Xunit.Assert.True(child.WaitForOwnedExit(TimeSpan.FromSeconds(120)), "Suspended child did not exit during cleanup.");
+                }
                 finally { child.Dispose(); }
             }
             Directory.Delete(root, recursive: true);
