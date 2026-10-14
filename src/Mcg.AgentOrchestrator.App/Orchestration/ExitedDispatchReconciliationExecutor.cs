@@ -11,7 +11,9 @@ internal static class ExitedDispatchReconciliationExecutor
         Func<Goal, Goal> readCurrentGoal)
     {
         var exitedUnappliedTaskIds = goal.Tasks
-            .Where(task => task.LastProcess is { } process &&
+            .Where(task => task.CompletionBuildEvidence is { } operation &&
+                           (operation.IsPending || !operation.CustodyReleased) ||
+                           task.LastProcess is { } process &&
                            DispatchProcessCompletionState.IsExitedWithoutAppliedCompletion(task, process))
             .Select(task => task.Id)
             .ToArray();

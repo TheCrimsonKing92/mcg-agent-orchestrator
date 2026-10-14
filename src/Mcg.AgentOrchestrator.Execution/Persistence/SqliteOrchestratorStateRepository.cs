@@ -2264,8 +2264,15 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         // The first durable operation owns this attempt; a competing launch cannot replace it.
         if (stored.Id != current.Id) return stored;
         if (stored.Applied || stored.Phase == CompletionBuildEvidencePhase.Cancelled) return stored;
+        if (!stored.IsPending)
+        {
+            // Current-task receipt application may advance; a stale cancellation cannot
+            // rewrite the independently persisted terminal build fact or custody marker.
+            return current.Applied && current.Phase == stored.Phase && current.HasSameOrigin(stored) &&
+                CompletionBuildEvidenceTarget.From(current).Matches(stored)
+                ? stored with { Applied = true } : stored;
+        }
         if (current.Applied || current.Phase == CompletionBuildEvidencePhase.Cancelled) return current;
-        if (!stored.IsPending) return stored;
         // An unchanged tick snapshot must not undo progress checkpointed by the operation owner.
         if (SnapshotEquals(baseline, current)) return stored;
         // Even a changed diagnostic cannot move an authorized child back into the launch path.

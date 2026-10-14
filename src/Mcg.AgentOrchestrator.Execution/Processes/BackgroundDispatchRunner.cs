@@ -2258,6 +2258,15 @@ public sealed partial class BackgroundDispatchRunner
                 continue;
             }
 
+            if (task.CompletionBuildEvidence is { IsPending: true } operation && !HasCurrentCompletionBuildWorker(task))
+            {
+                var disposition = CancelCompletionBuildEvidence(kernel, goalId, task.Id, CompletionBuildEvidenceTarget.From(operation));
+                if (disposition.IsPending || !disposition.CustodyReleased)
+                    throw new InvalidOperationException("Completion build cancellation is held; custody is retained.");
+                // A newer live worker still follows its own normal cancellation path.
+                if (task.LastProcess is not { IsRunning: true }) { cancelled++; continue; }
+            }
+
             CancelLatestProcess(kernel, goalId, task.Id, cancelledByConductor: true);
             cancelled++;
         }

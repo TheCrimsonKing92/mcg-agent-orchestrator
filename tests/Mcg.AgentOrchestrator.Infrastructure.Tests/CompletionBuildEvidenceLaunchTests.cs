@@ -438,7 +438,7 @@ public sealed class CompletionBuildEvidenceLaunchTests
         }
     }
 
-    private sealed class SacrificialChild(bool exitBeforeAdmission = false, bool holdAfterPermit = false) : IDisposable
+    internal sealed class SacrificialChild(bool exitBeforeAdmission = false, bool holdAfterPermit = false) : IDisposable
     {
         internal readonly string Marker = Guid.NewGuid().ToString("N");
         internal Process? Process;

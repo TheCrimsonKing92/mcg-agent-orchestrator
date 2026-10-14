@@ -295,6 +295,14 @@ internal sealed partial class ConductorDriver
         var dispatchRunner = OperatorCancelAwareDispatchRunner.ForWorkspace(workspace);
         _reconcileExitedDispatch = (goal, taskId) =>
         {
+            var attachedTask = kernel.GetTask(goal.Id, taskId);
+            if (attachedTask.CompletionBuildEvidence is { } operation &&
+                (!BackgroundDispatchRunner.HasCurrentCompletionBuildWorker(attachedTask) || !operation.IsPending && !operation.CustodyReleased))
+            {
+                var disposition = dispatchRunner.ReconcileCompletionBuildEvidence(kernel, goal.Id, taskId,
+                    CompletionBuildEvidenceTarget.From(operation));
+                return !disposition.IsPending && disposition.CustodyReleased;
+            }
             dispatchRunner.RefreshLatestProcessWithOutcome(kernel, goal.Id, taskId);
             var task = kernel.GetTask(goal.Id, taskId);
             return task.LastProcess is { } process &&

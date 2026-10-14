@@ -25,6 +25,7 @@ internal sealed class CompletionBuildEvidenceFixture : WorkerDispatchTestSupport
     internal bool FailChildCheckpoint;
     internal bool FailLaunchIntent;
     internal bool BusyLease;
+    internal bool FailStop;
     internal Action? BeforeChildCheckpoint;
     internal CompletionBuildEvidenceOperation? Launched;
 
@@ -83,7 +84,12 @@ internal sealed class CompletionBuildEvidenceFixture : WorkerDispatchTestSupport
             }, () => { Stops++; Live = false; });
         },
         probe: _ => Unknown ? CompletionBuildChildLiveness.Unknown : Live ? CompletionBuildChildLiveness.Live : CompletionBuildChildLiveness.Dead,
-        stop: startProcess is not null ? null : _ => { Stops++; Live = false; },
+        stop: startProcess is not null ? null : _ =>
+        {
+            Stops++;
+            if (FailStop) throw new InvalidOperationException("controlled child termination unconfirmed");
+            Live = false;
+        },
         begin: (goal, child, id) => BusyLease ? new(null, null) :
             new GoalEvidenceOperationCoordinator(new ReconcileSweepRemediationStore(StatePath), Root,
                 TimeSpan.FromMinutes(10), () => Clock.UtcNow, () => child.Pid, () => id, () => child.StartedAt,
@@ -102,6 +108,14 @@ internal sealed class CompletionBuildEvidenceFixture : WorkerDispatchTestSupport
 
     internal void Reload() => Kernel = new SqliteOrchestratorStateRepository(StatePath)
         .LoadGoalsAsync([GoalId]).GetAwaiter().GetResult();
+
+    internal void ResetWorkerMetadata()
+    {
+        Kernel.RequeueInterruptedDispatch(GoalId, TaskId, "controlled metadata reset", RetryCause.EnvironmentApparatusFailure);
+        Xunit.Assert.Null(Task.LastProcess);
+        Xunit.Assert.Null(Task.LastDispatch);
+        new SqliteOrchestratorStateRepository(StatePath).SaveAsync(Kernel).GetAwaiter().GetResult();
+    }
 
     internal void Release(CompletionBuildEvidencePhase phase = CompletionBuildEvidencePhase.Success, bool receipt = true)
     {
