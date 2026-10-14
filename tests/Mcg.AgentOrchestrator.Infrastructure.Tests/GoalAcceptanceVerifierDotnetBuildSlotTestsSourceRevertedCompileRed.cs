@@ -15,7 +15,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSourceRevertedComp
         Assert.Equal(FindingEvidenceNegativeControlOutcome.CompileRed, result.NegativeControlOutcome);
         Assert.True(result.Passed, result.Summary);
         Assert.True(result.IsValidEvidence);
-        Assert.Null(result.OutcomeReason);
+        Assert.Equal(FindingEvidenceOutcomeReason.ValidEvidence, result.OutcomeReason);
         Assert.Equal(FindingEvidenceArmDisposition.Inconclusive, SourceReverted(result).Disposition);
         Assert.All(SourceReverted(result).Checks, check => Assert.Empty(check.FailingTestIdentities ?? []));
         Assert.Contains("CS1061: Other has no AddedMember", result.Summary, StringComparison.Ordinal);

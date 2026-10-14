@@ -27,6 +27,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedEvidence : 
 
         Assert.True(result.Accepted);
         Assert.True(result.Passed);
+        Assert.Equal(FindingEvidenceOutcomeReason.ValidEvidence, result.OutcomeReason);
         var check = Assert.Single(result.Checks);
         Assert.StartsWith("reviewer focused evidence: Infrastructure.Tests ", check.Name, StringComparison.Ordinal);
         Assert.Contains("mode=focused reason=explicit-focused-mapping", result.Summary);

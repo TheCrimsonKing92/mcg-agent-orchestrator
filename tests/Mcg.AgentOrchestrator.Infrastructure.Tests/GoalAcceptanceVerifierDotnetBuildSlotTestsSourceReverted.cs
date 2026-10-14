@@ -1,6 +1,10 @@
+using System.Text.Json;
 using System.Xml.Linq;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using static ConductorDriverTests;
+using static ConductorDriverTestsGreenTesterReceiptClosure;
 
 [Xunit.Collection(TestCollections.JobAccounting)]
 public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSourceReverted : GoalAcceptanceVerifierDotnetBuildSlotTests
@@ -20,7 +24,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSourceReverted : G
         Assert.Contains(reverted.Checks, check => check.FailingTestIdentities?.Contains(Identity) == true);
         Assert.True(probe.Result.Passed);
         Assert.True(probe.Result.IsValidEvidence);
-        Assert.Null(probe.Result.OutcomeReason);
+        Assert.Equal(FindingEvidenceOutcomeReason.ValidEvidence, probe.Result.OutcomeReason);
+        AssertControlClosure(probe.Result, expectedClosable: true);
         Assert.Equal("baseline source", probe.SourceContent);
         Assert.Equal("deleted baseline source", probe.DeletedContent);
         Assert.Equal(probe.CandidateTestContent, probe.TestContent);
@@ -36,6 +41,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSourceReverted : G
         Assert.Equal(FindingEvidenceArmDisposition.Green,
             Assert.Single(probe.Result.Arms!, arm => arm.Arm == FindingEvidenceArm.SourceReverted).Disposition);
         Assert.True(probe.Result.Passed);
+        AssertControlClosure(probe.Result, expectedClosable: false);
     }
 
     [Xunit.Fact]
@@ -49,6 +55,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSourceReverted : G
         Assert.True(probe.Result.Passed);
         Assert.True(probe.Result.IsValidEvidence);
         Assert.Equal(0, probe.RevertedTestCalls);
+        AssertControlClosure(probe.Result, expectedClosable: false);
     }
 
     [Xunit.Fact]
@@ -76,6 +83,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSourceReverted : G
         Assert.Contains("tracked uncommitted changes", probe.Result.Summary, StringComparison.Ordinal);
         Assert.Null(probe.RevertedPath);
         Assert.True(probe.Result.Passed);
+        AssertControlClosure(probe.Result, expectedClosable: false);
     }
 
     [Xunit.Fact]
@@ -107,6 +115,53 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSourceReverted : G
         // Candidate-added selections stay absent at baseline, which retains its existing semantics.
         Assert.Equal(FindingEvidenceOutcomeReason.VacuousEvidence, probe.Result.OutcomeReason);
         Assert.Equal(FindingEvidenceNegativeControlOutcome.Demonstrated, probe.Result.NegativeControlOutcome);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("missing")]
+    [Xunit.InlineData("green")]
+    [Xunit.InlineData("stale")]
+    public async Task DemonstratedOutcomeRequiresRedControlArmAtReviewedCandidate(string invalidControl)
+    {
+        var probe = await RunProbeAsync();
+        Assert.Equal(FindingEvidenceNegativeControlOutcome.Demonstrated, probe.Result.NegativeControlOutcome);
+        var result = probe.Result with
+        {
+            Arms = probe.Result.Arms!
+                .Where(arm => invalidControl != "missing" || arm.Arm != FindingEvidenceArm.SourceReverted)
+                .Select(arm => arm.Arm != FindingEvidenceArm.SourceReverted ? arm : invalidControl switch
+                {
+                    "green" => arm with { Disposition = FindingEvidenceArmDisposition.Green, Passed = true },
+                    "stale" => arm with { Sha = new string('f', 40) },
+                    _ => arm
+                }).ToArray()
+        };
+        AssertControlClosure(result, expectedClosable: false);
+    }
+
+    private static void AssertControlClosure(FocusedEvidenceRunResult result, bool expectedClosable)
+    {
+        // Feed the actual producer result through persisted receipt data into the conductor's closure evaluator.
+        var candidate = Assert.Single(result.Arms!, arm => arm.Arm == FindingEvidenceArm.Candidate);
+        using var fixture = new ClosureFixture();
+        var finding = EvidenceFindingWithRequest("Demonstrate the source regression", "source-control",
+            classes: ["AddedProbeTests"]);
+        finding = finding with
+        {
+            EvidenceRequest = finding.EvidenceRequest! with { NegativeControl = FindingEvidenceNegativeControl.RevertSrc }
+        };
+        fixture.Report([finding], reviewedSha: candidate.Sha);
+        var receipt = new FindingEvidenceReceipt("source-control-receipt", candidate.Sha, finding.EvidenceRequest!,
+            result.Accepted, result.IsValidEvidence, result.Summary,
+            result.Arms!.Select(arm => new FindingEvidenceArmReceipt(arm.Arm, arm.Sha, arm.Disposition,
+                arm.Accepted, arm.Passed, arm.Summary)).ToArray(), NegativeControlOutcome: result.NegativeControlOutcome);
+        receipt = JsonSerializer.Deserialize<FindingEvidenceReceipt>(JsonSerializer.Serialize(receipt))!;
+        fixture.Kernel.RecordFindingEvidenceOutcome(fixture.Goal.Id, fixture.Requester.Id, finding.StableId,
+            new FindingEvidenceOutcome(Honoured: true, ReceiptId: receipt.ReceiptId, ResultReason: result.OutcomeReason), receipt);
+        var diagnosis = FindingReceiptClosureDiagnosis.Evaluate(fixture.Goal, fixture.Requester, candidate.Sha);
+        Assert.Equal(expectedClosable, diagnosis.IsClosable);
+        Assert.Equal(expectedClosable ? FindingReceiptClosureDiagnosis.Closable :
+            FindingReceiptClosureDiagnosis.NegativeControlNotDemonstrated, diagnosis.Code);
     }
 
     private async Task<Probe> RunProbeAsync(bool revertedGreen = false, bool buildFailure = false,
