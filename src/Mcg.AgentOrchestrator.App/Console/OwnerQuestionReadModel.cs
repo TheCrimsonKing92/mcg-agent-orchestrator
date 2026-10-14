@@ -115,8 +115,11 @@ internal sealed class OwnerQuestionReadModel(
             if (seen.Add((question.GoalId.ToUpperInvariant(), question.Text))) live.Add(question);
             else hidden.Add(new HiddenOwnerQuestion(question, "duplicate"));
         }
+        var raisedAt = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+        foreach (var candidate in eligible.Where(candidate => live.Contains(candidate.Question)))
+            raisedAt.TryAdd(candidate.Question.ItemId, candidate.CreatedAt);
         return new OwnerQuestionSnapshot(
-            eligible.Select(candidate => candidate.Question).Where(live.Contains).ToArray(), hidden);
+            eligible.Select(candidate => candidate.Question).Where(live.Contains).ToArray(), hidden, raisedAt);
     }
 
     private sealed record QuestionCandidate(

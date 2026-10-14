@@ -217,7 +217,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     {
         if (_controller.Model is not { } model) return;
         var status = model.Status;
-        _status.Text = $"conductor: {(status.ConductorRunning ? "running" : "stopped")} | active: {status.ActiveGoals} | decisions: {status.LiveDecisions} | last event: {Age(status.LastEventAge)} | landed today: {status.LandedToday} | bell: {(_controller.BellEnabled ? "on" : "off")}";
+        _status.Text = $"conductor: {(status.ConductorRunning ? "running" : "stopped")} | active: {status.ActiveGoals} | decisions: {status.LiveDecisions} | last event: {Age(status.LastEventAge)} | landed today: {status.LandedToday} | bell: {_controller.BellStatusText}";
         if (status.HiddenQuestions > 0) _status.Text += $" | hidden: {status.HiddenQuestions}";
         if (_refreshedAt is { } refreshed)
         {
