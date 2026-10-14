@@ -60,6 +60,13 @@ public sealed class PlannerMultipleEvidenceRequestDispatchTests
             Assert.Equal(0, planner.LastVerification.ExitCode);
             Assert.Equal(wait.Kind, planner.LastVerification.HumanInputKind);
             Assert.Equal(wait.EvidenceOwner, planner.LastVerification.HumanInputEvidenceOwner);
+            var fullOutput = Assert.IsType<string>(planner.LastVerification.AuthoritativeStandardOutput);
+            Assert.Contains(PlannerOutputContract.DurablePlanBeginMarker, fullOutput, StringComparison.Ordinal);
+            Assert.Equal(4, fullOutput.Split("PLANNER_EVIDENCE_REQUEST:", StringSplitOptions.None).Length - 1);
+            Assert.DoesNotContain("PLANNER_EVIDENCE_REQUEST:", planner.LastVerification.StandardOutput, StringComparison.Ordinal);
+            Assert.Equal(AgentOutputDirectives.ParseHumanInputRequest(
+                PlannerMultipleEvidenceRequestMergeTests.GateRequests, AgentRole.Planner).Directive!.Question,
+                wait.Question);
             Assert.DoesNotContain("planner-output-contract-rejected", planner.LastVerification.CompletionVerdictRule ?? "", StringComparison.Ordinal);
             Assert.DoesNotContain("[orchestrator Planner output contract rejection]", planner.LastVerification.StandardError, StringComparison.Ordinal);
         }

@@ -25,6 +25,13 @@ public static class AgentOutputDirectives
         // request already identified in the worker decision stream, never a new request.
         if (authoritativeOutput is { } fullOutput)
         {
+            // The durable receipt repeats the plan, including its evidence directives.
+            // Those copies are artifact content, not additional worker requests.
+            var receiptStart = fullOutput.IndexOf("<!-- MCG_DURABLE_PLANNER_PLAN:BEGIN -->", StringComparison.Ordinal);
+            if (receiptStart >= 0)
+            {
+                fullOutput = fullOutput[..receiptStart];
+            }
             var fullDirective = ParseHumanInputRequest(fullOutput, role).Directive;
             if (fullDirective is { Kind: HumanWaitKind.ProspectiveAcceptanceEvidence } &&
                 string.Equals(fullDirective.Question, question, StringComparison.Ordinal))
