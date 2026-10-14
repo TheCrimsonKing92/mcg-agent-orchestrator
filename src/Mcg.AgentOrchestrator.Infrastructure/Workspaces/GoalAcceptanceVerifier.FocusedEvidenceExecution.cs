@@ -169,9 +169,13 @@ internal static class FocusedEvidenceExecution
                 Checks: candidate.Checks,
                 Coverage: coverage,
                 Arms: [candidate],
-                OutcomeReason: candidate.Disposition == FindingEvidenceArmDisposition.ApparatusFailure
-                    ? FindingEvidenceOutcomeReason.ApparatusFailure
-                    : null), negativeControl, worktreePath, goalId, focusedChecks, coverage,
+                OutcomeReason: candidate.Disposition switch
+                {
+                    FindingEvidenceArmDisposition.Green => FindingEvidenceOutcomeReason.ValidEvidence,
+                    FindingEvidenceArmDisposition.Red => FindingEvidenceOutcomeReason.CandidateRed,
+                    FindingEvidenceArmDisposition.ApparatusFailure => FindingEvidenceOutcomeReason.ApparatusFailure,
+                    _ => FindingEvidenceOutcomeReason.CandidateInconclusive
+                }), negativeControl, worktreePath, goalId, focusedChecks, coverage,
                 stableSlotIndex, stableSlotLease, executionOwner, revertPaths: revertPaths, mutation: mutation, declaredPaths: declaredPaths).ConfigureAwait(false);
         }
 

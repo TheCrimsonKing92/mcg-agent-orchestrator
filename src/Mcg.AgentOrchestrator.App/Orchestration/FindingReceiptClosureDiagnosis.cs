@@ -32,6 +32,7 @@ internal sealed class FindingReceiptClosureDiagnosis
     internal const string ReceiptCandidateDiffers = "receipt-candidate-differs";
     internal const string CandidateArmMissing = "candidate-arm-missing";
     internal const string CandidateArmNotGreen = "candidate-arm-not-green";
+    internal const string NegativeControlNotDemonstrated = "negative-control-not-demonstrated";
     internal const string HumanInputRequestOpen = "human-input-request-open";
 
     private FindingReceiptClosureDiagnosis(string code, string sentence,
@@ -116,6 +117,13 @@ internal sealed class FindingReceiptClosureDiagnosis
                  !string.Equals(arm.Sha?.Trim(), reviewedSha, StringComparison.OrdinalIgnoreCase)));
             if (invalidArm is not null)
                 return Fail(CandidateArmNotGreen, $"Finding {finding.StableId} receipt {receiptId} Candidate arm has disposition={invalidArm.Disposition}, accepted={invalidArm.Accepted}, passed={invalidArm.Passed}, sha='{invalidArm.Sha}' instead of green at {reviewedSha}.");
+            // ValidEvidence describes the candidate; an explicitly requested RED control is a separate obligation.
+            if ((finding.EvidenceRequest?.NegativeControl is not null || receipt.Request?.NegativeControl is not null) &&
+                (receipt.NegativeControlOutcome != FindingEvidenceNegativeControlOutcome.Demonstrated ||
+                 !arms.Any(arm => arm is { Arm: FindingEvidenceArm.SourceReverted,
+                     Disposition: FindingEvidenceArmDisposition.Red, Accepted: true, Passed: false } &&
+                     string.Equals(arm.Sha?.Trim(), reviewedSha, StringComparison.OrdinalIgnoreCase))))
+                return Fail(NegativeControlNotDemonstrated, $"Finding {finding.StableId} receipt {receiptId} does not demonstrate its requested negative control at {reviewedSha}.");
             selected.Add((finding, receipt));
         }
         if (blockingHumanInputOpen)

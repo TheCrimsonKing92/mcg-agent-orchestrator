@@ -70,7 +70,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedEvidenceBui
         Assert.DoesNotContain("build phase timed out", check.ResultSummary);
         Assert.DoesNotContain(calls, call => call.Test);
         Assert.Equal(FindingEvidenceArmDisposition.Inconclusive, Assert.Single(result.Arms!).Disposition);
-        Assert.Null(result.OutcomeReason);
+        Assert.Equal(FindingEvidenceOutcomeReason.CandidateInconclusive, result.OutcomeReason);
     }
 
     [Xunit.Theory]
