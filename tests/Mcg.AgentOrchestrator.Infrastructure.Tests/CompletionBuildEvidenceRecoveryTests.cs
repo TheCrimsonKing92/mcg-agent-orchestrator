@@ -159,6 +159,8 @@ public sealed class CompletionBuildEvidenceRecoveryTests
         var f = Start();
         var operation = f.Task.CompletionBuildEvidence!;
         f.Release(receipt: false);
+        var owner = ParseOwner(operation);
+        GoalOperationJournal.Completed(f.Root, f.Goal, owner.Operation, "original completed fact", operationInstanceId: owner.InstanceId);
         f.ResetWorkerMetadata();
         var coordinator = new CompletionBuildEvidenceCoordinator(f.StatePath, f.Root,
             utcNow: () => f.Clock.UtcNow, probe: _ => CompletionBuildChildLiveness.Dead,
@@ -168,11 +170,30 @@ public sealed class CompletionBuildEvidenceRecoveryTests
         Assert.Equal(CompletionBuildEvidencePhase.Success, f.Task.CompletionBuildEvidence!.Phase);
         Assert.False(f.Task.CompletionBuildEvidence.CustodyReleased);
         Assert.Equal(operation.LeaseOwner, Lease(f));
+        var nextDispatch = f.Task.DispatchHistory.Single() with { DispatchedAt = operation.DispatchAt.AddMinutes(1) };
+        Assert.Contains("custody must be released", Assert.Throws<InvalidOperationException>(() =>
+            f.Kernel.RecordTaskDispatch(f.GoalId, f.TaskId, nextDispatch)).Message);
+        Assert.Null(f.Task.LastDispatch);
+        Assert.Single(f.Task.DispatchHistory);
+        new SqliteOrchestratorStateRepository(f.StatePath).SaveAsync(f.Kernel).GetAwaiter().GetResult();
+        f.Reload();
+        Assert.Contains("custody must be released", Assert.Throws<InvalidOperationException>(() =>
+            f.Kernel.RecordTaskDispatch(f.GoalId, f.TaskId, nextDispatch)).Message);
+        Assert.Equal(operation.Id, f.Task.CompletionBuildEvidence!.Id);
+        Assert.Equal(operation.LeaseOwner, Lease(f));
         var terminal = f.Runner().ReconcileCompletionBuildEvidence(f.Kernel, f.GoalId, f.TaskId, CompletionBuildEvidenceTarget.From(operation));
         Assert.Equal(CompletionBuildEvidencePhase.Success, terminal.Phase);
         Assert.True(terminal.CustodyReleased);
         Assert.Null(Lease(f));
         Assert.Null(f.Task.LastProcess);
+        f.Kernel.RecordTaskDispatch(f.GoalId, f.TaskId, nextDispatch);
+        new SqliteOrchestratorStateRepository(f.StatePath).SaveAsync(f.Kernel).GetAwaiter().GetResult();
+        f.Reload();
+        Assert.Null(f.Task.CompletionBuildEvidence);
+        Assert.Equal(2, f.Task.DispatchHistory.Count);
+        Assert.Equal(nextDispatch.DispatchedAt, f.Task.LastDispatch!.DispatchedAt);
+        Assert.True(File.Exists(operation.ResultPath));
+        Assert.Single(Journal(f, operation).Where(e => e.Status == GoalOperationStatus.Completed));
     }
 
     [Fact]
@@ -238,6 +259,80 @@ public sealed class CompletionBuildEvidenceRecoveryTests
     }
 
     [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ProductionReconciliationAppliesNewerWorkerWithoutConsumingHistoricalBuild(bool currentReceipt)
+    {
+        var f = Start();
+        var operation = f.Task.CompletionBuildEvidence!;
+        f.Release(receipt: false);
+        var owner = ParseOwner(operation);
+        GoalOperationJournal.Completed(f.Root, f.Goal, owner.Operation, "original completed fact", operationInstanceId: owner.InstanceId);
+        f.ResetWorkerMetadata();
+        AttachNewerExitedWorker(f, operation);
+        if (currentReceipt) f.WriteReceipt(operation.Projects);
+        var currentProcess = f.Task.LastProcess!;
+        var currentDispatch = f.Task.LastDispatch!;
+        var originalResult = File.ReadAllText(operation.ResultPath);
+
+        ExitedDispatchReconciliationExecutor.Execute(f.Goal,
+            (goal, taskId) => ExitedDispatchReconciliationExecutor.ReconcileTask(f.Kernel, goal.Id, taskId, f.Runner()),
+            _ => f.Goal);
+
+        Assert.True(DispatchProcessCompletionState.HasAlreadyBeenApplied(f.Task, f.Task.LastProcess!));
+        Assert.Equal(currentProcess.ProcessId, f.Task.LastProcess!.ProcessId);
+        Assert.Equal(currentProcess.StartedAt, f.Task.LastProcess.StartedAt);
+        Assert.Equal(currentDispatch.DispatchedAt, f.Task.LastDispatch!.DispatchedAt);
+        Assert.Equal(currentReceipt, Assert.Single(f.Task.VerificationHistory).Succeeded);
+        Assert.Equal(currentReceipt ? WorkTaskStatus.Completed : WorkTaskStatus.Failed, f.Task.Status);
+        Assert.Equal(CompletionBuildEvidencePhase.Success, f.Task.CompletionBuildEvidence!.Phase);
+        Assert.True(f.Task.CompletionBuildEvidence.CustodyReleased);
+        Assert.False(f.Task.CompletionBuildEvidence.Applied);
+        Assert.Null(f.Task.DispatchHistory.Single(d => d.DispatchedAt == operation.DispatchAt).ResultCommit);
+        if (currentReceipt) Assert.NotNull(f.Task.LastDispatch.ResultCommit);
+        else
+        {
+            Assert.Null(f.Task.LastDispatch.ResultCommit);
+            Assert.Contains("Historical completion build", f.Task.LastVerification!.StandardError);
+        }
+        Assert.Equal(originalResult, File.ReadAllText(operation.ResultPath));
+        Assert.Single(Journal(f, operation).Where(e => e.Status == GoalOperationStatus.Completed));
+        Assert.Null(Lease(f));
+        Assert.Equal(1, f.Launches);
+        Assert.Equal(GoalStatus.Active, f.Goal.Status);
+        new SqliteOrchestratorStateRepository(f.StatePath).SaveAsync(f.Kernel).GetAwaiter().GetResult();
+        f.Reload();
+        Assert.False(f.Task.CompletionBuildEvidence!.Applied);
+        var calls = 0;
+        ExitedDispatchReconciliationExecutor.Execute(f.Goal, (_, _) => { calls++; return false; }, _ => f.Goal);
+        Assert.Equal(0, calls);
+        Assert.Single(f.Task.VerificationHistory);
+    }
+
+    [Fact]
+    public void HistoricalUnknownChildHoldsNewerWorkerWithoutChangingItsEvidence()
+    {
+        var f = Start();
+        var operation = f.Task.CompletionBuildEvidence!;
+        f.ResetWorkerMetadata();
+        AttachNewerExitedWorker(f, operation);
+        f.Unknown = true;
+        f.WriteReceipt(operation.Projects);
+
+        Assert.False(ExitedDispatchReconciliationExecutor.ReconcileTask(f.Kernel, f.GoalId, f.TaskId, f.Runner()));
+        Assert.Null(f.Runner().RefreshLatestProcessWithOutcome(f.Kernel, f.GoalId, f.TaskId).Verification);
+        Assert.True(f.Task.CompletionBuildEvidence!.IsPending);
+        Assert.False(f.Task.CompletionBuildEvidence.CustodyReleased);
+        Assert.False(f.Task.CompletionBuildEvidence.Applied);
+        Assert.Null(f.Task.LastVerification);
+        Assert.Null(f.Task.LastDispatch!.ResultCommit);
+        Assert.Equal(WorkTaskStatus.Running, f.Task.Status);
+        Assert.Equal(operation.LeaseOwner, Lease(f));
+        Assert.Equal(0, f.Stops);
+        Assert.Equal(1, f.Launches);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public void RealOwnedChildAfterResetSupportsCancellationButRejectsReusedIdentity(bool reusedIdentity)
@@ -294,6 +389,35 @@ public sealed class CompletionBuildEvidenceRecoveryTests
         f.Runner().RefreshLatestProcess(f.Kernel, f.GoalId, f.TaskId);
         Assert.Equal(CompletionBuildEvidencePhase.Pending, f.Task.CompletionBuildEvidence!.Phase);
         return f;
+    }
+
+    private static void AttachNewerExitedWorker(CompletionBuildEvidenceFixture f, CompletionBuildEvidenceOperation operation)
+    {
+        var snapshot = f.Kernel.ExportSnapshot();
+        var goal = snapshot.Goals.Single();
+        var task = goal.Tasks.Single(t => t.Id == f.TaskId.Value);
+        var original = task.DispatchHistory!.Single();
+        var newer = original with { DispatchedAt = operation.DispatchAt.AddMinutes(30), ResultCommit = null };
+        var worker = operation.WorkerProcess with
+        {
+            ProcessId = operation.WorkerProcess.ProcessId + 1, StartedAt = newer.DispatchedAt,
+            CompletedAt = newer.DispatchedAt.AddMinutes(1), ExitCode = 0,
+            StandardOutputPath = Path.Combine(f.Root, "logs", "newer.out.log"),
+            StandardErrorPath = Path.Combine(f.Root, "logs", "newer.err.log"),
+            ExitCodePath = Path.Combine(f.Root, "logs", "newer.exit.txt")
+        };
+        File.Copy(operation.WorkerProcess.StandardOutputPath, worker.StandardOutputPath);
+        File.Copy(operation.WorkerProcess.StandardErrorPath, worker.StandardErrorPath);
+        File.WriteAllText(worker.ExitCodePath, "0");
+        var changed = task with { LastDispatch = newer, LastProcess = new TaskProcessSnapshot(
+            worker.ProcessId, worker.Command, worker.WorkingDirectory, worker.StandardOutputPath,
+            worker.StandardErrorPath, worker.ExitCodePath, worker.StartedAt, worker.CompletedAt, worker.ExitCode),
+            DispatchHistory = [original, newer], VerificationHistory = [], Status = WorkTaskStatus.Running };
+        f.Kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with { Goals = [goal with
+        { Tasks = goal.Tasks.Select(t => t.Id == changed.Id ? changed : t).ToArray() }] });
+        f.Clock.Advance(TimeSpan.FromMinutes(31));
+        new SqliteOrchestratorStateRepository(f.StatePath).SaveAsync(f.Kernel).GetAwaiter().GetResult();
+        f.Reload();
     }
 
     private static string? Lease(CompletionBuildEvidenceFixture f) =>

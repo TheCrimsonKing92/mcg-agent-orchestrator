@@ -948,6 +948,8 @@ public sealed partial class TaskSpec
     {
         if (CompletionBuildEvidence is { IsPending: true })
             throw new InvalidOperationException("A pending completion build must be cancelled before another dispatch.");
+        if (CompletionBuildEvidence is { CustodyReleased: false })
+            throw new InvalidOperationException("Completion build custody must be released before another dispatch.");
         CompletionBuildEvidence = null;
         if (_dispatchHistory.Count > 0)
         {
