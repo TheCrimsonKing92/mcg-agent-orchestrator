@@ -508,8 +508,11 @@ public sealed class Goal
 
         var obligation = _criterionEvidenceObligations[index];
         if (obligation.Owner != CriterionEvidenceOwner.Acceptance ||
-            obligation.State != CriterionEvidenceState.Pending)
+            obligation.State != CriterionEvidenceState.Pending ||
+            !string.IsNullOrWhiteSpace(obligation.FindingStableId))
         {
+            // An explicit finding mapping binds authority to its candidate.
+            // Reviewer observations cannot create or replace that binding.
             return obligation;
         }
 
