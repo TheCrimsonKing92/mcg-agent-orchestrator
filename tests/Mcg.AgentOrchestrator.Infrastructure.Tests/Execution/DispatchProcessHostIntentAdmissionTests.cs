@@ -145,6 +145,122 @@ public sealed class DispatchProcessHostIntentAdmissionTests(Xunit.ITestOutputHel
         finally { Directory.Delete(root, recursive: true); }
     }
 
+    [Xunit.Fact]
+    public void SuspendedChild_ModuleIdentityUnavailable_RecordsActualKernelIdentity()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var root = CreateRoot();
+        OwnedProcessGroup.SuspendedProcessStart? child = null;
+        try
+        {
+            var store = new SqliteOperatorIntentStore(Path.Combine(root, "intents.db"), root);
+            var reference = store.CaptureAdmission("goal", "task");
+            var process = TaskIntentAdmission.Launch(reference, "suspended-child", () =>
+            {
+                child = OwnedProcessGroup.StartSuspended(new System.Diagnostics.ProcessStartInfo(
+                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe"))
+                    { UseShellExecute = false, CreateNoWindow = true });
+                // The initial thread cannot initialize the loader until Resume. This forces
+                // the missing-module condition without depending on scheduling or machine load.
+                string? modulePath = null;
+                var moduleFailure = Xunit.Record.Exception(() => modulePath = child.Process.MainModule?.FileName);
+                Xunit.Assert.True(moduleFailure is null or System.ComponentModel.Win32Exception,
+                    "Module enumeration failed outside the controlled loader boundary: " + moduleFailure);
+                Xunit.Assert.Null(modulePath);
+                child.Process.StartInfo.FileName = Path.Combine(root, "not-the-launched-image.exe");
+                return child.Process;
+            });
+            var identity = child!.ReadLifecycleIdentity(process.Id);
+            Xunit.Assert.Equal(ProcessInspectionStatus.Available, identity.Status);
+            Xunit.Assert.False(process.HasExited);
+            Xunit.Assert.True(store.HasLaunch("suspended-child"));
+            using var connection = new Microsoft.Data.Sqlite.SqliteConnection(
+                new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder
+                    { DataSource = reference.StorePath, Mode = Microsoft.Data.Sqlite.SqliteOpenMode.ReadOnly, Pooling = false }.ToString());
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT process_id, process_started_at, process_path FROM task_intent_launches WHERE decision_key = 'suspended-child'";
+            using var row = command.ExecuteReader();
+            Xunit.Assert.True(row.Read());
+            Xunit.Assert.Equal(process.Id, row.GetInt32(0));
+            Xunit.Assert.Equal(identity.StartedAt!.Value.ToString("O"), row.GetString(1));
+            Xunit.Assert.Equal(identity.ExecutablePath, row.GetString(2));
+            Xunit.Assert.NotEqual(process.StartInfo.FileName, row.GetString(2));
+            Xunit.Assert.Null(store.GetSuppression("suspended-child"));
+        }
+        finally
+        {
+            if (child is not null)
+            {
+                child.Group.Kill();
+                try { Xunit.Assert.True(child.WaitForOwnedExit(TimeSpan.FromSeconds(120)), "Suspended child did not exit during cleanup."); }
+                finally { child.Dispose(); }
+            }
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("unavailable")]
+    [Xunit.InlineData("reader-throws")]
+    [Xunit.InlineData("wrong-pid")]
+    [Xunit.InlineData("missing-image")]
+    [Xunit.InlineData("missing-start")]
+    public void RequiredIdentityFailure_ReapsBeforeTeardown_PublishesFailedExit(string failure)
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var root = CreateRoot();
+        System.Diagnostics.Process? observedChild = null;
+        try
+        {
+            var store = new SqliteOperatorIntentStore(Path.Combine(root, "intents.db"), root);
+            var parameters = Parameters(root, store.CaptureAdmission("goal", "task"));
+            File.WriteAllText(parameters.StartGatePath!, "go");
+            var reads = 0;
+            ProcessInspectionStatus? nativeStatus = null;
+            var exitedBeforeTeardown = false;
+            var exit = DispatchProcessHost.RunWithHeartbeatHooksForTests(parameters,
+                new DispatchProcessHost.HeartbeatTestHooks
+                {
+                    BeforeTaskIntentAdmission = ConfigureProbeEnvironment,
+                    ReadTaskIntentLaunchIdentity = process =>
+                    {
+                        reads++;
+                        observedChild = System.Diagnostics.Process.GetProcessById(process.Id);
+                        // Retain the exact process object after the host disposes its own handle.
+                        var native = WindowsNativeProcessInspection.ReadLifecycleIdentity(process.Id, observedChild.SafeHandle);
+                        nativeStatus = native.Status;
+                        if (failure == "reader-throws") throw new InvalidOperationException("forced-identity-reader-failure");
+                        var identity = failure == "unavailable" ? null : new SpawnProcessIdentity(
+                            failure == "wrong-pid" ? -1 : process.Id,
+                            failure == "missing-start" ? default : native.StartedAt!.Value,
+                            failure == "missing-image" ? "" : native.ExecutablePath!);
+                        return new(identity, 1, "forced-identity-" + failure);
+                    },
+                    TeardownPhase = phase =>
+                    {
+                        if (phase == "quiescing") exitedBeforeTeardown = observedChild?.HasExited == true;
+                    }
+                });
+            RecordProbeOutcome(parameters, store, exit);
+            Xunit.Assert.Equal(ProcessInspectionStatus.Available, nativeStatus);
+            Xunit.Assert.Equal(1, reads);
+            Xunit.Assert.Equal(1, exit);
+            Xunit.Assert.True(exitedBeforeTeardown, "Unacknowledged child was still alive when host teardown began.");
+            Xunit.Assert.True(DispatchExitArtifacts.TryRead(parameters.ExitCodePath, out var artifact));
+            Xunit.Assert.Equal(1, artifact.ExitCode);
+            Xunit.Assert.False(store.HasLaunch(parameters.StdoutPath));
+            Xunit.Assert.Null(store.GetSuppression(parameters.StdoutPath));
+            Xunit.Assert.False(File.Exists(Path.Combine(root, "child-started")));
+            Xunit.Assert.Contains("forced-identity-", File.ReadAllText(parameters.StderrPath));
+        }
+        finally
+        {
+            observedChild?.Dispose();
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     private int RunProbe(DispatchProcessHost.DispatchRunParameters parameters, SqliteOperatorIntentStore store)
     {
         var exit = DispatchProcessHost.RunWithHeartbeatHooksForTests(parameters,

@@ -49,6 +49,10 @@ public static class TaskIntentAdmission
     }
 
     public static Process Launch(TaskIntentAdmissionReference reference, string decisionKey, Func<Process> start)
+        => Launch(reference, decisionKey, start, readIdentity: null);
+
+    internal static Process Launch(TaskIntentAdmissionReference reference, string decisionKey, Func<Process> start,
+        Func<Process, SpawnProcessIdentityReadResult>? readIdentity)
         => Serialize(reference.StorePath, reference.GoalId, reference.TaskId, () =>
         {
             var store = SqliteOperatorIntentStore.OpenAdmissionAuthority(reference.StorePath);
@@ -67,16 +71,49 @@ public static class TaskIntentAdmission
             var process = start();
             try
             {
-                store.RecordLaunch(reference, decisionKey, process);
+                var read = (readIdentity ?? ReadLaunchIdentity)(process);
+                if (read.Identity is not { } identity || identity.ProcessId != process.Id ||
+                    identity.StartedAt == default || string.IsNullOrWhiteSpace(identity.ImagePath))
+                    throw new InvalidOperationException("Launched worker image identity is unavailable.",
+                        new InvalidOperationException(read.Evidence));
+                store.RecordLaunch(reference, decisionKey, identity);
                 return process;
             }
-            catch
+            catch (Exception failure)
             {
-                try { if (!process.HasExited) process.Kill(entireProcessTree: true); } catch { }
-                // The caller owns the returned process handle and its output/exit-artifact teardown.
+                try
+                {
+                    if (!process.HasExited) process.Kill(entireProcessTree: true);
+                    if (!process.WaitForExit(5000))
+                        throw new TimeoutException("Unacknowledged worker did not exit after launch cleanup.");
+                }
+                catch (Exception cleanupFailure)
+                {
+                    throw new AggregateException("Task admission launch failed and worker cleanup failed.", failure, cleanupFailure);
+                }
+                // The start callback retains the handle for the caller's output/exit-artifact teardown.
                 throw;
             }
         });
+
+    private static SpawnProcessIdentityReadResult ReadLaunchIdentity(Process process)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            // Module enumeration depends on user-mode loader initialization. Read the actual
+            // image and creation time from the same owned kernel handle, including liveness checks.
+            var read = WindowsNativeProcessInspection.ReadLifecycleIdentity(process.Id, process.SafeHandle);
+            var identity = read.Status == ProcessInspectionStatus.Available &&
+                read.StartedAt is { } startedAt && !string.IsNullOrWhiteSpace(read.ExecutablePath)
+                ? new SpawnProcessIdentity(process.Id, startedAt, read.ExecutablePath)
+                : null;
+            return new(identity, 1, $"status={read.Status}; source={read.Operation}; native_error_code={read.NativeError}");
+        }
+
+        return SpawnProcessIdentityReader.TryRead(process, out var portableIdentity)
+            ? new(portableIdentity, 1, "status=read; source=process-identity")
+            : new(null, 1, "status=unavailable; source=process-identity");
+    }
 }
 
 public sealed partial class SqliteOperatorIntentStore
@@ -245,7 +282,7 @@ public sealed partial class SqliteOperatorIntentStore
             reader.GetString(4),reader.GetInt64(5),reader.GetInt64(6),reader.GetString(7),reader.GetString(8)) : null;
     }
 
-    internal void RecordLaunch(TaskIntentAdmissionReference reference, string decisionKey, Process process)
+    internal void RecordLaunch(TaskIntentAdmissionReference reference, string decisionKey, SpawnProcessIdentity identity)
     {
         using var conn = OpenAdmissionWriteConnection();
         using var cmd = conn.CreateCommand();
@@ -253,9 +290,9 @@ public sealed partial class SqliteOperatorIntentStore
         BindTarget(cmd, reference.GoalId, reference.TaskId);
         cmd.Parameters.AddWithValue("$key", decisionKey);
         cmd.Parameters.AddWithValue("$version", reference.Version);
-        cmd.Parameters.AddWithValue("$pid", process.Id);
-        cmd.Parameters.AddWithValue("$started", process.StartTime.ToUniversalTime().ToString("O"));
-        cmd.Parameters.AddWithValue("$path", process.MainModule?.FileName ?? throw new InvalidOperationException("Launched worker image identity is unavailable."));
+        cmd.Parameters.AddWithValue("$pid", identity.ProcessId);
+        cmd.Parameters.AddWithValue("$started", identity.StartedAt.ToString("O"));
+        cmd.Parameters.AddWithValue("$path", identity.ImagePath);
         cmd.ExecuteNonQuery();
     }
 

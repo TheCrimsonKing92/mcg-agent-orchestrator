@@ -1389,6 +1389,7 @@ public static void DropToLow() {
         internal TimeSpan? QuiesceTimeout { get; init; }
         internal Action<ProcessStartInfo>? BeforeTaskIntentAdmission { get; init; }
         internal Action<Process>? AfterTaskIntentAdmission { get; init; }
+        internal Func<Process, SpawnProcessIdentityReadResult>? ReadTaskIntentLaunchIdentity { get; init; }
     }
 
     internal static int RunWithHeartbeatHooksForTests(DispatchRunParameters parameters, HeartbeatTestHooks hooks) =>
@@ -1866,7 +1867,7 @@ public static void DropToLow() {
                         throw;
                     }
                     return worker;
-                })
+                }, heartbeatHooks?.ReadTaskIntentLaunchIdentity)
                 : ProcessTreeGuiSuppression.Start(startInfo);
             workerGroup ??= OwnedProcessGroup.Attach(worker);
             heartbeatHooks?.AfterTaskIntentAdmission?.Invoke(worker);
