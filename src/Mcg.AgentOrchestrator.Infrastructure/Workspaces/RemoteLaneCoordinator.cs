@@ -132,6 +132,8 @@ internal sealed class RemoteLaneCoordinator : IDisposable
         var inspectingTrx = false;
         IReadOnlyList<RemoteLaneStep> steps = [];
         string? exceptionMessage = null;
+        RemoteLaneLeaseDecision? leaseDecision = null;
+        RemoteLaneRunnerLogCaptureTiming? captureTiming = null;
         try
         {
             var submission = await _executor.SubmitAsync(request, cancellationToken).ConfigureAwait(false);
@@ -149,7 +151,13 @@ internal sealed class RemoteLaneCoordinator : IDisposable
                 if (handle.NewestHeartbeat is { } newest && newest > heartbeat) heartbeat = newest;
                 var now = _clock.GetUtcNow();
                 if (now - submittedAt > timeout) return await Fallback(RemoteLaneOutcomeCode.LaneTimeout).ConfigureAwait(false);
-                if (now - heartbeat > TimeSpan.FromSeconds(entry.LeaseSeconds)) return await Fallback(RemoteLaneOutcomeCode.LeaseExpired).ConfigureAwait(false);
+                var heartbeatAge = now - heartbeat;
+                if (heartbeatAge > TimeSpan.FromSeconds(entry.LeaseSeconds))
+                {
+                    leaseDecision = new(now, submittedAt, heartbeat, heartbeatAge, entry.LeaseSeconds,
+                        request.ExecutorId, entry.RunnerAlias, request.Lane, request.AttemptId, Snapshot());
+                    return await Fallback(RemoteLaneOutcomeCode.LeaseExpired).ConfigureAwait(false);
+                }
                 if (handle.TryGetResult() is { } result)
                 {
                     observedResult = result;
@@ -231,6 +239,7 @@ internal sealed class RemoteLaneCoordinator : IDisposable
             RemoteLaneRunnerLogCapture? capture = null;
             if (handle is IRemoteLaneAttemptDiagnosticsSource source)
             {
+                var captureStartedAt = _clock.GetUtcNow();
                 try
                 {
                     using var bound = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -239,6 +248,7 @@ internal sealed class RemoteLaneCoordinator : IDisposable
                     capture = await source.CaptureRunnerLogAsync(bound.Token).ConfigureAwait(false);
                 }
                 catch (Exception) { /* Diagnostics cannot change fallback. */ }
+                finally { captureTiming = new(captureStartedAt, _clock.GetUtcNow()); }
             }
             if (slot is { } held)
             {
@@ -249,13 +259,24 @@ internal sealed class RemoteLaneCoordinator : IDisposable
             return new(request, handle, null);
         }
 
+        RemoteLaneHandleDiagnostics? Snapshot()
+        {
+            try
+            {
+                var snapshot = (handle as IRemoteLaneAttemptDiagnosticsSource)?.Snapshot();
+                return snapshot is null ? null : new(snapshot.Poll,
+                    Array.AsReadOnly(snapshot.Fetches.ToArray()), snapshot.LastStatus?.Clone());
+            }
+            catch (Exception) { /* Optional diagnostics cannot change the decision. */ }
+            return null;
+        }
+
         RemoteLaneAttemptDetail Detail(RemoteLaneRunnerLogCapture? capture = null)
         {
-            RemoteLaneHandleDiagnostics? snapshot = null;
-            try { snapshot = (handle as IRemoteLaneAttemptDiagnosticsSource)?.Snapshot(); }
-            catch (Exception) { /* Optional diagnostics cannot change the decision. */ }
+            var snapshot = leaseDecision is null ? Snapshot() : leaseDecision.Snapshot;
             return new(capture?.FailedStep is { } failed ? steps.Concat([failed]).ToArray() : steps,
-                snapshot?.Poll, snapshot?.Fetches ?? [], snapshot?.LastStatus, capture?.Path, exceptionMessage);
+                snapshot?.Poll, snapshot?.Fetches ?? [], snapshot?.LastStatus, capture?.Path, exceptionMessage,
+                leaseDecision, captureTiming);
         }
     }
 
