@@ -322,7 +322,6 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
     }
 
     [Xunit.Theory]
-    [Xunit.InlineData("five-role")]
     [Xunit.InlineData("scout")]
     public void CliBacklogIntakeForcedPipelineUsesExactPersistedOrder(string pipeline)
     {
@@ -353,9 +352,7 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
 
         Xunit.Assert.NotNull(currentGoal);
         Xunit.Assert.Equal(
-            pipeline == "scout"
-                ? (AgentRole[])[AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer]
-                : (AgentRole[])[AgentRole.Researcher, AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
+            [AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
             currentGoal!.Tasks.Select(task => task.RequiredRole));
         Xunit.Assert.Contains($"\"workflow\":\"{pipeline}\"", output, StringComparison.Ordinal);
         Xunit.Assert.Contains("\"selectionSource\":\"explicitly-required\"", output, StringComparison.Ordinal);
@@ -389,7 +386,7 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
 
         var exception = Xunit.Assert.Throws<InvalidOperationException>(() =>
             CliCommandDispatcher.ExecuteCommand(
-                ["backlog-intake", items[0].Heading, items[1].Heading, "--create-goal", "--pipeline", "five-role", "--backlog-coverage", "full"],
+                ["backlog-intake", items[0].Heading, items[1].Heading, "--create-goal", "--pipeline", "scout", "--backlog-coverage", "full"],
                 kernel,
                 workspace,
                 ref agents,
@@ -448,7 +445,7 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
 
         var exception = Xunit.Assert.Throws<InvalidOperationException>(() =>
             CliCommandDispatcher.ExecuteCommand(
-                ["backlog-intake", item.Heading, "--create-goal", "--pipeline", "five-role", "--backlog-coverage", "full"],
+                ["backlog-intake", item.Heading, "--create-goal", "--pipeline", "scout", "--backlog-coverage", "full"],
                 kernel,
                 workspace,
                 ref agents,
@@ -459,7 +456,7 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         Xunit.Assert.Single(kernel.Goals);
         Xunit.Assert.Null(currentGoal);
         Xunit.Assert.Contains("does not match the explicitly requested intake pipeline", exception.Message, StringComparison.Ordinal);
-        Xunit.Assert.Contains("Requested workflow='five-role'", exception.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Requested workflow='scout'", exception.Message, StringComparison.Ordinal);
         Xunit.Assert.Contains("selectionSource='explicitly-required'", exception.Message, StringComparison.Ordinal);
         Xunit.Assert.Contains("persisted workflow='scout'", exception.Message, StringComparison.Ordinal);
         Xunit.Assert.Contains("selectionSource='automatic'", exception.Message, StringComparison.Ordinal);
@@ -482,7 +479,7 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         var item = Xunit.Assert.Single(intake.Items);
         var kernel = new AgentOrchestratorKernel();
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
-        var forcedPlan = GoalObjectivePlanner.Build(item.SuggestedObjective, GoalIntakePipeline.FiveRole);
+        var forcedPlan = GoalObjectivePlanner.Build(item.SuggestedObjective, GoalIntakePipeline.Scout);
         var existingGoal = GoalLifecycleCommands.CreateAndActivateGoal(kernel, agents, forcedPlan);
         kernel.SetGoalSourceBacklogItemId(existingGoal.Id, item.Id);
         var providers = new InMemoryModelProviderRegistry([]);
@@ -492,7 +489,7 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
 
         var output = CaptureConsole(() =>
             changed = CliCommandDispatcher.ExecuteCommand(
-                ["backlog-intake", item.Heading, "--create-goal", "--pipeline", "five-role", "--backlog-coverage", "full"],
+                ["backlog-intake", item.Heading, "--create-goal", "--pipeline", "scout", "--backlog-coverage", "full"],
                 kernel,
                 workspace,
                 ref agents,
@@ -503,7 +500,7 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         Xunit.Assert.False(changed);
         Xunit.Assert.Equal(existingGoal.Id, currentGoal!.Id);
         Xunit.Assert.Contains($"already has goal {existingGoal.Id.Value[..8]}", output, StringComparison.Ordinal);
-        Xunit.Assert.Contains("\"workflow\":\"five-role\"", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("\"workflow\":\"scout\"", output, StringComparison.Ordinal);
         Xunit.Assert.Contains("\"selectionSource\":\"explicitly-required\"", output, StringComparison.Ordinal);
     }
 

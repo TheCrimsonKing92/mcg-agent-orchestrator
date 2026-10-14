@@ -507,7 +507,7 @@ Console.WriteLine("    Show recommended next action and print the exact command 
 Console.WriteLine("    --full: also surfaces status, monitor, readiness, evidence, stages, gates, verify-needed,");
 Console.WriteLine("            input-needed, subscription-plan, model-outcomes, durations, dispatch-value, loop-health, failure-triage,");
 Console.WriteLine("            goal-recovery, supervisor, and operator-inbox detail in one output.");
-Console.WriteLine("  goal <objective> [--pipeline auto|scout|five-role|developer-reviewer|developer-only] [--simple] [--from-backlog] [--run --confirm-batch-start]");
+Console.WriteLine("  goal <objective> [--pipeline auto|scout|developer-reviewer|developer-only] [--simple] [--from-backlog] [--run --confirm-batch-start]");
 Console.WriteLine("    Create a goal. --pipeline: automatic Scout selection or an explicit pipeline override. --simple: single Developer task. --from-backlog: read from the backlog store. --run: create and start.");
 Console.WriteLine("  accept [goal-id] [--skip-verify] [--autonomy <policy>]");
 Console.WriteLine("    Accept a completed goal: run acceptance checks, merge workspace, and clean up worktree.");
@@ -529,7 +529,7 @@ Console.WriteLine("  provider-smoke [openai|anthropic|ollama] [--confirm-paid-sm
 Console.WriteLine("  prototype [objective]");
 Console.WriteLine("  operator-listen");
 Console.WriteLine("  simple-goal <objective>, goal-plan [heading-filter] [--create-goals|--create-simple-goals] [--backlog-coverage full|slice]");
-Console.WriteLine("  backlog-intake [heading-filter] [--create-goal [--pipeline auto|scout|five-role|developer-reviewer|developer-only]|--create-simple-goal] [--backlog-coverage full|slice] [--force-reclaim]");
+Console.WriteLine("  backlog-intake [heading-filter] [--create-goal [--pipeline auto|scout|developer-reviewer|developer-only]|--create-simple-goal] [--backlog-coverage full|slice] [--force-reclaim]");
 Console.WriteLine("  intent-template [template request] [--create-goal|--create-simple-goal]");
 Console.WriteLine("  goals, agents");
 Console.WriteLine("  agent <role> <provider> <model> [name] [--complex-model <model>] (replace role)");

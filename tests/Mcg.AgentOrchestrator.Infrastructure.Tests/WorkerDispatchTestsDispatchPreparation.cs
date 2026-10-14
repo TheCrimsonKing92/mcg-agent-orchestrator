@@ -226,7 +226,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
                 "goal-replace", predecessor.Id.Value, "--brief-file", briefPath,
                 "--reason-file", reasonPath, "--request-id", Guid.NewGuid().ToString(),
                 "--disposition", "zero-work-correction", "--confirm-goal-replace",
-                "--pipeline", "five-role"
+                "--pipeline", "scout"
             ],
             repository,
             workspace,
@@ -242,7 +242,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         var claim = new SourceBacklogClaimStore(workspace.SqliteStatePath).ResolveClaim(restored, item.Id);
         Xunit.Assert.Equal(successor.Id.Value, claim!.OwnerGoalId);
         Xunit.Assert.Equal(
-            [AgentRole.Researcher, AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
+            [AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
             successor.Tasks.Select(task => task.RequiredRole));
         Xunit.Assert.Null(successor.RefinedSpec);
         Xunit.Assert.Contains(successor.Timeline, evt =>
@@ -298,7 +298,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
                     "goal-replace", predecessor.Id.Value, "--brief-file", briefPath,
                     "--reason-file", reasonPath, "--request-id", Guid.NewGuid().ToString(),
                     "--disposition", "zero-work-correction", "--confirm-goal-replace",
-                    "--pipeline", "five-role"
+                    "--pipeline", "scout"
                 ],
                 repository,
                 workspace,

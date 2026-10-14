@@ -14,7 +14,7 @@ public enum GoalReadinessSeverity
 public enum GoalReadinessRecommendation
 {
     Proceed,
-    UseFiveRoleGoal,
+    UseScoutGoal,
     SplitObjective,
     CreateWorkspace,
     RequireOperatorConfirmation,
@@ -168,7 +168,7 @@ public static class GoalReadinessPreflight
             findings.Add(new GoalReadinessFinding(
                 GoalReadinessSeverity.Warning,
                 "file-scope-low-confidence",
-                "No concrete repository file scopes were detected; prefer five-role planning or add explicit target paths before unattended execution.",
+                "No concrete repository file scopes were detected; prefer the Scout pipeline (Planner, Developer, Tester, Reviewer) or add explicit target paths before unattended execution.",
                 CanOverride: true));
         }
 
@@ -179,7 +179,7 @@ public static class GoalReadinessPreflight
             findings.Add(new GoalReadinessFinding(
                 GoalReadinessSeverity.Warning,
                 "simple-goal-complex",
-                "Single Developer task is classified complex; five-role goal planning may reduce rework.",
+                "Single Developer task is classified complex; Scout pipeline goal planning (Planner, Developer, Tester, Reviewer) may reduce rework.",
                 CanOverride: true));
         }
 
@@ -285,11 +285,11 @@ public static class GoalReadinessPreflight
 
         if (tasks.Length == 1 && tasks[0].Complexity == TaskComplexity.Complex)
         {
-            return GoalReadinessRecommendation.UseFiveRoleGoal;
+            return GoalReadinessRecommendation.UseScoutGoal;
         }
 
         return fileScopeConfidence == "low"
-            ? GoalReadinessRecommendation.UseFiveRoleGoal
+            ? GoalReadinessRecommendation.UseScoutGoal
             : GoalReadinessRecommendation.Proceed;
     }
 

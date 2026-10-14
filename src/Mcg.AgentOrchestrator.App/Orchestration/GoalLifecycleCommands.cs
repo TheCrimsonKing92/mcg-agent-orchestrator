@@ -64,7 +64,7 @@ internal static class GoalLifecycleCommands
         IReadOnlyList<AgentDefinition> agents)
     {
         if (!plan.PipelineDecision.IsOverride ||
-            plan.PipelineDecision.Pipeline is not (GoalIntakePipeline.FiveRole or GoalIntakePipeline.Scout))
+            plan.PipelineDecision.Pipeline is not GoalIntakePipeline.Scout)
         {
             return;
         }

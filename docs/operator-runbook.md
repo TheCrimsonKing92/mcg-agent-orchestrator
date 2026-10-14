@@ -65,7 +65,7 @@ mcg-orchestrator.cmd conduct --loop --watch --policy Permissive --poll-seconds 1
 mcg-orchestrator.cmd next <goal-prefix> --full          # one-shot full inspection
 ```
 
-For ordinary implementation goals, use `goal`: the normal dogfood pipeline is the five-role SDLC flow through Planner, Researcher, Developer, Tester, and Reviewer. `simple-goal` is an explicit exception for genuinely mechanical, low-risk work or direct operator instruction. It is not a throughput shortcut, and narrow backlog items still use `goal` unless they meet that exception.
+For ordinary implementation goals, use `goal`: the normal dogfood pipeline is the Scout flow through Planner, Developer, Tester, and Reviewer; Scout is the only multi-role intake, and goals created earlier with a Researcher task still run. `simple-goal` is an explicit exception for genuinely mechanical, low-risk work or direct operator instruction. It is not a throughput shortcut, and narrow backlog items still use `goal` unless they meet that exception.
 
 Supply a fresh `--request-key` for each intended creation. If the foreground caller times out, do not invent a new key: run `goal-intake-status <request-key>` or repeat the exact original command with the same key. The receipt state distinguishes `still-committing`, `created`, and `failed`; a terminal `created` replay returns the original goal, while reuse with different effectful inputs fails with `GOAL_INTAKE_PAYLOAD_CONFLICT`. Identical unkeyed objectives remain separate goals by design.
 
