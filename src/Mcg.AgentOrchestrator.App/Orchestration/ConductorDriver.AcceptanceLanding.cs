@@ -55,7 +55,18 @@ internal sealed partial class ConductorDriver
                         $"greenToLandingMs={(_utcNow() - (attempt.CompletedAt ?? attempt.StartedAt)).TotalMilliseconds:F0}", mainSha);
             });
         return _parallelAcceptanceAttemptCoordinator.ReplayPassedReconciledReceipt(candidate,
-            decision => PassedAcceptanceReceiptReplay.Apply(decision, operations));
+            decision => PassedAcceptanceReceiptReplay.Apply(decision, operations),
+            decision =>
+            {
+                var current = GetCurrentGoal(goal);
+                var currentHeads = _resolveAcceptanceHeads(current);
+                if (GoalLifecycle.ResolveState(current, GetFacts(current)) is not (GoalLifecycleState.Verified or GoalLifecycleState.Verifying) ||
+                    HasActiveApparatusHold(current, out _) || HasActiveOwnerReviewHold(current, out _, out _) ||
+                    PassedAcceptanceReceiptReplay.CircuitHold(current, policy, _readAcceptanceEngineHealth()) is not null)
+                    return false;
+                return AcceptanceCriterionEvidence.RecordExactReplayEvidence(current, decision.Attempt,
+                    currentHeads, _cohortKernel ?? _conductorTickKernel);
+            });
     }
 
     private ConductorAdvanceResult ExecuteLanding(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)

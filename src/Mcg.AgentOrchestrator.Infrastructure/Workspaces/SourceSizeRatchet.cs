@@ -466,7 +466,9 @@ internal static class SourceSizeRatchet
             // Measured 14962 lines across the same 70 partial files; no extra headroom.
             // Goal ffa0471e wires attached-operation reconciliation when current worker metadata is absent;
             // lifecycle remains in CompletionBuildEvidenceCoordinator. Measured 14970 in the same 70 partials; no headroom.
-            new SourceClassCeiling("ConductorDriver", 14970, 70),
+            // Goal 6a4ec362 moves exact-pair/context validation to AcceptanceCriterionEvidence before
+            // recording rebound gate evidence. Measured 14968 across the same 70 partials; no headroom.
+            new SourceClassCeiling("ConductorDriver", 14968, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
