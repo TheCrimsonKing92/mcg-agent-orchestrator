@@ -241,8 +241,8 @@ internal static class SourceSizeRatchet
             // Goal ffa0471e adds orphan completion-build cancellation routing before normal worker cancellation;
             // operation lifecycle/custody stays in CompletionBuildEvidenceCoordinator. Measured 2728; no headroom.
             // Goal ffa0471e extracts historical/current completion-build policy to its owning collaborator.
-            // Integrated with the admission call sites: measured 2738 lines, no extra headroom.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Processes/BackgroundDispatchRunner.cs", 2738),
+            // Integrated build-scope extraction and task-intent admission: measured 2736, no headroom.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Processes/BackgroundDispatchRunner.cs", 2736),
             // Goal 5a75fed0 extracted typed projection parsing and literal restoration into
             // WorkerContextProjectionResidual, leaving the dispatcher to sequence package assembly.
             // Goal fd252fe4 adds retry fingerprints for the resolved provider, model, paid route, and
@@ -294,7 +294,9 @@ internal static class SourceSizeRatchet
             // Raised one line for goal 139b8c97: finding-format failures must count as review history
             // at the existing context-artifact selection seam so bounded repairs receive rejected findings.
             // Finding projection remains in ReviewFindingContextProjector; 2606 is the measured size.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Workers/WorkerProfileDispatcher.cs", 2604),
+            // Goal 6e82a00d extracts build-scope preparation to WorkerBuildScopeDispatchPreparation and
+            // integration-ref lookup to WorkerGitContext. Measured 2596 after extraction; no extra headroom.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Workers/WorkerProfileDispatcher.cs", 2596),
             // Raised for goal fd252fe4: the single typed retry-cause argument belongs at the durable CLI
             // command-application boundary; classification and admission behavior remain elsewhere.
             // Goal 17d96426 classifies the stateless Hermes trial beside the existing stateless commands.

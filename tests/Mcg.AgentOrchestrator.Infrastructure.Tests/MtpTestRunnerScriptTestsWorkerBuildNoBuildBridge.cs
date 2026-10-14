@@ -20,7 +20,7 @@ public sealed class MtpTestRunnerScriptTestsWorkerBuildNoBuildBridge
         AssertRejected(missing);
         var repair = Assert.Single(missing.Stdout.Split('\n').Where(line => line.StartsWith("Sanctioned build: ", StringComparison.Ordinal)));
         var repairScript = Path.Combine(fixture.Root, "repair.ps1");
-        File.WriteAllText(repairScript, repair["Sanctioned build: ".Length..]);
+        File.WriteAllText(repairScript, repair["Sanctioned build: ".Length..] + "\nexit $LASTEXITCODE\n");
 
         var lockPath = Path.Combine(fixture.IsolatedRoot, "build-slots", "build-0.lock");
         Directory.CreateDirectory(Path.GetDirectoryName(lockPath)!);
@@ -30,7 +30,7 @@ public sealed class MtpTestRunnerScriptTestsWorkerBuildNoBuildBridge
         try { build = fixture.Shell("-File", repairScript); }
         finally { if (fallbackSlot) slot.Unlock(0, 1); }
         Assert.True(build.ExitCode == 0, build.Stdout + build.Stderr);
-        Assert.Contains("PASS build:", build.Stdout, StringComparison.Ordinal);
+        Assert.True(build.Stdout.Contains("PASS build:", StringComparison.Ordinal), build.Stdout + build.Stderr);
         Assert.True(WorkerBuildReceipt.Evaluate(fixture.ReceiptPath, fixture.Root).Matches,
             "The additive receipt must remain usable by dispatch without a worker start.");
         using var receipt = JsonDocument.Parse(File.ReadAllText(fixture.ReceiptPath));
@@ -66,6 +66,7 @@ public sealed class MtpTestRunnerScriptTestsWorkerBuildNoBuildBridge
 
     [Xunit.Theory]
     [Xunit.InlineData("missing", "worker-build-receipt.json")]
+    [Xunit.InlineData("scope-metadata", "scope metadata changed")]
     [Xunit.InlineData("malformed", "sanctioned worker output")]
     [Xunit.InlineData("legacy", "sanctioned worker output")]
     [Xunit.InlineData("source", "tree digest is stale")]
@@ -92,6 +93,10 @@ public sealed class MtpTestRunnerScriptTestsWorkerBuildNoBuildBridge
         switch (mutation)
         {
             case "missing": File.Delete(receiptPath); break;
+            case "scope-metadata":
+                Directory.CreateDirectory(Path.Combine(sandbox.Root, ".orchestrator-context"));
+                File.WriteAllText(WorkerBuildProjectScope.MetadataPath(sandbox.Root), "{}");
+                break;
             case "malformed": File.WriteAllText(receiptPath, "{"); break;
             case "legacy": receipt.Remove("artifactsPath"); receipt.Remove("buildProperties"); break;
             case "source": File.WriteAllText(Path.Combine(sandbox.Root, "Feature.cs"), "// edited"); break;
@@ -291,6 +296,13 @@ public sealed class MtpTestRunnerScriptTestsWorkerBuildNoBuildBridge
             var candidate = MtpTestRunnerScriptTests.RepositoryRoot();
             foreach (var file in new[] { "Invoke-WorkerBuildCheck.ps1", "WorkerBuildReceipt.psm1", "MtpTestRunner.psm1", "Invoke-TestSummary.ps1" })
                 File.Copy(Path.Combine(candidate, "scripts", file), Path.Combine(Root, "scripts", file));
+            var scopeDirectory = Path.Combine(Root, "scripts", "WorkerBuildScopeTool");
+            Directory.CreateDirectory(scopeDirectory);
+            File.Copy(Path.Combine(candidate, "scripts", "WorkerBuildScopeTool", "Program.cs"), Path.Combine(scopeDirectory, "Program.cs"));
+            var scopeProject = System.Xml.Linq.XDocument.Load(Path.Combine(candidate, "scripts", "WorkerBuildScopeTool", "WorkerBuildScopeTool.csproj"));
+            scopeProject.Descendants("ProjectReference").Single().SetAttributeValue("Include",
+                Path.Combine(candidate, "src", "Mcg.AgentOrchestrator.Execution", "Mcg.AgentOrchestrator.Execution.csproj"));
+            scopeProject.Save(Path.Combine(scopeDirectory, "WorkerBuildScopeTool.csproj"));
             foreach (var file in new[] { "Directory.Build.props", "Directory.Build.targets", "global.json" })
                 File.Copy(Path.Combine(candidate, file), Path.Combine(Root, file));
             var manager = "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetBuildEnvironmentManager.cs";

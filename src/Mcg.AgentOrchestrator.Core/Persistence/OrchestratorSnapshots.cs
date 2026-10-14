@@ -254,7 +254,9 @@ public sealed record TaskDispatchSnapshot(
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     FailedRoundCheckpointDecision? FailedRoundCheckpointDecision = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    IReadOnlyList<string>? SelectedSkills = null);
+    IReadOnlyList<string>? SelectedSkills = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    WorkerBuildScopeIdentity? WorkerBuildScope = null);
 
 public sealed record TaskProcessSnapshot(
     int ProcessId,

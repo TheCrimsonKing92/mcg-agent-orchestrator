@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("Warnings", "CompilerFailure", "NonDiagnosticFailure", "MultipleProjects", "LogUnavailable")]
+    [ValidateSet("Warnings", "CompilerFailure", "NonDiagnosticFailure", "MultipleProjects", "LogUnavailable", "ScopeBootstrapFailure")]
     [string]$Scenario = "Warnings"
 )
 
@@ -85,6 +85,10 @@ $originalPath = $env:PATH
 $originalIsolatedRoot = $env:MCG_DOTNET_ISOLATED_ROOT
 $originalScenario = $env:MCG_BUILD_FIXTURE_SCENARIO
 $originalShimLog = $env:DOTNET_SHIM_LOG
+$originalRealDotnet = $env:MCG_SCOPE_REAL_DOTNET
+# PATHEXT can resolve both a harness .cmd and dotnet.exe; delegate to the first
+# command, as normal invocation does, rather than joining both paths in one env value.
+$realDotnet = @(Get-Command dotnet -CommandType Application -ErrorAction Stop)[0].Source
 
 try {
     New-Item -ItemType Directory -Force -Path $workDirectory, $shimDirectory, $isolatedRoot | Out-Null
@@ -92,6 +96,14 @@ try {
     $projectTwo = Join-Path $workDirectory "Two.csproj"
     Set-Content -LiteralPath $projectOne -Value "<Project />"
     Set-Content -LiteralPath $projectTwo -Value "<Project />"
+    foreach ($gitArguments in @(
+        ,@("init", "--initial-branch=fixture")
+        ,@("add", "-A")
+        ,@("-c", "user.name=Build Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=", "commit", "-m", "fixture")
+    )) {
+        $git = Invoke-CapturedProcess -FileName "git" -ArgumentList $gitArguments -WorkingDirectory $workDirectory
+        if ($git.ExitCode -ne 0) { throw "Fixture git setup failed: $($git.Stdout)$($git.Stderr)" }
+    }
 
 $shimScript = @'
 $rawArguments = $env:DOTNET_SHIM_RAW_ARGUMENTS
@@ -145,7 +157,12 @@ exit $exitCode
     $shimCommand = @'
 @echo off
 set "DOTNET_SHIM_RAW_ARGUMENTS=%*"
+if not "%DOTNET_SHIM_RAW_ARGUMENTS:WorkerBuildScopeTool=%"=="%DOTNET_SHIM_RAW_ARGUMENTS%" goto scope
 powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0dotnet-shim.ps1"
+exit /b %ERRORLEVEL%
+:scope
+if "%MCG_BUILD_FIXTURE_SCENARIO%"=="ScopeBootstrapFailure" exit /b 9
+"%MCG_SCOPE_REAL_DOTNET%" %*
 exit /b %ERRORLEVEL%
 '@
     Set-Content -LiteralPath (Join-Path $shimDirectory "dotnet.cmd") -Value $shimCommand
@@ -161,6 +178,7 @@ exit $LASTEXITCODE
     $env:MCG_DOTNET_ISOLATED_ROOT = $isolatedRoot
     $env:MCG_BUILD_FIXTURE_SCENARIO = $Scenario
     $env:DOTNET_SHIM_LOG = $shimLog
+    $env:MCG_SCOPE_REAL_DOTNET = $realDotnet
 
     if ($Scenario -eq "LogUnavailable") {
         $fixtureGoalPrefix = if ($workDirectory -match '[\\/]\.orchestrator-worktrees[\\/](?<prefix>[^\\/]+)') {
@@ -233,6 +251,12 @@ exit $LASTEXITCODE
             Assert-Contract (-not $helperText.Contains("PASS build:")) "log apparatus failure produced PASS"
             Write-Output "PASS fixture: scenario=LogUnavailable helper_chars=$($helperText.Length)"
         }
+        "ScopeBootstrapFailure" {
+            Assert-Contract ($helper.ExitCode -eq 1) "scope bootstrap failure incorrectly produced success"
+            Assert-Contract ($helperText.Contains("worker build scope tool bootstrap failed; complete-log:")) "scope bootstrap diagnostic was replaced: $helperText"
+            Assert-Contract (-not $helperText.Contains("PASS build:")) "scope bootstrap failure produced PASS"
+            Write-Output "PASS fixture: scenario=ScopeBootstrapFailure helper_chars=$($helperText.Length)"
+        }
     }
 }
 finally {
@@ -240,6 +264,7 @@ finally {
     $env:MCG_DOTNET_ISOLATED_ROOT = $originalIsolatedRoot
     $env:MCG_BUILD_FIXTURE_SCENARIO = $originalScenario
     $env:DOTNET_SHIM_LOG = $originalShimLog
+    $env:MCG_SCOPE_REAL_DOTNET = $originalRealDotnet
     if (Test-Path -LiteralPath $temporaryRoot) {
         Remove-Item -LiteralPath $temporaryRoot -Recurse -Force
     }
