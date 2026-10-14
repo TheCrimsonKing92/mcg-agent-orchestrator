@@ -34,6 +34,15 @@ At each meaningful operator checkpoint, report what reached main since the previ
 
 This discipline comes from the September 2026 dogfood failure: completed branches accumulated behind reciprocal test failures and acceptance-owned criteria rejected at review, while the driving agent spent rounds improving diagnostics and expanding work. The lesson is to restore the landing path and its ownership rules, not to count activity as delivery.
 
+## Record discovered problems when found
+
+Dogfood includes discovering defects and deficiencies, not just finishing the current goal. **Record a discovered problem in the canonical backlog when found; do not wait for a landing or goal boundary.**
+
+1. Check `backlog-list` and `backlog-show` for an equivalent item. Update that item with new evidence rather than filing a duplicate; otherwise use `backlog-add`.
+2. Associate the item with the appropriate structured epic. Include the observable problem, exact reproduction or evidence reference, affected behavior, and the outcome a fix must achieve. Keep an undetermined cause explicitly undetermined; do not turn a hypothesis into a durable diagnosis.
+3. Keep filing separate from active intake. Recording an issue does not authorize widening the active queue. Apply the landing progress discipline and current intake policy when deciding whether to start its fix; preserve critical correctness priority.
+4. Close the item only when its covered scope has been delivered and verified. A workaround, diagnosis, or filed follow-up does not establish that the defect is fixed.
+
 ## 1. Golden path (conductor-first)
 
 The conductor drives a goal through its **entire** lifecycle. You almost never call the manual verbs.
@@ -791,7 +800,7 @@ For rare lifecycle/task desync repair, `scripts\Set-OrchestratorGoalStatus.ps1` 
 ### Manual verbs and subscription execution checks
 
 - **Build/test processes:** `Directory.Build.props` (`UseSharedCompilation=false`) + `Directory.Build.rsp` (`-nodeReuse:false`) disable the Roslyn/MSBuild build servers REPO-WIDE and prevent the old CS2012 lock-holding daemons.
-- At a landing, the conductor records the dogfood entry in `.orchestrator/dogfood-log.db`; you still close the finished backlog item (`backlog-close`) and add newly discovered ones (`backlog-add`).
+- At a landing, the conductor records the dogfood entry in `.orchestrator/dogfood-log.db`; you still close the finished backlog item (`backlog-close`). Record discovered problems [when found](#record-discovered-problems-when-found), using an existing equivalent item or `backlog-add`, rather than waiting for the landing.
 
 **Manual lower-level verbs (fallback / granular control only — prefer `conduct --loop`):** `subscription-dispatch <n>` → `start-dispatch <n> --confirm-dispatch-start` (the cost guard blocks ONLY on an *anomalous* prompt — disproportionate to task complexity, ≥2× the per-complexity ceiling, or batch total ≥2× the batch ceiling; routine/legitimately-large Complex briefs proceed silently, so `--confirm-large-paid-subscription-start` is needed only when a genuinely bloated prompt trips it) → wait on the printed pid → `refresh-dispatch <n>` → operator gate → `accept`. `acceptance`/`accept` fast-forwards only when main has not advanced mid-goal; otherwise run the printed merge on a scratch verification branch first, then land on `main` only once the evidence is acceptable. Direct `acceptance` also has a known state-guard caveat; follow the runbook's stuck-goal guidance before invoking or retrying it. ApiOnly tasks (e.g. the local Reviewer) run via `run <n>` with no file access — output reflects prompt text, not branch state; close HUMAN_INPUT with `answer <request-id> --text-file <path>`, then `verify-manual <n> passed --text-file <path>`. To put an operator note into an undispatched task's brief, use `progress <n> running --text-file <path>` → `progress <n> failed --text-file <path>` → `retry <n> --text-file <path>`.
 
