@@ -1222,7 +1222,10 @@ public sealed class MtpTestRunnerScriptTests
 
         Xunit.Assert.Equal(24, result.ExitCode);
         Xunit.Assert.Contains("build receipt verification failed", result.Stdout, StringComparison.OrdinalIgnoreCase);
-        Xunit.Assert.Contains("McgIsolatedArtifactsPath", result.Stdout, StringComparison.Ordinal);
+        var projectPath = Path.Combine(sandbox.Root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests", "Mcg.AgentOrchestrator.Infrastructure.Tests.csproj");
+        Xunit.Assert.Contains(
+            $"Sanctioned build: & \"{sandbox.Root}/scripts/Invoke-WorkerBuildCheck.ps1\" \"{projectPath}\" -Configuration \"Debug\"",
+            result.Stdout, StringComparison.Ordinal);
         Xunit.Assert.False(File.Exists(sandbox.ArgumentLog));
     }
 

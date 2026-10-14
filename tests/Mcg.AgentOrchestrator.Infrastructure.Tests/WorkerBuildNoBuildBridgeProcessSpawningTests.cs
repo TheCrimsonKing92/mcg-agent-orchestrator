@@ -223,7 +223,7 @@ public sealed class WorkerBuildNoBuildBridgeProcessSpawningTests
 
     private static void AssertRejected(TestChildProcessCapture.Result result)
     {
-        Assert.Equal(24, result.ExitCode);
+        Assert.True(result.ExitCode == 24, result.Stdout + result.Stderr);
         var summary = Summary(result);
         Assert.Empty(summary.GetProperty("executedTestNames").EnumerateArray());
         Assert.Empty(summary.GetProperty("trxPaths").EnumerateArray());
@@ -269,6 +269,7 @@ public sealed class WorkerBuildNoBuildBridgeProcessSpawningTests
     private sealed class RealBridgeFixture : IDisposable
     {
         private readonly string _parent;
+        private readonly string _resultsRoot;
         public string Root { get; }
         public string IsolatedRoot { get; }
         public string ReceiptPath => Path.Combine(IsolatedRoot, "goals", "manual", "artifacts", "worker-build-receipt.json");
@@ -277,6 +278,11 @@ public sealed class WorkerBuildNoBuildBridgeProcessSpawningTests
         {
             // A private Git repo outside the goal worktree makes 'manual' slot choice explicit.
             _parent = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Temp", "mcg-bridge-" + Guid.NewGuid().ToString("N"));
+            var localAppData = Environment.GetEnvironmentVariable("LOCALAPPDATA");
+            if (string.IsNullOrWhiteSpace(localAppData))
+                localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            // Use the same required Low results boundary as the real managed helper.
+            _resultsRoot = Path.Combine(localAppData, "Temp", "Low", "mcg-tests", "bridge-" + Guid.NewGuid().ToString("N"));
             Root = Path.Combine(_parent, "repo");
             IsolatedRoot = Path.Combine(_parent, "outputs");
             Directory.CreateDirectory(Path.Combine(Root, "scripts"));
@@ -324,8 +330,8 @@ public sealed class WorkerBuildNoBuildBridgeProcessSpawningTests
         }
 
         public TestChildProcessCapture.Result Test() => Shell("-File", Path.Combine(Root, "scripts", "Invoke-TestSummary.ps1"),
-            "-Target", Project, "-NoBuild", "-Filter", "FullyQualifiedName~BridgeCanary", "-ResultsRoot", Path.Combine(_parent, "results"));
+            "-Target", Project, "-NoBuild", "-Filter", "FullyQualifiedName~BridgeCanary", "-ResultsRoot", _resultsRoot);
 
-        public void Dispose() => ScriptSandboxCleanup.DeleteOrThrow([_parent]);
+        public void Dispose() => ScriptSandboxCleanup.DeleteOrThrow([_parent, _resultsRoot]);
     }
 }
