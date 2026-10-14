@@ -39,9 +39,11 @@ public sealed class CliOperatorIntentSubmitJsonTests : CliTaskQueryTestSupport
         AssertEnvelope(result, jsonRecord);
         Assert.NotEqual(textRecord.Id, jsonRecord.Id);
         // State roots are separate; the source directory, input file and seeded identities are shared.
-        // This pins every record field, including payload paths, with only id/time excluded.
-        Assert.Equal(JsonSerializer.Serialize(textRecord with { Id = "", CreatedAt = default }),
-            JsonSerializer.Serialize(jsonRecord with { Id = "", CreatedAt = default }));
+        Assert.Equal(verb == "adjudicate", textRecord.AdmissionExpiresAt.HasValue);
+        Assert.Equal(verb == "adjudicate", jsonRecord.AdmissionExpiresAt.HasValue);
+        // Pin every record field, including payload paths, except generated identity and timestamps.
+        Assert.Equal(JsonSerializer.Serialize(textRecord with { Id = "", CreatedAt = default, AdmissionExpiresAt = null }),
+            JsonSerializer.Serialize(jsonRecord with { Id = "", CreatedAt = default, AdmissionExpiresAt = null }));
         Assert.Equal("same-key", jsonRecord.IdempotencyKey);
         Assert.Equal(OperatorIntentStatus.Pending, jsonRecord.Status);
 
