@@ -19,9 +19,13 @@ internal sealed class CompletionBuildEvidenceCoordinator : ICompletionBuildEvide
     private readonly Func<CompletionBuildEvidenceOperation, CompletionBuildEvidenceOperation?, CompletionBuildEvidenceOperation> _persist;
     private readonly Func<CompletionBuildEvidenceOperation, CompletionBuildChildLaunch> _launch;
     private readonly Func<CompletionBuildEvidenceOperation, CompletionBuildChildLiveness> _probe;
-    private readonly Action<CompletionBuildEvidenceOperation> _stop;
+    private readonly Func<CompletionBuildEvidenceOperation, string?> _stop;
     private readonly Func<Goal, CompletionBuildChildLaunch, string, GoalEvidenceOperationStart> _begin;
     private readonly Action<Goal, CompletionBuildEvidenceOperation> _finish;
+    private readonly Func<ProcessStartInfo, Process> _startProcess;
+    private readonly Func<Process, SpawnProcessIdentityReadResult> _readIdentity;
+    private readonly Func<Process, (TextReader Output, TextReader Error)> _hostReaders;
+    private readonly Dictionary<string, CompletionBuildHostCapture> _captures = new();
 
     internal CompletionBuildEvidenceCoordinator(string statePath, string executionDirectory,
         Func<DateTimeOffset>? utcNow = null,
@@ -30,7 +34,10 @@ internal sealed class CompletionBuildEvidenceCoordinator : ICompletionBuildEvide
         Func<CompletionBuildEvidenceOperation, CompletionBuildChildLiveness>? probe = null,
         Action<CompletionBuildEvidenceOperation>? stop = null,
         Func<Goal, CompletionBuildChildLaunch, string, GoalEvidenceOperationStart>? begin = null,
-        Action<Goal, CompletionBuildEvidenceOperation>? finish = null)
+        Action<Goal, CompletionBuildEvidenceOperation>? finish = null,
+        Func<ProcessStartInfo, Process>? startProcess = null,
+        Func<Process, SpawnProcessIdentityReadResult>? readIdentity = null,
+        Func<Process, (TextReader Output, TextReader Error)>? hostReaders = null)
     {
         _statePath = statePath;
         _executionDirectory = executionDirectory;
@@ -38,9 +45,13 @@ internal sealed class CompletionBuildEvidenceCoordinator : ICompletionBuildEvide
         _persist = persist ?? Persist;
         _launch = launch ?? Launch;
         _probe = probe ?? CompletionBuildEvidenceChildIdentity.Probe;
-        _stop = stop ?? CompletionBuildEvidenceChildIdentity.Stop;
+        _stop = stop is null ? StopChild : operation => { stop(operation); return null; };
         _begin = begin ?? Begin;
         _finish = finish ?? FinishLease;
+        _startProcess = startProcess ?? (info => ProcessTreeGuiSuppression.Start(info)
+            ?? throw new InvalidOperationException("Completion build child launch failed."));
+        _readIdentity = readIdentity ?? SpawnProcessIdentityReader.ReadForRegistration;
+        _hostReaders = hostReaders ?? (process => (process.StandardOutput, process.StandardError));
     }
 
     public CompletionBuildEvidenceOperation Reconcile(AgentOrchestratorKernel kernel, GoalId goalId,
@@ -109,11 +120,13 @@ internal sealed class CompletionBuildEvidenceCoordinator : ICompletionBuildEvide
         }
         catch (Exception ex)
         {
-            child?.Stop();
+            var diagnostic = ex.Message;
+            try { child?.Stop(); }
+            catch (Exception cleanup) { diagnostic += $" Cleanup failed: {cleanup.Message}"; }
             scope?.Abort("Completion build launch was not authorized.");
             scope?.Dispose();
             var terminal = operation with
-            { Phase = CompletionBuildEvidencePhase.ApparatusFailure, Diagnostic = $"Completion build launch failed: {ex.Message}" };
+            { Phase = CompletionBuildEvidencePhase.ApparatusFailure, Diagnostic = $"Completion build launch failed: {diagnostic}" };
             return Store(kernel, terminal, operation);
         }
     }
@@ -154,6 +167,18 @@ internal sealed class CompletionBuildEvidenceCoordinator : ICompletionBuildEvide
                 return Terminal(kernel, goal, operation, CompletionBuildEvidencePhase.TimedOut, "Completion build evidence exceeded its deadline.");
             return operation;
         }
+        if (_captures.TryGetValue(operation.Id, out var capture) && capture.Matches(operation))
+        {
+            var captureFailure = capture.Collect();
+            if (!capture.HasUnreapedChild) _captures.Remove(operation.Id);
+            if (capture.DeadlineExceeded)
+                return Terminal(kernel, goal, operation, CompletionBuildEvidencePhase.TimedOut,
+                    captureFailure ?? "Completion build child exceeded its deadline.");
+            if (captureFailure is not null)
+                return Terminal(kernel, goal, operation, CompletionBuildEvidencePhase.ApparatusFailure, captureFailure);
+        }
+        if (CompletionBuildHostCapture.ReadRecordedFailure(operation) is { } recordedFailure)
+            return Terminal(kernel, goal, operation, recordedFailure.Phase, recordedFailure.Diagnostic);
         CompletionBuildEvidenceOperation? result = null;
         try
         {
@@ -197,7 +222,8 @@ internal sealed class CompletionBuildEvidenceCoordinator : ICompletionBuildEvide
     private CompletionBuildEvidenceOperation Terminal(AgentOrchestratorKernel kernel, Goal goal,
         CompletionBuildEvidenceOperation operation, CompletionBuildEvidencePhase phase, string diagnostic)
     {
-        if (operation.ChildPid is not null) _stop(operation);
+        if (operation.ChildPid is not null && _stop(operation) is { } captureFailure)
+            diagnostic += " " + captureFailure;
         _finish(goal, operation);
         return Store(kernel, operation with { Phase = phase, Diagnostic = diagnostic }, operation);
     }
@@ -245,6 +271,7 @@ internal sealed class CompletionBuildEvidenceCoordinator : ICompletionBuildEvide
 
     private CompletionBuildChildLaunch Launch(CompletionBuildEvidenceOperation operation)
     {
+        var capture = new CompletionBuildHostCapture(operation, _utcNow);
         var info = new ProcessStartInfo("dotnet")
         {
             UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = operation.WorktreeRoot,
@@ -253,33 +280,51 @@ internal sealed class CompletionBuildEvidenceCoordinator : ICompletionBuildEvide
         info.ArgumentList.Add(typeof(CompletionBuildEvidenceCoordinator).Assembly.Location);
         foreach (var argument in new[] { Subcommand, _statePath, operation.GoalId, operation.TaskId, operation.Id })
             info.ArgumentList.Add(argument);
-        var process = ProcessTreeGuiSuppression.Start(info) ?? throw new InvalidOperationException("Completion build child launch failed.");
-        var identity = DispatchProcessIdentityEvidence.ReadCurrent(process.Id);
-        if (identity is null)
-        {
-            process.Kill(entireProcessTree: true);
-            process.Dispose();
-            throw new InvalidOperationException("Completion build child identity unavailable.");
-        }
-        _ = DrainHost(process, operation.ResultPath);
-        return new(identity.ProcessId, identity.StartedAt, identity.ImagePath,
-            () => { process.StandardInput.WriteLine(operation.Id); process.StandardInput.Close(); },
-            () => CompletionBuildEvidenceChildIdentity.Stop(operation with
-            { ChildPid = identity.ProcessId, ChildStartedAt = identity.StartedAt, ChildImagePath = identity.ImagePath }));
-    }
-
-    private static async Task DrainHost(Process process, string resultPath)
-    {
         try
         {
-            var stdout = process.StandardOutput.ReadToEndAsync();
-            var stderr = process.StandardError.ReadToEndAsync();
-            await process.WaitForExitAsync().ConfigureAwait(false);
-            Directory.CreateDirectory(Path.GetDirectoryName(resultPath)!);
-            await File.WriteAllTextAsync(resultPath + ".host.stdout", await stdout.ConfigureAwait(false)).ConfigureAwait(false);
-            await File.WriteAllTextAsync(resultPath + ".host.stderr", await stderr.ConfigureAwait(false)).ConfigureAwait(false);
+            var process = _startProcess(info);
+            capture.Attach(process, _hostReaders);
+            var read = _readIdentity(process);
+            capture.Registration = read;
+            if (!read.Succeeded)
+                throw new InvalidOperationException($"Completion build child identity unavailable. {read.Evidence}");
+            var identity = read.Identity!;
+            if (identity.ProcessId != process.Id || process.HasExited)
+                throw new InvalidOperationException("Completion build child exited or registration described a different child.");
+            _captures[operation.Id] = capture;
+            return new(identity.ProcessId, identity.StartedAt, identity.ImagePath,
+                () => capture.Authorize(operation.Id), () =>
+                {
+                    var failure = capture.Stop();
+                    if (!capture.HasUnreapedChild && _captures.GetValueOrDefault(operation.Id) == capture) _captures.Remove(operation.Id);
+                    if (failure is not null) throw new InvalidOperationException(failure);
+                });
         }
-        finally { process.Dispose(); }
+        catch (Exception ex)
+        {
+            capture.LaunchFailure = ex.ToString();
+            var cleanup = capture.Stop();
+            if (capture.HasUnreapedChild) _captures[operation.Id] = capture;
+            else if (_captures.GetValueOrDefault(operation.Id) == capture) _captures.Remove(operation.Id);
+            throw new InvalidOperationException($"{ex.Message} Host diagnostics: {capture.MetadataPath}." +
+                (cleanup is null ? string.Empty : $" {cleanup}"), ex);
+        }
+    }
+
+    private string? StopChild(CompletionBuildEvidenceOperation operation)
+    {
+        if (_captures.TryGetValue(operation.Id, out var capture) && capture.Matches(operation))
+        {
+            var failure = capture.Stop();
+            if (capture.HasUnreapedChild)
+                throw new InvalidOperationException(failure ?? "Completion build child termination unconfirmed.");
+            _captures.Remove(operation.Id);
+            // Diagnostic custody faults do not revoke confirmed termination or prevent
+            // the caller from releasing the lease and persisting cancellation.
+            return failure;
+        }
+        CompletionBuildEvidenceChildIdentity.Stop(operation);
+        return null;
     }
 
     internal static int RunChild(string[] args)
