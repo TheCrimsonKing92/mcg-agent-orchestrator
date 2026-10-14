@@ -1,9 +1,10 @@
+using System.Diagnostics;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-// Parallel-safe: unique repositories/SQLite files/artifact identities; all process boundaries are fake.
+// Parallel-safe: unique repositories/SQLite files/artifact identities; fake process defaults.
 internal sealed class CompletionBuildEvidenceFixture : WorkerDispatchTestSupport
 {
     internal readonly string Root;
@@ -24,6 +25,8 @@ internal sealed class CompletionBuildEvidenceFixture : WorkerDispatchTestSupport
     internal bool FailChildCheckpoint;
     internal bool FailLaunchIntent;
     internal bool BusyLease;
+    internal bool FailStop;
+    internal Action? BeforeChildCheckpoint;
     internal CompletionBuildEvidenceOperation? Launched;
 
     internal CompletionBuildEvidenceFixture()
@@ -40,7 +43,7 @@ internal sealed class CompletionBuildEvidenceFixture : WorkerDispatchTestSupport
                 File.WriteAllText(Path.Combine(directory, "Feature.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
                 File.WriteAllText(Path.Combine(directory, "Feature.cs"), "public sealed class Feature { }");
             });
-        Kernel = fixture.Kernel;
+        Kernel = AgentOrchestratorKernel.FromSnapshot(fixture.Kernel.ExportSnapshot(), Clock);
         GoalId = fixture.Goal.Id;
         TaskId = fixture.Task.Id;
         // This fixture owns the isolated bootstrap database; repositories never migrate implicitly.
@@ -48,17 +51,24 @@ internal sealed class CompletionBuildEvidenceFixture : WorkerDispatchTestSupport
         new SqliteOrchestratorStateRepository(StatePath).SaveAsync(Kernel).GetAwaiter().GetResult();
     }
 
-    internal CompletionBuildEvidenceCoordinator Coordinator() => new(StatePath, Root,
-        utcNow: () => Clock.UtcNow,
-        persist: FailChildCheckpoint || FailLaunchIntent ? (operation, previous) =>
+    internal CompletionBuildEvidenceCoordinator Coordinator(
+        Func<ProcessStartInfo, Process>? startProcess = null,
+        Func<Process, SpawnProcessIdentityReadResult>? readIdentity = null,
+        Func<Process, (TextReader Output, TextReader Error)>? hostReaders = null,
+        Func<DateTimeOffset>? utcNow = null) => new(StatePath, Root,
+        utcNow: utcNow ?? (() => Clock.UtcNow),
+        persist: FailChildCheckpoint || FailLaunchIntent || BeforeChildCheckpoint is not null ? (operation, previous) =>
         {
             if (FailLaunchIntent && previous is null)
                 throw new IOException("injected launch intent persistence failure");
             if (operation.Phase == CompletionBuildEvidencePhase.Pending)
-                throw new IOException("injected child identity checkpoint failure");
+            {
+                BeforeChildCheckpoint?.Invoke();
+                if (FailChildCheckpoint) throw new IOException("injected child identity checkpoint failure");
+            }
             return Persist(operation);
         } : null,
-        launch: operation =>
+        launch: startProcess is not null ? null : operation =>
         {
             Launches++;
             if (FailLaunch) throw new IOException("injected child launch failure");
@@ -73,12 +83,20 @@ internal sealed class CompletionBuildEvidenceFixture : WorkerDispatchTestSupport
                 Authorizations++;
             }, () => { Stops++; Live = false; });
         },
-        probe: _ => Unknown ? CompletionBuildChildLiveness.Unknown : Live ? CompletionBuildChildLiveness.Live : CompletionBuildChildLiveness.Dead,
-        stop: _ => { Stops++; Live = false; },
+        // Real children use the production identity probe; fake liveness is only meaningful
+        // alongside the fake launcher and stop callback that update it.
+        probe: startProcess is not null ? null : _ => Unknown ? CompletionBuildChildLiveness.Unknown : Live ? CompletionBuildChildLiveness.Live : CompletionBuildChildLiveness.Dead,
+        stop: startProcess is not null ? null : _ =>
+        {
+            Stops++;
+            if (FailStop) throw new InvalidOperationException("controlled child termination unconfirmed");
+            Live = false;
+        },
         begin: (goal, child, id) => BusyLease ? new(null, null) :
             new GoalEvidenceOperationCoordinator(new ReconcileSweepRemediationStore(StatePath), Root,
                 TimeSpan.FromMinutes(10), () => Clock.UtcNow, () => child.Pid, () => id, () => child.StartedAt,
-                new FakePidProbe()).TryBegin(goal, CompletionBuildEvidenceCoordinator.OperationName));
+                new FakePidProbe()).TryBegin(goal, CompletionBuildEvidenceCoordinator.OperationName),
+        startProcess: startProcess, readIdentity: readIdentity, hostReaders: hostReaders);
 
     private CompletionBuildEvidenceOperation Persist(CompletionBuildEvidenceOperation operation)
     {
@@ -87,11 +105,20 @@ internal sealed class CompletionBuildEvidenceFixture : WorkerDispatchTestSupport
         return operation;
     }
 
-    internal BackgroundDispatchRunner Runner() => new(Clock,
-        isStillRunning: _ => false, completionBuildEvidence: Coordinator(), resolveWorkerBuildReceiptPath: _ => ReceiptPath);
+    internal BackgroundDispatchRunner Runner(CompletionBuildEvidenceCoordinator? coordinator = null) => new(Clock,
+        isStillRunning: _ => false, completionBuildEvidence: coordinator ?? Coordinator(), resolveWorkerBuildReceiptPath: _ => ReceiptPath);
 
-    internal void Reload() => Kernel = new SqliteOrchestratorStateRepository(StatePath)
-        .LoadGoalsAsync([GoalId]).GetAwaiter().GetResult();
+    internal void Reload() => Kernel = AgentOrchestratorKernel.FromSnapshot(
+        new SqliteOrchestratorStateRepository(StatePath).LoadGoalsAsync([GoalId]).GetAwaiter().GetResult().ExportSnapshot(), Clock);
+
+    internal void ResetWorkerMetadata()
+    {
+        Kernel.RequeueInterruptedDispatch(GoalId, TaskId, "controlled metadata reset", RetryCause.EnvironmentApparatusFailure);
+        Xunit.Assert.Equal(Clock.UtcNow, Task.LatestRetryAt);
+        Xunit.Assert.Null(Task.LastProcess);
+        Xunit.Assert.Null(Task.LastDispatch);
+        new SqliteOrchestratorStateRepository(StatePath).SaveAsync(Kernel).GetAwaiter().GetResult();
+    }
 
     internal void Release(CompletionBuildEvidencePhase phase = CompletionBuildEvidencePhase.Success, bool receipt = true)
     {

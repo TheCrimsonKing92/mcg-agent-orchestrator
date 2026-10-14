@@ -294,12 +294,7 @@ internal sealed partial class ConductorDriver
         _cohortEventWriter = eventWriter;
         var dispatchRunner = OperatorCancelAwareDispatchRunner.ForWorkspace(workspace);
         _reconcileExitedDispatch = (goal, taskId) =>
-        {
-            dispatchRunner.RefreshLatestProcessWithOutcome(kernel, goal.Id, taskId);
-            var task = kernel.GetTask(goal.Id, taskId);
-            return task.LastProcess is { } process &&
-                   DispatchProcessCompletionState.HasAlreadyBeenApplied(task, process);
-        };
+            ExitedDispatchReconciliationExecutor.ReconcileTask(kernel, goal.Id, taskId, dispatchRunner);
         _cohortAcceptanceStore = new CohortAcceptanceStore(
             Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db"));
         _startCohortGateBackground = action =>

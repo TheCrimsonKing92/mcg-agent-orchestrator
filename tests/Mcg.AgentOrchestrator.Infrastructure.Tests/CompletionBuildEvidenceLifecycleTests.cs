@@ -5,6 +5,23 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // Parallel-safe: injected child lifecycle/clock and unique SQLite/journal roots.
 public sealed class CompletionBuildEvidenceLifecycleTests
 {
+    [Fact]
+    public void UnknownBuildChildIdentityCannotSilentlyCancelCurrentWorker()
+    {
+        var fixture = new CompletionBuildEvidenceFixture();
+        var runner = fixture.Runner();
+        runner.RefreshLatestProcess(fixture.Kernel, fixture.GoalId, fixture.TaskId);
+        fixture.Unknown = true;
+        Assert.Contains("custody is retained", Assert.Throws<InvalidOperationException>(() =>
+            runner.CancelLatestProcess(fixture.Kernel, fixture.GoalId, fixture.TaskId)).Message);
+        Assert.Equal(WorkTaskStatus.Running, fixture.Task.Status);
+        Assert.False(fixture.Task.LastProcess!.WasCancelled);
+        Assert.True(fixture.Task.CompletionBuildEvidence!.IsPending);
+        Assert.Equal(fixture.Task.CompletionBuildEvidence.LeaseOwner,
+            new ReconcileSweepRemediationStore(fixture.StatePath).TryGetAcceptanceLeaseOwner(fixture.GoalId.Value));
+        Assert.Equal(0, fixture.Stops);
+    }
+
     [Theory]
     [InlineData(CompletionBuildEvidencePhase.Launching)]
     [InlineData(CompletionBuildEvidencePhase.WaitingForLease)]
@@ -60,19 +77,28 @@ public sealed class CompletionBuildEvidenceLifecycleTests
     }
 
     [Fact]
-    public void CancellationWinsOverLateSuccessAndRemainsCancelledAfterReload()
+    public void WorkerCancellationPreservesAlreadyTerminalBuildSuccessAfterReload()
     {
         var fixture = new CompletionBuildEvidenceFixture();
         var runner = fixture.Runner();
         runner.RefreshLatestProcess(fixture.Kernel, fixture.GoalId, fixture.TaskId);
         fixture.Release();
         runner.CancelLatestProcess(fixture.Kernel, fixture.GoalId, fixture.TaskId);
-        Assert.Equal(CompletionBuildEvidencePhase.Cancelled, fixture.Task.CompletionBuildEvidence!.Phase);
+        Assert.Equal(CompletionBuildEvidencePhase.Success, fixture.Task.CompletionBuildEvidence!.Phase);
+        Assert.True(fixture.Task.CompletionBuildEvidence.CustodyReleased);
+        Assert.Equal(WorkTaskStatus.Cancelled, fixture.Task.Status);
+        Assert.True(fixture.Task.LastProcess!.WasCancelled);
+        Assert.Null(new ReconcileSweepRemediationStore(fixture.StatePath).TryGetAcceptanceLeaseOwner(fixture.GoalId.Value));
+        // The caller persists worker cancellation; the coordinator persists only its operation.
+        new SqliteOrchestratorStateRepository(fixture.StatePath).SaveAsync(fixture.Kernel).GetAwaiter().GetResult();
         fixture.Reload();
-        Assert.Equal(CompletionBuildEvidencePhase.Cancelled, fixture.Task.CompletionBuildEvidence!.Phase);
+        Assert.Equal(CompletionBuildEvidencePhase.Success, fixture.Task.CompletionBuildEvidence!.Phase);
+        Assert.True(fixture.Task.CompletionBuildEvidence.CustodyReleased);
+        Assert.True(fixture.Task.LastProcess!.WasCancelled);
         Assert.Null(fixture.Task.LastVerification);
         Assert.Null(fixture.Task.LastDispatch!.ResultCommit);
-        Assert.Equal(1, fixture.Stops);
+        Assert.Equal(0, fixture.Stops);
+        Assert.Equal(WorkTaskStatus.Cancelled, fixture.Task.Status);
     }
 
     [Theory]

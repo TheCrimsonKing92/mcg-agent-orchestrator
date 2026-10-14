@@ -721,7 +721,7 @@ public sealed partial class BackgroundDispatchRunner
         var task = kernel.GetTask(goalId, taskId);
         var processRecord = task.LastProcess
             ?? throw new InvalidOperationException($"Task '{taskId}' has no background process to refresh.");
-        if (task.CompletionBuildEvidence is { Phase: CompletionBuildEvidencePhase.Cancelled })
+        if (CompletionBuildDispatchReconciliationPolicy.HoldsRefresh(task, processRecord))
             return new DispatchRefreshOutcome(processRecord, null);
         if (DispatchProcessCompletionState.HasAlreadyBeenApplied(task, processRecord))
         {
@@ -964,7 +964,8 @@ public sealed partial class BackgroundDispatchRunner
             task.LastProcess?.WasCancelled != true && !outcome.ProcessRecord.WasCancelled)
             kernel.RecordFailedRoundCheckpointReceipt(goalId, taskId, failedReceipt);
         kernel.RecordTaskProcessRefreshed(goalId, taskId, outcome.ProcessRecord, verification, outcome.ProviderFailureKind);
-        if (verification is not null && task.CompletionBuildEvidence is { Applied: false } completedBuild)
+        if (verification is not null && HasCurrentCompletionBuildWorker(task) &&
+            task.CompletionBuildEvidence is { Applied: false } completedBuild)
             kernel.RecordCompletionBuildEvidence(goalId, taskId, completedBuild with { Applied = true });
         if (verification is not null && outcome.ProcessRecord.ResourceAccounting is { } accounting)
         {
@@ -1511,18 +1512,14 @@ public sealed partial class BackgroundDispatchRunner
                     DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed));
             }
 
-            var buildEvidence = OrchestratorBuildEvidenceCheck.Resolve(
-                processRecord.WorkingDirectory,
-                task.RequiredRole,
-                worktreeEvidence.ChangedPaths,
-                worktreeEvidence.DirtyPaths,
-                failedWorkerBuildCheck,
+            var buildEvidence = CompletionBuildDispatchReconciliationPolicy.Resolve(
+                task, processRecord.WorkingDirectory,
+                worktreeEvidence.ChangedPaths, worktreeEvidence.DirtyPaths, failedWorkerBuildCheck,
                 () => _completionClassifier.EvaluateWorkerBuildReceipt(processRecord.WorkingDirectory, goal.Id),
                 _runOrchestratorBuildCheck,
                 _completionBuildEvidence is null ? null : request => _completionBuildEvidence.Reconcile(
                     kernel, goalId, taskId, request, processRecord with
-                    { CompletedAt = processRecord.CompletedAt ?? _clock.UtcNow, ExitCode = observedExitCode }),
-                task.CompletionBuildEvidence is not null);
+                    { CompletedAt = processRecord.CompletedAt ?? _clock.UtcNow, ExitCode = observedExitCode }));
             if (buildEvidence.Pending)
                 return new DispatchRefreshOutcome(
                     processRecord with { CompletedAt = processRecord.CompletedAt ?? _clock.UtcNow, ExitCode = observedExitCode }, null,
@@ -2256,6 +2253,15 @@ public sealed partial class BackgroundDispatchRunner
             if (task.LastProcess is not { IsRunning: true } && task.CompletionBuildEvidence is not { IsPending: true })
             {
                 continue;
+            }
+
+            if (task.CompletionBuildEvidence is { IsPending: true } operation && !HasCurrentCompletionBuildWorker(task))
+            {
+                var disposition = CancelCompletionBuildEvidence(kernel, goalId, task.Id, CompletionBuildEvidenceTarget.From(operation));
+                if (disposition.IsPending || !disposition.CustodyReleased)
+                    throw new InvalidOperationException("Completion build cancellation is held; custody is retained.");
+                // A newer live worker still follows its own normal cancellation path.
+                if (task.LastProcess is not { IsRunning: true }) { cancelled++; continue; }
             }
 
             CancelLatestProcess(kernel, goalId, task.Id, cancelledByConductor: true);

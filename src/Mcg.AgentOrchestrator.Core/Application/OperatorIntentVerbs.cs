@@ -80,7 +80,8 @@ public sealed record ExperimentDecideOperatorIntentPayload(string ExperimentId, 
 public sealed record CancelDispatchOperatorIntentPayload(
     int ProcessId,
     DateTimeOffset ProcessStartedAt,
-    string DispatchId);
+    string DispatchId,
+    CompletionBuildEvidenceTarget? CompletionBuild = null);
 
 // These payloads state an operator's attributed request. They do not mutate a
 // goal until the conductor has durably applied the intent.

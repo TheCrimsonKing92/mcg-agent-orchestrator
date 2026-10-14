@@ -85,10 +85,20 @@ public sealed partial class TaskSpec
 
     internal void RecordCompletionBuildEvidence(CompletionBuildEvidenceOperation operation)
     {
-        if (operation.TaskId != Id.Value || operation.DispatchAt != LastDispatch?.DispatchedAt)
+        var previous = CompletionBuildEvidence;
+        var attachedOrigin = previous is not null && previous.HasSameOrigin(operation) &&
+            DispatchHistory.Any(dispatch => dispatch.DispatchedAt == operation.DispatchAt);
+        if (operation.TaskId != Id.Value ||
+            (operation.DispatchAt != LastDispatch?.DispatchedAt && !attachedOrigin))
             throw new InvalidOperationException("Completion build evidence does not belong to the current dispatch.");
-        if (CompletionBuildEvidence is { } previous && previous.Id == operation.Id &&
-            (!previous.IsPending && operation.IsPending || previous.Applied && !operation.Applied))
+        if (previous is not null && (!previous.HasSameOrigin(operation) ||
+            (previous.ChildPid is not null && !CompletionBuildEvidenceTarget.From(previous).Matches(operation))))
+            throw new InvalidOperationException("Completion build evidence cannot replace attached operation identity.");
+        if (previous is not null &&
+            (!previous.IsPending && operation.IsPending || previous.Applied && !operation.Applied ||
+             previous.CustodyReleased && !operation.CustodyReleased ||
+             !previous.IsPending && previous.Phase != operation.Phase &&
+             !(previous.Phase == CompletionBuildEvidencePhase.Success && operation.Phase == CompletionBuildEvidencePhase.StaleCandidate)))
             throw new InvalidOperationException("Completion build evidence cannot move backwards.");
         CompletionBuildEvidence = operation;
     }
@@ -938,6 +948,8 @@ public sealed partial class TaskSpec
     {
         if (CompletionBuildEvidence is { IsPending: true })
             throw new InvalidOperationException("A pending completion build must be cancelled before another dispatch.");
+        if (CompletionBuildEvidence is { CustodyReleased: false })
+            throw new InvalidOperationException("Completion build custody must be released before another dispatch.");
         CompletionBuildEvidence = null;
         if (_dispatchHistory.Count > 0)
         {

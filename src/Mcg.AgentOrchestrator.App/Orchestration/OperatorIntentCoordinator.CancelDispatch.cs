@@ -8,6 +8,9 @@ internal sealed partial class OperatorIntentCoordinator
     internal Func<AgentOrchestratorKernel, GoalId, TaskId, TaskProcessRecord> CancelLatestProcess { get; init; } =
         (kernel, goalId, taskId) => new BackgroundDispatchRunner().CancelLatestProcess(kernel, goalId, taskId);
 
+    internal Func<AgentOrchestratorKernel, GoalId, TaskId, CompletionBuildEvidenceTarget, CompletionBuildEvidenceOperation> CancelCompletionBuild { get; init; } =
+        (_, _, _, _) => throw new InvalidOperationException("Completion build cancellation requires its owning coordinator.");
+
     private void ApplyCancelDispatch(
         AgentOrchestratorKernel kernel,
         Goal goal,
@@ -15,6 +18,18 @@ internal sealed partial class OperatorIntentCoordinator
         OperatorIntentRecord intent)
     {
         var payload = Deserialize<CancelDispatchOperatorIntentPayload>(intent);
+        if (payload.CompletionBuild is { } target)
+        {
+            var operation = task.CompletionBuildEvidence
+                ?? throw new InvalidOperationException("No attached completion build operation.");
+            if (!target.Matches(operation) || payload.DispatchId != operation.DispatchId ||
+                payload.ProcessId != operation.WorkerProcess.ProcessId || payload.ProcessStartedAt != operation.WorkerProcess.StartedAt)
+                throw new InvalidOperationException("Completion build cancel intent identity mismatch.");
+            var disposition = CancelCompletionBuild(kernel, goal.Id, task.Id, target);
+            if (disposition.IsPending || !disposition.CustodyReleased)
+                throw new InvalidOperationException("Completion build cancellation is held; custody is retained.");
+            return;
+        }
         var process = task.LastProcess ??
             throw new InvalidOperationException($"Task '{task.Id}' has no background process to cancel.");
         var dispatch = task.LastDispatch ??

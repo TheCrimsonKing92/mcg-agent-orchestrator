@@ -300,6 +300,8 @@ Role routing requires an actionable target task; a missing or cancelled target o
 
 `cancel-dispatch` terminates the tracked background process tree and marks the task cancelled.
 
+`cancel-dispatch <task-number> --completion-build-operation <exact-operation-id>` enqueues cancellation of the attached completion-build operation, including after retry or recovery clears the worker metadata. The conductor validates its original dispatch, receipt, child identity and lease owner before acting. Matching terminal build evidence takes precedence over cancellation; unknown identity or unconfirmed termination retains custody. This operation-only path does not complete or cancel the current task. Conductor reconciliation also discovers attached operations independently of `LastProcess` and never restarts their completed workers.
+
 `verify` runs a local command and appends the result to the task history. `verify-manual` appends human-observed pass/fail evidence without running a command. Both update the latest verification shown in `task`, `monitor`, and task briefs. Use `verifications <task-number>` to inspect the retained evidence trail.
 
 ## Agent Configuration

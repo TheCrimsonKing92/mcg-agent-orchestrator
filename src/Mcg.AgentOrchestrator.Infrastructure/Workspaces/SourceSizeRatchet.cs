@@ -235,7 +235,10 @@ internal static class SourceSizeRatchet
             // Goal 207369f1 keeps pending completion, candidate revalidation and cancellation at the dispatch seam;
             // build lifecycle/lease/process behavior lives in CompletionBuildEvidenceCoordinator. Measured 2739; no headroom.
             // Goal c5b71650 integrates terminal-contract enforcement and extracted apparatus holds; measured 2719.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Processes/BackgroundDispatchRunner.cs", 2719),
+            // Goal ffa0471e adds orphan completion-build cancellation routing before normal worker cancellation;
+            // operation lifecycle/custody stays in CompletionBuildEvidenceCoordinator. Measured 2728; no headroom.
+            // Goal ffa0471e extracts historical/current completion-build policy to its owning collaborator.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Processes/BackgroundDispatchRunner.cs", 2725),
             // Goal 5a75fed0 extracted typed projection parsing and literal restoration into
             // WorkerContextProjectionResidual, leaving the dispatcher to sequence package assembly.
             // Goal fd252fe4 adds retry fingerprints for the resolved provider, model, paid route, and
@@ -455,7 +458,9 @@ internal static class SourceSizeRatchet
             // Goal 33b9b7a6 extracts bounded carry receipt formatting into AcceptanceMainAdvanceReceipt.
             // Goal 33b9b7a6 also extracts revalidation hold-identity formatting into that receipt owner.
             // Measured 14962 lines across the same 70 partial files; no extra headroom.
-            new SourceClassCeiling("ConductorDriver", 14962, 70),
+            // Goal ffa0471e wires attached-operation reconciliation when current worker metadata is absent;
+            // lifecycle remains in CompletionBuildEvidenceCoordinator. Measured 14970 in the same 70 partials; no headroom.
+            new SourceClassCeiling("ConductorDriver", 14970, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
@@ -472,7 +477,9 @@ internal static class SourceSizeRatchet
             // These checks belong beside lifecycle creation/reuse; same 30 partial files, no extra headroom.
             // Goal 09a3023d extracts portfolio projection assembly into EpicProgressCommands.
             // Measured 12157 total lines across the same 30 partial files; no extra headroom.
-            new SourceClassCeiling("CliCommandHandlers", 12157, 30),
+            // Goal ffa0471e validates an exact completion-build selector and enqueues typed cancellation without
+            // stopping a historical worker; lifecycle remains in the coordinator. Measured 12165 in 30 partials; no headroom.
+            new SourceClassCeiling("CliCommandHandlers", 12165, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
             // Goal 03580ad1 extracts source-mutation edits to AcceptanceSourceMutation; measured 8938 lines in 31 partials.

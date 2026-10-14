@@ -5,6 +5,23 @@ using Mcg.AgentOrchestrator.Core;
 public sealed class CompletionBuildEvidenceIdentityTests
 {
     [Fact]
+    public void MatchingCompletedBuildObservedAfterDeadlineStillCompletesCurrentDispatch()
+    {
+        var fixture = new CompletionBuildEvidenceFixture();
+        var runner = fixture.Runner();
+        runner.RefreshLatestProcess(fixture.Kernel, fixture.GoalId, fixture.TaskId);
+        fixture.Release();
+        fixture.Clock.Advance(TimeSpan.FromMinutes(20));
+        runner.RefreshLatestProcess(fixture.Kernel, fixture.GoalId, fixture.TaskId);
+        Assert.Equal(CompletionBuildEvidencePhase.Success, fixture.Task.CompletionBuildEvidence!.Phase);
+        Assert.True(fixture.Task.CompletionBuildEvidence.Applied);
+        Assert.Equal(WorkTaskStatus.Completed, fixture.Task.Status);
+        Assert.NotNull(fixture.Task.LastDispatch!.ResultCommit);
+        Assert.Single(fixture.Task.VerificationHistory);
+        Assert.Equal(0, fixture.Stops);
+    }
+
+    [Fact]
     public void RepeatedPollsAndRestartLaunchOnceAndApplyMatchingResultOnce()
     {
         var fixture = new CompletionBuildEvidenceFixture();
