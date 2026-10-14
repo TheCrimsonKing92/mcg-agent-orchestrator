@@ -237,7 +237,8 @@ internal static class SourceSizeRatchet
             // Goal c5b71650 integrates terminal-contract enforcement and extracted apparatus holds; measured 2719.
             // Goal ffa0471e adds orphan completion-build cancellation routing before normal worker cancellation;
             // operation lifecycle/custody stays in CompletionBuildEvidenceCoordinator. Measured 2728; no headroom.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Processes/BackgroundDispatchRunner.cs", 2728),
+            // Goal ffa0471e extracts historical/current completion-build policy to its owning collaborator.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Processes/BackgroundDispatchRunner.cs", 2725),
             // Goal 5a75fed0 extracted typed projection parsing and literal restoration into
             // WorkerContextProjectionResidual, leaving the dispatcher to sequence package assembly.
             // Goal fd252fe4 adds retry fingerprints for the resolved provider, model, paid route, and

@@ -273,6 +273,8 @@ public sealed class CompletionBuildEvidenceRecoveryTests
         if (currentReceipt) f.WriteReceipt(operation.Projects);
         var currentProcess = f.Task.LastProcess!;
         var currentDispatch = f.Task.LastDispatch!;
+        var retryAt = f.Task.LatestRetryAt;
+        Assert.True(currentDispatch.DispatchedAt > retryAt);
         var originalResult = File.ReadAllText(operation.ResultPath);
 
         ExitedDispatchReconciliationExecutor.Execute(f.Goal,
@@ -283,7 +285,11 @@ public sealed class CompletionBuildEvidenceRecoveryTests
         Assert.Equal(currentProcess.ProcessId, f.Task.LastProcess!.ProcessId);
         Assert.Equal(currentProcess.StartedAt, f.Task.LastProcess.StartedAt);
         Assert.Equal(currentDispatch.DispatchedAt, f.Task.LastDispatch!.DispatchedAt);
-        Assert.Equal(currentReceipt, Assert.Single(f.Task.VerificationHistory).Succeeded);
+        var verification = Assert.Single(f.Task.VerificationHistory);
+        Assert.Equal(currentReceipt, verification.Succeeded);
+        Assert.Equal(currentProcess.StartedAt, verification.DispatchStartedAt);
+        Assert.Equal(currentProcess.StandardOutputPath, verification.StandardOutputPath);
+        Assert.Equal(retryAt, f.Task.LatestRetryAt);
         Assert.Equal(currentReceipt ? WorkTaskStatus.Completed : WorkTaskStatus.Failed, f.Task.Status);
         Assert.Equal(CompletionBuildEvidencePhase.Success, f.Task.CompletionBuildEvidence!.Phase);
         Assert.True(f.Task.CompletionBuildEvidence.CustodyReleased);
@@ -299,7 +305,9 @@ public sealed class CompletionBuildEvidenceRecoveryTests
         Assert.Single(Journal(f, operation).Where(e => e.Status == GoalOperationStatus.Completed));
         Assert.Null(Lease(f));
         Assert.Equal(1, f.Launches);
-        Assert.Equal(GoalStatus.Active, f.Goal.Status);
+        // This single-task fixture becomes Verified only through the newer worker's own
+        // passing receipt; neither arm performs goal acceptance (Completed).
+        Assert.Equal(currentReceipt ? GoalStatus.Verified : GoalStatus.Active, f.Goal.Status);
         new SqliteOrchestratorStateRepository(f.StatePath).SaveAsync(f.Kernel).GetAwaiter().GetResult();
         f.Reload();
         Assert.False(f.Task.CompletionBuildEvidence!.Applied);
@@ -418,6 +426,7 @@ public sealed class CompletionBuildEvidenceRecoveryTests
         f.Clock.Advance(TimeSpan.FromMinutes(31));
         new SqliteOrchestratorStateRepository(f.StatePath).SaveAsync(f.Kernel).GetAwaiter().GetResult();
         f.Reload();
+        Assert.True(f.Task.LastDispatch!.DispatchedAt > f.Task.LatestRetryAt);
     }
 
     private static string? Lease(CompletionBuildEvidenceFixture f) =>

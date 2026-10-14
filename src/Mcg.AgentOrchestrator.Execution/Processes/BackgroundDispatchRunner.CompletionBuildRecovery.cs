@@ -17,7 +17,5 @@ public sealed partial class BackgroundDispatchRunner
         _completionBuildEvidence ?? throw new InvalidOperationException("Completion build operation recovery requires its owning coordinator.");
 
     public static bool HasCurrentCompletionBuildWorker(TaskSpec task) =>
-        task.CompletionBuildEvidence is { } operation && task.LastDispatch?.DispatchedAt == operation.DispatchAt &&
-        task.LastProcess is { } process && process.ProcessId == operation.WorkerProcess.ProcessId &&
-        process.StartedAt == operation.WorkerProcess.StartedAt;
+        CompletionBuildDispatchReconciliationPolicy.HasCurrentWorker(task);
 }

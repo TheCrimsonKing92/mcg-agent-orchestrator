@@ -721,10 +721,7 @@ public sealed partial class BackgroundDispatchRunner
         var task = kernel.GetTask(goalId, taskId);
         var processRecord = task.LastProcess
             ?? throw new InvalidOperationException($"Task '{taskId}' has no background process to refresh.");
-        if (processRecord.WasCancelled && task.CompletionBuildEvidence is { Phase: CompletionBuildEvidencePhase.Cancelled })
-            return new DispatchRefreshOutcome(processRecord, null);
-        if (task.CompletionBuildEvidence is { } attachedBuild && !HasCurrentCompletionBuildWorker(task) &&
-            (attachedBuild.IsPending || !attachedBuild.CustodyReleased))
+        if (CompletionBuildDispatchReconciliationPolicy.HoldsRefresh(task, processRecord))
             return new DispatchRefreshOutcome(processRecord, null);
         if (DispatchProcessCompletionState.HasAlreadyBeenApplied(task, processRecord))
         {
@@ -1515,23 +1512,14 @@ public sealed partial class BackgroundDispatchRunner
                     DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed));
             }
 
-            var historicalBuild = task.CompletionBuildEvidence is { } attached && !HasCurrentCompletionBuildWorker(task)
-                ? attached : null;
-            // Historical evidence retains its identity and disposition. Only an independent receipt can
-            // certify this newer candidate; an uncertified round can retry normally once custody releases.
-            var buildEvidence = OrchestratorBuildEvidenceCheck.Resolve(
-                processRecord.WorkingDirectory,
-                task.RequiredRole,
-                worktreeEvidence.ChangedPaths,
-                worktreeEvidence.DirtyPaths,
-                failedWorkerBuildCheck,
+            var buildEvidence = CompletionBuildDispatchReconciliationPolicy.Resolve(
+                task, processRecord.WorkingDirectory,
+                worktreeEvidence.ChangedPaths, worktreeEvidence.DirtyPaths, failedWorkerBuildCheck,
                 () => _completionClassifier.EvaluateWorkerBuildReceipt(processRecord.WorkingDirectory, goal.Id),
-                historicalBuild is null ? _runOrchestratorBuildCheck : _ => new(false, -1,
-                    $"Historical completion build {historicalBuild.Id} cannot certify this dispatch; current build receipt is required, or retry after custody release."),
-                _completionBuildEvidence is null || historicalBuild is not null ? null : request => _completionBuildEvidence.Reconcile(
+                _runOrchestratorBuildCheck,
+                _completionBuildEvidence is null ? null : request => _completionBuildEvidence.Reconcile(
                     kernel, goalId, taskId, request, processRecord with
-                    { CompletedAt = processRecord.CompletedAt ?? _clock.UtcNow, ExitCode = observedExitCode }),
-                HasCurrentCompletionBuildWorker(task));
+                    { CompletedAt = processRecord.CompletedAt ?? _clock.UtcNow, ExitCode = observedExitCode }));
             if (buildEvidence.Pending)
                 return new DispatchRefreshOutcome(
                     processRecord with { CompletedAt = processRecord.CompletedAt ?? _clock.UtcNow, ExitCode = observedExitCode }, null,

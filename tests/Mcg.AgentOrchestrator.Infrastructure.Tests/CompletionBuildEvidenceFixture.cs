@@ -43,7 +43,7 @@ internal sealed class CompletionBuildEvidenceFixture : WorkerDispatchTestSupport
                 File.WriteAllText(Path.Combine(directory, "Feature.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
                 File.WriteAllText(Path.Combine(directory, "Feature.cs"), "public sealed class Feature { }");
             });
-        Kernel = fixture.Kernel;
+        Kernel = AgentOrchestratorKernel.FromSnapshot(fixture.Kernel.ExportSnapshot(), Clock);
         GoalId = fixture.Goal.Id;
         TaskId = fixture.Task.Id;
         // This fixture owns the isolated bootstrap database; repositories never migrate implicitly.
@@ -108,12 +108,13 @@ internal sealed class CompletionBuildEvidenceFixture : WorkerDispatchTestSupport
     internal BackgroundDispatchRunner Runner(CompletionBuildEvidenceCoordinator? coordinator = null) => new(Clock,
         isStillRunning: _ => false, completionBuildEvidence: coordinator ?? Coordinator(), resolveWorkerBuildReceiptPath: _ => ReceiptPath);
 
-    internal void Reload() => Kernel = new SqliteOrchestratorStateRepository(StatePath)
-        .LoadGoalsAsync([GoalId]).GetAwaiter().GetResult();
+    internal void Reload() => Kernel = AgentOrchestratorKernel.FromSnapshot(
+        new SqliteOrchestratorStateRepository(StatePath).LoadGoalsAsync([GoalId]).GetAwaiter().GetResult().ExportSnapshot(), Clock);
 
     internal void ResetWorkerMetadata()
     {
         Kernel.RequeueInterruptedDispatch(GoalId, TaskId, "controlled metadata reset", RetryCause.EnvironmentApparatusFailure);
+        Xunit.Assert.Equal(Clock.UtcNow, Task.LatestRetryAt);
         Xunit.Assert.Null(Task.LastProcess);
         Xunit.Assert.Null(Task.LastDispatch);
         new SqliteOrchestratorStateRepository(StatePath).SaveAsync(Kernel).GetAwaiter().GetResult();
