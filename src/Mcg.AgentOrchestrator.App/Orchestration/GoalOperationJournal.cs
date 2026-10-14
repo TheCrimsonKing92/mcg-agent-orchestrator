@@ -8,6 +8,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
+// Lifecycle/result of the named operation, independent of observed partition or goal verdicts.
 public enum GoalOperationStatus
 {
     Begin,
@@ -51,6 +52,9 @@ public sealed record GoalOperationJournalEntry(
     string? LeaseRecovery = null,
     DateTimeOffset? OwnerProcessStartedAtUtc = null)
 {
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? AuditProperties { get; init; }
+
     public bool HasCandidate(string? branchHeadSha, string? mainHeadSha) =>
         ShaEquals(BranchHeadSha, branchHeadSha) && ShaEquals(MainHeadSha, mainHeadSha);
 
@@ -952,14 +956,17 @@ internal static partial class GoalOperationJournal
         bool rejectMalformedEntries = false)
     {
         var entries = new List<GoalOperationJournalEntry>();
+        var lineNumber = 0;
         foreach (var line in ReadJournalLines(path))
         {
-            var entry = TryDeserialize(line);
+            lineNumber++;
+            var entry = TryDeserialize(line, out var failure);
             if (entry is null)
             {
                 if (rejectMalformedEntries)
                 {
-                    throw new FormatException($"Malformed goal operation journal entry in '{path}'.");
+                    throw new FormatException(
+                        $"Malformed goal operation journal entry in '{path}' at line {lineNumber}: {failure}.");
                 }
 
                 continue;
@@ -1271,16 +1278,155 @@ internal static partial class GoalOperationJournal
         }
     }
 
-    private static GoalOperationJournalEntry? TryDeserialize(string line)
+    private static GoalOperationJournalEntry? TryDeserialize(string line, out string? failure)
     {
+        failure = null;
         try
         {
-            return JsonSerializer.Deserialize<GoalOperationJournalEntry>(line, JsonOptions);
+            using var document = JsonDocument.Parse(line);
+            var root = document.RootElement;
+            RequireJournal(root.ValueKind == JsonValueKind.Object, "$", "object-required");
+            RequireUniqueJournalProperties(root, "$");
+            JournalString(root, "idempotencyKey");
+            var goal = JournalProperty(root, "goalId");
+            RequireJournal(goal.ValueKind == JsonValueKind.Object, "$.goalId", "object-required");
+            RequireUniqueJournalProperties(goal, "$.goalId");
+            JournalString(goal, "value", "$.goalId");
+            var operation = JournalString(root, "operation");
+            var status = JournalString(root, "status");
+            var at = JournalProperty(root, "at");
+            RequireJournal(at.ValueKind == JsonValueKind.String && at.TryGetDateTimeOffset(out _),
+                "$.at", "timestamp-required");
+
+            var observation = operation is "acceptance:partition-within-attempt-retry" or
+                "acceptance:partition-within-attempt-probe";
+            if (status == "recorded")
+                RequireJournal(observation, "$.status", "unsupported-legacy-status");
+            else
+                RequireJournal(Enum.TryParse<GoalOperationStatus>(status, true, out var parsedStatus) &&
+                    Enum.IsDefined(parsedStatus) && status.Equals(parsedStatus.ToString(), StringComparison.OrdinalIgnoreCase),
+                    "$.status", "unsupported-status");
+            if (observation && (status == "recorded" || status.Equals("completed", StringComparison.OrdinalIgnoreCase)))
+                ValidatePartitionObservation(root, operation);
+
+            if (status != "recorded")
+                return JsonSerializer.Deserialize<GoalOperationJournalEntry>(line, JsonOptions);
+
+            // Compatibility is scoped to validated native observations. Only the in-memory status
+            // changes; the original journal and all additional audit properties remain intact.
+            using var normalized = new MemoryStream();
+            using (var writer = new Utf8JsonWriter(normalized))
+            {
+                writer.WriteStartObject();
+                foreach (var property in root.EnumerateObject())
+                {
+                    if (property.NameEquals("status")) writer.WriteString("status", "Completed");
+                    else property.WriteTo(writer);
+                }
+                writer.WriteEndObject();
+            }
+            return JsonSerializer.Deserialize<GoalOperationJournalEntry>(normalized.ToArray(), JsonOptions);
         }
-        catch (JsonException)
+        catch (JsonException exception)
         {
+            // Do not echo exception messages or row contents: they can contain arbitrary payloads.
+            var jsonPath = exception.Path ?? "$";
+            if (jsonPath.Length > 160) jsonPath = jsonPath[..160];
+            failure = $"{exception.Data["JournalFailure"] ?? "json-type-or-syntax"} path={jsonPath}";
             return null;
         }
+    }
+
+    private static void ValidatePartitionObservation(JsonElement root, string operation)
+    {
+        var goal = JournalString(root.GetProperty("goalId"), "value", "$.goalId");
+        var candidate = JournalString(root, "branchHeadSha");
+        var main = JournalString(root, "mainHeadSha");
+        var partition = JournalString(root, "partitionId");
+        var attempt = JournalString(root, "partitionAttemptId");
+        var filter = JournalString(root, "partitionFilterHash");
+        var pair = JournalString(root, "partitionPairKey");
+        var cache = JournalString(root, "partitionVerdictCacheKey");
+        var prefix = $"{goal}:acceptance:{candidate}:{main}:";
+        RequireJournal(pair.StartsWith(prefix, StringComparison.Ordinal) && pair.Length > prefix.Length &&
+            cache == $"{goal}:{candidate}:{main}:{pair[prefix.Length..]}:{filter}",
+            "$.partitionVerdictCacheKey", "candidate-identity-mismatch");
+        JournalString(root, "detail");
+        RequireJournal(JournalProperty(root, "acceptanceOutcome").ValueKind == JsonValueKind.Null,
+            "$.acceptanceOutcome", "observation-is-not-acceptance");
+        var receipt = JournalProperty(root, "partitionRetryReceipt");
+        RequireJournal(receipt.ValueKind == JsonValueKind.Object, "$.partitionRetryReceipt", "object-required");
+        const string receiptPath = "$.partitionRetryReceipt";
+        RequireUniqueJournalProperties(receipt, receiptPath);
+        RequireJournal(JournalString(receipt, "partitionId", receiptPath) == partition,
+            receiptPath + ".partitionId", "partition-identity-mismatch");
+        JournalString(receipt, "failedPredicate", receiptPath);
+        var original = JournalString(receipt, "originalInvocationId", receiptPath);
+        var retry = JournalString(receipt, "retryInvocationId", receiptPath);
+        RequireJournal(original != retry && original.StartsWith(attempt + ":", StringComparison.Ordinal) &&
+            retry.StartsWith(attempt + ":", StringComparison.Ordinal), receiptPath, "invocation-identity-mismatch");
+        JournalString(receipt, "trxOutcome", receiptPath);
+        JournalString(receipt, "diagnosticPath", receiptPath);
+        JournalString(receipt, "diagnosticSha256", receiptPath);
+        foreach (var name in new[] { "exitCode", "discoveredTestCount", "executedTestCount" })
+        {
+            var value = JournalProperty(receipt, name, receiptPath);
+            RequireJournal(value.ValueKind == JsonValueKind.Null ||
+                (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out _)),
+                receiptPath + "." + name, "integer-or-null-required");
+        }
+        if (receipt.TryGetProperty("notExecutedTestCount", out var notExecuted))
+            RequireJournal(notExecuted.ValueKind == JsonValueKind.Null ||
+                (notExecuted.ValueKind == JsonValueKind.Number && notExecuted.TryGetInt32(out _)),
+                receiptPath + ".notExecutedTestCount", "integer-or-null-required");
+        if (receipt.TryGetProperty("policySignal", out var policy))
+            RequireJournal(policy.ValueKind is JsonValueKind.Null or JsonValueKind.String,
+                receiptPath + ".policySignal", "string-or-null-required");
+        if (receipt.TryGetProperty("flakeConfirmed", out var confirmed))
+            RequireJournal(confirmed.ValueKind is JsonValueKind.Null or JsonValueKind.True or JsonValueKind.False,
+                receiptPath + ".flakeConfirmed", "boolean-or-null-required");
+        var probe = operation == "acceptance:partition-within-attempt-probe";
+        var verdict = JournalProperty(root, "partitionVerdict");
+        RequireJournal(probe ? verdict.ValueKind == JsonValueKind.String && verdict.GetString() is "RED" or "GREEN"
+            : verdict.ValueKind == JsonValueKind.Null, "$.partitionVerdict", "observation-verdict-required");
+        if (probe)
+        {
+            var flake = JournalProperty(receipt, "flakeConfirmed", receiptPath);
+            RequireJournal(flake.ValueKind is JsonValueKind.True or JsonValueKind.False,
+                receiptPath + ".flakeConfirmed", "boolean-required");
+        }
+        RequireJournal(root.GetProperty("idempotencyKey").GetString() ==
+            $"{attempt}:{(probe ? "probe" : "retry")}:{partition}:{retry}",
+            "$.idempotencyKey", "observation-identity-mismatch");
+    }
+
+    private static JsonElement JournalProperty(JsonElement root, string name, string path = "$")
+    {
+        RequireJournal(root.TryGetProperty(name, out var value), path + "." + name, "missing-field");
+        return value;
+    }
+
+    private static string JournalString(JsonElement root, string name, string path = "$")
+    {
+        var value = JournalProperty(root, name, path);
+        RequireJournal(value.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(value.GetString()),
+            path + "." + name, "nonempty-string-required");
+        return value.GetString()!;
+    }
+
+    private static void RequireUniqueJournalProperties(JsonElement root, string path)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var property in root.EnumerateObject())
+            RequireJournal(names.Add(property.Name), path, "duplicate-property");
+    }
+
+    private static void RequireJournal(bool valid, string path, string category)
+    {
+        if (valid) return;
+        var exception = new JsonException("Invalid journal schema.", path, null, null);
+        exception.Data["JournalFailure"] = category;
+        throw exception;
     }
 
     private static GoalLifecycleJournalEntry? TryDeserializeLifecycle(string line)
