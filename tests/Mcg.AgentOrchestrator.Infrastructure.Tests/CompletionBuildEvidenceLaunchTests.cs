@@ -32,7 +32,11 @@ public sealed class CompletionBuildEvidenceLaunchTests
         Assert.Equal(child.Identity.StartedAt, operation.ChildStartedAt);
         Assert.Equal(child.Identity.ImagePath, operation.ChildImagePath);
         Assert.True(child.Observer!.WaitForExit(10000), "Authorized sacrificial child did not exit.");
+        Assert.Equal(CompletionBuildChildLiveness.Dead, CompletionBuildEvidenceChildIdentity.Probe(operation));
         coordinator.Cancel(fixture.Kernel, fixture.GoalId, fixture.TaskId);
+        Assert.Equal(CompletionBuildEvidencePhase.Cancelled, fixture.Task.CompletionBuildEvidence!.Phase);
+        Assert.True(fixture.Task.CompletionBuildEvidence.CustodyReleased);
+        Assert.Null(new ReconcileSweepRemediationStore(fixture.StatePath).TryGetAcceptanceLeaseOwner(fixture.GoalId.Value));
 
         using var metadata = ReadOnlyMetadata(operation);
         Assert.True(metadata.RootElement.GetProperty("Authorized").GetBoolean());
@@ -240,6 +244,7 @@ public sealed class CompletionBuildEvidenceLaunchTests
             var operation = fixture.Task.CompletionBuildEvidence!;
             Assert.True(child.Observer!.HasExited);
             Assert.Equal(CompletionBuildEvidencePhase.Cancelled, operation.Phase);
+            Assert.True(operation.CustodyReleased);
             Assert.Contains("Operator cancelled", operation.Diagnostic);
             Assert.Contains(reason, operation.Diagnostic);
             Assert.Null(operation.BuildExitCode);
@@ -262,6 +267,7 @@ public sealed class CompletionBuildEvidenceLaunchTests
             }
             fixture.Reload();
             Assert.Equal(CompletionBuildEvidencePhase.Cancelled, fixture.Task.CompletionBuildEvidence!.Phase);
+            Assert.True(fixture.Task.CompletionBuildEvidence.CustodyReleased);
             Assert.Contains(reason, fixture.Task.CompletionBuildEvidence.Diagnostic);
         }
         finally { if (blockedDirectory is not null) File.Delete(blockedDirectory); }
@@ -385,7 +391,11 @@ public sealed class CompletionBuildEvidenceLaunchTests
         Assert.Equal(CompletionBuildEvidencePhase.Pending, admitted.Phase);
         Assert.Equal(second.Identity!.ProcessId, admitted.ChildPid);
         Assert.True(second.Observer!.WaitForExit(10000), "Second authorized child did not exit.");
+        Assert.Equal(CompletionBuildChildLiveness.Dead, CompletionBuildEvidenceChildIdentity.Probe(admitted));
         coordinator.Cancel(fixture.Kernel, fixture.GoalId, fixture.TaskId);
+        Assert.Equal(CompletionBuildEvidencePhase.Cancelled, fixture.Task.CompletionBuildEvidence!.Phase);
+        Assert.True(fixture.Task.CompletionBuildEvidence.CustodyReleased);
+        Assert.Null(new ReconcileSweepRemediationStore(fixture.StatePath).TryGetAcceptanceLeaseOwner(fixture.GoalId.Value));
         Assert.Equal(2, starts);
         Assert.Equal(original, File.ReadAllText(firstOutput));
         var files = MetadataFiles(operation);

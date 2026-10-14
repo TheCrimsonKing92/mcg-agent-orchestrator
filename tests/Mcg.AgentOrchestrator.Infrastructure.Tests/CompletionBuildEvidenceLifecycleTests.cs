@@ -85,8 +85,16 @@ public sealed class CompletionBuildEvidenceLifecycleTests
         fixture.Release();
         runner.CancelLatestProcess(fixture.Kernel, fixture.GoalId, fixture.TaskId);
         Assert.Equal(CompletionBuildEvidencePhase.Success, fixture.Task.CompletionBuildEvidence!.Phase);
+        Assert.True(fixture.Task.CompletionBuildEvidence.CustodyReleased);
+        Assert.Equal(WorkTaskStatus.Cancelled, fixture.Task.Status);
+        Assert.True(fixture.Task.LastProcess!.WasCancelled);
+        Assert.Null(new ReconcileSweepRemediationStore(fixture.StatePath).TryGetAcceptanceLeaseOwner(fixture.GoalId.Value));
+        // The caller persists worker cancellation; the coordinator persists only its operation.
+        new SqliteOrchestratorStateRepository(fixture.StatePath).SaveAsync(fixture.Kernel).GetAwaiter().GetResult();
         fixture.Reload();
         Assert.Equal(CompletionBuildEvidencePhase.Success, fixture.Task.CompletionBuildEvidence!.Phase);
+        Assert.True(fixture.Task.CompletionBuildEvidence.CustodyReleased);
+        Assert.True(fixture.Task.LastProcess!.WasCancelled);
         Assert.Null(fixture.Task.LastVerification);
         Assert.Null(fixture.Task.LastDispatch!.ResultCommit);
         Assert.Equal(0, fixture.Stops);

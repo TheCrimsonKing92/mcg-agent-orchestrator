@@ -83,7 +83,9 @@ internal sealed class CompletionBuildEvidenceFixture : WorkerDispatchTestSupport
                 Authorizations++;
             }, () => { Stops++; Live = false; });
         },
-        probe: _ => Unknown ? CompletionBuildChildLiveness.Unknown : Live ? CompletionBuildChildLiveness.Live : CompletionBuildChildLiveness.Dead,
+        // Real children use the production identity probe; fake liveness is only meaningful
+        // alongside the fake launcher and stop callback that update it.
+        probe: startProcess is not null ? null : _ => Unknown ? CompletionBuildChildLiveness.Unknown : Live ? CompletionBuildChildLiveness.Live : CompletionBuildChildLiveness.Dead,
         stop: startProcess is not null ? null : _ =>
         {
             Stops++;
