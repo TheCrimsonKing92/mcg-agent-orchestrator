@@ -160,6 +160,113 @@ public sealed class CompletionBuildEvidenceLaunchTests
         Assert.Null(new ReconcileSweepRemediationStore(fixture.StatePath).TryGetAcceptanceLeaseOwner(fixture.GoalId.Value));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CaptureOwnedDeadline_PreservesTimedOutAfterChildExit(bool restart)
+    {
+        var fixture = new CompletionBuildEvidenceFixture();
+        using var child = new SacrificialChild(holdAfterPermit: true);
+        var checkpoint = false;
+        var readsAfterCheckpoint = 0;
+        fixture.BeforeChildCheckpoint = () => checkpoint = true;
+        var coordinator = fixture.Coordinator(child.Start, utcNow: () =>
+            // Authorization sees a live deadline; the capture's subsequent observation
+            // sees an expired deadline. Setup and child readiness precede this stimulus.
+            checkpoint && Interlocked.Increment(ref readsAfterCheckpoint) > 1
+                ? fixture.Clock.UtcNow.AddHours(1) : fixture.Clock.UtcNow);
+        var runner = fixture.Runner(coordinator);
+        runner.RefreshLatestProcess(fixture.Kernel, fixture.GoalId, fixture.TaskId);
+        var admitted = fixture.Task.CompletionBuildEvidence!;
+        Assert.Equal(CompletionBuildEvidencePhase.Pending, admitted.Phase);
+        Assert.True(child.Observer!.WaitForExit(10000), "Capture deadline did not reap its held child.");
+        Assert.True(SpinWait.SpinUntil(() => MetadataFiles(admitted).Length == 1,
+            TimeSpan.FromSeconds(15)), "Capture deadline evidence was not published.");
+        using var metadata = ReadOnlyMetadata(admitted);
+        Assert.True(metadata.RootElement.GetProperty("Authorized").GetBoolean());
+        Assert.True(metadata.RootElement.GetProperty("DeadlineExceeded").GetBoolean());
+        Assert.Equal("exited", metadata.RootElement.GetProperty("Exit").GetString());
+        if (restart)
+        {
+            fixture.Reload();
+            runner = fixture.Runner();
+        }
+        fixture.Release(); // Even a matching success receipt must not erase the typed timeout.
+        runner.RefreshLatestProcess(fixture.Kernel, fixture.GoalId, fixture.TaskId);
+        var operation = fixture.Task.CompletionBuildEvidence!;
+        Assert.Equal(CompletionBuildEvidencePhase.TimedOut, operation.Phase);
+        Assert.Contains("deadline", operation.Diagnostic);
+        Assert.Null(operation.BuildExitCode);
+        Assert.NotEqual(WorkTaskStatus.Completed, fixture.Task.Status);
+        Assert.False(fixture.Task.LastVerification!.Succeeded);
+        Assert.Null(new ReconcileSweepRemediationStore(fixture.StatePath).TryGetAcceptanceLeaseOwner(fixture.GoalId.Value));
+        fixture.Reload();
+        Assert.Equal(CompletionBuildEvidencePhase.TimedOut, fixture.Task.CompletionBuildEvidence!.Phase);
+    }
+
+    [Theory]
+    [InlineData("read", "injected stream read failure")]
+    [InlineData("drain", "capture incomplete")]
+    [InlineData("artifact", "Host metadata write failed")]
+    public void AdmittedDiagnosticFault_CancellationPersistsAndReleasesLease(string fault, string reason)
+    {
+        var fixture = new CompletionBuildEvidenceFixture();
+        using var child = new SacrificialChild(holdAfterPermit: true);
+        var blocked = new CancellationReader();
+        string? blockedDirectory = null;
+        var coordinator = fixture.Coordinator(child.Start, process =>
+        {
+            if (fault == "artifact")
+            {
+                blockedDirectory = Path.GetDirectoryName(fixture.Task.CompletionBuildEvidence!.ResultPath)!;
+                Directory.CreateDirectory(Path.GetDirectoryName(blockedDirectory)!);
+                File.WriteAllText(blockedDirectory, "controlled directory obstruction");
+            }
+            return SpawnProcessIdentityReader.ReadForRegistration(process);
+        }, process => (fault switch
+        {
+            "read" => new FailedReader(),
+            "drain" => blocked,
+            _ => (TextReader)process.StandardOutput
+        }, process.StandardError));
+        try
+        {
+            var runner = fixture.Runner(coordinator);
+            runner.RefreshLatestProcess(fixture.Kernel, fixture.GoalId, fixture.TaskId);
+            var admitted = fixture.Task.CompletionBuildEvidence!;
+            Assert.Equal(CompletionBuildEvidencePhase.Pending, admitted.Phase);
+            Assert.NotNull(new ReconcileSweepRemediationStore(fixture.StatePath).TryGetAcceptanceLeaseOwner(fixture.GoalId.Value));
+            runner.CancelLatestProcess(fixture.Kernel, fixture.GoalId, fixture.TaskId);
+            var operation = fixture.Task.CompletionBuildEvidence!;
+            Assert.True(child.Observer!.HasExited);
+            Assert.Equal(CompletionBuildEvidencePhase.Cancelled, operation.Phase);
+            Assert.Contains("Operator cancelled", operation.Diagnostic);
+            Assert.Contains(reason, operation.Diagnostic);
+            Assert.Null(operation.BuildExitCode);
+            Assert.Equal(WorkTaskStatus.Cancelled, fixture.Task.Status);
+            Assert.True(fixture.Task.LastProcess!.WasCancelled);
+            Assert.Null(fixture.Task.LastVerification);
+            Assert.Null(new ReconcileSweepRemediationStore(fixture.StatePath).TryGetAcceptanceLeaseOwner(fixture.GoalId.Value));
+            if (fault == "drain")
+            {
+                Assert.True(blocked.Entered);
+                Assert.True(blocked.Cancelled.Task.IsCompletedSuccessfully);
+            }
+            if (fault != "artifact")
+            {
+                using var metadata = ReadOnlyMetadata(operation);
+                Assert.True(metadata.RootElement.GetProperty("Authorized").GetBoolean());
+                Assert.Equal("exited", metadata.RootElement.GetProperty("Exit").GetString());
+                Assert.False(metadata.RootElement.GetProperty("DeadlineExceeded").GetBoolean());
+                Assert.NotEmpty(metadata.RootElement.GetProperty("Errors").EnumerateArray());
+            }
+            fixture.Reload();
+            Assert.Equal(CompletionBuildEvidencePhase.Cancelled, fixture.Task.CompletionBuildEvidence!.Phase);
+            Assert.Contains(reason, fixture.Task.CompletionBuildEvidence.Diagnostic);
+        }
+        finally { if (blockedDirectory is not null) File.Delete(blockedDirectory); }
+    }
+
     [Fact]
     public void StartException_RecordsNoChildAndUnavailableStreams()
     {
@@ -331,13 +438,14 @@ public sealed class CompletionBuildEvidenceLaunchTests
         }
     }
 
-    private sealed class SacrificialChild(bool exitBeforeAdmission = false) : IDisposable
+    private sealed class SacrificialChild(bool exitBeforeAdmission = false, bool holdAfterPermit = false) : IDisposable
     {
         internal readonly string Marker = Guid.NewGuid().ToString("N");
         internal Process? Process;
         internal Process? Observer;
         internal SpawnProcessIdentity? Identity;
         internal int Starts;
+        private EventWaitHandle? _hold;
 
         internal Process Start(ProcessStartInfo requested)
         {
@@ -346,6 +454,7 @@ public sealed class CompletionBuildEvidenceLaunchTests
             Assert.True(requested.RedirectStandardInput && requested.RedirectStandardOutput && requested.RedirectStandardError);
             Starts++;
             using var ready = new EventWaitHandle(false, EventResetMode.ManualReset, Marker);
+            if (holdAfterPermit) _hold = new EventWaitHandle(false, EventResetMode.ManualReset, Marker + "-hold");
             var info = new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),
                 "WindowsPowerShell", "v1.0", "powershell.exe"))
             {
@@ -361,7 +470,9 @@ public sealed class CompletionBuildEvidenceLaunchTests
             info.ArgumentList.Add($"[Console]::Out.WriteLine('stdout:{Marker}'); [Console]::Error.WriteLine('stderr:{Marker}'); " +
                 "[Console]::Out.Flush(); [Console]::Error.Flush(); " +
                 $"$ready = [Threading.EventWaitHandle]::OpenExisting('{Marker}'); $ready.Set() | Out-Null; " +
-                "$value = [Console]::ReadLine(); if ($null -ne $value) { [Console]::Out.WriteLine('permit:' + $value) }; exit 7");
+                "$value = [Console]::ReadLine(); if ($null -ne $value) { [Console]::Out.WriteLine('permit:' + $value) }; " +
+                (holdAfterPermit ? $"$hold = [Threading.EventWaitHandle]::OpenExisting('{Marker}-hold'); $hold.WaitOne() | Out-Null; " : "") +
+                "exit 7");
             Process = System.Diagnostics.Process.Start(info)!;
             Observer = System.Diagnostics.Process.GetProcessById(Process.Id);
             // GetProcessById opens its handle lazily. Retain it while the child waits on stdin,
@@ -388,6 +499,7 @@ public sealed class CompletionBuildEvidenceLaunchTests
                 Observer.Dispose();
             }
             Process?.Dispose();
+            _hold?.Dispose();
         }
     }
 }

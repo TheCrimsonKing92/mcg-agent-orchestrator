@@ -6,6 +6,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
+internal sealed record CompletionBuildHostFailure(CompletionBuildEvidencePhase Phase, string Diagnostic);
+
 // Owns one held child and its diagnostic reads, from Start through exit/rejection. These
 // attempt-specific sidecars never supply build success or completion-build receipt identity.
 internal sealed class CompletionBuildHostCapture
@@ -40,6 +42,7 @@ internal sealed class CompletionBuildHostCapture
     internal SpawnProcessIdentityReadResult? Registration { get; set; }
     internal string? LaunchFailure { get; set; }
     internal bool HasUnreapedChild => _exit == "termination-unconfirmed";
+    internal bool DeadlineExceeded { get; private set; }
 
     internal void Attach(Process process, Func<Process, (TextReader Output, TextReader Error)> readers)
     {
@@ -84,14 +87,15 @@ internal sealed class CompletionBuildHostCapture
         return _completion.GetAwaiter().GetResult();
     }
 
-    internal static string? ReadRecordedFailure(CompletionBuildEvidenceOperation operation)
+    internal static CompletionBuildHostFailure? ReadRecordedFailure(CompletionBuildEvidenceOperation operation)
     {
         var directory = Path.GetDirectoryName(operation.ResultPath)!;
         if (!Directory.Exists(directory)) return null;
         string[] paths;
         try { paths = Directory.GetFiles(directory, Path.GetFileName(operation.ResultPath) + ".host.*.json"); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        { return $"Completion build host artifacts unavailable ({directory}): {ex.Message}"; }
+        { return new(CompletionBuildEvidencePhase.ApparatusFailure,
+            $"Completion build host artifacts unavailable ({directory}): {ex.Message}"); }
         foreach (var path in paths)
         {
             try
@@ -109,8 +113,13 @@ internal sealed class CompletionBuildHostCapture
                     identity.GetProperty("StartedAt").GetDateTimeOffset() != operation.ChildStartedAt ||
                     identity.GetProperty("ImagePath").GetString() != operation.ChildImagePath) continue;
                 var errors = evidence.GetProperty("Errors").EnumerateArray().Select(error => error.GetString()).ToArray();
+                var deadlineExceeded = evidence.TryGetProperty("DeadlineExceeded", out var timeout) && timeout.GetBoolean();
+                if (deadlineExceeded)
+                    return new(CompletionBuildEvidencePhase.TimedOut,
+                        $"Completion build child exceeded its deadline ({path}). " + string.Join("; ", errors));
                 if (errors.Length != 0)
-                    return $"Completion build host diagnostics failed ({path}): " + string.Join("; ", errors);
+                    return new(CompletionBuildEvidencePhase.ApparatusFailure,
+                        $"Completion build host diagnostics failed ({path}): " + string.Join("; ", errors));
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or
                 KeyNotFoundException or InvalidOperationException or FormatException)
@@ -134,7 +143,11 @@ internal sealed class CompletionBuildHostCapture
                 try { await _process.WaitForExitAsync(deadline.Token).ConfigureAwait(false); }
                 catch (OperationCanceledException)
                 {
-                    if (!_stop.IsCancellationRequested) _errors.Add("Child exceeded the completion-build deadline.");
+                    if (!_stop.IsCancellationRequested)
+                    {
+                        DeadlineExceeded = true;
+                        _errors.Add("Child exceeded the completion-build deadline.");
+                    }
                     KillHeldChild();
                 }
                 catch (Exception ex)
@@ -253,6 +266,7 @@ internal sealed class CompletionBuildHostCapture
             {
                 OperationId = _operation.Id, AttemptId = _attempt, _operation.TreeDigest, _operation.DispatchId,
                 HeldPid = _heldPid, Registration, LaunchFailure, Authorized = _authorized, Exit = _exit, ExitCode = _exitCode,
+                DeadlineExceeded,
                 StandardOutput = _stdout?.Evidence ?? "unavailable: child/reader not started",
                 StandardError = _stderr?.Evidence ?? "unavailable: child/reader not started",
                 Errors = _errors.ToArray()

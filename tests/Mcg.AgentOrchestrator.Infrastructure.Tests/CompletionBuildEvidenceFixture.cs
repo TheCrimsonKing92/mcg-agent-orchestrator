@@ -53,8 +53,9 @@ internal sealed class CompletionBuildEvidenceFixture : WorkerDispatchTestSupport
     internal CompletionBuildEvidenceCoordinator Coordinator(
         Func<ProcessStartInfo, Process>? startProcess = null,
         Func<Process, SpawnProcessIdentityReadResult>? readIdentity = null,
-        Func<Process, (TextReader Output, TextReader Error)>? hostReaders = null) => new(StatePath, Root,
-        utcNow: () => Clock.UtcNow,
+        Func<Process, (TextReader Output, TextReader Error)>? hostReaders = null,
+        Func<DateTimeOffset>? utcNow = null) => new(StatePath, Root,
+        utcNow: utcNow ?? (() => Clock.UtcNow),
         persist: FailChildCheckpoint || FailLaunchIntent || BeforeChildCheckpoint is not null ? (operation, previous) =>
         {
             if (FailLaunchIntent && previous is null)

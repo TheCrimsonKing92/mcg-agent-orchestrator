@@ -19,7 +19,7 @@ internal sealed class CompletionBuildEvidenceCoordinator : ICompletionBuildEvide
     private readonly Func<CompletionBuildEvidenceOperation, CompletionBuildEvidenceOperation?, CompletionBuildEvidenceOperation> _persist;
     private readonly Func<CompletionBuildEvidenceOperation, CompletionBuildChildLaunch> _launch;
     private readonly Func<CompletionBuildEvidenceOperation, CompletionBuildChildLiveness> _probe;
-    private readonly Action<CompletionBuildEvidenceOperation> _stop;
+    private readonly Func<CompletionBuildEvidenceOperation, string?> _stop;
     private readonly Func<Goal, CompletionBuildChildLaunch, string, GoalEvidenceOperationStart> _begin;
     private readonly Action<Goal, CompletionBuildEvidenceOperation> _finish;
     private readonly Func<ProcessStartInfo, Process> _startProcess;
@@ -45,7 +45,7 @@ internal sealed class CompletionBuildEvidenceCoordinator : ICompletionBuildEvide
         _persist = persist ?? Persist;
         _launch = launch ?? Launch;
         _probe = probe ?? CompletionBuildEvidenceChildIdentity.Probe;
-        _stop = stop ?? StopChild;
+        _stop = stop is null ? StopChild : operation => { stop(operation); return null; };
         _begin = begin ?? Begin;
         _finish = finish ?? FinishLease;
         _startProcess = startProcess ?? (info => ProcessTreeGuiSuppression.Start(info)
@@ -171,11 +171,14 @@ internal sealed class CompletionBuildEvidenceCoordinator : ICompletionBuildEvide
         {
             var captureFailure = capture.Collect();
             if (!capture.HasUnreapedChild) _captures.Remove(operation.Id);
+            if (capture.DeadlineExceeded)
+                return Terminal(kernel, goal, operation, CompletionBuildEvidencePhase.TimedOut,
+                    captureFailure ?? "Completion build child exceeded its deadline.");
             if (captureFailure is not null)
                 return Terminal(kernel, goal, operation, CompletionBuildEvidencePhase.ApparatusFailure, captureFailure);
         }
         if (CompletionBuildHostCapture.ReadRecordedFailure(operation) is { } recordedFailure)
-            return Terminal(kernel, goal, operation, CompletionBuildEvidencePhase.ApparatusFailure, recordedFailure);
+            return Terminal(kernel, goal, operation, recordedFailure.Phase, recordedFailure.Diagnostic);
         CompletionBuildEvidenceOperation? result = null;
         try
         {
@@ -219,7 +222,8 @@ internal sealed class CompletionBuildEvidenceCoordinator : ICompletionBuildEvide
     private CompletionBuildEvidenceOperation Terminal(AgentOrchestratorKernel kernel, Goal goal,
         CompletionBuildEvidenceOperation operation, CompletionBuildEvidencePhase phase, string diagnostic)
     {
-        if (operation.ChildPid is not null) _stop(operation);
+        if (operation.ChildPid is not null && _stop(operation) is { } captureFailure)
+            diagnostic += " " + captureFailure;
         _finish(goal, operation);
         return Store(kernel, operation with { Phase = phase, Diagnostic = diagnostic }, operation);
     }
@@ -307,15 +311,20 @@ internal sealed class CompletionBuildEvidenceCoordinator : ICompletionBuildEvide
         }
     }
 
-    private void StopChild(CompletionBuildEvidenceOperation operation)
+    private string? StopChild(CompletionBuildEvidenceOperation operation)
     {
         if (_captures.TryGetValue(operation.Id, out var capture) && capture.Matches(operation))
         {
             var failure = capture.Stop();
-            if (!capture.HasUnreapedChild) _captures.Remove(operation.Id);
-            if (failure is not null) throw new InvalidOperationException(failure);
+            if (capture.HasUnreapedChild)
+                throw new InvalidOperationException(failure ?? "Completion build child termination unconfirmed.");
+            _captures.Remove(operation.Id);
+            // Diagnostic custody faults do not revoke confirmed termination or prevent
+            // the caller from releasing the lease and persisting cancellation.
+            return failure;
         }
-        else CompletionBuildEvidenceChildIdentity.Stop(operation);
+        CompletionBuildEvidenceChildIdentity.Stop(operation);
+        return null;
     }
 
     internal static int RunChild(string[] args)
