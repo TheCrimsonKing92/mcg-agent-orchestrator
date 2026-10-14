@@ -444,9 +444,21 @@ public sealed class TaskIntentDispatchAdmissionTests
         DispatchProcessHost.WriteParameters(Path.Combine(seed.Root, "probe.dispatch.json"), primary);
         var sample = Xunit.Assert.Single(PlannerSampleDispatcher.CreateArtifacts(primary.StdoutPath, 2));
         var planPath = Path.Combine(seed.Root, "plan.txt");
-        File.WriteAllText(planPath, validPlan ? File.ReadAllText(Path.Combine(InfrastructureTestSupport.FindRepositoryRoot(),
+        var plan = File.ReadAllText(Path.Combine(InfrastructureTestSupport.FindRepositoryRoot(),
             "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests", "Fixtures", "PlannerOutputContract",
-            "658501ce-f6708f44-20260805012800.out.txt")) : "invalid sample plan");
+            "658501ce-f6708f44-20260805012800.out.txt")).ReplaceLineEndings("\n");
+        // Validate against this disposable workspace, including the scout research contract.
+        File.WriteAllText(Path.Combine(seed.Root, "Admission.cs"), "// Task intent admission fixture.");
+        var targetStart = plan.IndexOf("## Target seams and symbols", StringComparison.Ordinal);
+        var targetEnd = plan.IndexOf("## Ownership and lifecycle", targetStart, StringComparison.Ordinal);
+        plan = plan[..targetStart] + "## Target seams and symbols\n\n" +
+            "Developer owns `Admission.cs` and the task admission reconciliation seam.\n\n" + plan[targetEnd..];
+        var fixtureContract = PlannerOutputContract.Resolve(plan, "", seed.Root,
+            acceptanceCriteria: seed.Goal.RefinedSpec!.AcceptanceCriteria);
+        Xunit.Assert.True(fixtureContract.Succeeded, fixtureContract.Diagnostic);
+        File.WriteAllText(planPath, validPlan
+            ? WorkerDispatchTestSupport.ResearcherContractFixture() + Environment.NewLine + plan
+            : "invalid sample plan");
         var sampleParameters = primary with
         {
             Command = "$null = [Console]::In.ReadToEnd(); Get-Content -Raw -LiteralPath '" + planPath.Replace("'", "''") + "'",
@@ -490,7 +502,17 @@ public sealed class TaskIntentDispatchAdmissionTests
             var divergence = Xunit.Assert.IsType<PlannerCandidateDivergenceReceipt>(seed.Task.LastVerification.PlannerCandidateDivergence);
             var sampleEvidence = Xunit.Assert.Single(divergence.Candidates!, candidate => candidate.CandidateIndex == 1);
             Xunit.Assert.Equal(PlannerCandidateTerminalState.Succeeded, sampleEvidence.TerminalState);
+            Xunit.Assert.Equal(validPlan ? PlannerCandidateContractVerdict.Valid : PlannerCandidateContractVerdict.Invalid,
+                sampleEvidence.ContractVerdict);
+            var primaryEvidence = Xunit.Assert.Single(divergence.Candidates!, candidate => candidate.CandidateIndex == 0);
+            Xunit.Assert.Equal(PlannerCandidateTerminalState.IntentSuppressed, primaryEvidence.TerminalState);
+            Xunit.Assert.Equal(PlannerCandidateContractVerdict.NotEvaluated, primaryEvidence.ContractVerdict);
             Xunit.Assert.Equal(validPlan ? 1 : (int?)null, divergence.SelectedCandidateIndex);
+            if (validPlan)
+            {
+                Xunit.Assert.Equal("sole-valid-sample", divergence.SelectionReason);
+                Xunit.Assert.Equal("primary-intent-suppressed", divergence.FallbackCause);
+            }
             Xunit.Assert.Equal(validPlan, seed.Task.LastVerification.Succeeded);
             var reservation = Xunit.Assert.Single(seed.Task.RetryAdmissionHistory);
             Xunit.Assert.NotNull(reservation.WorkerStartedAt);

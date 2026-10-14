@@ -1364,6 +1364,10 @@ public sealed partial class BackgroundDispatchRunner
                         processRecord.CompletedAt is { } completedAt
                             ? Math.Max(0, (long)(completedAt - processRecord.StartedAt).TotalMilliseconds)
                             : null);
+                if (suppressedPrimaryWithStartedSamples)
+                    candidates = candidates.Select(candidate => candidate.Index == 0
+                        ? candidate with { TerminalState = PlannerCandidateTerminalState.IntentSuppressed }
+                        : candidate).ToArray();
                 var selection = PlannerCandidateSelector.Select(
                     candidates,
                     processRecord.WorkingDirectory,
