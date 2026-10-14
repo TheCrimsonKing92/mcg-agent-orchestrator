@@ -18,7 +18,7 @@ public static class CompletionBuildEvidenceChildIdentity
                 return CompletionBuildChildLiveness.Unknown;
             return identity.StartedAt == operation.ChildStartedAt &&
                 string.Equals(identity.ImagePath, operation.ChildImagePath, StringComparison.OrdinalIgnoreCase)
-                ? CompletionBuildChildLiveness.Live : CompletionBuildChildLiveness.Dead;
+                ? CompletionBuildChildLiveness.Live : CompletionBuildChildLiveness.Unknown;
         }
         catch (ArgumentException) { return CompletionBuildChildLiveness.Dead; }
         catch { return CompletionBuildChildLiveness.Unknown; }

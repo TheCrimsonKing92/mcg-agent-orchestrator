@@ -238,8 +238,11 @@ internal static class SourceSizeRatchet
             // Goal 1d995e6d adds exact-preparation validation, admission-reference handoff and suppression
             // reconciliation at the runner-owned start/completion boundaries. Store admission and receipt
             // reading remain separately owned; moving these call sites would split dispatch lifecycle ownership.
-            // Measured 2737 lines; no extra headroom.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Processes/BackgroundDispatchRunner.cs", 2737),
+            // Goal ffa0471e adds orphan completion-build cancellation routing before normal worker cancellation;
+            // operation lifecycle/custody stays in CompletionBuildEvidenceCoordinator. Measured 2728; no headroom.
+            // Goal ffa0471e extracts historical/current completion-build policy to its owning collaborator.
+            // Integrated with the admission call sites: measured 2738 lines, no extra headroom.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Processes/BackgroundDispatchRunner.cs", 2738),
             // Goal 5a75fed0 extracted typed projection parsing and literal restoration into
             // WorkerContextProjectionResidual, leaving the dispatcher to sequence package assembly.
             // Goal fd252fe4 adds retry fingerprints for the resolved provider, model, paid route, and
@@ -459,7 +462,9 @@ internal static class SourceSizeRatchet
             // Goal 33b9b7a6 extracts bounded carry receipt formatting into AcceptanceMainAdvanceReceipt.
             // Goal 33b9b7a6 also extracts revalidation hold-identity formatting into that receipt owner.
             // Measured 14962 lines across the same 70 partial files; no extra headroom.
-            new SourceClassCeiling("ConductorDriver", 14962, 70),
+            // Goal ffa0471e wires attached-operation reconciliation when current worker metadata is absent;
+            // lifecycle remains in CompletionBuildEvidenceCoordinator. Measured 14970 in the same 70 partials; no headroom.
+            new SourceClassCeiling("ConductorDriver", 14970, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
@@ -478,8 +483,11 @@ internal static class SourceSizeRatchet
             // Measured 12157 total lines across the same 30 partial files; no extra headroom.
             // Goal 1d995e6d passes the durable task admission reference at the existing manual-start call site;
             // reservation/version behavior remains in SqliteOperatorIntentStore. The two added wiring lines
-            // keep manual dispatch on the same protected launch path. Measured 12159 lines in 30 partials; no headroom.
-            new SourceClassCeiling("CliCommandHandlers", 12159, 30),
+            // keep manual dispatch on the same protected launch path.
+            // Goal ffa0471e validates an exact completion-build selector and enqueues typed cancellation without
+            // stopping a historical worker; lifecycle remains in the coordinator.
+            // Integrated size is 12167 lines in the same 30 partials; no extra headroom.
+            new SourceClassCeiling("CliCommandHandlers", 12167, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
             // Goal 03580ad1 extracts source-mutation edits to AcceptanceSourceMutation; measured 8938 lines in 31 partials.

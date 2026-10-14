@@ -5,6 +5,49 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class TaskCompletionBuildEvidencePersistenceTests
 {
     [Fact]
+    public async Task CurrentWorkerReceiptApplicationStillPersistsOverDurableTerminalBuildFact()
+    {
+        var f = new CompletionBuildEvidenceFixture();
+        var runner = f.Runner();
+        runner.RefreshLatestProcess(f.Kernel, f.GoalId, f.TaskId);
+        var baseline = f.Kernel.ExportSnapshot().Goals.Single();
+        f.Release();
+        runner.RefreshLatestProcess(f.Kernel, f.GoalId, f.TaskId);
+        var current = f.Kernel.ExportSnapshot().Goals.Single();
+        Assert.True(f.Task.CompletionBuildEvidence!.Applied);
+        var repository = new SqliteOrchestratorStateRepository(f.StatePath);
+        await repository.SaveGoalSnapshotsWithMergeAsync([new GoalSnapshotSaveRequest(baseline, current)]);
+        f.Reload();
+        Assert.Equal(CompletionBuildEvidencePhase.Success, f.Task.CompletionBuildEvidence!.Phase);
+        Assert.True(f.Task.CompletionBuildEvidence.Applied);
+        Assert.True(f.Task.CompletionBuildEvidence.CustodyReleased);
+        Assert.Equal(WorkTaskStatus.Completed, f.Task.Status);
+        Assert.Single(f.Task.VerificationHistory);
+        Assert.NotNull(f.Task.LastDispatch!.ResultCommit);
+    }
+
+    [Fact]
+    public async Task StaleCancellationSnapshotCannotOverwriteStoredTerminalSuccess()
+    {
+        var f = new CompletionBuildEvidenceFixture();
+        f.Runner().RefreshLatestProcess(f.Kernel, f.GoalId, f.TaskId);
+        var baseline = f.Kernel.ExportSnapshot().Goals.Single();
+        var stale = baseline with { Tasks = baseline.Tasks.Select(t => t.Id == f.TaskId.Value ? t with
+        { CompletionBuildEvidence = t.CompletionBuildEvidence! with { Phase = CompletionBuildEvidencePhase.Cancelled } } : t).ToArray() };
+        f.Release(receipt: false);
+        f.ResetWorkerMetadata();
+        f.Runner().ReconcileCompletionBuildEvidence(f.Kernel, f.GoalId, f.TaskId,
+            CompletionBuildEvidenceTarget.From(f.Task.CompletionBuildEvidence!));
+        var repository = new SqliteOrchestratorStateRepository(f.StatePath);
+        await repository.SaveGoalSnapshotsWithMergeAsync([new GoalSnapshotSaveRequest(baseline, stale)]);
+        f.Reload();
+        Assert.Equal(CompletionBuildEvidencePhase.Success, f.Task.CompletionBuildEvidence!.Phase);
+        Assert.True(f.Task.CompletionBuildEvidence.CustodyReleased);
+        Assert.Null(f.Task.LastProcess);
+        Assert.Null(f.Task.LastVerification);
+    }
+
+    [Fact]
     public void SnapshotRoundTripPreservesDispatchCandidateChildAndOriginalWorkerEvidence()
     {
         var fixture = new CompletionBuildEvidenceFixture();

@@ -19,9 +19,13 @@ internal sealed class CompletionBuildEvidenceCoordinator : ICompletionBuildEvide
     private readonly Func<CompletionBuildEvidenceOperation, CompletionBuildEvidenceOperation?, CompletionBuildEvidenceOperation> _persist;
     private readonly Func<CompletionBuildEvidenceOperation, CompletionBuildChildLaunch> _launch;
     private readonly Func<CompletionBuildEvidenceOperation, CompletionBuildChildLiveness> _probe;
-    private readonly Action<CompletionBuildEvidenceOperation> _stop;
+    private readonly Func<CompletionBuildEvidenceOperation, string?> _stop;
     private readonly Func<Goal, CompletionBuildChildLaunch, string, GoalEvidenceOperationStart> _begin;
     private readonly Action<Goal, CompletionBuildEvidenceOperation> _finish;
+    private readonly Func<ProcessStartInfo, Process> _startProcess;
+    private readonly Func<Process, SpawnProcessIdentityReadResult> _readIdentity;
+    private readonly Func<Process, (TextReader Output, TextReader Error)> _hostReaders;
+    private readonly Dictionary<string, CompletionBuildHostCapture> _captures = new();
 
     internal CompletionBuildEvidenceCoordinator(string statePath, string executionDirectory,
         Func<DateTimeOffset>? utcNow = null,
@@ -30,7 +34,10 @@ internal sealed class CompletionBuildEvidenceCoordinator : ICompletionBuildEvide
         Func<CompletionBuildEvidenceOperation, CompletionBuildChildLiveness>? probe = null,
         Action<CompletionBuildEvidenceOperation>? stop = null,
         Func<Goal, CompletionBuildChildLaunch, string, GoalEvidenceOperationStart>? begin = null,
-        Action<Goal, CompletionBuildEvidenceOperation>? finish = null)
+        Action<Goal, CompletionBuildEvidenceOperation>? finish = null,
+        Func<ProcessStartInfo, Process>? startProcess = null,
+        Func<Process, SpawnProcessIdentityReadResult>? readIdentity = null,
+        Func<Process, (TextReader Output, TextReader Error)>? hostReaders = null)
     {
         _statePath = statePath;
         _executionDirectory = executionDirectory;
@@ -38,9 +45,13 @@ internal sealed class CompletionBuildEvidenceCoordinator : ICompletionBuildEvide
         _persist = persist ?? Persist;
         _launch = launch ?? Launch;
         _probe = probe ?? CompletionBuildEvidenceChildIdentity.Probe;
-        _stop = stop ?? CompletionBuildEvidenceChildIdentity.Stop;
+        _stop = stop is null ? StopChild : operation => { stop(operation); return null; };
         _begin = begin ?? Begin;
         _finish = finish ?? FinishLease;
+        _startProcess = startProcess ?? (info => ProcessTreeGuiSuppression.Start(info)
+            ?? throw new InvalidOperationException("Completion build child launch failed."));
+        _readIdentity = readIdentity ?? SpawnProcessIdentityReader.ReadForRegistration;
+        _hostReaders = hostReaders ?? (process => (process.StandardOutput, process.StandardError));
     }
 
     public CompletionBuildEvidenceOperation Reconcile(AgentOrchestratorKernel kernel, GoalId goalId,
@@ -49,6 +60,12 @@ internal sealed class CompletionBuildEvidenceCoordinator : ICompletionBuildEvide
         var task = kernel.GetTask(goalId, taskId);
         var goal = kernel.GetGoal(goalId);
         var operation = task.CompletionBuildEvidence;
+        if (operation is not null && (task.LastDispatch?.DispatchedAt != operation.DispatchAt ||
+            workerProcess.ProcessId != operation.WorkerProcess.ProcessId || workerProcess.StartedAt != operation.WorkerProcess.StartedAt))
+        {
+            ReconcileAttached(kernel, goalId, taskId, CompletionBuildEvidenceTarget.From(operation));
+            throw new InvalidOperationException("Historical completion build evidence cannot certify the current worker; use operation-only recovery.");
+        }
         if (operation is null)
         {
             if (!WorktreeTreeDigest.TryCompute(request.WorktreeRoot, out var digest, out var reason))
@@ -109,11 +126,15 @@ internal sealed class CompletionBuildEvidenceCoordinator : ICompletionBuildEvide
         }
         catch (Exception ex)
         {
-            child?.Stop();
+            var diagnostic = ex.Message;
+            try { child?.Stop(); }
+            catch (Exception cleanup) { diagnostic += $" Cleanup failed: {cleanup.Message}"; }
+            if (_captures.TryGetValue(operation.Id, out var held) && held.HasUnreapedChild)
+                throw new InvalidOperationException($"Completion build launch child termination unconfirmed; custody is retained. {diagnostic}", ex);
             scope?.Abort("Completion build launch was not authorized.");
             scope?.Dispose();
             var terminal = operation with
-            { Phase = CompletionBuildEvidencePhase.ApparatusFailure, Diagnostic = $"Completion build launch failed: {ex.Message}" };
+            { Phase = CompletionBuildEvidencePhase.ApparatusFailure, Diagnostic = $"Completion build launch failed: {diagnostic}" };
             return Store(kernel, terminal, operation);
         }
     }
@@ -121,9 +142,13 @@ internal sealed class CompletionBuildEvidenceCoordinator : ICompletionBuildEvide
     private CompletionBuildEvidenceOperation Poll(AgentOrchestratorKernel kernel, Goal goal,
         CompletionBuildEvidenceOperation operation, OrchestratorBuildCheckRequest request)
     {
+        operation = RefreshAttached(kernel, goal.Id, new TaskId(operation.TaskId), CompletionBuildEvidenceTarget.From(operation));
+        if (operation.IsPending && ObserveTerminal(kernel, goal, operation) is { } observed)
+            operation = observed;
+        if (!operation.IsPending) operation = ReleaseCustody(kernel, goal, operation);
         if (!operation.IsPending && operation.Phase != CompletionBuildEvidencePhase.Success) return operation;
         var task = kernel.GetTask(goal.Id, new TaskId(operation.TaskId));
-        if (task.Status == WorkTaskStatus.Cancelled || task.LastDispatch?.DispatchedAt != operation.DispatchAt)
+        if (operation.IsPending && (task.Status == WorkTaskStatus.Cancelled || task.LastDispatch?.DispatchedAt != operation.DispatchAt))
             return Terminal(kernel, goal, operation, CompletionBuildEvidencePhase.Cancelled, "Originating dispatch was cancelled or superseded.");
         if (!WorktreeTreeDigest.TryCompute(request.WorktreeRoot, out var digest, out _) ||
             digest != operation.TreeDigest || !NormalizeProjects(request.Projects).SequenceEqual(operation.Projects) ||
@@ -154,6 +179,28 @@ internal sealed class CompletionBuildEvidenceCoordinator : ICompletionBuildEvide
                 return Terminal(kernel, goal, operation, CompletionBuildEvidencePhase.TimedOut, "Completion build evidence exceeded its deadline.");
             return operation;
         }
+        return ObserveTerminal(kernel, goal, operation) ?? operation;
+    }
+
+    private CompletionBuildEvidenceOperation? ObserveTerminal(AgentOrchestratorKernel kernel, Goal goal,
+        CompletionBuildEvidenceOperation operation)
+    {
+        if (!operation.IsPending || operation.ChildPid is null || _probe(operation) != CompletionBuildChildLiveness.Dead)
+            return null;
+        if (_captures.TryGetValue(operation.Id, out var capture) && capture.Matches(operation))
+        {
+            var captureFailure = capture.Collect();
+            if (capture.HasUnreapedChild)
+                throw new InvalidOperationException("Completion build child termination unconfirmed; custody is retained.");
+            if (!capture.HasUnreapedChild) _captures.Remove(operation.Id);
+            if (capture.DeadlineExceeded)
+                return SaveTerminal(kernel, goal, operation, CompletionBuildEvidencePhase.TimedOut,
+                    captureFailure ?? "Completion build child exceeded its deadline.");
+            if (captureFailure is not null)
+                return SaveTerminal(kernel, goal, operation, CompletionBuildEvidencePhase.ApparatusFailure, captureFailure);
+        }
+        if (CompletionBuildHostCapture.ReadRecordedFailure(operation) is { } recordedFailure)
+            return SaveTerminal(kernel, goal, operation, recordedFailure.Phase, recordedFailure.Diagnostic);
         CompletionBuildEvidenceOperation? result = null;
         try
         {
@@ -162,17 +209,16 @@ internal sealed class CompletionBuildEvidenceCoordinator : ICompletionBuildEvide
         }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
         {
-            return Terminal(kernel, goal, operation, CompletionBuildEvidencePhase.ApparatusFailure, $"Completion build result unreadable: {ex.Message}");
+            return SaveTerminal(kernel, goal, operation, CompletionBuildEvidencePhase.ApparatusFailure, $"Completion build result unreadable: {ex.Message}");
         }
         if (result is null || result.IsPending || !MatchesResult(operation, result))
-            return Terminal(kernel, goal, operation, CompletionBuildEvidencePhase.ApparatusFailure, "Completion build child exited without a matching terminal receipt.");
-        _finish(goal, operation);
-        return Store(kernel, operation with
-        { Phase = result.Phase, BuildExitCode = result.BuildExitCode, Diagnostic = result.Diagnostic }, operation);
+            return SaveTerminal(kernel, goal, operation, CompletionBuildEvidencePhase.ApparatusFailure, "Completion build child exited without a matching terminal receipt.");
+        return SaveTerminal(kernel, goal, operation, result.Phase, result.Diagnostic, result.BuildExitCode);
     }
 
     internal static bool MatchesResult(CompletionBuildEvidenceOperation expected, CompletionBuildEvidenceOperation result) =>
         result.WorkerProcess is not null && result.Projects is not null &&
+        expected.HasSameOrigin(result) &&
         result.Id == expected.Id && result.GoalId == expected.GoalId && result.TaskId == expected.TaskId &&
         result.DispatchId == expected.DispatchId && result.DispatchAt == expected.DispatchAt &&
         result.TreeDigest == expected.TreeDigest && result.WorktreeRoot == expected.WorktreeRoot &&
@@ -190,16 +236,117 @@ internal sealed class CompletionBuildEvidenceCoordinator : ICompletionBuildEvide
     public void Cancel(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId)
     {
         if (kernel.GetTask(goalId, taskId).CompletionBuildEvidence is { IsPending: true } operation)
+        {
+            var disposition = CancelAttached(kernel, goalId, taskId, CompletionBuildEvidenceTarget.From(operation));
+            if (disposition.IsPending || !disposition.CustodyReleased)
+                throw new InvalidOperationException("Completion build cancellation is held; custody is retained.");
+        }
+    }
+
+    public CompletionBuildEvidenceOperation ReconcileAttached(AgentOrchestratorKernel kernel, GoalId goalId,
+        TaskId taskId, CompletionBuildEvidenceTarget target)
+    {
+        var operation = RefreshAttached(kernel, goalId, taskId, target);
+        var goal = kernel.GetGoal(goalId);
+        if (!operation.IsPending) return ReleaseCustody(kernel, goal, operation);
+        if (ObserveTerminal(kernel, goal, operation) is { } terminal) return terminal;
+        // Recovery is lifecycle-only. It never launches or restores the original worker.
+        var task = kernel.GetTask(goalId, taskId);
+        if (task.Status == WorkTaskStatus.Cancelled || task.LastDispatch?.DispatchedAt != operation.DispatchAt || task.LastProcess is null)
+            return Terminal(kernel, goal, operation, CompletionBuildEvidencePhase.Cancelled, "Originating dispatch was cancelled or superseded.");
+        if (_utcNow() >= operation.Deadline)
+            return Terminal(kernel, goal, operation, CompletionBuildEvidencePhase.TimedOut, "Completion build evidence exceeded its deadline.");
+        return operation;
+    }
+
+    public CompletionBuildEvidenceOperation CancelAttached(AgentOrchestratorKernel kernel, GoalId goalId,
+        TaskId taskId, CompletionBuildEvidenceTarget target)
+    {
+        var operation = RefreshAttached(kernel, goalId, taskId, target);
+        return !operation.IsPending ? ReleaseCustody(kernel, kernel.GetGoal(goalId), operation) :
             Terminal(kernel, kernel.GetGoal(goalId), operation, CompletionBuildEvidencePhase.Cancelled,
                 "Operator cancelled completion build evidence.");
+    }
+
+    private CompletionBuildEvidenceOperation RefreshAttached(AgentOrchestratorKernel kernel, GoalId goalId,
+        TaskId taskId, CompletionBuildEvidenceTarget target)
+    {
+        var operation = kernel.GetTask(goalId, taskId).CompletionBuildEvidence
+            ?? throw new InvalidOperationException("No attached completion build operation.");
+        if (!target.Matches(operation)) throw new InvalidOperationException("Completion build operation selector mismatch.");
+        ValidateOrigin(kernel.GetTask(goalId, taskId), goalId, operation);
+        var saved = _persist(operation, operation); // Re-read durable authority at the action boundary.
+        if (!target.Matches(saved) || !operation.HasSameOrigin(saved))
+            throw new InvalidOperationException("Completion build operation authority changed.");
+        ValidateOrigin(kernel.GetTask(goalId, taskId), goalId, saved);
+        kernel.RecordCompletionBuildEvidence(goalId, taskId, saved);
+        return saved;
+    }
+
+    private void ValidateOrigin(TaskSpec task, GoalId goalId, CompletionBuildEvidenceOperation operation)
+    {
+        var dispatch = task.DispatchHistory.SingleOrDefault(d => d.DispatchedAt == operation.DispatchAt);
+        if (!Guid.TryParseExact(operation.Id, "N", out _) || !Enum.IsDefined(operation.Phase) ||
+            operation.IsPending && operation.CustodyReleased ||
+            operation.Phase == CompletionBuildEvidencePhase.Success && operation.BuildExitCode != 0 ||
+            operation.GoalId != goalId.Value || operation.TaskId != task.Id.Value || dispatch is null ||
+            BackgroundDispatchRunner.BuildDispatchId(goalId, task.Id, dispatch) != operation.DispatchId ||
+            operation.WorkerProcess.IsRunning || operation.WorkerProcess.Command != dispatch.Command ||
+            !string.Equals(operation.WorkerProcess.WorkingDirectory, operation.WorktreeRoot, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(Path.GetFullPath(dispatch.WorkingDirectory), operation.WorktreeRoot, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(Path.GetFullPath(operation.StatePath), Path.GetFullPath(_statePath), StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(Path.GetFullPath(operation.ExecutionDirectory), Path.GetFullPath(_executionDirectory), StringComparison.OrdinalIgnoreCase) ||
+            operation.Projects.Count == 0 || !NormalizeProjects(operation.Projects).SequenceEqual(operation.Projects) ||
+            string.IsNullOrWhiteSpace(operation.TreeDigest) ||
+            !string.Equals(operation.ResultPath, Path.Combine(DotnetBuildStorageLayout.GoalArtifactsPath(goalId),
+                "completion-build-evidence", operation.Id + ".result.json"), StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Completion build operation origin identity is unproven.");
+        if (operation.ChildPid is not null && (operation.ChildStartedAt is null || string.IsNullOrWhiteSpace(operation.ChildImagePath) ||
+            !GoalEvidenceOperationOwner.TryParse(operation.LeaseOwner, out var owner) || owner is null ||
+            owner.Operation != OperationName || owner.InstanceId != operation.Id || owner.ProcessId != operation.ChildPid))
+            throw new InvalidOperationException("Completion build operation child/lease identity is unproven.");
     }
 
     private CompletionBuildEvidenceOperation Terminal(AgentOrchestratorKernel kernel, Goal goal,
         CompletionBuildEvidenceOperation operation, CompletionBuildEvidencePhase phase, string diagnostic)
     {
-        if (operation.ChildPid is not null) _stop(operation);
+        if (_captures.TryGetValue(operation.Id, out var held) && held.HasUnreapedChild)
+            throw new InvalidOperationException("Completion build child termination unconfirmed; custody is retained.");
+        if (HasTerminalFact(operation) && ObserveTerminal(kernel, goal, operation) is { } observed) return observed;
+        if (operation.ChildPid is not null && _probe(operation) == CompletionBuildChildLiveness.Unknown)
+            return operation with { Diagnostic = "Completion build child liveness is unknown; reconciliation is held." };
+        if (operation.ChildPid is not null && _stop(operation) is { } captureFailure)
+            diagnostic += " " + captureFailure;
+        // A terminal receipt may have arrived during termination. Preserve it before fallback disposition.
+        if (operation.ChildPid is not null && HasTerminalFact(operation) &&
+            ObserveTerminal(kernel, goal, operation) is { } completed) return completed;
+        return SaveTerminal(kernel, goal, operation, phase, diagnostic);
+    }
+
+    private bool HasTerminalFact(CompletionBuildEvidenceOperation operation) => File.Exists(operation.ResultPath) ||
+        _captures.TryGetValue(operation.Id, out var capture) && capture.Matches(operation) && capture.DeadlineExceeded ||
+        CompletionBuildHostCapture.ReadRecordedFailure(operation)?.Phase == CompletionBuildEvidencePhase.TimedOut;
+
+    private CompletionBuildEvidenceOperation SaveTerminal(AgentOrchestratorKernel kernel, Goal goal,
+        CompletionBuildEvidenceOperation operation, CompletionBuildEvidencePhase phase, string diagnostic, int? exitCode = null) =>
+        ReleaseCustody(kernel, goal, Store(kernel, operation with
+        { Phase = phase, Diagnostic = diagnostic, BuildExitCode = exitCode }, operation));
+
+    private CompletionBuildEvidenceOperation ReleaseCustody(AgentOrchestratorKernel kernel, Goal goal,
+        CompletionBuildEvidenceOperation operation)
+    {
+        if (operation.IsPending) return operation;
+        if (_captures.TryGetValue(operation.Id, out var capture))
+        {
+            if (!capture.Matches(operation) || capture.HasUnreapedChild)
+                throw new InvalidOperationException("Completion build held child identity or termination is unproven; custody is retained.");
+            _stop(operation);
+        }
+        if (operation.CustodyReleased) return operation;
+        if (operation.ChildPid is not null && _probe(operation) != CompletionBuildChildLiveness.Dead)
+            throw new InvalidOperationException("Completion build terminal child is not proven dead; custody is retained.");
         _finish(goal, operation);
-        return Store(kernel, operation with { Phase = phase, Diagnostic = diagnostic }, operation);
+        return Store(kernel, operation with { CustodyReleased = true }, operation);
     }
 
     private CompletionBuildEvidenceOperation Store(AgentOrchestratorKernel kernel,
@@ -215,13 +362,20 @@ internal sealed class CompletionBuildEvidenceCoordinator : ICompletionBuildEvide
         .TransactGoalStateAsync(new GoalId(operation.GoalId), (state, _) =>
         {
             var task = state?.Goal.Tasks.SingleOrDefault(t => t.Id == operation.TaskId);
-            if (task is null || task.LastDispatch?.DispatchedAt != operation.DispatchAt ||
-                task.Status == WorkTaskStatus.Cancelled)
-                throw new InvalidOperationException("Completion build evidence lost current dispatch authority.");
+            if (task is null) throw new InvalidOperationException("Completion build evidence lost task authority.");
+            var loaded = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([state!.Goal], []));
+            ValidateOrigin(loaded.GetTask(new GoalId(operation.GoalId), new TaskId(operation.TaskId)), new GoalId(operation.GoalId), operation);
             var current = task.CompletionBuildEvidence;
-            if (current is not null && (previous is null || current.Id != operation.Id ||
-                current.Phase != previous.Phase || current.ChildPid != previous.ChildPid || current.Applied))
+            if (current is null && (previous is not null || task.LastDispatch?.DispatchedAt != operation.DispatchAt || task.Status == WorkTaskStatus.Cancelled))
+                throw new InvalidOperationException("Completion build evidence lost attached operation authority.");
+            if (current is not null && (previous is null || !current.HasSameOrigin(operation) ||
+                !CompletionBuildEvidenceTarget.From(current).Matches(previous) || current.Phase != previous.Phase ||
+                current.Applied != previous.Applied || current.CustodyReleased != previous.CustodyReleased))
                 return Task.FromResult((false, state, current));
+            if (current is not null && operation.Phase == current.Phase && operation.CustodyReleased == current.CustodyReleased &&
+                operation.Applied == current.Applied && CompletionBuildEvidenceTarget.From(current).Matches(operation) && operation.Diagnostic == current.Diagnostic)
+                return Task.FromResult((false, state, current));
+            loaded.RecordCompletionBuildEvidence(new GoalId(operation.GoalId), new TaskId(operation.TaskId), operation);
             var updated = state! with { Goal = state!.Goal with
             { Tasks = state.Goal.Tasks.Select(t => t.Id == task.Id ? t with { CompletionBuildEvidence = operation } : t).ToArray() } };
             return Task.FromResult((true, (GoalStateSnapshot?)updated, operation));
@@ -245,6 +399,7 @@ internal sealed class CompletionBuildEvidenceCoordinator : ICompletionBuildEvide
 
     private CompletionBuildChildLaunch Launch(CompletionBuildEvidenceOperation operation)
     {
+        var capture = new CompletionBuildHostCapture(operation, _utcNow);
         var info = new ProcessStartInfo("dotnet")
         {
             UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = operation.WorktreeRoot,
@@ -253,33 +408,51 @@ internal sealed class CompletionBuildEvidenceCoordinator : ICompletionBuildEvide
         info.ArgumentList.Add(typeof(CompletionBuildEvidenceCoordinator).Assembly.Location);
         foreach (var argument in new[] { Subcommand, _statePath, operation.GoalId, operation.TaskId, operation.Id })
             info.ArgumentList.Add(argument);
-        var process = ProcessTreeGuiSuppression.Start(info) ?? throw new InvalidOperationException("Completion build child launch failed.");
-        var identity = DispatchProcessIdentityEvidence.ReadCurrent(process.Id);
-        if (identity is null)
-        {
-            process.Kill(entireProcessTree: true);
-            process.Dispose();
-            throw new InvalidOperationException("Completion build child identity unavailable.");
-        }
-        _ = DrainHost(process, operation.ResultPath);
-        return new(identity.ProcessId, identity.StartedAt, identity.ImagePath,
-            () => { process.StandardInput.WriteLine(operation.Id); process.StandardInput.Close(); },
-            () => CompletionBuildEvidenceChildIdentity.Stop(operation with
-            { ChildPid = identity.ProcessId, ChildStartedAt = identity.StartedAt, ChildImagePath = identity.ImagePath }));
-    }
-
-    private static async Task DrainHost(Process process, string resultPath)
-    {
         try
         {
-            var stdout = process.StandardOutput.ReadToEndAsync();
-            var stderr = process.StandardError.ReadToEndAsync();
-            await process.WaitForExitAsync().ConfigureAwait(false);
-            Directory.CreateDirectory(Path.GetDirectoryName(resultPath)!);
-            await File.WriteAllTextAsync(resultPath + ".host.stdout", await stdout.ConfigureAwait(false)).ConfigureAwait(false);
-            await File.WriteAllTextAsync(resultPath + ".host.stderr", await stderr.ConfigureAwait(false)).ConfigureAwait(false);
+            var process = _startProcess(info);
+            capture.Attach(process, _hostReaders);
+            var read = _readIdentity(process);
+            capture.Registration = read;
+            if (!read.Succeeded)
+                throw new InvalidOperationException($"Completion build child identity unavailable. {read.Evidence}");
+            var identity = read.Identity!;
+            if (identity.ProcessId != process.Id || process.HasExited)
+                throw new InvalidOperationException("Completion build child exited or registration described a different child.");
+            _captures[operation.Id] = capture;
+            return new(identity.ProcessId, identity.StartedAt, identity.ImagePath,
+                () => capture.Authorize(operation.Id), () =>
+                {
+                    var failure = capture.Stop();
+                    if (!capture.HasUnreapedChild && _captures.GetValueOrDefault(operation.Id) == capture) _captures.Remove(operation.Id);
+                    if (failure is not null) throw new InvalidOperationException(failure);
+                });
         }
-        finally { process.Dispose(); }
+        catch (Exception ex)
+        {
+            capture.LaunchFailure = ex.ToString();
+            var cleanup = capture.Stop();
+            if (capture.HasUnreapedChild) _captures[operation.Id] = capture;
+            else if (_captures.GetValueOrDefault(operation.Id) == capture) _captures.Remove(operation.Id);
+            throw new InvalidOperationException($"{ex.Message} Host diagnostics: {capture.MetadataPath}." +
+                (cleanup is null ? string.Empty : $" {cleanup}"), ex);
+        }
+    }
+
+    private string? StopChild(CompletionBuildEvidenceOperation operation)
+    {
+        if (_captures.TryGetValue(operation.Id, out var capture) && capture.Matches(operation))
+        {
+            var failure = capture.Stop();
+            if (capture.HasUnreapedChild)
+                throw new InvalidOperationException(failure ?? "Completion build child termination unconfirmed.");
+            _captures.Remove(operation.Id);
+            // Diagnostic custody faults do not revoke confirmed termination or prevent
+            // the caller from releasing the lease and persisting cancellation.
+            return failure;
+        }
+        CompletionBuildEvidenceChildIdentity.Stop(operation);
+        return null;
     }
 
     internal static int RunChild(string[] args)
