@@ -99,6 +99,8 @@ internal static class CliCommandHelp
     public const string RoundValueUsage = "Usage: round-value [--since <ISO-8601-with-offset>] [--until <ISO-8601-with-offset>] [--json] [--by-skill] [--by-check] [--baseline-since <ISO-8601-with-offset> --baseline-until <ISO-8601-with-offset>]";
     public const string LessonUsage = "Usage: lesson record --situation <text> --rule <text> --evidence <ref>... [--applies-to <tag>...] [--goal <goal-prefix>] [--until-goal <goal-prefix>] [--actor-kind human|agent] [--json] | lesson retire <lesson-id> --reason <text> [--evidence <ref>...] [--json]";
     public const string LessonsUsage = "Usage: lessons [--all] [--applies-to <tag>] [--json]";
+    public const string DirectiveUsage = "Usage: directive record --kind intake|pacing|scope --text-file <path> [--expires-at <utc> | --until-handoff] [--actor-kind human|agent] [--operator-actor <actor>] [--idempotency-key <key>] [--json] | directive retire <id> --reason <text> [--json] | directive handoff [--note <text>] [--json]";
+    public const string DirectivesUsage = "Usage: directives [--json]";
     public const string EscapeUsage = "Usage: escape record --goal <landed-goal-prefix> --reason <text> --evidence <ref>... [--found-by-goal <goal-prefix>] [--actor-kind human|agent] [--json]";
     public const string ContextUsageUsage = "Usage: context-usage [--since <ISO-8601-with-offset>] [--role <role>] [--json]";
     public const string AuthorDraftUsage = "Usage: author-draft <backlog-id-prefix>";
@@ -661,6 +663,17 @@ internal static class CliCommandHelp
         "List active or retired operator lessons without running a conductor.",
         ["--all", "--applies-to", "--json", "--help", "-h"]);
 
+    private static readonly CommandHelpEntry Directive = new(
+        DirectiveUsage,
+        "Queue an owner directive record, retirement or handoff as a workspace intent.",
+        ["--kind", "--text-file", "--expires-at", "--until-handoff", "--reason", "--note",
+         "--actor-kind", "--operator-actor", "--idempotency-key", "--json", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry Directives = new(
+        DirectivesUsage,
+        "List non-retired owner directives, including expired entries.",
+        ["--json", "--help", "-h"]);
+
     private static readonly CommandHelpEntry ContextUsage = new(
         ContextUsageUsage,
         "Report per-role and per-model worker dispatch context usage.",
@@ -1184,6 +1197,16 @@ internal static class CliCommandHelp
         if (args[0].Equals("lesson", StringComparison.OrdinalIgnoreCase))
         {
             entry = Lesson;
+            return true;
+        }
+        if (args[0].Equals("directive", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = Directive;
+            return true;
+        }
+        if (args[0].Equals("directives", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = Directives;
             return true;
         }
         if (args[0].Equals("lessons", StringComparison.OrdinalIgnoreCase))

@@ -58,7 +58,10 @@ internal static class CliConductorCommand
                     if (CliConductorStatusJsonQueryCommand.IsConductorStatusJsonCommand(args))
                         output.WriteLine(ConductorStatusAgentReadView.Render(snapshot, time ?? TimeProvider.System));
                     else
+                    {
                         CliConductorStatusReader.Print(snapshot, output);
+                        ConductorStatusDirectives.Print(workspace, output, time ?? TimeProvider.System);
+                    }
                     return 0;
                 case "stop":
                     if (owner is null)

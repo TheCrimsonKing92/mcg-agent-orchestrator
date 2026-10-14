@@ -43,6 +43,7 @@ public sealed class ConductorVerbSetupTests
             Assert.NotNull(SqliteOperatorIntentStore.OpenExisting(workspace.OrchestratorDirectory, workspace.LogDirectory));
             Assert.NotNull(SqliteOperatorLessonStore.OpenReadOnly(workspace.OperatorLessonsStorePath));
             Assert.NotNull(SqliteOperatorEscapeStore.OpenReadOnly(workspace.OperatorEscapesStorePath));
+            Assert.NotNull(SqliteOperatorDirectiveStore.OpenReadOnly(workspace.OperatorDirectivesStorePath));
         }
         Assert.Empty(launcher.Requests);
         Assert.Equal("", error.ToString());
@@ -120,6 +121,7 @@ public sealed class ConductorVerbSetupTests
             Assert.NotNull(PortfolioStore.OpenReadOnly(workspace.PortfolioStorePath));
             Assert.NotNull(SqliteOperatorLessonStore.OpenReadOnly(workspace.OperatorLessonsStorePath));
             Assert.NotNull(SqliteOperatorEscapeStore.OpenReadOnly(workspace.OperatorEscapesStorePath));
+            Assert.NotNull(SqliteOperatorDirectiveStore.OpenReadOnly(workspace.OperatorDirectivesStorePath));
             return new(0, "{\"pid\":1234,\"stdoutPath\":\"stdout.log\"}", null);
         }
     }

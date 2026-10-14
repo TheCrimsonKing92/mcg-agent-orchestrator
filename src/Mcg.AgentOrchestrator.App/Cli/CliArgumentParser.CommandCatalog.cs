@@ -66,6 +66,8 @@ internal static IReadOnlyList<string> RecognizedCommands { get; } =
     "owner-digest",
     "lesson",
     "lessons",
+    "directive",
+    "directives",
     "context-usage",
     "author-draft",
     "host-exclusions",

@@ -19,6 +19,8 @@ internal static class AgentReadEnvelope
     public const int GateStatusSchemaVersion = 1;
     public const string ConductorStatusSchema = "mcg.conductor-status";
     public const int ConductorStatusSchemaVersion = 1;
+    public const string DirectivesSchema = "mcg.directives";
+    public const int DirectivesSchemaVersion = 1;
     public const string OperatorIntentSchema = "mcg.operator-intent";
     public const int OperatorIntentSchemaVersion = 1;
     public const string StatusSchema = "mcg.status";

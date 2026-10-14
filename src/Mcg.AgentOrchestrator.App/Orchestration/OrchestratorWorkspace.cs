@@ -191,6 +191,7 @@ public sealed record OrchestratorWorkspace(
     public string BacklogStorePath => Path.Combine(OrchestratorDirectory, "backlog.db");
 
     public string OperatorLessonsStorePath => Path.Combine(OrchestratorDirectory, SqliteOperatorLessonStore.DatabaseFileName);
+    public string OperatorDirectivesStorePath => Path.Combine(OrchestratorDirectory, SqliteOperatorDirectiveStore.DatabaseFileName);
     public string OperatorEscapesStorePath => Path.Combine(OrchestratorDirectory, SqliteOperatorEscapeStore.DatabaseFileName);
 
     public string PortfolioStorePath => Path.Combine(OrchestratorDirectory, "portfolio.db");

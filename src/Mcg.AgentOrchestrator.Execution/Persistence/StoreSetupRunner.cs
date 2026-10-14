@@ -23,6 +23,8 @@ public static class StoreSetupRunner
                 directory => Path.Combine(directory, StoreSchemaRegistry.OperatorLessons.Database)),
             [StoreSchemaRegistry.OperatorEscapes.StoreName] = new(SqliteOperatorEscapeStore.Setup,
                 directory => Path.Combine(directory, StoreSchemaRegistry.OperatorEscapes.Database)),
+            [StoreSchemaRegistry.OperatorDirectives.StoreName] = new(OperatorDirectiveStoreSetup.Setup,
+                directory => Path.Combine(directory, StoreSchemaRegistry.OperatorDirectives.Database)),
             [StoreSchemaRegistry.OperatorIntents.StoreName] = new(SqliteOperatorIntentStore.Setup,
                 directory => Path.Combine(directory, SqliteOperatorIntentStore.DatabaseFileName)),
             [StoreSchemaRegistry.CohortAcceptance.StoreName] = new(CohortAcceptanceStoreSetup.Setup,

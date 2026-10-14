@@ -40,6 +40,9 @@ public static class StoreSchemaRegistry
     public static StoreSchemaEntry OperatorEscapes { get; } =
         new("operator-escapes", Persistence + "OperatorEscapeStore.cs", "operator-escapes.db", "backlog", 1);
 
+    public static StoreSchemaEntry OperatorDirectives { get; } =
+        new("operator-directives", Persistence + "OperatorDirectiveStoreSetup.cs", "operator-directives.db", "backlog", 1);
+
     public static StoreSchemaEntry CohortAcceptance { get; } =
         new("cohort-acceptance", Persistence + "CohortAcceptanceStore.cs", "cohort-acceptance.db", "cohort", 1);
 
@@ -91,6 +94,7 @@ public static class StoreSchemaRegistry
         OperatorIntents,
         OperatorLessons,
         OperatorEscapes,
+        OperatorDirectives,
         CohortAcceptance,
         CohortAttributionRetractions,
         CohortSoloInheritedReceipts,

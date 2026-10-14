@@ -129,7 +129,8 @@ internal sealed partial class OperatorIntentCoordinator
                 Path.Combine(workspace.OrchestratorDirectory, "conductor-policy.json"),
                 RemoteLaneExecutorConfiguration.ResolveStorePath(workspace.ExecutionDirectory)),
             ExperimentDecisions = new ExperimentDecideIntentHandler(workspace.ExperimentStorePath),
-            EpicOutcomes = new EpicOutcomeIntentHandler(workspace.PortfolioStorePath)
+            EpicOutcomes = new EpicOutcomeIntentHandler(workspace.PortfolioStorePath),
+            Directives = new OperatorDirectiveIntentHandler(workspace.OperatorDirectivesStorePath)
         };
     }
 

@@ -14,6 +14,9 @@ public static class OperatorIntentVerbs
     public const string CriterionEvidenceRepair = "criterion-evidence-repair";
     public const string LessonRecord = "lesson-record";
     public const string LessonRetire = "lesson-retire";
+    public const string DirectiveRecord = "directive-record";
+    public const string DirectiveRetire = "directive-retire";
+    public const string DirectiveHandoff = "directive-handoff";
     public const string EscapeRecord = "escape-record";
     public const string ExperimentApplyFlag = "experiment-apply-flag";
     public const string ExperimentRevertFlag = "experiment-revert-flag";

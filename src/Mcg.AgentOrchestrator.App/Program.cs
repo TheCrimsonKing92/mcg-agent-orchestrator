@@ -193,6 +193,11 @@ if (CliLessonCommands.IsCommand(startupArgs))
     return ExitCompletedStartupCommand(CliLessonCommands.Run(startupArgs, workspace));
 }
 
+if (CliDirectiveCommands.IsCommand(startupArgs))
+{
+    return ExitCompletedStartupCommand(CliDirectiveCommands.Run(startupArgs, workspace));
+}
+
 if (CliEscapeCommands.IsCommand(startupArgs))
 {
     return ExitCompletedStartupCommand(CliEscapeCommands.Run(startupArgs, workspace));

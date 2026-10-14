@@ -21,6 +21,7 @@ internal sealed partial class OperatorIntentCoordinator
     internal ExperimentFlagIntentHandler? ExperimentFlags { get; init; }
     internal ExperimentDecideIntentHandler? ExperimentDecisions { get; init; }
     internal EpicOutcomeIntentHandler? EpicOutcomes { get; init; }
+    internal OperatorDirectiveIntentHandler? Directives { get; init; }
 
     public IReadOnlyList<string> ExecuteWorkspacePending(AgentOrchestratorKernel kernel)
     {
@@ -47,6 +48,12 @@ internal sealed partial class OperatorIntentCoordinator
                     OperatorIntentVerbs.ExperimentDecide => (ExperimentDecisions ?? throw new InvalidOperationException("Experiment intent services are unavailable.")).Apply(intent),
                     OperatorIntentVerbs.EpicOutcomeDefine or OperatorIntentVerbs.EpicOutcomeRecord =>
                         (EpicOutcomes ?? throw new InvalidOperationException("Epic outcome intent services are unavailable.")).Apply(intent),
+                    OperatorIntentVerbs.DirectiveRecord =>
+                        (Directives ?? throw new InvalidOperationException("Directive intent services are unavailable.")).Apply(intent),
+                    OperatorIntentVerbs.DirectiveRetire =>
+                        (Directives ?? throw new InvalidOperationException("Directive intent services are unavailable.")).Apply(intent),
+                    OperatorIntentVerbs.DirectiveHandoff =>
+                        (Directives ?? throw new InvalidOperationException("Directive intent services are unavailable.")).Apply(intent),
                     _ => throw new OperatorLessonRejectedException($"unsupported-workspace-verb {intent.Verb}")
                 };
             }
