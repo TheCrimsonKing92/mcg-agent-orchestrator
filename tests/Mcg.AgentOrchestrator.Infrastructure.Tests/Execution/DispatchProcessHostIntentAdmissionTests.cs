@@ -155,10 +155,10 @@ public sealed class DispatchProcessHostIntentAdmissionTests(Xunit.ITestOutputHel
         {
             var store = new SqliteOperatorIntentStore(Path.Combine(root, "intents.db"), root);
             var reference = store.CaptureAdmission("goal", "task");
+            var executablePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe");
             var process = TaskIntentAdmission.Launch(reference, "suspended-child", () =>
             {
-                child = OwnedProcessGroup.StartSuspended(new System.Diagnostics.ProcessStartInfo(
-                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe"))
+                child = OwnedProcessGroup.StartSuspended(new System.Diagnostics.ProcessStartInfo(executablePath)
                     { UseShellExecute = false, CreateNoWindow = true });
                 // The initial thread cannot initialize the loader until Resume. This forces
                 // the missing-module condition without depending on scheduling or machine load.
@@ -167,7 +167,9 @@ public sealed class DispatchProcessHostIntentAdmissionTests(Xunit.ITestOutputHel
                 Xunit.Assert.True(moduleFailure is null or System.ComponentModel.Win32Exception,
                     "Module enumeration failed outside the controlled loader boundary: " + moduleFailure);
                 Xunit.Assert.Null(modulePath);
-                child.Process.StartInfo.FileName = Path.Combine(root, "not-the-launched-image.exe");
+                // The native launch returns a GetProcessById wrapper with no managed start info.
+                // Identity recording must succeed without either loader metadata or launch hints.
+                Xunit.Assert.Throws<InvalidOperationException>(() => child.Process.StartInfo);
                 return child.Process;
             });
             var identity = child!.ReadLifecycleIdentity(process.Id);
@@ -185,7 +187,7 @@ public sealed class DispatchProcessHostIntentAdmissionTests(Xunit.ITestOutputHel
             Xunit.Assert.Equal(process.Id, row.GetInt32(0));
             Xunit.Assert.Equal(identity.StartedAt!.Value.ToString("O"), row.GetString(1));
             Xunit.Assert.Equal(identity.ExecutablePath, row.GetString(2));
-            Xunit.Assert.NotEqual(process.StartInfo.FileName, row.GetString(2));
+            Xunit.Assert.Equal(executablePath, row.GetString(2), ignoreCase: true);
             Xunit.Assert.Null(store.GetSuppression("suspended-child"));
         }
         finally
