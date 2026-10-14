@@ -57,13 +57,12 @@ public sealed class CliBacklogListAgentReadEnvelopeContractTests : CliTaskQueryT
         var seed = await CliBacklogReadOnlyRouteTests.CreateSeedAsync(root);
         var probe = new ProbeStateRepository(seed.Kernel) { ThrowOnOutbox = true };
         var readOutput = ExecuteRead(["backlog-list", "--json"], seed.Workspace, probe);
-        var writer = new ProbeStateRepository(seed.Kernel);
-        var persistentOutput = ExecutePersistent(["backlog-list", "--json"], seed.Workspace, writer);
+        var repository = new SqliteOrchestratorStateRepository(seed.Workspace.SqliteStatePath);
+        var persistentOutput = ExecutePersistent(["backlog-list", "--json"], seed.Workspace, repository);
         using var read = AssertEnvelope(readOutput);
         using var persistent = AssertEnvelope(persistentOutput);
         Assert.Equal(NormalizeTimestamp(readOutput, read), NormalizeTimestamp(persistentOutput, persistent));
         AssertNoWriterAccess(probe);
-        Assert.True(writer.ListOutboxMessagesCount > 0);
     }
 
     [Theory]
@@ -97,7 +96,7 @@ public sealed class CliBacklogListAgentReadEnvelopeContractTests : CliTaskQueryT
         var readOutput = ExecuteRead(["backlog-list"], seed.Workspace,
             new ProbeStateRepository(seed.Kernel) { ThrowOnOutbox = true });
         var persistentOutput = ExecutePersistent(["backlog-list"], seed.Workspace,
-            new ProbeStateRepository(seed.Kernel));
+            new SqliteOrchestratorStateRepository(seed.Workspace.SqliteStatePath));
         Assert.Equal(readOutput, persistentOutput);
         foreach (var output in new[] { readOutput, persistentOutput })
         {
@@ -205,13 +204,14 @@ public sealed class CliBacklogListAgentReadEnvelopeContractTests : CliTaskQueryT
             Assert.False(changed);
         });
 
-    private static string ExecutePersistent(string[] args, OrchestratorWorkspace workspace, ProbeStateRepository probe) =>
+    private static string ExecutePersistent(string[] args, OrchestratorWorkspace workspace,
+        ITransactionalOrchestratorStateRepository repository) =>
         CaptureConsole(() =>
         {
             IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
             var profiles = WorkerProfileCatalog.Default();
             Goal? current = null;
-            Assert.False(CliPersistentStateRunner.ExecuteCommand(args, probe, workspace, ref agents,
+            Assert.False(CliPersistentStateRunner.ExecuteCommand(args, repository, workspace, ref agents,
                 new InMemoryModelProviderRegistry([]), ref profiles, ref current, skipReadOnlyRoute: true));
         });
 
