@@ -83,12 +83,14 @@ internal sealed partial class GoalDispatchOperations
         string? cascadeCheapModelAlias = null,
         WorkerProfileCatalog? subscriptionProfiles = null, bool? cascadeMechanicalReworkCheap = null)
     {
+        var intentStore = SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory);
+        var intentAdmission = intentStore.CaptureAdmission(goal.Id.Value, task.Id.Value);
         EnsureRefinedForTask(kernel, workspace, providers, goal, task);
         var subscriptionMetadata = TryBuildProfileSubscriptionMetadata(goal, task, profile, agents,
             subscriptionProfiles, ResolveCascadeTesterCheapFirst(workspace, cascadeTesterCheapFirst, conductorPolicy),
             ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy), cascadeMechanicalReworkCheap: ResolveCascadeMechanicalReworkCheap(workspace, cascadeMechanicalReworkCheap, conductorPolicy));
         var home = _resolveHome(workspace);
-        return WorkerProfileDispatcher.PrepareTask(
+        var prepared = WorkerProfileDispatcher.PrepareTask(
             kernel,
             goal,
             task,
@@ -119,6 +121,8 @@ internal sealed partial class GoalDispatchOperations
             shadowRecorder: DispatchShadowRecorder.Default,
             orchestratorSkillDirectory: ResolveOrchestratorSkillDirectory(home), integrationBranch: workspace.IntegrationBranch,
             targetHome: new WorkerTargetHome(home.IsHome(workspace), WorkerAcceptanceManifestResolver.For(workspace)));
+        intentStore.BindPreparedAdmission(intentAdmission, prepared.Task.LastDispatch!.DispatchedAt);
+        return prepared;
     }
 
     public WorkerProfileDispatchResult RefreshPreparedDispatchBeforeStart(
@@ -424,11 +428,18 @@ internal sealed partial class GoalDispatchOperations
     {
         ReconcileExitedAssignedProcessRecords(kernel, goal);
         goal = kernel.GetGoal(goal.Id);
-        var safeBatch = DispatchReadinessRules.SelectFirstParallelSafeAssignedBatch(goal, agents);
+        var intentStore = SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory);
+        var intentAdmissions = goal.Tasks.ToDictionary(task => task.Id,
+            task => intentStore.CaptureAdmission(goal.Id.Value, task.Id.Value));
+        var held = intentStore.ListHeldTaskIds(goal.Id.Value).Select(id => new TaskId(id)).ToHashSet();
+        foreach (var id in held)
+            if (intentAdmissions.TryGetValue(id, out var reference))
+                intentStore.RecordSuppression(reference, $"selection:{goal.Id.Value}:{id.Value}:{reference.Version}");
+        var safeBatch = DispatchReadinessRules.SelectFirstParallelSafeAssignedBatch(goal, agents, excludedTaskIds: held);
         EnsureRefinedForSelectedTasks(kernel, workspace, providers, goal, safeBatch.TaskIds);
         goal = kernel.GetGoal(goal.Id);
         var home = _resolveHome(workspace);
-        return WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
+        var batch = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
             kernel,
             goal,
             agents,
@@ -445,6 +456,9 @@ internal sealed partial class GoalDispatchOperations
             cascadeCheapModelAlias: ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy), cascadeMechanicalReworkCheap: ResolveCascadeMechanicalReworkCheap(workspace, cascadeMechanicalReworkCheap, conductorPolicy),
             orchestratorSkillDirectory: ResolveOrchestratorSkillDirectory(home), integrationBranch: workspace.IntegrationBranch,
             targetHome: new WorkerTargetHome(home.IsHome(workspace), WorkerAcceptanceManifestResolver.For(workspace)));
+        foreach (var prepared in batch.Dispatches)
+            intentStore.BindPreparedAdmission(intentAdmissions[prepared.Task.Id], prepared.Task.LastDispatch!.DispatchedAt);
+        return batch;
     }
 
     public WorkerProfileDispatchResult SubscriptionDispatchTask(
@@ -463,9 +477,11 @@ internal sealed partial class GoalDispatchOperations
         bool? cascadeTesterCheapFirst = null,
         string? cascadeCheapModelAlias = null, bool? cascadeMechanicalReworkCheap = null)
     {
+        var intentStore = SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory);
+        var intentAdmission = intentStore.CaptureAdmission(goal.Id.Value, task.Id.Value);
         EnsureRefinedForTask(kernel, workspace, providers, goal, task);
         var home = _resolveHome(workspace);
-        return WorkerProfileDispatcher.PrepareSubscriptionTask(
+        var prepared = WorkerProfileDispatcher.PrepareSubscriptionTask(
             kernel,
             goal,
             task,
@@ -483,6 +499,8 @@ internal sealed partial class GoalDispatchOperations
             cascadeCheapModelAlias: ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy), cascadeMechanicalReworkCheap: ResolveCascadeMechanicalReworkCheap(workspace, cascadeMechanicalReworkCheap, conductorPolicy),
             orchestratorSkillDirectory: ResolveOrchestratorSkillDirectory(home), integrationBranch: workspace.IntegrationBranch,
             targetHome: new WorkerTargetHome(home.IsHome(workspace), WorkerAcceptanceManifestResolver.For(workspace)));
+        intentStore.BindPreparedAdmission(intentAdmission, prepared.Task.LastDispatch!.DispatchedAt);
+        return prepared;
     }
 
     private static CitedPriorEvidenceResolver CreateCitedPriorEvidenceResolver(OrchestratorWorkspace workspace) =>

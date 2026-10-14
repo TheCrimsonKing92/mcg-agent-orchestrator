@@ -121,6 +121,51 @@ public sealed class PlannerCandidateSelectorTests
             Xunit.Assert.NotEqual(PlannerCandidateContractVerdict.Valid, candidate.ContractVerdict));
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData(true)]
+    [Xunit.InlineData(false)]
+    public void IntentSuppressedPrimary_SelectsOnlyContractValidStartedSample(bool validSample)
+    {
+        var repositoryRoot = InfrastructureTestSupport.FindRepositoryRoot();
+        var plan = ReadPlannerFixture(repositoryRoot);
+        var samplePath = Path.Combine(repositoryRoot, "planner.sample-1.out.log");
+        var result = PlannerCandidateSelector.Select(
+            [
+                // Even stale valid output cannot qualify a primary that never started.
+                new(0, plan, TerminalState: PlannerCandidateTerminalState.IntentSuppressed),
+                new(1, validSample ? plan : "invalid sample plan", SourcePath: samplePath)
+            ], repositoryRoot);
+
+        Xunit.Assert.Equal(validSample, result.SelectedContract.Succeeded);
+        Xunit.Assert.Equal(validSample ? 1 : (int?)null, result.Receipt.SelectedCandidateIndex);
+        var primary = Xunit.Assert.Single(result.Receipt.Candidates!, candidate => candidate.CandidateIndex == 0);
+        Xunit.Assert.Equal(PlannerCandidateContractVerdict.NotEvaluated, primary.ContractVerdict);
+        Xunit.Assert.Equal(PlannerCandidateTerminalState.IntentSuppressed, primary.TerminalState);
+        if (validSample)
+        {
+            Xunit.Assert.Equal(samplePath, result.SelectedContract.IngestedPath);
+            Xunit.Assert.Equal("sole-valid-sample", result.Receipt.SelectionReason);
+            Xunit.Assert.Equal("primary-intent-suppressed", result.Receipt.FallbackCause);
+        }
+        else
+        {
+            Xunit.Assert.Equal("no-selection", result.Receipt.SelectionReason);
+        }
+    }
+
+    [Xunit.Fact]
+    public void FailedPrimaryWithValidSecondary_DoesNotUseIntentSuppressionFallback()
+    {
+        var repositoryRoot = InfrastructureTestSupport.FindRepositoryRoot();
+        var plan = ReadPlannerFixture(repositoryRoot);
+        var result = PlannerCandidateSelector.Select(
+            [new(0, plan, TerminalState: PlannerCandidateTerminalState.NonZeroExit), new(1, plan)], repositoryRoot);
+
+        Xunit.Assert.False(result.SelectedContract.Succeeded);
+        Xunit.Assert.Null(result.Receipt.SelectedCandidateIndex);
+        Xunit.Assert.Equal("no-selection", result.Receipt.SelectionReason);
+    }
+
     [Xunit.Fact]
     public void PeerAgreementSelectsConsensusInsteadOfFirstShortestValidPlan()
     {

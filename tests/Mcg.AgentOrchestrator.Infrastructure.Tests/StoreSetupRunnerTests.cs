@@ -84,7 +84,7 @@ public sealed class StoreSetupRunnerTests
         Assert.Empty(await BacklogStore.OpenReadOnly(workspace.BacklogStorePath).ListAsync());
         var intents = Assert.Single(results, result => result.StoreName == StoreSchemaRegistry.OperatorIntents.StoreName);
         Assert.Equal(Path.Combine(workspace.OrchestratorDirectory, SqliteOperatorIntentStore.DatabaseFileName), intents.DatabasePath);
-        Assert.Equal(1, intents.Version);
+        Assert.Equal(StoreSchemaRegistry.OperatorIntents.CurrentVersion!.Value, intents.Version);
         Assert.Empty(await SqliteOperatorIntentStore.OpenExisting(workspace.OrchestratorDirectory, workspace.LogDirectory)
             .ListActionableGoalIdsAsync());
         Assert.Equal((byte)2, File.ReadAllBytes(intents.DatabasePath)[18]);
@@ -127,9 +127,11 @@ public sealed class StoreSetupRunnerTests
         Assert.Equal(1, Assert.Single(first, result => result.StoreName == "dogfood-log").Version);
         using var dogfood = Open(workspace.DogfoodLogStorePath, SqliteOpenMode.ReadOnly);
         Assert.Equal(1, StoreSchemaVersions.Read(dogfood, StoreSchemaRegistry.DogfoodLog.StoreName));
-        Assert.Equal(1, Assert.Single(first, result => result.StoreName == StoreSchemaRegistry.OperatorIntents.StoreName).Version);
+        Assert.Equal(StoreSchemaRegistry.OperatorIntents.CurrentVersion!.Value,
+            Assert.Single(first, result => result.StoreName == StoreSchemaRegistry.OperatorIntents.StoreName).Version);
         using var intents = Open(Path.Combine(workspace.OrchestratorDirectory, SqliteOperatorIntentStore.DatabaseFileName), SqliteOpenMode.ReadOnly);
-        Assert.Equal(1, StoreSchemaVersions.Read(intents, StoreSchemaRegistry.OperatorIntents.StoreName));
+        Assert.Equal(StoreSchemaRegistry.OperatorIntents.CurrentVersion,
+            StoreSchemaVersions.Read(intents, StoreSchemaRegistry.OperatorIntents.StoreName));
         using var readBack = Open(workspace.PortfolioStorePath, SqliteOpenMode.ReadOnly);
         Assert.Equal(StoreSchemaRegistry.Portfolio.CurrentVersion, StoreSchemaVersions.Read(readBack, StoreSchemaRegistry.Portfolio.StoreName));
         using var query = readBack.CreateCommand();

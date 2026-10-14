@@ -183,9 +183,11 @@ public sealed partial class BackgroundDispatchRunner
         GoalId goalId,
         TaskId taskId,
         string logRoot,
-        Action<AgentOrchestratorKernel, GoalId, TaskId, DispatchRecordCheckpointPhase>? checkpointBeforeWorkerStart = null)
+        Action<AgentOrchestratorKernel, GoalId, TaskId, DispatchRecordCheckpointPhase>? checkpointBeforeWorkerStart = null,
+        TaskIntentAdmissionReference? taskIntentAdmission = null)
     {
-        var result = TryStartLatestDispatch(kernel, goalId, taskId, logRoot, checkpointBeforeWorkerStart);
+        var result = TryStartLatestDispatch(kernel, goalId, taskId, logRoot, checkpointBeforeWorkerStart,
+            taskIntentAdmission: taskIntentAdmission);
         if (result.RecoveryAction is { } action)
         {
             throw new InvalidOperationException(action.Reason);
@@ -209,11 +211,16 @@ public sealed partial class BackgroundDispatchRunner
         Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentState = null,
         WorkerSandboxOptions? sandboxOptions = null,
         Func<bool>? claimWorkerStart = null,
-        Func<bool>? confirmWorkerStart = null)
+        Func<bool>? confirmWorkerStart = null,
+        TaskIntentAdmissionReference? taskIntentAdmission = null)
     {
         var task = kernel.GetTask(goalId, taskId);
         var dispatch = task.LastDispatch
             ?? throw new InvalidOperationException($"Task '{taskId}' has no dispatch to start.");
+        if (taskIntentAdmission is { } intentReference &&
+            (intentReference.GoalId != goalId.Value || intentReference.TaskId != taskId.Value ||
+             intentReference.DispatchedAt != dispatch.DispatchedAt))
+            throw new InvalidOperationException("Task intent admission does not identify the current dispatch preparation.");
 
         if (DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, _clock.UtcNow, out var retryAfter))
         {
@@ -337,7 +344,9 @@ public sealed partial class BackgroundDispatchRunner
                     task.RequiredRole,
                     section.RoleVisibility))
                 .ToArray(),
-            ClaudeCredentialSelection: credentialSelection);
+            ClaudeCredentialSelection: credentialSelection,
+            TaskIntentAdmission: taskIntentAdmission,
+            StartGatePath: startGatePath);
         DispatchProcessHost.WriteParameters(parametersPath, runParameters);
 
         // Launch the native dispatch host detached: it outlives this CLI process, runs the worker
@@ -937,6 +946,12 @@ public sealed partial class BackgroundDispatchRunner
                 return;
             }
         }
+        if (outcome.IntentSuppression is { } suppression)
+        {
+            kernel.DiscardUnstartedDispatch(goalId, taskId, outcome.ProcessRecord,
+                $"TASK_INTENT_DISPATCH_SUPPRESSED goal={suppression.GoalId} task={suppression.TaskId} intent={suppression.IntentId} verb={suppression.Verb} task_version={suppression.TaskVersion}");
+            return;
+        }
         var previousProcess = task.LastProcess;
         var verification = outcome.Verification;
         if (outcome.ResultCommit is not null)
@@ -1216,8 +1231,12 @@ public sealed partial class BackgroundDispatchRunner
         string? orchestratorFailureReason = null)
     {
         var observedExitCode = exitCode;
-        var exitArtifactAlreadyExisted = File.Exists(processRecord.ExitCodePath);
         var task = kernel.GetTask(goalId, taskId);
+        if (TryReadIntentSuppression(goalId, taskId, task, processRecord, exitCode,
+                out var suppressedPrimaryWithStartedSamples) is { } suppression)
+            return new DispatchRefreshOutcome(processRecord with { CompletedAt = _clock.UtcNow, ExitCode = exitCode },
+                null, IntentSuppression: suppression);
+        var exitArtifactAlreadyExisted = File.Exists(processRecord.ExitCodePath);
         var dispatchAttempt = ResolveDispatchAttempt(task, processRecord);
         if (task.RequiredRole is AgentRole.Reviewer or AgentRole.Tester &&
             DispatchFailureClassifier.IsSubscriptionProviderCliDispatch(task) &&
@@ -1324,7 +1343,8 @@ public sealed partial class BackgroundDispatchRunner
 
         PlannerCandidateDivergenceReceipt? plannerCandidateDivergence = null;
         var scoutResearchSourcePath = processRecord.StandardOutputPath;
-        if (task.RequiredRole == AgentRole.Planner && (exitCode == 0 || successfulChildResultAvailable))
+        if (task.RequiredRole == AgentRole.Planner &&
+            (exitCode == 0 || successfulChildResultAvailable || suppressedPrimaryWithStartedSamples))
         {
             var acceptanceCriteria = RequiresDurablePlanArtifact(goal, task)
                 ? goal.RefinedSpec?.AcceptanceCriteria ?? []
@@ -1345,12 +1365,18 @@ public sealed partial class BackgroundDispatchRunner
                         processRecord.CompletedAt is { } completedAt
                             ? Math.Max(0, (long)(completedAt - processRecord.StartedAt).TotalMilliseconds)
                             : null);
+                if (suppressedPrimaryWithStartedSamples)
+                    candidates = candidates.Select(candidate => candidate.Index == 0
+                        ? candidate with { TerminalState = PlannerCandidateTerminalState.IntentSuppressed }
+                        : candidate).ToArray();
                 var selection = PlannerCandidateSelector.Select(
                     candidates,
                     processRecord.WorkingDirectory,
                     acceptanceCriteria);
                 plannerContract = selection.SelectedContract;
                 plannerCandidateDivergence = selection.Receipt;
+                if (suppressedPrimaryWithStartedSamples && plannerContract.Succeeded)
+                    exitCode = 0;
                 if (selection.Receipt.SelectedCandidateIndex is int selectedIndex)
                     scoutResearchSourcePath = candidates[selectedIndex].SourcePath
                         ?? throw new InvalidOperationException("Selected Planner candidate has no stdout source path.");
@@ -2697,19 +2723,6 @@ public sealed partial class BackgroundDispatchRunner
         TaskId taskId,
         TaskProcessResourceAccounting accounting) =>
         $"RESOURCE goal={goalId.Value[..8]} task={taskId.Value[..8]} cpu_ms={accounting.CpuMilliseconds} peak_mem_bytes={accounting.PeakMemoryBytes} io_bytes={accounting.IoBytes} accounting_source={accounting.AccountingSource}{(accounting.Reaped ? " reaped=true" : string.Empty)}";
-
-    // The detached dispatch host is the App's __dispatch-run subcommand. The App assembly sits next
-    // to this Infrastructure assembly in every run context (the App output dir in production; the
-    // test output dir in tests, which reference the App project), so resolve it from the base dir.
-    private static string ResolveDispatchHostAssembly()
-    {
-        return Path.Combine(AppContext.BaseDirectory, "Mcg.AgentOrchestrator.App.dll");
-    }
-
-    private static bool IsLocalDispatch(TaskDispatchRecord dispatch)
-    {
-        return dispatch.WorkerName.Equals("local", StringComparison.OrdinalIgnoreCase);
-    }
 
     internal readonly record struct WrapperExitReconciliationEvidence(
         int ObservedRootExitCode,

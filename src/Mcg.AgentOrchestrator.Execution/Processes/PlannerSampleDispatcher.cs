@@ -71,7 +71,8 @@ internal static class PlannerSampleDispatcher
                     PrepExitCodePath = primaryParameters.PrepExitCodePath is null ? null : sample.PrepExitCodePath,
                     ChildExitRecordPath = sample.ChildExitRecordPath,
                     HostDiagnosticPath = sample.HostDiagnosticPath,
-                    SandboxInstanceName = $"planner-sample-{sample.Index}"
+                    SandboxInstanceName = $"planner-sample-{sample.Index}",
+                    StartGatePath = sample.StartGatePath
                 };
                 DispatchProcessHost.WriteParameters(sample.ParametersPath, parameters);
                 var startInfo = CreateStartInfo(parameters.WorkingDirectory, dispatchHostAssembly, sample.ParametersPath, sample.StartGatePath);

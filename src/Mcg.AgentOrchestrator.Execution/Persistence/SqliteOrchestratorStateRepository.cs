@@ -2290,7 +2290,9 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         foreach (var receipt in current ?? [])
         {
             if (!merged.TryGetValue(receipt.ReceiptId, out var existing) ||
-                existing.WorkerStartedAt is null && receipt.WorkerStartedAt is not null)
+                existing.ReservationReleasedAt is null &&
+                (receipt.ReservationReleasedAt is not null ||
+                 existing.WorkerStartedAt is null && receipt.WorkerStartedAt is not null))
             {
                 merged[receipt.ReceiptId] = receipt;
             }
