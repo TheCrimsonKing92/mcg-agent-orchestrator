@@ -33,6 +33,7 @@ public sealed class CliOffWorkerEvidenceTests : GoalWorktreeTestBase
             var mergeCalls = 0;
             var gateCalls = 0;
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var cleanupContext = CreateIsolatedCleanupContext(repo);
             var context = new CliExecutionContext(kernel, workspace, new InMemoryModelProviderRegistry([]),
                 AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(), goal,
                 finalizeAcceptanceMerge: _ =>
@@ -42,10 +43,11 @@ public sealed class CliOffWorkerEvidenceTests : GoalWorktreeTestBase
                 },
                 stopAcceptanceHosts: _ => AcceptanceHostStopResult.Success("No fixture hosts."))
             {
-                CleanupContext = CreateIsolatedCleanupContext(repo),
+                CleanupContext = cleanupContext,
                 AcceptanceVerifier = FakeAcceptanceVerifier.Passed(() => gateCalls++),
                 RunInjectedAcceptanceVerifierInCurrentProcess = true,
-                StableSlotSelector = (_, _) => AcceptanceStableSlotTestSupport.CreateFakeStableSlotLease(repo)
+                StableSlotSelector = (_, _) => AcceptanceStableSlotTestSupport.CreateFakeStableSlotLease(
+                    cleanupContext.Hooks.BuildStorageRoot!.RootPath)
             };
 
             var acceptanceOutput = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance"], context));

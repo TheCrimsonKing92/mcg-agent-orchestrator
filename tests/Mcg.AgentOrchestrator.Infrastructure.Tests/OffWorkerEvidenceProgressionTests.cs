@@ -23,7 +23,9 @@ public sealed class OffWorkerEvidenceProgressionTests
         try
         {
             var (kernel, goal) = RecordCompletedWorker(role, owner, Candidate, root);
-            var repository = new SqliteOrchestratorStateRepository(Path.Combine(root, "state.db"));
+            var dbPath = Path.Combine(root, "state.db");
+            StateDbMigrations.EnsureUpToDate(dbPath);
+            var repository = new SqliteOrchestratorStateRepository(dbPath);
             await repository.SaveAsync(kernel);
             kernel = await repository.LoadAsync();
             goal = kernel.GetGoal(goal.Id);
