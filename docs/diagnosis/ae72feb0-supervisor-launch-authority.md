@@ -143,7 +143,7 @@ Retained receipt `finding-evidence-7663eee4a46327f2612b1c3d`, candidate
 none skipped. Its actual TRX SHA256 is
 `80733E580A9FB0651D0C4BCD590929E990869BC51A2841BA09C40B239B276D15`.
 Receipt path:
-`C:/Users/miles/vcs/mcg-agent-orchestrator/.orchestrator/pre-review-evidence-attempts/ae72feb013c64f6a809c2519de38bbd6/ae72feb0-pre-review-20261013181957145-1f9923acaced4c93a5de1ba58026e6d4-candidate.reviewer-focused-evidence-infrastructure-tests-fullyqualifiedname-conductorsupervisorrealhandoffpr-f2cfe51c63716891.trx`.
+`.orchestrator/pre-review-evidence-attempts/ae72feb013c64f6a809c2519de38bbd6/ae72feb0-pre-review-20261013181957145-1f9923acaced4c93a5de1ba58026e6d4-candidate.reviewer-focused-evidence-infrastructure-tests-fullyqualifiedname-conductorsupervisorrealhandoffpr-f2cfe51c63716891.trx`.
 `RealSupervisorTransfersHealthyChildAndSuccessorTicksAfterPredecessorBoundaryCloses`
 failed at line 111 with `Assert.Single() Failure: The collection was empty`.
 The retained output places its successor log in `.orchestrator/continuity/logs`, while
@@ -172,7 +172,7 @@ remains undetermined; this receipt does not authorize a launch-policy correction
 
 The retained repaired baseline passed: 20 executed, 20 passed, zero failed/skipped; wrapper exit 0,
 owned PID 33636 exited with ownership cleanup confirmed. Receipt:
-`C:/Users/miles/AppData/Local/Temp/Low/mcg-tests/summary-20261013T165247352-9f40e347/summary-Mcg.AgentOrchestrator.Infrastructure.Tests-1-r1-FullyQualifiedName-ConductorSupervisorWindowsLaunchAuthorityProcessSpawningTest-904446d16aac89d2.trx`;
+`<temp-low>/mcg-tests/summary-20261013T165247352-9f40e347/summary-Mcg.AgentOrchestrator.Infrastructure.Tests-1-r1-FullyQualifiedName-ConductorSupervisorWindowsLaunchAuthorityProcessSpawningTest-904446d16aac89d2.trx`;
 SHA256 `FA525E6B955ECBEF29F7AD7A3AE0E54C5D4716F556169820633D7B50F98A8F29`.
 
 The controls discriminate these named boundaries: direct restrictive outer fails with error 5;
@@ -250,7 +250,7 @@ The focused custody request is:
 
 The latest retained focused run of candidate `720007b8ea0070ec3f37b9b035c41ec29b718356`
 executed 24 tests: 23 passed, one failed, none skipped. Receipt:
-`C:/Users/miles/AppData/Local/Temp/Low/mcg-tests/summary-20261013T173620121-1d1e3b4c/summary-Mcg.AgentOrchestrator.Infrastructure.Tests-1-r1-FullyQualifiedName-ConductorSupervisorRealHandoffProcessSpawningTests-FullyQual-d9ec384d43f482a8.trx`;
+`<temp-low>/mcg-tests/summary-20261013T173620121-1d1e3b4c/summary-Mcg.AgentOrchestrator.Infrastructure.Tests-1-r1-FullyQualifiedName-ConductorSupervisorRealHandoffProcessSpawningTests-FullyQual-d9ec384d43f482a8.trx`;
 SHA256 `15957421856955E162B7BBAC7C2CA50D273F58B97D7AA10A27A93B61282ABB9E`.
 `RealSupervisorTransfersHealthyChildAndSuccessorTicksAfterPredecessorBoundaryCloses` failed
 in `CountTicks` at `File.ReadAllLines` with an IOException opening the still-written child log.
