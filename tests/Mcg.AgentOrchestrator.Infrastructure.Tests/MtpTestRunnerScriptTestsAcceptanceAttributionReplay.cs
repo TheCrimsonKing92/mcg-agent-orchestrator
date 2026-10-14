@@ -21,7 +21,7 @@ public sealed class MtpTestRunnerScriptTestsAcceptanceAttributionReplay
                 Set-MtpHermeticEnvironment -RepositoryRoot $root -WritableRoot $root
                 $build = New-MtpProcessStartInfo -Executable 'powershell.exe' -Arguments @('powershell.exe')
                 if ($build.EnvironmentVariables['MCG_ACCEPTANCE_ATTRIBUTION_REPLAY_REQUEST']) { throw 'Build inherited replay context' }
-                $run = Invoke-MtpAppHost -Executable 'powershell.exe' -Arguments @('powershell.exe','-NoProfile','-File','{{Quote(child)}}') -OutputLog (Join-Path $root 'probe.log') -AcceptanceAttributionReplayRequest 'bound-request'
+                $run = Invoke-MtpAppHost -Executable 'powershell.exe' -Arguments @('powershell.exe','-NoProfile','-ExecutionPolicy','Bypass','-File','{{Quote(child)}}') -OutputLog (Join-Path $root 'probe.log') -AcceptanceAttributionReplayRequest 'bound-request'
                 if ($run.ExitCode -ne 0 -or -not $run.ExitConfirmed) { throw 'Probe host failed' }
                 if ($env:MCG_ACCEPTANCE_ATTRIBUTION_REPLAY_REQUEST) { throw 'Parent environment changed' }
             } finally { Restore-MtpEnvironment -Snapshot $snapshot }
