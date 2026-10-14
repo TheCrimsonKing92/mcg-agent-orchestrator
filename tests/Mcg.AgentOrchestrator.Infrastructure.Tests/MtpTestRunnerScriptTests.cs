@@ -1147,7 +1147,7 @@ public sealed class MtpTestRunnerScriptTests
         Xunit.Assert.Equal(24, result.ExitCode);
         Xunit.Assert.Contains("NO-BUILD CLOSURE FAILURE", result.Stdout, StringComparison.Ordinal);
         Xunit.Assert.Contains("No verified no-build output exists", result.Stdout, StringComparison.OrdinalIgnoreCase);
-        Xunit.Assert.Contains("Repair: dotnet build", result.Stdout, StringComparison.OrdinalIgnoreCase);
+        Xunit.Assert.Contains("Invoke-WorkerBuildCheck.ps1", result.Stdout, StringComparison.OrdinalIgnoreCase);
         Xunit.Assert.Contains("was not copied or executed", result.Stdout, StringComparison.OrdinalIgnoreCase);
         Xunit.Assert.DoesNotContain("NO TRX", result.Stdout, StringComparison.OrdinalIgnoreCase);
     }
@@ -1222,7 +1222,10 @@ public sealed class MtpTestRunnerScriptTests
 
         Xunit.Assert.Equal(24, result.ExitCode);
         Xunit.Assert.Contains("build receipt verification failed", result.Stdout, StringComparison.OrdinalIgnoreCase);
-        Xunit.Assert.Contains("McgIsolatedArtifactsPath", result.Stdout, StringComparison.Ordinal);
+        var projectPath = Path.Combine(sandbox.Root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests", "Mcg.AgentOrchestrator.Infrastructure.Tests.csproj");
+        Xunit.Assert.Contains(
+            $"Sanctioned build: & \"{sandbox.Root}/scripts/Invoke-WorkerBuildCheck.ps1\" \"{projectPath}\" -Configuration \"Debug\"",
+            result.Stdout, StringComparison.Ordinal);
         Xunit.Assert.False(File.Exists(sandbox.ArgumentLog));
     }
 
@@ -2301,7 +2304,7 @@ public sealed class MtpTestRunnerScriptTests
             Directory.CreateDirectory(projectDirectory);
             Directory.CreateDirectory(resultsRoot);
 
-            foreach (var fileName in new[] { "Invoke-InfrastructureTestPartition.ps1", "Invoke-TestSummary.ps1", "MtpTestRunner.psm1" })
+            foreach (var fileName in new[] { "Invoke-InfrastructureTestPartition.ps1", "Invoke-TestSummary.ps1", "MtpTestRunner.psm1", "WorkerBuildReceipt.psm1" })
             {
                 File.Copy(Path.Combine(RepositoryRoot(), "scripts", fileName), Path.Combine(scripts, fileName));
             }
@@ -2836,6 +2839,7 @@ public sealed class MtpTestRunnerScriptTests
         {
             var startInfo = PowerShellStartInfo(Root);
             startInfo.Environment["LOCALAPPDATA"] = LocalApplicationDataRoot;
+            startInfo.Environment["MCG_DOTNET_ISOLATED_ROOT"] = Path.Combine(LocalApplicationDataRoot, "worker-builds");
             startInfo.Environment["DOTNET_STARTUP_HOOKS"] = string.Empty;
             return startInfo;
         }
