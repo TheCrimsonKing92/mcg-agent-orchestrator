@@ -1572,11 +1572,11 @@ public sealed partial class AgentOrchestratorKernel
             : message;
     }
 
-    public void RecordDispatchBaseCommit(GoalId goalId, TaskId taskId, string baseCommit)
+    public void RecordDispatchBaseCommit(GoalId goalId, TaskId taskId, string baseCommit, WorkerBuildScopeIdentity? buildScope = null)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
-        task.SetDispatchBaseCommit(baseCommit);
+        task.SetDispatchBaseCommit(baseCommit, buildScope);
     }
 
     public void RecordDispatchResultCommit(GoalId goalId, TaskId taskId, string resultCommit)

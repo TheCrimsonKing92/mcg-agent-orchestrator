@@ -1247,6 +1247,7 @@ function Copy-MtpStableNoBuildClosure {
             if ($null -ne $BuildSelection -and $null -ne $BuildSelection.WorkerProvenance) {
                 Assert-WorkerBuildPathNotRedirected -Path $SourceDirectory -Recurse
                 Assert-WorkerBuildPathNotRedirected -Path $BuildSelection.WorkerProvenance.Path
+                Assert-MtpWorkerScopeIdentity -Provenance $BuildSelection.WorkerProvenance
             }
             $before = Get-MtpClosureSnapshot -Path $SourceDirectory
             if ($null -ne $BuildSelection) {
@@ -1273,6 +1274,7 @@ function Copy-MtpStableNoBuildClosure {
                 $provenance = $BuildSelection.WorkerProvenance
                 Assert-WorkerBuildPathNotRedirected -Path $SourceDirectory -Recurse
                 Assert-WorkerBuildPathNotRedirected -Path $provenance.Path
+                Assert-MtpWorkerScopeIdentity -Provenance $provenance
                 if ((Get-WorktreeTreeDigest -Root $RepositoryRoot -TemporaryRoot $RunDirectory) -cne $provenance.TreeDigest -or
                     (Get-MtpSha256File -Path $provenance.Path) -cne $provenance.Sha256) {
                     throw 'Selected worker build identity changed while copying.'
@@ -2001,6 +2003,16 @@ function Resolve-MtpEvaluatedTargetPath {
     }
 }
 
+function Assert-MtpWorkerScopeIdentity {
+    param($Provenance)
+    $metadataDigest = 'none'
+    Assert-WorkerBuildPathNotRedirected -Path $Provenance.ScopeMetadataPath
+    if (Test-Path -LiteralPath $Provenance.ScopeMetadataPath -PathType Leaf) {
+        $metadataDigest = (Get-MtpSha256File -Path $Provenance.ScopeMetadataPath).ToLowerInvariant()
+    }
+    if ($metadataDigest -cne $Provenance.ScopeMetadataDigest) { throw 'Worker build scope metadata changed during no-build reuse.' }
+}
+
 function Read-MtpWorkerBuildProvenance {
     param([string]$RepositoryRoot, [string]$ProjectPath, [string]$Configuration, [string]$RunDirectory, [string]$WorkerRunRoot)
     if ([string]::IsNullOrWhiteSpace($WorkerRunRoot)) { $WorkerRunRoot = Get-WorkerBuildRunRoot -Root $RepositoryRoot }
@@ -2025,6 +2037,10 @@ function Read-MtpWorkerBuildProvenance {
         -not ([string]$receipt.configuration).Equals($Configuration, [StringComparison]::OrdinalIgnoreCase)) {
         throw "Worker build receipt worktree/configuration mismatch: $path"
     }
+    $scopeMetadataPath = Join-Path $root '.orchestrator-context\worker-build-scope.json'
+    $scopeMetadataDigest = if ($null -ne $receipt.PSObject.Properties['scopeMetadataDigest']) { [string]$receipt.scopeMetadataDigest } else { 'none' }
+    $scopeProvenance = [pscustomobject]@{ ScopeMetadataPath = $scopeMetadataPath; ScopeMetadataDigest = $scopeMetadataDigest }
+    Assert-MtpWorkerScopeIdentity -Provenance $scopeProvenance
     $covered = @($receipt.projects | ForEach-Object { [System.IO.Path]::GetFullPath((Join-Path $root ([string]$_))) })
     if ($ProjectPath -notin $covered) { throw "Worker build receipt does not cover requested project: $ProjectPath" }
     $artifacts = Assert-WorkerBuildArtifactsPath -Root $root -ArtifactsPath ([string]$receipt.artifactsPath) -RunRoot $WorkerRunRoot
@@ -2039,7 +2055,8 @@ function Read-MtpWorkerBuildProvenance {
         throw "Worker build receipt tree digest is stale: $path"
     }
     if ($hash -ne (Get-MtpSha256File -Path $path)) { throw "Worker build receipt changed during validation: $path" }
-    return [pscustomobject]@{ Path = $path; Sha256 = $hash; TreeDigest = $digest; ArtifactsPath = $artifacts }
+    Assert-MtpWorkerScopeIdentity -Provenance $scopeProvenance
+    return [pscustomobject]@{ Path = $path; Sha256 = $hash; TreeDigest = $digest; ArtifactsPath = $artifacts; ScopeMetadataPath = $scopeMetadataPath; ScopeMetadataDigest = $scopeMetadataDigest }
 }
 
 function Select-MtpVerifiedBuildOutput {
@@ -2111,6 +2128,7 @@ function Select-MtpVerifiedBuildOutput {
             $receipt = Assert-MtpBuildReceipt -Directory $candidate.Directory -ManagedAssemblyLeaf "$projectName.dll" -RepositoryRoot $RepositoryRoot -ProjectPath $projectPath -Configuration $Configuration -TargetFramework $candidate.Identity.TargetFramework -RuntimeIdentifier $candidate.Identity.RuntimeIdentifier -ExpectedSourcePaths $candidate.Identity.CompilePaths -RepairCommand $candidate.Repair
             if ($snapshot.Digest -cne (Get-MtpClosureSnapshot -Path $candidate.Directory).Digest) { throw 'No-build closure changed during validation.' }
             if ($null -ne $candidate.WorkerProvenance -and (Get-MtpSha256File -Path $candidate.WorkerProvenance.Path) -cne $candidate.WorkerProvenance.Sha256) { throw 'Worker receipt changed during selection.' }
+            if ($null -ne $candidate.WorkerProvenance) { Assert-MtpWorkerScopeIdentity -Provenance $candidate.WorkerProvenance }
             $verified.Add([pscustomobject]@{
                 Label = $candidate.Label
                 Directory = $candidate.Directory

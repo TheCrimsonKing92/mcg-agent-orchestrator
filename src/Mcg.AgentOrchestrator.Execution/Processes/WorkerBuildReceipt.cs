@@ -39,6 +39,23 @@ internal static class WorkerBuildReceipt
                 algorithm != WorktreeTreeDigest.Algorithm ||
                 !recordedDigest.StartsWith(algorithm + ":", StringComparison.Ordinal)) return new(false, "receipt-malformed");
             if (outcome != "success") return new(false, outcome == "failure" ? "build-failed" : "receipt-malformed");
+            if (root.TryGetProperty("projectResults", out var results))
+            {
+                if (results.ValueKind != JsonValueKind.Array || results.GetArrayLength() != projects.GetArrayLength())
+                    return new(false, "project-execution-incomplete");
+                var executed = new List<string>();
+                foreach (var result in results.EnumerateArray())
+                {
+                    if (result.ValueKind != JsonValueKind.Object ||
+                        !TryNumber(result, "exitCode", out var exitCode) || exitCode != 0 ||
+                        !TryString(result, "project", out var project) || !TryString(result, "logPath", out var log) || !File.Exists(log))
+                        return new(false, "project-execution-incomplete");
+                    executed.Add(project);
+                }
+                if (WorkerBuildReceiptCoverage.FindMissingProjects(
+                    projects.EnumerateArray().Select(project => project.GetString()!).ToArray(), executed).Count != 0)
+                    return new(false, "project-execution-incomplete");
+            }
             try
             {
                 var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
@@ -48,6 +65,18 @@ internal static class WorkerBuildReceipt
             }
             catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
             { return new(false, "receipt-malformed"); }
+            if (File.Exists(WorkerBuildProjectScope.MetadataPath(worktreeRoot)))
+            {
+                try
+                {
+                    var scope = WorkerBuildProjectScope.Resolve(worktreeRoot, []);
+                    if (!TryString(root, "scopeMetadataDigest", out var scopeDigest) || scopeDigest != scope.MetadataDigest)
+                        return new(false, "scope-mismatch");
+                    if (!root.TryGetProperty("projectResults", out _)) return new(false, "project-execution-incomplete");
+                }
+                catch (Exception exception) when (exception is not OutOfMemoryException)
+                { return new(false, "scope-invalid", Detail: exception.Message); }
+            }
             if (!WorktreeTreeDigest.TryCompute(worktreeRoot, out var currentDigest, out _, out var failure, gitRunner))
                 return new(false, "digest-unavailable", Detail: failure?.Describe());
             return string.Equals(recordedDigest, currentDigest, StringComparison.Ordinal)

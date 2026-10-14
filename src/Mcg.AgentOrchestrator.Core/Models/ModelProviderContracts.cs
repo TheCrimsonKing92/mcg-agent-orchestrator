@@ -332,7 +332,9 @@ public sealed record TaskDispatchRecord(
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     FailedRoundCheckpointDecision? FailedRoundCheckpointDecision = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    IReadOnlyList<string>? SelectedSkills = null)
+    IReadOnlyList<string>? SelectedSkills = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    WorkerBuildScopeIdentity? WorkerBuildScope = null)
 {
     public int BriefVersion { get; internal set; } = BriefVersion;
 

@@ -372,9 +372,7 @@ public sealed partial class BackgroundDispatchRunner
         startInfo.ArgumentList.Add(DispatchProcessHost.SubcommandName);
         startInfo.ArgumentList.Add(parametersPath);
 
-        // Capture baseCommit immediately before spawning — the left boundary for file attribution.
-        if (spawnReceipt.WorktreeHeadSha is not null)
-            kernel.RecordDispatchBaseCommit(goalId, taskId, spawnReceipt.WorktreeHeadSha);
+        WorkerBuildScopeDispatchPreparation.RecordDispatchBaseCommit(kernel, goalId, task, dispatch.WorkingDirectory, spawnReceipt.WorktreeHeadSha);
 
         if (TryRejectInterruptedDispatchRecovery(kernel, goalId, taskId, readCurrentState))
         {

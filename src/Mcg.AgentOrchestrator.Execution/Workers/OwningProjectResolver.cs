@@ -57,14 +57,43 @@ internal static class OwningProjectResolver
         return included;
     }
 
+    internal static bool IsExplicitlyExcluded(string root, string file)
+    {
+        var directory = Path.GetDirectoryName(file);
+        while (directory is not null)
+        {
+            if (Directory.Exists(directory))
+            {
+                foreach (var project in Directory.EnumerateFiles(directory, "*.csproj"))
+                {
+                    var relative = Path.GetRelativePath(directory, file).Replace('\\', '/');
+                    // Malformed or unevaluated declarations cannot establish a safe exclusion.
+                    var document = XDocument.Load(project);
+                    // Imported items (including implicit SDK imports) can reinclude a locally removed
+                    // source. Without evaluation, the project document cannot prove its exclusion.
+                    if (document.Root?.Attribute("Sdk") is not null ||
+                        document.Descendants().Any(element => element.Name.LocalName is "Import" or "Sdk")) continue;
+                    var items = document.Descendants().Where(element => element.Name.LocalName == "Compile").ToArray();
+                    if (items.Any(item => item.Attribute("Condition") is not null ||
+                        item.Ancestors().Any(parent => parent.Attribute("Condition") is not null) ||
+                        item.Attributes().Any(attribute => ContainsUnevaluatedExpression(attribute.Value)))) continue;
+                    if (items.Any(item => Matches((string?)item.Attribute("Remove"), relative)) && !Compiles(project, file))
+                        return true;
+                }
+            }
+            if (string.Equals(directory, Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)),
+                StringComparison.OrdinalIgnoreCase)) break;
+            directory = Path.GetDirectoryName(directory);
+        }
+        return false;
+    }
+
     private static bool Matches(string? patterns, string relative)
     {
         if (patterns is null) return false;
         foreach (var entry in patterns.Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
         {
-            if (entry.Contains("$(", StringComparison.Ordinal) ||
-                entry.Contains("@(", StringComparison.Ordinal) ||
-                entry.Contains("%(", StringComparison.Ordinal)) continue;
+            if (ContainsUnevaluatedExpression(entry)) continue;
             var pattern = entry.Replace('\\', '/');
             while (pattern.StartsWith("./", StringComparison.Ordinal)) pattern = pattern[2..];
             if (Regex.IsMatch(relative, GlobToRegex(pattern),
@@ -73,6 +102,11 @@ internal static class OwningProjectResolver
 
         return false;
     }
+
+    private static bool ContainsUnevaluatedExpression(string value) =>
+        value.Contains("$(", StringComparison.Ordinal) ||
+        value.Contains("@(", StringComparison.Ordinal) ||
+        value.Contains("%(", StringComparison.Ordinal);
 
     private static string GlobToRegex(string pattern)
     {

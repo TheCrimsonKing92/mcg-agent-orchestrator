@@ -315,6 +315,7 @@ public static partial class WorkerProfileDispatcher
             priorDispatch?.ResultCommit ?? priorDispatch?.BaseCommit ?? task.LastVerification?.ReviewedCommit,
             targetContext?.HeadCommit ?? priorDispatch?.BaseCommit,
             currentMainIdentity);
+        WorkerBuildScopeDispatchPreparation.Prepare(goal, task, workingDirectory, integrationBranch);
         kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
             profile.Name,
             preparation.Command,
@@ -1720,17 +1721,8 @@ public static partial class WorkerProfileDispatcher
             string.IsNullOrWhiteSpace(headCommit) ? null : headCommit);
     }
 
-    internal static string? ReadCurrentMainIdentityForRetry(string workingDirectory, string integrationBranch)
-    {
-        if (string.IsNullOrWhiteSpace(workingDirectory) || !Directory.Exists(workingDirectory))
-            return null;
-
-        var main = GitCli.Run(workingDirectory, "rev-parse", integrationBranch);
-        if (main.ExitCode != 0)
-            return null;
-        var identity = main.Output.Trim();
-        return string.IsNullOrWhiteSpace(identity) ? null : identity;
-    }
+    internal static string? ReadCurrentMainIdentityForRetry(string workingDirectory, string integrationBranch) =>
+        WorkerGitContext.ReadCurrentMainIdentityForRetry(workingDirectory, integrationBranch);
 
     private static SubscriptionModelSelection ResolveEffectiveSubscriptionModelSelection(
         AgentDefinition agent,

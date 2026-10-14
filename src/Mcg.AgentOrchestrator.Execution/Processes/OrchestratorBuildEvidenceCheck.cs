@@ -65,18 +65,32 @@ public static class OrchestratorBuildEvidenceCheck
         Func<WorkerBuildReceiptVerdict> workerBuildReceipt,
         Func<OrchestratorBuildCheckRequest, OrchestratorBuildCheckResult> runBuildCheck,
         Func<OrchestratorBuildCheckRequest, CompletionBuildEvidenceOperation>? reconcileOperation = null,
-        bool hasOperation = false)
+        bool hasOperation = false,
+        string? expectedScopeMetadataDigest = null)
     {
         if (failedWorkerBuildCheck)
         {
             return new(MissingEvidence: false, BuildFailed: false, Diagnostic: string.Empty);
         }
 
-        var projects = WorkerBuildEvidenceRequirement.FindRequiredProjects(
+        IReadOnlyList<string> projects = WorkerBuildEvidenceRequirement.FindRequiredProjects(
             worktreeRoot,
             role,
             changedPaths,
             dirtyPaths);
+        if (role is AgentRole.Developer or AgentRole.Tester &&
+            (expectedScopeMetadataDigest is not null || File.Exists(WorkerBuildProjectScope.MetadataPath(worktreeRoot))))
+        {
+            try
+            {
+                projects = WorkerBuildProjectScope.Resolve(worktreeRoot, projects,
+                    changedPaths.Concat(dirtyPaths), expectedScopeMetadataDigest).Projects;
+            }
+            catch (Exception exception) when (exception is not OutOfMemoryException)
+            {
+                return new(true, false, $"worker_build_scope=invalid; {exception.Message}");
+            }
+        }
         if (projects.Count == 0 && !hasOperation)
         {
             return new(MissingEvidence: false, BuildFailed: false, Diagnostic: string.Empty);

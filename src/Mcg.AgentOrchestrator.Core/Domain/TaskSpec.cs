@@ -1021,10 +1021,10 @@ public sealed partial class TaskSpec
         }
     }
 
-    internal void SetDispatchBaseCommit(string baseCommit)
+    internal void SetDispatchBaseCommit(string baseCommit, WorkerBuildScopeIdentity? buildScope = null)
     {
         if (LastDispatch is not null)
-            ReplaceLastDispatch(LastDispatch with { BaseCommit = baseCommit });
+            ReplaceLastDispatch(LastDispatch with { BaseCommit = baseCommit, WorkerBuildScope = buildScope });
     }
 
     internal void SetDispatchResultCommit(string resultCommit)
@@ -1163,7 +1163,7 @@ public sealed partial class TaskSpec
         dispatch.CandidateIdentity,
         dispatch.ProviderUsage,
         dispatch.InconclusiveRoundInputs, dispatch.ShadowDecision,
-        dispatch.FailedRoundCheckpointReceipt, dispatch.FailedRoundCheckpointDecision, dispatch.SelectedSkills);
+        dispatch.FailedRoundCheckpointReceipt, dispatch.FailedRoundCheckpointDecision, dispatch.SelectedSkills, dispatch.WorkerBuildScope);
 
     private static TaskDispatchRecord FromDispatchSnapshot(TaskDispatchSnapshot dispatch) => new(
         dispatch.WorkerName,
@@ -1206,7 +1206,7 @@ public sealed partial class TaskSpec
         dispatch.CandidateIdentity,
         dispatch.ProviderUsage,
         dispatch.InconclusiveRoundInputs, dispatch.ShadowDecision,
-        dispatch.FailedRoundCheckpointReceipt, dispatch.FailedRoundCheckpointDecision, dispatch.SelectedSkills);
+        dispatch.FailedRoundCheckpointReceipt, dispatch.FailedRoundCheckpointDecision, dispatch.SelectedSkills, dispatch.WorkerBuildScope);
 
     private static string? NormalizeOptional(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

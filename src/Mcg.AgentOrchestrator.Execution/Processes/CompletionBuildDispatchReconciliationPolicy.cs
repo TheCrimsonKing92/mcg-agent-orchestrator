@@ -34,6 +34,6 @@ internal static class CompletionBuildDispatchReconciliationPolicy
             historical is null ? runBuildCheck : _ => new(false, -1,
                 $"Historical completion build {historical.Id} cannot certify this dispatch; current build receipt is required, or retry after custody release."),
             historical is null ? reconcileOperation : null,
-            HasCurrentWorker(task));
+            HasCurrentWorker(task), task.LastDispatch?.WorkerBuildScope?.MetadataDigest);
     }
 }

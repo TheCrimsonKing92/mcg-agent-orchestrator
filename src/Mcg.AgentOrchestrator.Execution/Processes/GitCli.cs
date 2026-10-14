@@ -55,6 +55,10 @@ internal static class GitCli
     public static GitResult Run(string workingDirectory, int timeoutMilliseconds, params string[] args)
         => RunExecutable("git", workingDirectory, timeoutMilliseconds, args);
 
+    internal static GitResult RunForRepository(string workingDirectory, params string[] args) =>
+        RunExecutableCore("git", workingDirectory, DefaultTimeoutMilliseconds, null, args,
+            isolateRepository: true);
+
     internal static GitResult RunWithEnvironment(
         string workingDirectory,
         IReadOnlyDictionary<string, string> environment,
@@ -78,7 +82,8 @@ internal static class GitCli
         int timeoutMilliseconds,
         string? standardInput,
         string[] args,
-        IReadOnlyDictionary<string, string>? environment = null)
+        IReadOnlyDictionary<string, string>? environment = null,
+        bool isolateRepository = false)
     {
         var processStarted = false;
         try
@@ -97,6 +102,14 @@ internal static class GitCli
                 startInfo.ArgumentList.Add(config);
             foreach (var arg in args)
                 startInfo.ArgumentList.Add(arg);
+
+            if (isolateRepository)
+            {
+                foreach (var name in new[] { "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
+                    "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES" })
+                    startInfo.Environment.Remove(name);
+                startInfo.Environment["GIT_TERMINAL_PROMPT"] = "0";
+            }
 
             if (environment is not null)
             {

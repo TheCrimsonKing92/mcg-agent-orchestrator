@@ -11,7 +11,7 @@ public sealed class WorkerBuildCheckOutputBoundsTests
     {
         var result = await RunFixtureAsync("Warnings");
 
-        Assert.Equal(0, result.ExitCode);
+        Assert.True(result.ExitCode == 0, result.Combined);
         var receipt = Regex.Match(
             result.Stdout,
             @"raw_chars=(?<raw>\d+) helper_chars=(?<helper>\d+) raw_exit=(?<rawExit>\d+) helper_exit=(?<helperExit>\d+) raw_errors=(?<rawErrors>\d+) helper_errors=(?<helperErrors>\d+)",
@@ -29,11 +29,12 @@ public sealed class WorkerBuildCheckOutputBoundsTests
     [Xunit.InlineData("NonDiagnosticFailure")]
     [Xunit.InlineData("MultipleProjects")]
     [Xunit.InlineData("LogUnavailable")]
+    [Xunit.InlineData("ScopeBootstrapFailure")]
     public async Task WorkerBuildCheckPreservesBoundedFailureAndMultiProjectContracts(string scenario)
     {
         var result = await RunFixtureAsync(scenario);
 
-        Assert.Equal(0, result.ExitCode);
+        Assert.True(result.ExitCode == 0, result.Combined);
         Assert.Contains($"PASS fixture: scenario={scenario}", result.Stdout, StringComparison.Ordinal);
     }
 
