@@ -4,3 +4,4 @@ using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("Mcg.AgentOrchestrator.TestSupport")]
 [assembly: InternalsVisibleTo("Mcg.AgentOrchestrator.Infrastructure.Cli.Tests")]
 [assembly: InternalsVisibleTo("Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests")]
+[assembly: InternalsVisibleTo("Mcg.AgentOrchestrator.SupervisorLaunchProbe")]

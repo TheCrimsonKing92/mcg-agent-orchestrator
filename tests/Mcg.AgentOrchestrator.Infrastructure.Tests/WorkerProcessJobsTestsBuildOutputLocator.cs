@@ -192,6 +192,115 @@ public sealed class WorkerProcessJobsTestsBuildOutputLocator
         });
     }
 
+    private const string SupervisorProbe = "Mcg.AgentOrchestrator.SupervisorLaunchProbe";
+
+    [Fact]
+    public void SupervisorProbe_ExactCurrentClosureWinsOverOtherBuildOutput()
+    {
+        using var fixture = new LocatorFixture();
+        var otherOutput = Directory.CreateDirectory(Path.Combine(fixture.Root, "bin", SupervisorProbe, Configuration)).FullName;
+        foreach (var suffix in new[] { ".dll", ".runtimeconfig.json" })
+            File.WriteAllText(Path.Combine(otherOutput, SupervisorProbe + suffix), "other build");
+        Environment.SetEnvironmentVariable(TestBuildOutputLocator.BuildOutputRootVariable, Path.Combine(fixture.Root, "bin"));
+
+        fixture.WithCopiedAnchor(anchor =>
+        {
+            var closure = Path.GetDirectoryName(anchor.Assembly.Location)!;
+            foreach (var suffix in new[] { ".dll", ".runtimeconfig.json" })
+                File.WriteAllText(Path.Combine(closure, SupervisorProbe + suffix), "current build");
+
+            var found = Mcg.AgentOrchestrator.Infrastructure.Tests.DispatchProcessHostTestsConductorSupervisorWindowsLaunchAuthority.LocateProbe(anchor);
+            Assert.Equal(closure, found.Directory);
+            Assert.Equal([closure], found.TriedPaths);
+        });
+    }
+
+    [Theory]
+    [InlineData(".dll")]
+    [InlineData(".runtimeconfig.json")]
+    public void SupervisorProbe_IncompleteCurrentClosureUsesCompleteExportedBuildOutput(string presentSuffix)
+    {
+        using var fixture = new LocatorFixture();
+        var buildRoot = Path.Combine(fixture.Root, "bin");
+        var output = Directory.CreateDirectory(Path.Combine(buildRoot, SupervisorProbe, Configuration)).FullName;
+        foreach (var suffix in new[] { ".dll", ".runtimeconfig.json" })
+            File.WriteAllText(Path.Combine(output, SupervisorProbe + suffix), "bound build");
+        Environment.SetEnvironmentVariable(TestBuildOutputLocator.BuildOutputRootVariable, buildRoot);
+
+        fixture.WithCopiedAnchor(anchor =>
+        {
+            var closure = Path.GetDirectoryName(anchor.Assembly.Location)!;
+            File.WriteAllText(Path.Combine(closure, SupervisorProbe + presentSuffix), "partial current build");
+
+            var found = Mcg.AgentOrchestrator.Infrastructure.Tests.DispatchProcessHostTestsConductorSupervisorWindowsLaunchAuthority.LocateProbe(anchor);
+            Assert.Equal(output, found.Directory);
+            Assert.Equal([closure, Path.Combine(fixture.Root, "summary", SupervisorProbe, Configuration), output], found.TriedPaths);
+        });
+    }
+
+    [Theory]
+    [InlineData(".dll")]
+    [InlineData(".runtimeconfig.json")]
+    public void SupervisorProbe_IncompleteCurrentClosureUsesCompleteSibling(string presentSuffix)
+    {
+        using var fixture = new LocatorFixture();
+        var sibling = Directory.CreateDirectory(Path.Combine(fixture.Root, "summary", SupervisorProbe, Configuration)).FullName;
+        foreach (var suffix in new[] { ".dll", ".runtimeconfig.json" })
+            File.WriteAllText(Path.Combine(sibling, SupervisorProbe + suffix), "bound build");
+
+        fixture.WithCopiedAnchor(anchor =>
+        {
+            var closure = Path.GetDirectoryName(anchor.Assembly.Location)!;
+            File.WriteAllText(Path.Combine(closure, SupervisorProbe + presentSuffix), "partial copy");
+
+            var found = Mcg.AgentOrchestrator.Infrastructure.Tests.DispatchProcessHostTestsConductorSupervisorWindowsLaunchAuthority.LocateProbe(anchor);
+            Assert.Equal(sibling, found.Directory);
+            Assert.Equal([closure, sibling], found.TriedPaths);
+        });
+    }
+
+    [Theory]
+    [InlineData(".dll", ".runtimeconfig.json")]
+    [InlineData(".runtimeconfig.json", ".dll")]
+    public void SupervisorProbe_PartialDirectoriesAreNeverCombined(string localSuffix, string siblingSuffix)
+    {
+        using var fixture = new LocatorFixture();
+        var sibling = Directory.CreateDirectory(Path.Combine(fixture.Root, "summary", SupervisorProbe, Configuration)).FullName;
+        File.WriteAllText(Path.Combine(sibling, SupervisorProbe + siblingSuffix), "partial sibling");
+
+        fixture.WithCopiedAnchor(anchor =>
+        {
+            var closure = Path.GetDirectoryName(anchor.Assembly.Location)!;
+            File.WriteAllText(Path.Combine(closure, SupervisorProbe + localSuffix), "partial copy");
+
+            var found = Mcg.AgentOrchestrator.Infrastructure.Tests.DispatchProcessHostTestsConductorSupervisorWindowsLaunchAuthority.LocateProbe(anchor);
+            Assert.Null(found.Directory);
+            Assert.Equal([closure, sibling], found.TriedPaths);
+        });
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void SupervisorProbe_AbsentLocalCopyUsesOnlyCompleteBoundFallbackAndReportsPaths(bool complete)
+    {
+        using var fixture = new LocatorFixture();
+        var buildRoot = Path.Combine(fixture.Root, "bin");
+        var fallback = Directory.CreateDirectory(Path.Combine(buildRoot, SupervisorProbe, Configuration)).FullName;
+        File.WriteAllText(Path.Combine(fallback, SupervisorProbe + ".dll"), "bound build");
+        if (complete)
+            File.WriteAllText(Path.Combine(fallback, SupervisorProbe + ".runtimeconfig.json"), "bound build");
+        Environment.SetEnvironmentVariable(TestBuildOutputLocator.BuildOutputRootVariable, buildRoot);
+
+        fixture.WithCopiedAnchor(anchor =>
+        {
+            var closure = Path.GetDirectoryName(anchor.Assembly.Location)!;
+            var found = Mcg.AgentOrchestrator.Infrastructure.Tests.DispatchProcessHostTestsConductorSupervisorWindowsLaunchAuthority.LocateProbe(anchor);
+            Assert.Equal(complete ? fallback : null, found.Directory);
+            Assert.Equal([closure, Path.Combine(fixture.Root, "summary", SupervisorProbe, Configuration), fallback], found.TriedPaths);
+        });
+    }
+
     private sealed class LocatorFixture : IDisposable
     {
         private WeakReference? _copiedContext;

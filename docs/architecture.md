@@ -30,6 +30,7 @@ Infrastructure has no reference to OperatorComms.
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Fixtures/RealProcessShardProbe/Mcg.AgentOrchestrator.RealProcessShardProbe.csproj` | n/a | Executable fixture used to observe real-process shard behavior. | It is not a product host or a general-purpose test runner. |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Fixtures/IsolatedDotnetProbe/Mcg.AgentOrchestrator.IsolatedDotnetProbe.csproj` | n/a | Minimal executable fixture for isolated `dotnet` invocation tests. | It is not product tooling or a standalone test suite. |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Fixtures/ConsoleIoProbe/Mcg.AgentOrchestrator.ConsoleIoProbe.csproj` | n/a | Executable fixture for redirected Console I/O preservation tests. | It is not product tooling or a standalone test suite. |
+| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Fixtures/SupervisorLaunchProbe/Mcg.AgentOrchestrator.SupervisorLaunchProbe.csproj` | `src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj` | Executable fixture for Windows launch-authority comparisons and real supervisor handoff lifetime tests. | It is not a product host or a general-purpose test runner. |
 <!-- current-project-inventory:end -->
 
 The resulting production graph is:
