@@ -3,7 +3,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 // Parallel-safe: every host, kernel synchronization object and artifact belongs to the case root.
-public sealed class DispatchProcessHostIntentAdmissionTests
+public sealed class DispatchProcessHostIntentAdmissionTests(Xunit.ITestOutputHelper output)
 {
     [Xunit.Fact]
     public async Task ReleasedGate_LateEnqueue_SuppressesActualChildLaunch()
@@ -62,8 +62,7 @@ public sealed class DispatchProcessHostIntentAdmissionTests
             DispatchProcessHost.WriteParameters(path, parameters);
             var read = DispatchProcessHost.ReadParameters(path);
             Xunit.Assert.Equal(parameters.TaskIntentAdmission, read.TaskIntentAdmission);
-            Xunit.Assert.Equal(0, DispatchProcessHost.RunWithHeartbeatHooksForTests(read,
-                new DispatchProcessHost.HeartbeatTestHooks { BeforeTaskIntentAdmission = ConfigureProbeEnvironment }));
+            Xunit.Assert.Equal(0, RunProbe(read, store));
             Xunit.Assert.Equal("started", File.ReadAllText(Path.Combine(root, "child-started")));
             Xunit.Assert.Null(store.GetSuppression(parameters.StdoutPath));
         }
@@ -91,6 +90,7 @@ public sealed class DispatchProcessHostIntentAdmissionTests
                         persisted = store.EnqueueAsync(Intent()).GetAwaiter().GetResult();
                     }
                 });
+            RecordProbeOutcome(parameters, store, exit);
             Xunit.Assert.Equal(0, exit);
             Xunit.Assert.NotNull(persisted);
             Xunit.Assert.Equal("started", File.ReadAllText(Path.Combine(root, "child-started")));
@@ -114,10 +114,15 @@ public sealed class DispatchProcessHostIntentAdmissionTests
             var at = DateTimeOffset.UtcNow;
             store.BindPreparedAdmission(store.CaptureAdmission("goal", "task"), at);
             var parameters = Parameters(root, store.GetPreparedAdmission("goal", "task", at));
+            var path = Path.Combine(root, "parameters.json");
+            DispatchProcessHost.WriteParameters(path, parameters);
+            var read = DispatchProcessHost.ReadParameters(path);
+            Xunit.Assert.Equal(parameters.TaskIntentAdmission, read.TaskIntentAdmission);
             File.WriteAllText(parameters.StartGatePath!, "go");
-            Xunit.Assert.Equal(0, DispatchProcessHost.RunWithHeartbeatHooksForTests(parameters,
-                new DispatchProcessHost.HeartbeatTestHooks { BeforeTaskIntentAdmission = ConfigureProbeEnvironment }));
+            Xunit.Assert.Equal(0, RunProbe(read, store));
             Xunit.Assert.Equal("started", File.ReadAllText(Path.Combine(root, "child-started")));
+            Xunit.Assert.True(store.HasLaunch(parameters.StdoutPath));
+            Xunit.Assert.Null(store.GetSuppression(parameters.StdoutPath));
             Xunit.Assert.Empty(store.ListHeldTaskIds("goal"));
         }
         finally { Directory.Delete(root, recursive: true); }
@@ -138,6 +143,22 @@ public sealed class DispatchProcessHostIntentAdmissionTests
             Xunit.Assert.False(File.Exists(parameters.TaskIntentAdmission!.StorePath));
         }
         finally { Directory.Delete(root, recursive: true); }
+    }
+
+    private int RunProbe(DispatchProcessHost.DispatchRunParameters parameters, SqliteOperatorIntentStore store)
+    {
+        var exit = DispatchProcessHost.RunWithHeartbeatHooksForTests(parameters,
+            new DispatchProcessHost.HeartbeatTestHooks { BeforeTaskIntentAdmission = ConfigureProbeEnvironment });
+        RecordProbeOutcome(parameters, store, exit);
+        return exit;
+    }
+
+    private void RecordProbeOutcome(DispatchProcessHost.DispatchRunParameters parameters, SqliteOperatorIntentStore store, int exit)
+    {
+        // Emit before teardown: failed assertions retain this output in the managed TRX receipt.
+        output.WriteLine($"host-exit={exit}; launch={store.HasLaunch(parameters.StdoutPath)}; suppression={JsonSerializer.Serialize(store.GetSuppression(parameters.StdoutPath))}");
+        foreach (var path in new[] { parameters.ExitCodePath, parameters.StdoutPath, parameters.StderrPath })
+            output.WriteLine($"{Path.GetFileName(path)}: {(File.Exists(path) ? File.ReadAllText(path) : "<missing>")}");
     }
 
     private static string CreateRoot()

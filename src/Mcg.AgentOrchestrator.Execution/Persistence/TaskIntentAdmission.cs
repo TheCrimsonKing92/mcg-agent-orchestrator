@@ -84,6 +84,7 @@ public sealed partial class SqliteOperatorIntentStore
     private static bool HasTaskTarget(OperatorIntentRecord intent) =>
         !string.IsNullOrWhiteSpace(intent.TaskId) && intent.GoalId != Mcg.AgentOrchestrator.Core.OperatorIntentScopes.Workspace;
 
+    [StoreSchemaSource("operator-intents", "src/Mcg.AgentOrchestrator.Execution/Persistence/TaskIntentAdmission.cs")]
     private static void SetupTaskAdmission(SqliteConnection conn)
     {
         RunNonQuery(conn, """
