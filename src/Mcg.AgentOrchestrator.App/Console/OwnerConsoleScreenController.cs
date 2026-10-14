@@ -18,12 +18,15 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     {
         if (epics is null) return null;
         var since = OwnerConsoleEpicViewModel.Cutoff(window, clock.GetUtcNow());
+        if (detailId is not null)
+        {
+            var snapshot = await epics.LoadDetailAsync(detailId, since, cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            return new(window, since, [snapshot.Row],
+                OwnerConsoleEpicViewModel.BuildDetail(snapshot.Row, snapshot.Since, snapshot.Goals), clock.GetLocalNow());
+        }
         var rows = await epics.LoadAsync(since, cancellationToken).ConfigureAwait(false);
-        var row = rows.FirstOrDefault(item => item.Epic.Id == detailId);
-        var detail = row is null ? null : await OwnerConsoleEpicViewModel.DetailAsync(row, since, state, cancellationToken).ConfigureAwait(false);
-        if (detail is not null && detail.Plan is null)
-            detail = detail with { Plan = await epics.LoadPlanAsync(detail.Epic, cancellationToken).ConfigureAwait(false) };
-        return new(window, since, rows, detail, clock.GetLocalNow());
+        return new(window, since, rows, LoadedAt: clock.GetLocalNow());
     }
 
     internal OwnerConsoleViewModel? Model { get; private set; }
@@ -149,8 +152,7 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
             { choiceLines.Add(lines.Count); lines.Add(OwnerQuestionResolutionText.Summary(question, clock.LocalTimeZone)); }
         }
         var openQuestion = Model?.Decisions.Where(item => item.GoalId == goalId).OrderBy(item => item.Number).FirstOrDefault();
-        var epicRows = epics is null ? null : await epics.LoadAsync(null, token).ConfigureAwait(false);
-        var epicId = epicRows?.FirstOrDefault(row => row.MemberGoals.Any(item => item.Id == goalId))?.Epic.Id;
+        var epicId = epics is null ? null : await epics.FindGoalEpicAsync(goalId, token).ConfigureAwait(false);
         var failure = goal.RetainedAcceptanceFailure is { } recorded ? OwnerConsoleGoalLanding.FailureText(recorded, clock.LocalTimeZone) : null;
         return new(string.Join(Environment.NewLine, lines), choiceLines, resolved, openQuestion, failure, epicId);
     }

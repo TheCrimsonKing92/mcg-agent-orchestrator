@@ -79,8 +79,8 @@ internal static class EpicProgressReadModel
 
     internal static EpicProgressRollup LoadEpic(OrchestratorWorkspace workspace, string reference, bool includeReasons = false)
     {
-        var (store, epic) = ResolveEpic(workspace, reference);
-        return Load(workspace, store, [epic], includeReasons: includeReasons).Single();
+        return EpicDetailReadSnapshot.ReadAsync(workspace, reference, null, CancellationToken.None,
+            includeReasons: includeReasons, includeDetailGoals: false).GetAwaiter().GetResult().Row;
     }
 
     internal static IReadOnlyList<GoalSummary> ListMemberGoals(OrchestratorWorkspace workspace, string? reference)
