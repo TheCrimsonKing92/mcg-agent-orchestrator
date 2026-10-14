@@ -4,7 +4,7 @@ using System.Text.Json.Nodes;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 [Xunit.Collection(TestCollections.ProcessSpawning)]
-public sealed class WorkerBuildNoBuildBridgeProcessSpawningTests
+public sealed class MtpTestRunnerScriptTestsWorkerBuildNoBuildBridge
 {
     private const string Project = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj";
 
