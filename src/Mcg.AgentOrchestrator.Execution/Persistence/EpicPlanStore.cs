@@ -41,6 +41,11 @@ public sealed partial class EpicPlanStore
     {
         using var connection = Open(_path, _readOnly);
         Execute(connection, "BEGIN", epicId);
+        return Task.FromResult(Read(connection, epicId));
+    }
+
+    public static EpicPlan Read(SqliteConnection connection, string epicId)
+    {
         RequireEpic(connection, epicId);
         var bar = Scalar(connection, "SELECT bar FROM epics WHERE id = $epic", epicId) as string;
         var items = Rows(connection, epicId).Select(row => row.Item).ToArray();
@@ -52,7 +57,7 @@ public sealed partial class EpicPlanStore
             decisions.Add(new(reader.GetInt64(0), DateTimeOffset.Parse(reader.GetString(1), CultureInfo.InvariantCulture),
                 reader.GetString(2), reader.IsDBNull(3) ? null : reader.GetString(3)));
         reader.Close();
-        return Task.FromResult(new EpicPlan(epicId, bar, items, decisions, ReadOutcome(connection, epicId)));
+        return new EpicPlan(epicId, bar, items, decisions, ReadOutcome(connection, epicId));
     }
 
     public Task AddSliceAsync(string epicId, string backlogItemId, int? at = null, string actor = "operator")

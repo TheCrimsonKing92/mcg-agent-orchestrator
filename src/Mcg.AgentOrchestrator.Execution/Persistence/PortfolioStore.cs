@@ -113,6 +113,30 @@ public sealed class PortfolioStore
         return store;
     }
 
+    public static async Task<(PortfolioEpic Epic, PortfolioProject? Project,
+        IReadOnlyList<PortfolioEpicMember> Members, EpicPlan Plan)> ReadEpicAsync(
+        SqliteConnection connection, string path, string reference, CancellationToken cancellationToken = default)
+    {
+        var state = StoreSchemaVersions.Verify(connection, StoreSchemaRegistry.Portfolio);
+        if (state != StoreSchemaState.Current) throw SchemaSetupRequired(path, state);
+        var epic = await ResolveEpicAsync(connection, reference, cancellationToken)
+            ?? throw new InvalidOperationException($"Epic '{reference}' was not found.");
+        PortfolioProject? project = null;
+        if (epic.ProjectId is not null)
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT id, title, parent_project_id, created_at, created_by, updated_at, updated_by FROM projects WHERE id = $id";
+            command.Parameters.AddWithValue("$id", epic.ProjectId);
+            using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            if (await reader.ReadAsync(cancellationToken)) project = ReadProject(reader);
+        }
+        var members = new List<PortfolioEpicMember>();
+        await LoadEpicMembersAsync(connection, members, epic.Id, PortfolioMemberKind.Goal, "goal_epic_memberships", "goal_id", cancellationToken);
+        await LoadEpicMembersAsync(connection, members, epic.Id, PortfolioMemberKind.BacklogItem, "backlog_epic_memberships", "backlog_item_id", cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        return (epic, project, members, EpicPlanStore.Read(connection, epic.Id));
+    }
+
     private static InvalidOperationException SchemaSetupRequired(string dbPath, StoreSchemaState state) =>
         new($"Portfolio store '{dbPath}' schema is {state} (expected version {StoreSchemaRegistry.Portfolio.CurrentVersion}); run setup.");
 
