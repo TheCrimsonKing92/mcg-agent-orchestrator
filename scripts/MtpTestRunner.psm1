@@ -1,4 +1,5 @@
 Set-StrictMode -Version Latest
+Import-Module (Join-Path $PSScriptRoot 'WorkerBuildReceipt.psm1') -Force
 
 $script:ExitCodes = [pscustomobject]@{
     Manifest = 20
@@ -1227,7 +1228,10 @@ function Copy-MtpStableNoBuildClosure {
         [Parameter(Mandatory = $true)][string]$SourceDirectory,
         [Parameter(Mandatory = $true)][string]$PublishedDirectory,
         [Parameter(Mandatory = $true)][string]$ManagedAssemblyLeaf,
-        [Parameter(Mandatory = $true)][string]$ProjectName
+        [Parameter(Mandatory = $true)][string]$ProjectName,
+        $BuildSelection,
+        [string]$RepositoryRoot,
+        [string]$RunDirectory
     )
 
     $sourceManagedAssembly = Join-Path $SourceDirectory $ManagedAssemblyLeaf
@@ -1240,7 +1244,20 @@ function Copy-MtpStableNoBuildClosure {
     for ($attempt = 1; $attempt -le $script:MtpClosureSnapshotAttempts; $attempt++) {
         $staging = Join-Path $parent ".s-$([Guid]::NewGuid().ToString('N').Substring(0, 8))"
         try {
+            if ($null -ne $BuildSelection -and $null -ne $BuildSelection.WorkerProvenance) {
+                Assert-WorkerBuildPathNotRedirected -Path $SourceDirectory -Recurse
+                Assert-WorkerBuildPathNotRedirected -Path $BuildSelection.WorkerProvenance.Path
+            }
             $before = Get-MtpClosureSnapshot -Path $SourceDirectory
+            if ($null -ne $BuildSelection) {
+                if ($before.Digest -cne $BuildSelection.SnapshotDigest) {
+                    throw 'Selected no-build closure changed before copying.'
+                }
+                if ($null -ne $BuildSelection.WorkerProvenance -and
+                    (Get-MtpSha256File -Path $BuildSelection.WorkerProvenance.Path) -cne $BuildSelection.WorkerProvenance.Sha256) {
+                    throw 'Selected worker build receipt changed before copying.'
+                }
+            }
             [void](New-Item -ItemType Directory -Path $staging -ErrorAction Stop)
             Get-ChildItem -LiteralPath $SourceDirectory -Force | Copy-Item -Destination $staging -Recurse -Force -ErrorAction Stop
             $staged = Get-MtpClosureSnapshot -Path $staging
@@ -1251,6 +1268,15 @@ function Copy-MtpStableNoBuildClosure {
                 $before.FileCount -ne $after.FileCount) {
                 $lastFailure = "source output changed while snapshotting attempt $attempt of $script:MtpClosureSnapshotAttempts"
                 continue
+            }
+            if ($null -ne $BuildSelection -and $null -ne $BuildSelection.WorkerProvenance) {
+                $provenance = $BuildSelection.WorkerProvenance
+                Assert-WorkerBuildPathNotRedirected -Path $SourceDirectory -Recurse
+                Assert-WorkerBuildPathNotRedirected -Path $provenance.Path
+                if ((Get-WorktreeTreeDigest -Root $RepositoryRoot -TemporaryRoot $RunDirectory) -cne $provenance.TreeDigest -or
+                    (Get-MtpSha256File -Path $provenance.Path) -cne $provenance.Sha256) {
+                    throw 'Selected worker build identity changed while copying.'
+                }
             }
             Complete-MtpClosurePublication -StagingDirectory $staging -PublishedDirectory $PublishedDirectory -ManagedAssemblyLeaf $ManagedAssemblyLeaf -ProjectName $ProjectName
             $staging = $null
@@ -1339,8 +1365,7 @@ function Assert-MtpBuildReceipt {
     )
 
     if ([string]::IsNullOrWhiteSpace($RepairCommand)) {
-        $repairRoot = $RepositoryRoot.TrimEnd([char[]]@('\', '/'))
-        $RepairCommand = "dotnet build `"$ProjectPath`" --configuration $Configuration `"-p:McgIsolatedArtifactsPath=$repairRoot`""
+        $RepairCommand = "& `"$RepositoryRoot/scripts/Invoke-WorkerBuildCheck.ps1`" `"$ProjectPath`" -Configuration `"$Configuration`""
     }
     $receiptPath = Get-MtpBuildReceiptPath -Directory $Directory
     try {
@@ -1898,7 +1923,8 @@ function Resolve-MtpEvaluatedTargetPath {
         [Parameter(Mandatory = $true)]$Invocation,
         [Parameter(Mandatory = $true)][string]$Configuration,
         [Parameter(Mandatory = $true)][string]$DotnetPath,
-        [Parameter(Mandatory = $true)][string]$RunDirectory
+        [Parameter(Mandatory = $true)][string]$RunDirectory,
+        [string]$WorkerArtifactsPath
     )
 
     $projectPath = [System.IO.Path]::GetFullPath((Join-Path $RepositoryRoot ([string]$Invocation.project)))
@@ -1908,6 +1934,9 @@ function Resolve-MtpEvaluatedTargetPath {
     # truncated drain, into an opaque "invalid result" instead of the real failure.
     $resultPath = Join-Path $RunDirectory (Get-MtpBoundedFileName -Stem "msbuild-identity-$([System.IO.Path]::GetFileNameWithoutExtension($projectPath))" -Suffix '.json' -MaximumLength 180)
     $arguments = [string[]]@($DotnetPath, 'msbuild', $projectPath, '--nologo', "-p:Configuration=$Configuration", '-getProperty:TargetPath,TargetFramework,RuntimeIdentifier', '-getItem:Compile', "-getResultOutputFile:$resultPath")
+    if (-not [string]::IsNullOrWhiteSpace($WorkerArtifactsPath)) {
+        $arguments += @('-p:UseArtifactsOutput=true', "-p:ArtifactsPath=$WorkerArtifactsPath", '-p:BuildInParallel=false')
+    }
     $probe = Invoke-MtpBuildProcess -Executable $DotnetPath -Arguments $arguments -OutputLog $logPath -WorkingDirectory $RepositoryRoot
     if (-not $probe.Started -or -not [string]::IsNullOrWhiteSpace([string]$probe.StartFailureMessage) -or -not [string]::IsNullOrWhiteSpace([string]$probe.MonitoringFailureMessage) -or -not $probe.CleanupConfirmed -or -not $probe.DrainConfirmed -or $probe.ExitCode -ne 0) {
         throw "MSBuild target-path evaluation failed for '$projectPath'; started=$($probe.Started) exitCode=$($probe.ExitCode) cleanupConfirmed=$($probe.CleanupConfirmed) drainConfirmed=$($probe.DrainConfirmed); diagnostic log: $logPath"
@@ -1930,8 +1959,12 @@ function Resolve-MtpEvaluatedTargetPath {
     }
     $resolved = [System.IO.Path]::GetFullPath([string]$properties.TargetPath)
     $repositoryPrefix = [System.IO.Path]::GetFullPath($RepositoryRoot).TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
-    if (-not $resolved.StartsWith($repositoryPrefix, [System.StringComparison]::OrdinalIgnoreCase) -or -not $resolved.EndsWith('.dll', [System.StringComparison]::OrdinalIgnoreCase)) {
+    $outputPrefix = if ([string]::IsNullOrWhiteSpace($WorkerArtifactsPath)) { $repositoryPrefix } else { $WorkerArtifactsPath.TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar }
+    if (-not $resolved.StartsWith($outputPrefix, [System.StringComparison]::OrdinalIgnoreCase) -or -not $resolved.EndsWith('.dll', [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "MSBuild target-path evaluation escaped the repository or did not resolve a managed assembly: $resolved"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($WorkerArtifactsPath)) {
+        Assert-WorkerBuildPathNotRedirected -Path $resolved
     }
     $compilePaths = [System.Collections.Generic.List[string]]::new()
     try {
@@ -1968,13 +2001,55 @@ function Resolve-MtpEvaluatedTargetPath {
     }
 }
 
+function Read-MtpWorkerBuildProvenance {
+    param([string]$RepositoryRoot, [string]$ProjectPath, [string]$Configuration, [string]$RunDirectory, [string]$WorkerRunRoot)
+    if ([string]::IsNullOrWhiteSpace($WorkerRunRoot)) { $WorkerRunRoot = Get-WorkerBuildRunRoot -Root $RepositoryRoot }
+    $path = Join-Path $WorkerRunRoot 'artifacts\worker-build-receipt.json'
+    Assert-WorkerBuildPathNotRedirected -Path $path
+    $hash = Get-MtpSha256File -Path $path
+    $receipt = Get-Content -LiteralPath $path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+    if (($receipt.schemaVersion -isnot [int] -and $receipt.schemaVersion -isnot [long]) -or
+        $receipt.schemaVersion -ne 1 -or $receipt.buildOutcome -cne 'success' -or $receipt.digestAlgorithm -cne 'wbc1:git-tree') {
+        throw "Worker build receipt is incompatible or unsuccessful: $path"
+    }
+    $generatedAt = [DateTimeOffset]::MinValue
+    if ($receipt.projects -isnot [array] -or @($receipt.projects).Count -eq 0 -or
+        @($receipt.projects | Where-Object { $_ -isnot [string] -or [string]::IsNullOrWhiteSpace($_) }).Count -gt 0 -or
+        $receipt.treeDigest -isnot [string] -or $receipt.treeDigest -notmatch '^wbc1:git-tree:[a-f0-9]{40}([a-f0-9]{24})?$' -or
+        -not [DateTimeOffset]::TryParse([string]$receipt.generatedAtUtc, [ref]$generatedAt) -or
+        -not [System.IO.Path]::IsPathRooted([string]$receipt.worktreeRoot)) {
+        throw "Worker build receipt is malformed: $path"
+    }
+    $root = [System.IO.Path]::GetFullPath($RepositoryRoot).TrimEnd('\', '/')
+    if (-not [System.IO.Path]::GetFullPath([string]$receipt.worktreeRoot).TrimEnd('\', '/').Equals($root, [StringComparison]::OrdinalIgnoreCase) -or
+        -not ([string]$receipt.configuration).Equals($Configuration, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Worker build receipt worktree/configuration mismatch: $path"
+    }
+    $covered = @($receipt.projects | ForEach-Object { [System.IO.Path]::GetFullPath((Join-Path $root ([string]$_))) })
+    if ($ProjectPath -notin $covered) { throw "Worker build receipt does not cover requested project: $ProjectPath" }
+    $artifacts = Assert-WorkerBuildArtifactsPath -Root $root -ArtifactsPath ([string]$receipt.artifactsPath) -RunRoot $WorkerRunRoot
+    $properties = $receipt.buildProperties
+    if (@($properties.PSObject.Properties).Count -ne 3 -or
+        $properties.UseArtifactsOutput -cne 'true' -or $properties.BuildInParallel -cne 'false' -or
+        -not ([string]$properties.ArtifactsPath).Equals($artifacts, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Worker build receipt has unsupported output properties: $path"
+    }
+    $digest = Get-WorktreeTreeDigest -Root $root -TemporaryRoot $RunDirectory
+    if ([string]::IsNullOrWhiteSpace([string]$receipt.treeDigest) -or $receipt.treeDigest -cne $digest) {
+        throw "Worker build receipt tree digest is stale: $path"
+    }
+    if ($hash -ne (Get-MtpSha256File -Path $path)) { throw "Worker build receipt changed during validation: $path" }
+    return [pscustomobject]@{ Path = $path; Sha256 = $hash; TreeDigest = $digest; ArtifactsPath = $artifacts }
+}
+
 function Select-MtpVerifiedBuildOutput {
     param(
         [Parameter(Mandatory = $true)][string]$RepositoryRoot,
         [Parameter(Mandatory = $true)]$Invocation,
         [Parameter(Mandatory = $true)][string]$Configuration,
         [Parameter(Mandatory = $true)][string]$DotnetPath,
-        [Parameter(Mandatory = $true)][string]$RunDirectory
+        [Parameter(Mandatory = $true)][string]$RunDirectory,
+        [string]$WorkerRunRoot
     )
 
     $projectName = Get-MtpProjectName -Invocation $Invocation
@@ -1989,20 +2064,38 @@ function Select-MtpVerifiedBuildOutput {
     $declaredAssembly = Resolve-MtpManagedAssemblyPath -RepositoryRoot $RepositoryRoot -Invocation $Invocation -Configuration $Configuration
     $declaredDirectory = Split-Path -Parent $declaredAssembly
     $evaluatedDirectory = Split-Path -Parent $evaluatedIdentity.TargetPath
-    $repairRoot = $RepositoryRoot.TrimEnd([char[]]@('\', '/'))
+    $repairCommand = "& `"$RepositoryRoot/scripts/Invoke-WorkerBuildCheck.ps1`" `"$projectPath`" -Configuration `"$Configuration`""
     $candidates = @(
         [pscustomobject]@{
             Label = 'declared artifact output'
             Directory = $declaredDirectory
-            Repair = "dotnet build `"$projectPath`" --configuration $Configuration `"-p:McgIsolatedArtifactsPath=$repairRoot`""
+            Repair = $repairCommand
+            Identity = $evaluatedIdentity
+            WorkerProvenance = $null
         },
         [pscustomobject]@{
             Label = 'evaluated standard output'
             Directory = $evaluatedDirectory
-            Repair = "dotnet build `"$projectPath`" --configuration $Configuration"
+            Repair = $repairCommand
+            Identity = $evaluatedIdentity
+            WorkerProvenance = $null
         }
     )
     $rejections = [System.Collections.Generic.List[string]]::new()
+    try {
+        $provenance = Read-MtpWorkerBuildProvenance -RepositoryRoot $RepositoryRoot -ProjectPath $projectPath -Configuration $Configuration -RunDirectory $RunDirectory -WorkerRunRoot $WorkerRunRoot
+        $evaluationStopwatch.Start()
+        $workerIdentity = Resolve-MtpEvaluatedTargetPath -RepositoryRoot $RepositoryRoot -Invocation $Invocation -Configuration $Configuration -DotnetPath $DotnetPath -RunDirectory $RunDirectory -WorkerArtifactsPath $provenance.ArtifactsPath
+        $evaluationStopwatch.Stop()
+        $candidates += [pscustomobject]@{
+            Label = 'sanctioned worker output'
+            Directory = Split-Path -Parent $workerIdentity.TargetPath
+            Repair = $repairCommand
+            Identity = $workerIdentity
+            WorkerProvenance = $provenance
+        }
+    }
+    catch { $rejections.Add("sanctioned worker output: $($_.Exception.Message)") }
     $verified = [System.Collections.Generic.List[object]]::new()
     $verificationStopwatch = [System.Diagnostics.Stopwatch]::new()
     foreach ($candidate in $candidates) {
@@ -2011,12 +2104,20 @@ function Select-MtpVerifiedBuildOutput {
         }
         $verificationStopwatch.Start()
         try {
-            $receipt = Assert-MtpBuildReceipt -Directory $candidate.Directory -ManagedAssemblyLeaf "$projectName.dll" -RepositoryRoot $RepositoryRoot -ProjectPath $projectPath -Configuration $Configuration -TargetFramework $evaluatedIdentity.TargetFramework -RuntimeIdentifier $evaluatedIdentity.RuntimeIdentifier -ExpectedSourcePaths $evaluatedIdentity.CompilePaths -RepairCommand $candidate.Repair
+            if ($null -ne $candidate.WorkerProvenance) {
+                Assert-WorkerBuildPathNotRedirected -Path $candidate.Directory -Recurse
+            }
+            $snapshot = Get-MtpClosureSnapshot -Path $candidate.Directory
+            $receipt = Assert-MtpBuildReceipt -Directory $candidate.Directory -ManagedAssemblyLeaf "$projectName.dll" -RepositoryRoot $RepositoryRoot -ProjectPath $projectPath -Configuration $Configuration -TargetFramework $candidate.Identity.TargetFramework -RuntimeIdentifier $candidate.Identity.RuntimeIdentifier -ExpectedSourcePaths $candidate.Identity.CompilePaths -RepairCommand $candidate.Repair
+            if ($snapshot.Digest -cne (Get-MtpClosureSnapshot -Path $candidate.Directory).Digest) { throw 'No-build closure changed during validation.' }
+            if ($null -ne $candidate.WorkerProvenance -and (Get-MtpSha256File -Path $candidate.WorkerProvenance.Path) -cne $candidate.WorkerProvenance.Sha256) { throw 'Worker receipt changed during selection.' }
             $verified.Add([pscustomobject]@{
                 Label = $candidate.Label
                 Directory = $candidate.Directory
                 Receipt = $receipt
                 ClosureSha256 = Get-MtpBuildReceiptClosureDigest -Receipt $receipt -Directory $candidate.Directory
+                SnapshotDigest = $snapshot.Digest
+                WorkerProvenance = $candidate.WorkerProvenance
             })
         }
         catch {
@@ -2027,13 +2128,12 @@ function Select-MtpVerifiedBuildOutput {
         }
     }
     if ($verified.Count -eq 0) {
-        $wrapperCommand = "scripts/Invoke-WorkerBuildDiagnostic.ps1 build `"$projectPath`" `"-p:McgIsolatedArtifactsPath=$repairRoot`" --configuration `"$Configuration`""
-        throw "No verified no-build output exists for '$projectName'. $($rejections -join ' | ')`nSanctioned wrapper: $wrapperCommand"
+        throw "No verified no-build output exists for '$projectName'. $($rejections -join ' | ')`nSanctioned build: $repairCommand"
     }
     $closureHashes = @($verified | ForEach-Object { [string]$_.ClosureSha256 } | Sort-Object -Unique)
     if ($verified.Count -gt 1 -and $closureHashes.Count -gt 1) {
         $identities = @($verified | ForEach-Object { "path='$($_.Directory)' assemblySha256=$($_.Receipt.Headers['assemblySha256']) closureSha256=$($_.ClosureSha256)" })
-        throw "Ambiguous verified no-build outputs for '$projectName'; refusing to select by path layout or timestamp. $($identities -join ' | '). Repair with either: dotnet build `"$projectPath`" --configuration $Configuration OR dotnet build `"$projectPath`" --configuration $Configuration -p:McgIsolatedArtifactsPath=`"$RepositoryRoot`""
+        throw "Ambiguous verified no-build outputs for '$projectName'; refusing to select by path layout or timestamp. $($identities -join ' | '). Repair: $repairCommand"
     }
     $selected = @($verified | Where-Object { $_.Label -eq 'declared artifact output' } | Select-Object -First 1)
     if ($selected.Count -eq 0) {
@@ -2048,7 +2148,7 @@ function Select-MtpVerifiedBuildOutput {
         candidatesVerified = $verified.Count
     }
     Write-Host "NO-BUILD BUILD RECEIPT SELECTED - $($selected[0].Label) '$($selected[0].Directory)' assemblySha256=$($selected[0].Receipt.Headers['assemblySha256']) closureSha256=$($selected[0].ClosureSha256) identityCostMs total=$($identityCost.totalMs) evaluate=$($identityCost.evaluateMs) verify=$($identityCost.verifyMs) candidatesVerified=$($identityCost.candidatesVerified) rejected='$($rejected -join ' | ')'"
-    return [pscustomobject]@{ Directory = $selected[0].Directory; Receipt = $selected[0].Receipt; Rejections = $rejected; IdentityCost = $identityCost }
+    return [pscustomobject]@{ Directory = $selected[0].Directory; Receipt = $selected[0].Receipt; Rejections = $rejected; IdentityCost = $identityCost; SnapshotDigest = $selected[0].SnapshotDigest; WorkerProvenance = $selected[0].WorkerProvenance }
 }
 
 function New-MtpRunnerArguments {
@@ -2818,6 +2918,8 @@ function Invoke-MtpTestRun {
         return New-MtpTerminalResult -Outcome failed -ExitCode $script:ExitCodes.StartupHook -ResultsDirectory $runDirectory -ArtifactsRetained $true
     }
     try {
+        # Resolve the caller's build location before hermetic environment filtering; carry it as a typed value.
+        $workerRunRoot = Get-WorkerBuildRunRoot -Root $RepositoryRoot
         Set-MtpHermeticEnvironment -RepositoryRoot $RepositoryRoot -WritableRoot $runDirectory
         Write-Host "Results directory: $runDirectory"
         $usesManagedAssembly = [string]::IsNullOrWhiteSpace($RunnerPath)
@@ -2832,8 +2934,8 @@ function Invoke-MtpTestRun {
                 $projectName = Get-MtpProjectName -Invocation $project
                 $publishedDirectory = Get-MtpClosureDirectory -RunDirectory $runDirectory -Invocation $project
                 try {
-                    $buildSelection = Select-MtpVerifiedBuildOutput -RepositoryRoot $RepositoryRoot -Invocation $project -Configuration $Configuration -DotnetPath $DotnetPath -RunDirectory $runDirectory
-                    Copy-MtpStableNoBuildClosure -SourceDirectory $buildSelection.Directory -PublishedDirectory $publishedDirectory -ManagedAssemblyLeaf "$projectName.dll" -ProjectName $projectName
+                    $buildSelection = Select-MtpVerifiedBuildOutput -RepositoryRoot $RepositoryRoot -Invocation $project -Configuration $Configuration -DotnetPath $DotnetPath -RunDirectory $runDirectory -WorkerRunRoot $workerRunRoot
+                    Copy-MtpStableNoBuildClosure -SourceDirectory $buildSelection.Directory -PublishedDirectory $publishedDirectory -ManagedAssemblyLeaf "$projectName.dll" -ProjectName $projectName -BuildSelection $buildSelection -RepositoryRoot $RepositoryRoot -RunDirectory $runDirectory
                     $buildOutputRoots[[string]$project.project] = [System.IO.Path]::GetFullPath(
                         [System.IO.Path]::Combine($buildSelection.Directory, '..', '..'))
                     $closureMarker = Get-Content -LiteralPath (Join-Path $publishedDirectory $script:MtpClosureMarkerName) -Raw | ConvertFrom-Json
@@ -2867,7 +2969,7 @@ function Invoke-MtpTestRun {
             if (-not (Test-Path -LiteralPath $requiredExecutable -PathType Leaf)) {
                 $projectPath = Join-Path $RepositoryRoot ([string]$project.project)
                 $missingArtifact = if ($usesManagedAssembly) { 'MANAGED ASSEMBLY' } else { 'RUNNER' }
-                Write-Host "MISSING $missingArtifact - expected sealed run-local artifact '$requiredExecutable'. Build it with the managed MTP runner: $DotnetPath build `"$projectPath`" --configuration $Configuration"
+                Write-Host "MISSING $missingArtifact - expected sealed run-local artifact '$requiredExecutable'. Build it with: & `"$RepositoryRoot/scripts/Invoke-WorkerBuildCheck.ps1`" `"$projectPath`" -Configuration `"$Configuration`""
                 Write-Host "Retained diagnostic directory: $runDirectory"
                 return New-MtpTerminalResult -Outcome failed -ExitCode $script:ExitCodes.MissingRunnerArtifact -ResultsDirectory $runDirectory -ArtifactsRetained $true
             }
