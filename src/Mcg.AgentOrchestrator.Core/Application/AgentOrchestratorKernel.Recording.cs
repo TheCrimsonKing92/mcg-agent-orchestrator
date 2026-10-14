@@ -256,17 +256,17 @@ public sealed partial class AgentOrchestratorKernel
 
         var effectiveProviderFailureKind = verification.ProviderFailureKind;
         var outcome = DispatchFailureClassifier.Classify(task, verification, effectiveProviderFailureKind);
-        if (terminalContract.AllowsCompletion && VerificationFindingEvidencePolicy.HasOnlyAuthoritativelyDeferredAcceptanceFindings(goal, verification))
+        if (terminalContract.AllowsCompletion && VerificationFindingEvidencePolicy.HasOnlyAuthoritativelyDeferredOffWorkerFindings(goal, task, verification))
         {
             // The worker still supplied a contract-conformant blocking report,
-            // but its authoritative finding is pending deterministic acceptance
+            // but its authoritative finding is pending off-worker
             // evidence rather than a paid-worker repair. Do not let the generic
             // Tester blocker classifier reopen that worker.
             outcome = outcome with
             {
                 Kind = DispatchOutcomeKind.VerifiedSuccess,
-                EvidenceSummary = "Authoritatively mapped acceptance evidence remains pending.",
-                ClassifierReceipt = "CLASSIFIER rule=deferred-acceptance-owned-evidence; outcome_class=success; evidence=authoritative obligation pending.",
+                EvidenceSummary = "Authoritatively mapped off-worker evidence remains pending.",
+                ClassifierReceipt = "CLASSIFIER rule=deferred-off-worker-evidence; outcome_class=success; evidence=authoritative current candidate obligation pending.",
                 OutcomeClass = TaskOutcomeClass.Success
             };
         }
@@ -1023,18 +1023,18 @@ public sealed partial class AgentOrchestratorKernel
             mergedFindings,
             goal.EffectiveAcceptanceCriteriaCorrections);
         var workerBlockingFindings = openBlockingFindings
-            .Where(finding => VerificationFindingEvidencePolicy.FindAuthoritativelyDeferredAcceptanceObligation(goal, finding) is null)
+            .Where(finding => VerificationFindingEvidencePolicy.FindAuthoritativelyDeferredOffWorkerObligation(goal, finding, verification.ReviewedCommit) is null)
             .ToArray();
         foreach (var deferredFinding in openBlockingFindings.Except(workerBlockingFindings))
         {
-            var obligation = VerificationFindingEvidencePolicy.FindAuthoritativelyDeferredAcceptanceObligation(goal, deferredFinding)!;
+            var obligation = VerificationFindingEvidencePolicy.FindAuthoritativelyDeferredOffWorkerObligation(goal, deferredFinding, verification.ReviewedCommit)!;
             Append(
                 goal,
                 task.Id,
                 ProgressKind.TaskNote,
-                $"Deferred acceptance-owned finding remains pending: stable_id={deferredFinding.StableId}; " +
+                $"Deferred {(obligation.Owner == CriterionEvidenceOwner.Acceptance ? "acceptance-owned" : "operator-owned")} finding remains pending: stable_id={deferredFinding.StableId}; " +
                 $"obligation={obligation.DisplayLabel}; owner={obligation.Owner}; state={obligation.State}; " +
-                $"next_action={obligation.RequiredScope}.");
+                $"next_action={obligation.RequiredScope}; candidate_sha={verification.ReviewedCommit}.");
         }
         if (verification.WorkerResultPresent &&
             task.RequiredRole == AgentRole.Reviewer &&
@@ -1080,7 +1080,7 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         // A Tester/Reviewer can report its mandatory blocker text while the
-        // authoritative structured finding is already bound to Acceptance.
+        // authoritative structured finding is already bound to an off-worker owner.
         // The binding, not the prose, is what makes this a deferral.  Keep raw
         // blockers load-bearing whenever any substantive worker finding remains.
         if (!onlyAuthoritativelyDeferredBlockingFindings &&
@@ -2139,7 +2139,7 @@ public sealed partial class AgentOrchestratorKernel
             !WorkerResultBlockers.AssessSubscriptionVerification(task, task.LastVerification).AllowsCompletion ||
             (WorkerResultBlockers.AssessSubscriptionVerification(task, task.LastVerification).Status == VerificationTerminalContractStatus.Valid &&
              DispatchFailureClassifier.Classify(task, task.LastVerification).Kind != DispatchOutcomeKind.VerifiedSuccess &&
-             !VerificationFindingEvidencePolicy.HasOnlyAuthoritativelyDeferredAcceptanceFindings(goal, task.LastVerification)) ||
+             !VerificationFindingEvidencePolicy.HasOnlyAuthoritativelyDeferredOffWorkerFindings(goal, task, task.LastVerification)) ||
             (task.RequiredRole == AgentRole.Developer &&
              WorkerResultBlockers.GetAssignedScopeComplete(task.LastVerification) is false))
         {

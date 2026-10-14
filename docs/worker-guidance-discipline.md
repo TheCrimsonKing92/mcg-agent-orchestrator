@@ -102,6 +102,23 @@ only the specific path is declared; name the directory alone when the exact file
 - Describe the in-process test seam explicitly instead of naming conductor start or stop commands or tick counts, because those phrases trip live-conductor and sandbox feasibility checks.
 - Give workers fixture data inline instead of pointing them at runtime state under `.orchestrator/`, because workers cannot read that state.
 
+## Completing reachable scope with off-worker evidence
+
+For Tester and Reviewer results, check each remaining blocking finding against the authoritative
+criterion obligations supplied in context. Deferral requires exactly one current obligation for the
+exact stable finding ID, matching Operator/operator-owned or Acceptance/acceptance-owned ownership,
+and an expected candidate matching the dispatch candidate. A category or worker explanation alone
+does not grant deferral. Missing, stale, malformed, conflicting, or unmapped authority remains blocking
+and needs an attributed mapping or repair; retain any actual source or test-code blocker.
+
+When those checks pass, report the reachable inspection work as complete, retain the finding as
+open/blocking, and name its obligation, owner, Pending state, candidate, and required next action.
+Use `not-verifiable` for inaccessible criterion proof and route test execution to Acceptance or
+operator observations to Operator. Do not claim the proof ran, resolve the finding, or satisfy the
+obligation. Worker completion leaves acceptance and landing held until the owning executor records
+valid current required evidence and deterministic gates pass. See the
+[`role-capability-matrix`](role-capability-matrix.md) for execution boundaries.
+
 ## Corollaries
 
 **State the mechanism, not the property.** "Durable" is an adjective; "persisted to the outbox,

@@ -20,10 +20,17 @@ internal static class VerificationFindingEvidencePolicy
         return matches.Length != 1 || obligation is null || obligation.Owner is CriterionEvidenceOwner.Worker or CriterionEvidenceOwner.Unknown;
     }
 
-    internal static CriterionEvidenceObligation? FindAuthoritativelyDeferredAcceptanceObligation(Goal goal, ReviewFinding finding)
+    internal static CriterionEvidenceObligation? FindAuthoritativelyDeferredOffWorkerObligation(
+        Goal goal, ReviewFinding finding, string? reviewedCommit)
     {
-        if (finding.Category != FindingCategory.AcceptanceOwned ||
-            string.IsNullOrWhiteSpace(finding.StableId))
+        var owner = finding.Category switch
+        {
+            FindingCategory.AcceptanceOwned => CriterionEvidenceOwner.Acceptance,
+            FindingCategory.OperatorOwned => CriterionEvidenceOwner.Operator,
+            _ => CriterionEvidenceOwner.Unknown
+        };
+        if (owner == CriterionEvidenceOwner.Unknown ||
+            string.IsNullOrWhiteSpace(finding.StableId) || string.IsNullOrWhiteSpace(reviewedCommit))
         {
             return null;
         }
@@ -32,17 +39,31 @@ internal static class VerificationFindingEvidencePolicy
         // explicit operator/refinement binding to the exact stable finding id.
         var currentVersion = goal.AuthoritativeRefinedSpecVersion?.Version;
         var matches = goal.CriterionEvidenceObligations.Where(item =>
-            item.Owner == CriterionEvidenceOwner.Acceptance &&
-            item.HasValidEvidenceState &&
             item.CriterionVersion == currentVersion &&
+            item.State != CriterionEvidenceState.Repaired &&
             string.Equals(item.FindingStableId, finding.StableId, StringComparison.Ordinal)).ToArray();
-        return matches.Length == 1 ? matches[0] : null;
+        // Check ambiguity before filtering owners or validity. Restore retains
+        // duplicate/malformed claims as Unknown records for the same criterion.
+        if (matches.Length != 1) return null;
+        var obligation = matches[0];
+        return obligation.Owner == owner && obligation.HasValidEvidenceState &&
+            goal.CriterionEvidenceObligations.Count(item =>
+                item.CriterionVersion == currentVersion && item.CriterionIndex == obligation.CriterionIndex &&
+                item.State != CriterionEvidenceState.Repaired) == 1 &&
+            !string.IsNullOrWhiteSpace(obligation.ExpectedCandidateSha) &&
+            string.Equals(obligation.ExpectedCandidateSha, reviewedCommit, StringComparison.OrdinalIgnoreCase)
+                ? obligation : null;
     }
 
-    internal static bool HasOnlyAuthoritativelyDeferredAcceptanceFindings(
+    internal static bool HasOnlyAuthoritativelyDeferredOffWorkerFindings(
         Goal goal,
+        TaskSpec task,
         TaskVerificationRecord verification)
     {
+        if (task.RequiredRole is not (AgentRole.Tester or AgentRole.Reviewer) ||
+            !verification.WorkerResultPresent || !verification.Succeeded ||
+            verification.ProviderFailureKind != ProviderFailureKind.Unknown ||
+            DispatchFailureClassifier.IsProviderInterruptionFailure(verification)) return false;
         if (WorkerResultBlockers.TryFindCriteriaVerdicts(verification, out var verdicts, out _) &&
             verdicts.Any(item => item.Verdict == "not-met" && goal.RefinedSpec is { } spec &&
                 item.CriterionIndex >= 0 && item.CriterionIndex < spec.AcceptanceCriteria.Count &&
@@ -53,6 +74,6 @@ internal static class VerificationFindingEvidencePolicy
             verification.MergedReviewFindings ?? [],
             goal.EffectiveAcceptanceCriteriaCorrections);
         return openFindings.Count > 0 && openFindings.All(finding =>
-            FindAuthoritativelyDeferredAcceptanceObligation(goal, finding) is not null);
+            FindAuthoritativelyDeferredOffWorkerObligation(goal, finding, verification.ReviewedCommit) is not null);
     }
 }

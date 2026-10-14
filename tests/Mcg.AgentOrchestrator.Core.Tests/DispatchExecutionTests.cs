@@ -1974,7 +1974,7 @@ public sealed class DispatchExecutionTests
             expectedCandidateSha: "candidate-123");
         kernel.ActivateGoal(goal.Id, DefaultAgents());
         kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
-            "codex-cli", "record-evidence", "C:\\repo", clock.UtcNow));
+            "codex-cli", "record-evidence", "C:\\repo", clock.UtcNow, BaseCommit: "candidate-123"));
 
         var result = StructuredReviewerResult(
             "pass",

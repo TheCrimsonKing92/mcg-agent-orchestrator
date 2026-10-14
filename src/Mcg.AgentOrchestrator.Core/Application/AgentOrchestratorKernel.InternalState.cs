@@ -115,7 +115,7 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         var onlyAuthoritativelyDeferredEvidence = task.Status == WorkTaskStatus.Completed &&
-            task.LastVerification is { } verified && VerificationFindingEvidencePolicy.HasOnlyAuthoritativelyDeferredAcceptanceFindings(goal, verified);
+            task.LastVerification is { } verified && VerificationFindingEvidencePolicy.HasOnlyAuthoritativelyDeferredOffWorkerFindings(goal, task, verified);
         if (!onlyAuthoritativelyDeferredEvidence &&
             WorkerResultBlockers.TryFindTesterWorkerResultBlocker(task, task.LastVerification, out var testerBlocker))
         {
