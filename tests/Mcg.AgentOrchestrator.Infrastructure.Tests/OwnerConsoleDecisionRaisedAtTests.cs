@@ -29,6 +29,9 @@ public sealed class OwnerConsoleDecisionRaisedAtTests
     {
         const string active = "11111111111111111111111111111111";
         const string terminal = "22222222222222222222222222222222";
+        const string liveRequest = "33333333333333333333333333333333";
+        const string duplicateRequest = "44444444444444444444444444444444";
+        const string hiddenRequest = "55555555555555555555555555555555";
         var kernel = new AgentOrchestratorKernel();
         kernel.CreateGoal(new GoalId(active), "Active", [new TaskSpec(new TaskId("active-task"), "Work", AgentRole.Developer)]);
         kernel.CreateGoal(new GoalId(terminal), "Completed", [new TaskSpec(new TaskId("terminal-task"), "Work", AgentRole.Developer)]);
@@ -38,19 +41,19 @@ public sealed class OwnerConsoleDecisionRaisedAtTests
                 { Status = goal.Id == active ? GoalStatus.Active : GoalStatus.Completed }).ToArray(),
             HumanInputRequests =
             [
-                new("live", active, null, "Ship?", Now),
-                new("duplicate", active, null, "Ship?", Now.AddMinutes(1)),
-                new("hidden", terminal, null, "Already done?", Now)
+                new(liveRequest, active, null, "Ship?", Now),
+                new(duplicateRequest, active, null, "Ship?", Now.AddMinutes(1)),
+                new(hiddenRequest, terminal, null, "Already done?", Now)
             ]
         };
         var root = SharedTestSupport.CreateTempDirectory();
         try
         {
             var result = await new OwnerQuestionReadModel(new Queries(snapshot), root).ReadAsync(CancellationToken.None);
-            Assert.Equal("live", Assert.Single(result.Live).ItemId);
+            Assert.Equal(liveRequest, Assert.Single(result.Live).ItemId);
             Assert.NotNull(result.RaisedAt);
-            Assert.Equal(new Dictionary<string, DateTimeOffset> { ["live"] = Now }, result.RaisedAt);
-            Assert.Equal(["duplicate", "hidden"], result.Hidden.Select(item => item.Question.ItemId).Order());
+            Assert.Equal(new Dictionary<string, DateTimeOffset> { [liveRequest] = Now }, result.RaisedAt);
+            Assert.Equal([duplicateRequest, hiddenRequest], result.Hidden.Select(item => item.Question.ItemId).Order());
         }
         finally { SharedTestSupport.RemoveTempDirectory(root); }
     }
