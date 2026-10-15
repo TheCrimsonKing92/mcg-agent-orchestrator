@@ -9,7 +9,7 @@ public sealed class ConductorBatchLoopTestsSlotContentionHold : ConductorBatchLo
 {
     public ConductorBatchLoopTestsSlotContentionHold(ITestOutputHelper output) : base(output) { }
 
-    [Xunit.Theory(Timeout = 30_000)]
+    [Xunit.Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     [Xunit.InlineData(false)]
     [Xunit.InlineData(true)]
@@ -55,7 +55,7 @@ public sealed class ConductorBatchLoopTestsSlotContentionHold : ConductorBatchLo
         Assert.DoesNotContain(Decisions(kernel, goal), IsAdvanceFault);
     }
 
-    [Xunit.Theory(Timeout = 30_000)]
+    [Xunit.Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     [Xunit.InlineData(false)]
     [Xunit.InlineData(true)]
@@ -97,7 +97,7 @@ public sealed class ConductorBatchLoopTestsSlotContentionHold : ConductorBatchLo
         Assert.Equal(2, AttentionLines(ticks).Length);
     }
 
-    [Xunit.Theory(Timeout = 30_000)]
+    [Xunit.Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     [Xunit.InlineData(false)]
     [Xunit.InlineData(true)]

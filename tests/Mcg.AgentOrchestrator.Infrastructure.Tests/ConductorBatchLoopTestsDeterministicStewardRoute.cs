@@ -23,7 +23,7 @@ public sealed class ConductorBatchLoopTestsDeterministicStewardRoute : Conductor
     ];
     private static readonly string[] Criteria = ["Acceptance proves the format recovery.", "Operator reviews the exact candidate with another model family."];
 
-    [Xunit.Theory(Timeout = 30000)]
+    [Xunit.Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     [Xunit.InlineData(3)]
     [Xunit.InlineData(4)]

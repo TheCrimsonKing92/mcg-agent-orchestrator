@@ -10,7 +10,7 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceTransientRetryPrior
 {
     public ConductorBatchLoopTestsParallelAcceptanceTransientRetryPriority(ITestOutputHelper output) : base(output) { }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public void RetryPendingVerifyingGoalTakesSlotBeforeTrainAndCohort()
     {
@@ -48,7 +48,7 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceTransientRetryPrior
         AssertTrainAdmitted(fixture, members, tick);
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public void LiveAttemptForVerifyingGoalDoesNotYieldOrStartSecondAttempt()
     {
@@ -85,7 +85,7 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceTransientRetryPrior
         AssertTrainAdmitted(fixture, members, tick);
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public void RetryPendingGoalRejectedBySoloPathDoesNotYield()
     {

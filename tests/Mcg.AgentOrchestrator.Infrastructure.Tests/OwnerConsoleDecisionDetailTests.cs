@@ -8,7 +8,7 @@ using Terminal.Gui.Input;
 // Parallel-safe: each session owns its stores and uninitialized application; gates drive refreshes.
 public sealed class OwnerConsoleDecisionDetailTests
 {
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task DetailAnswerUsesBoundQuestionAndShowsQueuedNotice()
     {
         await using var session = new Session();
@@ -33,7 +33,7 @@ public sealed class OwnerConsoleDecisionDetailTests
         Assert.False(session.OpenTask.IsCompleted);
     }
 
-    [Theory(Timeout = 30_000)]
+    [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [InlineData(true)]
     [InlineData(false)]
     public async Task DetailAcceptDefaultUsesExistingConfirmation(bool confirmed)
@@ -52,7 +52,7 @@ public sealed class OwnerConsoleDecisionDetailTests
         Assert.False(session.OpenTask.IsCompleted);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task LiveRowRefreshUpdatesBodyActionsAndContextHelp()
     {
         await using var session = new Session();
@@ -80,7 +80,7 @@ public sealed class OwnerConsoleDecisionDetailTests
         Assert.DoesNotContain("a accept default", session.Dialog.HintText);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task RefreshShowsRecordedAuthorAnswerAndRemovesAnswerActions()
     {
         await using var session = new Session();
@@ -105,7 +105,7 @@ public sealed class OwnerConsoleDecisionDetailTests
         Assert.False(session.OpenTask.IsCompleted);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task RefreshShowsDismissedQuestionAndRemovesAnswerActions()
     {
         await using var session = new Session();
@@ -122,7 +122,7 @@ public sealed class OwnerConsoleDecisionDetailTests
         await AssertClosedToAnswers(session);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task RefreshShowsSupersededQuestionAndRemovesAnswerActions()
     {
         await using var session = new Session();
@@ -138,7 +138,7 @@ public sealed class OwnerConsoleDecisionDetailTests
         await AssertClosedToAnswers(session);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task VanishedQuestionWithoutResolutionIsNoLongerOpen()
     {
         await using var session = new Session();
@@ -150,7 +150,7 @@ public sealed class OwnerConsoleDecisionDetailTests
         await AssertClosedToAnswers(session);
     }
 
-    [Theory(Timeout = 30_000)]
+    [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [InlineData(false, "question 1 is no longer open")]
     [InlineData(true, "Question changed; review it again before answering.")]
     public async Task DetailAnswerRetainsStaleQuestionChecks(bool changed, string expected)
@@ -169,7 +169,7 @@ public sealed class OwnerConsoleDecisionDetailTests
         Assert.Equal(expected, Assert.Single(session.Dialogs.Texts).Text);
     }
 
-    [Theory(Timeout = 30_000)]
+    [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [InlineData(OperatorIntentStatus.Applied)]
     [InlineData(OperatorIntentStatus.Rejected)]
     public async Task AppliedAndRejectedNoticesRemainVisibleInsideDetail(OperatorIntentStatus status)
@@ -191,7 +191,7 @@ public sealed class OwnerConsoleDecisionDetailTests
         Assert.False(session.OpenTask.IsCompleted);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task HeldResolutionReadDoesNotHoldInputAndDisposedSessionIgnoresResult()
     {
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
