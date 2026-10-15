@@ -8,6 +8,11 @@ using Microsoft.Data.Sqlite;
 
 public sealed class AcceptanceCohortWorkflowTestsLandingAndReceipts : AcceptanceCohortWorkflowTests
 {
+    private sealed class PromotionClock : IClock
+    {
+        internal static readonly DateTimeOffset At = new(2026, 10, 1, 12, 0, 0, TimeSpan.Zero);
+        public DateTimeOffset UtcNow => At;
+    }
 
     [Fact]
     public void Store_PersistsReceiptAndTwoCoverageRowsAtomically_AndFairnessSurvivesRestart()
@@ -348,9 +353,25 @@ public sealed class AcceptanceCohortWorkflowTestsLandingAndReceipts : Acceptance
                 receipt,
                 integration.CommitRevision,
                 store,
-                ConductorAutonomyPolicy.Conservative);
+                ConductorAutonomyPolicy.Conservative,
+                promotionClock: new PromotionClock());
 
             Assert.True(result.MainAdvanced);
+            var promotionRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            promotionRepository.SaveAsync(kernel).GetAwaiter().GetResult();
+            var facts = promotionRepository.ListGoalMetadataAsync().GetAwaiter().GetResult()
+                .Where(row => row.Id == firstGoal.Id.Value || row.Id == secondGoal.Id.Value).ToArray();
+            Assert.Equal(2, facts.Length);
+            Assert.All(facts, row =>
+            {
+                Assert.NotNull(row.PromotionFact);
+                Assert.Equal(PromotionClock.At, row.PromotionFact.PromotedAt);
+                Assert.Equal(integration.CommitRevision, row.PromotionFact.PromotedMainRevision);
+                Assert.Equal(main, row.PromotionFact.PriorMainRevision);
+                Assert.Equal(bindings.Single(member => member.GoalId.Value == row.Id).CandidateRevision,
+                    row.PromotionFact.CandidateRevision);
+                Assert.Equal(GoalPromotionFact.CohortProvenance, row.PromotionFact.Provenance);
+            });
             Assert.Equal(integration.CommitRevision, RunGitOutput(repo, "rev-parse", "main").Trim());
             Assert.Equal(integration.TreeRevision, RunGitOutput(repo, "rev-parse", "main^{tree}").Trim());
             Assert.Equal(2, Assert.IsAssignableFrom<IReadOnlyList<AcceptanceCohortCoverage>>(result.Coverage).Count);
