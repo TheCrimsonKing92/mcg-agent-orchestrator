@@ -18,7 +18,8 @@ public static class WorkerBuildProjectScope
     public static string MetadataPath(string root) => Path.Combine(root, MetadataRelativePath);
 
     // The configured integration relationship is resolved once and then preserved across correction rounds.
-    public static void Prepare(string root, string goalId, string taskId, string integrationBranch, string? pinnedGoalBaseline = null)
+    public static void Prepare(string root, string goalId, string taskId, string integrationBranch, string? pinnedGoalBaseline = null,
+        Action<string>? diagnostic = null)
     {
         root = Canonical(root);
         var branch = Git(root, "symbolic-ref", "--short", "HEAD").Trim();
@@ -29,7 +30,9 @@ public static class WorkerBuildProjectScope
         Metadata? previous = File.Exists(path) ? ReadMetadata(root) : null;
         if (previous is not null)
         {
-            ValidateMetadata(root, branch, common, head, previous);
+            var squashed = DispatchBaseSquashedOff(root, head, previous);
+            // Retain every metadata guard, replacing only the confirmed stale dispatch ancestry.
+            ValidateMetadata(root, branch, common, head, squashed ? previous with { DispatchBase = head } : previous);
             // Older worktrees initialized by the explicit operator bridge only know the branch prefix.
             // A tracked dispatch can bind that same root/branch/baseline to its full goal identity once.
             var sameGoal = previous.GoalId == goalId ||
@@ -39,6 +42,8 @@ public static class WorkerBuildProjectScope
                 throw new IOException("Worker build scope goal/integration identity changed; conductor must replace the scope explicitly.");
             if (pinnedGoalBaseline is not null && previous.GoalBaseline != pinnedGoalBaseline)
                 throw new IOException("Worker build scope baseline differs from the conductor's pinned goal identity.");
+            if (squashed)
+                (diagnostic ?? Console.Error.WriteLine)($"Worker build scope dispatch base {previous.DispatchBase} is no longer an ancestor of HEAD {head}; replacing the scope.");
         }
         var baseline = pinnedGoalBaseline ?? previous?.GoalBaseline ?? Git(root, "merge-base", head,
             TrunkBranchName.Validate(integrationBranch)).Trim();
@@ -53,6 +58,18 @@ public static class WorkerBuildProjectScope
             File.Move(temporary, path, overwrite: true);
         }
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
+
+        static bool DispatchBaseSquashedOff(string root, string head, Metadata previous)
+        {
+            foreach (var revision in new[] { previous.GoalBaseline, previous.DispatchBase })
+                if (revision is null || revision.Length is not (40 or 64) || !revision.All(Uri.IsHexDigit))
+                    return false;
+
+            var baseline = GitCli.RunForRepository(root, "merge-base", "--is-ancestor", previous.GoalBaseline, head);
+            if (!baseline.Succeeded || baseline.DrainTimedOut) return false;
+            var dispatch = GitCli.RunForRepository(root, "merge-base", "--is-ancestor", previous.DispatchBase, head);
+            return dispatch.ExitCode == 1 && !dispatch.DrainTimedOut;
+        }
     }
 
     public static WorkerBuildScopeIdentity ReadDispatchIdentity(string root, string? expectedDispatchBase = null)
