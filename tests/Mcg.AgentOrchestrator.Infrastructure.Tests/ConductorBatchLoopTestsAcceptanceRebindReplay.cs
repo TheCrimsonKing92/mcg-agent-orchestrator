@@ -501,9 +501,12 @@ public sealed class ConductorBatchLoopTestsAcceptanceRebindReplay : ConductorBat
             }
             Configure();
             var seed = Coordinator.Evaluate(ConductorParallelAcceptanceCandidate.Create(Goal, 0, Scopes, Candidate, Main),
-                ConductorAutonomyPolicy.Conservative, (candidate, _, _, _, _) =>
-                    ConductorParallelAcceptanceRunResult.Accepted(candidate, new AcceptanceVerificationSummary(true, unmetCriteria,
-                        BranchHeadSha: Candidate, MainHeadSha: Main, TestResultPaths: TrxPaths)));
+                ConductorAutonomyPolicy.Conservative, (candidate, _, lease, _, _) =>
+                {
+                    Assert.Null(lease);
+                    return ConductorParallelAcceptanceRunResult.Accepted(candidate, new AcceptanceVerificationSummary(true, unmetCriteria,
+                        BranchHeadSha: Candidate, MainHeadSha: Main, TestResultPaths: TrxPaths));
+                });
             Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Completed, seed.Kind);
             _receiptPath = seed.Attempt.MetadataPath;
             Coordinator.MarkReconciled(seed.Attempt);
@@ -518,14 +521,18 @@ public sealed class ConductorBatchLoopTestsAcceptanceRebindReplay : ConductorBat
         private void Configure()
         {
             Coordinator = new ConductorParallelAcceptanceAttemptCoordinator(Path.GetDirectoryName(AttemptDirectory)!, TrunkBranchName.Default,
-                runInline: true, isProcessAlive: _ => true);
+                runInline: true, isProcessAlive: _ => true,
+                // These runners only publish fixture evidence; no build/test process
+                // executes, so seeding and fresh-gate controls need no machine build permit.
+                acquireStableSlotLease: (_, _) => null);
             Driver = MakeDriver(
                 getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true, HasOpenClarification: HumanHold,
                     IsMerged: _native && GoalOperationJournal.Read(Root, Goal.Id).Entries.Any(entry =>
                         entry.Operation == "conductor:land" && entry.Status == GoalOperationStatus.Completed)),
                 dispatchAndStart: _ => { WorkerLaunches++; return DispatchStartOutcome.Started(); },
-                runAcceptanceWithSlot: (_, _) =>
+                runAcceptanceWithSlot: (_, lease) =>
                 {
+                    Assert.Null(lease);
                     GateLaunches++;
                     BeforeGate?.Invoke();
                     return new AcceptanceVerificationSummary(true, [], BranchHeadSha: CurrentCandidate, MainHeadSha: CurrentMain,
