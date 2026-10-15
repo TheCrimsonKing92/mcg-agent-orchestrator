@@ -596,22 +596,29 @@ internal sealed partial class ConductorDriver
         }
 
         var dispositions = receipt.RequestDispositions ?? [];
-        var executedDispositions = dispositions
+        var hasCandidateOmissions = (receipt.Arms ?? []).Any(arm =>
+            arm.Arm == FindingEvidenceArm.Candidate && arm.NotRunSelections.Count > 0);
+        // An incomplete request can still contribute its actually executed classes.
+        // ExecutedRequest excludes omissions; retained GREEN TRX evidence below proves the remainder.
+        var coverageDispositions = dispositions
             .Where(disposition =>
-                disposition.Disposition.StartsWith("executed-", StringComparison.Ordinal))
+                disposition.Disposition.StartsWith("executed-", StringComparison.Ordinal) ||
+                (hasCandidateOmissions && disposition is
+                    { Disposition: "incomplete", Reason: "candidate-selections-not-executed", Decision: FindingEvidenceRequestDecision.PendingExecution } &&
+                 disposition.SourceReceiptIds?.Contains(receipt.ReceiptId, StringComparer.Ordinal) == true))
             .ToArray();
-        var executedDispositionCoverage = executedDispositions.SelectMany(disposition =>
+        var executedDispositionCoverage = coverageDispositions.SelectMany(disposition =>
                 FindingEvidenceRoundPlanner.ExpandSelections(ParseDispositionSelections(disposition.RequestIdentity)))
             .Select(FormatFindingEvidenceSelection).ToHashSet(StringComparer.Ordinal);
         if (receipt is not { Accepted: true, Passed: true } ||
             !string.Equals(receipt.CandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase) ||
             !string.Equals(receipt.ExecutionBasisIdentity, executionBasisIdentity, StringComparison.Ordinal) ||
-            executedDispositions.Length == 0 ||
+            coverageDispositions.Length == 0 ||
             !executedDispositionCoverage.IsSupersetOf(receiptCoverage) ||
             dispositions.Any(disposition =>
-                executedDispositions.Any(executed =>
+                coverageDispositions.Any(executed =>
                     string.Equals(executed.RequestIdentity, disposition.RequestIdentity, StringComparison.Ordinal)) &&
-                !disposition.Disposition.StartsWith("executed-", StringComparison.Ordinal)))
+                !coverageDispositions.Contains(disposition)))
         {
             return false;
         }
