@@ -1145,7 +1145,8 @@ internal sealed partial class ConductorBatchLoop
             var glanceDurationStats = _progressiveReviewGlances is null
                 ? Array.Empty<TaskDurationStatsRecord>()
                 : kernel.BuildTaskDurationStats();
-            foreach (var goal in eligible)
+            var walkOrder = GoalWalkOrder.Order(eligible);
+            foreach (var goal in walkOrder)
             {
                 if (isDeferringMaxDurationStop &&
                     !parallelLandingResults.ContainsKey(goal.Id.Value))

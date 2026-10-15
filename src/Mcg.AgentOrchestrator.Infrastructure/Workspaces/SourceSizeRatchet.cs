@@ -178,7 +178,9 @@ internal static class SourceSizeRatchet
             // Goal 8cc45279 extracts live-gate drain hold policy and polling to ConductorSelfRelaunchDrainHold; measured 2694.
             // Goal f8d371e2 adds the tick-local live suppression closure and admission checks where
             // pendingSelfRelaunch is owned; hold formatting remains separately owned. Measured 2707, no headroom.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2707),
+            // Goal 920a6429 adds one serial-walk binding to the separately owned GoalWalkOrder;
+            // acceptance admission keeps the original eligible list. Measured 2708 lines; no extra headroom.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2708),
             // Goal 354522f1 tick persistence partial measured at 467 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.TickPersistence.cs", 467),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.DependencyReadmission.cs", 375),
@@ -499,9 +501,10 @@ internal static class SourceSizeRatchet
             // Integrated size is 12167 lines in the same 30 partials; no extra headroom.
             // Goal 109d0d1d adds the backlog-list JSON branch beside the existing claim/readiness
             // resolution so both routes share filtering and human rendering stays byte-identical.
-            // Envelope serialization remains in BacklogListAgentReadView; measured 12190 lines
-            // across the same 30 partial files, with no extra headroom.
-            new SourceClassCeiling("CliCommandHandlers", 12190, 30),
+            // Envelope serialization remains in BacklogListAgentReadView. Goal 920a6429 adds only the
+            // two-line route to the separately owned CliGoalPriorityCommand; intent submission stays in
+            // that type. Measured 12192 lines across the same 30 partial files, with no extra headroom.
+            new SourceClassCeiling("CliCommandHandlers", 12192, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
             // Goal 03580ad1 extracts source-mutation edits to AcceptanceSourceMutation; measured 8938 lines in 31 partials.
@@ -532,7 +535,9 @@ internal static class SourceSizeRatchet
             // transitions require the kernel-owned clock, goal refresh and progress append; TaskSpec owns
             // retry admission accounting and Execution owns persisted denial evidence. Keeping the transaction
             // here preserves lifecycle ownership. Measured 9305 lines in 28 partials; no extra headroom.
-            new SourceClassCeiling("AgentOrchestratorKernel", 9305, 28),
+            // Goal 920a6429 keeps priority mutation and its audit append at the owning kernel lifecycle seam;
+            // parsing and ordering live in separate types. Measured 9315 lines in the same 28 partials; no headroom.
+            new SourceClassCeiling("AgentOrchestratorKernel", 9315, 28),
             // Goal d6033045 extracted the pre-admission receipt pass to PassedMergeTrainReceiptAdmission; goal 1d0f2317
             // adds one admission predicate to exclude stream-complete children before slot reservation. Measured 9255.
             // Goal 679eee57 added a one-line tick call to the separately owned ConductorExperimentWatch (+1); goal 80de5cb2 extracted
@@ -549,7 +554,9 @@ internal static class SourceSizeRatchet
             // Goal 207369f1 counts pending completion builds in existing relaunch draining and prevents detaching them;
             // lifecycle remains in CompletionBuildEvidenceCoordinator. Measured 9270 across the same 55 partials; no headroom.
             // Integrated receipt replay and completion-build draining: measured 9239 across 54 partial files, no headroom.
-            new SourceClassCeiling("ConductorBatchLoop", 9239, 54),
+            // Goal 920a6429 adds one binding to GoalWalkOrder for the serial walk only;
+            // sorting lives in that collaborator. Measured 9240 lines in the same 54 partials; no headroom.
+            new SourceClassCeiling("ConductorBatchLoop", 9240, 54),
             // Goal ec8903af moved the goal-prefix parser to CliGoalPrefixArguments.
             // Goal cd1f6380 adds four lines at the owning transaction boundary, forwarding both
             // registrars and invoking actions after commit; list behavior lives in PostCommitActions.
@@ -558,8 +565,9 @@ internal static class SourceSizeRatchet
             // Measured 5964 total lines across the same 18 partial files; no extra headroom.
             // Goal ddab9e7f adds three lines to forward the startup loop lease and run
             // WorkspaceStoreSetup under that ownership; migration planning stays in WorkspaceStoreSetup.
-            // Measured 5967 total lines across the same 18 partial files; no extra headroom.
-            new SourceClassCeiling("CliPersistentStateRunner", 5967, 18),
+            // Goal 920a6429 routes priority submission without a kernel-save transaction, preventing stale writes;
+            // the command owns intent submission. After integrating main, measured 5972 lines in the same 18 partials; no headroom.
+            new SourceClassCeiling("CliPersistentStateRunner", 5972, 18),
             // Goal 5935c270 extracts subscription-plan output into SubscriptionPlanTextView
             // (2026-10-09 console architecture review, finding 4, taming slice 13).
             // Goal c0ff6203 extracts six small text views (taming slice 14).
@@ -570,7 +578,9 @@ internal static class SourceSizeRatchet
             // Goal f968e488 extracts supervisor and acceptance queue output (slice 14): measured 2804 lines in 36 partials; no headroom.
             // Goal 85702c95 extracts gate-status rendering to GateStatusTextView; measured 2767 lines in 36 partials, no headroom.
             // Goal 7ba60507 extracts process-log presentation to ProcessLogsTextView; measured 2727 lines in 35 partials, no headroom.
-            new SourceClassCeiling("ConsoleViews", 2727, 35),
+            // Goal 920a6429 adds conditional priority text at the existing board and detail rendering seams;
+            // Normal output stays identical. Measured 2730 lines in the same 35 partials; no headroom.
+            new SourceClassCeiling("ConsoleViews", 2730, 35),
         });
 
     internal static IReadOnlyList<SourceSizeViolation> EvaluateClasses(
