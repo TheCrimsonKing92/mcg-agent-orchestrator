@@ -26,6 +26,8 @@ internal static class ConductEventOperatorClassifier
             "cohort-attribution-retracted" when StartsWithToken("COHORT_ATTRIBUTION_RETRACTED") => Decision,
             "host-health" when StartsWithToken("HOST_HEALTH_DEGRADED") => Decision,
             "host-health" when StartsWithToken("HOST_HEALTH_RECOVERED") => Outcome,
+            "program-health" when StartsWithToken("PROGRAM_HEALTH_ALERT") => Decision,
+            "program-health" when StartsWithToken("PROGRAM_HEALTH_CLEARED") => Outcome,
             "remote-executor-health" when StartsWithToken("REMOTE_EXECUTOR_WARNING") => Decision,
             "remote-executor-health" when StartsWithToken("REMOTE_EXECUTOR_RECOVERED") => Outcome,
             "state-log-divergence" when StartsWithToken("STATE_LOG_DIVERGENCE") =>

@@ -491,7 +491,9 @@ internal static class SourceSizeRatchet
             // Goal ffa0471e validates an exact completion-build selector and enqueues typed cancellation without
             // stopping a historical worker; lifecycle remains in the coordinator.
             // Integrated size is 12167 lines in the same 30 partials; no extra headroom.
-            new SourceClassCeiling("CliCommandHandlers", 12167, 30),
+            // Goal f3df9ed9 adds two wiring lines; program-health logic lives in ConductorProgramHealthMonitor.
+            // Measured 12169 lines in the same 30 partials; no extra headroom.
+            new SourceClassCeiling("CliCommandHandlers", 12169, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
             // Goal 03580ad1 extracts source-mutation edits to AcceptanceSourceMutation; measured 8938 lines in 31 partials.

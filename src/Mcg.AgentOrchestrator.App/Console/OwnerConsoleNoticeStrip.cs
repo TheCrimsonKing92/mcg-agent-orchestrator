@@ -1,7 +1,7 @@
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 internal enum OwnerConsoleNoticeSeverity { Success, Failure }
-internal enum OwnerConsoleNoticeSource { Refresh, Action }
+internal enum OwnerConsoleNoticeSource { Refresh, Action, ProgramHealth }
 
 internal sealed record OwnerConsoleNotice(string Text, DateTimeOffset RaisedAt,
     OwnerConsoleNoticeSeverity Severity, OwnerConsoleNoticeSource Source);
@@ -48,6 +48,15 @@ internal sealed class OwnerConsoleNoticeStrip(TimeProvider clock)
 
     internal void RefreshSucceeded() => Recover(OwnerConsoleNoticeSource.Refresh);
     internal void ActionStarted() => Recover(OwnerConsoleNoticeSource.Action);
+
+    internal void SetProgramHealth(string? text)
+    {
+        var current = _entries.Where(entry => entry.Source == OwnerConsoleNoticeSource.ProgramHealth).ToArray();
+        if (text is not null && current.Length == 1 && current[0].Text == text) return;
+        _entries.RemoveAll(entry => entry.Source == OwnerConsoleNoticeSource.ProgramHealth);
+        if (text is not null)
+            _entries.Insert(0, new(text, clock.GetLocalNow(), OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.ProgramHealth));
+    }
 
     private void Recover(OwnerConsoleNoticeSource source) =>
         _entries.RemoveAll(entry => entry.Severity == OwnerConsoleNoticeSeverity.Failure && entry.Source == source);
