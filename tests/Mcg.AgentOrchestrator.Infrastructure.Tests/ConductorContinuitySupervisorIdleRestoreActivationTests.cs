@@ -102,7 +102,7 @@ public sealed class ConductorContinuitySupervisorIdleRestoreActivationTests
                 "head-next", "head-next", "LOOP_START selfCheck=true", _successorLease);
             var supervisor = new ConductorContinuitySupervisor(Host, Events,
                 timeProvider: Deadlines,
-                stageSuccessor: _ => successor, activationHealthyTicks: 3,
+                inspectStores: () => [new("fixture-store", "fixture.db", 1, 1)], stageSuccessor: _ => successor, activationHealthyTicks: 3,
                 activationDelay: Deadlines.Delay,
                 activationStallTimeout: TimeSpan.FromMinutes(2),
                 raiseActivationAttention: Attention.Add);

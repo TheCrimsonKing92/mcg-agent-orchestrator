@@ -155,7 +155,7 @@ internal static class ConductorStatusSnapshotReader
         }
         catch (InvalidOperationException ex)
         {
-            return new("unavailable", $"setup required: {ex.Message}", []);
+            return new("unavailable", StoreSchemaDiagnostics.Message(ex), []);
         }
         catch (Exception ex) when (ex is SqliteException or IOException or UnauthorizedAccessException)
         {

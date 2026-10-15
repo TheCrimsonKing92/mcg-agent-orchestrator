@@ -98,7 +98,7 @@ public sealed class ConductorBatchLoopTestsActivationHeartbeatBeforeSleepOffTick
         using var lease = new MemoryStream();
         using var supervisorCancellation = new CancellationTokenSource();
         var supervisor = new ConductorContinuitySupervisor(host, events,
-            stageSuccessor: _ => Build("cadence-heartbeat", lease),
+            inspectStores: () => [new("fixture-store", "fixture.db", 1, 1)], stageSuccessor: _ => Build("cadence-heartbeat", lease),
             activationHealthyTicks: 1,
             activationStallTimeout: TimeSpan.FromMinutes(2),
             activationDelay: (_, _) =>

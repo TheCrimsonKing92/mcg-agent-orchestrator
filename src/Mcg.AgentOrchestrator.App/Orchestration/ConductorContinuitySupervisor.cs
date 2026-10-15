@@ -92,7 +92,8 @@ internal sealed partial class ConductorContinuitySupervisor(
     IConductorDiagnosticDumpCapture? dumpCapture = null,
     ConductorSupervisorHandoffOptions? supervisorHandoff = null,
     TimeSpan? outputSilenceBudget = null,
-    Action<ProtectedProcessIdentity>? bindProtectedIdentity = null)
+    Action<ProtectedProcessIdentity>? bindProtectedIdentity = null,
+    Func<IReadOnlyList<StoreSetupPlanEntry>>? inspectStores = null)
 {
     public const string ChildFlag = "--continuity-child";
     public const string ExitArtifactFlag = "--continuity-exit-artifact";
@@ -145,7 +146,25 @@ internal sealed partial class ConductorContinuitySupervisor(
         ConductorActivationBuild? failedActivationBuild = null;
         string? blockedActivationCommit = null;
         var restoring = false;
+        IReadOnlyList<StoreSetupPlanEntry>? fallbackStoreObservation = null;
         var attempt = 0;
+        bool CanRestore(int processId, string stdout, string stderr)
+        {
+            try
+            {
+                var now = inspectStores?.Invoke();
+                if (now is null || fallbackStoreObservation is null || !fallbackStoreObservation.SequenceEqual(now))
+                    throw new InvalidOperationException("Retained runtime schema compatibility is unknown or changed during activation; use a compatible runtime or independently verified recovery.");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                EmitHandoff("failed", attempt,
+                    $"LOOP_HANDOFF_FAILED attempt={attempt} phase=activation fallbackSuppressed=true schemaCompatibility={Sanitize(ex.Message)}",
+                    processId, stdout, stderr);
+                return false;
+            }
+        }
         var activationTickGapTimeout = ResolveActivationTickGapTimeout(args);
         InitializeOutputSilenceBudget(args);
 
@@ -194,10 +213,42 @@ internal sealed partial class ConductorContinuitySupervisor(
             var outputPrefix = $"conduct-supervisor-{stamp}-{attempt:D3}-{Guid.NewGuid():N}";
             var stdoutPath = activeChild?.StdoutPath ?? Path.Combine(outputDirectory, $"{outputPrefix}.out.log");
             var stderrPath = activeChild?.StderrPath ?? Path.Combine(outputDirectory, $"{outputPrefix}.err.log");
+            if (restoring && !CanRestore(0, stdoutPath, stderrPath)) return 1;
             if (activeChild is null)
             {
                 PrepareOutputFile(stdoutPath);
                 PrepareOutputFile(stderrPath);
+            }
+            var successor = activeChild is null ? pendingSuccessor : null;
+            if (successor is not null)
+            {
+                // Observe with the retained build before running any successor. An
+                // unavailable inventory suppresses activation, not the retained loop.
+                string? preflightFailure = null;
+                try
+                {
+                    fallbackStoreObservation = inspectStores?.Invoke();
+                    if (fallbackStoreObservation is null) preflightFailure = "schemaCompatibility=unknown";
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    preflightFailure = $"schemaCompatibility=unknown reason={Sanitize($"{ex.GetType().Name}:{ex.Message}")}";
+                }
+                if (preflightFailure is not null)
+                {
+                    EmitHandoff("failed", attempt,
+                        $"LOOP_HANDOFF_FAILED attempt={attempt} phase=preflight {preflightFailure} activationSuppressed=true",
+                        0, stdoutPath, stderrPath);
+                    blockedActivationCommit = successor.RepositoryHead;
+                    successor.RunDirectoryLease?.Dispose();
+                    pendingSuccessor = null;
+                    successor = null;
+                    fallbackStoreObservation = null;
+                }
             }
             var childArgs = args
                 .Where(arg => !arg.Equals(ChildFlag, StringComparison.OrdinalIgnoreCase))
@@ -208,11 +259,11 @@ internal sealed partial class ConductorContinuitySupervisor(
                     ExitArtifactFlag,
                     artifactPath
                 ])
+                .Concat(activeChild is null && pendingSuccessor is not null ? new[] { "--require-current-stores" } : Array.Empty<string>())
                 .ToArray();
             ConductorSupervisorProcessResult result;
             string? launchFailure = null;
             string? stallFailure = null;
-            var successor = activeChild is null ? pendingSuccessor : null;
             var activationMonitor = new ActivationMonitor(_timeProvider.GetUtcNow);
             var liveProcessId = 0;
             var readiness = successor is null
@@ -413,6 +464,11 @@ internal sealed partial class ConductorContinuitySupervisor(
                             }
 
                             blockedActivationCommit = candidateBuild.CommitSha;
+                            if (!CanRestore(activation.ProcessResult?.ProcessId ?? 0, stdoutPath, stderrPath))
+                            {
+                                candidateBuild.Lease?.Dispose();
+                                return 1;
+                            }
                             failedActivationBuild = candidateBuild;
                             restoring = true;
                             candidateBuild.Lease?.Dispose();
@@ -516,6 +572,7 @@ internal sealed partial class ConductorContinuitySupervisor(
                         pendingSuccessor = null;
                         successor.RunDirectoryLease?.Dispose();
                         var failed = ConductorActivationBuild.FromSuccessor(successor, _dotnetPath);
+                        if (!CanRestore(stoppedResult?.ProcessId ?? 0, stdoutPath, stderrPath)) return 1;
                         blockedActivationCommit = failed.CommitSha;
                         failedActivationBuild = failed;
                         restoring = true;
