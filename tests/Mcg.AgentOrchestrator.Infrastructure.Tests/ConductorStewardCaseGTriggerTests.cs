@@ -138,7 +138,8 @@ internal sealed class StewardCaseGHarness : IDisposable
     internal const string Sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     internal const string WorkerResult = "WORKER_RESULT:\nfiles: none\ntests: deferred - ExampleTests\ncommit: none\nblockers: none\nEND_WORKER_RESULT";
 
-    internal StewardCaseGHarness(int quietMinutes = 31, Func<GoalId, long?>? version = null)
+    internal StewardCaseGHarness(int quietMinutes = 31, Func<GoalId, long?>? version = null,
+        Action? beforeConductAppendCommit = null)
     {
         Directory.CreateDirectory(Root);
         Kernel = new AgentOrchestratorKernel(Clock);
@@ -162,7 +163,8 @@ internal sealed class StewardCaseGHarness : IDisposable
         Host = new ConductorStewardHost(Triggers, new ConductorStewardTriggerDetector(), Model, Intents,
             new AdjudicationEvidenceResolver(Root), version ?? (_ => 7), _ => Root,
             new GoalLifecycleEventWriter(Path.Combine(Root, "lifecycle")),
-            new ConductEventLogWriter(ConductPath, utcNow: () => Clock.UtcNow),
+            new ConductEventLogWriter(ConductPath, utcNow: () => Clock.UtcNow,
+                beforeAppendCommit: beforeConductAppendCommit),
             utcNow: () => Clock.UtcNow, caseG: CaseG);
     }
 

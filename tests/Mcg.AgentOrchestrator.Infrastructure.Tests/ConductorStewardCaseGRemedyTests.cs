@@ -52,6 +52,44 @@ public sealed class ConductorStewardCaseGRemedyTests
     }
 
     [Xunit.Fact]
+    public async Task Conduct_log_failure_preserves_submitted_remedy_and_repeat_escalation()
+    {
+        var appendAttempts = 0;
+        using var h = new StewardCaseGHarness(beforeConductAppendCommit: () =>
+        {
+            if (++appendAttempts == 1) throw new IOException("conduct append unavailable");
+        });
+        var trigger = Assert.Single(h.CaseG.Detect(h.Goal, h.Clock.UtcNow));
+
+        var error = Assert.Throws<IOException>(() => h.Host.ServiceTick(h.Kernel));
+
+        Assert.Equal("conduct append unavailable", error.Message);
+        var intent = Assert.Single(await h.Intents.ListForGoalAsync(h.Goal.Id.Value));
+        var stored = h.Triggers.Observe(trigger);
+        Assert.Equal("route-submitted", stored.Outcome);
+        Assert.Equal(intent.Id, stored.IntentId);
+        Assert.Equal(1, h.Triggers.CountRemedies(Kind));
+        h.Host.ServiceTick(h.Kernel);
+        Assert.Single(await h.Intents.ListForGoalAsync(h.Goal.Id.Value));
+
+        var coordinator = Coordinator(h, h.Intents, CollaborationItemStore.ForDirectory(h.Root), _ => false);
+        Assert.True(coordinator.ExecutePending(h.Kernel, h.Goal).MutatedGoalState);
+        coordinator.CompletePersisted([h.Goal.Id]);
+        Assert.Equal(OperatorIntentStatus.Applied, (await h.Intents.GetAsync(intent.Id))!.Status);
+        Assert.True(h.Kernel.BeginGoalAcceptanceVerification(h.Goal.Id, "gate started again"));
+        h.Clock.Advance(TimeSpan.FromMinutes(31));
+
+        h.Host.ServiceTick(h.Kernel);
+
+        Assert.Equal("route-applied", h.Triggers.Observe(trigger).Outcome);
+        Assert.Equal("steward-owner-question", h.Goal.CurrentHold?.State);
+        Assert.Single(await h.Intents.ListForGoalAsync(h.Goal.Id.Value));
+        Assert.Equal(1, h.Triggers.CountRemedies(Kind));
+        Assert.Equal(0, h.Model.Calls);
+        Assert.Null(h.Host.CurrentRound);
+    }
+
+    [Xunit.Fact]
     public async Task Twenty_nine_minutes_queues_no_remedy()
     {
         using var h = new StewardCaseGHarness(quietMinutes: 29);

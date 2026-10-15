@@ -245,6 +245,7 @@ internal sealed partial class ConductorStewardHost
                 continue;
             }
             if (stored.Status != "pending") continue;
+            OperatorIntentRecord intent;
             try
             {
                 var version = _version(goal.Id);
@@ -262,20 +263,22 @@ internal sealed partial class ConductorStewardHost
                     Precedent: $"steward-case=G trigger={trigger.Identity}",
                     Precondition: AdjudicationPrecondition.Capture(goal, task));
                 var intentId = Guid.NewGuid().ToString("N");
-                var intent = _intents.EnqueueAsync(new OperatorIntentRecord(
+                intent = _intents.EnqueueAsync(new OperatorIntentRecord(
                     intentId, $"steward-{stored.Key}", OperatorIntentVerbs.Adjudicate,
                     trigger.GoalId, trigger.TaskId, JsonSerializer.Serialize(payload, _json), [],
                     "steward", "conductor-steward", OperatorIntentAdjudication.StewardAssurance,
                     now, ActorKind: OperatorActorKind.Agent)).GetAwaiter().GetResult();
                 _triggers.MarkServiced(stored.Key, "route-submitted", intent.Id);
-                Record(trigger, "reopen-regate", "reopen-regate-submitted", intent.Id);
             }
             catch (Exception ex)
             {
                 // A deterministic trigger must not remain available to the model-round claimer.
                 _triggers.MarkServiced(stored.Key, "no-action", null);
                 Record(trigger, "no-action", $"case-G-failure:{ex.GetType().Name}", null);
+                continue;
             }
+            // Logging failure must not erase the submitted remedy's reconciliation identity.
+            Record(trigger, "reopen-regate", "reopen-regate-submitted", intent.Id);
         }
     }
 
