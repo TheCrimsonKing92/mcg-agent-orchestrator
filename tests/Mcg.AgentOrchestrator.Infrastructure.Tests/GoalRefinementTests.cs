@@ -508,15 +508,8 @@ public sealed class GoalRefinementTests
         ]));
         var kernel = new AgentOrchestratorKernel();
 
-        var plan = GoalObjectivePlanner.Build(
-            "Research and plan a focused implementation with tests.",
-            GoalIntakePipeline.FiveRole);
-        var goal = GoalLifecycleCommands.CreateAndActivateGoal(
-            kernel,
-            AgentCatalog.Default().Agents,
-            plan,
-            workspace,
-            providers);
+        var goal = ResearcherGoalPlanFixture.CreateAndActivate(kernel, AgentCatalog.Default().Agents,
+            "Research and plan a focused implementation with tests.");
 
         Xunit.Assert.Null(goal.RefinedSpec);
         Xunit.Assert.False(provider.Started.Task.IsCompleted);
@@ -862,23 +855,20 @@ public sealed class GoalRefinementTests
     public void GoalIntakePipelineRequestParserAcceptsDocumentedValuesCaseInsensitively()
     {
         Xunit.Assert.Equal(GoalIntakePipelineRequest.Auto, GoalIntakePipelineRequestParser.Parse("AUTO"));
-        Xunit.Assert.Equal(GoalIntakePipelineRequest.FiveRole, GoalIntakePipelineRequestParser.Parse("Five-Role"));
         Xunit.Assert.Equal(GoalIntakePipelineRequest.Scout, GoalIntakePipelineRequestParser.Parse("Scout"));
         Xunit.Assert.Equal(GoalIntakePipelineRequest.DeveloperReviewer, GoalIntakePipelineRequestParser.Parse("Developer-Reviewer"));
         Xunit.Assert.Equal(GoalIntakePipelineRequest.DeveloperOnly, GoalIntakePipelineRequestParser.Parse("Developer-Only"));
         Xunit.Assert.Null(GoalIntakePipelineRequest.Auto.ToPipelineOverride());
-        Xunit.Assert.Equal(GoalIntakePipeline.FiveRole, GoalIntakePipelineRequest.FiveRole.ToPipelineOverride());
         Xunit.Assert.Equal(GoalIntakePipeline.Scout, GoalIntakePipelineRequest.Scout.ToPipelineOverride());
         Xunit.Assert.Equal(GoalIntakePipeline.DeveloperReviewer, GoalIntakePipelineRequest.DeveloperReviewer.ToPipelineOverride());
         Xunit.Assert.Equal(GoalIntakePipeline.DeveloperOnly, GoalIntakePipelineRequest.DeveloperOnly.ToPipelineOverride());
         Xunit.Assert.Equal("auto", GoalIntakePipelineRequest.Auto.ToCanonicalValue());
-        Xunit.Assert.Equal("five-role", GoalIntakePipelineRequest.FiveRole.ToCanonicalValue());
         Xunit.Assert.Equal("scout", GoalIntakePipelineRequest.Scout.ToCanonicalValue());
         Xunit.Assert.Equal("developer-reviewer", GoalIntakePipelineRequest.DeveloperReviewer.ToCanonicalValue());
         Xunit.Assert.Equal("developer-only", GoalIntakePipelineRequest.DeveloperOnly.ToCanonicalValue());
 
         var exception = Xunit.Assert.Throws<ArgumentException>(() => GoalIntakePipelineRequestParser.Parse("two-role"));
-        Xunit.Assert.Contains("auto, scout, five-role, developer-reviewer, developer-only", exception.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("auto, scout, developer-reviewer, developer-only", exception.Message, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
@@ -907,29 +897,6 @@ public sealed class GoalRefinementTests
     }
 
     [Xunit.Fact]
-    public void GoalLifecycleCommandsForcedFiveRoleUsesDisplayedPlanAndPersistsExactOrder()
-    {
-        const string objective = "Update security token handling in src/Mcg.AgentOrchestrator.App/AuthPolicy.cs with focused tests.";
-        var automaticPlan = GoalObjectivePlanner.Build(objective);
-        var forcedPlan = GoalObjectivePlanner.Build(objective, GoalIntakePipeline.FiveRole);
-        var kernel = new AgentOrchestratorKernel();
-
-        var output = AsyncLocalConsoleRouter.Capture(() => ConsoleViews.PrintGoalObjectivePlan(forcedPlan));
-        var goal = GoalLifecycleCommands.CreateAndActivateGoal(kernel, AgentCatalog.Default().Agents, forcedPlan);
-
-        Xunit.Assert.Equal(GoalIntakePipeline.Scout, automaticPlan.PipelineDecision.Pipeline);
-        Xunit.Assert.False(automaticPlan.PipelineDecision.IsOverride);
-        Xunit.Assert.Equal(
-            [AgentRole.Researcher, AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
-            goal.Tasks.Select(task => task.RequiredRole));
-        Xunit.Assert.Contains("\"selectionSource\":\"explicitly-required\"", output, StringComparison.Ordinal);
-        Xunit.Assert.Contains("\"orderedRoles\":[\"Researcher\",\"Planner\",\"Developer\",\"Tester\",\"Reviewer\"]", output, StringComparison.Ordinal);
-        Xunit.Assert.Contains(goal.Timeline, evt =>
-            evt.Kind == ProgressKind.GoalPolicyDecision &&
-            evt.Message.Contains("Intake pipeline decision (override): five-role", StringComparison.Ordinal));
-    }
-
-    [Xunit.Fact]
     public void GoalLifecycleCommandsUnsatisfiedForcedPipelineFailsBeforeGoalMutation()
     {
         var kernel = new AgentOrchestratorKernel();
@@ -938,7 +905,7 @@ public sealed class GoalRefinementTests
             .ToArray();
         var plan = GoalObjectivePlanner.Build(
             "Update src/Mcg.AgentOrchestrator.App/Cli/CliCommandHelp.cs with focused tests.",
-            GoalIntakePipeline.FiveRole);
+            GoalIntakePipeline.Scout);
 
         var exception = Xunit.Assert.Throws<InvalidOperationException>(() =>
             GoalLifecycleCommands.CreateAndActivateGoal(kernel, agentsWithoutTester, plan));
@@ -953,7 +920,7 @@ public sealed class GoalRefinementTests
     {
         const string objective = "Design the implementation and verification approach for a new operator workflow.";
         var automaticPlan = GoalObjectivePlanner.Build(objective);
-        var requestedPlan = GoalObjectivePlanner.Build(objective, GoalIntakePipeline.FiveRole);
+        var requestedPlan = GoalObjectivePlanner.Build(objective, GoalIntakePipeline.Scout);
         var kernel = new AgentOrchestratorKernel();
         var existingGoal = GoalLifecycleCommands.CreateAndActivateGoal(
             kernel,
@@ -965,7 +932,7 @@ public sealed class GoalRefinementTests
         var exception = Xunit.Assert.Throws<InvalidOperationException>(() =>
             GoalLifecycleCommands.EnsureRequestedPipelineMatchesPersistedGoal(requestedPlan, existingGoal));
 
-        Xunit.Assert.Contains("Requested workflow='five-role'", exception.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Requested workflow='scout'", exception.Message, StringComparison.Ordinal);
         Xunit.Assert.Contains("persisted workflow='scout'", exception.Message, StringComparison.Ordinal);
         Xunit.Assert.Contains("selectionSource='automatic'", exception.Message, StringComparison.Ordinal);
     }

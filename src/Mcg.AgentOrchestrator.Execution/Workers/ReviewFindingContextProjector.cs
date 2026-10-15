@@ -56,9 +56,11 @@ internal static class ReviewFindingContextProjector
     {
         ArgumentNullException.ThrowIfNull(goal);
         ArgumentNullException.ThrowIfNull(targetTask);
+        var latestVerification = targetTask.VerificationHistory.LastOrDefault();
         var rounds = goal.Tasks
             .SelectMany(task => task.VerificationHistory.Select((verification, historyIndex) => new RoundSource(task, verification, historyIndex)))
             .Where(source => (source.Verification.MergedReviewFindings?.Count ?? 0) > 0 ||
+                              source.Verification.ReviewFindingContractViolation?.Code == ReviewFindingConvergence.FindingFormatViolationCode ||
                               (source.Verification.FindingEvidenceReceipts?.Count ?? 0) > 0)
             .OrderBy(source => source.Verification.CompletedAt)
             .ThenBy(source => source.Task.Id.Value, StringComparer.Ordinal)
@@ -102,6 +104,8 @@ internal static class ReviewFindingContextProjector
                 .OrderBy(reference => reference.Sha256, StringComparer.Ordinal)
                 .ToArray();
             var verdictIdentity = BuildVerdictIdentity(source.Verification);
+            WorkerResultBlockers.TryReadReviewFindingFragments(source.Verification,
+                out var submittedFindings, out var submittedAnchors);
             var bodyBytes = JsonSerializer.SerializeToUtf8Bytes(new
             {
                 CandidateSha = source.Verification.ReviewedCommit,
@@ -109,6 +113,13 @@ internal static class ReviewFindingContextProjector
                 Findings = source.Verification.MergedReviewFindings ?? [],
                 TouchedAnchors = source.Verification.ReviewFindingTouchedAnchors ?? [],
                 source.Verification.ReviewFindingTouchProofDiagnostic,
+                source.Verification.ReviewFindingContractViolation,
+                // Immutable repair evidence is separate from the accepted canonical ledger.
+                RejectedFindingsJson = source.Verification.ReviewFindingContractViolation?.Code ==
+                    ReviewFindingConvergence.FindingFormatViolationCode ? submittedFindings : null,
+                RejectedTouchedAnchorsJson = source.Verification.ReviewFindingContractViolation?.Code ==
+                    ReviewFindingConvergence.FindingFormatViolationCode ? submittedAnchors : null,
+                SubstantiveVerdict = ReadSubstantiveVerdict(source.Verification),
                 ReceiptBodies = receiptReferences
             });
             var hash = WorkerContextArtifact.Hash(bodyBytes);
@@ -157,6 +168,12 @@ internal static class ReviewFindingContextProjector
         var activeRoundHashes = entries.Select(entry => entry.Round.Sha256)
             .Distinct(StringComparer.Ordinal)
             .ToHashSet(StringComparer.Ordinal);
+        foreach (var source in rounds.Where(source =>
+                     source.Task.Id == targetTask.Id && ReferenceEquals(source.Verification, latestVerification) &&
+                     source.Verification.ReviewFindingContractViolation?.Code == ReviewFindingConvergence.FindingFormatViolationCode))
+        {
+            activeRoundHashes.Add(roundReferenceBySource[source].Sha256);
+        }
         var activeReceiptHashes = entries.SelectMany(entry => entry.ReceiptBodies)
             .Select(reference => reference.Sha256)
             .Concat(convergenceReceiptHashes)
@@ -175,7 +192,6 @@ internal static class ReviewFindingContextProjector
             .Select(body => new ReviewFindingContentReference(body.Sha256, body.LogicalIdentity))
             .ToArray();
 
-        var latestVerification = targetTask.VerificationHistory.LastOrDefault();
         var repairCheckpoint = targetTask.PendingReviewFindingRepairCheckpoint;
         var repairRequested = targetTask.PendingRetryRoundKind == RetryRoundKind.Mechanical &&
                               latestVerification?.ReviewFindingContractViolation is not null;
@@ -228,7 +244,7 @@ internal static class ReviewFindingContextProjector
                 .ToArray();
             var envelope = ReviewFindingContractRepairEnvelopeBuilder.Build(
                 currentCandidateSha!.Trim(),
-                verification.CompletionVerdictRule ?? $"exit-code:{verification.ExitCode}",
+                ReadSubstantiveVerdict(verification),
                 entries,
                 verification.ReviewFindingTouchedAnchors ?? [],
                 verification.ReviewFindingContractViolation!,
@@ -646,6 +662,12 @@ internal static class ReviewFindingContextProjector
             verification.ExitCode.ToString(System.Globalization.CultureInfo.InvariantCulture),
             verification.CompletionVerdictRule ?? string.Empty,
             verification.ReviewFindingContractViolation?.Code ?? string.Empty)));
+
+    private static string ReadSubstantiveVerdict(TaskVerificationRecord verification) =>
+        WorkerResultBlockers.TryFindPassVerdict(verification) ? "pass" :
+        WorkerResultBlockers.TryFindNeedsWorkVerdict(verification, out _) ? "needs-work" :
+        WorkerResultBlockers.TryFindBlockedAtCapVerdict(verification, out _) ? "blocked-at-cap" :
+        verification.CompletionVerdictRule ?? $"exit-code:{verification.ExitCode}";
 
     private static WorkerContextPreparationException PreparationFailure(string reason, string detail) =>
         new(new LogicalArtifactIdentity("goal/review-finding-history.json"), reason, detail);

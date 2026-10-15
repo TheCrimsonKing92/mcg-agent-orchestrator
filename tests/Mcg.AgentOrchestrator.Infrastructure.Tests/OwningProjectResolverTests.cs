@@ -5,6 +5,21 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class OwningProjectResolverTests : WorkerDispatchTestSupport
 {
     [Xunit.Fact]
+    public void RepositoryNestedCliAndAcceptanceProjectsOwnTheirSources()
+    {
+        var root = CreateTempDirectory();
+        const string parent = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests";
+        WriteProject(root, parent + "/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+            "<Compile Remove=\"Cli\\**\\*.cs\" /><Compile Remove=\"Acceptance\\**\\*.cs\" />");
+        WriteProject(root, parent + "/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj");
+        WriteProject(root, parent + "/Acceptance/Mcg.AgentOrchestrator.Infrastructure.Acceptance.Tests.csproj");
+        Xunit.Assert.Equal(
+            [parent + "/Acceptance/Mcg.AgentOrchestrator.Infrastructure.Acceptance.Tests.csproj",
+             parent + "/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj"],
+            Required(root, parent + "/Cli/CliFeatureTests.cs", parent + "/Acceptance/AcceptanceFeatureTests.cs"));
+    }
+
+    [Xunit.Fact]
     public void NestedProject_SeparatesParentAndCliSources()
     {
         var root = CreateTempDirectory();

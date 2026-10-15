@@ -98,6 +98,10 @@ internal sealed partial class OperatorIntentCoordinator
                 }
             })
         {
+            CancelLatestProcess = (kernel, goalId, taskId) =>
+                OperatorCancelAwareDispatchRunner.ForWorkspace(workspace).CancelLatestProcess(kernel, goalId, taskId),
+            CancelCompletionBuild = (kernel, goalId, taskId, target) =>
+                OperatorCancelAwareDispatchRunner.ForWorkspace(workspace).CancelCompletionBuildEvidence(kernel, goalId, taskId, target),
             Lessons = new OperatorLessonIntentServices(
                 new SqliteOperatorLessonStore(workspace.OperatorLessonsStorePath),
                 new AdjudicationEvidenceResolver(workspace.OrchestratorDirectory),
@@ -124,7 +128,9 @@ internal sealed partial class OperatorIntentCoordinator
             ExperimentFlags = new ExperimentFlagIntentHandler(workspace.ExperimentStorePath,
                 Path.Combine(workspace.OrchestratorDirectory, "conductor-policy.json"),
                 RemoteLaneExecutorConfiguration.ResolveStorePath(workspace.ExecutionDirectory)),
-            ExperimentDecisions = new ExperimentDecideIntentHandler(workspace.ExperimentStorePath)
+            ExperimentDecisions = new ExperimentDecideIntentHandler(workspace.ExperimentStorePath),
+            EpicOutcomes = new EpicOutcomeIntentHandler(workspace.PortfolioStorePath),
+            Directives = new OperatorDirectiveIntentHandler(workspace.OperatorDirectivesStorePath)
         };
     }
 
@@ -177,6 +183,17 @@ internal sealed partial class OperatorIntentCoordinator
                     recoveredOutcome,
                     _utcNow()).GetAwaiter().GetResult();
                 lines.Add($"OPERATOR_INTENT id={intent.Id} verb={intent.Verb} goal={goal.Id.Value[..8]} result=applied-recovered");
+                continue;
+            }
+
+            // Reconcile persisted effects before expiry: a crash after goal persistence is Applied,
+            // even when its original admission deadline has passed. Only this goal-state owner expires
+            // requests; dispatch never drops protection while an applier could still mutate the goal.
+            if (intent.AdmissionExpiresAt is { } deadline && deadline <= _utcNow())
+            {
+                _store.CompleteAsync(intent.Id, ClaimOwner, OperatorIntentStatus.Rejected,
+                    "Rejected: task-intent-admission-expired.", _utcNow()).GetAwaiter().GetResult();
+                lines.Add($"OPERATOR_INTENT id={intent.Id} verb={intent.Verb} goal={goal.Id.Value[..8]} result=rejected reason=task-intent-admission-expired");
                 continue;
             }
 

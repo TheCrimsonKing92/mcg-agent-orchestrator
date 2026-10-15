@@ -6,6 +6,7 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 internal static class CliReadOnlyCommandRunner
 {
     internal static bool IsReadOnlyCommand(IReadOnlyList<string> args) =>
+        EpicOutcomeMigrationProposals.IsCommand(args) ||
         CliFailureClustersQueryCommand.IsFailureClustersQueryCommand(args) ||
         CliLaneReuseShadowQueryCommand.IsLaneReuseShadowQueryCommand(args) ||
         CliRemoteExecutorsQueryCommand.IsCommand(args) ||
@@ -42,6 +43,7 @@ internal static class CliReadOnlyCommandRunner
         out bool changed,
         IClock? diagnosticsClock = null)
     {
+        if (EpicOutcomeMigrationProposals.IsCommand(args)) { EpicOutcomeMigrationProposals.Execute(args, workspace); changed = false; return true; }
         if (CliFailureClustersQueryCommand.IsFailureClustersQueryCommand(args)) { CliFailureClustersQueryCommand.Execute(args, workspace); changed = false; return true; }
         if (CliLaneReuseShadowQueryCommand.IsLaneReuseShadowQueryCommand(args)) { CliLaneReuseShadowQueryCommand.Execute(args, workspace); changed = false; return true; }
         if (CliRemoteExecutorsQueryCommand.IsCommand(args)) { CliRemoteExecutorsQueryCommand.Execute(args, workspace); changed = false; return true; }

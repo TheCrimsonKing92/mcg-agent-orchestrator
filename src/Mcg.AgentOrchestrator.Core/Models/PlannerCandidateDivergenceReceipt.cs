@@ -20,7 +20,8 @@ public enum PlannerCandidateTerminalState
     Cancelled,
     MissingExitArtifact,
     UnreadableTerminalArtifact,
-    MalformedTerminalArtifact
+    MalformedTerminalArtifact,
+    IntentSuppressed
 }
 
 public enum PlannerCandidateNormalizationState

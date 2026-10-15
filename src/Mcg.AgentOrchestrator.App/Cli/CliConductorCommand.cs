@@ -18,7 +18,8 @@ internal static class CliConductorCommand
         TextWriter? output = null, TextWriter? error = null,
         Func<OrchestratorWorkspace, ITransactionalOrchestratorStateRepository>? stateRepository = null,
         OrchestratorHome? home = null,
-        Func<string, IReadOnlyList<StoreSetupResult>>? storeSetup = null, TimeProvider? time = null)
+        Func<string, IReadOnlyList<StoreSetupResult>>? storeSetup = null, TimeProvider? time = null,
+        Action? verifyBinding = null, WorkspaceInvocationBinding? invocationBinding = null)
     {
         output ??= Console.Out;
         error ??= Console.Error;
@@ -26,6 +27,7 @@ internal static class CliConductorCommand
         if (args.Count < 2 || args.Count > 3 ||
             args.Count == 3 && !(args[1].Equals("start", StringComparison.OrdinalIgnoreCase) &&
                 args[2].Equals("--clear-stop", StringComparison.OrdinalIgnoreCase)) &&
+                !(args[1].Equals("setup", StringComparison.OrdinalIgnoreCase) && args[2].Equals("--plan", StringComparison.OrdinalIgnoreCase)) &&
                 !args[1].Equals("apply-intents", StringComparison.OrdinalIgnoreCase) &&
                 !CliConductorStatusJsonQueryCommand.IsConductorStatusJsonCommand(args))
         {
@@ -34,9 +36,28 @@ internal static class CliConductorCommand
         }
         try
         {
-            storeSetup ??= StoreSetupRunner.Run;
+            storeSetup ??= _ => WorkspaceStoreSetup.Run(workspace, verifyBinding);
             if (args[1].Equals("setup", StringComparison.OrdinalIgnoreCase))
             {
+                verifyBinding?.Invoke();
+                if (args.Count == 3)
+                {
+                    output.WriteLine($"repository: {workspace.RootDirectory}; execution: {workspace.ExecutionDirectory}; project: {workspace.ProjectName}; tenant: {workspace.TenantName}; state: {workspace.OrchestratorDirectory}");
+                    var plan = StoreSetupRunner.Plan(workspace.OrchestratorDirectory, includeState: true);
+                    foreach (var entry in plan)
+                        output.WriteLine($"{entry.StoreName}: recorded {entry.RecordedVersion?.ToString() ?? "missing"}; required {entry.RequiredVersion}; action {entry.Action} ({entry.DatabasePath})");
+                    StoreSetupRunner.RequireCompatible(plan);
+                    if (plan.Any(entry => entry.RequiresMigration))
+                    {
+                        if (lockProbe.ActiveOwnerPid(workspace) is { } activeOwner)
+                        {
+                            error.WriteLine($"Forward migration refused: active conductor pid {activeOwner}; stop/detach and restart with a compatible runtime.");
+                            return 1;
+                        }
+                        output.WriteLine("Forward migration requires exclusive conductor ownership: stop/detach, explicit new-runtime setup, then new-runtime restart; retain only a compatible fallback.");
+                    }
+                    return 0;
+                }
                 if (!TryRunStoreSetup(workspace, storeSetup, error, out var results))
                     return 1;
                 foreach (var result in results)
@@ -50,7 +71,7 @@ internal static class CliConductorCommand
                     return ApplyIntents(args, workspace, owner, stateRepository, output, error);
                 case "start":
                     return Start(workspace, owner, args.Count == 3, launcher ?? new SystemConductorProcessLauncher(),
-                        output, error, home ?? OrchestratorHome.ResolveForProcess(), storeSetup);
+                         output, error, home ?? OrchestratorHome.ResolveForProcess(), storeSetup, invocationBinding);
                 case "status":
                     var snapshot = ConductorStatusSnapshotReader.Read(workspace, owner,
                         (bootTime ?? (() => DateTimeOffset.UtcNow - TimeSpan.FromMilliseconds(Environment.TickCount64)))(),
@@ -58,7 +79,10 @@ internal static class CliConductorCommand
                     if (CliConductorStatusJsonQueryCommand.IsConductorStatusJsonCommand(args))
                         output.WriteLine(ConductorStatusAgentReadView.Render(snapshot, time ?? TimeProvider.System));
                     else
+                    {
                         CliConductorStatusReader.Print(snapshot, output);
+                        ConductorStatusDirectives.Print(workspace, output, time ?? TimeProvider.System);
+                    }
                     return 0;
                 case "stop":
                     if (owner is null)
@@ -173,7 +197,7 @@ internal static class CliConductorCommand
 
     private static int Start(OrchestratorWorkspace workspace, int? owner, bool clearStop,
         IConductorProcessLauncher launcher, TextWriter output, TextWriter error, OrchestratorHome home,
-        Func<string, IReadOnlyList<StoreSetupResult>> storeSetup)
+        Func<string, IReadOnlyList<StoreSetupResult>> storeSetup, WorkspaceInvocationBinding? invocationBinding)
     {
         if (owner is not null)
         {
@@ -194,10 +218,15 @@ internal static class CliConductorCommand
             return 1;
         List<string> launchArguments = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                 Path.Combine(home.InstallRootDirectory, "scripts", "Start-OrchestratorCommand.ps1"),
-                "-Name", "conduct-loop-daemon", "conduct", "--loop", "--daemon", "--watch",
-                "--poll-seconds", "120", "--max-duration", "43200"];
-        if (workspace.IsProjectScoped)
-            launchArguments.Add($"--project={workspace.ProjectName}");
+                "-Name", "conduct-loop-daemon", "-RepositoryRoot", workspace.RootDirectory,
+                "-ExpectedStateDirectory", workspace.OrchestratorDirectory];
+        if (invocationBinding?.DisposableFixture == true) launchArguments.Add("-DisposableFixture");
+        if (invocationBinding is not null)
+            launchArguments.AddRange(["-AppDll", typeof(OrchestratorWorkspace).Assembly.Location]);
+        launchArguments.AddRange(["conduct", "--loop", "--daemon", "--watch",
+                "--poll-seconds", "120", "--max-duration", "43200"]);
+        launchArguments.Add($"--project={workspace.ProjectName}");
+        launchArguments.Add($"--tenant={workspace.TenantName}");
         var request = new ConductorLaunchRequest("pwsh",
             launchArguments,
             workspace.ExecutionDirectory,

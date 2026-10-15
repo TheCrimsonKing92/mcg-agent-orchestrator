@@ -42,6 +42,20 @@ public class CanaryEngineSurfaceCoverageTests
     }
 
     [Fact]
+    public void Indirect_focused_selection_coverage_inspector_triggers_canary()
+    {
+        const string prefix =
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/FocusedEvidenceSelectionCoverageInspector";
+        var path = prefix + ".cs";
+        var result = PostLandingCanaryTrigger.Evaluate([path]);
+
+        Assert.True(result.ShouldRun);
+        Assert.Equal([path], result.TriggeringPaths);
+        Assert.Single(PostLandingCanaryTrigger.EnginePathPrefixes.Where(candidate => candidate == prefix));
+        Assert.False(CoveragePredicate(PostLandingCanaryTrigger.EnginePathPrefixes.Where(candidate => candidate != prefix))(path));
+    }
+
+    [Fact]
     public void Collaborator_surface_exactly_matches_preexisting_coverage_gap()
     {
         var surface = Assert.Single(AcceptanceEngineSurfaceRegistry.Surfaces,
@@ -52,9 +66,13 @@ public class CanaryEngineSurfaceCoverageTests
         var uncovered = UncoveredCollaboratorSourcePaths(CoveragePredicate(previousPrefixes));
         // Sort after stripping the extension: dotted partial files sort differently from their main file.
         var expectedPrefixes = uncovered.Select(path => path[..^3]).Order(StringComparer.Ordinal).ToArray();
+        // Exact .cs paths are needed when a dotted file stem already has an extension.
+        var actualPrefixes = surface.PathPrefixes
+            .Select(prefix => prefix.EndsWith(".cs", StringComparison.Ordinal) ? prefix[..^3] : prefix)
+            .Order(StringComparer.Ordinal).ToArray();
 
         Assert.NotEmpty(expectedPrefixes);
-        Assert.Equal(expectedPrefixes, surface.PathPrefixes);
+        Assert.Equal(expectedPrefixes, actualPrefixes);
     }
 
     private static string[] UncoveredCollaboratorSourcePaths(Func<string, bool> isCovered)

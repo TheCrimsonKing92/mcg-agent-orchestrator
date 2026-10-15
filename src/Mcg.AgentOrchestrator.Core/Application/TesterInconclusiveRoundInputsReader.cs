@@ -11,11 +11,11 @@ public static class TesterInconclusiveRoundInputsReader
         if (task.RequiredRole != AgentRole.Tester || task.VerificationHistory.Count == 0)
             return null;
         var history = task.VerificationHistory;
-        var current = ReadRound(task, history[^1]);
+        var current = ReadRound(history[^1], DispatchFailureClassifier.Classify(task, history[^1]));
         if (current is null)
             return null;
         var previous = history.Count > 1 && history[^2].DispatchStartedAt != history[^1].DispatchStartedAt
-            ? ReadRound(task, history[^2]) : null;
+            ? ReadRound(history[^2], DispatchFailureClassifier.ClassifyStoredRound(task, history[^2])) : null;
         return new FailedGoalInconclusiveRoundPair(previous, current);
     }
 
@@ -37,8 +37,8 @@ public static class TesterInconclusiveRoundInputsReader
         string.Equals(dispatch.WorkingDirectory, verification.WorkingDirectory, StringComparison.OrdinalIgnoreCase)
             ? dispatch.InconclusiveRoundInputs : null;
 
-    private static FailedGoalInconclusiveRoundInputs? ReadRound(TaskSpec task, TaskVerificationRecord record) =>
-        DispatchFailureClassifier.Classify(task, record).Kind == DispatchOutcomeKind.VerificationInconclusive &&
+    private static FailedGoalInconclusiveRoundInputs? ReadRound(TaskVerificationRecord record, DispatchOutcome outcome) =>
+        outcome.Kind == DispatchOutcomeKind.VerificationInconclusive &&
         record.DispatchStartedAt is not null && record.CandidateIdentity is { } candidate &&
         record.InconclusiveRoundInputs is { } inputs &&
         string.Equals(candidate.Canonical, inputs.CandidateIdentity, StringComparison.Ordinal)

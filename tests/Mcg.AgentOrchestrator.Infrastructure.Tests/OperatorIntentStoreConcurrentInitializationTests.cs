@@ -16,7 +16,8 @@ public sealed class OperatorIntentStoreConcurrentInitializationTests
             var columns = ReadActorKindColumns(databasePath);
             Xunit.Assert.Equal("TEXT", Xunit.Assert.Single(columns));
             using var connection = Open(databasePath);
-            Xunit.Assert.Equal(1, StoreSchemaVersions.Read(connection, StoreSchemaRegistry.OperatorIntents.StoreName));
+            Xunit.Assert.Equal(StoreSchemaRegistry.OperatorIntents.CurrentVersion,
+                StoreSchemaVersions.Read(connection, StoreSchemaRegistry.OperatorIntents.StoreName));
         }
         finally
         {
@@ -160,10 +161,12 @@ public sealed class OperatorIntentStoreConcurrentInitializationTests
         {
             var databasePath = Path.Combine(root, SqliteOperatorIntentStore.DatabaseFileName);
             SqliteOperatorIntentStore.Setup(databasePath);
-            var writer = SqliteOperatorIntentStore.ForDirectories(root, Path.Combine(root, "writer-wakes"));
+            var now = DateTimeOffset.Parse("2026-09-25T00:00:00Z");
+            var writer = new SqliteOperatorIntentStore(databasePath, Path.Combine(root, "writer-wakes"), utcNow: () => now);
             var intent = await writer.EnqueueAsync(new OperatorIntentRecord(
                 "intent", "key", "retry", "goal", "task", "{}", ["payload.txt"],
                 "operator", "cli", "test-assurance", DateTimeOffset.Parse("2026-09-25T00:00:00Z")));
+            Xunit.Assert.Equal(now.AddMinutes(5), intent.AdmissionExpiresAt);
             using (var connection = Open(databasePath))
                 Execute(connection, "PRAGMA journal_mode=WAL");
             Xunit.Assert.Equal((byte)2, File.ReadAllBytes(databasePath)[18]);
@@ -184,10 +187,17 @@ public sealed class OperatorIntentStoreConcurrentInitializationTests
             Xunit.Assert.False(Directory.Exists(wakeDirectory));
 
             // A reader must also observe intents submitted after it was opened.
+            now = now.AddMinutes(1);
             var nextIntent = intent with { Id = "next-intent", IdempotencyKey = "next-key" };
-            Xunit.Assert.Equal(nextIntent.Id, (await writer.EnqueueAsync(nextIntent)).Id);
-            Xunit.Assert.Equal(System.Text.Json.JsonSerializer.Serialize(nextIntent),
+            var persistedNextIntent = await writer.EnqueueAsync(nextIntent);
+            Xunit.Assert.Equal(nextIntent.Id, persistedNextIntent.Id);
+            Xunit.Assert.Equal(now.AddMinutes(5), persistedNextIntent.AdmissionExpiresAt);
+            Xunit.Assert.Equal(intent.AdmissionExpiresAt, nextIntent.AdmissionExpiresAt);
+            Xunit.Assert.NotEqual(nextIntent.AdmissionExpiresAt, persistedNextIntent.AdmissionExpiresAt);
+            Xunit.Assert.Equal(System.Text.Json.JsonSerializer.Serialize(persistedNextIntent),
                 System.Text.Json.JsonSerializer.Serialize(await reader.GetAsync(nextIntent.Id)));
+            Xunit.Assert.Equal(System.Text.Json.JsonSerializer.Serialize(intent),
+                System.Text.Json.JsonSerializer.Serialize(await reader.GetAsync(intent.Id)));
         }
         finally
         {
@@ -203,9 +213,13 @@ public sealed class OperatorIntentStoreConcurrentInitializationTests
         {
             var databasePath = Path.Combine(root, SqliteOperatorIntentStore.DatabaseFileName);
             SqliteOperatorIntentStore.Setup(databasePath);
+            var newerVersion = StoreSchemaRegistry.OperatorIntents.CurrentVersion!.Value + 1;
             using (var connection = Open(databasePath))
             {
-                Execute(connection, "UPDATE store_schema_versions SET version = 2, applied_at = 'original'");
+                using var command = connection.CreateCommand();
+                command.CommandText = "UPDATE store_schema_versions SET version = $version, applied_at = 'original'";
+                command.Parameters.AddWithValue("$version", newerVersion);
+                Xunit.Assert.Equal(1, command.ExecuteNonQuery());
                 Execute(connection, "PRAGMA journal_mode=WAL");
             }
             var before = Snapshot(databasePath);
@@ -216,7 +230,7 @@ public sealed class OperatorIntentStoreConcurrentInitializationTests
             Xunit.Assert.Equal(before, Snapshot(databasePath));
             Xunit.Assert.Equal(bytes, File.ReadAllBytes(databasePath));
             using var readBack = Open(databasePath);
-            Xunit.Assert.Equal(2, StoreSchemaVersions.Read(readBack, StoreSchemaRegistry.OperatorIntents.StoreName));
+            Xunit.Assert.Equal(newerVersion, StoreSchemaVersions.Read(readBack, StoreSchemaRegistry.OperatorIntents.StoreName));
         }
         finally
         {

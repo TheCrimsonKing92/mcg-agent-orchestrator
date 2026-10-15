@@ -2022,7 +2022,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     var stdout = Path.Combine(logs, "dev.out.log");
     var stderr = Path.Combine(logs, "dev.err.log");
     var exit = Path.Combine(logs, "dev.exit.txt");
-    File.WriteAllText(stdout, "Implemented the change." + Environment.NewLine + WorkerResultBlock("feature.txt", "implemented feature", "Passed: 1", head));
+    File.WriteAllText(stdout, "Implemented the change." + Environment.NewLine + WorkerResultBlock("feature.txt", "implemented feature", "pass - Passed: 1", head));
     File.WriteAllText(stderr, "Tokens used: input=123 output=45");
     File.SetLastWriteTimeUtc(stdout, now.AddMinutes(-3).UtcDateTime);
     File.SetLastWriteTimeUtc(stderr, now.AddMinutes(-3).UtcDateTime);
@@ -2339,7 +2339,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         root,
         AgentRole.Tester,
         "dotnet test --logger trx\r\nTRX 5/5 passed.\r\n" +
-            WorkerResultBlock("none", "dotnet test --logger trx", "TRX 5/5 passed", "none"),
+            WorkerResultBlock("none", "dotnet test --logger trx", "pass - TRX 5/5 passed", "none"),
         string.Empty,
         clock,
         taskDescription: "Verify behavior and modify the tests",
@@ -2425,12 +2425,8 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
 
         new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-        Assert.Equal(WorkTaskStatus.Failed, task.Status);
-        var failure = Assert.Single(goal.Timeline.Where(evt =>
-            evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskFailed));
-        Assert.Contains("tests_status=Unknown", failure.Message, StringComparison.Ordinal);
-        Assert.Contains("verification_recognized=false", failure.Message, StringComparison.Ordinal);
-        Assert.Contains("reason=verification-pattern-unmatched", failure.Message, StringComparison.Ordinal);
+        AssertIncompleteSubscriptionReport(kernel, goal, task, VerificationTerminalContractStatus.Malformed);
+        Assert.Contains("tests: unknown", Assert.Single(task.VerificationHistory).AuthoritativeStandardOutput!, StringComparison.Ordinal);
     }
 
     [Xunit.Theory]
@@ -2714,7 +2710,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         root,
         AgentRole.Tester,
         "Added a focused regression test and ran it.\r\n" +
-            WorkerResultBlock("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTests.cs", "dotnet test --logger trx", "TRX 5/5 passed", blockers: "none"),
+            WorkerResultBlock("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTests.cs", "dotnet test --logger trx", "pass - TRX 5/5 passed", blockers: "none"),
         string.Empty,
         clock,
         worktree =>
@@ -2753,21 +2749,21 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         verificationPlan: "Run the focused tests and confirm the acceptance criteria.",
         childExitCode: 0);
 
-    // WORKER_RESULT shape alone is not passing evidence. A non-zero clean Tester dispatch must remain
-    // failed unless the output contains real verification evidence.
+    // Child zero cannot replace a missing current terminal contract. Preserve the wrapper
+    // failure diagnostic while routing the absent report to bounded same-role repair.
     File.WriteAllText(process.ExitCodePath, "1");
 
     new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-    Assert.Equal(WorkTaskStatus.Failed, task.Status);
-    Assert.Equal(1, task.LastVerification!.ExitCode);
-    Assert.Contains("observed_wrapper_exit_code=1; child_exit_code=0", task.LastVerification.StandardError, StringComparison.Ordinal);
+    var verification = AssertIncompleteSubscriptionReport(kernel, goal, task, VerificationTerminalContractStatus.Missing);
+    Assert.Equal(1, verification.ExitCode);
+    Assert.Contains("observed_wrapper_exit_code=1; child_exit_code=0", verification.StandardError, StringComparison.Ordinal);
     Assert.Contains(
         DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WrapperProcessExitFailure),
-        task.LastVerification.StandardError,
+        verification.StandardError,
         StringComparison.Ordinal);
-    var classified = DispatchFailureClassifier.Classify(task, task.LastVerification);
-    Assert.Contains("rule=wrapper-process-exit-failure", classified.ClassifierReceipt, StringComparison.Ordinal);
+    var classified = DispatchFailureClassifier.Classify(task, verification);
+    Assert.Contains("rule=verification-terminal-contract-incomplete", classified.ClassifierReceipt, StringComparison.Ordinal);
     Assert.DoesNotContain("rule=required-file-change-evidence-missing", classified.ClassifierReceipt, StringComparison.Ordinal);
 }
 
@@ -2791,26 +2787,9 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
 
     new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-    Assert.Equal(WorkTaskStatus.Failed, task.Status);
-    Assert.Equal(1, task.LastVerification!.ExitCode);
-    Assert.Contains("did not produce required relevant file-change evidence", task.LastVerification.StandardError, StringComparison.Ordinal);
-    var failure = Assert.Single(goal.Timeline.Where(evt =>
-        evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskFailed));
-    Assert.Contains("DISPATCH_REJECTED role=Tester", failure.Message, StringComparison.Ordinal);
-    Assert.Contains($"task={task.Id.Value}", failure.Message, StringComparison.Ordinal);
-    Assert.Contains("worktree=\"", failure.Message, StringComparison.Ordinal);
-    Assert.Contains("dispatched_at=2026-06-02T12:00:00.0000000+00:00", failure.Message, StringComparison.Ordinal);
-    Assert.Contains($"baseline_head={task.LastDispatch!.BaseCommit}", failure.Message, StringComparison.Ordinal);
-    Assert.Contains("post_dispatch_commits=0", failure.Message, StringComparison.Ordinal);
-    Assert.Contains("changed_paths=none", failure.Message, StringComparison.Ordinal);
-    Assert.Contains("tests_status=Unknown blockers=Unknown", failure.Message, StringComparison.Ordinal);
-    Assert.Contains("verification_recognized=false", failure.Message, StringComparison.Ordinal);
-    Assert.Contains("reason=verification-pattern-unmatched", failure.Message, StringComparison.Ordinal);
-    Assert.Contains(
-        "detail=\"no structured tests value or accepted verification pattern was present\"",
-        failure.Message,
-        StringComparison.Ordinal);
-    Assert.DoesNotContain(task.LastDispatch.Command, failure.Message, StringComparison.Ordinal);
+    var verification = AssertIncompleteSubscriptionReport(kernel, goal, task, VerificationTerminalContractStatus.Missing);
+    Assert.Equal(0, verification.ExitCode);
+    Assert.DoesNotContain("did not produce required relevant file-change evidence", verification.StandardError, StringComparison.Ordinal);
     AssertExitCode(process.ExitCodePath, 0);
 }
 
@@ -2900,7 +2879,8 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
         root,
         AgentRole.Tester,
-        "Added focused regression tests and ran dotnet test --logger trx.\r\nTRX 5/5 passed.",
+        "Added focused regression tests and ran dotnet test --logger trx.\r\nTRX 5/5 passed.\r\n" +
+            WorkerResultBlock("none", "dotnet test --logger trx", "pass - TRX 5/5 passed", commit: "none"),
         string.Empty,
         clock,
         taskDescription: "Add focused regression tests for the dispatch guard",
@@ -2923,7 +2903,8 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     var (kernel, goal, task, _) = CreateCompletedGoalWorktreeDispatch(
         root,
         AgentRole.Tester,
-        "Verified and updated a test.",
+        "Verified and updated a test.\r\n" +
+            WorkerResultBlock("dirty.txt", "none", "fail - checks did not pass", commit: "none"),
         string.Empty,
         clock,
         worktree => File.WriteAllText(Path.Combine(worktree, "dirty.txt"), "uncommitted"));
@@ -2970,7 +2951,8 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     var (kernel, goal, task, _) = CreateCompletedGoalWorktreeDispatch(
         root,
         AgentRole.Tester,
-        "NO_CHANGE: Existing implementation already satisfies the request.",
+        "NO_CHANGE: Existing implementation already satisfies the request.\r\n" +
+            WorkerResultBlock("none", "inspected existing tests", "pass - existing focused test covers behavior", commit: "none"),
         string.Empty,
         clock,
         worktree => File.WriteAllText(Path.Combine(worktree, WorkerSandboxPreparer.ReceiptFileName), "{}"));
@@ -2995,7 +2977,8 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     var (kernel, goal, task, _) = CreateCompletedGoalWorktreeDispatch(
         root,
         AgentRole.Tester,
-        "NO_CHANGE: Existing implementation already satisfies the request.",
+        "NO_CHANGE: Existing implementation already satisfies the request.\r\n" +
+            WorkerResultBlock("none", "inspected existing tests", "pass - existing focused test covers behavior", commit: "none"),
         string.Empty,
         clock,
         WriteIsolationLeaseArtifacts);
@@ -3358,14 +3341,14 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         taskDescription: "Verify behavior with automated and manual checks",
         verificationPlan: "Run the focused tests and confirm the acceptance criteria.");
 
-    // Clean worktree + non-zero exit but NO verification evidence: a genuine failure (the worker never
-    // verified anything), not exit-code noise. Must stay failed.
+    // Non-zero exit and introductory prose cannot complete verification. Missing reporting
+    // belongs to same-role repair, with the observed exit retained in history.
     File.WriteAllText(process.ExitCodePath, "1");
 
     new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-    Assert.Equal(WorkTaskStatus.Failed, task.Status);
-    Assert.Equal(1, task.LastVerification!.ExitCode);
+    var verification = AssertIncompleteSubscriptionReport(kernel, goal, task, VerificationTerminalContractStatus.Missing);
+    Assert.Equal(1, verification.ExitCode);
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_short_zero_byte_streams_nonzero_root_exit_records_launch_retry")]
@@ -3386,19 +3369,16 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
 
     new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-    Assert.Equal(WorkTaskStatus.Failed, task.Status);
-    Assert.Equal(1, task.LastVerification!.ExitCode);
+    var verification = AssertIncompleteSubscriptionReport(kernel, goal, task, VerificationTerminalContractStatus.Missing);
+    Assert.Equal(1, verification.ExitCode);
     Assert.Equal(999999, task.LastProcess!.ProcessId);
     Assert.Equal(1, task.LastProcess.ExitCode);
     Assert.Equal(888888, task.LastProcess.ChildProcessId);
     Assert.Equal(23, task.LastProcess.ChildExitCode);
-    Assert.Equal(888888, task.LastVerification.ChildProcessId);
-    Assert.Equal(23, task.LastVerification.ChildExitCode);
+    Assert.Equal(888888, verification.ChildProcessId);
+    Assert.Equal(23, verification.ChildExitCode);
     Assert.Equal(1, task.EmptyOutputRetryCount);
-    Assert.Equal(
-        DispatchOutcomeKind.LaunchFailure,
-        DispatchFailureClassifier.Classify(task, task.LastVerification).Kind);
-    Assert.True(DispatchFailureClassifier.IsTransientEmptyOutputDispatchFlake(task.LastVerification));
+    Assert.True(DispatchFailureClassifier.IsTransientEmptyOutputDispatchFlake(verification));
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_exit_zero_empty_streamed_output_with_worker_result_file_without_passing_evidence_fails")]
@@ -3420,11 +3400,11 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
 
     new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-    Assert.Equal(WorkTaskStatus.Failed, task.Status);
-    Assert.Equal(1, task.LastVerification!.ExitCode);
-    Assert.True(task.LastVerification.WorkerResultPresent);
-    Assert.Equal(0, task.EmptyOutputRetryCount);
-    Assert.False(DispatchFailureClassifier.IsTransientEmptyOutputDispatchFlake(task.LastVerification));
+    var verification = AssertIncompleteSubscriptionReport(kernel, goal, task, VerificationTerminalContractStatus.Missing);
+    Assert.Equal(0, verification.ExitCode);
+    Assert.False(verification.WorkerResultPresent);
+    Assert.Equal(1, task.EmptyOutputRetryCount);
+    Assert.Equal("verification-terminal-contract-incomplete", verification.CompletionVerdictRule);
     AssertExitCode(process.ExitCodePath, 0);
 }
 
@@ -3476,12 +3456,9 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
 
     new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-    Assert.Equal(WorkTaskStatus.Failed, task.Status);
-    Assert.Equal(1, task.LastVerification!.ExitCode);
-    Assert.True(task.LastVerification.WorkerResultPresent);
-    Assert.NotEqual(
-        DispatchOutcomeKind.VerifiedSuccess,
-        DispatchFailureClassifier.Classify(task, task.LastVerification).Kind);
+    var verification = AssertIncompleteSubscriptionReport(kernel, goal, task, VerificationTerminalContractStatus.Missing);
+    Assert.Equal(1, verification.ExitCode);
+    Assert.False(verification.WorkerResultPresent);
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_with_committed_change_passes")]
@@ -4110,7 +4087,8 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     var (kernel, goal, task, _) = CreateCompletedGoalWorktreeDispatch(
         root,
         AgentRole.Tester,
-        "NO_CHANGE: Existing focused test already covers this behavior.",
+        "NO_CHANGE: Existing focused test already covers this behavior.\r\n" +
+            WorkerResultBlock("none", "inspected existing tests", "fail - worktree is dirty", commit: "none"),
         string.Empty,
         clock,
         worktree => File.AppendAllText(Path.Combine(worktree, "seed.txt"), "leftover"));
@@ -4121,25 +4099,6 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.Equal(1, task.LastVerification!.ExitCode);
     Assert.Contains("left the worktree dirty", task.LastVerification.StandardError, StringComparison.Ordinal);
     Assert.Contains("status_short=M seed.txt", task.LastVerification.StandardError, StringComparison.Ordinal);
-}
-
-    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_non_file_role_completion_is_unchanged")]
-    public void BackgroundDispatchRunnerNonFileRoleCompletionIsUnchanged()
-{
-    var root = CreateSeededDispatchRepository();
-    var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
-    var (kernel, goal, task, _) = CreateCompletedGoalWorktreeDispatch(
-        root,
-        AgentRole.Reviewer,
-        "Reviewed implementation evidence.",
-        string.Empty,
-        clock,
-        worktree => File.AppendAllText(Path.Combine(worktree, "seed.txt"), "leftover"));
-
-    new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
-
-    Assert.Equal(WorkTaskStatus.Completed, task.Status);
-    Assert.Equal(0, task.LastVerification!.ExitCode);
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_no_change_role_worker_result_blocker_is_advisory_when_tests_do_not_fail")]
@@ -4717,6 +4676,27 @@ private static (
         null);
     kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
     return (kernel, goal, task, process);
+}
+
+private static TaskVerificationRecord AssertIncompleteSubscriptionReport(
+    AgentOrchestratorKernel kernel,
+    Goal goal,
+    TaskSpec task,
+    VerificationTerminalContractStatus expectedStatus)
+{
+    Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+    Assert.Null(task.LastVerification);
+    var verification = Assert.Single(task.VerificationHistory);
+    Assert.False(verification.CompletionVerdictVerifiedSuccess);
+    Assert.Equal(expectedStatus, WorkerResultBlockers.AssessSubscriptionVerification(task, verification).Status);
+    Assert.Equal(DispatchOutcomeKind.VerificationIncomplete, DispatchFailureClassifier.Classify(task, verification).Kind);
+    Assert.Equal(RetryCause.ProviderInterruption, task.PendingRetryCause);
+    Assert.False(kernel.BuildVerificationGate(goal.Id).IsSatisfied);
+    Assert.False(AcceptancePrecheck.HasCompletedPassedVerificationForAllTasks(goal));
+    Assert.DoesNotContain(goal.Timeline, entry => entry.TaskId == task.Id && entry.Kind == ProgressKind.TaskCompleted);
+    Assert.Contains(goal.Timeline, entry => entry.TaskId == task.Id && entry.Kind == ProgressKind.TaskRetried &&
+        entry.Message.Contains("same-role retry", StringComparison.Ordinal));
+    return verification;
 }
 
 private static DispatchOutcome AssertNamedOrchestratorFailure(

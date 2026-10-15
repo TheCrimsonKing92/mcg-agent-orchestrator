@@ -244,8 +244,12 @@ public sealed class AcceptanceLaneTestFailureRerunTests
             Assert.NotSame(check, received);
             Assert.Equal(["Cls.M", "Other.N"], received.FocusedEvidenceTokens.Select(token => token.Value));
             Assert.All(received.FocusedEvidenceTokens, token => Assert.Equal(FocusedEvidenceTokenKind.Method, token.Kind));
+            Assert.Equal(["--filter", "FullyQualifiedName~Cls.M|FullyQualifiedName~Other.N"], received.Arguments);
+            Assert.Equal(received.FocusedEvidenceTokens, Assert.Single(received.FocusedEvidenceSelections));
             foreach (var property in typeof(AcceptanceManifestCheck).GetProperties()
-                         .Where(property => property.GetMethod is { IsStatic: false } && property.Name != nameof(check.FocusedEvidenceTokens)))
+                         .Where(property => property.GetMethod is { IsStatic: false } &&
+                             property.Name is not (nameof(check.FocusedEvidenceTokens) or
+                                 nameof(check.Arguments) or nameof(check.FocusedEvidenceSelections))))
                 Assert.Equal(property.GetValue(check), property.GetValue(received));
         }
         var mode = overLimit ? "mode=whole-lane reason=too-many-methods" : "mode=failed-only";
@@ -316,6 +320,28 @@ public sealed class AcceptanceLaneTestFailureRerunTests
             .Where(pair => pair.arg == "--filter-method").Select(pair => args[pair.index + 1]));
         Assert.DoesNotContain("--filter-class", args);
         Assert.DoesNotContain("--filter-not-class", args);
+    }
+
+    [Xunit.Fact]
+    public void NarrowedCheck_BindsExpressionAndCoverageToMethodsAndKeepsOtherArguments()
+    {
+        var check = new AcceptanceManifestCheck
+        {
+            Runner = "mtp",
+            Arguments = ["--verbosity", "minimal", "--filter", "FullyQualifiedName~AlphaTests", "--configuration", "Release"],
+            FocusedEvidenceSelections = [[new("AlphaTests", "FullyQualifiedName~AlphaTests",
+                FocusedEvidenceTokenKind.Class, "AlphaTests", "AlphaTests")]]
+        };
+        var plan = AcceptanceLaneRerunNarrowing.Select(check, ["AlphaTests.Failed", "OtherTests.Failed"]);
+        Assert.True(plan.IsNarrowed);
+        var narrowed = AcceptanceLaneRerunNarrowing.BuildRerunCheck(check, plan);
+        var arguments = new List<string>();
+        var filter = AcceptanceCheckCommandBuilder.ExtractFilterArguments(narrowed.Arguments, arguments);
+        Assert.Equal("FullyQualifiedName~AlphaTests.Failed|FullyQualifiedName~OtherTests.Failed", filter);
+        FocusedEvidenceRequestResolver.ValidateFocusedLaunch(filter!, narrowed.FocusedEvidenceTokens);
+        Assert.Equal(["--verbosity", "minimal", "--configuration", "Release", "--filter", filter!], arguments);
+        Assert.Equal(plan.Tokens, Assert.Single(narrowed.FocusedEvidenceSelections));
+        Assert.Equal(["--verbosity", "minimal", "--filter", "FullyQualifiedName~AlphaTests", "--configuration", "Release"], check.Arguments);
     }
 
     [Xunit.Fact]

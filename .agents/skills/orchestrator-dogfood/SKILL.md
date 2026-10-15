@@ -12,7 +12,7 @@ Use this skill when the task changes or validates the orchestrator by running wo
 ## Operating Loop
 
 1. Check the backlog with `backlog-list` before choosing or proposing work.
-2. Create the goal: `simple-goal "<objective>"` (one Developer task) or `goal "<objective>"` (five-role pipeline). For long objectives use `--brief-file <path>`, then delete the file.
+2. Create the goal: `simple-goal "<objective>"` (one Developer task) or `goal "<objective>"` (Scout pipeline: Planner, Developer, Tester, Reviewer). Scout is the only multi-role intake; goals created earlier with a Researcher task still run. For long objectives use `--brief-file <path>`, then delete the file.
 3. Drive it with the conductor — it owns workspace creation, dispatch, acceptance, and cleanup: `conduct --loop --watch --policy <Conservative|Permissive> --poll-seconds 15 --max-duration 5400`. Add `--daemon` only for controlled active-goal pickup; keep it bounded with `--max-duration` while the queue is still being proven.
 4. Observe with `.\scripts\Invoke-RepoScript.ps1 scripts\Get-OrchestratorSnapshot.ps1 -GoalPrefix <goal-prefix>` for compact process/lock/status state, adding more goal prefixes as plain trailing arguments when needed, or `next <goal-prefix> --full` when you need full task detail. Treat task status as provisional until the acceptance gate passes — verify the diff/commits/tests independently (see the worker-verification skill).
 5. When a goal sticks, use the runbook's **stuck-goal playbook**: `readiness <goal>` (start blockers), `recover <goal> "<note>"` (reset stuck/Failed/Cancelled tasks), `attention show <goal>` / `attention answer <goal> <id> "<text>"` or `attention dismiss <goal>` (clarifications).

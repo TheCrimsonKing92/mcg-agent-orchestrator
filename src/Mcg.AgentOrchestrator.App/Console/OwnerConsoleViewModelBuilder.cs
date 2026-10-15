@@ -7,7 +7,8 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries state,
     IOwnerQuestionSource questions, IConductorLiveness liveness, IOwnerGoalEpicLookup epics, TimeProvider clock,
-    Func<OwnerConductEvent, OwnerActivityTestEvidence?>? testEvidence = null, Func<string, string?>? gateMotion = null)
+    Func<OwnerConductEvent, OwnerActivityTestEvidence?>? testEvidence = null, Func<string, string?>? gateMotion = null,
+    Func<DateTimeOffset?>? latestTick = null)
 {
     internal const int MaxActivityItems = 100;
     private readonly Dictionary<string, int> _numbers = new(StringComparer.OrdinalIgnoreCase);
@@ -38,7 +39,8 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
                 _numbers.Add(question.ItemId, number = _numbers.Count + 1);
             return new OwnerConsoleDecision(question.ItemId, number, question.GoalId, Prefix(question.GoalId),
                 question.Kind, Summary(question.Text), question.Text, question.BlastRadius,
-                question.Confidence, question.ProposedDefault);
+                question.Confidence, question.ProposedDefault,
+                snapshot.RaisedAt?.TryGetValue(question.ItemId, out var raisedAt) == true ? raisedAt : null);
         }).ToImmutableArray();
         lock (_observationGate)
         {
@@ -95,8 +97,11 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
                     key.Rank == OwnerConsoleAttention.RecentTerminal) { SortKey = key, StageWithoutQuestion = stage });
             }
         }
+        DateTimeOffset? tick = null;
+        try { tick = latestTick?.Invoke(); }
+        catch { /* An unavailable tick must not prevent status refresh or produce a stale alarm. */ }
         return new(new(liveness.IsRunning(), board.Count(row => !row.Dimmed), 0, 0, null, 0,
-            board.Count(row => row.Dimmed && row.State == nameof(GoalStatus.Failed))), [], board.ToImmutable(), []);
+            board.Count(row => row.Dimmed && row.State == nameof(GoalStatus.Failed)), tick), [], board.ToImmutable(), []);
     }
 
     internal OwnerConsoleViewModel WithDecisions(OwnerConsoleViewModel model,

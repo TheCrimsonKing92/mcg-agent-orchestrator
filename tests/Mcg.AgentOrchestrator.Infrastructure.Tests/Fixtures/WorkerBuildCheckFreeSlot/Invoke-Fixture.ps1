@@ -108,7 +108,11 @@ exit 0
     $shimCommand = @'
 @echo off
 set "DOTNET_SHIM_RAW_ARGUMENTS=%*"
+if not "%DOTNET_SHIM_RAW_ARGUMENTS:WorkerBuildScopeTool=%"=="%DOTNET_SHIM_RAW_ARGUMENTS%" goto scope
 powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0dotnet-shim.ps1"
+exit /b %ERRORLEVEL%
+:scope
+"%MCG_SCOPE_REAL_DOTNET%" %*
 exit /b %ERRORLEVEL%
 '@
     Set-Content -LiteralPath (Join-Path $shimDirectory "dotnet.cmd") -Value $shimCommand
@@ -126,6 +130,7 @@ exit /b %ERRORLEVEL%
         PATH = $shimDirectory + [System.IO.Path]::PathSeparator + $env:PATH
         MCG_DOTNET_ISOLATED_ROOT = $isolatedRoot
         MCG_FREE_SLOT_CAPTURE = $captureDirectory
+        MCG_SCOPE_REAL_DOTNET = @(Get-Command dotnet -CommandType Application -ErrorAction Stop)[0].Source
     }
     Write-Output $helper.Stdout
     if (-not [string]::IsNullOrWhiteSpace($helper.Stderr)) { Write-Output $helper.Stderr }

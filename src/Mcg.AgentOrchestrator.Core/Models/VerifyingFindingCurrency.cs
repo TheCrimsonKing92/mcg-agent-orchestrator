@@ -55,6 +55,7 @@ public static class VerifyingFindingCurrency
 
         var supersededByLaterResult = verifyingTask.VerificationHistory.Any(verification =>
             verification.CompletedAt > findingRecord.CompletedAt &&
+            WorkerResultBlockers.AssessStoredSubscriptionVerification(verifyingTask, verification).AllowsCompletion &&
             (verification.MergedReviewFindings is not null ||
              IsLatestCompletedResult(verifyingTask, verification)));
         if (supersededByLaterResult)

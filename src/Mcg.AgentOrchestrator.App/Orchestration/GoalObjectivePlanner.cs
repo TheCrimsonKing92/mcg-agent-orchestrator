@@ -20,7 +20,6 @@ internal enum GoalIntakePipeline
 {
     DeveloperOnly,
     DeveloperReviewer,
-    FiveRole,
     Scout,
     DeveloperStreamReviewer,
     WholeGoalReview
@@ -29,7 +28,6 @@ internal enum GoalIntakePipeline
 internal enum GoalIntakePipelineRequest
 {
     Auto,
-    FiveRole,
     Scout,
     DeveloperReviewer,
     DeveloperOnly
@@ -37,7 +35,7 @@ internal enum GoalIntakePipelineRequest
 
 internal static class GoalIntakePipelineRequestParser
 {
-    public const string AllowedValues = "auto, scout, five-role, developer-reviewer, developer-only";
+    public const string AllowedValues = "auto, scout, developer-reviewer, developer-only";
 
     public static GoalIntakePipelineRequest Parse(string value)
     {
@@ -48,7 +46,7 @@ internal static class GoalIntakePipelineRequestParser
 
         if (value.Equals("five-role", StringComparison.OrdinalIgnoreCase))
         {
-            return GoalIntakePipelineRequest.FiveRole;
+            throw new ArgumentException($"Pipeline 'five-role' was removed; use 'scout' (Planner, Developer, Tester, Reviewer). Allowed values: {AllowedValues}.");
         }
 
         if (value.Equals("scout", StringComparison.OrdinalIgnoreCase))
@@ -73,7 +71,6 @@ internal static class GoalIntakePipelineRequestParser
         request switch
         {
             GoalIntakePipelineRequest.Auto => null,
-            GoalIntakePipelineRequest.FiveRole => GoalIntakePipeline.FiveRole,
             GoalIntakePipelineRequest.Scout => GoalIntakePipeline.Scout,
             GoalIntakePipelineRequest.DeveloperReviewer => GoalIntakePipeline.DeveloperReviewer,
             GoalIntakePipelineRequest.DeveloperOnly => GoalIntakePipeline.DeveloperOnly,
@@ -84,7 +81,6 @@ internal static class GoalIntakePipelineRequestParser
         request switch
         {
             GoalIntakePipelineRequest.Auto => "auto",
-            GoalIntakePipelineRequest.FiveRole => "five-role",
             GoalIntakePipelineRequest.Scout => "scout",
             GoalIntakePipelineRequest.DeveloperReviewer => "developer-reviewer",
             GoalIntakePipelineRequest.DeveloperOnly => "developer-only",
@@ -103,7 +99,6 @@ internal sealed record GoalIntakePipelineDecision(
         GoalIntakePipeline.DeveloperReviewer => "developer-reviewer",
         GoalIntakePipeline.DeveloperStreamReviewer => "developer-stream-reviewer",
         GoalIntakePipeline.WholeGoalReview => "whole-goal-review",
-        GoalIntakePipeline.FiveRole => "five-role",
         GoalIntakePipeline.Scout => "scout",
         _ => Pipeline.ToString()
     };
@@ -399,9 +394,7 @@ internal static class GoalObjectivePlanner
         }
 
         var reviewReasons = new List<string>();
-        AddReason("scope-implicit", automaticDefaultPipeline == GoalIntakePipeline.FiveRole
-            ? "scope-implicit objective needs Planner and Researcher to define the work before implementation"
-            : "scope-implicit objective needs the Scout to define the work before implementation");
+        AddReason("scope-implicit", "scope-implicit objective needs the Scout to define the work before implementation");
         AddReason("high-risk", "high-risk objective needs pre-acceptance review");
         AddReason("security-risk", "security-risk objective needs pre-acceptance review");
         AddReason("multi-scope", "multi-scope objective needs reviewer coverage across touched areas");
@@ -561,24 +554,12 @@ internal static class GoalObjectivePlanner
             ];
         }
 
-        if (pipeline == GoalIntakePipeline.Scout)
-        {
-            return
-            [
-                new GoalObjectiveTaskBoundary(1, AgentRole.Planner, "Inspect current source and synthesize a criterion-mapped Scout plan.", "read-only", "Scout plan and research findings must cite repository evidence."),
-                new GoalObjectiveTaskBoundary(2, AgentRole.Developer, complexity == TaskComplexity.Complex ? "Implement the scoped slice and keep changes narrow." : "Implement the focused change.", "workspace-write", verification[0]),
-                new GoalObjectiveTaskBoundary(3, AgentRole.Tester, "Run focused verification and capture failures as evidence.", "workspace-write", verification[0]),
-                new GoalObjectiveTaskBoundary(4, AgentRole.Reviewer, "Review diff, tests, and worker evidence before acceptance.", "read-only", "Review must mention residual risk and acceptance readiness.")
-            ];
-        }
-
         return
         [
-            new GoalObjectiveTaskBoundary(1, AgentRole.Researcher, "Inspect current source and prior evidence before implementation.", "read-only", "Research notes must cite exact files or state that no source change is needed."),
-            new GoalObjectiveTaskBoundary(2, AgentRole.Planner, "Synthesize the durable research into a criterion-mapped implementation plan.", "read-only", "Plan must map every acceptance criterion and identify target files, ownership, edge contracts, risks, and verification."),
-            new GoalObjectiveTaskBoundary(3, AgentRole.Developer, complexity == TaskComplexity.Complex ? "Implement the scoped slice and keep changes narrow." : "Implement the focused change.", "workspace-write", verification[0]),
-            new GoalObjectiveTaskBoundary(4, AgentRole.Tester, "Run focused verification and capture failures as evidence.", "workspace-write", verification[0]),
-            new GoalObjectiveTaskBoundary(5, AgentRole.Reviewer, "Review diff, tests, and worker evidence before acceptance.", "read-only", "Review must mention residual risk and acceptance readiness.")
+            new GoalObjectiveTaskBoundary(1, AgentRole.Planner, "Inspect current source and synthesize a criterion-mapped Scout plan.", "read-only", "Scout plan and research findings must cite repository evidence."),
+            new GoalObjectiveTaskBoundary(2, AgentRole.Developer, complexity == TaskComplexity.Complex ? "Implement the scoped slice and keep changes narrow." : "Implement the focused change.", "workspace-write", verification[0]),
+            new GoalObjectiveTaskBoundary(3, AgentRole.Tester, "Run focused verification and capture failures as evidence.", "workspace-write", verification[0]),
+            new GoalObjectiveTaskBoundary(4, AgentRole.Reviewer, "Review diff, tests, and worker evidence before acceptance.", "read-only", "Review must mention residual risk and acceptance readiness.")
         ];
     }
 
@@ -602,11 +583,6 @@ internal static class GoalObjectivePlanner
             return "Route through Developer+Reviewer before acceptance." + suffix;
         }
 
-        if (pipelineDecision.Pipeline == GoalIntakePipeline.FiveRole)
-        {
-            return "Route through the five-role pipeline so planning and research define the open scope." + suffix;
-        }
-
         if (pipelineDecision.Pipeline == GoalIntakePipeline.Scout)
         {
             return "Route through the Scout pipeline for source research and planning before implementation." + suffix;
@@ -622,7 +598,6 @@ internal static class GoalObjectivePlanner
             GoalIntakePipeline.DeveloperReviewer => "Developer+Reviewer",
             GoalIntakePipeline.DeveloperStreamReviewer => "Developer+stream-Reviewer",
             GoalIntakePipeline.WholeGoalReview => "Whole-Goal Reviewer",
-            GoalIntakePipeline.FiveRole => "five-role",
             GoalIntakePipeline.Scout => "scout",
             _ => pipeline.ToString()
         };

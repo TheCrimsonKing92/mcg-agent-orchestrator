@@ -100,11 +100,12 @@ public sealed class CliCommandTestsEpicProgressWindow : CliTaskQueryTestSupport,
             .ListGoalMetadataAsync().GetAwaiter().GetResult().Single(goal => goal.Status == "Completed");
         Assert.Null(terminal.CreatedAt); // Proves the default metadata path would miss a terminal creation.
         var probe = new ProbeStateRepository(new AgentOrchestratorKernel());
-        var baseline = Execute(["epic-list"], workspace, probe).Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        var baseline = ScopeLines(Execute(["epic-list"], workspace, probe));
 
         var output = Execute(["epic-list", "--since", "2000-01-01T00:00:00Z"], workspace, probe);
 
-        var lines = output.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        var lines = ScopeLines(output);
+        Assert.Contains("Outcome: unknown; bar version 0; outcome evidence required", output);
         Assert.Equal("Window since 2000-01-01T00:00:00.0000000Z (UTC)", lines[0]);
         Assert.Equal(baseline[0] + " window-created=11 window-transitioned=11 window-failed=2 window-landed=1", lines[1]);
         Assert.Equal(baseline[1], lines[2]);
@@ -143,12 +144,13 @@ public sealed class CliCommandTestsEpicProgressWindow : CliTaskQueryTestSupport,
         var workspace = Seed();
         var before = SnapshotStores(workspace);
         var probe = new ProbeStateRepository(new AgentOrchestratorKernel());
-        var baseline = Execute(["epic-list"], workspace, probe).Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        var baseline = ScopeLines(Execute(["epic-list"], workspace, probe));
 
         string[] args = inline ? ["epic-list", $"--since={value}"] : ["epic-list", "--since", value];
         var output = Execute(args, workspace, probe);
 
-        var lines = output.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        var lines = ScopeLines(output);
+        Assert.Contains("Outcome: unknown; bar version 0; outcome evidence required", output);
         Assert.Equal(3, lines.Length);
         var header = lines[0];
         Assert.StartsWith("Window since ", header);
@@ -289,6 +291,9 @@ public sealed class CliCommandTestsEpicProgressWindow : CliTaskQueryTestSupport,
         return CaptureConsole(() => Assert.False(CliPersistentStateRunner.ExecuteCommand(
             args, probe, workspace, ref agents, new InMemoryModelProviderRegistry([]), ref profiles, ref current)));
     }
+
+    private static string[] ScopeLines(string output) => output.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries)
+        .Where(line => !line.StartsWith("  Outcome", StringComparison.Ordinal)).ToArray();
 
     private static void AssertNoKernelAccess(ProbeStateRepository probe)
     {

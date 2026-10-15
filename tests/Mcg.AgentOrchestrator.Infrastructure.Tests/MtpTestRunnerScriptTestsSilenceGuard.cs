@@ -1,11 +1,110 @@
 using System.Diagnostics;
 using System.Text;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 [Xunit.Collection(TestCollections.ProcessSpawning)]
 public sealed class MtpTestRunnerScriptTestsSilenceGuard
 {
     private static readonly TimeSpan Window = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan Ceiling = TimeSpan.FromSeconds(2);
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false, true)]
+    [Xunit.InlineData(true, false)]
+    public async Task ChunkObserver_BufferedOrForwarded_ControlsOuterSilence(bool forward, bool stalled)
+    {
+        var time = new OutputTimeProvider();
+        long bytes = 0;
+        using var monitor = new AcceptanceLaneStallMonitor("nested", time, AcceptanceLaneStallPolicy.StallLimit, _ => { });
+        GateHeartbeatSnapshot Snapshot() => new(null, "verification-check", "nested", null, null, null, "running",
+            DateTimeOffset.MinValue, DateTimeOffset.MaxValue, DateTimeOffset.MinValue, bytes, 0, bytes);
+        monitor.Observe(Snapshot());
+        var captured = new StringBuilder();
+        var stamped = new StringBuilder();
+        const string chunk = "nested café 中文"; // Deliberately repeated, with no newline.
+        foreach (var seconds in new[] { 300, 590, 604 })
+        {
+            time.Seconds = seconds;
+            captured.Append(await RealProcessSilenceGuard.ReadChunksAsync(new StringReader(chunk),
+                text => stamped.Append(text), observeOutput: forward ? text => bytes += Encoding.UTF8.GetByteCount(text) : null));
+            monitor.Observe(Snapshot());
+        }
+        Assert.Equal(string.Concat(Enumerable.Repeat(chunk, 3)), captured.ToString());
+        Assert.Equal(captured.ToString(), stamped.ToString());
+        Assert.Equal(forward ? Encoding.UTF8.GetByteCount(captured.ToString()) : 0, bytes);
+        Assert.Equal(stalled, monitor.Stopped);
+    }
+
+    [Xunit.Fact]
+    public async Task ChunkObserver_EmptyInput_StillTripsOuterSilence()
+    {
+        var time = new OutputTimeProvider();
+        using var monitor = new AcceptanceLaneStallMonitor("nested", time, AcceptanceLaneStallPolicy.StallLimit, _ => { });
+        var snapshot = new GateHeartbeatSnapshot(null, "verification-check", "nested", null, null, null, "running",
+            DateTimeOffset.MinValue, DateTimeOffset.MaxValue, DateTimeOffset.MinValue, 0, 0, 0);
+        monitor.Observe(snapshot);
+        var callbacks = 0;
+        Assert.Equal(string.Empty, await RealProcessSilenceGuard.ReadChunksAsync(new StringReader(string.Empty),
+            _ => callbacks++, observeOutput: _ => callbacks++));
+        time.Seconds = 604;
+        monitor.Observe(snapshot);
+        Assert.Equal(0, callbacks);
+        Assert.True(monitor.Stopped);
+    }
+
+    [Xunit.Fact]
+    public async Task OutputObserver_PartialStreams_ArriveBeforeChildExit()
+    {
+        const string text = "café 中文";
+        var stdout = new StringBuilder();
+        var stderr = new StringBuilder();
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var sync = new object();
+        await using var child = await Child.Start(
+            $"[Console]::Out.Write('{text}'); [Console]::Out.Flush(); [Console]::Error.Write('{text}'); [Console]::Error.Flush(); AwaitFile 'release'",
+            observeOutput: (stream, chunk) =>
+            {
+                lock (sync)
+                {
+                    Assert.Contains(stream, new[] { "stdout", "stderr" });
+                    (stream == "stdout" ? stdout : stderr).Append(chunk);
+                    if (stdout.ToString() == text && stderr.ToString() == text) ready.TrySetResult();
+                }
+            });
+        await child.Observe(ready.Task);
+        Assert.False(child.Result.IsCompleted);
+        child.Release("release");
+        var result = await child.Completion;
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(text, result.Stdout);
+        Assert.Equal(text, result.Stderr);
+        Assert.Equal(result.Stdout, stdout.ToString());
+        Assert.Equal(result.Stderr, stderr.ToString());
+    }
+
+    [Xunit.Fact]
+    public async Task OutputObserver_Failure_ReapsChildAndReportsCapturedOutput()
+    {
+        var clock = new ManualElapsedClock();
+        using var scope = RealProcessSilenceGuard.Begin(() => clock.Elapsed, observe: clock.Observe);
+        await using var child = await Child.Start(
+            "[Console]::Out.Write('ready'); [Console]::Out.Flush(); AwaitFile 'second'; " +
+            "[Console]::Error.Write('failure'); [Console]::Error.Flush(); AwaitFile 'release'",
+            observeOutput: (stream, _) => { if (stream == "stderr") throw new IOException("observer sentinel"); });
+        await child.Observe(clock.WaitForOutputContaining("ready"));
+        child.ExpectedObserverFailure = true;
+        child.Release("second");
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => child.Completion);
+        Assert.IsType<IOException>(error.InnerException);
+        Assert.Contains("stdout:ready", error.Message, StringComparison.Ordinal);
+        Assert.Contains("stderr:failure", error.Message, StringComparison.Ordinal);
+    }
+
+    private sealed class OutputTimeProvider : TimeProvider
+    {
+        internal int Seconds { get; set; }
+        public override DateTimeOffset GetUtcNow() => DateTimeOffset.UnixEpoch.AddSeconds(Seconds);
+    }
 
     [Xunit.Fact]
     public async Task DefaultGuardAllowsProgressPastFormerThirtySecondDeadline()
@@ -103,15 +202,15 @@ public sealed class MtpTestRunnerScriptTestsSilenceGuard
         await using var child = await Child.Start(
             "[Console]::Out.WriteLine('still working'); [Console]::Out.Flush(); AwaitFile 'second'; " +
             "[Console]::Error.Write('recent stderr'); [Console]::Error.Flush(); AwaitFile 'release'",
-            TimeSpan.FromSeconds(1));
+            TimeSpan.FromSeconds(900));
         await child.Observe(clock.WaitForOutputContaining("still working\r\n"));
-        clock.AdvanceTo(TimeSpan.FromSeconds(0.9));
+        clock.AdvanceTo(TimeSpan.FromSeconds(899));
         await child.Observe(clock.WaitForEvaluationAtOrAfter(clock.Elapsed));
         child.Release("second");
         await child.Observe(clock.WaitForOutputContaining("recent stderr"));
-        clock.AdvanceTo(TimeSpan.FromSeconds(1.1));
+        clock.AdvanceTo(TimeSpan.FromSeconds(901));
         var error = await Assert.ThrowsAsync<MtpTestRunnerScriptTests.RealProcessHangGuardException>(() => child.Completion);
-        Assert.Contains("1 seconds", error.Message, StringComparison.Ordinal);
+        Assert.Contains("900 seconds", error.Message, StringComparison.Ordinal);
         Assert.Contains("elapsed=", error.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("no output for", error.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("total ceiling", error.Message, StringComparison.Ordinal);
@@ -128,11 +227,13 @@ public sealed class MtpTestRunnerScriptTestsSilenceGuard
         internal Task<MtpTestRunnerScriptTests.ProcessResult> Completion =>
             AwaitEvent(Result, "child exit or guard failure");
         internal int Pid { get; private set; }
+        internal bool ExpectedObserverFailure { get; set; }
         internal string PathFor(string name) => Path.Combine(_root, name);
         internal void Release(string name) => File.WriteAllText(PathFor(name), "release");
         internal void ReleaseNextPulse() => Release("pulse-" + _nextPulse++);
 
-        internal static async Task<Child> Start(string body, TimeSpan? timeout = null)
+        internal static async Task<Child> Start(string body, TimeSpan? timeout = null,
+            Action<string, string>? observeOutput = null)
         {
             var child = new Child();
             Directory.CreateDirectory(child._root);
@@ -159,7 +260,7 @@ public sealed class MtpTestRunnerScriptTestsSilenceGuard
             startInfo.ArgumentList.Add("-NonInteractive");
             startInfo.ArgumentList.Add("-EncodedCommand");
             startInfo.ArgumentList.Add(Convert.ToBase64String(Encoding.Unicode.GetBytes(script)));
-            child.Result = Task.Run(() => MtpTestRunnerScriptTests.Run(startInfo, timeout));
+            child.Result = Task.Run(() => MtpTestRunnerScriptTests.Run(startInfo, timeout, observeOutput: observeOutput));
             try
             {
                 await child.WaitForPid();
@@ -219,6 +320,7 @@ public sealed class MtpTestRunnerScriptTestsSilenceGuard
             ReleaseNextPulse();
             try { await Completion; }
             catch (MtpTestRunnerScriptTests.RealProcessHangGuardException) { }
+            catch (InvalidOperationException) when (ExpectedObserverFailure) { }
             finally { Directory.Delete(_root, recursive: true); }
         }
     }

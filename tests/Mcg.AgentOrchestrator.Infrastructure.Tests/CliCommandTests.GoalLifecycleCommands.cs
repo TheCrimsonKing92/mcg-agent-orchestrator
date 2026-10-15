@@ -212,7 +212,6 @@ public sealed class CliCommandTestsGoalLifecycleCommandsCreation : CliCommandTes
         var kernel = new AgentOrchestratorKernel();
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default()
             .AddOrReplaceById(TestAgent("planner-alt", AgentRole.Planner))
-            .AddOrReplaceById(TestAgent("researcher-alt", AgentRole.Researcher))
             .AddOrReplaceById(TestAgent("developer-alt", AgentRole.Developer))
             .AddOrReplaceById(TestAgent("tester-alt", AgentRole.Tester))
             .AddOrReplaceById(TestAgent("reviewer-alt", AgentRole.Reviewer))
@@ -227,11 +226,9 @@ public sealed class CliCommandTestsGoalLifecycleCommandsCreation : CliCommandTes
                 "goal",
                 "Implement roster overrides",
                 "--pipeline",
-                "five-role",
+                "scout",
                 "--planner",
                 "planner-alt",
-                "--researcher",
-                "researcher-alt",
                 "--developer",
                 "developer-alt",
                 "--tester",
@@ -248,7 +245,6 @@ public sealed class CliCommandTestsGoalLifecycleCommandsCreation : CliCommandTes
 
         Xunit.Assert.NotNull(currentGoal);
         Xunit.Assert.Equal("planner-alt", AssignedAgentId(currentGoal!, AgentRole.Planner));
-        Xunit.Assert.Equal("researcher-alt", AssignedAgentId(currentGoal, AgentRole.Researcher));
         Xunit.Assert.Equal("developer-alt", AssignedAgentId(currentGoal, AgentRole.Developer));
         Xunit.Assert.Equal("tester-alt", AssignedAgentId(currentGoal, AgentRole.Tester));
         Xunit.Assert.Equal("reviewer-alt", AssignedAgentId(currentGoal, AgentRole.Reviewer));

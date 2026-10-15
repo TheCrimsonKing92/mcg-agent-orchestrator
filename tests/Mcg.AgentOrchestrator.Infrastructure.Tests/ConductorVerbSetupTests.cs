@@ -21,26 +21,11 @@ public sealed class ConductorVerbSetupTests
             output.GetStringBuilder().Clear();
             Assert.Equal(0, CliConductorCommand.Run(["conductor", "setup"], workspace,
                 launcher, new ConductorVerbStartTests.FixedProbe(owner), output: output, error: error));
-            Assert.Equal($"portfolio: version 2 ({workspace.PortfolioStorePath}){Environment.NewLine}" +
-                $"experiments: version 1 ({workspace.ExperimentStorePath}){Environment.NewLine}" +
-                $"backlog: version 1 ({workspace.BacklogStorePath}){Environment.NewLine}" +
-                $"operator-intents: version 1 ({Path.Combine(workspace.OrchestratorDirectory, SqliteOperatorIntentStore.DatabaseFileName)}){Environment.NewLine}" +
-                $"operator-lessons: version 1 ({workspace.OperatorLessonsStorePath}){Environment.NewLine}" +
-                $"operator-escapes: version 1 ({workspace.OperatorEscapesStorePath}){Environment.NewLine}" +
-                $"cohort-acceptance: version 1 ({Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db")}){Environment.NewLine}" +
-                $"cohort-attribution-retractions: version 1 ({Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db")}){Environment.NewLine}" +
-                $"cohort-solo-inherited-receipts: version 1 ({Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db")}){Environment.NewLine}" +
-                $"merge-train-acceptance: version 1 ({Path.Combine(workspace.OrchestratorDirectory, "merge-train-acceptance.db")}){Environment.NewLine}" +
-                $"follower-gate-acceptance: version 1 ({Path.Combine(workspace.OrchestratorDirectory, "follower-gate-acceptance.db")}){Environment.NewLine}" +
-                $"collaboration-items: version 1 ({Path.Combine(workspace.OrchestratorDirectory, "collaboration-items.db")}){Environment.NewLine}" +
-                $"run-events: version 1 ({Path.Combine(workspace.OrchestratorDirectory, "run-events.db")}){Environment.NewLine}" +
-                $"dogfood-log: version 1 ({workspace.DogfoodLogStorePath}){Environment.NewLine}" +
-                $"author-claims: version 1 ({Path.Combine(workspace.OrchestratorDirectory, "author-claims.db")}){Environment.NewLine}" +
-                $"steward-triggers: version 1 ({Path.Combine(workspace.OrchestratorDirectory, "steward-triggers.db")}){Environment.NewLine}" +
-                $"judge-panel: version 1 ({Path.Combine(workspace.OrchestratorDirectory, "judge-panel.db")}){Environment.NewLine}" +
-                $"board-fill: version 1 ({Path.Combine(workspace.OrchestratorDirectory, "board-fill.db")}){Environment.NewLine}" +
-                $"progressive-review-glance-circuit: version 1 ({Path.Combine(workspace.OrchestratorDirectory, "progressive-review-glance-circuit.db")}){Environment.NewLine}" +
-                $"progressive-review-steering: version 1 ({Path.Combine(workspace.OrchestratorDirectory, "progressive-review-steering.db")}){Environment.NewLine}", output.ToString());
+            var expectedOutput = string.Concat(StoreSchemaRegistry.Inventory
+                .Where(entry => entry.CurrentVersion.HasValue)
+                .Select(entry => $"{entry.StoreName}: version {entry.CurrentVersion} " +
+                    $"({Path.Combine(workspace.OrchestratorDirectory, entry.Database)}){Environment.NewLine}"));
+            Assert.Equal(expectedOutput, output.ToString());
             Assert.NotNull(SqliteProgressiveReviewSteeringStore.OpenReadOnly(
                 Path.Combine(workspace.OrchestratorDirectory, StoreSchemaRegistry.ProgressiveReviewSteering.Database)));
             Assert.NotNull(FollowerGateAcceptanceStore.OpenReadOnly(
@@ -58,6 +43,7 @@ public sealed class ConductorVerbSetupTests
             Assert.NotNull(SqliteOperatorIntentStore.OpenExisting(workspace.OrchestratorDirectory, workspace.LogDirectory));
             Assert.NotNull(SqliteOperatorLessonStore.OpenReadOnly(workspace.OperatorLessonsStorePath));
             Assert.NotNull(SqliteOperatorEscapeStore.OpenReadOnly(workspace.OperatorEscapesStorePath));
+            Assert.NotNull(SqliteOperatorDirectiveStore.OpenReadOnly(workspace.OperatorDirectivesStorePath));
         }
         Assert.Empty(launcher.Requests);
         Assert.Equal("", error.ToString());
@@ -71,7 +57,7 @@ public sealed class ConductorVerbSetupTests
         using var error = new StringWriter();
         Assert.Equal(0, CliConductorCommand.Run(["conductor", "setup"], fixture.Workspace,
             lockProbe: new UnavailableProbe(), output: output, error: error));
-        Assert.Contains("portfolio: version 2", output.ToString());
+        Assert.Contains($"portfolio: version {StoreSchemaRegistry.Portfolio.CurrentVersion}", output.ToString());
         Assert.Equal("", error.ToString());
     }
 
@@ -135,6 +121,7 @@ public sealed class ConductorVerbSetupTests
             Assert.NotNull(PortfolioStore.OpenReadOnly(workspace.PortfolioStorePath));
             Assert.NotNull(SqliteOperatorLessonStore.OpenReadOnly(workspace.OperatorLessonsStorePath));
             Assert.NotNull(SqliteOperatorEscapeStore.OpenReadOnly(workspace.OperatorEscapesStorePath));
+            Assert.NotNull(SqliteOperatorDirectiveStore.OpenReadOnly(workspace.OperatorDirectivesStorePath));
             return new(0, "{\"pid\":1234,\"stdoutPath\":\"stdout.log\"}", null);
         }
     }

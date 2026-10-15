@@ -8,11 +8,6 @@ public sealed class AcceptanceDotnetBuildPhasePlanTests : IDisposable
 {
     private readonly string _worktreePath = Path.Combine(Path.GetTempPath(), $"build-phase-plan-{Guid.NewGuid():N}");
     private static readonly string[] ChangedFiles = ["src/Mcg.AgentOrchestrator.Core/Application/Goal.cs"];
-    private static readonly string[] ExpectedCacheableProjects =
-    [
-        CoreProject, ProvidersProject, OperatorCommsProject, InfrastructureProject, AppProject,
-        CoreTestsProject, InfrastructureTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject
-    ];
 
     public AcceptanceDotnetBuildPhasePlanTests() => Directory.CreateDirectory(_worktreePath);
 
@@ -29,13 +24,12 @@ public sealed class AcceptanceDotnetBuildPhasePlanTests : IDisposable
         var plan = Assert.IsType<DotnetBaseBuildCachePlan>(phase.CachePlan);
         Assert.Equal(new[] { _worktreePath }, resolverCalls);
         Assert.Equal("abc1234", plan.MainSha);
-        Assert.Equal(ExpectedCacheableProjects, plan.CacheableProjects);
+        Assert.Equal(CacheEligibleProjects([InfrastructureTestsProject], ScopedPlan()), plan.CacheableProjects);
+        Assert.Contains(ExecutionProject, plan.RestoreProjects);
         Assert.Equal(new[] { CoreProject, InfrastructureTestsProject }, plan.BuildProjects);
-        Assert.Equal(new[]
-        {
-            ProvidersProject, OperatorCommsProject, InfrastructureProject, AppProject,
-            CoreTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject
-        }, plan.RestoreProjects);
+        Assert.Equal(plan.CacheableProjects.Where(project => !ScopedPlan().DependencyClosure.Contains(project)), plan.RestoreProjects);
+        Assert.Empty(plan.RestoreProjects.Intersect(plan.BuildProjects));
+        Assert.Equal(plan.CacheableProjects.Count, plan.RestoreProjects.Count + plan.BuildProjects.Count);
     }
 
     [Theory]
@@ -81,6 +75,19 @@ public sealed class AcceptanceDotnetBuildPhasePlanTests : IDisposable
 
         Assert.Null(phase.CachePlan);
         Assert.Equal(1, resolverCalls);
+    }
+
+    [Fact]
+    public void CaseVariantClosure_PreservesTopologyOrder()
+    {
+        var closure = new HashSet<string>(StringComparer.Ordinal)
+        {
+            InfrastructureTestsProject.ToUpperInvariant(), ExecutionProject.ToUpperInvariant()
+        };
+        var phase = AcceptanceDotnetBuildPhase.Create(_worktreePath, Checks(), ChangedFiles,
+            PolicyShardPlan.Scoped("case variant", closure), _ => "abc1234");
+        var plan = Assert.IsType<DotnetBaseBuildCachePlan>(phase.CachePlan);
+        Assert.Equal(new[] { ExecutionProject, InfrastructureTestsProject }, plan.BuildProjects);
     }
 
     [Theory]

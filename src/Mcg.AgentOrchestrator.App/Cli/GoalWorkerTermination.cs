@@ -6,7 +6,8 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 // A receipt describes one already reaped dispatch generation; replay never performs process I/O.
 internal sealed record GoalWorkerTerminationReceipt(
     TaskId TaskId, TaskProcessRecord CancelledProcess,
-    CancellationCandidateEvidence CandidateEvidence, IReadOnlyList<string> TaskNotes);
+    CancellationCandidateEvidence CandidateEvidence, IReadOnlyList<string> TaskNotes,
+    CompletionBuildEvidenceOperation? CompletionBuildEvidence = null);
 
 internal static class GoalWorkerTermination
 {
@@ -27,7 +28,7 @@ internal static class GoalWorkerTermination
             var selection = new AgentOrchestratorKernel();
             selection.ReplaceGoalWithSnapshot(snapshot);
             foreach (var task in selection.GetGoal(new GoalId(snapshot.Id)).Tasks
-                .Where(task => task.LastProcess is { IsRunning: true }))
+                .Where(task => task.LastProcess is { IsRunning: true } || task.CompletionBuildEvidence is { IsPending: true }))
             {
                 receipts.Add((Override.Value ?? TerminateDispatch)(snapshot, task.Id));
             }
@@ -57,7 +58,7 @@ internal static class GoalWorkerTermination
             .Where(item => item.TaskId == taskId && item.Kind == ProgressKind.TaskNote &&
                 !item.Message.StartsWith("CANCELLATION_CANDIDATE_EVIDENCE", StringComparison.Ordinal))
             .Select(item => item.Message).ToArray();
-        return new(taskId, cancelled, candidate, notes);
+        return new(taskId, cancelled, candidate, notes, task.CompletionBuildEvidence);
     }
 
     internal static void Replay(AgentOrchestratorKernel kernel, GoalId goalId,
@@ -72,11 +73,13 @@ internal static class GoalWorkerTermination
             {
                 throw new InvalidOperationException($"Task {receipt.TaskId.Value[..8]} dispatch generation changed after termination.");
             }
-            if (!current.IsRunning)
+            if (!current.IsRunning && kernel.GetTask(goalId, receipt.TaskId).CompletionBuildEvidence is not { IsPending: true })
             {
                 if (current.WasCancelled) continue;
                 throw new InvalidOperationException($"Task {receipt.TaskId.Value[..8]} completed after termination preparation.");
             }
+            if (receipt.CompletionBuildEvidence is { } build)
+                kernel.RecordCompletionBuildEvidence(goalId, receipt.TaskId, build);
             kernel.RecordTaskProcessCancelled(goalId, receipt.TaskId, cancelled, receipt.CandidateEvidence);
             foreach (var note in receipt.TaskNotes) kernel.RecordTaskNote(goalId, receipt.TaskId, note);
         }

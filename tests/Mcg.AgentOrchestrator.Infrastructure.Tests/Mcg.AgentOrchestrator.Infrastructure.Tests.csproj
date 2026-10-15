@@ -19,6 +19,7 @@
     <ProjectReference Include="Fixtures\IsolatedDotnetProbe\Mcg.AgentOrchestrator.IsolatedDotnetProbe.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="Fixtures\RealProcessShardProbe\Mcg.AgentOrchestrator.RealProcessShardProbe.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="Fixtures\ConsoleIoProbe\Mcg.AgentOrchestrator.ConsoleIoProbe.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="Fixtures\SupervisorLaunchProbe\Mcg.AgentOrchestrator.SupervisorLaunchProbe.csproj" ReferenceOutputAssembly="false" />
     <PackageReference Include="BouncyCastle.Cryptography" Version="2.4.0" />
     <PackageReference Include="Microsoft.Testing.Extensions.TrxReport" Version="2.3.2" />
     <PackageReference Include="xunit.v3.mtp-v2" Version="3.2.2" />
@@ -32,6 +33,7 @@
     <Compile Remove="ProviderEnvironment\**\*.cs" />
     <Compile Remove="Fixtures\RealProcessShardProbe\**\*.cs" />
     <Compile Remove="Fixtures\ConsoleIoProbe\**\*.cs" />
+    <Compile Remove="Fixtures\SupervisorLaunchProbe\**\*.cs" />
     <Compile Include="Fixtures\ConsoleIoProbe\ConsoleHostCensus.cs" />
     <Content Include="TestData\Fixtures\progressive-review-10bd7223.json" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Fixtures\PlannerOutputContract\*.out.txt" CopyToOutputDirectory="PreserveNewest" />

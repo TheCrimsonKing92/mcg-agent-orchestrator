@@ -34,6 +34,10 @@ public sealed class WorkerBuildCheckFreeSlotTests
         Assert.Equal(TimeSpan.Zero, holder.GetProperty("acquiredAt").GetDateTimeOffset().Offset);
         Assert.True(observed.GetProperty("canonicalReceiptExists").GetBoolean());
         Assert.Equal("success", observed.GetProperty("receipt").GetProperty("buildOutcome").GetString());
+        Assert.Equal(artifactsPath, observed.GetProperty("receipt").GetProperty("artifactsPath").GetString());
+        var properties = observed.GetProperty("receipt").GetProperty("buildProperties");
+        Assert.Equal(artifactsPath, properties.GetProperty("ArtifactsPath").GetString());
+        Assert.Equal("true", properties.GetProperty("UseArtifactsOutput").GetString());
         Assert.True(observed.GetProperty("holderRemoved").GetBoolean());
         if (scenario == "HashedSlotFree")
             Assert.True(observed.GetProperty("lockReacquired").GetBoolean());

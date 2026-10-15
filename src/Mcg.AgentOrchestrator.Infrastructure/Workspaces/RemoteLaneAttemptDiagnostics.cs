@@ -11,7 +11,14 @@ internal sealed record RemoteLanePollSummary(int PollCount, int FailedPollCount,
     DateTimeOffset? LastHeartbeatChangeAt, RemoteLaneStep? LastFailedPoll);
 internal sealed record RemoteLaneAttemptDetail(IReadOnlyList<RemoteLaneStep> Steps,
     RemoteLanePollSummary? Poll, IReadOnlyList<RemoteLaneStep> Fetches, JsonElement? LastStatus,
-    string? RunnerLogPath, string? ExceptionMessage);
+    string? RunnerLogPath, string? ExceptionMessage,
+    RemoteLaneLeaseDecision? LeaseDecision = null, RemoteLaneRunnerLogCaptureTiming? RunnerLogCaptureTiming = null);
+// The predicate's operands are authoritative; the separately sampled diagnostics may be newer.
+internal sealed record RemoteLaneLeaseDecision(DateTimeOffset ObservedAt, DateTimeOffset SubmittedAt,
+    DateTimeOffset EffectiveHeartbeat, TimeSpan HeartbeatAge, int LeaseSeconds,
+    string ExecutorId, string? RunnerAlias, string Lane, string GateAttemptId,
+    RemoteLaneHandleDiagnostics? Snapshot);
+internal sealed record RemoteLaneRunnerLogCaptureTiming(DateTimeOffset StartedAt, DateTimeOffset EndedAt);
 internal sealed record RemoteLaneHandleDiagnostics(RemoteLanePollSummary Poll,
     IReadOnlyList<RemoteLaneStep> Fetches, JsonElement? LastStatus);
 internal sealed record RemoteLaneRunnerLogCapture(string? Path, RemoteLaneStep? FailedStep = null);

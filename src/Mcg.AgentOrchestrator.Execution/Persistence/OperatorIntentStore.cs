@@ -39,7 +39,8 @@ public sealed record OperatorIntentRecord(
     DateTimeOffset? ClaimedAt = null,
     DateTimeOffset? CompletedAt = null,
     string? Outcome = null,
-    OperatorActorKind ActorKind = OperatorActorKind.Human);
+    OperatorActorKind ActorKind = OperatorActorKind.Human,
+    DateTimeOffset? AdmissionExpiresAt = null);
 
 public sealed record ActionableOperatorIntentSummary(
     string GoalId,
@@ -95,7 +96,7 @@ public interface IOperatorIntentStore
     void AcknowledgeWake(string intentId);
 }
 
-public sealed class SqliteOperatorIntentStore : IOperatorIntentStore
+public sealed partial class SqliteOperatorIntentStore : IOperatorIntentStore
 {
     public const string DatabaseFileName = "operator-intents.db";
     public const string WakeFileSuffix = ".operator-intent.wake";
@@ -104,16 +105,23 @@ public sealed class SqliteOperatorIntentStore : IOperatorIntentStore
     private readonly string _dbPath;
     private readonly string _wakeDirectory;
     private readonly bool _readOnly;
+    private readonly Func<DateTimeOffset> _utcNow;
 
     internal Action<string> RemoveWakeFile { get; init; } = File.Delete;
     internal Action<string> EmitDiagnostic { get; init; } = Console.Error.WriteLine;
 
-    public SqliteOperatorIntentStore(string dbPath, string wakeDirectory, bool readOnly = false)
+    public SqliteOperatorIntentStore(string dbPath, string wakeDirectory, bool readOnly = false,
+        Func<DateTimeOffset>? utcNow = null)
+        : this(dbPath, wakeDirectory, readOnly, utcNow, initialize: true) { }
+
+    private SqliteOperatorIntentStore(string dbPath, string wakeDirectory, bool readOnly,
+        Func<DateTimeOffset>? utcNow, bool initialize)
     {
         _dbPath = Path.GetFullPath(dbPath);
         _wakeDirectory = Path.GetFullPath(wakeDirectory);
         _readOnly = readOnly;
-        if (!readOnly)
+        _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
+        if (!readOnly && initialize)
         {
             Setup(_dbPath);
             Directory.CreateDirectory(_wakeDirectory);
@@ -130,10 +138,13 @@ public sealed class SqliteOperatorIntentStore : IOperatorIntentStore
             throw SchemaSetupRequired(dbPath, StoreSchemaState.Missing);
 
         var store = new SqliteOperatorIntentStore(dbPath, logDirectory, readOnly: true);
-        using var conn = store.OpenConnection();
+        // Schema refusal must not create WAL sidecars in the source store.
+        using var snapshot = new StoreInspectionSnapshot(dbPath);
+        var conn = snapshot.Connection;
         var state = StoreSchemaVersions.Verify(conn, StoreSchemaRegistry.OperatorIntents);
         if (state != StoreSchemaState.Current)
-            throw SchemaSetupRequired(dbPath, state);
+            throw StoreSchemaDiagnostics.WithCompatibility(SchemaSetupRequired(dbPath, state), state,
+                conn, StoreSchemaRegistry.OperatorIntents, dbPath);
         return store;
     }
 
@@ -144,7 +155,7 @@ public sealed class SqliteOperatorIntentStore : IOperatorIntentStore
         new SqliteConnectionStringBuilder
         {
             DataSource = _dbPath,
-            Mode = _readOnly ? SqliteOpenMode.ReadOnly : SqliteOpenMode.ReadWriteCreate,
+            Mode = _readOnly ? SqliteOpenMode.ReadOnly : SqliteOpenMode.ReadWrite,
             Pooling = false
         }.ToString();
 
@@ -154,12 +165,20 @@ public sealed class SqliteOperatorIntentStore : IOperatorIntentStore
             throw new InvalidOperationException("Operator intents store is read-only.");
     }
 
-    public async Task<OperatorIntentRecord> EnqueueAsync(
+    public Task<OperatorIntentRecord> EnqueueAsync(
+        OperatorIntentRecord intent,
+        CancellationToken cancellationToken = default) =>
+        Task.Run(() => TaskIntentAdmission.Serialize(_dbPath, intent.GoalId, intent.TaskId,
+            () => EnqueueCoreAsync(intent, cancellationToken).GetAwaiter().GetResult()), cancellationToken);
+
+    private async Task<OperatorIntentRecord> EnqueueCoreAsync(
         OperatorIntentRecord intent,
         CancellationToken cancellationToken = default)
     {
         EnsureWritable();
         ValidateNewIntent(intent);
+        intent = intent with { AdmissionExpiresAt = HasTaskTarget(intent)
+            ? _utcNow().AddMinutes(5) : null };
         await using var conn = OpenConnection();
         await using var tx = conn.BeginTransaction();
         await using (var cmd = conn.CreateCommand())
@@ -169,16 +188,17 @@ public sealed class SqliteOperatorIntentStore : IOperatorIntentStore
                 INSERT OR IGNORE INTO operator_intents (
                     id, idempotency_key, verb, goal_id, task_id, payload_json,
                     payload_file_references_json, actor, channel, authentication_assurance,
-                    created_at, status, claim_owner, claimed_at, completed_at, outcome, actor_kind
+                    created_at, status, claim_owner, claimed_at, completed_at, outcome, actor_kind, admission_expires_at
                 )
                 VALUES (
                     $id, $idempotency_key, $verb, $goal_id, $task_id, $payload_json,
                     $payload_file_references_json, $actor, $channel, $authentication_assurance,
-                    $created_at, $status, $claim_owner, $claimed_at, $completed_at, $outcome, $actor_kind
+                    $created_at, $status, $claim_owner, $claimed_at, $completed_at, $outcome, $actor_kind, $admission_expires_at
                 )
                 """;
             BindIntent(cmd, intent);
-            await cmd.ExecuteNonQueryAsync(cancellationToken);
+            if (await cmd.ExecuteNonQueryAsync(cancellationToken) == 1 && HasTaskTarget(intent))
+                AdvanceAdmissionRevision(conn, tx, intent);
         }
 
         var persisted = await ReadByIdempotencyKeyAsync(conn, tx, intent.IdempotencyKey, cancellationToken)
@@ -306,6 +326,13 @@ public sealed class SqliteOperatorIntentStore : IOperatorIntentStore
         cmd.Parameters.AddWithValue("$id", intentId);
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken) ? ReadIntent(reader) : null;
+    }
+
+    public async Task<OperatorIntentRecord?> GetByIdempotencyKeyAsync(string idempotencyKey,
+        CancellationToken cancellationToken = default)
+    {
+        await using var conn = OpenConnection();
+        return await ReadByIdempotencyKeyAsync(conn, null, idempotencyKey, cancellationToken);
     }
 
     public async Task<IReadOnlyList<OperatorIntentRecord>> ListForGoalAsync(
@@ -473,6 +500,8 @@ public sealed class SqliteOperatorIntentStore : IOperatorIntentStore
             )
             """);
             AddColumnIfMissing(conn, "operator_intents", "actor_kind", "TEXT");
+            AddColumnIfMissing(conn, "operator_intents", "admission_expires_at", "TEXT");
+            SetupTaskAdmission(conn);
             RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS idx_operator_intents_actionable ON operator_intents(goal_id, status, created_at, id)");
             StoreSchemaVersions.UpgradeToCurrent(conn, StoreSchemaRegistry.OperatorIntents);
             RunNonQuery(conn, "COMMIT");
@@ -515,7 +544,7 @@ public sealed class SqliteOperatorIntentStore : IOperatorIntentStore
 
     private static async Task<OperatorIntentRecord?> ReadByIdempotencyKeyAsync(
         SqliteConnection conn,
-        SqliteTransaction tx,
+        SqliteTransaction? tx,
         string idempotencyKey,
         CancellationToken cancellationToken)
     {
@@ -590,6 +619,7 @@ public sealed class SqliteOperatorIntentStore : IOperatorIntentStore
         cmd.Parameters.AddWithValue("$completed_at", intent.CompletedAt is null ? DBNull.Value : intent.CompletedAt.Value.ToString("O"));
         cmd.Parameters.AddWithValue("$outcome", intent.Outcome is null ? DBNull.Value : intent.Outcome);
         cmd.Parameters.AddWithValue("$actor_kind", intent.ActorKind.ToString());
+        cmd.Parameters.AddWithValue("$admission_expires_at", (object?)intent.AdmissionExpiresAt?.ToString("O") ?? DBNull.Value);
     }
 
     private static OperatorIntentRecord ReadIntent(SqliteDataReader reader) =>
@@ -612,12 +642,13 @@ public sealed class SqliteOperatorIntentStore : IOperatorIntentStore
             reader.IsDBNull(15) ? null : reader.GetString(15),
             ActorKind: reader.IsDBNull(16)
                 ? OperatorActorKind.Human
-                : Enum.Parse<OperatorActorKind>(reader.GetString(16), ignoreCase: true));
+                : Enum.Parse<OperatorActorKind>(reader.GetString(16), ignoreCase: true),
+            AdmissionExpiresAt: reader.IsDBNull(17) ? null : DateTimeOffset.Parse(reader.GetString(17)));
 
     private const string SelectColumns = """
         SELECT id, idempotency_key, verb, goal_id, task_id, payload_json,
                payload_file_references_json, actor, channel, authentication_assurance,
-               created_at, status, claim_owner, claimed_at, completed_at, outcome, actor_kind
+               created_at, status, claim_owner, claimed_at, completed_at, outcome, actor_kind, admission_expires_at
         FROM operator_intents
         """;
 

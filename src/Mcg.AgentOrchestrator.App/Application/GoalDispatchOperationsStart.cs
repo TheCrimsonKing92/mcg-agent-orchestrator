@@ -35,6 +35,18 @@ internal sealed partial class GoalDispatchOperations
     {
         ReconcileExitedAssignedProcessRecords(kernel, goal);
         goal = kernel.GetGoal(goal.Id);
+        var intentStore = SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory);
+        var intentAdmissions = goal.Tasks.ToDictionary(task => task.Id,
+            task => intentStore.CaptureAdmission(goal.Id.Value, task.Id.Value));
+        var heldTaskIds = intentStore.ListHeldTaskIds(goal.Id.Value);
+        foreach (var taskId in heldTaskIds)
+        {
+            var reference = intentAdmissions.GetValueOrDefault(new TaskId(taskId));
+            if (reference is null) continue;
+            intentStore.RecordSuppression(reference, $"selection:{goal.Id.Value}:{taskId}:{reference.Version}");
+        }
+        excludedTaskIds = (excludedTaskIds ?? new HashSet<TaskId>())
+            .Concat(heldTaskIds.Select(id => new TaskId(id))).ToHashSet();
         var safeBatch = DispatchReadinessRules.SelectFirstParallelSafeAssignedBatch(goal, agents, approveHighRiskOwnership, excludedTaskIds);
         EnsureRefinedForSelectedTasks(kernel, workspace, providers, goal, safeBatch.TaskIds);
         goal = kernel.GetGoal(goal.Id);
@@ -61,6 +73,8 @@ internal sealed partial class GoalDispatchOperations
             cascadeCheapModelAlias: ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy), cascadeMechanicalReworkCheap: ResolveCascadeMechanicalReworkCheap(workspace, cascadeMechanicalReworkCheap, conductorPolicy),
             orchestratorSkillDirectory: ResolveOrchestratorSkillDirectory(home), integrationBranch: workspace.IntegrationBranch,
             targetHome: new WorkerTargetHome(home.IsHome(workspace), WorkerAcceptanceManifestResolver.For(workspace)));
+        foreach (var prepared in batch.Dispatches)
+            intentStore.BindPreparedAdmission(intentAdmissions[prepared.Task.Id], prepared.Task.LastDispatch!.DispatchedAt);
         // Validate recovery authority before admission can hydrate a whole durable snapshot.
         // The runner repeats this guard immediately before launch to cover later state changes.
         var rejectedRecoveryIds = batch.Dispatches
@@ -216,6 +230,7 @@ internal sealed partial class GoalDispatchOperations
     {
         runner ??= new BackgroundDispatchRunner();
         var logRoot = workspace.LogDirectory;
+        var intentStore = SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, logRoot);
         var plan = kernel.BuildProcessBatchPlan(goal.Id, ProcessBatchActionKind.StartDispatches);
         var started = new List<TaskSpec>();
         var recoveryActions = new List<WorkerSandboxPrepRecoverableAction>();
@@ -237,7 +252,23 @@ internal sealed partial class GoalDispatchOperations
                 continue;
             }
             var task = goal.Tasks.Single(task => task.Id == item.TaskId);
+            var intentAdmission = intentStore.GetPreparedAdmission(goal.Id.Value, task.Id.Value, task.LastDispatch!.DispatchedAt);
+            var suppression = intentStore.RecordSuppression(intentAdmission,
+                $"prepared:{goal.Id.Value}:{task.Id.Value}:{task.LastDispatch?.DispatchedAt:O}:{intentAdmission.Version}");
+            if (suppression is not null)
+            {
+                kernel.DiscardUnstartedPreparedDispatch(goal.Id, task.Id, task.LastDispatch!.DispatchedAt,
+                    $"TASK_INTENT_DISPATCH_SUPPRESSED goal={suppression.GoalId} task={suppression.TaskId} intent={suppression.IntentId} verb={suppression.Verb} task_version={suppression.TaskVersion}");
+                startRefusals.Add(new DispatchProcessStartRefusal(task.Id, "Pending operator intent holds task dispatch admission."));
+                continue;
+            }
             var recoveringPreparedReservation = HasRecoverablePreparedReservation(task);
+            if (RequiresRetiredPreparedDispatchRefresh(task) && !refreshBeforeStart)
+            {
+                startRefusals.Add(new DispatchProcessStartRefusal(task.Id,
+                    "Retired OpenAI model in an unstarted dispatch requires preparation refresh before start."));
+                continue;
+            }
             if (ShouldRefreshPreparedDispatchBeforeStart(task, refreshBeforeStart))
             {
                 resolvedAgents ??= agents ?? AgentCatalogStore.Load(workspace.AgentCatalogPath).Agents;
@@ -303,6 +334,16 @@ internal sealed partial class GoalDispatchOperations
             }
 
 
+            // Durable admission can hydrate a different prepared command. Refuse an old unclaimed
+            // attempt here rather than editing an authoritative receipt or command in place.
+            task = kernel.GetTask(goal.Id, item.TaskId);
+            intentAdmission = intentStore.GetPreparedAdmission(goal.Id.Value, task.Id.Value, task.LastDispatch!.DispatchedAt);
+            if (RequiresRetiredPreparedDispatchRefresh(task))
+            {
+                startRefusals.Add(new DispatchProcessStartRefusal(task.Id,
+                    "Retired OpenAI model in an unstarted dispatch requires preparation refresh before start."));
+                continue;
+            }
             var startReceipt = admission?.Receipt ?? task.RetryAdmissionHistory.LastOrDefault(receipt =>
                 receipt.LinkedDispatchAt == task.LastDispatch?.DispatchedAt &&
                 receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation);
@@ -380,7 +421,8 @@ internal sealed partial class GoalDispatchOperations
                         kernel.ReplaceGoalWithSnapshot(confirmation.Snapshot);
                         recordDurableGoalBaseline?.Invoke(confirmation.Snapshot);
                         return true;
-                    });
+                    },
+                taskIntentAdmission: intentAdmission);
             if (startResult.RecoveryAction is { } action)
             {
                 recoveryActions.Add(action);
@@ -516,9 +558,23 @@ internal sealed partial class GoalDispatchOperations
     /// Instance rather than static because the recoverable-reservation check consults this
     /// instance's process-liveness probe.
     /// </remarks>
-    internal bool ShouldRefreshPreparedDispatchBeforeStart(TaskSpec task, bool refreshBeforeStart) =>
-        refreshBeforeStart &&
-        (!HasRecoverablePreparedReservation(task) || !PreparedDispatchMatchesAcknowledgedAssignment(task));
+    internal bool ShouldRefreshPreparedDispatchBeforeStart(TaskSpec task, bool refreshBeforeStart)
+    {
+        if (HasRetiredPreparedModel(task))
+            return refreshBeforeStart && RequiresRetiredPreparedDispatchRefresh(task);
+        return refreshBeforeStart &&
+            (!HasRecoverablePreparedReservation(task) || !PreparedDispatchMatchesAcknowledgedAssignment(task));
+    }
+
+    private static bool HasRetiredPreparedModel(TaskSpec task) =>
+        task.LastDispatch is { } dispatch &&
+        EffectiveModelAssignment.Normalize(dispatch.ProviderName, dispatch.ModelName) != dispatch.ModelName;
+
+    private static bool RequiresRetiredPreparedDispatchRefresh(TaskSpec task) =>
+        HasRetiredPreparedModel(task) && task.LastProcess is null &&
+        !task.RetryAdmissionHistory.Any(receipt =>
+            receipt.LinkedDispatchAt == task.LastDispatch!.DispatchedAt &&
+            (receipt.WorkerStartClaimedAt is not null || receipt.WorkerStartedAt is not null));
 
     private static bool PreparedDispatchMatchesAcknowledgedAssignment(TaskSpec task) =>
         task.LastDispatch is { } preparedDispatch &&

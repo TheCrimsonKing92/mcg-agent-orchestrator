@@ -21,7 +21,7 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
             ["goal", "Update src/Mcg.AgentOrchestrator.App/Cli/CliCommandHelp.cs", "--pipeline", "five-role"],
             interactive);
         Xunit.Assert.Equal(interactive, oneShot);
-        Xunit.Assert.Contains("--pipeline <auto|scout|five-role|developer-reviewer|developer-only>", CliCommandHelp.GoalUsage, StringComparison.Ordinal);
+        Xunit.Assert.Contains("--pipeline <auto|scout|developer-reviewer|developer-only>", CliCommandHelp.GoalUsage, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
@@ -41,7 +41,7 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
 
         var output = CaptureConsole(() =>
             CliCommandDispatcher.ExecuteCommand(
-                ["goal", "--brief-file", briefPath, "--pipeline", "five-role"],
+                ["goal", "--brief-file", briefPath, "--pipeline", "scout"],
                 kernel,
                 workspace,
                 ref agents,
@@ -51,7 +51,7 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
 
         Xunit.Assert.NotNull(currentGoal);
         Xunit.Assert.Equal(
-            [AgentRole.Researcher, AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
+            [AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
             currentGoal!.Tasks.Select(task => task.RequiredRole));
         Xunit.Assert.Contains("\"selectionSource\":\"explicitly-required\"", output, StringComparison.Ordinal);
 
@@ -59,7 +59,7 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         Goal? conflictGoal = null;
         var exception = Xunit.Assert.Throws<ArgumentException>(() =>
             CliCommandDispatcher.ExecuteCommand(
-                ["goal", "--brief-file", briefPath, "--simple", "--pipeline", "five-role"],
+                ["goal", "--brief-file", briefPath, "--simple", "--pipeline", "scout"],
                 conflictKernel,
                 workspace,
                 ref agents,
@@ -85,7 +85,7 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         {
             new[] { "goal", "Update docs/usage.md", "--pipeline" },
             new[] { "goal", "Update docs/usage.md", "--pipeline", "two-role" },
-            new[] { "goal", "Update docs/usage.md", "--pipeline", "auto", "--pipeline", "five-role" }
+            new[] { "goal", "Update docs/usage.md", "--pipeline", "auto", "--pipeline", "scout" }
         })
         {
             Xunit.Assert.Throws<ArgumentException>(() =>

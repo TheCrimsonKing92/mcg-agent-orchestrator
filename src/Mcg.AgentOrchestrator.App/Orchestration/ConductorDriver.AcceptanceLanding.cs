@@ -7,10 +7,67 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed partial class ConductorDriver
 {
     private readonly Action<string, string> _acceptanceEventSink;
+    private readonly Func<AcceptanceEngineHealthSnapshot?> _readAcceptanceEngineHealth;
     private readonly Action<TimeSpan> _noTickAcceptancePollDelay;
     private readonly TimeSpan _noTickAcceptancePollTimeout;
     internal static readonly TimeSpan DefaultNoTickAcceptancePollTimeout = TimeSpan.FromHours(2);
     private static readonly TimeSpan NoTickAcceptancePollInterval = TimeSpan.FromMilliseconds(100);
+
+    internal ConductorAdvanceResult? TryReplayPassedAcceptance(Goal suppliedGoal, ConductorAutonomyPolicy policy)
+    {
+        var goal = GetCurrentGoal(suppliedGoal);
+        if (!_parallelAcceptanceAttemptCoordinator.HasPassedReconciledReceipt(goal.Id.Value))
+            return null;
+        var candidate = TryBuildParallelAcceptanceCandidate(goal, policy, 0, out _);
+        if (candidate is null)
+            return null;
+        using var mutation = _tryAcquireEvidenceMutationLease(goal, "conductor:acceptance-receipt-replay");
+        if (mutation is null)
+            return ReplacementEvidenceMutationHeld(goal, candidate.GoalPrefix, policy);
+
+        goal = GetCurrentGoal(goal);
+        var facts = GetFacts(goal);
+        if (goal.Status == GoalStatus.Completed || facts.IsMerged)
+            return MakeResult(goal.Id.Value, candidate.GoalPrefix, policy,
+                new ConductorAdvanceOutcome.Done(GoalLifecycle.ResolveState(goal, facts)));
+        if (GoalLifecycle.ResolveState(goal, facts) is not (GoalLifecycleState.Verified or GoalLifecycleState.Verifying) ||
+            !AcceptancePrecheck.HasCompletedPassedVerificationForAllTasks(goal) ||
+            ((_cohortKernel ?? _conductorTickKernel)?.BuildVerificationGate(goal.Id).IsSatisfied == false) ||
+            HasActiveApparatusHold(goal, out _) || HasActiveOwnerReviewHold(goal, out _, out _) ||
+            HasPendingDeferredNoChangeEvidence(goal) || HasRoutableRecordedCohortAttributionFailure(goal))
+            return null;
+        var circuitHold = PassedAcceptanceReceiptReplay.CircuitHold(goal, policy, _readAcceptanceEngineHealth());
+        if (circuitHold is not null)
+            return circuitHold;
+        var heads = _resolveAcceptanceHeads(goal);
+        candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, _getLandingFileScopes(goal),
+            heads.BranchHeadSha, heads.MainHeadSha);
+        var operations = new PassedAcceptanceReceiptReplay.LandingOperations(
+            original => RebaseBeforeMerge(goal, original.GoalPrefix, policy, out _),
+            () => _resolveAcceptanceHeads(goal),
+            CarryForwardGreenVerdict,
+            (original, acceptance) => CompleteLandingAfterAcceptance(goal, original.GoalPrefix, policy, acceptance),
+            (attempt, mainSha) =>
+            {
+                if (_executionDirectory is not null)
+                    GoalOperationJournal.Completed(_executionDirectory, goal, "conductor:acceptance-receipt-replay",
+                        $"attempt={attempt.AttemptId} gatesAvoided=1 " +
+                        $"greenToLandingMs={(_utcNow() - (attempt.CompletedAt ?? attempt.StartedAt)).TotalMilliseconds:F0}", mainSha);
+            });
+        return _parallelAcceptanceAttemptCoordinator.ReplayPassedReconciledReceipt(candidate,
+            decision => PassedAcceptanceReceiptReplay.Apply(decision, operations),
+            decision =>
+            {
+                var current = GetCurrentGoal(goal);
+                var currentHeads = _resolveAcceptanceHeads(current);
+                if (GoalLifecycle.ResolveState(current, GetFacts(current)) is not (GoalLifecycleState.Verified or GoalLifecycleState.Verifying) ||
+                    HasActiveApparatusHold(current, out _) || HasActiveOwnerReviewHold(current, out _, out _) ||
+                    PassedAcceptanceReceiptReplay.CircuitHold(current, policy, _readAcceptanceEngineHealth()) is not null)
+                    return false;
+                return AcceptanceCriterionEvidence.RecordExactReplayEvidence(current, decision.Attempt,
+                    currentHeads, _cohortKernel ?? _conductorTickKernel);
+            });
+    }
 
     private ConductorAdvanceResult ExecuteLanding(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)
     {
@@ -195,6 +252,16 @@ internal sealed partial class ConductorDriver
         {
             return null;
         }
+
+        var replay = VerifyingAttemptExecutor.ExecuteReplay(
+            () => TryReplayPassedAcceptance(goal, policy), out var replayWriterBusyMessage);
+        if (replayWriterBusyMessage is not null)
+        {
+            facts = facts with { ArtifactWriterBusy = true, ArtifactWriterMessage = replayWriterBusyMessage };
+            return Hold(GoalLifecycleState.Verified, facts);
+        }
+        if (replay is not null)
+            return replay;
 
         if (_isConductorTick &&
             policy.AcceptanceWidth >= ConductorAutonomyPolicy.MinimumAcceptanceWidth &&

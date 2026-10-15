@@ -113,9 +113,7 @@ public sealed class AuthorClaimStoreTestsVersionedSetup : IDisposable
         AuthorClaimStoreSetup.Setup(Db);
 
         AssertFutureContentUnchanged(schema, rows, versions);
-        var result = Assert.Single(StoreSetupRunner.Run(root), result => result.StoreName == "author-claims");
-        Assert.Equal(Db, result.DatabasePath);
-        Assert.Equal(99, result.Version);
+        Assert.Contains(Db, Assert.Throws<InvalidOperationException>(() => StoreSetupRunner.Run(root)).Message);
         AssertFutureContentUnchanged(schema, rows, versions);
     }
 

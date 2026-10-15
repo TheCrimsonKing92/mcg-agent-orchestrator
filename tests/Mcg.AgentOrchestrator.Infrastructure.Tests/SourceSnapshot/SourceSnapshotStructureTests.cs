@@ -62,6 +62,60 @@ public sealed class SourceSnapshotStructureTests
         Assert.NotEqual(parameter.Identifier.ValueText, parse.ArgumentList.Arguments[0].Expression.ToString());
     }
 
+    [Theory]
+    [InlineData("SourceClassSizeRatchetTests", "RealTable_MeasuredTotalsAndCountsAreAtOrUnderCeilings", "snapshot.GetLines")]
+    [InlineData("AcceptanceSourceMutationTests", "SourceRevertedArm_ExtractedMutation_DelegatesToSeparateOwner", "snapshot.GetSyntaxTree")]
+    public void MixedFixtureRepositoryGuardsUseCachedFiles(string type, string method, string cachedRead)
+    {
+        var snapshot = RepositorySourceSnapshotCache.Get(VerifiedRepositoryRoot.Find());
+        var root = snapshot.GetSyntaxTree(ProjectPath + type + ".cs").GetRoot();
+        // These classes also exercise mutable temporary fixtures. Only the immutable repository
+        // guard should share the snapshot; fixture reads must retain their fresh-read semantics.
+        AssertCachedRepositoryGuard(root, method, cachedRead);
+        if (type == "AcceptanceSourceMutationTests")
+            Assert.NotEmpty(Calls(FindMethod(root, method), "snapshot.GetText"));
+        else
+            AssertHoistedJoin(FindMethod(root, method));
+    }
+
+    [Theory]
+    [InlineData("Directory.EnumerateFiles(folder)")]
+    [InlineData("Directory.GetFiles(folder)")]
+    [InlineData("File.ReadAllText(file)")]
+    [InlineData("File.ReadAllLines(file)")]
+    [InlineData("CSharpSyntaxTree.ParseText(text)")]
+    public void MethodScopedDetector_DirectRepositoryIo_IsRejected(string directCall)
+    {
+        var root = CSharpSyntaxTree.ParseText("class C { void Guard() { " +
+            "var snapshot = RepositorySourceSnapshotCache.Get(folder); snapshot.GetLines(file); " +
+            directCall + "; } void Fixture() { File.ReadAllText(file); } }").GetRoot();
+
+        Assert.ThrowsAny<Xunit.Sdk.XunitException>(() =>
+            AssertCachedRepositoryGuard(root, "Guard", "snapshot.GetLines"));
+    }
+
+    [Fact]
+    public void MethodScopedDetector_FreshIoInAnotherMethod_IsPermitted()
+    {
+        var root = CSharpSyntaxTree.ParseText("class C { void Guard() { " +
+            "var snapshot = RepositorySourceSnapshotCache.Get(folder); snapshot.GetLines(file); } " +
+            "void Fixture() { File.ReadAllText(file); File.ReadAllLines(file); " +
+            "Directory.EnumerateFiles(folder); CSharpSyntaxTree.ParseText(text); } }").GetRoot();
+        Assert.Equal(3, ForbiddenIo(root).Count());
+        Assert.Single(Calls(root, "CSharpSyntaxTree.ParseText"));
+
+        AssertCachedRepositoryGuard(root, "Guard", "snapshot.GetLines");
+    }
+
+    [Fact]
+    public void HoistedJoinDetector_StringConstructionInsideClassLoop_IsRejected()
+    {
+        var root = CSharpSyntaxTree.ParseText("class C { void Guard() { " +
+            "foreach (var row in rows) { var files = lines.Select(x => string.Join(\"\\n\", x)).ToArray(); } } }").GetRoot();
+
+        Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => AssertHoistedJoin(FindMethod(root, "Guard")));
+    }
+
     [Fact]
     public void NewTypesEachHaveOneOwningFileAndNoPartialDeclarations()
     {
@@ -81,6 +135,30 @@ public sealed class SourceSnapshotStructureTests
                     .Any(type => type.Identifier.ValueText == name)).ToArray();
             Assert.Equal(new[] { path }, owners);
         }
+    }
+
+    private static MethodDeclarationSyntax FindMethod(SyntaxNode root, string method) =>
+        Assert.Single(root.DescendantNodes().OfType<MethodDeclarationSyntax>()
+            .Where(node => node.Identifier.ValueText == method));
+
+    private static void AssertCachedRepositoryGuard(SyntaxNode root, string method, string cachedRead)
+    {
+        var guard = FindMethod(root, method);
+        Assert.NotEmpty(Calls(guard, "RepositorySourceSnapshotCache.Get"));
+        Assert.NotEmpty(Calls(guard, cachedRead));
+        Assert.Empty(ForbiddenIo(guard));
+        Assert.Empty(Calls(guard, "CSharpSyntaxTree.ParseText"));
+    }
+
+    private static void AssertHoistedJoin(MethodDeclarationSyntax guard)
+    {
+        var join = Assert.Single(Calls(guard, "string.Join"));
+        Assert.Empty(join.Ancestors().OfType<ForEachStatementSyntax>());
+        var materialization = join.Ancestors().OfType<LocalDeclarationStatementSyntax>().First();
+        Assert.Contains(materialization.DescendantNodes().OfType<InvocationExpressionSyntax>(),
+            call => call.Expression is MemberAccessExpressionSyntax member && member.Name.Identifier.ValueText == "ToArray");
+        var classLoop = Assert.Single(guard.Body!.Statements.OfType<ForEachStatementSyntax>());
+        Assert.True(materialization.Span.End < classLoop.SpanStart);
     }
 
     private static IEnumerable<InvocationExpressionSyntax> Calls(SyntaxNode root, string name) =>

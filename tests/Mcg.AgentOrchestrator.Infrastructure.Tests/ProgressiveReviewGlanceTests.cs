@@ -2089,10 +2089,36 @@ public sealed class ProgressiveReviewGlanceTests
                 "C:\\work",
                 now.AddMinutes(2),
                 BaseCommit: "base"));
-        kernel.RecordDispatchExecutionResult(
-            goal.Id,
-            reviewer.Id,
-            new TaskVerificationRecord("review", "C:\\work", 1, "needs-work", "", now.AddMinutes(3)));
+        const string reviewOutput = """
+            WORKER_RESULT:
+            files: none
+            commands: reviewed criterion B
+            tests: deferred - AcceptanceTests
+            commit: none
+            blockers: none
+            model_fit: fixture - adequate
+            skills: none
+            confidence: high
+            findings: [{"stable_id":"criterion-b-missing","state":"open","severity":"blocking","category":"correctness","location":{"file":"src/Feature.cs","region":"CriterionB"},"description":"Acceptance criterion B remains unimplemented."}]
+            touched_anchors: []
+            criteria_verdicts: []
+            verdict: needs-work
+            END_WORKER_RESULT
+            """;
+        var reviewVerification = new TaskVerificationRecord(
+            "review", "C:\\work", 1, reviewOutput, "", now.AddMinutes(3),
+            WorkerResultPresent: true,
+            FullStandardOutput: reviewOutput,
+            DispatchStartedAt: now.AddMinutes(2),
+            EvidenceSource: VerificationEvidenceSource.Dispatch,
+            DispatchAttemptAt: now.AddMinutes(2));
+        Xunit.Assert.Equal(VerificationTerminalContractStatus.Valid,
+            WorkerResultBlockers.AssessSubscriptionVerification(reviewer, reviewVerification).Status);
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, reviewVerification);
+        Xunit.Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
+        Xunit.Assert.False(reviewer.LastVerification!.Succeeded);
+        Xunit.Assert.Equal(VerificationTerminalContractStatus.Valid,
+            WorkerResultBlockers.AssessSubscriptionVerification(reviewer, reviewer.LastVerification).Status);
         var result = coordinator.Observe(kernel, [goal]);
 
         Xunit.Assert.True(result.MutatedTaskState);

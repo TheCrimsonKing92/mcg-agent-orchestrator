@@ -66,7 +66,8 @@ internal static class OwnerConsoleFullScreenHost
             var builder = new OwnerConsoleViewModelBuilder(state, questions,
                 new ConductorLeaseLiveness(workspace.OrchestratorDirectory), new PortfolioGoalEpicLookup(workspace.PortfolioStorePath), clock,
                 item => item.EventKind == "acceptance-cohort" ? jointEvidence.Read(item, cohortEvidence.Read(item)) :
-                    gateEvidence.Read(item) ?? jointEvidence.Read(item), gateMotion.Describe);
+                    gateEvidence.Read(item) ?? jointEvidence.Read(item), gateMotion.Describe,
+                latestTick: () => Cli.ConductorStatusSnapshotReader.LatestTick(workspace));
             var opened = clock.GetUtcNow();
             DateTimeOffset? last = null;
             var landings = 0;
@@ -126,12 +127,16 @@ internal static class OwnerConsoleFullScreenHost
                 var board = OwnerConsoleStartupLoader.LoadingBoard(Task.Run(() => builder.BuildBoardAsync(token), token)
                     .WaitAsync(OwnerConsoleLoopOptions.Default.OperationBound, clock, token).GetAwaiter().GetResult());
                 app.Init();
+                var notifications = OwnerConsoleNotificationSettings.Load(
+                    Path.Combine(workspace.OrchestratorDirectory, "owner-console-settings.json"));
                 var controller = new OwnerConsoleScreenController(questions, new AttentionAnswerHandlerAdapter(workspace),
                     new TerminalGuiOwnerConsoleDialogs(app, token), state, new GoalEventFileTail(workspace.GoalLifecycleEventsDirectory),
                     new CliConductorConsoleAdapter(workspace), new CliOwnerDigestConsoleAdapter(workspace),
                     new OwnerDigestSummaryAdapter(workspace), clock, new WorkspaceEpicProgressSource(workspace),
                     resolutions: new OwnerQuestionResolutionReader(state, new GoalEventFileTail(workspace.GoalLifecycleEventsDirectory),
-                        workspace.OrchestratorDirectory, workspace.LogDirectory, clock));
+                        workspace.OrchestratorDirectory, workspace.LogDirectory, clock),
+                    notifier: new SystemOwnerConsoleNotifier(new WindowsOwnerConsoleSoundOutput(), notifications, File.Exists),
+                    notifications: notifications);
                 view = new(app, controller, () => RefreshAsync(), token, clock, OwnerConsoleLoopOptions.Default, diagnostics);
                 boardIds = board.Board.Select(row => row.GoalId).ToArray();
                 view.Render(board);

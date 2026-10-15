@@ -38,6 +38,9 @@ internal sealed partial class ConductorBatchLoop
             if (elapsed < Cap) return new(false, false, string.Empty);
             if (Detached) return new(false, true, string.Empty);
             if (DispatchHandlingChanged) return new(false, false, " reason=dispatch-handling-changed");
+            if (kernel.Goals.Any(goal => (onlyGoalId is null || goal.Id.Value == onlyGoalId) &&
+                goal.Tasks.Any(task => task.CompletionBuildEvidence is { IsPending: true })))
+                return new(false, false, " reason=completion-build-evidence-pending");
 
             foreach (var goal in kernel.Goals.Where(goal => onlyGoalId is null || goal.Id.Value == onlyGoalId))
             {
@@ -69,12 +72,14 @@ internal sealed partial class ConductorBatchLoop
     private static bool HasRunningDispatch(AgentOrchestratorKernel kernel, string? onlyGoalId) =>
         kernel.Goals.Any(goal =>
             (onlyGoalId is null || goal.Id.Value == onlyGoalId) &&
-            goal.Tasks.Any(task => task.LastProcess is { IsRunning: true }));
+            goal.Tasks.Any(task => task.LastProcess is { IsRunning: true } ||
+                task.CompletionBuildEvidence is { IsPending: true }));
 
     private static int CountRunningDispatches(AgentOrchestratorKernel kernel, string? onlyGoalId) =>
         kernel.Goals
             .Where(goal => onlyGoalId is null || goal.Id.Value == onlyGoalId)
-            .Sum(goal => goal.Tasks.Count(task => task.LastProcess is { IsRunning: true }));
+            .Sum(goal => goal.Tasks.Count(task => task.LastProcess is { IsRunning: true } ||
+                task.CompletionBuildEvidence is { IsPending: true }));
 
     private static IReadOnlyList<string> GetRunningDispatchExitCodePaths(AgentOrchestratorKernel kernel, string? onlyGoalId) =>
         kernel.Goals

@@ -24,20 +24,26 @@ internal sealed record EpicPlanItemStatus(EpicPlanItem Item, EpicPlanSliceStatus
         + (string.IsNullOrWhiteSpace(Detail) ? string.Empty : $" ({Detail})");
 }
 
-internal sealed record EpicPlanView(EpicPlan Plan, IReadOnlyList<EpicPlanItemStatus> Items, IReadOnlyList<PortfolioEpicMember> UnplannedMembers);
+internal sealed record EpicPlanView(EpicPlan Plan, IReadOnlyList<EpicPlanItemStatus> Items, IReadOnlyList<PortfolioEpicMember> UnplannedMembers,
+    EpicOutcomeProjection? Outcome = null, IReadOnlyList<PortfolioEpicMember>? UnplannedActiveMembers = null)
+{
+    internal EpicOutcomeProjection OutcomeProgress => Outcome ?? EpicOutcomeProjection.Unevaluated;
+}
 
 // Slice statuses are projections of backlog/goal state, never values written to portfolio.db.
 internal static class EpicPlanStatusReader
 {
     internal static IReadOnlyDictionary<string, EpicPlanView> Load(OrchestratorWorkspace workspace,
-        IReadOnlyList<PortfolioEpic> epics, bool includeReasons = false)
+        IReadOnlyList<PortfolioEpic> epics, bool includeReasons = false,
+        IReadOnlyList<BacklogItem>? backlogSnapshot = null, IReadOnlyList<GoalSummary>? goalSnapshot = null,
+        IReadOnlyList<PortfolioEpicMember>? memberSnapshot = null)
     {
         if (epics.Count == 0) return new Dictionary<string, EpicPlanView>();
         var planStore = EpicPlanStore.OpenReadOnly(workspace.PortfolioStorePath);
         var plans = epics.Select(epic => planStore.LoadAsync(epic.Id).GetAwaiter().GetResult()).ToArray();
         var portfolio = PortfolioStore.OpenReadOnly(workspace.PortfolioStorePath);
-        var backlog = BoardFillBacklogSnapshot.Read(workspace.BacklogStorePath).ToDictionary(item => item.Id, StringComparer.Ordinal);
-        var goals = EpicProgressReadModel.LoadGoalMetadata(workspace).ToDictionary(goal => goal.Id, StringComparer.Ordinal);
+        var backlog = (backlogSnapshot ?? BoardFillBacklogSnapshot.Read(workspace.BacklogStorePath)).ToDictionary(item => item.Id, StringComparer.Ordinal);
+        var goals = (goalSnapshot ?? EpicProgressReadModel.LoadGoalMetadata(workspace)).ToDictionary(goal => goal.Id, StringComparer.Ordinal);
         var claims = EpicPlanGoalClaimSnapshot.Read(workspace.SqliteStatePath);
         var reasons = new Dictionary<string, string>(StringComparer.Ordinal);
         if (includeReasons && File.Exists(workspace.SqliteStatePath))
@@ -51,29 +57,49 @@ internal static class EpicPlanStatusReader
             {
                 var kernel = SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath)
                     .LoadGoalsAsync(plannedIds.Select(id => new GoalId(id)).ToArray()).GetAwaiter().GetResult();
-                foreach (var goal in kernel.Goals)
-                {
-                    var events = goal.Timeline.OrderByDescending(item => item.OccurredAt).ToArray();
-                    var reason = goal.Status == GoalStatus.Parked
-                        ? events.FirstOrDefault(item => item.Kind == ProgressKind.GoalPolicyDecision &&
-                            item.Message.StartsWith("Goal parked:", StringComparison.OrdinalIgnoreCase))?.Message
-                        : events.FirstOrDefault(item => item.Kind == ProgressKind.TaskFailed)?.Message;
-                    if (string.IsNullOrWhiteSpace(reason))
-                        reason = events.FirstOrDefault(item => item.Kind == ProgressKind.GoalPolicyDecision)?.Message;
-                    if (reason is not null) reasons[goal.Id.Value] = reason;
-                }
+                foreach (var (id, reason) in Reasons(kernel.Goals)) reasons[id] = reason;
             }
         }
         return plans.ToDictionary(plan => plan.EpicId, plan =>
         {
-            var plannedBacklog = plan.Items.Where(item => item.Kind == EpicPlanItemKind.Slice)
-                .Select(item => item.BacklogItemId!).ToHashSet(StringComparer.Ordinal);
-            var unplanned = portfolio.ListEpicMembersAsync(plan.EpicId).GetAwaiter().GetResult().Where(member =>
-                member.Kind == PortfolioMemberKind.BacklogItem ? !plannedBacklog.Contains(member.MemberId) :
-                !(claims.ByGoal.TryGetValue(member.MemberId, out var id) && plannedBacklog.Contains(id)) &&
-                !claims.Persisted.Any(pair => pair.Value.OwnerGoalId == member.MemberId && plannedBacklog.Contains(pair.Key))).ToArray();
-            return new EpicPlanView(plan, Compute(plan, backlog, goals, claims, reasons), unplanned);
+            var members = memberSnapshot?.Where(member => member.EpicId == plan.EpicId).ToArray() ??
+                portfolio.ListEpicMembersAsync(plan.EpicId).GetAwaiter().GetResult();
+            return Build(plan, members, backlog, goals, claims, reasons);
         }, StringComparer.Ordinal);
+    }
+
+    internal static EpicPlanView Build(EpicPlan plan, IReadOnlyList<PortfolioEpicMember> members,
+        IReadOnlyDictionary<string, BacklogItem> backlog, IReadOnlyDictionary<string, GoalSummary> goals,
+        EpicPlanGoalClaims claims, IReadOnlyDictionary<string, string>? reasons = null)
+    {
+        var plannedBacklog = plan.Items.Where(item => item.Kind == EpicPlanItemKind.Slice)
+            .Select(item => item.BacklogItemId!).ToHashSet(StringComparer.Ordinal);
+        var unplanned = members.Where(member =>
+            member.Kind == PortfolioMemberKind.BacklogItem ? !plannedBacklog.Contains(member.MemberId) :
+            !(claims.ByGoal.TryGetValue(member.MemberId, out var id) && plannedBacklog.Contains(id)) &&
+            !claims.Persisted.Any(pair => pair.Value.OwnerGoalId == member.MemberId && plannedBacklog.Contains(pair.Key))).ToArray();
+        return new EpicPlanView(plan, Compute(plan, backlog, goals, claims, reasons), unplanned,
+            EpicOutcomeEvaluator.Evaluate(plan.Outcome, EpicOutcomeReceipts.Problem),
+            unplanned.Where(member => member.Kind == PortfolioMemberKind.Goal
+                ? !goals.TryGetValue(member.MemberId, out var goal) || goal.Status is not ("Completed" or "Cancelled" or "Superseded")
+                : !backlog.TryGetValue(member.MemberId, out var item) || item.Status is not (BacklogItemStatus.Done or BacklogItemStatus.Superseded)).ToArray());
+    }
+
+    internal static IReadOnlyDictionary<string, string> Reasons(IEnumerable<Goal> goals)
+    {
+        var reasons = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var goal in goals)
+        {
+            var events = goal.Timeline.OrderByDescending(item => item.OccurredAt).ToArray();
+            var reason = goal.Status == GoalStatus.Parked
+                ? events.FirstOrDefault(item => item.Kind == ProgressKind.GoalPolicyDecision &&
+                    item.Message.StartsWith("Goal parked:", StringComparison.OrdinalIgnoreCase))?.Message
+                : events.FirstOrDefault(item => item.Kind == ProgressKind.TaskFailed)?.Message;
+            if (string.IsNullOrWhiteSpace(reason))
+                reason = events.FirstOrDefault(item => item.Kind == ProgressKind.GoalPolicyDecision)?.Message;
+            if (reason is not null) reasons[goal.Id.Value] = reason;
+        }
+        return reasons;
     }
 
     internal static IReadOnlyList<EpicPlanItemStatus> Compute(EpicPlan plan,

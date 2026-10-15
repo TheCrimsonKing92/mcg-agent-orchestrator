@@ -93,7 +93,8 @@ public sealed class OwnerConsoleEpicViewTests
         await fixture.Source.PlanStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
 
         var dialog = fixture.View.EpicView;
-        Assert.Equal(["Loading Beta epic…"], dialog.Lines);
+        Assert.Contains("> Beta epic", dialog.Lines);
+        Assert.Contains("requested Beta epic", dialog.HeaderLine.Replace("\n", " "));
         Assert.Equal(1, fixture.Source.PlanCalls);
         Assert.Equal(["beta"], fixture.Source.PlanIds);
         Assert.False(entering.IsCompleted);
@@ -115,7 +116,8 @@ public sealed class OwnerConsoleEpicViewTests
         await fixture.View.HandleKeyAsync(new Key('e'));
         fixture.Source.PlanError = new InvalidOperationException("plan unavailable");
         await fixture.View.HandleKeyAsync(Key.Enter);
-        Assert.Equal(["Could not load epics: plan unavailable. Press r to retry."], fixture.View.EpicView.Lines);
+        Assert.Contains("Could not load epics: plan unavailable. Press r to retry.", fixture.View.EpicView.Lines);
+        Assert.Contains("stale", fixture.View.EpicView.HeaderLine);
         Assert.DoesNotContain("(no plan)", fixture.View.EpicView.Lines);
         fixture.Source.PlanError = null;
         await fixture.View.HandleKeyAsync(new Key('r'));
@@ -216,10 +218,14 @@ public sealed class OwnerConsoleEpicViewTests
         Assert.Contains("landed 0 · in flight 0 (0 verifying, 0 active) · failed 0 · backlog 0 open / 0 done", fixture.View.EpicView.Lines);
         await fixture.View.HandleKeyAsync(Key.Enter);
         Assert.Contains("(no plan of record)", fixture.View.EpicView.Lines);
+        await fixture.View.HandleKeyAsync(Key.Esc);
+        Assert.False(fixture.View.EpicView.ShowingDetail);
         fixture.Source.Epics.Clear();
         fixture.View.Render(fixture.Model);
         await fixture.View.EpicView.LastLoad;
+        var calls = fixture.Source.Calls;
         await fixture.View.HandleKeyAsync(Key.Enter);
+        Assert.Equal(calls, fixture.Source.Calls);
         Assert.False(fixture.View.EpicView.ShowingDetail);
         Assert.Equal(["No epics are defined yet. Create one with epic-add."], fixture.View.EpicView.Lines);
     }
@@ -310,7 +316,7 @@ public sealed class OwnerConsoleEpicViewTests
     }
 
     [Fact(Timeout = 30000)]
-    public async Task WindowChange_HeldLoad_ClearsRowsAndNamesNewWindow()
+    public async Task WindowChange_HeldLoad_RetainsRowsWithPriorWindowAndNamesNewWindow()
     {
         using var fixture = new Fixture();
         await fixture.View.HandleKeyAsync(new Key('e'));
@@ -319,15 +325,17 @@ public sealed class OwnerConsoleEpicViewTests
         var changing = fixture.View.HandleKeyAsync(new Key('w'));
         await fixture.Source.LoadStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal(["Loading epics (last 7 days)…"], fixture.View.EpicView.Lines);
-        Assert.Contains("loading…", fixture.View.EpicView.HeaderLine);
+        Assert.Contains("> Alpha epic", fixture.View.EpicView.Lines);
+        Assert.Contains("refreshing…", fixture.View.EpicView.HeaderLine);
+        Assert.Contains("last 7 days", fixture.View.EpicView.HeaderLine);
+        Assert.Contains("last 24 hours", fixture.View.EpicView.HeaderLine);
         fixture.Source.Release(pending, Now.AddDays(-7));
         await changing.WaitAsync(TestContext.Current.CancellationToken);
         AssertSummaries(fixture, Now.AddDays(-7));
     }
 
     [Fact(Timeout = 30000)]
-    public async Task Enter_HeldDetailLoad_ClearsListAndNamesSelectedEpic()
+    public async Task Enter_HeldDetailLoad_RetainsListAndNamesSelectedEpic()
     {
         using var fixture = new Fixture();
         await fixture.View.HandleKeyAsync(new Key('e'));
@@ -337,8 +345,11 @@ public sealed class OwnerConsoleEpicViewTests
         var entering = fixture.View.HandleKeyAsync(Key.Enter);
         await fixture.Source.LoadStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal(["Loading Beta epic…"], fixture.View.EpicView.Lines);
-        Assert.Contains("loading…", fixture.View.EpicView.HeaderLine);
+        Assert.Contains("> Beta epic", fixture.View.EpicView.Lines);
+        Assert.Contains("refreshing…", fixture.View.EpicView.HeaderLine);
+        Assert.Contains("requested Beta epic", fixture.View.EpicView.HeaderLine.Replace("\n", " "));
+        Assert.Equal(1, fixture.Source.ListCalls);
+        Assert.Equal(1, fixture.Source.DetailCalls);
         fixture.Source.Release(pending, Now.AddHours(-24));
         await entering.WaitAsync(TestContext.Current.CancellationToken);
         Assert.Equal("Beta epic", fixture.View.EpicView.Lines[0]);
@@ -360,14 +371,20 @@ public sealed class OwnerConsoleEpicViewTests
         fixture.Source.Error = new InvalidOperationException("portfolio unavailable.");
         await fixture.View.HandleKeyAsync(detail ? Key.Enter : new Key('e'));
         var dialog = fixture.View.EpicView;
-        Assert.Equal(["Could not load epics: portfolio unavailable. Press r to retry."], dialog.Lines);
+        Assert.Contains("Could not load epics: portfolio unavailable. Press r to retry.", dialog.Lines);
+        if (detail)
+        {
+            Assert.Contains("> Beta epic", dialog.Lines);
+            Assert.Contains("stale", dialog.HeaderLine);
+        }
         Assert.Contains("failed", dialog.HeaderLine);
         Assert.Contains("r retry", dialog.HintText);
         fixture.Source.Error = null;
         var pending = fixture.Source.HoldNextLoad();
         var retrying = fixture.View.HandleKeyAsync(new Key('r'));
         await fixture.Source.LoadStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
-        Assert.Equal([detail ? "Loading Beta epic…" : "Loading epics (last 24 hours)…"], dialog.Lines);
+        if (detail) Assert.Contains("> Beta epic", dialog.Lines);
+        else Assert.Equal(["Loading epics (last 24 hours)…"], dialog.Lines);
         Assert.DoesNotContain("r retry", dialog.HintText);
         fixture.Source.Release(pending, Now.AddHours(-24));
         await retrying.WaitAsync(TestContext.Current.CancellationToken);
@@ -447,6 +464,99 @@ public sealed class OwnerConsoleEpicViewTests
         Assert.DoesNotContain("refreshing…", dialog.HeaderLine);
     }
 
+    [Theory(Timeout = 30000)]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ModelApplied_SustainedUpdates_PublishesEachReadWhileRefreshing(bool detail)
+    {
+        using var fixture = new Fixture();
+        var callbacks = System.Threading.Channels.Channel.CreateUnbounded<Action>();
+        using var dialog = new OwnerConsoleEpicDialog(fixture.Controller,
+            action => Assert.True(callbacks.Writer.TryWrite(action)), CancellationToken.None);
+        var pending = fixture.Source.HoldNextLoad();
+        var opening = dialog.OpenAsync(OwnerConsolePane.Board, detail ? "alpha" : null);
+        var token = TestContext.Current.CancellationToken;
+        await fixture.Source.LoadStarted.Task.WaitAsync(token);
+        Assert.Equal(OwnerConsoleEpicLoadState.Loading, dialog.LoadState);
+
+        for (var read = 1; read <= 4; read++)
+        {
+            var calls = fixture.Source.Calls;
+            // Drive the production ModelApplied route while this read is held.
+            for (var update = 0; update < 3; update++) fixture.Controller.Apply(fixture.Model);
+            Assert.Equal(calls, fixture.Source.Calls);
+            fixture.Time.Current = Now.AddMinutes(read);
+            var title = $"Alpha read {read}";
+            fixture.Source.Epics[0] = fixture.Source.Epics[0] with { Title = title };
+            var next = fixture.Source.HoldNextLoad();
+            pending.SetResult(fixture.Source.Build(Now.AddHours(-24)));
+            await fixture.Source.LoadStarted.Task.WaitAsync(token);
+            // Consume the completed publication with the follow-up already in flight.
+            (await callbacks.Reader.ReadAsync(token))();
+            Assert.Equal(calls + 1, fixture.Source.Calls);
+            Assert.Equal(OwnerConsoleEpicLoadState.Loaded, dialog.LoadState);
+            Assert.Contains(detail ? title : $"> {title}", dialog.Lines);
+            Assert.Equal("alpha", dialog.SelectedEpicId);
+            Assert.Equal(detail, dialog.ShowingDetail);
+            var header = dialog.HeaderLine.Replace("\n", " ");
+            Assert.Contains("refreshing…", header);
+            Assert.Contains($"updated 01:0{read}:00", header);
+            Assert.False(opening.IsCompleted);
+            pending = next;
+        }
+
+        fixture.Time.Current = Now.AddMinutes(5);
+        fixture.Source.Release(pending, Now.AddHours(-24));
+        await opening.WaitAsync(token);
+        (await callbacks.Reader.ReadAsync(token))();
+        Assert.Equal(OwnerConsoleEpicLoadState.Loaded, dialog.LoadState);
+        Assert.Contains("updated 01:05:00", dialog.HeaderLine);
+        Assert.DoesNotContain("refreshing", dialog.HeaderLine);
+        Assert.False(callbacks.Reader.TryRead(out _));
+        Assert.Equal(5, fixture.Source.Calls);
+    }
+
+    [Theory(Timeout = 30000)]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Refresh_SameCycleReversedCallbacks_PreservesNewestPublication(bool olderFailure)
+    {
+        using var fixture = new Fixture();
+        var callbacks = System.Threading.Channels.Channel.CreateUnbounded<Action>();
+        using var dialog = new OwnerConsoleEpicDialog(fixture.Controller,
+            action => Assert.True(callbacks.Writer.TryWrite(action)), CancellationToken.None);
+        var token = TestContext.Current.CancellationToken;
+        await dialog.OpenAsync(OwnerConsolePane.Board);
+        (await callbacks.Reader.ReadAsync(token))();
+
+        var pending = fixture.Source.HoldNextLoad();
+        var refreshing = dialog.ReloadAsync();
+        await fixture.Source.LoadStarted.Task.WaitAsync(token);
+        fixture.Controller.Apply(fixture.Model);
+        fixture.Time.Current = Now.AddMinutes(1);
+        fixture.Source.Epics[0] = fixture.Source.Epics[0] with { Title = "Obsolete alpha" };
+        var next = fixture.Source.HoldNextLoad();
+        if (olderFailure) pending.SetException(new InvalidOperationException("obsolete error"));
+        else pending.SetResult(fixture.Source.Build(Now.AddHours(-24)));
+        await fixture.Source.LoadStarted.Task.WaitAsync(token);
+        var oldPublication = await callbacks.Reader.ReadAsync(token);
+
+        fixture.Time.Current = Now.AddMinutes(2);
+        fixture.Source.Epics[0] = fixture.Source.Epics[0] with { Title = "Current alpha" };
+        fixture.Source.Release(next, Now.AddHours(-24));
+        await refreshing.WaitAsync(token);
+        (await callbacks.Reader.ReadAsync(token))();
+        Assert.Contains("> Current alpha", dialog.Lines);
+        var currentLines = dialog.Lines.ToArray();
+        var currentHeader = dialog.HeaderLine;
+        oldPublication();
+        Assert.Equal(currentLines, dialog.Lines);
+        Assert.Equal(currentHeader, dialog.HeaderLine);
+        Assert.Equal(OwnerConsoleEpicLoadState.Loaded, dialog.LoadState);
+        Assert.Contains("updated 01:02:00", dialog.HeaderLine);
+        Assert.DoesNotContain("refreshing", dialog.HeaderLine);
+    }
+
     [Fact(Timeout = 30000)]
     public async Task Reopen_HeldLoad_ClearsPreviousContent()
     {
@@ -462,6 +572,113 @@ public sealed class OwnerConsoleEpicViewTests
         fixture.Source.Release(pending, Now.AddHours(-24));
         await opening.WaitAsync(TestContext.Current.CancellationToken);
         AssertSummaries(fixture, Now.AddHours(-24));
+    }
+
+    [Theory(Timeout = 30000)]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Refresh_QueuedOlderPublication_CannotReplaceContentOrFreshness(bool olderFailure)
+    {
+        using var fixture = new Fixture();
+        var callbacks = new Queue<Action>();
+        using var dialog = new OwnerConsoleEpicDialog(fixture.Controller, callbacks.Enqueue, CancellationToken.None);
+        await dialog.OpenAsync(OwnerConsolePane.Board);
+        Assert.Single(callbacks);
+        callbacks.Dequeue()();
+        Assert.Contains("> Alpha epic", dialog.Lines);
+        fixture.Time.Current = Now.AddMinutes(1);
+        fixture.Source.Epics[0] = fixture.Source.Epics[0] with { Title = "Obsolete alpha" };
+        if (olderFailure) fixture.Source.Error = new InvalidOperationException("obsolete error");
+        await dialog.ReloadAsync();
+        Assert.Single(callbacks);
+        var oldPublication = callbacks.Dequeue();
+
+        fixture.Time.Current = Now.AddMinutes(2);
+        fixture.Source.Error = null;
+        fixture.Source.Epics[0] = fixture.Source.Epics[0] with { Title = "Current alpha" };
+        var pending = fixture.Source.HoldNextLoad();
+        var refreshing = dialog.ReloadAsync();
+        await fixture.Source.LoadStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
+        oldPublication();
+        Assert.Contains("> Alpha epic", dialog.Lines);
+        Assert.DoesNotContain(dialog.Lines, line => line.Contains("Obsolete alpha", StringComparison.Ordinal));
+        Assert.DoesNotContain(dialog.Lines, line => line.Contains("obsolete error", StringComparison.Ordinal));
+        var retainedHeader = dialog.HeaderLine.Replace("\n", " ");
+        Assert.Contains("updated 01:00:00", retainedHeader);
+        Assert.DoesNotContain("updated 01:01:00", retainedHeader);
+        fixture.Source.Release(pending, Now.AddMinutes(2).AddHours(-24));
+        await refreshing.WaitAsync(TestContext.Current.CancellationToken);
+        Assert.Single(callbacks);
+        callbacks.Dequeue()();
+        Assert.Contains("> Current alpha", dialog.Lines);
+        Assert.Contains("updated 01:02:00", dialog.HeaderLine);
+        Assert.DoesNotContain("refreshing", dialog.HeaderLine);
+    }
+
+    [Fact]
+    public async Task Open_HostCancelledBeforeQueuedPublication_RejectsCompletedResult()
+    {
+        using var fixture = new Fixture();
+        using var cancellation = new CancellationTokenSource();
+        var callbacks = new Queue<Action>();
+        using var dialog = new OwnerConsoleEpicDialog(fixture.Controller, callbacks.Enqueue, cancellation.Token);
+        await dialog.OpenAsync(OwnerConsolePane.Board);
+        Assert.Single(callbacks);
+        var prior = dialog.Lines.ToArray();
+        cancellation.Cancel();
+        callbacks.Dequeue()();
+        Assert.Equal(prior, dialog.Lines);
+        Assert.Equal(OwnerConsoleEpicLoadState.Loading, dialog.LoadState);
+        Assert.DoesNotContain("updated", dialog.HeaderLine);
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task Navigation_PendingDetailThenListAndAnotherEpic_CancelsSupersededRequest()
+    {
+        using var fixture = new Fixture();
+        await fixture.View.HandleKeyAsync(new Key('e'));
+        await fixture.View.HandleKeyAsync(Key.CursorDown);
+        var pending = fixture.Source.HoldNextLoad();
+        var entering = fixture.View.HandleKeyAsync(Key.Enter);
+        await fixture.Source.LoadStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
+        var detailToken = fixture.Source.DetailToken;
+        fixture.Source.Pending = null;
+        await fixture.View.HandleKeyAsync(Key.Esc);
+        await entering.WaitAsync(TestContext.Current.CancellationToken);
+        Assert.True(detailToken.IsCancellationRequested);
+        Assert.False(fixture.View.EpicView.ShowingDetail);
+        Assert.Equal("beta", fixture.View.EpicView.SelectedEpicId);
+        await fixture.View.HandleKeyAsync(Key.CursorUp);
+        await fixture.View.HandleKeyAsync(Key.Enter);
+        Assert.Equal("alpha", fixture.View.EpicView.SelectedEpicId);
+        Assert.Equal("Alpha epic", fixture.View.EpicView.Lines[0]);
+        pending.SetResult(fixture.Source.Build(Now.AddHours(-24)));
+        Assert.Equal("Alpha epic", fixture.View.EpicView.Lines[0]);
+        Assert.Equal(2, fixture.Source.DetailCalls);
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task Refresh_Failure_RetainsPriorDetailAndSuccessfulTimestampUntilRetry()
+    {
+        using var fixture = new Fixture();
+        await fixture.View.HandleKeyAsync(new Key('e'));
+        await fixture.View.HandleKeyAsync(Key.Enter);
+        var prior = fixture.View.EpicView.Lines.ToArray();
+        fixture.Time.Current = Now.AddMinutes(1);
+        fixture.Source.Error = new InvalidOperationException("refresh unavailable");
+        await fixture.View.EpicView.ReloadAsync();
+        var dialog = fixture.View.EpicView;
+        Assert.Equal(prior, dialog.Lines.Take(prior.Length));
+        Assert.Contains("Could not load epics: refresh unavailable. Press r to retry.", dialog.Lines);
+        Assert.Contains("stale", dialog.HeaderLine);
+        var retainedHeader = dialog.HeaderLine.Replace("\n", " ");
+        Assert.Contains("updated 01:00:00", retainedHeader);
+        Assert.DoesNotContain("updated 01:01:00", retainedHeader);
+        fixture.Source.Error = null;
+        await fixture.View.HandleKeyAsync(new Key('r'));
+        Assert.Equal(prior, dialog.Lines);
+        Assert.Contains("updated 01:01:00", dialog.HeaderLine);
+        Assert.DoesNotContain("stale", dialog.HeaderLine);
     }
 
     private static readonly DateTimeOffset Now = DateTimeOffset.Parse("2026-10-08T22:00:00Z");
@@ -501,6 +718,7 @@ public sealed class OwnerConsoleEpicViewTests
         internal readonly OwnerConsoleScreenController Controller;
         internal readonly OwnerConsoleFullScreenView View;
         internal readonly OwnerConsoleViewModel Model = new(new(true, 3, 0, 0, null, 0), [], [], []);
+        internal readonly Clock Time = new();
 
         internal Fixture(bool wired = true)
         {
@@ -537,8 +755,9 @@ public sealed class OwnerConsoleEpicViewTests
             Harness.Kernel.EscalateTaskFailure(failed.Id, failed.Tasks.Single().Id, "Rejected by vendor");
             var parked = Harness.AddGoal("b-parked", "Parked beta", AgentRole.Developer);
             Harness.Kernel.ParkGoal(parked.Id, "waiting on vendor");
+            Source.State = Harness.State;
             Controller = new(Harness.Questions, Harness.Answers, Dialogs, Harness.State, Harness.Tail,
-                Harness.Conductor, Harness.DigestReport, Harness.Digest, new Clock(), wired ? Source : null);
+                Harness.Conductor, Harness.DigestReport, Harness.Digest, Time, wired ? Source : null);
             View = new(App, Controller, () => Task.CompletedTask);
             View.Render(Model);
             View.FocusDecisions();
@@ -555,6 +774,10 @@ public sealed class OwnerConsoleEpicViewTests
 
     private sealed class Source : IOwnerConsoleEpicSource
     {
+        internal IOrchestratorStateQueries State = null!;
+        internal int ListCalls;
+        internal int DetailCalls;
+        internal CancellationToken DetailToken;
         internal readonly List<PortfolioEpic> Epics = [];
         internal readonly List<PortfolioEpicMember> Members = [];
         internal readonly List<GoalSummary> Goals = [];
@@ -583,11 +806,30 @@ public sealed class OwnerConsoleEpicViewTests
             EpicProgressReadModel.Build(Epics, [], Members, Goals, Backlog, since);
         public Task<IReadOnlyList<EpicProgressRollup>> LoadAsync(DateTimeOffset? since, CancellationToken token)
         {
+            ListCalls++;
+            return ReadRows(since);
+        }
+        private Task<IReadOnlyList<EpicProgressRollup>> ReadRows(DateTimeOffset? since)
+        {
             Calls++;
             LoadStarted.TrySetResult();
             if (Pending is { } pending) return pending.Task;
             return Error is null ? Task.FromResult(Build(since)) : Task.FromException<IReadOnlyList<EpicProgressRollup>>(Error);
         }
+        public async Task<EpicDetailReadSnapshot> LoadDetailAsync(string epicId, DateTimeOffset? since, CancellationToken token)
+        {
+            DetailCalls++;
+            DetailToken = token;
+            var row = (await ReadRows(since).WaitAsync(token)).Single(row => row.Epic.Id == epicId);
+            var plan = await LoadPlanAsync(row.Epic, token);
+            var ids = row.MemberGoals.Where(member => member.Bucket is EpicProgressBucket.Active or EpicProgressBucket.Verifying or EpicProgressBucket.Parked ||
+                    member.Bucket == EpicProgressBucket.Failed && (since is null || member.UpdatedAt >= since))
+                .Select(member => new GoalId(member.Id)).ToArray();
+            var goals = (await State.LoadGoalsAsync(ids, token)).Goals.ToDictionary(goal => goal.Id.Value);
+            return new(row with { Plan = plan }, since, goals);
+        }
+        public Task<string?> FindGoalEpicAsync(string goalId, CancellationToken token) =>
+            Task.FromResult(Members.FirstOrDefault(member => member.Kind == PortfolioMemberKind.Goal && member.MemberId == goalId)?.EpicId);
         public Task<EpicPlanView> LoadPlanAsync(PortfolioEpic epic, CancellationToken token)
         {
             PlanCalls++;
@@ -601,7 +843,8 @@ public sealed class OwnerConsoleEpicViewTests
 
     private sealed class Clock : TimeProvider
     {
-        public override DateTimeOffset GetUtcNow() => Now;
+        internal DateTimeOffset Current = Now;
+        public override DateTimeOffset GetUtcNow() => Current;
         public override TimeZoneInfo LocalTimeZone => TimeZoneInfo.CreateCustomTimeZone("Test", TimeSpan.FromHours(3), "Test", "Test");
     }
 

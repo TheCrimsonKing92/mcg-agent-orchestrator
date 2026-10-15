@@ -58,6 +58,24 @@ public sealed class FindingReceiptClosureDiagnosisRoutingTests
     }
 
     [Fact]
+    public void RequestedNegativeControlCannotCloseWithCandidateOnlyReceipt()
+    {
+        using var fixture = new ClosureFixture();
+        var finding = Finding();
+        finding = finding with
+        {
+            EvidenceRequest = finding.EvidenceRequest! with { NegativeControl = FindingEvidenceNegativeControl.RevertSrc }
+        };
+        fixture.Report([finding]);
+        fixture.AdvanceToDecision();
+
+        Assert.Equal(FindingReceiptClosureDiagnosis.NegativeControlNotDemonstrated, fixture.ReceiptDiagnosis!.Code);
+        Assert.Equal([fixture.Requester.Id], fixture.Retried);
+        Assert.DoesNotContain(fixture.Developer!.Id, fixture.Retried);
+        Assert.DoesNotContain(fixture.Goal.Timeline, item => item.Message.StartsWith("FINDING_RECEIPT_CLOSURE", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void TesterReRaiseAtSameCandidateRoutesDeveloperWithReasonAndDiagnosis()
     {
         using var fixture = new ClosureFixture();

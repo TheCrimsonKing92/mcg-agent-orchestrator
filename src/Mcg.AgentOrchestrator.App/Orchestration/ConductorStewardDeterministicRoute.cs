@@ -8,6 +8,7 @@ internal sealed class ConductorStewardDeterministicRoute(
     IConductorStewardLaneSubstringResolver? lanes = null)
 {
     private const string RejectionMarker = "[orchestrator Planner output contract rejection]";
+    private const string MultipleEvidenceRequests = "Malformed PLANNER_EVIDENCE_REQUEST: exactly one evidence request may be emitted per round.";
     private const string SameLineRule = "Write the disposition and non-empty one-sentence plan summary on the same mapping line: N. maps to <subject>. disposition=planned; plan=<non-empty one-sentence summary>.";
     private const string ConcreteFileRule = "Cite a concrete repository-relative file path that exists at HEAD, without wildcards, or explicitly mark the path as new.";
     private static readonly Regex Unmapped = new(@"\bcriterion (?<number>\d+) is unmapped\b", RegexOptions.CultureInvariant);
@@ -56,8 +57,29 @@ internal sealed class ConductorStewardDeterministicRoute(
     {
         var evidence = trigger.Evidence;
         var marker = evidence.LastIndexOf(RejectionMarker, StringComparison.Ordinal);
+        var standaloneMarker = marker >= 0 &&
+            (marker == 0 || evidence[marker - 1] == '\n') &&
+            (evidence[(marker + RejectionMarker.Length)..].StartsWith("\n", StringComparison.Ordinal) ||
+             evidence[(marker + RejectionMarker.Length)..].StartsWith("\r\n", StringComparison.Ordinal));
         if (marker >= 0) evidence = evidence[(marker + RejectionMarker.Length)..];
         if (string.IsNullOrWhiteSpace(evidence)) return null;
+        if (trigger.Kind == ConductorStewardTriggerKind.PlannerOutputContractRejected && standaloneMarker &&
+            string.Equals(evidence.Trim(), MultipleEvidenceRequests, StringComparison.Ordinal))
+            return "Format-only correction: " + MultipleEvidenceRequests + " " +
+                "Read the complete rejected plan in the authoritative task/rejected-planner/stdout context artifact. " +
+                "Preserve the research sections, source findings, " +
+                "and every criterion mapping; change only evidence-directive formatting. " +
+                "Group the original requests by owner and availability. For compatible post-implementation Acceptance requests, " +
+                "emit exactly one well-formed PLANNER_EVIDENCE_REQUEST JSON directive with a valid one-based criterion_index, " +
+                "owner=acceptance-gate, availability=post-implementation, no store, non-empty evidence_key, needed and reason, " +
+                "and the exact deduplicated union of all required test class, method and theory selections, preserving their spelling. " +
+                "Retain separately owned Operator obligations in their criterion mappings with their required proof and pending status; " +
+                "do not emit an additional directive or claim that removing it satisfies the obligation. " +
+                "If evidence requests are incompatible or ownership is uncertain, retain that uncertainty and use the existing " +
+                "clarification/escalation procedure; never guess a merge or invent evidence. " +
+                "Self-check before resubmitting: count exactly one directive line, validate its JSON against the existing schema, " +
+                "compare its tests with every original Acceptance selection, and confirm all research and mappings remain " +
+                "and no pending test, review or Operator check is described as executed.";
         var corrections = new List<string>();
         var section = Section.Match(evidence);
         if (section.Success)

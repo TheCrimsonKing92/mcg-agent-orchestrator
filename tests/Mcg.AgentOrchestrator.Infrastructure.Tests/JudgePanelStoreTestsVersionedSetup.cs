@@ -123,9 +123,7 @@ public sealed class JudgePanelStoreTestsVersionedSetup : IDisposable
         JudgePanelStoreSetup.Setup(Db);
 
         AssertFutureContentUnchanged(schema, rows);
-        var result = Assert.Single(StoreSetupRunner.Run(root), result => result.StoreName == "judge-panel");
-        Assert.Equal(Db, result.DatabasePath);
-        Assert.Equal(99, result.Version);
+        Assert.Contains(Db, Assert.Throws<InvalidOperationException>(() => StoreSetupRunner.Run(root)).Message);
         AssertFutureContentUnchanged(schema, rows);
     }
 

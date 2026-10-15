@@ -61,7 +61,10 @@ internal sealed partial class ConductorDriver
             return rebase;
         }
 
-        return rebaseStatus == GoalWorktreeRebaseStatus.Rebased
+        var heads = _resolveAcceptanceHeads(candidate.Goal);
+        return rebaseStatus == GoalWorktreeRebaseStatus.Rebased ||
+            (heads.MainHeadSha is not null && candidate.MainHeadSha is not null &&
+             !heads.MainHeadSha.Equals(candidate.MainHeadSha, StringComparison.OrdinalIgnoreCase))
             ? CompleteLandingAfterRacingLandingCarryForward(candidate, policy, acceptance)
             : CompleteLandingAfterAcceptance(candidate.Goal, candidate.GoalPrefix, policy, acceptance);
     }
@@ -92,7 +95,8 @@ internal sealed partial class ConductorDriver
                 new ConductorAdvanceOutcome.Held(
                     GoalLifecycleState.Verified,
                     $"{reason} {disposition.FormatReceipt()}",
-                    StableIdentity: BuildRevalidationHoldIdentity(candidate)));
+                    StableIdentity: AcceptanceMainAdvanceReceipt.BuildRevalidationHoldIdentity(
+                        candidate, _resolveAcceptanceHeads)));
         }
 
         return CompleteLandingAfterAcceptance(candidate.Goal, candidate.GoalPrefix, policy, acceptance);
@@ -120,7 +124,7 @@ internal sealed partial class ConductorDriver
                     AcceptanceMainAdvanceCarryOperation,
                     currentBranchSha,
                     currentMainSha,
-                    BuildCarryForwardReceipt(disposition, acceptance, currentBranchSha!, currentMainSha!));
+                    AcceptanceMainAdvanceReceipt.FormatCarryForward(disposition, acceptance, currentBranchSha!, currentMainSha!));
             }
             else if (disposition is not AcceptanceMainAdvanceDisposition.Unchanged)
             {
@@ -130,7 +134,7 @@ internal sealed partial class ConductorDriver
         catch (Exception ex)
         {
             disposition = new AcceptanceMainAdvanceDisposition.Unknown(
-                $"exception-{ex.GetType().Name}:{Bound(ex.Message, 240)}");
+                $"exception-{ex.GetType().Name}:{AcceptanceMainAdvanceReceipt.Bound(ex.Message, 240)}");
             RecordMainAdvanceDiagnostic(candidate.Goal, disposition, currentMainSha);
         }
 
@@ -179,23 +183,22 @@ internal sealed partial class ConductorDriver
 
         if (candidate.MainHeadSha.Equals(currentMainSha, StringComparison.OrdinalIgnoreCase))
         {
-            return new AcceptanceMainAdvanceDisposition.Unchanged();
+            return candidate.BranchHeadSha.Equals(currentBranchSha, StringComparison.OrdinalIgnoreCase)
+                ? new AcceptanceMainAdvanceDisposition.Unchanged()
+                : new AcceptanceMainAdvanceDisposition.Unknown("branch-changed-without-main-advance");
         }
 
-        var ancestry = GitCli.Run(
+        if (!AcceptanceMainAdvanceGitEvidence.IsAncestor(
             _executionDirectory,
-            "merge-base",
-            "--is-ancestor",
             candidate.MainHeadSha,
-            currentMainSha);
-        if (!GitSucceeded(ancestry))
+            currentMainSha))
         {
             return new AcceptanceMainAdvanceDisposition.Unknown("verified-main-not-ancestor-of-current-main");
         }
 
-        var landed = ReadChangedPaths(_executionDirectory, candidate.MainHeadSha, currentMainSha);
-        var verified = ReadChangedPaths(_executionDirectory, candidate.MainHeadSha, candidate.BranchHeadSha);
-        var postRebase = ReadChangedPaths(_executionDirectory, currentMainSha, currentBranchSha);
+        var landed = AcceptanceMainAdvanceGitEvidence.ReadChangedPaths(_executionDirectory, candidate.MainHeadSha, currentMainSha);
+        var verified = AcceptanceMainAdvanceGitEvidence.ReadChangedPaths(_executionDirectory, candidate.MainHeadSha, candidate.BranchHeadSha);
+        var postRebase = AcceptanceMainAdvanceGitEvidence.ReadChangedPaths(_executionDirectory, currentMainSha, currentBranchSha);
         if (landed is null || verified is null || postRebase is null)
         {
             return new AcceptanceMainAdvanceDisposition.Unknown("git-changed-paths-unavailable");
@@ -209,56 +212,6 @@ internal sealed partial class ConductorDriver
             postRebase,
             landed);
     }
-
-    private static IReadOnlyList<string>? ReadChangedPaths(
-        string workingDirectory,
-        string oldRevision,
-        string newRevision)
-    {
-        var result = GitCli.Run(
-            workingDirectory,
-            "diff",
-            "--name-only",
-            "-z",
-            "--no-renames",
-            oldRevision,
-            newRevision);
-        return GitSucceeded(result)
-            ? result.Output
-                .Split('\0', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Select(RepositoryPathOverlap.Normalize)
-                .Where(path => path.Length > 0)
-                .ToArray()
-            : null;
-    }
-
-    private static bool GitSucceeded(GitCli.GitResult result) =>
-        result.Succeeded && !result.DrainTimedOut;
-
-    private string BuildRevalidationHoldIdentity(ConductorParallelAcceptanceCandidate candidate)
-    {
-        try
-        {
-            var current = _resolveAcceptanceHeads(candidate.Goal);
-            return $"acceptance-revalidation:" +
-                $"{current.BranchHeadSha ?? candidate.BranchHeadSha ?? "unknown"}:" +
-                $"{current.MainHeadSha ?? candidate.MainHeadSha ?? "unknown"}";
-        }
-        catch
-        {
-            return $"acceptance-revalidation:{candidate.CandidateKey}";
-        }
-    }
-
-    private static string BuildCarryForwardReceipt(
-        AcceptanceMainAdvanceDisposition disposition,
-        AcceptanceVerificationSummary acceptance,
-        string currentBranchSha,
-        string currentMainSha) =>
-        $"{disposition.FormatReceipt()} " +
-        $"verifiedBranch={Bound(acceptance.BranchHeadSha, 40)} " +
-        $"verifiedMain={Bound(acceptance.MainHeadSha, 40)} " +
-        $"currentBranch={Bound(currentBranchSha, 40)} currentMain={Bound(currentMainSha, 40)}";
 
     private void RecordMainAdvanceDiagnostic(
         Goal goal,
@@ -283,11 +236,5 @@ internal sealed partial class ConductorDriver
         {
             // Diagnostics must not replace today's safe re-gate behavior when evidence storage is unavailable.
         }
-    }
-
-    private static string Bound(string? value, int maxLength)
-    {
-        var normalized = string.IsNullOrWhiteSpace(value) ? "unknown" : value.Trim();
-        return normalized.Length <= maxLength ? normalized : normalized[..maxLength];
     }
 }

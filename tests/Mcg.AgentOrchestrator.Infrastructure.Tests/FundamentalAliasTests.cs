@@ -506,8 +506,8 @@ public sealed class FundamentalAliasTests
         Goal? currentGoal = null;
 
         string[] args = pipelineBeforeFilter
-            ? ["goal", "--pipeline", "five-role", "--from-backlog", "Update alias help", "--create-goal", "--backlog-coverage", "full"]
-            : ["goal", "Update alias help", "--from-backlog", "--create-goal", "--pipeline", "five-role", "--backlog-coverage", "full"];
+            ? ["goal", "--pipeline", "scout", "--from-backlog", "Update alias help", "--create-goal", "--backlog-coverage", "full"]
+            : ["goal", "Update alias help", "--from-backlog", "--create-goal", "--pipeline", "scout", "--backlog-coverage", "full"];
         var output = CaptureConsole(() =>
             CliCommandDispatcher.ExecuteCommand(
                 args,
@@ -520,7 +520,7 @@ public sealed class FundamentalAliasTests
 
         Xunit.Assert.NotNull(currentGoal);
         Xunit.Assert.Equal(
-            [AgentRole.Researcher, AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
+            [AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
             currentGoal!.Tasks.Select(task => task.RequiredRole));
         Xunit.Assert.Contains("\"selectionSource\":\"explicitly-required\"", output, StringComparison.Ordinal);
     }

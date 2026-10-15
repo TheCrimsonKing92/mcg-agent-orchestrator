@@ -76,9 +76,17 @@ public sealed class FailedRoundCheckpointReceiptRecordingTests
     {
         using var f = new FailedRoundCheckpointFixture(AgentRole.Tester);
         f.WriteEdits();
-        f.Complete();
+        // Exercise a substantive failed Tester round, rather than missing-output format repair.
+        f.Complete(output: "WORKER_RESULT:\nfiles: seed.txt, new-untracked.txt\ncommands: inspect candidate\n" +
+            "tests: fail - candidate verification failed\ncommit: none\nblockers: candidate verification failed\n" +
+            "model_fit: fixture/model - adequate - failed Tester checkpoint\nskills: none\n" +
+            "confidence: high\nEND_WORKER_RESULT");
+        Assert.Equal(WorkTaskStatus.Failed, f.Worker.Status);
         Assert.False(f.Worker.LastVerification!.Succeeded);
+        Assert.Equal(VerificationTerminalContractStatus.Valid,
+            WorkerResultBlockers.AssessSubscriptionVerification(f.Worker, f.Worker.LastVerification).Status);
         Assert.Null(f.Worker.LastDispatch!.FailedRoundCheckpointReceipt);
+        Assert.NotEmpty(FailedRoundCheckpointFixture.Git(f.Worktree, "status", "--short"));
     }
 
     [Fact]

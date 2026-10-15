@@ -23,7 +23,9 @@ public sealed record DispatchRefreshOutcome(
     DateTimeOffset? DispatchAttemptAt = null,
     DateTimeOffset? ReceiptlessUsageAttemptAt = null,
     FailedRoundCheckpointReceipt? FailedRoundReceipt = null,
-    string? SkillsReceipt = null);
+    string? SkillsReceipt = null,
+    CompletionBuildEvidenceOperation? PendingBuildEvidence = null,
+    TaskIntentSuppressionReceipt? IntentSuppression = null);
 
 public sealed record DispatchDiagnosticPayload(int ExitCode, string StandardOutput, string StandardError);
 

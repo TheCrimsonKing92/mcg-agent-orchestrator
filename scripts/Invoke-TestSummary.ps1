@@ -8,6 +8,9 @@
   a test project declared by config/acceptance-manifest.json. Use -NoBuild only when the
   managed assembly is already current. Use -AllowBreakaway only for tests that explicitly validate
   Windows CREATE_BREAKAWAY_FROM_JOB behavior. Clean-run receipts are removed; failed runs are retained.
+  -AcceptanceAttributionReplayInput accepts a bounded isolated-copy input only with the exact
+  actual-copy replay filter documented in docs/negative-controls/b7ad094e-attribution-replay.md.
+  Its structured result is retained beside passing TRX evidence.
 
 .EXAMPLE
   .\scripts\Invoke-TestSummary.ps1
@@ -26,6 +29,7 @@ param(
     [string]$ResultsRoot,
     [string]$RunnerPath,
     [string]$DotnetPath = 'dotnet',
+    [string]$AcceptanceAttributionReplayInput,
     [switch]$AllowBreakaway,
     [ValidateRange(1, 86400)][int]$TestHostTimeoutSeconds = 780
 )
@@ -41,6 +45,12 @@ function Complete-MtpInvocation {
 
     Write-MtpTerminalSummary -Result $Result
     exit ([int]$Result.ExitCode)
+}
+
+if ($PSBoundParameters.ContainsKey('AcceptanceAttributionReplayInput') -and [string]::IsNullOrWhiteSpace($AcceptanceAttributionReplayInput)) {
+    $diagnostic = 'REPLAY INPUT FAILURE - an explicitly requested actual-copy replay requires a nonempty input path.'
+    Write-Host $diagnostic
+    Complete-MtpInvocation (New-MtpTerminalResult -Outcome failed -ExitCode $exitCodes.Runner -ResultsDirectory $null -Diagnostics @($diagnostic))
 }
 
 try {
@@ -89,6 +99,7 @@ $run = Invoke-MtpTestRun `
     -ResultsRoot $ResultsRoot `
     -RunnerPath $RunnerPath `
     -DotnetPath $DotnetPath `
+    -AcceptanceAttributionReplayInput $AcceptanceAttributionReplayInput `
     -AllowBreakaway:$AllowBreakaway `
     -TestHostTimeoutSeconds $TestHostTimeoutSeconds
 Complete-MtpInvocation $run

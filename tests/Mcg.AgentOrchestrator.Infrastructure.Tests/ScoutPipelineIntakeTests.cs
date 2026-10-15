@@ -22,20 +22,10 @@ public sealed class ScoutPipelineIntakeTests
     }
 
     [Xunit.Fact]
-    public void ExplicitFiveRoleKeepsResearcherAndExplicitScoutChecksItsOwnRoles()
+    public void ExplicitScoutChecksItsOwnRoles()
     {
         const string objective = "Update one label in src/Mcg.AgentOrchestrator.App/Cli/CliCommandHelp.cs.";
-        var fiveRolePlan = GoalObjectivePlanner.Build(objective, GoalIntakePipeline.FiveRole);
         var scoutPlan = GoalObjectivePlanner.Build(objective, GoalIntakePipeline.Scout);
-        var kernel = new AgentOrchestratorKernel();
-        var fiveRoleGoal = GoalLifecycleCommands.CreateAndActivateGoal(
-            kernel, AgentCatalog.Default().Agents, fiveRolePlan);
-
-        Xunit.Assert.Equal(
-            [AgentRole.Researcher, AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
-            fiveRoleGoal.Tasks.Select(task => task.RequiredRole));
-        Xunit.Assert.Contains(fiveRoleGoal.Timeline, evt =>
-            evt.Message.Contains("Intake pipeline decision (override): five-role", StringComparison.Ordinal));
         Xunit.Assert.Equal(
             [AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
             scoutPlan.TaskBoundaries.Select(boundary => boundary.Role));

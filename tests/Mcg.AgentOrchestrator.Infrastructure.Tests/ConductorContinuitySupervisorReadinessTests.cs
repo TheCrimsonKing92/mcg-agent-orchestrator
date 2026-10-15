@@ -64,7 +64,7 @@ public sealed class ConductorContinuitySupervisorReadinessTests
             host,
             store,
             delay: (_, _) => releaseReadinessTimeout.Task,
-            stageSuccessor: _ => prepared,
+            inspectStores: () => [new("fixture-store", "fixture.db", 1, 1)], stageSuccessor: _ => prepared,
             appendConductEvent: (_, _, detail) =>
             {
                 conductEvents.Add(detail);
@@ -140,7 +140,7 @@ public sealed class ConductorContinuitySupervisorReadinessTests
             host,
             store,
             delay: (_, _) => releaseReadinessTimeout.Task,
-            stageSuccessor: _ => prepared,
+            inspectStores: () => [new("fixture-store", "fixture.db", 1, 1)], stageSuccessor: _ => prepared,
             appendConductEvent: (_, _, detail) => conductEvents.Add(detail),
             readinessTimeout: TimeSpan.FromSeconds(30));
 

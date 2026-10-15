@@ -23,7 +23,7 @@ public sealed class GoalObjectivePlannerPipelineShapeTests
     [Xunit.Fact]
     public void Parse_WholeGoalReview_RejectsInternalValueAndKeepsExistingValues()
     {
-        Xunit.Assert.Equal("auto, scout, five-role, developer-reviewer, developer-only",
+        Xunit.Assert.Equal("auto, scout, developer-reviewer, developer-only",
             GoalIntakePipelineRequestParser.AllowedValues);
         Xunit.Assert.Throws<ArgumentException>(() => GoalIntakePipelineRequestParser.Parse("whole-goal-review"));
     }
@@ -51,7 +51,7 @@ public sealed class GoalObjectivePlannerPipelineShapeTests
     [Xunit.Fact]
     public void Parse_StreamPipeline_RejectsInternalValueAndKeepsExistingValues()
     {
-        string[] expected = ["auto", "scout", "five-role", "developer-reviewer", "developer-only"];
+        string[] expected = ["auto", "scout", "developer-reviewer", "developer-only"];
         Xunit.Assert.Equal(expected, GoalIntakePipelineRequestParser.AllowedValues.Split(", "));
         Xunit.Assert.Equal(expected.Order(), Enum.GetValues<GoalIntakePipelineRequest>()
             .Select(request => request.ToCanonicalValue()).Order());

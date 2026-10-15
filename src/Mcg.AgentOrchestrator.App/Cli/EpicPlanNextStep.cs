@@ -8,6 +8,14 @@ internal static class EpicPlanNextStep
 {
     internal const string StalledText = "Stalled: nothing in flight or ready";
 
+    internal static EpicPlanNextStepResult Compute(EpicPlanView view)
+    {
+        var scope = Compute(view.Items);
+        if (scope.IsStalled || scope.Text is not ("complete" or "no plan")) return scope;
+        if (view.UnplannedActiveMembers is { Count: > 0 }) return new("unplanned active work requires reconciliation", true);
+        return view.OutcomeProgress.State == EpicOutcomeState.Proven ? scope : new(view.OutcomeProgress.Work, false);
+    }
+
     internal static EpicPlanNextStepResult Compute(IReadOnlyList<EpicPlanItemStatus> items)
     {
         var ordered = items.OrderBy(item => item.Item.Position).ToArray();

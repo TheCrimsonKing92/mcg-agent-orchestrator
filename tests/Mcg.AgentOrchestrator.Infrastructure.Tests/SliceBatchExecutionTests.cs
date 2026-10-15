@@ -306,7 +306,7 @@ public sealed class SliceBatchExecutionTests
         });
 
         var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
-        var requested = GoalObjectivePlanner.Build("Implement src/Other.cs.", GoalIntakePipeline.FiveRole);
+        var requested = ResearcherGoalPlanFixture.RequestedPlan("Implement src/Other.cs.");
         Xunit.Assert.All(restored.Goals.Where(goal => goal.SliceBatchParentId == parent.Id), child =>
         {
             var mismatch = Xunit.Assert.Throws<InvalidOperationException>(() =>

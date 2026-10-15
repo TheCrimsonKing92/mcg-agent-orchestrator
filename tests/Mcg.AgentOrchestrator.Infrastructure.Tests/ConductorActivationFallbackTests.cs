@@ -5,6 +5,95 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class ConductorActivationFallbackTests
 {
     [Xunit.Fact]
+    public async Task ChangedActualSchemaNeverLaunchesIncompatibleFallback()
+    {
+        var root = Directory.CreateTempSubdirectory("fallback-schema-").FullName;
+        try
+        {
+            var storeDirectory = Path.Combine(root, "stores");
+            var portfolio = Path.Combine(storeDirectory, "portfolio.db");
+            PortfolioStore.Setup(portfolio);
+            var events = new RecordingRunEventStore();
+            var host = new ScriptedHost((request, index, _) =>
+            {
+                if (index == 0)
+                {
+                    ConductorContinuityExitArtifact.Write(request.ExitArtifactPath, new("max-duration", 1, 1, true));
+                    return Task.FromResult(new ConductorSupervisorProcessResult(0, 100));
+                }
+                Assert.Equal(1, index); // A third request would restore the incompatible retained reader.
+                request.OnStandardOutputLine!("LOOP_READY lock=acquired");
+                request.OnStandardOutputLine("LOOP_START tick=0");
+                using var connection = new Microsoft.Data.Sqlite.SqliteConnection(new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder
+                {
+                    DataSource = portfolio, Pooling = false
+                }.ToString());
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = "UPDATE store_schema_versions SET version = 99";
+                Assert.Equal(1, command.ExecuteNonQuery());
+                return Task.FromResult(new ConductorSupervisorProcessResult(-1, 101));
+            });
+            var supervisor = new ConductorContinuitySupervisor(host, events,
+                stageSuccessor: _ => Build("future", "future", new MemoryStream()), activationHealthyTicks: 3,
+                inspectStores: () => StoreSetupRunner.Plan(storeDirectory));
+            Assert.Equal(1, await supervisor.RunAsync(["conduct", "--loop"], root, Path.Combine(root, "continuity"), "default", "default"));
+            Assert.Equal(2, host.Requests.Count);
+            Assert.DoesNotContain(events.Events, evt => evt.Operation == "activation" && evt.Status == "reverted");
+            Assert.Contains(events.Events, evt => evt.Detail?.Contains("fallbackSuppressed=true", StringComparison.Ordinal) == true);
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(0)]
+    [Xunit.InlineData(1)]
+    [Xunit.InlineData(2)]
+    public async Task PreflightFailureRetainsBuildAndReleasesSuccessorLease(int failure)
+    {
+        var root = Directory.CreateTempSubdirectory("preflight-retained-").FullName;
+        try
+        {
+            var events = new RecordingRunEventStore();
+            using var successorLease = new MemoryStream();
+            var host = new ScriptedHost((request, index, _) =>
+            {
+                Assert.InRange(index, 0, 1);
+                if (index == 1)
+                {
+                    Assert.False(successorLease.CanRead);
+                    Assert.DoesNotContain("--require-current-stores", request.Arguments);
+                }
+                ConductorContinuityExitArtifact.Write(request.ExitArtifactPath,
+                    new(index == 0 ? "max-duration" : "stop-file", 1, 1, index == 0));
+                return Task.FromResult(new ConductorSupervisorProcessResult(0, 100 + index));
+            });
+            var inspections = 0;
+            var supervisor = new ConductorContinuitySupervisor(host, events,
+                stageSuccessor: _ => Build("future", "future", successorLease),
+                inspectStores: failure == 0 ? null : () =>
+                {
+                    inspections++;
+                    if (failure == 1) throw new IOException("fixture inspection unavailable");
+                    throw new InvalidOperationException("fixture inspection invalid");
+                });
+
+            Assert.Equal(0, await supervisor.RunAsync(["conduct", "--loop"], root,
+                Path.Combine(root, "continuity"), "default", "default"));
+            Assert.Equal(2, host.Requests.Count);
+            Assert.Equal(host.Requests[0].CommandPrefix, host.Requests[1].CommandPrefix);
+            Assert.Equal(failure == 0 ? 0 : 1, inspections);
+            var failed = Assert.Single(events.Events, evt => evt.Detail?.Contains("phase=preflight", StringComparison.Ordinal) == true);
+            Assert.Equal("failed", failed.Status);
+            Assert.Contains("LOOP_HANDOFF_FAILED", failed.Detail);
+            Assert.Contains("activationSuppressed=true", failed.Detail);
+            if (failure != 0) Assert.Contains("reason=", failed.Detail);
+            Assert.DoesNotContain(events.Events, evt => evt.Operation == "activation" && evt.Status == "adopted");
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Xunit.Fact]
     public async Task FailedSuccessorRestoresPriorStagedBuildAndSuppressesSameHead()
     {
         var events = new RecordingRunEventStore();
@@ -39,7 +128,7 @@ public sealed class ConductorActivationFallbackTests
             return Task.FromResult(new ConductorSupervisorProcessResult(0, 100 + index));
         });
         var supervisor = new ConductorContinuitySupervisor(host, events,
-            stageSuccessor: _ => stages.Dequeue(), activationHealthyTicks: 3,
+            inspectStores: () => [new("fixture-store", "fixture.db", 1, 1)], stageSuccessor: _ => stages.Dequeue(), activationHealthyTicks: 3,
             activationDelay: (_, _) => throw new InvalidOperationException("No deadline should be needed"));
 
         var result = await supervisor.RunAsync(["conduct", "--loop"], "C:\\repo",
@@ -85,7 +174,7 @@ public sealed class ConductorActivationFallbackTests
             return Task.FromResult(new ConductorSupervisorProcessResult(-1, 200 + index));
         });
         var supervisor = new ConductorContinuitySupervisor(host, events,
-            stageSuccessor: _ => prepared, activationHealthyTicks: 3,
+            inspectStores: () => [new("fixture-store", "fixture.db", 1, 1)], stageSuccessor: _ => prepared, activationHealthyTicks: 3,
             activationDelay: (_, _) => throw new InvalidOperationException("No deadline should be needed"),
             raiseActivationAttention: attention.Add);
 
@@ -140,7 +229,7 @@ public sealed class ConductorActivationFallbackTests
             return Task.FromResult(new ConductorSupervisorProcessResult(0, 302));
         });
         var supervisor = new ConductorContinuitySupervisor(host, events,
-            stageSuccessor: _ => prepared,
+            inspectStores: () => [new("fixture-store", "fixture.db", 1, 1)], stageSuccessor: _ => prepared,
             activationDelay: (_, _) =>
             {
                 deadlineCreated.TrySetResult();
@@ -198,7 +287,7 @@ public sealed class ConductorActivationFallbackTests
             return Task.FromResult(new ConductorSupervisorProcessResult(0, 400 + index));
         });
         var supervisor = new ConductorContinuitySupervisor(host, events,
-            stageSuccessor: _ => successor, activationHealthyTicks: 3,
+            inspectStores: () => [new("fixture-store", "fixture.db", 1, 1)], stageSuccessor: _ => successor, activationHealthyTicks: 3,
             activationDelay: (_, _) => throw new InvalidOperationException("No deadline should be needed"));
 
         var result = await supervisor.RunAsync(["conduct", "--loop"], "C:\\repo",
@@ -253,7 +342,7 @@ public sealed class ConductorActivationFallbackTests
             return Task.FromResult(new ConductorSupervisorProcessResult(0, 500 + index));
         });
         var supervisor = new ConductorContinuitySupervisor(host, events,
-            stageSuccessor: _ => ++stageCount == 1
+            inspectStores: () => [new("fixture-store", "fixture.db", 1, 1)], stageSuccessor: _ => ++stageCount == 1
                 ? successor
                 : throw new InvalidOperationException("No newer HEAD"),
             activationHealthyTicks: 3,
@@ -307,7 +396,7 @@ public sealed class ConductorActivationFallbackTests
         });
         var deadlineCalls = 0;
         var supervisor = new ConductorContinuitySupervisor(host, events,
-            stageSuccessor: _ => successor, activationHealthyTicks: 3,
+            inspectStores: () => [new("fixture-store", "fixture.db", 1, 1)], stageSuccessor: _ => successor, activationHealthyTicks: 3,
             activationDelay: (_, _) =>
             {
                 return ++deadlineCalls switch

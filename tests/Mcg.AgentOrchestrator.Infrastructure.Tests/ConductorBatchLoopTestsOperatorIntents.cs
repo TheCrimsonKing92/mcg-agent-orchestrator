@@ -550,7 +550,11 @@ public sealed class ConductorBatchLoopTestsOperatorIntents : ConductorBatchLoopT
                 new ManualVerificationOperatorIntentPayload(verification));
 
             Assert.Equal(WorkTaskStatus.Completed, kernel.GetTask(goal.Id, task.Id).Status);
-            Assert.Equal(verification with { AcceptanceCriteriaVersionHash = "no-refined-spec" }, kernel.GetTask(goal.Id, task.Id).LastVerification);
+            Assert.Equal(verification with
+            {
+                AcceptanceCriteriaVersionHash = "no-refined-spec",
+                EvidenceSource = VerificationEvidenceSource.Manual
+            }, kernel.GetTask(goal.Id, task.Id).LastVerification);
         }
         finally
         {

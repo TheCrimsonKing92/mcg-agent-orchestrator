@@ -262,10 +262,7 @@ internal sealed partial class ConductorBatchLoop
 
         try
         {
-            return driver.CompleteParallelLandingAcceptance(
-                run.Candidate,
-                policy,
-                run.Acceptance,
+            return PassedAcceptanceReceiptReplay.Complete(driver, run, policy, attempt,
                 out evidenceMutationLeaseHeld);
         }
         catch (Exception ex)
@@ -306,7 +303,7 @@ internal sealed partial class ConductorBatchLoop
             policy.Name,
             new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, reason) { Owner = owner });
 
-    private static string BuildAcceptanceEngineHoldReason(AcceptanceEngineHealthSnapshot snapshot)
+    internal static string BuildAcceptanceEngineHoldReason(AcceptanceEngineHealthSnapshot snapshot)
     {
         var decision = AcceptanceEngineAcceptanceGate.Decide(
             snapshot.Health,

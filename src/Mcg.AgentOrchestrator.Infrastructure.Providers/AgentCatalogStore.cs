@@ -307,6 +307,7 @@ public static class AgentCatalogStore
 
         return model with
         {
+            ModelName = EffectiveModelAssignment.Normalize(model.ProviderName, model.ModelName),
             MaxOutputTokens = model.MaxOutputTokens ?? defaultMaxOutputTokens,
             ReasoningEffort = string.IsNullOrWhiteSpace(model.ReasoningEffort)
                 ? defaultReasoningEffort
@@ -316,16 +317,21 @@ public static class AgentCatalogStore
 
     private static SubscriptionLaunchProfile? NormalizeSubscription(AgentDefinition agent)
     {
-        if (agent.Subscription is null || !AgentExecutionPolicies.AllowsSubscription(agent.ExecutionPolicy))
+        if (agent.Subscription is null)
         {
             return agent.Subscription;
         }
 
-        var subscription = agent.Subscription;
+        var subscription = agent.Subscription with
+        {
+            ModelAlias = EffectiveModelAssignment.Normalize(agent.Model.ProviderName, agent.Subscription.ModelAlias)
+        };
+        if (!AgentExecutionPolicies.AllowsSubscription(agent.ExecutionPolicy))
+            return subscription;
         if (IsOpenAiCodexSubscription(agent, subscription) &&
             string.Equals(subscription.ModelAlias, AgentCatalog.StaleOpenAiCodexSubscriptionModelAlias, StringComparison.OrdinalIgnoreCase))
         {
-            subscription = subscription with { ModelAlias = AgentCatalog.OpenAiGpt6SolSubscriptionModelAlias };
+            subscription = subscription with { ModelAlias = AgentCatalog.OpenAiGpt61SolSubscriptionModelAlias };
         }
 
         return string.IsNullOrWhiteSpace(subscription.ReasoningEffort) && IsPaidProvider(agent.Model.ProviderName)

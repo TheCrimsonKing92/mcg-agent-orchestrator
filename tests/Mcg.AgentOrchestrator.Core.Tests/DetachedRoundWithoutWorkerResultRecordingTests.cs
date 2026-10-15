@@ -5,10 +5,12 @@ using Xunit;
 // Parallel-safe: all dispatch/process evidence stays in memory and time uses FakeClock.
 public sealed class DetachedRoundWithoutWorkerResultRecordingTests
 {
-    [Fact]
-    public void RecordDispatch_DetachedProseRound_RequeuesAndStampsHistory()
+    [Theory]
+    [InlineData(AgentRole.Reviewer)]
+    [InlineData(AgentRole.Tester)]
+    public void RecordDispatch_DetachedProseRound_RequeuesAndStampsHistory(AgentRole role)
     {
-        var (kernel, goal, task, clock) = ReviewerGoal();
+        var (kernel, goal, task, clock) = VerificationGoal(role);
 
         RecordRound(kernel, goal, task, clock, attempt: 1);
 
@@ -36,10 +38,12 @@ public sealed class DetachedRoundWithoutWorkerResultRecordingTests
             evt.Message.Contains("verdict=VerifiedSuccess", StringComparison.Ordinal));
     }
 
-    [Fact]
-    public void RecordDispatch_FourthConsecutiveDetachedRound_FailsTask()
+    [Theory]
+    [InlineData(AgentRole.Reviewer)]
+    [InlineData(AgentRole.Tester)]
+    public void RecordDispatch_FourthConsecutiveDetachedRound_FailsTask(AgentRole role)
     {
-        var (kernel, goal, task, clock) = ReviewerGoal();
+        var (kernel, goal, task, clock) = VerificationGoal(role);
         for (var attempt = 1; attempt <= 4; attempt++)
         {
             RecordRound(kernel, goal, task, clock, attempt);
@@ -96,17 +100,53 @@ public sealed class DetachedRoundWithoutWorkerResultRecordingTests
         Assert.Equal(2, DispatchFailureClassifier.CountConsecutiveDetachedWithoutWorkerResultRounds(task));
     }
 
-    private static (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Task, FakeClock Clock) ReviewerGoal()
+    [Theory]
+    [InlineData(AgentRole.Reviewer, false)]
+    [InlineData(AgentRole.Tester, false)]
+    [InlineData(AgentRole.Reviewer, true)]
+    [InlineData(AgentRole.Tester, true)]
+    public void DetachmentCannotReplaceMalformedOrStaleContract(AgentRole role, bool stale)
+    {
+        var (kernel, goal, task, clock) = VerificationGoal(role);
+        const string command = "codex exec";
+        var startedAt = clock.UtcNow;
+        kernel.RecordTaskDispatch(goal.Id, task.Id,
+            new TaskDispatchRecord("codex-cli", command, "C:\\repo", startedAt,
+                WorkerProviderKind: ProviderKind.OpenAICodexCli));
+        kernel.RecordTaskProcessStarted(goal.Id, task.Id,
+            new TaskProcessRecord(4242, command, "C:\\repo", "out.log", "err.log",
+                "exit.txt", startedAt, null, null));
+        kernel.RecordTaskProcessGracefullyDetached(goal.Id, task.Id,
+            task.LastProcess! with { WasGracefullyDetachedByConductor = true });
+        clock.Advance();
+        kernel.RecordTaskProcessRefreshed(goal.Id, task.Id,
+            task.LastProcess! with { CompletedAt = clock.UtcNow, ExitCode = 0 }, null);
+        var verification = new TaskVerificationRecord(command, "C:\\repo", 0,
+            "WORKER_RESULT:\nfiles: none", string.Empty, clock.UtcNow,
+            DispatchStartedAt: stale ? null : startedAt);
+
+        Assert.Equal(stale ? VerificationTerminalContractStatus.Stale : VerificationTerminalContractStatus.Malformed,
+            WorkerResultBlockers.AssessSubscriptionVerification(task, verification).Status);
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, verification);
+
+        var history = Assert.Single(task.VerificationHistory);
+        Assert.Equal(false, history.CompletionVerdictVerifiedSuccess);
+        Assert.Equal("verification-terminal-contract-incomplete", history.CompletionVerdictRule);
+        Assert.Equal(0, DispatchFailureClassifier.CountConsecutiveDetachedWithoutWorkerResultRounds(task));
+        Assert.NotEqual(WorkTaskStatus.Completed, task.Status);
+    }
+
+    private static (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Task, FakeClock Clock) VerificationGoal(AgentRole role)
     {
         var clock = new FakeClock();
         var kernel = new AgentOrchestratorKernel(clock);
         var goal = kernel.CreateGoal("Record detached reviewer rounds",
         [
             new TaskSpec(TaskId.New(), "Implement behavior", AgentRole.Developer),
-            new TaskSpec(TaskId.New(), "Review behavior", AgentRole.Reviewer)
+            new TaskSpec(TaskId.New(), "Verify behavior", role)
         ]);
         kernel.ActivateGoal(goal.Id, DefaultAgents());
-        var task = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        var task = goal.Tasks.Single(task => task.RequiredRole == role);
         Assert.NotNull(task.AssignedAgentId);
         return (kernel, goal, task, clock);
     }
@@ -134,6 +174,7 @@ public sealed class DetachedRoundWithoutWorkerResultRecordingTests
         Assert.DoesNotContain("WORKER_RESULT", prose, StringComparison.Ordinal);
 
         kernel.RecordDispatchExecutionResult(goal.Id, task.Id,
-            new TaskVerificationRecord(command, "C:\\repo", 0, prose, string.Empty, clock.UtcNow));
+            new TaskVerificationRecord(command, "C:\\repo", 0, prose, string.Empty, clock.UtcNow,
+                DispatchStartedAt: task.LastProcess.StartedAt));
     }
 }

@@ -26,6 +26,18 @@ internal sealed class WorkerGitContext
                 GitCli.Run(workingDirectory, timeoutMilliseconds, arguments));
     }
 
+    internal static string? ReadCurrentMainIdentityForRetry(string workingDirectory, string integrationBranch)
+    {
+        if (string.IsNullOrWhiteSpace(workingDirectory) || !Directory.Exists(workingDirectory))
+            return null;
+
+        var main = GitCli.Run(workingDirectory, "rev-parse", integrationBranch);
+        if (main.ExitCode != 0)
+            return null;
+        var identity = main.Output.Trim();
+        return string.IsNullOrWhiteSpace(identity) ? null : identity;
+    }
+
     internal string[] ReadChangedFilesForTestImpact(string workingDirectory)
     {
         if (!LooksLikeGitWorkspace(workingDirectory))

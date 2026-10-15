@@ -168,13 +168,28 @@ public sealed class FocusedEvidenceMatchedClassBudgetTests
         fixture.Write("Qualified.cs", "namespace Fixture; public class AlphaTests { [Xunit.Fact] public void Runs() { } }");
         const string filter = "FullyQualifiedName~Fixture.AlphaTests|FullyQualifiedName~Fixture.AlphaTests.Runs";
 
-        var check = fixture.Build(filter);
+        Assert.True(GoalAcceptanceVerifier.TryBuildFocusedEvidenceChecks(
+            "Infrastructure.Tests: " + filter, new AcceptanceGateEngineSettings(), fixture.Root,
+            out var checks, out var coverage, out var rejection), rejection.Detail);
 
-        Assert.Equal(10, check.TimeoutMinutes);
-        Assert.Equal(["--verbosity", "minimal", "--filter", filter], check.Arguments);
-        Assert.Collection(check.FocusedEvidenceMatchedClasses, selection => AssertSelection(selection, "Fixture.AlphaTests", "AlphaTests"));
-        Assert.Equal([GoalAcceptanceVerifier.FocusedEvidenceTokenKind.Class, GoalAcceptanceVerifier.FocusedEvidenceTokenKind.Method],
-            check.FocusedEvidenceTokens.Select(token => token.Kind));
+        Assert.All(checks, check => Assert.Equal(10, check.TimeoutMinutes));
+        Assert.Collection(checks,
+            classCheck =>
+            {
+                Assert.Equal(["--verbosity", "minimal", "--filter", "FullyQualifiedName~Fixture.AlphaTests"], classCheck.Arguments);
+                Assert.Collection(classCheck.FocusedEvidenceMatchedClasses,
+                    selection => AssertSelection(selection, "Fixture.AlphaTests", "AlphaTests"));
+                Assert.Equal(GoalAcceptanceVerifier.FocusedEvidenceTokenKind.Class, Assert.Single(classCheck.FocusedEvidenceTokens).Kind);
+            },
+            methodCheck =>
+            {
+                Assert.Equal(["--verbosity", "minimal", "--filter", "FullyQualifiedName~Fixture.AlphaTests.Runs"], methodCheck.Arguments);
+                Assert.Empty(methodCheck.FocusedEvidenceMatchedClasses);
+                Assert.Equal(GoalAcceptanceVerifier.FocusedEvidenceTokenKind.Method, Assert.Single(methodCheck.FocusedEvidenceTokens).Kind);
+            });
+        var targetCoverage = Assert.Single(coverage.TargetToChecks);
+        Assert.Equal("Infrastructure.Tests: " + filter, targetCoverage.Target);
+        Assert.Equal(checks.Select(check => check.Name), targetCoverage.CheckNames);
     }
 
     [Fact]

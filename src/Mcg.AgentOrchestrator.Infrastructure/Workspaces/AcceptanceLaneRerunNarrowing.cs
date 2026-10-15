@@ -24,15 +24,26 @@ internal static class AcceptanceLaneRerunNarrowing
         !plan.IsNarrowed ? check : new()
         {
             Name = check.Name, Type = check.Type, Command = check.Command, Project = check.Project,
-            Arguments = check.Arguments, Pattern = check.Pattern, FilePath = check.FilePath,
+            Arguments = NarrowedArguments(check.Arguments, plan), Pattern = check.Pattern, FilePath = check.FilePath,
             TimeoutMinutes = check.TimeoutMinutes, Advisory = check.Advisory, Runner = check.Runner,
             EstimatedSerialSeconds = check.EstimatedSerialSeconds, ExclusiveResourceKeys = check.ExclusiveResourceKeys,
             IsFocusedEvidenceSelection = check.IsFocusedEvidenceSelection,
-            FocusedEvidenceTokens = plan.Tokens, FocusedEvidenceSelections = check.FocusedEvidenceSelections,
+            FocusedEvidenceTokens = plan.Tokens, FocusedEvidenceSelections = [plan.Tokens],
             FocusedEvidenceMatchedClasses = check.FocusedEvidenceMatchedClasses,
             IsResolvedInfrastructureLane = check.IsResolvedInfrastructureLane,
             RequiresBuildSystemChange = check.RequiresBuildSystemChange
         };
+
+    private static IReadOnlyList<string> NarrowedArguments(IReadOnlyList<string> arguments, Plan plan)
+    {
+        var narrowed = new List<string>();
+        if (string.IsNullOrWhiteSpace(AcceptanceCheckCommandBuilder.ExtractFilterArguments(arguments, narrowed)))
+            throw new InvalidOperationException("A narrowed lane rerun requires an original filter.");
+        // The extractor leaves the original filter at the end. Keep all other
+        // arguments, and bind the replacement expression to the same method tokens.
+        narrowed[^1] = string.Join('|', plan.Tokens.Select(token => token.CanonicalToken));
+        return narrowed;
+    }
 
     internal static bool Passed(Plan plan, AcceptanceCheckResult rerun) =>
         rerun.Passed && (!plan.IsNarrowed ||
