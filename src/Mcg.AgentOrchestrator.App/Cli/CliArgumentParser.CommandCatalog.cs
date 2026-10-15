@@ -60,6 +60,7 @@ internal static IReadOnlyList<string> RecognizedCommands { get; } =
     "failure-triage",
     "failure-clusters",
     "lane-reuse-shadow",
+    "intent-coverage",
     "remote-executors",
     "remote-lane-selftest",
     "round-value",

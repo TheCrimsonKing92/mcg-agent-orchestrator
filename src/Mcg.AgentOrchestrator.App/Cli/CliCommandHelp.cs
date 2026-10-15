@@ -96,6 +96,7 @@ internal static class CliCommandHelp
     public const string OwnerDigestUsage = "Usage: owner-digest [--since <ISO-8601-with-offset>] [--until <ISO-8601-with-offset>] [--json] [--rounds]";
     public const string FailureClustersUsage = "Usage: failure-clusters [--since <ISO-8601>] [--until <ISO-8601>] [--top <n>] [--json]";
     public const string LaneReuseShadowUsage = "Usage: lane-reuse-shadow [--since <ISO-8601>] [--until <ISO-8601>] [--json]";
+    public const string IntentCoverageUsage = "Usage: intent-coverage [--since <ISO-8601>] [--until <ISO-8601>] [--min-cases <n>] [--json]";
     public const string RemoteExecutorsUsage = "Usage: remote-executors [--since <ISO-8601>] [--last <N>] [--json]";
     public const string RemoteLaneSelfTestUsage = "Usage: remote-lane-selftest --executor <id> [--timeout-minutes <n>]";
     public const string RoundValueUsage = "Usage: round-value [--since <ISO-8601-with-offset>] [--until <ISO-8601-with-offset>] [--json] [--by-skill] [--by-check] [--baseline-since <ISO-8601-with-offset> --baseline-until <ISO-8601-with-offset>]";
@@ -636,6 +637,11 @@ internal static class CliCommandHelp
         LaneReuseShadowUsage,
         "Report shadow lane reuse, hypothetical serial savings and misses; default window is 7 days.",
         ["--since", "--until", "--json", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry IntentCoverage = new(
+        IntentCoverageUsage,
+        "Score recorded human intents against typed Steward and Author coverage; default window is 7 days.",
+        ["--since", "--until", "--min-cases", "--json", "--help", "-h"]);
 
     private static readonly CommandHelpEntry RemoteExecutors = new(
         RemoteExecutorsUsage, "Read recent remote executor outcomes and advisory probes.",
@@ -1183,6 +1189,11 @@ internal static class CliCommandHelp
         if (args[0].Equals("lane-reuse-shadow", StringComparison.OrdinalIgnoreCase))
         {
             entry = LaneReuseShadow;
+            return true;
+        }
+        if (args[0].Equals("intent-coverage", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = IntentCoverage;
             return true;
         }
         if (args[0].Equals("remote-executors", StringComparison.OrdinalIgnoreCase))

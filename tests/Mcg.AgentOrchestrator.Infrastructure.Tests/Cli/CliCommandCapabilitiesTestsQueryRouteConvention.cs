@@ -15,6 +15,7 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteConvention
             ["goals"] = [["goals"], ["goals", "--epic", "Board"], ["goals", "--epic=Board"]],
             ["failure-clusters"] = [["failure-clusters"]],
             ["lane-reuse-shadow"] = [["lane-reuse-shadow"]],
+            ["intent-coverage"] = [["intent-coverage"]],
             ["remote-executors"] = [["remote-executors"]],
             ["round-value"] = [["round-value"]],
             ["board-simulate"] = [["board-simulate", "--day", "2026-10-15"]],
