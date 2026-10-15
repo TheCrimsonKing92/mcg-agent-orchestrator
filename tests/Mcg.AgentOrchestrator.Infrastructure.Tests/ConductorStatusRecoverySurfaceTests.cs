@@ -14,6 +14,43 @@ public sealed class ConductorStatusRecoverySurfaceTests
     private const string GoalB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
     [Fact]
+    public async Task Status_NewerIntents_ReportsCompatibleRuntimeInTextAndJsonWithoutWrites()
+    {
+        using var fixture = new ConductorVerbStartTests.Fixture();
+        var workspace = fixture.Workspace;
+        await SeedStatusSources(workspace);
+        var path = IntentPath(workspace);
+        SqliteOperatorIntentStore.Setup(path);
+        using (var connection = new Microsoft.Data.Sqlite.SqliteConnection(new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder
+        {
+            DataSource = path, Mode = Microsoft.Data.Sqlite.SqliteOpenMode.ReadWrite, Pooling = false
+        }.ToString()))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "UPDATE store_schema_versions SET version = 99";
+            Assert.Equal(1, command.ExecuteNonQuery());
+        }
+        var before = Directory.GetFiles(workspace.OrchestratorDirectory, SqliteOperatorIntentStore.DatabaseFileName + "*").Order(StringComparer.Ordinal)
+            .ToDictionary(file => file, Hash);
+        var text = string.Join(Environment.NewLine, StatusWithoutMutatingSources(workspace));
+        var snapshot = ConductorStatusSnapshotReader.Read(workspace, null, RecordedAt.AddDays(-2));
+        using var json = JsonDocument.Parse(ConductorStatusAgentReadView.Render(snapshot, TimeProvider.System));
+        var reason = snapshot.PendingIntents.Reason;
+        Assert.Equal("unavailable", snapshot.PendingIntents.State);
+        Assert.Contains("newer than runtime-supported version", reason);
+        Assert.Contains("compatible runtime", reason);
+        Assert.Contains("older setup cannot repair", reason);
+        Assert.DoesNotContain("run setup", reason);
+        Assert.DoesNotContain("setup required", reason);
+        Assert.Contains(reason!, text);
+        Assert.Equal(reason, json.RootElement.GetProperty("payload").GetProperty("pendingIntents").GetProperty("reason").GetString());
+        Assert.Equal(before.Keys.Order(StringComparer.Ordinal),
+            Directory.GetFiles(workspace.OrchestratorDirectory, SqliteOperatorIntentStore.DatabaseFileName + "*").Order(StringComparer.Ordinal));
+        foreach (var (file, hash) in before) Assert.Equal(hash, Hash(file));
+    }
+
+    [Fact]
     public async Task Status_TwoGenerations_ReportsLatestSummaryAndOnlyItsIdentityDeferrals()
     {
         using var fixture = new ConductorVerbStartTests.Fixture();

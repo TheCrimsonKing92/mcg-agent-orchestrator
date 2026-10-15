@@ -11,6 +11,8 @@
   <ItemGroup>
     <Compile Include="..\ConsoleCapture.cs" Link="ConsoleCapture.cs" />
     <Compile Include="..\CliChildProcessRunner.cs" Link="CliChildProcessRunner.cs" />
+    <Compile Include="..\FixtureProbeLocator.cs" Link="FixtureProbeLocator.cs" />
+    <Compile Include="..\TestBuildOutputLocator.cs" Link="TestBuildOutputLocator.cs" />
     <Compile Include="..\FailureClusterFixtureData.cs" Link="FailureClusterFixtureData.cs" />
     <Compile Include="..\FailureClusterTestData.cs" Link="FailureClusterTestData.cs" />
     <Compile Include="..\VerifiedRepositoryRoot.cs" Link="VerifiedRepositoryRoot.cs" />
@@ -20,6 +22,7 @@
     <ProjectReference Include="..\..\..\src\Mcg.AgentOrchestrator.Core\Mcg.AgentOrchestrator.Core.csproj" />
     <ProjectReference Include="..\..\..\src\Mcg.AgentOrchestrator.App\Mcg.AgentOrchestrator.App.csproj" />
     <ProjectReference Include="..\..\..\src\Mcg.AgentOrchestrator.Infrastructure\Mcg.AgentOrchestrator.Infrastructure.csproj" />
+    <ProjectReference Include="..\Fixtures\IsolatedDotnetProbe\Mcg.AgentOrchestrator.IsolatedDotnetProbe.csproj" ReferenceOutputAssembly="false" />
     <PackageReference Include="Microsoft.Testing.Extensions.TrxReport" Version="2.3.2" />
     <PackageReference Include="xunit.v3.mtp-v2" Version="3.2.2" />
   </ItemGroup>

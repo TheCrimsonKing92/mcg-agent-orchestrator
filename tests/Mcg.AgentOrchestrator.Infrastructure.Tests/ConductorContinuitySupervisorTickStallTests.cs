@@ -108,7 +108,7 @@ public sealed class ConductorContinuitySupervisorTickStallTests
         });
         var supervisor = new ConductorContinuitySupervisor(host, events,
             timeProvider: clock, delay: (_, _) => Task.CompletedTask,
-            stageSuccessor: _ => Prepared(), dotnetPath: "dotnet-test",
+            inspectStores: () => [new("fixture-store", "fixture.db", 1, 1)], stageSuccessor: _ => Prepared(), dotnetPath: "dotnet-test",
             activationDelay: (_, _) => throw new InvalidOperationException("Already healthy"),
             tickStallBudget: TimeSpan.FromMinutes(2),
             tickStallDelay: (duration, _) =>
@@ -244,7 +244,7 @@ public sealed class ConductorContinuitySupervisorTickStallTests
         });
         var supervisor = new ConductorContinuitySupervisor(host, events,
             timeProvider: new FixedClock(), delay: (_, _) => Task.CompletedTask,
-            stageSuccessor: _ => Prepared(), dotnetPath: "dotnet-test",
+            inspectStores: () => [new("fixture-store", "fixture.db", 1, 1)], stageSuccessor: _ => Prepared(), dotnetPath: "dotnet-test",
             activationDelay: (_, _) => throw new InvalidOperationException("Already healthy"),
             tickStallBudget: TimeSpan.FromMinutes(2),
             tickStallDelay: (duration, _) =>

@@ -52,6 +52,7 @@ internal static class OwnerActivityNarrator
         var held = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var landed = new HashSet<OwnerConductEvent>();
         string[] mostRecentLanding = [];
+        string[] mostRecentLandingPrefixes = [];
         var restarting = false;
         var stopped = false;
         for (var index = 0; index < ordered.Length; index++)
@@ -76,11 +77,12 @@ internal static class OwnerActivityNarrator
                     if (landed.Add(ordered[next])) train.Add(ordered[next]);
                 var goals = train.Select(value => value.GoalId).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
                 mostRecentLanding = goals.Select(Name).ToArray();
+                mostRecentLandingPrefixes = goals.Select(Prefix).ToArray();
                 var landing = GoalList(goals.Length > 1 ? "Landed together: " : "Landed: ",
                     mostRecentLanding, goals.Select(id => $" ({Prefix(id)})").ToArray());
                 Add(item, landing.Text,
                     "The work passed its checks and was added to main.", "The conductor will continue with the remaining work.",
-                    spans: landing.Spans);
+                    spans: landing.Spans, goalPrefixes: goals.Length > 1 ? mostRecentLandingPrefixes : null);
                 continue;
             }
             switch (item.EventKind)
@@ -162,7 +164,8 @@ internal static class OwnerActivityNarrator
                         var landingNames = GoalList("Main broke after landing ", mostRecentLanding);
                         Add(item, landingNames.Text + (mostRecentLanding.Length == 0 ? "recent work" : "") + $": {check}",
                             "A check of main failed after the work landed.", "Further landings wait while the failure is investigated.",
-                            "Yes. Review the failure and decide how to repair main.", spans: landingNames.Spans);
+                            "Yes. Review the failure and decide how to repair main.", spans: landingNames.Spans,
+                            goalPrefixes: mostRecentLandingPrefixes.Length > 1 ? mostRecentLandingPrefixes : null);
                     }
                     break;
                 case "loop-handoff":
@@ -226,11 +229,11 @@ internal static class OwnerActivityNarrator
         string FullName(string? id) => Words(title(id), Prefix(id).Length == 0 ? "This work" : Prefix(id));
         string Name(string? id) => FullName(id);
         void Add(OwnerConductEvent source, string sentence, string why, string next, string act = "No. You can let the conductor continue.",
-            OwnerConsoleLineSpans? spans = null)
+            OwnerConsoleLineSpans? spans = null, IReadOnlyList<string>? goalPrefixes = null)
         {
             result.Add(new(source.Timestamp, source.EventKind, "outcome", Prefix(source.GoalId), source.Detail,
                 FullName(source.GoalId), sentence, why, next, act, why, Resolution: OwnerActivityProgress.RetryAfter(source, ordered),
-                Spans: spans));
+                Spans: spans, GoalPrefixes: goalPrefixes));
         }
         void Stall(OwnerConductEvent source)
         {
@@ -252,7 +255,8 @@ internal static class OwnerActivityNarrator
             var named = GoalList(joint ? "Joint test run for " : "", joint ? ids.Select(FullName).ToArray() : [Name(source.GoalId)]);
             var label = named.Text;
             var spans = named.Spans with { OutcomeStart = label.Length + 2, OutcomeLength = (passed ? "passed" : "failed").Length };
-            if (passed) { Add(source, label + ": passed", "The joint checks passed.", "The conductor will land the work.", spans: spans); return; }
+            var goalPrefixes = joint && ids.Length > 1 ? ids.Select(Prefix).ToArray() : null;
+            if (passed) { Add(source, label + ": passed", "The joint checks passed.", "The conductor will land the work.", spans: spans, goalPrefixes: goalPrefixes); return; }
             var follow = ordered.Skip(Array.IndexOf(ordered, source) + 1).TakeWhile(value =>
                 !(joint ? value.EventKind == source.EventKind && Members(value).Length > 1 &&
                     Field(value, "outcome") is "failed" or "passed" :
@@ -295,7 +299,7 @@ internal static class OwnerActivityNarrator
             if (facts?.Checks.Count > 0) why += " Failed check: " + Words(facts.Checks[0], "the recorded check") + ".";
             Add(source, sentence, why, next + ".", ownerQuestion ?
                 "Yes. Review the failed check and answer the question in DECISIONS." : next == "needs you" ?
-                "Yes. Review the failed check and conductor status." : "No. The conductor is handling the next step.", spans);
+                "Yes. Review the failed check and conductor status." : "No. The conductor is handling the next step.", spans, goalPrefixes);
         }
     }
 
@@ -362,18 +366,29 @@ internal static class OwnerActivityNarrator
                 $"resolved at {resolved.At.ToLocalTime():HH:mm:ss}" + (resolved.Actor is { } actor ? " by " + ResolutionActor(actor) :
                     "; no longer listed in DECISIONS (the resolving actor was not recorded)") :
             item.OwnerQuestionId is not null ? "no longer listed in DECISIONS" : "no owner question is listed in DECISIONS for this event";
-        var act = decision is not null ? $"Yes. open DECISIONS row [{decision.Number}] {decision.GoalPrefix} {decision.Kind}: {decision.Summary}" :
-            $"No. {resolution}.";
+        var act = decision is not null ? $"Yes. Open DECISIONS row [{decision.Number}] {decision.GoalPrefix} {decision.Kind}: {decision.Summary}" :
+            $"No. {char.ToUpperInvariant(resolution[0])}{resolution[1..]}.";
         var happened = Line(item);
         if (item.GoalTitle.Length > 0 && !happened.Contains(item.GoalTitle, StringComparison.Ordinal))
             happened += " (" + item.GoalTitle + ")";
         var next = decision is not null ? "Work waits for your answer." : item.Resolution?.AutomaticRetry == true ?
             "The conductor resumed this work." : item.OwnerQuestionId is not null ?
             "This question no longer requires an owner answer." : item.Next;
-        return string.Join("\n", ["What happened: " + happened,
+        var lines = new List<string>();
+        if (item.GoalPrefixes is { Count: >= 2 } prefixes && item.Spans?.Titles is { } titles && titles.Count == prefixes.Count)
+        {
+            var end = titles[^1].Start + titles[^1].Length + titles[^1].TrailingLength;
+            lines.Add($"What happened: {item.Timestamp.ToLocalTime():HH:mm:ss} " +
+                item.Phrase[..titles[0].Start] + $"{prefixes.Count} goals" + item.Phrase[end..]);
+            for (var i = 0; i < prefixes.Count; i++)
+                lines.Add("  " + prefixes[i] + " " + item.Phrase.Substring(titles[i].Start, titles[i].Length));
+        }
+        else lines.Add("What happened: " + happened);
+        lines.AddRange([
             "Why: " + (item.Subject ?? item.Why),
             "What happens next: " + (decision is not null || item.Resolution is not null || item.OwnerQuestionId is not null ? resolution + ". " : "") + next,
             "Do you need to act: " + act]);
+        return string.Join("\n", lines);
     }
 
     private static string? FailureReason(OwnerConductEvent item)

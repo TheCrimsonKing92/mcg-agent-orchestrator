@@ -671,12 +671,13 @@ internal sealed partial class ConductorDriver
             ? Directory.GetCurrentDirectory()
             : _executionDirectory;
         var goalWorktree = GoalWorktrees.TryResolve(sourceRoot, goal.Id);
+        // One request per root: each fresh Request re-parses the whole test project on the tick thread.
+        var goalSources = goalWorktree is null ? null : new AcceptanceTestSourceResolver.Request(goalWorktree);
+        var rootSources = new AcceptanceTestSourceResolver.Request(sourceRoot);
         return failingTestIdentities.All(identity =>
             batch.TypedRequest.Selections.Any(selection =>
-                (goalWorktree is null
-                    ? Enumerable.Empty<string>()
-                    : AcceptanceTestSourceResolver.ResolveSourcePaths(goalWorktree, selection.TestProject, identity))
-                    .Concat(AcceptanceTestSourceResolver.ResolveSourcePaths(sourceRoot, selection.TestProject, identity))
+                (goalSources?.ResolveSourcePaths(selection.TestProject, identity) ?? [])
+                    .Concat(rootSources.ResolveSourcePaths(selection.TestProject, identity))
                     .Select(NormalizeFindingEvidencePath)
                     .Any(changedPaths.Contains)));
     }

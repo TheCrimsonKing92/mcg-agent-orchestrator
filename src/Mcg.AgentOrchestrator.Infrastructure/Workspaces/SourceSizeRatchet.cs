@@ -491,9 +491,12 @@ internal static class SourceSizeRatchet
             // Goal ffa0471e validates an exact completion-build selector and enqueues typed cancellation without
             // stopping a historical worker; lifecycle remains in the coordinator.
             // Integrated size is 12167 lines in the same 30 partials; no extra headroom.
-            // Goal f3df9ed9 adds two wiring lines; program-health logic lives in ConductorProgramHealthMonitor.
-            // Measured 12169 lines in the same 30 partials; no extra headroom.
-            new SourceClassCeiling("CliCommandHandlers", 12169, 30),
+            // Goal 109d0d1d adds the backlog-list JSON branch beside the existing claim/readiness
+            // resolution so both routes share filtering and human rendering stays byte-identical.
+            // Envelope serialization remains in BacklogListAgentReadView. Goal f3df9ed9 adds two wiring
+            // lines; program-health logic lives in ConductorProgramHealthMonitor. Measured 12192 lines
+            // across the same 30 partial files, with no extra headroom.
+            new SourceClassCeiling("CliCommandHandlers", 12192, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
             // Goal 03580ad1 extracts source-mutation edits to AcceptanceSourceMutation; measured 8938 lines in 31 partials.
@@ -548,7 +551,10 @@ internal static class SourceSizeRatchet
             // Same 18 partial files; no extra headroom beyond the required transaction wiring.
             // Goal 09a3023d extracts transport attribution construction into CliOperatorIntentAttributionResolver.
             // Measured 5964 total lines across the same 18 partial files; no extra headroom.
-            new SourceClassCeiling("CliPersistentStateRunner", 5964, 18),
+            // Goal ddab9e7f adds three lines to forward the startup loop lease and run
+            // WorkspaceStoreSetup under that ownership; migration planning stays in WorkspaceStoreSetup.
+            // Measured 5967 total lines across the same 18 partial files; no extra headroom.
+            new SourceClassCeiling("CliPersistentStateRunner", 5967, 18),
             // Goal 5935c270 extracts subscription-plan output into SubscriptionPlanTextView
             // (2026-10-09 console architecture review, finding 4, taming slice 13).
             // Goal c0ff6203 extracts six small text views (taming slice 14).

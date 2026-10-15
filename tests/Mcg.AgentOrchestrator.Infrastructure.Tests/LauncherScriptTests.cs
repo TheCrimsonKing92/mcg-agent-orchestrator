@@ -1709,6 +1709,30 @@ public sealed class LauncherScriptTests
         Assert.DoesNotContain("bin\\Debug\\net10.0\\Mcg.AgentOrchestrator.App.dll", script, StringComparison.Ordinal);
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData(false, false)]
+    [Xunit.InlineData(false, true)]
+    [Xunit.InlineData(true, false)]
+    [Xunit.InlineData(true, true)]
+    public void BoundLaunchersRequireExplicitPreparedRuntimeBeforeHostOrArtifactWrites(bool detached, bool rawFlags)
+    {
+        using var sandbox = CreateDefaultLauncherSandbox(includeStartCommand: true);
+        var state = Path.Combine(sandbox.RepositoryRoot, ".orchestrator");
+        string[] arguments = rawFlags
+            ? ["conductor", "setup", $"--repository-root={sandbox.RepositoryRoot}", $"--expected-state-directory={state}", "--disposable-fixture"]
+            : ["-RepositoryRoot", sandbox.RepositoryRoot, "-ExpectedStateDirectory", state, "-DisposableFixture", "conductor", "setup"];
+        var result = RunInvokeRepoScript(sandbox.RepositoryRoot,
+            detached ? "scripts\\Start-OrchestratorCommand.ps1" : "scripts\\Invoke-OrchestratorCommand.ps1",
+            new Dictionary<string, string?> { ["MCG_ORCHESTRATOR_DOTNET_PATH"] = Path.Combine(sandbox.RepositoryRoot, "must-not-run-dotnet.cmd") },
+            arguments);
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("requires an explicit prebuilt -AppDll", result.Stderr, StringComparison.Ordinal);
+        Assert.False(File.Exists(sandbox.InvocationPath));
+        Assert.False(Directory.Exists(state), "Refusal must precede logs, last-drive metadata and store creation.");
+        Assert.False(Directory.Exists(Path.Combine(sandbox.RepositoryRoot, ".build-lock")));
+    }
+
     [Xunit.Fact(DisplayName = "StartOrchestratorCommand_defaults_to_launcher_refresh_path")]
     public void StartOrchestratorCommandDefaultsToLauncherRefreshPath()
     {

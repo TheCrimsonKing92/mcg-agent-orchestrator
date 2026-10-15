@@ -45,10 +45,13 @@ public sealed class DogfoodLogStore
             throw SchemaSetupRequired(dbPath, StoreSchemaState.Missing);
 
         var store = new DogfoodLogStore(dbPath, readOnly: true);
-        using var conn = store.OpenConnection();
+        // Schema refusal must not create WAL sidecars in the source store.
+        using var snapshot = new StoreInspectionSnapshot(dbPath);
+        var conn = snapshot.Connection;
         var state = StoreSchemaVersions.Verify(conn, StoreSchemaRegistry.DogfoodLog);
         if (state != StoreSchemaState.Current)
-            throw SchemaSetupRequired(dbPath, state);
+            throw StoreSchemaDiagnostics.WithCompatibility(SchemaSetupRequired(dbPath, state), state,
+                conn, StoreSchemaRegistry.DogfoodLog, dbPath);
         return store;
     }
 

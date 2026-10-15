@@ -135,9 +135,7 @@ public sealed class RunEventStoreTestsVersionedSetup : IDisposable
         RunEventStoreSetup.Setup(Db);
 
         AssertFutureContentUnchanged(schema, rows, versions, futureRows);
-        var result = Assert.Single(StoreSetupRunner.Run(root), result => result.StoreName == "run-events");
-        Assert.Equal(Db, result.DatabasePath);
-        Assert.Equal(99, result.Version);
+        Assert.Contains(Db, Assert.Throws<InvalidOperationException>(() => StoreSetupRunner.Run(root)).Message);
         AssertFutureContentUnchanged(schema, rows, versions, futureRows);
     }
 

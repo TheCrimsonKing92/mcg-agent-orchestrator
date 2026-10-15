@@ -48,7 +48,7 @@ public sealed class ConductorContinuitySupervisorAdoptedNamingTests
             return Task.FromResult(new ConductorSupervisorProcessResult(0, 100 + index));
         });
         var supervisor = new ConductorContinuitySupervisor(host, events,
-            stageSuccessor: _ => stages.Dequeue(), activationHealthyTicks: 3,
+            inspectStores: () => [new("fixture-store", "fixture.db", 1, 1)], stageSuccessor: _ => stages.Dequeue(), activationHealthyTicks: 3,
             activationDelay: (_, _) => throw new InvalidOperationException("No deadline should be needed"),
             appendConductEvent: (_, _, line) => conductLines.Add(line));
 
@@ -100,7 +100,7 @@ public sealed class ConductorContinuitySupervisorAdoptedNamingTests
             return Task.FromResult(new ConductorSupervisorProcessResult(0, 100 + index));
         });
         var supervisor = new ConductorContinuitySupervisor(host, events,
-            stageSuccessor: _ => stages.Dequeue(), activationHealthyTicks: 3,
+            inspectStores: () => [new("fixture-store", "fixture.db", 1, 1)], stageSuccessor: _ => stages.Dequeue(), activationHealthyTicks: 3,
             activationDelay: (_, _) => throw new InvalidOperationException("No deadline should be needed"));
 
         var result = await supervisor.RunAsync(["conduct", "--loop"], "C:\\repo",
