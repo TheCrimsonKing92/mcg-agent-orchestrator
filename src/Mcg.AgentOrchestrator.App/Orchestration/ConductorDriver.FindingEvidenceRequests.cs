@@ -553,8 +553,8 @@ internal sealed partial class ConductorDriver
             var testClass = originalTestClass.Trim();
             if (string.IsNullOrWhiteSpace(project) ||
                 string.IsNullOrWhiteSpace(testClass) ||
-                originalTestClass.Length > MaxFindingEvidenceFilterLength ||
-                !IsSupportedFindingEvidenceFilter(testClass))
+                originalTestClass.Length > FindingEvidenceFilterSyntax.MaximumLength ||
+                !FindingEvidenceFilterSyntax.IsSupported(testClass))
             {
                 refusalDetail =
                     $"Every evidence selection requires a bounded valid test_project and test_class; " +
@@ -581,13 +581,11 @@ internal sealed partial class ConductorDriver
             foreach (var classFilter in classFilters)
             {
                 selections.Add(new FindingEvidenceSelection(canonicalProject, classFilter));
-                if (!TryGetExpandableFindingEvidenceClass(classFilter.Trim(), out var requestedClass, out var filterPrefix)) continue;
+                if (!FindingEvidenceFilterSyntax.TryGetExpandableClass(classFilter.Trim(), out var requestedClass, out var filterPrefix)) continue;
                 foreach (var siblingClass in resolveSiblingClasses(resolvedProject, requestedClass))
                 {
                     if (string.IsNullOrWhiteSpace(siblingClass) ||
-                        !EvidenceBareClassNamePattern.IsMatch(siblingClass) ||
-                        siblingClass.Contains('+') ||
-                        siblingClass.Contains('`'))
+                        !FindingEvidenceFilterSyntax.IsExpandableClassName(siblingClass))
                     {
                         continue;
                     }
@@ -609,74 +607,6 @@ internal sealed partial class ConductorDriver
             "; ",
             distinct.Select(FormatFindingEvidenceSelection));
         return true;
-    }
-
-    private static bool TryGetExpandableFindingEvidenceClass(
-        string filter,
-        out string requestedClass,
-        out string filterPrefix)
-    {
-        const string fullyQualifiedNamePrefix = "FullyQualifiedName~";
-        filterPrefix = string.Empty;
-        requestedClass = filter;
-        if (filter.StartsWith(fullyQualifiedNamePrefix, StringComparison.Ordinal))
-        {
-            filterPrefix = fullyQualifiedNamePrefix;
-            requestedClass = filter[fullyQualifiedNamePrefix.Length..];
-        }
-
-        return EvidenceBareClassNamePattern.IsMatch(requestedClass) &&
-            !requestedClass.Contains('+') &&
-            !requestedClass.Contains('`');
-    }
-
-    private static bool IsSupportedFindingEvidenceFilter(string filter)
-    {
-        if (EvidenceBareClassNamePattern.IsMatch(filter) ||
-            FindingEvidenceRoundPlanner.TryExpandClasses(filter, out _))
-        {
-            return true;
-        }
-
-        var parenthesisDepth = 0;
-        foreach (var character in filter)
-        {
-            if (character == '(')
-            {
-                parenthesisDepth++;
-            }
-            else if (character == ')' && --parenthesisDepth < 0)
-            {
-                return false;
-            }
-        }
-        if (parenthesisDepth != 0)
-        {
-            return false;
-        }
-
-        var tokens = Regex.Split(filter, @"[&|]");
-        if (tokens.Length == 0 || tokens.Any(string.IsNullOrWhiteSpace))
-        {
-            return false;
-        }
-
-        var hasPositiveSelection = false;
-        foreach (var rawToken in tokens)
-        {
-            var token = rawToken.Trim().Trim('(', ')').Trim();
-            if (token.Length == 0 ||
-                token.Contains('(') ||
-                token.Contains(')') ||
-                !EvidenceFilterTokenPattern.IsMatch(token))
-            {
-                return false;
-            }
-
-            hasPositiveSelection |= token.Contains("FullyQualifiedName~", StringComparison.OrdinalIgnoreCase);
-        }
-
-        return hasPositiveSelection;
     }
 
     private static string FormatFindingEvidenceSelection(FindingEvidenceSelection selection) =>

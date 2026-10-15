@@ -646,7 +646,7 @@ internal sealed partial class ConductorDriver
         var required = new List<string>();
         foreach (var selection in FindingEvidenceRoundPlanner.ExpandSelections(request.Selections))
         {
-            if (!TryGetExpandableFindingEvidenceClass(selection.TestClass, out var testClass, out _))
+            if (!FindingEvidenceFilterSyntax.TryGetExpandableClass(selection.TestClass, out var testClass, out _))
             {
                 return [];
             }

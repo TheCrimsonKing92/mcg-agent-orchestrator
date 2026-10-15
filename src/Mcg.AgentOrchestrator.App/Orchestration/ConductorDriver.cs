@@ -86,13 +86,6 @@ internal sealed partial class ConductorDriver
     private static readonly Regex AcceptanceRetryEvidencePattern = new(
         @"error CS\d+|error MSB\d+|\[FAIL\]",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly Regex EvidenceBareClassNamePattern = new(
-        @"^[A-Za-z_][A-Za-z0-9_.+`]*$",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly Regex EvidenceFilterTokenPattern = new(
-        @"^(?:FullyQualifiedName(?:!~|~)[A-Za-z_][A-Za-z0-9_.]*|Category\s*!=\s*[A-Za-z_][A-Za-z0-9_.-]*)$",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private const int MaxFindingEvidenceFilterLength = 1024;
     private readonly Func<Goal, GoalLifecycleFacts> _getFacts;
     private readonly Func<int> _getRunningPaidWorkerCount;
     private readonly Func<Goal, string> _createWorkspace;

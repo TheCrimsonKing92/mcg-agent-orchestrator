@@ -472,7 +472,9 @@ internal static class SourceSizeRatchet
             // recording rebound gate evidence. Measured 14968 across the same 70 partials; no headroom.
             // Goal 046ea7d3 extracts executed-member disposition finalization into FindingEvidenceRequestCompletion.
             // After integrating main 790560adf, measured 14876 lines across the same 70 partial files; no extra headroom.
-            new SourceClassCeiling("ConductorDriver", 14876, 70),
+            // Goal 046ea7d3 extracts filter validation and class expansion into FindingEvidenceFilterSyntax.
+            // Measured 14806 lines across the same 70 partial files; no extra headroom.
+            new SourceClassCeiling("ConductorDriver", 14806, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
