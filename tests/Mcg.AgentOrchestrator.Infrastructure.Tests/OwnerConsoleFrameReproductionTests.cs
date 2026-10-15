@@ -12,7 +12,12 @@ using Terminal.Gui.Input;
 public sealed class OwnerConsoleFrameReproductionTests(Xunit.ITestOutputHelper output)
 {
     [Fact]
-    public async Task PagingExposesRowCommitsInPinnedOutputBase()
+    public Task PageUpPageDownAndScrollCommitWholeFrames() => PagingFrames(buffered: true);
+
+    [Fact]
+    public Task PreFixOutputBaseExposesRowCommits() => PagingFrames(buffered: false);
+
+    private async Task PagingFrames(bool buffered)
     {
         const int count = 60, width = 72, height = 10;
         using var scene = new OwnerConsoleActivityOutcomeTests.Scene();
@@ -29,12 +34,15 @@ public sealed class OwnerConsoleFrameReproductionTests(Xunit.ITestOutputHelper o
         // Deliberately project ASCII table rows into a simulated viewport. This exercises the real
         // OutputBase dirty-row emitter, not Terminal.Gui's full layout or native Windows backend.
         var terminal = new RecordingOutput(width, height);
+        var destination = buffered ? OwnerConsoleFrameOutputInstaller.BufferOutput(terminal, TextWriter.Null) : terminal;
+        Assert.Equal(buffered, destination is OwnerConsoleFrameOutput);
         Key[] keys = [Key.PageDown, Key.PageUp, .. Enumerable.Repeat(Key.CursorDown, 12)];
         int[] selected = [10, 0, .. Enumerable.Range(1, 12)];
         output.WriteLine(JsonSerializer.Serialize(new
         {
             listSize = count, simulatedWidth = width, simulatedHeight = height,
-            backend = "OutputBase with Windows-equivalent immediate cursor/content commit recorder",
+            backend = buffered ? "Production frame adapter with recording Windows output" :
+                "OutputBase with Windows-equivalent immediate cursor/content commit recorder",
             clockFrequency = Stopwatch.Frequency, explicitFlushCount = 0,
             limitation = "Synthetic ASCII viewport; not a native write, live timing or visual receipt."
         }));
@@ -68,7 +76,7 @@ public sealed class OwnerConsoleFrameReproductionTests(Xunit.ITestOutputHelper o
             var before = terminal.Screen.ToArray();
             terminal.ResetOperations();
             started = Stopwatch.GetTimestamp();
-            terminal.Write(buffer); // Real pinned dependency implementation, not a copied row loop.
+            destination.Write(buffer); // Real pinned dependency implementation, not a copied row loop.
             var writeTicks = Stopwatch.GetTimestamp() - started;
             output.WriteLine(JsonSerializer.Serialize(new
             {
@@ -82,32 +90,46 @@ public sealed class OwnerConsoleFrameReproductionTests(Xunit.ITestOutputHelper o
                 operations = terminal.Operations
             }));
 
-            // Characterization of the unfixed mechanism, NOT the requested one-commit regression.
-            Assert.Equal(2 * height, terminal.Operations.Count);
-            for (var row = 0; row < height; row++)
+            if (buffered)
             {
-                Assert.Equal("cursor", terminal.Operations[2 * row].Kind);
-                Assert.Equal(row, terminal.Operations[2 * row].Row);
-                Assert.Equal("content", terminal.Operations[2 * row + 1].Kind);
+                var commit = Assert.Single(terminal.Operations);
+                Assert.Equal("frame", commit.Kind);
+                Assert.DoesNotContain("\u001b[2J", commit.Payload);
+                Assert.DoesNotContain("\u001b[3J", commit.Payload);
+                Assert.Equal(expected, Assert.Single(terminal.ScreensAfterContent));
+            }
+            else
+            {
+                // RED mechanism arm: without the production adapter the same buffer commits per row.
+                Assert.Equal(2 * height, terminal.Operations.Count);
+                for (var row = 0; row < height; row++)
+                {
+                    Assert.Equal("cursor", terminal.Operations[2 * row].Kind);
+                    Assert.Equal(row, terminal.Operations[2 * row].Row);
+                    Assert.Equal("content", terminal.Operations[2 * row + 1].Kind);
+                }
+                Assert.Equal(expected[0], terminal.ScreensAfterContent[0][0]);
+                Assert.Equal(before[^1], terminal.ScreensAfterContent[0][^1]);
             }
             Assert.Equal(expected, terminal.Screen);
             Assert.NotEqual(before[^1], expected[^1]);
-            Assert.Equal(expected[0], terminal.ScreensAfterContent[0][0]);
-            Assert.Equal(before[^1], terminal.ScreensAfterContent[0][^1]);
             Assert.All(buffer.DirtyLines, dirty => Assert.False(dirty));
         }
     }
 
-    private sealed record Operation(string Kind, int Column, int Row, string Payload);
+    internal sealed record Operation(string Kind, int Column, int Row, string Payload);
 
     // WindowsOutput immediately submits both operations to WriteConsole. Record that mapping,
     // without claiming to intercept WindowsOutput (which is internal and performs native IO).
-    private sealed class RecordingOutput(int width, int height) : OutputBase
+    internal sealed class RecordingOutput(int width, int height) : OutputBase, IOutput
     {
         private int _column, _row;
-        internal string[] Screen { get; } = Enumerable.Repeat(new string(' ', width), height).ToArray();
+        internal string[] Screen { get; private set; } = Enumerable.Repeat(new string(' ', width), height).ToArray();
         internal List<Operation> Operations { get; } = [];
         internal List<string[]> ScreensAfterContent { get; } = [];
+        internal bool Disposed { get; private set; }
+        internal bool RecordOnly { get; set; }
+        internal bool FailNextWrite { get; set; }
 
         internal void ResetOperations() { Operations.Clear(); ScreensAfterContent.Clear(); }
 
@@ -120,8 +142,10 @@ public sealed class OwnerConsoleFrameReproductionTests(Xunit.ITestOutputHelper o
 
         protected override void Write(StringBuilder text)
         {
+            base.Write(text);
             var payload = text.ToString();
             Operations.Add(new("content", _column, _row, payload));
+            if (RecordOnly) return;
             // This fixture uses only ASCII cells and SGR attributes; reject unsupported escapes.
             var plain = Regex.Replace(payload, @"\x1b\[[0-9;]*m", "");
             Assert.DoesNotContain('\u001b', plain);
@@ -132,5 +156,43 @@ public sealed class OwnerConsoleFrameReproductionTests(Xunit.ITestOutputHelper o
             _column += plain.Length;
             ScreensAfterContent.Add(Screen.ToArray());
         }
+
+        public void Write(ReadOnlySpan<char> text)
+        {
+            if (FailNextWrite) { FailNextWrite = false; throw new IOException("recorded write failure"); }
+            var payload = text.ToString();
+            Operations.Add(new("frame", _column, _row, payload));
+            if (RecordOnly) return;
+            // Consume a whole native submission before exposing the screen at its commit boundary.
+            var plain = Regex.Replace(payload, @"\x1b\[[0-9;]*m", "");
+            var matches = Regex.Matches(plain, @"\x1b\[(\d+);(\d+)H([^\x1b]*)");
+            Assert.NotEmpty(matches);
+            Assert.Equal(plain.Length, matches.Sum(match => match.Length));
+            foreach (Match match in matches)
+            {
+                _row = int.Parse(match.Groups[1].Value) - 1;
+                _column = int.Parse(match.Groups[2].Value) - 1;
+                var content = match.Groups[3].Value;
+                Assert.InRange(_row, 0, height - 1);
+                Assert.InRange(_column + content.Length, 0, width);
+                var row = Screen[_row].ToCharArray();
+                content.CopyTo(0, row, _column, content.Length);
+                Screen[_row] = new string(row);
+                _column += content.Length;
+            }
+            ScreensAfterContent.Add(Screen.ToArray());
+        }
+
+        public Size GetSize() => new(width, height);
+        public void SetSize(int columns, int rows)
+        {
+            width = columns; height = rows;
+            Screen = Enumerable.Repeat(new string(' ', width), height).ToArray();
+        }
+        private Terminal.Gui.Drivers.Cursor _cursor = new();
+        public Terminal.Gui.Drivers.Cursor GetCursor() => _cursor;
+        public void SetCursor(Terminal.Gui.Drivers.Cursor cursor) => _cursor = cursor;
+        public void Suspend() { }
+        public void Dispose() => Disposed = true;
     }
 }

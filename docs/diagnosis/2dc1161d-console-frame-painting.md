@@ -35,9 +35,9 @@ frame is committed. This is not yet an executed reproduction or attribution of t
 operator's visual symptom. It neither identifies the operator's active backend nor
 proves which intermediate writes the host displays.
 
-## Bounded reproduction authored for Tester execution
+## Prior bounded reproduction authored for Acceptance execution
 
-`OwnerConsoleFrameReproductionTests.PagingExposesRowCommitsInPinnedOutputBase`
+`OwnerConsoleFrameReproductionTests.PreFixOutputBaseExposesRowCommits`
 uses 60 board rows and a simulated 72-column, 10-row content viewport (six viewport
 heights). It drives actual view Page Down, Page Up and twelve Down steps, then calls
 the actual pinned `OutputBase.Write(IOutputBuffer)` implementation with an ASCII
@@ -73,7 +73,7 @@ Tester/Acceptance focused invocation:
 Retain executed count, outcome and full test output. A passing characterization
 would establish the dirty-row submission behavior only.
 
-## Implementation boundary requiring escalation
+## Prior implementation boundary (superseded by owner decision below)
 
 The smallest intended fix would buffer cursor sequences and row/run content inside
 the existing output component, then submit the complete update once. The application
@@ -104,3 +104,80 @@ timings and visual captures remain pending and do not block this Developer round
 This investigation is separate from scrolling responsiveness (backlog `0fc9adab`,
 landed goal `2017d034`). Its landing permits shared-view edits; it is not evidence of
 a shared cause. No data-loading or resource-pressure cause is asserted.
+
+## Owner-approved implementation (2026-10-15 22:19Z)
+
+The retry decision authorizes private reflection for this seam only and accepts
+the preceding source diagnosis as the basis for implementation. It supersedes
+the prior implementation stop above. It does not constitute live visual evidence
+or an executed regression receipt.
+
+Scope expansion: `OwnerConsoleFrameOutput.cs`, `OwnerConsoleFrameOutputInstaller.cs`
+and one application-creation call in `OwnerConsoleFullScreenHost.cs`. Row preparation
+cannot control native submissions, so the fix belongs at the existing output seam.
+`OwnerConsoleFullScreenView.cs` and input handling are untouched.
+
+The installer calls public `Application.Create()` first, preserving instance-model
+bookkeeping and events. Before initialization it validates and assigns exactly one
+private member, `ApplicationImpl._componentFactory` (private, instance, readonly,
+type `IComponentFactory`). All production reflection lives in the installer. A
+missing member, changed signature or reflection access failure leaves the normal
+application's factory unset and emits one diagnostic line naming the member.
+`OwnerConsoleFrameOutputInstallerTests.TerminalGui250ApplicationImplComponentFactorySignatureUpgradeGuard`
+checks the signature and actual installation against the referenced assembly.
+
+On Windows, an unforced or explicitly Windows full-screen application uses a
+`WindowsComponentFactory` subclass. This explicitly selects the approved Windows
+backend rather than the pinned registry's unforced ANSI default. Explicit other
+drivers and non-Windows applications retain their original creation path. The
+operator must record this backend choice in comparable live captures; synthetic
+output tests do not establish cross-backend timing equivalence.
+
+The factory wraps the built-in Windows output. `OutputBase.Write(IOutputBuffer)`
+still traverses dirty cells and composes attributes, Unicode and image sequences;
+the adapter collects its cursor and content callbacks, then invokes the built-in
+`IOutput.Write(ReadOnlySpan<char>)` once with the complete update. That method makes
+one native `WriteConsoleW` call. There is no separate clear-screen or intermediate
+submission from this refresh. An empty dirty update emits no write. Composition
+or submission errors clear the session buffer in `finally` and propagate; stale
+content cannot leak into the next refresh. Startup/query writes, cursor lifecycle,
+size changes and disposal continue through the built-in output. A single submission
+is an application-level commit contract, not proof of atomic host presentation.
+
+Legacy Windows consoles without ANSI capability retain the unmodified built-in
+output and emit one capability diagnostic (`WindowsOutput.IsLegacyConsole`). Their
+native cursor/attribute calls cannot be combined into this ANSI payload. Explicit
+other drivers, signature fallback and legacy fallback do not receive the buffering
+guarantee. If the operator's real console takes one of those paths or still visibly
+paints progressively, the visual criterion remains unmet; retain the evidence and
+escalate rather than infer success.
+
+`OwnerConsoleFrameReproductionTests.PageUpPageDownAndScrollCommitWholeFrames`
+uses the prior long-list scenario through the production adapter and requires one
+nonempty submission, exact final content and no mixed screen at the commit boundary.
+`PreFixOutputBaseExposesRowCommits` keeps the unbuffered mechanism control. The
+simulated ASCII table projection limitation above still applies.
+
+`OwnerConsoleFrameCompatibilityTests` covers complete resize repaints at 72x10,
+40x5, 96x15 and 12x1, repeated paging to both long-list bounds, selection/focus and
+viewport retention, matching pre-fix ANSI bytes including Unicode, unchanged plain
+and redirected board bytes, cursor/direct-query delegation and write-error cleanup.
+The plain fixture pins goal timestamps to the harness clock. The recording seam
+uses the production adapter/factory wrapping decision without native I/O.
+
+Acceptance must run `OwnerConsoleFrameReproductionTests`,
+`OwnerConsoleFrameCompatibilityTests`, `OwnerConsoleFrameOutputInstallerTests`
+and the existing console suite. For an executed negative control, return the
+built-in output unwrapped in `BufferOutput` while retaining the tests. The
+whole-frame test then fails its adapter/one-commit contract (the mechanism-control
+arm documents the row submissions); restore wrapping for GREEN. Keep revisions,
+exact failures and positive executed counts. No test execution is claimed here.
+
+Criteria 6 and 7 stay Operator-owned: comparable live per-phase timings and
+before/after ffmpeg recordings are still required. Retain list size, terminal
+host/version, window dimensions, backend, build configuration and revisions. This
+change supplies a candidate, not those live receipts.
+
+An upstream request for a public output/factory hook should be filed, referencing
+[`ApplicationImpl._componentFactory` and the internal factory constructors](https://github.com/tui-cs/Terminal.Gui/blob/ece73d25c37df9bb17cb0c0d2171abd4d98eeaff/Terminal.Gui/App/ApplicationImpl.cs#L38)
+and [the factory-consuming driver initialization](https://github.com/tui-cs/Terminal.Gui/blob/ece73d25c37df9bb17cb0c0d2171abd4d98eeaff/Terminal.Gui/App/ApplicationImpl.Driver.cs#L27).

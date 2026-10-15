@@ -47,7 +47,7 @@ internal static class OwnerConsoleFullScreenHost
         OwnerConsoleActivityLoader? activityLoader = null;
         Task? fill = null;
         using var rebuild = new SemaphoreSlim(1, 1);
-        using IApplication app = Terminal.Gui.App.Application.Create();
+        using IApplication app = OwnerConsoleFrameOutputInstaller.CreateApplication();
         OwnerConsoleFullScreenView? view = null;
         Task? reader = null;
         Task periodicRefresh = Task.CompletedTask;
