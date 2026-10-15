@@ -101,7 +101,8 @@ public sealed class BacklogStore
         using var conn = store.OpenConnection();
         var state = StoreSchemaVersions.Verify(conn, StoreSchemaRegistry.Backlog);
         if (state != StoreSchemaState.Current)
-            throw SchemaSetupRequired(dbPath, state);
+            throw StoreSchemaDiagnostics.WithCompatibility(SchemaSetupRequired(dbPath, state), state,
+                conn, StoreSchemaRegistry.Backlog, dbPath);
         return store;
     }
 

@@ -26,6 +26,7 @@ public sealed class LaneIsolatedRootGuardTests
         [typeof(LocalProcessVerifierStaticHookTests)] = ExplicitStorage,
         [typeof(StructuralCoveragePermitWaitTests)] = ExplicitStorage,
         [typeof(ConductorBatchLoopTestsDecisionProgressLine)] = "Formats decisions; no build or slot acquisition.",
+        [typeof(ConductorBatchLoopTestsAcceptanceReplayFingerprint)] = "Uses in-memory kernels and JSON snapshot restores; no build or slot acquisition.",
         [typeof(ConductorBatchLoopTestsAuthorAnswer)] = "Exercises author policy with injected conductor actions; no real build.",
         [typeof(ConductorBatchLoopTestsActivationHeartbeat)] = "Uses fake conductor/heartbeat callbacks; no real build.",
         [typeof(ConductorBatchLoopTestsActivationHeartbeatBeforeSleep)] = "Uses fake sleep and heartbeat callbacks; no real build.",

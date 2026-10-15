@@ -32,6 +32,8 @@ internal static class ConductorSuccessorSelfCheck
             }
 
             var schemaVersion = SqliteOrchestratorStateRepository.ValidateReadOnlySchema(args[2]);
+            StoreSetupRunner.RequireCompatible(StoreSetupRunner.Plan(
+                Path.GetDirectoryName(Path.GetFullPath(args[2]))!, includeState: true), requireCurrent: true);
             var journalMode = SqliteOrchestratorStateRepository.VerifyJournalMode(args[2]);
             var agents = AgentCatalogStore.Load(args[4]).Agents;
             var profiles = WorkerProfileStore.Load(args[5]).Profiles;

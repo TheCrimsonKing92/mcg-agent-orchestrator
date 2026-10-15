@@ -381,11 +381,44 @@ public sealed record FindingEvidenceArmReceipt(
     public IReadOnlyList<FindingEvidenceSelection> NotRunSelections { get; init; } = NotRunSelections ?? [];
 }
 
+public enum FindingEvidenceRequestDecision
+{
+    PendingExecution,
+    CoveredByPendingRequest,
+    CoveredByReceipt,
+    Executed,
+    DeferredToNextCandidate,
+    CandidateUnavailable,
+    Refused,
+    Superseded
+}
+
 public sealed record FindingEvidenceRequestDisposition(
     string FindingStableId,
     string RequestIdentity,
     string Disposition,
-    string? Reason = null);
+    string? Reason = null,
+    FindingEvidenceRequestDecision? Decision = null,
+    string? CandidateSha = null,
+    string? FindingRoundFingerprint = null,
+    string? CoveringRequestIdentity = null,
+    IReadOnlyList<string>? SourceReceiptIds = null,
+    string? ExecutionBasisIdentity = null)
+{
+    internal static IReadOnlyList<FindingEvidenceRequestDisposition> Merge(
+        IReadOnlyList<FindingEvidenceRequestDisposition>? existing,
+        IReadOnlyList<FindingEvidenceRequestDisposition>? updates,
+        bool preserveCompleted = false) =>
+        (existing ?? []).Concat(updates ?? [])
+            .GroupBy(item => (item.FindingStableId, item.RequestIdentity,
+                Candidate: item.CandidateSha?.ToLowerInvariant(), item.FindingRoundFingerprint,
+                item.ExecutionBasisIdentity))
+            .Select(group => preserveCompleted
+                ? group.LastOrDefault(item => item.Decision is FindingEvidenceRequestDecision.Executed
+                    or FindingEvidenceRequestDecision.CoveredByReceipt) ?? group.Last()
+                : group.Last())
+            .ToArray();
+}
 
 public sealed record FindingEvidenceReceipt(
     string ReceiptId,

@@ -44,7 +44,7 @@ internal static class CliCommandHelp
     public const string WorkspaceUsage = "Usage: workspace [create|merge|rebase|remove] [goal-id-prefix] [--force-terminal-cleanup]";
     public const string WorkspaceCreateUsage = "Usage: workspace create [goal-id-prefix]";
     public const string ReassignAgentUsage = "Usage: reassign-agent <task-number> <agent-id>|<goal-prefix> <task-number> <agent-id>|--goal <goal-prefix> <task-number> <agent-id>";
-    public const string BacklogListUsage = "Usage: backlog-list [--all] [--limit <n>] [--status <value>] [--text <pattern>|--text=<leading-dash-pattern>]";
+    public const string BacklogListUsage = "Usage: backlog-list [--all] [--limit <n>] [--status <value>] [--text <pattern>|--text=<leading-dash-pattern>] [--json]";
     public const string BacklogTriageUsage = "Usage: backlog-triage [--limit <n>] [--stale-days <n>]";
     public const string BacklogAddUsage = "Usage: backlog-add <title> [body] [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar] | backlog-add --title <title> [--text-file <path>|--body-file <path>] [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar] | backlog-add <title> --text-file <path> [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar] | backlog-add <title> --body-file <path> [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar]";
     public const string BacklogUpdateUsage = "Usage: backlog-update <id-prefix> [--title <text>] [--description <text> | --text-file <path> | --body-file <path>] [--priority <value>] [--tags <csv>] [--status <open|done|superseded>]";
@@ -394,8 +394,8 @@ internal static class CliCommandHelp
 
     private static readonly CommandHelpEntry BacklogList = new(
         BacklogListUsage,
-        "List every backlog item with its status and linked goal id.",
-        ["--all", "--limit", "--status", "--text", "--help", "-h"]);
+        "List every backlog item with its status and linked goal id. --json emits the mcg.backlog-list agent envelope.",
+        ["--all", "--limit", "--status", "--text", "--help", "-h", "--json"]);
 
     private static readonly CommandHelpEntry BacklogTriage = new(
         BacklogTriageUsage,
@@ -691,7 +691,7 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry Conductor = new(
         ConductorUsage,
         "Start, report or stop the conductor, set up versioned stores, or apply one goal's pending operator intents while no conductor runs. status --json prints the versioned mcg.conductor-status envelope.",
-        ["--clear-stop", "--help", "-h"]);
+        ["--clear-stop", "--plan", "--help", "-h"]);
 
     private static readonly IReadOnlyDictionary<string, IReadOnlySet<string>> GenericCommandFlags =
         new Dictionary<string, IReadOnlySet<string>>(StringComparer.OrdinalIgnoreCase)

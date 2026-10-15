@@ -145,7 +145,7 @@ public sealed class StoreSetupRunnerTests
     [Theory]
     [InlineData(4)]
     [InlineData(99)]
-    public void Run_NewerVersion_ReportsRecordedVersionWithoutDowngrade(int version)
+    public void Run_NewerVersion_RefusesWithoutDowngrade(int version)
     {
         using var fixture = new ConductorVerbStartTests.Fixture();
         var workspace = fixture.Workspace;
@@ -158,8 +158,8 @@ public sealed class StoreSetupRunnerTests
             Assert.Equal(1, command.ExecuteNonQuery());
         }
 
-        Assert.Equal(version, Assert.Single(StoreSetupRunner.Run(workspace.OrchestratorDirectory),
-            result => result.StoreName == "portfolio").Version);
+        Assert.Contains("runtime supports", Assert.Throws<InvalidOperationException>(() =>
+            StoreSetupRunner.Run(workspace.OrchestratorDirectory)).Message);
         using var readBack = Open(workspace.PortfolioStorePath, SqliteOpenMode.ReadOnly);
         Assert.Equal(version, StoreSchemaVersions.Read(readBack, StoreSchemaRegistry.Portfolio.StoreName));
     }

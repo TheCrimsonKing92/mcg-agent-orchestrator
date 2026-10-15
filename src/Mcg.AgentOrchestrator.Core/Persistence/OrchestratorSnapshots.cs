@@ -194,7 +194,8 @@ public sealed record TaskVerificationSnapshot(
     FailedGoalInconclusiveRoundInputs? InconclusiveRoundInputs = null,
     PlannerEvidenceStoreReference? HumanInputStoreReference = null,
     VerificationEvidenceSource EvidenceSource = VerificationEvidenceSource.Unspecified,
-    DateTimeOffset? DispatchAttemptAt = null)
+    DateTimeOffset? DispatchAttemptAt = null,
+    IReadOnlyList<FindingEvidenceRequestDisposition>? FindingEvidenceRequestDispositions = null)
 {
     public string StandardOutput { get; init; } = VerificationTextBounds.BoundText(StandardOutput, StandardOutputPath);
 

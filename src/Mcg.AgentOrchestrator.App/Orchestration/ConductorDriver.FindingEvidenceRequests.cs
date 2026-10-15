@@ -36,6 +36,8 @@ internal sealed partial class ConductorDriver
         }
 
         var findingRoundFingerprint = BuildFindingRoundFingerprint(requestingTask, round);
+        var findingEvidenceEngineSettings = _getFindingEvidenceEngineSettings(goal);
+        var executionBasisIdentity = BuildFindingEvidenceExecutionBasisIdentity(findingEvidenceEngineSettings);
 
         if (requestingTask.RequiredRole == AgentRole.Reviewer)
         {
@@ -58,6 +60,7 @@ internal sealed partial class ConductorDriver
             {
                 var reason = candidateShaAvailable ? "unresolved-writable-blockers-on-unchanged-candidate"
                     : "candidate-sha-unavailable-with-unresolved-writable-blockers";
+                var preservedFindings = requestingFindings;
                 requestingFindings = ReviewerFindingEvidenceSuppressionRouting.SelectAndSuppress(
                     writableBlockerIds, requestingFindings, requestingTask, candidateSha,
                     BuildFindingEvidenceIdentity, requestIdentity => _recordFindingEvidenceSuppressed(
@@ -67,6 +70,14 @@ internal sealed partial class ConductorDriver
                         reason,
                         CreateFindingEvidenceSuppressionIdentity(telemetryCandidateSha,
                             requestIdentity, writableBlockerIds)));
+                _recordFindingEvidenceRequestDispositions(goal.Id, requestingTask.Id,
+                    preservedFindings.Except(requestingFindings).Select(finding =>
+                        new FindingEvidenceRequestDisposition(finding.StableId,
+                            BuildFindingEvidenceIdentity(finding.EvidenceRequest!), "deferred-next-candidate", reason,
+                            candidateShaAvailable ? FindingEvidenceRequestDecision.DeferredToNextCandidate
+                                : FindingEvidenceRequestDecision.CandidateUnavailable,
+                            candidateShaAvailable ? candidateSha : null, findingRoundFingerprint,
+                            ExecutionBasisIdentity: executionBasisIdentity)).ToArray());
                 if (requestingFindings.Length == 0) return false;
             }
         }
@@ -78,8 +89,6 @@ internal sealed partial class ConductorDriver
         var normalizationRefused = false;
         var reusedGreenReceipt = false;
         var reattachedReceiptIds = new List<string>();
-        var findingEvidenceEngineSettings = _getFindingEvidenceEngineSettings(goal);
-        var executionBasisIdentity = BuildFindingEvidenceExecutionBasisIdentity(findingEvidenceEngineSettings);
         foreach (var finding in requestingFindings)
         {
             if (!TryNormalizeFindingEvidenceRequest(
@@ -130,6 +139,11 @@ internal sealed partial class ConductorDriver
                 reusedGreenReceipt = true;
                 if (uncoveredSelections.Count == 0)
                 {
+                    _recordFindingEvidenceRequestDispositions(goal.Id, requestingTask.Id,
+                        [new(finding.StableId, identity, "covered-by-receipt", coverageReason,
+                            FindingEvidenceRequestDecision.CoveredByReceipt, candidateSha, findingRoundFingerprint,
+                            SourceReceiptIds: coverageReceipts.Select(receipt => receipt.ReceiptId).ToArray(),
+                            ExecutionBasisIdentity: executionBasisIdentity)]);
                     ReattachCoverageReusableGreenFindingEvidence(
                         goal,
                         requestingTask,
@@ -189,7 +203,7 @@ internal sealed partial class ConductorDriver
         }
 
         var batches = ExcludePassedRoundFindingEvidenceBatches(
-            requestingTask, BuildFindingEvidenceBatches(groups), telemetryCandidateSha, findingRoundFingerprint);
+            requestingTask, FindingEvidenceRoundPlanner.BuildFindingEvidenceBatches(groups), telemetryCandidateSha, findingRoundFingerprint);
         var runnable = batches.FirstOrDefault();
         if (runnable is null)
         {
@@ -226,10 +240,9 @@ internal sealed partial class ConductorDriver
                 "Evidence requests could not run because the executor was unavailable.");
             return true;
         }
-        var initialRequestDispositions = BuildInitialRequestDispositions(batches, runnable);
-        var executedRequestDispositions = initialRequestDispositions
-            .Where(disposition => disposition.Disposition.StartsWith("executed-", StringComparison.Ordinal))
-            .ToArray();
+        var initialRequestDispositions = FindingEvidenceRoundPlanner.BuildInitialRequestDispositions(
+            batches, runnable, candidateSha!, findingRoundFingerprint, executionBasisIdentity);
+        _recordFindingEvidenceRequestDispositions(goal.Id, requestingTask.Id, initialRequestDispositions);
         var requestContext = new ConductorFocusedEvidenceRequestContext(
             findingRoundFingerprint,
             CreateFindingEvidenceBatchId(candidateSha!, findingRoundFingerprint, policy.Name, runnable.Identity),
@@ -306,27 +319,28 @@ internal sealed partial class ConductorDriver
             candidateSha!, findingRoundFingerprint, receiptIdentity);
         var actionableCandidateRed = TryAttributeActionableCandidateRed(
             goal, candidateSha!, armReceipts, runnable);
+        var receipt = new FindingEvidenceReceipt(
+            receiptId, candidateSha!, runnable.TypedRequest, evidence.Accepted, evidence.IsValidEvidence,
+            evidence.Summary, armReceipts, FindingRoundFingerprint: findingRoundFingerprint,
+            ExecutionBasisIdentity: executionBasisIdentity, NegativeControlOutcome: evidence.NegativeControlOutcome,
+            RevertPathsRejection: evidence.RevertPathsRejection);
+        var completedRequestDispositions = FindingEvidenceRequestCompletion.BuildDispositions(
+            initialRequestDispositions, runnable, receipt, FormatFindingEvidenceSelection, actionableCandidateRed is not null);
         var requestDispositions = actionableCandidateRed is not null
-            ? executedRequestDispositions
+            ? completedRequestDispositions.Where(disposition =>
+                    runnable.Members.Any(member => member.Identity == disposition.RequestIdentity))
                 .Concat(batches.Skip(1).SelectMany(batch => batch.Members).SelectMany(member =>
                     member.Findings.Select(finding => new FindingEvidenceRequestDisposition(
                         finding.StableId,
                         member.Identity,
                         "superseded",
-                        "superseded-by-actionable-red"))))
+                        "superseded-by-actionable-red", FindingEvidenceRequestDecision.Superseded,
+                        candidateSha, findingRoundFingerprint, SourceReceiptIds: [receiptId],
+                        ExecutionBasisIdentity: executionBasisIdentity))))
                 .ToArray()
-            : initialRequestDispositions;
-        var receipt = new FindingEvidenceReceipt(
-            receiptId,
-            candidateSha!,
-            runnable.TypedRequest,
-            evidence.Accepted,
-            evidence.IsValidEvidence,
-            evidence.Summary,
-            armReceipts,
-            requestDispositions,
-            findingRoundFingerprint,
-            executionBasisIdentity, evidence.NegativeControlOutcome, evidence.RevertPathsRejection);
+            : completedRequestDispositions;
+        _recordFindingEvidenceRequestDispositions(goal.Id, requestingTask.Id, requestDispositions);
+        receipt = receipt with { RequestDispositions = requestDispositions };
         if (evidence.OutcomeReason == FindingEvidenceOutcomeReason.ApparatusFailure &&
             !armReceipts.Any(arm => arm is { Arm: FindingEvidenceArm.Candidate, Disposition: FindingEvidenceArmDisposition.Red }))
         {
@@ -489,6 +503,15 @@ internal sealed partial class ConductorDriver
         string detail,
         string candidateSha, AcceptanceGateEngineSettings? inventorySettings = null)
     {
+        if (WorkerResultBlockers.TryFindReviewFindingRound(requestingTask.LastVerification, out var round, out _))
+        {
+            var hasCandidate = ConductorGitRevisionReader.IsValid(candidateSha);
+            _recordFindingEvidenceRequestDispositions(goalId, requestingTask.Id,
+                [new(finding.StableId, BuildFindingEvidenceIdentity(finding.EvidenceRequest!), "not-honoured",
+                    FindingEvidenceNotHonouredReasonJsonConverter.ToWireValue(reason),
+                    hasCandidate ? FindingEvidenceRequestDecision.Refused : FindingEvidenceRequestDecision.CandidateUnavailable,
+                    hasCandidate ? candidateSha : null, BuildFindingRoundFingerprint(requestingTask, round))]);
+        }
         _recordFindingEvidenceOutcome(
             goalId, requestingTask.Id, finding.StableId,
             FocusedEvidenceInventoryIdentity.NotHonoured(reason, detail, inventorySettings), null);
@@ -530,8 +553,8 @@ internal sealed partial class ConductorDriver
             var testClass = originalTestClass.Trim();
             if (string.IsNullOrWhiteSpace(project) ||
                 string.IsNullOrWhiteSpace(testClass) ||
-                originalTestClass.Length > MaxFindingEvidenceFilterLength ||
-                !IsSupportedFindingEvidenceFilter(testClass))
+                originalTestClass.Length > FindingEvidenceFilterSyntax.MaximumLength ||
+                !FindingEvidenceFilterSyntax.IsSupported(testClass))
             {
                 refusalDetail =
                     $"Every evidence selection requires a bounded valid test_project and test_class; " +
@@ -552,15 +575,17 @@ internal sealed partial class ConductorDriver
             }
 
             var canonicalProject = GoalAcceptanceVerifier.ProjectLabel(resolvedProject);
-            selections.Add(new FindingEvidenceSelection(canonicalProject, originalTestClass));
-            if (TryGetExpandableFindingEvidenceClass(testClass, out var requestedClass, out var filterPrefix))
+            // Keep the executor's selector syntax. Set expansion belongs to coverage planning,
+            // not to request delivery (in particular Name operands and Boolean filters).
+            IReadOnlyList<string> classFilters = [originalTestClass];
+            foreach (var classFilter in classFilters)
             {
+                selections.Add(new FindingEvidenceSelection(canonicalProject, classFilter));
+                if (!FindingEvidenceFilterSyntax.TryGetExpandableClass(classFilter.Trim(), out var requestedClass, out var filterPrefix)) continue;
                 foreach (var siblingClass in resolveSiblingClasses(resolvedProject, requestedClass))
                 {
                     if (string.IsNullOrWhiteSpace(siblingClass) ||
-                        !EvidenceBareClassNamePattern.IsMatch(siblingClass) ||
-                        siblingClass.Contains('+') ||
-                        siblingClass.Contains('`'))
+                        !FindingEvidenceFilterSyntax.IsExpandableClassName(siblingClass))
                     {
                         continue;
                     }
@@ -584,188 +609,11 @@ internal sealed partial class ConductorDriver
         return true;
     }
 
-    private static bool TryGetExpandableFindingEvidenceClass(
-        string filter,
-        out string requestedClass,
-        out string filterPrefix)
-    {
-        const string fullyQualifiedNamePrefix = "FullyQualifiedName~";
-        filterPrefix = string.Empty;
-        requestedClass = filter;
-        if (filter.StartsWith(fullyQualifiedNamePrefix, StringComparison.Ordinal))
-        {
-            filterPrefix = fullyQualifiedNamePrefix;
-            requestedClass = filter[fullyQualifiedNamePrefix.Length..];
-        }
-
-        return EvidenceBareClassNamePattern.IsMatch(requestedClass) &&
-            !requestedClass.Contains('+') &&
-            !requestedClass.Contains('`');
-    }
-
-    private static bool IsSupportedFindingEvidenceFilter(string filter)
-    {
-        if (EvidenceBareClassNamePattern.IsMatch(filter))
-        {
-            return true;
-        }
-
-        var parenthesisDepth = 0;
-        foreach (var character in filter)
-        {
-            if (character == '(')
-            {
-                parenthesisDepth++;
-            }
-            else if (character == ')' && --parenthesisDepth < 0)
-            {
-                return false;
-            }
-        }
-        if (parenthesisDepth != 0)
-        {
-            return false;
-        }
-
-        var tokens = Regex.Split(filter, @"[&|]");
-        if (tokens.Length == 0 || tokens.Any(string.IsNullOrWhiteSpace))
-        {
-            return false;
-        }
-
-        var hasPositiveSelection = false;
-        foreach (var rawToken in tokens)
-        {
-            var token = rawToken.Trim().Trim('(', ')').Trim();
-            if (token.Length == 0 ||
-                token.Contains('(') ||
-                token.Contains(')') ||
-                !EvidenceFilterTokenPattern.IsMatch(token))
-            {
-                return false;
-            }
-
-            hasPositiveSelection |= token.Contains("FullyQualifiedName~", StringComparison.OrdinalIgnoreCase);
-        }
-
-        return hasPositiveSelection;
-    }
-
     private static string FormatFindingEvidenceSelection(FindingEvidenceSelection selection) =>
         selection.TestProject + ":" + selection.TestClass;
 
     private static string BuildFindingEvidenceIdentity(FindingEvidenceRequest request) =>
         FindingEvidenceExecutionClassifier.BuildRequestIdentity(request);
-
-    private static IReadOnlyList<FindingEvidenceRequestDisposition> BuildInitialRequestDispositions(
-        IReadOnlyList<FindingEvidenceBatch> batches,
-        FindingEvidenceBatch executingBatch)
-    {
-        var dispositions = new List<FindingEvidenceRequestDisposition>();
-        foreach (var batch in batches)
-        {
-            var isExecuting = ReferenceEquals(batch, executingBatch);
-            var disposition = isExecuting
-                ? batch.Members.Count > 1 ? "executed-batched" : "executed-standalone"
-                : batch.Members.Count > 1 ? "pending-batched" : "pending-standalone";
-            var reason = batch.Members.Count > 1
-                ? "compatible-same-project"
-                : ResolveStandaloneEvidenceReason(batches, batch);
-            dispositions.AddRange(batch.Members.SelectMany(member =>
-                member.Findings.Select(finding => new FindingEvidenceRequestDisposition(
-                    finding.StableId,
-                    member.Identity,
-                    disposition,
-                    reason))));
-        }
-
-        return dispositions;
-    }
-
-    private static string ResolveStandaloneEvidenceReason(
-        IReadOnlyList<FindingEvidenceBatch> batches,
-        FindingEvidenceBatch standaloneBatch)
-    {
-        foreach (var other in batches.Where(batch => !ReferenceEquals(batch, standaloneBatch)))
-        {
-            var reason = GetFindingEvidenceUnbatchedReason(standaloneBatch.TypedRequest, other.TypedRequest);
-            if (reason is not null)
-            {
-                return reason;
-            }
-        }
-
-        return "single-request";
-    }
-
-    private static IReadOnlyList<FindingEvidenceBatch> BuildFindingEvidenceBatches(
-        IReadOnlyList<FindingEvidenceRequestGroup> groups)
-    {
-        var batches = new List<FindingEvidenceBatch>();
-        foreach (var group in groups)
-        {
-            var batchIndex = batches.FindIndex(batch =>
-                GetFindingEvidenceUnbatchedReason(batch.TypedRequest, group.TypedRequest) is null);
-            if (batchIndex < 0)
-            {
-                batches.Add(new FindingEvidenceBatch(
-                    group.Identity,
-                    group.Request,
-                    group.TypedRequest,
-                    [.. group.Findings],
-                    [group]));
-                continue;
-            }
-
-            var batch = batches[batchIndex];
-            var selections = batch.TypedRequest.Selections
-                .Concat(group.TypedRequest.Selections)
-                .Distinct()
-                .OrderBy(selection => selection.TestProject, StringComparer.Ordinal)
-                .ThenBy(selection => selection.TestClass, StringComparer.Ordinal)
-                .ToArray();
-            var request = batch.TypedRequest with { Selections = selections };
-            batches[batchIndex] = new FindingEvidenceBatch(
-                BuildFindingEvidenceIdentity(request),
-                string.Join("; ", selections.Select(FormatFindingEvidenceSelection)),
-                request,
-                [.. batch.Findings, .. group.Findings],
-                [.. batch.Members, group]);
-        }
-
-        return batches;
-    }
-
-    private static string? GetFindingEvidenceUnbatchedReason(
-        FindingEvidenceRequest left,
-        FindingEvidenceRequest right)
-    {
-        if (left.NegativeControl != right.NegativeControl) return "different-negative-control";
-        if (!FindingEvidenceRevertPaths.SamePaths(left.RevertPaths, right.RevertPaths)) return "different-revert-paths";
-        if (!FindingEvidenceMutation.Same(left.Mutation, right.Mutation)) return "different-mutation";
-        var leftProjects = left.Selections
-            .Select(selection => selection.TestProject)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-        var rightProjects = right.Selections
-            .Select(selection => selection.TestProject)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-        if (leftProjects.Length != 1 || rightProjects.Length != 1)
-        {
-            return "mixed-test-projects";
-        }
-
-        if (!string.Equals(leftProjects[0], rightProjects[0], StringComparison.OrdinalIgnoreCase))
-        {
-            return "different-test-project";
-        }
-
-        return left.Selections.Concat(right.Selections).All(selection =>
-            EvidenceBareClassNamePattern.IsMatch(selection.TestClass.Trim()))
-                ? null
-                : "incompatible-filter-semantics";
-    }
 
     private ActionableCandidateRedAttribution? TryAttributeActionableCandidateRed(
         Goal goal,
@@ -898,21 +746,6 @@ internal sealed partial class ConductorDriver
                 ? ConductorHoldOwner.BackgroundAttempt
                 : ConductorHoldOwner.None
         };
-
-    private sealed record FindingEvidenceRequestGroup(
-        string Identity,
-        string Request,
-        FindingEvidenceRequest TypedRequest,
-        List<ReviewFinding> Findings,
-        IReadOnlyList<FindingEvidenceReceipt>? ReusedSourceReceipts = null,
-        string? CoverageDecisionReason = null);
-
-    private sealed record FindingEvidenceBatch(
-        string Identity,
-        string Request,
-        FindingEvidenceRequest TypedRequest,
-        List<ReviewFinding> Findings,
-        IReadOnlyList<FindingEvidenceRequestGroup> Members);
 
     private sealed record ActionableCandidateRedAttribution(
         IReadOnlyList<ReviewFinding> Findings,

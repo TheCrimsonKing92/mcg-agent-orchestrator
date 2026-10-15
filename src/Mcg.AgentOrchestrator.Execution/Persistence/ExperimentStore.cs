@@ -60,7 +60,8 @@ public sealed class ExperimentStore
         using var connection = store.Open();
         var state = StoreSchemaVersions.Verify(connection, StoreSchemaRegistry.Experiments);
         if (state != StoreSchemaState.Current)
-            throw SchemaSetupRequired(dbPath, state);
+            throw StoreSchemaDiagnostics.WithCompatibility(SchemaSetupRequired(dbPath, state), state,
+                connection, StoreSchemaRegistry.Experiments, dbPath);
         return store;
     }
 

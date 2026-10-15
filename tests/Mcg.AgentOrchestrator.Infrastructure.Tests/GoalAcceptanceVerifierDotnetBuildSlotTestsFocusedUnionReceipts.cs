@@ -11,10 +11,42 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedUnionReceip
     {
         var request = "Infrastructure.Tests:" + Fqn(ClassA) + "|" + Fqn(MethodA);
         var checks = Resolve(request, out var coverage);
-        var completed = new AcceptanceCheckResult(checks[0].Name, true, 0, "passed");
+        var completed = new AcceptanceCheckResult(checks[0].Name, true, 0, "passed", ExecutedTestCount: 1);
         var notRun = FocusedEvidenceNotRunPlan.Compare(checks, [completed], coverage, continueAfterFailure: true);
         Assert.Equal(checks[1].Name, Assert.Single(notRun.Checks).CheckName);
         Assert.Equal(Fqn(ClassA) + "|" + Fqn(MethodA), Assert.Single(notRun.Selections).TestClass);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(0)]
+    [Xunit.InlineData(null)]
+    [Xunit.InlineData(1)]
+    public void RecordedResult_RequiresPositiveExecutionForItsMappedSelection(int? executed)
+    {
+        AcceptanceManifestCheck[] checks = [new() { Name = "Core" }, new() { Name = "Infrastructure" }];
+        var coverage = new FocusedEvidenceCoverage([
+            new("Core.Tests:DispatchExecutionTests", [checks[0].Name]),
+            new("Infrastructure.Tests:ConductorDriverTests", [checks[1].Name])]);
+        AcceptanceCheckResult[] results = [
+            new(checks[0].Name, true, 0, "passed", ExecutedTestCount: 1),
+            new(checks[1].Name, executed is > 0, executed is > 0 ? 0 : 8, "recorded",
+                ExecutedTestCount: executed)];
+
+        var notRun = FocusedEvidenceNotRunPlan.Compare(checks, results, coverage, continueAfterFailure: true);
+
+        if (executed is > 0)
+        {
+            Assert.Empty(notRun.Checks);
+            Assert.Empty(notRun.Selections);
+        }
+        else
+        {
+            var missing = Assert.Single(notRun.Checks);
+            Assert.Equal(checks[1].Name, missing.CheckName);
+            Assert.Equal("not-run:execution-not-demonstrated", missing.Reason);
+            Assert.Equal(new FindingEvidenceSelection("Infrastructure.Tests", "ConductorDriverTests"),
+                Assert.Single(notRun.Selections));
+        }
     }
 
     [Xunit.Theory]

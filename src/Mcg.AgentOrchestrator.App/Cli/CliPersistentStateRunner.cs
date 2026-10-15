@@ -81,7 +81,8 @@ internal static partial class CliPersistentStateRunner
         OperatorIntentSubmissionSource operatorIntentSubmissionSource = OperatorIntentSubmissionSource.Cli,
         WorktreeCleanupContext? acceptanceCleanupContext = null,
         Func<TimeSpan?, Action<DotnetBuildStableSlotWait>?, DotnetBuildEnvironmentLease>? stableSlotSelector = null,
-        bool skipReadOnlyRoute = false)
+        bool skipReadOnlyRoute = false,
+        ConductorLoopLeaseController? startupLoopLease = null)
     {
         if (!skipReadOnlyRoute && CliReadOnlyCommandRunner.TryExecute(args, stateRepository, workspace, providers, channel, ref agents, ref workerProfiles, ref currentGoal, out var readOnlyResult))
             return readOnlyResult;
@@ -172,7 +173,7 @@ internal static partial class CliPersistentStateRunner
         // dispatch it started — the goal then re-dispatches the same stage forever and can't advance.
         if (IsConductLoop(args))
         {
-            return ExecuteConductLoopOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel, acceptanceCleanupContext);
+            return ExecuteConductLoopOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel, acceptanceCleanupContext, startupLoopLease);
         }
 
         if (IsSingleGoalConductCommand(args))
@@ -929,10 +930,12 @@ internal static partial class CliPersistentStateRunner
         ref WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal,
         IOperatorChannel? channel = null,
-        WorktreeCleanupContext? cleanupContext = null)
+        WorktreeCleanupContext? cleanupContext = null,
+        ConductorLoopLeaseController? startupLoopLease = null)
     {
         cleanupContext ??= WorktreeCleanupContext.Load(attentionStoreDirectory: workspace.OrchestratorDirectory);
-        using var conductLoopLease = ConductorLoopLeaseController.Acquire(workspace.OrchestratorDirectory);
+        using var conductLoopLease = startupLoopLease ?? ConductorLoopLeaseController.Acquire(workspace.OrchestratorDirectory);
+        WorkspaceStoreSetup.RunWithOwnership(workspace);
         var operatorIntentStore = SqliteOperatorIntentStore.ForDirectories(
             workspace.OrchestratorDirectory,
             workspace.LogDirectory);

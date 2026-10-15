@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 [Xunit.Collection("ProcessSpawningHostBound")]
 public sealed class ConductorSelfRelaunchTestsLandingBuildStore
@@ -98,6 +99,8 @@ public sealed class ConductorSelfRelaunchTestsLandingBuildStore
             Directory.CreateDirectory(orchestrator);
             var state = Path.Combine(orchestrator, "state.db");
             _ = InfrastructureTestSupport.CreateMigratedStateRepository(state).LoadAsync().GetAwaiter().GetResult();
+            // Staging probes validate all stores and must not migrate during activation.
+            StoreSetupRunner.Run(orchestrator);
             var isolatedTemp = Path.Combine(Root, "isolated-temp");
             Directory.CreateDirectory(isolatedTemp);
             var resolver = Path.Combine(Root, "resolve-test-run-dir.ps1");

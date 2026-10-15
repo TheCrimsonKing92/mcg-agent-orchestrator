@@ -86,13 +86,6 @@ internal sealed partial class ConductorDriver
     private static readonly Regex AcceptanceRetryEvidencePattern = new(
         @"error CS\d+|error MSB\d+|\[FAIL\]",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly Regex EvidenceBareClassNamePattern = new(
-        @"^[A-Za-z_][A-Za-z0-9_.+`]*$",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly Regex EvidenceFilterTokenPattern = new(
-        @"^(?:FullyQualifiedName(?:!~|~)[A-Za-z_][A-Za-z0-9_.]*|Category\s*!=\s*[A-Za-z_][A-Za-z0-9_.-]*)$",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private const int MaxFindingEvidenceFilterLength = 1024;
     private readonly Func<Goal, GoalLifecycleFacts> _getFacts;
     private readonly Func<int> _getRunningPaidWorkerCount;
     private readonly Func<Goal, string> _createWorkspace;
@@ -121,6 +114,7 @@ internal sealed partial class ConductorDriver
     private readonly Action<GoalId, TaskId, string> _recordFindingEvidenceRun;
     private readonly Action<GoalId, TaskId, string, IReadOnlyList<string>, string, AgentRole, string, string> _recordFindingEvidenceSuppressed;
     private readonly Action<GoalId, TaskId, string, FindingEvidenceOutcome, FindingEvidenceReceipt?> _recordFindingEvidenceOutcome;
+    private readonly Action<GoalId, TaskId, IReadOnlyList<FindingEvidenceRequestDisposition>> _recordFindingEvidenceRequestDispositions;
     private readonly Func<GoalId, TaskId, IReadOnlyList<string>, int> _recordCriterionRetryFeedback;
     private readonly Action<GoalId, TaskId> _clearCriterionRetryFeedback;
     private readonly Action<
@@ -811,6 +805,8 @@ internal sealed partial class ConductorDriver
         {
             kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt);
         };
+        _recordFindingEvidenceRequestDispositions = (goalId, taskId, dispositions) =>
+            kernel.RecordFindingEvidenceRequestDispositions(goalId, taskId, dispositions);
         _recordPreReviewEvidence = (goalId, taskId, receipt) =>
             kernel.RecordPreReviewEvidence(goalId, taskId, receipt);
         _recordPreReviewMappingEscalationSuppressed = (goalId, taskId, candidateSha, suppressedCount) =>
@@ -1101,6 +1097,7 @@ internal sealed partial class ConductorDriver
         ConductorParallelAcceptanceAttemptCoordinator? focusedEvidenceAttemptCoordinator = null,
         Func<Goal, LandingEscalationRecheckResult>? recheckPreLandingRebaseConflict = null,
         Action<GoalId, TaskId, string, FindingEvidenceOutcome, FindingEvidenceReceipt?>? recordFindingEvidenceOutcome = null,
+        Action<GoalId, TaskId, IReadOnlyList<FindingEvidenceRequestDisposition>>? recordFindingEvidenceRequestDispositions = null,
         Action<GoalId, TaskId, string>? recordFindingEvidenceRequest = null,
         Action<GoalId, TaskId, string>? recordFindingEvidenceRun = null,
         Action<GoalId, TaskId, string, IReadOnlyList<string>, string, AgentRole, string, string>? recordFindingEvidenceSuppressed = null,
@@ -1204,6 +1201,7 @@ internal sealed partial class ConductorDriver
         _recordFindingEvidenceRun = recordFindingEvidenceRun ?? recordReviewerEvidenceRunRecorded ?? ((_, _, _) => { });
         _recordFindingEvidenceSuppressed = recordFindingEvidenceSuppressed ?? ((_, _, _, _, _, _, _, _) => { });
         _recordFindingEvidenceOutcome = recordFindingEvidenceOutcome ?? ((_, _, _, _, _) => { });
+        _recordFindingEvidenceRequestDispositions = recordFindingEvidenceRequestDispositions ?? ((_, _, _) => { });
         _recordCriterionRetryFeedback = recordCriterionRetryFeedback ?? ((_, _, _) => throw new InvalidOperationException("Criterion retry feedback delegate was not configured."));
         _clearCriterionRetryFeedback = clearCriterionRetryFeedback ?? ((_, _) => { });
         _recordAcceptanceFailure = recordAcceptanceFailureWithAttribution

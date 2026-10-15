@@ -99,7 +99,8 @@ public sealed record TaskVerificationRecord(
     FailedGoalInconclusiveRoundInputs? InconclusiveRoundInputs = null,
     PlannerEvidenceStoreReference? HumanInputStoreReference = null,
     VerificationEvidenceSource EvidenceSource = VerificationEvidenceSource.Unspecified,
-    DateTimeOffset? DispatchAttemptAt = null)
+    DateTimeOffset? DispatchAttemptAt = null,
+    IReadOnlyList<FindingEvidenceRequestDisposition>? FindingEvidenceRequestDispositions = null)
 {
     public string? AuthoritativeStandardOutput { get; init; } = FullStandardOutput ??
         (StandardOutputIsAuthoritative && FullStandardOutputUnavailableReason is null ? StandardOutput : null);
@@ -160,6 +161,10 @@ public sealed record TaskVerificationRecord(
             MergedReviewFindings = MergeFindings(MergedReviewFindings, preferred.MergedReviewFindings),
             ReviewFindingContractViolation = preferred.ReviewFindingContractViolation ?? ReviewFindingContractViolation,
             FindingEvidenceReceipts = MergeReceipts(FindingEvidenceReceipts, preferred.FindingEvidenceReceipts),
+            // Restoring an unenriched round must preserve its replay identity.
+            FindingEvidenceRequestDispositions = FindingEvidenceRequestDispositions is null &&
+                preferred.FindingEvidenceRequestDispositions is null ? null : FindingEvidenceRequestDisposition.Merge(
+                    FindingEvidenceRequestDispositions, preferred.FindingEvidenceRequestDispositions, preserveCompleted: true),
             OrchestratorFailureReason = preferred.OrchestratorFailureReason ?? OrchestratorFailureReason,
             ReviewFindingTouchProofDiagnostic = preferred.ReviewFindingTouchProofDiagnostic ?? ReviewFindingTouchProofDiagnostic,
             HumanInputQuestionFingerprint = preferred.HumanInputQuestionFingerprint ?? HumanInputQuestionFingerprint,

@@ -113,7 +113,7 @@ public sealed class ConductorStartupHeartbeatSupervisorTests
                 "C:\\startup-successor", "C:\\startup-successor\\Mcg.AgentOrchestrator.App.dll",
                 "head-startup", "head-startup", "LOOP_START selfCheck=true", _lease);
             var supervisor = new ConductorContinuitySupervisor(Host, Events,
-                stageSuccessor: _ => prepared, activationHealthyTicks: 3, readinessTimeout: SilenceWindow,
+                inspectStores: () => [new("fixture-store", "fixture.db", 1, 1)], stageSuccessor: _ => prepared, activationHealthyTicks: 3, readinessTimeout: SilenceWindow,
                 delay: (_, _) =>
                 {
                     ReadinessDelayCreated.TrySetResult();
