@@ -21,6 +21,8 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/FocusedEvidenceSelectionCoverageInspector",
             // Cleanup evidence is reached through the independently owned failure-cause adjudicator.
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceAssemblyCleanupEvidence",
+            // Timeout probe evidence is reached through the independently owned partition verdict cache.
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceTimedOutProbeEvidence",
             // Process helpers are reached through the independently owned acceptance process invoker.
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCommandProcessIdentityTracker",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceSdkConsoleRule",
@@ -86,7 +88,6 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceStructuralCoveragePartitionPlan",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceTestInventorySource",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceTestSourceResolver",
-            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceTimedOutProbeEvidence",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceWithinAttemptRerunEvidence",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/CommandLineTooLongException",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DeclaredTestProjectInventory",
