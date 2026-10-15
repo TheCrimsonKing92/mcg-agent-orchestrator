@@ -215,18 +215,25 @@ internal static class ConductorStatusSnapshotReader
     {
         if (!File.Exists(path)) return [];
         var result = new List<Event>();
-        foreach (var line in File.ReadLines(path))
+        try
         {
-            try
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream);
+            while (reader.ReadLine() is { } line)
             {
-                using var document = JsonDocument.Parse(line);
-                var root = document.RootElement;
-                result.Add(new Event(root.GetProperty("timestamp").GetDateTimeOffset(),
-                    root.GetProperty("eventKind").GetString() ?? "",
-                    root.GetProperty("detail").GetString() ?? ""));
+                try
+                {
+                    using var document = JsonDocument.Parse(line);
+                    var root = document.RootElement;
+                    result.Add(new Event(root.GetProperty("timestamp").GetDateTimeOffset(),
+                        root.GetProperty("eventKind").GetString() ?? "",
+                        root.GetProperty("detail").GetString() ?? ""));
+                }
+                catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException or KeyNotFoundException) { }
             }
-            catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException or KeyNotFoundException) { }
         }
+        catch (FileNotFoundException) { return []; }
         return result;
     }
 
