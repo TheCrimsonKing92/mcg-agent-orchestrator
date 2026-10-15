@@ -17,6 +17,9 @@
 param(
     [string]$AppDll,
     [string]$Pipeline,
+    [string]$RepositoryRoot,
+    [string]$ExpectedStateDirectory,
+    [switch]$DisposableFixture,
 
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$Arguments
@@ -36,6 +39,18 @@ if ($Arguments.Count -eq 0) {
 }
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
+$hasBinding = $PSBoundParameters.ContainsKey('RepositoryRoot') -or $PSBoundParameters.ContainsKey('ExpectedStateDirectory') -or $DisposableFixture -or
+    @($Arguments | Where-Object { $_ -match '^--(repository-root|expected-state-directory|disposable-fixture)(=|$)' }).Count -gt 0
+if ($hasBinding) {
+    if (-not [string]::IsNullOrWhiteSpace($RepositoryRoot)) { $Arguments += @('--repository-root', $RepositoryRoot) }
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedStateDirectory)) { $Arguments += @('--expected-state-directory', $ExpectedStateDirectory) }
+    if ($DisposableFixture) { $Arguments += '--disposable-fixture' }
+    # A bound invocation must select its prepared runtime explicitly, before
+    # launcher build/cache writes or root exports can precede binding validation.
+    if ([string]::IsNullOrWhiteSpace($AppDll)) {
+        throw 'Workspace binding requires an explicit prebuilt -AppDll; build and select the compatible runtime before retrying.'
+    }
+}
 if ([string]::IsNullOrWhiteSpace($AppDll)) {
     $launcher = Join-Path $repoRoot "mcg-orchestrator.cmd"
     if (-not (Test-Path -LiteralPath $launcher -PathType Leaf)) {
@@ -65,7 +80,9 @@ if (-not (Test-Path -LiteralPath $resolvedAppDll -PathType Leaf)) {
     throw "App DLL not found. Build the app first: $resolvedAppDll"
 }
 
-& dotnet $resolvedAppDll @Arguments
+$dotnetPath = [Environment]::GetEnvironmentVariable("MCG_ORCHESTRATOR_DOTNET_PATH", "Process")
+if ([string]::IsNullOrWhiteSpace($dotnetPath)) { $dotnetPath = "dotnet" }
+& $dotnetPath $resolvedAppDll @Arguments
 if ($LASTEXITCODE -is [int] -and $LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }

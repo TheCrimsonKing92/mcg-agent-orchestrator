@@ -138,10 +138,13 @@ public sealed partial class SqliteOperatorIntentStore : IOperatorIntentStore
             throw SchemaSetupRequired(dbPath, StoreSchemaState.Missing);
 
         var store = new SqliteOperatorIntentStore(dbPath, logDirectory, readOnly: true);
-        using var conn = store.OpenConnection();
+        // Schema refusal must not create WAL sidecars in the source store.
+        using var snapshot = new StoreInspectionSnapshot(dbPath);
+        var conn = snapshot.Connection;
         var state = StoreSchemaVersions.Verify(conn, StoreSchemaRegistry.OperatorIntents);
         if (state != StoreSchemaState.Current)
-            throw SchemaSetupRequired(dbPath, state);
+            throw StoreSchemaDiagnostics.WithCompatibility(SchemaSetupRequired(dbPath, state), state,
+                conn, StoreSchemaRegistry.OperatorIntents, dbPath);
         return store;
     }
 

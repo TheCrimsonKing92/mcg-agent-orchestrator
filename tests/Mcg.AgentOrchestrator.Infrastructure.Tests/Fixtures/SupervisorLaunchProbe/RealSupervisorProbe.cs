@@ -81,7 +81,8 @@ internal static class RealSupervisorProbe
                 }
             },
             supervisorHandoff: new ConductorSupervisorHandoffOptions(seam, own,
-                TimeSpan.FromSeconds(30), TimeSpan.FromMilliseconds(50)));
+                TimeSpan.FromSeconds(30), TimeSpan.FromMilliseconds(50)),
+            inspectStores: () => StoreSetupRunner.Plan(Path.Combine(root, ".orchestrator"), includeState: true));
         using var timeout = new CancellationTokenSource(custodianWatchdog);
         using var watchdogReceipt = timeout.Token.Register(() => Console.Error.WriteLine(
             JsonSerializer.Serialize(new { fixtureCustodianWatchdogExpired = true,

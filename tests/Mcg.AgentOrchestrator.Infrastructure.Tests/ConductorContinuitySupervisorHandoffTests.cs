@@ -87,6 +87,7 @@ internal sealed class SupervisorHandoffFixture
                     Seam.Acquire(new ConductorSupervisorBuildIdentity("commit-a", _ownRunDirectory));
                 return Task.CompletedTask;
             },
+            inspectStores: () => [new("fixture-store", "fixture.db", 1, 1)],
             stageSuccessor: _ => ++_stageCalls == 1 ? BuildB : BuildAfterB(_stageCalls),
             appendConductEvent: (_, _, detail) => ConductEvents.Add(detail),
             dotnetPath: "dotnet-test",

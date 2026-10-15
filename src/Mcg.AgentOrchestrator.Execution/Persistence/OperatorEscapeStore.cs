@@ -129,7 +129,8 @@ public sealed class SqliteOperatorEscapeStore(string databasePath)
         {
             var state = StoreSchemaVersions.Verify(connection, StoreSchemaRegistry.OperatorEscapes);
             if (state != StoreSchemaState.Current)
-                throw SchemaSetupRequired(state);
+                throw StoreSchemaDiagnostics.WithCompatibility(SchemaSetupRequired(state), state,
+                    connection, StoreSchemaRegistry.OperatorEscapes, _databasePath);
             return connection;
         }
         catch

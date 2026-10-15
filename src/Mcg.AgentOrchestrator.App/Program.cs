@@ -74,16 +74,22 @@ if (CliHostExclusionsCommand.IsCommand(args) && !CliCommandHelp.IsCommandSpecifi
 }
 
 var executionDirectory = Environment.GetEnvironmentVariable(OrchestratorWorkspace.RepoRootEnvironmentVariable);
+WorkspaceInvocationBinding invocationBinding;
 OrchestratorProjectSelection projectSelection;
 OrchestratorTenantSelection tenantSelection;
 try
 {
+    invocationBinding = WorkspaceInvocationBinding.Parse(args);
     projectSelection = OrchestratorProjectSelection.FromArgs(
-        args,
+        invocationBinding.CommandArgs,
         Environment.GetEnvironmentVariable(OrchestratorProjectSelection.ProjectEnvironmentVariable));
     tenantSelection = OrchestratorTenantSelection.FromArgs(
         projectSelection.CommandArgs,
         Environment.GetEnvironmentVariable(OrchestratorTenantSelection.TenantEnvironmentVariable));
+    invocationBinding.ValidateInheritedSelectors(executionDirectory,
+        Environment.GetEnvironmentVariable(OrchestratorProjectSelection.ProjectEnvironmentVariable),
+        Environment.GetEnvironmentVariable(OrchestratorTenantSelection.TenantEnvironmentVariable), projectSelection, tenantSelection);
+    executionDirectory = invocationBinding.RepositoryRoot ?? executionDirectory;
 }
 catch (Exception ex)
 {
@@ -125,13 +131,13 @@ var commandCapability = CliCommandCapabilities.Classify(startupArgs);
 var repoRoot = !string.IsNullOrWhiteSpace(executionDirectory)
     ? executionDirectory
     : OrchestratorWorkspace.ResolveRepoRoot(Environment.CurrentDirectory);
-OrchestratorHome.ExportForDescendants(OrchestratorHome.ResolveForLaunch(repoRoot));
-OrchestratorDataRoot.ExportForDescendants();
 var projectRegistry = OrchestratorProjectRegistry.CreateDefault();
 if (startupArgs.Count > 0 && startupArgs[0].Equals("project", StringComparison.OrdinalIgnoreCase))
 {
     try
     {
+        if (invocationBinding.DisposableFixture || invocationBinding.ExpectedStateDirectory is not null)
+            throw new InvalidOperationException("A state-directory binding cannot authorize project registry commands; manage the registry separately, then bind the resolved workspace.");
         return ProjectCliCommand.Execute(startupArgs, projectRegistry, repoRoot, projectSelection.ProjectName);
     }
     catch (Exception ex)
@@ -152,17 +158,47 @@ catch (Exception ex)
     return 1;
 }
 
-var workspace = activeProject.Name.Equals(OrchestratorWorkspace.DefaultProjectName, StringComparison.OrdinalIgnoreCase)
+OrchestratorWorkspace ResolveSelectedWorkspace(OrchestratorProject project) => project.Name.Equals(OrchestratorWorkspace.DefaultProjectName, StringComparison.OrdinalIgnoreCase)
     ? OrchestratorWorkspace.ForDirectory(
-        activeProject.RootDirectory,
+        project.RootDirectory,
         string.IsNullOrWhiteSpace(executionDirectory) ? null : executionDirectory,
-        tenantSelection.TenantName)
+        tenantSelection.TenantName, projectRegistry)
     : OrchestratorWorkspace.ForProject(
-        activeProject.Name,
-        activeProject.RootDirectory,
+        project.Name,
+        project.RootDirectory,
         tenantName: tenantSelection.TenantName,
-        integrationBranch: activeProject.IntegrationBranch,
-        dataRootDirectory: activeProject.DataRootDirectory);
+        integrationBranch: project.IntegrationBranch,
+        dataRootDirectory: project.DataRootDirectory);
+OrchestratorWorkspace workspace;
+try
+{
+    workspace = ResolveSelectedWorkspace(activeProject);
+    invocationBinding.Verify(workspace);
+}
+catch (Exception ex)
+{
+    Console.Error.WriteLine(ProgramStartupErrorFormatter.Format(ex));
+    return 1;
+}
+void VerifyWorkspaceBinding()
+{
+    var resolved = ResolveSelectedWorkspace(projectRegistry.ResolveActiveProject(repoRoot, projectSelection.ProjectName));
+    invocationBinding.Verify(resolved);
+    if (resolved != workspace) throw new InvalidOperationException("Workspace selection changed during startup; invocation refused.");
+}
+// Read-only prelaunch handshake for detached launchers. It never initializes stores/catalogs.
+if (startupArgs.Count == 2 && startupArgs[0] == "__workspace-binding-check" && startupArgs[1] == "--json")
+{
+    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(new
+    {
+        repositoryRoot = workspace.RootDirectory, stateDirectory = workspace.OrchestratorDirectory,
+        executionDirectory = workspace.ExecutionDirectory, project = workspace.ProjectName, tenant = workspace.TenantName,
+        stopFile = workspace.ConductorStopFilePath
+    }));
+    return 0;
+}
+OrchestratorHome.ExportForDescendants(OrchestratorHome.ResolveForLaunch(repoRoot));
+OrchestratorDataRoot.ExportForDescendants();
 try
 {
     if (CliCommandHelp.TryPrintStartupHelp(startupArgs))
@@ -215,7 +251,8 @@ if (CliAuthorDraftCommand.IsCommand(startupArgs))
 
 if (CliConductorCommand.IsCommand(startupArgs))
 {
-    return ExitCompletedStartupCommand(CliConductorCommand.Run(startupArgs, workspace));
+    return ExitCompletedStartupCommand(CliConductorCommand.Run(startupArgs, workspace, verifyBinding: VerifyWorkspaceBinding,
+        invocationBinding: invocationBinding));
 }
 
 if (CliRemoteLaneSelfTestCommand.IsCommand(startupArgs))
@@ -240,6 +277,12 @@ if (ConductorContinuitySupervisor.ShouldSupervise(
 {
     try
     {
+        VerifyWorkspaceBinding();
+        StoreSetupRunner.RequireCompatible(StoreSetupRunner.Plan(workspace.OrchestratorDirectory, includeState: true),
+            requireCurrent: invocationBinding.RequireCurrentStores);
+        // The supervisor's run-event store is writable too. Finish complete quiet setup
+        // before constructing it; the actual loop then holds ownership through startup.
+        WorkspaceStoreSetup.Run(workspace, VerifyWorkspaceBinding);
         var maxDurationRestage = Environment.GetEnvironmentVariable(
             "MCG_ORCHESTRATOR_MAX_DURATION_RESTAGE");
         var restageEnabled =
@@ -261,6 +304,7 @@ if (ConductorContinuitySupervisor.ShouldSupervise(
         var supervisor = new ConductorContinuitySupervisor(
             new SystemConductorSupervisorProcessHost(),
             new SqliteRunEventStore(workspace.RunEventStorePath),
+            inspectStores: () => StoreSetupRunner.Plan(workspace.OrchestratorDirectory, includeState: true),
             stageSuccessor: stageSuccessor,
             appendConductEvent: (eventKind, goalId, detail) =>
                 conductEventLogWriter.Append(eventKind, goalId, detail),
@@ -270,7 +314,9 @@ if (ConductorContinuitySupervisor.ShouldSupervise(
                 TimeSpan.FromMinutes(2),
                 TimeSpan.FromMilliseconds(250)));
         return await supervisor.RunAsync(
-            startupArgs,
+            startupArgs.Concat(new[] { "--repository-root", workspace.RootDirectory,
+                "--expected-state-directory", workspace.OrchestratorDirectory })
+                .Concat(invocationBinding.DisposableFixture ? new[] { "--disposable-fixture" } : Array.Empty<string>()).ToArray(),
             workspace.ExecutionDirectory,
             Path.Combine(workspace.OrchestratorDirectory, "continuity"),
             activeProject.Name,
@@ -428,6 +474,8 @@ if (startupArgs.Count > 0 && !CliHandledVerbRegistry.IsHandled(startupArgs[0]))
 }
 
 ITransactionalOrchestratorStateRepository stateRepository;
+ConductorLoopLeaseController? startupLoopLease = null;
+using var startupLoopLeaseLifetime = new StartupLeaseLifetime(() => startupLoopLease?.Dispose());
 Goal? currentGoal;
 bool stateHydrated;
 try
@@ -440,9 +488,16 @@ try
         // A handoff successor must not migrate or load state until the incumbent
         // explicitly transfers its sole-writer authority.
         ConductorLoopHandoff.WaitForAuthorityTransferIfRequested();
+        VerifyWorkspaceBinding();
+        StoreSetupRunner.RequireCompatible(StoreSetupRunner.Plan(workspace.OrchestratorDirectory, includeState: true),
+            requireCurrent: invocationBinding.RequireCurrentStores);
+        // Transfer the same controller into the loop; never release ownership between migration and startup.
+        startupLoopLease = ConductorLoopLeaseController.Acquire(workspace.OrchestratorDirectory);
+        VerifyWorkspaceBinding();
+        WorkspaceStoreSetup.RunWithOwnership(workspace, invocationBinding.RequireCurrentStores);
     }
 
-    ProgramStartupLifecycle.EnsureStateDbInitialized(startupArgs, workspace);
+    if (!isConductLoop) ProgramStartupLifecycle.EnsureStateDbInitialized(startupArgs, workspace);
 
     if (commandCapability == CliCommandCapability.Execution &&
         !CliAttentionQueryCommand.IsAttentionQueryCommand(startupArgs))
@@ -469,7 +524,7 @@ if (startupArgs.Count > 0)
     {
         CliReadOnlyStartupHydration.ExecuteStartupCommand(startupArgs, stateRepository, workspace,
             ref agents, providers, ref workerProfiles, ref currentGoal, stateHydrated,
-            operatorChannel, acceptanceCleanupContext: cleanupContext,
+            operatorChannel, acceptanceCleanupContext: cleanupContext, startupLoopLease: startupLoopLease,
             onReadOnlyDeclined: CliAttentionQueryCommand.IsAttentionQueryCommand(startupArgs)
                 ? () => ProgramStartupLifecycle.InitializeWorkerProcessTracking(
                     RunsStartupCleanup(startupArgs),
@@ -673,14 +728,7 @@ internal static class ProgramStartupLifecycle
         IReadOnlyList<string> _startupArgs,
         OrchestratorWorkspace workspace)
     {
-        if (StateDbMigrations.IsUpToDate(workspace.SqliteStatePath))
-            return;
-
-        // Every supported app path opens state through this boundary before it can
-        // query feature tables. Numbered migrations use BEGIN IMMEDIATE and recheck
-        // their durable catalog under that write lock, so concurrent startups remain
-        // serialized and idempotent without argv-specific schema authority gaps.
-        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+        WorkspaceStoreSetup.EnsureState(workspace);
     }
 
     internal static void InitializeWorkerProcessTracking(
@@ -703,4 +751,9 @@ internal static class ProgramStartupLifecycle
                 .Scheduler.SweepNow(executionDirectory);
         }
     }
+}
+
+internal sealed class StartupLeaseLifetime(Action dispose) : IDisposable
+{
+    public void Dispose() => dispose();
 }

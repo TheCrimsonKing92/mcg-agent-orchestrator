@@ -32,6 +32,7 @@ internal static class CliCommandCapabilities
                CliGateStatusJsonQueryCommand.IsGateStatusJsonCommand(args) ||
                CliAttentionShowJsonQueryCommand.IsAttentionShowJsonCommand(args) ||
                CliAttentionJsonQueryCommand.IsAttentionJsonCommand(args) ||
+               args.Count == 3 && args[0] == "conductor" && args[1] == "setup" && args[2] == "--plan" ||
                CliCommandHelp.IsCommandSpecificHelp(args)
             ? CliCommandCapability.QueryOnly
             : CliCommandCapability.Execution;

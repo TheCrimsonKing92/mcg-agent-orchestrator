@@ -109,7 +109,8 @@ public sealed class PortfolioStore
         using var conn = store.OpenConnection();
         var state = StoreSchemaVersions.Verify(conn, StoreSchemaRegistry.Portfolio);
         if (state != StoreSchemaState.Current)
-            throw SchemaSetupRequired(dbPath, state);
+            throw StoreSchemaDiagnostics.WithCompatibility(SchemaSetupRequired(dbPath, state), state,
+                conn, StoreSchemaRegistry.Portfolio, dbPath);
         return store;
     }
 

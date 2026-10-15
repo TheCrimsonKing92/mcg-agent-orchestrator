@@ -691,7 +691,7 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry Conductor = new(
         ConductorUsage,
         "Start, report or stop the conductor, set up versioned stores, or apply one goal's pending operator intents while no conductor runs. status --json prints the versioned mcg.conductor-status envelope.",
-        ["--clear-stop", "--help", "-h"]);
+        ["--clear-stop", "--plan", "--help", "-h"]);
 
     private static readonly IReadOnlyDictionary<string, IReadOnlySet<string>> GenericCommandFlags =
         new Dictionary<string, IReadOnlySet<string>>(StringComparer.OrdinalIgnoreCase)

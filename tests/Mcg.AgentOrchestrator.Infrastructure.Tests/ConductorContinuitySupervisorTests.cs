@@ -298,7 +298,7 @@ public sealed class ConductorContinuitySupervisorTests
         var supervisor = new ConductorContinuitySupervisor(
             host,
             store,
-            stageSuccessor: _ => prepared,
+            inspectStores: () => [new("fixture-store", "fixture.db", 1, 1)], stageSuccessor: _ => prepared,
             appendConductEvent: (_, _, detail) => conductEvents.Add(detail),
             dotnetPath: "dotnet-test");
 
@@ -362,7 +362,7 @@ public sealed class ConductorContinuitySupervisorTests
             host,
             store,
             delay: (_, _) => releaseReadinessTimeout.Task,
-            stageSuccessor: _ => prepared,
+            inspectStores: () => [new("fixture-store", "fixture.db", 1, 1)], stageSuccessor: _ => prepared,
             appendConductEvent: (_, _, detail) => conductEvents.Add(detail),
             readinessTimeout: TimeSpan.FromSeconds(30));
 
@@ -420,7 +420,7 @@ public sealed class ConductorContinuitySupervisorTests
         var supervisor = new ConductorContinuitySupervisor(
             host,
             store,
-            stageSuccessor: _ => prepared,
+            inspectStores: () => [new("fixture-store", "fixture.db", 1, 1)], stageSuccessor: _ => prepared,
             appendConductEvent: (_, _, detail) => conductEvents.Add(detail));
 
         supervisorTask = supervisor.RunAsync(
@@ -470,7 +470,7 @@ public sealed class ConductorContinuitySupervisorTests
             host,
             store,
             delay: (_, _) => Task.CompletedTask,
-            stageSuccessor: _ => prepared,
+            inspectStores: () => [new("fixture-store", "fixture.db", 1, 1)], stageSuccessor: _ => prepared,
             appendConductEvent: (_, _, detail) => conductEvents.Add(detail));
 
         var exitCode = await supervisor.RunAsync(
@@ -519,7 +519,7 @@ public sealed class ConductorContinuitySupervisorTests
         var supervisor = new ConductorContinuitySupervisor(
             host,
             store,
-            stageSuccessor: _ => throw new ConductorSelfRelaunchPreparationException(
+            inspectStores: () => [new("fixture-store", "fixture.db", 1, 1)], stageSuccessor: _ => throw new ConductorSelfRelaunchPreparationException(
                 "build",
                 "build rejected HEAD"),
             appendConductEvent: (_, _, detail) => conductEvents.Add(detail));
@@ -560,7 +560,7 @@ public sealed class ConductorContinuitySupervisorTests
         var supervisor = new ConductorContinuitySupervisor(
             host,
             store,
-            stageSuccessor: _ =>
+            inspectStores: () => [new("fixture-store", "fixture.db", 1, 1)], stageSuccessor: _ =>
             {
                 stageCalls++;
                 throw new ConductorSelfRelaunchPreparationException("build", "broken tree");
