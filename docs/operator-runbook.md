@@ -511,6 +511,54 @@ Notes that will save you time:
 
 ---
 
+### Stuck-goal signatures
+
+Use `attention show <goal>` and typed goal/attempt state to identify the signature before acting. Poll each recovery intent with `operator-intent-status <intent-id>` to `Applied`; `Pending` is not delivery evidence. Do not bypass the gate.
+
+**1. Verifying with no live gate**
+
+Detector: goal `Verifying`, all tasks Completed or Cancelled, newest timeline event at least 30 minutes old, no live acceptance attempt, no unreconciled grouped gate membership, no landing evidence, and a resolved branch head.
+Remedy: Steward case G queues one deterministic `reopen-regate` on the last Completed task; by hand, use `adjudicate --goal <goal> <last-completed-task-number> reopen-regate --text-file <note> --evidence <reference>`. A recurrence on the same task/head after application raises `steward-owner-question`; a rejected intent is not automatically retried on that identity.
+Evidence: quote goal/task ids, `quiet-since`, minutes quiet and the 30-minute threshold, task counts by status, absence of live/grouped attempts and landing evidence, head, verbatim WORKER_RESULT, and the intent/decision receipt.
+Owning fix: this goal `b182b6d4` (Steward case G); incident backlog `341a7ba0`.
+
+**2. Superseded, already-upstream goal still queued for gates**
+
+Detector: a Verified goal has sweep blocker `completed-branch-superseded` with `cleanup=retirement required`; Verifying goals are not checked for content equivalence.
+Remedy: none automatic. The goal lands through its own gate; if a passed train holds it, inspect another member for signatures 5 and 6. The sweep retires only Completed goals, and the Verified goal still has outstanding Acceptance-owned obligations. Retiring past those obligations would substitute git cherry equivalence for gate evidence and requires an owner decision.
+Evidence: quote the sweep blocker, goal status, git cherry equivalence, pending obligation ids/versions, and the train member actually holding landing.
+Owning fix: owner decision required for the `3f5ffcb2` shape; comparison goal `f99566c7` landed through its train with obligations satisfied.
+
+**3. Stale worker build scope after a gate squash**
+
+Detector: dispatch fails every tick with `Worker build scope Git merge-base failed (exit=1)`.
+Remedy: in that goal worktree, rename `.orchestrator-context/worker-build-scope.json` to `worker-build-scope.json.retired` so the next dispatch can establish a current scope.
+Evidence: quote the merge-base failure, old scope baseline and current head, retired file path, and the next dispatch/build receipt.
+Owning fix: goal `83db4cfc`.
+
+**4. Same-row size-ratchet conflict**
+
+Detector: merge conflict in the same source-size ratchet ceiling row after main and the goal both changed its measured source.
+Remedy: merge main in the goal worktree, set the row to the merged tree's measurement using the rule at `src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/SourceSizeRatchet.cs:579-615` (sum line counts for the matching partial class across eligible source files), commit at once, then `adjudicate --goal <goal> <task-number> route --cause MainDriftConflict --text-file <note> --evidence <reference>`.
+Evidence: quote the conflicted row, merged-tree measurement and contributing files, merge commit, and applied route intent.
+Owning fix: backlog `234b30e4`.
+
+**5. Stale Planner evidence wait under a superseded brief**
+
+Detector: `attention show <goal>` lists an open Planner evidence wait whose criterion or brief version has been superseded by the current revision.
+Remedy: `attention answer <goal> <id> --text-file <note>` naming the superseding revision and explaining how it settles that wait; use the exact id displayed by `attention show`.
+Evidence: quote wait id, old and current brief/criterion versions, superseding revision, and the durable answer receipt.
+Owning fix: backlog `7170763e`.
+
+**6. Passed grouped receipt held on evidence waits**
+
+Detector: the grouped gate receipt passed, but one or more members still have open evidence waits that hold the train.
+Remedy: answer each wait with `attention answer <goal> <id> --text-file <note>`, citing the grouped receipt id and its TRX for that member and criterion.
+Evidence: quote receipt id, candidate/member identity, TRX path and passing result, wait ids, and each durable answer receipt.
+Owning fix: goal `4ebdcef5`.
+
+---
+
 <a id="steward-and-author"></a>
 ## Steward and Author
 
@@ -528,7 +576,7 @@ Recognized Planner and collection-guard diagnostics can produce a deterministic 
 
 A permitted proposal submits an Agent-actor `adjudicate` intent with a `route` payload for the triggering task; the route policy permits only `NewTestFinding` or `ContractClarification` causes and reversible actions. (`src/Mcg.AgentOrchestrator.App/Orchestration/ConductorStewardHost.cs` line 305; `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorStewardAdjudication.cs` ::ConductorStewardRoutePolicy.RejectionReason.)
 
-The Steward never closes a task or re-gates: `close`, `reopen-regate` and `verify-manual` proposals are rejected by the route policy. (`src/Mcg.AgentOrchestrator.App/Orchestration/ConductorStewardAdjudication.cs` ::ConductorStewardAdjudicationParser.Parse and ::ConductorStewardRoutePolicy.RejectionReason; `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorStewardHost.cs` ::HarvestCompleted.) It raises an owner question rather than executing a rejected proposal; an explicit `ask-owner` or a recurring trigger after an applied route also raises a question, holds the goal with `steward-owner-question`, and emits `goal-escalation`. (`src/Mcg.AgentOrchestrator.App/Orchestration/ConductorStewardHost.cs` line 279 and ::ServiceTick, ::HarvestCompleted, ::Question.)
+The Steward may close a task only for admitted cases D and E and re-gate only for case G (Verifying with no live gate past the quiet threshold), with other actions routed or raised to the owner. (`src/Mcg.AgentOrchestrator.App/Orchestration/ConductorStewardAdjudication.cs` ::ConductorStewardAdjudicationParser.Parse and ::ConductorStewardRoutePolicy.RejectionReason; `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorStewardHost.cs` ::HarvestCompleted; `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorStewardCaseG.cs` ::IsStranded and ::Admits; `src/Mcg.AgentOrchestrator.App/Orchestration/OperatorIntentAdjudication.cs` ::Apply.) It raises an owner question rather than executing a rejected proposal; an explicit `ask-owner` or a recurring trigger after an applied route also raises a question, holds the goal with `steward-owner-question`, and emits `goal-escalation`. (`src/Mcg.AgentOrchestrator.App/Orchestration/ConductorStewardHost.cs` line 279 and ::ServiceTick, ::HarvestCompleted, ::Question.)
 
 Under the workspace's orchestrator directory, `steward-triggers.db` tracks triggers and `steward-rounds/` holds timestamped JSON model-round receipts containing the trigger, session, exit code, output and failure. (`src/Mcg.AgentOrchestrator.App/Orchestration/ConductorStewardHost.cs` ::CreateDefault; `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorStewardModelRound.cs` ::WriteReceipt.) Outcomes appear as `steward` events in `logs/conduct-events.log`; owner questions also appear in `goal-events/`. (`src/Mcg.AgentOrchestrator.App/Orchestration/ConductorStewardHost.cs` ::Record and ::Question; `src/Mcg.AgentOrchestrator.App/Orchestration/OrchestratorWorkspace.cs` ::ConductEventsLogPath and ::GoalLifecycleEventsDirectory; `src/Mcg.AgentOrchestrator.App/Orchestration/ConductEventLogWriter.cs` ::CurrentFileName.)
 
