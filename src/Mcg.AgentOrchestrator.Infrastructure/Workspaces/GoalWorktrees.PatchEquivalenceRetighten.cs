@@ -17,7 +17,7 @@ public static partial class GoalWorktrees
                 paths != SourceSizeRatchet.SourcePath) break;
             var before = GitCli.Run(executionDirectory, "show", $"{parents[1]}:{SourceSizeRatchet.SourcePath}");
             var after = GitCli.Run(executionDirectory, "show", $"{head}:{SourceSizeRatchet.SourcePath}");
-            // A subject is not proof: reject unrelated text, comments, lowered values and other files.
+            // A subject is not proof: accept only numeric changes in either direction; reject text, identity/order changes and other files.
             if (!before.Succeeded || before.DrainTimedOut || !after.Succeeded || after.DrainTimedOut ||
                 !SourceSizeRatchetRetightener.IsNumericRetightenOnly(before.Output, after.Output)) break;
             head = parents[1];
