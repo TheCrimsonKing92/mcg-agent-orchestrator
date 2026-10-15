@@ -66,7 +66,10 @@ public sealed class WorkerDispatchTestsSubscriptionTerminalContractSubmission : 
         new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
         task = kernel.GetTask(goal.Id, task.Id);
-        var verification = Assert.IsType<TaskVerificationRecord>(task.LastVerification);
+        // Contract repair clears the latest record for retry, retaining the failed round in history.
+        Assert.Null(task.LastVerification);
+        Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+        var verification = Assert.Single(task.VerificationHistory);
         Assert.Equal(VerificationTerminalContractStatus.Missing,
             WorkerResultBlockers.AssessSubscriptionVerification(task, verification).Status);
         Assert.Contains("rule=verification-terminal-contract-incomplete",
