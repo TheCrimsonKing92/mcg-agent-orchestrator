@@ -18,7 +18,9 @@ internal static class PassedMergeTrainReceiptAdmission
     internal sealed record Operations(
         FindReceipts Find,
         Func<Goal, ConductorAutonomyPolicy, GateReadyCandidateProjectionResult> Project,
-        Func<ConductorMergeTrainSelection, Goal[], ConductorAutonomyPolicy, ConductorMergeTrainRunResult> Land);
+        Func<ConductorMergeTrainSelection, Goal[], ConductorAutonomyPolicy, ConductorMergeTrainRunResult> Land,
+        Func<MergeTrainReceipt, string, AcceptanceRevalidationPlan>? PlanRevalidation = null,
+        Action<MergeTrainReceipt, AcceptanceRevalidationReceipt?>? RecordRevalidation = null);
 
     internal static (Goal[] Eligible, ConductorSpeculativeAcceptanceCandidate[] Candidates) Apply(
         ConductorDriver driver,
@@ -38,7 +40,11 @@ internal static class PassedMergeTrainReceiptAdmission
                 (ready, ineligible, stale, blocked, scopedGoals, observed) =>
                     driver.FindLandablePassedMergeTrainSelections(ready, ineligible, stale, blocked, scopedGoals, observed),
                 driver.ProjectGateReadyCandidate,
-                (selection, goals, autonomy) => driver.RunMergeTrain(selection, goals, autonomy, landFromReceiptOnly: true)),
+                (selection, goals, autonomy) => driver.RunMergeTrain(selection, goals, autonomy, landFromReceiptOnly: true),
+                (receipt, currentMain) => AcceptanceRevalidationPlanner.Plan(driver.ExecutionDirectory,
+                    receipt.Identity.ObservedMainRevision, currentMain,
+                    receipt.Identity.Members.SelectMany(member => member.LandingPaths).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()),
+                (receipt, decision) => AcceptanceRevalidationReceipt.Record(driver.ExecutionDirectory, scopedGoals, receipt, decision)),
             policy, eligible, candidates, scopedGoals, results, tick, changedGoalLines, holds,
             reportedStaleReceiptIds, emitProgress, recordProgress, heldResult);
 
@@ -66,6 +72,8 @@ internal static class PassedMergeTrainReceiptAdmission
         {
             if (reportedStaleReceiptIds.Add(receipt.ReceiptId))
             {
+                if (AcceptanceRevalidationReceipt.TryReport(receipt, moved, candidates, operations, tick, emitProgress))
+                    return;
                 emitProgress($"TRAIN_RECEIPT_STALE tick={tick} train={receipt.Identity.Value} " +
                     $"receipt={receipt.ReceiptId} moved={moved}");
             }
@@ -122,6 +130,8 @@ internal static class PassedMergeTrainReceiptAdmission
                 changedGoalLines);
             if (run.Detail.StartsWith("outcome=passed", StringComparison.Ordinal))
             {
+                try { if (run.Receipt is { } landed) operations.RecordRevalidation?.Invoke(landed, null); }
+                catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException or AccessViolationException)) { }
                 // Landing moved main, so the observations made before it no longer justify a hold.
                 heldMembers.Clear();
                 candidates = candidates

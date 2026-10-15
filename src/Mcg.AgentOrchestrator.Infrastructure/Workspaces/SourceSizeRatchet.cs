@@ -539,7 +539,8 @@ internal static class SourceSizeRatchet
             // Goal 207369f1 counts pending completion builds in existing relaunch draining and prevents detaching them;
             // lifecycle remains in CompletionBuildEvidenceCoordinator. Measured 9270 across the same 55 partials; no headroom.
             // Integrated receipt replay and completion-build draining: measured 9239 across 54 partial files, no headroom.
-            new SourceClassCeiling("ConductorBatchLoop", 9239, 54),
+            // Goal 587ba8d2 adds one train-receipt-revalidate conduct event mapping line.
+            new SourceClassCeiling("ConductorBatchLoop", 9240, 54),
             // Goal ec8903af moved the goal-prefix parser to CliGoalPrefixArguments.
             // Goal cd1f6380 adds four lines at the owning transaction boundary, forwarding both
             // registrars and invoking actions after commit; list behavior lives in PostCommitActions.
