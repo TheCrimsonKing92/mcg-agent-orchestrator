@@ -93,7 +93,7 @@ public sealed class ConductorBatchLoopTestsActivationHeartbeatBeforeSleep(ITestO
         });
         using var lease = new MemoryStream();
         var supervisor = new ConductorContinuitySupervisor(host, events,
-            stageSuccessor: _ => Build("idle-heartbeat", lease),
+            inspectStores: () => [new("fixture-store", "fixture.db", 1, 1)], stageSuccessor: _ => Build("idle-heartbeat", lease),
             activationHealthyTicks: 1,
             activationStallTimeout: TimeSpan.FromMinutes(2),
             activationDelay: (_, _) =>
@@ -173,7 +173,7 @@ public sealed class ConductorBatchLoopTestsActivationHeartbeatBeforeSleep(ITestO
         });
         using var lease = new MemoryStream();
         var supervisor = new ConductorContinuitySupervisor(host, events,
-            stageSuccessor: _ => Build("stalled-first-tick", lease),
+            inspectStores: () => [new("fixture-store", "fixture.db", 1, 1)], stageSuccessor: _ => Build("stalled-first-tick", lease),
             activationHealthyTicks: 1,
             activationDelay: (_, _) =>
             {

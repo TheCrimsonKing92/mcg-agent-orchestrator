@@ -110,7 +110,7 @@ public sealed class ConductorContinuitySupervisorIdleActivationTests
                 "C:\\next", "C:\\next\\Mcg.AgentOrchestrator.App.dll",
                 "head-next", "head-next", "LOOP_START selfCheck=true", SuccessorLease);
             var supervisor = new ConductorContinuitySupervisor(Host, Events,
-                timeProvider: Deadlines, stageSuccessor: _ => successor,
+                timeProvider: Deadlines, inspectStores: () => [new("fixture-store", "fixture.db", 1, 1)], stageSuccessor: _ => successor,
                 activationHealthyTicks: 3, activationDelay: Deadlines.Delay,
                 activationStallTimeout: TimeSpan.FromMinutes(2));
             return supervisor.RunAsync(["conduct", "--loop", "--daemon", "--poll-seconds", "120"],

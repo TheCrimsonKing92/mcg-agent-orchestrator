@@ -108,9 +108,7 @@ public sealed class StewardTriggerStoreTestsVersionedSetup : IDisposable
         StewardTriggerStoreSetup.Setup(Db);
 
         AssertFutureContentUnchanged(schema, triggers, rounds, versions);
-        var result = Assert.Single(StoreSetupRunner.Run(root), result => result.StoreName == "steward-triggers");
-        Assert.Equal(Db, result.DatabasePath);
-        Assert.Equal(99, result.Version);
+        Assert.Contains(Db, Assert.Throws<InvalidOperationException>(() => StoreSetupRunner.Run(root)).Message);
         AssertFutureContentUnchanged(schema, triggers, rounds, versions);
     }
 

@@ -184,7 +184,7 @@ public sealed class ConductorContinuitySupervisorDrainActivationTests
                 "head-next", "head-next", "LOOP_START selfCheck=true", _successorLease);
             var stageCount = 0;
             var supervisor = new ConductorContinuitySupervisor(Host, Events,
-                timeProvider: Deadlines, stageSuccessor: _ => stageCount++ == 0 ? successor : null!,
+                timeProvider: Deadlines, inspectStores: () => [new("fixture-store", "fixture.db", 1, 1)], stageSuccessor: _ => stageCount++ == 0 ? successor : null!,
                 appendConductEvent: (_, _, detail) => ConductLines.Add(detail),
                 activationHealthyTicks: 3, activationDelay: Deadlines.Delay,
                 activationStallTimeout: TimeSpan.FromMinutes(2), tickStallBudget: TickStallBudget);

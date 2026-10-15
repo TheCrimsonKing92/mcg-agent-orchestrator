@@ -7,10 +7,15 @@ internal static class OwnerQuestionResolutionText
         var lines = new List<string>
         {
             $"Goal: {OwnerConsoleViewModelBuilder.Prefix(resolution.GoalId)} {resolution.GoalTitle}",
-            "Asked at stage: " + resolution.Stage,
-            "Question:", resolution.Question,
-            $"{resolution.Outcome} by {resolution.Answerer} at {TimeZoneInfo.ConvertTime(resolution.ResolvedAt, zone):HH:mm:ss}"
+            "Asked at stage: " + resolution.Stage
         };
+        if (OwnerEvidenceRequestFields.Read(resolution.Question) is { } fields)
+        {
+            lines.AddRange(fields.Select(field => field.Label + ": " + field.Value));
+            lines.AddRange(resolution.Question.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n').Skip(1));
+        }
+        else { lines.Add("Question:"); lines.Add(resolution.Question); }
+        lines.Add($"Resolution: {resolution.Outcome} by {resolution.Answerer} at {TimeZoneInfo.ConvertTime(resolution.ResolvedAt, zone):HH:mm:ss}");
         if (resolution.Answer is { } answer)
         {
             lines.Add("Answer:");
@@ -22,6 +27,10 @@ internal static class OwnerQuestionResolutionText
         return string.Join("\n", lines);
     }
 
-    internal static string Summary(OwnerQuestionResolution item, TimeZoneInfo zone) =>
-        $"{item.Stage}: {item.Question.Split(['\r', '\n'], 2)[0]} — {item.Answerer}, {TimeZoneInfo.ConvertTime(item.ResolvedAt, zone):HH:mm:ss} ({item.Outcome})";
+    internal static string Summary(OwnerQuestionResolution item, TimeZoneInfo zone)
+    {
+        var question = OwnerEvidenceRequestFields.Read(item.Question) is { } fields
+            ? fields[0].Value : item.Question.Split(['\r', '\n'], 2)[0];
+        return $"{item.Stage}: {question} — {item.Answerer}, {TimeZoneInfo.ConvertTime(item.ResolvedAt, zone):HH:mm:ss} ({item.Outcome})";
+    }
 }

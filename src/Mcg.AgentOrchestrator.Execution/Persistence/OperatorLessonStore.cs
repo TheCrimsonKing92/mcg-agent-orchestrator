@@ -217,7 +217,8 @@ public sealed class SqliteOperatorLessonStore(string databasePath)
         {
             var state = StoreSchemaVersions.Verify(connection, StoreSchemaRegistry.OperatorLessons);
             if (state != StoreSchemaState.Current)
-                throw SchemaSetupRequired(state);
+                throw StoreSchemaDiagnostics.WithCompatibility(SchemaSetupRequired(state), state,
+                    connection, StoreSchemaRegistry.OperatorLessons, _databasePath);
             return connection;
         }
         catch

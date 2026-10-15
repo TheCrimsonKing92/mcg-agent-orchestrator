@@ -21,8 +21,10 @@ public sealed class ConductorVerbStartTests
         Assert.Equal("pwsh", request.FileName);
         Assert.Equal(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
             Path.Combine(fixture.Workspace.ExecutionDirectory, "scripts", "Start-OrchestratorCommand.ps1"),
-            "-Name", "conduct-loop-daemon", "conduct", "--loop", "--daemon", "--watch",
-            "--poll-seconds", "120", "--max-duration", "43200"], request.Arguments);
+            "-Name", "conduct-loop-daemon", "-RepositoryRoot", fixture.Workspace.RootDirectory,
+            "-ExpectedStateDirectory", fixture.Workspace.OrchestratorDirectory,
+            "conduct", "--loop", "--daemon", "--watch",
+            "--poll-seconds", "120", "--max-duration", "43200", "--project=default", "--tenant=default"], request.Arguments);
         Assert.Equal("120", request.Environment["MCG_DISPATCH_MAX_RUNTIME_MIN"]);
         Assert.Contains(CliProtectedProcessEnvironment.ProtectedPidVariable,
             request.EnvironmentVariablesToRemove);
@@ -51,7 +53,7 @@ public sealed class ConductorVerbStartTests
         Assert.Equal(Path.Combine(home.InstallRootDirectory, "scripts", "Start-OrchestratorCommand.ps1"),
             request.Arguments[4]);
         Assert.Equal(workspace.ExecutionDirectory, request.WorkingDirectory);
-        Assert.Equal(projectScoped ? ["--project=alpha"] : Array.Empty<string>(),
+        Assert.Equal(projectScoped ? ["--project=alpha"] : ["--project=default"],
             request.Arguments.Where(arg => arg.StartsWith("--project", StringComparison.Ordinal)).ToArray());
     }
 

@@ -546,7 +546,10 @@ internal static class SourceSizeRatchet
             // Same 18 partial files; no extra headroom beyond the required transaction wiring.
             // Goal 09a3023d extracts transport attribution construction into CliOperatorIntentAttributionResolver.
             // Measured 5964 total lines across the same 18 partial files; no extra headroom.
-            new SourceClassCeiling("CliPersistentStateRunner", 5964, 18),
+            // Goal ddab9e7f adds three lines to forward the startup loop lease and run
+            // WorkspaceStoreSetup under that ownership; migration planning stays in WorkspaceStoreSetup.
+            // Measured 5967 total lines across the same 18 partial files; no extra headroom.
+            new SourceClassCeiling("CliPersistentStateRunner", 5967, 18),
             // Goal 5935c270 extracts subscription-plan output into SubscriptionPlanTextView
             // (2026-10-09 console architecture review, finding 4, taming slice 13).
             // Goal c0ff6203 extracts six small text views (taming slice 14).

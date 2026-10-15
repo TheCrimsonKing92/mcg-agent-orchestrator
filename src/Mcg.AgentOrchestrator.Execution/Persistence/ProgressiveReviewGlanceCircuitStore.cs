@@ -300,7 +300,8 @@ public sealed class SqliteProgressiveReviewGlanceCircuitStore : IProgressiveRevi
         using var connection = store.OpenConnection();
         var state = StoreSchemaVersions.Verify(connection, StoreSchemaRegistry.ProgressiveReviewGlanceCircuit);
         if (state != StoreSchemaState.Current)
-            throw SchemaSetupRequired(dbPath, state);
+            throw StoreSchemaDiagnostics.WithCompatibility(SchemaSetupRequired(dbPath, state), state,
+                connection, StoreSchemaRegistry.ProgressiveReviewGlanceCircuit, dbPath);
         return store;
     }
 
