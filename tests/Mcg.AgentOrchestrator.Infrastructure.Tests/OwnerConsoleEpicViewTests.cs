@@ -24,6 +24,27 @@ public sealed class OwnerConsoleEpicViewTests
     }
 
     [Fact]
+    public async Task Detail_LaterUpdateAndUnknownDate_MatchOriginalPromotionRollup()
+    {
+        using var fixture = new Fixture();
+        var old = fixture.Source.Goals.Single(goal => goal.Id == "b-oldest");
+        fixture.Source.Goals.Remove(old);
+        fixture.Source.Goals.Add(old with { UpdatedAt = Now.ToString("O") });
+        var known = fixture.Source.Goals.Single(goal => goal.Id == "b-landed");
+        fixture.Source.Goals.Remove(known);
+        fixture.Source.Goals.Add(known with { PromotionFact = null });
+        await fixture.View.HandleKeyAsync(new Key('e'));
+        await fixture.View.HandleKeyAsync(Key.CursorDown);
+        await fixture.View.HandleKeyAsync(Key.Enter);
+        var row = fixture.Source.Build(Now.AddHours(-24)).Single(row => row.Epic.Id == "beta");
+        Assert.Equal(0, row.WindowLandedCount);
+        Assert.Equal(1, row.UnknownLandingDateCount);
+        Assert.Contains("Unknown landing dates:", fixture.View.EpicView.Lines);
+        Assert.Contains(fixture.View.EpicView.Lines, line => line.Contains("Original promotion date: unknown", StringComparison.Ordinal));
+        Assert.DoesNotContain(fixture.View.EpicView.Lines, line => line.Contains("Old landed beta", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task WCyclesWindowAndCountsFollowBuild()
     {
         using var fixture = new Fixture();
@@ -765,7 +786,9 @@ public sealed class OwnerConsoleEpicViewTests
 
         private void Add(string epic, string id, string title, GoalStatus status, int hours)
         {
-            Source.Goals.Add(new(id, status.ToString(), title, Now.AddHours(hours).ToString("O")));
+            Source.Goals.Add(new(id, status.ToString(), title, Now.AddHours(hours).ToString("O"),
+                PromotionFact: status == GoalStatus.Completed ? new(id, new string('b', 40),
+                    new string('a', 40), new string('c', 40), Now.AddHours(hours), GoalPromotionFact.SoloProvenance) : null));
             Source.Members.Add(new(epic, PortfolioMemberKind.Goal, id, Now, "test"));
         }
 

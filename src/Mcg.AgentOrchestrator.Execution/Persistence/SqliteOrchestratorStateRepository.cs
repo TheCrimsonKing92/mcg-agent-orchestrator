@@ -1523,6 +1523,12 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
     {
         await using var conn = OpenConnection();
         var results = new List<GoalSummary>();
+        var hasPromotionFacts = HasPromotionFactsTable(conn);
+        var promotionColumns = hasPromotionFacts
+            ? "promotion.goal_id, promotion.candidate_revision, promotion.prior_main_revision, promotion.promoted_main_revision, promotion.promoted_at, promotion.provenance"
+            : "NULL, NULL, NULL, NULL, NULL, NULL";
+        var promotionJoin = hasPromotionFacts
+            ? "LEFT JOIN goal_promotion_facts AS promotion ON promotion.goal_id = goals.id" : string.Empty;
 
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = $"""
@@ -1540,8 +1546,10 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
                     THEN COALESCE(json_extract(goals.snapshot_json, '$.Timeline[0].OccurredAt'),
                         json_extract(goals.snapshot_json, '$.CreatedAt'))
                 END AS created_at,
-                {ActiveWithFailedTaskConditionSql()}
+                {ActiveWithFailedTaskConditionSql()},
+                {promotionColumns}
             FROM goals
+            {promotionJoin}
             ORDER BY updated_at DESC
             """;
         cmd.Parameters.AddWithValue("$include_terminal_created_at", includeTerminalCreatedAt ? 1 : 0);
@@ -1557,7 +1565,8 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
                 CreatedAt: reader.IsDBNull(4)
                     ? null
                     : DateTimeOffset.Parse(reader.GetString(4), CultureInfo.InvariantCulture),
-                Condition: reader.IsDBNull(5) ? null : reader.GetString(5)));
+                Condition: reader.IsDBNull(5) ? null : reader.GetString(5),
+                PromotionFact: ReadPromotionFact(reader, 6)));
         }
 
         return results;
@@ -3080,9 +3089,13 @@ public sealed record GoalSummary
         string? ResultCommit = null,
         DateTimeOffset? CreatedAt = null,
         DateTimeOffset? TerminatedAt = null,
-        string? Condition = null)
-        : this(Id, Status, Objective, UpdatedAt, ResultCommit, CreatedAt, TerminatedAt, Condition, null)
+        string? Condition = null,
+        GoalPromotionFact? PromotionFact = null)
+        : this(Id, Status, Objective, UpdatedAt, ResultCommit, CreatedAt, TerminatedAt, Condition, terminalMetadataLoader: null)
     {
+        if (PromotionFact is not null && PromotionFact.GoalId != Id)
+            throw new ArgumentException("Promotion fact must belong to the summarized goal.", nameof(PromotionFact));
+        this.PromotionFact = PromotionFact;
     }
 
     internal GoalSummary(
@@ -3117,6 +3130,7 @@ public sealed record GoalSummary
     public DateTimeOffset? CreatedAt => _terminalMetadata?.Value.CreatedAt ?? _createdAt;
     public DateTimeOffset? TerminatedAt => _terminalMetadata?.Value.TerminatedAt ?? _terminatedAt;
     public string? Condition { get; init; }
+    public GoalPromotionFact? PromotionFact { get; init; }
 
     public bool Equals(GoalSummary? other) =>
         other is not null &&
@@ -3127,10 +3141,11 @@ public sealed record GoalSummary
         ResultCommit == other.ResultCommit &&
         CreatedAt == other.CreatedAt &&
         TerminatedAt == other.TerminatedAt &&
-        Condition == other.Condition;
+        Condition == other.Condition &&
+        PromotionFact == other.PromotionFact;
 
-    public override int GetHashCode() => HashCode.Combine(
-        Id, Status, Objective, UpdatedAt, ResultCommit, CreatedAt, TerminatedAt, Condition);
+    public override int GetHashCode() => HashCode.Combine(HashCode.Combine(
+        Id, Status, Objective, UpdatedAt, ResultCommit, CreatedAt, TerminatedAt, Condition), PromotionFact);
 
     public void Deconstruct(
         out string Id,

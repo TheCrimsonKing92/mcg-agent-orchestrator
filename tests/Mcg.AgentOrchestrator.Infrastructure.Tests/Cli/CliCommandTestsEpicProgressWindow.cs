@@ -53,7 +53,9 @@ public sealed class CliCommandTestsEpicProgressWindow : CliTaskQueryTestSupport,
     {
         var epic = new PortfolioEpic("epic", "Board", null, Cutoff, "test", Cutoff, "test");
         GoalSummary Goal(string id, string status, int created, int updated) =>
-            new(id, status, id, Cutoff.AddSeconds(updated).ToString("O"), CreatedAt: Cutoff.AddSeconds(created));
+            new(id, status, id, Cutoff.AddSeconds(updated).ToString("O"), CreatedAt: Cutoff.AddSeconds(created),
+                PromotionFact: status == "Completed" ? new(id, new string('b', 40), new string('a', 40),
+                    new string('c', 40), Cutoff.AddSeconds(updated), GoalPromotionFact.SoloProvenance) : null);
         var goals = new GoalSummary[]
         {
             Goal("active-before", "Active", -1, -1),
@@ -117,7 +119,7 @@ public sealed class CliCommandTestsEpicProgressWindow : CliTaskQueryTestSupport,
     }
 
     [Fact]
-    public void List_AbsoluteCutoff_IncludesGoalUpdatedExactlyAtCutoff()
+    public void List_AbsoluteCutoff_IncludesOriginalPromotionExactlyAtCutoff()
     {
         var workspace = Seed();
         var terminal = SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath)
@@ -126,9 +128,56 @@ public sealed class CliCommandTestsEpicProgressWindow : CliTaskQueryTestSupport,
         Assert.NotNull(terminal.CreatedAt);
         var probe = new ProbeStateRepository(new AgentOrchestratorKernel());
 
-        var output = Execute(["epic-list", "--since", terminal.UpdatedAt], workspace, probe);
+        Assert.NotNull(terminal.PromotionFact);
+        var output = Execute(["epic-list", "--since", terminal.PromotionFact.PromotedAt.ToString("O")], workspace, probe);
 
         Assert.Contains(" window-landed=1", output);
+        AssertNoKernelAccess(probe);
+    }
+
+    [Fact]
+    public void List_LaterUpdate_TextAndJsonKeepOriginalPromotionWindow()
+    {
+        var workspace = Seed();
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        var original = repository.ListGoalMetadataAsync().GetAwaiter().GetResult()
+            .Single(goal => goal.Status == "Completed").PromotionFact;
+        Assert.NotNull(original);
+        var probe = new ProbeStateRepository(new AgentOrchestratorKernel());
+        var cutoff = Cutoff.AddTicks(1).ToString("O");
+        Assert.Contains("window-landed=0", Execute(["epic-list", "--since", cutoff], workspace, probe));
+        using var json = System.Text.Json.JsonDocument.Parse(Execute(["epic-list", "--since", cutoff, "--json"], workspace, probe));
+        var row = json.RootElement.GetProperty("payload").GetProperty("epics")[0];
+        Assert.Equal(0, row.GetProperty("windowLandedCount").GetInt32());
+        Assert.Equal(0, row.GetProperty("unknownLandingDateCount").GetInt32());
+        var member = row.GetProperty("memberGoals").EnumerateArray().Single(member => member.GetProperty("id").GetString() == original.GoalId);
+        Assert.Equal("known", member.GetProperty("landingDateStatus").GetString());
+        Assert.Equal(original.PromotedAt, member.GetProperty("promotionFact").GetProperty("promotedAt").GetDateTimeOffset());
+        Assert.Contains(original.PromotedMainRevision, Execute(["epic-show", "Board"], workspace, probe));
+        AssertNoKernelAccess(probe);
+    }
+
+    [Fact]
+    public void List_LegacyLanding_ExplainsUnknownAndExcludesDatedWindow()
+    {
+        var workspace = Seed();
+        using (var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={workspace.SqliteStatePath};Pooling=False"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "DROP TABLE goal_promotion_facts; DELETE FROM schema_migrations WHERE migration_number = 14";
+            command.ExecuteNonQuery();
+        }
+        var before = SnapshotStores(workspace);
+        var probe = new ProbeStateRepository(new AgentOrchestratorKernel());
+        var output = Execute(["epic-list", "--since", "2000-01-01T00:00:00Z"], workspace, probe);
+        Assert.Contains("window-landed=0", output);
+        Assert.Contains("Unknown landing dates: 1 (excluded from dated windows)", output);
+        Assert.Contains("Original promotion date: unknown", Execute(["epic-show", "Board"], workspace, probe));
+        using var json = System.Text.Json.JsonDocument.Parse(Execute(["epic-list", "--json"], workspace, probe));
+        var row = json.RootElement.GetProperty("payload").GetProperty("epics")[0];
+        Assert.Equal(1, row.GetProperty("unknownLandingDateCount").GetInt32());
+        AssertStoresUnchanged(before);
         AssertNoKernelAccess(probe);
     }
 
@@ -228,7 +277,7 @@ public sealed class CliCommandTestsEpicProgressWindow : CliTaskQueryTestSupport,
     }
 
     [Fact]
-    public void List_Help_DescribesWindowFormsAndLandedUpdateStandIn()
+    public void List_Help_DescribesWindowFormsAndOriginalPromotionTime()
     {
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         var probe = new ProbeStateRepository(new AgentOrchestratorKernel());
@@ -236,7 +285,7 @@ public sealed class CliCommandTestsEpicProgressWindow : CliTaskQueryTestSupport,
         var output = Execute(["epic-list", "--help"], workspace, probe);
 
         Assert.Contains("Usage: epic-list [--since <Nh|Nd|timestamp>]", output);
-        foreach (var text in new[] { "--since", "24h", "7d", "absolute timestamp", "window-landed uses the goal update time until a landed-at timestamp exists" })
+        foreach (var text in new[] { "--since", "24h", "7d", "absolute timestamp", "window-landed uses the original successful promotion time", "unknown landing dates are excluded" })
             Assert.Contains(text, output);
         AssertNoKernelAccess(probe);
     }
@@ -256,6 +305,10 @@ public sealed class CliCommandTestsEpicProgressWindow : CliTaskQueryTestSupport,
         });
         kernel.CreateGoal(new GoalId("eeeeeeee111111111111111111111111"), "Unrelated title");
         new SqliteOrchestratorStateRepository(workspace.SqliteStatePath).SaveAsync(kernel).GetAwaiter().GetResult();
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        var landed = repository.ListGoalMetadataAsync().GetAwaiter().GetResult().Single(goal => goal.Status == "Completed");
+        repository.RecordPromotionFacts([new(landed.Id, new string('b', 40), new string('a', 40),
+            new string('c', 40), Cutoff, GoalPromotionFact.SoloProvenance)]);
         var store = new PortfolioStore(workspace.PortfolioStorePath);
         var epic = store.AddEpicAsync("Board").GetAwaiter().GetResult();
         foreach (var goal in snapshot.Goals)
