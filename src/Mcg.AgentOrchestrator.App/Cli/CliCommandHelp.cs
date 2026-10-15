@@ -642,6 +642,13 @@ internal static class CliCommandHelp
         RemoteLaneSelfTestUsage, "Operator-only self-test that pushes to the executor and runs one real SSH lane job.",
         ["--executor", "--timeout-minutes", "--help", "-h"]);
 
+    public const string BoardSimulateUsage = "Usage: board-simulate [--day <yyyy-MM-dd>] [--width <1-4>] [--train-size <0|3|4>] [--cohorts on|off] [--drop newest|lowest-pass-rate] [--seed <n>] [--json]";
+
+    private static readonly CommandHelpEntry BoardSimulate = new(
+        BoardSimulateUsage,
+        "Replay a recorded UTC day of gate scheduling offline and compare landings.",
+        ["--day", "--width", "--train-size", "--cohorts", "--drop", "--seed", "--json", "--help", "-h"]);
+
     private static readonly CommandHelpEntry RoundValue = new(
         RoundValueUsage,
         "Report productive, expected overhead and wasted rounds by terminal goal cohort; default window is 7 days.",
@@ -1184,6 +1191,11 @@ internal static class CliCommandHelp
         if (args[0].Equals("remote-lane-selftest", StringComparison.OrdinalIgnoreCase))
         {
             entry = RemoteLaneSelfTest;
+            return true;
+        }
+        if (args[0].Equals("board-simulate", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = BoardSimulate;
             return true;
         }
         if (args[0].Equals("round-value", StringComparison.OrdinalIgnoreCase))
