@@ -99,6 +99,7 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateShardPermitPool",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateShardPermitPool.Priority",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateShardWaiterMarkers",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/HermeticSystemDrive",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/MainBaselineDiscoveryCache",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/MemberDeclaredTestRemovals",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/MissingAcceptanceManifestException",

@@ -8,6 +8,8 @@ public sealed class PipeDrainSaturationProbeChildTests
     internal const string ReceiptPathVariable = "MCG_PIPE_DRAIN_SATURATION_PROBE_RECEIPT";
     internal const string DedicatedReaderMode = "dedicated-reader";
     internal const string WarmedDedicatedReaderMode = "warmed-dedicated-reader";
+    internal const string WarmedWithHeldPoolWorkMode = "warmed-with-held-pool-work";
+    internal const string WarmGrowthCappedBelowTargetMode = "warm-growth-capped-below-target";
     internal const string PoolDependentReaderMode = "pool-dependent-reader";
 
     [Xunit.Fact]
@@ -56,20 +58,33 @@ public sealed class PipeDrainSaturationProbeChildTests
         WarmPoolHistoryEvidence? warmEvidence = null;
         var poolDependentReadCompletedAfterObservation = false;
         var poolWorkItemExecutedDuringObservation = false;
-        var readerMode = mode == WarmedDedicatedReaderMode ? DedicatedReaderMode : mode;
+        var readerMode = mode is WarmedDedicatedReaderMode or WarmedWithHeldPoolWorkMode ? DedicatedReaderMode : mode;
 
         try
         {
-            if (mode == WarmedDedicatedReaderMode)
+            if (mode is WarmedDedicatedReaderMode or WarmedWithHeldPoolWorkMode or WarmGrowthCappedBelowTargetMode)
             {
                 try
                 {
-                    warmEvidence = BoundedThreadPoolSaturationApparatus.EstablishWarmPoolHistory();
+                    warmEvidence = mode switch
+                    {
+                        WarmedWithHeldPoolWorkMode => EstablishWarmPoolHistoryWithHeldWork(),
+                        WarmGrowthCappedBelowTargetMode => BoundedThreadPoolSaturationApparatus.EstablishWarmPoolHistory(
+                            maxWorkerCap: BoundedThreadPoolSaturationApparatus.WarmWorkerCount() - 1,
+                            growthTimeout: TimeSpan.FromSeconds(3)),
+                        _ => BoundedThreadPoolSaturationApparatus.EstablishWarmPoolHistory()
+                    };
                 }
                 catch
                 {
                     failureKind = "warm-history-not-established";
                     throw;
+                }
+
+                if (mode == WarmGrowthCappedBelowTargetMode)
+                {
+                    failureKind = "warm-growth-cap-not-enforced";
+                    throw new InvalidOperationException("failureKind=warm-growth-cap-not-enforced");
                 }
             }
 
@@ -175,6 +190,43 @@ public sealed class PipeDrainSaturationProbeChildTests
         if (failure is not null)
         {
             ExceptionDispatchInfo.Capture(failure).Throw();
+        }
+    }
+    private static WarmPoolHistoryEvidence EstablishWarmPoolHistoryWithHeldWork()
+    {
+        using var started = new ManualResetEventSlim(false);
+        using var release = new ManualResetEventSlim(false);
+        using var completed = new ManualResetEventSlim(false);
+        ThreadPool.UnsafeQueueUserWorkItem(
+            static state =>
+            {
+                var (started, release, completed) =
+                    ((ManualResetEventSlim, ManualResetEventSlim, ManualResetEventSlim))state!;
+                try
+                {
+                    started.Set();
+                    release.Wait();
+                }
+                finally
+                {
+                    completed.Set();
+                }
+            },
+            (started, release, completed));
+
+        try
+        {
+            if (!started.Wait(BoundedThreadPoolSaturationApparatus.PhaseWaitTimeout))
+                throw new TimeoutException("failureKind=held-pool-work-not-started");
+
+            return BoundedThreadPoolSaturationApparatus.EstablishWarmPoolHistory(
+                maxWorkerCap: BoundedThreadPoolSaturationApparatus.WarmWorkerCount());
+        }
+        finally
+        {
+            release.Set();
+            if (!completed.Wait(BoundedThreadPoolSaturationApparatus.PhaseWaitTimeout))
+                throw new TimeoutException("failureKind=held-pool-work-cleanup-timeout");
         }
     }
 }
