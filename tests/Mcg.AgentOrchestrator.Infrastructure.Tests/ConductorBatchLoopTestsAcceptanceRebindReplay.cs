@@ -530,9 +530,11 @@ public sealed class ConductorBatchLoopTestsAcceptanceRebindReplay : ConductorBat
                     IsMerged: _native && GoalOperationJournal.Read(Root, Goal.Id).Entries.Any(entry =>
                         entry.Operation == "conductor:land" && entry.Status == GoalOperationStatus.Completed)),
                 dispatchAndStart: _ => { WorkerLaunches++; return DispatchStartOutcome.Started(); },
-                runAcceptanceWithSlot: (_, lease) =>
+                runAcceptanceWithSlot: (_, slot) =>
                 {
-                    Assert.Null(lease);
+                    // The driver supplies the candidate's slot index even when
+                    // the fixture coordinator acquires no machine build lease.
+                    Assert.Equal(0, slot);
                     GateLaunches++;
                     BeforeGate?.Invoke();
                     return new AcceptanceVerificationSummary(true, [], BranchHeadSha: CurrentCandidate, MainHeadSha: CurrentMain,
