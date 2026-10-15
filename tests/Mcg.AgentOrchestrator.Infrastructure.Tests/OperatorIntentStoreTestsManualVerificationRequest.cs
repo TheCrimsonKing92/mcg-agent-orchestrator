@@ -25,7 +25,8 @@ public sealed class OperatorIntentStoreTestsManualVerificationRequest
         var observed = DateTimeOffset.Parse("2026-09-08T01:00:00Z");
         var receipt = ManualVerificationRecorder.Create(true, "Historical evidence", "fixture", observed);
         var json = JsonSerializer.Serialize(new ManualVerificationOperatorIntentPayload(receipt));
-        Xunit.Assert.DoesNotContain("Request", json, StringComparison.Ordinal);
+        using var document = JsonDocument.Parse(json);
+        Xunit.Assert.False(document.RootElement.TryGetProperty("Request", out _));
         var restored = JsonSerializer.Deserialize<ManualVerificationOperatorIntentPayload>(json)!;
         Xunit.Assert.Equal(observed, restored.ResolveVerification(observed.AddDays(1)).CompletedAt);
         Xunit.Assert.Equal("Historical evidence", restored.ResolveVerification(observed.AddDays(1)).AuthoritativeStandardOutput);

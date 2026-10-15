@@ -345,8 +345,12 @@ internal sealed partial class ConductorDriver
             var receipt = new FindingEvidenceReceipt(
                 rerunReceiptId, candidateSha, batch.TypedRequest, rerun.Accepted,
                 rerun.IsValidEvidence, rerun.Summary, rerunArms,
-                requestContext.RequestDispositions, findingRoundFingerprint,
-                BuildFindingEvidenceExecutionBasisIdentity(_getFindingEvidenceEngineSettings(goal)));
+                FindingRoundFingerprint: findingRoundFingerprint,
+                ExecutionBasisIdentity: BuildFindingEvidenceExecutionBasisIdentity(_getFindingEvidenceEngineSettings(goal)));
+            var requestDispositions = FindingEvidenceRequestCompletion.BuildDispositions(
+                requestContext.RequestDispositions, batch, receipt, FormatFindingEvidenceSelection);
+            _recordFindingEvidenceRequestDispositions(goal.Id, requestingTask.Id, requestDispositions);
+            receipt = receipt with { RequestDispositions = requestDispositions };
             foreach (var finding in batch.Findings)
             {
                 _recordFindingEvidenceOutcome(goal.Id, requestingTask.Id, finding.StableId,
@@ -534,7 +538,14 @@ internal sealed partial class ConductorDriver
             goal, requestingTask, finding, requestIdentity, receipt);
         var arms = receipt.Arms ?? [];
         var routedReceiptId = receipt.ReceiptId;
-        var requestDispositions = BuildInitialRequestDispositions([batch], batch);
+        var requestDispositions = FindingEvidenceRoundPlanner.BuildInitialRequestDispositions(
+            [batch], batch, candidateSha, findingRoundFingerprint, executionBasisIdentity)
+            .Select(disposition => disposition with
+            {
+                Decision = FindingEvidenceRequestDecision.CoveredByReceipt,
+                Reason = "reused-red-receipt", SourceReceiptIds = [receipt.ReceiptId]
+            }).ToArray();
+        _recordFindingEvidenceRequestDispositions(goal.Id, requestingTask.Id, requestDispositions);
         var requestContext = new ConductorFocusedEvidenceRequestContext(
             findingRoundFingerprint,
             CreateFindingEvidenceBatchId(candidateSha, findingRoundFingerprint, policy.Name, batch.Identity),

@@ -375,7 +375,9 @@ internal static class SourceSizeRatchet
             // brief evidence assertions together; extracting only the added assertions splits that contract.
             // Goal 01ea3f4d extracts the passing-Tester receipt integration contract and its brief helper
             // into ConductorDriverTestsPassingFindingEvidence; the remaining file measures 2559 lines.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsFindingEvidence.cs", 2559),
+            // Goal 046ea7d3 separates focused-evidence planning and apparatus fixtures.
+            // Integrated finding-evidence file measures 2490 lines; no extra headroom.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsFindingEvidence.cs", 2490),
             // Goal 1a43cb08 adds clause-boundary, broker-validation, and split-coverage regression facts.
             // Goal d62efe7a freezes the 36-class premise list so unrelated test inventory cannot change the split test.
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsPreReviewEvidence.cs", 1503),
@@ -468,7 +470,9 @@ internal static class SourceSizeRatchet
             // lifecycle remains in CompletionBuildEvidenceCoordinator. Measured 14970 in the same 70 partials; no headroom.
             // Goal 6a4ec362 moves exact-pair/context validation to AcceptanceCriterionEvidence before
             // recording rebound gate evidence. Measured 14968 across the same 70 partials; no headroom.
-            new SourceClassCeiling("ConductorDriver", 14968, 70),
+            // Goal 046ea7d3 extracts executed-member disposition finalization into FindingEvidenceRequestCompletion.
+            // After integrating main 790560adf, measured 14876 lines across the same 70 partial files; no extra headroom.
+            new SourceClassCeiling("ConductorDriver", 14876, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
