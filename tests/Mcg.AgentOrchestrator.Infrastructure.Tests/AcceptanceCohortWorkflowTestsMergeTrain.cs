@@ -777,16 +777,23 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrain : AcceptanceCohortWo
                 kernel, workspace, verifier, AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(),
                 cleanupHooks: CreateIsolatedCleanupContext(workspace.ExecutionDirectory).Hooks);
             var selection = ProjectTrainSelection(driver, firstGoal, secondGoal, thirdGoal);
-            var gateAdmitted = false;
+            var gateAdmitted = 0;
 
             var result = driver.RunMergeTrain(
                 selection,
                 [firstGoal, secondGoal, thirdGoal],
                 ConductorAutonomyPolicy.Permissive,
-                onGateAdmitted: () => gateAdmitted = true);
+                onGateAdmitted: () => gateAdmitted++);
 
-            Assert.False(gateAdmitted, "The merge-train stable-slot lease must not be acquired for a ratchet breach.");
-            Assert.Equal(0, verifier.RunCount);
+            var ejection = Assert.Single(result.Ejections);
+            Assert.Equal(firstGoal.Id, ejection.GoalId);
+            Assert.Equal(MergeTrainEjectionReason.RedAttributedMember, ejection.Reason);
+            Assert.Equal(1, gateAdmitted);
+            Assert.Equal(1, verifier.RunCount);
+            Assert.DoesNotContain("tests/Mcg.AgentOrchestrator.Core.Tests/TrainFirst.cs", verifier.ChangedFiles[0]);
+            var candidate = selection.Members.Single(member => member.GoalId == firstGoal.Id);
+            Assert.Equal(ConductorAcceptanceCohortAttributedMembers.Key(firstGoal.Id, candidate.CandidateRevision),
+                Assert.Single(driver.ReadTrainImplicatedMemberKeys()));
             Assert.Contains("outcome=Failed", result.Detail, StringComparison.Ordinal);
         }
         finally
