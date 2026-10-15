@@ -4,10 +4,11 @@ using Terminal.Gui.Drivers;
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
-// Session-owned adapter: keep the built-in Windows handle, cursor, size and disposal lifecycle.
+// Session-owned adapter: keep the built-in ANSI terminal, cursor, size and disposal lifecycle.
 // OutputBase still owns cell widths, attributes, images and dirty-row traversal.
-internal sealed class OwnerConsoleFrameOutput(IOutput windowsOutput) : OutputBase, IOutput
+internal sealed class OwnerConsoleFrameOutput(IOutput terminalOutput) : OutputBase, IOutput
 {
+    internal IOutput TerminalOutput => terminalOutput;
     private readonly StringBuilder _frame = new();
     private bool _composing;
 
@@ -17,7 +18,7 @@ internal sealed class OwnerConsoleFrameOutput(IOutput windowsOutput) : OutputBas
         if (IsLegacyConsole)
         {
             // Win32 cursor/attribute operations cannot be represented by an ANSI frame.
-            windowsOutput.Write(buffer);
+            terminalOutput.Write(buffer);
             return;
         }
 
@@ -26,7 +27,7 @@ internal sealed class OwnerConsoleFrameOutput(IOutput windowsOutput) : OutputBas
         try
         {
             base.Write(buffer);
-            if (_frame.Length > 0) windowsOutput.Write(_frame.ToString().AsSpan());
+            if (_frame.Length > 0) terminalOutput.Write(_frame.ToString().AsSpan());
         }
         finally
         {
@@ -51,25 +52,25 @@ internal sealed class OwnerConsoleFrameOutput(IOutput windowsOutput) : OutputBas
     public void Write(ReadOnlySpan<char> text)
     {
         if (_composing) throw new InvalidOperationException("Direct output during console frame composition.");
-        windowsOutput.Write(text);
+        terminalOutput.Write(text);
     }
 
     public new bool Force16Colors
     {
         get => base.Force16Colors;
-        set { base.Force16Colors = value; windowsOutput.Force16Colors = value; }
+        set { base.Force16Colors = value; terminalOutput.Force16Colors = value; }
     }
 
     public new bool IsLegacyConsole
     {
         get => base.IsLegacyConsole;
-        set { base.IsLegacyConsole = value; windowsOutput.IsLegacyConsole = value; }
+        set { base.IsLegacyConsole = value; terminalOutput.IsLegacyConsole = value; }
     }
 
-    public Size GetSize() => windowsOutput.GetSize();
-    public void SetSize(int width, int height) => windowsOutput.SetSize(width, height);
-    public Terminal.Gui.Drivers.Cursor GetCursor() => windowsOutput.GetCursor();
-    public void SetCursor(Terminal.Gui.Drivers.Cursor cursor) => windowsOutput.SetCursor(cursor);
-    public void Suspend() => windowsOutput.Suspend();
-    public void Dispose() => windowsOutput.Dispose();
+    public Size GetSize() => terminalOutput.GetSize();
+    public void SetSize(int width, int height) => terminalOutput.SetSize(width, height);
+    public Terminal.Gui.Drivers.Cursor GetCursor() => terminalOutput.GetCursor();
+    public void SetCursor(Terminal.Gui.Drivers.Cursor cursor) => terminalOutput.SetCursor(cursor);
+    public void Suspend() => terminalOutput.Suspend();
+    public void Dispose() => terminalOutput.Dispose();
 }

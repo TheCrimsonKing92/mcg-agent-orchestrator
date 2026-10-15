@@ -20,17 +20,26 @@ batch the driver's physical writes.
 
 In the pinned dependency:
 
+- [DriverRegistry.cs:111-118](https://github.com/tui-cs/Terminal.Gui/blob/ece73d25c37df9bb17cb0c0d2171abd4d98eeaff/Terminal.Gui/Drivers/DriverRegistry.cs#L111)
+  selects **ANSI** on Windows. The owner console does not set `ForceDriver`.
+  Thus the unforced pre-fix production path is `AnsiComponentFactory` / `AnsiOutput`,
+  not `WindowsComponentFactory` / `WindowsOutput`. This is source-derived backend
+  selection; the operator's actual live backend has not been captured here.
 - [OutputBase.cs:145-155,194-207,271-296](https://github.com/tui-cs/Terminal.Gui/blob/ece73d25c37df9bb17cb0c0d2171abd4d98eeaff/Terminal.Gui/Drivers/Output/OutputBase.cs#L145)
   processes dirty rows in order, positions the cursor, and submits each row/run separately.
-- [WindowsOutput.cs:217-227,257-269,403-430](https://github.com/tui-cs/Terminal.Gui/blob/ece73d25c37df9bb17cb0c0d2171abd4d98eeaff/Terminal.Gui/Drivers/WindowsDriver/WindowsOutput.cs#L217)
-  maps cursor movement and content to separate immediate native `WriteConsole` calls.
-  The later call at lines 340-367 does not buffer the earlier calls. Counting only
-  explicit `Flush` calls would miss these submission boundaries. Legacy mode also
-  writes per batch (lines 419-422).
+- [AnsiOutput.cs:211-281,314-339](https://github.com/tui-cs/Terminal.Gui/blob/ece73d25c37df9bb17cb0c0d2171abd4d98eeaff/Terminal.Gui/Drivers/AnsiDriver/AnsiOutput.cs#L211)
+  sends cursor sequences through its span writer and row content through its
+  `StringBuilder` writer. On Windows VT both call `WindowsVTOutputHelper.Write`
+  separately; neither accumulates a whole refresh. Its constructor enables VT via
+  `WindowsVTOutputHelper.TryEnable` (lines 97-114), unlike `WindowsOutput`.
+- [WindowsVTOutputHelper.cs:170-176](https://github.com/tui-cs/Terminal.Gui/blob/ece73d25c37df9bb17cb0c0d2171abd4d98eeaff/Terminal.Gui/Drivers/WindowsHelpers/WindowsVTOutputHelper.cs#L170)
+  converts each supplied payload to UTF-8 and immediately calls native `WriteFile`.
+  These are submission boundaries even without an explicit flush. The constructor's
+  startup flush is separate from dirty-frame rendering.
 - [DriverImpl.cs:93-104](https://github.com/tui-cs/Terminal.Gui/blob/ece73d25c37df9bb17cb0c0d2171abd4d98eeaff/Terminal.Gui/Drivers/DriverImpl.cs#L93)
   refreshes by passing its output buffer to that output component.
 
-The source-supported candidate mechanism is row/run submission before the entire
+The source-supported ANSI candidate mechanism is row/run submission before the entire
 frame is committed. This is not yet an executed reproduction or attribution of the
 operator's visual symptom. It neither identifies the operator's active backend nor
 proves which intermediate writes the host displays.
@@ -43,7 +52,8 @@ heights). It drives actual view Page Down, Page Up and twelve Down steps, then c
 the actual pinned `OutputBase.Write(IOutputBuffer)` implementation with an ASCII
 projection of the rendered board table. No source copy of the dependency row loop
 is used. The recording subclass maps cursor/content callbacks to the immediate
-submission boundaries found in WindowsOutput.
+submission boundaries found in the Windows VT branch of AnsiOutput. The recorder
+models the two callback boundaries; it does not execute the native backend.
 
 The test emits JSON through the test output helper: dataset and dimensions,
 timestamp frequency, separate input, model preparation, rendering/projection and
@@ -58,7 +68,7 @@ with the old final row. This is intentionally a pre-fix characterization test,
 not a passing one-commit contract or a RED/GREEN regression receipt.
 
 Limits: the projection is not Terminal.Gui table layout; the recorder does not
-intercept the internal WindowsOutput or make native calls. Rendering timing includes
+intercept AnsiOutput or make native calls. Rendering timing includes
 the projection, and output timing includes recorder work. These are synthetic phase
 measurements, not live timings, throughput benchmarks, or visual evidence. The test
 has been authored but **not executed** by Developer, as required by the role brief.
@@ -88,7 +98,7 @@ cannot install such a component through the pinned public initialization API:
   accepts a time provider, not an output component or factory.
 
 An output subclass in this repository alone would therefore be unwired. Replacing
-Console.Out would miss native Windows calls. No production fix was applied because
+Console.Out would miss native ANSI writes. No production fix was applied because
 the plan requires escalation when supported integration needs dependency changes.
 The missing capability is public, session-owned output/factory injection, or a
 corrected pinned dependency output implementation. Resolve that dependency scope
@@ -126,29 +136,42 @@ application's factory unset and emits one diagnostic line naming the member.
 `OwnerConsoleFrameOutputInstallerTests.TerminalGui250ApplicationImplComponentFactorySignatureUpgradeGuard`
 checks the signature and actual installation against the referenced assembly.
 
-On Windows, an unforced or explicitly Windows full-screen application uses a
-`WindowsComponentFactory` subclass. This explicitly selects the approved Windows
-backend rather than the pinned registry's unforced ANSI default. Explicit other
-drivers and non-Windows applications retain their original creation path. The
-operator must record this backend choice in comparable live captures; synthetic
-output tests do not establish cross-backend timing equivalence.
+Correction after Reviewer `console-frame-diagnosis-wrong-backend` and
+`console-frame-driver-switch-ansi-to-windows`: the earlier candidate incorrectly
+switched the default driver to Windows. The owner-approved scope covers output
+wrapping, not that driver change. On Windows, an unforced or explicitly ANSI
+full-screen application now uses an `AnsiComponentFactory` subclass. Its inherited
+ANSI input, input processor and built-in output construction retain the pre-fix VT
+setup. Explicit other drivers and non-Windows applications retain their creation
+path. Inline output is returned unwrapped.
 
-The factory wraps the built-in Windows output. `OutputBase.Write(IOutputBuffer)`
+[AnsiComponentFactory.cs:54-79,129-149](https://github.com/tui-cs/Terminal.Gui/blob/ece73d25c37df9bb17cb0c0d2171abd4d98eeaff/Terminal.Gui/Drivers/AnsiDriver/AnsiComponentFactory.cs#L54)
+recognizes the concrete `AnsiOutput` when choosing/configuring its size monitor.
+The adapter exposes its underlying output to the factory, which passes that exact
+instance to the built-in `CreateSizeMonitor`. This retains `AnsiSizeMonitor`, native
+polling configuration and ANSI size-query responses instead of silently falling
+back to `SizeMonitorImpl`. The main-loop screen-offset callback is inline-specific;
+inline mode remains unwrapped. No new reflection or input logic is introduced.
+
+The factory wraps the built-in ANSI output. `OutputBase.Write(IOutputBuffer)`
 still traverses dirty cells and composes attributes, Unicode and image sequences;
 the adapter collects its cursor and content callbacks, then invokes the built-in
-`IOutput.Write(ReadOnlySpan<char>)` once with the complete update. That method makes
-one native `WriteConsoleW` call. There is no separate clear-screen or intermediate
+`IOutput.Write(ReadOnlySpan<char>)` once with the complete update. On Windows VT
+that method makes one helper submission / native `WriteFile` call. There is no separate clear-screen or intermediate
 submission from this refresh. An empty dirty update emits no write. Composition
-or submission errors clear the session buffer in `finally` and propagate; stale
-content cannot leak into the next refresh. Startup/query writes, cursor lifecycle,
+or submission errors that reach the adapter clear its buffer in `finally` and
+propagate; stale content cannot leak into the next refresh. The pinned AnsiOutput
+catches output exceptions and its helper does not check `WriteFile` success; this
+adapter does not add native error detection. The throwing-recorder test proves
+adapter cleanup only. Startup/query writes, cursor lifecycle,
 size changes and disposal continue through the built-in output. A single submission
 is an application-level commit contract, not proof of atomic host presentation.
 
-Legacy Windows consoles without ANSI capability retain the unmodified built-in
-output and emit one capability diagnostic (`WindowsOutput.IsLegacyConsole`). Their
-native cursor/attribute calls cannot be combined into this ANSI payload. Explicit
-other drivers, signature fallback and legacy fallback do not receive the buffering
-guarantee. If the operator's real console takes one of those paths or still visibly
+The retained `IsLegacyConsole` guard returns native output unmodified if supplied
+such an output and emits one capability diagnostic. The default ANSI backend instead
+uses its own degraded behavior if VT initialization fails; wrapping does not make
+a degraded backend visible. Explicit other drivers, signature fallback and legacy
+fallback do not receive the buffering guarantee. If the operator's real console takes one of those paths or still visibly
 paints progressively, the visual criterion remains unmet; retain the evidence and
 escalate rather than infer success.
 
@@ -177,6 +200,18 @@ Criteria 6 and 7 stay Operator-owned: comparable live per-phase timings and
 before/after ffmpeg recordings are still required. Retain list size, terminal
 host/version, window dimensions, backend, build configuration and revisions. This
 change supplies a candidate, not those live receipts.
+
+Retry verification: `TerminalGui250ApplicationImplComponentFactorySignatureUpgradeGuard`
+now requires the installed factory's ANSI driver name to match the pinned Windows
+default (the former Windows factory fails this assertion).
+`InstalledFactoryKeepsAnsiInputAndComposesOutputThroughFrameAdapter` checks ANSI
+input processing, the factory's adapter chain and inline bypass.
+`WrappedAnsiOutputKeepsBuiltInAnsiSizeMonitor` exercises the concrete-type-sensitive
+monitor decision without acquiring a terminal; removing the unwrap produces
+`SizeMonitorImpl` instead. These tests are authored for Acceptance, not executed
+by Developer. The previously accepted long-list regression assertions are preserved;
+the output metadata now describes an ANSI-equivalent recorder. Acceptance must
+rerun focused GREEN and the retained negative control on this corrected backend.
 
 An upstream request for a public output/factory hook should be filed, referencing
 [`ApplicationImpl._componentFactory` and the internal factory constructors](https://github.com/tui-cs/Terminal.Gui/blob/ece73d25c37df9bb17cb0c0d2171abd4d98eeaff/Terminal.Gui/App/ApplicationImpl.cs#L38)

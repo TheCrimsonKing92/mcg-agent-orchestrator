@@ -32,7 +32,7 @@ public sealed class OwnerConsoleFrameReproductionTests(Xunit.ITestOutputHelper o
         await scene.View.HandleKeyAsync(Key.Home);
 
         // Deliberately project ASCII table rows into a simulated viewport. This exercises the real
-        // OutputBase dirty-row emitter, not Terminal.Gui's full layout or native Windows backend.
+        // OutputBase dirty-row emitter, not Terminal.Gui's full layout or native ANSI backend.
         var terminal = new RecordingOutput(width, height);
         var destination = buffered ? OwnerConsoleFrameOutputInstaller.BufferOutput(terminal, TextWriter.Null) : terminal;
         Assert.Equal(buffered, destination is OwnerConsoleFrameOutput);
@@ -41,8 +41,8 @@ public sealed class OwnerConsoleFrameReproductionTests(Xunit.ITestOutputHelper o
         output.WriteLine(JsonSerializer.Serialize(new
         {
             listSize = count, simulatedWidth = width, simulatedHeight = height,
-            backend = buffered ? "Production frame adapter with recording Windows output" :
-                "OutputBase with Windows-equivalent immediate cursor/content commit recorder",
+            backend = buffered ? "Production frame adapter with recording ANSI output (Windows VT-equivalent commits)" :
+                "OutputBase with AnsiOutput Windows VT-equivalent immediate cursor/content commit recorder",
             clockFrequency = Stopwatch.Frequency, explicitFlushCount = 0,
             limitation = "Synthetic ASCII viewport; not a native write, live timing or visual receipt."
         }));
@@ -119,8 +119,8 @@ public sealed class OwnerConsoleFrameReproductionTests(Xunit.ITestOutputHelper o
 
     internal sealed record Operation(string Kind, int Column, int Row, string Payload);
 
-    // WindowsOutput immediately submits both operations to WriteConsole. Record that mapping,
-    // without claiming to intercept WindowsOutput (which is internal and performs native IO).
+    // AnsiOutput's Windows VT branch submits cursor and content separately through WriteFile.
+    // Record that mapping without claiming to intercept AnsiOutput or perform native IO.
     internal sealed class RecordingOutput(int width, int height) : OutputBase, IOutput
     {
         private int _column, _row;

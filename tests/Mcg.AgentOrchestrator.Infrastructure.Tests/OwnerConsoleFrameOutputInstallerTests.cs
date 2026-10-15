@@ -1,4 +1,6 @@
 using System.Reflection;
+using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 using Mcg.AgentOrchestrator.App.OwnerConsole;
 using Terminal.Gui.App;
 using Terminal.Gui.Drivers;
@@ -23,9 +25,48 @@ public sealed class OwnerConsoleFrameOutputInstallerTests
         Assert.True(OwnerConsoleFrameOutputInstaller.TryInstall(app, diagnostic));
 
         var factory = Assert.IsType<OwnerConsoleFrameOutputInstaller.FrameFactory>(field.GetValue(app));
-        Assert.Equal(DriverRegistry.Names.WINDOWS, factory.GetDriverName());
+        Assert.IsAssignableFrom<AnsiComponentFactory>(factory);
+        Assert.Equal(DriverRegistry.Names.ANSI, factory.GetDriverName());
+        if (OperatingSystem.IsWindows())
+            Assert.Equal(DriverRegistry.GetDefaultDriver().Name, factory.GetDriverName());
         Assert.Equal("", diagnostic.ToString());
         Assert.Null(app.Driver); // Installation does not initialize native input/output.
+    }
+
+    [Fact]
+    public void InstalledFactoryKeepsAnsiInputAndComposesOutputThroughFrameAdapter()
+    {
+        using var terminal = new OwnerConsoleFrameReproductionTests.RecordingOutput(20, 4);
+        var factory = new OwnerConsoleFrameOutputInstaller.FrameFactory(TextWriter.Null, terminal);
+        var builtin = new AnsiComponentFactory();
+
+        Assert.Equal(builtin.CreateInputProcessor(new ConcurrentQueue<char>()).GetType(),
+            factory.CreateInputProcessor(new ConcurrentQueue<char>()).GetType());
+        var output = Assert.IsType<OwnerConsoleFrameOutput>(factory.CreateOutput());
+        Assert.Same(terminal, output.TerminalOutput);
+        output.Write(OwnerConsoleFrameCompatibilityTests.Buffer(["whole frame         "]));
+        Assert.Single(terminal.Operations);
+
+        factory.AppModel = AppModel.Inline;
+        Assert.Same(terminal, factory.CreateOutput());
+    }
+
+    [Fact]
+    public void WrappedAnsiOutputKeepsBuiltInAnsiSizeMonitor()
+    {
+        // Bypass AnsiOutput's terminal-acquiring constructor. Size monitoring only needs its
+        // size fields; this must not activate an alternate screen or change console modes.
+        var terminal = (AnsiOutput)RuntimeHelpers.GetUninitializedObject(typeof(AnsiOutput));
+        terminal.SetSize(20, 4);
+        var factory = new OwnerConsoleFrameOutputInstaller.FrameFactory(TextWriter.Null, terminal);
+        var buffer = new OutputBufferImpl();
+        buffer.SetSize(20, 4);
+        var builtinMonitor = new AnsiComponentFactory().CreateSizeMonitor(terminal, buffer);
+
+        var monitor = factory.CreateSizeMonitor(factory.CreateOutput(), buffer);
+
+        Assert.Equal("AnsiSizeMonitor", builtinMonitor.GetType().Name);
+        Assert.Equal(builtinMonitor.GetType(), monitor.GetType());
     }
 
     [Fact]

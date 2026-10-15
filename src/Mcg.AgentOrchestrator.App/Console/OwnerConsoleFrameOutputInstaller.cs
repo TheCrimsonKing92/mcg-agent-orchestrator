@@ -13,7 +13,7 @@ internal static class OwnerConsoleFrameOutputInstaller
     {
         var app = Terminal.Gui.App.Application.Create();
         if (OperatingSystem.IsWindows() &&
-            (string.IsNullOrEmpty(app.ForceDriver) || app.ForceDriver == DriverRegistry.Names.WINDOWS))
+            (string.IsNullOrEmpty(app.ForceDriver) || app.ForceDriver == DriverRegistry.Names.ANSI))
             TryInstall(app, System.Console.Error);
         return app;
     }
@@ -47,9 +47,18 @@ internal static class OwnerConsoleFrameOutputInstaller
         }
     }
 
-    internal sealed class FrameFactory(TextWriter diagnostic) : WindowsComponentFactory
+    internal sealed class FrameFactory(TextWriter diagnostic, IOutput? output = null) : AnsiComponentFactory(output: output)
     {
-        public override IOutput CreateOutput() => BufferOutput(base.CreateOutput(), diagnostic);
+        public override IOutput CreateOutput()
+        {
+            var terminal = base.CreateOutput();
+            return AppModel == AppModel.FullScreen ? BufferOutput(terminal, diagnostic) : terminal;
+        }
+
+        // The built-in factory recognizes AnsiOutput to configure polling or ANSI size queries.
+        // Give it the same output instance it would receive without the frame adapter.
+        public override ISizeMonitor CreateSizeMonitor(IOutput output, IOutputBuffer buffer) =>
+            base.CreateSizeMonitor(output is OwnerConsoleFrameOutput frame ? frame.TerminalOutput : output, buffer);
     }
 
     internal static IOutput BufferOutput(IOutput output, TextWriter diagnostic)
