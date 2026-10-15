@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.App.OwnerConsole;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
@@ -534,7 +535,7 @@ internal static class CliCommandHelp
 
     private static readonly CommandHelpEntry EpicList = new(
         EpicListUsage,
-        "List epics with every goal status bucket and open/done backlog counts; newest is the latest member-goal metadata update (UpdatedAt). Use --since with positive Nh or Nd durations (24h, 7d) or an absolute timestamp to show window counts. window-landed uses the goal update time until a landed-at timestamp exists.",
+        "List epics with every goal status bucket and open/done backlog counts; newest is the latest member-goal metadata update (UpdatedAt). Use --since with positive Nh or Nd durations (24h, 7d) or an absolute timestamp to show window counts. window-landed uses the original successful promotion time inclusively; unknown landing dates are excluded from dated windows.",
         ["--since", "--json", "--help", "-h"]);
 
     private static readonly CommandHelpEntry EpicMembers = new(
@@ -615,9 +616,9 @@ internal static class CliCommandHelp
         ["--min-goals", "--since", "--help", "-h"]);
 
     private static readonly CommandHelpEntry OwnerConsole = new(
-        "Usage: console [--plain]",
-        "Open the owner console; --plain uses line mode (also selected for redirected input or output).",
-        ["--plain", "--help", "-h"]);
+        OwnerConsoleInputTraceOptions.Usage,
+        "Open the owner console; --plain uses line mode (also selected for redirected input or output). --input-trace writes bounded input/draw diagnostics to a new JSON file after exit (interactive mode only).",
+        ["--plain", "--input-trace", "--help", "-h"]);
 
     private static readonly CommandHelpEntry OwnerDigest = new(
         OwnerDigestUsage,
@@ -767,6 +768,7 @@ internal static class CliCommandHelp
             ["refresh-dispatches"] = Flags("--autonomy", "--autonomy-policy", "--goal"),
             ["logs"] = GoalScopedTaskFlags(),
             ["cancel-dispatch"] = Flags("--goal", "--completion-build-operation", "--idempotency-key", "--operator-actor", "--actor-kind", "--json"),
+            ["goal-priority"] = Flags("--reason", "--idempotency-key", "--operator-actor", "--actor-kind", "--json"),
             ["accept"] = Flags(
                 "--autonomy", "--autonomy-policy", "--keep-workspace", "--no-record", "--skip-verify")
         };
@@ -1713,6 +1715,8 @@ internal static class CliCommandHelp
                     ? $"Usage: {command} <objective> --confirm-batch-start [--confirm-large-paid-subscription-start] [--confirm-readiness-risk] [--backlog-item <id-prefix> --backlog-coverage <full|slice>] [--epic <id-or-title>] [--autonomy <policy>]"
                     : command.Equals("cancel-dispatch", StringComparison.OrdinalIgnoreCase)
                     ? $"Usage: {command} [options] [--json]"
+                    : command.Equals("goal-priority", StringComparison.OrdinalIgnoreCase)
+                    ? CliGoalPriorityCommand.Usage
                     : $"Usage: {command} [options]",
                 "Run this operator command.",
                 GenericCommandFlags.TryGetValue(command, out var flags) ? flags : CliCommandHelp.Flags(),

@@ -60,10 +60,49 @@ internal static class ProspectiveEvidenceGateResolver
             }
             if (!resolved.Contains(wait.Id)) unresolved.Add(new(wait.Id, missing, submissionFailure));
         }
+
+        IReadOnlyList<GroupedGateReceiptTrxEvidence.Receipt>? grouped = null;
+        for (var index = 0; index < unresolved.Count; index++)
+        {
+            var pending = unresolved[index];
+            if (pending.SubmissionFailure is not null) continue;
+            var wait = waits.Single(wait => wait.Id == pending.RequestId);
+            var names = wait.TestNames!.Distinct(StringComparer.Ordinal).ToArray();
+            if (names.Any(string.IsNullOrWhiteSpace)) continue;
+            grouped ??= GroupedGateReceiptTrxEvidence.ReadPassedReceipts(
+                orchestratorDirectory, goal.Id, candidateBranchHeadSha);
+            foreach (var receipt in grouped)
+            {
+                var evidence = GroupedGateReceiptTrxEvidence.Evaluate(names, receipt.TrxPaths, orchestratorDirectory);
+                if (receipt == grouped[0] && attempts.Count == 0)
+                    unresolved[index] = pending with
+                    {
+                        MissingOrFailedTestNames = evidence.Where(item => !item.Satisfied)
+                            .Select(item => item.Selector).ToArray()
+                    };
+                if (evidence.Any(item => !item.Satisfied)) continue;
+
+                try
+                {
+                    kernel.SubmitHumanInput(wait.Id,
+                        $"Satisfied by {receipt.Kind} receipt {receipt.ReceiptId} for candidate {candidateBranchHeadSha}; TRX {string.Join(", ", receipt.TrxPaths)}; " +
+                        string.Join("; ", evidence.Select(item =>
+                            $"{item.Selector}: {item.Passed} passed, 0 failed, {item.Superseded} superseded by rerun")),
+                        origin: HumanInputAnswerOrigin.Worker, supersedeSiblings: false);
+                    resolved.Add(wait.Id);
+                    unresolved.RemoveAt(index--);
+                }
+                catch (Exception exception)
+                {
+                    unresolved[index] = new(wait.Id, [], $"{exception.GetType().Name}: {exception.Message}");
+                }
+                break;
+            }
+        }
         return new(resolved, unresolved);
     }
 
-    private static bool Matches(string selector, string resultName) =>
+    internal static bool Matches(string selector, string resultName) =>
         string.Equals(selector, resultName, StringComparison.Ordinal) ||
         (resultName.StartsWith(selector, StringComparison.Ordinal) && resultName.Length > selector.Length &&
             resultName[selector.Length] is '(' or '.');

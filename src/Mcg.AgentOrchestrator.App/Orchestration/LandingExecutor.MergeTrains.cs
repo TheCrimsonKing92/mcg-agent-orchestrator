@@ -15,7 +15,8 @@ internal static partial class LandingExecutor
         MergeTrainAcceptanceStore store,
         ConductorAutonomyPolicy policy,
         IGoalLifecycleEventWriter? eventWriter = null,
-        Func<string?>? mutationBlocker = null)
+        Func<string?>? mutationBlocker = null,
+        IClock? promotionClock = null)
     {
         ArgumentNullException.ThrowIfNull(goals);
         ArgumentNullException.ThrowIfNull(receipt);
@@ -208,6 +209,9 @@ internal static partial class LandingExecutor
                 AcceptanceCohortLandingOutcome.StateInvalidated,
                 $"Merge train receipt invalidated at the main compare-and-swap boundary: {mainUpdate.Error}");
         }
+        RecordSuccessfulPromotion(workspace,
+            receipt.Identity.Members.Select(member => (member.GoalId, member.CandidateRevision)).ToArray(),
+            receipt.Identity.ObservedMainRevision, commit, GoalPromotionFact.MergeTrainProvenance, promotionClock);
         var checkout = RunGit(executionDirectory, "read-tree", "-m", "-u", receipt.Identity.ObservedMainRevision, commit);
         if (checkout.ExitCode != 0)
         {

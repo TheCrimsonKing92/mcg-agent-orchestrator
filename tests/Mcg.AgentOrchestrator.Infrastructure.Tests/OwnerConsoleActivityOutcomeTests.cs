@@ -207,13 +207,13 @@ public sealed class OwnerConsoleActivityOutcomeTests
         internal readonly OwnerConsoleScreenController Controller;
         internal readonly OwnerConsoleFullScreenView View;
         internal Scene(IGoalEventTail? tail = null, Func<OwnerConductEvent, OwnerActivityTestEvidence?>? evidence = null,
-            Func<OwnerConsoleHarness, IOwnerQuestionSource>? questions = null)
+            Func<OwnerConsoleHarness, IOwnerQuestionSource>? questions = null, OwnerConsoleInputDiagnostics? diagnostics = null)
         {
             var source = questions?.Invoke(Harness) ?? Harness.Questions;
             Builder = new(Harness.State, source, Harness.Liveness, new Epics(), Harness.Clock, evidence);
             Controller = new(source, Harness.Answers, Dialogs, Harness.State, tail ?? Harness.Tail,
                 Harness.Conductor, Harness.DigestReport, Harness.Digest, Harness.Clock);
-            View = new(App, Controller, () => Task.CompletedTask);
+            View = new(App, Controller, () => Task.CompletedTask, diagnostics: diagnostics);
         }
         internal void AddGoals()
         {

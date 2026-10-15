@@ -27,4 +27,6 @@ internal sealed record EpicProgressRollup(
     EpicPlanView? Plan = null)
 {
     internal EpicOutcomeProjection Outcome => Plan?.OutcomeProgress ?? EpicOutcomeProjection.Unevaluated;
+    public int UnknownLandingDateCount => MemberGoals.Count(member =>
+        member.Bucket == EpicProgressBucket.Landed && member.PromotionFact is null);
 }

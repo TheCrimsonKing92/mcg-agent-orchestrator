@@ -49,7 +49,12 @@ public sealed class ConductorDriverTestsPassingFindingEvidence
             runFocusedEvidence: (_, request) =>
             {
                 focusedRuns++;
-                return new FocusedEvidenceRunResult(request, true, true, "tester requested evidence passed", []);
+                // A positive receipt must contain measured candidate execution, not only a green verdict.
+                AcceptanceCheckResult[] checks =
+                [new("tester requested evidence", true, 0, null, ExecutedTestCount: 1)];
+                return new FocusedEvidenceRunResult(request, true, true, "tester requested evidence passed", checks,
+                    Arms: [new(FindingEvidenceArm.Candidate, "abc1234", FindingEvidenceArmDisposition.Green,
+                        true, true, "tester requested evidence passed", checks)]);
             },
             retryTaskWithCause: (goalId, taskId, message, roundKind, cause) =>
             {
