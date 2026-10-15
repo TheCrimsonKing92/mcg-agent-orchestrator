@@ -590,6 +590,7 @@ finally {
                     projects = @($projectPaths | ForEach-Object { Get-DisplayPath -Root $repositoryRoot -Path $_ })
                     scopeIdentity = if ($null -ne $scope) { $scope.Identity } else { "unresolved" }
                     scopeMetadataDigest = if ($null -ne $scope) { $scope.MetadataDigest } else { "unresolved" }
+                    scopeStableDigest = if ($null -ne $scope) { $scope.StableMetadataDigest } else { "unresolved" }
                     projectResults = @($projectResults.ToArray())
                 }
                 New-Item -ItemType Directory -Force -Path $canonicalArtifactsPath | Out-Null

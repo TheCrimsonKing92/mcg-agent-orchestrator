@@ -28,6 +28,8 @@ public sealed class WorkerBuildProjectScopeProcessSpawningTests
 
         Assert.True(followup.ExitCode == 0, followup.Stdout + followup.Stderr);
         using var after = JsonDocument.Parse(File.ReadAllBytes(receiptPath));
+        Assert.Equal(WorkerBuildProjectScope.Resolve(fixture.Root, []).StableMetadataDigest,
+            after.RootElement.GetProperty("scopeStableDigest").GetString());
         Assert.NotEqual(before.RootElement.GetProperty("treeDigest").GetString(), after.RootElement.GetProperty("treeDigest").GetString());
         Assert.Equal(WorkerBuildProjectScopeTests.Fixture.AllProjects,
             after.RootElement.GetProperty("projects").EnumerateArray().Select(element => element.GetString()!.Replace('\\', '/')));
@@ -43,7 +45,7 @@ public sealed class WorkerBuildProjectScopeProcessSpawningTests
             () => WorkerBuildReceipt.Evaluate(receiptPath, fixture.Root), _ => { fallbacks++; return new(false, -1, "unexpected fallback"); });
         Assert.False(admission.FailsRound, admission.Diagnostic);
         Assert.Equal(0, fallbacks);
-        fixture.SetMetadata(fixture.Metadata() with { DispatchIdentity = Guid.NewGuid().ToString("N") });
+        fixture.SetMetadata(fixture.Metadata() with { IntegrationBranch = "other" });
         Assert.Equal("scope-mismatch", WorkerBuildReceipt.Evaluate(receiptPath, fixture.Root).Reason);
     }
 

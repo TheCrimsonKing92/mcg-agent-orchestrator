@@ -221,6 +221,10 @@ public static class OrchestratorBuildEvidenceCheck
                 : new(false, exitCode, $"Build evidence check returned malformed success output. {output}".Trim());
         }
 
+        if (output.Contains("build-check apparatus failure:", StringComparison.Ordinal) &&
+            !output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).Any(WorkerBuildLogErrorReader.IsCompilerDiagnostic))
+            return new(false, exitCode, $"Build evidence check hit an apparatus failure; no compiler verdict. {output}".Trim());
+
         var isMissingProject = output.Contains("FAIL build: missing project(s)", StringComparison.OrdinalIgnoreCase);
         var hasFailureVerdict = output.Contains(": error ", StringComparison.OrdinalIgnoreCase) ||
             output.Contains("FAIL build:", StringComparison.OrdinalIgnoreCase);

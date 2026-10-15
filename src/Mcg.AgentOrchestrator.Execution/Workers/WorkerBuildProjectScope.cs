@@ -13,7 +13,7 @@ public static class WorkerBuildProjectScope
         string Branch, string GoalId, string TaskId, string DispatchIdentity,
         string GoalBaseline, string DispatchBase, string IntegrationBranch);
     public sealed record Result(IReadOnlyList<string> RequestedProjects, IReadOnlyList<string> RequiredProjects,
-        IReadOnlyList<string> Projects, string Identity, string MetadataDigest);
+        IReadOnlyList<string> Projects, string Identity, string MetadataDigest, string StableMetadataDigest);
 
     public static string MetadataPath(string root) => Path.Combine(root, MetadataRelativePath);
 
@@ -82,6 +82,7 @@ public static class WorkerBuildProjectScope
         var head = Git(root, "rev-parse", "HEAD").Trim();
         var metadataPath = MetadataPath(root);
         var metadataDigest = "none";
+        var stableMetadataDigest = "none";
         var baseline = head;
         if (File.Exists(metadataPath))
         {
@@ -91,6 +92,7 @@ public static class WorkerBuildProjectScope
             var metadata = JsonSerializer.Deserialize<Metadata>(bytes) ?? throw new IOException("Empty worker build scope metadata.");
             var common = Canonical(Git(root, "rev-parse", "--path-format=absolute", "--git-common-dir").Trim());
             ValidateMetadata(root, branch, common, head, metadata);
+            stableMetadataDigest = WorkerBuildScopeStableDigest.Compute(metadata);
             baseline = metadata.GoalBaseline;
         }
         else if (branch.StartsWith("goal/", StringComparison.OrdinalIgnoreCase) ||
@@ -125,7 +127,7 @@ public static class WorkerBuildProjectScope
             .Order(StringComparer.Ordinal).ToArray();
         var identity = Hash(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new
         { root, branch, head, baseline, metadataDigest, requested, required = required.Projects, projects })));
-        return new(requested, required.Projects, projects, identity, metadataDigest);
+        return new(requested, required.Projects, projects, identity, metadataDigest, stableMetadataDigest);
     }
 
     internal static string ValidatePath(string root, string path, bool mustExist)

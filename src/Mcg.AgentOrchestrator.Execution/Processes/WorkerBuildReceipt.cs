@@ -70,7 +70,11 @@ internal static class WorkerBuildReceipt
                 try
                 {
                     var scope = WorkerBuildProjectScope.Resolve(worktreeRoot, []);
-                    if (!TryString(root, "scopeMetadataDigest", out var scopeDigest) || scopeDigest != scope.MetadataDigest)
+                    var fullMatch = TryString(root, "scopeMetadataDigest", out var scopeDigest) && scopeDigest == scope.MetadataDigest;
+                    var stableMatch = TryString(root, "scopeStableDigest", out var stableDigest) &&
+                        stableDigest is not ("none" or "unresolved") &&
+                        string.Equals(stableDigest, scope.StableMetadataDigest, StringComparison.Ordinal);
+                    if (!fullMatch && !stableMatch)
                         return new(false, "scope-mismatch");
                     if (!root.TryGetProperty("projectResults", out _)) return new(false, "project-execution-incomplete");
                 }
