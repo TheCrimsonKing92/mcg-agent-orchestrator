@@ -19,6 +19,8 @@ internal static class PortfolioTextView
         foreach (var row in rollups)
         {
             Console.WriteLine(FormatEpicRollupLine(row));
+            if (since is not null && row.UnknownLandingDateCount > 0)
+                Console.WriteLine($"  Unknown landing dates: {row.UnknownLandingDateCount} (excluded from dated windows)");
             if (summaries?.TryGetValue(row.Epic.Id, out var summary) == true)
                 Console.WriteLine($"  {summary}");
             if (includeOutcome) PrintOutcome(row.Outcome, row.Plan);
@@ -53,7 +55,11 @@ internal static class PortfolioTextView
         if (includeOutcome) PrintOutcome(row.Outcome, row.Plan);
         Console.WriteLine("Member goals:");
         foreach (var member in row.MemberGoals)
+        {
             Console.WriteLine($"  - {CliIdentifierText.ShortId(member.Id)} {member.Status} updated={FormatTimestamp(member.UpdatedAt)} {member.Title}");
+            if (member.Bucket == EpicProgressBucket.Landed)
+                Console.WriteLine($"    {member.PromotionExplanation}");
+        }
     }
 
     public static void PrintEpicMembers(PortfolioEpic epic, IReadOnlyList<PortfolioEpicMember> members)

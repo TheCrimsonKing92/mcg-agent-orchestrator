@@ -535,7 +535,7 @@ internal static class CliCommandHelp
 
     private static readonly CommandHelpEntry EpicList = new(
         EpicListUsage,
-        "List epics with every goal status bucket and open/done backlog counts; newest is the latest member-goal metadata update (UpdatedAt). Use --since with positive Nh or Nd durations (24h, 7d) or an absolute timestamp to show window counts. window-landed uses the goal update time until a landed-at timestamp exists.",
+        "List epics with every goal status bucket and open/done backlog counts; newest is the latest member-goal metadata update (UpdatedAt). Use --since with positive Nh or Nd durations (24h, 7d) or an absolute timestamp to show window counts. window-landed uses the original successful promotion time inclusively; unknown landing dates are excluded from dated windows.",
         ["--since", "--json", "--help", "-h"]);
 
     private static readonly CommandHelpEntry EpicMembers = new(
