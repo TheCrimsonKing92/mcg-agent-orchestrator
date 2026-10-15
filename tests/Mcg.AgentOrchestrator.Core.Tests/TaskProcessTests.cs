@@ -172,7 +172,8 @@ public sealed class TaskProcessTests
         {
             CompletionVerdictVerifiedSuccess = true,
             CompletionVerdictRule = "succeeded-dispatch-completion-evidence",
-            AcceptanceCriteriaVersionHash = "no-refined-spec"
+            AcceptanceCriteriaVersionHash = "no-refined-spec",
+            EvidenceSource = VerificationEvidenceSource.Dispatch
         },
         task.LastVerification);
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
@@ -200,7 +201,11 @@ public sealed class TaskProcessTests
 
     var request = kernel.GetPendingHumanInput(goal.Id).Single();
     Assert.Equal(completed, task.LastProcess);
-    Assert.Equal(verification with { AcceptanceCriteriaVersionHash = "no-refined-spec" }, task.LastVerification);
+    Assert.Equal(verification with
+    {
+        AcceptanceCriteriaVersionHash = "no-refined-spec",
+        EvidenceSource = VerificationEvidenceSource.Dispatch
+    }, task.LastVerification);
     Assert.Equal(WorkTaskStatus.WaitingForHuman, task.Status);
     Assert.Equal(GoalStatus.WaitingForHuman, goal.Status);
     Assert.Equal("Which test command should I run?", request.Question);
@@ -288,4 +293,3 @@ public sealed class TaskProcessTests
     Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCancelled);
 }
 }
-

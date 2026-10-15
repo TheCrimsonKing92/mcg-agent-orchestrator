@@ -8,6 +8,36 @@ public static class StateDbMigrations
     private sealed record Migration(int Number, string Name, Action<SqliteConnection> Apply);
     private const int CurrentMigrationNumber = 13;
 
+    public static StoreSetupPlanEntry Plan(string dbPath)
+    {
+        StoreSetupRunner.WorkspacePathGuard(dbPath);
+        if (!StoreSetupRunner.TargetExists(dbPath)) return new("state-migrations", dbPath, null, CurrentMigrationNumber);
+        using var snapshot = new StoreInspectionSnapshot(dbPath);
+        using var command = snapshot.Connection.CreateCommand();
+        command.CommandText = "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name = 'meta'";
+        if (Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture) != 0)
+        {
+            command.CommandText = "SELECT value FROM meta WHERE key = 'schema_version'";
+            var stored = command.ExecuteScalar()?.ToString();
+            if (stored is not null && (!int.TryParse(stored, NumberStyles.None, CultureInfo.InvariantCulture, out var coreVersion) ||
+                coreVersion > int.Parse(SqliteOrchestratorStateRepository.CurrentSchemaVersion, CultureInfo.InvariantCulture)))
+                throw new InvalidOperationException($"State store '{dbPath}' records incompatible core schema version {stored}; runtime supports {SqliteOrchestratorStateRepository.CurrentSchemaVersion}. Use a compatible runtime or independently verified recovery; older setup cannot repair this schema.");
+        }
+        command.CommandText = "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name = 'schema_migrations'";
+        if (Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture) == 0)
+            return new("state-migrations", dbPath, null, CurrentMigrationNumber);
+        command.CommandText = "SELECT COALESCE(MAX(migration_number), 0) FROM schema_migrations";
+        var maximum = Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture);
+        command.CommandText = "SELECT COUNT(*) FROM schema_migrations WHERE migration_number BETWEEN 1 AND $current";
+        command.Parameters.AddWithValue("$current", CurrentMigrationNumber);
+        var count = Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture);
+        if (maximum <= CurrentMigrationNumber && count != maximum)
+            throw new InvalidOperationException($"State migration history has gaps: {dbPath}.");
+        if (maximum == CurrentMigrationNumber && !string.Equals(snapshot.ReadJournalMode(), "wal", StringComparison.OrdinalIgnoreCase))
+            return new("state-migrations", dbPath, CurrentMigrationNumber - 1, CurrentMigrationNumber);
+        return new("state-migrations", dbPath, maximum, CurrentMigrationNumber);
+    }
+
     /// <summary>
     /// Reports whether the published state store already has every numbered migration.
     /// This probe is read-only; callers that observe <see langword="false"/> must acquire
@@ -15,7 +45,8 @@ public static class StateDbMigrations
     /// </summary>
     public static bool IsUpToDate(string dbPath)
     {
-        if (!File.Exists(dbPath))
+        StoreSetupRunner.WorkspacePathGuard(dbPath);
+        if (!StoreSetupRunner.TargetExists(dbPath))
             return false;
 
         using var connection = StateDbConnectionFactory.Open(
@@ -44,8 +75,15 @@ public static class StateDbMigrations
             WHERE migration_number BETWEEN 1 AND $current
             """;
         migrations.Parameters.AddWithValue("$current", CurrentMigrationNumber);
-        return Convert.ToInt32(migrations.ExecuteScalar(), CultureInfo.InvariantCulture) ==
-            CurrentMigrationNumber;
+        if (Convert.ToInt32(migrations.ExecuteScalar(), CultureInfo.InvariantCulture) != CurrentMigrationNumber)
+            return false;
+        migrations.CommandText = "SELECT MAX(migration_number) FROM schema_migrations";
+        if (Convert.ToInt32(migrations.ExecuteScalar(), CultureInfo.InvariantCulture) != CurrentMigrationNumber)
+            return false;
+        migrations.CommandText = "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name = 'meta'";
+        if (Convert.ToInt32(migrations.ExecuteScalar(), CultureInfo.InvariantCulture) == 0) return false;
+        migrations.CommandText = "SELECT value FROM meta WHERE key = 'schema_version'";
+        return string.Equals(migrations.ExecuteScalar()?.ToString(), SqliteOrchestratorStateRepository.CurrentSchemaVersion, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -89,6 +127,7 @@ public static class StateDbMigrations
         Action<string>? statementObserver,
         SqliteWriteTelemetryOptions? telemetryOptions)
     {
+        StoreSetupRunner.RequireCompatible([Plan(dbPath)]);
         var repository = new SqliteOrchestratorStateRepository(
             dbPath,
             statementObserver,

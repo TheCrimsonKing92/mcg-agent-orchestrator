@@ -699,8 +699,28 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
     }
 
 
-    [Xunit.Fact(DisplayName = "Cli_logs_stream_arg_is_not_misinterpreted_as_goal_prefix")]
-    public void CliLogsStreamArgIsNotMisinterpretedAsGoalPrefix()
+    [Xunit.Theory(DisplayName = "Cli_logs_stream_arg_is_not_misinterpreted_as_goal_prefix")]
+    [Xunit.InlineData(0, null)]
+    [Xunit.InlineData(0, "all")]
+    [Xunit.InlineData(0, "stdout")]
+    [Xunit.InlineData(0, "stderr")]
+    [Xunit.InlineData(0, "exit")]
+    [Xunit.InlineData(1, null)]
+    [Xunit.InlineData(1, "all")]
+    [Xunit.InlineData(1, "stdout")]
+    [Xunit.InlineData(1, "stderr")]
+    [Xunit.InlineData(1, "exit")]
+    [Xunit.InlineData(2, null)]
+    [Xunit.InlineData(2, "all")]
+    [Xunit.InlineData(2, "stdout")]
+    [Xunit.InlineData(2, "stderr")]
+    [Xunit.InlineData(2, "exit")]
+    [Xunit.InlineData(3, null)]
+    [Xunit.InlineData(3, "all")]
+    [Xunit.InlineData(3, "stdout")]
+    [Xunit.InlineData(3, "stderr")]
+    [Xunit.InlineData(3, "exit")]
+    public void CliLogsStreamArgIsNotMisinterpretedAsGoalPrefix(int goalAddress, string? stream)
     {
         var root = CreateTempDirectory();
         var workspace = CreateRefinedWorkspace(root);
@@ -709,16 +729,28 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         IReadOnlyList<AgentDefinition> agents = [];
         var providers = new InMemoryModelProviderRegistry([]);
         var profiles = WorkerProfileCatalog.Default();
-        Goal? currentGoal = goal;
+        Goal? currentGoal = goalAddress == 0 ? goal : null;
         kernel.ActivateGoal(goal.Id, agents);
 
         // Regression guard: "logs 1 stdout" must resolve task 1 on the current goal, not treat "1"
         // as a goal prefix and "stdout" as a task number.
+        var command = goalAddress switch
+        {
+            0 => new List<string> { "logs", "1" },
+            1 => new List<string> { "logs", goal.Id.Value[..8], "1" },
+            2 => new List<string> { "logs", "--goal", goal.Id.Value[..8], "1" },
+            3 => new List<string> { "logs", "1", "--goal", goal.Id.Value[..8] },
+            _ => throw new ArgumentOutOfRangeException(nameof(goalAddress))
+        };
+        if (stream is not null)
+        {
+            command.Add(stream);
+        }
         InvalidOperationException? ex = null;
         try
         {
             CliCommandDispatcher.ExecuteCommand(
-                ["logs", "1", "stdout"],
+                command,
                 kernel,
                 workspace,
                 ref agents,
@@ -733,7 +765,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
 
         // Must fail because the task has no process, not because the goal/task wasn't found.
         Xunit.Assert.NotNull(ex);
-        Xunit.Assert.Contains("no background process logs", ex!.Message);
+        Xunit.Assert.Equal("Task has no background process logs.", ex!.Message);
     }
 
 
@@ -764,7 +796,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         var output = CaptureConsole(() =>
         {
             ConsoleViews.PrintTask(goal, task);
-            ConsoleViews.PrintProcessLogs(task, ProcessLogStream.All);
+            ProcessLogsTextView.PrintProcessLogs(ProcessLogReader.Read(task.LastProcess!), ProcessLogStream.All);
         });
         Xunit.Assert.Contains("Heartbeat Status:", output);
         Xunit.Assert.Contains("heartbeat: available state=running pid=777 child_pid=888", output);
@@ -799,7 +831,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         var output = CaptureConsole(() =>
         {
             ConsoleViews.PrintTask(goal, task);
-            ConsoleViews.PrintProcessLogs(task, ProcessLogStream.All);
+            ProcessLogsTextView.PrintProcessLogs(ProcessLogReader.Read(task.LastProcess!), ProcessLogStream.All);
         });
 
         Xunit.Assert.Contains("Heartbeat Status:", output);
@@ -2131,7 +2163,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         Xunit.Assert.NotNull(ex);
         Xunit.Assert.Contains("retry <task-number> <message>", ex!.Message);
         Xunit.Assert.Equal(WorkTaskStatus.Completed, task.Status);
-        Xunit.Assert.Equal(verification with { AcceptanceCriteriaVersionHash = "no-refined-spec" }, task.LastVerification);
+        Xunit.Assert.Equal(verification with { AcceptanceCriteriaVersionHash = "no-refined-spec", EvidenceSource = VerificationEvidenceSource.Manual }, task.LastVerification);
     }
 
 

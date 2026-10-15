@@ -9,7 +9,7 @@ public sealed record CriterionVerdict(
     [property: JsonPropertyName("verdict")] string Verdict,
     [property: JsonPropertyName("evidence")] string Evidence);
 
-public static class WorkerResultBlockers
+public static partial class WorkerResultBlockers
 {
     public enum TestsStatus
     {
@@ -189,10 +189,20 @@ public static class WorkerResultBlockers
     public static bool TryFindReviewFindingRound(
         TaskVerificationRecord? verification,
         out ReviewFindingRound round,
-        out string diagnostic)
+        out string diagnostic) =>
+        TryFindReviewFindingRound(verification, out round, out diagnostic, out _, out _);
+
+    public static bool TryFindReviewFindingRound(
+        TaskVerificationRecord? verification,
+        out ReviewFindingRound round,
+        out string diagnostic,
+        out IReadOnlyList<ReviewFindingParseDiagnostic> advisoryRejections,
+        out ReviewFindingContractViolation? formatViolation)
     {
         round = new ReviewFindingRound([], []);
         diagnostic = string.Empty;
+        advisoryRejections = [];
+        formatViolation = null;
         if (verification is null)
         {
             diagnostic = "reviewer verification is missing.";
@@ -204,14 +214,22 @@ public static class WorkerResultBlockers
         if (string.IsNullOrWhiteSpace(findingsJson) || string.IsNullOrWhiteSpace(touchedAnchorsJson))
         {
             diagnostic = "reviewer WORKER_RESULT must contain one-line findings and touched_anchors JSON arrays.";
+            if (findingsJson is not null || touchedAnchorsJson is not null)
+                formatViolation = new(ReviewFindingConvergence.FindingFormatViolationCode, diagnostic);
             return false;
         }
 
-        if (!ReviewFindingConvergence.TryParseJson(findingsJson, touchedAnchorsJson, out var reportedRound, out diagnostic))
+        var parsed = ReviewFindingConvergence.ParseJson(findingsJson, touchedAnchorsJson);
+        advisoryRejections = parsed.AdvisoryRejections;
+        if (parsed.FatalDiagnostic is { } fatal)
         {
+            diagnostic = fatal.Reason;
+            formatViolation = new(ReviewFindingConvergence.FindingFormatViolationCode, diagnostic,
+                SubmittedStableId: fatal.StableId);
             return false;
         }
 
+        var reportedRound = parsed.Round;
         round = reportedRound with
         {
             // Outcomes are Conductor-owned. A worker may request evidence but cannot forge a
@@ -974,6 +992,12 @@ public static class WorkerResultBlockers
 
     private static IEnumerable<string> EnumerateEvidenceLines(TaskVerificationRecord verification)
     {
+        if (verification.EvidenceSource == VerificationEvidenceSource.Dispatch && verification.DispatchAttemptAt is not null)
+        {
+            foreach (var line in SplitRetainedLines(verification.AuthoritativeStandardOutput))
+                yield return line;
+            yield break;
+        }
         // A dispatch's stdout is the worker-authored response. Stderr can contain the
         // launcher prompt and upstream WORKER_RESULT blocks, so it is never an
         // authoritative source for the completed round's result.

@@ -70,7 +70,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedEvidenceBui
         Assert.DoesNotContain("build phase timed out", check.ResultSummary);
         Assert.DoesNotContain(calls, call => call.Test);
         Assert.Equal(FindingEvidenceArmDisposition.Inconclusive, Assert.Single(result.Arms!).Disposition);
-        Assert.Null(result.OutcomeReason);
+        Assert.Equal(FindingEvidenceOutcomeReason.CandidateInconclusive, result.OutcomeReason);
     }
 
     [Xunit.Theory]
@@ -139,9 +139,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedEvidenceBui
 
                 if (isTest)
                 {
-                    WriteMtpTrx(args);
+                    var identities = Enumerable.Range(1, targetCount)
+                        .Select(index => $"BuildTimeoutTarget{index}Tests.ExecutedMember").ToArray();
+                    WriteMtpTrx(args, executedTestCount: identities.Length, identities);
                     return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
-                        0, "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
+                        0, $"Passed! - Failed: 0, Passed: {identities.Length}, Skipped: 0, Total: {identities.Length}."));
                 }
 
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, string.Empty));

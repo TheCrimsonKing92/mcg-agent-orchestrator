@@ -6,6 +6,15 @@ internal static partial class WorkerSubscriptionModelResolver
 {
     private const string IntakeRiskLabelsMarker = "risk labels:";
 
+    internal static string ResolveEffectiveSubscriptionModelName(
+        AgentDefinition agent, SubscriptionModelSelection selection, string providerName)
+    {
+        var modelName = selection.UsesSubscriptionLaunchProfile
+            ? agent.Subscription?.ModelAlias ?? selection.Model.ModelName
+            : selection.Model.ModelName;
+        return EffectiveModelAssignment.Normalize(providerName, modelName);
+    }
+
     internal static SubscriptionModelSelection ResolveEffectiveSubscriptionModelSelection(
         AgentDefinition agent,
         Goal goal,

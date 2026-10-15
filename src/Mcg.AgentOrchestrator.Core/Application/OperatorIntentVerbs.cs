@@ -14,17 +14,25 @@ public static class OperatorIntentVerbs
     public const string CriterionEvidenceRepair = "criterion-evidence-repair";
     public const string LessonRecord = "lesson-record";
     public const string LessonRetire = "lesson-retire";
+    public const string DirectiveRecord = "directive-record";
+    public const string DirectiveRetire = "directive-retire";
+    public const string DirectiveHandoff = "directive-handoff";
     public const string EscapeRecord = "escape-record";
     public const string ExperimentApplyFlag = "experiment-apply-flag";
     public const string ExperimentRevertFlag = "experiment-revert-flag";
     public const string ExperimentToggleFlag = "experiment-toggle-flag";
     public const string ExperimentDecide = "experiment-decide";
+    public const string EpicOutcomeDefine = "epic-outcome-define";
+    public const string EpicOutcomeRecord = "epic-outcome-record";
 }
 
 public static class OperatorIntentScopes
 {
     public const string Workspace = "@workspace";
 }
+
+public sealed record EpicOutcomeDefineOperatorIntentPayload(string EpicId, EpicOutcomeDefinition Definition);
+public sealed record EpicOutcomeRecordOperatorIntentPayload(string EpicId, EpicOutcomeEvidence Evidence);
 
 public enum OperatorActorKind
 {
@@ -75,7 +83,8 @@ public sealed record ExperimentDecideOperatorIntentPayload(string ExperimentId, 
 public sealed record CancelDispatchOperatorIntentPayload(
     int ProcessId,
     DateTimeOffset ProcessStartedAt,
-    string DispatchId);
+    string DispatchId,
+    CompletionBuildEvidenceTarget? CompletionBuild = null);
 
 // These payloads state an operator's attributed request. They do not mutate a
 // goal until the conductor has durably applied the intent.

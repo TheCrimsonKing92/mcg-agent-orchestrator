@@ -57,7 +57,7 @@ internal static class AcceptanceCheckProcessInvoker
         var commandLine = string.Join(' ', arguments.Select(QuoteForDisplay));
         var timedOut = false;
         using var captureLimitStop = new CaptureLimitStop(stopOnCaptureLimit);
-        using var laneStall = AcceptanceLaneStallMonitor.ForHeartbeat(heartbeatContext, TimeProvider.System);
+        using var laneStall = AcceptanceLaneStallMonitor.ForHeartbeat(heartbeatContext, TimeProvider.System, AcceptanceLaneResultsDirectory.ProbeFor(arguments));
         var elapsed = Stopwatch.StartNew();
         CancellationTokenSource? heartbeatCts = null;
         Task? heartbeatTask = null;

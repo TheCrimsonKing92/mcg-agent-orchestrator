@@ -1,6 +1,7 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
+using System.Text.Json;
 
 using static ConductorDriverTests;
 
@@ -22,8 +23,13 @@ public sealed class ConductorDriverTestsUnusableBaselineCandidateRerun
             foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
                 PassVerification(kernel, goal, task, hasCommittedChanges: task == developer);
             FailReviewerNeedsWork(kernel, goal, reviewer, "Candidate RED needs a usable baseline",
-                findings: [EvidenceFindingWithRequest("Run focused evidence", "baseline-apparatus",
-                    classes: ["ConductorDriverTests"])]);
+                findings:
+                [
+                    EvidenceFindingWithRequest("Run focused evidence", "baseline-apparatus",
+                        classes: ["ConductorDriverTests", "FindingEvidenceRoundPlannerTests"]),
+                    EvidenceFindingWithRequest("Share the superset receipt", "baseline-apparatus-member",
+                        classes: ["ConductorDriverTests"])
+                ]);
 
             var runs = 0;
             var retried = new List<TaskId>();
@@ -39,7 +45,7 @@ public sealed class ConductorDriverTestsUnusableBaselineCandidateRerun
                     if (runs == 3 && rerunGreen)
                     {
                         var green = ConductorDriverTestsFindingEvidenceReuse.RetainedEvidenceWithExecutedClasses(
-                            root, request, candidateSha);
+                            root, request, candidateSha, ["ConductorDriverTests", "FindingEvidenceRoundPlannerTests"]);
                         return green with
                         {
                             Arms = green.Arms!.Where(arm => arm.Arm == FindingEvidenceArm.Candidate).ToArray(),
@@ -64,6 +70,8 @@ public sealed class ConductorDriverTestsUnusableBaselineCandidateRerun
                 },
                 recordFindingEvidenceRequest: (goalId, taskId, message) =>
                     kernel.RecordFindingEvidenceRequest(goalId, taskId, message),
+                recordFindingEvidenceRequestDispositions: (goalId, taskId, dispositions) =>
+                    kernel.RecordFindingEvidenceRequestDispositions(goalId, taskId, dispositions),
                 recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
                     kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt),
                 writeEscalation: (_, _, message) => escalation = message);
@@ -78,8 +86,44 @@ public sealed class ConductorDriverTestsUnusableBaselineCandidateRerun
             if (rerunGreen)
             {
                 Assert.Equal([reviewer.Id], retried);
-                Assert.Equal(FindingEvidenceOutcomeReason.ValidEvidence,
-                    reviewer.VerificationHistory.Last().MergedReviewFindings!.Single().EvidenceOutcome?.ResultReason);
+                var reloaded = AgentOrchestratorKernel.FromSnapshot(JsonSerializer.Deserialize<OrchestratorSnapshot>(
+                    JsonSerializer.Serialize(kernel.ExportSnapshot()))!);
+                var durable = reloaded.Goals.Single().Tasks.Single(task => task.Id == reviewer.Id);
+                var verification = durable.VerificationHistory.Last();
+                var receipt = Assert.Single(verification.FindingEvidenceReceipts!, item =>
+                    item.Arms!.Any(arm => arm.Arm == FindingEvidenceArm.Candidate &&
+                        arm.Disposition == FindingEvidenceArmDisposition.Green));
+                Assert.Equal(candidateSha, receipt.CandidateSha);
+                Assert.Equal(2, Assert.Single(receipt.Arms!).ExecutedTestCount);
+                Assert.Equal(2, receipt.RequestDispositions!.Count);
+                Assert.Equal(2, verification.FindingEvidenceRequestDispositions!.Count);
+                Assert.All(receipt.RequestDispositions, disposition =>
+                {
+                    Assert.Equal(disposition.FindingStableId == "baseline-apparatus"
+                        ? FindingEvidenceRequestDecision.Executed
+                        : FindingEvidenceRequestDecision.CoveredByReceipt, disposition.Decision);
+                    Assert.Equal(receipt.ReceiptId, Assert.Single(disposition.SourceReceiptIds!));
+                    Assert.Equal(candidateSha, disposition.CandidateSha);
+                    Assert.Equal(receipt.FindingRoundFingerprint, disposition.FindingRoundFingerprint);
+                    Assert.Equal(receipt.ExecutionBasisIdentity, disposition.ExecutionBasisIdentity);
+                    var taskDisposition = Assert.Single(verification.FindingEvidenceRequestDispositions,
+                        item => item.FindingStableId == disposition.FindingStableId);
+                    Assert.Equal(disposition.Decision, taskDisposition.Decision);
+                    Assert.Equal(receipt.ReceiptId, Assert.Single(taskDisposition.SourceReceiptIds!));
+                });
+                var owner = receipt.RequestDispositions.Single(item => item.FindingStableId == "baseline-apparatus");
+                var member = receipt.RequestDispositions.Single(item => item.FindingStableId == "baseline-apparatus-member");
+                Assert.Null(owner.CoveringRequestIdentity);
+                Assert.Equal(owner.RequestIdentity, member.CoveringRequestIdentity);
+                Assert.Equal("covered-by-executed-superset", member.Reason);
+                Assert.Equal(2, verification.MergedReviewFindings!.Count);
+                Assert.All(verification.MergedReviewFindings, finding =>
+                {
+                    Assert.Equal(FindingEvidenceOutcomeReason.ValidEvidence, finding.EvidenceOutcome?.ResultReason);
+                    Assert.Equal(receipt.ReceiptId, finding.EvidenceOutcome?.ReceiptId);
+                    Assert.Equal(FindingEvidenceExecutionState.ExecutedOnCandidate,
+                        FindingEvidenceExecutionClassifier.Classify(durable, finding, candidateSha));
+                });
             }
             else
             {

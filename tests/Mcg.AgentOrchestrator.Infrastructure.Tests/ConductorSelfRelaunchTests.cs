@@ -496,6 +496,8 @@ public sealed class ConductorSelfRelaunchTests
                 .LoadAsync()
                 .GetAwaiter()
                 .GetResult();
+            // Prepare every store while quiet; successor activation requires current schemas.
+            StoreSetupRunner.Run(orchestratorDirectory);
             var lease = ConductorLoopLeaseController.Acquire(orchestratorDirectory);
             var appOutputDirectory = Path.Combine(root, "build-output");
             var resolverWrapper = Path.Combine(root, "resolve-test-run-dir.ps1");

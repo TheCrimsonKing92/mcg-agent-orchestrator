@@ -17,6 +17,8 @@ public static class AcceptanceEngineSurfaceRegistry
     [
         new("acceptance-verifier", [
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier",
+            // Selection coverage is reached through the verifier's telemetry collaborator.
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/FocusedEvidenceSelectionCoverageInspector",
             // Cleanup evidence is reached through the independently owned failure-cause adjudicator.
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceAssemblyCleanupEvidence",
             // Process helpers are reached through the independently owned acceptance process invoker.
@@ -50,6 +52,7 @@ public static class AcceptanceEngineSurfaceRegistry
         new("attempt-artifact-custody", ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceAttemptArtifactCustody"]),
         new("acceptance-collaborators", [
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceArtifactFileNames",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceAssemblyCleanupAttribution",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCheckCommandBuilder",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCheckProcessInvoker",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceContainedGenerationBaseline",
@@ -86,6 +89,7 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceWithinAttemptRerunEvidence",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/CommandLineTooLongException",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DeclaredTestProjectInventory",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/FocusedEvidenceRequestResolver.BooleanPlanning.cs",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateChildReapSeam",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateHeartbeatContext",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateHeartbeatRunClass",

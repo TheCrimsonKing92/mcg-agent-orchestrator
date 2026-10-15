@@ -21,7 +21,7 @@ The [operator runbook](docs/operator-runbook.md#1-golden-path-conductor-first) d
 
 ## How it works
 
-An operator creates a goal with an objective and acceptance criteria. Automatic intake selects the Scout pipeline: Planner, Developer, Tester, and Reviewer; `--pipeline five-role` also includes a Researcher. The [intake planner](src/Mcg.AgentOrchestrator.App/Orchestration/GoalObjectivePlanner.cs) selects the pipeline and defines its task boundaries and role order.
+An operator creates a goal with an objective and acceptance criteria. Automatic intake selects the Scout pipeline: Planner, Developer, Tester, and Reviewer. Scout is the only multi-role intake; goals created earlier with a Researcher task still run. The [intake planner](src/Mcg.AgentOrchestrator.App/Orchestration/GoalObjectivePlanner.cs) selects the pipeline and defines its task boundaries and role order.
 
 The conductor creates an isolated git worktree, dispatches the workers, and waits for their results. After review, it runs the acceptance suite against the candidate and applies the change-risk gate. A passing candidate allowed by policy lands in `main`; failures, conflicts, and requests for human input return to the operator. The loop records the landing in SQLite and removes the worktree. Follow the [runbook](docs/operator-runbook.md#1-golden-path-conductor-first) for the complete operating sequence.
 
@@ -81,7 +81,7 @@ Start with the [operator runbook](docs/operator-runbook.md) for setup, operation
 ## Projects
 
 The current project inventory is derived from `src/**/*.csproj` (6 production projects) and
-`tests/**/*.csproj` (10 test/support projects). See the
+`tests/**/*.csproj` (11 test/support projects). See the
 [architecture map](docs/architecture.md) for the dependency graph, state ownership, current seams,
 and the separately labelled modular-monolith target.
 
@@ -104,6 +104,7 @@ and the separately labelled modular-monolith target.
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Fixtures/RealProcessShardProbe/Mcg.AgentOrchestrator.RealProcessShardProbe.csproj` | Executable fixture for real-process shard tests. | Product hosting or general test execution. |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Fixtures/IsolatedDotnetProbe/Mcg.AgentOrchestrator.IsolatedDotnetProbe.csproj` | Minimal executable fixture for isolated `dotnet` invocation tests. | Product tooling or a standalone test suite. |
 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Fixtures/ConsoleIoProbe/Mcg.AgentOrchestrator.ConsoleIoProbe.csproj` | Executable fixture for redirected Console I/O preservation tests. | Product tooling or a standalone test suite. |
+| `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Fixtures/SupervisorLaunchProbe/Mcg.AgentOrchestrator.SupervisorLaunchProbe.csproj` | Executable fixture for Windows launch-authority comparisons and real supervisor handoff lifetime tests. | Product hosting or general test execution. |
 <!-- current-project-inventory:end -->
 
 `scripts/OrchestratorSqliteTools/OrchestratorSqliteTools.csproj` and

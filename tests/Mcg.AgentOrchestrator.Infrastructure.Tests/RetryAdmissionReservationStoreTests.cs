@@ -389,8 +389,10 @@ public sealed class RetryAdmissionReservationStoreTests
             databasePath, goal.Id, task.Id, at, "owner-b", at.AddMinutes(2)));
     }
 
-    [Xunit.Fact]
-    public async Task StartClaimIsNotStartedUntilDurableConfirmation()
+    [Xunit.Theory]
+    [Xunit.InlineData("gpt")]
+    [Xunit.InlineData("gpt-6-sol")]
+    public async Task StartClaimIsNotStartedUntilDurableConfirmation(string modelName)
     {
         var root = Path.Combine(Path.GetTempPath(), "mcg-retry-admission-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -404,10 +406,11 @@ public sealed class RetryAdmissionReservationStoreTests
         await repository.SaveAsync(kernel);
         var at = DateTimeOffset.Parse("2026-08-25T12:00:00Z");
         var fingerprint = RetryContextFingerprintBuilder.Build(new RetryContextFingerprintInput(
-            goal.Id.Value, task.Id.Value, task.RequiredRole, "OpenAI", "gpt",
+            goal.Id.Value, task.Id.Value, task.RequiredRole, "OpenAI", modelName,
             PaidRouteClassification.Paid, "candidate", "criteria", [], [], [], [], "base", "main"));
         var dispatch = new TaskDispatchRecord(
-            "worker", "command", "worktree", at,
+            "worker", $"worker --model {modelName}", "worktree", at,
+            ProviderName: "OpenAI", ModelName: modelName,
             RetryContextFingerprint: fingerprint,
             PaidRoute: PaidRouteClassification.Paid);
         var reservation = await RetryAdmissionReservationStore.TryReserveAsync(
@@ -424,6 +427,9 @@ public sealed class RetryAdmissionReservationStoreTests
             databasePath, goal.Id, task.Id, at, "owner-a", at.AddSeconds(2));
         Assert.NotNull(Assert.Single(confirmed!.Snapshot.Tasks.Single().RetryAdmissionHistory!).WorkerStartedAt);
         Assert.Equal(at, reservation!.Snapshot.Tasks.Single().LastDispatch!.DispatchedAt);
+        var stored = await repository.LoadAsync();
+        Assert.Equal(dispatch, stored.GetTask(goal.Id, task.Id).LastDispatch);
+        Assert.Equal(fingerprint, claimedReceipt.Fingerprint);
     }
 
     [Xunit.Fact]

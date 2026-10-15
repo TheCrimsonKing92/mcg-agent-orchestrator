@@ -1,3 +1,4 @@
+using System.Reflection;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 using Xunit;
@@ -15,6 +16,15 @@ public sealed class StoreSchemaRegistryTests
             .Order(StringComparer.Ordinal).ToArray();
         Assert.NotEmpty(sources);
         var entries = StoreSchemaRegistry.Inventory;
+        var fragments = typeof(StoreSchemaRegistry).Assembly.GetTypes()
+            .SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance))
+            .SelectMany(method => method.GetCustomAttributes<StoreSchemaSourceAttribute>()).ToArray();
+        Assert.All(fragments, fragment =>
+        {
+            Assert.Single(entries.Where(entry => entry.StoreName == fragment.StoreName));
+            Assert.Contains(fragment.SourceFile, sources);
+            Assert.Single(fragments.Where(other => other.SourceFile == fragment.SourceFile));
+        });
         // These entries register their owning stores; CREATE statements live in extracted setup types.
         Assert.Equal(sources, entries.Select(entry => entry == StoreSchemaRegistry.AuthorClaims
             ? "src/Mcg.AgentOrchestrator.Execution/Persistence/AuthorClaimStoreSetup.cs"
@@ -27,7 +37,8 @@ public sealed class StoreSchemaRegistryTests
             : entry == StoreSchemaRegistry.CohortAcceptance || entry == StoreSchemaRegistry.CohortAttributionRetractions ||
                 entry == StoreSchemaRegistry.CohortSoloInheritedReceipts
                 ? "src/Mcg.AgentOrchestrator.Execution/Persistence/CohortAcceptanceStoreSetup.cs"
-            : entry.SourceFile).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray());
+            : entry.SourceFile).Concat(fragments.Select(fragment => fragment.SourceFile))
+            .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray());
         Assert.Equal(entries.Count, entries.Select(entry => entry.StoreName).Distinct(StringComparer.Ordinal).Count());
         Assert.All(entries, entry =>
         {
@@ -36,7 +47,13 @@ public sealed class StoreSchemaRegistryTests
             Assert.False(string.IsNullOrWhiteSpace(entry.Family));
         });
         Assert.Equal(new[] { StoreSchemaRegistry.Portfolio, StoreSchemaRegistry.Experiments, StoreSchemaRegistry.Backlog, StoreSchemaRegistry.OperatorIntents, StoreSchemaRegistry.OperatorLessons,
-            StoreSchemaRegistry.OperatorEscapes, StoreSchemaRegistry.CohortAcceptance, StoreSchemaRegistry.CohortAttributionRetractions, StoreSchemaRegistry.CohortSoloInheritedReceipts, StoreSchemaRegistry.MergeTrainAcceptance, StoreSchemaRegistry.FollowerGateAcceptance, StoreSchemaRegistry.CollaborationItems, StoreSchemaRegistry.RunEvents, StoreSchemaRegistry.DogfoodLog, StoreSchemaRegistry.AuthorClaims, StoreSchemaRegistry.StewardTriggers, StoreSchemaRegistry.JudgePanel, StoreSchemaRegistry.BoardFill, StoreSchemaRegistry.ProgressiveReviewGlanceCircuit, StoreSchemaRegistry.ProgressiveReviewSteering }, entries.Where(entry => entry.CurrentVersion.HasValue).ToArray());
+            StoreSchemaRegistry.OperatorEscapes, StoreSchemaRegistry.OperatorDirectives, StoreSchemaRegistry.CohortAcceptance, StoreSchemaRegistry.CohortAttributionRetractions, StoreSchemaRegistry.CohortSoloInheritedReceipts, StoreSchemaRegistry.MergeTrainAcceptance, StoreSchemaRegistry.FollowerGateAcceptance, StoreSchemaRegistry.CollaborationItems, StoreSchemaRegistry.RunEvents, StoreSchemaRegistry.DogfoodLog, StoreSchemaRegistry.AuthorClaims, StoreSchemaRegistry.StewardTriggers, StoreSchemaRegistry.JudgePanel, StoreSchemaRegistry.BoardFill, StoreSchemaRegistry.ProgressiveReviewGlanceCircuit, StoreSchemaRegistry.ProgressiveReviewSteering }, entries.Where(entry => entry.CurrentVersion.HasValue).ToArray());
+        Assert.Equal("operator-directives", StoreSchemaRegistry.OperatorDirectives.StoreName);
+        Assert.Equal(1, StoreSchemaRegistry.OperatorDirectives.CurrentVersion);
+        Assert.Equal("operator-directives.db", StoreSchemaRegistry.OperatorDirectives.Database);
+        Assert.Equal("backlog", StoreSchemaRegistry.OperatorDirectives.Family);
+        Assert.Equal("src/Mcg.AgentOrchestrator.Execution/Persistence/OperatorDirectiveStoreSetup.cs",
+            StoreSchemaRegistry.OperatorDirectives.SourceFile);
         Assert.Equal(1, StoreSchemaRegistry.RunEvents.CurrentVersion);
         Assert.Equal("run-events", StoreSchemaRegistry.RunEvents.StoreName);
         Assert.Equal("run-events.db", StoreSchemaRegistry.RunEvents.Database);
@@ -73,8 +90,35 @@ public sealed class StoreSchemaRegistryTests
         Assert.Equal("merge-train-acceptance.db", StoreSchemaRegistry.MergeTrainAcceptance.Database);
         Assert.Equal(1, StoreSchemaRegistry.DogfoodLog.CurrentVersion);
         Assert.Equal("dogfood-log.db", StoreSchemaRegistry.DogfoodLog.Database);
-        Assert.Equal(1, StoreSchemaRegistry.OperatorIntents.CurrentVersion);
+        Assert.Equal(2, StoreSchemaRegistry.OperatorIntents.CurrentVersion);
         Assert.Equal(SqliteOperatorIntentStore.DatabaseFileName, StoreSchemaRegistry.OperatorIntents.Database);
+    }
+
+    [Fact]
+    public void OperatorIntents_SetupOwnsAdmissionTablesUnderExistingSchemaVersion()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcg-schema-owner-" + Guid.NewGuid().ToString("N"));
+        var path = Path.Combine(root, SqliteOperatorIntentStore.DatabaseFileName);
+        try
+        {
+            SqliteOperatorIntentStore.Setup(path);
+            using var conn = new SqliteConnection(new SqliteConnectionStringBuilder
+                { DataSource = path, Mode = SqliteOpenMode.ReadOnly, Pooling = false }.ToString());
+            conn.Open();
+            Assert.Equal(StoreSchemaState.Current, StoreSchemaVersions.Verify(conn, StoreSchemaRegistry.OperatorIntents));
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT name FROM sqlite_schema WHERE type = 'table' AND name LIKE 'task_intent_%' ORDER BY name";
+            var tables = new List<string>();
+            using (var reader = cmd.ExecuteReader())
+                while (reader.Read()) tables.Add(reader.GetString(0));
+            Assert.Equal(new[] { "task_intent_admission", "task_intent_launches", "task_intent_preparations", "task_intent_suppressions" }, tables);
+            cmd.CommandText = "SELECT store_name FROM store_schema_versions";
+            using var versions = cmd.ExecuteReader();
+            Assert.True(versions.Read());
+            Assert.Equal(StoreSchemaRegistry.OperatorIntents.StoreName, versions.GetString(0));
+            Assert.False(versions.Read());
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
     }
 
     [Fact]
@@ -92,8 +136,9 @@ public sealed class StoreSchemaRegistryTests
     [InlineData(null, StoreSchemaState.Missing)]
     [InlineData(0, StoreSchemaState.Older)]
     [InlineData(1, StoreSchemaState.Older)]
-    [InlineData(2, StoreSchemaState.Current)]
-    [InlineData(3, StoreSchemaState.Newer)]
+    [InlineData(2, StoreSchemaState.Older)]
+    [InlineData(3, StoreSchemaState.Current)]
+    [InlineData(4, StoreSchemaState.Newer)]
     public void Verify_RecordedVersion_ClassifiesWithoutChangingRecord(int? version, StoreSchemaState expected)
     {
         using var conn = OpenMemory();
@@ -119,6 +164,8 @@ public sealed class StoreSchemaRegistryTests
     [InlineData(0)]
     [InlineData(1)]
     [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(4)]
     public void UpgradeToCurrent_ExistingRecord_UpgradesOnlyOlderAndPreservesOtherStores(int version)
     {
         using var conn = OpenMemory();

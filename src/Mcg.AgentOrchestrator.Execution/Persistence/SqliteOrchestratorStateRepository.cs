@@ -2214,6 +2214,10 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
             VerificationHistory = PickStoreOwnedList(baseline.VerificationHistory, stored.VerificationHistory, current.VerificationHistory),
             LastDispatch = attemptAuthority is null ? PickTickOwned(baseline.LastDispatch, stored.LastDispatch, current.LastDispatch) : attemptAuthority.LastDispatch,
             LastProcess = attemptAuthority is null ? PickSameAttemptProcess(baseline.LastProcess, stored.LastProcess, current.LastProcess) : attemptAuthority.LastProcess,
+            // Operation ownership is independent of the worker-attempt snapshot. A stale tick may
+            // advance other attempt fields while the persisted owner has already launched its child.
+            CompletionBuildEvidence = MergeCompletionBuildEvidence(
+                baseline.CompletionBuildEvidence, stored.CompletionBuildEvidence, current.CompletionBuildEvidence),
             VerificationPlan = PickStoreOwned(baseline.VerificationPlan, stored.VerificationPlan, current.VerificationPlan),
             SubscriptionRetryAfter = PickStoreOwned(baseline.SubscriptionRetryAfter, stored.SubscriptionRetryAfter, current.SubscriptionRetryAfter),
             SubscriptionDeferralReleasedAt = PickStoreOwned(baseline.SubscriptionDeferralReleasedAt, stored.SubscriptionDeferralReleasedAt, current.SubscriptionDeferralReleasedAt),
@@ -2249,6 +2253,33 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         };
     }
 
+    private static CompletionBuildEvidenceOperation? MergeCompletionBuildEvidence(
+        CompletionBuildEvidenceOperation? baseline, CompletionBuildEvidenceOperation? stored,
+        CompletionBuildEvidenceOperation? current)
+    {
+        if (stored is null) return current;
+        if (current is null) return stored;
+        if (stored.DispatchAt != current.DispatchAt)
+            return stored.DispatchAt > current.DispatchAt ? stored : current;
+        // The first durable operation owns this attempt; a competing launch cannot replace it.
+        if (stored.Id != current.Id) return stored;
+        if (stored.Applied || stored.Phase == CompletionBuildEvidencePhase.Cancelled) return stored;
+        if (!stored.IsPending)
+        {
+            // Current-task receipt application may advance; a stale cancellation cannot
+            // rewrite the independently persisted terminal build fact or custody marker.
+            return current.Applied && current.Phase == stored.Phase && current.HasSameOrigin(stored) &&
+                CompletionBuildEvidenceTarget.From(current).Matches(stored)
+                ? stored with { Applied = true } : stored;
+        }
+        if (current.Applied || current.Phase == CompletionBuildEvidencePhase.Cancelled) return current;
+        // An unchanged tick snapshot must not undo progress checkpointed by the operation owner.
+        if (SnapshotEquals(baseline, current)) return stored;
+        // Even a changed diagnostic cannot move an authorized child back into the launch path.
+        if (stored.ChildPid is not null && current.ChildPid is null && current.IsPending) return stored;
+        return current.Phase == CompletionBuildEvidencePhase.Launching ? stored : current;
+    }
+
     private static IReadOnlyList<RetryAdmissionReceipt> MergeRetryAdmissionHistory(
         IReadOnlyList<RetryAdmissionReceipt>? stored,
         IReadOnlyList<RetryAdmissionReceipt>? current)
@@ -2259,7 +2290,9 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
         foreach (var receipt in current ?? [])
         {
             if (!merged.TryGetValue(receipt.ReceiptId, out var existing) ||
-                existing.WorkerStartedAt is null && receipt.WorkerStartedAt is not null)
+                existing.ReservationReleasedAt is null &&
+                (receipt.ReservationReleasedAt is not null ||
+                 existing.WorkerStartedAt is null && receipt.WorkerStartedAt is not null))
             {
                 merged[receipt.ReceiptId] = receipt;
             }

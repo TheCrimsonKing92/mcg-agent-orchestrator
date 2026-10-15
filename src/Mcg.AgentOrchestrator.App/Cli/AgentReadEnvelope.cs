@@ -6,10 +6,13 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static class AgentReadEnvelope
 {
+    public const string EpicProgressSchema = "mcg.epic-progress";
     public const string RemoteExecutorsSchema = "mcg.remote-executors";
     public const int RemoteExecutorsSchemaVersion = 1;
     public const string GoalsSchema = "mcg.goals";
     public const int GoalsSchemaVersion = 1;
+    public const string BacklogListSchema = "mcg.backlog-list";
+    public const int BacklogListSchemaVersion = 1;
     public const string AttentionSchema = "mcg.attention";
     public const int AttentionSchemaVersion = 1;
     public const string AttentionShowSchema = "mcg.attention-show";
@@ -18,6 +21,8 @@ internal static class AgentReadEnvelope
     public const int GateStatusSchemaVersion = 1;
     public const string ConductorStatusSchema = "mcg.conductor-status";
     public const int ConductorStatusSchemaVersion = 1;
+    public const string DirectivesSchema = "mcg.directives";
+    public const int DirectivesSchemaVersion = 1;
     public const string OperatorIntentSchema = "mcg.operator-intent";
     public const int OperatorIntentSchemaVersion = 1;
     public const string StatusSchema = "mcg.status";

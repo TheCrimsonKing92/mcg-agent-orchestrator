@@ -32,7 +32,8 @@ public sealed class FollowerGateAcceptanceStore
         using var connection = store.Open();
         var state = StoreSchemaVersions.Verify(connection, StoreSchemaRegistry.FollowerGateAcceptance);
         if (state != StoreSchemaState.Current)
-            throw SchemaSetupRequired(dbPath, state);
+            throw StoreSchemaDiagnostics.WithCompatibility(SchemaSetupRequired(dbPath, state), state,
+                connection, StoreSchemaRegistry.FollowerGateAcceptance, dbPath);
         return store;
     }
 

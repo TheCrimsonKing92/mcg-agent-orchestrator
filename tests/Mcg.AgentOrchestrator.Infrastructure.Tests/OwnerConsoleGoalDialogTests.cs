@@ -254,11 +254,18 @@ public sealed class OwnerConsoleGoalDialogTests
     { public Task<string> GetTitleAsync(string id, CancellationToken token) => Task.FromResult(""); }
     private sealed class EpicSource : IOwnerConsoleEpicSource
     {
-        public Task<EpicPlanView> LoadPlanAsync(PortfolioEpic epic, CancellationToken token) =>
-            Task.FromResult(new EpicPlanView(new(epic.Id, null, [], []), [], []));
+        public Task<string?> FindGoalEpicAsync(string goalId, CancellationToken token) =>
+            Task.FromResult<string?>(goalId == Id ? "member-epic" : null);
         public Task<IReadOnlyList<EpicProgressRollup>> LoadAsync(DateTimeOffset? since, CancellationToken token) =>
-            Task.FromResult<IReadOnlyList<EpicProgressRollup>>([new(new("member-epic", "Member epic", null, At, "test", At, "test"), null,
-                [], [new(Id, EpicProgressBucket.Active, "Active", At, "Member goal")], 1, 0, 1, 0, 0, 0, At, 0, 0, 0, 0, 0, 0)]);
+            throw new InvalidOperationException("Goal navigation must not load all epic rollups.");
+        public Task<EpicDetailReadSnapshot> LoadDetailAsync(string epicId, DateTimeOffset? since, CancellationToken token)
+        {
+            Assert.Equal("member-epic", epicId);
+            var row = new EpicProgressRollup(new(epicId, "Member epic", null, At, "test", At, "test"), null,
+                [], [new(Id, EpicProgressBucket.Active, "Active", At, "Member goal")], 1, 0, 1, 0, 0, 0, At, 0, 0, 0, 0, 0, 0)
+                { Plan = new(new(epicId, null, [], []), [], []) };
+            return Task.FromResult(new EpicDetailReadSnapshot(row, since, new Dictionary<string, Goal>()));
+        }
     }
     private sealed class Dialogs : IOwnerConsoleDialogs
     {

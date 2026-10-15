@@ -665,7 +665,6 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
     }
 
     [Xunit.Theory]
-    [Xunit.InlineData("five-role")]
     [Xunit.InlineData("scout")]
     public async Task GoalReplaceCancelledZeroWorkCreatesSelectedPipelineSuccessor(string pipeline)
     {
@@ -726,10 +725,15 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
         Xunit.Assert.Equal(2, restored.Goals.Count);
         var successor = Xunit.Assert.Single(restored.Goals, goal => goal.Id != predecessor.Id);
         Xunit.Assert.Equal(item.Id, successor.SourceBacklogItemId);
+        var sourceFacts = EpicPlanGoalClaimSnapshot.Read(workspace.SqliteStatePath).Resolve(item);
+        Xunit.Assert.Equal(EpicPlanOwnershipResolution.Persisted, sourceFacts.Resolution);
+        Xunit.Assert.Equal(successor.Id.Value, sourceFacts.OwnerGoalId);
+        Xunit.Assert.Equal(SourceBacklogCoverage.Full, sourceFacts.Coverage);
+        Xunit.Assert.Equal(2, sourceFacts.LinkedGoals.Count);
+        Xunit.Assert.Empty(sourceFacts.DeliveredGoals);
+        Xunit.Assert.False(sourceFacts.AutomaticIntakeEligible);
         Xunit.Assert.Equal(
-            pipeline == "scout"
-                ? (AgentRole[])[AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer]
-                : (AgentRole[])[AgentRole.Researcher, AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
+            [AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
             successor.Tasks.Select(task => task.RequiredRole));
         Xunit.Assert.All(successor.Tasks, task => Xunit.Assert.Null(task.LastDispatch));
         Xunit.Assert.False(Directory.Exists(GoalWorktrees.WorktreePath(workspace.ExecutionDirectory, successor.Id)));
@@ -911,7 +915,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
                     "goal-replace", predecessor.Id.Value, "--brief-file", briefPath,
                     "--reason-file", reasonPath, "--request-id", requestId.ToString(),
                     "--disposition", "zero-work-correction", "--confirm-goal-replace",
-                    "--pipeline", "five-role"
+                    "--pipeline", "scout"
                 ],
                 repository,
                 workspace,
@@ -934,7 +938,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
                     "goal-replace", predecessor.Id.Value, "--brief-file", briefPath,
                     "--reason-file", reasonPath, "--request-id", requestId.ToString(),
                     "--disposition", "zero-work-correction", "--confirm-goal-replace",
-                    "--pipeline", "five-role"
+                    "--pipeline", "scout"
                 ],
                 repository,
                 workspace,
@@ -985,7 +989,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
                         "goal-replace", predecessor.Id.Value, "--brief-file", briefPath,
                         "--reason-file", reasonPath, "--request-id", requestId.ToString(),
                         "--disposition", "zero-work-correction", "--confirm-goal-replace",
-                        "--pipeline", "five-role"
+                        "--pipeline", "scout"
                     ],
                     repository,
                     workspace,
@@ -1057,7 +1061,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
                         "goal-replace", predecessor.Id.Value, "--brief-file", briefPath,
                         "--reason-file", reasonPath, "--request-id", requestId.ToString(),
                         "--disposition", "zero-work-correction", "--confirm-goal-replace",
-                        "--pipeline", "five-role"
+                        "--pipeline", "scout"
                     ],
                     repository,
                     workspace,
@@ -1142,7 +1146,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
             "goal-replace", predecessor.Id.Value, "--brief-file", briefPath,
             "--reason-file", reasonPath, "--request-id", requestId.ToString(),
             "--disposition", "zero-work-correction", "--confirm-goal-replace",
-            "--pipeline", "five-role"
+            "--pipeline", "scout"
         };
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var refiner = new ClarifyingGoalRefinerProvider();
@@ -1176,7 +1180,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
         Xunit.Assert.Equal(GoalReplacementOutcome.ProtectedOwner, audit!.Outcome);
         Xunit.Assert.NotEmpty(audit.ObjectiveHash);
         Xunit.Assert.Equal(
-            "Researcher,Planner,Developer,Tester,Reviewer",
+            "Planner,Developer,Tester,Reviewer",
             audit.OrderedRoles);
         Xunit.Assert.Equal(predecessor.Id, Xunit.Assert.Single((await repository.LoadAsync()).Goals).Id);
     }
@@ -1229,7 +1233,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
                         "goal-replace", predecessor.Id.Value, "--brief-file", briefPath,
                         "--reason-file", reasonPath, "--request-id", requestId.ToString(),
                         "--disposition", "zero-work-correction", "--confirm-goal-replace",
-                        "--pipeline", "five-role"
+                        "--pipeline", "scout"
                     ],
                     repository,
                     workspace,
@@ -1362,7 +1366,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
                     "goal-replace", predecessor.Id.Value, "--brief-file", briefPath,
                     "--reason-file", reasonPath, "--request-id", requestId.ToString(),
                     "--disposition", "zero-work-correction", "--confirm-goal-replace",
-                    "--pipeline", "five-role"
+                    "--pipeline", "scout"
                 ],
                 repository,
                 workspace,
@@ -1432,7 +1436,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
                         "goal-replace", predecessor.Id.Value, "--brief-file", briefPath,
                         "--reason-file", reasonPath, "--request-id", requestId.ToString(),
                         "--disposition", "zero-work-correction", "--confirm-goal-replace",
-                        "--pipeline", "five-role"
+                        "--pipeline", "scout"
                     ],
                     repository,
                     workspace,
@@ -1517,7 +1521,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
                     "goal-replace", predecessor.Id.Value, "--brief-file", secondBrief,
                     "--reason-file", reasonPath, "--request-id", secondRequest.ToString(),
                     "--disposition", "zero-work-correction", "--confirm-goal-replace",
-                    "--pipeline", "five-role"
+                    "--pipeline", "scout"
                 ],
                 CreateMigratedStateRepository(workspace.SqliteStatePath),
                 workspace,
@@ -1542,7 +1546,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
                         "goal-replace", predecessor.Id.Value, "--brief-file", firstBrief,
                         "--reason-file", reasonPath, "--request-id", firstRequest.ToString(),
                         "--disposition", "zero-work-correction", "--confirm-goal-replace",
-                        "--pipeline", "five-role"
+                        "--pipeline", "scout"
                     ],
                     repository,
                     workspace,
@@ -1630,7 +1634,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
             "Prepare a corrected successor.",
             expectedClaim.OwnerGoalId,
             expectedClaim.Version,
-            "five-role",
+            "scout",
             string.Empty);
         var acquisition = new CliPersistentStateRunner.GoalReplacementTransferLeaseAcquisition(
             CliPersistentStateRunner.GoalReplacementTransferLeaseAcquisitionKind.CompetingReplacementTimedOut,
@@ -1711,7 +1715,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
                         "goal-replace", predecessor.Id.Value, "--brief-file", brief,
                         "--reason-file", reasonPath, "--request-id", requestId.ToString(),
                         "--disposition", "zero-work-correction", "--confirm-goal-replace",
-                        "--pipeline", "five-role"
+                        "--pipeline", "scout"
                     ],
                     repository,
                     workspace,
@@ -1832,7 +1836,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
                     "goal-replace", predecessor.Id.Value, "--brief-file", brief,
                     "--reason-file", reasonPath, "--request-id", requestId.ToString(),
                     "--disposition", "zero-work-correction", "--confirm-goal-replace",
-                    "--pipeline", "five-role"
+                    "--pipeline", "scout"
                 ],
                 CreateMigratedStateRepository(workspace.SqliteStatePath),
                 workspace,
@@ -1934,7 +1938,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
                         "goal-replace", predecessor.Id.Value, "--brief-file", briefPath,
                         "--reason-file", reasonPath, "--request-id", Guid.NewGuid().ToString(),
                         "--disposition", "zero-work-correction", "--confirm-goal-replace",
-                        "--pipeline", "five-role"
+                        "--pipeline", "scout"
                     ],
                     repository,
                     workspace,
@@ -1998,7 +2002,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
                         "goal-replace", predecessor.Id.Value, "--brief-file", briefPath,
                         "--reason-file", reasonPath, "--request-id", requestId.ToString(),
                         "--disposition", "zero-work-correction", "--confirm-goal-replace",
-                        "--pipeline", "five-role"
+                        "--pipeline", "scout"
                     ],
                     repository,
                     workspace,
@@ -2066,7 +2070,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
                         "goal-replace", predecessor.Id.Value, "--brief-file", briefPath,
                         "--reason-file", reasonPath, "--request-id", requestId.ToString(),
                         "--disposition", "zero-work-correction", "--confirm-goal-replace",
-                        "--pipeline", "five-role"
+                        "--pipeline", "scout"
                     ],
                     repository,
                     workspace,
@@ -2118,7 +2122,7 @@ public sealed class CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacem
 
         var exception = Xunit.Assert.Throws<InvalidOperationException>(() => CaptureConsole(() =>
             CliPersistentStateRunner.ExecuteCommand(
-                ["goal", "Update src/Mcg.AgentOrchestrator.App/Cli/CliCommandHelp.cs", "--pipeline", "five-role"],
+                ["goal", "Update src/Mcg.AgentOrchestrator.App/Cli/CliCommandHelp.cs", "--pipeline", "scout"],
                 repository,
                 workspace,
                 ref agents,

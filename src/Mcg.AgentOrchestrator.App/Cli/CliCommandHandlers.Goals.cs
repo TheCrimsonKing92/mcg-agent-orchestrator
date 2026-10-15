@@ -1550,11 +1550,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         loopPolicy),
                     remedy => GoalGitFactIndex.Build(context.Workspace.ExecutionDirectory, context.Workspace.IntegrationBranch)
                         .TryGetGoalBranchTip(remedy.GoalId));
-                var loopReaper = new BackgroundDispatchRunner
-                {
-                    OperatorIntents = SqliteOperatorIntentStore.ForDirectories(
-                        context.Workspace.OrchestratorDirectory, context.Workspace.LogDirectory)
-                };
+                var loopReaper = OperatorCancelAwareDispatchRunner.ForWorkspace(context.Workspace);
                 var unappliedExitWatch = new ConductorUnappliedExitWatch();
                 var consoleCodePageWatch = new ConductorConsoleCodePageWatch();
                 var hostHealthMonitor = new ConductorHostHealthMonitor(
@@ -1883,11 +1879,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 var watchMaxDurationDeferralCeiling = AcceptanceGateEngineSettings
                     .Load(context.Workspace.ExecutionDirectory)
                     .ResolveCheckTimeout(null);
-                var watchReaper = new BackgroundDispatchRunner
-                {
-                    OperatorIntents = SqliteOperatorIntentStore.ForDirectories(
-                        context.Workspace.OrchestratorDirectory, context.Workspace.LogDirectory)
-                };
+                var watchReaper = OperatorCancelAwareDispatchRunner.ForWorkspace(
+                    context.Workspace, context.CompletionBuildEvidence);
                 var suppressWatchRefinementForMaxDurationDeferral = false;
                 Action<AgentOrchestratorKernel> watchSweep = wk =>
                 {
@@ -1939,7 +1932,11 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     .WithStoreEvidence(ConductorStoreEvidenceStep.CreateDefault(context.Workspace)).Run(
                     context.Kernel, conductDriver, conductPolicy, watchStopPath,
                     watchInterval: TimeSpan.FromSeconds(watchPollSeconds),
-                    onTick: ConductorTickPusher.CreateStoreCallback(context.Workspace.RunEventStorePath),
+                    onTick: tick =>
+                    {
+                        ConductorTickPusher.TryRecord(context.Workspace.RunEventStorePath, tick);
+                        context.ConductorTickObserver?.Invoke(tick);
+                    },
                     wakeSignal: watchWakeSignal,
                     maxDuration: watchMax,
                     onlyGoalId: watchGoalId, persistTick: context.PersistCheckpoint,

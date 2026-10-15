@@ -3,6 +3,69 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class ModelFunctionCatalogStoreTests
 {
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void RetirementNormalizesPrimaryAndBackupBindingsWithoutChangingIdentity(bool backup)
+    {
+        var path = Path.Combine(CreateTempDirectory(), "model-functions.json");
+        var binding = new ModelFunctionBinding("custom-purpose", ModelLane.Capable,
+            new ModelProfile("oPeNaI", "GpT-6-SoL", ModelCapability.Text | ModelCapability.ToolUse, SubscriptionMode.ApiKey, "xhigh", 321),
+            "Custom name", new SubscriptionLaunchProfile("custom-profile", "GPT-6-SOL", "low"));
+        var control = binding with
+        {
+            Purpose = "other-purpose", Lane = ModelLane.CheapApi,
+            Model = binding.Model with { ProviderName = "Anthropic" }
+        };
+        ModelFunctionCatalogStore.Save(path, new ModelFunctionCatalog([binding, control]));
+        if (backup)
+        {
+            ModelFunctionCatalogStore.Save(path, ModelFunctionCatalog.Empty);
+            File.WriteAllText(path, "{corrupt}");
+        }
+        var primaryText = File.ReadAllText(path);
+        var backupText = backup ? File.ReadAllText(path + ".bak") : null;
+        var restored = ModelFunctionCatalogStore.Load(path);
+        Assert.Equal(binding with
+        {
+            Model = binding.Model with { ModelName = "gpt-6.1-sol" },
+            Subscription = binding.Subscription! with { ModelAlias = "gpt-6.1-sol" }
+        }, restored.Bindings[0]);
+        Assert.Equal(control, restored.Bindings[1]);
+        Assert.Equal(primaryText, File.ReadAllText(path));
+        if (backup) Assert.Equal(backupText, File.ReadAllText(path + ".bak"));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("gpt-6-luna")]
+    [Xunit.InlineData("gpt-6-astra")]
+    [Xunit.InlineData("custom-gpt-6-sol")]
+    [Xunit.InlineData("gpt-6-sol ")]
+    [Xunit.InlineData(null)]
+    public void RetirementPreservesOtherInternalAliases(string? alias)
+    {
+        var path = Path.Combine(CreateTempDirectory(), "model-functions.json");
+        var binding = new ModelFunctionBinding("custom-purpose", ModelLane.Local,
+            new ModelProfile("OpenAI", alias ?? "api-custom", ModelCapability.Code, SubscriptionMode.ApiKey),
+            Subscription: new SubscriptionLaunchProfile("codex-cli", alias));
+        ModelFunctionCatalogStore.Save(path, new ModelFunctionCatalog([binding]));
+        Assert.Equal(binding, Assert.Single(ModelFunctionCatalogStore.Load(path).Bindings));
+    }
+
+    [Xunit.Fact]
+    public void ParsedEmptyPrimaryAndCorruptBackupKeepExistingEmptyBehavior()
+    {
+        var path = Path.Combine(CreateTempDirectory(), "model-functions.json");
+        ModelFunctionCatalogStore.Save(path, new ModelFunctionCatalog([
+            new ModelFunctionBinding("purpose", ModelLane.Capable,
+                new ModelProfile("OpenAI", "gpt-6-sol", ModelCapability.Text, SubscriptionMode.ApiKey))]));
+        ModelFunctionCatalogStore.Save(path, ModelFunctionCatalog.Empty);
+        Assert.Empty(ModelFunctionCatalogStore.Load(path).Bindings);
+        File.WriteAllText(path, "{corrupt}");
+        File.WriteAllText(path + ".bak", "{also-corrupt}");
+        Assert.Empty(ModelFunctionCatalogStore.Load(path).Bindings);
+    }
+
     [Xunit.Fact(DisplayName = "ModelFunctionCatalogStore_roundtrips_bindings")]
     public void ModelFunctionCatalogStoreRoundtripsBindings()
 {

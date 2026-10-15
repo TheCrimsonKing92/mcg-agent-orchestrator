@@ -47,6 +47,7 @@ internal static class OwnerConsoleEpicFormatter
             var marker = row.Epic.Id == selectedId ? "> " : "  ";
             lines.Add(Fit(marker + Title(row.Epic.Title), width));
             lines.AddRange(Wrap(Summary(row), width));
+            if (row.Plan is not null) lines.AddRange(Wrap(row.Outcome.Render(), width));
             lines.Add(string.Empty);
         }
         return lines;

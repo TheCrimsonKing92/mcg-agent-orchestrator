@@ -23,4 +23,8 @@ internal sealed record EpicProgressRollup(
     int? WindowCreatedCount = null,
     int? WindowTransitionedCount = null,
     int? WindowFailedCount = null,
-    int? WindowLandedCount = null);
+    int? WindowLandedCount = null,
+    EpicPlanView? Plan = null)
+{
+    internal EpicOutcomeProjection Outcome => Plan?.OutcomeProgress ?? EpicOutcomeProjection.Unevaluated;
+}

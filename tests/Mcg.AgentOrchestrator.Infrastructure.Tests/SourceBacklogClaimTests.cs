@@ -151,6 +151,7 @@ public sealed class SourceBacklogClaimTests
     [Xunit.InlineData(GoalStatus.Superseded, true, GoalReplacementDisposition.SupersedeUnlandedAttempt, GoalReplacementOutcome.Succeeded)]
     [Xunit.InlineData(GoalStatus.Cancelled, false, GoalReplacementDisposition.Unspecified, GoalReplacementOutcome.IneligibleDisposition)]
     [Xunit.InlineData(GoalStatus.Active, false, GoalReplacementDisposition.ZeroWorkCorrection, GoalReplacementOutcome.ProtectedOwner)]
+    [Xunit.InlineData(GoalStatus.Completed, true, GoalReplacementDisposition.AbandonFailedAttempt, GoalReplacementOutcome.ProtectedOwner)]
     public void EligibilityUsesExplicitDispositionMatrix(
         GoalStatus status,
         bool hasWork,

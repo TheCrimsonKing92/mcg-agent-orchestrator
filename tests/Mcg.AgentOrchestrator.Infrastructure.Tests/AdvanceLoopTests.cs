@@ -57,12 +57,7 @@ public sealed class AdvanceLoopTests
         TaskSpec? researcher = null;
     try
     {
-        goal = GoalLifecycleCommands.CreateAndActivateGoal(
-            kernel,
-            agents,
-            GoalObjectivePlanner.Build("Start subscription handoff on create", GoalIntakePipeline.FiveRole),
-            workspace,
-            providers);
+        goal = ResearcherGoalPlanFixture.CreateAndActivate(kernel, agents, "Start subscription handoff on create");
         var advancement = new GoalAdvancementOperations().AdvanceGoalWithSubscriptionsUntilBlocked(
             kernel,
             agents,

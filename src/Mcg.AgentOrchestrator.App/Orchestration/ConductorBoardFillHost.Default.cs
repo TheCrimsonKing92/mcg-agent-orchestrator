@@ -1,3 +1,4 @@
+using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -18,20 +19,36 @@ internal sealed partial class ConductorBoardFillHost
         (kernel, items) =>
         {
             var byId = items.ToDictionary(item => item.Id, StringComparer.Ordinal);
-            var claims = new SourceBacklogClaimStore(workspace.SqliteStatePath);
-            return item => BacklogDependencyReadiness.Evaluate(item,
+            var dependencyClaims = new SourceBacklogClaimStore(workspace.SqliteStatePath);
+            EpicPlanGoalClaims claims;
+            try { claims = EpicPlanGoalClaimSnapshot.Read(workspace.SqliteStatePath, kernel.Goals.ToArray()); }
+            catch (Exception exception) when (exception is Microsoft.Data.Sqlite.SqliteException or IOException or UnauthorizedAccessException)
+            {
+                return _ => new(false, false, " [Blocked: source ownership unavailable]");
+            }
+            return item =>
+            {
+                if (!claims.Resolve(item).AutomaticIntakeEligible)
+                    return new(false, false, " [Blocked: source already claimed or unresolved]");
+                // A malformed prerequisite must block its dependent, not abort selection of independent work.
+                if (item.Dependencies.Any(dependency => dependency.TargetKind == BacklogDependencyTargetKind.Backlog &&
+                    byId.TryGetValue(dependency.PrerequisiteId, out var prerequisite) &&
+                    claims.Resolve(prerequisite) is { OwnerGoalId: not null, Coverage: null }))
+                    return new(false, false, " [Blocked: prerequisite ownership unavailable]");
+                return BacklogDependencyReadiness.Evaluate(item,
                 id => kernel.Goals.FirstOrDefault(goal => goal.Id.Value == id),
                 id => byId.GetValueOrDefault(id),
                 id =>
                 {
                     try
                     {
-                        var owner = claims.ResolveClaim(kernel, id);
+                        var owner = dependencyClaims.ResolveClaim(kernel, id);
                         return new(kernel.Goals.FirstOrDefault(goal => goal.Id.Value == owner?.OwnerGoalId));
                     }
                     catch (LegacySourceBacklogOwnerAmbiguousException) { return new(null, true); }
                 },
                 goal => LandingState(workspace, goal));
+            };
         }, policy, new(workspace.ConductEventsLogPath), verifier: new BoardFillPremiseVerifier(
             () => ModelFunctionCatalogStore.Load(workspace.ModelFunctionCatalogPath),
             new GitAuthorBriefDraftRepository(workspace.ExecutionDirectory, workspace.IntegrationBranch), workspace.ExecutionDirectory),

@@ -945,19 +945,22 @@ internal static partial class ConductorLoopHandoff
                             $"spawnConsoleVisible={ToLowerInvariant(spawnConsole.Visible)} suppression={suppression}"));
 
                     beforeCreateProcess?.Invoke();
+                    var creationFlags = WindowsSuccessorCreationFlags | (suppressionScope?.ChildCreationFlags ?? 0);
+                    var authority = CaptureWindowsLaunchAuthority(creationFlags, nativeCommand[0]);
                     if (!CreateProcessW(
                             lpApplicationName: nativeCommand[0],
                             lpCommandLine: commandLine,
                             lpProcessAttributes: IntPtr.Zero,
                             lpThreadAttributes: IntPtr.Zero,
                             bInheritHandles: true,
-                            dwCreationFlags: (WindowsCreationFlags)(WindowsSuccessorCreationFlags | (suppressionScope?.ChildCreationFlags ?? 0)),
+                            dwCreationFlags: (WindowsCreationFlags)creationFlags,
                             lpEnvironment: environment,
                             lpCurrentDirectory: request.WorkingDirectory,
                             lpStartupInfo: ref startupInfo,
                             lpProcessInformation: out var processInformation))
                     {
                         var nativeError = Marshal.GetLastWin32Error();
+                        TryAppendWindowsLaunchAuthority(request, authority, nativeError, null);
                         throw new Win32Exception(
                             nativeError,
                             $"Failed to start breakaway conduct loop successor (nativeError={nativeError}).");
@@ -965,6 +968,9 @@ internal static partial class ConductorLoopHandoff
 
                     try
                     {
+                        var successorStartedAt = ReadSuccessorStartTimeFromHandle(processInformation.hProcess);
+                        TryAppendWindowsLaunchAuthority(request, authority, 0,
+                            (int)processInformation.dwProcessId, successorStartedAt);
                         // In a nested hierarchy, CREATE_BREAKAWAY_FROM_JOB escapes the immediate job
                         // and each permissive ancestor until the first non-breakaway ancestor. A true
                         // any-job probe can therefore mean the successor escaped the incumbent's
@@ -972,7 +978,7 @@ internal static partial class ConductorLoopHandoff
                         var residualJobMembership = ProbeProcessJobMembership(processInformation.hProcess);
 
                         return CreateBreakawayLaunchResult(request, (int)processInformation.dwProcessId,
-                            residualJobMembership, ReadSuccessorStartTimeFromHandle(processInformation.hProcess));
+                            residualJobMembership, successorStartedAt);
                     }
                     finally
                     {

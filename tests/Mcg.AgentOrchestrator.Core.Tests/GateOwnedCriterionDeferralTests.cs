@@ -4,6 +4,116 @@ public sealed class GateOwnedCriterionDeferralTests
 {
     private const string Candidate = "candidate-c";
 
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void ExplicitOperatorMarkerWithoutOwnershipRowsAcceptsDeferredReview(bool legacy)
+    {
+        const string criterion = "Observe the deployed behavior. Operator owns observation after candidate readiness.";
+        var scenario = CreateReviewScenario(gateOwned: false, criterion);
+        if (legacy)
+        {
+            var snapshot = scenario.Kernel.ExportSnapshot();
+            var kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with
+            {
+                Goals = [snapshot.Goals[0] with
+                {
+                    CriterionEvidenceObligations = [],
+                    RefinedSpecVersions = null
+                }]
+            });
+            var goal = kernel.GetGoal(scenario.Goal.Id);
+            scenario = (kernel, goal, goal.Tasks.Single());
+        }
+
+        Xunit.Assert.Empty(scenario.Goal.RefinedSpec!.OperatorOwnedAcceptanceCriteria);
+        Xunit.Assert.Empty(scenario.Goal.RefinedSpec.AcceptanceGateOwnedAcceptanceCriteria);
+        RecordReview(scenario, "not-verifiable");
+
+        Xunit.Assert.Equal(WorkTaskStatus.Completed, scenario.Reviewer.Status);
+        Xunit.Assert.Equal(GoalStatus.Verified, scenario.Goal.Status);
+        var obligation = Xunit.Assert.Single(scenario.Goal.CriterionEvidenceObligations);
+        Xunit.Assert.Equal("criterion-v1-0", obligation.Id);
+        Xunit.Assert.Equal(CriterionEvidenceOwner.Operator, obligation.Owner);
+        Xunit.Assert.Equal(CriterionEvidenceState.Pending, obligation.State);
+        Xunit.Assert.Equal("operator observation", obligation.RequiredScope);
+        Xunit.Assert.Equal("authoritative refined spec v1; explicit operator ownership marker", obligation.Provenance);
+        Xunit.Assert.Null(obligation.ExpectedCandidateSha);
+        Xunit.Assert.Null(obligation.ReceiptId);
+        Xunit.Assert.Equal(obligation, Xunit.Assert.Single(scenario.Goal.GetOutstandingCriterionEvidenceObligations(Candidate)));
+        Xunit.Assert.Contains(scenario.Goal.Timeline, item =>
+            item.Kind == ProgressKind.TaskNote &&
+            item.Message.Contains("Deferred criterion evidence remains pending", StringComparison.Ordinal) &&
+            item.Message.Contains(obligation.Id, StringComparison.Ordinal));
+        var error = Xunit.Assert.Throws<InvalidOperationException>(() =>
+            scenario.Kernel.CompleteGoal(scenario.Goal.Id, "Review passed."));
+        Xunit.Assert.Contains("criterion evidence obligations remain outstanding", error.Message, StringComparison.Ordinal);
+
+        scenario.Kernel.SetGoalRefinedSpec(scenario.Goal.Id, scenario.Goal.RefinedSpec);
+        var restored = AgentOrchestratorKernel.FromSnapshot(scenario.Kernel.ExportSnapshot()).GetGoal(scenario.Goal.Id);
+        Xunit.Assert.Equal(obligation, Xunit.Assert.Single(restored.CriterionEvidenceObligations));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("Observe behavior with the operator. REAL-WORLD-DEPENDENT.")]
+    [Xunit.InlineData("Operator observes the deployed behavior after readiness.")]
+    [Xunit.InlineData("Observe behavior. Operator owns observation; Developer owns verification.")]
+    [Xunit.InlineData("Observe behavior. Developer owns verification.")]
+    public void WeakOrConflictingOwnershipWithoutRowsStillRejectsDeferral(string criterion)
+    {
+        var scenario = CreateReviewScenario(gateOwned: false, criterion);
+
+        RecordReview(scenario, "not-verifiable");
+
+        Xunit.Assert.Empty(scenario.Goal.CriterionEvidenceObligations);
+        Xunit.Assert.Equal(WorkTaskStatus.Failed, scenario.Reviewer.Status);
+        Xunit.Assert.Contains(scenario.Goal.Timeline, item =>
+            item.Kind == ProgressKind.TaskFailed && item.Message.Contains("attestation rejected", StringComparison.Ordinal));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void ExplicitOperatorMarkerDoesNotReplaceUnknownOrDuplicateRows(bool duplicate)
+    {
+        var scenario = CreateReviewScenario(false, "Observe behavior. Operator owns observation.");
+        var snapshot = scenario.Kernel.ExportSnapshot();
+        var row = new CriterionEvidenceObligation("criterion-v1-0", 0, 1,
+            scenario.Goal.RefinedSpec!.AcceptanceCriteria[0], CriterionEvidenceOwner.Unknown,
+            CriterionEvidenceState.Pending, "ownership mapping required", "persisted unresolved ownership", DateTimeOffset.UtcNow);
+        var kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with
+        {
+            Goals = [snapshot.Goals[0] with { CriterionEvidenceObligations = duplicate ? [row, row] : [row] }]
+        });
+        var goal = kernel.GetGoal(scenario.Goal.Id);
+        scenario = (kernel, goal, goal.Tasks.Single());
+
+        RecordReview(scenario, "not-verifiable");
+
+        Xunit.Assert.Equal(WorkTaskStatus.Failed, scenario.Reviewer.Status);
+        Xunit.Assert.Equal(duplicate ? 2 : 1, goal.CriterionEvidenceObligations.Count);
+        Xunit.Assert.All(goal.CriterionEvidenceObligations, item => Xunit.Assert.Equal(CriterionEvidenceOwner.Unknown, item.Owner));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void StructuredGateOwnershipTakesPrecedenceOverOperatorMarker(bool duplicate)
+    {
+        const string criterion = "Observe behavior. Operator owns observation.";
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Preserve structured ownership");
+        kernel.RecordGoalRefinement(goal.Id, new RefinedSpec(goal.Objective, [criterion],
+            VerificationClass.TestVerifiable, [], [])
+        {
+            AcceptanceGateOwnedAcceptanceCriteria = duplicate ? [criterion, criterion] : [criterion]
+        });
+
+        var row = Xunit.Assert.Single(goal.CriterionEvidenceObligations);
+        Xunit.Assert.Equal(duplicate ? CriterionEvidenceOwner.Unknown : CriterionEvidenceOwner.Acceptance, row.Owner);
+        Xunit.Assert.DoesNotContain("explicit operator ownership marker", row.Provenance, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact]
     public void GateOwnedNotVerifiableVerdictBindsPendingObligationAndVerifiesGoal()
     {
@@ -124,14 +234,15 @@ public sealed class GateOwnedCriterionDeferralTests
             $"Compact Reviewer requirements are {compactReviewer.Length} chars.");
     }
 
-    private static (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Reviewer) CreateReviewScenario(bool gateOwned)
+    private static (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Reviewer) CreateReviewScenario(
+        bool gateOwned, string criterion = "The full acceptance gate passes.")
     {
         var kernel = new AgentOrchestratorKernel();
         var reviewer = new TaskSpec(TaskId.New(), "Review", AgentRole.Reviewer);
         var goal = kernel.CreateGoal("Route gate evidence", [reviewer]);
         var spec = new RefinedSpec(
             "Require deterministic gate evidence.",
-            ["The full acceptance gate passes."],
+            [criterion],
             VerificationClass.TestVerifiable,
             [],
             []);

@@ -949,6 +949,17 @@ public sealed class WorkerProcessJobsTests : IDisposable
         Assert.Equal(4, permanentAttempts);
         Assert.Equal([23, 23, 23], permanentDelays);
         Assert.Equal("status=unavailable attempts=4 reason=identity-unavailable", permanentResult.Evidence);
+
+        using var exited = Process.Start(new ProcessStartInfo("cmd.exe", "/d /c exit 0")
+        { UseShellExecute = false, CreateNoWindow = true })!;
+        Assert.True(exited.WaitForExit(5000), "The exited registration control did not exit.");
+        var exitedDelays = new List<int>();
+        var exitedResult = SpawnProcessIdentityReader.ReadForRegistration(exited, _ => null,
+            exitedDelays.Add, maxAttempts: 4, delayMilliseconds: 23);
+        Assert.False(exitedResult.Succeeded);
+        Assert.Equal(1, exitedResult.Attempts);
+        Assert.Empty(exitedDelays);
+        Assert.Equal("status=unavailable attempts=1 reason=process-exited", exitedResult.Evidence);
     }
 
     [Xunit.Fact(DisplayName = "WorkerProcessJobs_register_without_durable_registry_skips_identity_reads")]

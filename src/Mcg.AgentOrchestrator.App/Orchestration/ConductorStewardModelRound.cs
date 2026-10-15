@@ -34,7 +34,7 @@ internal sealed class ClaudeConductorStewardModelRound(
         var sessionId = _newSessionId().ToString("D");
         if (!model.IsValid)
         {
-            WriteReceipt(trigger, sessionId, null, null, null, model.InvalidReason, null);
+            WriteReceipt(trigger, sessionId, null, null, null, model.InvalidReason, null, Array.Empty<string>());
             throw new ConductorModelRoundException(model.InvalidReason!, null);
         }
         var selected = lessons?.Select(ConductorLessonSelector.StewardTags(trigger.Kind));
@@ -69,11 +69,13 @@ internal sealed class ClaudeConductorStewardModelRound(
             result = await _runProcessAsync(
                 new WorkerProcessRunRequest($"claude {model.ModelArguments} --permission-mode plan --tools 'Read,Grep,Glob' --allowed-tools 'Read,Grep,Glob' --session-id {sessionId} -p",
                     workingDirectory, TimeSpan.FromMinutes(4), prompt), cancellationToken);
-            WriteReceipt(trigger, sessionId, result.ExitCode, result.StandardOutput, result.StandardError, null, model.Alias);
+            WriteReceipt(trigger, sessionId, result.ExitCode, result.StandardOutput, result.StandardError, null, model.Alias,
+                selected?.LessonIds ?? Array.Empty<string>());
         }
         catch (Exception ex)
         {
-            WriteReceipt(trigger, sessionId, null, null, null, $"{ex.GetType().Name}: {ex.Message}", model.Alias);
+            WriteReceipt(trigger, sessionId, null, null, null, $"{ex.GetType().Name}: {ex.Message}", model.Alias,
+                selected?.LessonIds ?? Array.Empty<string>());
             throw;
         }
         if (result.ExitCode != 0)
@@ -82,7 +84,7 @@ internal sealed class ClaudeConductorStewardModelRound(
     }
 
     private void WriteReceipt(ConductorStewardTrigger trigger, string sessionId, int? exitCode,
-        string? stdout, string? stderr, string? failure, string? model)
+        string? stdout, string? stderr, string? failure, string? model, IReadOnlyList<string> lessonIds)
     {
         Directory.CreateDirectory(receiptDirectory);
         var path = Path.Combine(receiptDirectory, $"{DateTimeOffset.UtcNow:yyyyMMddTHHmmssfff}-{Guid.NewGuid():N}.json");
@@ -95,7 +97,8 @@ internal sealed class ClaudeConductorStewardModelRound(
             stdout,
             stderr,
             failure,
-            model
+            model,
+            lessonIds = lessonIds.ToArray()
         }));
     }
 }

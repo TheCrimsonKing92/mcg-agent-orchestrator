@@ -64,6 +64,7 @@ public sealed partial class BackgroundDispatchRunner
     private readonly Func<ProcessStartInfo, Process?> _startProcess;
     private readonly Func<OrchestratorBuildCheckRequest, OrchestratorBuildCheckResult> _runOrchestratorBuildCheck;
     private readonly Func<ProcessCommandLineSnapshot> _processCommandLineSnapshotFactory;
+    private readonly ICompletionBuildEvidenceOperation? _completionBuildEvidence;
 
     public BackgroundDispatchRunner(
         IClock? clock = null,
@@ -84,7 +85,8 @@ public sealed partial class BackgroundDispatchRunner
         Func<OrchestratorBuildCheckRequest, OrchestratorBuildCheckResult>? runOrchestratorBuildCheck = null,
         Func<int, (DateTimeOffset StartedAt, string ImagePath)?>? readProcessIdentity = null,
         Func<ProcessCommandLineSnapshot>? processCommandLineSnapshotFactory = null,
-        Func<GoalId, string>? resolveWorkerBuildReceiptPath = null)
+        Func<GoalId, string>? resolveWorkerBuildReceiptPath = null,
+        ICompletionBuildEvidenceOperation? completionBuildEvidence = null)
     {
         _clock = clock ?? new SystemClock();
         _postOutputIdleTimeout = postOutputIdleTimeout ?? DefaultPostOutputIdleTimeout;
@@ -124,7 +126,9 @@ public sealed partial class BackgroundDispatchRunner
             readCurrentIdentity: DispatchProcessIdentityEvidence.Adapt(readProcessIdentity));
         var launch = startProcess ?? Process.Start;
         _startProcess = startInfo => DispatchProcessStartObservation.Start(startInfo, launch);
-        _runOrchestratorBuildCheck = runOrchestratorBuildCheck ?? OrchestratorBuildEvidenceCheck.RunDefault;
+        _completionBuildEvidence = completionBuildEvidence;
+        _runOrchestratorBuildCheck = runOrchestratorBuildCheck ?? (_ =>
+            new(false, -1, "Completion build evidence coordinator is unavailable."));
         _processCommandLineSnapshotFactory = processCommandLineSnapshotFactory ?? ProcessCommandLines.SnapshotOperation;
     }
     private static bool IsDispatchStartDisabledByEnvironment()
@@ -179,9 +183,11 @@ public sealed partial class BackgroundDispatchRunner
         GoalId goalId,
         TaskId taskId,
         string logRoot,
-        Action<AgentOrchestratorKernel, GoalId, TaskId, DispatchRecordCheckpointPhase>? checkpointBeforeWorkerStart = null)
+        Action<AgentOrchestratorKernel, GoalId, TaskId, DispatchRecordCheckpointPhase>? checkpointBeforeWorkerStart = null,
+        TaskIntentAdmissionReference? taskIntentAdmission = null)
     {
-        var result = TryStartLatestDispatch(kernel, goalId, taskId, logRoot, checkpointBeforeWorkerStart);
+        var result = TryStartLatestDispatch(kernel, goalId, taskId, logRoot, checkpointBeforeWorkerStart,
+            taskIntentAdmission: taskIntentAdmission);
         if (result.RecoveryAction is { } action)
         {
             throw new InvalidOperationException(action.Reason);
@@ -205,11 +211,16 @@ public sealed partial class BackgroundDispatchRunner
         Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentState = null,
         WorkerSandboxOptions? sandboxOptions = null,
         Func<bool>? claimWorkerStart = null,
-        Func<bool>? confirmWorkerStart = null)
+        Func<bool>? confirmWorkerStart = null,
+        TaskIntentAdmissionReference? taskIntentAdmission = null)
     {
         var task = kernel.GetTask(goalId, taskId);
         var dispatch = task.LastDispatch
             ?? throw new InvalidOperationException($"Task '{taskId}' has no dispatch to start.");
+        if (taskIntentAdmission is { } intentReference &&
+            (intentReference.GoalId != goalId.Value || intentReference.TaskId != taskId.Value ||
+             intentReference.DispatchedAt != dispatch.DispatchedAt))
+            throw new InvalidOperationException("Task intent admission does not identify the current dispatch preparation.");
 
         if (DispatchFailureClassifier.IsSubscriptionRetryDeferred(task, _clock.UtcNow, out var retryAfter))
         {
@@ -333,7 +344,9 @@ public sealed partial class BackgroundDispatchRunner
                     task.RequiredRole,
                     section.RoleVisibility))
                 .ToArray(),
-            ClaudeCredentialSelection: credentialSelection);
+            ClaudeCredentialSelection: credentialSelection,
+            TaskIntentAdmission: taskIntentAdmission,
+            StartGatePath: startGatePath);
         DispatchProcessHost.WriteParameters(parametersPath, runParameters);
 
         // Launch the native dispatch host detached: it outlives this CLI process, runs the worker
@@ -359,9 +372,7 @@ public sealed partial class BackgroundDispatchRunner
         startInfo.ArgumentList.Add(DispatchProcessHost.SubcommandName);
         startInfo.ArgumentList.Add(parametersPath);
 
-        // Capture baseCommit immediately before spawning — the left boundary for file attribution.
-        if (spawnReceipt.WorktreeHeadSha is not null)
-            kernel.RecordDispatchBaseCommit(goalId, taskId, spawnReceipt.WorktreeHeadSha);
+        WorkerBuildScopeDispatchPreparation.RecordDispatchBaseCommit(kernel, goalId, task, dispatch.WorkingDirectory, spawnReceipt.WorktreeHeadSha);
 
         if (TryRejectInterruptedDispatchRecovery(kernel, goalId, taskId, readCurrentState))
         {
@@ -717,6 +728,8 @@ public sealed partial class BackgroundDispatchRunner
         var task = kernel.GetTask(goalId, taskId);
         var processRecord = task.LastProcess
             ?? throw new InvalidOperationException($"Task '{taskId}' has no background process to refresh.");
+        if (CompletionBuildDispatchReconciliationPolicy.HoldsRefresh(task, processRecord))
+            return new DispatchRefreshOutcome(processRecord, null);
         if (DispatchProcessCompletionState.HasAlreadyBeenApplied(task, processRecord))
         {
             return new DispatchRefreshOutcome(processRecord, null);
@@ -885,6 +898,22 @@ public sealed partial class BackgroundDispatchRunner
         DispatchRefreshOutcome outcome)
     {
         var task = GetTaskAfterReceiptlessUsage(kernel, goalId, taskId, outcome);
+        if (task.RequiredRole is AgentRole.Reviewer or AgentRole.Tester &&
+            DispatchFailureClassifier.IsSubscriptionProviderCliDispatch(task) &&
+            (outcome.ProcessRecord.StartedAt < task.LastDispatch!.DispatchedAt ||
+             (task.LastProcess is { } currentProcess &&
+              (currentProcess.StartedAt != outcome.ProcessRecord.StartedAt ||
+               !string.Equals(currentProcess.StandardOutputPath, outcome.ProcessRecord.StandardOutputPath, StringComparison.OrdinalIgnoreCase)))))
+        {
+            kernel.RecordTaskNote(goalId, taskId, "Ignored stale verification-role process completion; current attempt is unchanged.");
+            return;
+        }
+        if (outcome.PendingBuildEvidence is { } pending)
+        {
+            kernel.RecordCompletionBuildEvidence(goalId, taskId, pending);
+            kernel.RecordTaskProcessRefreshed(goalId, taskId, outcome.ProcessRecord, null);
+            return;
+        }
         if (outcome.Verification is not null && outcome.DispatchAttemptAt is { } dispatchAttemptAt)
         {
             var dispatch = task.DispatchHistory.SingleOrDefault(candidate => candidate.DispatchedAt == dispatchAttemptAt)
@@ -915,6 +944,12 @@ public sealed partial class BackgroundDispatchRunner
                 return;
             }
         }
+        if (outcome.IntentSuppression is { } suppression)
+        {
+            kernel.DiscardUnstartedDispatch(goalId, taskId, outcome.ProcessRecord,
+                $"TASK_INTENT_DISPATCH_SUPPRESSED goal={suppression.GoalId} task={suppression.TaskId} intent={suppression.IntentId} verb={suppression.Verb} task_version={suppression.TaskVersion}");
+            return;
+        }
         var previousProcess = task.LastProcess;
         var verification = outcome.Verification;
         if (outcome.ResultCommit is not null)
@@ -942,6 +977,9 @@ public sealed partial class BackgroundDispatchRunner
             task.LastProcess?.WasCancelled != true && !outcome.ProcessRecord.WasCancelled)
             kernel.RecordFailedRoundCheckpointReceipt(goalId, taskId, failedReceipt);
         kernel.RecordTaskProcessRefreshed(goalId, taskId, outcome.ProcessRecord, verification, outcome.ProviderFailureKind);
+        if (verification is not null && HasCurrentCompletionBuildWorker(task) &&
+            task.CompletionBuildEvidence is { Applied: false } completedBuild)
+            kernel.RecordCompletionBuildEvidence(goalId, taskId, completedBuild with { Applied = true });
         if (verification is not null && outcome.ProcessRecord.ResourceAccounting is { } accounting)
         {
             kernel.RecordTaskNote(goalId, taskId, FormatResourceReceipt(goalId, taskId, accounting));
@@ -992,69 +1030,7 @@ public sealed partial class BackgroundDispatchRunner
                 Blocker: { Length: > 0 } blocker
             } apparatusHold && !AgentOrchestratorKernel.IsReopenProtectedGoalStatus(kernel.GetGoal(goalId).Status))
         {
-            RecordBoundedApparatusHold(kernel, goalId, taskId, apparatusHold, blocker);
-        }
-    }
-
-    private static void RecordBoundedApparatusHold(
-        AgentOrchestratorKernel kernel,
-        GoalId goalId,
-        TaskId taskId,
-        DispatchRecoveryDecision decision,
-        string blocker)
-    {
-        var priorObservations = kernel.GetTimeline(goalId).Count(evt =>
-            evt.TaskId == taskId &&
-            evt.Kind == ProgressKind.TaskNote &&
-            evt.Message.StartsWith(ApparatusHoldReceiptPrefix, StringComparison.Ordinal) &&
-            evt.Message.Contains($"blocker='{blocker}'", StringComparison.Ordinal));
-        var observation = priorObservations + 1;
-        var diagnostic = DispatchProcessRecoveryService.BuildRecoveryDiagnostic(decision);
-        kernel.RecordTaskNote(
-            goalId,
-            taskId,
-            $"{ApparatusHoldReceiptPrefix} observation={observation}/{ApparatusHoldObservationsBeforeEscalation}; {diagnostic}");
-
-        if (observation < ApparatusHoldObservationsBeforeEscalation)
-        {
-            return;
-        }
-
-        var fingerprint = $"dispatch-apparatus-hold:{taskId.Value}:{blocker}";
-        var requestResult = kernel.RequestHumanInputDeduplicated(
-            goalId,
-            taskId,
-            $"Dispatch recovery cannot determine the worker outcome after {observation} observations because blocker '{blocker}' remains. " +
-            $"Inspect and repair or remove the apparatus artifact at '{decision.EvidencePath}', then answer this request to resume. {diagnostic}",
-            HumanWaitKind.RecoveryChoice,
-            isAutoDefaultable: false,
-            isDismissible: false,
-            isAnswerRequired: true,
-            isExternallyBlocked: false,
-            questionFingerprint: fingerprint,
-            blockerFingerprint: fingerprint,
-            recordDuplicateSuppression: false);
-        if (!requestResult.WasSuppressedByAnswer || requestResult.Request.AnsweredAt is null)
-        {
-            return;
-        }
-
-        var answeredObservations = kernel.GetTimeline(goalId).Count(evt =>
-            evt.TaskId == taskId &&
-            evt.Kind == ProgressKind.TaskNote &&
-            evt.OccurredAt >= requestResult.Request.AnsweredAt &&
-            evt.Message.StartsWith(ApparatusHoldReceiptPrefix, StringComparison.Ordinal) &&
-            evt.Message.Contains($"blocker='{blocker}'", StringComparison.Ordinal));
-        var task = kernel.GetTask(goalId, taskId);
-        if (answeredObservations >= AnsweredApparatusHoldObservationsBeforeFailure &&
-            task.Status is not (WorkTaskStatus.Completed or WorkTaskStatus.Failed or WorkTaskStatus.Cancelled))
-        {
-            kernel.ReportTaskProgress(
-                goalId,
-                taskId,
-                WorkTaskStatus.Failed,
-                $"Dispatch apparatus remained indeterminate for {answeredObservations} observations after answered recovery request " +
-                $"{requestResult.Request.Id.Value[..8]}; blocker='{blocker}'; evidence='{decision.EvidencePath}'.");
+            DispatchApparatusHoldRecorder.Record(kernel, goalId, taskId, apparatusHold, blocker);
         }
     }
 
@@ -1253,9 +1229,17 @@ public sealed partial class BackgroundDispatchRunner
         string? orchestratorFailureReason = null)
     {
         var observedExitCode = exitCode;
-        var exitArtifactAlreadyExisted = File.Exists(processRecord.ExitCodePath);
         var task = kernel.GetTask(goalId, taskId);
+        if (TryReadIntentSuppression(goalId, taskId, task, processRecord, exitCode,
+                out var suppressedPrimaryWithStartedSamples) is { } suppression)
+            return new DispatchRefreshOutcome(processRecord with { CompletedAt = _clock.UtcNow, ExitCode = exitCode },
+                null, IntentSuppression: suppression);
+        var exitArtifactAlreadyExisted = File.Exists(processRecord.ExitCodePath);
         var dispatchAttempt = ResolveDispatchAttempt(task, processRecord);
+        if (task.RequiredRole is AgentRole.Reviewer or AgentRole.Tester &&
+            DispatchFailureClassifier.IsSubscriptionProviderCliDispatch(task) &&
+            dispatchAttempt?.DispatchedAt != task.LastDispatch!.DispatchedAt)
+            return new DispatchRefreshOutcome(processRecord, null);
         DateTimeOffset? contextReceiptAttemptAt = dispatchAttempt?.ContextPackageReceipt is null
             ? null
             : dispatchAttempt.DispatchedAt;
@@ -1293,6 +1277,17 @@ public sealed partial class BackgroundDispatchRunner
         var goal = kernel.GetGoal(goalId);
         var humanInputDirective = AgentOutputDirectives.ParseHumanInputRequest(authoritativeStandardOutput, task.RequiredRole);
         var hasRoleCapability = DispatchRoleOutputCapabilities.TryGet(task.RequiredRole, out var dispatchRoleCapability);
+        var requiresTerminalContract = task.RequiredRole is AgentRole.Reviewer or AgentRole.Tester &&
+            DispatchFailureClassifier.IsSubscriptionProviderCliDispatch(task);
+        var terminalContract = requiresTerminalContract
+            ? WorkerResultBlockers.AssessTerminalVerificationOutput(task.RequiredRole,
+                fullStandardOutput.Content is null ? null : authoritativeStandardOutput)
+            : new VerificationTerminalContractAssessment(VerificationTerminalContractStatus.NotApplicable, string.Empty);
+        var providerCancelled = requiresTerminalContract && DispatchFailureClassifier.IsProviderInterruptionFailure(
+            new TaskVerificationRecord(processRecord.Command, processRecord.WorkingDirectory, observedExitCode,
+                authoritativeStandardOutput, decisionStandardError, _clock.UtcNow,
+                StandardOutputPath: processRecord.StandardOutputPath, EvidenceSource: VerificationEvidenceSource.Dispatch,
+                DispatchAttemptAt: dispatchAttempt?.DispatchedAt));
         var completeNonBlockedWorkerResult = hasRoleCapability && _completionClassifier.HasSuccessfulWorkerResult(
             processRecord.WorkingDirectory,
             authoritativeStandardOutput,
@@ -1300,6 +1295,7 @@ public sealed partial class BackgroundDispatchRunner
             allowNoChangedFiles: true,
             requireNoBlockers: true,
             roleCapability: dispatchRoleCapability);
+        completeNonBlockedWorkerResult &= terminalContract.AllowsCompletion && !providerCancelled;
         var successfulChildResultAvailable =
             observedExitCode != 0 &&
             hasChildExitRecord &&
@@ -1310,7 +1306,7 @@ public sealed partial class BackgroundDispatchRunner
             hasChildExitRecord &&
             childExitRecord.ExitCode == 0 &&
             !completeNonBlockedWorkerResult;
-        var completionContractSucceeded = true;
+        var completionContractSucceeded = terminalContract.AllowsCompletion && !providerCancelled;
 
         if (task.RequiredRole == AgentRole.Researcher &&
             RequiresDurableResearchArtifact(goal, task) &&
@@ -1345,7 +1341,8 @@ public sealed partial class BackgroundDispatchRunner
 
         PlannerCandidateDivergenceReceipt? plannerCandidateDivergence = null;
         var scoutResearchSourcePath = processRecord.StandardOutputPath;
-        if (task.RequiredRole == AgentRole.Planner && (exitCode == 0 || successfulChildResultAvailable))
+        if (task.RequiredRole == AgentRole.Planner &&
+            (exitCode == 0 || successfulChildResultAvailable || suppressedPrimaryWithStartedSamples))
         {
             var acceptanceCriteria = RequiresDurablePlanArtifact(goal, task)
                 ? goal.RefinedSpec?.AcceptanceCriteria ?? []
@@ -1366,12 +1363,18 @@ public sealed partial class BackgroundDispatchRunner
                         processRecord.CompletedAt is { } completedAt
                             ? Math.Max(0, (long)(completedAt - processRecord.StartedAt).TotalMilliseconds)
                             : null);
+                if (suppressedPrimaryWithStartedSamples)
+                    candidates = candidates.Select(candidate => candidate.Index == 0
+                        ? candidate with { TerminalState = PlannerCandidateTerminalState.IntentSuppressed }
+                        : candidate).ToArray();
                 var selection = PlannerCandidateSelector.Select(
                     candidates,
                     processRecord.WorkingDirectory,
                     acceptanceCriteria);
                 plannerContract = selection.SelectedContract;
                 plannerCandidateDivergence = selection.Receipt;
+                if (suppressedPrimaryWithStartedSamples && plannerContract.Succeeded)
+                    exitCode = 0;
                 if (selection.Receipt.SelectedCandidateIndex is int selectedIndex)
                     scoutResearchSourcePath = candidates[selectedIndex].SourcePath
                         ?? throw new InvalidOperationException("Selected Planner candidate has no stdout source path.");
@@ -1444,8 +1447,11 @@ public sealed partial class BackgroundDispatchRunner
         var workerResultPresent = _completionClassifier.HasWorkerResultArtifact(
             processRecord.WorkingDirectory,
             authoritativeStandardOutput);
+        if (requiresTerminalContract)
+            workerResultPresent = terminalContract.Status == VerificationTerminalContractStatus.Valid && !providerCancelled;
         var hasCommittedChanges = false;
         var orchestratorCommitted = false;
+        var buildEvidenceAllowsResultCommit = true;
         InterruptedWorkCheckpointDisposition? checkpointDisposition = null;
         FailedRoundCheckpointReceipt? failedRoundReceipt = null;
         var completedWorktreeInspection = RequiresFileChangeEvidence(task)
@@ -1511,7 +1517,7 @@ public sealed partial class BackgroundDispatchRunner
                 sandboxCommitOnBehalfEvidence);
             // Blockers remain advisory on the ordinary exit-0 commit path. The stricter
             // completeNonBlockedWorkerResult is reserved for overriding a failed wrapper exit.
-            var successfulWorkerResult = _completionClassifier.HasSuccessfulWorkerResult(
+            var successfulWorkerResult = terminalContract.AllowsCompletion && !providerCancelled && _completionClassifier.HasSuccessfulWorkerResult(
                 processRecord.WorkingDirectory,
                 decisionStandardOutput,
                 decisionStandardError);
@@ -1530,7 +1536,24 @@ public sealed partial class BackgroundDispatchRunner
                     DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed));
             }
 
-            checkpointDisposition = _checkpointAuthorizer.AuthorizeAndCheckpoint(
+            var buildEvidence = CompletionBuildDispatchReconciliationPolicy.Resolve(
+                task, processRecord.WorkingDirectory,
+                worktreeEvidence.ChangedPaths, worktreeEvidence.DirtyPaths, failedWorkerBuildCheck,
+                () => _completionClassifier.EvaluateWorkerBuildReceipt(processRecord.WorkingDirectory, goal.Id),
+                _runOrchestratorBuildCheck,
+                _completionBuildEvidence is null ? null : request => _completionBuildEvidence.Reconcile(
+                    kernel, goalId, taskId, request, processRecord with
+                    { CompletedAt = processRecord.CompletedAt ?? _clock.UtcNow, ExitCode = observedExitCode }));
+            if (buildEvidence.Pending)
+                return new DispatchRefreshOutcome(
+                    processRecord with { CompletedAt = processRecord.CompletedAt ?? _clock.UtcNow, ExitCode = observedExitCode }, null,
+                    PendingBuildEvidence: buildEvidence.Operation);
+
+            buildEvidenceAllowsResultCommit = !failedWorkerBuildCheck && !buildEvidence.FailsRound;
+            checkpointDisposition = buildEvidence.FailsRound
+                ? new InterruptedWorkCheckpointDisposition(InterruptedWorkCheckpointDispositionKind.NotApplicable,
+                    "completion-build-evidence-not-certified", string.Empty)
+                : _checkpointAuthorizer.AuthorizeAndCheckpoint(
                 new InterruptedWorkCheckpointRequest(
                     goalId,
                     task,
@@ -1548,14 +1571,6 @@ public sealed partial class BackgroundDispatchRunner
                     checkpointDisposition.Message);
             }
 
-            var buildEvidence = OrchestratorBuildEvidenceCheck.Resolve(
-                processRecord.WorkingDirectory,
-                task.RequiredRole,
-                worktreeEvidence.ChangedPaths,
-                worktreeEvidence.DirtyPaths,
-                failedWorkerBuildCheck,
-                () => _completionClassifier.EvaluateWorkerBuildReceipt(processRecord.WorkingDirectory, goal.Id),
-                _runOrchestratorBuildCheck);
             var missingWorkerBuildEvidence = buildEvidence.MissingEvidence;
             standardErrorDiagnostic = buildEvidence.AppendDiagnostic(standardErrorDiagnostic);
             if (buildEvidence.FailsRound)
@@ -1567,6 +1582,7 @@ public sealed partial class BackgroundDispatchRunner
                 task.LastDispatch.SandboxLowIntegrity != true &&
                 (successfulWorkerResult || worktreeEvidence.HasRelevantCommitAfterDispatch);
             var shouldCommitDirtyWorktree =
+                !buildEvidence.FailsRound &&
                 !missingWorkerBuildEvidence &&
                 checkpointDisposition?.IsCheckpoint != true &&
                 (recoveryDecision?.Action != DispatchRecoveryAction.PreserveInterruptedWork || reconcileWrapperExit) &&
@@ -1574,6 +1590,24 @@ public sealed partial class BackgroundDispatchRunner
                  reconcileWrapperExit ||
                  (task.LastDispatch.SandboxLowIntegrity && sandboxCommitOnBehalfEvidence) ||
                  (originalExitCode != 0 && successfulWorkerResult && !provider.Capabilities.CanSelfCommit && lowIntegrityConfinementEvidence));
+
+            if (buildEvidence.Operation is { Phase: CompletionBuildEvidencePhase.Success } built)
+            {
+                var currentReceipt = _completionClassifier.EvaluateWorkerBuildReceipt(processRecord.WorkingDirectory, goal.Id);
+                if (!WorktreeTreeDigest.TryCompute(processRecord.WorkingDirectory, out var currentDigest, out _) ||
+                    currentDigest != built.TreeDigest || !currentReceipt.Matches ||
+                    WorkerBuildReceiptCoverage.FindMissingProjects(built.Projects, currentReceipt.Projects).Count != 0)
+                {
+                    shouldCommitDirtyWorktree = false;
+                    missingWorkerBuildEvidence = true;
+                    buildEvidenceAllowsResultCommit = false;
+                    exitCode = 1;
+                    kernel.RecordCompletionBuildEvidence(goalId, taskId, built with
+                    { Phase = CompletionBuildEvidencePhase.StaleCandidate, Diagnostic = "Build candidate evidence changed before commit authorization." });
+                    standardErrorDiagnostic = AppendDiagnostic(standardErrorDiagnostic ?? string.Empty,
+                        DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing));
+                }
+            }
 
             if (!worktreeEvidence.IsClean &&
                 shouldCommitDirtyWorktree)
@@ -1673,6 +1707,7 @@ public sealed partial class BackgroundDispatchRunner
                     fullStandardOutput.Content is not null &&
                     WorkerResultBlockers.TryFindPremiseInvalidEvidence(authoritativeStandardOutput, out _);
                 var requiresCommitEvidence =
+                    terminalContract.AllowsCompletion && !providerCancelled &&
                     !successfulChildWithoutUsableWorkerResult &&
                     !hasPremiseInvalidStop &&
                     _completionClassifier.RequiresPostDispatchCommitEvidence(task, hasVerificationOnlyTesterCompletion) &&
@@ -1706,13 +1741,9 @@ public sealed partial class BackgroundDispatchRunner
                 checkpointDisposition?.IsCheckpoint == true,
                 task.LastDispatch.SandboxLowIntegrity && !lowIntegrityConfinementEvidence, processRecord.WasCancelled);
 
-            // WORKER_RESULT is advisory only. Substance is proven from git ground truth
-            // (relevant commit after dispatch + clean worktree, checked above) and the
-            // acceptance test run — not from the worker's self-reported field shape, which
-            // produced recurring false-failures across many distinct WORKER_RESULT schemas.
-            // The self-report is still parsed for the model-fit note when recording the
-            // verification (TaskSpec.RecordVerification via ModelFitEvidence); it never
-            // gates the dispatch.
+            // The subscription Tester terminal report is required independently of git
+            // evidence: a relevant commit cannot replace it. Other implementation roles
+            // retain their existing git/build/no-change evidence semantics.
         }
         else if (completedWorktreeInspection is { IsAvailable: false } unavailableInspection)
         {
@@ -1816,13 +1847,9 @@ public sealed partial class BackgroundDispatchRunner
             ExitArtifactReason = exitArtifact?.Reason
         };
 
-        // Capture resultCommit after all orchestrator commits — the right boundary for file attribution.
-        var resultCommit = checkpointDisposition?.IsCheckpoint == true
-            ? null
-            : TryGetWorktreeHead(processRecord.WorkingDirectory);
-        var resultCommitProvenance = hasCommittedChanges
-            ? orchestratorCommitted ? "orchestrator" : "worker"
-            : null;
+        var (resultCommit, resultCommitProvenance) = CaptureResultCommit(
+            processRecord.WorkingDirectory, buildEvidenceAllowsResultCommit,
+            checkpointDisposition?.IsCheckpoint == true, hasCommittedChanges, orchestratorCommitted);
 
         // Worker-self-reported stdout bytes from the heartbeat — a flush-race-proof signal of real output.
         var heartbeatStdoutBytes = _recoveryService.TryReadHeartbeat(GetHeartbeatPath(processRecord), out var completionHeartbeat)
@@ -1867,7 +1894,9 @@ public sealed partial class BackgroundDispatchRunner
             FullStandardOutputUnavailableReason: fullStandardOutput.UnavailableReason,
             FullStandardErrorUnavailableReason: fullStandardError.UnavailableReason,
             PlannerCandidateDivergence: plannerCandidateDivergence,
-            AssignedScopeComplete: hasAssignedScopeComplete ? assignedScopeComplete : null);
+            AssignedScopeComplete: hasAssignedScopeComplete ? assignedScopeComplete : null,
+            EvidenceSource: VerificationEvidenceSource.Dispatch,
+            DispatchAttemptAt: requiresTerminalContract ? dispatchAttempt?.DispatchedAt : null);
 
         var outcome = new DispatchRefreshOutcome(
             completed,
@@ -2046,6 +2075,22 @@ public sealed partial class BackgroundDispatchRunner
 
         var standardOutput = _processLogReader.ReadBestEffort(processRecord, processRecord.StandardOutputPath).DecisionText;
         var standardError = _processLogReader.ReadBestEffort(processRecord, processRecord.StandardErrorPath).DecisionText;
+        if (task.RequiredRole is AgentRole.Reviewer or AgentRole.Tester &&
+            DispatchFailureClassifier.IsSubscriptionProviderCliDispatch(task))
+        {
+            var complete = _processLogReader.ReadComplete(processRecord.StandardOutputPath);
+            var capturedOutput = complete.Content is null ? null : ProcessLogReader.NormalizeCompleteDecisionText(complete.Content);
+            if (!WorkerResultBlockers.AssessTerminalVerificationOutput(task.RequiredRole,
+                    capturedOutput).AllowsCompletion ||
+                DispatchFailureClassifier.IsProviderInterruptionFailure(new TaskVerificationRecord(
+                    processRecord.Command, processRecord.WorkingDirectory, 0, capturedOutput ?? "", standardError, _clock.UtcNow,
+                    StandardOutputPath: processRecord.StandardOutputPath, EvidenceSource: VerificationEvidenceSource.Dispatch,
+                    DispatchAttemptAt: task.LastDispatch?.DispatchedAt)))
+            {
+                deniedNote = "Hung-wrapper rescue requires a current-attempt terminal verification contract.";
+                return false;
+            }
+        }
         var hasPopulatedStandardOutput =
             ProcessLogReader.SafeFileLength(processRecord.StandardOutputPath) > 0L ||
             (_recoveryService.TryReadHeartbeat(GetHeartbeatPath(processRecord), out var heartbeat) &&
@@ -2162,6 +2207,19 @@ public sealed partial class BackgroundDispatchRunner
         var processRecord = task.LastProcess
             ?? throw new InvalidOperationException($"Task '{taskId}' has no background process to cancel.");
 
+        if (task.CompletionBuildEvidence is { IsPending: true })
+        {
+            if (_completionBuildEvidence is not null)
+                _completionBuildEvidence.Cancel(kernel, goalId, taskId);
+            else
+            {
+                var operation = task.CompletionBuildEvidence;
+                CompletionBuildEvidenceChildIdentity.Stop(operation);
+                kernel.RecordCompletionBuildEvidence(goalId, taskId, operation with
+                { Phase = CompletionBuildEvidencePhase.Cancelled, Diagnostic = "Operator cancelled completion build evidence." });
+            }
+        }
+
         var resourceAccounting = ReapForCancellation(processRecord, bypassTrackedJobRegistry);
         var cancelledAt = _clock.UtcNow;
         var cancelled = processRecord with
@@ -2216,9 +2274,18 @@ public sealed partial class BackgroundDispatchRunner
 
         foreach (var task in goal.Tasks)
         {
-            if (task.LastProcess is not { IsRunning: true })
+            if (task.LastProcess is not { IsRunning: true } && task.CompletionBuildEvidence is not { IsPending: true })
             {
                 continue;
+            }
+
+            if (task.CompletionBuildEvidence is { IsPending: true } operation && !HasCurrentCompletionBuildWorker(task))
+            {
+                var disposition = CancelCompletionBuildEvidence(kernel, goalId, task.Id, CompletionBuildEvidenceTarget.From(operation));
+                if (disposition.IsPending || !disposition.CustodyReleased)
+                    throw new InvalidOperationException("Completion build cancellation is held; custody is retained.");
+                // A newer live worker still follows its own normal cancellation path.
+                if (task.LastProcess is not { IsRunning: true }) { cancelled++; continue; }
             }
 
             CancelLatestProcess(kernel, goalId, task.Id, cancelledByConductor: true);
@@ -2654,19 +2721,6 @@ public sealed partial class BackgroundDispatchRunner
         TaskId taskId,
         TaskProcessResourceAccounting accounting) =>
         $"RESOURCE goal={goalId.Value[..8]} task={taskId.Value[..8]} cpu_ms={accounting.CpuMilliseconds} peak_mem_bytes={accounting.PeakMemoryBytes} io_bytes={accounting.IoBytes} accounting_source={accounting.AccountingSource}{(accounting.Reaped ? " reaped=true" : string.Empty)}";
-
-    // The detached dispatch host is the App's __dispatch-run subcommand. The App assembly sits next
-    // to this Infrastructure assembly in every run context (the App output dir in production; the
-    // test output dir in tests, which reference the App project), so resolve it from the base dir.
-    private static string ResolveDispatchHostAssembly()
-    {
-        return Path.Combine(AppContext.BaseDirectory, "Mcg.AgentOrchestrator.App.dll");
-    }
-
-    private static bool IsLocalDispatch(TaskDispatchRecord dispatch)
-    {
-        return dispatch.WorkerName.Equals("local", StringComparison.OrdinalIgnoreCase);
-    }
 
     internal readonly record struct WrapperExitReconciliationEvidence(
         int ObservedRootExitCode,

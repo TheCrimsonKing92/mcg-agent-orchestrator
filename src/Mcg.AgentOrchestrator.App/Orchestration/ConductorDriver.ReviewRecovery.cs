@@ -12,7 +12,9 @@ internal sealed partial class ConductorDriver
     {
         observation = FailedGoalFindingObservation.None;
         var candidate = FailedGoalRecoveryPolicy.SelectReviewContractCandidate(
-            goal.Tasks.Select(task => new FailedGoalReviewContractCandidate(
+            goal.Tasks.Where(task => task.LastVerification is null ||
+                WorkerResultBlockers.AssessSubscriptionVerification(task, task.LastVerification).AllowsCompletion)
+            .Select(task => new FailedGoalReviewContractCandidate(
                 task.Id,
                 task.RequiredRole,
                 task.Status,
@@ -24,6 +26,8 @@ internal sealed partial class ConductorDriver
         var reviewerTask = goal.Tasks.Single(task => task.Id == candidate.TaskId);
         var violation = reviewerTask.LastVerification?.ReviewFindingContractViolation ??
             throw new InvalidOperationException("Selected review-contract candidate lost its violation evidence.");
+        var maxRepairs = violation.Code == ReviewFindingConvergence.FindingFormatViolationCode
+            ? 1 : MaxReviewFindingContractRepairsPerRound;
 
         IReadOnlyList<ReviewFinding> canonicalLedger;
         try
@@ -42,7 +46,7 @@ internal sealed partial class ConductorDriver
                     null,
                     null,
                     0,
-                    MaxReviewFindingContractRepairsPerRound,
+                    maxRepairs,
                     string.Empty,
                     string.Empty,
                     BuildFailedGoalAttemptIdentity(reviewerTask)));
@@ -70,7 +74,7 @@ internal sealed partial class ConductorDriver
             : null;
         var priorRepairs = CountReviewerContractRepairsInCurrentRound(goal, reviewerTask);
         var repairLimitEvidence =
-            $"{reviewerTask.RequiredRole} exhausted the contract-repair limit ({MaxReviewFindingContractRepairsPerRound}) in the same review round for task {reviewerTask.Id.Value[..8]}; " +
+            $"{reviewerTask.RequiredRole} exhausted the contract-repair limit ({maxRepairs}) in the same review round for task {reviewerTask.Id.Value[..8]}; " +
                 $"violation_code={violation.Code}; prior_stable_id={violation.PriorStableId ?? "none"}; " +
                 $"submitted_stable_id={violation.SubmittedStableId ?? "none"}; " +
                 $"prior_location={violation.PriorLocation?.ToString() ?? "none"}; " +
@@ -83,7 +87,7 @@ internal sealed partial class ConductorDriver
                 retryCapEvidence,
                 touchProofUnavailableEvidence,
                 priorRepairs,
-                MaxReviewFindingContractRepairsPerRound,
+                maxRepairs,
                 repairLimitEvidence,
                 string.Empty,
                 BuildFailedGoalAttemptIdentity(reviewerTask));
@@ -95,7 +99,7 @@ internal sealed partial class ConductorDriver
             reviewerTask,
             violation,
             priorRepairs + 1,
-            MaxReviewFindingContractRepairsPerRound,
+            maxRepairs,
             FormatVerifyingRoleOutputArtifact(reviewerTask));
         observation = FailedGoalRecoveryPolicy.SelectReviewContractObservation(selectionFacts with { RepairEnvelope = brief });
         return true;
@@ -125,7 +129,8 @@ internal sealed partial class ConductorDriver
         }
         if (trigger is null)
         {
-            foreach (var requestingTask in goal.Tasks.Where(task => task.LastVerification is not null))
+            foreach (var requestingTask in goal.Tasks.Where(task => task.LastVerification is not null &&
+                WorkerResultBlockers.AssessSubscriptionVerification(task, task.LastVerification).AllowsCompletion))
             {
                 if (TryBuildFindingEvidenceRequest(goal, requestingTask, policy, out observation))
                 {
@@ -300,6 +305,10 @@ internal sealed partial class ConductorDriver
         {
             return null;
         }
+
+        if (task.LastVerification is { } contractRecord &&
+            !WorkerResultBlockers.AssessSubscriptionVerification(task, contractRecord).AllowsCompletion)
+            return null;
 
         if (task.LastVerification is { } latestVerification &&
             !VerifyingFindingCurrency.IsCurrent(goal, task, latestVerification))

@@ -14,9 +14,13 @@ internal static class OwnerConsoleEpicPlanFormatter
         var lines = new List<string>();
         if (next.IsStalled) lines.Add(EpicPlanNextStep.StalledText);
         lines.Add($"Bar: {view?.Plan.Bar ?? "(no bar)"}");
+        lines.Add((view?.OutcomeProgress ?? EpicOutcomeProjection.Unevaluated).Render());
         if (items.Count == 0) lines.Add("(no plan)");
         foreach (var item in items.OrderBy(item => item.Item.Position))
+        {
             lines.Add($"{item.Item.Position}. {item.Subject} — {item.Render()}");
+            if (item.SourceFacts is { } facts) lines.Add($"  {facts.Render()}");
+        }
 
         lines.Add("Decisions (newest first):");
         var decisions = view?.Plan.Decisions ?? [];
@@ -30,6 +34,7 @@ internal static class OwnerConsoleEpicPlanFormatter
         if (decisions.Count > 5)
             lines.Add($"  {decisions.Count - 5} older decisions: see epic-plan {Short(detail.Epic.Id)}");
         if (items.Count > 0 && !next.IsStalled) lines.Add($"Next step: {next.Text}");
+        if (view is not null) lines.Add($"Outcome next step: {EpicPlanNextStep.Compute(view).Text}");
 
         lines.Add("Not in plan:");
         var unplanned = view?.UnplannedMembers ?? [];

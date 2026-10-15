@@ -109,7 +109,7 @@ public sealed class OwnerConsoleActivityOutcomeTests
         Assert.StartsWith("Do you need to act: ", parts[3]);
         Assert.Contains("No.", parts[3]);
         Assert.Equal(1, dialog.Text.Split("11111111", StringSplitOptions.None).Length - 1);
-        const string noQuestion = "no owner question is listed in DECISIONS for this event";
+        const string noQuestion = "No owner question is listed in DECISIONS for this event";
         Assert.Equal(1, dialog.Text.Split(noQuestion, StringSplitOptions.None).Length - 1);
         Assert.Contains(noQuestion, parts[3]);
         Assert.DoesNotContain(noQuestion, parts[2]);
@@ -126,7 +126,7 @@ public sealed class OwnerConsoleActivityOutcomeTests
         var item = Assert.Single(model.Activity);
         var decision = Assert.Single(model.Decisions);
         var text = OwnerActivityNarrator.Explain(item, model.Decisions);
-        Assert.Contains($"Do you need to act: Yes. open DECISIONS row [{decision.Number}] 11111111 HumanInput: Continue?", text);
+        Assert.Contains($"Do you need to act: Yes. Open DECISIONS row [{decision.Number}] 11111111 HumanInput: Continue?", text);
         Assert.Contains("What happens next: still waiting on you. Work waits for your answer.", text);
         Assert.Contains("Why: Continue?", text);
     }
@@ -142,7 +142,7 @@ public sealed class OwnerConsoleActivityOutcomeTests
         Assert.Equal(1, text.Split("11111111", StringSplitOptions.None).Length - 1);
         Assert.Contains("Why: needs a rebase", text);
         Assert.Contains($"What happens next: resolved at {time.AddSeconds(5).ToLocalTime():HH:mm:ss} by the Author. Work can continue.", text);
-        Assert.Contains($"Do you need to act: No. resolved at {time.AddSeconds(5).ToLocalTime():HH:mm:ss} by the Author.", text);
+        Assert.Contains($"Do you need to act: No. Resolved at {time.AddSeconds(5).ToLocalTime():HH:mm:ss} by the Author.", text);
     }
 
     [Fact]
@@ -207,13 +207,13 @@ public sealed class OwnerConsoleActivityOutcomeTests
         internal readonly OwnerConsoleScreenController Controller;
         internal readonly OwnerConsoleFullScreenView View;
         internal Scene(IGoalEventTail? tail = null, Func<OwnerConductEvent, OwnerActivityTestEvidence?>? evidence = null,
-            Func<OwnerConsoleHarness, IOwnerQuestionSource>? questions = null)
+            Func<OwnerConsoleHarness, IOwnerQuestionSource>? questions = null, OwnerConsoleInputDiagnostics? diagnostics = null)
         {
             var source = questions?.Invoke(Harness) ?? Harness.Questions;
             Builder = new(Harness.State, source, Harness.Liveness, new Epics(), Harness.Clock, evidence);
             Controller = new(source, Harness.Answers, Dialogs, Harness.State, tail ?? Harness.Tail,
                 Harness.Conductor, Harness.DigestReport, Harness.Digest, Harness.Clock);
-            View = new(App, Controller, () => Task.CompletedTask);
+            View = new(App, Controller, () => Task.CompletedTask, diagnostics: diagnostics);
         }
         internal void AddGoals()
         {

@@ -134,9 +134,15 @@ internal sealed class SystemConductorSupervisorHandoffSeam : IConductorSuperviso
         return path;
     }
 
-    public ConductorSupervisorHandoffRecord ReadRecord(string path) =>
-        JsonSerializer.Deserialize<ConductorSupervisorHandoffRecord>(File.ReadAllText(path))
-        ?? throw new InvalidDataException("Supervisor handoff record is empty.");
+    public ConductorSupervisorHandoffRecord ReadRecord(string path)
+    {
+        // Claim the exact artifact atomically before publishing readiness. A second
+        // consumer must fail even while the incumbent still owns the lease.
+        var claimedPath = path + ".claimed";
+        File.Move(path, claimedPath, overwrite: false);
+        return JsonSerializer.Deserialize<ConductorSupervisorHandoffRecord>(File.ReadAllText(claimedPath))
+            ?? throw new InvalidDataException("Supervisor handoff record is empty.");
+    }
 
     public void WriteReady(string path, ConductorSupervisorReadyRecord ready) => WriteAtomic(path, ready);
 

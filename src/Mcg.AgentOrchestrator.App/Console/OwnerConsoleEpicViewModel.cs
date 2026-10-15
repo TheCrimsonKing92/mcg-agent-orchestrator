@@ -21,19 +21,16 @@ internal sealed record OwnerConsoleEpicViewModel(OwnerConsoleEpicWindow Window, 
         return since;
     }
 
-    internal static async Task<Detail> DetailAsync(EpicProgressRollup row, DateTimeOffset? since,
-        IOrchestratorStateQueries state, CancellationToken cancellationToken)
+    internal static Detail BuildDetail(EpicProgressRollup row, DateTimeOffset? since,
+        IReadOnlyDictionary<string, Goal> goals)
     {
         var inFlight = row.MemberGoals.Where(member => member.Bucket is EpicProgressBucket.Active or EpicProgressBucket.Verifying).ToArray();
         // Mirror Build's inclusive window predicate without changing or recomputing its counts.
         var landed = row.MemberGoals.Where(member => member.Bucket == EpicProgressBucket.Landed && InWindow(member)).ToArray();
         var failed = row.MemberGoals.Where(member => member.Bucket == EpicProgressBucket.Failed && InWindow(member)).ToArray();
         var parked = row.MemberGoals.Where(member => member.Bucket == EpicProgressBucket.Parked).ToArray();
-        var ids = inFlight.Concat(failed).Concat(parked).Select(member => new GoalId(member.Id)).Distinct().ToArray();
-        var goals = ids.Length == 0 ? new Dictionary<string, Goal>() :
-            (await state.LoadGoalsAsync(ids, cancellationToken).ConfigureAwait(false)).Goals.ToDictionary(goal => goal.Id.Value);
         return new(row.Epic, inFlight.Select(Line).ToArray(), landed.Select(Line).ToArray(),
-            failed.Select(member => Trouble(member, true)).ToArray(), parked.Select(member => Trouble(member, false)).ToArray());
+            failed.Select(member => Trouble(member, true)).ToArray(), parked.Select(member => Trouble(member, false)).ToArray(), row.Plan);
 
         bool InWindow(EpicProgressMemberGoal member) => since is null || member.UpdatedAt >= since;
         GoalLine Line(EpicProgressMemberGoal member) => new(member.Id, member.Title,

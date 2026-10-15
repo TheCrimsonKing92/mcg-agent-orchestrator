@@ -7,7 +7,6 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class CliCommandTestsScoutGoalCreation : CliCommandTestBase
 {
     [Xunit.Theory]
-    [Xunit.InlineData("five-role")]
     [Xunit.InlineData("scout")]
     public async Task GoalCreateForcedPipelinePersistsExactTaskOrder(string pipeline)
     {
@@ -43,9 +42,7 @@ public sealed class CliCommandTestsScoutGoalCreation : CliCommandTestBase
         var restored = await CreateMigratedStateRepository(workspace.SqliteStatePath).LoadAsync();
         var persistedGoal = Xunit.Assert.Single(restored.Goals);
         Xunit.Assert.Equal(
-            pipeline == "scout"
-                ? (AgentRole[])[AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer]
-                : (AgentRole[])[AgentRole.Researcher, AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
+            [AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
             persistedGoal.Tasks.Select(task => task.RequiredRole));
     }
 }

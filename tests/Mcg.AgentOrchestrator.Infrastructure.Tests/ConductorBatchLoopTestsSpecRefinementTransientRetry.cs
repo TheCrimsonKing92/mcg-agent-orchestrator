@@ -186,8 +186,8 @@ public sealed class ConductorBatchLoopTestsSpecRefinementTransientRetry(ITestOut
         {
             Workspace = OrchestratorWorkspace.ForDirectory(_root);
             Repository = OpenStateRepository(Workspace.SqliteStatePath);
-            Goal = GoalLifecycleCommands.CreateAndActivateGoal(Kernel, AgentCatalog.Default().Agents,
-                GoalObjectivePlanner.Build("Plan a focused implementation with tests.", GoalIntakePipeline.FiveRole));
+            Goal = ResearcherGoalPlanFixture.CreateAndActivate(Kernel, AgentCatalog.Default().Agents,
+                "Plan a focused implementation with tests.");
             GoalRefinementWorkCoordinator.RecordPending(Kernel, Goal.Id);
             Message = GoalRefinementWorkCoordinator.CreateMessage(Goal.Id) with { CreatedAt = Now };
             GoalRefinementWorkCoordinator.UtcNowOverride = () => Now;

@@ -96,7 +96,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRunnerInvocationAn
                 calls.Add(args);
                 if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
                 {
-                    WriteMtpTrx(args);
+                    WriteMtpTrx(args, executedTestCount: 2,
+                        ["ConductorDriverTests.ExecutedMember", "GoalAcceptanceVerifierTests.ExecutedMember"]);
                     return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed! - Failed: 0, Passed: 2, Skipped: 0, Total: 2."));
                 }
 

@@ -36,6 +36,27 @@ internal static class WorkerVerificationEvidence
         };
     }
 
+    public static string? ProjectRejectedPlannerOutputForContext(
+        TaskSpec task,
+        AgentRole targetRole,
+        LogicalArtifactIdentity identity)
+    {
+        // Retry clears latest pointers; bind recovery to the latest rejected Planner output, never an older plan.
+        if (targetRole != AgentRole.Planner ||
+            task.LastVerification is not null ||
+            task.PendingRetryCause != RetryCause.ContractClarification ||
+            task.LatestRetryInherited ||
+            task.LatestRetryAt is not { } retryAt ||
+            task.VerificationHistory.LastOrDefault() is not { Succeeded: false } rejectedPlan ||
+            rejectedPlan.CompletedAt > retryAt ||
+            !string.Equals(rejectedPlan.CompletionVerdictRule, "planner-output-contract-rejected", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        return RequireAuthoritativeStandardOutput(rejectedPlan, identity);
+    }
+
     public static string RequireAuthoritativeStandardOutput(
         TaskVerificationRecord verification,
         LogicalArtifactIdentity identity)

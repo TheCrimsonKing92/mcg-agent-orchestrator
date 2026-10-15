@@ -7,6 +7,35 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 // Records only the obligations owned by a successful full gate; other evidence still blocks landing.
 internal static partial class AcceptanceCriterionEvidence
 {
+    // Called only with a coordinator-validated exact-pair full pass, while both
+    // receipt writer and goal mutation custody are held. This phase never rebinds.
+    internal static bool RecordExactReplayEvidence(
+        Goal goal, ConductorParallelAcceptanceAttempt attempt,
+        (string? BranchHeadSha, string? MainHeadSha) currentHeads, AgentOrchestratorKernel? kernel)
+    {
+        if (kernel is null ||
+            !string.Equals(currentHeads.BranchHeadSha, attempt.BranchHeadSha, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(currentHeads.MainHeadSha, attempt.MainHeadSha, StringComparison.OrdinalIgnoreCase) ||
+            ConductorParallelAcceptanceAttemptCoordinator.BuildReplayContextFingerprint(goal) != attempt.ReplayContextFingerprint)
+            return false;
+        var candidateSha = attempt.BranchHeadSha!;
+        var matching = goal.GetOutstandingCriterionEvidenceObligations(candidateSha)
+            .Where(item => item.Owner is not (CriterionEvidenceOwner.Operator or CriterionEvidenceOwner.Worker) ||
+                item.RequiredScope == CriterionEvidenceScopes.FullAcceptanceGate)
+            .ToArray();
+        // Validate the entire set before recording any evidence.
+        if (matching.Length == 0 || matching.Any(item =>
+                item.Owner != CriterionEvidenceOwner.Acceptance || item.State != CriterionEvidenceState.Pending ||
+                item.RequiredScope != CriterionEvidenceScopes.FullAcceptanceGate ||
+                !string.Equals(item.ExpectedCandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase)))
+            return false;
+        foreach (var obligation in matching)
+            kernel.RecordCriterionEvidence(goal.Id, obligation.Id, CriterionEvidenceOwner.Acceptance,
+                candidateSha, $"full-acceptance:{candidateSha}", CriterionEvidenceScopes.FullAcceptanceGate,
+                passed: true, detail: $"Deterministic full acceptance passed for the mapped candidate; source=attempt:{attempt.AttemptId}.");
+        return true;
+    }
+
     public static ConductorAdvanceOutcome.Held? RecordAndCreateHold(Goal goal, string? candidateSha, AgentOrchestratorKernel? kernel, string integrationBranch, string? executionDirectory = null)
     {
         var diagnostic = RecordAndDescribeOutstanding(goal, candidateSha, kernel, integrationBranch, executionDirectory);
@@ -114,7 +143,7 @@ internal static partial class AcceptanceCriterionEvidence
             goal, normalizedCandidate, kernel, integrationBranch, executionDirectory);
         if (rebindDiagnostic is not null) return rebindDiagnostic;
 
-        var diagnostic = RecordFullAcceptanceEvidence(goal, normalizedCandidate, kernel, evidenceSource, integrationBranch, executionDirectory: null);
+        var diagnostic = RecordFullAcceptanceEvidence(goal, normalizedCandidate, kernel, evidenceSource, integrationBranch, executionDirectory);
         if (diagnostic is not null) return diagnostic;
         var outstanding = goal.GetOutstandingCriterionEvidenceObligations(normalizedCandidate)
             .Where(IsBoundOrNonAcceptanceObligation)

@@ -1286,22 +1286,33 @@ public sealed class ConductorDriverTestsPreReviewEvidence
     [Xunit.Fact]
     public void BuildPreReviewEvidenceContext_SplitsOversizedFocusedFilterAtClauseBoundaries()
     {
-        var root = InfrastructureTestSupport.FindRepositoryRoot();
         string[] changedFiles = [
             "src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs",
             "tests/Mcg.AgentOrchestrator.Core.Tests/DispatchOutcomeClassifyTests.cs"];
-        var plan = RepositoryTestImpactPlanner.Plan(changedFiles, root);
-        var infrastructureCheck = Assert.Single(plan.Checks,
-            check => check.TestProject == RepositoryTestProject.Infrastructure);
-        var originalFilter = infrastructureCheck.Command[^1];
+        // Pin the plan at the translation seam: the live planner may legitimately
+        // choose an unfiltered project run or a smaller reverse-dependent selection.
+        var originalFilter = string.Join('|', PremiseInfrastructureClassNames.Select(
+            name => $"FullyQualifiedName~{name}"));
+        Assert.True(originalFilter.Length > PreReviewFocusedRequestSplitter.MaxFocusedEvidenceFilterLength);
+        var plan = new RepositoryTestImpactPlan(true, false, "Controlled oversized selection.",
+        [
+            new RepositoryTestImpactCheck("focused infrastructure tests",
+                ["dotnet", "test", "--project",
+                    "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+                    "--filter", originalFilter],
+                "Controlled splitter input.", RepositoryTestProject.Infrastructure,
+                PremiseInfrastructureClassNames)
+        ]);
 
-        var context = ConductorDriver.BuildPreReviewEvidenceContext("wide-impact-sha", changedFiles, root);
+        var context = ConductorDriver.BuildPreReviewEvidenceContext("wide-impact-sha",
+            RepositoryChangeClassifier.Classify(changedFiles), plan);
         var emitted = context.SelectedFocusedTests.Where(item =>
                 item.StartsWith("Infrastructure.Tests: ", StringComparison.Ordinal))
             .ToArray();
 
         Assert.False(context.MappingNeedsInput);
-        Assert.True(emitted.Length >= 2);
+        Assert.False(context.NoApplicableTests);
+        Assert.Equal(2, emitted.Length);
         Assert.All(emitted, item => Assert.True(
             item[(item.IndexOf(':', StringComparison.Ordinal) + 1)..].Length <=
                 PreReviewFocusedRequestSplitter.MaxFocusedEvidenceFilterLength,
@@ -1430,11 +1441,8 @@ public sealed class ConductorDriverTestsPreReviewEvidence
     public void FocusedRequestSplitter_ExactBrokerBoundaryPreservesOneToOneCoverage()
     {
         var root = InfrastructureTestSupport.FindRepositoryRoot();
-        var classNames = Assert.Single(RepositoryTestImpactPlanner.Plan([
-            "src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs"], root).Checks,
-            check => check.TestProject == RepositoryTestProject.Infrastructure).TestClassSelections!;
         var clauses = new List<string>();
-        foreach (var clause in classNames.Select(name => $"FullyQualifiedName~{name}"))
+        foreach (var clause in PremiseInfrastructureClassNames.Select(name => $"FullyQualifiedName~{name}"))
         {
             if (string.Join('|', clauses.Append(clause)).Length > 1000)
             {

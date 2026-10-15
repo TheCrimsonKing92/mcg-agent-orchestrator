@@ -8,6 +8,69 @@ using Xunit;
 // Parallel-safe: private workspace and an explicitly owned, stdin-gated process.
 public sealed class WorkerDispatchTestsRetryStartGoalEvents : WorkerDispatchTestSupport
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RetirementStopsOrRebuildsMatchingUnclaimedCommandBeforeFakeLaunch(bool refresh)
+    {
+        var root = CreateTempDirectory();
+        WriteSkill(root, "orchestrator-dogfood");
+        var workspace = OrchestratorWorkspace.ForDirectory(root, root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Plan a small change.", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Plan a small change", [task]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec("Plan a small change", ["Plan the change"], VerificationClass.TestVerifiable, [], []));
+        var agent = new AgentDefinition(new AgentId("planner"), "Planner", AgentRole.Planner,
+            new ModelProfile("OpenAI", "gpt-6-sol", ModelCapability.Text, SubscriptionMode.ApiKey, "low"),
+            ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+            Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-6-sol", "low"), IsProviderRoutingConstrained: true);
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var at = DateTimeOffset.UtcNow.AddMinutes(-1);
+        var fingerprint = RetryContextFingerprintBuilder.Build(new RetryContextFingerprintInput(
+            goal.Id.Value, task.Id.Value, AgentRole.Planner, "OpenAI", "gpt-6-sol",
+            PaidRouteClassification.Paid, "candidate", "criteria", [], [], [], [], "base", "main"));
+        var oldDispatch = new TaskDispatchRecord("codex-cli", "codex exec --model gpt-6-sol", root, at,
+            ProviderName: "OpenAI", ModelName: "gpt-6-sol", RetryContextFingerprint: fingerprint,
+            PaidRoute: PaidRouteClassification.Paid, AssignedAgentId: agent.Id.Value);
+        kernel.RecordTaskDispatch(goal.Id, task.Id, oldDispatch);
+        var oldReceipt = kernel.RecordPreparedRetryAdmission(goal.Id, task.Id, fingerprint, PaidRouteClassification.Paid,
+            at, reservationOwnerId: "owner", reservationLeaseExpiresAt: DateTimeOffset.UtcNow.AddMinutes(1)).Receipt;
+        // A fake launcher keeps the global real-worker safety rewrite from hiding the
+        // refreshed command. The injected start callback inspects it without spawning.
+        var profiles = new WorkerProfileCatalog([
+            new WorkerProfile("codex-cli", "fake-worker --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory}")]);
+        var launches = 0;
+        var runner = new BackgroundDispatchRunner(disableProcessStart: false, startProcess: startInfo =>
+        {
+            launches++;
+            var parameters = DispatchProcessHost.ReadParameters(startInfo.ArgumentList.Last());
+            Assert.Equal(kernel.GetTask(goal.Id, task.Id).LastDispatch!.Command, parameters.Command);
+            Assert.Contains("--model 'gpt-6.1-sol'", parameters.Command, StringComparison.Ordinal);
+            Assert.DoesNotContain("--model gpt-6-sol", parameters.Command, StringComparison.Ordinal);
+            throw new InvalidOperationException("fake-launch-boundary");
+        });
+        var operations = new GoalDispatchOperations();
+        Assert.True(operations.ShouldRefreshPreparedDispatchBeforeStart(task, true));
+        if (refresh)
+        {
+            var exception = Assert.Throws<InvalidOperationException>(() => operations.StartDispatches(
+                kernel, workspace, goal, [agent], profiles, runner: runner, sandboxOptions: DisabledSandbox));
+            Assert.Equal("fake-launch-boundary", exception.Message);
+            Assert.Equal(1, launches);
+            Assert.Equal("gpt-6.1-sol", kernel.GetTask(goal.Id, task.Id).LastDispatch!.ModelName);
+        }
+        else
+        {
+            var result = operations.StartDispatches(kernel, workspace, goal, [agent], profiles,
+                refreshBeforeStart: false, runner: runner, sandboxOptions: DisabledSandbox);
+            Assert.Equal(0, launches);
+            Assert.Single(result.StartRefusals);
+            Assert.Equal(oldDispatch, task.LastDispatch);
+        }
+        Assert.Contains(oldReceipt, kernel.GetTask(goal.Id, task.Id).RetryAdmissionHistory);
+        Assert.Equal("gpt-6-sol", oldDispatch.ModelName);
+    }
+
     private static readonly WorkerSandboxOptions DisabledSandbox = new(
         Enabled: false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
 

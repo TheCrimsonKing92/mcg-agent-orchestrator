@@ -88,7 +88,9 @@ public static class DispatchProcessHost
         // whose environment may differ. Path and source kind only - no credential material crosses here,
         // and the payload is re-read at seeding time. Null for non-Claude dispatches; a Claude sandbox
         // dispatch that arrives without it fails before launch rather than re-deriving a source.
-        ClaudeCredentialSourceSelection? ClaudeCredentialSelection = null);
+        ClaudeCredentialSourceSelection? ClaudeCredentialSelection = null,
+        TaskIntentAdmissionReference? TaskIntentAdmission = null,
+        string? StartGatePath = null);
 
     public sealed record DispatchChildExitRecord(
         int ProcessId,
@@ -1385,6 +1387,9 @@ public static void DropToLow() {
         internal Action<string>? DiagnosticRecorded { get; init; }
         internal Action<WaitHandle>? QuiesceSignalCreated { get; init; }
         internal TimeSpan? QuiesceTimeout { get; init; }
+        internal Action<ProcessStartInfo>? BeforeTaskIntentAdmission { get; init; }
+        internal Action<Process>? AfterTaskIntentAdmission { get; init; }
+        internal Func<Process, SpawnProcessIdentityReadResult>? ReadTaskIntentLaunchIdentity { get; init; }
     }
 
     internal static int RunWithHeartbeatHooksForTests(DispatchRunParameters parameters, HeartbeatTestHooks hooks) =>
@@ -1848,10 +1853,24 @@ public static void DropToLow() {
 
             WriteHeartbeat("starting");
             using var mandatoryContextLeases = AcquireMandatoryContextFileLeases(parameters);
-            RequireStartGate();
+            RequireStartGate(parameters.StartGatePath);
+            heartbeatHooks?.BeforeTaskIntentAdmission?.Invoke(startInfo);
             startInfo.Environment[WorkerSandboxOptions.DispatchWorkerVariable] = "1";
-            worker = ProcessTreeGuiSuppression.Start(startInfo);
-            workerGroup = OwnedProcessGroup.Attach(worker);
+            worker = parameters.TaskIntentAdmission is { } intentAdmission
+                ? global::Mcg.AgentOrchestrator.Infrastructure.TaskIntentAdmission.Launch(intentAdmission, parameters.StdoutPath, () =>
+                {
+                    worker = ProcessTreeGuiSuppression.Start(startInfo);
+                    try { workerGroup = OwnedProcessGroup.Attach(worker); }
+                    catch
+                    {
+                        try { if (!worker.HasExited) worker.Kill(entireProcessTree: true); } catch { }
+                        throw;
+                    }
+                    return worker;
+                }, heartbeatHooks?.ReadTaskIntentLaunchIdentity)
+                : ProcessTreeGuiSuppression.Start(startInfo);
+            workerGroup ??= OwnedProcessGroup.Attach(worker);
+            heartbeatHooks?.AfterTaskIntentAdmission?.Invoke(worker);
 
             try { WriteHeartbeat("launched"); }
             catch (Exception failure) { RecordHeartbeatWriteFailure("launched", failure); }
@@ -1910,6 +1929,11 @@ public static void DropToLow() {
             try { stdout.Flush(); } catch { }
             try { stderr.Flush(); } catch { }
             exitCode = worker.ExitCode;
+        }
+        catch (TaskIntentDispatchSuppressedException ex)
+        {
+            exitCode = global::Mcg.AgentOrchestrator.Infrastructure.TaskIntentAdmission.SuppressedExitCode;
+            RecordHostFailure(ex);
         }
         catch (Exception ex)
         {
@@ -2371,9 +2395,9 @@ public static void DropToLow() {
         return fallback;
     }
 
-    private static void RequireStartGate()
+    private static void RequireStartGate(string? explicitGatePath)
     {
-        var gatePath = Environment.GetEnvironmentVariable(StartGatePathVariable);
+        var gatePath = explicitGatePath ?? Environment.GetEnvironmentVariable(StartGatePathVariable);
         if (string.IsNullOrWhiteSpace(gatePath))
         {
             return;

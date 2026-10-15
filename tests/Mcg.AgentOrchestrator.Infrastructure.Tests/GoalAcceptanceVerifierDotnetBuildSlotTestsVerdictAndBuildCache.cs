@@ -543,26 +543,16 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         var cache = new DotnetBaseBuildCache(cacheRoot);
         File.WriteAllText(Path.Combine(root, "Mcg.AgentOrchestrator.sln"), string.Empty);
         var mainSha = new string('a', 40);
-        string[] restoredProjects =
-        [
-            "src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj",
-            "src/Mcg.AgentOrchestrator.Infrastructure.Providers/Mcg.AgentOrchestrator.Infrastructure.Providers.csproj",
-            "src/Mcg.AgentOrchestrator.Infrastructure.OperatorComms/Mcg.AgentOrchestrator.Infrastructure.OperatorComms.csproj",
-            "src/Mcg.AgentOrchestrator.Infrastructure/Mcg.AgentOrchestrator.Infrastructure.csproj",
-            "src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj",
-            "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj",
-            "tests/Mcg.AgentOrchestrator.TestSupport/Mcg.AgentOrchestrator.TestSupport.csproj",
-            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj",
-            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj"
-        ];
+        var restoredProjects = CacheFixtureRestoreProjects("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ChaosGateNoWorkerResultTests.cs");
         foreach (var project in restoredProjects)
         {
             WriteProjectArtifacts(seedArtifacts, project, $"cached:{project}");
         }
 
-        cache.Publish(mainSha, seedArtifacts, restoredProjects);
+        cache.Publish(mainSha, seedArtifacts, restoredProjects, new("fixture-v1"));
         TestOverrides.ResolveBaseBuildMainShaForTests = _ => mainSha;
         TestOverrides.BaseBuildCacheForTests = cache;
+        TestOverrides.ResolveBaseBuildIdentityForTests = () => new("fixture-v1");
         try
         {
             var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
@@ -627,6 +617,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
             Assert.Contains("build_phase_ms=", output, StringComparison.Ordinal);
             Assert.Contains("Core=hit", output, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.Providers=hit", output, StringComparison.Ordinal);
+            Assert.Contains("Execution=hit", output, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.ProviderEnvironment.Tests=hit", output, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.Cli.Tests=hit", output, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.Tests=changed", output, StringComparison.Ordinal);
@@ -640,6 +631,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         {
             TestOverrides.ResolveBaseBuildMainShaForTests = null;
             TestOverrides.BaseBuildCacheForTests = null;
+            TestOverrides.ResolveBaseBuildIdentityForTests = null;
             TryDeleteStableSlotHeartbeat(0);
             DeleteDirectoryWithRetry(root);
         }
@@ -655,21 +647,16 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         var cache = new DotnetBaseBuildCache(cacheRoot);
         File.WriteAllText(Path.Combine(root, "Mcg.AgentOrchestrator.sln"), string.Empty);
         var mainSha = new string('c', 40);
-        string[] restoredProjects =
-        [
-            "src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj",
-            "src/Mcg.AgentOrchestrator.Infrastructure.Providers/Mcg.AgentOrchestrator.Infrastructure.Providers.csproj",
-            "src/Mcg.AgentOrchestrator.Infrastructure.OperatorComms/Mcg.AgentOrchestrator.Infrastructure.OperatorComms.csproj",
-            "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj"
-        ];
+        var restoredProjects = CacheFixtureRestoreProjects("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs");
         foreach (var project in restoredProjects)
         {
             WriteProjectArtifacts(seedArtifacts, project, $"cached:{project}");
         }
 
-        cache.Publish(mainSha, seedArtifacts, restoredProjects);
+        cache.Publish(mainSha, seedArtifacts, restoredProjects, new("fixture-v1"));
         TestOverrides.ResolveBaseBuildMainShaForTests = _ => mainSha;
         TestOverrides.BaseBuildCacheForTests = cache;
+        TestOverrides.ResolveBaseBuildIdentityForTests = () => new("fixture-v1");
         try
         {
             var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
@@ -742,12 +729,13 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
             Assert.Contains("TestSupport=changed", output, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.ProviderEnvironment.Tests=changed", output, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.Cli.Tests=changed", output, StringComparison.Ordinal);
-            Assert.Contains("built_projects=Infrastructure,App,Infrastructure.Tests,TestSupport,Infrastructure.ProviderEnvironment.Tests,Infrastructure.Cli.Tests", output, StringComparison.Ordinal);
+            Assert.Contains(BuiltProjectsReceipt(CacheFixtureProjects().Except(restoredProjects)), output, StringComparison.Ordinal);
         }
         finally
         {
             TestOverrides.ResolveBaseBuildMainShaForTests = null;
             TestOverrides.BaseBuildCacheForTests = null;
+            TestOverrides.ResolveBaseBuildIdentityForTests = null;
             TryDeleteStableSlotHeartbeat(0);
             DeleteDirectoryWithRetry(root);
         }
@@ -762,22 +750,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         var cache = new DotnetBaseBuildCache(cacheRoot);
         File.WriteAllText(Path.Combine(root, "Mcg.AgentOrchestrator.sln"), string.Empty);
         var mainSha = new string('b', 40);
-        string[] cacheableProjects =
-        [
-            "src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj",
-            "src/Mcg.AgentOrchestrator.Infrastructure.Providers/Mcg.AgentOrchestrator.Infrastructure.Providers.csproj",
-            "src/Mcg.AgentOrchestrator.Infrastructure.OperatorComms/Mcg.AgentOrchestrator.Infrastructure.OperatorComms.csproj",
-            "src/Mcg.AgentOrchestrator.Infrastructure/Mcg.AgentOrchestrator.Infrastructure.csproj",
-            "src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj",
-            "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj",
-            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
-            "tests/Mcg.AgentOrchestrator.TestSupport/Mcg.AgentOrchestrator.TestSupport.csproj",
-            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj",
-            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj"
-        ];
+        var cacheableProjects = CacheFixtureProjects();
 
         TestOverrides.ResolveBaseBuildMainShaForTests = _ => mainSha;
         TestOverrides.BaseBuildCacheForTests = cache;
+        TestOverrides.ResolveBaseBuildIdentityForTests = () => new("fixture-v1");
         try
         {
             var verifier = new GoalAcceptanceVerifier(TestOverrides, (args, _, _) =>
@@ -876,6 +853,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
             Assert.Contains("Core=miss", firstOutput, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.Providers=miss", firstOutput, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.OperatorComms=miss", firstOutput, StringComparison.Ordinal);
+            Assert.Contains("Execution=miss", firstOutput, StringComparison.Ordinal);
             Assert.Contains("Infrastructure=miss", firstOutput, StringComparison.Ordinal);
             Assert.Contains("App=miss", firstOutput, StringComparison.Ordinal);
             Assert.Contains("Core.Tests=miss", firstOutput, StringComparison.Ordinal);
@@ -883,10 +861,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
             Assert.Contains("TestSupport=miss", firstOutput, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.ProviderEnvironment.Tests=miss", firstOutput, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.Cli.Tests=miss", firstOutput, StringComparison.Ordinal);
-            Assert.Contains("built_projects=Core,Infrastructure.Providers,Infrastructure.OperatorComms,Infrastructure,App,Core.Tests,Infrastructure.Tests,TestSupport,Infrastructure.ProviderEnvironment.Tests,Infrastructure.Cli.Tests", firstOutput, StringComparison.Ordinal);
+            Assert.Contains(BuiltProjectsReceipt(cacheableProjects), firstOutput, StringComparison.Ordinal);
             Assert.Contains("Core=hit", secondOutput, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.Providers=hit", secondOutput, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.OperatorComms=hit", secondOutput, StringComparison.Ordinal);
+            Assert.Contains("Execution=hit", secondOutput, StringComparison.Ordinal);
             Assert.Contains("Infrastructure=hit", secondOutput, StringComparison.Ordinal);
             Assert.Contains("App=hit", secondOutput, StringComparison.Ordinal);
             Assert.Contains("Core.Tests=hit", secondOutput, StringComparison.Ordinal);
@@ -903,6 +882,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
         {
             TestOverrides.ResolveBaseBuildMainShaForTests = null;
             TestOverrides.BaseBuildCacheForTests = null;
+            TestOverrides.ResolveBaseBuildIdentityForTests = null;
             TryDeleteStableSlotHeartbeat(0);
             DeleteDirectoryWithRetry(root);
         }
@@ -1003,4 +983,17 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsVerdictAndBuildCac
                     $"{check.Name}: predicate={check.CompletionDecision?.FailedPredicate}; " +
                     $"classification={check.FailureClassification}; heartbeat={check.GateHeartbeatPath}; " +
                     $"heartbeat_exists={File.Exists(check.GateHeartbeatPath)}; output={check.OutputTail}"));
+
+    private static string[] CacheFixtureRestoreProjects(string changedPath)
+    {
+        var plan = AcceptancePolicyShardPlanner.BuildPolicyShardPlan([changedPath],
+            new AcceptanceShardPolicySwitches(FullShards: false, ChangeScoped: true));
+        return CacheFixtureProjects().Where(project => !plan.DependencyClosure.Contains(project)).ToArray();
+    }
+    private static string[] CacheFixtureProjects() => AcceptancePolicyShardPlanner.CacheEligibleProjects(
+        [AcceptancePolicyShardPlanner.InfrastructureTestsProject], PolicyShardPlan.NotApplicable("fixture")).ToArray();
+
+    private static string BuiltProjectsReceipt(IEnumerable<string> projects) => "built_projects=" +
+        string.Join(",", projects.Select(project => Path.GetFileNameWithoutExtension(project)
+            .Replace("Mcg.AgentOrchestrator.", "", StringComparison.Ordinal)));
 }

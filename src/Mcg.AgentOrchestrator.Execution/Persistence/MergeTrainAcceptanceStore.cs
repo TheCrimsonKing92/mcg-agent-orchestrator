@@ -37,7 +37,8 @@ public sealed class MergeTrainAcceptanceStore
         using var connection = store.Open();
         var state = StoreSchemaVersions.Verify(connection, StoreSchemaRegistry.MergeTrainAcceptance);
         if (state != StoreSchemaState.Current)
-            throw SchemaSetupRequired(dbPath, state);
+            throw StoreSchemaDiagnostics.WithCompatibility(SchemaSetupRequired(dbPath, state), state,
+                connection, StoreSchemaRegistry.MergeTrainAcceptance, dbPath);
         return store;
     }
 

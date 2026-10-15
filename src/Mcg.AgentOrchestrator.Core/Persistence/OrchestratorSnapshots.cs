@@ -138,7 +138,8 @@ public sealed record TaskSnapshot(
     DateTimeOffset? LatestRoleInputRetryAt = null,
     DateTimeOffset? CriterionRetryFeedbackRoundAt = null,
     bool LatestRetryInherited = false,
-    DateTimeOffset? SubscriptionDeferralReleasedAt = null);
+    DateTimeOffset? SubscriptionDeferralReleasedAt = null,
+    CompletionBuildEvidenceOperation? CompletionBuildEvidence = null);
 
 public sealed record TaskExecutionSnapshot(
     string AgentId,
@@ -191,7 +192,10 @@ public sealed record TaskVerificationSnapshot(
     CandidateIdentity? CandidateIdentity = null,
     string? AcceptanceCriteriaVersionHash = null,
     FailedGoalInconclusiveRoundInputs? InconclusiveRoundInputs = null,
-    PlannerEvidenceStoreReference? HumanInputStoreReference = null)
+    PlannerEvidenceStoreReference? HumanInputStoreReference = null,
+    VerificationEvidenceSource EvidenceSource = VerificationEvidenceSource.Unspecified,
+    DateTimeOffset? DispatchAttemptAt = null,
+    IReadOnlyList<FindingEvidenceRequestDisposition>? FindingEvidenceRequestDispositions = null)
 {
     public string StandardOutput { get; init; } = VerificationTextBounds.BoundText(StandardOutput, StandardOutputPath);
 
@@ -251,7 +255,9 @@ public sealed record TaskDispatchSnapshot(
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     FailedRoundCheckpointDecision? FailedRoundCheckpointDecision = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    IReadOnlyList<string>? SelectedSkills = null);
+    IReadOnlyList<string>? SelectedSkills = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    WorkerBuildScopeIdentity? WorkerBuildScope = null);
 
 public sealed record TaskProcessSnapshot(
     int ProcessId,

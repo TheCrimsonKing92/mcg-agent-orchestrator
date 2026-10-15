@@ -169,12 +169,12 @@ public sealed class ReadmeFrontPageContractTests
     }
 
     [Xunit.Fact]
-    public void GoalReferenceNamesScoutDefaultAndExplicitFiveRoleOption()
+    public void GoalReferenceNamesScoutDefaultAndNoFiveRoleOption()
     {
         var section = string.Join('\n', ReadSection("docs/cli-reference.md", "## `goal`", "## "));
         Xunit.Assert.Contains("automatic default is the Scout pipeline", section, StringComparison.Ordinal);
         Xunit.Assert.Contains("(Planner → Developer → Tester → Reviewer)", section, StringComparison.Ordinal);
-        Xunit.Assert.Contains("`--pipeline five-role` to request five roles", section, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("five-role", section, StringComparison.OrdinalIgnoreCase);
     }
 
     [Xunit.Fact]

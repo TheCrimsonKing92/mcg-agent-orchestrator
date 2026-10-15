@@ -2,11 +2,15 @@ param(
     [Parameter(Mandatory = $true, Position = 0, ValueFromRemainingArguments = $true)]
     [string[]]$Projects,
 
-    [string]$Configuration = "Debug"
+    [string]$Configuration = "Debug",
+
+    # Explicit operator bridge for worktrees dispatched before pinned scope metadata existed.
+    [string]$InitializeScopeIntegrationBranch
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+Import-Module (Join-Path $PSScriptRoot "WorkerBuildReceipt.psm1") -Force
 
 function ConvertTo-SafePathSegment {
     param([string]$Value)
@@ -47,23 +51,6 @@ function Get-BuildSlotName {
     }
 
     return "build-$hash"
-}
-
-function Get-IsolatedRootBase {
-    if (-not [string]::IsNullOrWhiteSpace($env:MCG_DOTNET_ISOLATED_ROOT)) {
-        return $env:MCG_DOTNET_ISOLATED_ROOT
-    }
-
-    if ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT -and
-        -not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
-        # DispatchProcessHost redirects TEMP into each worker's private sandbox. LocalLow is the
-        # machine-user shared Low-integrity location, so workers and the acceptance lane resolve
-        # the same four authoritative build-slot locks without widening worker write access.
-        $localLow = [System.IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA "..\LocalLow"))
-        return (Join-Path $localLow "mcg-dotnet-isolated")
-    }
-
-    return (Join-Path ([System.IO.Path]::GetTempPath()) "mcg-dotnet-isolated")
 }
 
 function Get-HostTempBase {
@@ -161,38 +148,6 @@ function Get-GoalPrefix {
     }
 
     return "manual"
-}
-
-function Get-WorktreeTreeDigest {
-    param([string]$Root, [string]$TemporaryRoot)
-
-    $savedIndex = $env:GIT_INDEX_FILE
-    $savedObjects = $env:GIT_OBJECT_DIRECTORY
-    $savedAlternates = $env:GIT_ALTERNATE_OBJECT_DIRECTORIES
-    $savedOptionalLocks = $env:GIT_OPTIONAL_LOCKS
-    try {
-        $objects = Join-Path $TemporaryRoot "git-objects"
-        New-Item -ItemType Directory -Force -Path $objects | Out-Null
-        $commonObjects = & git -c core.fsmonitor=false -c gc.auto=0 rev-parse --path-format=absolute --git-path objects 2>$null
-        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($commonObjects)) { return $null }
-        $env:GIT_INDEX_FILE = Join-Path $TemporaryRoot "git-index"
-        $env:GIT_OBJECT_DIRECTORY = $objects
-        $env:GIT_ALTERNATE_OBJECT_DIRECTORIES = $commonObjects.Trim()
-        $env:GIT_OPTIONAL_LOCKS = "0"
-        $null = & git -c core.fsmonitor=false -c gc.auto=0 read-tree HEAD 2>$null
-        if ($LASTEXITCODE -ne 0) { return $null }
-        $null = & git -c core.fsmonitor=false -c gc.auto=0 add -A 2>$null
-        if ($LASTEXITCODE -ne 0) { return $null }
-        $tree = & git -c core.fsmonitor=false -c gc.auto=0 write-tree 2>$null
-        if ($LASTEXITCODE -ne 0 -or $tree -notmatch '^[a-fA-F0-9]{40}([a-fA-F0-9]{24})?$') { return $null }
-        return "wbc1:git-tree:$($tree.ToLowerInvariant())"
-    }
-    finally {
-        $env:GIT_INDEX_FILE = $savedIndex
-        $env:GIT_OBJECT_DIRECTORY = $savedObjects
-        $env:GIT_ALTERNATE_OBJECT_DIRECTORIES = $savedAlternates
-        $env:GIT_OPTIONAL_LOCKS = $savedOptionalLocks
-    }
 }
 
 function Clear-ArtifactsDirectory {
@@ -390,7 +345,7 @@ $buildConcurrencySlotCount = Get-BuildConcurrencySlotCount
 $buildSlotName = Get-BuildSlotName -Value $safeGoalPrefix -SlotCount $buildConcurrencySlotCount
 $hashedBuildSlotIndex = [int]$buildSlotName.Substring("build-".Length)
 $leaseId = "goal-$safeGoalPrefix"
-$runRoot = Join-Path $isolatedRoot "goals\$safeGoalPrefix"
+$runRoot = Get-WorkerBuildRunRoot -Root $repositoryRoot
 $leaseRoot = Join-Path $runRoot "lease"
 $artifactsPath = Join-Path $runRoot "artifacts"
 $canonicalArtifactsPath = $artifactsPath
@@ -435,6 +390,9 @@ $runStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 $runLogRoot = $null
 $receiptPath = Join-Path $artifactsPath "worker-build-receipt.json"
 $treeDigest = $null
+$scope = $null
+$projectResults = [System.Collections.Generic.List[object]]::new()
+$receiptWarning = $null
 try {
     $lockDirectory = Split-Path -Parent $executionLockPath
     New-Item -ItemType Directory -Force -Path $lockDirectory | Out-Null
@@ -495,12 +453,42 @@ try {
         "-tl:off"
     )
 
-    try { $treeDigest = Get-WorktreeTreeDigest -Root $repositoryRoot -TemporaryRoot $processTempPath }
-    catch { $treeDigest = $null }
+    $treeDigest = Get-WorktreeTreeDigest -Root $repositoryRoot -TemporaryRoot $processTempPath
+    $scopeMetadataPath = Join-Path $repositoryRoot ".orchestrator-context\worker-build-scope.json"
+    $initialScopeMetadataDigest = if (Test-Path -LiteralPath $scopeMetadataPath -PathType Leaf) {
+        (Get-FileHash -LiteralPath $scopeMetadataPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    } else { "none" }
 
     $runId = "{0}-{1}-{2}" -f (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssfffZ"), $PID, ([Guid]::NewGuid().ToString("N").Substring(0, 8))
     $runLogRoot = Join-Path $artifactsPath "worker-build-logs\$runId"
     New-Item -ItemType Directory -Force -Path $runLogRoot | Out-Null
+
+    # Bootstrap under this invocation's custody. Tool compilation provides no project coverage credit.
+    # Keep transient dependency outputs off deeply nested goal/fixture artifact paths on Windows;
+    # the durable bootstrap log stays with this invocation's project logs.
+    $scopeToolProject = Join-Path $PSScriptRoot "WorkerBuildScopeTool\WorkerBuildScopeTool.csproj"
+    $scopeToolRoot = Join-Path $processTempPath "scope-tool"
+    $scopeToolBin = Join-Path $scopeToolRoot "bin"
+    $scopeToolLog = Join-Path $runLogRoot "scope-bootstrap.txt"
+    & dotnet build $scopeToolProject --nologo --configuration Debug --verbosity minimal --artifacts-path $scopeToolRoot --output $scopeToolBin -maxcpucount:1 -p:BuildInParallel=false -tl:off *> $scopeToolLog
+    if ($LASTEXITCODE -ne 0) { throw "worker build scope tool bootstrap failed; complete-log: $scopeToolLog" }
+    $scopeToolDll = Join-Path $scopeToolBin "WorkerBuildScopeTool.dll"
+    if (-not (Test-Path -LiteralPath $scopeToolDll -PathType Leaf)) { throw "worker build scope tool output missing: $scopeToolDll" }
+    $scopeResultPath = Join-Path $processTempPath "scope.json"
+    $scopeArguments = @($repositoryRoot, $scopeResultPath)
+    if (-not [string]::IsNullOrWhiteSpace($InitializeScopeIntegrationBranch)) {
+        $scopeArguments += @("--initialize-legacy-goal", $InitializeScopeIntegrationBranch)
+    }
+    $scopeArguments += $Projects
+    $scopeOutput = @(& dotnet $scopeToolDll @scopeArguments 2>&1)
+    if ($LASTEXITCODE -ne 0) { throw "worker build scope discovery failed: $($scopeOutput -join ' ')" }
+    $scope = Get-Content -LiteralPath $scopeResultPath -Raw | ConvertFrom-Json
+    if ($scope.MetadataDigest -ne $initialScopeMetadataDigest -and
+        -not ($initialScopeMetadataDigest -eq "none" -and -not [string]::IsNullOrWhiteSpace($InitializeScopeIntegrationBranch))) {
+        throw "worker build scope metadata changed during bootstrap"
+    }
+    $projectPaths = @($scope.Projects | ForEach-Object { Join-Path $repositoryRoot $_ })
+    Write-Output "build-scope: requested=$($scope.RequestedProjects -join ',') required=$($scope.RequiredProjects -join ',') projects=$($scope.Projects -join ',')"
 
     for ($projectIndex = 0; $projectIndex -lt $projectPaths.Count; $projectIndex++) {
         $projectPath = $projectPaths[$projectIndex]
@@ -513,6 +501,7 @@ try {
         )
         $output = @(& dotnet build $projectPath --nologo --configuration $Configuration --verbosity minimal @isolatedArguments @fileLoggerArguments 2>&1)
         $projectExitCode = $LASTEXITCODE
+        $projectResults.Add([pscustomobject]@{ project = $relativeProject; exitCode = $projectExitCode; logPath = $logPath })
         $outputLines = ConvertTo-OutputLines -Output $output
         if ($projectExitCode -ne 0) {
             $exitCode = 1
@@ -551,6 +540,71 @@ catch {
     $apparatusFailure = $_.Exception.Message
 }
 finally {
+    # Publish the actual output identity while slot custody still protects this build.
+    if ($lockHeld) {
+        $receiptWarning = $null
+        if ([string]::IsNullOrWhiteSpace($treeDigest)) {
+            $exitCode = 1
+            $apparatusFailure = "tree digest could not be computed"
+            $receiptWarning = "warning: worker build receipt unavailable: tree digest could not be computed"
+        }
+        else {
+            try {
+                $finalDigest = Get-WorktreeTreeDigest -Root $repositoryRoot -TemporaryRoot $processTempPath
+                if ($finalDigest -ne $treeDigest) {
+                    $exitCode = 1
+                    $apparatusFailure = "worktree identity changed during worker build"
+                }
+                if ($null -eq $scope) {
+                    $exitCode = 1
+                    if ([string]::IsNullOrWhiteSpace($apparatusFailure)) {
+                        $apparatusFailure = "worker build scope was not resolved"
+                    }
+                }
+                else {
+                    # Re-read immutable inputs and scope; metadata is internal and outside the source tree digest.
+                    $finalScopePath = Join-Path $processTempPath "final-scope.json"
+                    $scopeOutput = @(& dotnet $scopeToolDll $repositoryRoot $finalScopePath @Projects 2>&1)
+                    if ($LASTEXITCODE -ne 0) { throw "final worker build scope discovery failed: $($scopeOutput -join ' ')" }
+                    $finalScope = Get-Content -LiteralPath $finalScopePath -Raw | ConvertFrom-Json
+                    if ($finalScope.Identity -ne $scope.Identity) {
+                        $exitCode = 1
+                        $apparatusFailure = "worker build scope identity changed during build"
+                    }
+                    if ($projectResults.Count -ne $projectPaths.Count) {
+                        $exitCode = 1
+                        $apparatusFailure = "worker build project execution evidence incomplete"
+                    }
+                }
+                $receipt = [ordered]@{
+                    schemaVersion = 1
+                    treeDigest = $treeDigest
+                    finalTreeDigest = $finalDigest
+                    digestAlgorithm = "wbc1:git-tree"
+                    buildOutcome = if ($exitCode -eq 0) { "success" } else { "failure" }
+                    generatedAtUtc = (Get-Date).ToUniversalTime().ToString("o")
+                    worktreeRoot = $repositoryRoot
+                    configuration = $Configuration
+                    artifactsPath = [System.IO.Path]::GetFullPath($artifactsPath)
+                    buildProperties = [ordered]@{ UseArtifactsOutput = "true"; ArtifactsPath = [System.IO.Path]::GetFullPath($artifactsPath); BuildInParallel = "false" }
+                    projects = @($projectPaths | ForEach-Object { Get-DisplayPath -Root $repositoryRoot -Path $_ })
+                    scopeIdentity = if ($null -ne $scope) { $scope.Identity } else { "unresolved" }
+                    scopeMetadataDigest = if ($null -ne $scope) { $scope.MetadataDigest } else { "unresolved" }
+                    scopeStableDigest = if ($null -ne $scope) { $scope.StableMetadataDigest } else { "unresolved" }
+                    projectResults = @($projectResults.ToArray())
+                }
+                New-Item -ItemType Directory -Force -Path $canonicalArtifactsPath | Out-Null
+                $temporaryReceipt = Join-Path $canonicalArtifactsPath ("worker-build-receipt-$PID.tmp")
+                [System.IO.File]::WriteAllText($temporaryReceipt, ($receipt | ConvertTo-Json -Depth 5), [System.Text.UTF8Encoding]::new($false))
+                Move-Item -LiteralPath $temporaryReceipt -Destination $receiptPath -Force
+            }
+            catch {
+                $exitCode = 1
+                $apparatusFailure = "could not publish worker build receipt: $($_.Exception.Message)"
+                $receiptWarning = "warning: worker build receipt unavailable: could not write receipt"
+            }
+        }
+    }
     if ($lockHeld -and $null -ne $lockStream) {
         try {
             $holderPath = "$executionLockPath.owner.json"
@@ -568,31 +622,6 @@ finally {
 }
 
 $runStopwatch.Stop()
-$receiptWarning = $null
-if ([string]::IsNullOrWhiteSpace($treeDigest)) {
-    $receiptWarning = "warning: worker build receipt unavailable: tree digest could not be computed"
-}
-else {
-    try {
-        $receipt = [ordered]@{
-            schemaVersion = 1
-            treeDigest = $treeDigest
-            digestAlgorithm = "wbc1:git-tree"
-            buildOutcome = if ($exitCode -eq 0) { "success" } else { "failure" }
-            generatedAtUtc = (Get-Date).ToUniversalTime().ToString("o")
-            worktreeRoot = $repositoryRoot
-            configuration = $Configuration
-            projects = @($projectPaths | ForEach-Object { Get-DisplayPath -Root $repositoryRoot -Path $_ })
-        }
-        New-Item -ItemType Directory -Force -Path $canonicalArtifactsPath | Out-Null
-        $temporaryReceipt = Join-Path $canonicalArtifactsPath ("worker-build-receipt-$PID.tmp")
-        [System.IO.File]::WriteAllText($temporaryReceipt, ($receipt | ConvertTo-Json -Depth 4), [System.Text.UTF8Encoding]::new($false))
-        Move-Item -LiteralPath $temporaryReceipt -Destination $receiptPath -Force
-    }
-    catch {
-        $receiptWarning = "warning: worker build receipt unavailable: could not write receipt"
-    }
-}
 if ($null -ne $receiptWarning) { Write-Output $receiptWarning }
 $logSummary = if ([string]::IsNullOrWhiteSpace($runLogRoot)) { "unavailable" } else { $runLogRoot }
 if ($exitCode -eq 0) {

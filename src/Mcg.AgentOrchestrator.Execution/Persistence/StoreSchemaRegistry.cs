@@ -3,10 +3,18 @@ using Microsoft.Data.Sqlite;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-// Inventory entries describe schema-owning source files. A null version means setup conversion
+// Inventory entries describe owning store schemas. A null version means setup conversion
 // is deferred to a later slice; it does not assert that the existing store's schema is version zero.
 public sealed record StoreSchemaEntry(
     string StoreName, string SourceFile, string Database, string Family, int? CurrentVersion);
+
+// An extracted schema fragment declares its existing owner here, rather than inventing a store.
+[AttributeUsage(AttributeTargets.Method)]
+public sealed class StoreSchemaSourceAttribute(string storeName, string sourceFile) : Attribute
+{
+    public string StoreName { get; } = storeName;
+    public string SourceFile { get; } = sourceFile;
+}
 
 public static class StoreSchemaRegistry
 {
@@ -15,7 +23,7 @@ public static class StoreSchemaRegistry
     private const string Comms = "src/Mcg.AgentOrchestrator.Infrastructure.OperatorComms/";
 
     public static StoreSchemaEntry Portfolio { get; } =
-        new("portfolio", Persistence + "PortfolioStore.cs", "portfolio.db", "portfolio", 2);
+        new("portfolio", Persistence + "PortfolioStore.cs", "portfolio.db", "portfolio", 3);
 
     public static StoreSchemaEntry Experiments { get; } =
         new("experiments", Persistence + "ExperimentStore.cs", "experiments.db", "experiment", 1);
@@ -24,13 +32,16 @@ public static class StoreSchemaRegistry
         new("backlog", Persistence + "BacklogStore.cs", "backlog.db", "backlog", 1);
 
     public static StoreSchemaEntry OperatorIntents { get; } =
-        new("operator-intents", Persistence + "OperatorIntentStore.cs", SqliteOperatorIntentStore.DatabaseFileName, "backlog", 1);
+        new("operator-intents", Persistence + "OperatorIntentStore.cs", SqliteOperatorIntentStore.DatabaseFileName, "backlog", 2);
 
     public static StoreSchemaEntry OperatorLessons { get; } =
         new("operator-lessons", Persistence + "OperatorLessonStore.cs", "operator-lessons.db", "backlog", 1);
 
     public static StoreSchemaEntry OperatorEscapes { get; } =
         new("operator-escapes", Persistence + "OperatorEscapeStore.cs", "operator-escapes.db", "backlog", 1);
+
+    public static StoreSchemaEntry OperatorDirectives { get; } =
+        new("operator-directives", Persistence + "OperatorDirectiveStoreSetup.cs", "operator-directives.db", "backlog", 1);
 
     public static StoreSchemaEntry CohortAcceptance { get; } =
         new("cohort-acceptance", Persistence + "CohortAcceptanceStore.cs", "cohort-acceptance.db", "cohort", 1);
@@ -83,6 +94,7 @@ public static class StoreSchemaRegistry
         OperatorIntents,
         OperatorLessons,
         OperatorEscapes,
+        OperatorDirectives,
         CohortAcceptance,
         CohortAttributionRetractions,
         CohortSoloInheritedReceipts,

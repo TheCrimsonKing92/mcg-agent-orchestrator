@@ -85,13 +85,15 @@ public sealed record RetryAdmissionReceipt(
     IReadOnlyList<string>? StableFindingIds = null,
     IReadOnlyList<string>? EvidenceIdentities = null,
     string? RequiredTaskChangeId = null,
-    bool EvidenceIdentitiesTruncated = false);
+    bool EvidenceIdentitiesTruncated = false,
+    DateTimeOffset? ReservationReleasedAt = null);
 
 public sealed record RetryAdmissionResult(
     RetryAdmissionDecision Decision,
     RetryAdmissionReceipt Receipt)
 {
-    public bool AllowsProcessStart => Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation;
+    public bool AllowsProcessStart => Receipt.ReservationReleasedAt is null &&
+        Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation;
 }
 
 public sealed record RetryAdmissionSnapshotResult(
@@ -447,6 +449,10 @@ public static class RetryAdmissionPolicy
             receipt.LinkedDispatchAt == linkedDispatchAt &&
             receipt.Fingerprint == fingerprint &&
             receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation);
+        if (sameAttempt?.ReservationReleasedAt is not null)
+            return Create(task, fingerprint, paidRoute, cause, RetryAdmissionDecision.Prevented,
+                RetryAdmissionRoute.ReservationLease, linkedDispatchAt, recordedAt, sameAttempt.LinkedDispatchAt,
+                reservationOwnerId, reservationLeaseExpiresAt);
         if (sameAttempt is not null && sameAttempt.WorkerStartedAt is null)
         {
             if (!string.IsNullOrWhiteSpace(reservationOwnerId) &&
@@ -526,6 +532,7 @@ public static class RetryAdmissionPolicy
                 receipt.LinkedDispatchAt != linkedDispatchAt &&
                 receipt.Fingerprint == fingerprint &&
                 receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation &&
+                receipt.ReservationReleasedAt is null &&
                 receipt.WorkerStartedAt is null)
             : null;
         if (activeSameContextReservation is not null)
@@ -553,6 +560,7 @@ public static class RetryAdmissionPolicy
                 receipt.LinkedDispatchAt != linkedDispatchAt &&
                 receipt.Fingerprint == fingerprint &&
                 receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation &&
+                receipt.ReservationReleasedAt is null &&
                 HasKnownUnsuccessfulOutcome(task, receipt))
             : null;
         var recoveryEvidence = task.RetryAdmissionHistory.LastOrDefault(receipt =>
@@ -563,6 +571,7 @@ public static class RetryAdmissionPolicy
             !task.RetryAdmissionHistory.Any(receipt =>
                 receipt.Fingerprint == fingerprint &&
                 receipt.LinkedDispatchAt > recoveryEvidence.LinkedDispatchAt &&
+                receipt.ReservationReleasedAt is null &&
                 receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation);
         if (priorSameContext is not null && !recoveryCreditAvailable)
         {

@@ -9,7 +9,8 @@ public sealed record WorkerProcessRunRequest(
     string WorkingDirectory,
     TimeSpan? Timeout = null,
     string? StandardInput = null,
-    ProcessOutputDrainPolicy? OutputDrainPolicy = null);
+    ProcessOutputDrainPolicy? OutputDrainPolicy = null,
+    bool RequireOwnedProcessGroup = false);
 
 public sealed record WorkerProcessRunResult(
     int ExitCode,
@@ -70,6 +71,11 @@ public static class WorkerProcessRunner
         }
         catch
         {
+            if (request.RequireOwnedProcessGroup)
+            {
+                TryKillProcessTree(process, null);
+                throw;
+            }
             // Process groups are a cleanup backstop. If assignment is unavailable, keep the
             // command path alive and fall back to direct tree-kill on cancellation.
         }

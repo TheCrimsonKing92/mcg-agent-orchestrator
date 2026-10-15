@@ -1,4 +1,5 @@
 using System.Globalization;
+using Mcg.AgentOrchestrator.Core;
 using Microsoft.Data.Sqlite;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
@@ -6,10 +7,11 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 public enum EpicPlanItemKind { Slice, Step }
 public sealed record EpicPlanItem(int Position, EpicPlanItemKind Kind, string? BacklogItemId, string? Text, bool Done);
 public sealed record EpicPlanDecision(long Id, DateTimeOffset DecidedAt, string Text, string? DecidedBy);
-public sealed record EpicPlan(string EpicId, string? Bar, IReadOnlyList<EpicPlanItem> Items, IReadOnlyList<EpicPlanDecision> Decisions);
+public sealed record EpicPlan(string EpicId, string? Bar, IReadOnlyList<EpicPlanItem> Items, IReadOnlyList<EpicPlanDecision> Decisions,
+    EpicOutcomeHistory? Outcome = null);
 
 // Owns ordered plan rows, decisions and the bar. Slice progress belongs to backlog/goal state.
-public sealed class EpicPlanStore
+public sealed partial class EpicPlanStore
 {
     private readonly string _path;
     private readonly bool _readOnly;
@@ -39,6 +41,11 @@ public sealed class EpicPlanStore
     {
         using var connection = Open(_path, _readOnly);
         Execute(connection, "BEGIN", epicId);
+        return Task.FromResult(Read(connection, epicId));
+    }
+
+    public static EpicPlan Read(SqliteConnection connection, string epicId)
+    {
         RequireEpic(connection, epicId);
         var bar = Scalar(connection, "SELECT bar FROM epics WHERE id = $epic", epicId) as string;
         var items = Rows(connection, epicId).Select(row => row.Item).ToArray();
@@ -49,7 +56,8 @@ public sealed class EpicPlanStore
         while (reader.Read())
             decisions.Add(new(reader.GetInt64(0), DateTimeOffset.Parse(reader.GetString(1), CultureInfo.InvariantCulture),
                 reader.GetString(2), reader.IsDBNull(3) ? null : reader.GetString(3)));
-        return Task.FromResult(new EpicPlan(epicId, bar, items, decisions));
+        reader.Close();
+        return new EpicPlan(epicId, bar, items, decisions, ReadOutcome(connection, epicId));
     }
 
     public Task AddSliceAsync(string epicId, string backlogItemId, int? at = null, string actor = "operator")
@@ -128,8 +136,22 @@ public sealed class EpicPlanStore
             ("$now", Now()), ("$text", text), ("$by", decidedBy)));
     }
 
-    public Task SetBarAsync(string epicId, string? text) => WriteAsync(epicId, connection => Execute(connection,
-        "UPDATE epics SET bar = $text WHERE id = $epic", epicId, ("$text", string.IsNullOrWhiteSpace(text) ? null : text.Trim())));
+    public Task SetBarAsync(string epicId, string? text) => SetBarAsync(epicId, text,
+        new("operator", OperatorActorKind.Human, "local-api", AuthorizationTier.Mutate));
+
+    public Task SetBarAsync(string epicId, string? text, EpicOutcomeAttribution attribution)
+    {
+        EpicOutcomeContract.RequireMutation(attribution);
+        var normalized = string.IsNullOrWhiteSpace(text) ? null : text.Trim();
+        return WriteAsync(epicId, connection =>
+        {
+            if ((Scalar(connection, "SELECT bar FROM epics WHERE id = $epic", epicId) as string) == normalized) return;
+            var history = ReadOutcome(connection, epicId);
+            AppendRevision(connection, epicId, new(checked(history.Version + 1), normalized, [],
+                "legacy-bar-changed", attribution.Actor, attribution.Channel, DateTimeOffset.UtcNow));
+            Execute(connection, "UPDATE epics SET bar = $text WHERE id = $epic", epicId, ("$text", normalized));
+        });
+    }
 
     private async Task WriteAsync(string epicId, Action<SqliteConnection> write)
     {

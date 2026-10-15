@@ -761,7 +761,23 @@ public sealed class VerificationAndProcessLogTests
     var stdoutPath = Path.Combine(logRoot, "tester.out.log");
     var stderrPath = Path.Combine(logRoot, "tester.err.log");
     var exitPath = Path.Combine(logRoot, "tester.exit.txt");
-    var middleEvidence = "test run successful";
+    var gateReceipt = Path.Combine(logRoot, "middle-log-gate.trx");
+    File.WriteAllText(gateReceipt, "<TestRun><ResultSummary outcome=\"Completed\"><Counters total=\"1\" passed=\"1\" failed=\"0\" /></ResultSummary></TestRun>");
+    var testEvidence = $"test run successful; {gateReceipt}; Passed: 1";
+    var middleEvidence = $"""
+        WORKER_RESULT:
+        files: none
+        commands: inspected {gateReceipt}
+        tests: pass - {testEvidence}
+        commit: none
+        blockers: none
+        model_fit: fixture - adequate
+        skills: none
+        confidence: high
+        END_WORKER_RESULT
+        """;
+    Assert.Equal(VerificationTerminalContractStatus.Valid,
+        WorkerResultBlockers.AssessTerminalVerificationOutput(AgentRole.Tester, middleEvidence).Status);
     var stdout =
         new string('H', VerificationTextBounds.PreviewHeadChars) +
         Environment.NewLine +
@@ -783,8 +799,11 @@ public sealed class VerificationAndProcessLogTests
 
     Assert.Equal(0, refreshed.ExitCode);
     Assert.Equal(WorkTaskStatus.Completed, testerTask.Status);
+    Assert.Equal(VerificationTerminalContractStatus.Valid,
+        WorkerResultBlockers.AssessSubscriptionVerification(testerTask, testerTask.LastVerification!).Status);
     Assert.True(testerTask.LastVerification!.StandardOutput.Length <= 20_000);
     Assert.DoesNotContain(middleEvidence, testerTask.LastVerification.StandardOutput, StringComparison.Ordinal);
+    Assert.DoesNotContain(testEvidence, testerTask.LastVerification.StandardOutput, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "CreateVerificationLog_truncates_long_output_at_2000_chars")]

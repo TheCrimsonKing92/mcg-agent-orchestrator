@@ -13,7 +13,10 @@ internal sealed record ApparatusRedGateReading(
     IReadOnlyList<ApparatusRedFailingTest> FailingTests,
     bool EveryFailedCheckHasTestIdentities,
     IReadOnlyList<string> FailedCheckNames,
-    bool WithinAttemptRerunExplained = false);
+    bool WithinAttemptRerunExplained = false,
+    IReadOnlyList<AcceptanceCheckResult>? AssemblyCleanupFailures = null,
+    int SourceEnumerationCount = 0,
+    int SourceReadCount = 0);
 
 /// <summary>
 /// The composition root for apparatus-RED classification: it owns the census store, the test-source
@@ -35,14 +38,16 @@ internal sealed class ApparatusRedGate
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly TimeSpan _crossGoalWindow;
     private readonly int _perGoalRegateCap;
+    private readonly Func<string?, AcceptanceTestSourceResolver.Request> _createSourceRequest;
 
     internal ApparatusRedGate(
         string indexPath,
         Func<Goal, string?>? resolveSourceRoot = null,
         Func<DateTimeOffset>? utcNow = null,
         TimeSpan? crossGoalWindow = null,
-        int perGoalRegateCap = DefaultPerGoalRegateCap)
-        : this(new AcceptanceFailingTestIndex(indexPath), resolveSourceRoot, utcNow, crossGoalWindow, perGoalRegateCap)
+        int perGoalRegateCap = DefaultPerGoalRegateCap,
+        Func<string?, AcceptanceTestSourceResolver.Request>? createSourceRequest = null)
+        : this(new AcceptanceFailingTestIndex(indexPath), resolveSourceRoot, utcNow, crossGoalWindow, perGoalRegateCap, createSourceRequest)
     {
     }
 
@@ -51,7 +56,8 @@ internal sealed class ApparatusRedGate
         Func<Goal, string?>? resolveSourceRoot = null,
         Func<DateTimeOffset>? utcNow = null,
         TimeSpan? crossGoalWindow = null,
-        int perGoalRegateCap = DefaultPerGoalRegateCap)
+        int perGoalRegateCap = DefaultPerGoalRegateCap,
+        Func<string?, AcceptanceTestSourceResolver.Request>? createSourceRequest = null)
     {
         ArgumentNullException.ThrowIfNull(index);
         ArgumentOutOfRangeException.ThrowIfNegative(perGoalRegateCap);
@@ -60,6 +66,7 @@ internal sealed class ApparatusRedGate
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         _crossGoalWindow = crossGoalWindow ?? DefaultCrossGoalWindow;
         _perGoalRegateCap = perGoalRegateCap;
+        _createSourceRequest = createSourceRequest ?? (root => new AcceptanceTestSourceResolver.Request(root));
     }
 
     internal int PerGoalRegateCap => _perGoalRegateCap;
@@ -174,13 +181,19 @@ internal sealed class ApparatusRedGate
         Lazy<IReadOnlyList<string>> changedPaths)
     {
         var sourceRoot = _resolveSourceRoot(goal);
+        var sourceRequest = _createSourceRequest(sourceRoot);
         var normalizedChangedPaths = changedPaths.Value
             .Select(NormalizePath)
             .Where(path => !string.IsNullOrWhiteSpace(path))
             .ToArray();
         var failingTests = new List<ApparatusRedFailingTest>();
         var declaredChangedTypes = new Lazy<IReadOnlySet<string>>(() =>
-            CandidateChangedTypeReferenceReader.ReadDeclaredTypeNames(sourceRoot, normalizedChangedPaths));
+            CandidateChangedTypeReferenceReader.ReadDeclaredTypeNames(sourceRoot, normalizedChangedPaths, sourceRequest));
+        var uniqueChecks = acceptance.RequiredUnmetCriteria.GroupBy(check => check.Name, StringComparer.Ordinal)
+            .Where(group => group.Count() == 1).ToDictionary(group => group.Key, group => group.Single(), StringComparer.Ordinal);
+        var cleanupChecks = uniqueChecks.Values.Where(check =>
+            AcceptanceAssemblyCleanupAttributionReader.IsBoundCleanupOnly(check, goal.Id.Value,
+                acceptance.BranchHeadSha, acceptance.MainHeadSha)).ToDictionary(check => check.Name, StringComparer.Ordinal);
         var everyCheckHasIdentities = true;
         var failedIdentityBearingChecks = acceptance.RequiredUnmetCriteria
             .Where(check =>
@@ -200,10 +213,29 @@ internal sealed class ApparatusRedGate
         var explainedByRerun = false;
         foreach (var check in acceptance.RequiredUnmetCriteria)
         {
+            if (cleanupChecks.ContainsKey(check.Name))
+            {
+                // Retain the assembly failure and its original receipts, never synthetic repository census rows.
+                everyCheckHasIdentities = false;
+                continue;
+            }
             var identities = check.FailingTestIdentities?
                 .Where(identity => !string.IsNullOrWhiteSpace(identity))
                 .Distinct(StringComparer.Ordinal)
                 .ToArray() ?? [];
+            if (check.CoveredBy is { Count: > 0 } contributors &&
+                contributors.All(name => name != check.Name && uniqueChecks.ContainsKey(name)))
+            {
+                var cleanupIdentities = contributors.Where(cleanupChecks.ContainsKey)
+                    .SelectMany(name => cleanupChecks[name].FailingTestIdentities ?? [])
+                    .ToHashSet(StringComparer.Ordinal);
+                identities = identities.Where(identity => !cleanupIdentities.Contains(identity)).ToArray();
+                if (contributors.All(cleanupChecks.ContainsKey) && identities.Length == 0)
+                {
+                    everyCheckHasIdentities = false;
+                    continue;
+                }
+            }
             if (identities.Length == 0)
             {
                 if (rerunExplainedChecks.Contains(check.Name))
@@ -233,10 +265,7 @@ internal sealed class ApparatusRedGate
                     : ApparatusInfrastructureSignatures.Match(failure.Message, failure.StackTrace);
                 var message = failure is null ? check.OutputTail : failure.Message;
                 var messageFingerprint = AcceptanceFailingTestIndex.ComputeMessageFingerprint(message);
-                var sourcePaths = AcceptanceTestSourceResolver.ResolveSourcePaths(
-                    sourceRoot,
-                    check.TestProjectPath,
-                    identity);
+                var sourcePaths = sourceRequest.ResolveSourcePaths(check.TestProjectPath, identity);
                 var rerunPassed = check.FailingTestAttributions?.Any(attribution =>
                     attribution.TestIdentity.Equals(identity, StringComparison.Ordinal) &&
                     attribution.Origin == AcceptanceTestFailureOrigin.UnconfirmedIntroduced &&
@@ -270,7 +299,7 @@ internal sealed class ApparatusRedGate
                     FailureMessage: message,
                     MessageFingerprint: messageFingerprint,
                     ReferencedChangedTypes: CandidateChangedTypeReferenceReader.MatchReferencedTypes(
-                        sourceRoot, sourcePaths, declaredChangedTypes.Value),
+                        sourceRoot, sourcePaths, declaredChangedTypes.Value, sourceRequest),
                     CandidateRerunNotExecuted: notExecutedReruns.Length > 0,
                     CandidateRerunInfrastructureSignature: rerunInfrastructureSignature));
             }
@@ -307,7 +336,10 @@ internal sealed class ApparatusRedGate
             acceptance.FailedChecks is { Count: > 0 } failedChecks
                 ? failedChecks
                 : acceptance.RequiredUnmetCriteria.Select(check => check.Name).ToArray(),
-            explainedByRerun);
+            explainedByRerun,
+            cleanupChecks.Values.Select(AcceptanceAssemblyCleanupEvidence.AttachCleanupCause).ToArray(),
+            sourceRequest.EnumerationCount,
+            sourceRequest.ReadCount);
     }
 
     private static IReadOnlyList<AcceptanceTrxFailure> ReadTrxFailures(AcceptanceCheckResult check)

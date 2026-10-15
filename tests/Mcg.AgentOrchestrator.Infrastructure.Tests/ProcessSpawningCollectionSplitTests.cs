@@ -188,7 +188,8 @@ public sealed class ProcessSpawningCollectionSplitTests
 
     private static readonly string[] AdditionalWorkerDispatchFixtureClasses =
     [
-        "DispatchHostLifetimeHandoffTests"
+        "DispatchHostLifetimeHandoffTests",
+        "WorkerDispatchTestsSubscriptionTerminalContract"
     ];
 
     private static string[] FilterClassEntries(string filter) =>

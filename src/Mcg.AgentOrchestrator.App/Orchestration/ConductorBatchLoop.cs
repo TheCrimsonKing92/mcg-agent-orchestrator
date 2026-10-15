@@ -2364,7 +2364,7 @@ internal sealed partial class ConductorBatchLoop
         var run = decision.Run ?? ConductorParallelAcceptanceRunResult.Fault(
             candidate,
             new InvalidOperationException("Completed acceptance attempt had no run result."));
-        ReconcileParallelAcceptanceTerminalStateUnlessReused(kernel, goal, run, decision.Attempt);
+        PassedAcceptanceReceiptReplay.ReconcileUnlessReused(kernel, goal, run, decision.Attempt);
         var completion = CompleteParallelAcceptanceRun(
             driver,
             policy,

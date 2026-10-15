@@ -6,8 +6,13 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     IOwnerConsoleDialogs dialogs, IOrchestratorStateQueries state, IGoalEventTail tail,
     IOwnerConsoleConductor conductor, IOwnerConsoleDigestReport digest,
     IOwnerDigestSummary summary, TimeProvider clock, IOwnerConsoleEpicSource? epics = null,
-    AnswerIntentStatusTracker? answerTracking = null, OwnerQuestionResolutionReader? resolutions = null) : IDisposable
+    AnswerIntentStatusTracker? answerTracking = null, OwnerQuestionResolutionReader? resolutions = null,
+    IOwnerConsoleNotifier? notifier = null, OwnerConsoleNotificationSettings? notifications = null) : IDisposable
 {
+    private readonly object _notificationGate = new();
+    private readonly IOwnerConsoleNotifier _notifier = notifier ?? new NullOwnerConsoleNotifier();
+    private readonly OwnerConsoleNotificationDetector _notifications = new(notifications ?? new());
+    private OwnerConsoleBellTiers _bellTiers = OwnerConsoleBellTiers.All;
     private readonly AnswerIntentStatusTracker _answerTracking = answerTracking ?? new(answers.ReadStatusAsync, clock);
     public void Dispose() => _answerTracking.Dispose();
 
@@ -18,17 +23,21 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     {
         if (epics is null) return null;
         var since = OwnerConsoleEpicViewModel.Cutoff(window, clock.GetUtcNow());
+        if (detailId is not null)
+        {
+            var snapshot = await epics.LoadDetailAsync(detailId, since, cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            return new(window, since, [snapshot.Row],
+                OwnerConsoleEpicViewModel.BuildDetail(snapshot.Row, snapshot.Since, snapshot.Goals), clock.GetLocalNow());
+        }
         var rows = await epics.LoadAsync(since, cancellationToken).ConfigureAwait(false);
-        var row = rows.FirstOrDefault(item => item.Epic.Id == detailId);
-        var detail = row is null ? null : await OwnerConsoleEpicViewModel.DetailAsync(row, since, state, cancellationToken).ConfigureAwait(false);
-        if (detail is not null)
-            detail = detail with { Plan = await epics.LoadPlanAsync(detail.Epic, cancellationToken).ConfigureAwait(false) };
-        return new(window, since, rows, detail, clock.GetLocalNow());
+        return new(window, since, rows, LoadedAt: clock.GetLocalNow());
     }
 
     internal OwnerConsoleViewModel? Model { get; private set; }
     internal string? SelectedDecisionId { get; private set; }
-    internal bool BellEnabled { get; private set; } = true;
+    internal bool BellEnabled { get { lock (_notificationGate) return _bellTiers != OwnerConsoleBellTiers.None; } }
+    internal string BellStatusText { get { lock (_notificationGate) return _bellTiers.StatusText; } }
     internal bool QuitRequested { get; private set; }
     private string? _requestedEpicId;
     internal string? TakeRequestedEpicId()
@@ -62,11 +71,21 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
 
     internal void Apply(OwnerConsoleViewModel model)
     {
-        var oldIndex = SelectedIndex;
-        Model = model;
-        if (!model.Decisions.Any(item => item.Id == SelectedDecisionId))
-            SelectedDecisionId = model.Decisions.Length == 0 ? null :
-                model.Decisions[Math.Clamp(oldIndex, 0, model.Decisions.Length - 1)].Id;
+        IReadOnlyList<OwnerConsoleNotificationTier> tiers;
+        lock (_notificationGate)
+        {
+            tiers = _notifications.Detect(Model, model, clock.GetUtcNow(), _bellTiers);
+            var oldIndex = SelectedIndex;
+            Model = model;
+            if (!model.Decisions.Any(item => item.Id == SelectedDecisionId))
+                SelectedDecisionId = model.Decisions.Length == 0 ? null :
+                    model.Decisions[Math.Clamp(oldIndex, 0, model.Decisions.Length - 1)].Id;
+        }
+        foreach (var tier in tiers)
+        {
+            try { _notifier.Notify(tier); }
+            catch { /* Sound failure must not break rendering. */ }
+        }
         ModelApplied?.Invoke();
     }
 
@@ -149,8 +168,7 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
             { choiceLines.Add(lines.Count); lines.Add(OwnerQuestionResolutionText.Summary(question, clock.LocalTimeZone)); }
         }
         var openQuestion = Model?.Decisions.Where(item => item.GoalId == goalId).OrderBy(item => item.Number).FirstOrDefault();
-        var epicRows = epics is null ? null : await epics.LoadAsync(null, token).ConfigureAwait(false);
-        var epicId = epicRows?.FirstOrDefault(row => row.MemberGoals.Any(item => item.Id == goalId))?.Epic.Id;
+        var epicId = epics is null ? null : await epics.FindGoalEpicAsync(goalId, token).ConfigureAwait(false);
         var failure = goal.RetainedAcceptanceFailure is { } recorded ? OwnerConsoleGoalLanding.FailureText(recorded, clock.LocalTimeZone) : null;
         return new(string.Join(Environment.NewLine, lines), choiceLines, resolved, openQuestion, failure, epicId);
     }
@@ -243,8 +261,25 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
                     break;
                 case "metrics": control.HandleMetrics(line); break;
                 case "bell":
-                    if (parts.Length != 2 || parts[1] is not ("on" or "off")) output.WriteLine("usage: bell on|off");
-                    else { BellEnabled = parts[1] == "on"; output.WriteLine($"bell {parts[1]}"); }
+                    var arguments = parts.Skip(1).Select(part => part.ToLowerInvariant()).ToArray();
+                    if (arguments.Length == 1 && arguments[0] is "on" or "off")
+                    {
+                        lock (_notificationGate) _bellTiers = arguments[0] == "on" ? OwnerConsoleBellTiers.All : OwnerConsoleBellTiers.None;
+                        output.WriteLine($"bell {arguments[0]}");
+                    }
+                    else if (arguments.Length == 2 && arguments[0] is "calm" or "attention" or "alarm" &&
+                        arguments[1] is "on" or "off")
+                    {
+                        var tier = arguments[0] switch
+                        {
+                            "calm" => OwnerConsoleNotificationTier.Calm,
+                            "attention" => OwnerConsoleNotificationTier.Attention,
+                            _ => OwnerConsoleNotificationTier.Alarm
+                        };
+                        lock (_notificationGate) _bellTiers = _bellTiers.With(tier, arguments[1] == "on");
+                        output.WriteLine($"bell {arguments[0]} {arguments[1]}");
+                    }
+                    else output.WriteLine("usage: bell on|off | bell <calm|attention|alarm> on|off");
                     break;
                 case "goal":
                     if (parts.Length != 2) { output.WriteLine("usage: goal <id-prefix>"); break; }

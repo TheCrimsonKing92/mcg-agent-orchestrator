@@ -60,7 +60,7 @@ internal static partial class FocusedEvidenceRequestResolver
                 }
             }
 
-            FocusedEvidenceFilter? filter;
+            IReadOnlyList<FocusedEvidenceFilter?> filters;
             int targetCount;
             try
             {
@@ -69,7 +69,7 @@ internal static partial class FocusedEvidenceRequestResolver
                         allowMappedProject: hasExplicitProject,
                         worktreePath,
                         project,
-                        out filter,
+                        out filters,
                         out targetCount,
                         out rejection))
                 {
@@ -83,33 +83,36 @@ internal static partial class FocusedEvidenceRequestResolver
             }
 
             totalTargets += targetCount;
-            if (filter is not null && ProjectMatches(project, InfrastructureTestsProject))
+            foreach (var filter in filters)
             {
-                IReadOnlyList<(string Project, FocusedEvidenceFilter Filter)> projectArms;
-                try
+                if (filter is not null && ProjectMatches(project, InfrastructureTestsProject))
                 {
-                    if (!TryExpandExtractedFocusedEvidenceProjects(
-                            worktreePath,
-                            engineSettings,
-                            project,
-                            filter,
-                            out projectArms,
-                            out rejection))
+                    IReadOnlyList<(string Project, FocusedEvidenceFilter Filter)> projectArms;
+                    try
                     {
+                        if (!TryExpandExtractedFocusedEvidenceProjects(
+                                worktreePath,
+                                engineSettings,
+                                project,
+                                filter,
+                                out projectArms,
+                                out rejection))
+                        {
+                            return false;
+                        }
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                    {
+                        rejection = BuildFocusedEvidenceSourceDiscoveryRejection(filter.OriginalToken, ex);
                         return false;
                     }
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                {
-                    rejection = BuildFocusedEvidenceSourceDiscoveryRejection(filter.OriginalToken, ex);
-                    return false;
-                }
 
-                validated.AddRange(projectArms.Select(arm => (item, arm.Project, arm.Filter)));
-            }
-            else
-            {
-                validated.Add((item, project, filter));
+                    validated.AddRange(projectArms.Select(arm => (item, arm.Project, arm.Filter)));
+                }
+                else
+                {
+                    validated.Add((item, project, filter));
+                }
             }
         }
 
@@ -135,46 +138,50 @@ internal static partial class FocusedEvidenceRequestResolver
         foreach (var projectGroup in validated.GroupBy(item => item.Project, StringComparer.OrdinalIgnoreCase))
         {
             var projectUnbatchedReasons = new HashSet<string>(StringComparer.Ordinal);
-            var compatible = projectGroup
+            var compatibleGroups = projectGroup
                 .Where(item => item.Filter is not null && IsPositiveFocusedEvidenceDisjunction(item.Filter))
-                .ToArray();
-            if (compatible.Length > 1)
+                .GroupBy(item => item.Filter!.Tokens[0].Kind);
+            foreach (var compatibleGroup in compatibleGroups)
             {
-                var tokens = compatible
-                    .SelectMany(item => item.Filter!.Tokens)
-                    .DistinctBy(token => token.CanonicalToken, StringComparer.Ordinal)
-                    .OrderBy(token => token.CanonicalToken, StringComparer.Ordinal)
-                    .ToArray();
-                var canonical = string.Join("|", tokens.Select(token => token.CanonicalToken));
-                if (canonical.Length <= GoalAcceptanceVerifier.MaxFocusedEvidenceFilterLength)
+                var compatible = compatibleGroup.ToArray();
+                if (compatible.Length > 1)
                 {
-                    planned.Add(new FocusedEvidencePlannedCheck(
-                        compatible.Select(item => item.Target).Distinct(StringComparer.Ordinal).ToArray(),
-                        projectGroup.Key,
-                        new FocusedEvidenceFilter(
-                            string.Join("; ", compatible.Select(item => item.Target)),
-                            canonical,
-                            tokens),
-                        compatible.Select(item => item.Filter!).ToArray()));
-                    batchedCompatibleItems = true;
+                    var tokens = compatible
+                        .SelectMany(item => item.Filter!.Tokens)
+                        .DistinctBy(token => token.CanonicalToken, StringComparer.Ordinal)
+                        .OrderBy(token => token.CanonicalToken, StringComparer.Ordinal)
+                        .ToArray();
+                    var canonical = string.Join("|", tokens.Select(token => token.CanonicalToken));
+                    if (canonical.Length <= GoalAcceptanceVerifier.MaxFocusedEvidenceFilterLength)
+                    {
+                        planned.Add(new FocusedEvidencePlannedCheck(
+                            compatible.Select(item => item.Target).Distinct(StringComparer.Ordinal).ToArray(),
+                            projectGroup.Key,
+                            new FocusedEvidenceFilter(
+                                string.Join("; ", compatible.Select(item => item.Target)),
+                                canonical,
+                                tokens),
+                            compatible.Select(item => item.Filter!).ToArray()));
+                        batchedCompatibleItems = true;
+                    }
+                    else
+                    {
+                        var packedGroups = FocusedEvidenceOverflowPacker.Pack(compatible, projectGroup.Key);
+                        planned.AddRange(packedGroups);
+                        if (packedGroups.Count > 1)
+                        {
+                            projectUnbatchedReasons.Add("bounded-filter-overflow");
+                        }
+                    }
                 }
                 else
                 {
-                    var packedGroups = FocusedEvidenceOverflowPacker.Pack(compatible, projectGroup.Key);
-                    planned.AddRange(packedGroups);
-                    if (packedGroups.Count > 1)
-                    {
-                        projectUnbatchedReasons.Add("bounded-filter-overflow");
-                    }
+                    planned.AddRange(compatible.Select(item => new FocusedEvidencePlannedCheck(
+                        (IReadOnlyList<string>)[item.Target],
+                        item.Project,
+                        item.Filter,
+                        [item.Filter!])));
                 }
-            }
-            else
-            {
-                planned.AddRange(compatible.Select(item => new FocusedEvidencePlannedCheck(
-                    (IReadOnlyList<string>)[item.Target],
-                    item.Project,
-                    item.Filter,
-                    [item.Filter!])));
             }
 
             var incompatible = projectGroup
@@ -184,11 +191,13 @@ internal static partial class FocusedEvidenceRequestResolver
             {
                 projectUnbatchedReasons.Add("incompatible-filter-semantics");
             }
-            planned.AddRange(incompatible.Select(item => new FocusedEvidencePlannedCheck(
-                (IReadOnlyList<string>)[item.Target],
-                item.Project,
-                item.Filter,
-                item.Filter is null ? [] : [item.Filter])));
+            planned.AddRange(incompatible
+                .GroupBy(item => item.Filter?.CanonicalText, StringComparer.Ordinal)
+                .Select(group => new FocusedEvidencePlannedCheck(
+                    group.Select(item => item.Target).Distinct(StringComparer.Ordinal).ToArray(),
+                    projectGroup.Key,
+                    group.First().Filter,
+                    group.First().Filter is { } filter ? [filter] : [])));
             unbatchedReasons.AddRange(projectUnbatchedReasons.Select(reason =>
                 $"{GoalAcceptanceVerifier.ProjectLabel(projectGroup.Key)}={reason}"));
         }
@@ -261,6 +270,7 @@ internal static partial class FocusedEvidenceRequestResolver
     private static bool IsPositiveFocusedEvidenceDisjunction(FocusedEvidenceFilter filter) =>
         filter.Tokens.Count > 0 &&
         filter.Tokens.All(token => token.Kind is FocusedEvidenceTokenKind.Class or FocusedEvidenceTokenKind.Method) &&
+        filter.Tokens.Select(token => token.Kind).Distinct().Count() == 1 &&
         !filter.CanonicalText.Contains('&', StringComparison.Ordinal);
 
     private static string? ResolveExtractedFocusedEvidenceProject(
@@ -455,11 +465,11 @@ internal static partial class FocusedEvidenceRequestResolver
         bool allowMappedProject,
         string worktreePath,
         string project,
-        out FocusedEvidenceFilter? filter,
+        out IReadOnlyList<FocusedEvidenceFilter?> filters,
         out int targetCount,
         out FocusedEvidenceRejection rejection)
     {
-        filter = null;
+        filters = [null];
         targetCount = 0;
         rejection = new FocusedEvidenceRejection(
             FocusedEvidenceRejectionCode.UnsupportedToken,
@@ -515,119 +525,66 @@ internal static partial class FocusedEvidenceRequestResolver
             return false;
         }
 
-        if (trimmed.Contains("FullyQualifiedName~", StringComparison.OrdinalIgnoreCase))
+        try
         {
-            var tokens = new List<FocusedEvidenceFilterToken>();
-            foreach (var rawToken in Regex.Split(expression, @"[&|]"))
+            var resolvedCount = 0;
+            var planned = PlanBooleanFilter(expression, ResolveAtom);
+            if (planned.Any(arm => !arm.Any(IsPositiveToken)))
             {
-                var originalToken = rawToken;
-                var token = originalToken.Trim().Trim('(', ')').Trim();
-                if (token.Length == 0)
-                {
-                    continue;
-                }
+                throw new FocusedBooleanException(expression, "each alternative must name a positive test selection");
+            }
+            targetCount = resolvedCount;
+            filters = planned.Select(arm => (FocusedEvidenceFilter?)new FocusedEvidenceFilter(
+                expression, CanonicalLaunchFilter(arm), arm)).ToArray();
+            return true;
 
-                var fullyQualifiedName = Regex.Match(
-                    token,
+            FocusedEvidenceFilterToken ResolveAtom(string original)
+            {
+                var atom = original.Trim();
+                var name = Regex.Match(atom,
                     @"^FullyQualifiedName\s*(?<op>!~|~)\s*(?<value>[A-Za-z_][A-Za-z0-9_.]*)$",
                     RegexOptions.IgnoreCase);
-                if (fullyQualifiedName.Success)
+                if (name.Success)
                 {
-                    var value = fullyQualifiedName.Groups["value"].Value;
-                    if (fullyQualifiedName.Groups["op"].Value == "!~")
+                    var value = name.Groups["value"].Value;
+                    if (name.Groups["op"].Value == "!~")
                     {
-                        tokens.Add(new FocusedEvidenceFilterToken(
-                            originalToken,
-                            $"FullyQualifiedName!~{value}",
-                            FocusedEvidenceTokenKind.ExcludedClass,
-                            value,
-                            value));
-                        continue;
+                        if (value.Contains('.') &&
+                            TryResolveFocusedEvidenceSelection(worktreePath, project, original, value,
+                                out var excludedSelection, out _) &&
+                            excludedSelection.Kind == FocusedEvidenceTokenKind.Method)
+                            throw new FocusedBooleanException(original, "method exclusions are not supported by focused class-exclusion tokens");
+                        return new(original, $"FullyQualifiedName!~{value}",
+                            FocusedEvidenceTokenKind.ExcludedClass, value, value);
                     }
-
-                    if (!TryResolveFocusedEvidenceSelection(
-                            worktreePath,
-                            project,
-                            originalToken,
-                            value,
-                            out var selection,
-                            out rejection))
-                    {
-                        return false;
-                    }
-
-                    tokens.Add(selection);
-                    targetCount++;
-                    continue;
+                    return ResolvePositive(original, value);
                 }
-
-                var categoryExclusion = Regex.Match(
-                    token,
-                    @"^Category\s*!=\s*(?<value>[A-Za-z_][A-Za-z0-9_.-]*)$",
+                var category = Regex.Match(atom, @"^Category\s*!=\s*(?<value>[A-Za-z_][A-Za-z0-9_.-]*)$",
                     RegexOptions.IgnoreCase);
-                if (categoryExclusion.Success)
+                if (category.Success)
                 {
-                    var value = categoryExclusion.Groups["value"].Value;
-                    tokens.Add(new FocusedEvidenceFilterToken(
-                        originalToken,
-                        $"Category!={value}",
-                        FocusedEvidenceTokenKind.ExcludedTrait,
-                        value,
-                        string.Empty));
-                    continue;
+                    var value = category.Groups["value"].Value;
+                    return new(original, $"Category!={value}", FocusedEvidenceTokenKind.ExcludedTrait, value, string.Empty);
                 }
-
-                rejection = new FocusedEvidenceRejection(
-                    FocusedEvidenceRejectionCode.UnsupportedToken,
-                    originalToken,
-                    $"focused evidence filter contains unsupported token '{originalToken}'");
-                return false;
+                if (Regex.IsMatch(atom, @"^[A-Za-z_][A-Za-z0-9_.]*$"))
+                    return ResolvePositive(original, atom);
+                throw new FocusedBooleanException(original, $"unsupported token '{original}'");
             }
 
-            if (targetCount == 0)
+            FocusedEvidenceFilterToken ResolvePositive(string original, string value)
             {
-                rejection = new FocusedEvidenceRejection(
-                    FocusedEvidenceRejectionCode.UnsafeFilter,
-                    expression,
-                    "focused evidence filter did not name a positive test selection");
-                return false;
+                if (!TryResolveFocusedEvidenceSelection(worktreePath, project, original, value,
+                        out var selection, out var resolutionRejection))
+                    throw new FocusedBooleanException(resolutionRejection);
+                resolvedCount++;
+                return selection;
             }
-
-            filter = new FocusedEvidenceFilter(
-                expression,
-                Regex.Replace(trimmed, @"\s+", string.Empty),
-                tokens);
-            return true;
         }
-
-        var classNames = expression
-            .Split([',', '|'], StringSplitOptions.None)
-            .Select(original => (Original: original, Normalized: original.Trim()))
-            .Where(token => token.Normalized.Length > 0)
-            .ToArray();
-        if (classNames.Length == 0 ||
-            classNames.Any(token => !Regex.IsMatch(token.Normalized, @"^[A-Za-z_][A-Za-z0-9_.]*$")))
+        catch (FocusedBooleanException ex)
         {
-            var offendingToken = classNames.FirstOrDefault(token =>
-                !Regex.IsMatch(token.Normalized, @"^[A-Za-z_][A-Za-z0-9_.]*$")).Original ?? expression;
-            rejection = new FocusedEvidenceRejection(
-                FocusedEvidenceRejectionCode.UnsupportedToken,
-                offendingToken,
-                $"focused evidence request contains unsupported token '{offendingToken}'");
+            rejection = ex.Rejection;
             return false;
         }
-
-        targetCount = classNames.Length;
-        filter = new FocusedEvidenceFilter(
-            expression,
-            string.Join("|", classNames.Select(token => $"FullyQualifiedName~{token.Normalized}")),
-            classNames.Select(token => new FocusedEvidenceFilterToken(
-                token.Original,
-                $"FullyQualifiedName~{token.Normalized}",
-                FocusedEvidenceTokenKind.Class,
-                token.Normalized,
-                token.Normalized)).ToArray());
-        return true;
     }
 
     internal static bool TryResolveFocusedEvidenceSelection(

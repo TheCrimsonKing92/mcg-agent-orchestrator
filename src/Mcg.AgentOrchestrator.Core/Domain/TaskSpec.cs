@@ -81,6 +81,28 @@ public sealed partial class TaskSpec
 
     public TaskProcessRecord? LastProcess { get; private set; }
 
+    public CompletionBuildEvidenceOperation? CompletionBuildEvidence { get; private set; }
+
+    internal void RecordCompletionBuildEvidence(CompletionBuildEvidenceOperation operation)
+    {
+        var previous = CompletionBuildEvidence;
+        var attachedOrigin = previous is not null && previous.HasSameOrigin(operation) &&
+            DispatchHistory.Any(dispatch => dispatch.DispatchedAt == operation.DispatchAt);
+        if (operation.TaskId != Id.Value ||
+            (operation.DispatchAt != LastDispatch?.DispatchedAt && !attachedOrigin))
+            throw new InvalidOperationException("Completion build evidence does not belong to the current dispatch.");
+        if (previous is not null && (!previous.HasSameOrigin(operation) ||
+            (previous.ChildPid is not null && !CompletionBuildEvidenceTarget.From(previous).Matches(operation))))
+            throw new InvalidOperationException("Completion build evidence cannot replace attached operation identity.");
+        if (previous is not null &&
+            (!previous.IsPending && operation.IsPending || previous.Applied && !operation.Applied ||
+             previous.CustodyReleased && !operation.CustodyReleased ||
+             !previous.IsPending && previous.Phase != operation.Phase &&
+             !(previous.Phase == CompletionBuildEvidencePhase.Success && operation.Phase == CompletionBuildEvidencePhase.StaleCandidate)))
+            throw new InvalidOperationException("Completion build evidence cannot move backwards.");
+        CompletionBuildEvidence = operation;
+    }
+
     public string? InterruptedDispatchRecoveryId { get; private set; }
 
     public InterruptedWorkCheckpoint? PendingInterruptedWorkCheckpoint { get; private set; }
@@ -192,7 +214,10 @@ public sealed partial class TaskSpec
                     LastVerification.CandidateIdentity,
                     LastVerification.AcceptanceCriteriaVersionHash,
                     LastVerification.InconclusiveRoundInputs,
-                    LastVerification.HumanInputStoreReference),
+                    LastVerification.HumanInputStoreReference,
+                    LastVerification.EvidenceSource,
+                    LastVerification.DispatchAttemptAt,
+                    LastVerification.FindingEvidenceRequestDispositions),
             _verificationHistory
                 .Select(verification => new TaskVerificationSnapshot(
                     verification.Command,
@@ -226,7 +251,10 @@ public sealed partial class TaskSpec
                     verification.CandidateIdentity,
                     verification.AcceptanceCriteriaVersionHash,
                     verification.InconclusiveRoundInputs,
-                    verification.HumanInputStoreReference))
+                    verification.HumanInputStoreReference,
+                    verification.EvidenceSource,
+                    verification.DispatchAttemptAt,
+                    verification.FindingEvidenceRequestDispositions))
                 .ToList(),
             LastDispatch is null
                 ? null
@@ -291,7 +319,8 @@ public sealed partial class TaskSpec
             LatestRoleInputRetryAt,
             CriterionRetryFeedbackRoundAt,
             LatestRetryInherited,
-            SubscriptionDeferralReleasedAt);
+            SubscriptionDeferralReleasedAt,
+            CompletionBuildEvidence);
     }
 
     internal static TaskSpec FromSnapshot(TaskSnapshot snapshot)
@@ -367,7 +396,10 @@ public sealed partial class TaskSpec
                     CandidateIdentity: verification.CandidateIdentity,
                     AcceptanceCriteriaVersionHash: verification.AcceptanceCriteriaVersionHash,
                     InconclusiveRoundInputs: verification.InconclusiveRoundInputs,
-                    HumanInputStoreReference: verification.HumanInputStoreReference));
+                    HumanInputStoreReference: verification.HumanInputStoreReference,
+                    EvidenceSource: verification.EvidenceSource,
+                    DispatchAttemptAt: verification.DispatchAttemptAt,
+                    FindingEvidenceRequestDispositions: verification.FindingEvidenceRequestDispositions));
             }
         }
 
@@ -411,7 +443,10 @@ public sealed partial class TaskSpec
                 CandidateIdentity: snapshot.LastVerification.CandidateIdentity,
                 AcceptanceCriteriaVersionHash: snapshot.LastVerification.AcceptanceCriteriaVersionHash,
                 InconclusiveRoundInputs: snapshot.LastVerification.InconclusiveRoundInputs,
-                HumanInputStoreReference: snapshot.LastVerification.HumanInputStoreReference);
+                HumanInputStoreReference: snapshot.LastVerification.HumanInputStoreReference,
+                EvidenceSource: snapshot.LastVerification.EvidenceSource,
+                DispatchAttemptAt: snapshot.LastVerification.DispatchAttemptAt,
+                FindingEvidenceRequestDispositions: snapshot.LastVerification.FindingEvidenceRequestDispositions);
             var historyIndex = task._verificationHistory.FindLastIndex(
                 verification => verification.HasSameRoundIdentity(latestVerification));
             if (historyIndex < 0)
@@ -540,6 +575,7 @@ public sealed partial class TaskSpec
         task.InterruptedDispatchRecoveryId = snapshot.InterruptedDispatchRecoveryId;
         task.PendingInterruptedWorkCheckpoint = snapshot.PendingInterruptedWorkCheckpoint;
         task.WasCancelledByConductor = snapshot.WasCancelledByConductor;
+        task.CompletionBuildEvidence = snapshot.CompletionBuildEvidence;
         return task;
     }
 
@@ -578,7 +614,8 @@ public sealed partial class TaskSpec
             DispatchOutcomeKind.LaunchFailure or
             DispatchOutcomeKind.EmptyOutputFlake or
             DispatchOutcomeKind.PreflightFailure or
-            DispatchOutcomeKind.VerificationInconclusive
+            DispatchOutcomeKind.VerificationInconclusive or
+            DispatchOutcomeKind.VerificationIncomplete
             ? EmptyOutputRetryCount + 1
             : 0;
         if (verification.ModelFitNote is null)
@@ -647,6 +684,40 @@ public sealed partial class TaskSpec
         LastVerification = updated;
     }
 
+    internal void RecordFindingEvidenceRequestDispositions(
+        IReadOnlyList<FindingEvidenceRequestDisposition> dispositions)
+    {
+        if (LastVerification is null)
+            throw new InvalidOperationException("Finding evidence decisions require an existing verification.");
+        foreach (var disposition in dispositions)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(disposition.FindingStableId);
+            ArgumentException.ThrowIfNullOrWhiteSpace(disposition.RequestIdentity);
+            ArgumentException.ThrowIfNullOrWhiteSpace(disposition.FindingRoundFingerprint);
+            ArgumentException.ThrowIfNullOrWhiteSpace(disposition.Reason);
+            if (disposition.Decision is null ||
+                (disposition.Decision != FindingEvidenceRequestDecision.CandidateUnavailable &&
+                 string.IsNullOrWhiteSpace(disposition.CandidateSha)))
+                throw new ArgumentException("A typed finding evidence decision requires candidate identity.", nameof(dispositions));
+            if (disposition.Decision == FindingEvidenceRequestDecision.CoveredByPendingRequest &&
+                string.IsNullOrWhiteSpace(disposition.CoveringRequestIdentity))
+                throw new ArgumentException("Pending coverage requires a covering request identity.", nameof(dispositions));
+            if (disposition.Decision is FindingEvidenceRequestDecision.CoveredByReceipt or FindingEvidenceRequestDecision.Executed &&
+                disposition.SourceReceiptIds is not { Count: > 0 })
+                throw new ArgumentException("Completed coverage requires an execution receipt identity.", nameof(dispositions));
+        }
+        var prior = LastVerification;
+        var updated = prior with
+        {
+            FindingEvidenceRequestDispositions = FindingEvidenceRequestDisposition.Merge(
+                prior.FindingEvidenceRequestDispositions, dispositions)
+        };
+        var historyIndex = _verificationHistory.FindLastIndex(item =>
+            ReferenceEquals(item, prior) || item.HasSameRoundIdentity(prior));
+        if (historyIndex >= 0) _verificationHistory[historyIndex] = updated;
+        LastVerification = updated;
+    }
+
     internal void RecordFindingEvidenceOutcome(
         string stableId,
         FindingEvidenceOutcome outcome,
@@ -709,7 +780,9 @@ public sealed partial class TaskSpec
         var updated = prior with
         {
             MergedReviewFindings = findings,
-            FindingEvidenceReceipts = receipts
+            FindingEvidenceReceipts = receipts,
+            FindingEvidenceRequestDispositions = FindingEvidenceRequestDisposition.Merge(
+                prior.FindingEvidenceRequestDispositions, receipt?.RequestDispositions)
         };
         var historyIndex = _verificationHistory.FindLastIndex(item =>
             ReferenceEquals(item, prior) || item.HasSameRoundIdentity(prior));
@@ -817,6 +890,7 @@ public sealed partial class TaskSpec
     {
         var index = _retryAdmissionHistory.FindLastIndex(receipt =>
             receipt.LinkedDispatchAt == linkedDispatchAt &&
+            receipt.ReservationReleasedAt is null &&
             receipt.Decision is RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation);
         if (index >= 0)
             _retryAdmissionHistory[index] = _retryAdmissionHistory[index] with { WorkerStartedAt = workerStartedAt };
@@ -835,7 +909,7 @@ public sealed partial class TaskSpec
             return false;
 
         var receipt = _retryAdmissionHistory[index];
-        if (receipt.WorkerStartedAt is not null ||
+        if (receipt.ReservationReleasedAt is not null || receipt.WorkerStartedAt is not null ||
             receipt.WorkerStartClaimedAt is not null ||
             !string.Equals(receipt.ReservationOwnerId, reservationOwnerId, StringComparison.Ordinal))
         {
@@ -859,7 +933,7 @@ public sealed partial class TaskSpec
             return false;
 
         var receipt = _retryAdmissionHistory[index];
-        if (receipt.WorkerStartedAt is not null ||
+        if (receipt.ReservationReleasedAt is not null || receipt.WorkerStartedAt is not null ||
             receipt.WorkerStartClaimedAt is null ||
             !string.Equals(receipt.ReservationOwnerId, reservationOwnerId, StringComparison.Ordinal))
         {
@@ -869,6 +943,25 @@ public sealed partial class TaskSpec
         _retryAdmissionHistory[index] = receipt with { WorkerStartedAt = workerStartedAt };
         RetryAdmissionHoldRoute = null;
         return true;
+    }
+
+    internal void ReleaseUnstartedRetryAdmission(DateTimeOffset dispatchedAt, DateTimeOffset releasedAt)
+    {
+        for (var index = 0; index < _retryAdmissionHistory.Count; index++)
+        {
+            var receipt = _retryAdmissionHistory[index];
+            if (receipt.LinkedDispatchAt != dispatchedAt ||
+                receipt.Decision is not (RetryAdmissionDecision.Allowed or RetryAdmissionDecision.ResumedReservation)) continue;
+            // The execution owner proved that no worker was created. Undo the supervisor's gate
+            // acknowledgement and expire this unspent reservation; retain the admission receipt.
+            _retryAdmissionHistory[index] = receipt with
+            {
+                WorkerStartedAt = null,
+                WorkerStartClaimedAt = null,
+                ReservationLeaseExpiresAt = releasedAt,
+                ReservationReleasedAt = releasedAt
+            };
+        }
     }
 
     internal void RecordSubscriptionLimitReview(string? note, DateTimeOffset? reviewedAt, int failureCount)
@@ -913,6 +1006,11 @@ public sealed partial class TaskSpec
 
     internal void RecordDispatch(TaskDispatchRecord dispatch)
     {
+        if (CompletionBuildEvidence is { IsPending: true })
+            throw new InvalidOperationException("A pending completion build must be cancelled before another dispatch.");
+        if (CompletionBuildEvidence is { CustodyReleased: false })
+            throw new InvalidOperationException("Completion build custody must be released before another dispatch.");
+        CompletionBuildEvidence = null;
         if (_dispatchHistory.Count > 0)
         {
             var latestAttemptAt = _dispatchHistory.Max(candidate => candidate.DispatchedAt);
@@ -963,10 +1061,10 @@ public sealed partial class TaskSpec
         }
     }
 
-    internal void SetDispatchBaseCommit(string baseCommit)
+    internal void SetDispatchBaseCommit(string baseCommit, WorkerBuildScopeIdentity? buildScope = null)
     {
         if (LastDispatch is not null)
-            ReplaceLastDispatch(LastDispatch with { BaseCommit = baseCommit });
+            ReplaceLastDispatch(LastDispatch with { BaseCommit = baseCommit, WorkerBuildScope = buildScope });
     }
 
     internal void SetDispatchResultCommit(string resultCommit)
@@ -1105,7 +1203,7 @@ public sealed partial class TaskSpec
         dispatch.CandidateIdentity,
         dispatch.ProviderUsage,
         dispatch.InconclusiveRoundInputs, dispatch.ShadowDecision,
-        dispatch.FailedRoundCheckpointReceipt, dispatch.FailedRoundCheckpointDecision, dispatch.SelectedSkills);
+        dispatch.FailedRoundCheckpointReceipt, dispatch.FailedRoundCheckpointDecision, dispatch.SelectedSkills, dispatch.WorkerBuildScope);
 
     private static TaskDispatchRecord FromDispatchSnapshot(TaskDispatchSnapshot dispatch) => new(
         dispatch.WorkerName,
@@ -1148,7 +1246,7 @@ public sealed partial class TaskSpec
         dispatch.CandidateIdentity,
         dispatch.ProviderUsage,
         dispatch.InconclusiveRoundInputs, dispatch.ShadowDecision,
-        dispatch.FailedRoundCheckpointReceipt, dispatch.FailedRoundCheckpointDecision, dispatch.SelectedSkills);
+        dispatch.FailedRoundCheckpointReceipt, dispatch.FailedRoundCheckpointDecision, dispatch.SelectedSkills, dispatch.WorkerBuildScope);
 
     private static string? NormalizeOptional(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

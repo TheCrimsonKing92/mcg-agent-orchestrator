@@ -13,7 +13,8 @@ internal sealed partial class ConductorDriver
     private VerifyingFindingTrigger? BuildTesterDeveloperOwnedFindingTrigger(Goal goal, TaskSpec task)
     {
         if (task is not { Status: WorkTaskStatus.Failed, RequiredRole: AgentRole.Tester } ||
-            task.LastVerification?.MergedReviewFindings is not { } mergedFindings)
+            task.LastVerification?.MergedReviewFindings is not { } mergedFindings ||
+            !WorkerResultBlockers.AssessSubscriptionVerification(task, task.LastVerification).AllowsCompletion)
         {
             return null;
         }
@@ -325,6 +326,9 @@ internal sealed partial class ConductorDriver
             if (candidateReceipt is not { Accepted: true, Passed: false } ||
                 !string.Equals(candidateReceipt.CandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase) ||
                 !string.Equals(candidateReceipt.ExecutionBasisIdentity, executionBasisIdentity, StringComparison.Ordinal) ||
+                candidateReceipt.Request.NegativeControl != normalizedRequest.NegativeControl ||
+                !FindingEvidenceRevertPaths.SamePaths(candidateReceipt.Request.RevertPaths, normalizedRequest.RevertPaths) ||
+                !FindingEvidenceMutation.Same(candidateReceipt.Request.Mutation, normalizedRequest.Mutation) ||
                 candidateArm is not
                 {
                     Accepted: true,
@@ -519,6 +523,9 @@ internal sealed partial class ConductorDriver
                 if (!string.Equals(receipt.FindingRoundFingerprint, executedRoundFingerprint, StringComparison.Ordinal) ||
                     !string.Equals(receipt.CandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase) ||
                     !string.Equals(receipt.ExecutionBasisIdentity, executionBasisIdentity, StringComparison.Ordinal) ||
+                    receipt.Request.NegativeControl != normalizedRequest.NegativeControl ||
+                    !FindingEvidenceRevertPaths.SamePaths(receipt.Request.RevertPaths, normalizedRequest.RevertPaths) ||
+                    !FindingEvidenceMutation.Same(receipt.Request.Mutation, normalizedRequest.Mutation) ||
                     !TryGetFindingEvidenceCoverage(FindingEvidenceExecutedCoverage.ExecutedRequest(receipt, FormatFindingEvidenceSelection), out var receiptCoverage) ||
                     !receiptCoverage.Overlaps(requestedCoverage))
                 {
@@ -545,10 +552,11 @@ internal sealed partial class ConductorDriver
             }
         }
 
-        uncoveredSelections = normalizedRequest.Selections
+        var expandedSelections = FindingEvidenceRoundPlanner.ExpandSelections(normalizedRequest.Selections);
+        uncoveredSelections = expandedSelections
             .Where(selection => !reusableBySelection.ContainsKey(FormatFindingEvidenceSelection(selection)))
             .ToArray();
-        reusableReceipts = normalizedRequest.Selections
+        reusableReceipts = expandedSelections
             .Select(selection => reusableBySelection.GetValueOrDefault(FormatFindingEvidenceSelection(selection)))
             .Where(receipt => receipt is not null)
             .Cast<FindingEvidenceReceipt>()
@@ -581,28 +589,36 @@ internal sealed partial class ConductorDriver
         string candidateSha,
         string executionBasisIdentity)
     {
-        if (!TryGetFindingEvidenceCoverage(receipt.Request, out var receiptCoverage))
+        var executedRequest = FindingEvidenceExecutedCoverage.ExecutedRequest(receipt, FormatFindingEvidenceSelection);
+        if (!TryGetFindingEvidenceCoverage(executedRequest, out var receiptCoverage))
         {
             return false;
         }
 
         var dispositions = receipt.RequestDispositions ?? [];
-        var executedDispositions = dispositions
+        var hasCandidateOmissions = (receipt.Arms ?? []).Any(arm =>
+            arm.Arm == FindingEvidenceArm.Candidate && arm.NotRunSelections.Count > 0);
+        // An incomplete request can still contribute its actually executed classes.
+        // ExecutedRequest excludes omissions; retained GREEN TRX evidence below proves the remainder.
+        var coverageDispositions = dispositions
             .Where(disposition =>
-                disposition.Disposition.StartsWith("executed-", StringComparison.Ordinal) &&
-                disposition.RequestIdentity
-                    .Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                    .ToHashSet(StringComparer.Ordinal)
-                    .IsSupersetOf(receiptCoverage))
+                disposition.Disposition.StartsWith("executed-", StringComparison.Ordinal) ||
+                (hasCandidateOmissions && disposition is
+                    { Disposition: "incomplete", Reason: "candidate-selections-not-executed", Decision: FindingEvidenceRequestDecision.PendingExecution } &&
+                 disposition.SourceReceiptIds?.Contains(receipt.ReceiptId, StringComparer.Ordinal) == true))
             .ToArray();
+        var executedDispositionCoverage = coverageDispositions.SelectMany(disposition =>
+                FindingEvidenceRoundPlanner.ExpandSelections(ParseDispositionSelections(disposition.RequestIdentity)))
+            .Select(FormatFindingEvidenceSelection).ToHashSet(StringComparer.Ordinal);
         if (receipt is not { Accepted: true, Passed: true } ||
             !string.Equals(receipt.CandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase) ||
             !string.Equals(receipt.ExecutionBasisIdentity, executionBasisIdentity, StringComparison.Ordinal) ||
-            executedDispositions.Length == 0 ||
+            coverageDispositions.Length == 0 ||
+            !executedDispositionCoverage.IsSupersetOf(receiptCoverage) ||
             dispositions.Any(disposition =>
-                executedDispositions.Any(executed =>
+                coverageDispositions.Any(executed =>
                     string.Equals(executed.RequestIdentity, disposition.RequestIdentity, StringComparison.Ordinal)) &&
-                !disposition.Disposition.StartsWith("executed-", StringComparison.Ordinal)))
+                !coverageDispositions.Contains(disposition)))
         {
             return false;
         }
@@ -622,15 +638,15 @@ internal sealed partial class ConductorDriver
                 candidateArm.TestResultPaths,
                 candidateArm.ReceiptArtifacts,
                 candidateArm.ExecutedTestCount!.Value,
-                ResolveFindingEvidenceRequiredTestClasses(receipt.Request));
+                ResolveFindingEvidenceRequiredTestClasses(executedRequest));
     }
 
     private static IReadOnlyList<string> ResolveFindingEvidenceRequiredTestClasses(FindingEvidenceRequest request)
     {
         var required = new List<string>();
-        foreach (var selection in request.Selections)
+        foreach (var selection in FindingEvidenceRoundPlanner.ExpandSelections(request.Selections))
         {
-            if (!TryGetExpandableFindingEvidenceClass(selection.TestClass, out var testClass, out _))
+            if (!FindingEvidenceFilterSyntax.TryGetExpandableClass(selection.TestClass, out var testClass, out _))
             {
                 return [];
             }
@@ -713,7 +729,7 @@ internal sealed partial class ConductorDriver
         return artifacts;
     }
 
-    private static string BuildFindingEvidenceExecutionBasisIdentity(AcceptanceGateEngineSettings settings)
+    internal static string BuildFindingEvidenceExecutionBasisIdentity(AcceptanceGateEngineSettings settings)
     {
         var invocations = settings.MtpInvocations
             .OrderBy(invocation => invocation.Project, StringComparer.OrdinalIgnoreCase)
@@ -747,7 +763,7 @@ internal sealed partial class ConductorDriver
             requestingTask.LastVerification?.CompletedAt,
             round);
 
-    private static string BuildFindingRoundFingerprint(
+    internal static string BuildFindingRoundFingerprint(
         TaskId requestingTaskId,
         DateTimeOffset? verificationCompletedAt,
         ReviewFindingRound round)
@@ -779,13 +795,51 @@ internal sealed partial class ConductorDriver
         FindingEvidenceRequest request,
         out HashSet<string> coverage)
     {
-        coverage = request.Selections
+        coverage = FindingEvidenceRoundPlanner.ExpandSelections(request.Selections)
             .Where(selection =>
                 !string.IsNullOrWhiteSpace(selection.TestProject) &&
                 !string.IsNullOrWhiteSpace(selection.TestClass))
             .Select(FormatFindingEvidenceSelection)
             .ToHashSet(StringComparer.Ordinal);
-        return coverage.Count > 0 && coverage.Count == request.Selections.Count;
+        return coverage.Count > 0;
+    }
+
+    private static IReadOnlyList<FindingEvidenceSelection> ParseDispositionSelections(string identity)
+    {
+        // Request identities use project:selection alternatives. A bare alternative inherits
+        // its preceding project, which also supports older positive-disjunction receipts.
+        // Split identities only outside selector groups, then expand complete expressions.
+        // Splitting every pipe first loses the balanced parentheses needed by class parsing.
+        var tokens = new List<string>();
+        var depth = 0;
+        var start = 0;
+        for (var index = 0; index < identity.Length; index++)
+        {
+            if (identity[index] == '(') depth++;
+            else if (identity[index] == ')' && --depth < 0) return [];
+            else if (identity[index] == '|' && depth == 0)
+            {
+                tokens.Add(identity[start..index].Trim());
+                start = index + 1;
+            }
+        }
+        if (depth != 0) return [];
+        tokens.Add(identity[start..].Trim());
+
+        var selections = new List<FindingEvidenceSelection>();
+        string? project = null;
+        foreach (var token in tokens.Where(token => token.Length > 0))
+        {
+            var separator = token.IndexOf(':');
+            if (separator >= 0)
+            {
+                project = token[..separator];
+                selections.Add(new(project, token[(separator + 1)..]));
+            }
+            else if (project is not null && FindingEvidenceRoundPlanner.TryExpandClasses(token, out _))
+                selections.Add(new(project, token));
+        }
+        return selections;
     }
 
     private static bool HasEverCommittedOutput(TaskSpec task) =>

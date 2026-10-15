@@ -5,6 +5,8 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed record ConductorLessonSelection(
     IReadOnlyList<OperatorLesson> Lessons, IReadOnlyList<string> Entries, int Omitted)
 {
+    public IReadOnlyList<string> LessonIds => Lessons.Select(lesson => lesson.Id).ToArray();
+
     internal static ConductorLessonSelection Empty { get; } = new([], [], 0);
 }
 
@@ -33,7 +35,9 @@ internal sealed class ConductorLessonSelector(string storePath, Action<string>? 
                 .Where(lesson => lesson.RetiredAt is null && lesson.RetireReason is null)
                 .Where(lesson => Valid(lesson) && lesson.AppliesTo.Any(tags.Contains))
                 .DistinctBy(lesson => lesson.Id, StringComparer.Ordinal)
-                .OrderByDescending(lesson => lesson.RecordedAt)
+                .OrderByDescending(lesson => lesson.AppliesTo.Any(tag => tag.Contains(':') && tags.Contains(tag)))
+                .ThenByDescending(lesson => tags.Count(tag => lesson.AppliesTo.Contains(tag, StringComparer.OrdinalIgnoreCase)))
+                .ThenByDescending(lesson => lesson.RecordedAt)
                 .ThenByDescending(lesson => lesson.Id, StringComparer.Ordinal)
                 .ToArray();
 

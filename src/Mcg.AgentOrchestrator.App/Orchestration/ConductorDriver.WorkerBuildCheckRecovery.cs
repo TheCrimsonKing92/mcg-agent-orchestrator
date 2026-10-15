@@ -22,11 +22,11 @@ internal sealed partial class ConductorDriver
             candidate.Status == WorkTaskStatus.Failed &&
             candidate.RequiredRole == AgentRole.Developer &&
             candidate.LastVerification is { } verification &&
-            string.Equals(
-                TaskOutcomeClassifier.TryExtractRule(
-                    DispatchFailureClassifier.Classify(candidate, verification).ClassifierReceipt),
-                DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed,
-                StringComparison.Ordinal));
+            TaskOutcomeClassifier.TryExtractRule(
+                DispatchFailureClassifier.Classify(candidate, verification).ClassifierReceipt) is { } rule &&
+            (string.Equals(rule, DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed, StringComparison.Ordinal) ||
+             (string.Equals(rule, DispatchFailureDiagnosticMarker.WorkerBuildEvidenceMissing,
+                 StringComparison.Ordinal) && IsBuildSlotLockTimeout(verification))));
         if (task is null) return null;
         var errors = WorkerBuildLogErrorReader.ReadNewest(_workerBuildArtifactsPath(goal.Id));
         var lockTimeout = errors is null && IsBuildSlotLockTimeout(task.LastVerification!);

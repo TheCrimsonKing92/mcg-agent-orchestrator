@@ -2678,11 +2678,8 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
     public void BatchLoopIntroducedTypedApparatusRestoresVerifiedForRegate()
     {
         var kernel = new AgentOrchestratorKernel();
-        var plan = GoalObjectivePlanner.Build(
-            "Update src/Mcg.AgentOrchestrator.App/Orchestration/IntroducedRegate.cs",
-            GoalIntakePipeline.FiveRole,
-            kernel.BuildTaskDurationStats());
-        var goal = GoalLifecycleCommands.CreateAndActivateGoal(kernel, DefaultAgents(), plan);
+        var goal = ResearcherGoalPlanFixture.CreateAndActivate(kernel, DefaultAgents(),
+            "Update src/Mcg.AgentOrchestrator.App/Orchestration/IntroducedRegate.cs");
         foreach (var task in goal.Tasks)
         {
             PassVerification(kernel, goal, task);

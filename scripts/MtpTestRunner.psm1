@@ -1,4 +1,5 @@
 Set-StrictMode -Version Latest
+Import-Module (Join-Path $PSScriptRoot 'WorkerBuildReceipt.psm1') -Force
 
 $script:ExitCodes = [pscustomobject]@{
     Manifest = 20
@@ -829,6 +830,7 @@ function Write-MtpRunOwnershipSidecar {
             attemptId = $attemptId
             machineName = [System.Environment]::MachineName
             ownerProcessId = $PID
+            ownerProcessStartedAt = (Get-Process -Id $PID -ErrorAction Stop).StartTime.ToUniversalTime().ToString('o')
             createdAt = [DateTimeOffset]::UtcNow.ToString('o')
             runLabel = $RunLabel
         }
@@ -1226,7 +1228,10 @@ function Copy-MtpStableNoBuildClosure {
         [Parameter(Mandatory = $true)][string]$SourceDirectory,
         [Parameter(Mandatory = $true)][string]$PublishedDirectory,
         [Parameter(Mandatory = $true)][string]$ManagedAssemblyLeaf,
-        [Parameter(Mandatory = $true)][string]$ProjectName
+        [Parameter(Mandatory = $true)][string]$ProjectName,
+        $BuildSelection,
+        [string]$RepositoryRoot,
+        [string]$RunDirectory
     )
 
     $sourceManagedAssembly = Join-Path $SourceDirectory $ManagedAssemblyLeaf
@@ -1239,7 +1244,21 @@ function Copy-MtpStableNoBuildClosure {
     for ($attempt = 1; $attempt -le $script:MtpClosureSnapshotAttempts; $attempt++) {
         $staging = Join-Path $parent ".s-$([Guid]::NewGuid().ToString('N').Substring(0, 8))"
         try {
+            if ($null -ne $BuildSelection -and $null -ne $BuildSelection.WorkerProvenance) {
+                Assert-WorkerBuildPathNotRedirected -Path $SourceDirectory -Recurse
+                Assert-WorkerBuildPathNotRedirected -Path $BuildSelection.WorkerProvenance.Path
+                Assert-MtpWorkerScopeIdentity -Provenance $BuildSelection.WorkerProvenance
+            }
             $before = Get-MtpClosureSnapshot -Path $SourceDirectory
+            if ($null -ne $BuildSelection) {
+                if ($before.Digest -cne $BuildSelection.SnapshotDigest) {
+                    throw 'Selected no-build closure changed before copying.'
+                }
+                if ($null -ne $BuildSelection.WorkerProvenance -and
+                    (Get-MtpSha256File -Path $BuildSelection.WorkerProvenance.Path) -cne $BuildSelection.WorkerProvenance.Sha256) {
+                    throw 'Selected worker build receipt changed before copying.'
+                }
+            }
             [void](New-Item -ItemType Directory -Path $staging -ErrorAction Stop)
             Get-ChildItem -LiteralPath $SourceDirectory -Force | Copy-Item -Destination $staging -Recurse -Force -ErrorAction Stop
             $staged = Get-MtpClosureSnapshot -Path $staging
@@ -1250,6 +1269,16 @@ function Copy-MtpStableNoBuildClosure {
                 $before.FileCount -ne $after.FileCount) {
                 $lastFailure = "source output changed while snapshotting attempt $attempt of $script:MtpClosureSnapshotAttempts"
                 continue
+            }
+            if ($null -ne $BuildSelection -and $null -ne $BuildSelection.WorkerProvenance) {
+                $provenance = $BuildSelection.WorkerProvenance
+                Assert-WorkerBuildPathNotRedirected -Path $SourceDirectory -Recurse
+                Assert-WorkerBuildPathNotRedirected -Path $provenance.Path
+                Assert-MtpWorkerScopeIdentity -Provenance $provenance
+                if ((Get-WorktreeTreeDigest -Root $RepositoryRoot -TemporaryRoot $RunDirectory) -cne $provenance.TreeDigest -or
+                    (Get-MtpSha256File -Path $provenance.Path) -cne $provenance.Sha256) {
+                    throw 'Selected worker build identity changed while copying.'
+                }
             }
             Complete-MtpClosurePublication -StagingDirectory $staging -PublishedDirectory $PublishedDirectory -ManagedAssemblyLeaf $ManagedAssemblyLeaf -ProjectName $ProjectName
             $staging = $null
@@ -1338,8 +1367,7 @@ function Assert-MtpBuildReceipt {
     )
 
     if ([string]::IsNullOrWhiteSpace($RepairCommand)) {
-        $repairRoot = $RepositoryRoot.TrimEnd([char[]]@('\', '/'))
-        $RepairCommand = "dotnet build `"$ProjectPath`" --configuration $Configuration `"-p:McgIsolatedArtifactsPath=$repairRoot`""
+        $RepairCommand = "& `"$RepositoryRoot/scripts/Invoke-WorkerBuildCheck.ps1`" `"$ProjectPath`" -Configuration `"$Configuration`""
     }
     $receiptPath = Get-MtpBuildReceiptPath -Directory $Directory
     try {
@@ -1897,7 +1925,8 @@ function Resolve-MtpEvaluatedTargetPath {
         [Parameter(Mandatory = $true)]$Invocation,
         [Parameter(Mandatory = $true)][string]$Configuration,
         [Parameter(Mandatory = $true)][string]$DotnetPath,
-        [Parameter(Mandatory = $true)][string]$RunDirectory
+        [Parameter(Mandatory = $true)][string]$RunDirectory,
+        [string]$WorkerArtifactsPath
     )
 
     $projectPath = [System.IO.Path]::GetFullPath((Join-Path $RepositoryRoot ([string]$Invocation.project)))
@@ -1907,6 +1936,9 @@ function Resolve-MtpEvaluatedTargetPath {
     # truncated drain, into an opaque "invalid result" instead of the real failure.
     $resultPath = Join-Path $RunDirectory (Get-MtpBoundedFileName -Stem "msbuild-identity-$([System.IO.Path]::GetFileNameWithoutExtension($projectPath))" -Suffix '.json' -MaximumLength 180)
     $arguments = [string[]]@($DotnetPath, 'msbuild', $projectPath, '--nologo', "-p:Configuration=$Configuration", '-getProperty:TargetPath,TargetFramework,RuntimeIdentifier', '-getItem:Compile', "-getResultOutputFile:$resultPath")
+    if (-not [string]::IsNullOrWhiteSpace($WorkerArtifactsPath)) {
+        $arguments += @('-p:UseArtifactsOutput=true', "-p:ArtifactsPath=$WorkerArtifactsPath", '-p:BuildInParallel=false')
+    }
     $probe = Invoke-MtpBuildProcess -Executable $DotnetPath -Arguments $arguments -OutputLog $logPath -WorkingDirectory $RepositoryRoot
     if (-not $probe.Started -or -not [string]::IsNullOrWhiteSpace([string]$probe.StartFailureMessage) -or -not [string]::IsNullOrWhiteSpace([string]$probe.MonitoringFailureMessage) -or -not $probe.CleanupConfirmed -or -not $probe.DrainConfirmed -or $probe.ExitCode -ne 0) {
         throw "MSBuild target-path evaluation failed for '$projectPath'; started=$($probe.Started) exitCode=$($probe.ExitCode) cleanupConfirmed=$($probe.CleanupConfirmed) drainConfirmed=$($probe.DrainConfirmed); diagnostic log: $logPath"
@@ -1929,8 +1961,12 @@ function Resolve-MtpEvaluatedTargetPath {
     }
     $resolved = [System.IO.Path]::GetFullPath([string]$properties.TargetPath)
     $repositoryPrefix = [System.IO.Path]::GetFullPath($RepositoryRoot).TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
-    if (-not $resolved.StartsWith($repositoryPrefix, [System.StringComparison]::OrdinalIgnoreCase) -or -not $resolved.EndsWith('.dll', [System.StringComparison]::OrdinalIgnoreCase)) {
+    $outputPrefix = if ([string]::IsNullOrWhiteSpace($WorkerArtifactsPath)) { $repositoryPrefix } else { $WorkerArtifactsPath.TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar }
+    if (-not $resolved.StartsWith($outputPrefix, [System.StringComparison]::OrdinalIgnoreCase) -or -not $resolved.EndsWith('.dll', [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "MSBuild target-path evaluation escaped the repository or did not resolve a managed assembly: $resolved"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($WorkerArtifactsPath)) {
+        Assert-WorkerBuildPathNotRedirected -Path $resolved
     }
     $compilePaths = [System.Collections.Generic.List[string]]::new()
     try {
@@ -1967,13 +2003,70 @@ function Resolve-MtpEvaluatedTargetPath {
     }
 }
 
+function Assert-MtpWorkerScopeIdentity {
+    param($Provenance)
+    $metadataDigest = 'none'
+    Assert-WorkerBuildPathNotRedirected -Path $Provenance.ScopeMetadataPath
+    if (Test-Path -LiteralPath $Provenance.ScopeMetadataPath -PathType Leaf) {
+        $metadataDigest = (Get-MtpSha256File -Path $Provenance.ScopeMetadataPath).ToLowerInvariant()
+    }
+    if ($metadataDigest -cne $Provenance.ScopeMetadataDigest) { throw 'Worker build scope metadata changed during no-build reuse.' }
+}
+
+function Read-MtpWorkerBuildProvenance {
+    param([string]$RepositoryRoot, [string]$ProjectPath, [string]$Configuration, [string]$RunDirectory, [string]$WorkerRunRoot)
+    if ([string]::IsNullOrWhiteSpace($WorkerRunRoot)) { $WorkerRunRoot = Get-WorkerBuildRunRoot -Root $RepositoryRoot }
+    $path = Join-Path $WorkerRunRoot 'artifacts\worker-build-receipt.json'
+    Assert-WorkerBuildPathNotRedirected -Path $path
+    $hash = Get-MtpSha256File -Path $path
+    $receipt = Get-Content -LiteralPath $path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+    if (($receipt.schemaVersion -isnot [int] -and $receipt.schemaVersion -isnot [long]) -or
+        $receipt.schemaVersion -ne 1 -or $receipt.buildOutcome -cne 'success' -or $receipt.digestAlgorithm -cne 'wbc1:git-tree') {
+        throw "Worker build receipt is incompatible or unsuccessful: $path"
+    }
+    $generatedAt = [DateTimeOffset]::MinValue
+    if ($receipt.projects -isnot [array] -or @($receipt.projects).Count -eq 0 -or
+        @($receipt.projects | Where-Object { $_ -isnot [string] -or [string]::IsNullOrWhiteSpace($_) }).Count -gt 0 -or
+        $receipt.treeDigest -isnot [string] -or $receipt.treeDigest -notmatch '^wbc1:git-tree:[a-f0-9]{40}([a-f0-9]{24})?$' -or
+        -not [DateTimeOffset]::TryParse([string]$receipt.generatedAtUtc, [ref]$generatedAt) -or
+        -not [System.IO.Path]::IsPathRooted([string]$receipt.worktreeRoot)) {
+        throw "Worker build receipt is malformed: $path"
+    }
+    $root = [System.IO.Path]::GetFullPath($RepositoryRoot).TrimEnd('\', '/')
+    if (-not [System.IO.Path]::GetFullPath([string]$receipt.worktreeRoot).TrimEnd('\', '/').Equals($root, [StringComparison]::OrdinalIgnoreCase) -or
+        -not ([string]$receipt.configuration).Equals($Configuration, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Worker build receipt worktree/configuration mismatch: $path"
+    }
+    $scopeMetadataPath = Join-Path $root '.orchestrator-context\worker-build-scope.json'
+    $scopeMetadataDigest = if ($null -ne $receipt.PSObject.Properties['scopeMetadataDigest']) { [string]$receipt.scopeMetadataDigest } else { 'none' }
+    $scopeProvenance = [pscustomobject]@{ ScopeMetadataPath = $scopeMetadataPath; ScopeMetadataDigest = $scopeMetadataDigest }
+    Assert-MtpWorkerScopeIdentity -Provenance $scopeProvenance
+    $covered = @($receipt.projects | ForEach-Object { [System.IO.Path]::GetFullPath((Join-Path $root ([string]$_))) })
+    if ($ProjectPath -notin $covered) { throw "Worker build receipt does not cover requested project: $ProjectPath" }
+    $artifacts = Assert-WorkerBuildArtifactsPath -Root $root -ArtifactsPath ([string]$receipt.artifactsPath) -RunRoot $WorkerRunRoot
+    $properties = $receipt.buildProperties
+    if (@($properties.PSObject.Properties).Count -ne 3 -or
+        $properties.UseArtifactsOutput -cne 'true' -or $properties.BuildInParallel -cne 'false' -or
+        -not ([string]$properties.ArtifactsPath).Equals($artifacts, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Worker build receipt has unsupported output properties: $path"
+    }
+    $digest = Get-WorktreeTreeDigest -Root $root -TemporaryRoot $RunDirectory
+    if ([string]::IsNullOrWhiteSpace([string]$receipt.treeDigest) -or $receipt.treeDigest -cne $digest) {
+        throw "Worker build receipt tree digest is stale: $path"
+    }
+    if ($hash -ne (Get-MtpSha256File -Path $path)) { throw "Worker build receipt changed during validation: $path" }
+    Assert-MtpWorkerScopeIdentity -Provenance $scopeProvenance
+    return [pscustomobject]@{ Path = $path; Sha256 = $hash; TreeDigest = $digest; ArtifactsPath = $artifacts; ScopeMetadataPath = $scopeMetadataPath; ScopeMetadataDigest = $scopeMetadataDigest }
+}
+
 function Select-MtpVerifiedBuildOutput {
     param(
         [Parameter(Mandatory = $true)][string]$RepositoryRoot,
         [Parameter(Mandatory = $true)]$Invocation,
         [Parameter(Mandatory = $true)][string]$Configuration,
         [Parameter(Mandatory = $true)][string]$DotnetPath,
-        [Parameter(Mandatory = $true)][string]$RunDirectory
+        [Parameter(Mandatory = $true)][string]$RunDirectory,
+        [string]$WorkerRunRoot
     )
 
     $projectName = Get-MtpProjectName -Invocation $Invocation
@@ -1988,20 +2081,38 @@ function Select-MtpVerifiedBuildOutput {
     $declaredAssembly = Resolve-MtpManagedAssemblyPath -RepositoryRoot $RepositoryRoot -Invocation $Invocation -Configuration $Configuration
     $declaredDirectory = Split-Path -Parent $declaredAssembly
     $evaluatedDirectory = Split-Path -Parent $evaluatedIdentity.TargetPath
-    $repairRoot = $RepositoryRoot.TrimEnd([char[]]@('\', '/'))
+    $repairCommand = "& `"$RepositoryRoot/scripts/Invoke-WorkerBuildCheck.ps1`" `"$projectPath`" -Configuration `"$Configuration`""
     $candidates = @(
         [pscustomobject]@{
             Label = 'declared artifact output'
             Directory = $declaredDirectory
-            Repair = "dotnet build `"$projectPath`" --configuration $Configuration `"-p:McgIsolatedArtifactsPath=$repairRoot`""
+            Repair = $repairCommand
+            Identity = $evaluatedIdentity
+            WorkerProvenance = $null
         },
         [pscustomobject]@{
             Label = 'evaluated standard output'
             Directory = $evaluatedDirectory
-            Repair = "dotnet build `"$projectPath`" --configuration $Configuration"
+            Repair = $repairCommand
+            Identity = $evaluatedIdentity
+            WorkerProvenance = $null
         }
     )
     $rejections = [System.Collections.Generic.List[string]]::new()
+    try {
+        $provenance = Read-MtpWorkerBuildProvenance -RepositoryRoot $RepositoryRoot -ProjectPath $projectPath -Configuration $Configuration -RunDirectory $RunDirectory -WorkerRunRoot $WorkerRunRoot
+        $evaluationStopwatch.Start()
+        $workerIdentity = Resolve-MtpEvaluatedTargetPath -RepositoryRoot $RepositoryRoot -Invocation $Invocation -Configuration $Configuration -DotnetPath $DotnetPath -RunDirectory $RunDirectory -WorkerArtifactsPath $provenance.ArtifactsPath
+        $evaluationStopwatch.Stop()
+        $candidates += [pscustomobject]@{
+            Label = 'sanctioned worker output'
+            Directory = Split-Path -Parent $workerIdentity.TargetPath
+            Repair = $repairCommand
+            Identity = $workerIdentity
+            WorkerProvenance = $provenance
+        }
+    }
+    catch { $rejections.Add("sanctioned worker output: $($_.Exception.Message)") }
     $verified = [System.Collections.Generic.List[object]]::new()
     $verificationStopwatch = [System.Diagnostics.Stopwatch]::new()
     foreach ($candidate in $candidates) {
@@ -2010,12 +2121,21 @@ function Select-MtpVerifiedBuildOutput {
         }
         $verificationStopwatch.Start()
         try {
-            $receipt = Assert-MtpBuildReceipt -Directory $candidate.Directory -ManagedAssemblyLeaf "$projectName.dll" -RepositoryRoot $RepositoryRoot -ProjectPath $projectPath -Configuration $Configuration -TargetFramework $evaluatedIdentity.TargetFramework -RuntimeIdentifier $evaluatedIdentity.RuntimeIdentifier -ExpectedSourcePaths $evaluatedIdentity.CompilePaths -RepairCommand $candidate.Repair
+            if ($null -ne $candidate.WorkerProvenance) {
+                Assert-WorkerBuildPathNotRedirected -Path $candidate.Directory -Recurse
+            }
+            $snapshot = Get-MtpClosureSnapshot -Path $candidate.Directory
+            $receipt = Assert-MtpBuildReceipt -Directory $candidate.Directory -ManagedAssemblyLeaf "$projectName.dll" -RepositoryRoot $RepositoryRoot -ProjectPath $projectPath -Configuration $Configuration -TargetFramework $candidate.Identity.TargetFramework -RuntimeIdentifier $candidate.Identity.RuntimeIdentifier -ExpectedSourcePaths $candidate.Identity.CompilePaths -RepairCommand $candidate.Repair
+            if ($snapshot.Digest -cne (Get-MtpClosureSnapshot -Path $candidate.Directory).Digest) { throw 'No-build closure changed during validation.' }
+            if ($null -ne $candidate.WorkerProvenance -and (Get-MtpSha256File -Path $candidate.WorkerProvenance.Path) -cne $candidate.WorkerProvenance.Sha256) { throw 'Worker receipt changed during selection.' }
+            if ($null -ne $candidate.WorkerProvenance) { Assert-MtpWorkerScopeIdentity -Provenance $candidate.WorkerProvenance }
             $verified.Add([pscustomobject]@{
                 Label = $candidate.Label
                 Directory = $candidate.Directory
                 Receipt = $receipt
                 ClosureSha256 = Get-MtpBuildReceiptClosureDigest -Receipt $receipt -Directory $candidate.Directory
+                SnapshotDigest = $snapshot.Digest
+                WorkerProvenance = $candidate.WorkerProvenance
             })
         }
         catch {
@@ -2026,13 +2146,12 @@ function Select-MtpVerifiedBuildOutput {
         }
     }
     if ($verified.Count -eq 0) {
-        $wrapperCommand = "scripts/Invoke-WorkerBuildDiagnostic.ps1 build `"$projectPath`" `"-p:McgIsolatedArtifactsPath=$repairRoot`" --configuration `"$Configuration`""
-        throw "No verified no-build output exists for '$projectName'. $($rejections -join ' | ')`nSanctioned wrapper: $wrapperCommand"
+        throw "No verified no-build output exists for '$projectName'. $($rejections -join ' | ')`nSanctioned build: $repairCommand"
     }
     $closureHashes = @($verified | ForEach-Object { [string]$_.ClosureSha256 } | Sort-Object -Unique)
     if ($verified.Count -gt 1 -and $closureHashes.Count -gt 1) {
         $identities = @($verified | ForEach-Object { "path='$($_.Directory)' assemblySha256=$($_.Receipt.Headers['assemblySha256']) closureSha256=$($_.ClosureSha256)" })
-        throw "Ambiguous verified no-build outputs for '$projectName'; refusing to select by path layout or timestamp. $($identities -join ' | '). Repair with either: dotnet build `"$projectPath`" --configuration $Configuration OR dotnet build `"$projectPath`" --configuration $Configuration -p:McgIsolatedArtifactsPath=`"$RepositoryRoot`""
+        throw "Ambiguous verified no-build outputs for '$projectName'; refusing to select by path layout or timestamp. $($identities -join ' | '). Repair: $repairCommand"
     }
     $selected = @($verified | Where-Object { $_.Label -eq 'declared artifact output' } | Select-Object -First 1)
     if ($selected.Count -eq 0) {
@@ -2047,7 +2166,7 @@ function Select-MtpVerifiedBuildOutput {
         candidatesVerified = $verified.Count
     }
     Write-Host "NO-BUILD BUILD RECEIPT SELECTED - $($selected[0].Label) '$($selected[0].Directory)' assemblySha256=$($selected[0].Receipt.Headers['assemblySha256']) closureSha256=$($selected[0].ClosureSha256) identityCostMs total=$($identityCost.totalMs) evaluate=$($identityCost.evaluateMs) verify=$($identityCost.verifyMs) candidatesVerified=$($identityCost.candidatesVerified) rejected='$($rejected -join ' | ')'"
-    return [pscustomobject]@{ Directory = $selected[0].Directory; Receipt = $selected[0].Receipt; Rejections = $rejected; IdentityCost = $identityCost }
+    return [pscustomobject]@{ Directory = $selected[0].Directory; Receipt = $selected[0].Receipt; Rejections = $rejected; IdentityCost = $identityCost; SnapshotDigest = $selected[0].SnapshotDigest; WorkerProvenance = $selected[0].WorkerProvenance }
 }
 
 function New-MtpRunnerArguments {
@@ -2140,12 +2259,76 @@ function ConvertTo-MtpCommandLineArgument {
     return $quoted.ToString()
 }
 
+function Assert-MtpAttributionReplayInvocation {
+    param([object[]]$Projects, [string[]]$Filters, [int]$Repeat, [string]$RunnerPath)
+    $expectedFilter = 'FullyQualifiedName~ApparatusRedGateSourceIndexTests&Name~ActualCopiedCompletionRecordsOneFailedDecisionAndNextGoalCanAdvance'
+    if ($Projects.Count -ne 1 -or
+        [string]$Projects[0].project -ne 'tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj' -or
+        $Filters.Count -ne 1 -or $Filters[0] -cne $expectedFilter -or $Repeat -ne 1 -or
+        -not [string]::IsNullOrWhiteSpace($RunnerPath)) {
+        throw "Actual-copy replay requires the Infrastructure.Tests managed host, one invocation, and exact filter '$expectedFilter'."
+    }
+}
+
+function New-MtpAttributionReplayRequest {
+    param([string]$InputPath, [string]$RepositoryRoot, [string]$ManagedAssembly, [string]$ResultPath)
+    $root = [System.IO.Path]::GetFullPath($RepositoryRoot).TrimEnd('\', '/')
+    $inputFile = Get-Item -LiteralPath $InputPath -ErrorAction Stop
+    if ($inputFile.PSIsContainer -or $inputFile.Length -gt 1048576) { throw 'Replay input must be a bounded JSON file.' }
+    $inputBytes = [System.IO.File]::ReadAllBytes($inputFile.FullName)
+    $input = [System.Text.Encoding]::UTF8.GetString($inputBytes) | ConvertFrom-Json
+    $gitRoot = @(& git -C $root rev-parse --show-toplevel)
+    if ($LASTEXITCODE -ne 0 -or $gitRoot.Count -ne 1 -or
+        [System.IO.Path]::GetFullPath($gitRoot[0]).TrimEnd('\', '/') -ine $root) { throw 'Replay source root is not the candidate worktree root.' }
+    $head = @(& git -C $root rev-parse HEAD)
+    if ($LASTEXITCODE -ne 0 -or $head.Count -ne 1 -or $head[0] -notmatch '^[a-fA-F0-9]{40}$') { throw 'Replay candidate HEAD is unavailable.' }
+    $dirty = @(& git -C $root status --porcelain --untracked-files=no)
+    if ($LASTEXITCODE -ne 0 -or $dirty.Count -ne 0) { throw 'Actual-copy replay requires a committed, clean tracked candidate.' }
+    if ([string]::IsNullOrWhiteSpace([string]$input.sourceRoot) -or
+        [System.IO.Path]::GetFullPath([string]$input.sourceRoot).TrimEnd('\', '/') -ine $root -or
+        [string]$input.finalCandidateSha -ine $head[0]) { throw 'Replay input source root/final candidate does not match the executing candidate.' }
+    $sources = @('src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceTestSourceResolver.cs',
+        'src/Mcg.AgentOrchestrator.App/Orchestration/ApparatusRedGate.cs',
+        'tests/Mcg.AgentOrchestrator.Infrastructure.Tests/AcceptanceAttributionReplayFixture.cs',
+        'tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ApparatusRedGateSourceIndexTests.cs',
+        'scripts/MtpTestRunner.psm1', 'scripts/Invoke-TestSummary.ps1') | ForEach-Object {
+        [ordered]@{ file = $_; sha256 = Get-MtpSha256File -Path (Join-Path $root $_) }
+    }
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try { $inputHash = [System.BitConverter]::ToString($sha.ComputeHash($inputBytes)).Replace('-', '') }
+    finally { $sha.Dispose() }
+    return ([ordered]@{ schemaVersion = 1; requestId = [Guid]::NewGuid().ToString('N'); replayKind = 'actual-copy'
+        inputPath = $inputFile.FullName; inputSha256 = $inputHash; sourceRoot = $root; finalCandidateSha = $head[0]
+        assemblySha256 = Get-MtpSha256File -Path $ManagedAssembly; sources = @($sources); resultPath = $ResultPath
+    } | ConvertTo-Json -Depth 8 -Compress)
+}
+
+function Assert-MtpAttributionReplayResult {
+    param([string]$Request, [string]$ResultPath, [string[]]$ExecutedTestNames)
+    $requestObject = $Request | ConvertFrom-Json
+    if (-not (Test-Path -LiteralPath $ResultPath -PathType Leaf) -or (Get-Item -LiteralPath $ResultPath).Length -gt 1048576) {
+        throw 'Actual-copy replay did not publish its bounded result artifact; a normalized pass is insufficient.'
+    }
+    $result = Get-Content -LiteralPath $ResultPath -Raw | ConvertFrom-Json
+    if ($ExecutedTestNames.Count -ne 1 -or $ExecutedTestNames[0] -cne 'ApparatusRedGateSourceIndexTests.ActualCopiedCompletionRecordsOneFailedDecisionAndNextGoalCanAdvance' -or
+        $result.replayKind -cne 'actual-copy' -or
+        ($result.request | ConvertTo-Json -Depth 8 -Compress) -cne ($requestObject | ConvertTo-Json -Depth 8 -Compress) -or
+        [string]::IsNullOrWhiteSpace([string]$result.historicalAttemptId) -or
+        [string]::IsNullOrWhiteSpace([string]$result.originalTrxRunId) -or
+        [string]::IsNullOrWhiteSpace([string]$result.rerunTrxRunId) -or $result.originalTrxRunId -eq $result.rerunTrxRunId -or
+        $result.receipt.failureDecisions -ne 1 -or $result.receipt.nextGoalAdvanced -ne $true -or
+        $result.receipt.sourceEnumerations -ne 0 -or $result.receipt.sourceReads -ne 0) {
+        throw 'Actual-copy replay result is missing, stale, normalized, or bound to a different invocation.'
+    }
+}
+
 function New-MtpProcessStartInfo {
     param(
         [Parameter(Mandatory = $true)][string]$Executable,
         [Parameter(Mandatory = $true)][string[]]$Arguments,
         [string]$StartupHookPath,
-        [string]$BuildOutputRoot
+        [string]$BuildOutputRoot,
+        [string]$AcceptanceAttributionReplayRequest
     )
 
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
@@ -2200,6 +2383,12 @@ function New-MtpProcessStartInfo {
     }
     if (-not [string]::IsNullOrWhiteSpace($BuildOutputRoot)) {
         $startInfo.EnvironmentVariables['MCG_TEST_BUILD_OUTPUT_ROOT'] = $BuildOutputRoot
+    }
+    # A fixed, typed replay context belongs only to the selected test host. Never alter the
+    # caller environment or the hermetic allowlist (build/discovery must not inherit it).
+    if (-not [string]::IsNullOrWhiteSpace($AcceptanceAttributionReplayRequest)) {
+        $startInfo.EnvironmentVariables['MCG_ACCEPTANCE_ATTRIBUTION_REPLAY_MODE'] = 'actual-copy'
+        $startInfo.EnvironmentVariables['MCG_ACCEPTANCE_ATTRIBUTION_REPLAY_REQUEST'] = $AcceptanceAttributionReplayRequest
     }
     return $startInfo
 }
@@ -2318,6 +2507,7 @@ function Invoke-MtpAppHost {
         [Parameter(Mandatory = $true)][string]$OutputLog,
         [string]$StartupHookPath,
         [string]$BuildOutputRoot,
+        [string]$AcceptanceAttributionReplayRequest,
         [switch]$AllowBreakaway,
         [ValidateRange(1, 86400)][int]$TestHostTimeoutSeconds = 780,
         [pscustomobject]$TimeoutPolicy
@@ -2344,7 +2534,7 @@ function Invoke-MtpAppHost {
             $ownedJob = [McgMtpOwnedJob]::new($AllowBreakaway.IsPresent)
         }
         $process = [System.Diagnostics.Process]::new()
-        $process.StartInfo = New-MtpProcessStartInfo -Executable $Executable -Arguments $Arguments -StartupHookPath $StartupHookPath -BuildOutputRoot $BuildOutputRoot
+        $process.StartInfo = New-MtpProcessStartInfo -Executable $Executable -Arguments $Arguments -StartupHookPath $StartupHookPath -BuildOutputRoot $BuildOutputRoot -AcceptanceAttributionReplayRequest $AcceptanceAttributionReplayRequest
         $capture.Attach($process)
         if (-not [McgMtpSuppressedProcessStart]::Start($process)) {
             throw "Process.Start returned false for '$Executable'."
@@ -2550,7 +2740,8 @@ function Write-MtpRunEvidenceReceipt {
         [string[]]$ExecutedTestNames = @(),
         [object[]]$BuildSelections = @(),
         [scriptblock]$OwnershipWriter,
-        [string]$AttemptId
+        [string]$AttemptId,
+        [string]$AcceptanceAttributionReplayResult
     )
 
     $resultsRoot = Split-Path -Parent $RunDirectory
@@ -2571,6 +2762,14 @@ function Write-MtpRunEvidenceReceipt {
         throw "Could not write retention ownership sidecar for retained run evidence '$evidenceDirectory'. $removalOutcome; the original run directory remains available for diagnosis."
     }
     try {
+        $replayEvidence = $null
+        if (-not [string]::IsNullOrWhiteSpace($AcceptanceAttributionReplayResult)) {
+            $replayHash = Get-MtpSha256File -Path $AcceptanceAttributionReplayResult
+            $replayDestination = Join-Path $evidenceDirectory 'acceptance-attribution-replay.json'
+            Copy-Item -LiteralPath $AcceptanceAttributionReplayResult -Destination $replayDestination -ErrorAction Stop
+            if ((Get-MtpSha256File -Path $replayDestination) -ne $replayHash) { throw 'Replay result changed during retention.' }
+            $replayEvidence = [ordered]@{ file = 'acceptance-attribution-replay.json'; sha256 = $replayHash }
+        }
         $trxEvidence = [System.Collections.Generic.List[object]]::new()
         foreach ($trxPath in $TrxPaths) {
             $summary = Read-MtpTrxResult -Path $trxPath
@@ -2603,6 +2802,37 @@ function Write-MtpRunEvidenceReceipt {
                 identityCostMs = $_.IdentityCost
             }
         })
+        $nestedEvidence = [System.Collections.Generic.List[object]]::new()
+        $nestedRoot = Join-Path $RunDirectory 'nested-managed-projects'
+        if (Test-Path -LiteralPath $nestedRoot) {
+            # Only the bounded diagnostics layout is copied. Reject links and unexpected entries
+            # rather than following a fixture path or silently losing its evidence during cleanup.
+            $rows = @(Get-ChildItem -LiteralPath $nestedRoot -Force -ErrorAction Stop)
+            if (((Get-Item -LiteralPath $nestedRoot -Force).Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw 'Nested managed-project diagnostics root is not a bounded owned subtree.'
+            }
+            foreach ($row in $rows) {
+                if (-not $row.PSIsContainer -or $row.Name -notmatch '^p-[a-f0-9]{8}$' -or ($row.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+                    throw "Invalid nested managed-project diagnostics row '$($row.FullName)'."
+                }
+                $files = @(Get-ChildItem -LiteralPath $row.FullName -Force -ErrorAction Stop)
+                if (@($files | Where-Object { $_.PSIsContainer -or $_.Name -notin @('phases.jsonl', 'build.binlog', '.mtp-run-ownership.json') -or ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 }).Count -gt 0 -or
+                    -not (Test-Path -LiteralPath (Join-Path $row.FullName 'phases.jsonl') -PathType Leaf)) {
+                    throw "Invalid nested managed-project diagnostics files in '$($row.FullName)'."
+                }
+                $destination = Join-Path (Join-Path $evidenceDirectory 'nested-managed-projects') $row.Name
+                [void](New-Item -ItemType Directory -Path $destination -Force -ErrorAction Stop)
+                foreach ($file in $files) {
+                    $target = Join-Path $destination $file.Name
+                    Copy-Item -LiteralPath $file.FullName -Destination $target -ErrorAction Stop
+                    $sourceHash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256 -ErrorAction Stop).Hash
+                    if ((Get-FileHash -LiteralPath $target -Algorithm SHA256 -ErrorAction Stop).Hash -ne $sourceHash) {
+                        throw "Nested managed-project diagnostics copy changed '$($file.FullName)'."
+                    }
+                    $nestedEvidence.Add([ordered]@{ file = "nested-managed-projects/$($row.Name)/$($file.Name)"; sha256 = $sourceHash; bytes = $file.Length })
+                }
+            }
+        }
         $evidence = [ordered]@{
             schemaVersion = 1
             runLabel = $RunLabel
@@ -2611,7 +2841,9 @@ function Write-MtpRunEvidenceReceipt {
             executedTestNames = @($ExecutedTestNames | Sort-Object -Unique)
             selections = $selectionEvidence
             trx = $trxEvidence.ToArray()
+            nestedManagedProjects = $nestedEvidence.ToArray()
         }
+        if ($null -ne $replayEvidence) { $evidence['acceptanceAttributionReplay'] = $replayEvidence }
         $evidence | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $evidenceDirectory 'run-identity.json') -Encoding UTF8 -ErrorAction Stop
     }
     catch {
@@ -2640,6 +2872,7 @@ function Invoke-MtpTestRun {
         [string]$ResultsRoot,
         [string]$RunnerPath,
         [string]$DotnetPath = 'dotnet',
+        [string]$AcceptanceAttributionReplayInput,
         [switch]$AllowBreakaway,
         [ValidateRange(1, 86400)][int]$TestHostTimeoutSeconds = 780,
         [scriptblock]$RetainedEvidenceOwnershipWriter
@@ -2661,6 +2894,9 @@ function Invoke-MtpTestRun {
             if (-not [string]::IsNullOrWhiteSpace($filter)) {
                 [void](ConvertTo-MtpFilterArguments -Filter $filter)
             }
+        }
+        if (-not [string]::IsNullOrWhiteSpace($AcceptanceAttributionReplayInput)) {
+            Assert-MtpAttributionReplayInvocation -Projects $projects -Filters $filterList -Repeat $Repeat -RunnerPath $RunnerPath
         }
     }
     catch {
@@ -2684,6 +2920,8 @@ function Invoke-MtpTestRun {
     $lastOwnedProcessId = $null
     $lastRunnerExitCode = $null
     $allExitsConfirmed = $true
+    $replayRequest = $null
+    $replayResultPath = $null
     $environmentSnapshot = Get-MtpEnvironmentSnapshot
     $timeoutPolicy = Get-MtpTimeoutPolicy -TestHostTimeoutSeconds $TestHostTimeoutSeconds
     # Captured before Set-MtpHermeticEnvironment strips it, so retained evidence written after the
@@ -2698,6 +2936,8 @@ function Invoke-MtpTestRun {
         return New-MtpTerminalResult -Outcome failed -ExitCode $script:ExitCodes.StartupHook -ResultsDirectory $runDirectory -ArtifactsRetained $true
     }
     try {
+        # Resolve the caller's build location before hermetic environment filtering; carry it as a typed value.
+        $workerRunRoot = Get-WorkerBuildRunRoot -Root $RepositoryRoot
         Set-MtpHermeticEnvironment -RepositoryRoot $RepositoryRoot -WritableRoot $runDirectory
         Write-Host "Results directory: $runDirectory"
         $usesManagedAssembly = [string]::IsNullOrWhiteSpace($RunnerPath)
@@ -2712,8 +2952,8 @@ function Invoke-MtpTestRun {
                 $projectName = Get-MtpProjectName -Invocation $project
                 $publishedDirectory = Get-MtpClosureDirectory -RunDirectory $runDirectory -Invocation $project
                 try {
-                    $buildSelection = Select-MtpVerifiedBuildOutput -RepositoryRoot $RepositoryRoot -Invocation $project -Configuration $Configuration -DotnetPath $DotnetPath -RunDirectory $runDirectory
-                    Copy-MtpStableNoBuildClosure -SourceDirectory $buildSelection.Directory -PublishedDirectory $publishedDirectory -ManagedAssemblyLeaf "$projectName.dll" -ProjectName $projectName
+                    $buildSelection = Select-MtpVerifiedBuildOutput -RepositoryRoot $RepositoryRoot -Invocation $project -Configuration $Configuration -DotnetPath $DotnetPath -RunDirectory $runDirectory -WorkerRunRoot $workerRunRoot
+                    Copy-MtpStableNoBuildClosure -SourceDirectory $buildSelection.Directory -PublishedDirectory $publishedDirectory -ManagedAssemblyLeaf "$projectName.dll" -ProjectName $projectName -BuildSelection $buildSelection -RepositoryRoot $RepositoryRoot -RunDirectory $runDirectory
                     $buildOutputRoots[[string]$project.project] = [System.IO.Path]::GetFullPath(
                         [System.IO.Path]::Combine($buildSelection.Directory, '..', '..'))
                     $closureMarker = Get-Content -LiteralPath (Join-Path $publishedDirectory $script:MtpClosureMarkerName) -Raw | ConvertFrom-Json
@@ -2747,7 +2987,7 @@ function Invoke-MtpTestRun {
             if (-not (Test-Path -LiteralPath $requiredExecutable -PathType Leaf)) {
                 $projectPath = Join-Path $RepositoryRoot ([string]$project.project)
                 $missingArtifact = if ($usesManagedAssembly) { 'MANAGED ASSEMBLY' } else { 'RUNNER' }
-                Write-Host "MISSING $missingArtifact - expected sealed run-local artifact '$requiredExecutable'. Build it with the managed MTP runner: $DotnetPath build `"$projectPath`" --configuration $Configuration"
+                Write-Host "MISSING $missingArtifact - expected sealed run-local artifact '$requiredExecutable'. Build it with: & `"$RepositoryRoot/scripts/Invoke-WorkerBuildCheck.ps1`" `"$projectPath`" -Configuration `"$Configuration`""
                 Write-Host "Retained diagnostic directory: $runDirectory"
                 return New-MtpTerminalResult -Outcome failed -ExitCode $script:ExitCodes.MissingRunnerArtifact -ResultsDirectory $runDirectory -ArtifactsRetained $true
             }
@@ -2790,7 +3030,17 @@ function Invoke-MtpTestRun {
                 if ($usesManagedAssembly) {
                     $arguments = @($executable) + @($arguments)
                 }
-                $run = Invoke-MtpAppHost -Executable $executable -Arguments $arguments -OutputLog $outputLog -StartupHookPath $startupHookPath -BuildOutputRoot $buildOutputRoots[[string]$project.project] -AllowBreakaway:$AllowBreakaway -TestHostTimeoutSeconds $TestHostTimeoutSeconds -TimeoutPolicy $timeoutPolicy
+                if (-not [string]::IsNullOrWhiteSpace($AcceptanceAttributionReplayInput)) {
+                    try {
+                        $replayResultPath = Join-Path $runDirectory 'acceptance-attribution-replay.json'
+                        $replayRequest = New-MtpAttributionReplayRequest -InputPath $AcceptanceAttributionReplayInput -RepositoryRoot $RepositoryRoot -ManagedAssembly $managedAssembly -ResultPath $replayResultPath
+                    }
+                    catch {
+                        Write-Host "REPLAY INPUT FAILURE - $($_.Exception.Message)"
+                        return New-MtpTerminalResult -Outcome failed -ExitCode $script:ExitCodes.Runner -ResultsDirectory $runDirectory -ArtifactsRetained $true
+                    }
+                }
+                $run = Invoke-MtpAppHost -Executable $executable -Arguments $arguments -OutputLog $outputLog -StartupHookPath $startupHookPath -BuildOutputRoot $buildOutputRoots[[string]$project.project] -AcceptanceAttributionReplayRequest $replayRequest -AllowBreakaway:$AllowBreakaway -TestHostTimeoutSeconds $TestHostTimeoutSeconds -TimeoutPolicy $timeoutPolicy
                 $lastOwnedProcessId = $run.OwnedProcessId
                 $lastRunnerExitCode = $run.ExitCode
                 $allExitsConfirmed = $allExitsConfirmed -and [bool]$run.ExitConfirmed
@@ -2863,7 +3113,10 @@ function Invoke-MtpTestRun {
         }
 
         try {
-            $retainedEvidenceDirectory = Write-MtpRunEvidenceReceipt -RunDirectory $runDirectory -RunLabel $RunLabel -TrxPaths $trxPaths.ToArray() -RequestedFilters $filterList -ExecutedTestNames $executedTestNames.ToArray() -BuildSelections $buildSelections.ToArray() -OwnershipWriter $RetainedEvidenceOwnershipWriter -AttemptId $acceptanceAttemptId
+            if ($null -ne $replayRequest) {
+                Assert-MtpAttributionReplayResult -Request $replayRequest -ResultPath $replayResultPath -ExecutedTestNames $executedTestNames.ToArray()
+            }
+            $retainedEvidenceDirectory = Write-MtpRunEvidenceReceipt -RunDirectory $runDirectory -RunLabel $RunLabel -TrxPaths $trxPaths.ToArray() -RequestedFilters $filterList -ExecutedTestNames $executedTestNames.ToArray() -BuildSelections $buildSelections.ToArray() -OwnershipWriter $RetainedEvidenceOwnershipWriter -AttemptId $acceptanceAttemptId -AcceptanceAttributionReplayResult $replayResultPath
             Write-Host "Run identity and named TRX evidence retained: $retainedEvidenceDirectory"
         }
         catch {

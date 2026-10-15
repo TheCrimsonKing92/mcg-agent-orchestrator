@@ -2,6 +2,48 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 
 public sealed class ConductorStewardDeterministicRouteTests
 {
+    private const string MultipleRequests = "Malformed PLANNER_EVIDENCE_REQUEST: exactly one evidence request may be emitted per round.";
+
+    [Xunit.Fact]
+    public void Exact_multiple_request_rejection_supplies_preservation_and_self_check_procedure()
+    {
+        var output = new ConductorStewardDeterministicRoute().TryBuild(Trigger(
+            "worker stderr\n[orchestrator Planner output contract rejection]\n" + MultipleRequests + "\n"), "unused");
+
+        Xunit.Assert.NotNull(output);
+        var route = ConductorStewardAdjudicationParser.Parse(output);
+        Xunit.Assert.Equal("ContractClarification", route.Cause);
+        Xunit.Assert.Contains(MultipleRequests, route.Text);
+        Xunit.Assert.Contains("Format-only", route.Text);
+        Xunit.Assert.Contains("task/rejected-planner/stdout", route.Text);
+        Xunit.Assert.Contains("every criterion mapping", route.Text);
+        Xunit.Assert.Contains("research sections, source findings", route.Text);
+        Xunit.Assert.Contains("exact deduplicated union", route.Text);
+        Xunit.Assert.Contains("owner=acceptance-gate", route.Text);
+        Xunit.Assert.Contains("no store", route.Text);
+        Xunit.Assert.Contains("Operator obligations", route.Text);
+        Xunit.Assert.Contains("required proof and pending status", route.Text);
+        Xunit.Assert.Contains("never guess a merge or invent evidence", route.Text);
+        Xunit.Assert.Contains("Self-check", route.Text);
+        Xunit.Assert.Contains("count exactly one directive line", route.Text);
+        Xunit.Assert.Contains("every original Acceptance selection", route.Text);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("Malformed PLANNER_EVIDENCE_REQUEST: exactly one evidence request may be emitted per round.")]
+    [Xunit.InlineData("Example: [orchestrator Planner output contract rejection]\nMalformed PLANNER_EVIDENCE_REQUEST: exactly one evidence request may be emitted per round.")]
+    [Xunit.InlineData("[orchestrator Planner output contract rejection] Malformed PLANNER_EVIDENCE_REQUEST: exactly one evidence request may be emitted per round.")]
+    [Xunit.InlineData("[orchestrator Planner output contract rejection]\nExample: Malformed PLANNER_EVIDENCE_REQUEST: exactly one evidence request may be emitted per round.")]
+    [Xunit.InlineData("[orchestrator Planner output contract rejection]\n\"Malformed PLANNER_EVIDENCE_REQUEST: exactly one evidence request may be emitted per round.\"")]
+    [Xunit.InlineData("[orchestrator Planner output contract rejection]\nMalformed PLANNER_EVIDENCE_REQUEST: exactly one evidence request may be emitted per round.\nunknown additional diagnostic")]
+    [Xunit.InlineData("[orchestrator Planner output contract rejection]\nMalformed PLANNER_EVIDENCE_REQUEST: exactly one evidence request may be emitted per round")]
+    [Xunit.InlineData("[orchestrator Planner output contract rejection]\nMalformed PLANNER_EVIDENCE_REQUEST: payload is not valid JSON.")]
+    [Xunit.InlineData("[orchestrator Planner output contract rejection]\nMalformed PLANNER_EVIDENCE_REQUEST: exactly one evidence request may be emitted per round.\n[orchestrator Planner output contract rejection]\nunknown diagnostic")]
+    public void Unauthoritative_quoted_near_match_and_mixed_diagnostics_do_not_receive_multiple_request_recovery(string evidence)
+    {
+        Xunit.Assert.Null(new ConductorStewardDeterministicRoute().TryBuild(Trigger(evidence), "unused"));
+    }
+
     [Xunit.Fact]
     public void Known_planner_reasons_produce_one_contract_route()
     {

@@ -68,18 +68,19 @@ internal static class EpicProgressReadModel
         && args.Skip(1).Any(arg => arg.Equals("--epic", StringComparison.OrdinalIgnoreCase)
             || arg.StartsWith("--epic=", StringComparison.OrdinalIgnoreCase));
 
-    internal static IReadOnlyList<EpicProgressRollup> Load(OrchestratorWorkspace workspace, DateTimeOffset? since = null)
+    internal static IReadOnlyList<EpicProgressRollup> Load(OrchestratorWorkspace workspace, DateTimeOffset? since = null,
+        bool includeReasons = false)
     {
         if (!File.Exists(workspace.PortfolioStorePath))
             return [];
         var store = PortfolioStore.OpenReadOnly(workspace.PortfolioStorePath);
-        return Load(workspace, store, store.ListEpicsAsync().GetAwaiter().GetResult(), since);
+        return Load(workspace, store, store.ListEpicsAsync().GetAwaiter().GetResult(), since, includeReasons);
     }
 
-    internal static EpicProgressRollup LoadEpic(OrchestratorWorkspace workspace, string reference)
+    internal static EpicProgressRollup LoadEpic(OrchestratorWorkspace workspace, string reference, bool includeReasons = false)
     {
-        var (store, epic) = ResolveEpic(workspace, reference);
-        return Load(workspace, store, [epic]).Single();
+        return EpicDetailReadSnapshot.ReadAsync(workspace, reference, null, CancellationToken.None,
+            includeReasons: includeReasons, includeDetailGoals: false).GetAwaiter().GetResult().Row;
     }
 
     internal static IReadOnlyList<GoalSummary> ListMemberGoals(OrchestratorWorkspace workspace, string? reference)
@@ -105,12 +106,15 @@ internal static class EpicProgressReadModel
 
     private static IReadOnlyList<EpicProgressRollup> Load(
         OrchestratorWorkspace workspace, PortfolioStore store, IReadOnlyList<PortfolioEpic> epics,
-        DateTimeOffset? since = null)
+        DateTimeOffset? since = null, bool includeReasons = false)
     {
         var projects = store.ListProjectsAsync().GetAwaiter().GetResult();
         var members = epics.SelectMany(epic => store.ListEpicMembersAsync(epic.Id).GetAwaiter().GetResult()).ToArray();
         var backlog = BoardFillBacklogSnapshot.Read(workspace.BacklogStorePath);
-        return Build(epics, projects, members, LoadGoalMetadata(workspace, includeTerminalCreatedAt: since is not null), backlog, since);
+        var goals = LoadGoalMetadata(workspace, includeTerminalCreatedAt: since is not null);
+        var plans = EpicPlanStatusReader.Load(workspace, epics, includeReasons, backlog, goals, members);
+        return Build(epics, projects, members, goals, backlog, since)
+            .Select(row => row with { Plan = plans[row.Epic.Id] }).ToArray();
     }
 
     internal static IReadOnlyList<GoalSummary> LoadGoalMetadata(OrchestratorWorkspace workspace, bool includeTerminalCreatedAt = false)

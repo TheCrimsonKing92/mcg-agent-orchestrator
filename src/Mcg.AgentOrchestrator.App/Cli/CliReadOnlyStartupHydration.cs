@@ -28,7 +28,8 @@ internal static class CliReadOnlyStartupHydration
         bool hydrated,
         IOperatorChannel? channel = null,
         WorktreeCleanupContext? acceptanceCleanupContext = null,
-        Action? onReadOnlyDeclined = null)
+        Action? onReadOnlyDeclined = null,
+        ConductorLoopLeaseController? startupLoopLease = null)
     {
         if (!hydrated)
         {
@@ -44,6 +45,6 @@ internal static class CliReadOnlyStartupHydration
         return CliPersistentStateRunner.ExecuteCommand(args, stateRepository, workspace, ref agents,
             providers, ref workerProfiles, ref currentGoal, channel,
             acceptanceCleanupContext: acceptanceCleanupContext,
-            skipReadOnlyRoute: !hydrated);
+            skipReadOnlyRoute: !hydrated, startupLoopLease: startupLoopLease);
     }
 }

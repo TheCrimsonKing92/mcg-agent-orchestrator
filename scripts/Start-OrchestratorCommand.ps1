@@ -8,6 +8,9 @@ param(
     [string]$Name = "command",
     [string]$AppDll,
     [string]$Pipeline,
+    [string]$RepositoryRoot,
+    [string]$ExpectedStateDirectory,
+    [switch]$DisposableFixture,
 
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$Arguments
@@ -88,6 +91,9 @@ function Get-ArgumentValue {
     )
 
     for ($i = 0; $i -lt $Values.Count; $i++) {
+        if ($Values[$i].StartsWith($Name + '=', [System.StringComparison]::OrdinalIgnoreCase)) {
+            return $Values[$i].Substring($Name.Length + 1)
+        }
         if ($Values[$i].Equals($Name, [System.StringComparison]::OrdinalIgnoreCase)) {
             if (($i + 1) -lt $Values.Count) {
                 return $Values[$i + 1]
@@ -211,6 +217,54 @@ try {
     }
 
     $usesLauncher = [string]::IsNullOrWhiteSpace($AppDll)
+    $hasBinding = $PSBoundParameters.ContainsKey('RepositoryRoot') -or $PSBoundParameters.ContainsKey('ExpectedStateDirectory') -or $DisposableFixture -or
+        @($Arguments | Where-Object { $_ -match '^--(repository-root|expected-state-directory|disposable-fixture)(=|$)' }).Count -gt 0
+    $bindingArgs = @()
+    if (-not [string]::IsNullOrWhiteSpace($RepositoryRoot)) { $bindingArgs += @('--repository-root', $RepositoryRoot) }
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedStateDirectory)) { $bindingArgs += @('--expected-state-directory', $ExpectedStateDirectory) }
+    if ($DisposableFixture) { $bindingArgs += '--disposable-fixture' }
+    if ($hasBinding -and $usesLauncher) {
+        throw 'Workspace binding requires an explicit prebuilt -AppDll; build and select the compatible runtime before retrying.'
+    }
+    $dotnetPath = [Environment]::GetEnvironmentVariable("MCG_ORCHESTRATOR_DOTNET_PATH", "Process")
+    if ([string]::IsNullOrWhiteSpace($dotnetPath)) { $dotnetPath = "dotnet" }
+    $verifiedStateDirectory = $null
+    $verifiedExecutionDirectory = $repoRoot
+    $verifiedStopFile = $null
+    if ($hasBinding) {
+        if (-not (Test-Path -LiteralPath $AppDll -PathType Leaf)) { throw "Build the app before a bound launch: $AppDll" }
+        # Ask the actual app's owning resolver; do not duplicate registry/tenant/relocation rules.
+        $selectionArgs = @()
+        for ($i = 0; $i -lt $Arguments.Count; $i++) {
+            if ($Arguments[$i] -match '^--(project|tenant|repository-root|expected-state-directory)=') { $selectionArgs += $Arguments[$i] }
+            elseif ($Arguments[$i] -in @('--project', '--tenant', '--repository-root', '--expected-state-directory')) {
+                $selectionArgs += $Arguments[$i]
+                if (++$i -ge $Arguments.Count) { throw 'Missing workspace selector value.' }
+                $selectionArgs += $Arguments[$i]
+            }
+            elseif ($Arguments[$i] -eq '--disposable-fixture') { $selectionArgs += $Arguments[$i] }
+        }
+        $bindingJson = & $dotnetPath $AppDll '__workspace-binding-check' '--json' @selectionArgs @bindingArgs
+        if ($LASTEXITCODE -ne 0) { throw 'Workspace binding prelaunch check refused; no launcher artifacts written.' }
+        $verified = ($bindingJson -join [Environment]::NewLine) | ConvertFrom-Json -ErrorAction Stop
+        $requestedSelectors = @($selectionArgs) + @($bindingArgs)
+        $requestedRoot = Get-ArgumentValue -Values $requestedSelectors -Name '--repository-root'
+        $requestedState = Get-ArgumentValue -Values $requestedSelectors -Name '--expected-state-directory'
+        if ([string]::IsNullOrWhiteSpace([string]$verified.repositoryRoot) -or
+            [string]::IsNullOrWhiteSpace([string]$verified.stateDirectory) -or
+            [string]::IsNullOrWhiteSpace([string]$verified.executionDirectory)) { throw 'Malformed workspace binding receipt.' }
+        foreach ($expectation in @(@($requestedRoot, [string]$verified.repositoryRoot), @($requestedState, [string]$verified.stateDirectory))) {
+            if (-not [string]::IsNullOrWhiteSpace($expectation[0]) -and
+                -not [string]::Equals([System.IO.Path]::GetFullPath($expectation[0]).TrimEnd('\', '/'),
+                    [System.IO.Path]::GetFullPath($expectation[1]).TrimEnd('\', '/'), [System.StringComparison]::OrdinalIgnoreCase)) {
+                throw 'Workspace binding receipt differs from the explicit expectation.'
+            }
+        }
+        $verifiedStateDirectory = [string]$verified.stateDirectory
+        $verifiedExecutionDirectory = [string]$verified.executionDirectory
+        $verifiedStopFile = [string]$verified.stopFile
+        $Arguments += $bindingArgs
+    }
     $targetExecutable = if ($usesLauncher) {
         $launcher
     } else {
@@ -227,7 +281,7 @@ try {
         } else {
             [System.IO.Path]::GetFullPath($configuredRepositoryRoot)
         }
-        $stopFilePath = [System.IO.Path]::GetFullPath((Join-Path $effectiveRepositoryRoot ".conduct-stop"))
+        $stopFilePath = if ($null -ne $verifiedStopFile) { $verifiedStopFile } else { [System.IO.Path]::GetFullPath((Join-Path $effectiveRepositoryRoot ".conduct-stop")) }
         if (Test-Path -LiteralPath $stopFilePath -ErrorAction Stop) {
             $failureKind = "stop-authority-refused"
             $failureStopFilePath = $stopFilePath
@@ -236,7 +290,7 @@ try {
         }
     }
 
-    $logsRoot = Join-Path $repoRoot ".orchestrator\logs"
+    $logsRoot = if ($null -ne $verifiedStateDirectory) { Join-Path $verifiedStateDirectory 'logs' } else { Join-Path $repoRoot ".orchestrator\logs" }
     New-Item -ItemType Directory -Force -Path $logsRoot | Out-Null
 
     $stamp = Get-Date -Format "yyyyMMddHHmmss"
@@ -246,11 +300,6 @@ try {
 
     if (-not (Test-Path -LiteralPath $targetExecutable -PathType Leaf)) {
         throw "Launcher or App DLL not found: $targetExecutable"
-    }
-
-    $dotnetPath = [Environment]::GetEnvironmentVariable("MCG_ORCHESTRATOR_DOTNET_PATH", "Process")
-    if ([string]::IsNullOrWhiteSpace($dotnetPath)) {
-        $dotnetPath = "dotnet"
     }
 
     $processFilePath = $dotnetPath
@@ -266,9 +315,9 @@ try {
 
     $processArgumentLine = ($launchArguments | ForEach-Object { ConvertTo-CommandLineArgument $_ }) -join " "
 
-    $journalPath = Join-Path $repoRoot ".orchestrator\last-drive.json"
+    $journalPath = if ($null -ne $verifiedStateDirectory) { Join-Path $verifiedStateDirectory 'last-drive.json' } else { Join-Path $repoRoot ".orchestrator\last-drive.json" }
     Write-LastDriveJournal `
-        -RepositoryRoot $repoRoot `
+        -RepositoryRoot $verifiedExecutionDirectory `
         -JournalPath $journalPath `
         -BatchName $Name `
         -ApplicationDll $AppDll `
@@ -287,7 +336,7 @@ try {
             -WindowStyle Hidden `
             -PassThru `
             -FilePath $processFilePath `
-            -WorkingDirectory $repoRoot `
+            -WorkingDirectory $verifiedExecutionDirectory `
             -ArgumentList $processArgumentLine `
             -RedirectStandardOutput $stdoutPath `
             -RedirectStandardError $stderrPath

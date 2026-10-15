@@ -31,9 +31,11 @@ public sealed record OrchestratorWorkspace(
 
     // Configuration wins for deployed layouts where the orchestrator binary is
     // outside the target repository tree.
-    public static string ResolveRepoRoot(string? startDirectory = null, string? fallbackDirectory = null)
+    public static string ResolveRepoRoot(string? startDirectory = null, string? fallbackDirectory = null, string? explicitRoot = null,
+        Func<string, string?>? readEnvironment = null)
     {
-        var configuredRoot = Environment.GetEnvironmentVariable(RepoRootEnvironmentVariable);
+        if (!string.IsNullOrWhiteSpace(explicitRoot)) return Path.GetFullPath(explicitRoot);
+        var configuredRoot = (readEnvironment ?? Environment.GetEnvironmentVariable)(RepoRootEnvironmentVariable);
         if (!string.IsNullOrWhiteSpace(configuredRoot))
         {
             return Path.GetFullPath(configuredRoot);
@@ -53,7 +55,7 @@ public sealed record OrchestratorWorkspace(
             var dir = new DirectoryInfo(Path.GetFullPath(candidate));
             while (dir != null)
             {
-                if (Directory.Exists(Path.Combine(dir.FullName, GitDirectoryName)))
+                if (Directory.Exists(Path.Combine(dir.FullName, GitDirectoryName)) || File.Exists(Path.Combine(dir.FullName, GitDirectoryName)))
                     return dir.FullName;
                 dir = dir.Parent;
             }
@@ -191,6 +193,7 @@ public sealed record OrchestratorWorkspace(
     public string BacklogStorePath => Path.Combine(OrchestratorDirectory, "backlog.db");
 
     public string OperatorLessonsStorePath => Path.Combine(OrchestratorDirectory, SqliteOperatorLessonStore.DatabaseFileName);
+    public string OperatorDirectivesStorePath => Path.Combine(OrchestratorDirectory, SqliteOperatorDirectiveStore.DatabaseFileName);
     public string OperatorEscapesStorePath => Path.Combine(OrchestratorDirectory, SqliteOperatorEscapeStore.DatabaseFileName);
 
     public string PortfolioStorePath => Path.Combine(OrchestratorDirectory, "portfolio.db");

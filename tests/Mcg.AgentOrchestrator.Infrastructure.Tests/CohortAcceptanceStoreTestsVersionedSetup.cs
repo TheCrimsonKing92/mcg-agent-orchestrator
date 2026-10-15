@@ -145,13 +145,7 @@ public sealed class CohortAcceptanceStoreTestsVersionedSetup : IDisposable
 
         using (var connection = Open())
             Assert.Equal(before, Snapshot(connection));
-        var results = StoreSetupRunner.Run(root);
-        foreach (var name in StoreNames)
-        {
-            var result = Assert.Single(results, result => result.StoreName == name);
-            Assert.Equal(Db, result.DatabasePath);
-            Assert.Equal(99, result.Version);
-        }
+        Assert.Contains(Db, Assert.Throws<InvalidOperationException>(() => StoreSetupRunner.Run(root)).Message);
         using var readBack = Open();
         Assert.Equal(before, Snapshot(readBack));
         AssertVersions(readBack, 99);

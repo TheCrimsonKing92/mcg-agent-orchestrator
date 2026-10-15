@@ -30,6 +30,8 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
                     .ToArray();
             }
 
+            var json = HasCliConfirmation(parts, "--json");
+            var rows = json ? new List<BacklogListAgentReadView.Row>() : null;
             foreach (var item in items)
             {
                 var claim = ResolveSourceBacklogClaimForRead(context, item.Id, out var ambiguity);
@@ -37,7 +39,28 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
                     ? null
                     : context.Kernel.Goals.FirstOrDefault(goal => goal.Id.Value == claim.OwnerGoalId);
                 var goalId = ambiguity is null ? linkedGoal?.Id.Value ?? "-" : "legacy-owner-ambiguous";
+                if (rows is not null)
+                {
+                    var readiness = BacklogDependencyReadiness.Evaluate(item,
+                        id => context.Kernel.Goals.FirstOrDefault(goal => goal.Id.Value == id),
+                        id => store.GetByExactIdAsync(id).GetAwaiter().GetResult(),
+                        id =>
+                        {
+                            var owner = FindAuthoritativeSourceGoalForRead(context, id, out var ownerAmbiguity);
+                            return new BacklogPrerequisiteOwner(owner, ownerAmbiguity is not null);
+                        },
+                        goal => ResolveBacklogShowGoalLandingState(context, goal));
+                    rows.Add(new(item.Id, item.Title, RenderBacklogListingStatus(item, linkedGoal),
+                        ambiguity is null ? linkedGoal?.Id.Value : null, ambiguity is not null, readiness.Eligible,
+                        item.CreatedAt, item.UpdatedAt, item.Priority, item.Tags, item.SupersededBy));
+                    continue;
+                }
                 Console.WriteLine($"{RenderBacklogListTag(item)}{RenderBacklogTimestampSuffix(item)}{RenderBacklogListSuffix(item)}{RenderBacklogReadinessSuffix(item, context, store)} {item.Id} | status={RenderBacklogListingStatus(item, linkedGoal)} | goal={goalId} | title={item.Title}");
+            }
+            if (rows is not null)
+            {
+                Console.WriteLine(BacklogListAgentReadView.Serialize(rows));
+                return false;
             }
             Console.WriteLine($"Backlog list: {items.Count} item(s) from backlog store");
             return false;

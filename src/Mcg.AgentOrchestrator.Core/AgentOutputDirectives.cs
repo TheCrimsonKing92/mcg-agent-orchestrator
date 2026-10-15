@@ -25,6 +25,13 @@ public static class AgentOutputDirectives
         // request already identified in the worker decision stream, never a new request.
         if (authoritativeOutput is { } fullOutput)
         {
+            // The durable receipt repeats the plan, including its evidence directives.
+            // Those copies are artifact content, not additional worker requests.
+            var receiptStart = fullOutput.IndexOf("<!-- MCG_DURABLE_PLANNER_PLAN:BEGIN -->", StringComparison.Ordinal);
+            if (receiptStart >= 0)
+            {
+                fullOutput = fullOutput[..receiptStart];
+            }
             var fullDirective = ParseHumanInputRequest(fullOutput, role).Directive;
             if (fullDirective is { Kind: HumanWaitKind.ProspectiveAcceptanceEvidence } &&
                 string.Equals(fullDirective.Question, question, StringComparison.Ordinal))
@@ -168,6 +175,41 @@ public static class AgentOutputDirectives
             .ToArray();
         if (evidenceRequests.Length > 1)
         {
+            if (role == AgentRole.Planner)
+            {
+                var requests = new List<HumanInputDirective>();
+                var entries = new List<string>();
+                foreach (var evidenceRequest in evidenceRequests)
+                {
+                    var json = evidenceRequest["PLANNER_EVIDENCE_REQUEST:".Length..].Trim();
+                    var parsed = ParsePlannerEvidenceRequest(json);
+                    if (parsed.IsMalformed || parsed.Directive is null)
+                    {
+                        return MalformedEvidenceRequest("exactly one evidence request may be emitted per round");
+                    }
+
+                    requests.Add(parsed.Directive);
+                    // The directive retains fingerprints, not the raw evidence key. Keep the
+                    // validated payload's identity and requested evidence in the merged record.
+                    using var document = JsonDocument.Parse(json);
+                    var root = document.RootElement;
+                    entries.Add($"{entries.Count + 1}) {root.GetProperty("evidence_key").GetString()!.Trim()}: " +
+                        root.GetProperty("needed").GetString()!.Trim());
+                }
+
+                var merged = PlannerEvidenceRequestMerger.TryMerge(requests);
+                if (merged?.Directive is { } directive)
+                {
+                    return merged with
+                    {
+                        Directive = directive with
+                        {
+                            Question = directive.Question + " Merged evidence requests: " + string.Join("; ", entries) + "."
+                        }
+                    };
+                }
+            }
+
             return MalformedEvidenceRequest("exactly one evidence request may be emitted per round");
         }
 
@@ -204,7 +246,7 @@ public static class AgentOutputDirectives
         return new HumanInputDirectiveParseResult(null, null);
     }
 
-    private static HumanInputDirectiveParseResult ParsePlannerEvidenceRequest(string json)
+    internal static HumanInputDirectiveParseResult ParsePlannerEvidenceRequest(string json)
     {
         if (json.StartsWith("none", StringComparison.OrdinalIgnoreCase) &&
             (json.Length == 4 || char.IsWhiteSpace(json[4]) || char.IsPunctuation(json[4])))

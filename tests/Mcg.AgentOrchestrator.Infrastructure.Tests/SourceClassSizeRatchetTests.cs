@@ -19,21 +19,26 @@ public sealed class SourceClassSizeRatchetTests
             new[] { "ConductorDriver", "CliCommandHandlers", "GoalAcceptanceVerifier", "AgentOrchestratorKernel",
                 "ConductorBatchLoop", "CliPersistentStateRunner", "ConsoleViews" },
             SourceSizeRatchet.SeededClassCeilings.Select(row => row.ClassName));
-        var files = Directory.EnumerateFiles(Path.Combine(root, "src"), "*.cs", SearchOption.AllDirectories)
-            .Where(path => !Path.GetRelativePath(root, path).Split(Path.DirectorySeparatorChar)
-                .Any(segment => segment.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
-                    segment.Equals("obj", StringComparison.OrdinalIgnoreCase)))
-            .Select(path => File.ReadAllLines(path)).ToArray();
+        var snapshot = RepositorySourceSnapshotCache.Get(root);
+        var files = snapshot.EnumerateFiles(Path.Combine(root, "src"))
+            .Where(path => IsMeasuredSourceFile(root, path))
+            .Select(path => snapshot.GetLines(path))
+            .Select(lines => (Text: string.Join("\n", lines), LineCount: lines.Count)).ToArray();
 
         foreach (var row in SourceSizeRatchet.SeededClassCeilings)
         {
-            var partials = files.Where(lines => Regex.IsMatch(string.Join("\n", lines),
+            var partials = files.Where(file => Regex.IsMatch(file.Text,
                 $@"\bpartial\s+class\s+{Regex.Escape(row.ClassName)}\b", RegexOptions.CultureInvariant)).ToArray();
-            var totalLineCount = partials.Sum(lines => lines.Length);
+            var totalLineCount = partials.Sum(file => file.LineCount);
             Assert.True(totalLineCount <= row.MaximumTotalLineCount,
                 $"{row.ClassName} has {totalLineCount} lines, exceeding its ceiling of {row.MaximumTotalLineCount}.");
             Assert.True(partials.Length <= row.MaximumPartialFileCount,
                 $"{row.ClassName} has {partials.Length} partial files, exceeding its ceiling of {row.MaximumPartialFileCount}.");
+            if (row.ClassName == "ConsoleViews")
+            {
+                Assert.Equal(totalLineCount, row.MaximumTotalLineCount);
+                Assert.Equal(partials.Length, row.MaximumPartialFileCount);
+            }
         }
     }
 
@@ -42,6 +47,23 @@ public sealed class SourceClassSizeRatchetTests
     {
         Assert.Equal(SourceSizeRatchet.SeededClassCeilings,
             SourceSizeRatchetPreflight.TryReadClassAuthority(FindRepositoryRoot()));
+    }
+
+    [Fact]
+    public void CachedMeasurement_UppercaseGeneratedTrees_AreExcluded()
+    {
+        using var fixture = new SourceSnapshotFixture();
+        var included = fixture.Write("src/Widget.cs", string.Join("\n", Partial(2)));
+        var bin = fixture.Write("src/BIN/Widget.cs", string.Join("\n", Partial(3)));
+        var obj = fixture.Write("src/project/OBJ/Widget.cs", string.Join("\n", Partial(3)));
+        var snapshot = RepositorySourceSnapshotCache.Get(fixture.Root);
+        var inventory = snapshot.EnumerateFiles(Path.Combine(fixture.Root, "src")).ToArray();
+        Assert.Contains(bin, inventory);
+        Assert.Contains(obj, inventory);
+
+        var file = Assert.Single(inventory.Where(path => IsMeasuredSourceFile(fixture.Root, path)));
+        Assert.Equal(included, file);
+        Assert.Equal(Partial(2), snapshot.GetLines(file));
     }
 
     [Fact]
@@ -169,6 +191,11 @@ public sealed class SourceClassSizeRatchetTests
     {
         return SourceSizeRatchet.EvaluateClasses("in-memory", [ceiling], path => files[path], _ => files.Keys);
     }
+
+    private static bool IsMeasuredSourceFile(string root, string path) =>
+        !Path.GetRelativePath(root, path).Split(Path.DirectorySeparatorChar)
+            .Any(segment => segment.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
+                segment.Equals("obj", StringComparison.OrdinalIgnoreCase));
 
     private static string[] Partial(int count) =>
         new[] { "internal sealed partial class Widget { }" }.Concat(Enumerable.Repeat("// member", count - 1)).ToArray();

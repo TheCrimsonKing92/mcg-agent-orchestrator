@@ -11,8 +11,8 @@ internal static class OwnerConsoleKeyHints
         ("conductor status", "Show conductor status."),
         ("digest", "Show the owner digest."),
         ("metrics", "Show conductor metrics."),
-        ("bell on", "Enable the attention bell."),
-        ("bell off", "Disable the attention bell."),
+        ("bell on", "Enable all three bell tiers; use bell <calm|attention|alarm> on|off for one tier."),
+        ("bell off", "Disable all three bell tiers; use bell <calm|attention|alarm> on|off for one tier."),
         ("goal <id-prefix>", "Open live goal detail, landing status and actions."),
         ("epics", "Open the epic view (same as e).")
     ];
