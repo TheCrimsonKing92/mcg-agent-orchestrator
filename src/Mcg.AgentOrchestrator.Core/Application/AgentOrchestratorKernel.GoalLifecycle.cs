@@ -2563,6 +2563,16 @@ public sealed partial class AgentOrchestratorKernel
 
     public IReadOnlyList<ProgressEvent> GetTimeline(GoalId goalId) => GetGoal(goalId).Timeline;
 
+    public GoalPriority SetGoalPriority(GoalId goalId, GoalPriority priority, string actor, string rationale)
+    {
+        var goal = GetGoal(goalId);
+        var previous = goal.Priority;
+        goal.SetPriority(priority);
+        Append(goal, null, ProgressKind.GoalPolicyDecision,
+            $"Goal priority set: previous={GoalPriorities.Format(previous)} new={GoalPriorities.Format(priority)} actor={actor} reason={(string.IsNullOrEmpty(rationale) ? "(no reason given)" : rationale)}");
+        return previous;
+    }
+
     public void RecordGoalPolicyDecision(GoalId goalId, string message) =>
         RecordGoalPolicyDecision(goalId, message, null);
 

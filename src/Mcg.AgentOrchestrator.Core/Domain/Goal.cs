@@ -72,6 +72,13 @@ public sealed class Goal
     public IReadOnlyList<GoalBriefVersion> BriefVersions => _briefVersions;
 
     public GoalStatus Status { get; private set; } = GoalStatus.Draft;
+    public GoalPriority Priority { get; private set; } = GoalPriority.Normal;
+
+    internal void SetPriority(GoalPriority priority)
+    {
+        _ = GoalPriorities.Format(priority);
+        Priority = priority;
+    }
 
     public RefinedSpec? RefinedSpec => AuthoritativeRefinedSpecVersion?.Spec;
 
@@ -1081,6 +1088,7 @@ public sealed class Goal
             OperatorAcceptanceRegateCount: OperatorAcceptanceRegateCount,
             ConsecutiveAcceptanceIdentityStaleCount: ConsecutiveAcceptanceIdentityStaleCount,
             LastAcceptanceIdentityStaleAttemptId: LastAcceptanceIdentityStaleAttemptId,
+            Priority: Priority == GoalPriority.Normal ? null : GoalPriorities.Format(Priority),
             CurrentHold: CurrentHold is null
                 ? null
                 : new GoalHoldSnapshot(
@@ -1214,6 +1222,7 @@ public sealed class Goal
         goal.RestoreAcceptanceIdentityStale(
             snapshot.ConsecutiveAcceptanceIdentityStaleCount,
             snapshot.LastAcceptanceIdentityStaleAttemptId);
+        goal.SetPriority(GoalPriorities.ParseOrDefault(snapshot.Priority));
         goal.RestoreHold(snapshot.CurrentHold);
 
         return goal;
