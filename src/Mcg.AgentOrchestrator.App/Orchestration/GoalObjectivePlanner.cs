@@ -22,7 +22,8 @@ internal enum GoalIntakePipeline
     DeveloperReviewer,
     Scout,
     DeveloperStreamReviewer,
-    WholeGoalReview
+    WholeGoalReview,
+    TestFirst
 }
 
 internal enum GoalIntakePipelineRequest
@@ -30,12 +31,13 @@ internal enum GoalIntakePipelineRequest
     Auto,
     Scout,
     DeveloperReviewer,
-    DeveloperOnly
+    DeveloperOnly,
+    TestFirst
 }
 
 internal static class GoalIntakePipelineRequestParser
 {
-    public const string AllowedValues = "auto, scout, developer-reviewer, developer-only";
+    public const string AllowedValues = "auto, scout, developer-reviewer, developer-only, test-first";
 
     public static GoalIntakePipelineRequest Parse(string value)
     {
@@ -64,6 +66,11 @@ internal static class GoalIntakePipelineRequestParser
             return GoalIntakePipelineRequest.DeveloperOnly;
         }
 
+        if (value.Equals("test-first", StringComparison.OrdinalIgnoreCase))
+        {
+            return GoalIntakePipelineRequest.TestFirst;
+        }
+
         throw new ArgumentException($"--pipeline must be one of: {AllowedValues}.");
     }
 
@@ -74,6 +81,7 @@ internal static class GoalIntakePipelineRequestParser
             GoalIntakePipelineRequest.Scout => GoalIntakePipeline.Scout,
             GoalIntakePipelineRequest.DeveloperReviewer => GoalIntakePipeline.DeveloperReviewer,
             GoalIntakePipelineRequest.DeveloperOnly => GoalIntakePipeline.DeveloperOnly,
+            GoalIntakePipelineRequest.TestFirst => GoalIntakePipeline.TestFirst,
             _ => throw new ArgumentOutOfRangeException(nameof(request), request, "Unknown goal intake pipeline request.")
         };
 
@@ -84,6 +92,7 @@ internal static class GoalIntakePipelineRequestParser
             GoalIntakePipelineRequest.Scout => "scout",
             GoalIntakePipelineRequest.DeveloperReviewer => "developer-reviewer",
             GoalIntakePipelineRequest.DeveloperOnly => "developer-only",
+            GoalIntakePipelineRequest.TestFirst => "test-first",
             _ => throw new ArgumentOutOfRangeException(nameof(request), request, "Unknown goal intake pipeline request.")
         };
 }
@@ -100,6 +109,7 @@ internal sealed record GoalIntakePipelineDecision(
         GoalIntakePipeline.DeveloperStreamReviewer => "developer-stream-reviewer",
         GoalIntakePipeline.WholeGoalReview => "whole-goal-review",
         GoalIntakePipeline.Scout => "scout",
+        GoalIntakePipeline.TestFirst => "test-first",
         _ => Pipeline.ToString()
     };
 
@@ -554,6 +564,17 @@ internal static class GoalObjectivePlanner
             ];
         }
 
+        if (pipeline == GoalIntakePipeline.TestFirst)
+        {
+            return
+            [
+                new GoalObjectiveTaskBoundary(1, AgentRole.Planner, "Inspect current source and synthesize a criterion-mapped Scout plan. For each Developer-owned criterion, name the test class and the outcome the test-author task asserts.", "read-only", "Scout plan and research findings must cite repository evidence."),
+                new GoalObjectiveTaskBoundary(2, AgentRole.Developer, "Test author: write one failing test per Developer-owned acceptance criterion that asserts the criterion's named outcome, not implementation details. Change only files under tests/, plus additions-only compile stubs under src/ whose bodies throw NotImplementedException. Do not implement behavior. Report the authored classes in tests: deferred.", "workspace-write", verification[0]),
+                new GoalObjectiveTaskBoundary(3, AgentRole.Developer, "Implement: make the authored tests pass. Do not edit any file the test-author task changed under tests/. If an authored test contradicts a criterion, stop with blockers: premise-invalid naming the test and the criterion.", "workspace-write", verification[0]),
+                new GoalObjectiveTaskBoundary(4, AgentRole.Reviewer, "First check each authored test against its acceptance criterion: it asserts the criterion's named outcome, not implementation details, and one exists for every Developer-owned criterion. Then review the implementation diff, tests, and worker evidence before acceptance.", "read-only", "Review must mention residual risk and acceptance readiness.")
+            ];
+        }
+
         return
         [
             new GoalObjectiveTaskBoundary(1, AgentRole.Planner, "Inspect current source and synthesize a criterion-mapped Scout plan.", "read-only", "Scout plan and research findings must cite repository evidence."),
@@ -599,6 +620,7 @@ internal static class GoalObjectivePlanner
             GoalIntakePipeline.DeveloperStreamReviewer => "Developer+stream-Reviewer",
             GoalIntakePipeline.WholeGoalReview => "Whole-Goal Reviewer",
             GoalIntakePipeline.Scout => "scout",
+            GoalIntakePipeline.TestFirst => "test-first",
             _ => pipeline.ToString()
         };
 

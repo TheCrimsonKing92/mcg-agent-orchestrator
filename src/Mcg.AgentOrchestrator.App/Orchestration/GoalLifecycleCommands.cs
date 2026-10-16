@@ -284,6 +284,12 @@ internal static class GoalLifecycleCommands
             return "scout";
         }
 
+        if (roles.SequenceEqual([AgentRole.Planner, AgentRole.Developer, AgentRole.Developer, AgentRole.Reviewer]) &&
+            TestFirstScopeCheck.IsTestFirst(goal))
+        {
+            return "test-first";
+        }
+
         return "custom";
     }
 
