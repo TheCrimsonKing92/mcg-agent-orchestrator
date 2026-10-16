@@ -14,9 +14,7 @@ internal static class ProspectiveEvidenceGateResolver
         string? candidateBranchHeadSha)
     {
         var waits = kernel.GetPendingHumanInput(goal.Id)
-            .Where(wait => wait.Kind == HumanWaitKind.ProspectiveAcceptanceEvidence &&
-                string.Equals(wait.EvidenceOwner, "acceptance-gate", StringComparison.OrdinalIgnoreCase) &&
-                wait.TestNames is { Count: > 0 })
+            .Where(GroupedAdmissionLandingHold.IsGateSatisfiable)
             .ToArray();
         if (waits.Length == 0) return new([], []);
 

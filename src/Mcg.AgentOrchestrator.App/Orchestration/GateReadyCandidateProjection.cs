@@ -19,7 +19,8 @@ internal enum GateReadyCandidateExclusionReason
     MergeIndeterminate,
     ApparatusHold,
     OwnerReviewHold,
-    PassedTrainReceiptHeld
+    PassedTrainReceiptHeld,
+    LandingHeld
 }
 
 internal enum GateReadyVerificationState
@@ -77,6 +78,7 @@ internal abstract record GateReadyCandidateProjectionResult
         : GateReadyCandidateProjectionResult
     {
         public IReadOnlyList<string> ConflictPaths { get; init; } = Array.Empty<string>();
+        public string? HoldRequestId { get; init; }
     }
 }
 

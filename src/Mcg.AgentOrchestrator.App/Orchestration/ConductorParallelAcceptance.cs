@@ -102,7 +102,7 @@ internal abstract record ConductorSpeculativeAcceptanceExclusionEvidence
     {
     }
 
-    internal sealed record Upstream(GateReadyCandidateExclusionReason Reason)
+    internal sealed record Upstream(GateReadyCandidateExclusionReason Reason, string? HoldRequestId = null)
         : ConductorSpeculativeAcceptanceExclusionEvidence;
 
     internal sealed record MainRevisionMismatch(
@@ -188,6 +188,9 @@ internal sealed partial record ConductorSpeculativeAcceptancePlan(
 
     private static string Render(ConductorSpeculativeAcceptanceExclusionEvidence evidence) => evidence switch
     {
+        ConductorSpeculativeAcceptanceExclusionEvidence.Upstream
+            { Reason: GateReadyCandidateExclusionReason.LandingHeld, HoldRequestId: { Length: > 0 } requestId } =>
+            $"LandingHeld(request={requestId[..Math.Min(8, requestId.Length)]})",
         ConductorSpeculativeAcceptanceExclusionEvidence.Upstream upstream => upstream.Reason.ToString(),
         ConductorSpeculativeAcceptanceExclusionEvidence.MainRevisionMismatch mismatch =>
             $"MainRevisionMismatch(conflict={Prefix(mismatch.ConflictingGoalId)},expected={Bound(mismatch.ExpectedMainRevision)},actual={Bound(mismatch.ActualMainRevision)})",
@@ -232,7 +235,7 @@ internal static class ConductorSpeculativeAcceptanceCohortPlanner
             {
                 dispositions.Add(new ConductorSpeculativeAcceptanceDisposition.Excluded(
                     candidate.GoalId,
-                    new ConductorSpeculativeAcceptanceExclusionEvidence.Upstream(upstream.Reason)));
+                    new ConductorSpeculativeAcceptanceExclusionEvidence.Upstream(upstream.Reason, upstream.HoldRequestId)));
                 continue;
             }
 

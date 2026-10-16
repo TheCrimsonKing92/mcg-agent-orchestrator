@@ -269,7 +269,7 @@ internal sealed partial class ConductorBatchLoop
         foreach (var (receipt, partitions) in driver.ConsumeTerminalFailedCohortReceipts())
             RecordParallelAcceptanceProgress(ConductorDriver.FormatTerminalFailedCohortReceipt(tick, receipt, partitions), changedGoalLines);
         var speculativeCandidates = state.OrderedEligible.Select(goal => new ConductorSpeculativeAcceptanceCandidate(
-            goal.Id, driver.ProjectGateReadyCandidate(goal, policy))).ToArray();
+            goal.Id, driver.ProjectGroupedAdmissionCandidate(goal, policy))).ToArray();
         state.ActiveCohortCapacity = driver.GetActiveAcceptanceCohortCapacity();
         state.AcceptanceCensus = CaptureLiveAcceptanceCensus(
             state.LiveAttempts, state.ActiveAttemptIds, state.ActiveCohortCapacity, tick,

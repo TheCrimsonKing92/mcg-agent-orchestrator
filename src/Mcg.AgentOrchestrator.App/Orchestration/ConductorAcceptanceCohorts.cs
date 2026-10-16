@@ -530,7 +530,7 @@ internal sealed partial class ConductorBatchLoop
                 .Where(candidate => !results.ContainsKey(candidate.GoalId.Value))
                 .Select(candidate => new ConductorSpeculativeAcceptanceCandidate(
                     candidate.GoalId,
-                    driver.ProjectGateReadyCandidate(
+                    driver.ProjectGroupedAdmissionCandidate(
                         eligible.Single(goal => goal.Id == candidate.GoalId), policy)))
                 .ToArray();
         }
