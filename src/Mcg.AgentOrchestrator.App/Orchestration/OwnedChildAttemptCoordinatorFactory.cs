@@ -13,6 +13,7 @@ internal static class OwnedChildAttemptCoordinatorFactory
             workspace.IntegrationBranch, workspace.ExecutionDirectory,
             tryRunPreSlot: tryRunPreSlot,
             runInline: runInline,
+            conductEventLogWriter: new ConductEventLogWriter(workspace.ConductEventsLogPath),
             buildStorageRoot: buildStorageRoot,
             stateDirectory: workspace.OrchestratorDirectory,
             projectName: OwnedChildWorkspaceResolver.RecordedProjectName(workspace));

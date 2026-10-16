@@ -133,7 +133,9 @@ internal static class SourceSizeRatchet
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.PreReviewEvidence.cs", 467),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.ReviewRecovery.cs", 439),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.LandingCompletion.cs", 645),
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.AcceptanceCohortExecution.cs", 640),
+            // Goal eade84cb preserves published cohort receipts while holder cleanup still reserves capacity.
+            // Custody remains separately owned; after integrating main f34678bcb, measured 645 lines, with no extra headroom.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.AcceptanceCohortExecution.cs", 645),
             // Goal 5a07b0d6 retains three orchestration lines carrying reattached receipt ids to the
             // closure-first route; the reused-green branch owns this delivery handoff, not receipt selection.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FindingEvidenceRequests.cs", 754),
@@ -179,8 +181,10 @@ internal static class SourceSizeRatchet
             // Goal f8d371e2 adds the tick-local live suppression closure and admission checks where
             // pendingSelfRelaunch is owned; hold formatting remains separately owned. Measured 2707, no headroom.
             // Goal 920a6429 adds one serial-walk binding to the separately owned GoalWalkOrder;
-            // acceptance admission keeps the original eligible list. Measured 2708 lines; no extra headroom.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2708),
+            // acceptance admission keeps the original eligible list. Goal eade84cb wires acceptance-holder
+            // detach before loop exit at the existing dispatch boundary; holder transfer stays in its coordinator.
+            // After integrating main b8da8f673, measured 2710 lines; no extra headroom.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2710),
             // Goal 354522f1 tick persistence partial measured at 467 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.TickPersistence.cs", 467),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.DependencyReadmission.cs", 375),
@@ -427,7 +431,7 @@ internal static class SourceSizeRatchet
             // Reconciled after integrating main e1f6f11c at its measured post-merge test-owner size.
             // Goal 5daaa1db replaces ambient build-root mutation with explicit child-launch ownership
             // and disposes the owned root; the real-process transport assertions remain in this fixture.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorBatchLoopTestsParallelAcceptance.cs", 5280),
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorBatchLoopTestsParallelAcceptance.cs", 5281),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/DotnetBuildEnvironmentManagerTests.cs", 1357),
         });
 
@@ -468,6 +472,8 @@ internal static class SourceSizeRatchet
             // Goal 33b9b7a6 extracts bounded carry receipt formatting into AcceptanceMainAdvanceReceipt.
             // Goal 33b9b7a6 also extracts revalidation hold-identity formatting into that receipt owner.
             // Measured 14962 lines across the same 70 partial files; no extra headroom.
+            // Goal eade84cb adds holder-detach wiring and preserves cohort/train receipts during cleanup.
+            // Custody lives in AcceptanceHolderLease.
             // Goal ffa0471e wires attached-operation reconciliation when current worker metadata is absent;
             // lifecycle remains in CompletionBuildEvidenceCoordinator. Measured 14970 in the same 70 partials; no headroom.
             // Goal 6a4ec362 moves exact-pair/context validation to AcceptanceCriterionEvidence before
@@ -480,7 +486,9 @@ internal static class SourceSizeRatchet
             // main 3732befa8, measured 14823 lines across the same 70 partial files; no extra headroom.
             // Goal 4cad184f adds three lines of grouped-receipt RED handling; after integrating main fd7b91785,
             // measured 14826 lines across the same 70 partial files; no extra headroom.
-            new SourceClassCeiling("ConductorDriver", 14826, 70),
+            // Goal eade84cb adds acceptance-admission holder checks; after integrating main cb6e071fa,
+            // measured 14839 lines across the same 70 partial files; no extra headroom.
+            new SourceClassCeiling("ConductorDriver", 14839, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
@@ -561,8 +569,10 @@ internal static class SourceSizeRatchet
             // lifecycle remains in CompletionBuildEvidenceCoordinator. Measured 9270 across the same 55 partials; no headroom.
             // Integrated receipt replay and completion-build draining: measured 9239 across 54 partial files, no headroom.
             // Goal 920a6429 adds one binding to GoalWalkOrder for the serial walk only;
-            // sorting lives in that collaborator. Measured 9240 lines in the same 54 partials; no headroom.
-            new SourceClassCeiling("ConductorBatchLoop", 9240, 54),
+            // sorting lives in that collaborator. Goal eade84cb adds acceptance-holder detach wiring before
+            // checkpoint/exit; the coordinator owns transfer. After integrating main b8da8f673, measured 9242 lines
+            // in the same 54 partials; no headroom.
+            new SourceClassCeiling("ConductorBatchLoop", 9242, 54),
             // Goal ec8903af moved the goal-prefix parser to CliGoalPrefixArguments.
             // Goal cd1f6380 adds four lines at the owning transaction boundary, forwarding both
             // registrars and invoking actions after commit; list behavior lives in PostCommitActions.

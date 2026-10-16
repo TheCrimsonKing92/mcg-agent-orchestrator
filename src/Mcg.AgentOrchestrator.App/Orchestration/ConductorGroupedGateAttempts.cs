@@ -52,7 +52,10 @@ internal sealed record ConductorGroupedGateAttempt(
     string? Detail = null,
     string Outcome = "Running",
     string? StateDirectory = null,
-    string? ProjectName = null);
+    string? ProjectName = null)
+{
+    public int HolderContractVersion { get; init; }
+}
 
 internal sealed record ConductorGroupedGateLaunchResult(
     int ProcessId, DateTimeOffset? StartedAt, string? ExecutablePath);
@@ -66,10 +69,16 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
     private readonly string? _projectName;
     private readonly Func<ConductorGroupedGateAttempt, ConductorGroupedGateLaunchResult> _launch;
     private readonly Func<int, bool> _isProcessAlive;
+    private readonly Func<ConductorGroupedGateAttempt, SpawnTrackedProcessStatus> _classifyHolder;
     private readonly Func<ConductorGroupedGateAttempt, bool> _stop;
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly Action<string>? _event;
     private readonly DotnetBuildStorageRoot _buildStorageRoot;
+    private readonly bool _usesDurableHolderLease;
+    private readonly SpawnProcessIdentity _generationIdentity;
+    private readonly AcceptanceHolderLease? _holderLease;
+    private readonly ConcurrentDictionary<string, string> _holderHolds = new();
+    private AcceptanceHolderLease HolderLease => _holderLease ?? new(utcNow: _utcNow, eventSink: _event);
 
     internal int GenerationId { get; }
 
@@ -83,7 +92,10 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
         Action<string>? eventSink = null,
         DotnetBuildStorageRoot? buildStorageRoot = null,
         string? stateDirectory = null,
-        string? projectName = null)
+        string? projectName = null,
+        Func<ConductorGroupedGateAttempt, SpawnTrackedProcessStatus>? classifyHolder = null,
+        AcceptanceHolderLease? holderLease = null,
+        SpawnProcessIdentity? generationIdentity = null)
     {
         _root = root;
         _stateDirectory = stateDirectory;
@@ -91,10 +103,18 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
         GenerationId = generationId ?? Environment.ProcessId;
         _launch = launch ?? LaunchOwnedProcess;
         _isProcessAlive = isProcessAlive ?? IsProcessAlive;
+        _classifyHolder = classifyHolder ?? (isProcessAlive is not null
+            ? attempt => isProcessAlive(attempt.OwnerProcessId)
+                ? SpawnTrackedProcessStatus.LiveMatch : SpawnTrackedProcessStatus.DeadOrRecycled
+            : attempt => AcceptanceHolderIdentity.Classify(attempt.OwnerProcessId,
+                attempt.OwnerProcessStartedAt, attempt.OwnerExecutablePath));
         _stop = stop ?? StopIdentityRevalidated;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         _event = eventSink;
         _buildStorageRoot = buildStorageRoot ?? DotnetBuildEnvironmentManager.CaptureStorageRoot();
+        _holderLease = holderLease;
+        _usesDurableHolderLease = holderLease is not null || (launch is null && isProcessAlive is null && classifyHolder is null);
+        _generationIdentity = generationIdentity ?? AcceptanceHolderLease.CurrentGeneration();
     }
 
     internal IEnumerable<ConductorGroupedGateAttempt> ReadAll() =>
@@ -182,12 +202,15 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
             mainRevision, treeRevision, manifestIdentity, identityValue, _utcNow(), 0,
             GenerationId, prefix + ".attempt.json", prefix + ".result.json", prefix + ".exit",
             prefix + ".out.log", prefix + ".err.log", executionDirectory, policy.ToJson(),
-            StateDirectory: _stateDirectory, ProjectName: _projectName);
+            StateDirectory: _stateDirectory, ProjectName: _projectName)
+        { HolderContractVersion = _usesDurableHolderLease ? 1 : 0 };
     }
 
     internal ConductorGroupedGateAttempt Launch(ConductorGroupedGateAttempt attempt)
     {
         Save(attempt); // The attempt exists before a child can start.
+        if (attempt.HolderContractVersion == 1)
+            HolderLease.Reserve(AcceptanceHolderBinding.For(attempt), _generationIdentity);
         ConductorGroupedGateLaunchResult launched;
         try
         {
@@ -212,8 +235,8 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
                 ? current with
                 {
                     OwnerProcessId = launched.ProcessId,
-                    OwnerProcessStartedAt = launched.StartedAt,
-                    OwnerExecutablePath = launched.ExecutablePath
+                    OwnerProcessStartedAt = launched.StartedAt ?? current.OwnerProcessStartedAt,
+                    OwnerExecutablePath = launched.ExecutablePath ?? current.OwnerExecutablePath
                 }
                 : current);
         }
@@ -226,6 +249,108 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
     }
 
     internal bool IsAlive(int processId) => processId > 0 && _isProcessAlive(processId);
+
+    private bool StopHolder(ConductorGroupedGateAttempt attempt, string reason)
+    {
+        if (attempt.HolderContractVersion != 1) return !_usesDurableHolderLease && _stop(attempt);
+        var binding = AcceptanceHolderBinding.For(attempt);
+        var identity = attempt.OwnerProcessStartedAt is { } started && attempt.OwnerExecutablePath is { } image
+            ? new SpawnProcessIdentity(attempt.OwnerProcessId, started, image) : null;
+        if (identity is not null) HolderLease.ValidateRecordedHolder(binding, identity);
+        return HolderLease.Cancel(binding, _generationIdentity, reason, identity);
+    }
+
+    internal void PrepareHolderDetach()
+    {
+        if (!_usesDurableHolderLease) return;
+        foreach (var attempt in ReadAll())
+        {
+            if (!ReservesCapacity(attempt)) continue;
+            if (attempt.HolderContractVersion != 1)
+            {
+                RecordHolderHold(attempt, "legacy-detach-capacity-fenced");
+                continue;
+            }
+            var binding = AcceptanceHolderBinding.For(attempt);
+            if (HolderLease.Read(binding).Generation != _generationIdentity &&
+                !HolderLease.Adopt(binding, _generationIdentity)) continue;
+            if (HolderLease.Detach(binding, _generationIdentity)) continue;
+            if (!StopHolder(attempt, "detach-not-provable"))
+                throw new InvalidOperationException($"Grouped acceptance detach/cancel settlement unproven: {attempt.AttemptId}.");
+            Reconcile(attempt, "holder-tree-cancelled-before-detach");
+            File.WriteAllText(attempt.ExitCodePath, "1");
+        }
+    }
+
+    // Unknown is an occupied holder, even when a result has already been published.
+    internal bool ReservesCapacity(ConductorGroupedGateAttempt attempt)
+    {
+        if (attempt.HolderContractVersion != 1)
+        {
+            // Injected stop boundaries attest settlement by returning success; their liveness
+            // probes can still describe the old process after Refuse publishes reconciliation.
+            if (!_usesDurableHolderLease) return attempt.ReconciledAt is null &&
+                _classifyHolder(attempt) != SpawnTrackedProcessStatus.DeadOrRecycled;
+            if (!LegacyHolderSettled(attempt))
+            {
+                RecordHolderHold(attempt, "legacy-tree-settlement-unavailable");
+                return true;
+            }
+            return WithMetadataLock(attempt.MetadataPath, () =>
+            {
+                var current = Read(attempt.MetadataPath);
+                if (!LegacyHolderSettled(current)) return true;
+                if (current.Outcome == "Running")
+                {
+                    if (File.Exists(current.ResultPath)) return true;
+                    Save(current with { ReconciledAt = _utcNow(), Outcome = "Reconciled",
+                        Detail = "legacy-holder-settled" });
+                }
+                var binding = AcceptanceHolderBinding.For(current);
+                if (LegacyAcceptanceHolderSettlement.RecordTerminal(binding, current.OwnerProcessId,
+                    current.OwnerProcessStartedAt, current.OwnerExecutablePath, current.StartedAt,
+                    _utcNow(), "legacy-holder-absent-or-settled"))
+                    _event?.Invoke($"ACCEPTANCE_HOLDER_RELEASE attempt={current.AttemptId} slot={binding.Slot} " +
+                        $"holder={current.OwnerProcessId} holderStartedAt={current.OwnerProcessStartedAt:O} " +
+                        $"holderImage={current.OwnerExecutablePath} receipt={LegacyAcceptanceHolderSettlement.TerminalReceiptPath(binding)} " +
+                        "reason=legacy-holder-absent-or-settled");
+                return false;
+            });
+        }
+        var binding = AcceptanceHolderBinding.For(attempt);
+        if (attempt.OwnerProcessStartedAt is { } started && attempt.OwnerExecutablePath is { } image)
+        {
+            HolderLease.ValidateRecordedHolder(binding, new(attempt.OwnerProcessId, started, image));
+            _ = HolderLease.ReconcileUnclaimed(binding, new(attempt.OwnerProcessId, started, image));
+        }
+        var observation = HolderLease.Observe(binding);
+        if (observation.CanAdopt) _ = HolderLease.Adopt(binding, _generationIdentity);
+        if (observation.ReservesCapacity)
+        {
+            if (!observation.CanAdopt) RecordHolderHold(attempt, observation.Reason);
+            return true;
+        }
+        if (attempt.ReconciledAt is null)
+            Reconcile(attempt, $"holder-tree-settled:{observation.Reason}");
+        return false;
+    }
+
+    private bool LegacyHolderSettled(ConductorGroupedGateAttempt attempt) =>
+        LegacyAcceptanceHolderSettlement.IsAbsent(attempt.OwnerProcessId,
+            attempt.OwnerProcessStartedAt, attempt.OwnerExecutablePath, () => _classifyHolder(attempt)) ||
+        !(attempt.OwnerProcessId <= 0 && attempt.Outcome == "Running") &&
+        LegacyAcceptanceHolderSettlement.IsSettled(AcceptanceHolderBinding.For(attempt), attempt.OwnerProcessId,
+            attempt.OwnerProcessStartedAt, attempt.OwnerExecutablePath, attempt.StartedAt,
+            () => _classifyHolder(attempt), attempt.ReconciledAt);
+
+    private void RecordHolderHold(ConductorGroupedGateAttempt attempt, string reason)
+    {
+        if (_holderHolds.TryGetValue(attempt.AttemptId, out var previous) && previous == reason) return;
+        _holderHolds[attempt.AttemptId] = reason;
+        _event?.Invoke($"ACCEPTANCE_HOLDER_HOLD attempt={attempt.AttemptId} slot={attempt.Kind}:{attempt.IdentityValue} " +
+            $"holder={attempt.OwnerProcessId} holderStartedAt={attempt.OwnerProcessStartedAt:O} " +
+            $"holderImage={attempt.OwnerExecutablePath} generation={_generationIdentity.ProcessId} reason={reason}");
+    }
 
     internal string? IdentityDifference(
         ConductorGroupedGateAttempt attempt, string kind,
@@ -248,10 +373,20 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
     }
 
     internal bool ShouldAdopt(ConductorGroupedGateAttempt attempt) =>
-        ConductorOrphanGateAttemptAdoption.ShouldAdopt(attempt, GenerationId, _isProcessAlive, File.Exists);
+        attempt.HolderContractVersion == 1
+            ? HolderLease.CanAdopt(AcceptanceHolderBinding.For(attempt), _generationIdentity)
+            : ConductorOrphanGateAttemptAdoption.ShouldAdopt(attempt, GenerationId, _isProcessAlive, File.Exists,
+                _classifyHolder);
 
     internal ConductorGroupedGateAttempt Adopt(ConductorGroupedGateAttempt attempt)
     {
+        if (attempt.HolderContractVersion == 1)
+        {
+            if (!HolderLease.Adopt(AcceptanceHolderBinding.For(attempt), _generationIdentity)) return attempt;
+            // Grouped metadata has its own short lock; the child only claims identity here.
+            // Result publication is separate, so this marker cannot overwrite a child verdict.
+            return Update(attempt.MetadataPath, current => current with { AdoptedByGenerationId = GenerationId });
+        }
         if (attempt.AdoptedByGenerationId == GenerationId) return attempt;
         var changed = false;
         attempt = Update(attempt.MetadataPath, current =>
@@ -270,7 +405,7 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
 
     internal bool Refuse(ConductorGroupedGateAttempt attempt, string field)
     {
-        if (!_stop(attempt)) return false;
+        if (!StopHolder(attempt, $"identity-changed:{field}")) return false;
         Update(attempt.MetadataPath, current => current with
         {
             ReconciledAt = _utcNow(), Outcome = "Reconciled",
@@ -291,7 +426,7 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
         {
             var current = Read(attempt.MetadataPath);
             if (current.ReconciledAt is not null || current.Outcome != "Running" ||
-                File.Exists(current.ResultPath) || File.Exists(current.ExitCodePath) || !_stop(current)) return false;
+                File.Exists(current.ResultPath) || File.Exists(current.ExitCodePath) || !StopHolder(current, wireReason)) return false;
             Save(current with
             {
                 ReconciledAt = _utcNow(), Outcome = "Reconciled",
@@ -317,7 +452,10 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
         attempt = Update(attempt.MetadataPath, current =>
         {
             reconciled = false;
-            if (current.ReconciledAt is not null || IsAlive(current.OwnerProcessId)) return current;
+            if (current.ReconciledAt is not null || (current.HolderContractVersion == 1
+                ? HolderLease.Observe(AcceptanceHolderBinding.For(current)).ReservesCapacity
+                : _usesDurableHolderLease ? !LegacyHolderSettled(current)
+                    : _classifyHolder(current) != SpawnTrackedProcessStatus.DeadOrRecycled)) return current;
             reconciled = true;
             return current with { ReconciledAt = _utcNow(), Outcome = "Reconciled", Detail = detail };
         });
@@ -438,10 +576,21 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
 
     private ConductorGroupedGateLaunchResult LaunchOwnedProcess(ConductorGroupedGateAttempt attempt)
     {
-        var startInfo = BuildOwnedProcessStartInfo(attempt, _buildStorageRoot);
-        var process = ProcessTreeGuiSuppression.Start(startInfo)
-            ?? throw new InvalidOperationException("Failed to start grouped acceptance gate child.");
+        Process process;
+        try
+        {
+            var startInfo = BuildOwnedProcessStartInfo(attempt, _buildStorageRoot);
+            process = ProcessTreeGuiSuppression.Start(startInfo)
+                ?? throw new InvalidOperationException("Failed to start grouped acceptance gate child.");
+        }
+        catch
+        {
+            if (attempt.HolderContractVersion == 1)
+                HolderLease.CancelUnstartedLaunch(AcceptanceHolderBinding.For(attempt), _generationIdentity);
+            throw;
+        }
         var processId = process.Id;
+        var identity = SpawnProcessIdentityReader.ReadForRegistration(process).Identity;
         try
         {
             process.StandardInput.Close();
@@ -462,15 +611,7 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
             // The child owns its durable streams; an unavailable startup pipe must not be classified as
             // a failed launch after the process exists.
         }
-        DateTimeOffset? startedAt = null;
-        string? executablePath = null;
-        try { startedAt = process.StartTime.ToUniversalTime(); }
-        catch (System.ComponentModel.Win32Exception) { }
-        catch (InvalidOperationException) { }
-        try { executablePath = process.MainModule?.FileName; }
-        catch (System.ComponentModel.Win32Exception) { }
-        catch (InvalidOperationException) { }
-        var result = new ConductorGroupedGateLaunchResult(processId, startedAt, executablePath);
+        var result = new ConductorGroupedGateLaunchResult(processId, identity?.StartedAt, identity?.ImagePath);
         try
         {
             if (process.HasExited && OwnedProcessDrains.TryRemove(processId, out var completed))

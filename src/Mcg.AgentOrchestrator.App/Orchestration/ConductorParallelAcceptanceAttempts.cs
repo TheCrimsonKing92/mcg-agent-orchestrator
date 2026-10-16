@@ -164,6 +164,9 @@ internal sealed record ConductorParallelAcceptanceAttempt(
     public string? ReplayContextFingerprint { get; init; }
     public string? ReplayResultFingerprint { get; init; }
     public DateTimeOffset? ReplayLandedAt { get; init; }
+    public DateTimeOffset? OwnerProcessStartedAt { get; init; }
+    public string? OwnerExecutablePath { get; init; }
+    public int HolderContractVersion { get; init; }
 
     public string CandidateKey => $"{GoalId}:{BranchHeadSha ?? "unknown-branch"}:{MainHeadSha ?? "unknown-main"}";
 }
@@ -203,7 +206,8 @@ internal sealed record ConductorParallelAcceptanceOwnedProcessLaunch(
     Action<int> ExecuteInCurrentProcess,
     DotnetBuildStorageRoot? BuildStorageRoot);
 
-internal sealed record ConductorParallelAcceptanceOwnedProcessLaunchResult(int ProcessId);
+internal sealed record ConductorParallelAcceptanceOwnedProcessLaunchResult(
+    int ProcessId, DateTimeOffset? StartedAt = null, string? ExecutablePath = null);
 
 internal delegate ConductorParallelAcceptanceRunResult ConductorParallelAcceptanceRunAcceptance(
     ConductorParallelAcceptanceCandidate candidate,
@@ -392,6 +396,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
     private readonly Func<string, TimeSpan, IDisposable?> _tryAcquireAttemptWriterLease;
     private readonly Func<string, string, CancellationToken, DotnetBuildEnvironmentLease> _acquireCohortStableSlotRound;
     private readonly Func<TimeSpan, CancellationToken, Task>? _cohortStableSlotRoundDelay;
+    private readonly Func<ConductorParallelAcceptanceAttempt, SpawnTrackedProcessStatus> _classifyHolder;
 
     internal ConductorParallelAcceptanceAttemptCoordinator(
         string rootDirectory, string integrationBranch,
@@ -415,14 +420,17 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         IReadOnlyDictionary<string, TextWriter>? attemptLogWriters = null,
         Action<ConductorParallelAcceptanceAttempt>? resultPublishedForTests = null,
         DotnetBuildStorageRoot? buildStorageRoot = null,
-        // Each conductor renewal is a fresh child process, so the loop pid is a sound generation
-        // identity and the driver needs no threading change to supply one.
+        // Retained for legacy artifacts; the holder lease binds the full conductor identity.
         int? conductorGenerationId = null,
         Func<string, TimeSpan, IDisposable?>? tryAcquireAttemptWriterLease = null,
         Func<string, string, CancellationToken, DotnetBuildEnvironmentLease>? acquireCohortStableSlotRound = null,
         Func<TimeSpan, CancellationToken, Task>? cohortStableSlotRoundDelay = null,
         string? stateDirectory = null,
-        string? projectName = null)
+        string? projectName = null,
+        Func<ConductorParallelAcceptanceAttempt, SpawnTrackedProcessStatus>? classifyHolder = null,
+        AcceptanceHolderLease? holderLease = null,
+        SpawnProcessIdentity? generationIdentity = null,
+        Func<int, bool>? isHolderProcessAbsent = null)
     {
         if (runInline && attemptCompletionGateForTests is not null)
         {
@@ -439,6 +447,14 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         _timeProvider = timeProvider ?? TimeProvider.System;
         _utcNow = utcNow ?? _timeProvider.GetUtcNow;
         _isProcessAlive = isProcessAlive ?? IsProcessAlive;
+        _isHolderProcessAbsent = isHolderProcessAbsent ?? AcceptanceHolderIdentity.IsProcessAbsent;
+        // An injected liveness probe models a process in existing in-process fixtures. Production
+        // always uses the full recorded identity; new identity fixtures inject classification directly.
+        _classifyHolder = classifyHolder ?? (isProcessAlive is not null
+            ? attempt => isProcessAlive(attempt.OwnerProcessId)
+                ? SpawnTrackedProcessStatus.LiveMatch : SpawnTrackedProcessStatus.DeadOrRecycled
+            : attempt => AcceptanceHolderIdentity.Classify(attempt.OwnerProcessId,
+                attempt.OwnerProcessStartedAt, attempt.OwnerExecutablePath));
         _launchOwnedProcess = launchOwnedProcess ?? LaunchExternalOwnedProcess;
         _runInline = runInline;
         _tryRunPreSlot = tryRunPreSlot;
@@ -461,6 +477,10 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         _buildPermitBusyTimeout = buildPermitBusyTimeout ?? DotnetBuildEnvironmentManager.DefaultSlotBusyPollTimeout;
         _buildPermitSleep = buildPermitSleep;
         _conductorGenerationId = conductorGenerationId ?? Environment.ProcessId;
+        _holderLease = holderLease;
+        _usesDurableHolderLease = holderLease is not null || (!_runInline && launchOwnedProcess is null &&
+            attemptCompletionGateForTests is null);
+        _generationIdentity = generationIdentity ?? AcceptanceHolderLease.CurrentGeneration();
         _tryAcquireAttemptWriterLease = tryAcquireAttemptWriterLease ??
             ((directory, wait) => StorageRetentionMaintenance.TryAcquireAttemptWriterLease(directory, wait));
     }
@@ -525,6 +545,18 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                 $"Acceptance attempt identity changed at canonical metadata path '{attempt.MetadataPath}'.");
         }
 
+        // Reconciled legacy entries are selected only for their independent settlement fence,
+        // never for verdict replay. If settlement raced enumeration, the next census drops them.
+        if (_usesDurableHolderLease && current.HolderContractVersion == 0 &&
+            current.ExecutionProtocol == "out-of-process" && IsReconciled(current))
+            return ConductorParallelAcceptanceAttemptDecision.Running(current);
+
+        if (current.HolderContractVersion == 1 && IsCapacityReservingAttempt(current))
+        {
+            _ = HolderLease.Adopt(AcceptanceHolderBinding.For(current), _generationIdentity);
+            return ConductorParallelAcceptanceAttemptDecision.Running(current);
+        }
+        current = ReadCanonicalAttempt(attempt.MetadataPath, attempt.GoalId);
         if (current.SupersedingMainHeadSha is not null)
         {
             return TryCompleteSupersededAttempt(current, candidate) ??
@@ -629,6 +661,11 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         {
             return ConductorParallelAcceptanceAttemptDecision.Running(adopted);
         }
+
+        if (current is not null &&
+            (current.HolderContractVersion == 1 || _usesDurableHolderLease && IsReconciled(current)) &&
+            IsCapacityReservingAttempt(current))
+            return ConductorParallelAcceptanceAttemptDecision.Running(current);
 
         _attemptWriterLeaseAcquiringForTests?.Invoke();
         var goalDirectory = Path.Combine(_rootDirectory, candidate.Goal.Id.Value);
@@ -988,6 +1025,12 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             .Where(IsCapacityReservingAttempt)
             .ToArray();
 
+    // Admission owns the global slot census, including goals outside this conductor's selection.
+    internal IReadOnlyList<ConductorParallelAcceptanceAttempt> GetAllCapacityReservingAttempts() =>
+        GetCapacityReservingAttempts(Directory.Exists(_rootDirectory)
+            ? Directory.EnumerateDirectories(_rootDirectory).Select(Path.GetFileName).OfType<string>()
+            : []);
+
     internal IReadOnlySet<string> GetLiveAttemptGoalIds(IEnumerable<string> goalIds) =>
         GetUnreconciledAttempts(goalIds)
             .Where(attempt => IsLiveAttempt(attempt) || IsLiveInvalidatedAttempt(attempt))
@@ -1019,35 +1062,30 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         !attempt.ReconciledAt.HasValue &&
         !File.Exists(attempt.ResultPath) &&
         !File.Exists(attempt.ExitCodePath) &&
-        _isProcessAlive(attempt.OwnerProcessId) &&
+        (_classifyHolder(attempt) != SpawnTrackedProcessStatus.DeadOrRecycled) &&
         !IsHeartbeatStale(attempt);
 
     private bool IsLiveInvalidatedAttempt(ConductorParallelAcceptanceAttempt attempt) =>
         !File.Exists(attempt.ExitCodePath) &&
-        _isProcessAlive(attempt.OwnerProcessId) &&
+        (_classifyHolder(attempt) != SpawnTrackedProcessStatus.DeadOrRecycled) &&
         (attempt.SupersedingMainHeadSha is not null && !attempt.ReconciledAt.HasValue ||
          attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.StaleCandidate &&
          attempt.ReconciledAt.HasValue && !IsHeartbeatStale(attempt));
 
     private bool IsCapacityReservingAttempt(ConductorParallelAcceptanceAttempt attempt) =>
-        attempt.SupersedingMainHeadSha is not null && !attempt.ReconciledAt.HasValue &&
-        !File.Exists(attempt.ExitCodePath) && _isProcessAlive(attempt.OwnerProcessId) ||
-        attempt switch
-        {
-            { Outcome: ConductorParallelAcceptanceAttemptOutcome.Running, ReconciledAt: null } =>
-                !File.Exists(attempt.ResultPath) &&
-                !File.Exists(attempt.ExitCodePath) &&
-                _isProcessAlive(attempt.OwnerProcessId),
-            { Outcome: ConductorParallelAcceptanceAttemptOutcome.StaleCandidate, ReconciledAt: not null } =>
-                IsCapacityReservingInvalidatedAttempt(attempt),
-            _ => false
-        };
+        // Results, reconciliation, heartbeat age and lease expiry are not holder settlement.
+        // Unknown includes legacy/missing identity and inspection failure, so it retains capacity.
+        attempt.ExecutionProtocol == "in-process"
+            ? attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.Running && !IsReconciled(attempt)
+            : attempt.HolderContractVersion == 1
+                ? ReservesHolderLease(attempt)
+                : ReservesLegacyHolder(attempt);
 
     private bool IsCapacityReservingInvalidatedAttempt(ConductorParallelAcceptanceAttempt attempt) =>
         attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.StaleCandidate &&
         attempt.ReconciledAt.HasValue &&
         !File.Exists(attempt.ExitCodePath) &&
-        _isProcessAlive(attempt.OwnerProcessId);
+        (_classifyHolder(attempt) != SpawnTrackedProcessStatus.DeadOrRecycled);
 
     internal IReadOnlyList<string> TakePendingLeaseReceipts(ConductorParallelAcceptanceAttempt attempt)
     {
@@ -1100,6 +1138,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         try
         {
             Persist(attempt);
+            if (attempt.HolderContractVersion == 1)
+                HolderLease.Reserve(AcceptanceHolderBinding.For(attempt), _generationIdentity);
             EmitEvidenceStart(attempt);
             WriteHeartbeat(attempt, "starting");
             File.AppendAllText(attempt.StdoutPath, $"{attempt.Kind} attempt {attempt.AttemptId} started for {attempt.GoalPrefix} slot-{attempt.SlotIndex}{Environment.NewLine}");
@@ -1139,7 +1179,10 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                     RunAttemptWithArtifactLease(activeAttempt, candidate, policy, runAcceptance);
                 },
                 _buildStorageRoot));
-            var launched = TryPersistOwnerProcess(attempt, launch.ProcessId);
+            var launched = TryPersistOwnerProcess(attempt, launch.ProcessId,
+                launch.StartedAt is { } startedAt && launch.ExecutablePath is { } image
+                    ? new SpawnProcessIdentity(launch.ProcessId, startedAt, image) : null,
+                captureIdentity: false);
             if (launched.Outcome == ConductorParallelAcceptanceAttemptOutcome.Running)
             {
                 WriteHeartbeat(launched, "running");
@@ -1200,6 +1243,9 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                 Path.GetDirectoryName(metadataPath) ?? throw new InvalidOperationException(
                     "acceptance attempt metadata path has no parent directory"),
                 attemptWriterLeaseTimeout);
+            using var holderContainment = attempt.HolderContractVersion == 1
+                ? new AcceptanceHolderLease().Claim(AcceptanceHolderBinding.For(attempt),
+                    AcceptanceHolderLease.CurrentGeneration()) : null;
             attemptLogWriters = RedirectConsole(attempt);
             var workspace = OwnedChildWorkspaceResolver.ForParallelAcceptanceAttempt(attempt);
             var stateRepository = SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath);
@@ -1817,7 +1863,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                         return durablePassed;
                     }
 
-                    return _isProcessAlive(attempt.OwnerProcessId) ? null : MarkTransientArtifactReadFailure(attempt, ex.Message);
+                    return (_classifyHolder(attempt) != SpawnTrackedProcessStatus.DeadOrRecycled) ? null : MarkTransientArtifactReadFailure(attempt, ex.Message);
                 }
 
                 return MarkCorrupt(attempt, ex.Message);
@@ -1840,7 +1886,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             return MarkCorrupt(attempt, "exit artifact exists without a result artifact");
         }
 
-        if (!_isProcessAlive(attempt.OwnerProcessId))
+        if (_classifyHolder(attempt) == SpawnTrackedProcessStatus.DeadOrRecycled &&
+            !IsCapacityReservingAttempt(attempt))
         {
             var latest = TryReadAttemptFile(attempt.MetadataPath);
             if (latest is not null && TryBuildDurablePassedCompletion(latest, candidate, out durablePassed))
@@ -2101,7 +2148,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             IntegrationBranch = _integrationBranch,
             StateDirectory = _stateDirectory,
             ProjectName = _projectName,
-            ReplayContextFingerprint = BuildReplayContextFingerprint(candidate.Goal)
+            ReplayContextFingerprint = BuildReplayContextFingerprint(candidate.Goal),
+            HolderContractVersion = _usesDurableHolderLease ? 1 : 0
         };
     }
 
@@ -2400,8 +2448,13 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
 
     private ConductorParallelAcceptanceAttempt TryPersistOwnerProcess(
         ConductorParallelAcceptanceAttempt attempt,
-        int ownerProcessId)
+        int ownerProcessId,
+        SpawnProcessIdentity? launchIdentity = null,
+        bool captureIdentity = true)
     {
+        // The launcher supplies identity from its retained Process; the child captures itself.
+        // Never manufacture the launch identity by looking up a PID after the holder has exited.
+        var identity = launchIdentity ?? (captureIdentity ? AcceptanceHolderIdentity.Capture(ownerProcessId) : null);
         lock (MetadataWriteGate)
         {
             var current = TryReadAttemptFile(attempt.MetadataPath);
@@ -2411,6 +2464,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                 var missing = attempt with
                 {
                     OwnerProcessId = ownerProcessId,
+                    OwnerProcessStartedAt = identity?.StartedAt,
+                    OwnerExecutablePath = identity?.ImagePath,
                     LastHeartbeatAt = _utcNow()
                 };
                 WriteAttemptFile(missing);
@@ -2422,9 +2477,17 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
                 return current;
             }
 
+            if (current.OwnerProcessStartedAt is { } recordedStart &&
+                (current.OwnerProcessId != ownerProcessId ||
+                 identity is not null && (identity.StartedAt != recordedStart ||
+                     !string.Equals(identity.ImagePath, current.OwnerExecutablePath, StringComparison.OrdinalIgnoreCase))))
+                throw new InvalidOperationException("Acceptance holder identity changed while claiming the attempt.");
+
             var updated = current with
             {
                 OwnerProcessId = ownerProcessId,
+                OwnerProcessStartedAt = identity?.StartedAt ?? current.OwnerProcessStartedAt,
+                OwnerExecutablePath = identity?.ImagePath ?? current.OwnerExecutablePath,
                 LastHeartbeatAt = _utcNow()
             };
             WriteAttemptFile(updated);
@@ -2440,11 +2503,22 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
     /// </summary>
     private ConductorParallelAcceptanceAttempt? TryAdoptOrphanAttempt(ConductorParallelAcceptanceAttempt attempt)
     {
+        if (attempt.HolderContractVersion == 1)
+        {
+            if (attempt.OwnerProcessStartedAt is { } started && attempt.OwnerExecutablePath is { } image)
+                HolderLease.ValidateRecordedHolder(AcceptanceHolderBinding.For(attempt),
+                    new(attempt.OwnerProcessId, started, image));
+            if (!HolderLease.Adopt(AcceptanceHolderBinding.For(attempt), _generationIdentity)) return null;
+            // The independently locked lease is durable even while the child owns result custody.
+            WriteHeartbeat(attempt, "adopted");
+            return attempt;
+        }
         if (!ConductorOrphanGateAttemptAdoption.ShouldAdopt(
                 attempt,
                 _conductorGenerationId,
                 _isProcessAlive,
-                File.Exists))
+                File.Exists,
+                _classifyHolder))
         {
             return null;
         }
@@ -2533,12 +2607,27 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
     private ConductorParallelAcceptanceOwnedProcessLaunchResult LaunchExternalOwnedProcess(
         ConductorParallelAcceptanceOwnedProcessLaunch launch)
     {
-        var startInfo = BuildOwnedProcessStartInfo(launch.Attempt, buildStorageRoot: launch.BuildStorageRoot);
-        var process = ProcessTreeGuiSuppression.Start(startInfo)
-            ?? throw new InvalidOperationException("failed to start acceptance attempt process");
+        Process process;
+        try
+        {
+            var startInfo = BuildOwnedProcessStartInfo(launch.Attempt, buildStorageRoot: launch.BuildStorageRoot);
+            process = ProcessTreeGuiSuppression.Start(startInfo)
+                ?? throw new InvalidOperationException("failed to start acceptance attempt process");
+        }
+        catch
+        {
+            if (launch.Attempt.HolderContractVersion == 1)
+                HolderLease.CancelUnstartedLaunch(AcceptanceHolderBinding.For(launch.Attempt), _generationIdentity);
+            throw;
+        }
         var processId = process.Id;
-        DetachOwnedProcessStreams(process, launch.Attempt);
-        return new ConductorParallelAcceptanceOwnedProcessLaunchResult(processId);
+        var identity = SpawnProcessIdentityReader.ReadForRegistration(process).Identity;
+        try { DetachOwnedProcessStreams(process, launch.Attempt); }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException or ObjectDisposedException)
+        {
+            // Startup pipe failure is not a failed OS launch. Preserve the durable holder claim.
+        }
+        return new ConductorParallelAcceptanceOwnedProcessLaunchResult(processId, identity?.StartedAt, identity?.ImagePath);
     }
 
     internal static ProcessStartInfo BuildOwnedProcessStartInfo(

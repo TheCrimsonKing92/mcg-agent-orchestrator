@@ -1,6 +1,7 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 internal sealed class ManualConductorTimeProviderForTests : TimeProvider
 {
@@ -28,6 +29,7 @@ internal sealed class HoldingAcceptanceAttemptsAcrossTicksFixture : IAsyncDispos
 {
     private readonly ManualConductorTimeProviderForTests _timeProvider;
     private readonly ConductorParallelAcceptanceAttemptCompletionGateForTests _completionGate = new();
+    private readonly HashSet<string> _exitedHolders = new(StringComparer.Ordinal);
     private readonly string _attemptRoot;
     private readonly string _stopFilePath;
     private bool _disposed;
@@ -50,6 +52,10 @@ internal sealed class HoldingAcceptanceAttemptsAcrossTicksFixture : IAsyncDispos
             _attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
             utcNow: _timeProvider.GetUtcNow,
             isProcessAlive: pid => pid == Environment.ProcessId,
+            classifyHolder: attempt => _exitedHolders.Contains(attempt.AttemptId)
+                ? SpawnTrackedProcessStatus.DeadOrRecycled : SpawnTrackedProcessStatus.LiveMatch,
+            // Completion models the gate child publishing its result and exiting.
+            resultPublishedForTests: attempt => _exitedHolders.Add(attempt.AttemptId),
             launchOwnedProcess: _ =>
             {
                 Interlocked.Increment(ref _processSpawnCount);

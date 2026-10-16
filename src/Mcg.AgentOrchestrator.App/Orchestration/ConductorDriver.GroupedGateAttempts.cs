@@ -10,6 +10,12 @@ internal sealed partial class ConductorDriver
 
     internal int CountLiveGroupedGateAttempts() => ConductorLiveGroupedGateCount.Count(_groupedGateAttempts);
 
+    internal void PrepareAcceptanceHolderDetach()
+    {
+        if (ParallelAcceptanceEnabled) ParallelAcceptanceAttemptCoordinator.PrepareHolderDetach();
+        _groupedGateAttempts?.PrepareHolderDetach();
+    }
+
     internal void EnableOwnedGroupedGateAttempts(
         ConductorGroupedGateAttemptCoordinator? coordinator = null)
     {
@@ -43,7 +49,7 @@ internal sealed partial class ConductorDriver
             if (!attempt.Members.Any(member => selectedIds.Contains(member.GoalId))) continue;
 
             var difference = coordinator.IdentityDifference(attempt, kind, members, mainRevision, treeRevision, _integrationBranch);
-            if (attempt.ReconciledAt is not null)
+            if (attempt.ReconciledAt is not null && !coordinator.ReservesCapacity(attempt))
             {
                 if (difference is null && !receiptExists && !ConductorGroupedGateAttemptCoordinator.IsSlotsBusyDeferral(attempt) &&
                     !string.IsNullOrWhiteSpace(attempt.Detail) &&
@@ -51,12 +57,12 @@ internal sealed partial class ConductorDriver
                     return (null, true);
                 continue;
             }
-            var alive = coordinator.IsAlive(attempt.OwnerProcessId);
+            var alive = coordinator.ReservesCapacity(attempt);
             if (!alive)
             {
                 attempt = coordinator.TryReconcileDead(attempt, File.Exists(attempt.ResultPath)
                     ? "child-result-published" : "owner-dead");
-                alive = coordinator.IsAlive(attempt.OwnerProcessId);
+                alive = coordinator.ReservesCapacity(attempt);
                 if (!alive)
                 {
                     CompleteOwnedRunForAttempt(attempt);
@@ -83,7 +89,7 @@ internal sealed partial class ConductorDriver
                 attempt = coordinator.Adopt(attempt);
             }
 
-            if (File.Exists(attempt.ExitCodePath) || File.Exists(attempt.ResultPath))
+            if (!coordinator.ReservesCapacity(attempt) && (File.Exists(attempt.ExitCodePath) || File.Exists(attempt.ResultPath)))
             {
                 coordinator.Reconcile(attempt, "child-result-published");
                 CompleteOwnedRunForAttempt(attempt);
@@ -146,8 +152,7 @@ internal sealed partial class ConductorDriver
         {
             if (run.AttemptMetadataPath is not { } path || run.Completion.Task.IsCompleted) continue;
             var attempt = ConductorGroupedGateAttemptCoordinator.Read(path);
-            if (File.Exists(attempt.ExitCodePath) || File.Exists(attempt.ResultPath) ||
-                !coordinator.IsAlive(attempt.OwnerProcessId))
+            if (!coordinator.ReservesCapacity(attempt))
                 run.Completion.TrySetResult();
         }
         StopInvalidatedFollowerGates();
@@ -160,9 +165,7 @@ internal sealed partial class ConductorDriver
         {
             foreach (var attempt in coordinator.ReadAll())
             {
-                if (attempt.ReconciledAt is not null || attempt.Outcome != "Running" ||
-                    File.Exists(attempt.ResultPath) || File.Exists(attempt.ExitCodePath) ||
-                    !coordinator.IsAlive(attempt.OwnerProcessId))
+                if (!coordinator.ReservesCapacity(attempt))
                     continue;
                 var current = attempt;
                 if (current.AdoptedByGenerationId != coordinator.GenerationId &&
