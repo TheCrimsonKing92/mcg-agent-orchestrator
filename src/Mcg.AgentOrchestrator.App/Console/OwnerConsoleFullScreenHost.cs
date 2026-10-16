@@ -140,7 +140,8 @@ internal static class OwnerConsoleFullScreenHost
                     resolutions: new OwnerQuestionResolutionReader(state, new GoalEventFileTail(workspace.GoalLifecycleEventsDirectory),
                         workspace.OrchestratorDirectory, workspace.LogDirectory, clock),
                     notifier: new SystemOwnerConsoleNotifier(new WindowsOwnerConsoleSoundOutput(), notifications, File.Exists),
-                    notifications: notifications);
+                    notifications: notifications,
+                    fleet: () => OwnerFleetViewModelBuilder.Load(workspace, new ConductorLeaseLiveness(workspace.OrchestratorDirectory)));
                 view = new(app, controller, () => RefreshAsync(), token, clock, OwnerConsoleLoopOptions.Default, diagnostics);
                 boardIds = board.Board.Select(row => row.GoalId).ToArray();
                 view.Render(board);

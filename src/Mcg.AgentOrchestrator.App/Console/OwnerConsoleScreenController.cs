@@ -7,7 +7,8 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     IOwnerConsoleConductor conductor, IOwnerConsoleDigestReport digest,
     IOwnerDigestSummary summary, TimeProvider clock, IOwnerConsoleEpicSource? epics = null,
     AnswerIntentStatusTracker? answerTracking = null, OwnerQuestionResolutionReader? resolutions = null,
-    IOwnerConsoleNotifier? notifier = null, OwnerConsoleNotificationSettings? notifications = null) : IDisposable
+    IOwnerConsoleNotifier? notifier = null, OwnerConsoleNotificationSettings? notifications = null,
+    Func<OwnerFleetViewModel>? fleet = null) : IDisposable
 {
     private readonly object _notificationGate = new();
     private readonly IOwnerConsoleNotifier _notifier = notifier ?? new NullOwnerConsoleNotifier();
@@ -244,10 +245,12 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
         if (parts.Length == 0) return;
         var output = new OwnerConsoleCapturedOutput();
         string? goalId = null;
+        string? fleetText = null;
         var control = new OwnerConsoleControlCommands(conductor, digest, output, clock);
         if (!await RunDependencyAsync(line, ExecuteAsync, operation, cancellationToken)) return;
         cancellationToken.ThrowIfCancellationRequested();
         if (goalId is not null) { await ShowGoalDetailAsync(goalId, operation, cancellationToken); return; }
+        if (fleetText is not null) { await dialogs.ShowTextAsync("Fleet", fleetText); return; }
         await dialogs.ShowTextAsync("Command result", output.Text);
 
         async Task ExecuteAsync(CancellationToken stepToken)
@@ -260,6 +263,11 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
                     else foreach (var item in summary.ReadSummaryLines().Take(5)) output.WriteLine(item);
                     break;
                 case "metrics": control.HandleMetrics(line); break;
+                case "fleet":
+                    if (parts.Length != 1) output.WriteLine("usage: fleet");
+                    else if (fleet is null) output.WriteLine("fleet view unavailable in this session");
+                    else fleetText = OwnerFleetDiagram.Render(fleet());
+                    break;
                 case "bell":
                     var arguments = parts.Skip(1).Select(part => part.ToLowerInvariant()).ToArray();
                     if (arguments.Length == 1 && arguments[0] is "on" or "off")
