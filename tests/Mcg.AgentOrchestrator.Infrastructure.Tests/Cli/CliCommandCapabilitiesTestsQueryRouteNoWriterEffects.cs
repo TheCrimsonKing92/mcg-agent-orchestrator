@@ -14,6 +14,7 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteNoWriterEffects : CliTa
         {
             ["tasks"] = [["tasks"]],
             ["task"] = [["task", "abc10000"]],
+            ["finding"] = [["finding", "query-route-finding"]],
             ["status"] = [["status", "abc10000"], ["status"],
                 ["status", "abc10000", "--tasks-only"], ["status", "--tasks-only", "abc10000"], ["status", "--tasks-only"]],
             ["readiness"] = [["readiness", "abc10000"], ["readiness"]],
@@ -206,6 +207,15 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteNoWriterEffects : CliTa
         var task = new TaskSpec(new TaskId("abc10000dddddddddddddddddddddddd"),
             "Query route task", AgentRole.Developer);
         kernel.CreateGoal(new GoalId("abc10000aaaaaaaaaaaaaaaaaaaaaaaa"), "Query route goal", [task]);
-        return kernel;
+        var snapshot = kernel.ExportSnapshot();
+        var goal = snapshot.Goals.Single();
+        var verification = new TaskVerificationSnapshot("review", "", 0, "", "",
+            DateTimeOffset.Parse("2026-10-07T00:00:00Z"), MergedReviewFindings:
+            [new ReviewFinding("query-route-finding", ReviewFindingState.Open,
+                new ReviewFindingLocation("sample.cs", "Query"), "Query route finding")]);
+        return AgentOrchestratorKernel.FromSnapshot(snapshot with
+        {
+            Goals = [goal with { Tasks = [goal.Tasks.Single() with { VerificationHistory = [verification] }] }]
+        });
     }
 }
