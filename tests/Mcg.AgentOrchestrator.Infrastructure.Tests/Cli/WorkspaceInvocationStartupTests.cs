@@ -233,6 +233,47 @@ public sealed class WorkspaceInvocationStartupTests
         Assert.Equal(before, fixture.Snapshot());
     }
 
+    [Fact]
+    public void DogfoodLogListWithZeroStateWriteThresholdLeavesWorkspaceUnchanged()
+    {
+        using var fixture = new Fixture();
+        Directory.CreateDirectory(fixture.State);
+        StateDbMigrations.EnsureUpToDate(Path.Combine(fixture.State, "state.db"));
+        var path = Path.Combine(fixture.State, "dogfood-log.db");
+        DogfoodLogStore.Setup(path);
+        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString()))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "UPDATE store_schema_versions SET version = 99";
+            Assert.Equal(1, command.ExecuteNonQuery());
+        }
+        var before = fixture.Snapshot();
+        var result = fixture.Run(fixture.Bound("dogfood-log", "list", "--limit", "1"),
+            new() { ["MCG_STATE_WRITE_WARNING_MS"] = "0" });
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("compatible runtime or independently verified recovery", result.StandardError);
+        Assert.DoesNotContain("run setup", result.StandardError);
+        Assert.Equal(before, fixture.Snapshot());
+    }
+
+    [Fact]
+    public void StateWriteTransactionVerbWithZeroThresholdStillWritesDiagnostics()
+    {
+        using var fixture = new Fixture();
+        Directory.CreateDirectory(fixture.State);
+        StateDbMigrations.EnsureUpToDate(Path.Combine(fixture.State, "state.db"));
+
+        // No earlier route in ExecuteCommand claims agents, so it reaches TransactWithOutboxAsync.
+        var result = fixture.Run(fixture.Bound("agents"),
+            new() { ["MCG_STATE_WRITE_WARNING_MS"] = "0" });
+
+        Assert.Equal(0, result.ExitCode);
+        var receipt = Path.Combine(fixture.State, "logs", SqliteWriteTelemetry.DiagnosticsFileName);
+        Assert.True(File.Exists(receipt));
+        Assert.True(new FileInfo(receipt).Length > 0);
+    }
+
     private sealed class Fixture : IDisposable
     {
         internal string Root { get; } = Directory.CreateTempSubdirectory("workspace-startup-").FullName;
