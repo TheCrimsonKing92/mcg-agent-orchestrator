@@ -44,7 +44,7 @@ public sealed class ConductorLiveGroupedGateCountTests : ConductorBatchLoopTests
             var now = DateTimeOffset.UnixEpoch;
             var coordinator = new ConductorGroupedGateAttemptCoordinator(
                 Path.Combine(root, "attempts"), generationId: 111,
-                isProcessAlive: pid => condition is not ("owner-dead" or "result" or "exit" or "not-running") && pid == 222,
+                isProcessAlive: pid => condition != "owner-dead" && pid == 222,
                 utcNow: () => now);
             var attempt = SaveAttempt(coordinator, root, "train");
             if (condition == "reconciled") attempt = attempt with { ReconciledAt = now };
@@ -79,61 +79,9 @@ public sealed class ConductorLiveGroupedGateCountTests : ConductorBatchLoopTests
         finally { TryDeleteDirectory(root); }
     }
 
-    [Xunit.Theory]
-    [Xunit.InlineData("reconciled")]
-    [Xunit.InlineData("result")]
-    [Xunit.InlineData("exit")]
-    [Xunit.InlineData("not-running")]
-    public void PublishedTerminalStateStillCountsWhileHolderIsAlive(string condition)
-    {
-        var root = CreateTempDirectory("terminal-live-grouped-gate");
-        try
-        {
-            var live = true;
-            var holder = new SpawnProcessIdentity(222, DateTimeOffset.UnixEpoch, "C:\\dotnet.exe");
-            var generation = new SpawnProcessIdentity(111, DateTimeOffset.UnixEpoch, "C:\\dotnet.exe");
-            var lease = new AcceptanceHolderLease(
-                utcNow: () => DateTimeOffset.UnixEpoch,
-                classify: identity => identity == holder && !live
-                    ? SpawnTrackedProcessStatus.DeadOrRecycled : SpawnTrackedProcessStatus.LiveMatch,
-                attach: _ => new EmptyHolderContainment(),
-                job: (_, identity, status, _) =>
-                {
-                    Assert.Equal(holder, identity);
-                    return new(status == SpawnTrackedProcessStatus.LiveMatch,
-                        status == SpawnTrackedProcessStatus.DeadOrRecycled, "test-holder-state");
-                });
-            var coordinator = new ConductorGroupedGateAttemptCoordinator(
-                root, generationId: 111, isProcessAlive: pid => live && pid == 222,
-                holderLease: lease, generationIdentity: generation);
-            var attempt = SaveAttempt(coordinator, root, "train");
-            Assert.Equal(1, attempt.HolderContractVersion);
-            var binding = AcceptanceHolderBinding.For(attempt);
-            lease.Reserve(binding, generation);
-            using var containment = lease.Claim(binding, holder);
-            Assert.Equal(holder, lease.Read(binding).Holder);
-            if (condition == "reconciled") attempt = attempt with { ReconciledAt = DateTimeOffset.UnixEpoch };
-            if (condition == "not-running") attempt = attempt with { Outcome = "Completed" };
-            ConductorGroupedGateAttemptCoordinator.Save(attempt);
-            if (condition == "result") File.WriteAllText(attempt.ResultPath, "{}");
-            if (condition == "exit") File.WriteAllText(attempt.ExitCodePath, "0");
-
-            Assert.Equal(1, ConductorLiveGroupedGateCount.Count(coordinator));
-            live = false;
-            Assert.Equal(0, ConductorLiveGroupedGateCount.Count(coordinator));
-            Assert.Equal("Released", lease.Read(binding).Phase);
-        }
-        finally { TryDeleteDirectory(root); }
-    }
-
     [Xunit.Fact]
     public void CoordinatorNotEnabled_Count_ReturnsZero() =>
         Assert.Equal(0, ConductorLiveGroupedGateCount.Count(null));
-
-    private sealed class EmptyHolderContainment : IDisposable
-    {
-        public void Dispose() { }
-    }
 
     internal static ConductorGroupedGateAttempt SaveAttempt(
         ConductorGroupedGateAttemptCoordinator coordinator, string root, string kind)

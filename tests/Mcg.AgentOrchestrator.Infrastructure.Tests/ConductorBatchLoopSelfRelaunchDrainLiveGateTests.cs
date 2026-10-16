@@ -69,11 +69,9 @@ public sealed class ConductorBatchLoopSelfRelaunchDrainLiveGateTests : Conductor
             var eventPath = Path.Combine(root, "events.log");
             var started = DateTimeOffset.UnixEpoch;
             var now = started;
-            var holders = new AcceptanceHolderExitFixture();
             var coordinator = new ConductorGroupedGateAttemptCoordinator(
                 Path.Combine(root, "attempts"), generationId: 111,
-                isProcessAlive: pid => pid == 222, utcNow: () => now,
-                classifyHolder: holders.Classify);
+                isProcessAlive: pid => pid == 222, utcNow: () => now);
             var attempt = ConductorLiveGroupedGateCountTests.SaveAttempt(coordinator, root, kind);
             var kernel = new AgentOrchestratorKernel();
             CreateVerifiedSimpleGoal(kernel, "Update conductor runtime");
@@ -140,11 +138,8 @@ public sealed class ConductorBatchLoopSelfRelaunchDrainLiveGateTests : Conductor
                         if (rollback < 0) drainWaits.Add(interval);
                         now += TimeSpan.FromMinutes(neverPublish ? 5 : 1);
                         if (!neverPublish && sleeps == 5)
-                        {
                             File.WriteAllText(publishExit ? attempt.ExitCodePath : attempt.ResultPath,
                                 publishExit ? "0" : "{\"Verdict\":\"passed\"}");
-                            holders.RecordExit(attempt);
-                        }
                         // A broken hold/defer path must fail instead of leaving the acceptance host hung.
                         if (sleeps >= 20) File.WriteAllText(stopPath, "deferred drain did not re-arm");
                         return false;

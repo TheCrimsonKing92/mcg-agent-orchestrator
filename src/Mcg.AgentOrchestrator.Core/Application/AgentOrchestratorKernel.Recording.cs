@@ -256,6 +256,7 @@ public sealed partial class AgentOrchestratorKernel
 
         var effectiveProviderFailureKind = verification.ProviderFailureKind;
         var outcome = DispatchFailureClassifier.Classify(task, verification, effectiveProviderFailureKind);
+        if (terminalContract.AllowsCompletion) ReviewedCandidateEvidenceBinding.BindReviewerAttestations(goal, task, verification, _clock.UtcNow);
         if (terminalContract.AllowsCompletion && VerificationFindingEvidencePolicy.HasOnlyAuthoritativelyDeferredOffWorkerFindings(goal, task, verification))
         {
             // The worker still supplied a contract-conformant blocking report,

@@ -1,5 +1,3 @@
-using Mcg.AgentOrchestrator.Infrastructure;
-
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 /// <summary>
@@ -19,16 +17,16 @@ internal static class ConductorOrphanGateAttemptAdoption
     /// True when <paramref name="attempt"/> is an orphan of another generation whose gate child is
     /// still alive, so the current generation must adopt it and must not launch a replacement.
     ///
-    /// An attempt with no recorded generation is foreign, but it can be adopted only with verified
-    /// holder identity. Missing holder identity is an unresolved capacity hold, never adoption proof.
-    /// A recycled PID cannot authorize adoption or termination of the unrelated replacement process.
+    /// An attempt with no recorded generation predates generation identity. It is treated as
+    /// unknown-but-not-mine and adopted while its child is alive, which is strictly safer than
+    /// relaunching. When the gate child is dead this returns false, and the existing dead-owner path
+    /// fences the attempt and charges the budget once, which is correct.
     /// </summary>
     internal static bool ShouldAdopt(
         ConductorParallelAcceptanceAttempt attempt,
         int currentGenerationId,
         Func<int, bool> isProcessAlive,
-        Func<string, bool> artifactExists,
-        Func<ConductorParallelAcceptanceAttempt, SpawnTrackedProcessStatus>? classifyHolder = null)
+        Func<string, bool> artifactExists)
     {
         ArgumentNullException.ThrowIfNull(attempt);
         ArgumentNullException.ThrowIfNull(isProcessAlive);
@@ -39,9 +37,7 @@ internal static class ConductorOrphanGateAttemptAdoption
                !artifactExists(attempt.ResultPath) &&
                !artifactExists(attempt.ExitCodePath) &&
                attempt.OwnerProcessId > 0 &&
-               (classifyHolder?.Invoke(attempt) ?? AcceptanceHolderIdentity.Classify(
-                   attempt.OwnerProcessId, attempt.OwnerProcessStartedAt, attempt.OwnerExecutablePath)) ==
-                   SpawnTrackedProcessStatus.LiveMatch &&
+               isProcessAlive(attempt.OwnerProcessId) &&
                IsForeignGeneration(attempt, currentGenerationId, isProcessAlive);
     }
 
@@ -49,8 +45,7 @@ internal static class ConductorOrphanGateAttemptAdoption
         ConductorGroupedGateAttempt attempt,
         int currentGenerationId,
         Func<int, bool> isProcessAlive,
-        Func<string, bool> artifactExists,
-        Func<ConductorGroupedGateAttempt, SpawnTrackedProcessStatus>? classifyHolder = null)
+        Func<string, bool> artifactExists)
     {
         ArgumentNullException.ThrowIfNull(attempt);
         ArgumentNullException.ThrowIfNull(isProcessAlive);
@@ -60,9 +55,7 @@ internal static class ConductorOrphanGateAttemptAdoption
                !artifactExists(attempt.ResultPath) &&
                !artifactExists(attempt.ExitCodePath) &&
                attempt.OwnerProcessId > 0 &&
-               (classifyHolder?.Invoke(attempt) ?? AcceptanceHolderIdentity.Classify(
-                   attempt.OwnerProcessId, attempt.OwnerProcessStartedAt, attempt.OwnerExecutablePath)) ==
-                   SpawnTrackedProcessStatus.LiveMatch &&
+               isProcessAlive(attempt.OwnerProcessId) &&
                attempt.LaunchingGenerationId != currentGenerationId &&
                !isProcessAlive(attempt.LaunchingGenerationId);
     }

@@ -4,7 +4,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
 {
     internal IReadOnlyList<string> GetRunningAttemptExitCodePaths(IEnumerable<string> goalIds) =>
         GetUnreconciledAttempts(goalIds)
-            .Where(attempt => !File.Exists(attempt.ExitCodePath) && IsCapacityReservingAttempt(attempt))
+            .Where(IsCapacityReservingAttempt)
             .Select(attempt => attempt.ExitCodePath)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();

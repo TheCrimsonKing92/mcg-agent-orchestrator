@@ -180,7 +180,7 @@ internal sealed partial class ConductorDriver
         foreach (var attempt in coordinator.ReadAll())
         {
             if (attempt.Kind != "follower" || attempt.ReconciledAt is not null || attempt.Outcome != "Running" ||
-                !coordinator.ReservesCapacity(attempt)) continue;
+                !coordinator.IsAlive(attempt.OwnerProcessId)) continue;
             var binding = ReadFollowerBinding(attempt);
             var reason = ReadFollowerStopReason(attempt, binding);
             if (reason is null || !coordinator.Invalidate(attempt, reason.Value)) continue;
