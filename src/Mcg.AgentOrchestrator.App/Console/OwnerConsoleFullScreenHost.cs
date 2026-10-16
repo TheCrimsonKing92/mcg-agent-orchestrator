@@ -47,7 +47,7 @@ internal static class OwnerConsoleFullScreenHost
         OwnerConsoleActivityLoader? activityLoader = null;
         Task? fill = null;
         using var rebuild = new SemaphoreSlim(1, 1);
-        using IApplication app = Terminal.Gui.App.Application.Create();
+        using IApplication app = OwnerConsoleFrameOutputInstaller.CreateApplication();
         OwnerConsoleFullScreenView? view = null;
         Task? reader = null;
         Task periodicRefresh = Task.CompletedTask;
@@ -105,6 +105,7 @@ internal static class OwnerConsoleFullScreenHost
                         var board = await builder.BuildBoardAsync(stepToken);
                         boardIds = board.Board.Select(row => row.GoalId).ToArray();
                         foreach (var lifecycle in activityLoader.ReadNew(boardIds, scope ?? OwnerConsoleRefreshScope.All)) OwnerConsoleStartupActivity.Append(recent, builder.EnrichEvent(lifecycle), OwnerConsoleStartupActivity.MaxRawEvents);
+                        var programHealth = OwnerConsoleProgramHealthNotice.Current(recent); app.Invoke(() => { if (!token.IsCancellationRequested) view!.NoticeStrip.SetProgramHealth(programHealth); });
                         var (decisions, hidden) = await builder.ReadDecisionsAsync(stepToken);
                         var model = builder.WithActivity(builder.WithDecisions(board, decisions, hidden),
                             inputs with { RecentEvents = recent.ToArray(),

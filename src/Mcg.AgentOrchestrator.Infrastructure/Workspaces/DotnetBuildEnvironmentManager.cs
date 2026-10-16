@@ -2558,6 +2558,19 @@ public static class DotnetBuildEnvironmentManager
             JsonSerializer.Serialize(entry, LeaseJournalJsonOptions) + Environment.NewLine);
     }
 
+    internal static void TryAppendBuildSlotHoldJournal(DotnetBuildEnvironment environment, BuildSlotHoldRecord hold)
+    {
+        try
+        {
+            var entry = new LeaseJournalEntry(1, hold.ReleasedAt, BuildSlotHoldRecord.EventName,
+                Environment.ProcessId, ReceiptSlotName(environment), environment.LeaseId, null,
+                BuildSlotHoldRecord.Released, hold.FormatDetails(), environment.ArtifactsPath ?? "");
+            TryAppendLeaseJournal(Path.Combine(Path.GetDirectoryName(environment.ExecutionLockPath)!,
+                BuildSlotHoldRecord.JournalFileName), JsonSerializer.Serialize(entry, LeaseJournalJsonOptions) + Environment.NewLine);
+        }
+        catch (Exception) { } // Attribution must never prevent lease disposal.
+    }
+
     private static bool TryAppendLeaseJournal(string journalPath, string serializedEntry)
     {
         string? pendingPath = null;
@@ -2917,6 +2930,7 @@ public static class DotnetBuildEnvironmentManager
     private sealed class LeaseFileStream : FileStream
     {
         private readonly DotnetBuildEnvironment _environment;
+        private readonly DateTimeOffset _acquiredAt;
         private Action? _disposeObserver;
         private bool _rangeLocked;
         private int _released;
@@ -2928,6 +2942,7 @@ public static class DotnetBuildEnvironmentManager
             try
             {
                 Lock(0, 1);
+                _acquiredAt = DateTimeOffset.UtcNow;
                 _rangeLocked = true;
             }
             catch
@@ -2952,14 +2967,23 @@ public static class DotnetBuildEnvironmentManager
             {
                 if (disposing && Interlocked.Exchange(ref _released, 1) == 0)
                 {
+                    BuildSlotHoldRecord? hold = null;
                     if (_rangeLocked)
                     {
+                        try
+                        {
+                            var now = DateTimeOffset.UtcNow;
+                            hold = new BuildSlotHoldRecord(_environment.HolderLabel, _acquiredAt, now,
+                                BuildSlotHoldRecord.WitnessCompiledProjects(_environment.ArtifactsPath, _acquiredAt, now));
+                        }
+                        catch (Exception) { } // Keep the existing release path independent of diagnostics.
                         TryDeleteExecutionLeaseMetadata(_environment.ExecutionLockPath);
                         Unlock(0, 1);
                         _rangeLocked = false;
                     }
 
                     EmitLeaseReceipt("LEASE_RELEASE", _environment);
+                    if (hold is not null) TryAppendBuildSlotHoldJournal(_environment, hold);
                 }
             }
             finally

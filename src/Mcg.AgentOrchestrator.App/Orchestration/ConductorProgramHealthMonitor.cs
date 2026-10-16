@@ -1,0 +1,117 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json.Nodes;
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
+
+namespace Mcg.AgentOrchestrator.App.Orchestration;
+
+internal sealed class ConductorProgramHealthMonitor(string statePath, Func<string?> policyReader,
+    ConductEventLogWriter writer, TimeProvider clock,
+    Func<GoalId, IReadOnlyList<ProgramHealthReceiptObservation>> receiptReader)
+{
+    internal const string EventKind = "program-health";
+    internal const string StateFileName = "program-health-state.json";
+    internal const string AlertEvent = "PROGRAM_HEALTH_ALERT";
+    internal const string ClearedEvent = "PROGRAM_HEALTH_CLEARED";
+
+    internal static ConductorProgramHealthMonitor ForWorkspace(OrchestratorWorkspace workspace, ConductEventLogWriter writer)
+    {
+        // Store setup stays inside Evaluate's advisory exception boundary, including retries after a failed open.
+        MergeTrainAcceptanceStore? store = null;
+        string? ReadPolicy()
+        {
+            try { return File.ReadAllText(Path.Combine(workspace.OrchestratorDirectory, "conductor-policy.json")); }
+            catch (FileNotFoundException) { return null; }
+            catch (DirectoryNotFoundException) { return null; }
+        }
+        return new(Path.Combine(workspace.OrchestratorDirectory, StateFileName), ReadPolicy, writer, TimeProvider.System,
+            id => (store ??= new MergeTrainAcceptanceStore(Path.Combine(workspace.OrchestratorDirectory, "merge-train-acceptance.db")))
+                .ReadPassedReceiptsForGoal(id).Select(ProgramHealthReceiptObservation.FromMergeTrainReceipt).ToArray());
+    }
+
+    internal void Evaluate(IReadOnlyList<(GoalId Id, GoalStatus Status)> goals, string? integrationHead)
+    {
+        if (integrationHead is null) return;
+        try
+        {
+            var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(statePath).ToUpperInvariant())));
+            using var mutex = new Mutex(false, "McgProgramHealth-" + key);
+            try { mutex.WaitOne(); } catch (AbandonedMutexException) { }
+            try { EvaluateUnderLock(goals, integrationHead); }
+            finally { mutex.ReleaseMutex(); }
+        }
+        catch
+        {
+            // Program health is advisory and must never interrupt conductor work.
+        }
+    }
+
+    private void EvaluateUnderLock(IReadOnlyList<(GoalId Id, GoalStatus Status)> goals, string integrationHead)
+    {
+        var now = clock.GetUtcNow();
+        var state = Load();
+        var changed = state is null;
+        state ??= new JsonObject
+        {
+            ["lastHead"] = integrationHead, ["lastLandingAt"] = null,
+            ["observedSince"] = now, ["activeKey"] = null
+        };
+        if (!string.Equals(state["lastHead"]!.GetValue<string>(), integrationHead, StringComparison.OrdinalIgnoreCase))
+        {
+            state["lastHead"] = integrationHead;
+            state["lastLandingAt"] = now;
+            changed = true;
+        }
+        var receipts = goals.Where(goal => goal.Status is GoalStatus.Verifying or GoalStatus.Verified or
+            GoalStatus.WaitingForHuman or GoalStatus.Parked or GoalStatus.AcceptanceFailed)
+            .SelectMany(goal => receiptReader(goal.Id)).ToArray();
+        var snapshot = new ProgramHealthSnapshot(now, state["lastLandingAt"]?.GetValue<DateTimeOffset>(),
+            state["observedSince"]!.GetValue<DateTimeOffset>(), integrationHead,
+            goals.Count(goal => goal.Status == GoalStatus.Verified), receipts);
+        var assessment = ProgramHealthEvaluator.Evaluate(snapshot, ProgramHealthThresholds.Read(policyReader()));
+        var activeKey = state["activeKey"]?.GetValue<string>();
+        string? detail = null;
+        if (assessment.Tripped && assessment.Key != activeKey)
+            detail = ProgramHealthEvaluator.FormatAlert(snapshot, assessment);
+        else if (!assessment.Tripped && activeKey is not null)
+            detail = ProgramHealthEvaluator.FormatCleared(activeKey, assessment);
+        if (detail is not null)
+        {
+            if (!writer.AppendRequired(EventKind, null, detail, now, eventId: "program-health:" + Guid.NewGuid().ToString("N"))) return;
+            state["activeKey"] = assessment.Tripped ? assessment.Key : null;
+            changed = true;
+        }
+        if (changed) Save(state);
+    }
+
+    private JsonObject? Load()
+    {
+        try
+        {
+            if (JsonNode.Parse(File.ReadAllText(statePath)) is not JsonObject state ||
+                !state.ContainsKey("lastLandingAt") || !state.ContainsKey("activeKey")) return null;
+            if (string.IsNullOrEmpty(state["lastHead"]?.GetValue<string>()) || state["observedSince"] is null) return null;
+            _ = state["observedSince"]!.GetValue<DateTimeOffset>();
+            _ = state["lastLandingAt"]?.GetValue<DateTimeOffset>();
+            _ = state["activeKey"]?.GetValue<string>();
+            return state;
+        }
+        catch { return null; }
+    }
+
+    private void Save(JsonObject state)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(statePath))!);
+        var temporaryPath = statePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            File.WriteAllText(temporaryPath, state.ToJsonString());
+            File.Move(temporaryPath, statePath, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath)) File.Delete(temporaryPath);
+        }
+    }
+}
