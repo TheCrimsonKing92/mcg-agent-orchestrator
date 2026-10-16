@@ -38,7 +38,7 @@ internal static class OrchestratorArtifactRegistry
         Source("spec-refiner-precedents.json", "App/Orchestration/OrchestratorWorkspace.cs"),
         Source("acceptance-gate-attempts", "Infrastructure/Workspaces/GoalAcceptanceVerifier.cs"),
         Source("pre-review-evidence-attempts", "App/Orchestration/OwnedChildAttemptCoordinatorFactory.cs"),
-        Source("grouped-gate-attempts", "App/Orchestration/ConductorDriver.GroupedGateAttempts.cs"),
+        Source("grouped-gate-attempts", "App/Orchestration/OwnedChildAttemptCoordinatorFactory.cs"),
         Source("merge-train-evidence", "Execution/Persistence/MergeTrainAcceptanceStore.cs"),
         Source("cohort-acceptance.db.artifacts", "Execution/Persistence/CohortAcceptanceStore.cs", literal: ".artifacts"),
         Source("goal-operations", "App/Orchestration/GoalOperationJournal.cs"),
