@@ -28,6 +28,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     private readonly Label _hints = new() { Y = Pos.AnchorEnd(2), Width = Dim.Fill(), Height = 1 };
     private readonly Label _epicHint = new() { Y = Pos.AnchorEnd(2), Text = OwnerConsoleEpicFormatter.KeyHint, Height = 1 };
     internal OwnerConsoleEpicDialog EpicView { get; }
+    internal OwnerConsoleGateDialog GateView { get; } = new();
     internal string EpicHintText => _epicHint.Text;
     private readonly Dictionary<string, string> _working = new();
     private readonly OwnerConsoleScreenOperation _operation;
@@ -93,7 +94,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         _epicHint.X = Pos.AnchorEnd(OwnerConsoleEpicFormatter.KeyHint.Length);
         _hints.Width = Dim.Fill(OwnerConsoleEpicFormatter.KeyHint.Length + 2);
         EpicView = new(controller, Invoke, token);
-        Window.Add(_status, decisions, board, activity, _notice, _hints, _epicHint, _command, EpicView);
+        Window.Add(_status, decisions, board, activity, _notice, _hints, _epicHint, _command, EpicView, GateView);
         _notice.ViewportChanged += (_, _) => RenderNotices();
         _decisions.ValueChanged += (_, _) =>
         {
@@ -145,6 +146,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
 
     internal void Render(OwnerConsoleViewModel model)
     {
+        GateView.Render(model.Gate);
         using var trace = _diagnostics?.Begin("render", TraceState);
         _rendering = true;
         try
@@ -237,7 +239,8 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     {
         if (_controller.Model is not { } model) return;
         var status = model.Status;
-        _status.Text = $"conductor: {(status.ConductorRunning ? "running" : "stopped")} | active: {status.ActiveGoals} | decisions: {status.LiveDecisions} | last event: {Age(status.LastEventAge)} | landed today: {status.LandedToday} | bell: {_controller.BellStatusText}";
+        var gateSegment = model.Gate is { } gate ? " | " + OwnerConsoleGateFormatter.StatusSegment(gate) : "";
+        _status.Text = $"conductor: {(status.ConductorRunning ? "running" : "stopped")}{gateSegment} | active: {status.ActiveGoals} | decisions: {status.LiveDecisions} | last event: {Age(status.LastEventAge)} | landed today: {status.LandedToday} | bell: {_controller.BellStatusText}";
         if (status.HiddenQuestions > 0) _status.Text += $" | hidden: {status.HiddenQuestions}";
         if (_refreshedAt is { } refreshed)
         {
@@ -314,6 +317,11 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
 
     private async Task HandleKeyCoreAsync(Key key)
     {
+        if (GateView.IsOpen)
+        {
+            if (GateView.HandleKey(key)) FocusPane(GateView.ReturnPane);
+            return;
+        }
         if (EpicView.IsOpen)
         {
             if (await EpicView.HandleKeyAsync(key)) FocusPane(EpicView.ReturnPane);
@@ -368,6 +376,12 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         {
             key.Handled = true;
             if (!ActionRunning) await ActAsync(_ => _controller.ShowHelpAsync());
+            return;
+        }
+        if (character == 'g')
+        {
+            key.Handled = true;
+            if (!ActionRunning) { StartAction(); GateView.Open(FocusedPane, _controller.Model?.Gate); }
             return;
         }
         if (character == 'e')
@@ -529,7 +543,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         static OwnerConsoleTracePane Pane(View view, int index, string? identity, int count) =>
             new(index, identity, count, view.Viewport.X, view.Viewport.Y, view.Viewport.Width, view.Viewport.Height);
         return new(_editingCommand || _command.HasFocus ? "Command" : FocusedPane.ToString(),
-            _editingCommand, EpicView.IsOpen || (_app.Initialized && _app.TopRunnableView != Window),
+            _editingCommand, EpicView.IsOpen || GateView.IsOpen || (_app.Initialized && _app.TopRunnableView != Window),
             Pane(_decisions, _decisions.SelectedItem ?? -1, _controller.SelectedDecisionId, _controller.Model?.Decisions.Length ?? 0),
             Pane(_board, _selectedBoardIndex, SelectedGoalId, _controller.Model?.Board.Length ?? 0) with
                 { RowOffset = _board.RowOffset, ColumnOffset = _board.ColumnOffset },

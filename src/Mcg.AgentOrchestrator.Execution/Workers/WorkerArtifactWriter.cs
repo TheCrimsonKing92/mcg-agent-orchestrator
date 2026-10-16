@@ -67,7 +67,8 @@ internal sealed partial class WorkerArtifactWriter
             CriteriaSelfCheckPromptContext.BuildArtifact(task.RequiredRole));
         WriteText(
             Path.Combine(contextDirectory, "current-task.md"),
-            BuildCurrentTask(task, workingDirectory, preserveCompleteArtifacts));
+            BuildCurrentTask(task, workingDirectory, preserveCompleteArtifacts,
+                task.RequiredRole == AgentRole.Tester ? WorkerResultSubmission.PathFor(workingDirectory, goal.Id) : null));
         var durablePlannerPlans = ResolveDurablePlannerPlans(goal.Tasks, task.Id);
         var durableResearch = ResolveLatestDurableResearch(goal.Tasks, task.Id);
         var durablePlan = durablePlannerPlans.Values.LastOrDefault(resolution => resolution.Succeeded);
@@ -324,7 +325,8 @@ internal sealed partial class WorkerArtifactWriter
     private static string BuildCurrentTask(
         TaskSpec task,
         string workingDirectory,
-        bool preserveCompleteArtifacts)
+        bool preserveCompleteArtifacts,
+        string? submissionPath)
     {
         var lines = new List<string>
         {
@@ -422,6 +424,8 @@ internal sealed partial class WorkerArtifactWriter
         lines.Add("## Worker Result Contract");
         lines.Add("End final output with:");
         lines.AddRange(AgentOutputDirectives.WorkerResultTemplateLinesForRole(task.RequiredRole));
+        if (task.RequiredRole == AgentRole.Tester && submissionPath is not null)
+            lines.Add($"Write the result fields as one JSON object to a file inside the context folder and submit it with `{WorkerResultSubmission.FormatCommand(WorkerResultSubmission.ResolveScriptPath(), workingDirectory, task.Id, submissionPath)}`; fix every `REJECTED:` line and submit again until it prints `ACCEPTED`; the accepted submission is the result; still end the output with the WORKER_RESULT block.");
 
         return string.Join(Environment.NewLine, lines);
     }

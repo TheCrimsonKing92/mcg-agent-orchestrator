@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 using System.Diagnostics;
@@ -10,6 +11,43 @@ using System.Xml.Linq;
 [Xunit.Collection(TestCollections.GoalAcceptanceVerifier)]
 public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
 {
+    [Xunit.Theory]
+    [Xunit.InlineData(true, "passed", 0)]
+    [Xunit.InlineData(false, "failed", 2)]
+    [Xunit.InlineData(null, "unknown", 0)]
+    public void ShardCompletionOutcomeReachesConductLog(bool? passed, string outcome, int failed)
+    {
+        var directory = CreateTempDirectory();
+        try
+        {
+            var progress = new List<AcceptanceGateProgress>();
+            var result = passed is null ? null : new AcceptanceCheckResult("infrastructure tests: A", passed.Value,
+                passed.Value ? 0 : 1, null, FailingTestIdentities: passed.Value ? [] : ["Failure.One", "Failure.Two"]);
+            GoalAcceptanceVerifier.EmitShardTimingProgress(new GoalId("11111111111111111111111111111111"),
+                "shard-complete", "infrastructure tests: A", 2, TimeSpan.FromSeconds(10), 1,
+                new DotnetBuildStorageRoot(directory), progress.Add, result);
+            var emitted = Assert.Single(progress);
+            Assert.Equal(outcome, emitted.Outcome);
+            Assert.Equal(failed, emitted.FailedTestCount);
+            AcceptanceCohortMemberBinding Member(char digit) => new(new GoalId(new string(digit, 32)),
+                new string('a', 40), new string('b', 40), ["src/A.cs"], ["resource:a"], ChangeRiskTier.Behavior,
+                Mcg.AgentOrchestrator.Core.Conductor.ConductorTransitionDecision.Auto, "Clean", "NoConflictsDetected");
+            var members = new[] { Member('1'), Member('2') };
+            var identity = AcceptanceCohortIdentity.Create(members, new string('c', 40), new string('d', 40), "manifest-v1");
+            var path = Path.Combine(directory, "conduct-events.log");
+            ConductorDriver.AppendCohortGateProgressEvents(new ConductEventLogWriter(path), identity, members, emitted);
+            var lines = File.ReadAllLines(path).Select(line => Mcg.AgentOrchestrator.App.OwnerConsole.OwnerConsoleGateProgress.ParseEvent(line)!).ToArray();
+            Assert.Equal(2, lines.Length);
+            Assert.All(lines, line =>
+            {
+                Assert.Contains("phase=shard-complete elapsed_ms=10000 target=\"infrastructure tests: A\"", line.Detail);
+                Assert.Contains("members=11111111,22222222", line.Detail);
+                Assert.EndsWith($" outcome={outcome} failed={failed}", line.Detail);
+            });
+        }
+        finally { DeleteDirectoryWithRetry(directory); }
+    }
+
     [Xunit.Fact]
     public void GoalAcceptanceVerifier_resolves_execution_environments_under_each_constructed_storage_root()
     {

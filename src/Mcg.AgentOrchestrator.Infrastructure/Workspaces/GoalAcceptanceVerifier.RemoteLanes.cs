@@ -275,7 +275,7 @@ public sealed partial class GoalAcceptanceVerifier
                 primarySlotIndex,
                 shardElapsed,
                 shardConcurrency.Count,
-                _storageRoot, EmitGateProgress);
+                _storageRoot, EmitGateProgress, result);
         }
 
         while (pendingShards.Count > 0 || activeShards.Count > 0 || activeRemote.Count > 0)

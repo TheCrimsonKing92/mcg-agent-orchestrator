@@ -47,6 +47,8 @@ internal static class CliCommandHelp
     public const string ReassignAgentUsage = "Usage: reassign-agent <task-number> <agent-id>|<goal-prefix> <task-number> <agent-id>|--goal <goal-prefix> <task-number> <agent-id>";
     public const string BacklogListUsage = "Usage: backlog-list [--all] [--limit <n>] [--status <value>] [--text <pattern>|--text=<leading-dash-pattern>] [--json]";
     public const string BacklogTriageUsage = "Usage: backlog-triage [--limit <n>] [--stale-days <n>]";
+    public const string BacklogPremiseCheckUsage = "Usage: backlog-premise-check [--min-age-days <n>]";
+    public const string BacklogPremiseCloseUsage = "Usage: backlog-premise-close <id-prefix> [<id-prefix> ...] --confirm-backlog-premise-close [--min-age-days <n>]";
     public const string BacklogAddUsage = "Usage: backlog-add <title> [body] [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar] | backlog-add --title <title> [--text-file <path>|--body-file <path>] [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar] | backlog-add <title> --text-file <path> [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar] | backlog-add <title> --body-file <path> [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar]";
     public const string BacklogUpdateUsage = "Usage: backlog-update <id-prefix> [--title <text>] [--description <text> | --text-file <path> | --body-file <path>] [--priority <value>] [--tags <csv>] [--status <open|done|superseded>]";
     public const string BacklogShowUsage = "Usage: backlog-show <id-prefix>";
@@ -96,6 +98,7 @@ internal static class CliCommandHelp
     public const string OwnerDigestUsage = "Usage: owner-digest [--since <ISO-8601-with-offset>] [--until <ISO-8601-with-offset>] [--json] [--rounds]";
     public const string FailureClustersUsage = "Usage: failure-clusters [--since <ISO-8601>] [--until <ISO-8601>] [--top <n>] [--json]";
     public const string LaneReuseShadowUsage = "Usage: lane-reuse-shadow [--since <ISO-8601>] [--until <ISO-8601>] [--json]";
+    public const string BuildAttributionUsage = "Usage: build-attribution [--since <ISO-8601>] [--until <ISO-8601>] [--json]";
     public const string IntentCoverageUsage = "Usage: intent-coverage [--since <ISO-8601>] [--until <ISO-8601>] [--min-cases <n>] [--json]";
     public const string RemoteExecutorsUsage = "Usage: remote-executors [--since <ISO-8601>] [--last <N>] [--json]";
     public const string RemoteLaneSelfTestUsage = "Usage: remote-lane-selftest --executor <id> [--timeout-minutes <n>]";
@@ -405,6 +408,16 @@ internal static class CliCommandHelp
         "Print compact backlog triage buckets for daemon curation.",
         ["--limit", "--stale-days", "--help", "-h"]);
 
+    private static readonly CommandHelpEntry BacklogPremiseCheck = new(
+        BacklogPremiseCheckUsage,
+        "Propose closes for stale backlog items with deterministic evidence and print an owner skim list. Writes nothing.",
+        ["--min-age-days", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry BacklogPremiseClose = new(
+        BacklogPremiseCloseUsage,
+        "Re-evaluate premise evidence and close only confirmed, named proposals.",
+        ["--min-age-days", "--confirm-backlog-premise-close", "--help", "-h"]);
+
     private static readonly CommandHelpEntry BacklogAdd = new(
         BacklogAddUsage,
         "Add a backlog item. Prints advisory similarity pointers unless suppressed.",
@@ -638,6 +651,10 @@ internal static class CliCommandHelp
         "Report shadow lane reuse, hypothetical serial savings and misses; default window is 7 days.",
         ["--since", "--until", "--json", "--help", "-h"]);
 
+    private static readonly CommandHelpEntry BuildAttribution = new(
+        BuildAttributionUsage,
+        "Report build-slot consumer shares and duplicate compiles per tree; default window is 24 hours.",
+        ["--since", "--until", "--json", "--help", "-h"]);
     private static readonly CommandHelpEntry IntentCoverage = new(
         IntentCoverageUsage,
         "Score recorded human intents against typed Steward and Author coverage; default window is 7 days.",
@@ -1186,6 +1203,11 @@ internal static class CliCommandHelp
             entry = FailureClusters;
             return true;
         }
+        if (args[0].Equals("build-attribution", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = BuildAttribution;
+            return true;
+        }
         if (args[0].Equals("lane-reuse-shadow", StringComparison.OrdinalIgnoreCase))
         {
             entry = LaneReuseShadow;
@@ -1341,6 +1363,18 @@ internal static class CliCommandHelp
         if (args[0].Equals("backlog-triage", StringComparison.OrdinalIgnoreCase))
         {
             entry = BacklogTriage;
+            return true;
+        }
+
+        if (args[0].Equals("backlog-premise-check", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = BacklogPremiseCheck;
+            return true;
+        }
+
+        if (args[0].Equals("backlog-premise-close", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = BacklogPremiseClose;
             return true;
         }
 

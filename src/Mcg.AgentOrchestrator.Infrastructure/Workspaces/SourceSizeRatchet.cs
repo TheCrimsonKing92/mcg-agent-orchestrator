@@ -64,7 +64,9 @@ internal static class SourceSizeRatchet
             // Goal 982098a9 moves build failure results and cache identity lifetime to AcceptanceDotnetBuildPhase; measured 4969 lines.
             // Goal b7ad094e adds four call-site lines binding cleanup attribution to the selected verdict's
             // candidate/attempt before cache publication; inspection stays in AcceptanceAssemblyCleanupAttributionReader.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 4973),
+            // Goal 56ff780e adds three lines at the existing shard-progress seam to carry the result,
+            // outcome and failed-test count to the owner gate view; measured 4976 lines, no extra headroom.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 4976),
             // Goal c0cfa8ae test telemetry collaborator measured at 423 lines.
             // Goal 402c1005 moved TRX completion inspection and shard decisions into AcceptanceShardCompletionAdjudicator.
             // Goal ad3fafc0 extracted run ownership publication and stale-receipt clearing into AcceptanceTestRunPreparation.
@@ -244,7 +246,8 @@ internal static class SourceSizeRatchet
             // operation lifecycle/custody stays in CompletionBuildEvidenceCoordinator. Measured 2728; no headroom.
             // Goal ffa0471e extracts historical/current completion-build policy to its owning collaborator.
             // Integrated build-scope extraction and task-intent admission: measured 2736, no headroom.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Processes/BackgroundDispatchRunner.cs", 2736),
+            // Goal e7c4bc06 adds Tester submission ingestion: measured 2743, no headroom.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Processes/BackgroundDispatchRunner.cs", 2743),
             // Goal 5a75fed0 extracted typed projection parsing and literal restoration into
             // WorkerContextProjectionResidual, leaving the dispatcher to sequence package assembly.
             // Goal fd252fe4 adds retry fingerprints for the resolved provider, model, paid route, and
@@ -327,7 +330,9 @@ internal static class SourceSizeRatchet
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 4803),
             // Goal 03aaf13e adds the explicit-root isolation fact at the verifier's existing execution-
             // environment seam; the production verifier remains at its prior ceiling.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs", 1605),
+            // Goal 56ff780e keeps passed/failed/unknown shard-completion producer coverage in its owning
+            // test class as required by criterion 3; measured 1643 lines, no extra headroom.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs", 1643),
             // Goal 682f25a1 re-derived this row after integrating goal c2eae988, whose fault-isolation
             // eligibility coverage had already added 173 net lines before the multi-file ratchet landed.
             // Goal ce3c3917 adds the two MakeDriver forwarding seams required to inject and capture the
@@ -510,7 +515,8 @@ internal static class SourceSizeRatchet
             // that type. Goal f3df9ed9 adds two wiring lines; program-health logic lives in
             // ConductorProgramHealthMonitor. After integrating main b8da8f673, measured 12194 lines across
             // the same 30 partial files, with no extra headroom.
-            new SourceClassCeiling("CliCommandHandlers", 12194, 30),
+            // Goal 6cf5a8ce routes the backlog-premise-check/close verbs to their separately owned command type.
+            new SourceClassCeiling("CliCommandHandlers", 12195, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
             // Goal 03580ad1 extracts source-mutation edits to AcceptanceSourceMutation; measured 8938 lines in 31 partials.
@@ -522,7 +528,9 @@ internal static class SourceSizeRatchet
             // into DotnetBaseBuildCacheIdentityResolver; measured 8678 total lines in 28 partial files, no extra headroom.
             // Goal b7ad094e keeps the four cleanup-attribution binding lines at the verifier's verdict/cache
             // boundary; receipt inspection is separately owned. Measured 8682 lines in the same 28 partials, no headroom.
-            new SourceClassCeiling("GoalAcceptanceVerifier", 8682, 28),
+            // Goal 56ff780e adds only the three result/outcome/count lines at the existing shard-progress
+            // seam; gate read-model behavior is separately owned. Measured 8685 lines in the same 28 partials.
+            new SourceClassCeiling("GoalAcceptanceVerifier", 8685, 28),
             // Goal d647b5f3 extracts premise-invalid clarification construction to PremiseInvalidClarification.
             // Goal 439c80ae extracts Reviewer evidence brief projection to ReviewerEvidenceBriefSection;
             // measured 9319 total lines across the existing 27 partial files, with no extra headroom.
@@ -628,7 +636,8 @@ internal static class SourceSizeRatchet
     internal static IReadOnlyDictionary<string, (int TotalLines, int PartialFiles)> MeasureClasses(
         string repositoryRoot, IEnumerable<string> classNames, out List<SourceSizeViolation> violations,
         Func<string, IEnumerable<string>>? readLines = null,
-        Func<string, IEnumerable<string>>? enumerateSourceFiles = null)
+        Func<string, IEnumerable<string>>? enumerateSourceFiles = null,
+        IDictionary<string, List<string>>? partialFiles = null)
     {
         var names = classNames.Distinct(StringComparer.Ordinal).ToArray();
         violations = [];
@@ -671,6 +680,12 @@ internal static class SourceSizeRatchet
                         {
                             totals[index] += lines.Length;
                             counts[index]++;
+                            if (partialFiles is not null)
+                            {
+                                if (!partialFiles.TryGetValue(names[index], out var paths))
+                                    partialFiles[names[index]] = paths = [];
+                                paths.Add(relativePath);
+                            }
                         }
                     }
                 }

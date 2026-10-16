@@ -19,6 +19,7 @@ public sealed class LaneIsolatedRootGuardTests
         [typeof(DotnetBuildEnvironmentManagerTestsStableSlotArtifacts)] = ExplicitStorage,
         [typeof(DotnetBuildEnvironmentManagerTestsWriteFailureScope)] = ExplicitStorage,
         [typeof(DotnetBuildEnvironmentManagerTestsStableSlotHolderLabel)] = ExplicitStorage,
+        [typeof(DotnetBuildEnvironmentManagerTestsLeaseHeldJournal)] = ExplicitStorage,
         [typeof(DotnetBuildEnvironmentManagerTestsLeasePermitsStaleRecovery)] = ExplicitStorage,
         [typeof(DotnetBuildEnvironmentManagerTestsFocusedRunner)] =
             "Owns explicit storage through the rooted base; child runners pin their own override or GUID LOCALAPPDATA fallback, not the host grid.",

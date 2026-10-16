@@ -393,6 +393,12 @@ $treeDigest = $null
 $scope = $null
 $projectResults = [System.Collections.Generic.List[object]]::new()
 $receiptWarning = $null
+$runId = "{0}-{1}-{2}" -f (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssfffZ"), $PID, ([Guid]::NewGuid().ToString("N").Substring(0, 8))
+$holderLabel = "worker-build-check:goal-${safeGoalPrefix}:run-$runId"
+$waitStartedAt = [DateTimeOffset]::UtcNow
+$acquiredAt = $null
+$headCommit = $null
+$lockWaitTimedOut = $false
 try {
     $lockDirectory = Split-Path -Parent $executionLockPath
     New-Item -ItemType Directory -Force -Path $lockDirectory | Out-Null
@@ -417,6 +423,7 @@ try {
 
         if (-not $lockHeld) {
             if ([DateTime]::UtcNow -ge $deadline) {
+                $lockWaitTimedOut = $true
                 throw "Timed out waiting for build lease execution lock: $hashedExecutionLockPath"
             }
 
@@ -424,6 +431,7 @@ try {
         }
     }
 
+    $acquiredAt = [DateTimeOffset]::UtcNow
     if ($buildSlotIndex -ne $hashedBuildSlotIndex) {
         $artifactsPath = Join-Path $runRoot "artifacts-$buildSlotName"
     }
@@ -432,6 +440,7 @@ try {
             version = 1
             leaseId = $leaseId
             slotOwnerToken = $leaseId
+            holderLabel = $holderLabel
             artifactsPath = $artifactsPath
             ownerProcessId = $PID
             machineName = [Environment]::MachineName
@@ -454,12 +463,12 @@ try {
     )
 
     $treeDigest = Get-WorktreeTreeDigest -Root $repositoryRoot -TemporaryRoot $processTempPath
+    $headCommit = Get-WorktreeHeadCommit -Root $repositoryRoot
     $scopeMetadataPath = Join-Path $repositoryRoot ".orchestrator-context\worker-build-scope.json"
     $initialScopeMetadataDigest = if (Test-Path -LiteralPath $scopeMetadataPath -PathType Leaf) {
         (Get-FileHash -LiteralPath $scopeMetadataPath -Algorithm SHA256).Hash.ToLowerInvariant()
     } else { "none" }
 
-    $runId = "{0}-{1}-{2}" -f (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssfffZ"), $PID, ([Guid]::NewGuid().ToString("N").Substring(0, 8))
     $runLogRoot = Join-Path $artifactsPath "worker-build-logs\$runId"
     New-Item -ItemType Directory -Force -Path $runLogRoot | Out-Null
 
@@ -604,6 +613,38 @@ finally {
                 $receiptWarning = "warning: worker build receipt unavailable: could not write receipt"
             }
         }
+    }
+    if ($lockHeld -or $lockWaitTimedOut) {
+        try {
+            $releasedAt = [DateTimeOffset]::UtcNow
+            $waitUntil = if ($lockHeld) { $acquiredAt } else { $releasedAt }
+            $waitMs = [Math]::Max(0, [Math]::Floor(($waitUntil - $waitStartedAt).TotalMilliseconds)).ToString('0', [Globalization.CultureInfo]::InvariantCulture)
+            $holdReason = "holder=$holderLabel waitMs=$waitMs"
+            if ($lockHeld) {
+                $heldMs = [Math]::Max(0, [Math]::Floor(($releasedAt - $acquiredAt).TotalMilliseconds)).ToString('0', [Globalization.CultureInfo]::InvariantCulture)
+                $recordTree = if ([string]::IsNullOrWhiteSpace($treeDigest)) { 'unresolved' } else { $treeDigest }
+                $recordHead = if ([string]::IsNullOrWhiteSpace($headCommit)) { 'unresolved' } else { $headCommit }
+                $outcome = if ($exitCode -eq 0) { 'success' } else { 'failure' }
+                $holdReason = "holder=$holderLabel acquiredAt=$($acquiredAt.UtcDateTime.ToString('o')) heldMs=$heldMs waitMs=$waitMs tree=$recordTree head=$recordHead configuration=$Configuration outcome=$outcome"
+            }
+            $holdEntry = [ordered]@{
+                version = 1
+                recordedAt = $releasedAt.UtcDateTime.ToString('o')
+                event = if ($lockHeld) { 'LEASE_HELD' } else { 'LEASE_WAIT_TIMEOUT' }
+                processId = $PID
+                slot = if ($lockHeld) { $buildSlotName } else { 'none' }
+                leaseId = $leaseId
+                reclaimedProcessId = $null
+                decision = if ($lockHeld) { 'released' } else { 'timed-out' }
+                triggerPath = if ($lockHeld -and $null -ne $runLogRoot) { $runLogRoot } else { '' }
+                reason = $holdReason
+            }
+            $pendingPath = Join-Path (Split-Path -Parent $executionLockPath) ("build-slot-holds.jsonl.pending-$([Guid]::NewGuid().ToString('N')).jsonl")
+            $pendingTemporaryPath = "$pendingPath.tmp"
+            [System.IO.File]::WriteAllText($pendingTemporaryPath, (($holdEntry | ConvertTo-Json -Compress) + [Environment]::NewLine), [System.Text.UTF8Encoding]::new($false))
+            Move-Item -LiteralPath $pendingTemporaryPath -Destination $pendingPath
+        }
+        catch { } # Attribution never changes the build result or slot release.
     }
     if ($lockHeld -and $null -ne $lockStream) {
         try {
