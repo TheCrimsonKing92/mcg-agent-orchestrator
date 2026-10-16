@@ -34,6 +34,7 @@ internal sealed record OwnerConsoleGateProgress(bool Live, string Kind,
         Func<string, string?>? title = null, IReadOnlyDictionary<string, double>? quietSeconds = null)
     {
         var parsed = events.OrderBy(item => item.Timestamp).Select(item => new Observation(item, Tokens(item.Detail))).ToArray();
+        var breakdownConcurrency = BreakdownConcurrency(parsed);
         var gates = new Dictionary<string, Gate>(StringComparer.Ordinal);
         DateTimeOffset? lastEnd = null;
         foreach (var item in parsed)
@@ -152,8 +153,9 @@ internal sealed record OwnerConsoleGateProgress(bool Live, string Kind,
             }).ToArray();
             var total = rows.Where(row => row.IsManifestLane).Sum(row => row.MedianSeconds ?? 0);
             var done = rows.Where(row => row.IsManifestLane && IsDone(row)).ToArray();
-            var remaining = rows.Where(row => row.IsManifestLane && !IsDone(row)).Sum(row =>
-                Math.Max(0, (row.MedianSeconds ?? 0) - (row.State == OwnerConsoleGateLaneState.Running ? row.Elapsed.TotalSeconds : 0)));
+            var unfinished = rows.Where(row => row.IsManifestLane && !IsDone(row)).ToArray();
+            var concurrency = Math.Max(breakdownConcurrency, unfinished.Count(row => row.State == OwnerConsoleGateLaneState.Running));
+            var remaining = OwnerConsoleGateRemainingEstimate.Makespan(unfinished, concurrency);
             var kind = gate.Events.Any(item => item.Get("train").Length > 0 || item.Get("scope") == "merge-train") ? "train" :
                 gate.Members.Length > 1 ? "cohort" : "solo";
             return new(true, kind, gate.Members.Select(id => new OwnerConsoleGateMember(id, title?.Invoke(id) ?? "")).ToArray(),
@@ -198,6 +200,20 @@ internal sealed record OwnerConsoleGateProgress(bool Live, string Kind,
         manifest.OrderByDescending(lane => lane.Name.Length).FirstOrDefault(lane =>
             target.StartsWith(lane.Name + ":", StringComparison.Ordinal) ||
             target.StartsWith("infrastructure tests: " + lane.Name + ":", StringComparison.Ordinal))?.Name ?? target;
+
+    private static int BreakdownConcurrency(Observation[] parsed)
+    {
+        var newest = parsed.LastOrDefault(item => item.Event.Detail.StartsWith("PHASE_PROGRESS ", StringComparison.Ordinal) &&
+            item.Get("phase") == "gate-phase-breakdown");
+        foreach (var field in (newest?.Get("target") ?? "").Split(';'))
+        {
+            var separator = field.IndexOf('=');
+            if (separator < 0 || !field[..separator].Equals("shard_concurrency_effective", StringComparison.Ordinal)) continue;
+            return int.TryParse(field[(separator + 1)..], NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) &&
+                value >= 1 ? value : 1;
+        }
+        return 1;
+    }
 
     private static Dictionary<string, string> Tokens(string detail) => Fields.Matches(detail).Cast<Match>()
         .GroupBy(match => match.Groups["key"].Value).ToDictionary(group => group.Key, group =>
