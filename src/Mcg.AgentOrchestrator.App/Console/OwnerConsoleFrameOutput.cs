@@ -10,6 +10,7 @@ internal sealed class OwnerConsoleFrameOutput(IOutput terminalOutput) : OutputBa
 {
     internal IOutput TerminalOutput => terminalOutput;
     private readonly StringBuilder _frame = new();
+    private readonly OutputBufferImpl _recorderResetBuffer = new();
     private bool _composing;
 
     public override void Write(IOutputBuffer buffer)
@@ -27,6 +28,9 @@ internal sealed class OwnerConsoleFrameOutput(IOutput terminalOutput) : OutputBa
         try
         {
             base.Write(buffer);
+            // Arm OutputBase's per-frame recorder reset before the span submission.
+            // An empty buffer emits nothing; replaying the consumed buffer could render images twice.
+            terminalOutput.Write(_recorderResetBuffer);
             if (_frame.Length > 0) terminalOutput.Write(_frame.ToString().AsSpan());
         }
         finally

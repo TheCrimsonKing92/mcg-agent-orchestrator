@@ -160,6 +160,8 @@ public sealed class OwnerConsoleFrameReproductionTests(Xunit.ITestOutputHelper o
         public void Write(ReadOnlySpan<char> text)
         {
             if (FailNextWrite) { FailNextWrite = false; throw new IOException("recorded write failure"); }
+            // Match AnsiOutput: span writes use OutputBase's real last-output recorder too.
+            base.Write(new StringBuilder().Append(text));
             var payload = text.ToString();
             Operations.Add(new("frame", _column, _row, payload));
             if (RecordOnly) return;

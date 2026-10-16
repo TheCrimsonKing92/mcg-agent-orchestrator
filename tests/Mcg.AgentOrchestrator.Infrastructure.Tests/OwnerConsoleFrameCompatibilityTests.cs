@@ -131,6 +131,32 @@ public sealed class OwnerConsoleFrameCompatibilityTests
     }
 
     [Fact]
+    public void RepeatedFramesBoundInnerRecorderAndCleanFramesResetNextQuery()
+    {
+        var native = new OwnerConsoleFrameReproductionTests.RecordingOutput(12, 2) { RecordOnly = true };
+        using var destination = OwnerConsoleFrameOutputInstaller.BufferOutput(native, TextWriter.Null);
+        const string query = "\u001b[6n";
+        for (var frame = 0; frame < 100; frame++)
+        {
+            destination.Write(query.AsSpan());
+            var buffer = Buffer([$"Frame {frame:D3}   ", "last row    "]);
+            native.ResetOperations();
+
+            destination.Write(buffer);
+
+            // Real OutputBase retention must contain only this frame, including cursor bytes.
+            // Without the inner buffer-overload call it retains the query and every prior frame.
+            Assert.Equal(Assert.Single(native.Operations).Payload, native.GetLastOutput());
+            native.ResetOperations();
+            destination.Write(buffer); // Already consumed: reset must emit no terminal writes.
+            Assert.Empty(native.Operations);
+            destination.Write(query.AsSpan());
+            Assert.Equal(query, Assert.Single(native.Operations).Payload);
+            Assert.Equal(query, native.GetLastOutput());
+        }
+    }
+
+    [Fact]
     public void CursorPropertiesAndDirectQueriesKeepBuiltInLifecycle()
     {
         var native = new OwnerConsoleFrameReproductionTests.RecordingOutput(20, 2) { RecordOnly = true };
