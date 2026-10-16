@@ -9,6 +9,10 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // Parallel-safe: each fixture owns its files, clock and process probes; no children are launched.
 public sealed class GroupedGateAttemptLegacyRestoreTests(ITestOutputHelper output) : ConductorBatchLoopTests(output)
 {
+    private const string MainRevision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    private const string BranchRevision = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    private const string OtherMainRevision = "cccccccccccccccccccccccccccccccccccccccc";
+
     [Fact]
     public void StartupRestoresOnlyLiveAttemptFromOverlappingFinishedHistory()
     {
@@ -114,7 +118,7 @@ public sealed class GroupedGateAttemptLegacyRestoreTests(ITestOutputHelper outpu
         SetField(driver, "_cohortAcceptanceVerifier", new UnexpectedVerifier());
 
         // A different main makes the next admission decision observable without creating a worktree.
-        var outcome = driver.StartFollowerGate(Projections(["a"])[0], Projections(["c"], "different-main")[0],
+        var outcome = driver.StartFollowerGate(Projections(["a"])[0], Projections(["c"], OtherMainRevision)[0],
             ConductorAutonomyPolicy.Conservative);
 
         Assert.IsType<FollowerGateStartOutcome.MainDiffers>(outcome);
@@ -133,7 +137,7 @@ public sealed class GroupedGateAttemptLegacyRestoreTests(ITestOutputHelper outpu
         SetField(driver, "_cohortAcceptanceVerifier", new UnexpectedVerifier());
 
         Assert.IsType<FollowerGateStartOutcome.LeaderHasFollower>(driver.StartFollowerGate(
-            Projections(["a"])[0], Projections(["c"], "different-main")[0], ConductorAutonomyPolicy.Conservative));
+            Projections(["a"])[0], Projections(["c"], OtherMainRevision)[0], ConductorAutonomyPolicy.Conservative));
         Assert.Equal(1, driver.CountLiveGroupedGateAttempts());
         Assert.Equal(0, fixture.Launches);
     }
@@ -351,11 +355,11 @@ public sealed class GroupedGateAttemptLegacyRestoreTests(ITestOutputHelper outpu
 
     private static void StartGrouped(ConductorDriver driver, string[] members) =>
         typeof(ConductorDriver).GetMethod("StartGroupedGateAttempt", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .Invoke(driver, ["cohort", Projections(members), "main", "tree", "manifest", "new-identity", "new-key",
+            .Invoke(driver, ["cohort", Projections(members), MainRevision, "tree", "manifest", "new-identity", "new-key",
                 ConductorAutonomyPolicy.Conservative]);
 
-    private static GateReadyCandidateProjection[] Projections(string[] ids, string mainRevision = "main") => ids.Select(id =>
-        new ConductorGroupedGateMember(id, "branch", "candidate", ["src/" + id], [], ChangeRiskTier.Behavior)
+    private static GateReadyCandidateProjection[] Projections(string[] ids, string mainRevision = MainRevision) => ids.Select(id =>
+        new ConductorGroupedGateMember(id, BranchRevision, BranchRevision, ["src/" + id], [], ChangeRiskTier.Behavior)
             .ToProjection(mainRevision)).ToArray();
 
     private static void Publish(ConductorGroupedGateAttempt attempt, string status)
@@ -394,7 +398,7 @@ public sealed class GroupedGateAttemptLegacyRestoreTests(ITestOutputHelper outpu
 
         internal ConductorGroupedGateAttempt Attempt(string kind, string[] members, bool leased = true)
         {
-            var attempt = Coordinator.Create(kind, Projections(members), "main", "tree", "manifest",
+            var attempt = Coordinator.Create(kind, Projections(members), MainRevision, "tree", "manifest",
                 Guid.NewGuid().ToString("N"), Root, ConductorAutonomyPolicy.Conservative) with
             {
                 OwnerProcessId = _holder.ProcessId, OwnerProcessStartedAt = _holder.StartedAt,

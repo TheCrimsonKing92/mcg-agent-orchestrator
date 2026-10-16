@@ -280,6 +280,10 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
                 maxIterations: 1);
             Assert.True(primerEntered.Wait(TimeSpan.FromSeconds(5)));
             Assert.True(SpinWait.SpinUntil(() => !coordinator.HasLiveAttempt(primer.Id.Value), TimeSpan.FromSeconds(5)));
+            // Result publication precedes holder exit; wait for its capacity claim to settle too.
+            Assert.True(SpinWait.SpinUntil(
+                () => coordinator.GetCapacityReservingAttempts([primer.Id.Value]).Count == 0,
+                TimeSpan.FromSeconds(5)));
             PassVerificationAt(kernel, waiting, waiting.Tasks.Single(), now.AddMinutes(2));
             BatchTickSummary? admissionTick = null;
             new ConductorBatchLoop().Run(

@@ -436,7 +436,8 @@ internal static class SourceSizeRatchet
             // Reconciled after integrating main e1f6f11c at its measured post-merge test-owner size.
             // Goal 5daaa1db replaces ambient build-root mutation with explicit child-launch ownership
             // and disposes the owned root; the real-process transport assertions remain in this fixture.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorBatchLoopTestsParallelAcceptance.cs", 5281),
+            // Goal 2c245bc3 waits for the primer holder's capacity release before asserting next-slot admission.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorBatchLoopTestsParallelAcceptance.cs", 5285),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/DotnetBuildEnvironmentManagerTests.cs", 1357),
         });
 
