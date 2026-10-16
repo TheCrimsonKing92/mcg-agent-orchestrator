@@ -30,7 +30,7 @@ public sealed class ConductorBatchLoopTestsAcceptanceCohortBackgroundAttribution
         Assert.Contains($"LandingPathOverlap(conflict={guilty.Id.Value[..8]}", before);
 
         var loop = fixture.CreateLoop();
-        var first = fixture.Tick(loop);
+        fixture.Tick(loop);
 
         Assert.Equal(GoalStatus.AcceptanceFailed, guilty.Status);
         var attribution = Assert.Single(guilty.LatestAcceptanceFailure!.CheckAttributions!);
@@ -49,13 +49,13 @@ public sealed class ConductorBatchLoopTestsAcceptanceCohortBackgroundAttribution
             line.Contains("reason=child-result-published", StringComparison.Ordinal) &&
             line.Contains($"receipt={receipt.ReceiptId}", StringComparison.Ordinal));
         Assert.Equal(1, fixture.ConsumptionCount(receipt));
-        AssertExcluded(first, guilty);
+        AssertExcluded(fixture.EventLines(), guilty, expectedPlanCount: 1);
         Assert.Empty(fixture.Landings);
         Assert.DoesNotContain(fixture.Launched, attempt => attempt.GoalId == guilty.Id.Value);
 
-        var second = fixture.Tick(loop);
+        fixture.Tick(loop);
 
-        AssertExcluded(second, guilty);
+        AssertExcluded(fixture.EventLines(), guilty, expectedPlanCount: 2);
         Assert.Equal(GoalStatus.AcceptanceFailed, guilty.Status);
         Assert.Equal(GoalStatus.Verifying, partner.Status);
         Assert.Null(partner.LatestAcceptanceFailure);
@@ -109,11 +109,12 @@ public sealed class ConductorBatchLoopTestsAcceptanceCohortBackgroundAttribution
         lines.Where(line => line.StartsWith(
             $"ACCEPTANCE_COHORT_ATTRIBUTION_VERDICT goal={goal.Id.Value} ", StringComparison.Ordinal));
 
-    private static void AssertExcluded(BatchTickSummary tick, Goal guilty)
+    private static void AssertExcluded(IEnumerable<string> eventLines, Goal guilty, int expectedPlanCount)
     {
-        var plans = tick.ProgressLines!.Where(line =>
+        // Speculative plans are emitted to the conduct event log, not the tick summary accumulator.
+        var plans = eventLines.Where(line =>
             line.StartsWith("SPECULATIVE_COHORT_PLAN ", StringComparison.Ordinal)).ToArray();
-        Assert.NotEmpty(plans);
+        Assert.Equal(expectedPlanCount, plans.Length);
         Assert.All(plans, line =>
         {
             var members = line.Split(' ').Single(token => token.StartsWith("members=", StringComparison.Ordinal));
