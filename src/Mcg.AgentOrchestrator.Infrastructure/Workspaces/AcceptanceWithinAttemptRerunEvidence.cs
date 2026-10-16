@@ -11,7 +11,9 @@ public sealed record AcceptanceWithinAttemptRerunEvidence(
     string OriginalInvocationId,
     string RetryInvocationId,
     int ExecutedTestCount,
-    IReadOnlyList<string> RerunTestResultPaths)
+    IReadOnlyList<string> RerunTestResultPaths,
+    bool RerunPassed = true,
+    IReadOnlyList<string>? RerunFailingTestIdentities = null)
 {
     public const string Reason = "within-attempt-rerun-pass";
 }

@@ -264,7 +264,7 @@ public sealed class GoalAcceptanceVerifierSizeRatchetTests
             Assert.Contains("12", violation.Message, StringComparison.Ordinal);
             Assert.Contains("recorded ceiling of 4", violation.Message, StringComparison.Ordinal);
             Assert.Contains(
-                "Extract behavior to a collaborator and lower the ceiling",
+                "Extract behavior to a collaborator; the conductor lowers the row",
                 violation.Message,
                 StringComparison.Ordinal);
             Assert.Contains(

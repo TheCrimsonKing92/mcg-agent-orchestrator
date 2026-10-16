@@ -430,7 +430,9 @@ internal sealed partial class ConductorDriver
                 OwnerProtectedGateDiagnostic.Write(Console.Out, identity.Value, ownerProtectedCheck);
             var classifiedVerification = ClassifyCohortVerificationResultWithPaths(verification);
             classification = classifiedVerification.Classification;
-            gateTestResultPaths = classifiedVerification.NormalizedTestResultPaths;
+            gateTestResultPaths = GroupedReceiptTestResultPaths.Apply(Console.Out, "cohort",
+                $"cohort-receipt-v2-{identity.Value[(AcceptanceCohortIdentity.Version.Length + 1)..]}",
+                verification, classifiedVerification.NormalizedTestResultPaths);
             failedChecks = verification.Checks?
                 .Where(check => !check.Passed && !check.Advisory)
                 .Select(check => check.Name)

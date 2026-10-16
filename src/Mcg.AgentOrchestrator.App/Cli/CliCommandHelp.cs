@@ -65,6 +65,7 @@ internal static class CliCommandHelp
     public const string ExperimentShowUsage = "Usage: experiment-show <experiment> [--as-of <timestamp-with-offset>]";
     public const string ExperimentDecideUsage = "Usage: experiment-decide <experiment> --outcome <confirmed|refuted|inconclusive> --evidence <reference> --action <text>";
     public const string ExperimentExtendUsage = "Usage: experiment-extend <experiment> --count <n> --reason <text>";
+    public const string ExperimentTrainBacktestUsage = "Usage: experiment-train-backtest --since <timestamp with offset> [--training-count <n>]";
     public const string ExperimentApplyFlagUsage = "Usage: experiment-apply-flag <experiment> [--operator-actor <actor>] [--actor-kind <human|agent>] [--idempotency-key <key>] [--json]";
     public const string EpicRenameUsage = "Usage: epic-rename <epic> <new-title>";
     public const string EpicDescribeUsage = "Usage: epic-describe <epic> <text> | epic-describe <epic> --text-file <path>";
@@ -95,6 +96,7 @@ internal static class CliCommandHelp
     public const string OwnerDigestUsage = "Usage: owner-digest [--since <ISO-8601-with-offset>] [--until <ISO-8601-with-offset>] [--json] [--rounds]";
     public const string FailureClustersUsage = "Usage: failure-clusters [--since <ISO-8601>] [--until <ISO-8601>] [--top <n>] [--json]";
     public const string LaneReuseShadowUsage = "Usage: lane-reuse-shadow [--since <ISO-8601>] [--until <ISO-8601>] [--json]";
+    public const string IntentCoverageUsage = "Usage: intent-coverage [--since <ISO-8601>] [--until <ISO-8601>] [--min-cases <n>] [--json]";
     public const string RemoteExecutorsUsage = "Usage: remote-executors [--since <ISO-8601>] [--last <N>] [--json]";
     public const string RemoteLaneSelfTestUsage = "Usage: remote-lane-selftest --executor <id> [--timeout-minutes <n>]";
     public const string RoundValueUsage = "Usage: round-value [--since <ISO-8601-with-offset>] [--until <ISO-8601-with-offset>] [--json] [--by-skill] [--by-check] [--baseline-since <ISO-8601-with-offset> --baseline-until <ISO-8601-with-offset>]";
@@ -473,6 +475,7 @@ internal static class CliCommandHelp
         ExperimentDecideUsage, "Record evidence and action once on an open experiment.", ["--outcome", "--evidence", "--action", "--help", "-h"]);
     private static readonly CommandHelpEntry ExperimentExtend = new(
         ExperimentExtendUsage, "Record a longer stop target and reason on an open experiment.", ["--count", "--reason", "--help", "-h"]);
+    private static readonly CommandHelpEntry ExperimentTrainBacktest = new(ExperimentTrainBacktestUsage, "Read stored merge train receipts and compare drop policies.", ["--since", "--training-count", "--help", "-h"]);
     private static readonly CommandHelpEntry ExperimentApplyFlag = new(
         ExperimentApplyFlagUsage, "Queue a workspace Mutate-tier intent to apply a boolean policy flag. The conductor captures its prior value; an eligible keep reading at the stop rule records confirmed and files a make-permanent backlog item.",
         ["--operator-actor", "--actor-kind", "--idempotency-key", "--json", "--help", "-h"]);
@@ -635,12 +638,24 @@ internal static class CliCommandHelp
         "Report shadow lane reuse, hypothetical serial savings and misses; default window is 7 days.",
         ["--since", "--until", "--json", "--help", "-h"]);
 
+    private static readonly CommandHelpEntry IntentCoverage = new(
+        IntentCoverageUsage,
+        "Score recorded human intents against typed Steward and Author coverage; default window is 7 days.",
+        ["--since", "--until", "--min-cases", "--json", "--help", "-h"]);
+
     private static readonly CommandHelpEntry RemoteExecutors = new(
         RemoteExecutorsUsage, "Read recent remote executor outcomes and advisory probes.",
         ["--since", "--last", "--json", "--help", "-h"]);
     private static readonly CommandHelpEntry RemoteLaneSelfTest = new(
         RemoteLaneSelfTestUsage, "Operator-only self-test that pushes to the executor and runs one real SSH lane job.",
         ["--executor", "--timeout-minutes", "--help", "-h"]);
+
+    public const string BoardSimulateUsage = "Usage: board-simulate [--day <yyyy-MM-dd>] [--width <1-4>] [--train-size <0|3|4>] [--cohorts on|off] [--drop newest|lowest-pass-rate] [--seed <n>] [--json]";
+
+    private static readonly CommandHelpEntry BoardSimulate = new(
+        BoardSimulateUsage,
+        "Replay a recorded UTC day of gate scheduling offline and compare landings.",
+        ["--day", "--width", "--train-size", "--cohorts", "--drop", "--seed", "--json", "--help", "-h"]);
 
     private static readonly CommandHelpEntry RoundValue = new(
         RoundValueUsage,
@@ -1176,6 +1191,11 @@ internal static class CliCommandHelp
             entry = LaneReuseShadow;
             return true;
         }
+        if (args[0].Equals("intent-coverage", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = IntentCoverage;
+            return true;
+        }
         if (args[0].Equals("remote-executors", StringComparison.OrdinalIgnoreCase))
         {
             entry = RemoteExecutors;
@@ -1184,6 +1204,11 @@ internal static class CliCommandHelp
         if (args[0].Equals("remote-lane-selftest", StringComparison.OrdinalIgnoreCase))
         {
             entry = RemoteLaneSelfTest;
+            return true;
+        }
+        if (args[0].Equals("board-simulate", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = BoardSimulate;
             return true;
         }
         if (args[0].Equals("round-value", StringComparison.OrdinalIgnoreCase))
@@ -1395,6 +1420,7 @@ internal static class CliCommandHelp
         if (args[0].Equals("experiment-show", StringComparison.OrdinalIgnoreCase)) { entry = ExperimentShow; return true; }
         if (args[0].Equals("experiment-decide", StringComparison.OrdinalIgnoreCase)) { entry = ExperimentDecide; return true; }
         if (args[0].Equals("experiment-extend", StringComparison.OrdinalIgnoreCase)) { entry = ExperimentExtend; return true; }
+        if (args[0].Equals("experiment-train-backtest", StringComparison.OrdinalIgnoreCase)) { entry = ExperimentTrainBacktest; return true; }
         if (args[0].Equals("experiment-apply-flag", StringComparison.OrdinalIgnoreCase)) { entry = ExperimentApplyFlag; return true; }
         if (args[0].Equals("epic-add", StringComparison.OrdinalIgnoreCase))
         {

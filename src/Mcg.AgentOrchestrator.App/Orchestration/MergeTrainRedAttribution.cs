@@ -54,6 +54,8 @@ internal static class MergeTrainRedAttribution
     {
         failingSubjects = [];
         if (receipt.Outcome != MergeTrainGateOutcome.Failed) return null;
+        if (receipt.FailedChecks.Contains(SourceSizeRatchetPreflight.CheckName, StringComparer.Ordinal))
+            return MergeTrainRatchetAttribution.TryAttribute(receipt, workspacePath, members, out failingSubjects);
         return TryAttribute(receipt.GateTestResultPaths, workspacePath, members, out failingSubjects);
     }
 

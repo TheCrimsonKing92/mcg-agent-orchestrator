@@ -12,7 +12,7 @@ public sealed class ConductorDriverTestImpactDegradedEventTests : IDisposable
     private string LogPath => Path.Combine(_root.FullName, "conduct-events.log");
     private static readonly DateTimeOffset Timestamp = new(2026, 10, 4, 12, 0, 0, TimeSpan.Zero);
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public void AdvanceOnce_IndexBound_EmitsOncePerGoalAndCandidate()
     {
@@ -76,7 +76,7 @@ public sealed class ConductorDriverTestImpactDegradedEventTests : IDisposable
         if (expectedCount == 1) AssertEvent(events[0], goal, "candidate-a", kind, reason);
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public void AdvanceOnce_SameCandidateAcrossGoals_EmitsForEachGoal()
     {
@@ -98,7 +98,7 @@ public sealed class ConductorDriverTestImpactDegradedEventTests : IDisposable
         AssertEvent(events[1], goalB, "same-sha", ReverseDependencyDegradationKind.IndexedSourceBound, BoundReason);
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public void AdvanceOnce_FailedEventAppend_RetriesWithoutBlockingReview()
     {

@@ -11,7 +11,8 @@ internal enum ConductorStewardTriggerKind
     AcceptanceCollectionGuardClass,
     DeveloperGateReopenNoCommit,
     DeveloperReviewerFindingNoCommit,
-    ReviewerOrTesterBlockerWithAnswer
+    ReviewerOrTesterBlockerWithAnswer,
+    VerifyingWithoutLiveGate
 }
 
 internal sealed record ConductorStewardTrigger(
@@ -32,6 +33,7 @@ internal sealed record ConductorStewardTrigger(
         ConductorStewardTriggerKind.DeveloperGateReopenNoCommit => "D",
         ConductorStewardTriggerKind.DeveloperReviewerFindingNoCommit => "E",
         ConductorStewardTriggerKind.ReviewerOrTesterBlockerWithAnswer => "F",
+        ConductorStewardTriggerKind.VerifyingWithoutLiveGate => "G",
         _ => "C"
     };
 

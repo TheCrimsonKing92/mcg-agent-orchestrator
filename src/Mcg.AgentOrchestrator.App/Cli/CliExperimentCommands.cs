@@ -8,11 +8,12 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 internal static class CliExperimentCommands
 {
     internal static bool IsCommand(string command) =>
-        command.ToLowerInvariant() is "experiment-add" or "experiment-show" or "experiment-decide" or "experiment-extend" or "experiment-apply-flag";
+        command.ToLowerInvariant() is "experiment-add" or "experiment-show" or "experiment-decide" or "experiment-extend" or "experiment-apply-flag" or "experiment-train-backtest";
 
     internal static bool? TryExecute(string command, IReadOnlyList<string> parts, CliExecutionContext context)
     {
         if (!IsCommand(command)) return null;
+        if (command == "experiment-train-backtest") return CliExperimentTrainBacktestCommand.Execute(parts, context.Workspace);
         if (command == "experiment-apply-flag") return CliExperimentFlagCommands.SubmitApply(parts, context.Workspace);
         var options = ExperimentOptions(parts, command == "experiment-add" ? 1 : 2);
         if (command == "experiment-add")

@@ -10,9 +10,9 @@ internal static class SourceSizeRatchet
     internal const string SourcePath = "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/SourceSizeRatchet.cs";
 
     // Seeded at 6e7a90d7b3fe192ae4f1e430cb7452710f88b73c using File.ReadLines(path).Count().
-    // Each row is the only place its guarded path and ceiling value live. When extraction shrinks a guarded
-    // file, lower its ceiling here. When growth is unavoidable, put the goal-specific justification directly
-    // above that row and raise only that value. Never derive these ceilings from current files or add an opt-out.
+    // Goals do not lower rows or add measured-size comments; integration lowers rows to the tree's size before the gate.
+    // Edit a row only to raise it, with goal-specific justification directly above it. Never raise ceilings
+    // automatically or add an opt-out. A rename or removal updates the authority in the same change.
     internal static IReadOnlyList<SourceSizeCeiling> SeededCeilings { get; } = Array.AsReadOnly(
         new[]
         {
@@ -432,8 +432,8 @@ internal static class SourceSizeRatchet
         });
 
     // Reseeded at main 584b86d13 using complete File.ReadLines counts for files declaring each partial class.
-    // Lower a row when extraction shrinks the class; raise it only with a goal-specific justification
-    // directly above that row. Moving members into another partial file does not shrink the class.
+    // Goals do not lower rows or add measured-size comments; integration lowers rows to the tree's size before the gate.
+    // Raise only with goal-specific justification directly above; renames/removals update the authority in the same change.
     internal static IReadOnlyList<SourceClassCeiling> SeededClassCeilings { get; } = Array.AsReadOnly(
         new[]
         {
@@ -476,7 +476,11 @@ internal static class SourceSizeRatchet
             // After integrating main 790560adf, measured 14876 lines across the same 70 partial files; no extra headroom.
             // Goal 046ea7d3 extracts filter validation and class expansion into FindingEvidenceFilterSyntax.
             // After integrating main 79b67570c, measured 14807 lines across the same 70 partial files; no extra headroom.
-            new SourceClassCeiling("ConductorDriver", 14807, 70),
+            // Goal 8d040dde adds landing-completion handling in ConductorDriver.LandingCompletion; after integrating
+            // main 3732befa8, measured 14823 lines across the same 70 partial files; no extra headroom.
+            // Goal 4cad184f adds three lines of grouped-receipt RED handling; after integrating main fd7b91785,
+            // measured 14826 lines across the same 70 partial files; no extra headroom.
+            new SourceClassCeiling("ConductorDriver", 14826, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
@@ -597,16 +601,46 @@ internal static class SourceSizeRatchet
             return [];
         }
 
+        var measurements = MeasureClasses(repositoryRoot, ceilings.Select(ceiling => ceiling.ClassName),
+            out var violations, readLines, enumerateSourceFiles);
+        foreach (var ceiling in ceilings)
+        {
+            var (total, count) = measurements.GetValueOrDefault(ceiling.ClassName);
+            if (total > ceiling.MaximumTotalLineCount)
+            {
+                violations.Add(new SourceSizeViolation(
+                    $"class:{ceiling.ClassName}", total, ceiling.MaximumTotalLineCount,
+                    BuildClassOverCeilingMessage(ceiling, total, ceiling.MaximumTotalLineCount, "class total-line")));
+            }
+
+            if (count > ceiling.MaximumPartialFileCount)
+            {
+                violations.Add(new SourceSizeViolation(
+                    $"class:{ceiling.ClassName}", count, ceiling.MaximumPartialFileCount,
+                    BuildClassOverCeilingMessage(ceiling, count, ceiling.MaximumPartialFileCount, "partial-file-count")));
+            }
+        }
+
+        return violations;
+    }
+
+    internal static IReadOnlyDictionary<string, (int TotalLines, int PartialFiles)> MeasureClasses(
+        string repositoryRoot, IEnumerable<string> classNames, out List<SourceSizeViolation> violations,
+        Func<string, IEnumerable<string>>? readLines = null,
+        Func<string, IEnumerable<string>>? enumerateSourceFiles = null)
+    {
+        var names = classNames.Distinct(StringComparer.Ordinal).ToArray();
+        violations = [];
+        if (names.Length == 0) return new Dictionary<string, (int, int)>(StringComparer.Ordinal);
         readLines ??= File.ReadLines;
         enumerateSourceFiles ??= root => Directory.Exists(Path.Combine(root, "src"))
             ? Directory.EnumerateFiles(Path.Combine(root, "src"), "*.cs", SearchOption.AllDirectories)
             : [];
-        var patterns = ceilings.Select(ceiling => new Regex(
-            $@"\bpartial\s+class\s+{Regex.Escape(ceiling.ClassName)}\b",
+        var patterns = names.Select(name => new Regex(
+            $@"\bpartial\s+class\s+{Regex.Escape(name)}\b",
             RegexOptions.CultureInvariant)).ToArray();
-        var totals = new int[ceilings.Length];
-        var counts = new int[ceilings.Length];
-        var violations = new List<SourceSizeViolation>();
+        var totals = new int[names.Length];
+        var counts = new int[names.Length];
         var seenPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         try
         {
@@ -630,7 +664,7 @@ internal static class SourceSizeRatchet
                 {
                     var lines = readLines(sourcePath).ToArray();
                     var text = string.Join("\n", lines);
-                    for (var index = 0; index < ceilings.Length; index++)
+                    for (var index = 0; index < names.Length; index++)
                     {
                         if (patterns[index].IsMatch(text))
                         {
@@ -652,25 +686,8 @@ internal static class SourceSizeRatchet
                 "src/", null, 0, BuildUnreadableFileMessage("src/", exception)));
         }
 
-        for (var index = 0; index < ceilings.Length; index++)
-        {
-            var ceiling = ceilings[index];
-            if (totals[index] > ceiling.MaximumTotalLineCount)
-            {
-                violations.Add(new SourceSizeViolation(
-                    $"class:{ceiling.ClassName}", totals[index], ceiling.MaximumTotalLineCount,
-                    BuildClassOverCeilingMessage(ceiling, totals[index], ceiling.MaximumTotalLineCount, "class total-line")));
-            }
-
-            if (counts[index] > ceiling.MaximumPartialFileCount)
-            {
-                violations.Add(new SourceSizeViolation(
-                    $"class:{ceiling.ClassName}", counts[index], ceiling.MaximumPartialFileCount,
-                    BuildClassOverCeilingMessage(ceiling, counts[index], ceiling.MaximumPartialFileCount, "partial-file-count")));
-            }
-        }
-
-        return violations;
+        return Enumerable.Range(0, names.Length).Where(index => counts[index] > 0)
+            .ToDictionary(index => names[index], index => (totals[index], counts[index]), StringComparer.Ordinal);
     }
 
     private static string BuildClassOverCeilingMessage(SourceClassCeiling ceiling, int actual, int maximum, string limit)
@@ -678,7 +695,7 @@ internal static class SourceSizeRatchet
         return $"class:{ceiling.ClassName} has {actual.ToString(CultureInfo.InvariantCulture)}, " +
             $"exceeding the {limit} ceiling of {maximum.ToString(CultureInfo.InvariantCulture)}. " +
             "Moving members into another partial file of the same class does not satisfy this limit. " +
-            "Extract members into a separately owned type and lower the row, or raise the row with " +
+            "Extract members into a separately owned type; the conductor lowers the row when the change integrates. Otherwise raise the row with " +
             $"goal-specific justification directly above it in {SeededClassCeilingsSymbol}. See {DocumentationPath}.";
     }
 
@@ -846,8 +863,8 @@ internal static class SourceSizeRatchet
     {
         return $"{ceiling.RelativePath} has {actualLineCount.ToString(CultureInfo.InvariantCulture)} lines, " +
             $"exceeding the recorded ceiling of {ceiling.MaximumLineCount.ToString(CultureInfo.InvariantCulture)}. " +
-            "Extract behavior to a collaborator and lower the ceiling for this entry, or raise the recorded " +
-            "ceiling for this entry deliberately with justification in the same change by editing " +
+            "Extract behavior to a collaborator; the conductor lowers the row to the measured size when the change integrates. Otherwise raise the recorded " +
+            "ceiling for this entry deliberately with justification in the same change, with the justification directly above the row in " +
             $"{SeededCeilingsSymbol}. See {DocumentationPath}.";
     }
 
