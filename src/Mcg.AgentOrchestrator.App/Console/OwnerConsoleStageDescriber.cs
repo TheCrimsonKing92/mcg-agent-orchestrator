@@ -7,8 +7,13 @@ internal static class OwnerConsoleStageDescriber
 {
     internal const string OwnerQuestion = "question for you";
 
-    internal static string Describe(Goal goal, OwnerConsoleBoardSortKey key, int? queuePosition, DateTimeOffset now)
+    internal static string Describe(Goal goal, OwnerConsoleBoardSortKey key, int? queuePosition, DateTimeOffset now,
+        OwnerConsoleGateProgress? gate = null)
     {
+        if (key.Rank is OwnerConsoleAttention.GateRunning or OwnerConsoleAttention.WaitingForGate &&
+            gate?.ForMember(goal.Id.Value) is { } live)
+            return live.TotalCount > 0 ? $"in gate: {live.DoneCount}/{live.TotalCount}, {OwnerConsoleGateFormatter.Remaining(live.RemainingSeconds)} left" :
+                $"gate running {(int)live.Elapsed.TotalMinutes}m";
         switch (key.Rank)
         {
             case OwnerConsoleAttention.NeedsYou: return OwnerQuestion;
@@ -19,9 +24,12 @@ internal static class OwnerConsoleStageDescriber
                 return dependency.Success ? "held: depends on " + dependency.Groups[1].Value :
                     "held: " + OwnerActivityNarrator.WaitingOn(blocker);
             case OwnerConsoleAttention.GateRunning:
+                if (gate is not null) return "verifying (no live gate)";
                 var started = OwnerConsoleBoardSortKey.LatestPolicy(goal)?.OccurredAt;
                 return "gate running" + (started is null ? "" : $" {Math.Max(0, (int)(now - started.Value).TotalMinutes)}m");
             case OwnerConsoleAttention.WaitingForGate:
+                if (gate is { Live: true, Members.Count: > 0 })
+                    return $"queued for gate #{queuePosition}, behind {gate.Members[0].Id[..Math.Min(8, gate.Members[0].Id.Length)]}";
                 return "waiting for gate" + (queuePosition is null ? "" : $" ({Ordinal(queuePosition.Value)} in queue)");
             case OwnerConsoleAttention.WorkerRunning:
                 return OwnerConsoleBoardSortKey.RunningTask(goal)!.RequiredRole.ToString();
