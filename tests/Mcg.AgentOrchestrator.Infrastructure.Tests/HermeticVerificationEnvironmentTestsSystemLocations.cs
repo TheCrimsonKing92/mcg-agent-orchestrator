@@ -33,10 +33,73 @@ public sealed class HermeticVerificationEnvironmentTestsSystemLocations : GoalAc
 
         var root = CreateTempDirectory();
         var originalDrive = Environment.GetEnvironmentVariable("SystemDrive");
-        var expectedDrive = originalDrive ?? Path.GetPathRoot(Environment.SystemDirectory)!.TrimEnd('\\');
+        var expectedDrive = string.IsNullOrWhiteSpace(originalDrive) ? Path.GetPathRoot(Environment.SystemDirectory)!.TrimEnd('\\') : originalDrive;
         try
         {
             Environment.SetEnvironmentVariable("SystemDrive", expectedDrive);
+            var observed = await GoalAcceptanceVerifier.RunProcessForTestsAsync(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                    "[Console]::Write([Environment]::GetEnvironmentVariable('SystemDrive'))"],
+                root, TimeSpan.FromSeconds(20));
+            var expanded = await GoalAcceptanceVerifier.RunProcessForTestsAsync(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                    @"[Console]::Write([Environment]::ExpandEnvironmentVariables('%SystemDrive%\ProgramData'))"],
+                root, TimeSpan.FromSeconds(20));
+
+            Assert.Equal(0, observed.ExitCode);
+            Assert.Equal(0, expanded.ExitCode);
+            Assert.Equal(expectedDrive, observed.Output.Trim(), ignoreCase: true);
+            var path = expanded.Output.Trim();
+            Assert.Equal(Path.Combine(expectedDrive + @"\", "ProgramData"), path, ignoreCase: true);
+            Assert.True(Path.IsPathFullyQualified(path), path);
+            Assert.False(path.StartsWith(root, StringComparison.OrdinalIgnoreCase), path);
+            Assert.DoesNotContain('%', path);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("SystemDrive", originalDrive);
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+    [Xunit.Fact]
+    public void SystemDriveResolvesBlankOrMissingValuesAndPreservesSuppliedValues()
+    {
+        Assert.Equal("E:", HermeticSystemDrive.Resolve(null, @"E:\Windows\system32"));
+        Assert.Equal("E:", HermeticSystemDrive.Resolve("", @"E:\Windows\system32"));
+        Assert.Equal("E:", HermeticSystemDrive.Resolve("   ", @"E:\Windows\system32"));
+        Assert.Equal("D:", HermeticSystemDrive.Resolve("D:", @"E:\Windows\system32"));
+
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var expectedDrive = Path.GetPathRoot(Environment.SystemDirectory)!.TrimEnd('\\');
+        foreach (var supplied in new[] { "", null, "Q:" })
+        {
+            var environment = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+            if (supplied is not null)
+                environment["systemdrive"] = supplied;
+
+            GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(environment, Path.GetTempPath());
+
+            Assert.Equal(supplied == "Q:" ? "Q:" : expectedDrive, environment["SystemDrive"]);
+            var resolvedDrive = environment["SystemDrive"];
+            GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(environment, Path.GetTempPath());
+            Assert.Equal(resolvedDrive, environment["SystemDrive"]);
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task RealGateChildResolvesMissingSystemDriveOutsideItsWorkingDirectory()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var root = CreateTempDirectory();
+        var originalDrive = Environment.GetEnvironmentVariable("SystemDrive");
+        var expectedDrive = Path.GetPathRoot(Environment.SystemDirectory)!.TrimEnd('\\');
+        try
+        {
+            Environment.SetEnvironmentVariable("SystemDrive", null);
             var observed = await GoalAcceptanceVerifier.RunProcessForTestsAsync(
                 ["powershell", "-NoProfile", "-NonInteractive", "-Command",
                     "[Console]::Write([Environment]::GetEnvironmentVariable('SystemDrive'))"],

@@ -18,7 +18,7 @@ internal static class OwnerActivityNarrator
             "HumanInputReceived" or "HumanInputSuperseded" || Field(item, "resolution-verb") is not null,
         "state-log-divergence" => Positive(item, "lost") || Positive(item, "repeated"),
         "author" => Field(item, "kind") == "ask-owner",
-        "acceptance" or "acceptance-cohort" or "canary-gate" or "loop-relaunch" or "loop-handoff" or
+        "program-health" or "acceptance" or "acceptance-cohort" or "canary-gate" or "loop-relaunch" or "loop-handoff" or
             "loop-start" or "loop-stop" or "goal-escalation" or "goal-stalled" or "train-receipt-released" or
             "owner-question-resolved" or "owner-hold-cleared" or "admission" or "infrastructure-deferral" or "experiment-reading-due" => true,
         _ => false

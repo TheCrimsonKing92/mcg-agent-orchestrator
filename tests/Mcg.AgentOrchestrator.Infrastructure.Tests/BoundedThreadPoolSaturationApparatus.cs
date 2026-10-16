@@ -1,5 +1,7 @@
 internal static class BoundedThreadPoolSaturationApparatus
 {
+    internal static readonly TimeSpan PhaseWaitTimeout = TimeSpan.FromSeconds(30);
+
     internal static void RunWithBoundedSaturatedThreadPool(Action<BoundedSaturationEvidence> body)
     {
         ArgumentNullException.ThrowIfNull(body);
@@ -46,7 +48,7 @@ internal static class BoundedThreadPoolSaturationApparatus
                 QueueBlocker(entered, release, completed, signalsEntry: false);
             }
 
-            if (!entered.Wait(TimeSpan.FromSeconds(30)))
+            if (!entered.Wait(PhaseWaitTimeout))
             {
                 throw new TimeoutException(
                     $"failureKind=barrier-timeout barrierCount={barrierCount} " +
@@ -70,7 +72,7 @@ internal static class BoundedThreadPoolSaturationApparatus
         finally
         {
             release.Set();
-            if (completed.CurrentCount != 0 && !completed.Wait(TimeSpan.FromSeconds(30)))
+            if (completed.CurrentCount != 0 && !completed.Wait(PhaseWaitTimeout))
             {
                 throw new TimeoutException(
                     $"failureKind=cleanup-timeout remainingCallbacks={completed.CurrentCount} " +
@@ -89,76 +91,119 @@ internal static class BoundedThreadPoolSaturationApparatus
         }
     }
 
-    // Grows this process's worker pool to the legacy saturation scale before any bound is applied, so the
+    // Grows this process's worker pool to the legacy saturation scale before saturation is bounded, so the
     // warm-history arm reproduces prior pool growth inside the isolated child instead of depending on
     // whatever history the shared test runner happens to carry.
-    internal static WarmPoolHistoryEvidence EstablishWarmPoolHistory()
+    internal static WarmPoolHistoryEvidence EstablishWarmPoolHistory(
+        int? maxWorkerCap = null,
+        TimeSpan? growthTimeout = null)
     {
         if (Thread.CurrentThread.IsThreadPoolThread)
         {
             throw new InvalidOperationException("failureKind=warm-history-on-pool-thread");
         }
 
+        var warmWorkerCount = WarmWorkerCount();
         ThreadPool.GetMinThreads(out var originalMinWorkers, out var originalMinIo);
+        ThreadPool.GetMaxThreads(out var originalMaxWorkers, out var originalMaxIo);
         var threadCountBeforeWarm = ThreadPool.ThreadCount;
-
-        // Same scale as the shared saturation helper's blocker formula, so the grown history matches the
-        // magnitude that produced the original warm-pool failure rather than an arbitrary count.
-        var warmWorkerCount = Math.Max(originalMinWorkers, Environment.ProcessorCount) * 2 + 32;
         var minSet = false;
+        var maxSet = false;
         int warmThreadCountPeak;
         using var release = new ManualResetEventSlim(false);
         using var entered = new CountdownEvent(warmWorkerCount);
-        using var completed = new CountdownEvent(warmWorkerCount);
+        using var completed = new CountdownEvent(0);
 
         try
         {
-            // Raising the worker minimum makes thread creation immediate up to that minimum, so growth is
-            // established by the barrier below rather than by waiting on throttled hill-climbing injection.
-            minSet = ThreadPool.SetMinThreads(warmWorkerCount, originalMinIo);
+            // Set the minimum first so lowering the maximum to the optional cap cannot be refused.
+            minSet = ThreadPool.SetMinThreads(
+                maxWorkerCap is int cap ? Math.Min(warmWorkerCount, cap) : warmWorkerCount, originalMinIo);
             if (!minSet)
             {
                 throw new InvalidOperationException(
                     $"failureKind=warm-set-min-failed warmWorkerCount={warmWorkerCount}");
             }
 
+            if (maxWorkerCap is int workerCap)
+            {
+                maxSet = ThreadPool.SetMaxThreads(workerCap, originalMaxIo);
+                if (!maxSet)
+                {
+                    throw new InvalidOperationException(
+                        $"failureKind=warm-set-max-failed maxWorkerCap={workerCap}");
+                }
+            }
+
+            completed.Reset(warmWorkerCount);
             for (var index = 0; index < warmWorkerCount; index++)
             {
                 QueueBlocker(entered, release, completed, signalsEntry: true);
             }
 
-            if (!entered.Wait(TimeSpan.FromSeconds(30)))
+            var growthStarted = System.Diagnostics.Stopwatch.StartNew();
+            while ((warmThreadCountPeak = ThreadPool.ThreadCount) < warmWorkerCount)
             {
-                throw new TimeoutException(
-                    $"failureKind=warm-barrier-timeout warmWorkerCount={warmWorkerCount} " +
-                    $"threadCount={ThreadPool.ThreadCount} pendingWorkItems={ThreadPool.PendingWorkItemCount}");
-            }
+                if (growthStarted.Elapsed >= (growthTimeout ?? PhaseWaitTimeout))
+                {
+                    throw new TimeoutException(
+                        $"failureKind=warm-growth-not-observed warmWorkerCount={warmWorkerCount} " +
+                        $"threadCount={warmThreadCountPeak} enteredBlockers={warmWorkerCount - entered.CurrentCount} " +
+                        $"pendingWorkItems={ThreadPool.PendingWorkItemCount}");
+                }
 
-            warmThreadCountPeak = ThreadPool.ThreadCount;
-            if (warmThreadCountPeak < warmWorkerCount)
-            {
-                throw new InvalidOperationException(
-                    $"failureKind=warm-growth-not-observed warmThreadCountPeak={warmThreadCountPeak} " +
-                    $"warmWorkerCount={warmWorkerCount}");
+                Thread.Sleep(50);
             }
         }
         finally
         {
             release.Set();
-            if (completed.CurrentCount != 0 && !completed.Wait(TimeSpan.FromSeconds(30)))
+            try
             {
-                throw new TimeoutException(
-                    $"failureKind=warm-cleanup-timeout remainingCallbacks={completed.CurrentCount} " +
-                    $"pendingWorkItems={ThreadPool.PendingWorkItemCount}");
+                if (completed.CurrentCount != 0 && !completed.Wait(PhaseWaitTimeout))
+                {
+                    throw new TimeoutException(
+                        $"failureKind=warm-cleanup-timeout remainingCallbacks={completed.CurrentCount} " +
+                        $"pendingWorkItems={ThreadPool.PendingWorkItemCount}");
+                }
             }
-
-            if (minSet && !ThreadPool.SetMinThreads(originalMinWorkers, originalMinIo))
+            finally
             {
-                throw new InvalidOperationException("failureKind=warm-restore-min-failed");
+                ThreadPool.GetMinThreads(out var currentMinWorkers, out _);
+                if (originalMaxWorkers >= currentMinWorkers)
+                {
+                    RestoreMaximum();
+                    RestoreMinimum();
+                }
+                else
+                {
+                    RestoreMinimum();
+                    RestoreMaximum();
+                }
             }
         }
 
         return new WarmPoolHistoryEvidence(warmWorkerCount, threadCountBeforeWarm, warmThreadCountPeak);
+
+        void RestoreMinimum()
+        {
+            if (minSet && !ThreadPool.SetMinThreads(originalMinWorkers, originalMinIo))
+                throw new InvalidOperationException("failureKind=warm-restore-min-failed");
+        }
+
+        void RestoreMaximum()
+        {
+            if (maxSet && !ThreadPool.SetMaxThreads(originalMaxWorkers, originalMaxIo))
+                throw new InvalidOperationException("failureKind=warm-restore-max-failed");
+        }
+    }
+
+    internal static int WarmWorkerCount()
+    {
+        ThreadPool.GetMinThreads(out var originalMinWorkers, out _);
+        // Same scale as the shared saturation helper's blocker formula, so the grown history matches the
+        // magnitude that produced the original warm-pool failure rather than an arbitrary count.
+        return Math.Max(originalMinWorkers, Environment.ProcessorCount) * 2 + 32;
     }
 
     private static void QueueBlocker(

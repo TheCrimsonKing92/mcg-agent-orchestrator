@@ -168,7 +168,8 @@ internal static partial class ConductorSelfRelaunch
 
     internal static ConductorPreparedSuccessor PrepareSuccessor(
         ConductorSuccessorStagingOptions options,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Action<string, string, CancellationToken>? beforeSelfCheck = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var buildTimeout = options.BuildTimeout <= TimeSpan.Zero
@@ -256,6 +257,7 @@ internal static partial class ConductorSelfRelaunch
             runDirectory,
             Path.GetFileName(appDllPath),
             gitHead);
+        beforeSelfCheck?.Invoke(successorDll, gitHead, cancellationToken);
         var selfCheck = RunProcess(
             options.DotnetPath,
             [

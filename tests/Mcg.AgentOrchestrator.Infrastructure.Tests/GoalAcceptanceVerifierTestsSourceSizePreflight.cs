@@ -34,7 +34,7 @@ public sealed class GoalAcceptanceVerifierTestsSourceSizePreflight : GoalAccepta
             Assert.Contains("3 lines", result.OutputTail, StringComparison.Ordinal);
             Assert.Contains("recorded ceiling of 2", result.OutputTail, StringComparison.Ordinal);
             Assert.Contains(
-                "Extract behavior to a collaborator and lower the ceiling",
+                "Extract behavior to a collaborator; the conductor lowers the row",
                 result.OutputTail,
                 StringComparison.Ordinal);
             Assert.Contains(

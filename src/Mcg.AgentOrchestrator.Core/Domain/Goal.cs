@@ -514,20 +514,8 @@ public sealed class Goal
             return null;
 
         var obligation = _criterionEvidenceObligations[index];
-        if (obligation.Owner != CriterionEvidenceOwner.Acceptance ||
-            obligation.State != CriterionEvidenceState.Pending ||
-            !string.IsNullOrWhiteSpace(obligation.FindingStableId))
-        {
-            // An explicit finding mapping binds authority to its candidate.
-            // Reviewer observations cannot create or replace that binding.
-            return obligation;
-        }
-
-        var bound = obligation with
-        {
-            ExpectedCandidateSha = normalizedCandidate,
-            RecordedAt = recordedAt
-        };
+        // The binding follows the commit a Reviewer reviewed; evidence moves only through the equivalence check.
+        var bound = ReviewedCandidateEvidenceBinding.Apply(obligation, normalizedCandidate, recordedAt);
         _criterionEvidenceObligations[index] = bound;
         return bound;
     }
