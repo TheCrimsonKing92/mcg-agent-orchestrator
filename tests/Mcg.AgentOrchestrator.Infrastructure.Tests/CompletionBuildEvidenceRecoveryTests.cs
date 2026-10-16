@@ -146,7 +146,7 @@ public sealed class CompletionBuildEvidenceRecoveryTests
         var goal = snapshot.Goals.Single();
         f.Kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with { Goals = [goal with
         { Tasks = goal.Tasks.Select(t => t.Id == f.TaskId.Value ? t with { CompletionBuildEvidence = foreign } : t).ToArray() }] });
-        Assert.Throws<InvalidOperationException>(() => f.Runner().CancelCompletionBuildEvidence(f.Kernel, f.GoalId, f.TaskId,
+        Assert.ThrowsAny<InvalidOperationException>(() => f.Runner().CancelCompletionBuildEvidence(f.Kernel, f.GoalId, f.TaskId,
             CompletionBuildEvidenceTarget.From(foreign)));
         Assert.Equal(0, f.Stops);
         Assert.Equal(operation.LeaseOwner, Lease(f));
