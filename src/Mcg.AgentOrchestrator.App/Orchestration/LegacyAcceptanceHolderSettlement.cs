@@ -17,6 +17,32 @@ internal static class LegacyAcceptanceHolderSettlement
     internal const string IncompleteIdentityPidAbsentEvidence =
         "legacy-terminal-reconciled-incomplete-identity-pid-absent";
 
+    internal const string PredatesHostBootEvidence = "legacy-holder-predates-host-boot";
+
+    // GetTickCount64 counts from the current boot (sleep included), so no process predating it survives.
+    internal static DateTimeOffset? CurrentHostBootTime() =>
+        DateTimeOffset.UtcNow - TimeSpan.FromMilliseconds(Environment.TickCount64);
+
+    // A process tree cannot survive a host restart. Whatever owns the recorded PID now, the holder
+    // is settled when the attempt's recorded activity and every holder-written artifact predate the
+    // boot. The conductor's own terminal metadata writes are deliberately not consulted, so the
+    // answer stays stable after admission terminalizes the attempt.
+    internal static bool PredatesHostBoot(ConductorParallelAcceptanceAttempt attempt, DateTimeOffset boot)
+    {
+        if (attempt.StartedAt >= boot || attempt.LastHeartbeatAt >= boot) return false;
+        foreach (var path in new[] { attempt.HeartbeatPath, attempt.StdoutPath, attempt.StderrPath,
+            attempt.ExitCodePath, attempt.ResultPath })
+        {
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(path) && File.Exists(path) &&
+                    new DateTimeOffset(File.GetLastWriteTimeUtc(path), TimeSpan.Zero) >= boot) return false;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return false; }
+        }
+        return true;
+    }
+
     // Upgrade admission follows the recorded full identity. Incomplete or uninspectable
     // identities still require the existing operator proof; a matching live PID never settles.
     internal static bool IsAbsent(int processId, DateTimeOffset? startedAt, string? image,

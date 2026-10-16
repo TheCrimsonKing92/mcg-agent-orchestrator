@@ -7,6 +7,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
     private readonly bool _usesDurableHolderLease;
     private readonly SpawnProcessIdentity _generationIdentity;
     private readonly Func<int, bool> _isHolderProcessAbsent;
+    private readonly Func<DateTimeOffset?> _hostBootTime;
     private readonly AcceptanceHolderLease? _holderLease;
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _holderHolds = new();
     private AcceptanceHolderLease HolderLease => _holderLease ?? new(utcNow: _utcNow,
@@ -96,6 +97,9 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
 
     private string? LegacyHolderSettlementReason(ConductorParallelAcceptanceAttempt attempt)
     {
+        if (_hostBootTime() is { } boot && LegacyAcceptanceHolderSettlement.PredatesHostBoot(attempt, boot))
+            return LegacyAcceptanceHolderSettlement.PredatesHostBootEvidence;
+
         if (LegacyAcceptanceHolderSettlement.HasPidAbsentTerminalReceipt(attempt))
             return LegacyAcceptanceHolderSettlement.IncompleteIdentityPidAbsentEvidence;
 

@@ -430,7 +430,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         Func<ConductorParallelAcceptanceAttempt, SpawnTrackedProcessStatus>? classifyHolder = null,
         AcceptanceHolderLease? holderLease = null,
         SpawnProcessIdentity? generationIdentity = null,
-        Func<int, bool>? isHolderProcessAbsent = null)
+        Func<int, bool>? isHolderProcessAbsent = null,
+        Func<DateTimeOffset?>? hostBootTime = null)
     {
         if (runInline && attemptCompletionGateForTests is not null)
         {
@@ -448,6 +449,7 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         _utcNow = utcNow ?? _timeProvider.GetUtcNow;
         _isProcessAlive = isProcessAlive ?? IsProcessAlive;
         _isHolderProcessAbsent = isHolderProcessAbsent ?? AcceptanceHolderIdentity.IsProcessAbsent;
+        _hostBootTime = hostBootTime ?? (() => null); // Production factories pass the real boot time.
         // An injected liveness probe models a process in existing in-process fixtures. Production
         // always uses the full recorded identity; new identity fixtures inject classification directly.
         _classifyHolder = classifyHolder ?? (isProcessAlive is not null

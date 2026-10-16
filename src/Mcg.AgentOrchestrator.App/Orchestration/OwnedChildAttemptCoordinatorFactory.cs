@@ -16,7 +16,8 @@ internal static class OwnedChildAttemptCoordinatorFactory
             conductEventLogWriter: new ConductEventLogWriter(workspace.ConductEventsLogPath),
             buildStorageRoot: buildStorageRoot,
             stateDirectory: workspace.OrchestratorDirectory,
-            projectName: OwnedChildWorkspaceResolver.RecordedProjectName(workspace));
+            projectName: OwnedChildWorkspaceResolver.RecordedProjectName(workspace),
+            hostBootTime: LegacyAcceptanceHolderSettlement.CurrentHostBootTime);
 
     internal static ConductorParallelAcceptanceAttemptCoordinator CreateFocusedEvidence(
         OrchestratorWorkspace workspace, DotnetBuildStorageRoot? buildStorageRoot) =>
@@ -26,5 +27,6 @@ internal static class OwnedChildAttemptCoordinatorFactory
             conductEventLogWriter: new ConductEventLogWriter(workspace.ConductEventsLogPath),
             buildStorageRoot: buildStorageRoot,
             stateDirectory: workspace.OrchestratorDirectory,
-            projectName: OwnedChildWorkspaceResolver.RecordedProjectName(workspace));
+            projectName: OwnedChildWorkspaceResolver.RecordedProjectName(workspace),
+            hostBootTime: LegacyAcceptanceHolderSettlement.CurrentHostBootTime);
 }
