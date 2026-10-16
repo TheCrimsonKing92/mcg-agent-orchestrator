@@ -145,14 +145,16 @@ internal sealed class AcceptanceHolderLease
         using var gate = Lock(binding);
         var record = Read(binding);
         if (record.Phase is "Released" or "Cancelled" || record.Holder is null) return false;
-        if (record.Generation == generation && record.Phase != "Detached") return true;
         // A recycled conductor PID is a foreign generation. An unreadable generation remains a hold.
         if (record.Generation != generation &&
             _classify(record.Generation) != SpawnTrackedProcessStatus.DeadOrRecycled) return false;
         var started = _utcNow();
         var status = _classify(record.Holder);
         var job = ObserveJob(record, record.Holder, status, false);
+        // The owning generation gets no shortcut: a holder that exited is not adoptable by anyone, or
+        // its finished attempt reads as running every tick until a successor generation reconciles it.
         if (status != SpawnTrackedProcessStatus.LiveMatch || !job.HolderMatches || job.Settled) return false;
+        if (record.Generation == generation && record.Phase != "Detached") return true;
         Save(Transition(record, "adopt", generation, "Adopted", job.Detail, started));
         return true;
     }
