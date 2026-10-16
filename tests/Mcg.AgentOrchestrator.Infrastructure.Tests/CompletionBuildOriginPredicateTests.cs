@@ -57,7 +57,8 @@ public sealed class CompletionBuildOriginPredicateTests
         var reconciled = f.Coordinator().ReconcileAttached(f.Kernel, f.GoalId, f.TaskId,
             CompletionBuildEvidenceTarget.From(operation));
 
-        Assert.Equal(operation, reconciled);
+        // Reconciliation rereads SQLite, so compare collection contents across rehydrated records.
+        Assert.Equivalent(operation, reconciled, strict: true);
         Assert.Equal(0, f.Stops);
     }
 
