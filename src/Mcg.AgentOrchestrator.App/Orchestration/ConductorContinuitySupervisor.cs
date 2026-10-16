@@ -95,7 +95,8 @@ internal sealed partial class ConductorContinuitySupervisor(
     Action<ProtectedProcessIdentity>? bindProtectedIdentity = null,
     Func<IReadOnlyList<StoreSetupPlanEntry>>? inspectStores = null,
     ConductorHandoffSchemaUpgrade? schemaUpgrade = null,
-    Func<Action<string, string, CancellationToken>, CancellationToken, ConductorPreparedSuccessor>? stageSuccessorWithHook = null)
+    Func<Action<string, string, CancellationToken>, CancellationToken, ConductorPreparedSuccessor>? stageSuccessorWithHook = null,
+    string? stopFilePath = null)
 {
     public const string ChildFlag = "--continuity-child";
     public const string ExitArtifactFlag = "--continuity-exit-artifact";
@@ -110,7 +111,8 @@ internal sealed partial class ConductorContinuitySupervisor(
         Environment.GetEnvironmentVariable(ActivationHealthyTicksEnvironmentVariable)));
     private readonly Func<TimeSpan, CancellationToken, Task> _activationDelay = activationDelay ??
         ((duration, token) => Task.Delay(duration, timeProvider ?? TimeProvider.System, token));
-    private readonly TimeSpan _activationStallTimeout = activationStallTimeout ?? readinessTimeout ?? TimeSpan.FromMinutes(2);
+    private readonly TimeSpan _activationStallTimeout = activationStallTimeout ?? readinessTimeout ??
+        ResolveActivationStallTimeout(Environment.GetEnvironmentVariable(ActivationStallTimeoutEnvironmentVariable));
     private readonly Action<string>? _raiseActivationAttention = raiseActivationAttention;
     private readonly TimeSpan _tickStallBudget = tickStallBudget ?? ResolveTickStallBudget(
         Environment.GetEnvironmentVariable(TickStallBudgetEnvironmentVariable));
@@ -770,6 +772,14 @@ internal sealed partial class ConductorContinuitySupervisor(
                     cancellationToken).ConfigureAwait(false))
                     return 0;
                 continue;
+            }
+
+            if (ConductorSupervisorStopDecision.Basis(stopFilePath, artifact) is { } stopBasis)
+            {
+                var honored = $"SUPERVISOR_STOP_HONORED basis={stopBasis} exit={result.ExitCode} pid={result.ProcessId} attempt={attempt}";
+                TryAppendConductEvent(honored);
+                Record("stopped", "completed", attempt, honored, result.ProcessId, stdoutPath, stderrPath);
+                return 0;
             }
 
             var now = _timeProvider.GetUtcNow();

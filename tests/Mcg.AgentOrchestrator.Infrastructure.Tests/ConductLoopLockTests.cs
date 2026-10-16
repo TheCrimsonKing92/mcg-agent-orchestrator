@@ -187,9 +187,10 @@ public sealed class ConductLoopLockTests
                     probe,
                     () => writtenAt.AddMinutes(5)));
 
-            Assert.Equal(
-                "Refused: conduct-loop.lock held by pid 31337, running, written 5m ago — delete to proceed",
-                exception.Message);
+            Assert.Contains("pid 31337", exception.Message);
+            Assert.Contains("5m ago", exception.Message);
+            Assert.Contains("conductor stop", exception.Message);
+            Assert.DoesNotContain("to proceed", exception.Message);
             Assert.True(File.Exists(lockPath));
             Assert.Equal(1, probe.IdentityMatchCount);
         }

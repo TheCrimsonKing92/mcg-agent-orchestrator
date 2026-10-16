@@ -145,14 +145,16 @@ internal sealed class AcceptanceHolderLease
         using var gate = Lock(binding);
         var record = Read(binding);
         if (record.Phase is "Released" or "Cancelled" || record.Holder is null) return false;
-        if (record.Generation == generation && record.Phase != "Detached") return true;
         // A recycled conductor PID is a foreign generation. An unreadable generation remains a hold.
         if (record.Generation != generation &&
             _classify(record.Generation) != SpawnTrackedProcessStatus.DeadOrRecycled) return false;
         var started = _utcNow();
         var status = _classify(record.Holder);
         var job = ObserveJob(record, record.Holder, status, false);
+        // The owning generation gets no shortcut: a holder that exited is not adoptable by anyone, or
+        // its finished attempt reads as running every tick until a successor generation reconciles it.
         if (status != SpawnTrackedProcessStatus.LiveMatch || !job.HolderMatches || job.Settled) return false;
+        if (record.Generation == generation && record.Phase != "Detached") return true;
         Save(Transition(record, "adopt", generation, "Adopted", job.Detail, started));
         return true;
     }
@@ -269,9 +271,22 @@ internal sealed class AcceptanceHolderLease
     }
 
     private AcceptanceJobObservation ObserveJob(AcceptanceHolderLeaseRecord record,
-        SpawnProcessIdentity holder, SpawnTrackedProcessStatus status, bool cancel) =>
-        _job?.Invoke(record.JobName, holder, status, cancel) ?? DurableAcceptanceJob.Observe(
+        SpawnProcessIdentity holder, SpawnTrackedProcessStatus status, bool cancel)
+    {
+        var observation = _job?.Invoke(record.JobName, holder, status, cancel) ?? DurableAcceptanceJob.Observe(
             record.JobName, holder, status, cancel, record.Binding.SettlementPath);
+        // A missing job name alone never proves settlement: the job may never have existed. But this lease
+        // recorded job-custody-ready, so the named kill-on-close job did exist with the holder inside it and
+        // breakaway disabled. A job object disappears only after its last handle closes, and kill-on-close then
+        // terminates every member. With the holder also dead, the tree has exited even though the custodian
+        // died before it could publish a receipt (2026-10-16: an activation revert killed the custodian's tree,
+        // and the dead attempt held width-1 admission for 50 minutes).
+        return observation is { Settled: false, Detail: "job-open-error:2" } &&
+            status == SpawnTrackedProcessStatus.DeadOrRecycled && record.Holder == holder &&
+            record.Receipts.Any(receipt => receipt.Transition == "claim" && receipt.Reason == "job-custody-ready")
+            ? new(false, true, "job-gone-after-custody")
+            : observation;
+    }
 
     private static bool ValidIdentity(SpawnProcessIdentity? identity) => identity is not null &&
         identity.ProcessId > 0 && identity.StartedAt != DateTimeOffset.MinValue &&
