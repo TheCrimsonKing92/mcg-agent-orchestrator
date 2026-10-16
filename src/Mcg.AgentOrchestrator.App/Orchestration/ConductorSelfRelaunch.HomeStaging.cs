@@ -24,8 +24,14 @@ internal static partial class ConductorSelfRelaunch
     }
 
     internal static Func<CancellationToken, ConductorPreparedSuccessor>? CreateSuccessorStagerForHome(
-        OrchestratorHome home, OrchestratorWorkspace workspace, Action<string> recordSkip)
+        OrchestratorHome home, OrchestratorWorkspace workspace, Action<string> recordSkip) =>
+        CreateSuccessorStagerForHome(home, workspace, recordSkip, out _);
+
+    internal static Func<CancellationToken, ConductorPreparedSuccessor>? CreateSuccessorStagerForHome(
+        OrchestratorHome home, OrchestratorWorkspace workspace, Action<string> recordSkip,
+        out Func<Action<string, string, CancellationToken>, CancellationToken, ConductorPreparedSuccessor>? stageSuccessorWithHook)
     {
+        stageSuccessorWithHook = null;
         var staging = home.CreateSuccessorStagingOptions(workspace);
         if (staging is null)
         {
@@ -33,6 +39,7 @@ internal static partial class ConductorSelfRelaunch
             return null;
         }
 
+        stageSuccessorWithHook = (hook, token) => PrepareSuccessor(staging, token, hook);
         return cancellationToken => PrepareSuccessor(staging, cancellationToken);
     }
 
@@ -40,16 +47,4 @@ internal static partial class ConductorSelfRelaunch
         OrchestratorHome home, OrchestratorWorkspace workspace, Action<string> recordSkip) =>
         recordSkip($"LOOP_HANDOFF_SKIPPED reason=target-not-home target={workspace.ExecutionDirectory} home={home.SourceRootDirectory ?? "none"}");
 
-    internal static Func<Action<string, string, CancellationToken>, CancellationToken, ConductorPreparedSuccessor>?
-        CreateSuccessorStagerForHomeWithHook(
-            OrchestratorHome home, OrchestratorWorkspace workspace, Action<string> recordSkip)
-    {
-        var staging = home.CreateSuccessorStagingOptions(workspace);
-        if (staging is null)
-        {
-            RecordNotHome(home, workspace, recordSkip);
-            return null;
-        }
-        return (hook, token) => PrepareSuccessor(staging, token, hook);
-    }
 }
