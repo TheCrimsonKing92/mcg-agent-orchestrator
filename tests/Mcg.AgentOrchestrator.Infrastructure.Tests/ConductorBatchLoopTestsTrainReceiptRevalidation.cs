@@ -184,8 +184,9 @@ public sealed class ConductorBatchLoopTestsTrainReceiptRevalidation : Acceptance
     {
         var first = ReadyGoal(fixture.Kernel, fixture.Repo, "Occupant one",
             "tests/Mcg.AgentOrchestrator.Dashboard.Tests/Occupant.cs", "occupant one");
+        // Both occupants need authoritative resource keys to project as Ready.
         var second = ReadyGoal(fixture.Kernel, fixture.Repo, "Occupant two",
-            "src/Mcg.AgentOrchestrator.App/Orchestration/Occupant.cs", "occupant two");
+            "tests/Mcg.AgentOrchestrator.Execution.Tests/Occupant.cs", "occupant two");
         new BackgroundGateStartHarness().Capture(fixture.Driver);
         var occupant = fixture.Driver.RunAcceptanceCohort(ProjectSelection(fixture.Driver, first, second),
             [first, second], ConductorAutonomyPolicy.Permissive, runGateInBackground: true);
