@@ -145,7 +145,7 @@ public sealed class ConductorBatchLoopTestsPersistenceFailure : ConductorBatchLo
         Assert.Equal(GoalStatus.Completed, reloaded.GetGoal(goal.Id).Status);
     }
 
-    [Xunit.Fact(Timeout = 60_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public async Task SweepTerminalization_PersistsThenCleansAcrossThreeReloadedTicks()
     {
@@ -275,7 +275,7 @@ public sealed class ConductorBatchLoopTestsPersistenceFailure : ConductorBatchLo
             line.Contains("\"eventType\":\"GoalLanded\"", StringComparison.Ordinal)));
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public async Task SweepTerminalization_NonDurableCheckpointEmitsOneHoldAndDefersIntent()
     {
@@ -1003,7 +1003,7 @@ public sealed class ConductorBatchLoopTestsPersistenceFailure : ConductorBatchLo
         Assert.Equal(1, attempts);
     }
 
-    [Xunit.Theory(Timeout = 30_000)]
+    [Xunit.Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     [Xunit.InlineData(5)]
     [Xunit.InlineData(6)]
@@ -1101,7 +1101,7 @@ public sealed class ConductorBatchLoopTestsPersistenceFailure : ConductorBatchLo
         Assert.Contains($"sqlite_extended_code={sqliteErrorCode}", recovered, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public void TransientSqliteCheckpoint_ControlledWriterKeepsLeaseAcrossTicks()
     {
@@ -1229,7 +1229,7 @@ public sealed class ConductorBatchLoopTestsPersistenceFailure : ConductorBatchLo
         Assert.Same(exception, actual);
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public void TransientSqliteCheckpoint_TerminalRecoveryEmitsBeforeExit()
     {
@@ -1280,7 +1280,7 @@ public sealed class ConductorBatchLoopTestsPersistenceFailure : ConductorBatchLo
         Assert.Contains("TICK_CHECKPOINT_RECOVERED", output, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public async Task TransientSqliteCheckpoint_HeldGoalDefersOperatorIntent()
     {
@@ -1338,7 +1338,7 @@ public sealed class ConductorBatchLoopTestsPersistenceFailure : ConductorBatchLo
         Assert.Equal(OperatorIntentStatus.Pending, stored!.Status);
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public void TransientSqliteCheckpoint_LoadHoldRechecksThroughLoop()
     {

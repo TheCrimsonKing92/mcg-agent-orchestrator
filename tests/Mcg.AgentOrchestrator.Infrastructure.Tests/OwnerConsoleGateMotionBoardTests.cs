@@ -45,6 +45,27 @@ public sealed class OwnerConsoleGateMotionBoardTests
             withDelegate.Board.Select(row => (row.GoalId, row.Stage, row.StageWithoutQuestion)));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task InjectedGateModelControlsVerifyingStageAndMotion(bool live)
+    {
+        var clock = new OwnerConsoleTestClock();
+        var harness = Harness(clock);
+        var calls = new List<string>();
+        var gate = live ? new OwnerConsoleGateProgress(true, "solo", [new(GateGoal, "Gate")], clock.Now.AddMinutes(-6),
+            TimeSpan.FromMinutes(6), [], .5, 360, 2, 4) : OwnerConsoleGateProgress.Idle();
+        var model = await new OwnerConsoleViewModelBuilder(harness.State, harness.Questions, harness.Liveness,
+            new Epics(), clock, gateMotion: id => { calls.Add(id); return "output moving"; }, gateProgress: _ => gate).BuildBoardAsync();
+
+        var stage = model.Board.Single(row => row.GoalId == GateGoal).Stage;
+        Assert.Equal(live ? "in gate: 2/4, ~6m left, output moving" : "verifying (no live gate)", stage);
+        Assert.DoesNotContain("gate running", stage);
+        Assert.Equal(live ? new[] { GateGoal } : [], calls);
+        Assert.Equal(live ? "queued for gate #1, behind 57cf8f07" : "waiting for gate (1st in queue)",
+            model.Board.Single(row => row.GoalId == WaitingGoal).Stage);
+    }
+
     private static OwnerConsoleHarness Harness(OwnerConsoleTestClock clock)
     {
         var harness = new OwnerConsoleHarness();

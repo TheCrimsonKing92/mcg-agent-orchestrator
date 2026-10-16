@@ -260,6 +260,11 @@ if (CliRemoteLaneSelfTestCommand.IsCommand(startupArgs))
     return ExitCompletedStartupCommand(await CliRemoteLaneSelfTestCommand.RunAsync(startupArgs, workspace));
 }
 
+if (CliExecutorScreenCommand.IsCommand(startupArgs))
+{
+    return ExitCompletedStartupCommand(await CliExecutorScreenCommand.RunAsync(startupArgs, workspace));
+}
+
 if (Mcg.AgentOrchestrator.App.OwnerConsole.OwnerConsoleVerb.IsCommand(startupArgs))
     return ExitCompletedStartupCommand(await Mcg.AgentOrchestrator.App.OwnerConsole.OwnerConsoleVerb.RunAsync(startupArgs, workspace));
 if (CliOperatorIntentRoute.IsServed(startupArgs))
@@ -289,6 +294,8 @@ if (ConductorContinuitySupervisor.ShouldSupervise(
             !string.Equals(maxDurationRestage, "0", StringComparison.OrdinalIgnoreCase) &&
             !string.Equals(maxDurationRestage, "false", StringComparison.OrdinalIgnoreCase);
         var conductEventLogWriter = new ConductEventLogWriter(workspace.ConductEventsLogPath);
+        Func<Action<string, string, CancellationToken>, CancellationToken, ConductorPreparedSuccessor>?
+            stageSuccessorWithHook = null;
         var stageSuccessor = restageEnabled
             ? ConductorSelfRelaunch.CreateSuccessorStagerForHome(
                 OrchestratorHome.ResolveForProcess(), workspace,
@@ -296,7 +303,7 @@ if (ConductorContinuitySupervisor.ShouldSupervise(
                 {
                     Console.WriteLine(line);
                     conductEventLogWriter.Append("loop-handoff", null, line);
-                })
+                }, out stageSuccessorWithHook)
             : null;
 
         var supervisorSeam = new SystemConductorSupervisorHandoffSeam(
@@ -306,6 +313,9 @@ if (ConductorContinuitySupervisor.ShouldSupervise(
             new SqliteRunEventStore(workspace.RunEventStorePath),
             inspectStores: () => StoreSetupRunner.Plan(workspace.OrchestratorDirectory, includeState: true),
             stageSuccessor: stageSuccessor,
+            stageSuccessorWithHook: stageSuccessorWithHook,
+            schemaUpgrade: new ConductorHandoffSchemaUpgrade(
+                workspace.OrchestratorDirectory, workspace.ExecutionDirectory),
             appendConductEvent: (eventKind, goalId, detail) =>
                 conductEventLogWriter.Append(eventKind, goalId, detail),
             supervisorHandoff: new ConductorSupervisorHandoffOptions(

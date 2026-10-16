@@ -35,10 +35,12 @@ internal sealed class OperatorIntentAdjudication(
         var caseE = (payload.EvidenceReferences ?? []).Contains("steward-case=E", StringComparer.Ordinal);
         var stewardClose = intent.AuthenticationAssurance == StewardAssurance && shape == "close" &&
             AdmitsStewardClose(goal, task, payload);
+        var stewardRegate = intent.AuthenticationAssurance == StewardAssurance && shape == "reopen-regate" &&
+            ConductorStewardCaseG.Admits(goal, task, payload, now);
         if (intent.AuthenticationAssurance == StewardAssurance &&
             (intent.ActorKind != OperatorActorKind.Agent || intent.Actor != "steward" ||
              intent.Channel != "conductor-steward" ||
-             !(stewardClose || shape == "route" &&
+             !(stewardClose || stewardRegate || shape == "route" &&
                retryCause is (RetryCause.NewTestFinding or RetryCause.ContractClarification) &&
                (!caseE || ConductorStewardCaseEAdmission.AdmitsReviewerRetry(goal, task, payload, ResolveHead(goal.Id))))))
             reason = "steward-capability-boundary";
@@ -49,8 +51,8 @@ internal sealed class OperatorIntentAdjudication(
         if (reason is null && AdjudicationPrecondition.IsStale(payload, goal, task))
             reason = "stale-goal-state-version";
 
-        // This narrow recovery completes a task; it cannot attest or land the candidate.
-        var actionKind = stewardClose ? DecisionActionKind.Recover :
+        // These narrow recoveries complete a task; they cannot attest or land the candidate.
+        var actionKind = stewardClose || stewardRegate ? DecisionActionKind.Recover :
             shape == "route" ? DecisionActionKind.Retry : DecisionActionKind.VerifyManual;
         var requiredTier = DecisionAuthorization.RequiredTierFor(actionKind);
         var assurance = ResolveAuthorizationTier(intent.AuthenticationAssurance);

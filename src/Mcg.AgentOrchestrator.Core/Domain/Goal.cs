@@ -20,6 +20,7 @@ public sealed class Goal
     private readonly List<EffectiveAcceptanceCriteriaCorrection> _effectiveAcceptanceCriteriaCorrections = [];
     private readonly List<RefinementOwnershipDiagnostic> _refinementOwnershipDiagnostics = [];
     private readonly List<CriterionEvidenceObligation> _criterionEvidenceObligations = [];
+    private readonly List<GateTestObligation> _gateTestObligations = [];
     private readonly HashSet<GoalId> _dependsOn = [];
 
     public Goal(GoalId id, string objective, IReadOnlyList<TaskSpec> tasks)
@@ -72,6 +73,13 @@ public sealed class Goal
     public IReadOnlyList<GoalBriefVersion> BriefVersions => _briefVersions;
 
     public GoalStatus Status { get; private set; } = GoalStatus.Draft;
+    public GoalPriority Priority { get; private set; } = GoalPriority.Normal;
+
+    internal void SetPriority(GoalPriority priority)
+    {
+        _ = GoalPriorities.Format(priority);
+        Priority = priority;
+    }
 
     public RefinedSpec? RefinedSpec => AuthoritativeRefinedSpecVersion?.Spec;
 
@@ -243,6 +251,27 @@ public sealed class Goal
         var currentIndex = _refinedSpecVersions.FindIndex(version => version.Version == current.Version);
         _refinedSpecVersions[currentIndex] = current with { Spec = spec };
         EnsureCriterionEvidenceObligations(spec, current.Version, recordedAt);
+    }
+
+    public IReadOnlyList<GateTestObligation> GateTestObligations => _gateTestObligations.AsReadOnly();
+
+    internal void RecordGateTestObligation(GateTestObligation obligation)
+    {
+        var index = _gateTestObligations.FindIndex(existing =>
+            existing.Id == obligation.Id && existing.BriefVersion == obligation.BriefVersion);
+        if (index < 0) _gateTestObligations.Add(obligation);
+        else _gateTestObligations[index] = obligation;
+    }
+
+    internal void RestoreGateTestObligations(IReadOnlyList<GateTestObligation>? obligations)
+    {
+        _gateTestObligations.Clear();
+        foreach (var obligation in obligations ?? [])
+        {
+            if (_gateTestObligations.Any(existing =>
+                existing.Id == obligation.Id && existing.BriefVersion == obligation.BriefVersion)) continue;
+            _gateTestObligations.Add(obligation with { Selectors = obligation.Selectors?.ToArray() ?? [] });
+        }
     }
 
     internal void RestoreCriterionEvidenceObligations(IReadOnlyList<CriterionEvidenceObligation>? obligations)
@@ -507,20 +536,8 @@ public sealed class Goal
             return null;
 
         var obligation = _criterionEvidenceObligations[index];
-        if (obligation.Owner != CriterionEvidenceOwner.Acceptance ||
-            obligation.State != CriterionEvidenceState.Pending ||
-            !string.IsNullOrWhiteSpace(obligation.FindingStableId))
-        {
-            // An explicit finding mapping binds authority to its candidate.
-            // Reviewer observations cannot create or replace that binding.
-            return obligation;
-        }
-
-        var bound = obligation with
-        {
-            ExpectedCandidateSha = normalizedCandidate,
-            RecordedAt = recordedAt
-        };
+        // The binding follows the commit a Reviewer reviewed; evidence moves only through the equivalence check.
+        var bound = ReviewedCandidateEvidenceBinding.Apply(obligation, normalizedCandidate, recordedAt);
         _criterionEvidenceObligations[index] = bound;
         return bound;
     }
@@ -1081,6 +1098,7 @@ public sealed class Goal
             OperatorAcceptanceRegateCount: OperatorAcceptanceRegateCount,
             ConsecutiveAcceptanceIdentityStaleCount: ConsecutiveAcceptanceIdentityStaleCount,
             LastAcceptanceIdentityStaleAttemptId: LastAcceptanceIdentityStaleAttemptId,
+            Priority: Priority == GoalPriority.Normal ? null : GoalPriorities.Format(Priority),
             CurrentHold: CurrentHold is null
                 ? null
                 : new GoalHoldSnapshot(
@@ -1102,7 +1120,8 @@ public sealed class Goal
             SourceBacklogCoverage: SourceBacklogCoverage,
             SliceBatchParentId: SliceBatchParentId?.Value,
             AcceptanceFailureDeferredForRetry: _acceptanceFailureDeferredForRetry,
-            CriterionEvidenceObligations: _criterionEvidenceObligations.Count == 0 ? null : _criterionEvidenceObligations.ToArray());
+            CriterionEvidenceObligations: _criterionEvidenceObligations.Count == 0 ? null : _criterionEvidenceObligations.ToArray(),
+            GateTestObligations: _gateTestObligations.Count == 0 ? null : _gateTestObligations.ToArray());
     }
 
     internal static Goal FromSnapshot(GoalSnapshot snapshot)
@@ -1173,6 +1192,7 @@ public sealed class Goal
         }
 
         goal.RestoreCriterionEvidenceObligations(snapshot.CriterionEvidenceObligations);
+        goal.RestoreGateTestObligations(snapshot.GateTestObligations);
 
         if (snapshot.LatestAcceptanceFailure is { } failure)
         {
@@ -1214,6 +1234,7 @@ public sealed class Goal
         goal.RestoreAcceptanceIdentityStale(
             snapshot.ConsecutiveAcceptanceIdentityStaleCount,
             snapshot.LastAcceptanceIdentityStaleAttemptId);
+        goal.SetPriority(GoalPriorities.ParseOrDefault(snapshot.Priority));
         goal.RestoreHold(snapshot.CurrentHold);
 
         return goal;

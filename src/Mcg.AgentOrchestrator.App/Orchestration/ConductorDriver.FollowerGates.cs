@@ -35,8 +35,9 @@ internal sealed partial class ConductorDriver
         lock (_cohortGateRegistrationSync)
         {
             SweepCompletedCohortGateRuns();
+            if (GroupedGateAdmissionBlocked()) return new FollowerGateStartOutcome.FollowerBusy();
             if (coordinator.ReadAll().Any(attempt => attempt.Kind == "follower" &&
-                attempt.ReconciledAt is null && attempt.Members[0].GoalId == leader.GoalId.Value))
+                attempt.Members[0].GoalId == leader.GoalId.Value && coordinator.ReservesCapacity(attempt)))
                 return new FollowerGateStartOutcome.LeaderHasFollower();
             var heldMembers = new HashSet<string>(StringComparer.Ordinal) { follower.GoalId.Value };
             if (TryGetActiveCohortGateRun(heldMembers, out _)) return new FollowerGateStartOutcome.FollowerBusy();
@@ -180,7 +181,7 @@ internal sealed partial class ConductorDriver
         foreach (var attempt in coordinator.ReadAll())
         {
             if (attempt.Kind != "follower" || attempt.ReconciledAt is not null || attempt.Outcome != "Running" ||
-                !coordinator.IsAlive(attempt.OwnerProcessId)) continue;
+                !coordinator.ReservesCapacity(attempt)) continue;
             var binding = ReadFollowerBinding(attempt);
             var reason = ReadFollowerStopReason(attempt, binding);
             if (reason is null || !coordinator.Invalidate(attempt, reason.Value)) continue;

@@ -1456,7 +1456,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         TimeSpan elapsed,
         int concurrentShardCount,
         DotnetBuildStorageRoot storageRoot,
-        Action<AcceptanceGateProgress>? progressSink)
+        Action<AcceptanceGateProgress>? progressSink,
+        AcceptanceCheckResult? result = null)
     {
         var now = DateTimeOffset.UtcNow;
         progressSink?.Invoke(new AcceptanceGateProgress(
@@ -1472,7 +1473,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             elapsed,
             0,
             GateHeartbeatArtifacts.GetStableSlotPath(slotIndex, storageRoot),
-            GateLoadContextProbe.Capture(concurrentShardCount)));
+            GateLoadContextProbe.Capture(concurrentShardCount),
+            Outcome: result is null ? "unknown" : result.Passed ? "passed" : "failed",
+            FailedTestCount: result?.FailingTestIdentities?.Count ?? 0));
     }
 
     private async Task<(AcceptanceCheckResult Result, bool Retried)> RunCheckWithPartitionVerdictCacheAsync(
@@ -4543,9 +4546,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         environment.TryGetValue(NuGetPackagesVariable, out var nugetPackages);
         var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
-        var allowed = environment
+        var allowed = HermeticSystemDrive.WithResolvedSystemDrive(environment
             .Where(pair => IsInheritedHermeticVerificationEnvironmentVariable(pair.Key))
-            .ToArray();
+            .ToArray(), Environment.SystemDirectory);
 
         // This is deliberately an allow-list, not another enumeration of known-dangerous inputs. Verification
         // children have accumulated behavior switches, provider credentials, control-plane tokens, and attempt

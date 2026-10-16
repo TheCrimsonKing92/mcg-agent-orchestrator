@@ -14,6 +14,52 @@ public sealed class EpicDetailReadSnapshotTests : CliCommandTestBase
     [InlineData(1)]
     [InlineData(7)]
     [InlineData(0)]
+    public async Task Read_SelectedEpic_UsesOriginalPromotionTimeAndRetainsUnknownDates(int days)
+    {
+        var workspace = CreateRefinedWorkspace(CreateTempDirectory());
+        var portfolio = new PortfolioStore(workspace.PortfolioStorePath);
+        var epic = await portfolio.AddEpicAsync("Promotion scope");
+        var other = await portfolio.AddEpicAsync("Unrelated promotion");
+        var kernel = new AgentOrchestratorKernel();
+        var original = kernel.CreateGoal("Old promotion with recent metadata");
+        var unknown = kernel.CreateGoal("Legacy unknown promotion");
+        var sentinel = kernel.CreateGoal("Unrelated recent promotion");
+        var exported = kernel.ExportSnapshot();
+        kernel = AgentOrchestratorKernel.FromSnapshot(exported with
+        {
+            Goals = exported.Goals.Select(goal => goal with { Status = GoalStatus.Completed }).ToArray()
+        });
+        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        await repository.SaveAsync(kernel);
+        var now = new DateTimeOffset(2026, 10, 14, 12, 0, 0, TimeSpan.Zero);
+        repository.RecordPromotionFacts([new(original.Id.Value, new string('b', 40), new string('a', 40),
+            new string('c', 40), now.AddDays(-14), GoalPromotionFact.SoloProvenance)]);
+        repository.RecordPromotionFacts([new(sentinel.Id.Value, new string('e', 40), new string('d', 40),
+            new string('f', 40), now, GoalPromotionFact.SoloProvenance)]);
+        await portfolio.AssignGoalToEpicAsync(original.Id.Value, epic.Id);
+        await portfolio.AssignGoalToEpicAsync(unknown.Id.Value, epic.Id);
+        await portfolio.AssignGoalToEpicAsync(sentinel.Id.Value, other.Id);
+        DateTimeOffset? since = days == 0 ? null : now.AddDays(-days);
+        var expected = EpicProgressReadModel.Load(workspace, since).Single(row => row.Epic.Id == epic.Id);
+        var before = Bytes(workspace);
+        var scoped = await EpicDetailReadSnapshot.ReadAsync(workspace, epic.Id, since, CancellationToken.None);
+        var detail = OwnerConsoleEpicViewModel.BuildDetail(scoped.Row, since, scoped.Goals);
+
+        Assert.Equal(expected.MemberGoals, scoped.Row.MemberGoals);
+        Assert.Equal(expected.WindowLandedCount, scoped.Row.WindowLandedCount);
+        Assert.Equal(now.AddDays(-14), scoped.Row.MemberGoals.Single(goal => goal.Id == original.Id.Value).PromotionFact!.PromotedAt);
+        Assert.Null(scoped.Row.MemberGoals.Single(goal => goal.Id == unknown.Id.Value).PromotionFact);
+        Assert.DoesNotContain(scoped.Row.MemberGoals, goal => goal.Id == sentinel.Id.Value);
+        Assert.Equal(days == 0 ? 2 : 0, detail.Landed.Count);
+        Assert.Equal(days == 0 ? 0 : 1, detail.UnknownLandingDates!.Count);
+        Assert.Empty(scoped.Goals);
+        AssertBytes(before, workspace);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(7)]
+    [InlineData(0)]
     public async Task Read_SelectedEpic_ScopesEveryStoreAndMatchesBroadProjection(int days)
     {
         var workspace = CreateRefinedWorkspace(CreateTempDirectory());

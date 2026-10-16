@@ -9,6 +9,26 @@ public sealed class EpicProgressReadModelTests
     private static readonly PortfolioEpic Epic = new("epic", "Progress", null, Epoch, "test", Epoch, "test");
 
     [Fact]
+    public void Build_OriginalPromotionDates_ExcludeLaterUpdatesAndUnknowns()
+    {
+        GoalSummary Goal(string id, string status, DateTimeOffset? promotion) => new(id, status, id,
+            Epoch.AddDays(3).ToString("O"), PromotionFact: promotion is null ? null : new(id,
+                new string('b', 40), new string('a', 40), new string('c', 40), promotion.Value,
+                GoalPromotionFact.SoloProvenance));
+        var goals = new[] { Goal("old", "Completed", Epoch.AddTicks(-1)),
+            Goal("boundary", "Completed", Epoch), Goal("unknown", "Completed", null),
+            Goal("pending", "Verified", Epoch), Goal("failed", "Failed", null) };
+        var members = goals.Select(goal => Member(goal.Id)).Append(Member("boundary")).ToArray();
+        var row = Assert.Single(EpicProgressReadModel.Build([Epic], [], members, goals, [], Epoch));
+        Assert.Equal(1, row.WindowLandedCount);
+        Assert.Equal(3, row.LandedCount);
+        Assert.Equal(1, row.UnknownLandingDateCount);
+        Assert.Equal(5, row.GoalCount);
+        Assert.Equal("unknown", row.MemberGoals.Single(member => member.Id == "unknown").LandingDateStatus);
+        Assert.Equal("known", row.MemberGoals.Single(member => member.Id == "boundary").LandingDateStatus);
+    }
+
+    [Fact]
     public void Build_AllStatusesAndMissing_CountEachMembershipExactlyOnce()
     {
         var expected = new Dictionary<GoalStatus, EpicProgressBucket>

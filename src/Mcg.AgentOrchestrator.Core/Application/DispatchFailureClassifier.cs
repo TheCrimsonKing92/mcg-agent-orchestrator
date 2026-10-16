@@ -572,6 +572,20 @@ public static partial class DispatchFailureClassifier
         ProviderFailureKind providerFailureKind,
         bool workerResultPresent = false,
         bool hasCommittedChanges = false)
+        => ClassifyCore(task, verification, providerFailureKind, workerResultPresent, hasCommittedChanges,
+            WorkerResultBlockers.AssessSubscriptionVerification);
+
+    public static DispatchOutcome ClassifyStoredRound(TaskSpec task, TaskVerificationRecord verification)
+        => ClassifyCore(task, verification, verification.ProviderFailureKind, false, false,
+            WorkerResultBlockers.AssessStoredSubscriptionVerification);
+
+    private static DispatchOutcome ClassifyCore(
+        TaskSpec task,
+        TaskVerificationRecord verification,
+        ProviderFailureKind providerFailureKind,
+        bool workerResultPresent,
+        bool hasCommittedChanges,
+        Func<TaskSpec, TaskVerificationRecord, VerificationTerminalContractAssessment> assessTerminalContract)
     {
         if (IsProviderInterruptionFailure(verification))
         {
@@ -601,7 +615,7 @@ public static partial class DispatchFailureClassifier
         var exitCode = verification.ExitCode;
         var hasZeroByteOutput = HasZeroByteStandardOutput(verification);
 
-        var terminalContract = WorkerResultBlockers.AssessSubscriptionVerification(task, verification);
+        var terminalContract = assessTerminalContract(task, verification);
         if (!terminalContract.AllowsCompletion)
         {
             // Preserve positively identified provider faults before diagnosing absent reporting.

@@ -98,6 +98,7 @@ internal sealed record AcceptancePartitionVerdictCacheOptions(
     Func<IReadOnlyList<TempRootApparatusLossReceiptV1>>? ResolveApparatusLossReceipts = null,
     Func<AcceptanceManifestCheck, string?>? ResolveClosureHash = null,
     Func<string, string, string, IReadOnlyList<string>>? ResolveChangedFiles = null,
+    Func<string, string, string, IReadOnlyList<string>>? ResolveLaneCarryChangedFiles = null,
     IReadOnlyList<AcceptanceManifestCheck>? IdenticalTreeChecks = null);
 
 internal sealed partial class AcceptancePartitionVerdictCache
@@ -128,8 +129,9 @@ internal sealed partial class AcceptancePartitionVerdictCache
     private readonly ConcurrentDictionary<string, Lazy<string?>> _closureHashes = new(StringComparer.OrdinalIgnoreCase);
     private AcceptanceSharedApparatusInvalidation? _sharedApparatusInvalidation;
     private AcceptanceTestReuseShadow? TestReuseShadow { get; init; }
+    private AcceptanceLaneCarryShadow? LaneCarryShadow { get; init; }
     private bool _shadowsPending;
-    internal bool HasPendingShadows => TestReuseShadow is not null && _shadowsPending;
+    internal bool HasPendingShadows => (TestReuseShadow is not null || LaneCarryShadow is not null) && _shadowsPending;
 
     private AcceptancePartitionVerdictCache(
         string goalId,
@@ -273,6 +275,8 @@ internal sealed partial class AcceptancePartitionVerdictCache
             new AcceptanceClosureVerdictIndex(options.WorktreePath),
             identicalTreeIdentities)
         {
+            LaneCarryShadow = partitionCount == 0 ? null : new AcceptanceLaneCarryShadow(options.WorktreePath, options.GoalId.Value, attemptId,
+                GoalAcceptanceVerifier.NormalizeShaToken(candidateTreeSha), options.ResolveLaneCarryChangedFiles),
             TestReuseShadow = partitionCount == 0 ? null : new AcceptanceTestReuseShadow(
                 options.WorktreePath, options.GoalId.Value, attemptId,
                 GoalAcceptanceVerifier.NormalizeShaToken(mainSha),
@@ -574,6 +578,7 @@ internal sealed partial class AcceptancePartitionVerdictCache
 
         PartitionWithinAttemptRetryReceipt completedReceipt;
         AcceptanceCheckResult verdict;
+        bool rerunPass;
         lock (_gate)
         {
             var retryIndex = _retries.FindLastIndex(receipt =>
@@ -606,7 +611,8 @@ internal sealed partial class AcceptancePartitionVerdictCache
                     _sharedApparatusInvalidation,
                     partitionId);
             }
-            if (IsWithinAttemptRerunPass(firstRun, decision, probe))
+            rerunPass = IsWithinAttemptRerunPass(firstRun, decision, probe);
+            if (rerunPass)
             {
                 verdict = verdict with
                 {
@@ -619,13 +625,20 @@ internal sealed partial class AcceptancePartitionVerdictCache
                         probe.TestResultPaths!)
                 };
             }
+            else if (AcceptanceTimedOutProbeEvidence.TryBuild(partitionId, firstRun, probe,
+                completedReceipt.OriginalInvocationId, completedReceipt.RetryInvocationId) is { } timedOutEvidence)
+            {
+                verdict = verdict with { WithinAttemptRerun = timedOutEvidence };
+            }
         }
 
         var detail =
             $"partition_id={partitionId} predicate={decision.FailedPredicate} verdict_source=first_run " +
             $"probe_ran=true flake_confirmed={probe.Passed.ToString().ToLowerInvariant()}" +
-            (verdict.WithinAttemptRerun is null ? string.Empty :
-                $" apparatus_reason={AcceptanceWithinAttemptRerunEvidence.Reason}");
+            (rerunPass ? $" apparatus_reason={AcceptanceWithinAttemptRerunEvidence.Reason}" : string.Empty) +
+            (verdict.WithinAttemptRerun is { FailedPredicate: AcceptanceShardCompletionPredicates.TimedOut } evidence
+                ? $" first_trx=none rerun_trx_recorded=true rerun_passed={evidence.RerunPassed.ToString().ToLowerInvariant()}"
+                : string.Empty);
         AppendPartitionVerdictJournalEntries(
             JournalPath,
             [new PartitionVerdictJournalEntry(
@@ -717,6 +730,7 @@ internal sealed partial class AcceptancePartitionVerdictCache
                 probeReceipt?.FlakeConfirmed));
         }
         TestReuseShadow?.Observe(check, result);
+        LaneCarryShadow?.Observe(check, filterHash, result);
     }
 
     internal void RecordSemanticDeduplications(
@@ -810,6 +824,7 @@ internal sealed partial class AcceptancePartitionVerdictCache
         if (!HasPendingShadows) return;
         _shadowsPending = false;
         TestReuseShadow?.Complete();
+        LaneCarryShadow?.Complete();
     }
 
     private void RecordReuse(PartitionVerdictReuseReceipt receipt)

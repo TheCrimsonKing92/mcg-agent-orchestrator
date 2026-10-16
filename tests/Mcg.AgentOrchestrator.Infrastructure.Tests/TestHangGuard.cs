@@ -2,6 +2,8 @@ internal static class TestHangGuard
 {
     internal static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
     internal static readonly TimeSpan HangSafetyBound = TimeSpan.FromSeconds(120);
+    // Whole-test hang failsafe below the 600 s lane stall limit; never a speed check.
+    internal const int WholeTestMilliseconds = 300_000;
 
     internal static async Task CompletesWithinAsync(Task task, TimeSpan bound, string operation)
     {

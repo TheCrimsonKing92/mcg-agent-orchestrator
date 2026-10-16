@@ -61,6 +61,8 @@ public static void PrintGoal(
     }
 
     Console.WriteLine($"Status: {statusText ?? goal.Status.ToString()}");
+    if (!tasksOnly && goal.Priority != GoalPriority.Normal)
+        Console.WriteLine($"Priority: {goal.Priority}");
     if (!tasksOnly && !string.IsNullOrWhiteSpace(goal.SourceBacklogItemId))
     {
         Console.WriteLine($"Source backlog: {goal.SourceBacklogItemId}");

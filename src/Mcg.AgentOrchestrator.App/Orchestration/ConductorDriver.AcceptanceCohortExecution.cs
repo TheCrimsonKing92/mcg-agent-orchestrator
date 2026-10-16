@@ -121,7 +121,12 @@ internal sealed partial class ConductorDriver
                 selection.Members[0].MainRevision, integration.TreeRevision,
                 memberPairKey, receipt is not null);
             if (recovered.Running is not null)
-                return CohortInFlight(selection, orderedGoals, policy, recovered.Running);
+            {
+                var inFlight = CohortInFlight(selection, orderedGoals, policy, recovered.Running);
+                // A published receipt is pending holder cleanup, not a new member verdict.
+                return receipt is null ? inFlight : inFlight with { Receipt = receipt, MemberResults =
+                    new Dictionary<string, ConductorAdvanceResult>(StringComparer.Ordinal) };
+            }
             if (recovered.DeadWithoutReceipt)
                 receipt = _cohortAcceptanceStore.SaveGateReceipt(new AcceptanceCohortReceipt(
                     $"cohort-receipt-v2-{identity.Value[(AcceptanceCohortIdentity.Version.Length + 1)..]}",
@@ -430,7 +435,9 @@ internal sealed partial class ConductorDriver
                 OwnerProtectedGateDiagnostic.Write(Console.Out, identity.Value, ownerProtectedCheck);
             var classifiedVerification = ClassifyCohortVerificationResultWithPaths(verification);
             classification = classifiedVerification.Classification;
-            gateTestResultPaths = classifiedVerification.NormalizedTestResultPaths;
+            gateTestResultPaths = GroupedReceiptTestResultPaths.Apply(Console.Out, "cohort",
+                $"cohort-receipt-v2-{identity.Value[(AcceptanceCohortIdentity.Version.Length + 1)..]}",
+                verification, classifiedVerification.NormalizedTestResultPaths);
             failedChecks = verification.Checks?
                 .Where(check => !check.Passed && !check.Advisory)
                 .Select(check => check.Name)

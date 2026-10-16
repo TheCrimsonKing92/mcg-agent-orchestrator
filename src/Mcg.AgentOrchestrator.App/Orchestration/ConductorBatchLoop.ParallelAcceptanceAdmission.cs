@@ -38,7 +38,7 @@ internal sealed partial class ConductorBatchLoop
             .ToArray());
         var activeReservations = BuildActiveParallelAcceptanceReservations(
             driver.ParallelAcceptanceAttemptCoordinator,
-            kernel.Goals.Where(goal => goal.Status != GoalStatus.Completed).ToArray());
+            kernel.Goals.ToArray());
         if (activeReservations.Failure is { } capacityFailure)
         {
             var reason =
@@ -264,12 +264,12 @@ internal sealed partial class ConductorBatchLoop
         HashSet<string> escalatedGoals,
         int tick,
         List<string> changedGoalLines,
+        HashSet<GoalId> changedGoalIds,
         Func<bool> suppressNewAcceptanceAdmission)
     {
-        foreach (var (receipt, partitions) in driver.ConsumeTerminalFailedCohortReceipts())
-            RecordParallelAcceptanceProgress(ConductorDriver.FormatTerminalFailedCohortReceipt(tick, receipt, partitions), changedGoalLines);
+        state.OrderedEligible = ConductorAcceptanceCohortTerminalReceiptConsumption.PrepareAdmission(driver, state.OrderedEligible, changedGoalIds, tick, changedGoalLines);
         var speculativeCandidates = state.OrderedEligible.Select(goal => new ConductorSpeculativeAcceptanceCandidate(
-            goal.Id, driver.ProjectGateReadyCandidate(goal, policy))).ToArray();
+            goal.Id, driver.ProjectGroupedAdmissionCandidate(goal, policy, kernel))).ToArray();
         state.ActiveCohortCapacity = driver.GetActiveAcceptanceCohortCapacity();
         state.AcceptanceCensus = CaptureLiveAcceptanceCensus(
             state.LiveAttempts, state.ActiveAttemptIds, state.ActiveCohortCapacity, tick,
@@ -315,11 +315,11 @@ internal sealed partial class ConductorBatchLoop
                 goal.Status, _acceptanceEngineCircuit?.Read())))
         {
             (state.CohortEligible, state.ProductionCandidates) = LandPassedAcceptanceCohortsBeforeTrainSelection(
-                driver, policy, state.CohortEligible, state.ProductionCandidates, state.Results, tick, changedGoalLines);
+                driver, policy, state.CohortEligible, state.ProductionCandidates, state.Results, tick, changedGoalLines, kernel);
         }
         (state.CohortEligible, state.ProductionCandidates) = LandPassedMergeTrainReceiptsBeforeAdmission(
-            driver, policy, state.CohortEligible, state.ProductionCandidates, scopedGoals, state.Results, tick, changedGoalLines);
-        CarryFollowerGateReceipts(state, driver, policy, tick, changedGoalLines);
+            driver, policy, state.CohortEligible, state.ProductionCandidates, scopedGoals, state.Results, tick, changedGoalLines, kernel);
+        CarryFollowerGateReceipts(state, driver, policy, tick, changedGoalLines, kernel);
         state.OldestWaiterObservation = suppressNewAcceptanceAdmission()
             ? new ParallelAcceptanceOldestWaiterObservation(null, 0)
             : ObserveOldestParallelAcceptanceWaiter(state.OrderedEligible, state.LiveAttemptGoalIds);

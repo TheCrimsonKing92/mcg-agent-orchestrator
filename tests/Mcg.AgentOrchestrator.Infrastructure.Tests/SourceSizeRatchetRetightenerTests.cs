@@ -68,10 +68,10 @@ public sealed class SourceSizeRatchetRetightenerTests : GoalWorktreeTestBase
 
     [Theory]
     [InlineData("new SourceSizeCeiling(\"src/A.cs\", 18)\n", true)]
-    [InlineData("new SourceSizeCeiling(\"src/A.cs\", 14)\n", false)]
+    [InlineData("new SourceSizeCeiling(\"src/A.cs\", 14)\n", true)]
     [InlineData("new SourceSizeCeiling(\"src/A.cs\", 18) // extra\n", false)]
     [InlineData("new SourceSizeCeiling(\"src/B.cs\", 18)\n", false)]
-    public void CarryForwardPeelRequiresOnlyNumericIncreases(string after, bool expected) =>
+    public void CarryForwardPeelRequiresOnlyNumericChanges(string after, bool expected) =>
         Assert.Equal(expected, SourceSizeRatchetRetightener.IsNumericRetightenOnly(Row(15), after));
 
     private static string Row(int ceiling) => $"new SourceSizeCeiling(\"src/A.cs\", {ceiling})\n";

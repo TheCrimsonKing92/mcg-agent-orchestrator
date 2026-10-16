@@ -66,7 +66,7 @@ internal sealed partial class ConductorDriver
     {
         var reviewer = goal.Tasks.FirstOrDefault(task => task.RequiredRole == AgentRole.Reviewer);
         var newestReceipt = reviewer?.PreReviewEvidenceHistory.LastOrDefault();
-        var developerRetryAt = goal.Tasks.FirstOrDefault(task => task.RequiredRole == AgentRole.Developer)?.LatestRetryAt;
+        var developerRetryAt = goal.Tasks.LastOrDefault(task => task.RequiredRole == AgentRole.Developer)?.LatestRetryAt;
         if (newestReceipt is not null && developerRetryAt is { } retryAt && retryAt > newestReceipt.RecordedAt)
             return new(0, []);
         return PreReviewRepeatedFailureSet.Evaluate(reviewer?.PreReviewEvidenceHistory ?? []);

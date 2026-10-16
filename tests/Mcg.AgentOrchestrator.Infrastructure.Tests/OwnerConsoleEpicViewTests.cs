@@ -24,6 +24,27 @@ public sealed class OwnerConsoleEpicViewTests
     }
 
     [Fact]
+    public async Task Detail_LaterUpdateAndUnknownDate_MatchOriginalPromotionRollup()
+    {
+        using var fixture = new Fixture();
+        var old = fixture.Source.Goals.Single(goal => goal.Id == "b-oldest");
+        fixture.Source.Goals.Remove(old);
+        fixture.Source.Goals.Add(old with { UpdatedAt = Now.ToString("O") });
+        var known = fixture.Source.Goals.Single(goal => goal.Id == "b-landed");
+        fixture.Source.Goals.Remove(known);
+        fixture.Source.Goals.Add(known with { PromotionFact = null });
+        await fixture.View.HandleKeyAsync(new Key('e'));
+        await fixture.View.HandleKeyAsync(Key.CursorDown);
+        await fixture.View.HandleKeyAsync(Key.Enter);
+        var row = fixture.Source.Build(Now.AddHours(-24)).Single(row => row.Epic.Id == "beta");
+        Assert.Equal(0, row.WindowLandedCount);
+        Assert.Equal(1, row.UnknownLandingDateCount);
+        Assert.Contains("Unknown landing dates:", fixture.View.EpicView.Lines);
+        Assert.Contains(fixture.View.EpicView.Lines, line => line.Contains("Original promotion date: unknown", StringComparison.Ordinal));
+        Assert.DoesNotContain(fixture.View.EpicView.Lines, line => line.Contains("Old landed beta", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task WCyclesWindowAndCountsFollowBuild()
     {
         using var fixture = new Fixture();
@@ -76,7 +97,7 @@ public sealed class OwnerConsoleEpicViewTests
         Assert.Equal("beta", dialog.SelectedEpicId);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task Enter_HeldPlanRead_ShowsSelectedEpicPlanThroughSource()
     {
         using var fixture = new Fixture();
@@ -252,7 +273,7 @@ public sealed class OwnerConsoleEpicViewTests
         Assert.All(dialog.Lines, line => Assert.True(line.GetColumns() <= dialog.BodyPane.Viewport.Width, line));
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task BoardUpdatesCoalesceDuringPendingEpicRead()
     {
         using var fixture = new Fixture();
@@ -275,7 +296,7 @@ public sealed class OwnerConsoleEpicViewTests
         Assert.Contains(fixture.View.EpicView.Lines, line => line.Contains("Updated alpha", StringComparison.Ordinal));
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task ClosingCancelsPendingReadAndRejectsLateResults()
     {
         using var fixture = new Fixture();
@@ -292,7 +313,7 @@ public sealed class OwnerConsoleEpicViewTests
         Assert.Equal(1, fixture.Source.Calls);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task Open_HeldLoad_ShowsLoadingBeforeRowsAndLocalUpdateTime()
     {
         using var fixture = new Fixture();
@@ -315,7 +336,7 @@ public sealed class OwnerConsoleEpicViewTests
         Assert.DoesNotContain("loading…", dialog.HeaderLine);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task WindowChange_HeldLoad_RetainsRowsWithPriorWindowAndNamesNewWindow()
     {
         using var fixture = new Fixture();
@@ -334,7 +355,7 @@ public sealed class OwnerConsoleEpicViewTests
         AssertSummaries(fixture, Now.AddDays(-7));
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task Enter_HeldDetailLoad_RetainsListAndNamesSelectedEpic()
     {
         using var fixture = new Fixture();
@@ -357,7 +378,7 @@ public sealed class OwnerConsoleEpicViewTests
         Assert.Contains("updated 01:00:00", fixture.View.EpicView.HeaderLine);
     }
 
-    [Theory(Timeout = 30000)]
+    [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [InlineData(false)]
     [InlineData(true)]
     public async Task Failure_Retry_ShowsReasonAndClearsFailureAndRetryHint(bool detail)
@@ -441,7 +462,7 @@ public sealed class OwnerConsoleEpicViewTests
         AssertSummaries(fixture, null);
     }
 
-    [Theory(Timeout = 30000)]
+    [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [InlineData(false)]
     [InlineData(true)]
     public async Task ModelApplied_HeldRefresh_KeepsContentWithRefreshingHeader(bool detail)
@@ -464,7 +485,7 @@ public sealed class OwnerConsoleEpicViewTests
         Assert.DoesNotContain("refreshing…", dialog.HeaderLine);
     }
 
-    [Theory(Timeout = 30000)]
+    [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [InlineData(false)]
     [InlineData(true)]
     public async Task ModelApplied_SustainedUpdates_PublishesEachReadWhileRefreshing(bool detail)
@@ -516,7 +537,7 @@ public sealed class OwnerConsoleEpicViewTests
         Assert.Equal(5, fixture.Source.Calls);
     }
 
-    [Theory(Timeout = 30000)]
+    [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [InlineData(false)]
     [InlineData(true)]
     public async Task Refresh_SameCycleReversedCallbacks_PreservesNewestPublication(bool olderFailure)
@@ -557,7 +578,7 @@ public sealed class OwnerConsoleEpicViewTests
         Assert.DoesNotContain("refreshing", dialog.HeaderLine);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task Reopen_HeldLoad_ClearsPreviousContent()
     {
         using var fixture = new Fixture();
@@ -574,7 +595,7 @@ public sealed class OwnerConsoleEpicViewTests
         AssertSummaries(fixture, Now.AddHours(-24));
     }
 
-    [Theory(Timeout = 30000)]
+    [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [InlineData(false)]
     [InlineData(true)]
     public async Task Refresh_QueuedOlderPublication_CannotReplaceContentOrFreshness(bool olderFailure)
@@ -632,7 +653,7 @@ public sealed class OwnerConsoleEpicViewTests
         Assert.DoesNotContain("updated", dialog.HeaderLine);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task Navigation_PendingDetailThenListAndAnotherEpic_CancelsSupersededRequest()
     {
         using var fixture = new Fixture();
@@ -657,7 +678,7 @@ public sealed class OwnerConsoleEpicViewTests
         Assert.Equal(2, fixture.Source.DetailCalls);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task Refresh_Failure_RetainsPriorDetailAndSuccessfulTimestampUntilRetry()
     {
         using var fixture = new Fixture();
@@ -765,7 +786,9 @@ public sealed class OwnerConsoleEpicViewTests
 
         private void Add(string epic, string id, string title, GoalStatus status, int hours)
         {
-            Source.Goals.Add(new(id, status.ToString(), title, Now.AddHours(hours).ToString("O")));
+            Source.Goals.Add(new(id, status.ToString(), title, Now.AddHours(hours).ToString("O"),
+                PromotionFact: status == GoalStatus.Completed ? new(id, new string('b', 40),
+                    new string('a', 40), new string('c', 40), Now.AddHours(hours), GoalPromotionFact.SoloProvenance) : null));
             Source.Members.Add(new(epic, PortfolioMemberKind.Goal, id, Now, "test"));
         }
 

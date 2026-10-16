@@ -8,8 +8,12 @@ internal static class FindingEvidenceExecutedCoverage
         FindingEvidenceReceipt receipt, Func<FindingEvidenceSelection, string> format)
     {
         var notRun = (receipt.Arms ?? []).Where(arm => arm.Arm == FindingEvidenceArm.Candidate)
-            .SelectMany(arm => arm.NotRunSelections).Select(format).ToHashSet(StringComparer.Ordinal);
-        return receipt.Request.Selections.Where(selection => !notRun.Contains(format(selection))).ToArray();
+            .SelectMany(arm => FindingEvidenceRoundPlanner.ExpandSelections(arm.NotRunSelections))
+            .Select(format).ToHashSet(StringComparer.Ordinal);
+        // Expand class unions without reordering the receipt's requested selections.
+        return receipt.Request.Selections
+            .SelectMany(selection => FindingEvidenceRoundPlanner.ExpandSelections([selection])).Distinct()
+            .Where(selection => !notRun.Contains(format(selection))).ToArray();
     }
 
     internal static FindingEvidenceRequest ExecutedRequest(FindingEvidenceReceipt receipt, Func<FindingEvidenceSelection, string> format) =>

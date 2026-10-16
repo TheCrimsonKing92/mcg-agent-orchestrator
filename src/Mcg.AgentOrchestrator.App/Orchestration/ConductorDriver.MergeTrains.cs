@@ -148,7 +148,12 @@ internal sealed partial class ConductorDriver
                 var recovered = RecoverGroupedGateAttempt("train", selection.Members,
                     selection.Members[0].MainRevision, workspace.TreeRevision,
                     trainKey, receipt is not null);
-                if (recovered.Running is not null) return InFlight(recovered.Running);
+                if (recovered.Running is not null)
+                {
+                    var inFlight = InFlight(recovered.Running);
+                    return receipt is null ? inFlight : inFlight with { Receipt = receipt, MemberResults =
+                        new Dictionary<string, ConductorAdvanceResult>(StringComparer.Ordinal), RecordedReceipt = receipt };
+                }
                 if (recovered.DeadWithoutReceipt)
                     receipt = _mergeTrainAcceptanceStore.SaveGateReceipt(new MergeTrainReceipt(
                         $"merge-train-receipt-{identity.Value[(MergeTrainIdentity.Version.Length + 1)..]}",
@@ -234,8 +239,9 @@ internal sealed partial class ConductorDriver
                     var resultPaths = NormalizeCohortTestResultPaths(verification.TestResultPaths);
                     var outcome = MergeTrainTimeoutAttribution.ResolveGateOutcome(
                         ClassifyCohortVerificationResult(verification), resultPaths, workspace.Path, members);
+                    var receiptId = $"merge-train-receipt-{identity.Value[(MergeTrainIdentity.Version.Length + 1)..]}";
                     receipt = _mergeTrainAcceptanceStore.SaveGateReceipt(new MergeTrainReceipt(
-                        $"merge-train-receipt-{identity.Value[(MergeTrainIdentity.Version.Length + 1)..]}",
+                        receiptId,
                         identity,
                         outcome,
                         DateTimeOffset.UtcNow,
@@ -243,7 +249,7 @@ internal sealed partial class ConductorDriver
                         verification.Checks?.Where(check => !check.Passed && !check.Advisory)
                             .Select(check => check.Name).ToArray() ?? [],
                         verification.ExitCode,
-                        resultPaths,
+                        GroupedReceiptTestResultPaths.Apply(Console.Out, "train", receiptId, verification, resultPaths),
                         ValidForLanding: outcome == MergeTrainGateOutcome.Passed));
                 }
                 catch (Exception ex) when (ex is AcceptanceInfrastructureDeferredException or

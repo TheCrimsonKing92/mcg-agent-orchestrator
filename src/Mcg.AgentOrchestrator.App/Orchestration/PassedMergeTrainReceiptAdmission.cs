@@ -35,11 +35,11 @@ internal static class PassedMergeTrainReceiptAdmission
         HashSet<string> reportedStaleReceiptIds,
         Action<string> emitProgress,
         Action<string, List<string>> recordProgress,
-        Func<Goal, string, ConductorAdvanceResult> heldResult)
+        Func<Goal, string, ConductorAdvanceResult> heldResult, AgentOrchestratorKernel kernel)
         => Apply(new Operations(
                 (ready, ineligible, stale, blocked, scopedGoals, observed) =>
                     driver.FindLandablePassedMergeTrainSelections(ready, ineligible, stale, blocked, scopedGoals, observed),
-                driver.ProjectGateReadyCandidate,
+                (goal, autonomy) => driver.ProjectGroupedAdmissionCandidate(goal, autonomy, kernel),
                 (selection, goals, autonomy) => driver.RunMergeTrain(selection, goals, autonomy, landFromReceiptOnly: true),
                 (receipt, currentMain) => AcceptanceRevalidationPlanner.Plan(driver.ExecutionDirectory,
                     receipt.Identity.ObservedMainRevision, currentMain,
@@ -81,10 +81,31 @@ internal static class PassedMergeTrainReceiptAdmission
         foreach (var (selection, _) in operations.Find(
                      candidates, ineligibleGoalIds, ReportStale, (receipt, observation) =>
                      {
-                         var decision = holds.Observe(receipt, observation);
+                         var landingHeldRequestIds = new Dictionary<GoalId, string>();
+                         foreach (var member in observation.NotReadyGoalIds)
+                         {
+                             var goal = scopedGoals.SingleOrDefault(goal => goal.Id == member);
+                             var projection = candidates.SingleOrDefault(candidate => candidate.GoalId == member)
+                                 ?.ProjectionResult ?? (goal is null ? null : operations.Project(goal, policy));
+                             if (projection is GateReadyCandidateProjectionResult.Excluded
+                                 { Reason: GateReadyCandidateExclusionReason.LandingHeld, HoldRequestId: { } requestId })
+                             {
+                                 landingHeldRequestIds.Add(member, requestId);
+                             }
+                         }
+                         var decision = holds.Observe(receipt,
+                             observation with { LandingHeldRequestIds = landingHeldRequestIds });
                          if (decision.Moved is not null)
                          {
                              ReportStale(receipt, decision.Moved);
+                         }
+                         else if (decision.Released && decision.ReleaseReason == "landing-held")
+                         {
+                             var member = decision.BlockedMember!.Value;
+                             var request = decision.HoldRequestId!;
+                             emitProgress($"TRAIN_RECEIPT_RELEASED train={receipt.Identity.Value} " +
+                                 $"receipt={receipt.ReceiptId} reason=landing-held member={member[..Math.Min(8, member.Length)]} " +
+                                 $"request={request[..Math.Min(8, request.Length)]}");
                          }
                          else if (decision.Released)
                          {

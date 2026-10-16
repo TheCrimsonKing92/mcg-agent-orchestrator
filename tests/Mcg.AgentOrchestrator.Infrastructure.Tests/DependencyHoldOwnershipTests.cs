@@ -8,7 +8,7 @@ using static ConductorDriverTests;
 // Parallel-safe: each case owns its kernel, injected clock, writers and temporary root.
 public sealed class DependencyHoldOwnershipTests
 {
-    [Theory(Timeout = 30_000)]
+    [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     [InlineData(GoalStatus.Draft)]
     [InlineData(GoalStatus.Active)]
@@ -27,7 +27,7 @@ public sealed class DependencyHoldOwnershipTests
         Assert.DoesNotContain(fixture.Lines, line => line.StartsWith("GOAL_STALLED ", StringComparison.Ordinal));
     }
 
-    [Theory(Timeout = 30_000)]
+    [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     [InlineData(GoalStatus.Parked)]
     [InlineData(GoalStatus.WaitingForHuman)]
@@ -46,7 +46,7 @@ public sealed class DependencyHoldOwnershipTests
         Assert.Contains(fixture.Lines, line => line.StartsWith("GOAL_STALLED ", StringComparison.Ordinal));
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public void Tick_DependencyResumes_ClearsPreviouslyTrackedHold()
     {

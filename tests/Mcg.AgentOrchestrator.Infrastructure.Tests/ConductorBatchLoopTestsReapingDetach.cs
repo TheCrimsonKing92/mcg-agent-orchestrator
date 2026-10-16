@@ -632,7 +632,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
         Assert.Equal(777, recoveredTask.LastProcess!.ProcessId);
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public async Task DetachedExit_SuccessorTick_CompletesTask()
     {
@@ -679,7 +679,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
         }
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public async Task ProductionShapedPidReuse_CompletesFromNativeExitWithoutOwningOrKillingFalseBranches()
     {
@@ -801,7 +801,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
         }
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public async Task DetachedExit_LiveNonSelectedOwnedProcess_RemainsRunning()
     {
@@ -847,7 +847,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
         }
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public async Task DetachedExit_LiveOwnedProcessWithUnreadableIdentity_AllowsCompletion()
     {
@@ -889,7 +889,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
         }
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public async Task DetachedExit_LiveOwnedProcessWithSameStartImageMismatch_AllowsCompletion()
     {
@@ -933,7 +933,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
         }
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public async Task DetachedExit_ReusedNonSelectedOwnedProcess_AllowsCompletion()
     {
@@ -978,7 +978,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
         }
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public async Task DetachedExit_ReusedHostProcess_AllowsCompletion()
     {
@@ -1023,7 +1023,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
         }
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public async Task DetachedLiveProcess_SuccessorTick_RemainsRunning()
     {
@@ -1076,7 +1076,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
         }
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public async Task DetachedExitedProcess_LaterHandoff_DoesNotRepeatNote()
     {
@@ -1106,7 +1106,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
         }
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public async Task DetachedInvalidExit_HoldNamesPidAndArtifact()
     {
@@ -1142,7 +1142,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
         }
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public async Task DetachedInvalidExit_ReusedProcess_HoldNamesPidAndArtifact()
     {
@@ -1189,7 +1189,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
         }
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public async Task DetachedInvalidExit_LiveRecordedProcess_RemainsRunning()
     {
@@ -1233,7 +1233,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
         }
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public async Task DetachedInvalidExit_UnreadableRecordedProcessIdentity_RemainsRunning()
     {
@@ -1275,7 +1275,7 @@ public sealed class ConductorBatchLoopTestsReapingDetach : ConductorBatchLoopTes
         }
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public async Task DetachedMissingExit_UsesBoundedRecoveryInsteadOfHolding()
     {

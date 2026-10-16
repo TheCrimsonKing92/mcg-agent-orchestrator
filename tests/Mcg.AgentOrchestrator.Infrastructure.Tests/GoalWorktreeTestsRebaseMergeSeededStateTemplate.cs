@@ -22,7 +22,7 @@ public sealed class GoalWorktreeTestsRebaseMergeSeededStateTemplate : GoalWorktr
             Assert.NotEmpty(freshSchema);
             Assert.Equal(freshSchema, ReadSchema(copiedPath));
             var freshMigrations = ReadMigrations(freshPath);
-            Assert.Equal(13, freshMigrations.Length);
+            Assert.Equal(14, freshMigrations.Length);
             Assert.Equal(freshMigrations, ReadMigrations(copiedPath));
             Assert.Equal(ReadJournalMode(freshPath), ReadJournalMode(copiedPath));
             Assert.True(StateDbMigrations.IsUpToDate(freshPath));
@@ -91,17 +91,17 @@ public sealed class GoalWorktreeTestsRebaseMergeSeededStateTemplate : GoalWorktr
             Directory.CreateDirectory(root);
             var stalePath = Path.Combine(root, "stale.db");
             File.WriteAllBytes(stalePath, SeededStateDatabaseTemplate.Build());
-            Assert.Equal(13, ReadMigrations(stalePath).Length);
+            Assert.Equal(14, ReadMigrations(stalePath).Length);
             Assert.True(SeededStateDatabaseTemplate.Validate(File.ReadAllBytes(stalePath)));
             Assert.Equal(1, ExecuteWrite(stalePath,
-                "DELETE FROM schema_migrations WHERE migration_number = 13"));
-            Assert.Equal(12, ReadMigrations(stalePath).Length);
+                "DELETE FROM schema_migrations WHERE migration_number = 14"));
+            Assert.Equal(13, ReadMigrations(stalePath).Length);
             Assert.False(SeededStateDatabaseTemplate.Validate(File.ReadAllBytes(stalePath)));
 
             var copiedPath = Path.Combine(root, "copy", "state.db");
             SeededStateDatabaseTemplate.CopyTo(copiedPath);
             Assert.True(StateDbMigrations.IsUpToDate(copiedPath));
-            Assert.Equal(13, ReadMigrations(copiedPath).Length);
+            Assert.Equal(14, ReadMigrations(copiedPath).Length);
         }
         finally
         {
@@ -140,7 +140,7 @@ public sealed class GoalWorktreeTestsRebaseMergeSeededStateTemplate : GoalWorktr
             StateDbMigrations.EnsureUpToDate(controlPath, statements.Add, telemetryOptions: null);
             Assert.Contains(statements, sql => sql.TrimStart().StartsWith(
                 "CREATE TABLE", StringComparison.OrdinalIgnoreCase));
-            Assert.Equal(13, statements.Count(sql => sql.TrimStart().StartsWith(
+            Assert.Equal(14, statements.Count(sql => sql.TrimStart().StartsWith(
                 "INSERT INTO schema_migrations", StringComparison.OrdinalIgnoreCase)));
             Assert.Contains(controlPath, openedPaths);
 
@@ -152,7 +152,7 @@ public sealed class GoalWorktreeTestsRebaseMergeSeededStateTemplate : GoalWorktr
             // Positive control for this exact destination proves the path filter works.
             Assert.Single(openedPaths.Where(path =>
                 path.Equals(copiedPath, StringComparison.OrdinalIgnoreCase)));
-            Assert.Equal(13, ReadMigrations(copiedPath).Length);
+            Assert.Equal(14, ReadMigrations(copiedPath).Length);
         }
         finally
         {

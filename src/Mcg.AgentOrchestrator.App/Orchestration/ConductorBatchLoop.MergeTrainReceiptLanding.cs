@@ -17,12 +17,12 @@ internal sealed partial class ConductorBatchLoop
             IReadOnlyList<Goal> scopedGoals,
             Dictionary<string, ParallelLandingOutcome> results,
             int tick,
-            List<string> changedGoalLines)
+            List<string> changedGoalLines, AgentOrchestratorKernel kernel)
     {
         return PassedMergeTrainReceiptAdmission.Apply(
             driver, policy, eligible, candidates, scopedGoals, results, tick, changedGoalLines,
             _passedMergeTrainReceiptHolds, _reportedStaleMergeTrainReceiptIds, line => EmitProgress(line),
             RecordParallelAcceptanceProgress,
-            (goal, reason) => ParallelAcceptanceHeld(goal, policy, reason, ConductorHoldOwner.AcceptanceQueue));
+            (goal, reason) => ParallelAcceptanceHeld(goal, policy, reason, ConductorHoldOwner.AcceptanceQueue), kernel);
     }
 }

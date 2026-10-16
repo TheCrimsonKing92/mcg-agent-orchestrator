@@ -4,12 +4,9 @@
 Owns: Claude Code harness operating guidance.
 Counterpart: AGENTS.md owns shared repository discipline plus Codex harness operating guidance.
 Rule: Agents editing shared-discipline content must update BOTH AGENTS.md and CLAUDE.md counterpart-contract blocks and shared-anchor lists, or move the content to docs/operator-runbook.md or another shared home.
-Operator procedure home: docs/operator-runbook.md owns harness-neutral operate/observe/recover procedures, including conductor stop and relaunch semantics; counterpart files point there instead of duplicating them.
-Landing progress home: docs/operator-runbook.md#landing-progress-discipline owns stalled-landing diagnosis, dependent repair integration, evidence ownership, and review convergence; both harnesses follow it.
+Driver takeover home: docs/operator-runbook.md#driver-takeover owns handoff expiry of owner intake/pacing instructions and the stop-and-ask rule when a remembered instruction conflicts with a current request; both harnesses follow it.
 Managed .NET test execution home: docs/operator-runbook.md owns the repository-safe managed-runner command and the native-apphost prohibition; counterpart files and worker skills point there instead of inventing test launch commands.
 Managed .NET build execution home: docs/operator-runbook.md owns the bounded worker-build helper, durable diagnostic-output contract, and exceptional diagnostic wrapper; counterpart files and worker skills point there instead of inventing build launch commands.
-Role capability home: docs/role-capability-matrix.md owns the enforcement-sourced worker capability and acceptance-criterion routing matrix; counterpart files point there instead of duplicating it.
-Repository conventions home: docs/repository-conventions.md owns test-source layout and repository-root conventions that protect test selection and isolated verification; counterpart files point there instead of duplicating them.
 Shared anchors:
 - output-discipline
 - retry-and-loop-control
@@ -30,7 +27,6 @@ Claude Code auto-reads this file. Shared repository discipline stays in [AGENTS.
 > **Operating the orchestrator - driving, observing, or recovering goals? Start with [`docs/operator-runbook.md`](docs/operator-runbook.md).** It is the harness-neutral canonical conductor guide, including the stuck-goal playbook and state/store map.
 > **Test-design discipline?** Use the shared [`test-design-discipline`](docs/test-design-discipline.md) guidance and Reviewer checklist requirement.
 > **Work accumulating without landings, or repeated review/correction?** Apply the shared [landing progress discipline](docs/operator-runbook.md#landing-progress-discipline) before another dispatch or full gate run.
-> **Steward and Author:** See [Steward and Author](docs/operator-runbook.md#steward-and-author) in the operator runbook.
 > **Adding or splitting test source?** Follow the shared [`repository conventions`](docs/repository-conventions.md) that protect changed-test selection and isolated verification.
 > **Writing acceptance criteria?** Assign each criterion to a capable evidence owner using the shared [`role-capability-matrix`](docs/role-capability-matrix.md) before creating the goal.
 > **Writing a brief, retry feedback, or a clarification answer — especially a second correction to the same worker?** Use [`worker-guidance-discipline`](docs/worker-guidance-discipline.md). A prohibition invites variants and an adjective invites interpretation; give a decision procedure the worker can run on its own output, or point at an exemplar already in the repo.
@@ -51,7 +47,3 @@ Use the runbook's manual-bounce procedure after loop-affecting landings and its 
 To reopen an AcceptanceFailed goal whose verdict genuinely stands (flake or environment-caused gate failure) without a paid worker round, leave the loop running and submit one atomic `adjudicate --goal <goal> <task#> reopen-regate --text-file <explanation> --evidence <reference>` (use `close` for a task that genuinely passed, `route --cause <cause>` to retry); the runbook's adjudicate section lists the evidence reference forms. It records a decision with its evidence in one intent, replacing the older `retry --mechanical` / `progress` / `verify-manual` sequence. These verbs always append typed records to `operator-intents.db`; the tick is the sole `state.db` writer and each submitting surface can poll the recorded outcome. If the loop is down, the intents remain pending until a conductor starts, unless `conductor apply-intents <goal-prefix>` applies one goal's intents offline; the procedure is the Applying intents while no conductor runs section of [docs/operator-runbook.md](docs/operator-runbook.md).
 
 For a stuck worker, use `cancel-dispatch <task-number>` (add `--goal <goal-prefix>` for another goal) or stop an exact known process id with `repo-process-stop --id <pid>`. Never run broad process cleanup.
-
-## Orchestrator Notes
-
-Both Claude and Codex operators should use `docs/operator-runbook.md` for the operate/observe/recover flow. Claude-specific mechanics belong here; shared discipline and architecture/spec/evidence rules belong in `AGENTS.md`.

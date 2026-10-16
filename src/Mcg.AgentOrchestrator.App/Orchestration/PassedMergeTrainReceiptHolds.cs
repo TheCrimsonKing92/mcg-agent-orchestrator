@@ -10,14 +10,17 @@ internal sealed class PassedMergeTrainReceiptHolds
     internal sealed record Observation(
         string MainRevision,
         IReadOnlyDictionary<GoalId, string?> CandidateRevisions,
-        IReadOnlySet<GoalId> NotReadyGoalIds, string IntegrationBranch);
+        IReadOnlySet<GoalId> NotReadyGoalIds, string IntegrationBranch,
+        IReadOnlyDictionary<GoalId, string>? LandingHeldRequestIds = null);
 
     internal sealed record Decision(
         int HeldTicks = 0,
         GoalId? BlockedMember = null,
         IReadOnlyList<GoalId>? HeldGoalIds = null,
         bool Released = false,
-        string? Moved = null);
+        string? Moved = null,
+        string? ReleaseReason = null,
+        string? HoldRequestId = null);
 
     private readonly Dictionary<string, (int Ticks, IReadOnlyList<GoalId> Members)> _heldTicks =
         new(StringComparer.Ordinal);
@@ -60,6 +63,18 @@ internal sealed class PassedMergeTrainReceiptHolds
         if (_released.Contains(id))
         {
             return new();
+        }
+
+        foreach (var member in receipt.Identity.Members)
+        {
+            if (observation.NotReadyGoalIds.Contains(member.GoalId) &&
+                observation.LandingHeldRequestIds?.TryGetValue(member.GoalId, out var requestId) == true)
+            {
+                _heldTicks.Remove(id);
+                _released.Add(id);
+                return new(BlockedMember: member.GoalId, Released: true,
+                    ReleaseReason: "landing-held", HoldRequestId: requestId);
+            }
         }
 
         var blocked = receipt.Identity.Members.First(member =>

@@ -10,11 +10,14 @@ internal static class CliCommandCapabilities
 {
     private static readonly HashSet<string> QueryCommands = new(StringComparer.OrdinalIgnoreCase)
     {
-        "tasks", "task", "status", "goals", "monitor-goal",
+        "tasks", "task", "finding", "status", "goals", "monitor-goal",
         "failure-clusters",
         "lane-reuse-shadow",
+        "build-attribution",
+        "intent-coverage",
         "remote-executors",
         "round-value",
+        "board-simulate",
         "epic-outcome-proposals",
         "architecture", "config", "model-outcomes",
         "backlog-list", "backlog-show", "backlog-similar", "goal-events", "timeline",

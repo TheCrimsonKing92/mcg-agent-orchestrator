@@ -10,9 +10,9 @@ internal static class SourceSizeRatchet
     internal const string SourcePath = "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/SourceSizeRatchet.cs";
 
     // Seeded at 6e7a90d7b3fe192ae4f1e430cb7452710f88b73c using File.ReadLines(path).Count().
-    // Each row is the only place its guarded path and ceiling value live. When extraction shrinks a guarded
-    // file, lower its ceiling here. When growth is unavoidable, put the goal-specific justification directly
-    // above that row and raise only that value. Never derive these ceilings from current files or add an opt-out.
+    // Goals do not lower rows or add measured-size comments; integration lowers rows to the tree's size before the gate.
+    // Edit a row only to raise it, with goal-specific justification directly above it. Never raise ceilings
+    // automatically or add an opt-out. A rename or removal updates the authority in the same change.
     internal static IReadOnlyList<SourceSizeCeiling> SeededCeilings { get; } = Array.AsReadOnly(
         new[]
         {
@@ -64,17 +64,19 @@ internal static class SourceSizeRatchet
             // Goal 982098a9 moves build failure results and cache identity lifetime to AcceptanceDotnetBuildPhase; measured 4969 lines.
             // Goal b7ad094e adds four call-site lines binding cleanup attribution to the selected verdict's
             // candidate/attempt before cache publication; inspection stays in AcceptanceAssemblyCleanupAttributionReader.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 4973),
+            // Goal 56ff780e adds three lines at the existing shard-progress seam to carry the result,
+            // outcome and failed-test count to the owner gate view; measured 4976 lines, no extra headroom.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 4976),
             // Goal c0cfa8ae test telemetry collaborator measured at 423 lines.
             // Goal 402c1005 moved TRX completion inspection and shard decisions into AcceptanceShardCompletionAdjudicator.
             // Goal ad3fafc0 extracted run ownership publication and stale-receipt clearing into AcceptanceTestRunPreparation.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.TestTelemetry.cs", 259),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.TestTelemetry.cs", 247),
             // Goal efdff7b2 build-artifact lock collaborator measured at 334 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.BuildArtifactLock.cs", 334),
             // Goal 78053cf4 capture custody collaborator measured at 378 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.CaptureCustody.cs", 378),
             // Goal c60a7cb5 split focused-evidence request resolution into its own type.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.FocusedEvidenceRequestResolver.cs", 740),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.FocusedEvidenceRequestResolver.cs", 696),
             // Goal 40cc558d keeps direct SDK selection, bounded missing-executable fallback, and pipe recustody at the capture lifecycle boundary; measured candidate is 635 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.ProcessRunner.cs", 198),
             // Goal e3bb2a77 extracted acceptance child invocation into its own owner.
@@ -128,26 +130,28 @@ internal static class SourceSizeRatchet
             // branch through it (one field and its wiring). Measured 1789 lines after both; no extra headroom.
             // Goal f62c7f67 extracts owned gate/evidence coordinator construction into
             // OwnedChildAttemptCoordinatorFactory; measured 1783 lines, no extra headroom.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 1783),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs", 1735),
             // Goal 0e30d5e9 extracted impact-plan mapping to PreReviewEvidenceContextBuilder.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.PreReviewEvidence.cs", 480),
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.ReviewRecovery.cs", 461),
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.LandingCompletion.cs", 692),
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.AcceptanceCohortExecution.cs", 641),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.PreReviewEvidence.cs", 467),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.ReviewRecovery.cs", 439),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.LandingCompletion.cs", 645),
+            // Goal eade84cb preserves published cohort receipts while holder cleanup still reserves capacity.
+            // Custody remains separately owned; after integrating main f34678bcb, measured 645 lines, with no extra headroom.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.AcceptanceCohortExecution.cs", 645),
             // Goal 5a07b0d6 retains three orchestration lines carrying reattached receipt ids to the
             // closure-first route; the reused-green branch owns this delivery handoff, not receipt selection.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FindingEvidenceRequests.cs", 921),
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FailedGoalRecovery.cs", 369),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FindingEvidenceRequests.cs", 754),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FailedGoalRecovery.cs", 346),
             // Goal 4ff31b70 (ConductorDriver size relief) moved parallel acceptance members unchanged to this partial.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.ParallelAcceptance.cs", 627), // def5cd48: planner conflict probe and existing-policy escalation.
             // Goal 4ff31b70 (ConductorDriver size relief) moved dispatch diagnostics unchanged to this partial.
             // Goal 0079c3a4 moved dispatch-start effects into DispatchStartExecutor.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.DispatchDiagnostics.cs", 378),
             // Goal 4ff31b70 (ConductorDriver size relief) moved git and lease helpers unchanged to this partial.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.GitAndLeaseHelpers.cs", 145),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.GitAndLeaseHelpers.cs", 130),
             // Goal 4ff31b70 (ConductorDriver size relief) moved pre-review evidence routing unchanged to this partial.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.PreReviewEvidenceRouting.cs", 199),
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Core/Application/FailedGoalRecoveryPolicy.cs", 775),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.PreReviewEvidenceRouting.cs", 184),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Core/Application/FailedGoalRecoveryPolicy.cs", 748),
             // Raised for goal dadadfac: set-aside re-admission must be decided where the loop already holds
             // the goal, its recorded set-aside entry, and the current sweep blockers together.
             // Raised for goal 289b469d: registration-fault hold/escalation must be decided at the existing
@@ -178,7 +182,11 @@ internal static class SourceSizeRatchet
             // Goal 8cc45279 extracts live-gate drain hold policy and polling to ConductorSelfRelaunchDrainHold; measured 2694.
             // Goal f8d371e2 adds the tick-local live suppression closure and admission checks where
             // pendingSelfRelaunch is owned; hold formatting remains separately owned. Measured 2707, no headroom.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2707),
+            // Goal 920a6429 adds one serial-walk binding to the separately owned GoalWalkOrder;
+            // acceptance admission keeps the original eligible list. Goal eade84cb wires acceptance-holder
+            // detach before loop exit at the existing dispatch boundary; holder transfer stays in its coordinator.
+            // After integrating main b8da8f673, measured 2710 lines; no extra headroom.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2710),
             // Goal 354522f1 tick persistence partial measured at 467 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.TickPersistence.cs", 467),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.DependencyReadmission.cs", 375),
@@ -186,7 +194,7 @@ internal static class SourceSizeRatchet
             // Goal 33b9b7a6 extracts reconciled-pass application to PassedAcceptanceReceiptReplay.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.ParallelAcceptanceCompletion.cs", 462),
             // Goal 6e664238 conduct-event partial measured at 260 lines.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.ConductEvents.cs", 260),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.ConductEvents.cs", 250),
             // Goal f8d371e2 threads live suppression through the existing admission phases and rechecks
             // it between inline solo completions, preserving in-flight gates. Measured 804, no headroom.
             // Goal 33b9b7a6 extracts receipt replay admission and progress to PassedAcceptanceReceiptReplay.
@@ -242,7 +250,8 @@ internal static class SourceSizeRatchet
             // operation lifecycle/custody stays in CompletionBuildEvidenceCoordinator. Measured 2728; no headroom.
             // Goal ffa0471e extracts historical/current completion-build policy to its owning collaborator.
             // Integrated build-scope extraction and task-intent admission: measured 2736, no headroom.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Processes/BackgroundDispatchRunner.cs", 2736),
+            // Goal e7c4bc06 adds Tester submission ingestion: measured 2743, no headroom.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Processes/BackgroundDispatchRunner.cs", 2743),
             // Goal 5a75fed0 extracted typed projection parsing and literal restoration into
             // WorkerContextProjectionResidual, leaving the dispatcher to sequence package assembly.
             // Goal fd252fe4 adds retry fingerprints for the resolved provider, model, paid route, and
@@ -322,10 +331,12 @@ internal static class SourceSizeRatchet
             // Both transaction branches must register here and run only after commit; no extra headroom.
             // Goal 09a3023d adds four entry-point lines to preserve the authenticated submission source
             // for outcome/compatibility mutations; parsing and application live in dedicated collaborators.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 4812),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 4803),
             // Goal 03aaf13e adds the explicit-root isolation fact at the verifier's existing execution-
             // environment seam; the production verifier remains at its prior ceiling.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs", 1611),
+            // Goal 56ff780e keeps passed/failed/unknown shard-completion producer coverage in its owning
+            // test class as required by criterion 3; measured 1643 lines, no extra headroom.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs", 1643),
             // Goal 682f25a1 re-derived this row after integrating goal c2eae988, whose fault-isolation
             // eligibility coverage had already added 173 net lines before the multi-file ratchet landed.
             // Goal ce3c3917 adds the two MakeDriver forwarding seams required to inject and capture the
@@ -356,15 +367,15 @@ internal static class SourceSizeRatchet
             // guarded is exactly the pair coming apart; splitting them would lose the contract they compare.
             // Reconciled again for goal cf64014b on 2026-09-22, which adds one lease-recovery assertion at
             // this acceptance seam; ceiling re-measured at the integrated head.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsAcceptanceCoordination.cs", 1281),
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsAcceptanceCoordination.cs", 1242),
             // Raised for goal 13630c9f: lifecycle coverage keeps unchanged-candidate holds, bounded
             // operator release, and main/candidate HEAD regating in one state-transition decision table.
             // Raised for goal d5fcf981: acceptance attribution controls prove worker retry versus held
             // lifecycle transitions, including canonical identities produced from a TRX receipt.
             // Goal fc109f3f keeps both apparatus classifications in the five-role lifecycle decision table
             // that proves unchanged candidates preserve all completed worker evidence during re-gating.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsLifecycleStates.cs", 2002),
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsReviewRetryConvergence.cs", 778),
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsLifecycleStates.cs", 1942),
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsReviewRetryConvergence.cs", 777),
             // Raised for goal 4e3cdbb8: behavioral coverage now pins every permanent and transient
             // finding-evidence refusal disposition plus receipt-id priority on the next-round request loop.
             // Raised for goal 52590d3e: the finding-evidence owner now carries both recorded incident shapes,
@@ -375,13 +386,15 @@ internal static class SourceSizeRatchet
             // brief evidence assertions together; extracting only the added assertions splits that contract.
             // Goal 01ea3f4d extracts the passing-Tester receipt integration contract and its brief helper
             // into ConductorDriverTestsPassingFindingEvidence; the remaining file measures 2559 lines.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsFindingEvidence.cs", 2559),
+            // Goal 046ea7d3 separates focused-evidence planning and apparatus fixtures.
+            // Integrated finding-evidence file measures 2490 lines; no extra headroom.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsFindingEvidence.cs", 2490),
             // Goal 1a43cb08 adds clause-boundary, broker-validation, and split-coverage regression facts.
             // Goal d62efe7a freezes the 36-class premise list so unrelated test inventory cannot change the split test.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsPreReviewEvidence.cs", 1503),
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsPreReviewEvidence.cs", 1498),
             // Goal 42115646 pins the migrated rung-8 escalation warning at the real Driver note-effect seam.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsContractRepairBounds.cs", 1228),
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsDispatchRecovery.cs", 537),
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsContractRepairBounds.cs", 1220),
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsDispatchRecovery.cs", 536),
             // Goal 42115646 pins pure-policy precedence/equality separately from the Driver effect seam.
             // Review correction adds the rung-8 phase counterfactual, walks policy-owned helper IL
             // transitively, and pins the policy/interpreter owners at measured post-review sizes.
@@ -389,24 +402,24 @@ internal static class SourceSizeRatchet
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Core.Tests/FailedGoalRecoveryPolicyBoundaryTests.cs", 114),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FailedGoalRecoveryExtractionTests.cs", 59),
             new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorDriverTestsFailedGoalRecoveryInterpreter.cs", 192),
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommands.cs", 1489),
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsAcceptance.cs", 697),
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsConductLoopHydration.cs", 817),
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsDispatchRecovery.cs", 455),
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommands.cs", 1488),
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsAcceptance.cs", 695),
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsConductLoopHydration.cs", 801),
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsDispatchRecovery.cs", 417),
             // Raised for goal 8b6de491: the slice-batch preview test needs an available Developer agent in
             // its roster now that creating a batch requires one, and the roster is declared inline.
             // Raised for goal 152bd7c9: source-claim replacement regressions add 7 lines of assertions;
             // the broader intake/replacement suite remains scheduled for decomposition.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacement.cs", 2751),
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsGoalIntakeAndReplacement.cs", 2748),
             // Raised for goal a2289b27: the strict-checkpoint fixture explicitly names its initial
             // branch main before provisioning a goal worktree, so it works with non-main Git defaults.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsGoalQueriesAndLanding.cs", 984),
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsStartupAndMetadata.cs", 275),
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsGoalQueriesAndLanding.cs", 983),
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTestsPersistentRunnerCommandsStartupAndMetadata.cs", 274),
             // Raised for goals fd252fe4 and b8dde431: worker-result fixtures supply the required typed provider-
             // interruption cause and PID-identity evidence; owning-suite assertions preserve coverage.
             // Raised for goal 2dd0ece6: the real dispatch leak guard tests exercise the launched-host
             // ownership path without splitting this already consolidated classification fixture.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTestsWorkerResultClassification.cs", 4825),
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTestsWorkerResultClassification.cs", 4824),
             // Goal 46ff9f83 adds unequal logical-width/build-permit controls and the typed maximum diagnostic.
             // Goal 289b469d adds the per-stage registration-fault decision table, bounded-cap proof, durable
             // fault/verdict state distinction, and paid-round negative controls owned by this existing class.
@@ -423,13 +436,14 @@ internal static class SourceSizeRatchet
             // Reconciled after integrating main e1f6f11c at its measured post-merge test-owner size.
             // Goal 5daaa1db replaces ambient build-root mutation with explicit child-launch ownership
             // and disposes the owned root; the real-process transport assertions remain in this fixture.
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorBatchLoopTestsParallelAcceptance.cs", 5284),
-            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/DotnetBuildEnvironmentManagerTests.cs", 1480),
+            // Goal 2c245bc3 waits for the primer holder's capacity release before asserting next-slot admission.
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorBatchLoopTestsParallelAcceptance.cs", 5285),
+            new SourceSizeCeiling("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/DotnetBuildEnvironmentManagerTests.cs", 1357),
         });
 
     // Reseeded at main 584b86d13 using complete File.ReadLines counts for files declaring each partial class.
-    // Lower a row when extraction shrinks the class; raise it only with a goal-specific justification
-    // directly above that row. Moving members into another partial file does not shrink the class.
+    // Goals do not lower rows or add measured-size comments; integration lowers rows to the tree's size before the gate.
+    // Raise only with goal-specific justification directly above; renames/removals update the authority in the same change.
     internal static IReadOnlyList<SourceClassCeiling> SeededClassCeilings { get; } = Array.AsReadOnly(
         new[]
         {
@@ -464,11 +478,26 @@ internal static class SourceSizeRatchet
             // Goal 33b9b7a6 extracts bounded carry receipt formatting into AcceptanceMainAdvanceReceipt.
             // Goal 33b9b7a6 also extracts revalidation hold-identity formatting into that receipt owner.
             // Measured 14962 lines across the same 70 partial files; no extra headroom.
+            // Goal eade84cb adds holder-detach wiring and preserves cohort/train receipts during cleanup.
+            // Custody lives in AcceptanceHolderLease.
             // Goal ffa0471e wires attached-operation reconciliation when current worker metadata is absent;
             // lifecycle remains in CompletionBuildEvidenceCoordinator. Measured 14970 in the same 70 partials; no headroom.
             // Goal 6a4ec362 moves exact-pair/context validation to AcceptanceCriterionEvidence before
             // recording rebound gate evidence. Measured 14968 across the same 70 partials; no headroom.
-            new SourceClassCeiling("ConductorDriver", 14968, 70),
+            // Goal 046ea7d3 extracts executed-member disposition finalization into FindingEvidenceRequestCompletion.
+            // After integrating main 790560adf, measured 14876 lines across the same 70 partial files; no extra headroom.
+            // Goal 046ea7d3 extracts filter validation and class expansion into FindingEvidenceFilterSyntax.
+            // After integrating main 79b67570c, measured 14807 lines across the same 70 partial files; no extra headroom.
+            // Goal 8d040dde adds landing-completion handling in ConductorDriver.LandingCompletion; after integrating
+            // main 3732befa8, measured 14823 lines across the same 70 partial files; no extra headroom.
+            // Goal 4cad184f adds three lines of grouped-receipt RED handling; after integrating main fd7b91785,
+            // measured 14826 lines across the same 70 partial files; no extra headroom.
+            // Goal eade84cb adds acceptance-admission holder checks; after integrating main cb6e071fa,
+            // measured 14839 lines across the same 70 partial files; no extra headroom.
+            // Goal 2c245bc3 restores overlapping holders and derives a recoverable admission hold.
+            // The recovery sweep also settles non-reserving attempts once their holder is proven settled.
+            // Measured 14888 lines across the same 70 partial files; no extra headroom.
+            new SourceClassCeiling("ConductorDriver", 14883, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
@@ -491,7 +520,15 @@ internal static class SourceSizeRatchet
             // Goal ffa0471e validates an exact completion-build selector and enqueues typed cancellation without
             // stopping a historical worker; lifecycle remains in the coordinator.
             // Integrated size is 12167 lines in the same 30 partials; no extra headroom.
-            new SourceClassCeiling("CliCommandHandlers", 12167, 30),
+            // Goal 109d0d1d adds the backlog-list JSON branch beside the existing claim/readiness
+            // resolution so both routes share filtering and human rendering stays byte-identical.
+            // Envelope serialization remains in BacklogListAgentReadView. Goal 920a6429 adds only the
+            // two-line route to the separately owned CliGoalPriorityCommand; intent submission stays in
+            // that type. Goal f3df9ed9 adds two wiring lines; program-health logic lives in
+            // ConductorProgramHealthMonitor. After integrating main b8da8f673, measured 12194 lines across
+            // the same 30 partial files, with no extra headroom.
+            // Goal 6cf5a8ce routes the backlog-premise-check/close verbs to their separately owned command type.
+            new SourceClassCeiling("CliCommandHandlers", 12186, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
             // Goal 03580ad1 extracts source-mutation edits to AcceptanceSourceMutation; measured 8938 lines in 31 partials.
@@ -503,7 +540,9 @@ internal static class SourceSizeRatchet
             // into DotnetBaseBuildCacheIdentityResolver; measured 8678 total lines in 28 partial files, no extra headroom.
             // Goal b7ad094e keeps the four cleanup-attribution binding lines at the verifier's verdict/cache
             // boundary; receipt inspection is separately owned. Measured 8682 lines in the same 28 partials, no headroom.
-            new SourceClassCeiling("GoalAcceptanceVerifier", 8682, 28),
+            // Goal 56ff780e adds only the three result/outcome/count lines at the existing shard-progress
+            // seam; gate read-model behavior is separately owned. Measured 8685 lines in the same 28 partials.
+            new SourceClassCeiling("GoalAcceptanceVerifier", 8685, 28),
             // Goal d647b5f3 extracts premise-invalid clarification construction to PremiseInvalidClarification.
             // Goal 439c80ae extracts Reviewer evidence brief projection to ReviewerEvidenceBriefSection;
             // measured 9319 total lines across the existing 27 partial files, with no extra headroom.
@@ -522,7 +561,12 @@ internal static class SourceSizeRatchet
             // transitions require the kernel-owned clock, goal refresh and progress append; TaskSpec owns
             // retry admission accounting and Execution owns persisted denial evidence. Keeping the transaction
             // here preserves lifecycle ownership. Measured 9305 lines in 28 partials; no extra headroom.
-            new SourceClassCeiling("AgentOrchestratorKernel", 9305, 28),
+            // Goal 920a6429 keeps priority mutation and its audit append at the owning kernel lifecycle seam;
+            // parsing and ordering live in separate types. Goal c55f943c adds one Reviewer binding call before
+            // finding deferral. After integrating main b8da8f673, measured 9309 lines in the same 28 partials; no headroom.
+            // Goal 171a09ca records gate-owned Planner requests as typed obligations at the dispatch intake;
+            // measured increase is exactly 10 lines (9319 total), with the same 28 partials and no headroom.
+            new SourceClassCeiling("AgentOrchestratorKernel", 9319, 28),
             // Goal d6033045 extracted the pre-admission receipt pass to PassedMergeTrainReceiptAdmission; goal 1d0f2317
             // adds one admission predicate to exclude stream-complete children before slot reservation. Measured 9255.
             // Goal 679eee57 added a one-line tick call to the separately owned ConductorExperimentWatch (+1); goal 80de5cb2 extracted
@@ -539,8 +583,11 @@ internal static class SourceSizeRatchet
             // Goal 207369f1 counts pending completion builds in existing relaunch draining and prevents detaching them;
             // lifecycle remains in CompletionBuildEvidenceCoordinator. Measured 9270 across the same 55 partials; no headroom.
             // Integrated receipt replay and completion-build draining: measured 9239 across 54 partial files, no headroom.
-            // Goal 587ba8d2 adds one train-receipt-revalidate conduct event mapping line.
-            new SourceClassCeiling("ConductorBatchLoop", 9240, 54),
+            // Goal 920a6429 adds one binding to GoalWalkOrder for the serial walk only;
+            // sorting lives in that collaborator. Goal eade84cb adds acceptance-holder detach wiring before
+            // checkpoint/exit; the coordinator owns transfer. After integrating main b8da8f673, measured 9242 lines
+            // in the same 54 partials. Goal 587ba8d2 adds one train-receipt-revalidate conduct event mapping line.
+            new SourceClassCeiling("ConductorBatchLoop", 9243, 54),
             // Goal ec8903af moved the goal-prefix parser to CliGoalPrefixArguments.
             // Goal cd1f6380 adds four lines at the owning transaction boundary, forwarding both
             // registrars and invoking actions after commit; list behavior lives in PostCommitActions.
@@ -549,8 +596,9 @@ internal static class SourceSizeRatchet
             // Measured 5964 total lines across the same 18 partial files; no extra headroom.
             // Goal ddab9e7f adds three lines to forward the startup loop lease and run
             // WorkspaceStoreSetup under that ownership; migration planning stays in WorkspaceStoreSetup.
-            // Measured 5967 total lines across the same 18 partial files; no extra headroom.
-            new SourceClassCeiling("CliPersistentStateRunner", 5967, 18),
+            // Goal 920a6429 routes priority submission without a kernel-save transaction, preventing stale writes;
+            // the command owns intent submission. After integrating main, measured 5972 lines in the same 18 partials; no headroom.
+            new SourceClassCeiling("CliPersistentStateRunner", 5972, 18),
             // Goal 5935c270 extracts subscription-plan output into SubscriptionPlanTextView
             // (2026-10-09 console architecture review, finding 4, taming slice 13).
             // Goal c0ff6203 extracts six small text views (taming slice 14).
@@ -561,7 +609,9 @@ internal static class SourceSizeRatchet
             // Goal f968e488 extracts supervisor and acceptance queue output (slice 14): measured 2804 lines in 36 partials; no headroom.
             // Goal 85702c95 extracts gate-status rendering to GateStatusTextView; measured 2767 lines in 36 partials, no headroom.
             // Goal 7ba60507 extracts process-log presentation to ProcessLogsTextView; measured 2727 lines in 35 partials, no headroom.
-            new SourceClassCeiling("ConsoleViews", 2727, 35),
+            // Goal 920a6429 adds conditional priority text at the existing board and detail rendering seams;
+            // Normal output stays identical. Measured 2730 lines in the same 35 partials; no headroom.
+            new SourceClassCeiling("ConsoleViews", 2730, 35),
         });
 
     internal static IReadOnlyList<SourceSizeViolation> EvaluateClasses(
@@ -576,16 +626,47 @@ internal static class SourceSizeRatchet
             return [];
         }
 
+        var measurements = MeasureClasses(repositoryRoot, ceilings.Select(ceiling => ceiling.ClassName),
+            out var violations, readLines, enumerateSourceFiles);
+        foreach (var ceiling in ceilings)
+        {
+            var (total, count) = measurements.GetValueOrDefault(ceiling.ClassName);
+            if (total > ceiling.MaximumTotalLineCount)
+            {
+                violations.Add(new SourceSizeViolation(
+                    $"class:{ceiling.ClassName}", total, ceiling.MaximumTotalLineCount,
+                    BuildClassOverCeilingMessage(ceiling, total, ceiling.MaximumTotalLineCount, "class total-line")));
+            }
+
+            if (count > ceiling.MaximumPartialFileCount)
+            {
+                violations.Add(new SourceSizeViolation(
+                    $"class:{ceiling.ClassName}", count, ceiling.MaximumPartialFileCount,
+                    BuildClassOverCeilingMessage(ceiling, count, ceiling.MaximumPartialFileCount, "partial-file-count")));
+            }
+        }
+
+        return violations;
+    }
+
+    internal static IReadOnlyDictionary<string, (int TotalLines, int PartialFiles)> MeasureClasses(
+        string repositoryRoot, IEnumerable<string> classNames, out List<SourceSizeViolation> violations,
+        Func<string, IEnumerable<string>>? readLines = null,
+        Func<string, IEnumerable<string>>? enumerateSourceFiles = null,
+        IDictionary<string, List<string>>? partialFiles = null)
+    {
+        var names = classNames.Distinct(StringComparer.Ordinal).ToArray();
+        violations = [];
+        if (names.Length == 0) return new Dictionary<string, (int, int)>(StringComparer.Ordinal);
         readLines ??= File.ReadLines;
         enumerateSourceFiles ??= root => Directory.Exists(Path.Combine(root, "src"))
             ? Directory.EnumerateFiles(Path.Combine(root, "src"), "*.cs", SearchOption.AllDirectories)
             : [];
-        var patterns = ceilings.Select(ceiling => new Regex(
-            $@"\bpartial\s+class\s+{Regex.Escape(ceiling.ClassName)}\b",
+        var patterns = names.Select(name => new Regex(
+            $@"\bpartial\s+class\s+{Regex.Escape(name)}\b",
             RegexOptions.CultureInvariant)).ToArray();
-        var totals = new int[ceilings.Length];
-        var counts = new int[ceilings.Length];
-        var violations = new List<SourceSizeViolation>();
+        var totals = new int[names.Length];
+        var counts = new int[names.Length];
         var seenPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         try
         {
@@ -609,12 +690,18 @@ internal static class SourceSizeRatchet
                 {
                     var lines = readLines(sourcePath).ToArray();
                     var text = string.Join("\n", lines);
-                    for (var index = 0; index < ceilings.Length; index++)
+                    for (var index = 0; index < names.Length; index++)
                     {
                         if (patterns[index].IsMatch(text))
                         {
                             totals[index] += lines.Length;
                             counts[index]++;
+                            if (partialFiles is not null)
+                            {
+                                if (!partialFiles.TryGetValue(names[index], out var paths))
+                                    partialFiles[names[index]] = paths = [];
+                                paths.Add(relativePath);
+                            }
                         }
                     }
                 }
@@ -631,25 +718,8 @@ internal static class SourceSizeRatchet
                 "src/", null, 0, BuildUnreadableFileMessage("src/", exception)));
         }
 
-        for (var index = 0; index < ceilings.Length; index++)
-        {
-            var ceiling = ceilings[index];
-            if (totals[index] > ceiling.MaximumTotalLineCount)
-            {
-                violations.Add(new SourceSizeViolation(
-                    $"class:{ceiling.ClassName}", totals[index], ceiling.MaximumTotalLineCount,
-                    BuildClassOverCeilingMessage(ceiling, totals[index], ceiling.MaximumTotalLineCount, "class total-line")));
-            }
-
-            if (counts[index] > ceiling.MaximumPartialFileCount)
-            {
-                violations.Add(new SourceSizeViolation(
-                    $"class:{ceiling.ClassName}", counts[index], ceiling.MaximumPartialFileCount,
-                    BuildClassOverCeilingMessage(ceiling, counts[index], ceiling.MaximumPartialFileCount, "partial-file-count")));
-            }
-        }
-
-        return violations;
+        return Enumerable.Range(0, names.Length).Where(index => counts[index] > 0)
+            .ToDictionary(index => names[index], index => (totals[index], counts[index]), StringComparer.Ordinal);
     }
 
     private static string BuildClassOverCeilingMessage(SourceClassCeiling ceiling, int actual, int maximum, string limit)
@@ -657,7 +727,7 @@ internal static class SourceSizeRatchet
         return $"class:{ceiling.ClassName} has {actual.ToString(CultureInfo.InvariantCulture)}, " +
             $"exceeding the {limit} ceiling of {maximum.ToString(CultureInfo.InvariantCulture)}. " +
             "Moving members into another partial file of the same class does not satisfy this limit. " +
-            "Extract members into a separately owned type and lower the row, or raise the row with " +
+            "Extract members into a separately owned type; the conductor lowers the row when the change integrates. Otherwise raise the row with " +
             $"goal-specific justification directly above it in {SeededClassCeilingsSymbol}. See {DocumentationPath}.";
     }
 
@@ -825,8 +895,8 @@ internal static class SourceSizeRatchet
     {
         return $"{ceiling.RelativePath} has {actualLineCount.ToString(CultureInfo.InvariantCulture)} lines, " +
             $"exceeding the recorded ceiling of {ceiling.MaximumLineCount.ToString(CultureInfo.InvariantCulture)}. " +
-            "Extract behavior to a collaborator and lower the ceiling for this entry, or raise the recorded " +
-            "ceiling for this entry deliberately with justification in the same change by editing " +
+            "Extract behavior to a collaborator; the conductor lowers the row to the measured size when the change integrates. Otherwise raise the recorded " +
+            "ceiling for this entry deliberately with justification in the same change, with the justification directly above the row in " +
             $"{SeededCeilingsSymbol}. See {DocumentationPath}.";
     }
 

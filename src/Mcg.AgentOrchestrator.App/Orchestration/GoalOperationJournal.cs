@@ -1231,27 +1231,33 @@ internal static partial class GoalOperationJournal
     {
         try
         {
-            var storePath = System.IO.Path.Combine(
-                System.IO.Path.GetFullPath(executionDirectory),
-                ".orchestrator",
-                "run-events.db");
-            var store = GetRunEventStore(storePath);
-            store.AppendAsync(new RunEventAppend(
-                RunEventTypes.GoalOperation,
-                entry.GoalId.Value,
-                entry.Operation,
-                entry.Status.ToString(),
-                entry.Detail,
-                JsonSerializer.Serialize(entry, JsonOptions),
-                entry.At))
-                .GetAwaiter()
-                .GetResult();
+            AppendRunEvent(executionDirectory, entry, OrchestratorProjectRegistry.CreateDefault());
         }
         catch
         {
             // The journal is still the command's primary lifecycle side effect; observability must not
             // make dispatch or acceptance fail.
         }
+    }
+
+    internal static void AppendRunEvent(
+        string executionDirectory,
+        GoalOperationJournalEntry entry,
+        OrchestratorProjectRegistry registry)
+    {
+        var storePath = GoalOperationRunEventStoreLocator.Resolve(executionDirectory, registry);
+        Directory.CreateDirectory(Path.GetDirectoryName(storePath)!);
+        var store = GetRunEventStore(storePath);
+        store.AppendAsync(new RunEventAppend(
+            RunEventTypes.GoalOperation,
+            entry.GoalId.Value,
+            entry.Operation,
+            entry.Status.ToString(),
+            entry.Detail,
+            JsonSerializer.Serialize(entry, JsonOptions),
+            entry.At))
+            .GetAwaiter()
+            .GetResult();
     }
 
     internal static SqliteRunEventStore GetRunEventStore(string storePath)

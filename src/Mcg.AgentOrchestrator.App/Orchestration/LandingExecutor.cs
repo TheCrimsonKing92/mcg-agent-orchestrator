@@ -49,7 +49,8 @@ internal static partial class LandingExecutor
         IOperatorChannel? channel = null,
         ConductorAutonomyPolicy? policy = null,
         IGoalLifecycleEventWriter? eventWriter = null,
-        Func<string?>? mutationBlocker = null)
+        Func<string?>? mutationBlocker = null,
+        IClock? promotionClock = null)
     {
         var executionDirectory = workspace.ExecutionDirectory;
         var goalPrefix = goal.Id.Value[..8];
@@ -127,20 +128,23 @@ internal static partial class LandingExecutor
 
         var changedFiles = changedFilesResult.Files;
         var prospectiveEvidence = EvaluatePendingHumanInput(
-            kernel, goal, workspace.OrchestratorDirectory, ResolveRef(executionDirectory, goalBranch)).Resolution;
+            kernel, goal, workspace.OrchestratorDirectory, ResolveRef(executionDirectory, goalBranch));
         var acceptance = GoalAcceptanceStatusProjector.Build(kernel, goal, workspace.ExecutionDirectory, workspace.IntegrationBranch);
-        var acceptanceAccepted = acceptance.IsAccepted && prospectiveEvidence.UnresolvedWaits.Count == 0;
+        var acceptanceAccepted = acceptance.IsAccepted && prospectiveEvidence.Resolution.UnresolvedWaits.Count == 0 &&
+            prospectiveEvidence.ObligationLines.Count == 0;
         landingFacts = landingFacts with
         {
             AcceptanceAccepted = acceptanceAccepted,
-            AcceptanceHoldDescription = prospectiveEvidence.UnresolvedWaits.Count == 0
+            AcceptanceHoldDescription = prospectiveEvidence.Resolution.UnresolvedWaits.Count == 0 &&
+                prospectiveEvidence.ObligationLines.Count == 0
                 ? acceptance.AcceptanceHoldDescription
                 : acceptance.AcceptanceHoldDescription + string.Concat(
-                    prospectiveEvidence.UnresolvedWaits.Select(wait =>
+                    prospectiveEvidence.Resolution.UnresolvedWaits.Select(wait =>
                         $"  {HumanWaitKind.ProspectiveAcceptanceEvidence} {wait.RequestId.Value[..8]} " +
                         (wait.SubmissionFailure is { } failure
                             ? $"submission failed: {failure}"
-                            : $"missing: {string.Join(", ", wait.MissingOrFailedTestNames)}")))
+                            : $"missing: {string.Join(", ", wait.MissingOrFailedTestNames)}"))) +
+                string.Concat(prospectiveEvidence.ObligationLines.Select(line => $"  {line}"))
         };
         if (!acceptanceAccepted)
         {
@@ -366,6 +370,8 @@ internal static partial class LandingExecutor
                 false, $"Parked on {IntegrationBranchName}: {reason}");
         }
 
+        RecordSuccessfulPromotion(workspace, [(goal.Id, evidenceCandidateSha!)], boundMainRevision!,
+            candidateRevision!, GoalPromotionFact.SoloProvenance, promotionClock);
         DeleteLandingAnchor(executionDirectory, goal, candidateRevision!);
 
         var synchronizeWorktree = RunGit(
@@ -660,7 +666,8 @@ internal static partial class LandingExecutor
         CohortAcceptanceStore store,
         ConductorAutonomyPolicy policy,
         IGoalLifecycleEventWriter? eventWriter = null,
-        Func<string?>? mutationBlocker = null)
+        Func<string?>? mutationBlocker = null,
+        IClock? promotionClock = null)
     {
         ArgumentNullException.ThrowIfNull(goals);
         ArgumentNullException.ThrowIfNull(receipt);
@@ -880,6 +887,9 @@ internal static partial class LandingExecutor
                     : AcceptanceCohortLandingOutcome.RetryableHold,
                 $"Cohort receipt invalidated because main changed at the compare-and-swap boundary: {advanceMain.Error}; {rollbackDetail}.");
         }
+        RecordSuccessfulPromotion(workspace,
+            receipt.Identity.Members.Select(member => (member.GoalId, member.CandidateRevision)).ToArray(),
+            receipt.Identity.ObservedMainRevision, commit, GoalPromotionFact.CohortProvenance, promotionClock);
         var refreshCheckout = RunGit(
             executionDirectory,
             "read-tree", "-m", "-u", receipt.Identity.ObservedMainRevision, commit);

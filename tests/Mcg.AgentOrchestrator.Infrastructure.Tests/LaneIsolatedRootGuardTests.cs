@@ -10,40 +10,17 @@ public sealed class LaneIsolatedRootGuardTests
         "Owns a GUID DotnetBuildStorageRoot via DotnetBuildEnvironmentManagerRootedTestBase; its separate collection protects process-local hooks.";
 
     // Waivers are named, reviewable, and rejected when no longer needed. They do not waive the clear scan.
-    private static readonly IReadOnlyDictionary<Type, string> CollectionExceptions = new Dictionary<Type, string>
+    private static IReadOnlyDictionary<Type, string> LoadCollectionExceptions()
     {
-        [typeof(DotnetBuildEnvironmentManagerTests)] = ExplicitStorage,
-        [typeof(DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixtures)] = ExplicitStorage,
-        [typeof(DotnetBuildEnvironmentManagerTestsOwnedRunRootRegistration)] = ExplicitStorage,
-        [typeof(DotnetBuildEnvironmentManagerTestsSlotsBusyLiveness)] = ExplicitStorage,
-        [typeof(DotnetBuildEnvironmentManagerTestsStableSlotArtifacts)] = ExplicitStorage,
-        [typeof(DotnetBuildEnvironmentManagerTestsWriteFailureScope)] = ExplicitStorage,
-        [typeof(DotnetBuildEnvironmentManagerTestsStableSlotHolderLabel)] = ExplicitStorage,
-        [typeof(DotnetBuildEnvironmentManagerTestsLeasePermitsStaleRecovery)] = ExplicitStorage,
-        [typeof(DotnetBuildEnvironmentManagerTestsFocusedRunner)] =
-            "Owns explicit storage through the rooted base; child runners pin their own override or GUID LOCALAPPDATA fallback, not the host grid.",
-        [typeof(DotnetBuildEnvironmentManagerTestsProcessSpawnGuard)] = ExplicitStorage,
-        [typeof(LocalProcessVerifierStaticHookTests)] = ExplicitStorage,
-        [typeof(StructuralCoveragePermitWaitTests)] = ExplicitStorage,
-        [typeof(ConductorBatchLoopTestsDecisionProgressLine)] = "Formats decisions; no build or slot acquisition.",
-        [typeof(ConductorBatchLoopTestsAuthorAnswer)] = "Exercises author policy with injected conductor actions; no real build.",
-        [typeof(ConductorBatchLoopTestsActivationHeartbeat)] = "Uses fake conductor/heartbeat callbacks; no real build.",
-        [typeof(ConductorBatchLoopTestsActivationHeartbeatBeforeSleep)] = "Uses fake sleep and heartbeat callbacks; no real build.",
-        [typeof(ConductorBatchLoopTestsActivationHeartbeatBeforeSleepOffTickCadence)] = "Uses fake sleep and heartbeat callbacks; no real build.",
-        [typeof(ConductorBatchLoopTestsIdleActivationHeartbeat)] = "Uses injected idle-loop callbacks; no real build.",
-        [typeof(ConductorBatchLoopTestsConsoleCodePageChange)] = "Uses a GUID log root and injected conductor actions; no real build.",
-        [typeof(ConductorBatchLoopTestsPromptRolloutWatchLanding)] = "Uses fake conductor/landing callbacks; no real build.",
-        [typeof(ConductorBatchLoopTestsParallelAcceptanceHoldOwner)] = "Checks hold policy with fake acceptance actions; no real build.",
-        [typeof(ConductorBatchLoopTestsStewardCaseEClose)] = "Checks steward policy with injected actions; no real build.",
-        [typeof(ConductorBatchLoopTestsStewardCaseDClose)] = "Uses StewardCaseDHarness with GUID stores and injected actions; no real build.",
-        [typeof(ConductorBatchLoopTestsStewardCaseFRoute)] = "Uses StewardCaseFHarness with GUID stores, a fake model, and injected driver actions; no real build or slot acquisition.",
-        [typeof(ConductorBatchLoopTestsStaleProcessReconcile)] = "Uses fake process reconciliation and conductor actions; no real build.",
-        [typeof(ConductorBatchLoopTestsSpawnLaunchName)] = "Checks dispatch metadata with injected launch actions; no real build.",
-        [typeof(ConductorBatchLoopTestsRetryReservationReadmit)] = "Uses fake retry/dispatch actions; no real build.",
-        [typeof(ConductorBatchLoopTestsUnappliedExitStream)] = "Uses fake exit-stream/conductor actions; no real build.",
-        [typeof(ConductorBatchLoopTestsMainSuspectRelease)] = "Checks release policy with injected actions; no real build.",
-        [typeof(OperatorIntentAdjudicationTestsStewardCaseD)] = "Uses StewardCaseDHarness with GUID stores and injected actions; no real build."
-    };
+        var exceptions = new Dictionary<Type, string>();
+        foreach (var (name, reason) in TestCollectionGuardRules.LoadIsolatedCollectionExemptions(VerifiedRepositoryRoot.Find()))
+        {
+            var type = typeof(LaneIsolatedRootGuardTests).Assembly.GetType(name);
+            Assert.True(type is not null, $"Stale collection exception: {name} is outside the lane.");
+            exceptions.Add(type!, reason);
+        }
+        return exceptions;
+    }
 
     private static readonly IReadOnlyDictionary<(Type Class, string Method), string> LocalHostChildClearExceptions =
         new Dictionary<(Type, string), string>
@@ -57,7 +34,7 @@ public sealed class LaneIsolatedRootGuardTests
     public void Effective_lane_classes_keep_isolated_roots_or_named_exceptions() =>
         LaneIsolatedRootScanner.VerifyLane(VerifiedRepositoryRoot.Find(), "Dotnet build slots",
             typeof(LaneIsolatedRootGuardTests).Assembly, IsIsolatedCollection,
-            CollectionExceptions, new Dictionary<(Type, string), string>(), TestCollections.DotnetBuildSlots);
+            LoadCollectionExceptions(), new Dictionary<(Type, string), string>(), TestCollections.DotnetBuildSlots);
 
     [Xunit.Fact]
     public void Local_host_only_lane_keeps_isolated_roots_or_named_exceptions() =>

@@ -1,0 +1,37 @@
+using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
+
+namespace Mcg.AgentOrchestrator.App.OwnerConsole;
+
+internal enum OwnerFleetReachability { Unknown, Reachable, Unreachable }
+
+internal sealed record OwnerFleetHostNode(bool ConductorRunning, int ExecutorCount,
+    int UnreadableOutcomeLines, int UnreadableProbeLines);
+
+internal sealed record OwnerFleetExecutorNode(string Id, OwnerFleetReachability Reachability,
+    IReadOnlyList<string> ProbeReasons, DateTimeOffset? ProbeAt, int? ConfiguredSlots,
+    int PeakConcurrentAttempts, string? LastOutcome, DateTimeOffset? LastOutcomeAt,
+    double? AcceptedShare, IReadOnlyList<RemoteExecutorLaneSeconds> Lanes);
+
+internal sealed record OwnerFleetViewModel(OwnerFleetHostNode Host,
+    IReadOnlyList<OwnerFleetExecutorNode> Executors);
+
+internal static class OwnerFleetViewModelBuilder
+{
+    internal static OwnerFleetViewModel Build(RemoteExecutorReport report, bool conductorRunning, TimeZoneInfo zone) =>
+        new(new(conductorRunning, report.Executors.Count, report.UnreadableOutcomeLines, report.UnreadableProbeLines),
+            report.Executors.Select(row =>
+            {
+                var last = row.RecentAttempts.FirstOrDefault();
+                return new OwnerFleetExecutorNode(row.ExecutorId, row.LastProbe is null ? OwnerFleetReachability.Unknown :
+                    row.LastProbe.Reachable ? OwnerFleetReachability.Reachable : OwnerFleetReachability.Unreachable,
+                    row.LastProbe?.Reasons.ToArray() ?? [],
+                    row.LastProbe is { } probe ? TimeZoneInfo.ConvertTime(probe.ObservedAt, zone) : null,
+                    row.ConfiguredSlots, row.PeakConcurrentAttempts, last?.Outcome,
+                    last is null ? null : TimeZoneInfo.ConvertTime(last.ObservedAt, zone), row.AcceptedShare, row.Lanes.ToArray());
+            }).ToArray());
+
+    internal static OwnerFleetViewModel Load(OrchestratorWorkspace workspace, IConductorLiveness liveness) =>
+        Build(RemoteExecutorReportReader.Read(workspace, null, 10), liveness.IsRunning(), TimeZoneInfo.Local);
+}

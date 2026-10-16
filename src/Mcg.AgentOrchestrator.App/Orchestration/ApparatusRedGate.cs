@@ -39,6 +39,7 @@ internal sealed class ApparatusRedGate
     private readonly TimeSpan _crossGoalWindow;
     private readonly int _perGoalRegateCap;
     private readonly Func<string?, AcceptanceTestSourceResolver.Request> _createSourceRequest;
+    private readonly GateFailureLandingAttributor? _landingAttributor;
 
     internal ApparatusRedGate(
         string indexPath,
@@ -46,8 +47,9 @@ internal sealed class ApparatusRedGate
         Func<DateTimeOffset>? utcNow = null,
         TimeSpan? crossGoalWindow = null,
         int perGoalRegateCap = DefaultPerGoalRegateCap,
-        Func<string?, AcceptanceTestSourceResolver.Request>? createSourceRequest = null)
-        : this(new AcceptanceFailingTestIndex(indexPath), resolveSourceRoot, utcNow, crossGoalWindow, perGoalRegateCap, createSourceRequest)
+        Func<string?, AcceptanceTestSourceResolver.Request>? createSourceRequest = null,
+        GateFailureLandingAttributor? landingAttributor = null)
+        : this(new AcceptanceFailingTestIndex(indexPath), resolveSourceRoot, utcNow, crossGoalWindow, perGoalRegateCap, createSourceRequest, landingAttributor)
     {
     }
 
@@ -57,7 +59,8 @@ internal sealed class ApparatusRedGate
         Func<DateTimeOffset>? utcNow = null,
         TimeSpan? crossGoalWindow = null,
         int perGoalRegateCap = DefaultPerGoalRegateCap,
-        Func<string?, AcceptanceTestSourceResolver.Request>? createSourceRequest = null)
+        Func<string?, AcceptanceTestSourceResolver.Request>? createSourceRequest = null,
+        GateFailureLandingAttributor? landingAttributor = null)
     {
         ArgumentNullException.ThrowIfNull(index);
         ArgumentOutOfRangeException.ThrowIfNegative(perGoalRegateCap);
@@ -67,6 +70,19 @@ internal sealed class ApparatusRedGate
         _crossGoalWindow = crossGoalWindow ?? DefaultCrossGoalWindow;
         _perGoalRegateCap = perGoalRegateCap;
         _createSourceRequest = createSourceRequest ?? (root => new AcceptanceTestSourceResolver.Request(root));
+        _landingAttributor = landingAttributor;
+    }
+
+    internal IReadOnlyList<string> FormatFailingClassAttribution(
+        Goal goal,
+        string? mainHeadSha,
+        ApparatusRedGateReading? reading,
+        IReadOnlyList<AcceptanceCheckResult> actionableCriteria)
+    {
+        if (_landingAttributor is null || reading is null) return [];
+        var attributions = _landingAttributor.Attribute(goal, mainHeadSha, reading, actionableCriteria);
+        return attributions.Count == 0 ? [] :
+            ["Failing class attribution (candidate diff and main history only; no new test run):", .. attributions.Select(item => item.Line)];
     }
 
     internal int PerGoalRegateCap => _perGoalRegateCap;

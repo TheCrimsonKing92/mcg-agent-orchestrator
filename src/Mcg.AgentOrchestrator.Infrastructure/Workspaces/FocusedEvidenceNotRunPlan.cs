@@ -3,11 +3,12 @@ using AcceptanceManifestCheck = Mcg.AgentOrchestrator.Infrastructure.GoalAccepta
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
-// Result presence, rather than the requested set, establishes which checks executed.
+// A recorded result establishes execution only when that check ran tests.
 internal sealed record FocusedEvidenceNotRunPlan(IReadOnlyList<FocusedEvidenceNotRunPlan.NotRunCheck> Checks)
 {
     internal const string ApparatusStoppedAfterFailure = "apparatus-stopped-after-failure";
     internal const string NoResultRecorded = "no-result-recorded";
+    internal const string ExecutionNotDemonstrated = "execution-not-demonstrated";
     internal sealed record NotRunCheck(string CheckName, string Reason, IReadOnlyList<FindingEvidenceSelection> Selections);
 
     internal IReadOnlyList<FindingEvidenceSelection> Selections => Checks.SelectMany(check => check.Selections)
@@ -19,14 +20,14 @@ internal sealed record FocusedEvidenceNotRunPlan(IReadOnlyList<FocusedEvidenceNo
         FocusedEvidenceCoverage coverage,
         bool continueAfterFailure)
     {
-        var completed = results.Select(result => result.Name).ToHashSet(StringComparer.Ordinal);
         var missing = new List<NotRunCheck>();
         var stoppedAfterFailure = false;
         foreach (var check in planned)
         {
-            if (completed.Contains(check.Name))
+            var recorded = results.Where(result => result.Name == check.Name).ToArray();
+            if (recorded.Length > 0 && recorded.All(result => result.ExecutedTestCount is > 0))
             {
-                stoppedAfterFailure |= !continueAfterFailure && results.Any(result => result.Name == check.Name && !result.Passed);
+                stoppedAfterFailure |= !continueAfterFailure && recorded.Any(result => !result.Passed);
                 continue;
             }
             var selections = coverage.TargetToChecks
@@ -34,7 +35,10 @@ internal sealed record FocusedEvidenceNotRunPlan(IReadOnlyList<FocusedEvidenceNo
                 .Select(target => target.Target.Split(':', 2, StringSplitOptions.TrimEntries))
                 .Where(parts => parts.Length == 2)
                 .Select(parts => new FindingEvidenceSelection(parts[0], parts[1])).ToArray();
-            missing.Add(new(check.Name, $"not-run:{(stoppedAfterFailure ? ApparatusStoppedAfterFailure : NoResultRecorded)}", selections));
+            var reason = recorded.Length > 0 ? ExecutionNotDemonstrated
+                : stoppedAfterFailure ? ApparatusStoppedAfterFailure : NoResultRecorded;
+            missing.Add(new(check.Name, $"not-run:{reason}", selections));
+            stoppedAfterFailure |= !continueAfterFailure && recorded.Any(result => !result.Passed);
         }
         return new(missing);
     }

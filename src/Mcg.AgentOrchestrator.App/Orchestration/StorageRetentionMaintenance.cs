@@ -665,6 +665,14 @@ internal static partial class StorageRetentionMaintenance
                 deleted += SweepOperatorAttemptEntries(goalDirectory, family, now, reclaim, decisions);
                 continue;
             }
+            if (AcceptanceHolderDirectoryPreventsRetention(goalDirectory, out var holderMetadataInvalidReason))
+            {
+                decisions.Add(new EvidenceRetentionDecision(family,
+                    holderMetadataInvalidReason is null ? EvidenceRetentionAction.Preserved : EvidenceRetentionAction.RetainedUndecidable,
+                    goalDirectory, goalId, EvidenceOwnerResolution.Unrecorded,
+                    holderMetadataInvalidReason ?? "acceptance-holder-unsettled"));
+                continue;
+            }
             var owners = goals.Where(goal => goal.GoalId.Equals(goalId, StringComparison.OrdinalIgnoreCase)).ToArray();
             if (owners.Length != 1)
             {
@@ -1764,6 +1772,7 @@ internal static partial class StorageRetentionMaintenance
                 var reconciled = root.TryGetProperty("reconciledAt", out var reconciledAt) &&
                     reconciledAt.ValueKind == JsonValueKind.String &&
                     reconciledAt.TryGetDateTimeOffset(out _);
+                reconciled &= !AcceptanceHolderPreventsRetention(root);
                 var declaredPaths = ReadDeclaredAttemptPaths(root, goalDirectory);
                 var lifecycleRevision = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
                     System.Text.Encoding.UTF8.GetBytes(root.GetRawText()))).ToLowerInvariant();

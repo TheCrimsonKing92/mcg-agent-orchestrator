@@ -11,7 +11,7 @@ public sealed class OwnerConsoleExperimentDecideTests
     private const string Queued = "Answer queued for question 1 (experiment 1a2b3c4d); the conductor applies it on its next tick.";
     private const string Applied = "Answer applied for question 1 (experiment 1a2b3c4d)";
 
-    [Fact(Timeout = 30_000)] // Hang-only bound; status delivery is controlled by an event gate.
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)] // Hang-only bound; status delivery is controlled by an event gate.
     public async Task OwnerExperimentDecisionFlow_ValidForm_QueuesThenReportsApplied()
     {
         var form = new OwnerExperimentDecisionForm("confirmed", " receipt:chosen \n", " Keep this result \n");
@@ -34,7 +34,7 @@ public sealed class OwnerConsoleExperimentDecideTests
         Assert.Equal("intent-experiment", Assert.Single(scene.Answers.StatusIds));
     }
 
-    [Theory(Timeout = 30_000)]
+    [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [InlineData("confirmed", "receipt", " \n ", "action is required.")]
     [InlineData("confirmed", " \n ", "Keep", "evidence is required.")]
     [InlineData("keep", "receipt", "Keep", "outcome: expected confirmed, refuted or inconclusive.")]
@@ -51,7 +51,7 @@ public sealed class OwnerConsoleExperimentDecideTests
         Assert.Single(scene.Dialogs.Defaults);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task OwnerExperimentDecisionFlow_CancelledDialog_DoesNotSubmit()
     {
         using var scene = await Scene.CreateAsync(null);
@@ -61,7 +61,7 @@ public sealed class OwnerConsoleExperimentDecideTests
         Assert.Empty(scene.View.NoticeStrip.Visible);
     }
 
-    [Theory(Timeout = 30_000)]
+    [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [InlineData("gone")]
     [InlineData("changed")]
     [InlineData("malformed")]
@@ -77,7 +77,7 @@ public sealed class OwnerConsoleExperimentDecideTests
         Assert.Empty(scene.Answers.Decisions);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task OwnerExperimentDecisionFlow_ChangedDuringDialog_RefusesSubmit()
     {
         using var scene = await Scene.CreateAsync(new OwnerExperimentDecisionForm("confirmed", "receipt", "Keep"));
@@ -88,7 +88,7 @@ public sealed class OwnerConsoleExperimentDecideTests
         Assert.Empty(scene.Answers.Decisions);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task OwnerExperimentDecisionFlow_DecidedExperiment_ShowsRejection()
     {
         using var scene = await Scene.CreateAsync(new OwnerExperimentDecisionForm("confirmed", "receipt", "Keep"));

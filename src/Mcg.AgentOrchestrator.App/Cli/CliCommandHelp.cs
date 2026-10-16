@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.App.OwnerConsole;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
@@ -44,8 +45,10 @@ internal static class CliCommandHelp
     public const string WorkspaceUsage = "Usage: workspace [create|merge|rebase|remove] [goal-id-prefix] [--force-terminal-cleanup]";
     public const string WorkspaceCreateUsage = "Usage: workspace create [goal-id-prefix]";
     public const string ReassignAgentUsage = "Usage: reassign-agent <task-number> <agent-id>|<goal-prefix> <task-number> <agent-id>|--goal <goal-prefix> <task-number> <agent-id>";
-    public const string BacklogListUsage = "Usage: backlog-list [--all] [--limit <n>] [--status <value>] [--text <pattern>|--text=<leading-dash-pattern>]";
+    public const string BacklogListUsage = "Usage: backlog-list [--all] [--limit <n>] [--status <value>] [--text <pattern>|--text=<leading-dash-pattern>] [--json]";
     public const string BacklogTriageUsage = "Usage: backlog-triage [--limit <n>] [--stale-days <n>]";
+    public const string BacklogPremiseCheckUsage = "Usage: backlog-premise-check [--min-age-days <n>]";
+    public const string BacklogPremiseCloseUsage = "Usage: backlog-premise-close <id-prefix> [<id-prefix> ...] --confirm-backlog-premise-close [--min-age-days <n>]";
     public const string BacklogAddUsage = "Usage: backlog-add <title> [body] [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar] | backlog-add --title <title> [--text-file <path>|--body-file <path>] [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar] | backlog-add <title> --text-file <path> [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar] | backlog-add <title> --body-file <path> [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar]";
     public const string BacklogUpdateUsage = "Usage: backlog-update <id-prefix> [--title <text>] [--description <text> | --text-file <path> | --body-file <path>] [--priority <value>] [--tags <csv>] [--status <open|done|superseded>]";
     public const string BacklogShowUsage = "Usage: backlog-show <id-prefix>";
@@ -64,6 +67,7 @@ internal static class CliCommandHelp
     public const string ExperimentShowUsage = "Usage: experiment-show <experiment> [--as-of <timestamp-with-offset>]";
     public const string ExperimentDecideUsage = "Usage: experiment-decide <experiment> --outcome <confirmed|refuted|inconclusive> --evidence <reference> --action <text>";
     public const string ExperimentExtendUsage = "Usage: experiment-extend <experiment> --count <n> --reason <text>";
+    public const string ExperimentTrainBacktestUsage = "Usage: experiment-train-backtest --since <timestamp with offset> [--training-count <n>]";
     public const string ExperimentApplyFlagUsage = "Usage: experiment-apply-flag <experiment> [--operator-actor <actor>] [--actor-kind <human|agent>] [--idempotency-key <key>] [--json]";
     public const string EpicRenameUsage = "Usage: epic-rename <epic> <new-title>";
     public const string EpicDescribeUsage = "Usage: epic-describe <epic> <text> | epic-describe <epic> --text-file <path>";
@@ -94,8 +98,11 @@ internal static class CliCommandHelp
     public const string OwnerDigestUsage = "Usage: owner-digest [--since <ISO-8601-with-offset>] [--until <ISO-8601-with-offset>] [--json] [--rounds]";
     public const string FailureClustersUsage = "Usage: failure-clusters [--since <ISO-8601>] [--until <ISO-8601>] [--top <n>] [--json]";
     public const string LaneReuseShadowUsage = "Usage: lane-reuse-shadow [--since <ISO-8601>] [--until <ISO-8601>] [--json]";
+    public const string BuildAttributionUsage = "Usage: build-attribution [--since <ISO-8601>] [--until <ISO-8601>] [--json]";
+    public const string IntentCoverageUsage = "Usage: intent-coverage [--since <ISO-8601>] [--until <ISO-8601>] [--min-cases <n>] [--json]";
     public const string RemoteExecutorsUsage = "Usage: remote-executors [--since <ISO-8601>] [--last <N>] [--json]";
     public const string RemoteLaneSelfTestUsage = "Usage: remote-lane-selftest --executor <id> [--timeout-minutes <n>]";
+    public const string ExecutorScreenUsage = "Usage: executor-screen [--max-candidates <n>] [--executor <id>]";
     public const string RoundValueUsage = "Usage: round-value [--since <ISO-8601-with-offset>] [--until <ISO-8601-with-offset>] [--json] [--by-skill] [--by-check] [--baseline-since <ISO-8601-with-offset> --baseline-until <ISO-8601-with-offset>]";
     public const string LessonUsage = "Usage: lesson record --situation <text> --rule <text> --evidence <ref>... [--applies-to <tag>...] [--goal <goal-prefix>] [--until-goal <goal-prefix>] [--actor-kind human|agent] [--json] | lesson retire <lesson-id> --reason <text> [--evidence <ref>...] [--json]";
     public const string LessonsUsage = "Usage: lessons [--all] [--applies-to <tag>] [--json]";
@@ -394,13 +401,23 @@ internal static class CliCommandHelp
 
     private static readonly CommandHelpEntry BacklogList = new(
         BacklogListUsage,
-        "List every backlog item with its status and linked goal id.",
-        ["--all", "--limit", "--status", "--text", "--help", "-h"]);
+        "List every backlog item with its status and linked goal id. --json emits the mcg.backlog-list agent envelope.",
+        ["--all", "--limit", "--status", "--text", "--help", "-h", "--json"]);
 
     private static readonly CommandHelpEntry BacklogTriage = new(
         BacklogTriageUsage,
         "Print compact backlog triage buckets for daemon curation.",
         ["--limit", "--stale-days", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry BacklogPremiseCheck = new(
+        BacklogPremiseCheckUsage,
+        "Propose closes for stale backlog items with deterministic evidence and print an owner skim list. Writes nothing.",
+        ["--min-age-days", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry BacklogPremiseClose = new(
+        BacklogPremiseCloseUsage,
+        "Re-evaluate premise evidence and close only confirmed, named proposals.",
+        ["--min-age-days", "--confirm-backlog-premise-close", "--help", "-h"]);
 
     private static readonly CommandHelpEntry BacklogAdd = new(
         BacklogAddUsage,
@@ -472,6 +489,7 @@ internal static class CliCommandHelp
         ExperimentDecideUsage, "Record evidence and action once on an open experiment.", ["--outcome", "--evidence", "--action", "--help", "-h"]);
     private static readonly CommandHelpEntry ExperimentExtend = new(
         ExperimentExtendUsage, "Record a longer stop target and reason on an open experiment.", ["--count", "--reason", "--help", "-h"]);
+    private static readonly CommandHelpEntry ExperimentTrainBacktest = new(ExperimentTrainBacktestUsage, "Read stored merge train receipts and compare drop policies.", ["--since", "--training-count", "--help", "-h"]);
     private static readonly CommandHelpEntry ExperimentApplyFlag = new(
         ExperimentApplyFlagUsage, "Queue a workspace Mutate-tier intent to apply a boolean policy flag. The conductor captures its prior value; an eligible keep reading at the stop rule records confirmed and files a make-permanent backlog item.",
         ["--operator-actor", "--actor-kind", "--idempotency-key", "--json", "--help", "-h"]);
@@ -534,7 +552,7 @@ internal static class CliCommandHelp
 
     private static readonly CommandHelpEntry EpicList = new(
         EpicListUsage,
-        "List epics with every goal status bucket and open/done backlog counts; newest is the latest member-goal metadata update (UpdatedAt). Use --since with positive Nh or Nd durations (24h, 7d) or an absolute timestamp to show window counts. window-landed uses the goal update time until a landed-at timestamp exists.",
+        "List epics with every goal status bucket and open/done backlog counts; newest is the latest member-goal metadata update (UpdatedAt). Use --since with positive Nh or Nd durations (24h, 7d) or an absolute timestamp to show window counts. window-landed uses the original successful promotion time inclusively; unknown landing dates are excluded from dated windows.",
         ["--since", "--json", "--help", "-h"]);
 
     private static readonly CommandHelpEntry EpicMembers = new(
@@ -615,9 +633,9 @@ internal static class CliCommandHelp
         ["--min-goals", "--since", "--help", "-h"]);
 
     private static readonly CommandHelpEntry OwnerConsole = new(
-        "Usage: console [--plain]",
-        "Open the owner console; --plain uses line mode (also selected for redirected input or output).",
-        ["--plain", "--help", "-h"]);
+        OwnerConsoleInputTraceOptions.Usage,
+        "Open the owner console; --plain uses line mode (also selected for redirected input or output). --input-trace writes bounded input/draw diagnostics to a new JSON file after exit (interactive mode only).",
+        ["--plain", "--input-trace", "--help", "-h"]);
 
     private static readonly CommandHelpEntry OwnerDigest = new(
         OwnerDigestUsage,
@@ -634,12 +652,31 @@ internal static class CliCommandHelp
         "Report shadow lane reuse, hypothetical serial savings and misses; default window is 7 days.",
         ["--since", "--until", "--json", "--help", "-h"]);
 
+    private static readonly CommandHelpEntry BuildAttribution = new(
+        BuildAttributionUsage,
+        "Report build-slot consumer shares and duplicate compiles per tree; default window is 24 hours.",
+        ["--since", "--until", "--json", "--help", "-h"]);
+    private static readonly CommandHelpEntry IntentCoverage = new(
+        IntentCoverageUsage,
+        "Score recorded human intents against typed Steward and Author coverage; default window is 7 days.",
+        ["--since", "--until", "--min-cases", "--json", "--help", "-h"]);
+
     private static readonly CommandHelpEntry RemoteExecutors = new(
         RemoteExecutorsUsage, "Read recent remote executor outcomes and advisory probes.",
         ["--since", "--last", "--json", "--help", "-h"]);
     private static readonly CommandHelpEntry RemoteLaneSelfTest = new(
         RemoteLaneSelfTestUsage, "Operator-only self-test that pushes to the executor and runs one real SSH lane job.",
         ["--executor", "--timeout-minutes", "--help", "-h"]);
+    private static readonly CommandHelpEntry ExecutorScreen = new(
+        ExecutorScreenUsage, "Screen a candidate on an idle executor and record an advisory receipt.",
+        ["--max-candidates", "--executor", "--help", "-h"]);
+
+    public const string BoardSimulateUsage = "Usage: board-simulate [--day <yyyy-MM-dd>] [--width <1-4>] [--train-size <0|3|4>] [--cohorts on|off] [--drop newest|lowest-pass-rate] [--seed <n>] [--json]";
+
+    private static readonly CommandHelpEntry BoardSimulate = new(
+        BoardSimulateUsage,
+        "Replay a recorded UTC day of gate scheduling offline and compare landings.",
+        ["--day", "--width", "--train-size", "--cohorts", "--drop", "--seed", "--json", "--help", "-h"]);
 
     private static readonly CommandHelpEntry RoundValue = new(
         RoundValueUsage,
@@ -747,6 +784,7 @@ internal static class CliCommandHelp
             ["goals-prune"] = Flags("--confirm-prune"),
             ["model-function-add"] = Flags("--subscription", "--subscription-model", "--subscription-reasoning"),
             ["task"] = GoalScopedTaskFlags(),
+            ["finding"] = GoalScopedTaskFlags(),
             ["verification-plan"] = GoalScopedTaskFlags(),
             ["brief"] = GoalScopedTaskFlags(),
             ["task-timeline"] = GoalScopedTaskFlags(),
@@ -767,6 +805,7 @@ internal static class CliCommandHelp
             ["refresh-dispatches"] = Flags("--autonomy", "--autonomy-policy", "--goal"),
             ["logs"] = GoalScopedTaskFlags(),
             ["cancel-dispatch"] = Flags("--goal", "--completion-build-operation", "--idempotency-key", "--operator-actor", "--actor-kind", "--json"),
+            ["goal-priority"] = Flags("--reason", "--idempotency-key", "--operator-actor", "--actor-kind", "--json"),
             ["accept"] = Flags(
                 "--autonomy", "--autonomy-policy", "--keep-workspace", "--no-record", "--skip-verify")
         };
@@ -1169,9 +1208,19 @@ internal static class CliCommandHelp
             entry = FailureClusters;
             return true;
         }
+        if (args[0].Equals("build-attribution", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = BuildAttribution;
+            return true;
+        }
         if (args[0].Equals("lane-reuse-shadow", StringComparison.OrdinalIgnoreCase))
         {
             entry = LaneReuseShadow;
+            return true;
+        }
+        if (args[0].Equals("intent-coverage", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = IntentCoverage;
             return true;
         }
         if (args[0].Equals("remote-executors", StringComparison.OrdinalIgnoreCase))
@@ -1179,9 +1228,19 @@ internal static class CliCommandHelp
             entry = RemoteExecutors;
             return true;
         }
+        if (args[0].Equals("executor-screen", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = ExecutorScreen;
+            return true;
+        }
         if (args[0].Equals("remote-lane-selftest", StringComparison.OrdinalIgnoreCase))
         {
             entry = RemoteLaneSelfTest;
+            return true;
+        }
+        if (args[0].Equals("board-simulate", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = BoardSimulate;
             return true;
         }
         if (args[0].Equals("round-value", StringComparison.OrdinalIgnoreCase))
@@ -1317,6 +1376,18 @@ internal static class CliCommandHelp
             return true;
         }
 
+        if (args[0].Equals("backlog-premise-check", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = BacklogPremiseCheck;
+            return true;
+        }
+
+        if (args[0].Equals("backlog-premise-close", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = BacklogPremiseClose;
+            return true;
+        }
+
         if (args[0].Equals("backlog-add", StringComparison.OrdinalIgnoreCase))
         {
             entry = BacklogAdd;
@@ -1393,6 +1464,7 @@ internal static class CliCommandHelp
         if (args[0].Equals("experiment-show", StringComparison.OrdinalIgnoreCase)) { entry = ExperimentShow; return true; }
         if (args[0].Equals("experiment-decide", StringComparison.OrdinalIgnoreCase)) { entry = ExperimentDecide; return true; }
         if (args[0].Equals("experiment-extend", StringComparison.OrdinalIgnoreCase)) { entry = ExperimentExtend; return true; }
+        if (args[0].Equals("experiment-train-backtest", StringComparison.OrdinalIgnoreCase)) { entry = ExperimentTrainBacktest; return true; }
         if (args[0].Equals("experiment-apply-flag", StringComparison.OrdinalIgnoreCase)) { entry = ExperimentApplyFlag; return true; }
         if (args[0].Equals("epic-add", StringComparison.OrdinalIgnoreCase))
         {
@@ -1713,6 +1785,10 @@ internal static class CliCommandHelp
                     ? $"Usage: {command} <objective> --confirm-batch-start [--confirm-large-paid-subscription-start] [--confirm-readiness-risk] [--backlog-item <id-prefix> --backlog-coverage <full|slice>] [--epic <id-or-title>] [--autonomy <policy>]"
                     : command.Equals("cancel-dispatch", StringComparison.OrdinalIgnoreCase)
                     ? $"Usage: {command} [options] [--json]"
+                    : command.Equals("goal-priority", StringComparison.OrdinalIgnoreCase)
+                    ? CliGoalPriorityCommand.Usage
+                    : command.Equals("finding", StringComparison.OrdinalIgnoreCase)
+                    ? $"Usage: {CliFindingQueryCommand.Usage}"
                     : $"Usage: {command} [options]",
                 "Run this operator command.",
                 GenericCommandFlags.TryGetValue(command, out var flags) ? flags : CliCommandHelp.Flags(),
