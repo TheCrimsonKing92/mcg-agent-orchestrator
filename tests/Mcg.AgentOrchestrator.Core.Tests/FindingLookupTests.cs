@@ -90,10 +90,17 @@ public sealed class FindingLookupTests
     [Fact]
     public void ReceiptOnAnotherRecord_IsNotAttached()
     {
-        var goal = GoalWith(Record([Finding("build-timeout")]), Record([], [Receipt("unrelated-record")]));
+        // Identical round identities are merged during snapshot restoration; keep these rounds distinct.
+        var unrelated = Record([], [Receipt("unrelated-record")]) with { CompletedAt = Completed.AddMinutes(1) };
+        var goal = GoalWith(Record([Finding("build-timeout")]), unrelated);
+        var history = goal.Tasks[0].VerificationHistory;
+        Assert.Equal(2, history.Count);
+        Assert.Empty(history[0].FindingEvidenceReceipts ?? []);
+        Assert.Equal("unrelated-record", Assert.Single(history[1].FindingEvidenceReceipts!).ReceiptId);
         var match = Assert.Single(FindingLookup.Find([goal], "build-timeout").Matches);
+        Assert.Equal(Completed, match.CompletedAt);
         Assert.Empty(match.Receipts);
-        Assert.NotNull(match.MissingReceiptReason);
+        Assert.Equal(FindingLookup.MissingReceiptReason("build-timeout"), match.MissingReceiptReason);
     }
 
     [Fact]
