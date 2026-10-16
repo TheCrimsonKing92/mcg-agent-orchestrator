@@ -269,7 +269,7 @@ public sealed class WorkspaceInvocationStartupTests
             new() { ["MCG_STATE_WRITE_WARNING_MS"] = "0" });
 
         Assert.Equal(0, result.ExitCode);
-        var receipt = Path.Combine(fixture.State, "logs", SqliteWriteTelemetry.DiagnosticsFileName);
+        var receipt = Path.Combine(fixture.State, SqliteWriteTelemetry.DiagnosticsDirectoryName, SqliteWriteTelemetry.DiagnosticsFileName);
         Assert.True(File.Exists(receipt));
         Assert.True(new FileInfo(receipt).Length > 0);
     }
