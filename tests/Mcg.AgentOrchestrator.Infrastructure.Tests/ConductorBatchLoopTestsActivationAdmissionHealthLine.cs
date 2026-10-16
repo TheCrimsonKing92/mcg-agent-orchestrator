@@ -3,7 +3,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-// Parallel-safe: private metadata roots, scoped gate probes, fake process identities; no builds or environment mutation.
+[Xunit.Collection("DotnetBuildSlots")]
 public sealed class ConductorBatchLoopTestsActivationAdmissionHealthLine(ITestOutputHelper output)
     : ConductorBatchLoopTests(output)
 {
