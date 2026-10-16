@@ -10,13 +10,14 @@ using Xunit;
 public sealed class WorkerResultSubmissionTests : IDisposable
 {
     internal const string Project = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj";
-    internal const string Fixture = """
+    private const string HistoricalModelAlias = "gpt-5.6-terra"; // Deliberate historical alias preserved from Tester round 1d995e6d-663a5172; not a dispatch selection.
+    internal const string Fixture = $$$"""
         {"commands":"inspected fb0dcb7e commit and diff",
         "tests":"deferred - request conductor execution on candidate fb0dcb7e for CliOperatorIntentSubmitJsonTests",
         "blockers":"none",
         "findings":[{"stable_id":"cli-operator-intent-submit-json-current-execution","state":"open","severity":"blocking","category":"test-evidence","location":{"file":"tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/CliOperatorIntentSubmitJsonTests.cs","region":"Submit_Json_PreservesRecordHumanTextAndIdempotency"},"description":"No exact-candidate execution receipt exists.","evidence_request":{"selections":[{"test_project":"tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj","test_class":"FullyQualifiedName~CliOperatorIntentSubmitJsonTests"}]}}],
         "touched_anchors":[],
-        "model_fit":"OpenAI/gpt-5.6-terra - adequate - candidate inspection - source change was clear",
+        "model_fit":"OpenAI/{{{HistoricalModelAlias}}} - adequate - candidate inspection - source change was clear",
         "skills":"verification-before-completion",
         "confidence":"high"}
         """;
