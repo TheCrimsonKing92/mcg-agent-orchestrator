@@ -8,8 +8,9 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     IOwnerDigestSummary summary, TimeProvider clock, IOwnerConsoleEpicSource? epics = null,
     AnswerIntentStatusTracker? answerTracking = null, OwnerQuestionResolutionReader? resolutions = null,
     IOwnerConsoleNotifier? notifier = null, OwnerConsoleNotificationSettings? notifications = null,
-    Func<OwnerFleetViewModel>? fleet = null) : IDisposable
+    Func<OwnerFleetViewModel>? fleet = null, OwnerGoalDetailQuery? goalDetail = null) : IDisposable
 {
+    private readonly OwnerGoalDetailQuery _goalDetail = goalDetail ?? new OwnerGoalDetailQuery(state, tail);
     private readonly object _notificationGate = new();
     private readonly IOwnerConsoleNotifier _notifier = notifier ?? new NullOwnerConsoleNotifier();
     private readonly OwnerConsoleNotificationDetector _notifications = new(notifications ?? new());
@@ -157,7 +158,7 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     private async Task<OwnerConsoleGoalDialog.Content?> ComposeGoalAsync(string goalId, CancellationToken token)
     {
         var output = new OwnerConsoleCapturedOutput();
-        var goal = await OwnerConsoleGoalDetailFormatter.ComposeAsync(state, tail, goalId, output, token, clock.LocalTimeZone).ConfigureAwait(false);
+        var goal = await OwnerConsoleGoalDetailFormatter.ComposeAsync(_goalDetail, goalId, output, token, clock.LocalTimeZone).ConfigureAwait(false);
         if (goal is null) return null;
         var resolved = resolutions is null ? [] : await resolutions.ListForGoalAsync(goalId, token).ConfigureAwait(false);
         var lines = output.Text.Replace("\r", "").TrimEnd('\n').Split('\n').ToList();
