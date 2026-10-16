@@ -68,6 +68,75 @@ public sealed class GroupedGateAttemptLegacyRestoreTests(ITestOutputHelper outpu
     }
 
     [Theory]
+    [InlineData("completed", false)]
+    [InlineData("failed", false)]
+    [InlineData("completed", true)]
+    [InlineData("failed", true)]
+    public void FinishedLeasedAttemptSettlesAfterReleaseOrHolderDeath(string status, bool released)
+    {
+        using var fixture = new Fixture();
+        var attempt = fixture.Attempt("train", ["a", "b"]);
+        var binding = AcceptanceHolderBinding.For(attempt);
+        Publish(attempt, status);
+        File.WriteAllText(attempt.ResultPath, JsonSerializer.Serialize(new
+            { Status = status, Verdict = "passed", ReceiptId = "published-receipt" }));
+        var result = File.ReadAllBytes(attempt.ResultPath);
+        var exit = File.ReadAllBytes(attempt.ExitCodePath);
+        fixture.Status = SpawnTrackedProcessStatus.DeadOrRecycled;
+        if (released)
+        {
+            Assert.False(fixture.Lease.Observe(binding).ReservesCapacity);
+            Assert.Equal("Released", fixture.Lease.Read(binding).Phase);
+            fixture.Status = SpawnTrackedProcessStatus.LiveMatch;
+        }
+        var metadata = File.ReadAllBytes(attempt.MetadataPath);
+        var lease = File.ReadAllBytes(binding.LeasePath);
+
+        Assert.False(fixture.Coordinator.ReservesCapacity(attempt));
+        Assert.Equal(metadata, File.ReadAllBytes(attempt.MetadataPath));
+        Assert.Equal(lease, File.ReadAllBytes(binding.LeasePath));
+        var driver = Driver(fixture.Coordinator, fixture.Root);
+        Assert.Empty(driver.GetActiveCohortGateMemberGoalIds());
+
+        var settled = ConductorGroupedGateAttemptCoordinator.Read(attempt.MetadataPath);
+        Assert.Equal("Reconciled", settled.Outcome);
+        Assert.NotNull(settled.ReconciledAt);
+        Assert.Equal("child-result-published", settled.Detail);
+        Assert.Equal("Released", fixture.Lease.Read(binding).Phase);
+        Assert.Equal(result, File.ReadAllBytes(attempt.ResultPath));
+        Assert.Equal(exit, File.ReadAllBytes(attempt.ExitCodePath));
+        var expectedEvent = status == "completed"
+            ? "ACCEPTANCE_COHORT_CHILD_COMPLETED " : "ACCEPTANCE_COHORT_RECONCILED_DEAD ";
+        var settlementEvent = Assert.Single(fixture.Events.Where(line =>
+            line.StartsWith(expectedEvent, StringComparison.Ordinal)));
+        Assert.Contains($"attempt={attempt.AttemptId}", settlementEvent);
+        if (status == "completed") Assert.Contains("verdict=passed receipt=published-receipt", settlementEvent);
+        Assert.Empty(driver.GetActiveCohortGateMemberGoalIds());
+        Assert.Single(fixture.Events.Where(line => line.StartsWith(expectedEvent, StringComparison.Ordinal)));
+    }
+
+    [Theory]
+    [InlineData("completed")]
+    [InlineData("failed")]
+    public void FinishedLegacyAttemptSettlesOnlyAfterHolderDeath(string status)
+    {
+        using var fixture = new Fixture();
+        var attempt = fixture.Attempt("train", ["a", "b"], leased: false);
+        Publish(attempt, status);
+        var result = File.ReadAllBytes(attempt.ResultPath);
+        fixture.Status = SpawnTrackedProcessStatus.DeadOrRecycled;
+        var driver = Driver(fixture.Coordinator, fixture.Root);
+
+        Assert.Empty(driver.GetActiveCohortGateMemberGoalIds());
+
+        var settled = ConductorGroupedGateAttemptCoordinator.Read(attempt.MetadataPath);
+        Assert.Equal("Reconciled", settled.Outcome);
+        Assert.NotNull(settled.ReconciledAt);
+        Assert.Equal(result, File.ReadAllBytes(attempt.ResultPath));
+        Assert.False(File.Exists(AcceptanceHolderBinding.For(attempt).LeasePath));
+    }
+
+    [Theory]
     [InlineData("completed")]
     [InlineData("failed")]
     public void FinishedLegacyRecoveryDoesNotRewriteMetadataOrCreateSidecars(string status)

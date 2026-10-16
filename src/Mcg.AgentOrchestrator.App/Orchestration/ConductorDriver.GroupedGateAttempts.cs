@@ -178,7 +178,11 @@ internal sealed partial class ConductorDriver
             foreach (var attempt in coordinator.ReadAll())
             {
                 if (!coordinator.ReservesCapacity(attempt))
+                {
+                    if (ConductorGroupedGateAttemptCoordinator.HasFinishedResult(attempt))
+                        coordinator.TryReconcileDead(attempt, "child-result-published");
                     continue;
+                }
                 var current = attempt;
                 if (current.AdoptedByGenerationId != coordinator.GenerationId &&
                     coordinator.ShouldAdopt(current))

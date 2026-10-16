@@ -373,7 +373,7 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return true; }
     }
 
-    private static bool HasFinishedResult(ConductorGroupedGateAttempt attempt)
+    internal static bool HasFinishedResult(ConductorGroupedGateAttempt attempt)
     {
         if (!File.Exists(attempt.ExitCodePath)) return false;
         try
@@ -523,22 +523,26 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
         ConductorGroupedGateAttempt attempt, string detail)
     {
         // Classification can expose free capacity without authorizing a settlement write.
-        // Preserve completed history and live pre-lease records, including their verdicts.
-        if (_usesDurableHolderLease && (HasFinishedResult(attempt) || attempt.ReconciledAt is not null ||
+        // Preserve terminal metadata and live pre-lease records, including their verdicts.
+        // A published result frees capacity, but settlement still requires holder evidence below.
+        if (_usesDurableHolderLease && (attempt.ReconciledAt is not null ||
             attempt.Outcome != "Running" ||
             !LeaseFilePresent(AcceptanceHolderBinding.For(attempt).LeasePath) &&
             HasCompleteHolderIdentity(attempt) && _classifyHolder(attempt) != SpawnTrackedProcessStatus.DeadOrRecycled))
             return attempt;
         var reconciled = false;
-        attempt = Update(attempt.MetadataPath, current =>
+        attempt = WithMetadataLock(attempt.MetadataPath, () =>
         {
+            var current = Read(attempt.MetadataPath);
             reconciled = false;
             if (current.ReconciledAt is not null || (current.HolderContractVersion == 1
                 ? HolderLease.Observe(AcceptanceHolderBinding.For(current)).ReservesCapacity
                 : _usesDurableHolderLease ? !LegacyHolderSettled(current)
                     : _classifyHolder(current) != SpawnTrackedProcessStatus.DeadOrRecycled)) return current;
             reconciled = true;
-            return current with { ReconciledAt = _utcNow(), Outcome = "Reconciled", Detail = detail };
+            var settled = current with { ReconciledAt = _utcNow(), Outcome = "Reconciled", Detail = detail };
+            Save(settled);
+            return settled;
         });
         if (reconciled) EmitReconciledDead(attempt);
         return attempt;

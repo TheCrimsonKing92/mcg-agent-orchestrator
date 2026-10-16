@@ -495,8 +495,9 @@ internal static class SourceSizeRatchet
             // Goal eade84cb adds acceptance-admission holder checks; after integrating main cb6e071fa,
             // measured 14839 lines across the same 70 partial files; no extra headroom.
             // Goal 2c245bc3 restores overlapping holders and derives a recoverable admission hold.
-            // Measured 14884 lines across the same 70 partial files; no extra headroom.
-            new SourceClassCeiling("ConductorDriver", 14884, 70),
+            // The recovery sweep also settles non-reserving attempts once their holder is proven settled.
+            // Measured 14888 lines across the same 70 partial files; no extra headroom.
+            new SourceClassCeiling("ConductorDriver", 14888, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
