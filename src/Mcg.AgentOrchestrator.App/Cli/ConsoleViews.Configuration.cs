@@ -13,7 +13,8 @@ internal static partial class ConsoleViews
             var condition = GoalLifecycle.HasActiveFailedTask(goal)
                 ? $" [{GoalLifecycle.ActiveWithFailedTaskCondition}]"
                 : string.Empty;
-            Console.WriteLine($"{goal.Id.Value[..8]} {goal.Status}{condition}: {OutputTextPreview.CreateSummary(goal.Objective).Text}");
+            var priority = goal.Priority == GoalPriority.Normal ? string.Empty : $" [priority={GoalPriorities.Format(goal.Priority)}]";
+            Console.WriteLine($"{goal.Id.Value[..8]} {goal.Status}{condition}{priority}: {OutputTextPreview.CreateSummary(goal.Objective).Text}");
         }
     }
 

@@ -75,8 +75,15 @@ END_WORKER_RESULT
         {
             FocusedRuns++;
             Assert.Contains("CliTimelineRouteParityTests", request);
+            var check = new AcceptanceCheckResult("fixture candidate", true, 0, null, ExecutedTestCount: 1);
             return new FocusedEvidenceRunResult(request, true, true, "candidate focused evidence passed",
-                [new AcceptanceCheckResult("fixture candidate", true, 0, null)]);
+                [check],
+                Arms:
+                [
+                    new FocusedEvidenceArmRunResult(
+                        FindingEvidenceArm.Candidate, CurrentCandidate, FindingEvidenceArmDisposition.Green,
+                        Accepted: true, Passed: true, "candidate focused evidence passed", [check])
+                ]);
         },
         retryTaskWithCause: (goalId, taskId, message, roundKind, cause) =>
         {

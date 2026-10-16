@@ -379,6 +379,12 @@ internal sealed partial class OperatorIntentCoordinator
             case OperatorIntentVerbs.Answer:
                 ApplyAnswer(kernel, goal, intent);
                 return;
+            case OperatorIntentVerbs.GoalPriority:
+                var priorityPayload = Deserialize<GoalPriorityOperatorIntentPayload>(intent);
+                if (!GoalPriorities.TryParse(priorityPayload.Level, out var priority))
+                    throw new InvalidOperationException($"Invalid goal priority '{priorityPayload.Level}'; valid levels: {GoalPriorities.ValidLevelsText}.");
+                kernel.SetGoalPriority(goal.Id, priority, intent.Actor, priorityPayload.Rationale ?? "");
+                return;
             case OperatorIntentVerbs.CriterionEvidenceMap:
                 var mapping = Deserialize<CriterionEvidenceMappingOperatorIntentPayload>(intent);
                 kernel.MapCriterionEvidenceOwner(

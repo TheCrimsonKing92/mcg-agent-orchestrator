@@ -53,9 +53,11 @@ public sealed class GuidanceTextBudgetTests
         // Developer standing rules are loaded inline or through rule.md in every Developer brief.
         new("Developer standing rules", 638, () => string.Join("\n", WorkerStandingRules.RenderBriefSection(AgentRole.Developer))),
         // AGENTS.md is copied into every worker's context as repository guidance.
-        new("AGENTS.md", 25029, () => ReadRepositoryFile("AGENTS.md")),
+        // +235 chars: driver-takeover home line (operator-runbook#driver-takeover).
+        new("AGENTS.md", 25264, () => ReadRepositoryFile("AGENTS.md")),
         // CLAUDE.md is automatically loaded by the Claude harness as repository guidance.
-        new("CLAUDE.md", 7355, () => ReadRepositoryFile("CLAUDE.md")),
+        // +235 chars: driver-takeover home line (operator-runbook#driver-takeover).
+        new("CLAUDE.md", 7590, () => ReadRepositoryFile("CLAUDE.md")),
         // guidance-budget-table:end
     ];
 

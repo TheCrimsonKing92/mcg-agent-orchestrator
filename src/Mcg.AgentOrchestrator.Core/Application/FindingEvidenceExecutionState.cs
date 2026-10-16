@@ -190,6 +190,13 @@ public static class FindingEvidenceExecutionClassifier
                 (receipt.Request?.NegativeControl == request.NegativeControl && receipt.NegativeControlOutcome is not null))
             .Where(receipt => FindingEvidenceRevertPaths.SamePaths(receipt.Request?.RevertPaths, request.RevertPaths))
             .Where(receipt => FindingEvidenceMutation.Same(receipt.Request?.Mutation, request.Mutation))
+            // A batch outcome may reference this receipt even when fail-fast skipped the
+            // finding's member. Its typed disposition takes precedence over that reference.
+            .Where(receipt => !(receipt.RequestDispositions ?? []).Any(disposition =>
+                string.Equals(disposition.FindingStableId, finding.StableId, StringComparison.Ordinal) &&
+                disposition.Decision is FindingEvidenceRequestDecision.PendingExecution
+                    or FindingEvidenceRequestDecision.CoveredByPendingRequest
+                    or FindingEvidenceRequestDecision.DeferredToNextCandidate))
             .Any(receipt =>
                 CoversFindingOutcome(receipt, outcomeReceiptId) ||
                 CoversFindingDisposition(receipt, finding.StableId) ||

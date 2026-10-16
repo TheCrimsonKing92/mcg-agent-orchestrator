@@ -260,6 +260,11 @@ internal static partial class CliPersistentStateRunner
         }
         if (IsCancelDispatchCommand(args))
             return ExecuteCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
+        if (CliGoalPriorityCommand.IsCommand(args))
+        {
+            CliCommandHelp.ThrowIfInvalidFlags(args);
+            return ExecuteCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
+        }
         if (IsGoalScopedTaskMutationCommand(args) || args.Count > 0 && args[0].Equals(OperatorIntentVerbs.ApprovePolicyChange, StringComparison.OrdinalIgnoreCase))
         {
             CliCommandHelp.ThrowIfInvalidFlags(args);

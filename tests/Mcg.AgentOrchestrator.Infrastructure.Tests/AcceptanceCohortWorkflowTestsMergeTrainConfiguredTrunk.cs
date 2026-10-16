@@ -6,6 +6,11 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // Parallel-safe: all refs, SQLite receipts and artifacts live in this test's own repository.
 public sealed class AcceptanceCohortWorkflowTestsMergeTrainConfiguredTrunk : AcceptanceCohortWorkflowTests
 {
+    private sealed class PromotionClock : IClock
+    {
+        internal static readonly DateTimeOffset At = new(2026, 10, 1, 12, 0, 0, TimeSpan.Zero);
+        public DateTimeOffset UtcNow => At;
+    }
     [Fact]
     public void ExecuteMergeTrain_MasterOnlyRepository_AdvancesTestedCommit()
     {
@@ -52,6 +57,7 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrainConfiguredTrunk : Acc
             Assert.Equal(master, RunGitOutput(repo, "rev-parse", "master").Trim());
             Assert.NotEqual(master, commit);
             var workspace = OrchestratorWorkspace.ForProject("alpha", repo, integrationBranch: "master", dataRootDirectory: dataRoot);
+            StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
             var store = new MergeTrainAcceptanceStore(Path.Combine(workspace.OrchestratorDirectory, "merge-train-acceptance.db"));
             var identity = MergeTrainIdentity.Create(bindings, master, tree, "manifest-v1");
             var receipt = store.SaveGateReceipt(new MergeTrainReceipt("master-train-receipt", identity,
@@ -59,9 +65,23 @@ public sealed class AcceptanceCohortWorkflowTestsMergeTrainConfiguredTrunk : Acc
                 GateTestResultPaths: [WritePassingTrx(repo, "master-train.trx")], ValidForLanding: true));
 
             var result = LandingExecutor.ExecuteMergeTrain(kernel, goals, workspace, receipt, commit,
-                store, ConductorAutonomyPolicy.Permissive);
+                store, ConductorAutonomyPolicy.Permissive, promotionClock: new PromotionClock());
 
             Assert.Equal(AcceptanceCohortLandingOutcome.Advanced, result.Outcome);
+            var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            repository.SaveAsync(kernel).GetAwaiter().GetResult();
+            var facts = repository.ListGoalMetadataAsync().GetAwaiter().GetResult();
+            Assert.Equal(3, facts.Count);
+            Assert.All(facts, row =>
+            {
+                Assert.NotNull(row.PromotionFact);
+                Assert.Equal(PromotionClock.At, row.PromotionFact.PromotedAt);
+                Assert.Equal(master, row.PromotionFact.PriorMainRevision);
+                Assert.Equal(commit, row.PromotionFact.PromotedMainRevision);
+                Assert.Equal(bindings.Single(member => member.GoalId.Value == row.Id).CandidateRevision,
+                    row.PromotionFact.CandidateRevision);
+                Assert.Equal(GoalPromotionFact.MergeTrainProvenance, row.PromotionFact.Provenance);
+            });
             Assert.Equal(commit, RunGitOutput(repo, "rev-parse", "refs/heads/master").Trim());
             Assert.NotEqual(0, GitCli.Run(repo, "rev-parse", "--verify", "--quiet", "refs/heads/main").ExitCode);
             Assert.All(goals, goal => Assert.Equal(GoalStatus.Completed, goal.Status));

@@ -16,6 +16,12 @@ public sealed partial class SqliteOrchestratorStateRepository
         using (var reader = probe.ExecuteReader())
             while (reader.Read()) columns.Add(reader.GetString(1));
         if (columns.Count == 0) return results;
+        var hasPromotionFacts = HasPromotionFactsTable(connection);
+        var promotionColumns = hasPromotionFacts
+            ? "promotion.goal_id, promotion.candidate_revision, promotion.prior_main_revision, promotion.promoted_main_revision, promotion.promoted_at, promotion.provenance"
+            : "NULL, NULL, NULL, NULL, NULL, NULL";
+        var promotionJoin = hasPromotionFacts
+            ? "LEFT JOIN goal_promotion_facts AS promotion ON promotion.goal_id = goals.id" : string.Empty;
         foreach (var batch in ids.Distinct(StringComparer.Ordinal).Chunk(400))
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -33,14 +39,15 @@ public sealed partial class SqliteOrchestratorStateRepository
             var objective = columns.Contains("objective") ? "objective" : "''";
             var updated = columns.Contains("updated_at") ? "updated_at" : "''";
             var condition = columns.Contains("snapshot_json") ? ActiveWithFailedTaskConditionSql() : "NULL";
-            command.CommandText = $"SELECT id, status, {objective}, {updated}, {created}, {condition} FROM goals WHERE id IN ({scope}) ORDER BY {updated} DESC";
+            command.CommandText = $"SELECT id, status, {objective}, {updated}, {created}, {condition}, {promotionColumns} FROM goals {promotionJoin} WHERE id IN ({scope}) ORDER BY {updated} DESC";
             if (columns.Contains("snapshot_json"))
                 command.Parameters.AddWithValue("$include_terminal_created_at", includeTerminalCreatedAt ? 1 : 0);
             using var reader = await command.ExecuteReaderAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken))
                 results.Add(new(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3),
                     CreatedAt: reader.IsDBNull(4) ? null : DateTimeOffset.Parse(reader.GetString(4), CultureInfo.InvariantCulture),
-                    Condition: reader.IsDBNull(5) ? null : reader.GetString(5)));
+                    Condition: reader.IsDBNull(5) ? null : reader.GetString(5),
+                    PromotionFact: ReadPromotionFact(reader, 6)));
         }
         return results;
     }

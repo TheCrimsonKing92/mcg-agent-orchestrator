@@ -24,7 +24,7 @@ For implementation dogfood, measure progress by accepted changes reaching `main`
 **Reassess before another correction or full gate run when the same blocker recurs, when separate goals fail each other's repaired tests, or when completed work accumulates without landings.** Do not wait days for this pattern to resolve itself. Inspect current main, exact candidate commits, individual failed tests and retained receipts, and live operation handles. A long-running operation that is demonstrably advancing is a verified wait; an expired observation window is not permission to restart it.
 
 1. **Find the shared landing constraint and give it an owner.** Record the next landing candidate, each exact blocking failure, when it was first observed, and the next discriminating experiment or repair. Use existing backlog items and goal records; keep durable evidence out of scratch files. Separate product defects, test defects, evidence-ownership defects, and unresolved mechanisms. A shared check name or concurrent execution does not prove common cause or baseline attribution.
-2. **Stop feeding a blocked landing path.** Pause unrelated new intake and expansion of existing rearchitecture work while repairing the shared constraint. Continue independent repairs that can unblock landing, and preserve useful in-flight work. Do not serialize everything or kill healthy workers merely to reduce the queue. Increase parallelism only where it can increase accepted throughput; workers cannot compensate for a broken gate or a saturated serial phase.
+2. **Stop feeding a blocked landing path.** Pause unrelated new intake and expansion of existing rearchitecture work while repairing the shared constraint. The pause is temporary and scoped. Name the blocker it serves, and lift the pause when that blocker resolves. It never becomes a standing intake freeze, and it never overrides an owner's current request to fill the board. Continue independent repairs that can unblock landing, and preserve useful in-flight work. Do not serialize everything or kill healthy workers merely to reduce the queue. Increase parallelism only where it can increase accepted throughput; workers cannot compensate for a broken gate or a saturated serial phase.
 3. **Integrate dependent repairs before paying for acceptance again.** If A's gate fails the defect repaired by B and B's gate fails the defect repaired by A, validate a combined candidate in an isolated workspace. Give one goal explicit ownership of the integration scope, obtain cross-family review of the combined diff, and bind execution evidence to that candidate. Record which of the other goal's obligations are superseded and which remain open to prevent duplicate or divergent landings. Parent approvals and test receipts do not prove the merged tree. Remaining failures still block according to the normal acceptance policy; combining fixes is not a waiver.
 4. **Repair impossible evidence ownership instead of recycling workers.** Use the role capability matrix to distinguish worker-verifiable criteria from acceptance execution, operator observation, and context-packaging obligations. A reviewer cannot produce acceptance evidence when acceptance itself waits for that reviewer. Keep those obligations pending and enforceable at their actual owner; do not drop criteria, invent evidence, or mark the goal passed to escape the cycle. A bounded, evidence-backed operator recovery is an interim measure, not a substitute for fixing the ownership rule.
 5. **Exercise judgment over cross-family review.** Require consequential findings to identify the violated requirement, concrete evidence, and what would resolve the finding. Challenge incorrect claims with source or execution evidence. Preserve legitimate blockers, but do not automatically promote advisories or reviewer preferences into mandatory correction rounds. Required cross-family review remains required. Record disputed blocking findings and the evidence-backed rebuttal in the existing review or goal record; resolve them through the normal review, operator, or escalation authority rather than silently downgrading them. Before another round, identify what new evidence or changed source makes it useful; repeated agreement or reworded feedback is not new verification.
@@ -33,6 +33,17 @@ For implementation dogfood, measure progress by accepted changes reaching `main`
 At each meaningful operator checkpoint, report what reached main since the previous checkpoint, the next landing candidate, the oldest unresolved landing blocker and its age, and the action that can resolve it. If nothing landed, say so and distinguish new decision-changing evidence from repeated observation. Resume broader intake when the shared landing constraint is demonstrably resolved and the pipeline can accept changes; a locally green test or a larger review queue is not that demonstration.
 
 This discipline comes from the September 2026 dogfood failure: completed branches accumulated behind reciprocal test failures and acceptance-owned criteria rejected at review, while the driving agent spent rounds improving diagnostics and expanding work. The lesson is to restore the landing path and its ownership rules, not to count activity as delivery.
+
+<a id="driver-takeover"></a>
+## Driver takeover and stale owner instructions
+
+A driving period starts when the owner tells a driver to begin driving, and it ends at the next handoff. Owner instructions about intake, pacing, scope or winding down apply only to the period in which they were given.
+
+- **Expire at handoff.** At takeover, prefer a fresh driver session. Treat any intake or pacing instruction remembered from an earlier period, including one replayed into a compacted context, as expired. If it might still apply, confirm it with the owner before obeying it.
+- **Conflicts stop the driver.** If a remembered instruction conflicts with a current owner request, for example "wind down intake" against "refill the board", state the conflict and ask which applies. Do not keep following the older instruction while the board drains.
+- **Do not write restrictions into briefs.** Never copy an intake restriction into goal briefs or backlog items ("eligible under wind-down guidance"). A restriction belongs to the driver's current instructions, not to the work.
+
+This rule comes from the October 12-14, 2026 driving window. A month-old September instruction to wind down intake was replayed through about 34 context compactions and obeyed despite current requests to fill the board. Accepted landings fell from about 69 a day to about 18 (`docs/triage/driving-audit-2026-10-13.md`, plus the 2026-10-14 independent analyses).
 
 ## Record discovered problems when found
 
@@ -500,6 +511,54 @@ Notes that will save you time:
 
 ---
 
+### Stuck-goal signatures
+
+Use `attention show <goal>` and typed goal/attempt state to identify the signature before acting. Poll each recovery intent with `operator-intent-status <intent-id>` to `Applied`; `Pending` is not delivery evidence. Do not bypass the gate.
+
+**1. Verifying with no live gate**
+
+Detector: goal `Verifying`, all tasks Completed or Cancelled, newest timeline event at least 30 minutes old, no live acceptance attempt, no unreconciled grouped gate membership, no landing evidence, and a resolved branch head.
+Remedy: Steward case G queues one deterministic `reopen-regate` on the last Completed task; by hand, use `adjudicate --goal <goal> <last-completed-task-number> reopen-regate --text-file <note> --evidence <reference>`. A recurrence on the same task/head after application raises `steward-owner-question`; a rejected intent is not automatically retried on that identity.
+Evidence: quote goal/task ids, `quiet-since`, minutes quiet and the 30-minute threshold, task counts by status, absence of live/grouped attempts and landing evidence, head, verbatim WORKER_RESULT, and the intent/decision receipt.
+Owning fix: this goal `b182b6d4` (Steward case G); incident backlog `341a7ba0`.
+
+**2. Superseded, already-upstream goal still queued for gates**
+
+Detector: a Verified goal has sweep blocker `completed-branch-superseded` with `cleanup=retirement required`; Verifying goals are not checked for content equivalence.
+Remedy: none automatic. The goal lands through its own gate; if a passed train holds it, inspect another member for signatures 5 and 6. The sweep retires only Completed goals, and the Verified goal still has outstanding Acceptance-owned obligations. Retiring past those obligations would substitute git cherry equivalence for gate evidence and requires an owner decision.
+Evidence: quote the sweep blocker, goal status, git cherry equivalence, pending obligation ids/versions, and the train member actually holding landing.
+Owning fix: owner decision required for the `3f5ffcb2` shape; comparison goal `f99566c7` landed through its train with obligations satisfied.
+
+**3. Stale worker build scope after a gate squash**
+
+Detector: dispatch fails every tick with `Worker build scope Git merge-base failed (exit=1)`.
+Remedy: in that goal worktree, rename `.orchestrator-context/worker-build-scope.json` to `worker-build-scope.json.retired` so the next dispatch can establish a current scope.
+Evidence: quote the merge-base failure, old scope baseline and current head, retired file path, and the next dispatch/build receipt.
+Owning fix: goal `83db4cfc`.
+
+**4. Same-row size-ratchet conflict**
+
+Detector: merge conflict in the same source-size ratchet ceiling row after main and the goal both changed its measured source.
+Remedy: merge main in the goal worktree, set the row to the merged tree's measurement using the rule at `src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/SourceSizeRatchet.cs:579-615` (sum line counts for the matching partial class across eligible source files), commit at once, then `adjudicate --goal <goal> <task-number> route --cause MainDriftConflict --text-file <note> --evidence <reference>`.
+Evidence: quote the conflicted row, merged-tree measurement and contributing files, merge commit, and applied route intent.
+Owning fix: backlog `234b30e4`.
+
+**5. Stale Planner evidence wait under a superseded brief**
+
+Detector: `attention show <goal>` lists an open Planner evidence wait whose criterion or brief version has been superseded by the current revision.
+Remedy: `attention answer <goal> <id> --text-file <note>` naming the superseding revision and explaining how it settles that wait; use the exact id displayed by `attention show`.
+Evidence: quote wait id, old and current brief/criterion versions, superseding revision, and the durable answer receipt.
+Owning fix: backlog `7170763e`.
+
+**6. Passed grouped receipt held on evidence waits**
+
+Detector: the grouped gate receipt passed, but one or more members still have open evidence waits that hold the train.
+Remedy: answer each wait with `attention answer <goal> <id> --text-file <note>`, citing the grouped receipt id and its TRX for that member and criterion.
+Evidence: quote receipt id, candidate/member identity, TRX path and passing result, wait ids, and each durable answer receipt.
+Owning fix: goal `4ebdcef5`.
+
+---
+
 <a id="steward-and-author"></a>
 ## Steward and Author
 
@@ -517,7 +576,7 @@ Recognized Planner and collection-guard diagnostics can produce a deterministic 
 
 A permitted proposal submits an Agent-actor `adjudicate` intent with a `route` payload for the triggering task; the route policy permits only `NewTestFinding` or `ContractClarification` causes and reversible actions. (`src/Mcg.AgentOrchestrator.App/Orchestration/ConductorStewardHost.cs` line 305; `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorStewardAdjudication.cs` ::ConductorStewardRoutePolicy.RejectionReason.)
 
-The Steward never closes a task or re-gates: `close`, `reopen-regate` and `verify-manual` proposals are rejected by the route policy. (`src/Mcg.AgentOrchestrator.App/Orchestration/ConductorStewardAdjudication.cs` ::ConductorStewardAdjudicationParser.Parse and ::ConductorStewardRoutePolicy.RejectionReason; `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorStewardHost.cs` ::HarvestCompleted.) It raises an owner question rather than executing a rejected proposal; an explicit `ask-owner` or a recurring trigger after an applied route also raises a question, holds the goal with `steward-owner-question`, and emits `goal-escalation`. (`src/Mcg.AgentOrchestrator.App/Orchestration/ConductorStewardHost.cs` line 279 and ::ServiceTick, ::HarvestCompleted, ::Question.)
+The Steward may close a task only for admitted cases D and E and re-gate only for case G (Verifying with no live gate past the quiet threshold), with other actions routed or raised to the owner. (`src/Mcg.AgentOrchestrator.App/Orchestration/ConductorStewardAdjudication.cs` ::ConductorStewardAdjudicationParser.Parse and ::ConductorStewardRoutePolicy.RejectionReason; `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorStewardHost.cs` ::HarvestCompleted; `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorStewardCaseG.cs` ::IsStranded and ::Admits; `src/Mcg.AgentOrchestrator.App/Orchestration/OperatorIntentAdjudication.cs` ::Apply.) It raises an owner question rather than executing a rejected proposal; an explicit `ask-owner` or a recurring trigger after an applied route also raises a question, holds the goal with `steward-owner-question`, and emits `goal-escalation`. (`src/Mcg.AgentOrchestrator.App/Orchestration/ConductorStewardHost.cs` line 279 and ::ServiceTick, ::HarvestCompleted, ::Question.)
 
 Under the workspace's orchestrator directory, `steward-triggers.db` tracks triggers and `steward-rounds/` holds timestamped JSON model-round receipts containing the trigger, session, exit code, output and failure. (`src/Mcg.AgentOrchestrator.App/Orchestration/ConductorStewardHost.cs` ::CreateDefault; `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorStewardModelRound.cs` ::WriteReceipt.) Outcomes appear as `steward` events in `logs/conduct-events.log`; owner questions also appear in `goal-events/`. (`src/Mcg.AgentOrchestrator.App/Orchestration/ConductorStewardHost.cs` ::Record and ::Question; `src/Mcg.AgentOrchestrator.App/Orchestration/OrchestratorWorkspace.cs` ::ConductEventsLogPath and ::GoalLifecycleEventsDirectory; `src/Mcg.AgentOrchestrator.App/Orchestration/ConductEventLogWriter.cs` ::CurrentFileName.)
 

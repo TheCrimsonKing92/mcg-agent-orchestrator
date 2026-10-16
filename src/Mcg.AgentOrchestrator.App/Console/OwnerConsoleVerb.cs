@@ -11,13 +11,19 @@ internal static class OwnerConsoleVerb
     internal static Task<int> RunAsync(IReadOnlyList<string> args, OrchestratorWorkspace workspace,
         CancellationToken cancellationToken = default)
     {
-        if (args.Skip(1).Any(arg => !arg.Equals("--plain", StringComparison.OrdinalIgnoreCase)))
+        string? inputTracePath;
+        try
         {
-            System.Console.Error.WriteLine("Usage: console [--plain]");
+            inputTracePath = OwnerConsoleInputTraceOptions.Parse(args,
+                System.Console.IsInputRedirected, System.Console.IsOutputRedirected);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
+        {
+            System.Console.Error.WriteLine(ex.Message);
             return Task.FromResult(1);
         }
         return OwnerConsoleModeSelector.RunAsync(args, System.Console.IsInputRedirected, System.Console.IsOutputRedirected,
-            new(token => RunPlainAsync(workspace, token), token => OwnerConsoleFullScreenHost.RunAsync(workspace, token)), cancellationToken);
+            new(token => RunPlainAsync(workspace, token), token => OwnerConsoleFullScreenHost.RunAsync(workspace, token, inputTracePath)), cancellationToken);
     }
 
     private static async Task<int> RunPlainAsync(OrchestratorWorkspace workspace, CancellationToken cancellationToken)

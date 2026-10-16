@@ -216,7 +216,8 @@ public sealed partial class TaskSpec
                     LastVerification.InconclusiveRoundInputs,
                     LastVerification.HumanInputStoreReference,
                     LastVerification.EvidenceSource,
-                    LastVerification.DispatchAttemptAt),
+                    LastVerification.DispatchAttemptAt,
+                    LastVerification.FindingEvidenceRequestDispositions),
             _verificationHistory
                 .Select(verification => new TaskVerificationSnapshot(
                     verification.Command,
@@ -252,7 +253,8 @@ public sealed partial class TaskSpec
                     verification.InconclusiveRoundInputs,
                     verification.HumanInputStoreReference,
                     verification.EvidenceSource,
-                    verification.DispatchAttemptAt))
+                    verification.DispatchAttemptAt,
+                    verification.FindingEvidenceRequestDispositions))
                 .ToList(),
             LastDispatch is null
                 ? null
@@ -396,7 +398,8 @@ public sealed partial class TaskSpec
                     InconclusiveRoundInputs: verification.InconclusiveRoundInputs,
                     HumanInputStoreReference: verification.HumanInputStoreReference,
                     EvidenceSource: verification.EvidenceSource,
-                    DispatchAttemptAt: verification.DispatchAttemptAt));
+                    DispatchAttemptAt: verification.DispatchAttemptAt,
+                    FindingEvidenceRequestDispositions: verification.FindingEvidenceRequestDispositions));
             }
         }
 
@@ -442,7 +445,8 @@ public sealed partial class TaskSpec
                 InconclusiveRoundInputs: snapshot.LastVerification.InconclusiveRoundInputs,
                 HumanInputStoreReference: snapshot.LastVerification.HumanInputStoreReference,
                 EvidenceSource: snapshot.LastVerification.EvidenceSource,
-                DispatchAttemptAt: snapshot.LastVerification.DispatchAttemptAt);
+                DispatchAttemptAt: snapshot.LastVerification.DispatchAttemptAt,
+                FindingEvidenceRequestDispositions: snapshot.LastVerification.FindingEvidenceRequestDispositions);
             var historyIndex = task._verificationHistory.FindLastIndex(
                 verification => verification.HasSameRoundIdentity(latestVerification));
             if (historyIndex < 0)
@@ -680,6 +684,40 @@ public sealed partial class TaskSpec
         LastVerification = updated;
     }
 
+    internal void RecordFindingEvidenceRequestDispositions(
+        IReadOnlyList<FindingEvidenceRequestDisposition> dispositions)
+    {
+        if (LastVerification is null)
+            throw new InvalidOperationException("Finding evidence decisions require an existing verification.");
+        foreach (var disposition in dispositions)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(disposition.FindingStableId);
+            ArgumentException.ThrowIfNullOrWhiteSpace(disposition.RequestIdentity);
+            ArgumentException.ThrowIfNullOrWhiteSpace(disposition.FindingRoundFingerprint);
+            ArgumentException.ThrowIfNullOrWhiteSpace(disposition.Reason);
+            if (disposition.Decision is null ||
+                (disposition.Decision != FindingEvidenceRequestDecision.CandidateUnavailable &&
+                 string.IsNullOrWhiteSpace(disposition.CandidateSha)))
+                throw new ArgumentException("A typed finding evidence decision requires candidate identity.", nameof(dispositions));
+            if (disposition.Decision == FindingEvidenceRequestDecision.CoveredByPendingRequest &&
+                string.IsNullOrWhiteSpace(disposition.CoveringRequestIdentity))
+                throw new ArgumentException("Pending coverage requires a covering request identity.", nameof(dispositions));
+            if (disposition.Decision is FindingEvidenceRequestDecision.CoveredByReceipt or FindingEvidenceRequestDecision.Executed &&
+                disposition.SourceReceiptIds is not { Count: > 0 })
+                throw new ArgumentException("Completed coverage requires an execution receipt identity.", nameof(dispositions));
+        }
+        var prior = LastVerification;
+        var updated = prior with
+        {
+            FindingEvidenceRequestDispositions = FindingEvidenceRequestDisposition.Merge(
+                prior.FindingEvidenceRequestDispositions, dispositions)
+        };
+        var historyIndex = _verificationHistory.FindLastIndex(item =>
+            ReferenceEquals(item, prior) || item.HasSameRoundIdentity(prior));
+        if (historyIndex >= 0) _verificationHistory[historyIndex] = updated;
+        LastVerification = updated;
+    }
+
     internal void RecordFindingEvidenceOutcome(
         string stableId,
         FindingEvidenceOutcome outcome,
@@ -742,7 +780,9 @@ public sealed partial class TaskSpec
         var updated = prior with
         {
             MergedReviewFindings = findings,
-            FindingEvidenceReceipts = receipts
+            FindingEvidenceReceipts = receipts,
+            FindingEvidenceRequestDispositions = FindingEvidenceRequestDisposition.Merge(
+                prior.FindingEvidenceRequestDispositions, receipt?.RequestDispositions)
         };
         var historyIndex = _verificationHistory.FindLastIndex(item =>
             ReferenceEquals(item, prior) || item.HasSameRoundIdentity(prior));

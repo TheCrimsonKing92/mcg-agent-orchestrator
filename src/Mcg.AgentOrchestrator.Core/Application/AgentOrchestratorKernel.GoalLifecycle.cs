@@ -421,22 +421,8 @@ public sealed partial class AgentOrchestratorKernel
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
-        ArgumentNullException.ThrowIfNull(blockerIds);
-        var normalizedBlockerIds = blockerIds
-            .Where(id => !string.IsNullOrWhiteSpace(id))
-            .Select(id => id.Trim())
-            .Distinct(StringComparer.Ordinal)
-            .OrderBy(id => id, StringComparer.Ordinal)
-            .ToArray();
-        if (normalizedBlockerIds.Length == 0)
-        {
-            throw new ArgumentException("At least one writable blocker id is required.", nameof(blockerIds));
-        }
-
-        ArgumentException.ThrowIfNullOrWhiteSpace(candidateSha);
-        ArgumentException.ThrowIfNullOrWhiteSpace(evidenceRequestId);
-        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
-        ArgumentException.ThrowIfNullOrWhiteSpace(suppressionIdentity);
+        var message = FindingEvidenceSuppression.Message(goalId, taskId, candidateSha, blockerIds,
+            evidenceRequestId, chosenOwner, reason, suppressionIdentity);
         if (goal.Timeline.Any(evt =>
                 evt.Kind == ProgressKind.FindingEvidenceSuppressed &&
                 evt.Message.Contains(
@@ -450,9 +436,16 @@ public sealed partial class AgentOrchestratorKernel
             goal,
             taskId,
             ProgressKind.FindingEvidenceSuppressed,
-            $"finding-evidence-suppressed goal_id={goalId}; task_id={taskId}; candidate_sha={candidateSha.Trim()}; " +
-            $"blocker_ids={string.Join(',', normalizedBlockerIds)}; evidence_request_id={evidenceRequestId.Trim()}; " +
-            $"chosen_owner={chosenOwner}; reason={reason.Trim()}; suppression_identity={suppressionIdentity.Trim()}");
+            message);
+        return task;
+    }
+
+    public TaskSpec RecordFindingEvidenceRequestDispositions(
+        GoalId goalId, TaskId taskId,
+        IReadOnlyList<FindingEvidenceRequestDisposition> dispositions)
+    {
+        var task = GetGoal(goalId).FindTask(taskId);
+        task.RecordFindingEvidenceRequestDispositions(dispositions);
         return task;
     }
 
@@ -2569,6 +2562,16 @@ public sealed partial class AgentOrchestratorKernel
     }
 
     public IReadOnlyList<ProgressEvent> GetTimeline(GoalId goalId) => GetGoal(goalId).Timeline;
+
+    public GoalPriority SetGoalPriority(GoalId goalId, GoalPriority priority, string actor, string rationale)
+    {
+        var goal = GetGoal(goalId);
+        var previous = goal.Priority;
+        goal.SetPriority(priority);
+        Append(goal, null, ProgressKind.GoalPolicyDecision,
+            $"Goal priority set: previous={GoalPriorities.Format(previous)} new={GoalPriorities.Format(priority)} actor={actor} reason={(string.IsNullOrEmpty(rationale) ? "(no reason given)" : rationale)}");
+        return previous;
+    }
 
     public void RecordGoalPolicyDecision(GoalId goalId, string message) =>
         RecordGoalPolicyDecision(goalId, message, null);

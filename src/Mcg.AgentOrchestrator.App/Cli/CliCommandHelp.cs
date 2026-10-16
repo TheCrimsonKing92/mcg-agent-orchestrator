@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.App.OwnerConsole;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
@@ -44,7 +45,7 @@ internal static class CliCommandHelp
     public const string WorkspaceUsage = "Usage: workspace [create|merge|rebase|remove] [goal-id-prefix] [--force-terminal-cleanup]";
     public const string WorkspaceCreateUsage = "Usage: workspace create [goal-id-prefix]";
     public const string ReassignAgentUsage = "Usage: reassign-agent <task-number> <agent-id>|<goal-prefix> <task-number> <agent-id>|--goal <goal-prefix> <task-number> <agent-id>";
-    public const string BacklogListUsage = "Usage: backlog-list [--all] [--limit <n>] [--status <value>] [--text <pattern>|--text=<leading-dash-pattern>]";
+    public const string BacklogListUsage = "Usage: backlog-list [--all] [--limit <n>] [--status <value>] [--text <pattern>|--text=<leading-dash-pattern>] [--json]";
     public const string BacklogTriageUsage = "Usage: backlog-triage [--limit <n>] [--stale-days <n>]";
     public const string BacklogAddUsage = "Usage: backlog-add <title> [body] [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar] | backlog-add --title <title> [--text-file <path>|--body-file <path>] [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar] | backlog-add <title> --text-file <path> [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar] | backlog-add <title> --body-file <path> [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar]";
     public const string BacklogUpdateUsage = "Usage: backlog-update <id-prefix> [--title <text>] [--description <text> | --text-file <path> | --body-file <path>] [--priority <value>] [--tags <csv>] [--status <open|done|superseded>]";
@@ -394,8 +395,8 @@ internal static class CliCommandHelp
 
     private static readonly CommandHelpEntry BacklogList = new(
         BacklogListUsage,
-        "List every backlog item with its status and linked goal id.",
-        ["--all", "--limit", "--status", "--text", "--help", "-h"]);
+        "List every backlog item with its status and linked goal id. --json emits the mcg.backlog-list agent envelope.",
+        ["--all", "--limit", "--status", "--text", "--help", "-h", "--json"]);
 
     private static readonly CommandHelpEntry BacklogTriage = new(
         BacklogTriageUsage,
@@ -534,7 +535,7 @@ internal static class CliCommandHelp
 
     private static readonly CommandHelpEntry EpicList = new(
         EpicListUsage,
-        "List epics with every goal status bucket and open/done backlog counts; newest is the latest member-goal metadata update (UpdatedAt). Use --since with positive Nh or Nd durations (24h, 7d) or an absolute timestamp to show window counts. window-landed uses the goal update time until a landed-at timestamp exists.",
+        "List epics with every goal status bucket and open/done backlog counts; newest is the latest member-goal metadata update (UpdatedAt). Use --since with positive Nh or Nd durations (24h, 7d) or an absolute timestamp to show window counts. window-landed uses the original successful promotion time inclusively; unknown landing dates are excluded from dated windows.",
         ["--since", "--json", "--help", "-h"]);
 
     private static readonly CommandHelpEntry EpicMembers = new(
@@ -615,9 +616,9 @@ internal static class CliCommandHelp
         ["--min-goals", "--since", "--help", "-h"]);
 
     private static readonly CommandHelpEntry OwnerConsole = new(
-        "Usage: console [--plain]",
-        "Open the owner console; --plain uses line mode (also selected for redirected input or output).",
-        ["--plain", "--help", "-h"]);
+        OwnerConsoleInputTraceOptions.Usage,
+        "Open the owner console; --plain uses line mode (also selected for redirected input or output). --input-trace writes bounded input/draw diagnostics to a new JSON file after exit (interactive mode only).",
+        ["--plain", "--input-trace", "--help", "-h"]);
 
     private static readonly CommandHelpEntry OwnerDigest = new(
         OwnerDigestUsage,
@@ -640,6 +641,13 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry RemoteLaneSelfTest = new(
         RemoteLaneSelfTestUsage, "Operator-only self-test that pushes to the executor and runs one real SSH lane job.",
         ["--executor", "--timeout-minutes", "--help", "-h"]);
+
+    public const string BoardSimulateUsage = "Usage: board-simulate [--day <yyyy-MM-dd>] [--width <1-4>] [--train-size <0|3|4>] [--cohorts on|off] [--drop newest|lowest-pass-rate] [--seed <n>] [--json]";
+
+    private static readonly CommandHelpEntry BoardSimulate = new(
+        BoardSimulateUsage,
+        "Replay a recorded UTC day of gate scheduling offline and compare landings.",
+        ["--day", "--width", "--train-size", "--cohorts", "--drop", "--seed", "--json", "--help", "-h"]);
 
     private static readonly CommandHelpEntry RoundValue = new(
         RoundValueUsage,
@@ -767,6 +775,7 @@ internal static class CliCommandHelp
             ["refresh-dispatches"] = Flags("--autonomy", "--autonomy-policy", "--goal"),
             ["logs"] = GoalScopedTaskFlags(),
             ["cancel-dispatch"] = Flags("--goal", "--completion-build-operation", "--idempotency-key", "--operator-actor", "--actor-kind", "--json"),
+            ["goal-priority"] = Flags("--reason", "--idempotency-key", "--operator-actor", "--actor-kind", "--json"),
             ["accept"] = Flags(
                 "--autonomy", "--autonomy-policy", "--keep-workspace", "--no-record", "--skip-verify")
         };
@@ -1182,6 +1191,11 @@ internal static class CliCommandHelp
         if (args[0].Equals("remote-lane-selftest", StringComparison.OrdinalIgnoreCase))
         {
             entry = RemoteLaneSelfTest;
+            return true;
+        }
+        if (args[0].Equals("board-simulate", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = BoardSimulate;
             return true;
         }
         if (args[0].Equals("round-value", StringComparison.OrdinalIgnoreCase))
@@ -1713,6 +1727,8 @@ internal static class CliCommandHelp
                     ? $"Usage: {command} <objective> --confirm-batch-start [--confirm-large-paid-subscription-start] [--confirm-readiness-risk] [--backlog-item <id-prefix> --backlog-coverage <full|slice>] [--epic <id-or-title>] [--autonomy <policy>]"
                     : command.Equals("cancel-dispatch", StringComparison.OrdinalIgnoreCase)
                     ? $"Usage: {command} [options] [--json]"
+                    : command.Equals("goal-priority", StringComparison.OrdinalIgnoreCase)
+                    ? CliGoalPriorityCommand.Usage
                     : $"Usage: {command} [options]",
                 "Run this operator command.",
                 GenericCommandFlags.TryGetValue(command, out var flags) ? flags : CliCommandHelp.Flags(),

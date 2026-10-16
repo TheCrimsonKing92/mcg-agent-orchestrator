@@ -11,6 +11,7 @@ internal static class CliReadOnlyCommandRunner
         CliLaneReuseShadowQueryCommand.IsLaneReuseShadowQueryCommand(args) ||
         CliRemoteExecutorsQueryCommand.IsCommand(args) ||
         CliRoundValueQueryCommand.IsRoundValueQueryCommand(args) ||
+        CliBoardSimulateQueryCommand.IsBoardSimulateQueryCommand(args) ||
         GoalBoardCommand.IsBoardCommand(args) ||
         TrialCompareCliCommand.RequiresHistoricalState(args) ||
         CliTaskQueryCommand.IsTaskQueryCommand(args) ||
@@ -48,6 +49,7 @@ internal static class CliReadOnlyCommandRunner
         if (CliLaneReuseShadowQueryCommand.IsLaneReuseShadowQueryCommand(args)) { CliLaneReuseShadowQueryCommand.Execute(args, workspace); changed = false; return true; }
         if (CliRemoteExecutorsQueryCommand.IsCommand(args)) { CliRemoteExecutorsQueryCommand.Execute(args, workspace); changed = false; return true; }
         if (CliRoundValueQueryCommand.IsRoundValueQueryCommand(args)) { CliRoundValueQueryCommand.Execute(args, stateRepository, workspace); changed = false; return true; }
+        if (CliBoardSimulateQueryCommand.IsBoardSimulateQueryCommand(args)) { CliBoardSimulateQueryCommand.Execute(args, workspace.OrchestratorDirectory, Console.Out, Console.Error, DateTimeOffset.UtcNow); changed = false; return true; }
         if (GoalBoardCommand.IsBoardCommand(args))
         {
             GoalBoardCommand.Run(args, stateRepository, workspace);

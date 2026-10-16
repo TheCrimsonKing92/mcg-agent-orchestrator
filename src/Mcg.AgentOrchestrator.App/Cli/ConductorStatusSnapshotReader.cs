@@ -13,6 +13,17 @@ internal static class ConductorStatusSnapshotReader
 {
     private sealed record Event(DateTimeOffset At, string Kind, string Detail);
 
+    internal static DateTimeOffset? LatestTick(OrchestratorWorkspace workspace) =>
+        LatestTick(ReadEvents(workspace.ConductEventsLogPath), workspace.RunEventStorePath);
+
+    private static DateTimeOffset? LatestTick(IReadOnlyList<Event> events, string runEventStorePath)
+    {
+        var logTick = events.Where(item => item.Kind.StartsWith("tick", StringComparison.OrdinalIgnoreCase))
+            .MaxBy(item => item.At)?.At;
+        var dbTick = ReadLatestTick(runEventStorePath);
+        return logTick is null ? dbTick : dbTick is null ? logTick : (logTick > dbTick ? logTick : dbTick);
+    }
+
     internal static ConductorStatusSnapshot Read(OrchestratorWorkspace workspace, int? owner,
         DateTimeOffset bootTime, Func<string?>? mainCommit = null)
     {
@@ -36,11 +47,7 @@ internal static class ConductorStatusSnapshotReader
         var build = Latest(events, workspace.ConductEventsLogPath, item => item.Kind == "supervisor-build");
         var buildCommit = ReadBuildCommit(build?.Detail);
         var generation = ReadGeneration(buildCommit, mainCommit);
-        var logTick = events.Where(item => item.Kind.StartsWith("tick", StringComparison.OrdinalIgnoreCase))
-            .MaxBy(item => item.At)?.At;
-        var dbTick = ReadLatestTick(workspace.RunEventStorePath);
-        var tick = logTick is null ? dbTick : dbTick is null ? logTick :
-            (logTick > dbTick ? logTick : dbTick);
+        var tick = LatestTick(events, workspace.RunEventStorePath);
 
         ConductorStatusSnapshot.GoalsObservation goalSnapshot;
         if (!File.Exists(workspace.SqliteStatePath))
@@ -208,18 +215,25 @@ internal static class ConductorStatusSnapshotReader
     {
         if (!File.Exists(path)) return [];
         var result = new List<Event>();
-        foreach (var line in File.ReadLines(path))
+        try
         {
-            try
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream);
+            while (reader.ReadLine() is { } line)
             {
-                using var document = JsonDocument.Parse(line);
-                var root = document.RootElement;
-                result.Add(new Event(root.GetProperty("timestamp").GetDateTimeOffset(),
-                    root.GetProperty("eventKind").GetString() ?? "",
-                    root.GetProperty("detail").GetString() ?? ""));
+                try
+                {
+                    using var document = JsonDocument.Parse(line);
+                    var root = document.RootElement;
+                    result.Add(new Event(root.GetProperty("timestamp").GetDateTimeOffset(),
+                        root.GetProperty("eventKind").GetString() ?? "",
+                        root.GetProperty("detail").GetString() ?? ""));
+                }
+                catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException or KeyNotFoundException) { }
             }
-            catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException or KeyNotFoundException) { }
         }
+        catch (FileNotFoundException) { return []; }
         return result;
     }
 

@@ -453,6 +453,7 @@ public sealed class ConductorDriverTests
         Action<GoalId, TaskId, string, int>? recordPreReviewMappingEscalationSuppressed = null,
         ConductorParallelAcceptanceAttemptCoordinator? focusedEvidenceAttemptCoordinator = null,
         Action<GoalId, TaskId, string, FindingEvidenceOutcome, FindingEvidenceReceipt?>? recordFindingEvidenceOutcome = null,
+        Action<GoalId, TaskId, IReadOnlyList<FindingEvidenceRequestDisposition>>? recordFindingEvidenceRequestDispositions = null,
         Action<GoalId, TaskId, string>? recordFindingEvidenceRequest = null,
         Action<GoalId, TaskId, string>? recordFindingEvidenceRun = null,
         Action<GoalId, TaskId, string, IReadOnlyList<string>, string, AgentRole, string, string>? recordFindingEvidenceSuppressed = null,
@@ -513,6 +514,7 @@ public sealed class ConductorDriverTests
             recordPreReviewMappingEscalationSuppressed: recordPreReviewMappingEscalationSuppressed,
             focusedEvidenceAttemptCoordinator: focusedEvidenceAttemptCoordinator,
             recordFindingEvidenceOutcome: recordFindingEvidenceOutcome,
+            recordFindingEvidenceRequestDispositions: recordFindingEvidenceRequestDispositions,
             recordFindingEvidenceRequest: recordFindingEvidenceRequest,
             recordFindingEvidenceRun: recordFindingEvidenceRun,
             recordFindingEvidenceSuppressed: recordFindingEvidenceSuppressed,
@@ -602,7 +604,8 @@ public sealed class ConductorDriverTests
             0,
             null,
             ArtifactsPath: "C:\\receipts\\candidate",
-            TestResultPaths: ["C:\\receipts\\candidate\\result.trx"]);
+            TestResultPaths: ["C:\\receipts\\candidate\\result.trx"],
+            ExecutedTestCount: 1);
         var baselineCheck = baselineDisposition switch
         {
             FindingEvidenceArmDisposition.Green => new AcceptanceCheckResult(
@@ -666,7 +669,8 @@ public sealed class ConductorDriverTests
             "GateReadyCandidateProjectorTests.Harness returned ResourcesEmpty",
             ArtifactsPath: "C:\\receipts\\candidate",
             TestResultPaths: ["C:\\receipts\\candidate\\result.trx"],
-            FailingTestIdentities: [failingTestIdentity]);
+            FailingTestIdentities: [failingTestIdentity],
+            ExecutedTestCount: 1);
         var baselineCheck = new AcceptanceCheckResult(
             "baseline focused evidence",
             true,

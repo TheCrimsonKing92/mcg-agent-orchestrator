@@ -78,7 +78,7 @@ public sealed class FocusedEvidenceOverflowContinuationTests : GoalAcceptanceVer
             new("Infrastructure.Tests:AlphaTests", [planned[0].Name]),
             new("Infrastructure.Tests:BetaTests", [planned[1].Name])]);
         AcceptanceCheckResult[] results = [new(planned[0].Name, !firstFails, firstFails ? 2 : 0, "",
-            FailingTestIdentities: firstFails ? ["AlphaTests.Fails"] : [])];
+            FailingTestIdentities: firstFails ? ["AlphaTests.Fails"] : [], ExecutedTestCount: 1)];
         var arm = await FocusedEvidenceExecution.RunFocusedEvidenceArmAsync(
             _ => throw new InvalidOperationException("No scoped runner is needed."),
             (_, _, _, _, _, _, _, _, _) => Task.FromResult<IReadOnlyList<AcceptanceCheckResult>>(results),
