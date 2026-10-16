@@ -32,7 +32,7 @@ public sealed class AcceptanceHolderBindingCandidateRewriteTests : IDisposable
     }
 
     [Fact]
-    public void WithoutLaunchKey_TheRewrittenCandidateIsRejected()
+    public void RecordWrittenBeforeLaunchKey_RecoversTheLaunchCandidateFromItsOwnLease()
     {
         var launched = Attempt("launch-branch", "launch-main") with { HolderContractVersion = 1 };
         var lease = new AcceptanceHolderLease();
@@ -40,6 +40,22 @@ public sealed class AcceptanceHolderBindingCandidateRewriteTests : IDisposable
 
         var terminal = launched with { BranchHeadSha = "integrated-branch" };
 
+        Assert.Equal(launched.CandidateKey, AcceptanceHolderBinding.For(terminal).Candidate);
+        Assert.Equal("Reserved", lease.Read(AcceptanceHolderBinding.For(terminal)).Phase);
+    }
+
+    [Fact]
+    public void ALeaseForAnotherAttempt_IsNotAdoptedAndTheMismatchStillFailsClosed()
+    {
+        var launched = Attempt("launch-branch", "launch-main") with { HolderContractVersion = 1 };
+        var lease = new AcceptanceHolderLease();
+        // Same canonical metadata path, so the same lease file, but bound to a different attempt id.
+        var foreign = AcceptanceHolderBinding.For(launched) with { AttemptId = "other-attempt" };
+        lease.Reserve(foreign, AcceptanceHolderLease.CurrentGeneration());
+
+        var terminal = launched with { BranchHeadSha = "integrated-branch" };
+
+        Assert.Equal(terminal.CandidateKey, AcceptanceHolderBinding.For(terminal).Candidate);
         var error = Assert.Throws<InvalidDataException>(() => lease.Read(AcceptanceHolderBinding.For(terminal)));
         Assert.Equal("Acceptance holder lease binding or phase changed.", error.Message);
     }
