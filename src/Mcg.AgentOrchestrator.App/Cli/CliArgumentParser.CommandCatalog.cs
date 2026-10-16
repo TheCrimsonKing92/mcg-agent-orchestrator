@@ -28,6 +28,7 @@ internal static IReadOnlyList<string> RecognizedCommands { get; } =
     "experiment-show",
     "experiment-decide",
     "experiment-extend",
+    "experiment-add-pair",
     "experiment-train-backtest",
     "experiment-apply-flag",
     "epic-assign",
