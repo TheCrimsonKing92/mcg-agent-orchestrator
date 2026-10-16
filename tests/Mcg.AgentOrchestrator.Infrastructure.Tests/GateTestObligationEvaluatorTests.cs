@@ -165,9 +165,15 @@ public sealed class GateTestObligationEvaluatorTests
     {
         using var fixture = new ProspectiveEvidenceGateFixture();
         var path = GroupedGateTrxSamples.Write(fixture.Root, "present.trx", GroupedGateTrxSamples.Namespaced);
-        string[] paths = [path, Path.Combine(fixture.Root, "missing.trx")];
-        if (grouped) ProspectiveEvidenceGateResolverGroupedReceiptTests.Save(fixture, paths);
+        var missingPath = GroupedGateTrxSamples.Write(fixture.Root, "missing.trx", GroupedGateTrxSamples.Namespaced);
+        string[] paths = [path, missingPath];
+        // Grouped receipts retain copies, so remove a retained TRX only after valid receipt creation.
+        if (grouped) missingPath = ProspectiveEvidenceGateResolverGroupedReceiptTests.Save(fixture, paths).TrxPaths[0];
         else fixture.WriteAttempt([], additionalPaths: paths);
+        Assert.Equal(GateTestObligationEvaluator.Outcome.Satisfied,
+            Evaluate(fixture, [GroupedGateTrxSamples.Selectors[1]]).Outcome);
+        File.Delete(missingPath);
+        Assert.False(File.Exists(missingPath));
 
         var result = Evaluate(fixture, [GroupedGateTrxSamples.Selectors[1]]);
 
