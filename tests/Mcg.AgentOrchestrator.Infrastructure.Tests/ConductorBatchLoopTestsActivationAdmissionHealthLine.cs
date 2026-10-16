@@ -65,11 +65,15 @@ public sealed class ConductorBatchLoopTestsActivationAdmissionHealthLine(ITestOu
                 runAcceptanceWithSlot: (_, _) => throw new InvalidOperationException("Admission must be held"),
                 getLandingFileScopes: goal => [$"src/{goal.Id.Value}.cs"],
                 parallelAcceptanceAttemptCoordinator: coordinator);
+            var sleeps = 0;
             var text = AsyncLocalConsoleRouter.Capture(() => new ConductorBatchLoop(utcNow: () => clock.UtcNow).Run(
                 kernel, driver, ConductorAutonomyPolicy.Conservative, NoStopPath(),
-                maxIterations: 1, emitActivationHeartbeat: true));
+                maxIterations: 1, emitActivationHeartbeat: true,
+                watchInterval: TimeSpan.FromSeconds(1), sleepFunc: _ => ++sleeps == 1));
+            Assert.Equal(1, sleeps);
             var lines = Lines(text);
-            var end = Assert.Single(lines.Where(line => line.StartsWith("TICK_END ", StringComparison.Ordinal)));
+            var end = Assert.Single(lines.Where(line => line.StartsWith(
+                "TICK_END tick=1 activation=true ", StringComparison.Ordinal)));
             // Strip only the existing timestamp suffix to pin the original heartbeat bytes.
             Assert.Equal("TICK_END tick=1 activation=true", end[..end.IndexOf(" ts=", StringComparison.Ordinal)]);
             var healthLine = lines[Array.IndexOf(lines, end) - 1];
