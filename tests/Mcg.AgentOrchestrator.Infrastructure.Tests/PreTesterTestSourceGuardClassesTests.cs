@@ -97,7 +97,7 @@ public sealed class PreTesterTestSourceGuardClassesTests
     public void EveryServedFormsTableReaderIsInTheSharedClassList()
     {
         var root = VerifiedRepositoryRoot.Find();
-        var needle = "typeof(" + nameof(CliCommandCapabilitiesTestsQueryRouteConvention) + ")";
+        var needle = "typeof(" + SharedNames[0] + ")";
         var readers = EnumerateTestSources(root).Where(path => File.ReadAllText(path).Contains(needle, StringComparison.Ordinal))
             .Select(Path.GetFileNameWithoutExtension).ToArray();
 
