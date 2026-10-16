@@ -14,7 +14,9 @@ public sealed record ExperimentIntervention(ExperimentInterventionKind Kind, str
 public sealed record ExperimentBaseline(ExperimentBaselineKind Kind, DateTimeOffset? Since = null,
     DateTimeOffset? Until = null, string? TwinGoalId = null, string? ComparisonGoalId = null,
     IReadOnlyList<string>? BaselineGoalIds = null, IReadOnlyList<string>? ComparisonGoalIds = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? MinGateSeconds = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? MinGateSeconds = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? IncrementalMembers = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PairingRule = null);
 public sealed record ExperimentStopRule(int Count, ExperimentStopUnit Unit, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<ExperimentStopExtension>? Extensions = null);
 public sealed record ExperimentCondition(string Metric, string Op, [property: JsonRequired] double ChangePercent);
 public sealed record ExperimentDecisionRule(IReadOnlyList<ExperimentCondition> KeepIf, IReadOnlyList<ExperimentCondition> RevertIf);
@@ -233,6 +235,101 @@ public sealed class ExperimentStore
         }
         transaction.Commit();
         return destination;
+    }
+
+    public async Task<IReadOnlyList<ExperimentMemberEvent>> AddMemberPairAsync(string experimentId,
+        string baselineGoalId, string baselineSha256, string comparisonGoalId, string comparisonSha256,
+        string reason, DateTimeOffset at, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(baselineGoalId) || string.IsNullOrWhiteSpace(comparisonGoalId) ||
+            string.Equals(baselineGoalId, comparisonGoalId, StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("rule goal-resolution: two distinct full goal ids are required.");
+        if (string.IsNullOrWhiteSpace(reason)) throw new ArgumentException("rule reason: text is required.");
+        using var connection = Open();
+        RunNonQuery(connection, "BEGIN IMMEDIATE");
+        try
+        {
+            var open = new List<ExperimentRecord>();
+            using (var command = connection.CreateCommand())
+            {
+                command.CommandText = "SELECT * FROM experiments WHERE outcome='open'";
+                using var reader = await command.ExecuteReaderAsync(cancellationToken);
+                while (await reader.ReadAsync(cancellationToken)) open.Add(Read(reader));
+            }
+            if (!open.Any(record => record.Id == experimentId))
+                throw new InvalidOperationException("rule experiment-open: experiment must exist and be open.");
+            foreach (var record in open)
+            {
+                var baseline = record.Spec.Baseline;
+                var references = (baseline.BaselineGoalIds ?? []).Concat(baseline.ComparisonGoalIds ?? []);
+                var events = await ReadMemberEventsAsync(connection, record.Id, cancellationToken);
+                foreach (var goalId in new[] { baselineGoalId, comparisonGoalId })
+                    if (references.Any(reference => !string.IsNullOrWhiteSpace(reference) &&
+                            goalId.StartsWith(reference.Trim(), StringComparison.OrdinalIgnoreCase)) ||
+                        events.Any(member => string.Equals(member.GoalId, goalId, StringComparison.OrdinalIgnoreCase)))
+                        throw new InvalidOperationException($"rule single-membership: goal '{goalId}' already belongs to open experiment '{record.Id}'.");
+            }
+            // Optional append-only journal: the versioned experiment schema remains unchanged.
+            RunNonQuery(connection, """
+                CREATE TABLE IF NOT EXISTS experiment_member_events (
+                    event_id TEXT PRIMARY KEY, experiment_id TEXT NOT NULL, pair_id TEXT NOT NULL,
+                    arm TEXT NOT NULL CHECK(arm IN ('baseline','comparison')), goal_id TEXT NOT NULL,
+                    brief_sha256 TEXT NOT NULL, reason TEXT NOT NULL, added_at TEXT NOT NULL);
+                """);
+            var pairId = Guid.NewGuid().ToString("n");
+            ExperimentMemberEvent[] added =
+            [
+                new(Guid.NewGuid().ToString("n"), pairId, "baseline", baselineGoalId, baselineSha256, reason.Trim(), at),
+                new(Guid.NewGuid().ToString("n"), pairId, "comparison", comparisonGoalId, comparisonSha256, reason.Trim(), at)
+            ];
+            foreach (var member in added)
+            {
+                using var insert = connection.CreateCommand();
+                insert.CommandText = "INSERT INTO experiment_member_events VALUES ($event,$experiment,$pair,$arm,$goal,$sha,$reason,$at)";
+                insert.Parameters.AddWithValue("$event", member.EventId);
+                insert.Parameters.AddWithValue("$experiment", experimentId);
+                insert.Parameters.AddWithValue("$pair", member.PairId);
+                insert.Parameters.AddWithValue("$arm", member.Arm);
+                insert.Parameters.AddWithValue("$goal", member.GoalId);
+                insert.Parameters.AddWithValue("$sha", member.BriefSha256);
+                insert.Parameters.AddWithValue("$reason", member.Reason);
+                insert.Parameters.AddWithValue("$at", member.AddedAt.ToString("O"));
+                await insert.ExecuteNonQueryAsync(cancellationToken);
+            }
+            RunNonQuery(connection, "COMMIT");
+            return added;
+        }
+        catch
+        {
+            try { RunNonQuery(connection, "ROLLBACK"); } catch { }
+            throw;
+        }
+    }
+
+    public async Task<IReadOnlyList<ExperimentMemberEvent>> ListMemberEventsAsync(string experimentId,
+        CancellationToken cancellationToken = default)
+    {
+        using var connection = Open();
+        return await ReadMemberEventsAsync(connection, experimentId, cancellationToken);
+    }
+
+    private static async Task<IReadOnlyList<ExperimentMemberEvent>> ReadMemberEventsAsync(SqliteConnection connection,
+        string experimentId, CancellationToken cancellationToken)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT 1 FROM sqlite_master WHERE type='table' AND name='experiment_member_events'";
+        if (await command.ExecuteScalarAsync(cancellationToken) is null) return [];
+        command.CommandText = """
+            SELECT event_id,pair_id,arm,goal_id,brief_sha256,reason,added_at
+            FROM experiment_member_events WHERE experiment_id=$id ORDER BY added_at,rowid
+            """;
+        command.Parameters.AddWithValue("$id", experimentId);
+        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var events = new List<ExperimentMemberEvent>();
+        while (await reader.ReadAsync(cancellationToken))
+            events.Add(new(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3),
+                reader.GetString(4), reader.GetString(5), DateTimeOffset.Parse(reader.GetString(6), System.Globalization.CultureInfo.InvariantCulture)));
+        return events;
     }
 
     public async Task<bool> ExtendStopRuleAsync(string id, int newCount, string reason, DateTimeOffset at,
