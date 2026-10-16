@@ -2189,7 +2189,7 @@ internal sealed partial class ConductorBatchLoop
         ReconcileParallelAcceptanceAttempts(state, kernel, driver, policy, tick, changedGoalLines, changedGoalIds);
         PrepareGroupedAcceptanceAdmission(
             state, eligible, scopedGoals, verifiedGoalIdsAtTickStart, preWalkIntentChangedGoalIds,
-            kernel, driver, policy, completedGoals, escalatedGoals, tick, changedGoalLines,
+            kernel, driver, policy, completedGoals, escalatedGoals, tick, changedGoalLines, changedGoalIds,
             suppressNewAcceptanceAdmission);
         if (!suppressNewAcceptanceAdmission())
             AdmitMergeTrain(state, driver, policy, tick, changedGoalLines);

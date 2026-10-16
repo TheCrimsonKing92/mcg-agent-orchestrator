@@ -69,6 +69,54 @@ public sealed class ConductorBatchLoopTestsAcceptanceCohortBackgroundAttribution
         Assert.Single(VerdictLines(fixture.EventLines(), guilty));
     }
 
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
+    [Trait("Category", "CrossTick")]
+    public void ChildPublishedFailure_OutsideScopedWalkIsCheckpointedOnConsumingTick()
+    {
+        using var fixture = new RoutingFixture();
+        var receipt = fixture.SeedAttributedFailure();
+        var guilty = fixture.PairGoals[0];
+        var partner = fixture.PairGoals[1];
+        var initialTimeline = guilty.Timeline.ToArray();
+        var savedGoalIds = new HashSet<GoalId>();
+        OrchestratorSnapshot? saved = null;
+        var tickCompleted = false;
+
+        fixture.CreateLoop().Run(fixture.Kernel, fixture.Driver, RoutingFixture.Policy,
+            Path.Combine(fixture.Repo, "stop-does-not-exist"), maxIterations: 1,
+            onlyGoalId: partner.Id.Value,
+            onTick: _ => tickCompleted = true,
+            checkpointGoalTick: (current, requested) =>
+            {
+                // A later detach checkpoint cannot satisfy the consuming-tick requirement.
+                if (!tickCompleted)
+                {
+                    savedGoalIds.UnionWith(requested);
+                    if (requested.Contains(guilty.Id))
+                        saved = JsonSerializer.Deserialize<OrchestratorSnapshot>(
+                            JsonSerializer.Serialize(current.ExportSnapshot()));
+                }
+                return requested.Select(goalId => new GoalSnapshotCheckpointResult(
+                    goalId.Value, GoalSnapshotCheckpointDisposition.Durable, null, "state",
+                    Path.Combine(fixture.Workspace.OrchestratorDirectory, "state.db"),
+                    "fixture-checkpoint")).ToArray();
+            });
+
+        Assert.True(tickCompleted);
+        Assert.Contains(guilty.Id, savedGoalIds);
+        Assert.NotNull(saved);
+        var restored = AgentOrchestratorKernel.FromSnapshot(saved).GetGoal(guilty.Id);
+        Assert.Contains(FailingTest, restored.RetainedAcceptanceFailure!.FailedChecks);
+        // Recording alone leaves Status and Timeline unchanged; routing A is outside this walk.
+        Assert.Equal(GoalStatus.Verified, guilty.Status);
+        Assert.Equal(initialTimeline, guilty.Timeline);
+        Assert.Null(partner.LatestAcceptanceFailure);
+        Assert.Contains("action=recorded reason=identity-match",
+            Assert.Single(VerdictLines(fixture.EventLines(), guilty)));
+        Assert.Equal(1, fixture.ConsumptionCount(receipt));
+        Assert.DoesNotContain(fixture.Launched, attempt => attempt.GoalId == guilty.Id.Value);
+    }
+
     [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [InlineData("candidate-changed")]
     [InlineData("main-changed")]
