@@ -326,14 +326,7 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
     switch (command)
     {
         case "finding":
-            var (findingQuery, findingGoalPrefix) = CliFindingQueryCommand.Parse(parts);
-            IEnumerable<Goal> findingGoals = findingGoalPrefix is null
-                ? context.Kernel.Goals
-                : [OrchestratorEntityResolver.ResolveGoal(context.Kernel, null, findingGoalPrefix)];
-            var findingResult = FindingLookup.Find(findingGoals, findingQuery);
-            if (findingResult.Matches.Count == 0)
-                throw new KeyNotFoundException($"No finding matches {findingQuery}.");
-            ConsoleViews.PrintFindingLookup(findingResult);
+            CliFindingQueryCommand.Execute(parts, context.Kernel);
             return false;
 
         case "task":
@@ -773,7 +766,7 @@ private static (TaskSpec Task, int NextIndex) ResolveCommandTaskTarget(IReadOnly
     else if (parts.Count > 2 &&
         !parts[2].StartsWith("--", StringComparison.Ordinal) &&
         (!int.TryParse(parts[1], out _) || parts[1].Length >= 8) &&
-        TryResolveGoalPrefix(context.Kernel, parts[1], out _))
+        CliTaskQueryCommand.TryResolveGoalPrefix(context.Kernel, parts[1], out _))
     {
         goalPrefix = parts[1];
         taskValue = parts[2];
@@ -787,19 +780,6 @@ private static (TaskSpec Task, int NextIndex) ResolveCommandTaskTarget(IReadOnly
 
     context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, goalPrefix);
     return (OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, taskValue), nextIndex);
-}
-
-private static bool TryResolveGoalPrefix(AgentOrchestratorKernel kernel, string idOrPrefix, out Goal? goal)
-{
-    var matches = kernel.Goals.Where(candidate => candidate.Id.Value.StartsWith(idOrPrefix, StringComparison.OrdinalIgnoreCase)).ToList();
-    if (matches.Count == 1)
-    {
-        goal = matches[0];
-        return true;
-    }
-
-    goal = null;
-    return false;
 }
 
 private static void RequireRemainingArgument(IReadOnlyList<string> parts, int index, string usage)

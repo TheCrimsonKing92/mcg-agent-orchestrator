@@ -2,7 +2,7 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
-internal static partial class ConsoleViews
+internal static class FindingLookupTextView
 {
     public static void PrintFindingLookup(FindingLookupResult result)
     {

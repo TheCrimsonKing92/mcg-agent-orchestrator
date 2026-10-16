@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Mcg.AgentOrchestrator.App.Orchestration;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
@@ -19,6 +20,18 @@ internal static class CliFindingQueryCommand
             !string.IsNullOrWhiteSpace(args[3]) && !args[3].StartsWith('-'))
             return (args[3], args[2]);
         throw new ArgumentException($"Usage: {Usage}");
+    }
+
+    internal static void Execute(IReadOnlyList<string> args, AgentOrchestratorKernel kernel)
+    {
+        var (query, goalPrefix) = Parse(args);
+        IEnumerable<Goal> goals = goalPrefix is null
+            ? kernel.Goals
+            : [OrchestratorEntityResolver.ResolveGoal(kernel, null, goalPrefix)];
+        var result = FindingLookup.Find(goals, query);
+        if (result.Matches.Count == 0)
+            throw new KeyNotFoundException($"No finding matches {query}.");
+        FindingLookupTextView.PrintFindingLookup(result);
     }
 
     internal static void Execute(
