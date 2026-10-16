@@ -19,6 +19,8 @@ public sealed class ConductorBatchLoopTestsActivationAdmissionHealthLine(ITestOu
         {
             var clock = new FixedClock();
             var kernel = new AgentOrchestratorKernel(clock);
+            // One durable attempt must fill the width so the second goal remains waiting.
+            var policy = ConductorAutonomyPolicy.Conservative with { AcceptanceWidth = 1 };
             var goals = Enumerable.Range(0, 2).Select(index =>
             {
                 var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(),
@@ -47,7 +49,7 @@ public sealed class ConductorBatchLoopTestsActivationAdmissionHealthLine(ITestOu
             {
                 var started = coordinator.Evaluate(ConductorParallelAcceptanceCandidate.Create(
                     goals[0], 0, ["src/AdmissionHealth0.cs"], "branch-sha", "main-sha"),
-                    ConductorAutonomyPolicy.Conservative, PassingRun);
+                    policy, PassingRun);
                 Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, started.Kind);
                 kernel.BeginGoalAcceptanceVerification(goals[0].Id, "Acceptance attempt launched.");
                 Assert.Single(coordinator.GetAllCapacityReservingAttempts());
@@ -67,7 +69,7 @@ public sealed class ConductorBatchLoopTestsActivationAdmissionHealthLine(ITestOu
                 parallelAcceptanceAttemptCoordinator: coordinator);
             var sleeps = 0;
             var text = AsyncLocalConsoleRouter.Capture(() => new ConductorBatchLoop(utcNow: () => clock.UtcNow).Run(
-                kernel, driver, ConductorAutonomyPolicy.Conservative, NoStopPath(),
+                kernel, driver, policy, NoStopPath(),
                 maxIterations: 1, emitActivationHeartbeat: true,
                 watchInterval: TimeSpan.FromSeconds(1), sleepFunc: _ => ++sleeps == 1));
             Assert.Equal(1, sleeps);
@@ -83,7 +85,7 @@ public sealed class ConductorBatchLoopTestsActivationAdmissionHealthLine(ITestOu
             Assert.Equal(scenario != "occupied", sample.CensusFailed);
             Assert.Equal(0, sample.LiveGates);
             Assert.Single(lines.Where(line => line.StartsWith(ActivationAdmissionSample.Prefix, StringComparison.Ordinal)));
-            if (scenario == "occupied") Assert.True(sample.Occupied >= 1);
+            if (scenario == "occupied") Assert.Equal(policy.AcceptanceWidth, sample.Occupied);
             if (scenario == "live-probe") Assert.True(probes >= 1);
             Assert.Equal(scenario == "occupied" ? 1 : 0, launches);
         }
