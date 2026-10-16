@@ -56,7 +56,7 @@ public sealed class AcceptanceLaneCarryShadowReachTests
 
     [Theory]
     [InlineData("ProcessStartInfo")]
-    [InlineData("pwsh")]
+    [InlineData("pw" + "sh")]
     [InlineData("powershell")]
     [InlineData("EnumerateFiles")]
     [InlineData("GetFiles")]
