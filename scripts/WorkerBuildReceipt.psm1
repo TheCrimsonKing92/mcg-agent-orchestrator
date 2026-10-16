@@ -66,6 +66,16 @@ function Get-WorkerBuildRunRoot {
     return Join-Path (Get-IsolatedRootBase) "goals\$safe"
 }
 
+function Get-WorktreeHeadCommit {
+    param([Parameter(Mandatory = $true)][string]$Root)
+    try {
+        $head = Invoke-WorkerReceiptGit -Root $Root -Arguments @('rev-parse', 'HEAD')
+        if ($head -match '^[a-fA-F0-9]{40}$') { return $head.ToLowerInvariant() }
+    }
+    catch { }
+    return $null
+}
+
 function Get-WorktreeTreeDigest {
     param([Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)][string]$TemporaryRoot)
     # Each computation owns a private index and object store; never mutate the real index or
@@ -128,4 +138,4 @@ function Assert-WorkerBuildPathNotRedirected {
     }
 }
 
-Export-ModuleMember -Function Get-IsolatedRootBase, Get-WorkerBuildRunRoot, Get-WorktreeTreeDigest, Assert-WorkerBuildArtifactsPath, Assert-WorkerBuildPathNotRedirected
+Export-ModuleMember -Function Get-IsolatedRootBase, Get-WorkerBuildRunRoot, Get-WorktreeTreeDigest, Get-WorktreeHeadCommit, Assert-WorkerBuildArtifactsPath, Assert-WorkerBuildPathNotRedirected
