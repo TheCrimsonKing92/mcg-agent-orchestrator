@@ -54,6 +54,7 @@ internal sealed partial class ConductorBatchLoop
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
         {
+            RecordActivationAdmissionFailure();
             return new ActiveParallelAcceptanceReservations([], [], [], [], ex);
         }
     }
@@ -163,14 +164,18 @@ internal sealed partial class ConductorBatchLoop
     {
         try
         {
-            return BuildLiveAcceptanceCensus(
+            var liveGates = GateLoadContextProbe.CaptureLiveGateOccupants();
+            var census = BuildLiveAcceptanceCensus(
                 activeAttempts,
                 activeAttemptIds,
                 activeCohorts,
-                GateLoadContextProbe.CaptureLiveGateOccupants());
+                liveGates);
+            RecordActivationAdmissionCensus(census.OccupiedCount, liveGates.Count(gate => gate.CountsAsAcceptanceOccupant));
+            return census;
         }
         catch (Exception ex) when (ex is GateLoadContextProbe.LoadProbeUnavailableException or IOException or UnauthorizedAccessException)
         {
+            RecordActivationAdmissionFailure();
             RecordParallelAcceptanceProgress(
                 $"ADMISSION tick={tick} detail=live-census-unavailable error={SanitizeReason(ex.Message)}",
                 changedGoalLines);
