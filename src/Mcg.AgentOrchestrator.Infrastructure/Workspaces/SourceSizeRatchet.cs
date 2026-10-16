@@ -628,7 +628,8 @@ internal static class SourceSizeRatchet
     internal static IReadOnlyDictionary<string, (int TotalLines, int PartialFiles)> MeasureClasses(
         string repositoryRoot, IEnumerable<string> classNames, out List<SourceSizeViolation> violations,
         Func<string, IEnumerable<string>>? readLines = null,
-        Func<string, IEnumerable<string>>? enumerateSourceFiles = null)
+        Func<string, IEnumerable<string>>? enumerateSourceFiles = null,
+        IDictionary<string, List<string>>? partialFiles = null)
     {
         var names = classNames.Distinct(StringComparer.Ordinal).ToArray();
         violations = [];
@@ -671,6 +672,12 @@ internal static class SourceSizeRatchet
                         {
                             totals[index] += lines.Length;
                             counts[index]++;
+                            if (partialFiles is not null)
+                            {
+                                if (!partialFiles.TryGetValue(names[index], out var paths))
+                                    partialFiles[names[index]] = paths = [];
+                                paths.Add(relativePath);
+                            }
                         }
                     }
                 }
