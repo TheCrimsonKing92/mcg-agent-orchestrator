@@ -100,7 +100,8 @@ internal sealed class ConductorExperimentWatch
             {
                 try
                 {
-                    var reading = ExperimentReading.Evaluate(record, goals, landings, intents, asOf,
+                    var effective = ExperimentMembership.Effective(record, experiments.ListMemberEventsAsync(record.Id).GetAwaiter().GetResult());
+                    var reading = ExperimentReading.Evaluate(effective, goals, landings, intents, asOf,
                         record.Spec.StopRule.Unit == ExperimentStopUnit.Gates
                             ? ExperimentGateStopCount.Count(record, asOf, hostLedgers, () => gateAttempts.Value)
                             : 0, hostLedgers);
