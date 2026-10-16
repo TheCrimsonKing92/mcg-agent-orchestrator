@@ -157,6 +157,83 @@ public sealed class ExecutorScreeningRunnerTests
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ExpiredQueuedLaneHoldsSlotsUntilPollAndCancellationDrain(bool cancelFirst)
+    {
+        // Parallel-safe: real handle lifecycle with a fake transport and a fixture-owned root.
+        using var fixture = new ExecutorScreeningFixture();
+        var pollEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releasePoll = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseCancel = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var request = new RemoteLaneRequest(fixture.Entry.Id, "screening-queued", fixture.Candidate.GoalId,
+            "sc-12345678", "project", "A", "hash", fixture.Candidate.Commit, fixture.Candidate.Tree,
+            fixture.Candidate.MainSha, "screening-manifest");
+        var handle = new SshRemoteLaneHandle(request, fixture.Entry, fixture.Root, "candidate", request.Lane,
+            fixture.Clock, async (arguments, _, _, _) =>
+            {
+                if (arguments.Contains("cancel.txt"))
+                {
+                    cancelEntered.TrySetResult();
+                    await releaseCancel.Task;
+                }
+                else
+                {
+                    pollEntered.TrySetResult();
+                    await releasePoll.Task;
+                }
+                return new GoalAcceptanceVerifier.CommandResult(1, "");
+            }, TimeSpan.Zero, null);
+        Task<ExecutorScreeningReceipt?>? work = null;
+        try
+        {
+            await pollEntered.Task.WaitAsync(TimeSpan.FromSeconds(30)); // Hang-only event bound.
+            fixture.Executor.Submit = (_, _) =>
+            {
+                fixture.Clock.Advance(TimeSpan.FromSeconds(61));
+                return Task.FromResult(new RemoteLaneSubmission(handle));
+            };
+            // Lease expiry and cleanup entry run synchronously until the held drain task is awaited.
+            work = fixture.Run(Lanes("A"));
+            AssertHeld();
+            await cancelEntered.Task.WaitAsync(TimeSpan.FromSeconds(30));
+            var cancellation = Assert.IsAssignableFrom<Task>(handle.QueuedJobCancellation);
+            (cancelFirst ? releaseCancel : releasePoll).TrySetResult();
+            await (cancelFirst ? cancellation : handle.PollLoop).WaitAsync(TimeSpan.FromSeconds(30));
+            AssertHeld(); // The other drain still owns every executor slot.
+            (cancelFirst ? releasePoll : releaseCancel).TrySetResult();
+            var receipt = Assert.IsType<ExecutorScreeningReceipt>(await work.WaitAsync(TimeSpan.FromSeconds(30)));
+            Assert.Equal(ExecutorScreeningVerdict.Incomplete, receipt.Verdict);
+            Assert.Equal(RemoteLaneOutcomeCode.LeaseExpired, Assert.Single(receipt.LaneOutcomes).Outcome);
+            Assert.True(handle.PollLoop.IsCompleted);
+            Assert.True(cancellation.IsCompleted);
+            Assert.Single(ExecutorScreeningReceiptLedger.ReadAll(fixture.ReceiptPath));
+            fixture.AssertReleased();
+        }
+        finally
+        {
+            releasePoll.TrySetResult();
+            releaseCancel.TrySetResult();
+            handle.Abandon();
+            await handle.PollLoop.WaitAsync(TimeSpan.FromSeconds(30));
+            if (handle.QueuedJobCancellation is { } cancellation)
+                await cancellation.WaitAsync(TimeSpan.FromSeconds(30));
+            if (work is not null) await work.WaitAsync(TimeSpan.FromSeconds(30));
+        }
+
+        void AssertHeld()
+        {
+            Assert.True(RemoteExecutorOccupancy.IsOccupied(fixture.Root, fixture.Entry.Id));
+            for (var slot = 0; slot < fixture.Entry.Slots; slot++)
+            {
+                using var claim = RemoteExecutorOccupancy.TryClaimExclusive(fixture.Root, fixture.Entry.Id, slot);
+                Assert.Null(claim);
+            }
+        }
+    }
+
     [Fact]
     public async Task LosingAnySlotClaimSubmitsNothingAndLeavesNoReceipt()
     {

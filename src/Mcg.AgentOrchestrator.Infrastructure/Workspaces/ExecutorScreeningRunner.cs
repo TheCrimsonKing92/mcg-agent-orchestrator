@@ -71,11 +71,14 @@ internal static class ExecutorScreeningRunner
         finally
         {
             // Poll tasks close their handles before completing. Retain the claims until all have drained.
-            await Task.WhenAll(running.Select(active => active.Work)).ConfigureAwait(false);
-            for (var slot = claims.Count - 1; slot >= 0; slot--)
+            try { await Task.WhenAll(running.Select(active => active.Work)).ConfigureAwait(false); }
+            finally
             {
-                RemoteExecutorOccupancy.Release(occupancyRoot, entry.Id, attempt, slot);
-                claims[slot].Dispose();
+                for (var slot = claims.Count - 1; slot >= 0; slot--)
+                {
+                    RemoteExecutorOccupancy.Release(occupancyRoot, entry.Id, attempt, slot);
+                    claims[slot].Dispose();
+                }
             }
         }
 
@@ -129,6 +132,18 @@ internal static class ExecutorScreeningRunner
                 }
                 catch (Exception) { }
                 try { handle.Abandon(); } catch (Exception) { }
+                if (handle is SshRemoteLaneHandle ssh)
+                {
+                    // Abandon only signals the poller, and queued cancellation runs independently.
+                    // Neither may outlive our slot claims or the operator command's process.
+                    try { await ssh.PollLoop.ConfigureAwait(false); } catch (Exception) { }
+                    try
+                    {
+                        if (ssh.QueuedJobCancellation is { } cancellation)
+                            await cancellation.ConfigureAwait(false);
+                    }
+                    catch (Exception) { }
+                }
             }
         }
     }
