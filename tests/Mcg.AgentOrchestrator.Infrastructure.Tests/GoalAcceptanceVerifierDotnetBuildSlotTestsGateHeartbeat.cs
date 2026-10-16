@@ -86,7 +86,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsGateHeartbeat : Go
         }
     }
 
-    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_gate_heartbeat_failsafe_cancels_and_awaits_child_when_heartbeat_write_is_suppressed", Timeout = 150_000)]
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_gate_heartbeat_failsafe_cancels_and_awaits_child_when_heartbeat_write_is_suppressed", Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task GateHeartbeatFailsafeCancelsAndAwaitsChildWhenHeartbeatWriteIsSuppressed()
     {
         if (!OperatingSystem.IsWindows())

@@ -80,7 +80,7 @@ public sealed class ConductorDriverTestsPreTesterNamedEvidence
         Assert.Equal(["MissingDeclaredTests"], receipt.NotRun);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public void StartedBackgroundAttemptWithBriefNamedClassReconcilesAcrossTicks()
     {
@@ -135,7 +135,7 @@ public sealed class ConductorDriverTestsPreTesterNamedEvidence
         Assert.Equal([AgentRole.Tester], roles);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public void GreenReceiptWithBriefNamedClassAnswersLaterTesterRequest()
     {

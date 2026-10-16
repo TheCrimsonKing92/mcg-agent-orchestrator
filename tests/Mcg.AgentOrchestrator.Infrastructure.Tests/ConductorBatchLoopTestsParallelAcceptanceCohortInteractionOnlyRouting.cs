@@ -10,7 +10,7 @@ using Microsoft.Data.Sqlite;
 [Collection(TestCollections.DotnetBuildSlots)]
 public sealed class ConductorBatchLoopTestsParallelAcceptanceCohortInteractionOnlyRouting : AcceptanceCohortWorkflowTests
 {
-    [Theory(Timeout = 30_000)]
+    [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [InlineData(false)]
     [InlineData(true)]
     [Trait("Category", "CrossTick")]
@@ -103,7 +103,7 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceCohortInteractionOn
         Assert.Equal(1, fixture.ConsumptionCount(receipt));
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public void PassedReceipt_PrelandsBothMembersOnceWithoutOutcomeConsumption()
     {

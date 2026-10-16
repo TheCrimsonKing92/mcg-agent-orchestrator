@@ -124,7 +124,11 @@ Use a built candidate explicitly for disposable work. The foreground and detache
 
 `setup --plan` reports the resolved repository/execution/project/tenant identity and each database's path, recorded/required version and proposed action without initialization. It opens only temporary locked copies for SQLite inspection, including WAL/SHM; a source that cannot be copied safely is refused. Execution rebuilds and revalidates the plan under migration ownership. A partial unexpected setup failure names completed and pending stores; no cross-database rollback is implied.
 
-For a schema advance that older readers cannot handle: use the supported stop/detach procedure, confirm the owner has exited, prepare and explicitly select the new runtime, inspect its bound plan, run its setup, then start that same compatible runtime. Do not use an older setup to repair a Newer refusal. Failed new-runtime startup leaves a stopped workspace requiring a compatible runtime or independently verified recovery; automatic downgrade is unsupported. Successor self-check and startup require current schemas, so unattended activation cannot introduce an incompatible forward migration. Fallback is suppressed if the retained build's observed store versions have changed or its inventory is unavailable.
+During a planned self-relaunch, staging asks the built successor for its bound `conductor setup --plan`, including state migrations, before self-check. A forward upgrade requires the previous child to have exited, an exclusive `conduct-loop.lock` probe, and its stdout log to prove the drain finished: `LOOP_RELAUNCH_REBUILD` after the last `LOOP_RELAUNCH_DRAIN`, with no `LOOP_RELAUNCH_DETACH` in that attempt (a literal drain with `active=0 liveGates=0` also qualifies). Each existing database that will advance is backed up using SQLite's online-backup API under `.orchestrator/backups/pre-upgrade-<UTC timestamp>-<successor commit>/`. The probe is released before the successor's `conductor setup` takes its own exclusive ownership; a racing loop owner causes setup to refuse. Staging re-plans and requires every store current before self-check and launch. `LOOP_HANDOFF_SCHEMA_UPGRADE` records the stores, backup path and `result=applied|failed`. An unavailable plan or a newer store keeps the existing self-check path, including its schema refusals, without setup or backup.
+
+An upgrade failure records `LOOP_HANDOFF_FAILED phase=schema-upgrade` with completed/pending stores and the backup path. The retained runtime restarts only if its stores remain current and setup termination is confirmed; otherwise `SUPERVISOR_ESCALATED reason=schema-upgrade-incomplete` requires operator recovery. If activation fails after an applied upgrade, `SUPERVISOR_ESCALATED reason=fallback-incompatible-after-upgrade` names the advanced stores, versions and backup rather than launching the incompatible retained build. This guard lasts until activation adoption. Backups are retained until an operator removes them; the supervisor never restores them automatically.
+
+For an upgrade failure or newer-schema refusal: use the supported stop/detach procedure, confirm the owner has exited, prepare and explicitly select the compatible new runtime, inspect its bound plan, run its setup, then start that same runtime. Do not use an older setup to repair a Newer refusal. Failed new-runtime startup leaves a stopped workspace requiring a compatible runtime or independently verified recovery; automatic downgrade is unsupported. Successor self-check and startup still require current schemas. Fallback is also suppressed if the retained build's observed store versions have changed or its inventory is unavailable.
 
 ### Manual bounce fallback after loop-affecting code lands
 
@@ -511,6 +515,54 @@ Notes that will save you time:
 
 ---
 
+### Stuck-goal signatures
+
+Use `attention show <goal>` and typed goal/attempt state to identify the signature before acting. Poll each recovery intent with `operator-intent-status <intent-id>` to `Applied`; `Pending` is not delivery evidence. Do not bypass the gate.
+
+**1. Verifying with no live gate**
+
+Detector: goal `Verifying`, all tasks Completed or Cancelled, newest timeline event at least 30 minutes old, no live acceptance attempt, no unreconciled grouped gate membership, no landing evidence, and a resolved branch head.
+Remedy: Steward case G queues one deterministic `reopen-regate` on the last Completed task; by hand, use `adjudicate --goal <goal> <last-completed-task-number> reopen-regate --text-file <note> --evidence <reference>`. A recurrence on the same task/head after application raises `steward-owner-question`; a rejected intent is not automatically retried on that identity.
+Evidence: quote goal/task ids, `quiet-since`, minutes quiet and the 30-minute threshold, task counts by status, absence of live/grouped attempts and landing evidence, head, verbatim WORKER_RESULT, and the intent/decision receipt.
+Owning fix: this goal `b182b6d4` (Steward case G); incident backlog `341a7ba0`.
+
+**2. Superseded, already-upstream goal still queued for gates**
+
+Detector: a Verified goal has sweep blocker `completed-branch-superseded` with `cleanup=retirement required`; Verifying goals are not checked for content equivalence.
+Remedy: none automatic. The goal lands through its own gate; if a passed train holds it, inspect another member for signatures 5 and 6. The sweep retires only Completed goals, and the Verified goal still has outstanding Acceptance-owned obligations. Retiring past those obligations would substitute git cherry equivalence for gate evidence and requires an owner decision.
+Evidence: quote the sweep blocker, goal status, git cherry equivalence, pending obligation ids/versions, and the train member actually holding landing.
+Owning fix: owner decision required for the `3f5ffcb2` shape; comparison goal `f99566c7` landed through its train with obligations satisfied.
+
+**3. Stale worker build scope after a gate squash**
+
+Detector: dispatch fails every tick with `Worker build scope Git merge-base failed (exit=1)`.
+Remedy: in that goal worktree, rename `.orchestrator-context/worker-build-scope.json` to `worker-build-scope.json.retired` so the next dispatch can establish a current scope.
+Evidence: quote the merge-base failure, old scope baseline and current head, retired file path, and the next dispatch/build receipt.
+Owning fix: goal `83db4cfc`.
+
+**4. Same-row size-ratchet conflict**
+
+Detector: merge conflict in the same source-size ratchet ceiling row after main and the goal both changed its measured source.
+Remedy: merge main in the goal worktree, set the row to the merged tree's measurement using the rule at `src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/SourceSizeRatchet.cs:579-615` (sum line counts for the matching partial class across eligible source files), commit at once, then `adjudicate --goal <goal> <task-number> route --cause MainDriftConflict --text-file <note> --evidence <reference>`.
+Evidence: quote the conflicted row, merged-tree measurement and contributing files, merge commit, and applied route intent.
+Owning fix: backlog `234b30e4`.
+
+**5. Stale Planner evidence wait under a superseded brief**
+
+Detector: `attention show <goal>` lists an open Planner evidence wait whose criterion or brief version has been superseded by the current revision.
+Remedy: `attention answer <goal> <id> --text-file <note>` naming the superseding revision and explaining how it settles that wait; use the exact id displayed by `attention show`.
+Evidence: quote wait id, old and current brief/criterion versions, superseding revision, and the durable answer receipt.
+Owning fix: backlog `7170763e`.
+
+**6. Passed grouped receipt held on evidence waits**
+
+Detector: the grouped gate receipt passed, but one or more members still have open evidence waits that hold the train.
+Remedy: answer each wait with `attention answer <goal> <id> --text-file <note>`, citing the grouped receipt id and its TRX for that member and criterion.
+Evidence: quote receipt id, candidate/member identity, TRX path and passing result, wait ids, and each durable answer receipt.
+Owning fix: goal `4ebdcef5`.
+
+---
+
 <a id="steward-and-author"></a>
 ## Steward and Author
 
@@ -528,7 +580,7 @@ Recognized Planner and collection-guard diagnostics can produce a deterministic 
 
 A permitted proposal submits an Agent-actor `adjudicate` intent with a `route` payload for the triggering task; the route policy permits only `NewTestFinding` or `ContractClarification` causes and reversible actions. (`src/Mcg.AgentOrchestrator.App/Orchestration/ConductorStewardHost.cs` line 305; `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorStewardAdjudication.cs` ::ConductorStewardRoutePolicy.RejectionReason.)
 
-The Steward never closes a task or re-gates: `close`, `reopen-regate` and `verify-manual` proposals are rejected by the route policy. (`src/Mcg.AgentOrchestrator.App/Orchestration/ConductorStewardAdjudication.cs` ::ConductorStewardAdjudicationParser.Parse and ::ConductorStewardRoutePolicy.RejectionReason; `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorStewardHost.cs` ::HarvestCompleted.) It raises an owner question rather than executing a rejected proposal; an explicit `ask-owner` or a recurring trigger after an applied route also raises a question, holds the goal with `steward-owner-question`, and emits `goal-escalation`. (`src/Mcg.AgentOrchestrator.App/Orchestration/ConductorStewardHost.cs` line 279 and ::ServiceTick, ::HarvestCompleted, ::Question.)
+The Steward may close a task only for admitted cases D and E and re-gate only for case G (Verifying with no live gate past the quiet threshold), with other actions routed or raised to the owner. (`src/Mcg.AgentOrchestrator.App/Orchestration/ConductorStewardAdjudication.cs` ::ConductorStewardAdjudicationParser.Parse and ::ConductorStewardRoutePolicy.RejectionReason; `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorStewardHost.cs` ::HarvestCompleted; `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorStewardCaseG.cs` ::IsStranded and ::Admits; `src/Mcg.AgentOrchestrator.App/Orchestration/OperatorIntentAdjudication.cs` ::Apply.) It raises an owner question rather than executing a rejected proposal; an explicit `ask-owner` or a recurring trigger after an applied route also raises a question, holds the goal with `steward-owner-question`, and emits `goal-escalation`. (`src/Mcg.AgentOrchestrator.App/Orchestration/ConductorStewardHost.cs` line 279 and ::ServiceTick, ::HarvestCompleted, ::Question.)
 
 Under the workspace's orchestrator directory, `steward-triggers.db` tracks triggers and `steward-rounds/` holds timestamped JSON model-round receipts containing the trigger, session, exit code, output and failure. (`src/Mcg.AgentOrchestrator.App/Orchestration/ConductorStewardHost.cs` ::CreateDefault; `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorStewardModelRound.cs` ::WriteReceipt.) Outcomes appear as `steward` events in `logs/conduct-events.log`; owner questions also appear in `goal-events/`. (`src/Mcg.AgentOrchestrator.App/Orchestration/ConductorStewardHost.cs` ::Record and ::Question; `src/Mcg.AgentOrchestrator.App/Orchestration/OrchestratorWorkspace.cs` ::ConductEventsLogPath and ::GoalLifecycleEventsDirectory; `src/Mcg.AgentOrchestrator.App/Orchestration/ConductEventLogWriter.cs` ::CurrentFileName.)
 

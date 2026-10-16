@@ -93,7 +93,9 @@ internal sealed partial class ConductorContinuitySupervisor(
     ConductorSupervisorHandoffOptions? supervisorHandoff = null,
     TimeSpan? outputSilenceBudget = null,
     Action<ProtectedProcessIdentity>? bindProtectedIdentity = null,
-    Func<IReadOnlyList<StoreSetupPlanEntry>>? inspectStores = null)
+    Func<IReadOnlyList<StoreSetupPlanEntry>>? inspectStores = null,
+    ConductorHandoffSchemaUpgrade? schemaUpgrade = null,
+    Func<Action<string, string, CancellationToken>, CancellationToken, ConductorPreparedSuccessor>? stageSuccessorWithHook = null)
 {
     public const string ChildFlag = "--continuity-child";
     public const string ExitArtifactFlag = "--continuity-exit-artifact";
@@ -148,8 +150,18 @@ internal sealed partial class ConductorContinuitySupervisor(
         var restoring = false;
         IReadOnlyList<StoreSetupPlanEntry>? fallbackStoreObservation = null;
         var attempt = 0;
+        ConductorHandoffSchemaUpgrade.Outcome? appliedUpgrade = null;
+        bool EscalateUpgrade(string reason, ConductorHandoffSchemaUpgrade.Outcome upgrade, int pid, string stdout, string stderr)
+        {
+            var detail = $"SUPERVISOR_ESCALATED reason={reason} stores={upgrade.Stores} backup={upgrade.BackupDirectory} {upgrade.Progress}";
+            TryAppendConductEvent(detail);
+            Record("restart", "escalated", attempt, detail, pid, stdout, stderr);
+            return false;
+        }
         bool CanRestore(int processId, string stdout, string stderr)
         {
+            if (appliedUpgrade is not null)
+                return EscalateUpgrade("fallback-incompatible-after-upgrade", appliedUpgrade, processId, stdout, stderr);
             try
             {
                 var now = inspectStores?.Invoke();
@@ -240,6 +252,7 @@ internal sealed partial class ConductorContinuitySupervisor(
                 }
                 if (preflightFailure is not null)
                 {
+                    if (appliedUpgrade is not null && !CanRestore(0, stdoutPath, stderrPath)) return 1;
                     EmitHandoff("failed", attempt,
                         $"LOOP_HANDOFF_FAILED attempt={attempt} phase=preflight {preflightFailure} activationSuppressed=true",
                         0, stdoutPath, stderrPath);
@@ -414,6 +427,7 @@ internal sealed partial class ConductorContinuitySupervisor(
                         pendingSuccessor = null;
                         successor.RunDirectoryLease?.Dispose();
                         var failed = ConductorActivationBuild.FromSuccessor(successor, _dotnetPath);
+                        if (appliedUpgrade is not null && !CanRestore(0, stdoutPath, stderrPath)) return 1;
                         blockedActivationCommit = failed.CommitSha;
                         failedActivationBuild = failed;
                         restoring = true;
@@ -457,6 +471,9 @@ internal sealed partial class ConductorContinuitySupervisor(
                             if (!activation.TerminationConfirmed)
                             {
                                 candidateBuild.Lease?.Dispose();
+                                if (appliedUpgrade is not null)
+                                    EscalateUpgrade("fallback-incompatible-after-upgrade", appliedUpgrade,
+                                        activation.ProcessResult?.ProcessId ?? 0, stdoutPath, stderrPath);
                                 EmitHandoff("failed", attempt,
                                     $"LOOP_HANDOFF_FAILED attempt={attempt} phase=activation fallbackSuppressed=true reason={activation.Reason}",
                                     activation.ProcessResult?.ProcessId ?? 0, stdoutPath, stderrPath);
@@ -481,8 +498,10 @@ internal sealed partial class ConductorContinuitySupervisor(
                         currentBuild.Lease?.Dispose();
                         var previousBuild = currentBuild;
                         currentBuild = candidateBuild;
+                        if (activation.DeliberateStop) appliedUpgrade = null;
                         if (activation.Adopted)
                         {
+                            appliedUpgrade = null;
                             RecordActivation("adopted", attempt, candidateBuild, previousBuild, null, activation.Detail);
                             NoteAdoptedBuild(candidateBuild);
                             ConductorSupervisorActiveChild? handoffChild = null;
@@ -536,6 +555,7 @@ internal sealed partial class ConductorContinuitySupervisor(
                     }
                     else if (runTask.IsCompletedSuccessfully && HasDeliberateStopArtifact(artifactPath))
                     {
+                        appliedUpgrade = null;
                         timeoutCts.Cancel();
                         pendingSuccessor = null;
                         currentBuild.Lease?.Dispose();
@@ -558,6 +578,9 @@ internal sealed partial class ConductorContinuitySupervisor(
                         cancellationToken.ThrowIfCancellationRequested();
                         if (completed != runTask && stoppedResult?.TerminationConfirmed != true)
                         {
+                            if (appliedUpgrade is not null)
+                                EscalateUpgrade("fallback-incompatible-after-upgrade", appliedUpgrade,
+                                    stoppedResult?.ProcessId ?? 0, stdoutPath, stderrPath);
                             EmitHandoff(
                                 "failed",
                                 attempt,
@@ -597,6 +620,11 @@ internal sealed partial class ConductorContinuitySupervisor(
             }
             catch (Exception ex)
             {
+                if (appliedUpgrade is not null)
+                {
+                    EscalateUpgrade("fallback-incompatible-after-upgrade", appliedUpgrade, 0, stdoutPath, stderrPath);
+                    return 1;
+                }
                 launchFailure = $"launch={ex.GetType().Name}:{ex.Message}";
                 result = new ConductorSupervisorProcessResult(-1, 0, stdoutPath, stderrPath);
             }
@@ -623,15 +651,48 @@ internal sealed partial class ConductorContinuitySupervisor(
                 }
 
                 Record("restart", "planned", attempt, artifact.StopReason, result.ProcessId, stdoutPath, stderrPath);
-                if (stageSuccessor is not null && !stagingDisabled)
+                if ((stageSuccessor is not null || stageSuccessorWithHook is not null) && !stagingDisabled)
                 {
                     TryAppendConductEvent(
                         $"LOOP_HANDOFF_STAGING attempt={attempt} repositoryHead=resolve-pending");
+                    ConductorHandoffSchemaUpgrade.Outcome? upgradeOutcome = null;
                     try
                     {
                         cancellationToken.ThrowIfCancellationRequested();
                         pendingSuccessor?.RunDirectoryLease?.Dispose();
-                        pendingSuccessor = stageSuccessor(cancellationToken);
+                        pendingSuccessor = null;
+                        if (stageSuccessorWithHook is not null)
+                        {
+                            pendingSuccessor = stageSuccessorWithHook((dll, commit, token) =>
+                            {
+                                if (schemaUpgrade is null || string.Equals(commit, blockedActivationCommit, StringComparison.OrdinalIgnoreCase)) return;
+                                var binding = new List<string> { $"--project={projectName}", $"--tenant={tenantName}" };
+                                for (var i = 0; i < args.Count; i++)
+                                {
+                                    if (args[i] is "--repository-root" or "--expected-state-directory")
+                                    {
+                                        binding.Add(args[i]);
+                                        binding.Add(args[++i]);
+                                    }
+                                    else if (args[i] == "--disposable-fixture" ||
+                                        args[i].StartsWith("--repository-root=", StringComparison.Ordinal) ||
+                                        args[i].StartsWith("--expected-state-directory=", StringComparison.Ordinal)) binding.Add(args[i]);
+                                }
+                                upgradeOutcome = schemaUpgrade.Execute(dll, commit, binding,
+                                    result.TerminationConfirmed, stdoutPath, token);
+                                if (upgradeOutcome.Reason == "plan-unavailable")
+                                    TryAppendConductEvent($"LOOP_HANDOFF_SCHEMA_PLAN_UNAVAILABLE attempt={attempt} successor={commit}");
+                                if (upgradeOutcome.Applied || upgradeOutcome.Failed)
+                                    EmitHandoff(upgradeOutcome.Applied ? "applied" : "failed", attempt,
+                                        $"LOOP_HANDOFF_SCHEMA_UPGRADE stores={upgradeOutcome.Stores} backup={upgradeOutcome.BackupDirectory} " +
+                                        $"result={(upgradeOutcome.Applied ? "applied" : "failed")}", result.ProcessId, stdoutPath, stderrPath);
+                                if (upgradeOutcome.Applied) appliedUpgrade = upgradeOutcome;
+                                if (upgradeOutcome.Failed)
+                                    throw new ConductorSelfRelaunchPreparationException("schema-upgrade",
+                                        $"reason={upgradeOutcome.Reason} {upgradeOutcome.Progress} backup={upgradeOutcome.BackupDirectory} {upgradeOutcome.Detail}");
+                            }, cancellationToken);
+                        }
+                        else pendingSuccessor = stageSuccessor!(cancellationToken);
                         if (pendingSuccessor is not null &&
                             string.Equals(pendingSuccessor.RepositoryHead, blockedActivationCommit,
                                 StringComparison.OrdinalIgnoreCase))
@@ -663,14 +724,37 @@ internal sealed partial class ConductorContinuitySupervisor(
                             "failed",
                             attempt,
                             $"LOOP_HANDOFF_FAILED attempt={attempt} phase={phase} " +
-                            $"reason={Sanitize($"{ex.GetType().Name}:{ex.Message}")}" +
+                            (upgradeOutcome is { Failed: true }
+                                ? $"reason={upgradeOutcome.Reason} {upgradeOutcome.Progress} backup={upgradeOutcome.BackupDirectory} detail={Sanitize(upgradeOutcome.Detail)}"
+                                : $"reason={Sanitize($"{ex.GetType().Name}:{ex.Message}")}") +
                             (stagingDisabled ? " stagingDisabled=true" : string.Empty),
                             result.ProcessId,
                             stdoutPath,
                             stderrPath);
+                        if (appliedUpgrade is not null)
+                        {
+                            EscalateUpgrade("fallback-incompatible-after-upgrade", appliedUpgrade, result.ProcessId, stdoutPath, stderrPath);
+                            return 1;
+                        }
+                        if (upgradeOutcome is { Failed: true })
+                        {
+                            var compatible = false;
+                            try
+                            {
+                                var retainedPlan = inspectStores?.Invoke();
+                                compatible = upgradeOutcome.TerminationConfirmed && retainedPlan is { Count: > 0 } &&
+                                    retainedPlan.All(e => !e.IsNewer && !e.RequiresMigration);
+                            }
+                            catch (Exception) { /* Unknown compatibility must suppress fallback. */ }
+                            if (!compatible)
+                            {
+                                EscalateUpgrade("schema-upgrade-incomplete", upgradeOutcome, result.ProcessId, stdoutPath, stderrPath);
+                                return 1;
+                            }
+                        }
                     }
                 }
-                else if (stageSuccessor is not null)
+                else if (stageSuccessor is not null || stageSuccessorWithHook is not null)
                 {
                     EmitHandoff(
                         "failed",
@@ -681,7 +765,7 @@ internal sealed partial class ConductorContinuitySupervisor(
                         stdoutPath,
                         stderrPath);
                 }
-                if (await TryHandOffSupervisionAsync(args, workingDirectory, outputDirectory,
+                if (appliedUpgrade is null && await TryHandOffSupervisionAsync(args, workingDirectory, outputDirectory,
                     pendingSuccessor, renewalsWithoutProgress, blockedActivationCommit,
                     cancellationToken).ConfigureAwait(false))
                     return 0;

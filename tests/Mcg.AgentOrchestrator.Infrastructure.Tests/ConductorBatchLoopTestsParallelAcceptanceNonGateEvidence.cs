@@ -60,7 +60,7 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceNonGateEvidence : C
         Assert.Equal(1, scenario.AttemptCount);
     }
 
-    [Xunit.Theory(Timeout = 30000)]
+    [Xunit.Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     [Xunit.InlineData(false)]
     [Xunit.InlineData(true)]
@@ -156,7 +156,7 @@ public sealed class ConductorBatchLoopTestsParallelAcceptanceNonGateEvidence : C
         Assert.Equal(0, scenario.VerifierRuns);
     }
 
-    [Xunit.Fact(Timeout = 30000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task ConcurrentReplayKeepsMutationCustodyThroughExactlyOneLanding()
     {
         using var scenario = CreateScenario();

@@ -10,9 +10,9 @@ internal static class SourceSizeRatchet
     internal const string SourcePath = "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/SourceSizeRatchet.cs";
 
     // Seeded at 6e7a90d7b3fe192ae4f1e430cb7452710f88b73c using File.ReadLines(path).Count().
-    // Each row is the only place its guarded path and ceiling value live. When extraction shrinks a guarded
-    // file, lower its ceiling here. When growth is unavoidable, put the goal-specific justification directly
-    // above that row and raise only that value. Never derive these ceilings from current files or add an opt-out.
+    // Goals do not lower rows or add measured-size comments; integration lowers rows to the tree's size before the gate.
+    // Edit a row only to raise it, with goal-specific justification directly above it. Never raise ceilings
+    // automatically or add an opt-out. A rename or removal updates the authority in the same change.
     internal static IReadOnlyList<SourceSizeCeiling> SeededCeilings { get; } = Array.AsReadOnly(
         new[]
         {
@@ -178,7 +178,9 @@ internal static class SourceSizeRatchet
             // Goal 8cc45279 extracts live-gate drain hold policy and polling to ConductorSelfRelaunchDrainHold; measured 2694.
             // Goal f8d371e2 adds the tick-local live suppression closure and admission checks where
             // pendingSelfRelaunch is owned; hold formatting remains separately owned. Measured 2707, no headroom.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2707),
+            // Goal 920a6429 adds one serial-walk binding to the separately owned GoalWalkOrder;
+            // acceptance admission keeps the original eligible list. Measured 2708 lines; no extra headroom.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2708),
             // Goal 354522f1 tick persistence partial measured at 467 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.TickPersistence.cs", 467),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.DependencyReadmission.cs", 375),
@@ -430,8 +432,8 @@ internal static class SourceSizeRatchet
         });
 
     // Reseeded at main 584b86d13 using complete File.ReadLines counts for files declaring each partial class.
-    // Lower a row when extraction shrinks the class; raise it only with a goal-specific justification
-    // directly above that row. Moving members into another partial file does not shrink the class.
+    // Goals do not lower rows or add measured-size comments; integration lowers rows to the tree's size before the gate.
+    // Raise only with goal-specific justification directly above; renames/removals update the authority in the same change.
     internal static IReadOnlyList<SourceClassCeiling> SeededClassCeilings { get; } = Array.AsReadOnly(
         new[]
         {
@@ -474,7 +476,11 @@ internal static class SourceSizeRatchet
             // After integrating main 790560adf, measured 14876 lines across the same 70 partial files; no extra headroom.
             // Goal 046ea7d3 extracts filter validation and class expansion into FindingEvidenceFilterSyntax.
             // After integrating main 79b67570c, measured 14807 lines across the same 70 partial files; no extra headroom.
-            new SourceClassCeiling("ConductorDriver", 14807, 70),
+            // Goal 8d040dde adds landing-completion handling in ConductorDriver.LandingCompletion; after integrating
+            // main 3732befa8, measured 14823 lines across the same 70 partial files; no extra headroom.
+            // Goal 4cad184f adds three lines of grouped-receipt RED handling; after integrating main fd7b91785,
+            // measured 14826 lines across the same 70 partial files; no extra headroom.
+            new SourceClassCeiling("ConductorDriver", 14826, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
@@ -499,9 +505,10 @@ internal static class SourceSizeRatchet
             // Integrated size is 12167 lines in the same 30 partials; no extra headroom.
             // Goal 109d0d1d adds the backlog-list JSON branch beside the existing claim/readiness
             // resolution so both routes share filtering and human rendering stays byte-identical.
-            // Envelope serialization remains in BacklogListAgentReadView; measured 12190 lines
-            // across the same 30 partial files, with no extra headroom.
-            new SourceClassCeiling("CliCommandHandlers", 12190, 30),
+            // Envelope serialization remains in BacklogListAgentReadView. Goal 920a6429 adds only the
+            // two-line route to the separately owned CliGoalPriorityCommand; intent submission stays in
+            // that type. Measured 12192 lines across the same 30 partial files, with no extra headroom.
+            new SourceClassCeiling("CliCommandHandlers", 12192, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
             // Goal 03580ad1 extracts source-mutation edits to AcceptanceSourceMutation; measured 8938 lines in 31 partials.
@@ -532,7 +539,9 @@ internal static class SourceSizeRatchet
             // transitions require the kernel-owned clock, goal refresh and progress append; TaskSpec owns
             // retry admission accounting and Execution owns persisted denial evidence. Keeping the transaction
             // here preserves lifecycle ownership. Measured 9305 lines in 28 partials; no extra headroom.
-            new SourceClassCeiling("AgentOrchestratorKernel", 9305, 28),
+            // Goal 920a6429 keeps priority mutation and its audit append at the owning kernel lifecycle seam;
+            // parsing and ordering live in separate types. Measured 9315 lines in the same 28 partials; no headroom.
+            new SourceClassCeiling("AgentOrchestratorKernel", 9315, 28),
             // Goal d6033045 extracted the pre-admission receipt pass to PassedMergeTrainReceiptAdmission; goal 1d0f2317
             // adds one admission predicate to exclude stream-complete children before slot reservation. Measured 9255.
             // Goal 679eee57 added a one-line tick call to the separately owned ConductorExperimentWatch (+1); goal 80de5cb2 extracted
@@ -549,7 +558,9 @@ internal static class SourceSizeRatchet
             // Goal 207369f1 counts pending completion builds in existing relaunch draining and prevents detaching them;
             // lifecycle remains in CompletionBuildEvidenceCoordinator. Measured 9270 across the same 55 partials; no headroom.
             // Integrated receipt replay and completion-build draining: measured 9239 across 54 partial files, no headroom.
-            new SourceClassCeiling("ConductorBatchLoop", 9239, 54),
+            // Goal 920a6429 adds one binding to GoalWalkOrder for the serial walk only;
+            // sorting lives in that collaborator. Measured 9240 lines in the same 54 partials; no headroom.
+            new SourceClassCeiling("ConductorBatchLoop", 9240, 54),
             // Goal ec8903af moved the goal-prefix parser to CliGoalPrefixArguments.
             // Goal cd1f6380 adds four lines at the owning transaction boundary, forwarding both
             // registrars and invoking actions after commit; list behavior lives in PostCommitActions.
@@ -558,8 +569,9 @@ internal static class SourceSizeRatchet
             // Measured 5964 total lines across the same 18 partial files; no extra headroom.
             // Goal ddab9e7f adds three lines to forward the startup loop lease and run
             // WorkspaceStoreSetup under that ownership; migration planning stays in WorkspaceStoreSetup.
-            // Measured 5967 total lines across the same 18 partial files; no extra headroom.
-            new SourceClassCeiling("CliPersistentStateRunner", 5967, 18),
+            // Goal 920a6429 routes priority submission without a kernel-save transaction, preventing stale writes;
+            // the command owns intent submission. After integrating main, measured 5972 lines in the same 18 partials; no headroom.
+            new SourceClassCeiling("CliPersistentStateRunner", 5972, 18),
             // Goal 5935c270 extracts subscription-plan output into SubscriptionPlanTextView
             // (2026-10-09 console architecture review, finding 4, taming slice 13).
             // Goal c0ff6203 extracts six small text views (taming slice 14).
@@ -570,7 +582,9 @@ internal static class SourceSizeRatchet
             // Goal f968e488 extracts supervisor and acceptance queue output (slice 14): measured 2804 lines in 36 partials; no headroom.
             // Goal 85702c95 extracts gate-status rendering to GateStatusTextView; measured 2767 lines in 36 partials, no headroom.
             // Goal 7ba60507 extracts process-log presentation to ProcessLogsTextView; measured 2727 lines in 35 partials, no headroom.
-            new SourceClassCeiling("ConsoleViews", 2727, 35),
+            // Goal 920a6429 adds conditional priority text at the existing board and detail rendering seams;
+            // Normal output stays identical. Measured 2730 lines in the same 35 partials; no headroom.
+            new SourceClassCeiling("ConsoleViews", 2730, 35),
         });
 
     internal static IReadOnlyList<SourceSizeViolation> EvaluateClasses(
@@ -585,16 +599,46 @@ internal static class SourceSizeRatchet
             return [];
         }
 
+        var measurements = MeasureClasses(repositoryRoot, ceilings.Select(ceiling => ceiling.ClassName),
+            out var violations, readLines, enumerateSourceFiles);
+        foreach (var ceiling in ceilings)
+        {
+            var (total, count) = measurements.GetValueOrDefault(ceiling.ClassName);
+            if (total > ceiling.MaximumTotalLineCount)
+            {
+                violations.Add(new SourceSizeViolation(
+                    $"class:{ceiling.ClassName}", total, ceiling.MaximumTotalLineCount,
+                    BuildClassOverCeilingMessage(ceiling, total, ceiling.MaximumTotalLineCount, "class total-line")));
+            }
+
+            if (count > ceiling.MaximumPartialFileCount)
+            {
+                violations.Add(new SourceSizeViolation(
+                    $"class:{ceiling.ClassName}", count, ceiling.MaximumPartialFileCount,
+                    BuildClassOverCeilingMessage(ceiling, count, ceiling.MaximumPartialFileCount, "partial-file-count")));
+            }
+        }
+
+        return violations;
+    }
+
+    internal static IReadOnlyDictionary<string, (int TotalLines, int PartialFiles)> MeasureClasses(
+        string repositoryRoot, IEnumerable<string> classNames, out List<SourceSizeViolation> violations,
+        Func<string, IEnumerable<string>>? readLines = null,
+        Func<string, IEnumerable<string>>? enumerateSourceFiles = null)
+    {
+        var names = classNames.Distinct(StringComparer.Ordinal).ToArray();
+        violations = [];
+        if (names.Length == 0) return new Dictionary<string, (int, int)>(StringComparer.Ordinal);
         readLines ??= File.ReadLines;
         enumerateSourceFiles ??= root => Directory.Exists(Path.Combine(root, "src"))
             ? Directory.EnumerateFiles(Path.Combine(root, "src"), "*.cs", SearchOption.AllDirectories)
             : [];
-        var patterns = ceilings.Select(ceiling => new Regex(
-            $@"\bpartial\s+class\s+{Regex.Escape(ceiling.ClassName)}\b",
+        var patterns = names.Select(name => new Regex(
+            $@"\bpartial\s+class\s+{Regex.Escape(name)}\b",
             RegexOptions.CultureInvariant)).ToArray();
-        var totals = new int[ceilings.Length];
-        var counts = new int[ceilings.Length];
-        var violations = new List<SourceSizeViolation>();
+        var totals = new int[names.Length];
+        var counts = new int[names.Length];
         var seenPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         try
         {
@@ -618,7 +662,7 @@ internal static class SourceSizeRatchet
                 {
                     var lines = readLines(sourcePath).ToArray();
                     var text = string.Join("\n", lines);
-                    for (var index = 0; index < ceilings.Length; index++)
+                    for (var index = 0; index < names.Length; index++)
                     {
                         if (patterns[index].IsMatch(text))
                         {
@@ -640,25 +684,8 @@ internal static class SourceSizeRatchet
                 "src/", null, 0, BuildUnreadableFileMessage("src/", exception)));
         }
 
-        for (var index = 0; index < ceilings.Length; index++)
-        {
-            var ceiling = ceilings[index];
-            if (totals[index] > ceiling.MaximumTotalLineCount)
-            {
-                violations.Add(new SourceSizeViolation(
-                    $"class:{ceiling.ClassName}", totals[index], ceiling.MaximumTotalLineCount,
-                    BuildClassOverCeilingMessage(ceiling, totals[index], ceiling.MaximumTotalLineCount, "class total-line")));
-            }
-
-            if (counts[index] > ceiling.MaximumPartialFileCount)
-            {
-                violations.Add(new SourceSizeViolation(
-                    $"class:{ceiling.ClassName}", counts[index], ceiling.MaximumPartialFileCount,
-                    BuildClassOverCeilingMessage(ceiling, counts[index], ceiling.MaximumPartialFileCount, "partial-file-count")));
-            }
-        }
-
-        return violations;
+        return Enumerable.Range(0, names.Length).Where(index => counts[index] > 0)
+            .ToDictionary(index => names[index], index => (totals[index], counts[index]), StringComparer.Ordinal);
     }
 
     private static string BuildClassOverCeilingMessage(SourceClassCeiling ceiling, int actual, int maximum, string limit)
@@ -666,7 +693,7 @@ internal static class SourceSizeRatchet
         return $"class:{ceiling.ClassName} has {actual.ToString(CultureInfo.InvariantCulture)}, " +
             $"exceeding the {limit} ceiling of {maximum.ToString(CultureInfo.InvariantCulture)}. " +
             "Moving members into another partial file of the same class does not satisfy this limit. " +
-            "Extract members into a separately owned type and lower the row, or raise the row with " +
+            "Extract members into a separately owned type; the conductor lowers the row when the change integrates. Otherwise raise the row with " +
             $"goal-specific justification directly above it in {SeededClassCeilingsSymbol}. See {DocumentationPath}.";
     }
 
@@ -834,8 +861,8 @@ internal static class SourceSizeRatchet
     {
         return $"{ceiling.RelativePath} has {actualLineCount.ToString(CultureInfo.InvariantCulture)} lines, " +
             $"exceeding the recorded ceiling of {ceiling.MaximumLineCount.ToString(CultureInfo.InvariantCulture)}. " +
-            "Extract behavior to a collaborator and lower the ceiling for this entry, or raise the recorded " +
-            "ceiling for this entry deliberately with justification in the same change by editing " +
+            "Extract behavior to a collaborator; the conductor lowers the row to the measured size when the change integrates. Otherwise raise the recorded " +
+            "ceiling for this entry deliberately with justification in the same change, with the justification directly above the row in " +
             $"{SeededCeilingsSymbol}. See {DocumentationPath}.";
     }
 

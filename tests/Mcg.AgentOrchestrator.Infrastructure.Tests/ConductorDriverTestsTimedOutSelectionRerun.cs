@@ -130,7 +130,7 @@ public sealed class ConductorDriverTestsTimedOutSelectionRerun
         Assert.Equal(new[] { scenario.Tester.Id }, scenario.Dispatches);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public void RequestedBackgroundRerun_RelaunchObservesSameAttemptWithoutAnotherLaunch()
     {

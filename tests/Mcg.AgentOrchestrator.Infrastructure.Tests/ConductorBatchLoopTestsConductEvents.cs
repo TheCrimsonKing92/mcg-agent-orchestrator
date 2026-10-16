@@ -221,7 +221,7 @@ public sealed class ConductorBatchLoopTestsConductEvents : ConductorBatchLoopTes
             $"{Path.GetFileName(logPath)}.pending-*.jsonl"));
     }
 
-    [Xunit.Fact(Timeout = 30_000, DisplayName = "ConductEvents_required_lifecycle_staging_honors_cross_process_gate")]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds, DisplayName = "ConductEvents_required_lifecycle_staging_honors_cross_process_gate")]
     public async Task ConductEventsRequiredLifecycleStagingHonorsCrossProcessGate()
     {
         var root = CreateTempDirectory("mcg-conduct-events-cross-process-required");
