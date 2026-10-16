@@ -230,6 +230,15 @@ internal sealed class ConductorStewardTriggerStore
         transaction.Commit();
     }
 
+    internal int CountRemedies(ConductorStewardTriggerKind kind)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT COUNT(*) FROM steward_triggers WHERE kind = $kind AND outcome IN ('route-submitted', 'route-applied')";
+        command.Parameters.AddWithValue("$kind", kind.ToString());
+        return checked((int)(long)command.ExecuteScalar()!);
+    }
+
     internal void MarkRouteApplied(string key)
     {
         using var connection = Open();

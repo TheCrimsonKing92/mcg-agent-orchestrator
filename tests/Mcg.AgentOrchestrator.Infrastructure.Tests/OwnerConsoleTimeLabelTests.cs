@@ -96,7 +96,7 @@ public sealed class OwnerConsoleTimeLabelTests
         Assert.Single(fixture.Harness.Conductor.Calls);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task LoopNotice_UsesInjectedLocalTime()
     {
         var harness = new OwnerConsoleLoopTestHarness();

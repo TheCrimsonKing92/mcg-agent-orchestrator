@@ -9,7 +9,7 @@ public sealed class ConductorCrossTickTests
 {
     private const string FairnessMainRevision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public void CohortFairness_BlockedHeadYieldDebtPrioritizesHeadAfterRelease()
     {
@@ -71,7 +71,7 @@ public sealed class ConductorCrossTickTests
         }
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public async Task ParallelAcceptanceFairness_LiveOldest_AllowsDeclaredCapacityAcrossTicks()
     {
@@ -79,7 +79,7 @@ public sealed class ConductorCrossTickTests
         await RunFairnessScenario(1);
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public async Task ParallelAcceptanceFairness_StalledOldest_BypassesAtThreshold()
     {
@@ -92,7 +92,7 @@ public sealed class ConductorCrossTickTests
         Assert.Equal(0, scenario.ProcessSpawnCount);
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public async Task ParallelAcceptanceFairness_BelowStallThreshold_ExplicitlyDefers()
     {
@@ -111,7 +111,7 @@ public sealed class ConductorCrossTickTests
         Assert.Equal(0, scenario.ProcessSpawnCount);
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public async Task ParallelAcceptanceFairness_StalledOldestBypass_EmitsDistinctAdmissionRecord()
     {

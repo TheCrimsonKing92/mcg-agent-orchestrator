@@ -14,7 +14,7 @@ public sealed class ConductorBatchLoopTestsAcceptanceRebindReplay : ConductorBat
 
     public ConductorBatchLoopTestsAcceptanceRebindReplay(ITestOutputHelper output) : base(output) { }
 
-    [Xunit.Theory(Timeout = 30000)]
+    [Xunit.Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     [Xunit.InlineData(false, false)]
     [Xunit.InlineData(false, true)]
@@ -55,7 +55,7 @@ public sealed class ConductorBatchLoopTestsAcceptanceRebindReplay : ConductorBat
         if (occupant is not null) scene.AssertOccupant(occupant);
     }
 
-    [Xunit.Theory(Timeout = 30000)]
+    [Xunit.Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     [Xunit.InlineData("missing-proof")]
     [Xunit.InlineData("corrupt-result")]
@@ -122,7 +122,7 @@ public sealed class ConductorBatchLoopTestsAcceptanceRebindReplay : ConductorBat
         Assert.Equal(2, scene.AttemptCount);
     }
 
-    [Xunit.Theory(Timeout = 30000)]
+    [Xunit.Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     [Xunit.InlineData(false, null)]
     [Xunit.InlineData(true, null)]
@@ -165,7 +165,7 @@ public sealed class ConductorBatchLoopTestsAcceptanceRebindReplay : ConductorBat
         if (occupant is not null) scene.AssertOccupant(occupant);
     }
 
-    [Xunit.Theory(Timeout = 30000)]
+    [Xunit.Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     [Xunit.InlineData(false)]
     [Xunit.InlineData(true)]
@@ -324,7 +324,7 @@ public sealed class ConductorBatchLoopTestsAcceptanceRebindReplay : ConductorBat
         Assert.Equal(0, scene.GateLaunches);
     }
 
-    [Xunit.Fact(Timeout = 30000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task BusyWriterCustodyLeavesEvidencePending()
     {
         using var scene = new Scene();
@@ -348,7 +348,7 @@ public sealed class ConductorBatchLoopTestsAcceptanceRebindReplay : ConductorBat
         finally { release.TrySetResult(); await writer.WaitAsync(TimeSpan.FromSeconds(30)); }
     }
 
-    [Xunit.Fact(Timeout = 30000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task ReconciliationKeepsCustodyThroughOneLanding()
     {
         using var scene = new Scene();

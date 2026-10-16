@@ -12,7 +12,7 @@ public sealed class ConductorDriverTestImpactHeadroomLowEventTests : IDisposable
     private static readonly DateTimeOffset Timestamp = new(2026, 10, 4, 12, 0, 0, TimeSpan.Zero);
     private static readonly RepositoryTestImpactHeadroom AtThreshold = new(3200, 4000, 77, 96, 52, 64);
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public void AdvanceOnce_Thresholds_DeduplicatesAcrossGoalsUntilMainChanges()
     {
@@ -99,7 +99,7 @@ public sealed class ConductorDriverTestImpactHeadroomLowEventTests : IDisposable
         Xunit.Assert.Equal(kind == ReverseDependencyDegradationKind.IndexedSourceBound ? 2 : 1, events.Length);
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public void AdvanceOnce_UnresolvedMain_DeduplicatesAcrossGoalsByCandidate()
     {
@@ -126,7 +126,7 @@ public sealed class ConductorDriverTestImpactHeadroomLowEventTests : IDisposable
         AssertEvent(events[1], goalB, candidate, "unresolved", "IndexedSourceFiles", 8, 10);
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public void AdvanceOnce_MainEqualsFallbackSha_KeepsKeyNamespacesSeparate()
     {
@@ -151,7 +151,7 @@ public sealed class ConductorDriverTestImpactHeadroomLowEventTests : IDisposable
         AssertEvent(events[1], goal, "same-sha", "unresolved", "IndexedSourceFiles", 8, 10);
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public void AdvanceOnce_FailedAppend_RetriesWithoutBlockingReview()
     {

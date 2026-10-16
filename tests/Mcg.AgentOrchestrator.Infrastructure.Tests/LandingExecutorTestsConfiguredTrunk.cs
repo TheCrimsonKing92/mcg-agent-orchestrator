@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using static LandingExecutorTests;
 
@@ -51,7 +52,7 @@ public sealed class LandingExecutorTestsConfiguredTrunk
     [Theory]
     [InlineData("master", true)]
     [InlineData("main", false)]
-    public void Execute_ConfiguredOrDefaultTrunk_AdvancesOnlyThatRef(string trunk, bool configured)
+    public async Task Execute_ConfiguredOrDefaultTrunk_AdvancesOnlyThatRef(string trunk, bool configured)
     {
         var repo = CreateGitRepository();
         var dataRoot = SharedTestSupport.CreateTempDirectory();
@@ -65,6 +66,11 @@ public sealed class LandingExecutorTestsConfiguredTrunk
             var before = ReadGit(repo, "rev-parse", $"refs/heads/{trunk}");
             if (configured) AssertMissingMain(repo);
             var (kernel, goal) = CreateVerifiedGoal(repo);
+            // CreateGitRepository bootstraps only the default workspace; the
+            // selected project store needs the same conductor precondition.
+            var repository = InfrastructureTestSupport.CreateMigratedStateRepository(workspace.SqliteStatePath);
+            await repository.SaveAsync(kernel);
+            var promotedAt = new DateTimeOffset(2026, 10, 1, 12, 0, 0, TimeSpan.Zero);
             var branch = GoalWorktrees.BranchName(goal.Id);
             ReadGit(repo, "checkout", "-b", branch);
             AppendCommit(repo, "src/configured-trunk.txt", "landed content");
@@ -73,18 +79,26 @@ public sealed class LandingExecutorTestsConfiguredTrunk
             GoalOperationJournal.AcceptancePassed(repo, goal, "conductor:acceptance",
                 candidate, before, "passed candidate", DateTimeOffset.UtcNow.AddMinutes(-1));
 
-            var result = LandingExecutor.Execute(kernel, goal, workspace);
+            var result = LandingExecutor.Execute(kernel, goal, workspace,
+                promotionClock: new FixedClock(promotedAt));
 
             Assert.True(result.MainAdvanced, result.Message);
             Assert.NotEqual(before, result.MergeCommitSha);
             Assert.Equal(result.MergeCommitSha, ReadGit(repo, "rev-parse", $"refs/heads/{trunk}"));
             Assert.Equal("landed content", File.ReadAllText(Path.Combine(repo, "src", "configured-trunk.txt")).Trim());
             if (configured) AssertMissingMain(repo);
+            var original = new GoalPromotionFact(goal.Id.Value, candidate, before,
+                result.MergeCommitSha!, promotedAt, GoalPromotionFact.SoloProvenance);
+            Assert.Equal(original, Assert.Single(await SqliteOrchestratorStateRepository
+                .OpenReadOnly(workspace.SqliteStatePath).ListGoalMetadataAsync()).PromotionFact);
 
             GoalOperationJournal.Completed(repo, goal, "conductor:land", result.Message);
-            var repeated = LandingExecutor.Execute(kernel, goal, workspace);
+            var repeated = LandingExecutor.Execute(kernel, goal, workspace,
+                promotionClock: new FixedClock(promotedAt.AddDays(1)));
             Assert.False(repeated.MainAdvanced);
             Assert.Equal(result.MergeCommitSha, ReadGit(repo, "rev-parse", trunk));
+            Assert.Equal(original, Assert.Single(await SqliteOrchestratorStateRepository
+                .OpenReadOnly(workspace.SqliteStatePath).ListGoalMetadataAsync()).PromotionFact);
         }
         finally
         {
@@ -130,4 +144,9 @@ public sealed class LandingExecutorTestsConfiguredTrunk
 
     private static void AssertMissingMain(string repo) =>
         Assert.NotEqual(0, GitCli.Run(repo, "rev-parse", "--verify", "--quiet", "refs/heads/main").ExitCode);
+
+    private sealed class FixedClock(DateTimeOffset at) : IClock
+    {
+        public DateTimeOffset UtcNow => at;
+    }
 }

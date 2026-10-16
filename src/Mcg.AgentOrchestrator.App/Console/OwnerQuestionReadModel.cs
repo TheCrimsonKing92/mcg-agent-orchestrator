@@ -1,3 +1,4 @@
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -54,9 +55,12 @@ internal sealed class OwnerQuestionReadModel(
         // supply terminal and orphan requests, while retaining main's stable request order and ties.
         var detached = requests.Where(request => !loadedIds.Contains(request.GoalId)).ToArray();
         var detachedKernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([], detached));
+        var authorHolds = loadedGoals.ToDictionary(goal => goal.Id.Value,
+            goal => AuthorOwnerQuestionHold.TryParse(goal.CurrentHold), StringComparer.OrdinalIgnoreCase);
         var open = kernel.HumanInputRequests.Where(request => !request.IsCompleted && loadedIds.Contains(request.GoalId.Value))
             .Concat(detachedKernel.HumanInputRequests.Where(request => !request.IsCompleted))
-            .Select(RequestCandidate).ToDictionary(candidate => candidate.Question.ItemId, StringComparer.Ordinal);
+            .Select(request => RequestCandidate(request, authorHolds.GetValueOrDefault(request.GoalId.Value)))
+            .ToDictionary(candidate => candidate.Question.ItemId, StringComparer.Ordinal);
         var ordered = requests.Select(request => request.Id).Concat(open.Keys).Distinct(StringComparer.Ordinal);
         candidates.AddRange(ordered.Where(open.ContainsKey).Select(id => open[id]));
         foreach (var goal in loadedGoals)
@@ -115,8 +119,11 @@ internal sealed class OwnerQuestionReadModel(
             if (seen.Add((question.GoalId.ToUpperInvariant(), question.Text))) live.Add(question);
             else hidden.Add(new HiddenOwnerQuestion(question, "duplicate"));
         }
+        var raisedAt = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+        foreach (var candidate in eligible.Where(candidate => live.Contains(candidate.Question)))
+            raisedAt.TryAdd(candidate.Question.ItemId, candidate.CreatedAt);
         return new OwnerQuestionSnapshot(
-            eligible.Select(candidate => candidate.Question).Where(live.Contains).ToArray(), hidden);
+            eligible.Select(candidate => candidate.Question).Where(live.Contains).ToArray(), hidden, raisedAt);
     }
 
     private sealed record QuestionCandidate(
@@ -126,10 +133,16 @@ internal sealed class OwnerQuestionReadModel(
         Enum.TryParse<GoalStatus>(status, ignoreCase: true, out var parsed) &&
         parsed is GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Superseded;
 
-    private static QuestionCandidate RequestCandidate(HumanInputRequest request) =>
-        new(new OwnerQuestion(request.Id.Value, request.GoalId.Value, OwnerQuestionKind.HumanInput,
-            request.Question, ProposedDefault: request.SuggestedDefaultAnswer), request.RequestedAt,
+    private static QuestionCandidate RequestCandidate(HumanInputRequest request, AuthorOwnerQuestionHold? author)
+    {
+        var matches = author is { TargetKind: nameof(OperatorAnswerTargetKind.HumanInput) } &&
+            string.Equals(author.TargetId, request.Id.Value, StringComparison.OrdinalIgnoreCase);
+        return new(new OwnerQuestion(request.Id.Value, request.GoalId.Value, OwnerQuestionKind.HumanInput,
+            request.Question, BlastRadius: matches ? author!.BlastRadius : null,
+            ProposedDefault: matches && string.IsNullOrWhiteSpace(request.SuggestedDefaultAnswer)
+                ? author!.Recommendation : request.SuggestedDefaultAnswer), request.RequestedAt,
             HumanWaitPolicyDefaults.BlocksActiveWork(request.Kind));
+    }
 
     internal static string? Field(string body, string label)
     {

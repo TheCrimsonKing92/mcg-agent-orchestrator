@@ -9,7 +9,7 @@ using static ConductorDriverTests;
 public sealed class ConductorDriverTestsPreTesterStaleCandidate
 {
     // Bounds only detect a missing runner-entered/released event; ordering comes from those events.
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public async Task RewrittenHeadDiscardsStaleRunAndRerunsAtNewHead()
     {
@@ -46,7 +46,7 @@ public sealed class ConductorDriverTestsPreTesterStaleCandidate
             line.Contains("receipt=" + receipt.ReceiptId, StringComparison.Ordinal));
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task FastForwardedHeadKeepsAncestorCandidateReceipt()
     {
         using var scenario = new Scenario();

@@ -199,6 +199,7 @@ public sealed class GoalLifecycleEventWriterTests
         {
             InitializeRepository(root);
             var workspace = OrchestratorWorkspace.ForDirectory(root);
+            _ = CreateMigratedStateRepository(workspace.SqliteStatePath);
             var writer = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory);
             var kernel = new AgentOrchestratorKernel();
             kernel.SetEventWriter(writer);

@@ -31,6 +31,18 @@ public sealed class FindingEvidenceExecutedCoverageTests
     }
 
     [Xunit.Fact]
+    public void CoverageExpandsUnionsWithoutReorderingRequestedSelections()
+    {
+        FindingEvidenceSelection[] selections = [Selection("GammaTests"), Selection("AlphaTests|BetaTests"), Selection("DeltaTests")];
+        var arm = new FindingEvidenceArmReceipt(FindingEvidenceArm.Candidate, "candidate",
+            FindingEvidenceArmDisposition.Inconclusive, true, false, "partial", NotRunSelections: [Selection("AlphaTests")]);
+        var receipt = new FindingEvidenceReceipt("receipt", "candidate", new(selections), true, false, "partial", Arms: [arm]);
+
+        Assert.Equal([Selection("GammaTests"), Selection("BetaTests"), Selection("DeltaTests")],
+            FindingEvidenceExecutedCoverage.ExecutedSelections(receipt, Format));
+    }
+
+    [Xunit.Fact]
     public void LegacyArmWithoutNotRunFieldDeserializesToEmptyCoverageExclusions()
     {
         var arm = JsonSerializer.Deserialize<FindingEvidenceArmReceipt>("""

@@ -35,7 +35,7 @@ public sealed class ConductorDriverTestsPreTesterRedLoopOperatorRetry
     }
 
     // The timeout is only a hang detector; assertions measure recorded rounds, never elapsed time.
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public void ThreeNewRedsAfterOperatorAnswerEscalateAgain()
     {
@@ -63,7 +63,7 @@ public sealed class ConductorDriverTestsPreTesterRedLoopOperatorRetry
         Assert.Equal([AgentRole.Developer, AgentRole.Developer], scenario.Dispatched);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public void ConductorRetriesWithoutEscalationPreserveThreeRedGuard()
     {

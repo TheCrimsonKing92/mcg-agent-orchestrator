@@ -133,6 +133,20 @@ internal sealed partial class ConductorDriver
             }
 
             var criteria = FormatUnmetCriteria(retryDisposition.ActionableCriteria);
+            IReadOnlyList<string> attributionLines;
+            try
+            {
+                attributionLines = _apparatusRedGate?.FormatFailingClassAttribution(
+                    goal, acceptance.MainHeadSha ?? _resolveAcceptanceHeads(goal).MainHeadSha,
+                    apparatusRedReading, retryDisposition.ActionableCriteria) ?? [];
+            }
+            catch (Exception)
+            {
+                // Attribution is advisory; even a head-resolution failure must preserve routing.
+                attributionLines = [];
+            }
+            if (attributionLines.Count > 0)
+                criteria += "; " + string.Join("; ", attributionLines);
             var task = SelectTaskForCriterionRetry(goal);
             if (task is null)
             {
@@ -141,7 +155,8 @@ internal sealed partial class ConductorDriver
 
             if (goal.AutomaticAcceptanceRetryCount < policy.MaxCriterionRetries)
             {
-                var retryFeedback = FormatCriterionRetryFeedback(retryDisposition.ActionableCriteria);
+                IReadOnlyList<string> retryFeedback =
+                    [.. FormatCriterionRetryFeedback(retryDisposition.ActionableCriteria), .. attributionLines];
                 var retryCount = _recordCriterionRetryFeedback(
                     goal.Id,
                     task.Id,

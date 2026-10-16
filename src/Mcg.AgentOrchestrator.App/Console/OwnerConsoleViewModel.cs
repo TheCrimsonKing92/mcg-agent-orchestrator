@@ -8,11 +8,11 @@ internal sealed record OwnerConsoleViewModel(
     OwnerConsolePaneState? DecisionsState = null, OwnerConsolePaneState? ActivityState = null);
 
 internal sealed record OwnerConsoleStatus(bool ConductorRunning, int ActiveGoals, int LiveDecisions,
-    int HiddenQuestions, TimeSpan? LastEventAge, int LandedToday, int FailedToday = 0);
+    int HiddenQuestions, TimeSpan? LastEventAge, int LandedToday, int FailedToday = 0, DateTimeOffset? LatestTickAt = null);
 
 internal sealed record OwnerConsoleDecision(string Id, int Number, string GoalId, string GoalPrefix,
     OwnerQuestionKind Kind, string Summary, string FullText, string? BlastRadius,
-    string? Confidence, string? ProposedDefault)
+    string? Confidence, string? ProposedDefault, DateTimeOffset? RaisedAt = null)
 {
     internal OwnerQuestion ToQuestion() => new(Id, GoalId, Kind, FullText, BlastRadius, Confidence, ProposedDefault);
 }

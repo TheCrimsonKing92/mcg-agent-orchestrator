@@ -234,8 +234,9 @@ internal sealed partial class ConductorDriver
                     var resultPaths = NormalizeCohortTestResultPaths(verification.TestResultPaths);
                     var outcome = MergeTrainTimeoutAttribution.ResolveGateOutcome(
                         ClassifyCohortVerificationResult(verification), resultPaths, workspace.Path, members);
+                    var receiptId = $"merge-train-receipt-{identity.Value[(MergeTrainIdentity.Version.Length + 1)..]}";
                     receipt = _mergeTrainAcceptanceStore.SaveGateReceipt(new MergeTrainReceipt(
-                        $"merge-train-receipt-{identity.Value[(MergeTrainIdentity.Version.Length + 1)..]}",
+                        receiptId,
                         identity,
                         outcome,
                         DateTimeOffset.UtcNow,
@@ -243,7 +244,7 @@ internal sealed partial class ConductorDriver
                         verification.Checks?.Where(check => !check.Passed && !check.Advisory)
                             .Select(check => check.Name).ToArray() ?? [],
                         verification.ExitCode,
-                        resultPaths,
+                        GroupedReceiptTestResultPaths.Apply(Console.Out, "train", receiptId, verification, resultPaths),
                         ValidForLanding: outcome == MergeTrainGateOutcome.Passed));
                 }
                 catch (Exception ex) when (ex is AcceptanceInfrastructureDeferredException or

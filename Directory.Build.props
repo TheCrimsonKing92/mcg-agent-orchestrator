@@ -6,6 +6,7 @@
     <UseSharedCompilation>false</UseSharedCompilation>
     <DefaultItemExcludes>$(DefaultItemExcludes);**\artifacts\**;**/artifacts/**;**\.scratch\**;**/.scratch/**</DefaultItemExcludes>
     <DefaultItemExcludesInProjectFolder>$(DefaultItemExcludesInProjectFolder);**\artifacts\**;**/artifacts/**;**\.scratch\**;**/.scratch/**</DefaultItemExcludesInProjectFolder>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
   <PropertyGroup Condition="'$(AuditPipeline)' == 'true'">
     <NuGetAudit>true</NuGetAudit>

@@ -8,7 +8,7 @@ using static ConductorDriverTests;
 // Parallel-safe: process liveness/launch and build slots are seamed; all state and files are private.
 public sealed class FindingEvidenceRecoveryHoldOwnerTests
 {
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public void Recovery_StartedAndRunningEvidencePastThreshold_ClearsHold()
     {

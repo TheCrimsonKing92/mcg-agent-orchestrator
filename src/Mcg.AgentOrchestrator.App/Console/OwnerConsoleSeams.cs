@@ -74,7 +74,8 @@ internal sealed record OwnerQuestion(
     string? BlastRadius = null, string? Confidence = null, string? ProposedDefault = null);
 
 internal sealed record OwnerQuestionSnapshot(
-    IReadOnlyList<OwnerQuestion> Live, IReadOnlyList<HiddenOwnerQuestion> Hidden);
+    IReadOnlyList<OwnerQuestion> Live, IReadOnlyList<HiddenOwnerQuestion> Hidden,
+    IReadOnlyDictionary<string, DateTimeOffset>? RaisedAt = null);
 
 internal sealed record HiddenOwnerQuestion(OwnerQuestion Question, string Reason);
 
