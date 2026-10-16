@@ -28,7 +28,7 @@ internal sealed partial class ConductorBatchLoop
         foreach (var goal in state.OrderedEligible)
         {
             if (goal.Id == leader?.Id || state.Results.ContainsKey(goal.Id.Value) || state.LiveAttemptGoalIds.Contains(goal.Id.Value)) continue;
-            if (driver.ProjectGateReadyCandidate(goal, policy) is not GateReadyCandidateProjectionResult.Ready ready) continue;
+            if (driver.ProjectGroupedAdmissionCandidate(goal, policy, kernel) is not GateReadyCandidateProjectionResult.Ready ready) continue;
             follower = goal;
             followerProjection = ready.Projection;
             break;
@@ -72,7 +72,7 @@ internal sealed partial class ConductorBatchLoop
     }
 
     private void CarryFollowerGateReceipts(ParallelAcceptanceBatchState state, ConductorDriver driver,
-        ConductorAutonomyPolicy policy, int tick, List<string> changedGoalLines)
+        ConductorAutonomyPolicy policy, int tick, List<string> changedGoalLines, AgentOrchestratorKernel kernel)
     {
         if (!policy.FollowerGatesEnabled) return;
         foreach (var goal in state.CohortEligible)
@@ -87,6 +87,6 @@ internal sealed partial class ConductorBatchLoop
         state.CohortEligible = state.CohortEligible.Where(goal => !state.Results.ContainsKey(goal.Id.Value)).ToArray();
         state.ProductionCandidates = state.ProductionCandidates.Where(candidate => !state.Results.ContainsKey(candidate.GoalId.Value))
             .Select(candidate => new ConductorSpeculativeAcceptanceCandidate(candidate.GoalId,
-                driver.ProjectGateReadyCandidate(state.CohortEligible.Single(goal => goal.Id == candidate.GoalId), policy))).ToArray();
+                driver.ProjectGroupedAdmissionCandidate(state.CohortEligible.Single(goal => goal.Id == candidate.GoalId), policy, kernel))).ToArray();
     }
 }

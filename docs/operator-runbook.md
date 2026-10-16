@@ -286,6 +286,7 @@ acceptance suite output → git diff / commits in the worktree → verification 
 | `status <goal-prefix>` | objective + the task list with each task's status (`[Assigned]`/`[Completed]`/`[Failed]`/...) |
 | `task <goal-prefix> <n>` | one task's detail: assigned agent, dispatch command, exit code, and latest verification/failure preview; previews may be truncated |
 | `verifications <goal-prefix> <n>` | the task's stored verification history, including orchestrator-authored stdout/stderr such as planner-contract and acceptance state-guard diagnostics; use the printed artifact path when a long value is previewed |
+| `finding [--goal <goal-prefix>] <stable-id-or-prefix>` | finding occurrences and their same-record evidence receipts, including missing-receipt reasons; replaces searching `.orchestrator` for a finding id. Exact ids take precedence; ambiguous prefixes show all matches. Without `--goal`, searches all listed goals. Read-only. |
 | `readiness <goal-prefix>` | **start blockers** — high-risk objective terms and ownership approval (run this first when a goal won't dispatch); read-only terminal-goal diagnosis reports pending repairs without applying them |
 | `readiness-repair [goal-prefix]` | apply the repairing terminal-goal sweep, surface attention, and print start blockers; can change state, as does `goal-recovery <goal-prefix>` |
 | `durations` | role/complexity runtime medians plus attempts-per-task; use it to spot slow lanes and retry redundancy before changing worker mix or loop policy |
@@ -319,7 +320,7 @@ Keep one persistent listener when the harness can stream it. If the harness buff
 
 Incident history lives in `docs/incidents/`; use it when a symptom needs narrative context beyond the current transactional records.
 
-Judge worker progress by **worktree file changes**, not stdout bytes: `git -C .orchestrator-worktrees/<prefix> status --short` and `git -C .orchestrator-worktrees/<prefix> log --oneline main..HEAD`.
+Judge worker progress by **worktree file changes**, not stdout bytes: `cd .orchestrator-worktrees/<prefix> && git status --short` and, from the main checkout, `git log --oneline main..goal/<prefix>`. Avoid `git -C <worktree> ...`: a permission rule for it must put the wildcard before the subcommand, which also approves `-c` options that run arbitrary commands.
 
 For focused goal inspection, prefer the repo helpers over broad `.orchestrator` reads:
 
@@ -394,7 +395,7 @@ Known direct-command limitation: [acceptance](cli-reference.md#acceptance-and-ga
 | A task stays `[Failed]` / `[Running]` after the real dispatch round is dead, or a retry is blocked by stale task state | The task row is pinned even though the worker round has no useful forward path. | Confirm with `scripts\Get-GoalDispatchInventory.ps1 <goal>` and `scripts\Get-GoalTaskSummary.ps1 <goal>`, then requeue only that task: `.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorSqliteTool.ps1 requeue-task --task-number <n> --note "<why>" <goal>`. |
 | `Get-GoalDispatchInventory.ps1` shows a `dispatch.json` generation with **no heartbeat and no exit** | Dispatch prep failed before the worker process started; the worker never ran, so waiting will not produce output. | Stop the loop cleanly, retire the dead dispatch artifacts, requeue the task with `requeue-task`, then relaunch the conductor. |
 | Goal in `Failed` lifecycle but the work is committed in the worktree | A stage process was orphaned (e.g. a loop crash). The commit is safe. | `recover <goal> --text-file <path>`, then re-run the loop so the conductor reconciles and lands it. |
-| Worker exits 0, worktree has uncommitted changes, and logs say `index.lock: Permission denied` under `.git\worktrees\<goal>` | Low-integrity worker could edit files but could not write git metadata, so conductor commit-on-behalf did not complete. | Inspect the diff, run focused tests, then from a normal-integrity operator shell run the `git -C .orchestrator-worktrees/<goal> add ...` and `git -C .orchestrator-worktrees/<goal> commit -m "<message>"` steps as separate commands; use `.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-Git.ps1 ...` if direct git prompts. Submit `adjudicate --goal <goal> <task> close --text-file <explanation-path> --evidence trx:<test-receipt-path>`, confirm it applied, then re-run the conductor. |
+| Worker exits 0, worktree has uncommitted changes, and logs say `index.lock: Permission denied` under `.git\worktrees\<goal>` | Low-integrity worker could edit files but could not write git metadata, so conductor commit-on-behalf did not complete. | Inspect the diff, run focused tests, then from a normal-integrity operator shell change into `.orchestrator-worktrees/<goal>` and run `git add ...` and `git commit -m "<message>"` there as separate commands; use `.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-Git.ps1 ...` if direct git prompts. Submit `adjudicate --goal <goal> <task> close --text-file <explanation-path> --evidence trx:<test-receipt-path>`, confirm it applied, then re-run the conductor. |
 | Codex task fails with `exec error: Access is denied. (os error 5)` and stderr names `C:\Program Files\WindowsApps\...\pwsh.exe`, or fails immediately with `unexpected argument '<word>' found` after falling back to Windows PowerShell | Codex can run under same-user Low IL, but WindowsApps/package PowerShell activation can fail; Windows PowerShell 5.1 can also split `(Get-Content -Raw prompt)` into multiple native arguments. | Treat this as a launcher regression, not proof that Low IL is unusable. Verify `WorkerShell` pins a real PowerShell 7 host, preferring `%LOCALAPPDATA%\Programs\PowerShell\7\pwsh.exe`; extract/install a real filesystem `pwsh.exe` there if only the Store alias exists. Verify `DispatchProcessHost` removes WindowsApps from Low-IL `PATH`, then rerun focused `WorkerShellTests` / `DispatchProcessHostTests` before falling back to another Developer provider. |
 | Low-IL dispatch shows no stdout/stderr files and no heartbeat for minutes, while process inspection shows `icacls ... /setintegritylevel ... /T` under `__dispatch-run` | The sandbox is still applying Mandatory Integrity labels before the worker launch. Older builds redirected `icacls` output without draining it, causing pipe backpressure, 120s startup timeouts, orphaned `icacls`, and duplicate retries; a completed `icacls` can also return nonzero on a previously used worktree. | Stop the loop with `.conduct-stop`, then stop only the exact orphan dispatch PIDs if the task was already retried. Verify `DispatchProcessHost.SetLowIntegrity` drains `icacls`, kills it on timeout, treats completed nonzero exits as non-fatal, and emits a `preparing-sandbox` heartbeat before restarting the conductor. |
 | Goal genuinely dead / wrong, can't proceed | — | `abandon-goal <goal> --text-file <path> --confirm-goal-abandon` (remove its worktree first if a Low-IL `.mcg-sandbox` orphan blocks it). |
@@ -476,7 +477,7 @@ diagnostic includes the commit-worthy paths that prevented dispatch. Confirm it 
 worktree before changing policy or providers:
 
 ```powershell
-git -C .orchestrator-worktrees/<goal-prefix> status --short --untracked-files=all
+cd .orchestrator-worktrees/<goal-prefix> && git status --short --untracked-files=all
 ```
 
 Preserve real work. Remove only a confirmed disposable artifact; never broadly clean, stash, or
@@ -655,8 +656,8 @@ When every dirty path is a tracked regular file with a clean index, effective `-
 Security-risk and build-system goals may intentionally stop at the landing gate even after acceptance passes. When the escalation is only "review before landing", land out-of-band from the repository root on the main checkout and record it:
 
 ```powershell
-git -C .orchestrator-worktrees/<goal-prefix> diff --stat main...HEAD
-git -C .orchestrator-worktrees/<goal-prefix> diff main...HEAD
+git diff --stat main...goal/<goal-prefix>
+git diff main...goal/<goal-prefix>
 git switch -c verify/<goal-prefix> main
 git merge --no-ff goal/<goal-prefix>
 # run the goal's own new test classes here, on the scratch branch
@@ -856,6 +857,74 @@ For rare lifecycle/task desync repair, `scripts\Set-OrchestratorGoalStatus.ps1` 
 
 ## 8. Operating discipline (hard-won)
 
+### Acceptance holder handoff and bounce evidence
+
+New owned acceptance attempts publish an independently locked `<metadata>.holder.json` before
+launch. The child claims its exact PID, start time and image and a named, non-breakaway Windows
+job before running the verifier. The lease binds the attempt, candidate and logical slot;
+it is separate from physical build permits and goal leases. Conductor stop checkpoints follow
+durable holder detach (or exact cancellation and terminal publication). A successor reconciles
+these records every admission tick, including holders of terminal or out-of-scope goals.
+Result publication, heartbeat age, lease expiry and root exit do not release an occupied job.
+An independent Windows PowerShell custodian acquires the named job handle before holder
+assignment, outside that job. It survives conductor and holder exit, waits for job completion
+notifications, and publishes `<metadata>.holder-settled.json` only after accounting proves zero
+active processes. The receipt binds the job name and full holder identity. A missing job name
+without this receipt remains a hold. Kill-on-close remains enabled so loss of the final custody
+handle cancels the bound tree. The `claim` lease receipt measures custody startup latency.
+Retention also preserves unsettled holder artifacts, including evidence whose goal owner is absent.
+Unreadable claims and legacy attempts with live or uninspectable identities remain capacity holds;
+do not clear them by changing lease age or lowering gate width. For a complete recorded PID/start/image
+identity that is absent or recycled, admission terminalizes any running attempt, preserves a published
+verdict, and writes `<metadata>.legacy-holder-terminal.json` plus `ACCEPTANCE_HOLDER_RELEASE` before
+reusing the slot. This receipt records holder identity absence, not legacy descendant containment.
+Retention revalidates the identity and receipt. A graceful stop retains unresolved legacy occupancy
+and reports `legacy-detach-capacity-fenced` without preventing worker detach/checkpoint publication.
+After identity-bound inspection proves the **entire** legacy predecessor tree settled (including
+orphan shards), retain that evidence in the goal artifacts and run
+`scripts/Confirm-LegacyAcceptanceHolderSettlement.ps1 -MetadataPath <canonical-attempt.json> -EvidencePath <durable-evidence-file> -ConfirmEntireTreeSettled`.
+The switch is an explicit operator attestation of whole-tree exit; the command does not infer it
+from PID death. It refuses a live/uninspectable recorded holder and publishes a receipt bound to
+attempt, candidate, slot, launch time and recorded PID/start/image. The script also accepts settlement when all recorded holder activity predates the host boot (overridable with `-HostBootTime`). Without that proof, a live PID whose start time cannot be read is refused with `holder PID is owned by a process whose start time cannot be read`. Admission revalidates that
+receipt and holder absence/reuse, then terminalizes metadata before releasing capacity; retention
+uses the same proof. A pending published result remains reserved until its normal verdict mapper
+publishes terminal metadata. An unrelated recycled PID is never killed. Missing/malformed receipts
+for incomplete or uninspectable identities remain holds; collect the missing tree evidence before retrying recovery.
+For terminal legacy metadata with no recorded PID, the evidence must also prove no launcher
+remains pending. Running unresolved launches cannot be recovered with this command.
+When legacy start/image fields are incomplete, a live PID can be proven recycled if its current
+creation time differs from a recorded holder start, or, without that start, is strictly later than
+the recorded `LastHeartbeatAt` (parallel) or `ReconciledAt` (grouped). That observation must fall
+between attempt creation and settlement confirmation. Attempt creation alone cannot prove reuse;
+without a usable observation, retain the fence and collect the missing identity/tree evidence.
+The receipt freezes that observation in `HolderObservedAt`, so later verdict/reconciliation
+timestamps cannot invalidate it. When no earlier observation exists, confirmation establishes
+root absence at `ConfirmedAt`; a PID created strictly later cannot re-fence the settled attempt.
+
+The Operator owns this real-world check after focused Acceptance receipts pass:
+
+1. Use a bounded `conduct --loop` with a real acceptance gate and prove at least two shards are
+   active under the same recorded holder. Retain its attempt, slot, PID/start/image and named job.
+2. Request the documented conductor stop, wait for successful exit and retain
+   `ACCEPTANCE_HOLDER_DETACH` (or `ACCEPTANCE_HOLDER_CANCEL`) from the conduct event log and
+   the matching durable lease receipt. Restart with the supported conductor startup command;
+   preserve publish/rebuild handoff preconditions when exercising self-relaunch.
+3. Retain `ACCEPTANCE_HOLDER_ADOPT` from the successor and continuous identity-bound job/tree
+   observations through cleanup and subsequent admission. Assert maximum concurrent holder
+   trees for that slot is exactly one. Snapshots alone do not prove the maximum: combine them
+   with claim, terminalization and job-settlement receipts.
+4. Exercise a stale/recycled recorded holder identity. Require the unrelated replacement process
+   to survive and the old bound job to settle before admission. Also run the focused negative
+   control with the tree occupancy decision replaced by PID-only liveness: the assertion that
+   admission remains blocked after root death with active descendants must fail, with nonzero
+   test discovery. Restore the occupancy decision and require the same selection to pass.
+5. Report lease receipt `DurationMilliseconds` for detach, adopt and cancellation, successor
+   startup-to-adoption time, and added handoff phases against a matched baseline. These are
+   measurements, not host-speed correctness thresholds. A refused/unproven cancellation is
+   a hold or loud stop failure, never a successful cancel receipt.
+
+### General operating discipline
+
 - **Carry standing provider authorization forward.** The operator has authorized Anthropic adversarial review of this repository, including source, paths, commit IDs and test evidence (reiterated 2026-09-06). Ordinary review payload changes, task boundaries and context compaction do not reset that authorization. If automatic approval review rejects an authorized review, report the existing authorization and concrete review scope when resolving that tool failure; continue unaffected implementation and validation. Do not park goals or ask the operator for the same permission again. This guidance does not disable platform approval controls or authorize unrelated disclosures.
 
 - **One canonical path.** Prefer `conduct --loop`; the manual verbs (`subscription-dispatch → start-dispatch → refresh-dispatch → accept`) are granular fallback only.
@@ -867,6 +936,7 @@ For rare lifecycle/task desync repair, `scripts\Set-OrchestratorGoalStatus.ps1` 
   Routine requests explicitly build requested roots plus every completion-required source owner. The managed scope query shares the completion resolver; `build-scope` displays requested, required, and final roots before execution. Dispatch pins the configured integration merge-base, worktree, branch, and dispatch identity in `.orchestrator-context/worker-build-scope.json`, preserving the goal baseline across corrections. One invocation publishes fresh full coverage with per-root exit/log evidence. Source or scope mutation, unresolved ownership, missing/foreign projects, and compiler failures prevent success. Existing receipts and transitive references provide no coverage credit. For a goal dispatched before this metadata existed, the operator can initialize it once with `-InitializeScopeIntegrationBranch <configured-integration-branch>` on the helper; ordinary goal builds fail clearly when metadata is missing. Explicit-target investigations remain available through `Invoke-WorkerBuildDiagnostic.ps1`. Focused test execution, full acceptance, and live admission observation still require their respective owners.
 - **Keep exceptional diagnostics bounded.** If the normal helper cannot express the required build arguments, use `scripts/Invoke-WorkerBuildDiagnostic.ps1 build <project-or-solution> <diagnostic-arguments...>`. It passes an argument array without evaluating shell text, closes child stdin, drains stdout/stderr, preserves the child exit code, retains the full output in isolated goal artifacts, and returns only counts, elapsed time, and the log path. This diagnostic summary is not normal worker build evidence; inspect or excerpt the retained log only for a named missing diagnostic.
 - **Scope the test suite to the changed project**, not the whole solution; run it foreground (or poll). Use `scripts/Invoke-TestSummary.ps1 -Target <project>` for compact results. The helper builds by default and launches the managed .NET 10 Microsoft.Testing.Platform assembly through `dotnet`; use `-NoBuild` only when the existing managed assembly is known current. Do not substitute raw `dotnet test`, which launches the generated native apphost on Windows.
+- **Supply explicit test inputs** with `scripts/Invoke-TestSummary.ps1 -TestInput 'MCG_TEST_INPUT_NAME=value'` (multiple entries use PowerShell array syntax: `-TestInput @('MCG_TEST_INPUT_ALPHA=value1', 'MCG_TEST_INPUT_BETA=value2')`). Names must match the case-sensitive reserved prefix pattern `^MCG_TEST_INPUT_[A-Z0-9_]+$`, be unique, and have non-empty values. Inputs are applied after the environment scrub; inherited variables with that prefix are still stripped unless explicitly supplied. Only names appear in `Test inputs passed:` and the `testInputNames` array of `MTP_TERMINAL_SUMMARY`, never values. Unprefixed or invalid names, duplicate names, and empty values cause `TEST INPUT FAILURE` before the build. For `GroupedGateAttemptLegacyRestoreTests.RealHistoryRestore`, pass `-TestInput 'MCG_TEST_INPUT_GROUPED_GATE_ATTEMPTS_COPY=<copy path>'`.
 
   ### Managed test filter syntax
 

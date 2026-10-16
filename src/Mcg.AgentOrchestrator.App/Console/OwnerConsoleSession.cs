@@ -16,7 +16,8 @@ internal sealed class OwnerConsoleSession(
     IOwnerConsoleConductor? conductor = null,
     IOwnerConsoleDigestReport? digestReport = null,
     ChangeStreamFileReader? changes = null,
-    AnswerIntentStatusTracker? answerTracking = null) : IDisposable
+    AnswerIntentStatusTracker? answerTracking = null,
+    Func<OwnerFleetViewModel>? fleet = null) : IDisposable
 {
     private readonly AnswerIntentStatusTracker _answerTracking = answerTracking ?? new(answers.ReadStatusAsync, clock);
     public void Dispose() => _answerTracking.Dispose();
@@ -117,11 +118,26 @@ internal sealed class OwnerConsoleSession(
 
     internal async Task<bool> HandleCommandAsync(string raw, CancellationToken cancellationToken)
     {
-        var metadata = await RefreshQuestionsAsync(cancellationToken);
         var line = raw.TrimEnd('\r').Trim();
         if (line.Length == 0) return true;
         var parts = line.Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
         var command = parts[0].ToLowerInvariant();
+        if (command == "fleet")
+        {
+            if (parts.Length != 1) Announce("usage: fleet");
+            else if (fleet is null) Announce("fleet view unavailable in this session");
+            else
+            {
+                try
+                {
+                    foreach (var row in OwnerFleetDiagram.Render(fleet()).Split('\n')) output.WriteLine(row);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                { Announce($"fleet unavailable: {ex.Message}"); }
+            }
+            return true;
+        }
+        var metadata = await RefreshQuestionsAsync(cancellationToken);
         switch (command)
         {
             case "quit": return false;
@@ -129,6 +145,7 @@ internal sealed class OwnerConsoleSession(
                 Announce("board | goal <id-prefix> | answer <n> <text> | accept <n> | bell on|off | help | quit");
                 output.WriteLine("conductor start [--clear-stop] | conductor stop [--yes] | conductor status");
                 output.WriteLine("digest | metrics | board");
+                output.WriteLine("fleet: Show the fleet diagram: host and executor boxes.");
                 break;
             case "board": await PrintBoardAsync(metadata, cancellationToken); break;
             case "conductor": _control.HandleConductor(line); break;

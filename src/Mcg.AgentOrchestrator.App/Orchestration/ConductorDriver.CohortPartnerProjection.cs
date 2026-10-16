@@ -5,9 +5,12 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorDriver
 {
+    internal GateReadyCandidateProjectionResult ProjectGroupedAdmissionCandidate(Goal goal, ConductorAutonomyPolicy policy, AgentOrchestratorKernel? kernelArgument) =>
+        GroupedAdmissionLandingHold.Apply(ProjectGateReadyCandidate(goal, policy),
+            (_cohortKernel ?? kernelArgument ?? _conductorTickKernel)?.GetPendingHumanInput(goal.Id) ?? []);
+
     // This projection judges pair compatibility only. It never makes the in-review goal gate-ready.
-    internal GateReadyCandidateProjectionResult ProjectInReviewCohortPartner(
-        Goal goal, ConductorAutonomyPolicy policy)
+    internal GateReadyCandidateProjectionResult ProjectInReviewCohortPartner(Goal goal, ConductorAutonomyPolicy policy)
     {
         if (HasActiveOwnerReviewHold(goal, out _, out _))
             return ExcludedGateReadyCandidate(GateReadyCandidateExclusionReason.OwnerReviewHold);
@@ -29,9 +32,6 @@ internal sealed partial class ConductorDriver
                 policy.GetTransitionDecision(GoalLifecycleState.Merged, risk.Value)))
                 ?? ExcludedGateReadyCandidate(GateReadyCandidateExclusionReason.RevisionUnknown);
         }
-        catch
-        {
-            return ExcludedGateReadyCandidate(GateReadyCandidateExclusionReason.RevisionUnknown);
-        }
+        catch { return ExcludedGateReadyCandidate(GateReadyCandidateExclusionReason.RevisionUnknown); }
     }
 }

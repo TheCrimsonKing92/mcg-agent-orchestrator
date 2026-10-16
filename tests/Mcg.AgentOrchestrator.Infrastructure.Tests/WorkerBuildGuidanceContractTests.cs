@@ -50,7 +50,7 @@ public sealed class WorkerBuildGuidanceContractTests
             BindingFlags.Static | BindingFlags.NonPublic)
             ?? throw new MissingMethodException(typeof(WorkerArtifactWriter).FullName, "BuildCurrentTask");
 
-        var guidance = Assert.IsType<string>(method.Invoke(null, [task, repositoryRoot, false]));
+        var guidance = Assert.IsType<string>(method.Invoke(null, [task, repositoryRoot, false, null]));
 
         var invocation = OrchestratorBuildEvidenceCheck.FormatScriptInvocation(OrchestratorBuildEvidenceCheck.ResolveScriptPath());
         Assert.Contains(invocation + " <project.csproj> [project.csproj...]", guidance, StringComparison.Ordinal);

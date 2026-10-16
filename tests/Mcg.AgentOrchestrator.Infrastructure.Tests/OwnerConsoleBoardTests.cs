@@ -5,6 +5,31 @@ using Mcg.AgentOrchestrator.Core;
 public sealed class OwnerConsoleBoardTests
 {
     [Fact]
+    public async Task PlainBoardWithNoLiveGateKeepsExactLegacyBytes()
+    {
+        var harness = new OwnerConsoleHarness();
+        harness.AddGoal("11111111", "Verified fixture", AgentRole.Developer);
+        harness.AddGoal("22222222", "Verifying fixture", AgentRole.Tester);
+        var snapshot = harness.Kernel.ExportSnapshot();
+        harness.Kernel.ReplaceWithSnapshot(snapshot with
+        {
+            Goals = snapshot.Goals.Select(goal => goal with
+            {
+                Status = goal.Id == "11111111" ? GoalStatus.Verified : GoalStatus.Verifying,
+                Timeline = [new(goal.Id, null, ProgressKind.GoalPolicyDecision, "fixture", harness.Clock.GetUtcNow().AddMinutes(-2))]
+            }).ToArray()
+        });
+        using var session = harness.Session();
+
+        await session.HandleCommandAsync("board", CancellationToken.None);
+
+        Assert.Equal(string.Join(Environment.NewLine,
+            ConsoleAnnouncementFormatter.Format(harness.Clock, "board | active goals: 2 | owner questions: 0"),
+            "11111111 | Verified fixture | Verified | Developer | 2m",
+            "22222222 | Verifying fixture | Verifying | Tester | 2m", ""), harness.Output.Text);
+    }
+
+    [Fact]
     public async Task WatchTransitionPrintsHeaderAndBothActiveGoals()
     {
         var harness = new OwnerConsoleHarness();

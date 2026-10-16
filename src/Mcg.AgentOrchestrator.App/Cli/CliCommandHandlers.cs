@@ -34,6 +34,7 @@ public static bool Execute(IReadOnlyList<string> parts, CliExecutionContext cont
     }
 
     var handled = CliExperimentCommands.TryExecute(command, parts, context) ??
+        CliBacklogPremiseCommands.TryExecute(command, parts, context) ??
         TryExecuteOwnerDigestCommand(command, parts, context) ??
         TryExecuteFundamentalsAlias(command, parts, context) ??
         TryExecuteFlakeCensusCommand(command, parts, context) ??

@@ -5,6 +5,19 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static class CliTaskQueryCommand
 {
+    internal static bool TryResolveGoalPrefix(AgentOrchestratorKernel kernel, string idOrPrefix, out Goal? goal)
+    {
+        var matches = kernel.Goals.Where(candidate => candidate.Id.Value.StartsWith(idOrPrefix, StringComparison.OrdinalIgnoreCase)).ToList();
+        if (matches.Count == 1)
+        {
+            goal = matches[0];
+            return true;
+        }
+
+        goal = null;
+        return false;
+    }
+
     internal static bool IsTaskQueryCommand(IReadOnlyList<string> args) =>
         args.Count >= 1 &&
         (args[0].Equals("task", StringComparison.OrdinalIgnoreCase) ||

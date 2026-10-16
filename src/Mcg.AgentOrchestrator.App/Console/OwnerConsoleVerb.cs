@@ -35,18 +35,20 @@ internal static class OwnerConsoleVerb
                 ? SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath)
                 : new EmptyStateQueries();
             var source = new ConductEventFileSource(workspace.ConductEventsLogPath, clock);
+            var liveness = new ConductorLeaseLiveness(workspace.OrchestratorDirectory);
             var changes = new ChangeStreamFileReader(Path.Combine(
                 Path.GetDirectoryName(workspace.ConductEventsLogPath) ?? ".", ChangeStreamWriter.FileName));
             using var session = new OwnerConsoleSession(
                 state,
                 new OwnerQuestionReadModel(state, workspace.OrchestratorDirectory),
                 new AttentionAnswerHandlerAdapter(workspace),
-                new ConductorLeaseLiveness(workspace.OrchestratorDirectory),
+                liveness,
                 new OwnerDigestSummaryAdapter(workspace),
                 new GoalEventFileTail(workspace.GoalLifecycleEventsDirectory),
                 new SystemConsoleOutput(), clock,
                 new CliConductorConsoleAdapter(workspace),
-                new CliOwnerDigestConsoleAdapter(workspace), changes);
+                new CliOwnerDigestConsoleAdapter(workspace), changes,
+                fleet: () => OwnerFleetViewModelBuilder.Load(workspace, liveness));
             await new OwnerConsoleLoop(session, new SystemConsoleInput(), source, clock)
                 .RunAsync(cancellationToken);
             return 0;

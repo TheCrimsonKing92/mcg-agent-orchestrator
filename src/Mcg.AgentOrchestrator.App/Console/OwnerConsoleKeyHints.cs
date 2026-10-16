@@ -14,7 +14,8 @@ internal static class OwnerConsoleKeyHints
         ("bell on", "Enable all three bell tiers; use bell <calm|attention|alarm> on|off for one tier."),
         ("bell off", "Disable all three bell tiers; use bell <calm|attention|alarm> on|off for one tier."),
         ("goal <id-prefix>", "Open live goal detail, landing status and actions."),
-        ("epics", "Open the epic view (same as e).")
+        ("epics", "Open the epic view (same as e)."),
+        ("fleet", "Show the fleet diagram: host and executor boxes.")
     ];
 
     internal static string CommandPrompt => string.Join(" | ", Commands.Select(item => item.Command));
@@ -84,7 +85,9 @@ internal static class OwnerConsoleKeyHints
         "Epic detail PgDn: Scroll down one page.",
         "Epic detail Esc: Back to the epic list.",
         "Epic view w (list and detail): Cycle the time window (day, week, all time).",
-        "Epic view r (list and detail): Reload after a failed load."
+        "Epic view r (list and detail): Reload after a failed load.",
+        "g: Open the GATE view (any pane).",
+        "GATE view Up/Down PgUp/PgDn: Scroll lanes; Esc: Close the GATE view."
     }.Concat(OwnerActivityNarrator.JumpKeyHelp).Concat(Commands.Where(item => item.Command != "epics")
         .Select(item => $":{item.Command}: {item.Description}")));
 }

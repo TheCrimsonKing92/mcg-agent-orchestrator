@@ -20,6 +20,7 @@ public sealed class Goal
     private readonly List<EffectiveAcceptanceCriteriaCorrection> _effectiveAcceptanceCriteriaCorrections = [];
     private readonly List<RefinementOwnershipDiagnostic> _refinementOwnershipDiagnostics = [];
     private readonly List<CriterionEvidenceObligation> _criterionEvidenceObligations = [];
+    private readonly List<GateTestObligation> _gateTestObligations = [];
     private readonly HashSet<GoalId> _dependsOn = [];
 
     public Goal(GoalId id, string objective, IReadOnlyList<TaskSpec> tasks)
@@ -250,6 +251,27 @@ public sealed class Goal
         var currentIndex = _refinedSpecVersions.FindIndex(version => version.Version == current.Version);
         _refinedSpecVersions[currentIndex] = current with { Spec = spec };
         EnsureCriterionEvidenceObligations(spec, current.Version, recordedAt);
+    }
+
+    public IReadOnlyList<GateTestObligation> GateTestObligations => _gateTestObligations.AsReadOnly();
+
+    internal void RecordGateTestObligation(GateTestObligation obligation)
+    {
+        var index = _gateTestObligations.FindIndex(existing =>
+            existing.Id == obligation.Id && existing.BriefVersion == obligation.BriefVersion);
+        if (index < 0) _gateTestObligations.Add(obligation);
+        else _gateTestObligations[index] = obligation;
+    }
+
+    internal void RestoreGateTestObligations(IReadOnlyList<GateTestObligation>? obligations)
+    {
+        _gateTestObligations.Clear();
+        foreach (var obligation in obligations ?? [])
+        {
+            if (_gateTestObligations.Any(existing =>
+                existing.Id == obligation.Id && existing.BriefVersion == obligation.BriefVersion)) continue;
+            _gateTestObligations.Add(obligation with { Selectors = obligation.Selectors?.ToArray() ?? [] });
+        }
     }
 
     internal void RestoreCriterionEvidenceObligations(IReadOnlyList<CriterionEvidenceObligation>? obligations)
@@ -1098,7 +1120,8 @@ public sealed class Goal
             SourceBacklogCoverage: SourceBacklogCoverage,
             SliceBatchParentId: SliceBatchParentId?.Value,
             AcceptanceFailureDeferredForRetry: _acceptanceFailureDeferredForRetry,
-            CriterionEvidenceObligations: _criterionEvidenceObligations.Count == 0 ? null : _criterionEvidenceObligations.ToArray());
+            CriterionEvidenceObligations: _criterionEvidenceObligations.Count == 0 ? null : _criterionEvidenceObligations.ToArray(),
+            GateTestObligations: _gateTestObligations.Count == 0 ? null : _gateTestObligations.ToArray());
     }
 
     internal static Goal FromSnapshot(GoalSnapshot snapshot)
@@ -1169,6 +1192,7 @@ public sealed class Goal
         }
 
         goal.RestoreCriterionEvidenceObligations(snapshot.CriterionEvidenceObligations);
+        goal.RestoreGateTestObligations(snapshot.GateTestObligations);
 
         if (snapshot.LatestAcceptanceFailure is { } failure)
         {

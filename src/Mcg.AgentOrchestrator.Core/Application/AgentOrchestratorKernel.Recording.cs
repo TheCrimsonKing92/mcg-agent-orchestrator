@@ -211,46 +211,56 @@ public sealed partial class AgentOrchestratorKernel
                 humanInputQuestion += $"{Environment.NewLine}Accompanying WORKER_RESULT blocker evidence: {accompanyingBlocker}";
             }
 
-            var requestResult = RequestHumanInputDeduplicated(
-                goal.Id,
-                task.Id,
-                humanInputQuestion,
-                kind: verification.HumanInputKind
-                    ?? parsedHumanInput.Directive?.Kind
-                    ?? HumanWaitKind.SpecClarification,
-                questionFingerprint: verification.HumanInputQuestionFingerprint
-                    ?? parsedHumanInput.Directive?.QuestionFingerprint
-                    ?? HumanInputRequest.BuildQuestionFingerprint(rawQuestion),
-                blockerFingerprint: verification.HumanInputBlockerFingerprint
-                    ?? parsedHumanInput.Directive?.BlockerFingerprint
-                    ?? HumanInputRequest.BuildWorkerResultBlockerFingerprint(
-                        task.Id,
-                        task.RequiredRole,
-                        rawQuestion,
-                        accompanyingBlocker),
-                completedRound: verification.WorkerResultPresent ? completedRound : null,
-                workerResultLogReference: verification.StandardOutputPath,
-                recordDuplicateSuppression: verification.WorkerResultPresent,
-                evidenceOwner: verification.HumanInputEvidenceOwner
-                    ?? parsedHumanInput.Directive?.EvidenceOwner,
-                storeReference: verification.HumanInputStoreReference ?? parsedHumanInput.Directive?.StoreReference,
-                testNames: testNames);
-            if (verification.WorkerResultPresent &&
-                requestResult.WasSuppressedByAnswer &&
-                WorkerResultBlockers.TryGetBlockersStatus(verification, out var blockersStatus) &&
-                blockersStatus == WorkerResultBlockers.BlockersStatus.None)
+            var kind = verification.HumanInputKind ?? parsedHumanInput.Directive?.Kind ?? HumanWaitKind.SpecClarification;
+            var owner = verification.HumanInputEvidenceOwner ?? parsedHumanInput.Directive?.EvidenceOwner;
+            var fingerprint = verification.HumanInputQuestionFingerprint
+                ?? parsedHumanInput.Directive?.QuestionFingerprint
+                ?? HumanInputRequest.BuildQuestionFingerprint(rawQuestion);
+            if (kind == HumanWaitKind.ProspectiveAcceptanceEvidence && GateTestObligation.IsAcceptanceGateOwner(owner))
             {
-                RecordHumanInputWorkerResultContradiction(
-                    goal.Id,
-                    taskId,
-                    requestResult.Request.Id,
-                    completedRound,
-                    verification.StandardOutputPath);
+                var obligation = new GateTestObligation(fingerprint, goal.AuthoritativeBrief.Version,
+                    testNames?.ToArray() ?? [], task.Id.Value, rawQuestion, _clock.UtcNow);
+                goal.RecordGateTestObligation(obligation);
+                Append(goal, taskId, ProgressKind.TaskNote, obligation.RecordingNote);
             }
-            if (HumanWaitPolicyDefaults.BlocksActiveWork(requestResult.Request.Kind) &&
-                (verification.WorkerResultPresent || !requestResult.WasSuppressedByAnswer))
+            else
             {
-                return;
+                var requestResult = RequestHumanInputDeduplicated(
+                    goal.Id,
+                    task.Id,
+                    humanInputQuestion,
+                    kind: kind,
+                    questionFingerprint: fingerprint,
+                    blockerFingerprint: verification.HumanInputBlockerFingerprint
+                        ?? parsedHumanInput.Directive?.BlockerFingerprint
+                        ?? HumanInputRequest.BuildWorkerResultBlockerFingerprint(
+                            task.Id,
+                            task.RequiredRole,
+                            rawQuestion,
+                            accompanyingBlocker),
+                    completedRound: verification.WorkerResultPresent ? completedRound : null,
+                    workerResultLogReference: verification.StandardOutputPath,
+                    recordDuplicateSuppression: verification.WorkerResultPresent,
+                    evidenceOwner: owner,
+                    storeReference: verification.HumanInputStoreReference ?? parsedHumanInput.Directive?.StoreReference,
+                    testNames: testNames);
+                if (verification.WorkerResultPresent &&
+                    requestResult.WasSuppressedByAnswer &&
+                    WorkerResultBlockers.TryGetBlockersStatus(verification, out var blockersStatus) &&
+                    blockersStatus == WorkerResultBlockers.BlockersStatus.None)
+                {
+                    RecordHumanInputWorkerResultContradiction(
+                        goal.Id,
+                        taskId,
+                        requestResult.Request.Id,
+                        completedRound,
+                        verification.StandardOutputPath);
+                }
+                if (HumanWaitPolicyDefaults.BlocksActiveWork(requestResult.Request.Kind) &&
+                    (verification.WorkerResultPresent || !requestResult.WasSuppressedByAnswer))
+                {
+                    return;
+                }
             }
         }
 

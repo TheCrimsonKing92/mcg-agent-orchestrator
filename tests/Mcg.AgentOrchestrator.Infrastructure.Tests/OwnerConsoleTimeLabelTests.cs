@@ -40,9 +40,10 @@ public sealed class OwnerConsoleTimeLabelTests
         Assert.Equal(Prefix + "board | goal <id-prefix> | answer <n> <text> | accept <n> | bell on|off | help | quit", lines[0]);
         Assert.Equal("conductor start [--clear-stop] | conductor stop [--yes] | conductor status", lines[1]);
         Assert.Equal("digest | metrics | board", lines[2]);
-        Assert.Equal(Prefix + GoalId + " | Build search | Active", lines[3]);
-        Assert.Equal("recent event", lines[4]);
-        Assert.Equal(5, lines.Length);
+        Assert.Equal("fleet: Show the fleet diagram: host and executor boxes.", lines[3]);
+        Assert.Equal(Prefix + GoalId + " | Build search | Active", lines[4]);
+        Assert.Equal("recent event", lines[5]);
+        Assert.Equal(6, lines.Length);
     }
 
     [Fact]

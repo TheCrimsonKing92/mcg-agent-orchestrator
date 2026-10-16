@@ -24,14 +24,15 @@ public sealed class FiveRolePipelineRetirementTests : CliCommandTestBase
     [Xunit.Fact]
     public void Parse_SupportedAndUnknownValues_PreservesFourValueContract()
     {
-        const string allowed = "auto, scout, developer-reviewer, developer-only";
+        const string allowed = "auto, scout, developer-reviewer, developer-only, test-first";
         Xunit.Assert.Equal(allowed, GoalIntakePipelineRequestParser.AllowedValues);
         foreach (var (value, expected) in new[]
         {
             ("auto", GoalIntakePipelineRequest.Auto),
             ("scout", GoalIntakePipelineRequest.Scout),
             ("developer-reviewer", GoalIntakePipelineRequest.DeveloperReviewer),
-            ("developer-only", GoalIntakePipelineRequest.DeveloperOnly)
+            ("developer-only", GoalIntakePipelineRequest.DeveloperOnly),
+            ("test-first", GoalIntakePipelineRequest.TestFirst)
         })
         {
             var parsed = GoalIntakePipelineRequestParser.Parse(value);

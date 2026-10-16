@@ -14,9 +14,7 @@ internal static class ProspectiveEvidenceGateResolver
         string? candidateBranchHeadSha)
     {
         var waits = kernel.GetPendingHumanInput(goal.Id)
-            .Where(wait => wait.Kind == HumanWaitKind.ProspectiveAcceptanceEvidence &&
-                string.Equals(wait.EvidenceOwner, "acceptance-gate", StringComparison.OrdinalIgnoreCase) &&
-                wait.TestNames is { Count: > 0 })
+            .Where(GroupedAdmissionLandingHold.IsGateSatisfiable)
             .ToArray();
         if (waits.Length == 0) return new([], []);
 
@@ -109,7 +107,7 @@ internal static class ProspectiveEvidenceGateResolver
         (resultName.StartsWith(selector, StringComparison.Ordinal) && resultName.Length > selector.Length &&
             resultName[selector.Length] is '(' or '.');
 
-    private static IReadOnlyList<GateAttempt> ReadAttempts(
+    internal static IReadOnlyList<GateAttempt> ReadAttempts(
         string orchestratorDirectory, GoalId goalId, string? candidateSha)
     {
         if (string.IsNullOrWhiteSpace(candidateSha)) return [];
@@ -178,7 +176,7 @@ internal static class ProspectiveEvidenceGateResolver
         root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
             ? value.GetString() : null;
 
-    private sealed record GateAttempt(
+    internal sealed record GateAttempt(
         string Id, DateTimeOffset CompletedAt, IReadOnlyList<string> Paths, IReadOnlyList<TestResult> Results);
 }
 
