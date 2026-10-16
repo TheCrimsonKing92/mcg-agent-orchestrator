@@ -478,7 +478,9 @@ internal static class SourceSizeRatchet
             // After integrating main 79b67570c, measured 14807 lines across the same 70 partial files; no extra headroom.
             // Goal 8d040dde adds landing-completion handling in ConductorDriver.LandingCompletion; after integrating
             // main 3732befa8, measured 14823 lines across the same 70 partial files; no extra headroom.
-            new SourceClassCeiling("ConductorDriver", 14823, 70),
+            // Goal 4cad184f adds three lines of grouped-receipt RED handling; after integrating main fd7b91785,
+            // measured 14826 lines across the same 70 partial files; no extra headroom.
+            new SourceClassCeiling("ConductorDriver", 14826, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
