@@ -869,12 +869,9 @@ public sealed class AcceptanceCohortWorkflowTestsBackgroundAndCapacity : Accepta
             ConductorParallelAcceptanceOwnedProcessLaunch? launch = null;
             const int ownerProcessId = 8123;
             var landed = false;
-            var holders = new AcceptanceHolderExitFixture();
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
                 attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
                 isProcessAlive: _ => true,
-                classifyHolder: holders.Classify,
-                resultPublishedForTests: holders.RecordExit,
                 launchOwnedProcess: pending =>
                 {
                     launch = pending;

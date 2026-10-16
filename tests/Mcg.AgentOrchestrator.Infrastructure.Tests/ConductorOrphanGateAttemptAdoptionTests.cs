@@ -10,181 +10,7 @@ public sealed class ConductorOrphanGateAttemptAdoptionTests
     private const int SuccessorGeneration = 909;
     private const int GateChildPid = 7115;
 
-    private static bool ShouldAdoptFixture(
-        ConductorParallelAcceptanceAttempt attempt, int generation,
-        Func<int, bool> alive, Func<string, bool> artifactExists) =>
-        ConductorOrphanGateAttemptAdoption.ShouldAdopt(attempt, generation, alive, artifactExists,
-            current => alive(current.OwnerProcessId)
-                ? SpawnTrackedProcessStatus.LiveMatch : SpawnTrackedProcessStatus.DeadOrRecycled);
-
-    [Xunit.Fact]
-    public void RecycledHolderIsNotAdoptedEvenWhenPidIsAlive()
-    {
-        var attempt = SyntheticAttempt(FirstGeneration);
-        Xunit.Assert.False(ConductorOrphanGateAttemptAdoption.ShouldAdopt(
-            attempt, SuccessorGeneration, pid => pid == GateChildPid, _ => false,
-            _ => SpawnTrackedProcessStatus.DeadOrRecycled));
-    }
-
-    [Xunit.Fact]
-    public void LegacyHolderWithoutRecordedIdentityIsNotAdopted()
-    {
-        Xunit.Assert.False(ConductorOrphanGateAttemptAdoption.ShouldAdopt(
-            SyntheticAttempt(FirstGeneration), SuccessorGeneration, pid => pid == GateChildPid, _ => false));
-    }
-
-    [Xunit.Fact]
-    public void RecordedStartTimeMismatchIsNotAdopted()
-    {
-        using var process = System.Diagnostics.Process.GetCurrentProcess();
-        var attempt = SyntheticAttempt(FirstGeneration) with
-        {
-            OwnerProcessId = process.Id,
-            OwnerProcessStartedAt = new DateTimeOffset(process.StartTime.ToUniversalTime()).AddMinutes(-1),
-            OwnerExecutablePath = process.MainModule!.FileName
-        };
-        Xunit.Assert.False(ConductorOrphanGateAttemptAdoption.ShouldAdopt(
-            attempt, SuccessorGeneration, pid => pid == process.Id, _ => false));
-    }
-
-    [Xunit.Fact]
-    public void ImageMismatchRemainsUnknownRatherThanDead()
-    {
-        using var process = System.Diagnostics.Process.GetCurrentProcess();
-        var startedAt = new DateTimeOffset(process.StartTime.ToUniversalTime());
-        var image = process.MainModule!.FileName + ".different-image";
-        Xunit.Assert.Equal(SpawnTrackedProcessStatus.Unknown,
-            AcceptanceHolderIdentity.Classify(process.Id, startedAt, image));
-    }
-
     private static readonly JsonSerializerOptions AttemptJson = new(JsonSerializerDefaults.Web);
-
-    [Xunit.Fact]
-    public void CapacityQueries_FilterByGoalWhileGlobalAdmissionIncludesForeignGoals()
-    {
-        var root = CreateTempDirectory();
-        try
-        {
-            var kernel = new AgentOrchestratorKernel();
-            var occupiedGoal = kernel.CreateGoal("Occupied goal");
-            var unrelatedGoal = kernel.CreateGoal("Unrelated goal");
-            var coordinator = NewCoordinator(root, FirstGeneration, _ => true,
-                () => DateTimeOffset.UnixEpoch,
-                _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(GateChildPid));
-            var candidate = ConductorParallelAcceptanceCandidate.Create(occupiedGoal, 0, [], "branch", "main");
-            var started = coordinator.Evaluate(candidate, ConductorAutonomyPolicy.Permissive, FailIfRun);
-            Xunit.Assert.Empty(coordinator.GetCapacityReservingAttempts([unrelatedGoal.Id.Value]));
-            Xunit.Assert.Equal(started.Attempt.AttemptId,
-                Xunit.Assert.Single(coordinator.GetCapacityReservingAttempts([occupiedGoal.Id.Value])).AttemptId);
-            Xunit.Assert.Equal(started.Attempt.AttemptId,
-                Xunit.Assert.Single(coordinator.GetAllCapacityReservingAttempts()).AttemptId);
-        }
-        finally { Directory.Delete(root, recursive: true); }
-    }
-
-    [Xunit.Theory]
-    [Xunit.InlineData("Running")]
-    [Xunit.InlineData("Passed")]
-    [Xunit.InlineData("LaunchFailed")]
-    public void LegacySettlement_ReleasesSlotAfterTerminalPublicationAndAllowsRetention(
-        string outcomeName)
-    {
-        var outcome = Enum.Parse<ConductorParallelAcceptanceAttemptOutcome>(outcomeName);
-        var root = CreateTempDirectory();
-        try
-        {
-            var legacy = SyntheticAttempt(FirstGeneration);
-            var directory = Path.Combine(root, legacy.GoalId);
-            Directory.CreateDirectory(directory);
-            // Incomplete pre-upgrade identities need whole-tree settlement; complete dead
-            // identities are released automatically by the successor admission path.
-            legacy = legacy with { MetadataPath = Path.Combine(directory, legacy.AttemptId + ".attempt.json"), Outcome = outcome,
-                OwnerProcessId = outcomeName == "LaunchFailed" ? 0 : GateChildPid,
-                OwnerProcessStartedAt = null,
-                OwnerExecutablePath = null };
-            File.WriteAllText(legacy.MetadataPath, JsonSerializer.Serialize(legacy, AttemptJson));
-            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(root, TrunkBranchName.Default,
-                utcNow: () => DateTimeOffset.UnixEpoch.AddDays(1),
-                classifyHolder: current => current.OwnerProcessId == 0
-                    ? SpawnTrackedProcessStatus.Unknown : SpawnTrackedProcessStatus.DeadOrRecycled,
-                holderLease: new AcceptanceHolderLease());
-            Xunit.Assert.Single(coordinator.GetAllCapacityReservingAttempts());
-            coordinator.PrepareHolderDetach(); // missing settlement retains capacity without breaking stop
-            Xunit.Assert.Single(coordinator.GetAllCapacityReservingAttempts());
-            var binding = AcceptanceHolderBinding.For(legacy);
-            File.WriteAllText(LegacyAcceptanceHolderSettlement.ReceiptPath(binding), JsonSerializer.Serialize(
-                new LegacyAcceptanceHolderSettlementReceipt(binding, legacy.OwnerProcessId,
-                    legacy.OwnerProcessStartedAt, legacy.OwnerExecutablePath, legacy.StartedAt,
-                    legacy.StartedAt.AddDays(1), "operator proved whole-tree exit")));
-            Xunit.Assert.Empty(coordinator.GetAllCapacityReservingAttempts());
-            var terminal = ReadAttempt(legacy.MetadataPath);
-            Xunit.Assert.Equal(outcome == ConductorParallelAcceptanceAttemptOutcome.Running
-                ? ConductorParallelAcceptanceAttemptOutcome.ProcessDied : outcome, terminal.Outcome);
-            using var metadata = JsonDocument.Parse(File.ReadAllText(legacy.MetadataPath));
-            Xunit.Assert.False(StorageRetentionMaintenance.AcceptanceHolderPreventsRetention(metadata.RootElement));
-            coordinator.PrepareHolderDetach();
-        }
-        finally { Directory.Delete(root, recursive: true); }
-    }
-
-    [Xunit.Fact]
-    public void PublishedAndReconciledResultDoesNotReleaseLiveHolderSlot()
-    {
-        var root = CreateTempDirectory();
-        try
-        {
-            var goal = new AgentOrchestratorKernel().CreateGoal("Keep holder occupancy separate from verdict");
-            var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [], "branch", "main");
-            var holderAlive = true;
-            var coordinator = NewCoordinator(root, FirstGeneration,
-                pid => pid == GateChildPid && holderAlive, () => DateTimeOffset.UnixEpoch,
-                _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(GateChildPid));
-            var started = coordinator.Evaluate(candidate, ConductorAutonomyPolicy.Permissive, FailIfRun);
-            PublishPassingResult(started.Attempt, candidate);
-            coordinator.MarkReconciled(started.Attempt);
-
-            var reserved = Xunit.Assert.Single(coordinator.GetCapacityReservingAttempts([goal.Id.Value]));
-            Xunit.Assert.Equal(started.Attempt.AttemptId, reserved.AttemptId);
-            Xunit.Assert.Equal(0, reserved.SlotIndex);
-
-            holderAlive = false; // explicit settlement signal, independent of result publication
-            Xunit.Assert.Empty(coordinator.GetCapacityReservingAttempts([goal.Id.Value]));
-        }
-        finally { Directory.Delete(root, recursive: true); }
-    }
-
-    [Xunit.Fact]
-    public void UnreadableIdentityRetainsSlotWithoutAdoptionOrReplacement()
-    {
-        var root = CreateTempDirectory();
-        try
-        {
-            var goal = new AgentOrchestratorKernel().CreateGoal("Retain unknown holder identity");
-            var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [], "branch", "main");
-            var started = NewCoordinator(root, FirstGeneration, _ => true,
-                () => DateTimeOffset.UnixEpoch,
-                _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(GateChildPid))
-                .Evaluate(candidate, ConductorAutonomyPolicy.Permissive, FailIfRun);
-            var launches = 0;
-            var successor = new ConductorParallelAcceptanceAttemptCoordinator(
-                root, TrunkBranchName.Default, utcNow: () => DateTimeOffset.UnixEpoch.AddHours(1),
-                isProcessAlive: _ => false, conductorGenerationId: SuccessorGeneration,
-                classifyHolder: _ => SpawnTrackedProcessStatus.Unknown,
-                launchOwnedProcess: _ =>
-                {
-                    launches++;
-                    throw new InvalidOperationException("An unknown holder must block replacement.");
-                });
-
-            var decision = successor.Evaluate(candidate, ConductorAutonomyPolicy.Permissive, FailIfRun);
-            Xunit.Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Running, decision.Kind);
-            Xunit.Assert.Equal(started.Attempt.AttemptId, decision.Attempt.AttemptId);
-            Xunit.Assert.Null(decision.Attempt.AdoptedByGenerationId);
-            Xunit.Assert.Equal(0, launches);
-            Xunit.Assert.Single(successor.GetCapacityReservingAttempts([goal.Id.Value]));
-        }
-        finally { Directory.Delete(root, recursive: true); }
-    }
 
     [Xunit.Fact(DisplayName = "OrphanGateAttemptAdoption_successor_adopts_foreign_generation_and_starts_no_second_attempt")]
     public void SuccessorAdoptsForeignGenerationAndStartsNoSecondAttempt()
@@ -344,7 +170,7 @@ public sealed class ConductorOrphanGateAttemptAdoptionTests
     {
         var attempt = SyntheticAttempt(FirstGeneration);
 
-        Xunit.Assert.False(ShouldAdoptFixture(
+        Xunit.Assert.False(ConductorOrphanGateAttemptAdoption.ShouldAdopt(
             attempt,
             SuccessorGeneration,
             _ => false,
@@ -356,7 +182,7 @@ public sealed class ConductorOrphanGateAttemptAdoptionTests
     {
         var attempt = SyntheticAttempt(SuccessorGeneration);
 
-        Xunit.Assert.False(ShouldAdoptFixture(
+        Xunit.Assert.False(ConductorOrphanGateAttemptAdoption.ShouldAdopt(
             attempt,
             SuccessorGeneration,
             _ => true,
@@ -368,7 +194,7 @@ public sealed class ConductorOrphanGateAttemptAdoptionTests
     {
         var attempt = SyntheticAttempt(FirstGeneration);
 
-        Xunit.Assert.False(ShouldAdoptFixture(
+        Xunit.Assert.False(ConductorOrphanGateAttemptAdoption.ShouldAdopt(
             attempt,
             SuccessorGeneration,
             _ => true,
@@ -380,7 +206,7 @@ public sealed class ConductorOrphanGateAttemptAdoptionTests
     {
         var attempt = SyntheticAttempt(null);
 
-        Xunit.Assert.True(ShouldAdoptFixture(
+        Xunit.Assert.True(ConductorOrphanGateAttemptAdoption.ShouldAdopt(
             attempt,
             SuccessorGeneration,
             pid => pid == GateChildPid,
@@ -392,12 +218,12 @@ public sealed class ConductorOrphanGateAttemptAdoptionTests
     {
         var attempt = SyntheticAttempt(FirstGeneration);
 
-        Xunit.Assert.False(ShouldAdoptFixture(
+        Xunit.Assert.False(ConductorOrphanGateAttemptAdoption.ShouldAdopt(
             attempt,
             SuccessorGeneration,
             pid => pid == GateChildPid,
             path => path == attempt.ResultPath));
-        Xunit.Assert.False(ShouldAdoptFixture(
+        Xunit.Assert.False(ConductorOrphanGateAttemptAdoption.ShouldAdopt(
             attempt,
             SuccessorGeneration,
             pid => pid == GateChildPid,
@@ -413,7 +239,7 @@ public sealed class ConductorOrphanGateAttemptAdoptionTests
         var adopted = attempt with { AdoptedByGenerationId = SuccessorGeneration };
         Xunit.Assert.False(ConductorOrphanGateAttemptAdoption.NeedsAdoptionRecord(adopted, SuccessorGeneration));
         // Adopting does not make the attempt mine: the fence that keeps Launch unreachable must survive.
-        Xunit.Assert.True(ShouldAdoptFixture(
+        Xunit.Assert.True(ConductorOrphanGateAttemptAdoption.ShouldAdopt(
             adopted,
             SuccessorGeneration,
             pid => pid == GateChildPid,

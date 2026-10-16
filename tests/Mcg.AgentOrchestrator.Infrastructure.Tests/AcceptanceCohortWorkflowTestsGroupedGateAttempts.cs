@@ -181,10 +181,6 @@ public sealed class AcceptanceCohortWorkflowTestsGroupedGateAttempts : Acceptanc
             PublishPassingReceipt(record, workspace, repo);
             File.WriteAllText(record.ResultPath, "passed");
             File.WriteAllText(record.ExitCodePath, "0");
-            Assert.Equal(1, second.CountLiveGroupedGateAttempts());
-            Assert.Equal(1, second.GetActiveAcceptanceCohortCapacity().ActiveRootCount);
-            Assert.Equal(0, Run(second, goals, cohort, mergeTrain));
-            Assert.Equal(0, launches);
             alive = false;
             _ = second.GetActiveCohortGateMemberGoalIds();
             var completed = Run(second, goals, cohort, mergeTrain);

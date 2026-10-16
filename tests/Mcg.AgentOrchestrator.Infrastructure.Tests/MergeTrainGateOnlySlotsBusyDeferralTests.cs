@@ -65,7 +65,6 @@ public sealed class MergeTrainGateOnlySlotsBusyDeferralTests(MergeTrainDeferralS
                 Assert.Equal(0, ConductorGroupedGateAttemptHost.Run(attempt.MetadataPath,
                     child => outcome = scenario.Driver.RunGroupedGateAttemptBody(child),
                     (_, _) => new NoConsoleRedirection()));
-                scenario.Holders.RecordExit(attempt);
                 Assert.NotNull(outcome);
                 Assert.Equal("deferred-slots-busy", outcome.Verdict);
                 Assert.Equal("", outcome.ReceiptId);
@@ -89,7 +88,6 @@ public sealed class MergeTrainGateOnlySlotsBusyDeferralTests(MergeTrainDeferralS
             var freeAttempt = scenario.Launches[2];
             Assert.Equal(0, ConductorGroupedGateAttemptHost.Run(freeAttempt.MetadataPath,
                 scenario.Driver.RunGroupedGateAttemptBody, (_, _) => new NoConsoleRedirection()));
-            scenario.Holders.RecordExit(freeAttempt);
             using var passed = JsonDocument.Parse(File.ReadAllText(freeAttempt.ResultPath));
             Assert.Equal("completed", passed.RootElement.GetProperty("Status").GetString());
             Assert.Equal("passed", passed.RootElement.GetProperty("Verdict").GetString());
@@ -118,7 +116,6 @@ public sealed class MergeTrainGateOnlySlotsBusyDeferralTests(MergeTrainDeferralS
             var attempt = Assert.Single(scenario.Launches);
             Assert.Equal(1, ConductorGroupedGateAttemptHost.Run(attempt.MetadataPath,
                 scenario.Driver.RunGroupedGateAttemptBody, (_, _) => new NoConsoleRedirection()));
-            scenario.Holders.RecordExit(attempt);
             using var document = JsonDocument.Parse(File.ReadAllText(attempt.ResultPath));
             Assert.Equal("failed", document.RootElement.GetProperty("Status").GetString());
             Assert.Equal(nameof(IOException), document.RootElement.GetProperty("ErrorType").GetString());
@@ -211,7 +208,6 @@ public sealed class MergeTrainGateOnlySlotsBusyDeferralTests(MergeTrainDeferralS
         internal string? Identity;
         internal DotnetBuildEnvironmentLease? Lease;
         internal bool Alive;
-        internal AcceptanceHolderExitFixture Holders { get; } = new();
         internal List<ConductorGroupedGateAttempt> Launches { get; } = [];
 
         internal void EnableGrouped() => Driver.EnableOwnedGroupedGateAttempts(new ConductorGroupedGateAttemptCoordinator(
@@ -221,7 +217,7 @@ public sealed class MergeTrainGateOnlySlotsBusyDeferralTests(MergeTrainDeferralS
                 Launches.Add(attempt);
                 Alive = true;
                 return new ConductorGroupedGateLaunchResult(Environment.ProcessId, null, null);
-            }, isProcessAlive: _ => Alive, classifyHolder: Holders.Classify));
+            }, isProcessAlive: _ => Alive));
 
         internal ConductorMergeTrainRunResult StartBackground() => Driver.RunMergeTrain(Selection, Goals,
             ConductorAutonomyPolicy.Permissive, runGateInBackground: true);

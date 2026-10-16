@@ -35,7 +35,7 @@ internal sealed partial class ConductorBatchLoop
     {
         try
         {
-            var liveAttempts = coordinator.GetAllCapacityReservingAttempts();
+            var liveAttempts = coordinator.GetCapacityReservingAttempts(goals.Select(goal => goal.Id.Value));
             var goalsById = goals.ToDictionary(goal => goal.Id.Value, StringComparer.Ordinal);
             var candidates = liveAttempts
                 .Where(attempt => goalsById.ContainsKey(attempt.GoalId))

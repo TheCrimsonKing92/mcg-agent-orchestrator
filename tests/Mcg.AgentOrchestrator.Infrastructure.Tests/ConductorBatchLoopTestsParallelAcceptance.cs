@@ -1968,7 +1968,6 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         var launches = 0;
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
             attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
-            isProcessAlive: _ => false, // A launch that throws never starts a holder.
             launchOwnedProcess: _ =>
             {
                 launches++;
