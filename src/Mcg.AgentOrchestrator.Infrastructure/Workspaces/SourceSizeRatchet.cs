@@ -510,7 +510,8 @@ internal static class SourceSizeRatchet
             // that type. Goal f3df9ed9 adds two wiring lines; program-health logic lives in
             // ConductorProgramHealthMonitor. After integrating main b8da8f673, measured 12194 lines across
             // the same 30 partial files, with no extra headroom.
-            new SourceClassCeiling("CliCommandHandlers", 12194, 30),
+            // Goal 6cf5a8ce routes the backlog-premise-check/close verbs to their separately owned command type.
+            new SourceClassCeiling("CliCommandHandlers", 12195, 30),
             // Goal ae77554f extracts bounded remote offer history parsing into RemoteLaneOfferHistoryReader.
             // Measured 9053 total lines across the existing 32 partial files; no extra headroom.
             // Goal 03580ad1 extracts source-mutation edits to AcceptanceSourceMutation; measured 8938 lines in 31 partials.

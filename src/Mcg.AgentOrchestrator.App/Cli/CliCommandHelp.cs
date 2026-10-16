@@ -47,6 +47,8 @@ internal static class CliCommandHelp
     public const string ReassignAgentUsage = "Usage: reassign-agent <task-number> <agent-id>|<goal-prefix> <task-number> <agent-id>|--goal <goal-prefix> <task-number> <agent-id>";
     public const string BacklogListUsage = "Usage: backlog-list [--all] [--limit <n>] [--status <value>] [--text <pattern>|--text=<leading-dash-pattern>] [--json]";
     public const string BacklogTriageUsage = "Usage: backlog-triage [--limit <n>] [--stale-days <n>]";
+    public const string BacklogPremiseCheckUsage = "Usage: backlog-premise-check [--min-age-days <n>]";
+    public const string BacklogPremiseCloseUsage = "Usage: backlog-premise-close <id-prefix> [<id-prefix> ...] --confirm-backlog-premise-close [--min-age-days <n>]";
     public const string BacklogAddUsage = "Usage: backlog-add <title> [body] [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar] | backlog-add --title <title> [--text-file <path>|--body-file <path>] [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar] | backlog-add <title> --text-file <path> [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar] | backlog-add <title> --body-file <path> [--epic <id-or-title>] [--depends-on <id-prefix>] [--no-similar]";
     public const string BacklogUpdateUsage = "Usage: backlog-update <id-prefix> [--title <text>] [--description <text> | --text-file <path> | --body-file <path>] [--priority <value>] [--tags <csv>] [--status <open|done|superseded>]";
     public const string BacklogShowUsage = "Usage: backlog-show <id-prefix>";
@@ -404,6 +406,16 @@ internal static class CliCommandHelp
         BacklogTriageUsage,
         "Print compact backlog triage buckets for daemon curation.",
         ["--limit", "--stale-days", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry BacklogPremiseCheck = new(
+        BacklogPremiseCheckUsage,
+        "Propose closes for stale backlog items with deterministic evidence and print an owner skim list. Writes nothing.",
+        ["--min-age-days", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry BacklogPremiseClose = new(
+        BacklogPremiseCloseUsage,
+        "Re-evaluate premise evidence and close only confirmed, named proposals.",
+        ["--min-age-days", "--confirm-backlog-premise-close", "--help", "-h"]);
 
     private static readonly CommandHelpEntry BacklogAdd = new(
         BacklogAddUsage,
@@ -1341,6 +1353,18 @@ internal static class CliCommandHelp
         if (args[0].Equals("backlog-triage", StringComparison.OrdinalIgnoreCase))
         {
             entry = BacklogTriage;
+            return true;
+        }
+
+        if (args[0].Equals("backlog-premise-check", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = BacklogPremiseCheck;
+            return true;
+        }
+
+        if (args[0].Equals("backlog-premise-close", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = BacklogPremiseClose;
             return true;
         }
 

@@ -183,6 +183,8 @@ internal static IReadOnlyList<string> RecognizedCommands { get; } =
     "conduct",
     "backlog-list",
     "backlog-triage",
+    "backlog-premise-check",
+    "backlog-premise-close",
     "backlog-add",
     "backlog-update",
     "backlog-show",
