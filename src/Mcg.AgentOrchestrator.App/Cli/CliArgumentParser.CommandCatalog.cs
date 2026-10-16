@@ -64,6 +64,7 @@ internal static IReadOnlyList<string> RecognizedCommands { get; } =
     "intent-coverage",
     "remote-executors",
     "remote-lane-selftest",
+    "executor-screen",
     "round-value",
     "board-simulate",
     "flake-census",
