@@ -1,0 +1,130 @@
+[
+  {
+    "class": "DotnetBuildEnvironmentManagerTests",
+    "reason": "Owns a GUID DotnetBuildStorageRoot via DotnetBuildEnvironmentManagerRootedTestBase; its separate collection protects process-local hooks."
+  },
+  {
+    "class": "DotnetBuildEnvironmentManagerTestsLockAttributionLandingFixtures",
+    "reason": "Owns a GUID DotnetBuildStorageRoot via DotnetBuildEnvironmentManagerRootedTestBase; its separate collection protects process-local hooks."
+  },
+  {
+    "class": "DotnetBuildEnvironmentManagerTestsOwnedRunRootRegistration",
+    "reason": "Owns a GUID DotnetBuildStorageRoot via DotnetBuildEnvironmentManagerRootedTestBase; its separate collection protects process-local hooks."
+  },
+  {
+    "class": "DotnetBuildEnvironmentManagerTestsSlotsBusyLiveness",
+    "reason": "Owns a GUID DotnetBuildStorageRoot via DotnetBuildEnvironmentManagerRootedTestBase; its separate collection protects process-local hooks."
+  },
+  {
+    "class": "DotnetBuildEnvironmentManagerTestsStableSlotArtifacts",
+    "reason": "Owns a GUID DotnetBuildStorageRoot via DotnetBuildEnvironmentManagerRootedTestBase; its separate collection protects process-local hooks."
+  },
+  {
+    "class": "DotnetBuildEnvironmentManagerTestsWriteFailureScope",
+    "reason": "Owns a GUID DotnetBuildStorageRoot via DotnetBuildEnvironmentManagerRootedTestBase; its separate collection protects process-local hooks."
+  },
+  {
+    "class": "DotnetBuildEnvironmentManagerTestsStableSlotHolderLabel",
+    "reason": "Owns a GUID DotnetBuildStorageRoot via DotnetBuildEnvironmentManagerRootedTestBase; its separate collection protects process-local hooks."
+  },
+  {
+    "class": "DotnetBuildEnvironmentManagerTestsLeaseHeldJournal",
+    "reason": "Owns a GUID DotnetBuildStorageRoot via DotnetBuildEnvironmentManagerRootedTestBase; its separate collection protects process-local hooks."
+  },
+  {
+    "class": "DotnetBuildEnvironmentManagerTestsLeasePermitsStaleRecovery",
+    "reason": "Owns a GUID DotnetBuildStorageRoot via DotnetBuildEnvironmentManagerRootedTestBase; its separate collection protects process-local hooks."
+  },
+  {
+    "class": "DotnetBuildEnvironmentManagerTestsFocusedRunner",
+    "reason": "Owns explicit storage through the rooted base; child runners pin their own override or GUID LOCALAPPDATA fallback, not the host grid."
+  },
+  {
+    "class": "DotnetBuildEnvironmentManagerTestsProcessSpawnGuard",
+    "reason": "Owns a GUID DotnetBuildStorageRoot via DotnetBuildEnvironmentManagerRootedTestBase; its separate collection protects process-local hooks."
+  },
+  {
+    "class": "LocalProcessVerifierStaticHookTests",
+    "reason": "Owns a GUID DotnetBuildStorageRoot via DotnetBuildEnvironmentManagerRootedTestBase; its separate collection protects process-local hooks."
+  },
+  {
+    "class": "StructuralCoveragePermitWaitTests",
+    "reason": "Owns a GUID DotnetBuildStorageRoot via DotnetBuildEnvironmentManagerRootedTestBase; its separate collection protects process-local hooks."
+  },
+  {
+    "class": "ConductorBatchLoopTestsDecisionProgressLine",
+    "reason": "Formats decisions; no build or slot acquisition."
+  },
+  {
+    "class": "ConductorBatchLoopTestsAcceptanceReplayFingerprint",
+    "reason": "Uses in-memory kernels and JSON snapshot restores; no build or slot acquisition."
+  },
+  {
+    "class": "ConductorBatchLoopTestsAuthorAnswer",
+    "reason": "Exercises author policy with injected conductor actions; no real build."
+  },
+  {
+    "class": "ConductorBatchLoopTestsActivationHeartbeat",
+    "reason": "Uses fake conductor/heartbeat callbacks; no real build."
+  },
+  {
+    "class": "ConductorBatchLoopTestsActivationHeartbeatBeforeSleep",
+    "reason": "Uses fake sleep and heartbeat callbacks; no real build."
+  },
+  {
+    "class": "ConductorBatchLoopTestsActivationHeartbeatBeforeSleepOffTickCadence",
+    "reason": "Uses fake sleep and heartbeat callbacks; no real build."
+  },
+  {
+    "class": "ConductorBatchLoopTestsIdleActivationHeartbeat",
+    "reason": "Uses injected idle-loop callbacks; no real build."
+  },
+  {
+    "class": "ConductorBatchLoopTestsConsoleCodePageChange",
+    "reason": "Uses a GUID log root and injected conductor actions; no real build."
+  },
+  {
+    "class": "ConductorBatchLoopTestsPromptRolloutWatchLanding",
+    "reason": "Uses fake conductor/landing callbacks; no real build."
+  },
+  {
+    "class": "ConductorBatchLoopTestsParallelAcceptanceHoldOwner",
+    "reason": "Checks hold policy with fake acceptance actions; no real build."
+  },
+  {
+    "class": "ConductorBatchLoopTestsStewardCaseEClose",
+    "reason": "Checks steward policy with injected actions; no real build."
+  },
+  {
+    "class": "ConductorBatchLoopTestsStewardCaseDClose",
+    "reason": "Uses StewardCaseDHarness with GUID stores and injected actions; no real build."
+  },
+  {
+    "class": "ConductorBatchLoopTestsStewardCaseFRoute",
+    "reason": "Uses StewardCaseFHarness with GUID stores, a fake model, and injected driver actions; no real build or slot acquisition."
+  },
+  {
+    "class": "ConductorBatchLoopTestsStaleProcessReconcile",
+    "reason": "Uses fake process reconciliation and conductor actions; no real build."
+  },
+  {
+    "class": "ConductorBatchLoopTestsSpawnLaunchName",
+    "reason": "Checks dispatch metadata with injected launch actions; no real build."
+  },
+  {
+    "class": "ConductorBatchLoopTestsRetryReservationReadmit",
+    "reason": "Uses fake retry/dispatch actions; no real build."
+  },
+  {
+    "class": "ConductorBatchLoopTestsUnappliedExitStream",
+    "reason": "Uses fake exit-stream/conductor actions; no real build."
+  },
+  {
+    "class": "ConductorBatchLoopTestsMainSuspectRelease",
+    "reason": "Checks release policy with injected actions; no real build."
+  },
+  {
+    "class": "OperatorIntentAdjudicationTestsStewardCaseD",
+    "reason": "Uses StewardCaseDHarness with GUID stores and injected actions; no real build."
+  }
+]

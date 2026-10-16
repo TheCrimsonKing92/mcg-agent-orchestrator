@@ -167,6 +167,9 @@ internal sealed record ConductorParallelAcceptanceAttempt(
     public DateTimeOffset? OwnerProcessStartedAt { get; init; }
     public string? OwnerExecutablePath { get; init; }
     public int HolderContractVersion { get; init; }
+    // The candidate the durable holder lease and job were bound to at launch. Terminal persistence
+    // rewrites the heads to the integrated candidate, which must not change the lease identity.
+    public string? HolderCandidateKey { get; init; }
 
     public string CandidateKey => $"{GoalId}:{BranchHeadSha ?? "unknown-branch"}:{MainHeadSha ?? "unknown-main"}";
 }
@@ -2151,7 +2154,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             StateDirectory = _stateDirectory,
             ProjectName = _projectName,
             ReplayContextFingerprint = BuildReplayContextFingerprint(candidate.Goal),
-            HolderContractVersion = _usesDurableHolderLease ? 1 : 0
+            HolderContractVersion = _usesDurableHolderLease ? 1 : 0,
+            HolderCandidateKey = _usesDurableHolderLease ? candidate.CandidateKey : null
         };
     }
 

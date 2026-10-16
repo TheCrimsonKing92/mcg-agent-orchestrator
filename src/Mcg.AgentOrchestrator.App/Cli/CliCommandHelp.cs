@@ -780,6 +780,7 @@ internal static class CliCommandHelp
             ["goals-prune"] = Flags("--confirm-prune"),
             ["model-function-add"] = Flags("--subscription", "--subscription-model", "--subscription-reasoning"),
             ["task"] = GoalScopedTaskFlags(),
+            ["finding"] = GoalScopedTaskFlags(),
             ["verification-plan"] = GoalScopedTaskFlags(),
             ["brief"] = GoalScopedTaskFlags(),
             ["task-timeline"] = GoalScopedTaskFlags(),
@@ -1777,6 +1778,8 @@ internal static class CliCommandHelp
                     ? $"Usage: {command} [options] [--json]"
                     : command.Equals("goal-priority", StringComparison.OrdinalIgnoreCase)
                     ? CliGoalPriorityCommand.Usage
+                    : command.Equals("finding", StringComparison.OrdinalIgnoreCase)
+                    ? $"Usage: {CliFindingQueryCommand.Usage}"
                     : $"Usage: {command} [options]",
                 "Run this operator command.",
                 GenericCommandFlags.TryGetValue(command, out var flags) ? flags : CliCommandHelp.Flags(),

@@ -11,6 +11,8 @@
   -AcceptanceAttributionReplayInput accepts a bounded isolated-copy input only with the exact
   actual-copy replay filter documented in docs/negative-controls/b7ad094e-attribution-replay.md.
   Its structured result is retained beside passing TRX evidence.
+  -TestInput accepts explicit MCG_TEST_INPUT_NAME=value entries after the environment scrub;
+  only the supplied names are included in the run summary.
 
 .EXAMPLE
   .\scripts\Invoke-TestSummary.ps1
@@ -30,6 +32,7 @@ param(
     [string]$RunnerPath,
     [string]$DotnetPath = 'dotnet',
     [string]$AcceptanceAttributionReplayInput,
+    [string[]]$TestInput = @(),
     [switch]$AllowBreakaway,
     [ValidateRange(1, 86400)][int]$TestHostTimeoutSeconds = 780
 )
@@ -100,6 +103,7 @@ $run = Invoke-MtpTestRun `
     -RunnerPath $RunnerPath `
     -DotnetPath $DotnetPath `
     -AcceptanceAttributionReplayInput $AcceptanceAttributionReplayInput `
+    -TestInput $TestInput `
     -AllowBreakaway:$AllowBreakaway `
     -TestHostTimeoutSeconds $TestHostTimeoutSeconds
 Complete-MtpInvocation $run

@@ -99,10 +99,7 @@
       "Bash(git merge-base *)",
       "Bash(git merge goal/*)",
       "Bash(git merge main)",
-      "Bash(git -C .orchestrator-worktrees/* merge main)",
-      "Bash(git -C .orchestrator-worktrees/*)",
       "Bash(git worktree *)",
-      "Bash(rm -rf .orchestrator-worktrees/*)",
       "Bash(dotnet test*)",
       "Bash(dotnet build*)",
       "Bash(dotnet build-server *)",
@@ -191,6 +188,11 @@
       "PowerShell(.\\mcg-orchestrator.cmd recover *)",
       "PowerShell(.\\scripts\\Send-OperatorPage.ps1 *)",
       "PowerShell(./scripts/Send-OperatorPage.ps1 *)"
+    ],
+    "deny": [
+      "Bash(git diff *--output*)",
+      "Bash(git log *--output*)",
+      "Bash(git show *--output*)"
     ]
   }
 }
