@@ -65,7 +65,7 @@ public sealed class ConductorBatchLoopTestsTickCpuLedger(ITestOutputHelper outpu
         finally { Directory.Delete(root, true); }
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public void QuietTicksAppendEvenWhenNoSummaryIsEmitted()
     {

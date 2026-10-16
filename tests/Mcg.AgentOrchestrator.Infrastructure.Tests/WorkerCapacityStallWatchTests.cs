@@ -115,7 +115,7 @@ public sealed class WorkerCapacityStallWatchTests(ITestOutputHelper output)
         Assert.Empty(fixture.Events());
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public void Run_CapacityHeldTicks_EmitsOneStallAndResetsForNextRun()
     {

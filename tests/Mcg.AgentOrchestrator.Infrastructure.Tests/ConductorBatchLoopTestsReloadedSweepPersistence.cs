@@ -10,7 +10,7 @@ public sealed class ConductorBatchLoopTestsReloadedSweepPersistence : ConductorB
 
     public ConductorBatchLoopTestsReloadedSweepPersistence(ITestOutputHelper output) : base(output) { }
 
-    [Xunit.Fact(Timeout = 30000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public void ReloadedSweepCompletion_HeldAdvance_PersistsOnceAcrossTwoTicks()
     {
@@ -108,7 +108,7 @@ public sealed class ConductorBatchLoopTestsReloadedSweepPersistence : ConductorB
         Assert.Null(durable.LastProcess);
     }
 
-    [Xunit.Fact(Timeout = 30000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public void UnchangedHeldGoal_ThreeTicks_WritesNoTickSnapshot()
     {

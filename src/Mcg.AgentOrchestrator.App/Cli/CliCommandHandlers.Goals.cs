@@ -1559,6 +1559,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     conductEventLogWriter, signals: new(new WindowsForegroundLockReader(), TimeProvider.System,
                         new WindowsWorkerSandboxReader(),
                         new RepositoryIntegrityProbe(context.Workspace.ExecutionDirectory, new IcaclsIntegrityLabeler())));
+                var programHealthMonitor = ConductorProgramHealthMonitor.ForWorkspace(context.Workspace, conductEventLogWriter);
                 var maintenanceCadence = RunEventMaintenanceCadenceRunner.ForWorkspace(context.Workspace);
                 var remoteExecutorProbe = new ConductorRemoteExecutorProbe(
                     AcceptancePartitionVerdictCache.ResolveHostStateRoot(context.Workspace.ExecutionDirectory),
@@ -1735,6 +1736,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     ConductorTickStepLedger.Measure("state-log-check", () => stateLogCheck.OnTick());
                     ConductorTickStepLedger.Measure("failure-clusters", () => failureClustersDaily.OnTick());
                     ConductorTickStepLedger.Measure("host-health", () => hostHealthMonitor.Evaluate());
+                    ConductorTickStepLedger.Measure("program-health", () => programHealthMonitor.Evaluate(loopKernel.Goals.Select(goal => (goal.Id, goal.Status)).ToArray(), terminalSweepCache.ObservedMainSha));
                     ConductorTickStepLedger.Measure("remote-executor-probe", () => remoteExecutorProbe.Evaluate());
                     ConductorTickStepLedger.Measure("remote-git-mirror", () => RemoteGitMirror.TryStartBackgroundProcessing(loopKernel, context.Workspace.ExecutionDirectory, integrationBranch: context.Workspace.IntegrationBranch));
                     return terminalSweep;

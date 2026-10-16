@@ -4,7 +4,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 [Xunit.Collection("IsolatedProcessSpawning")]
 public sealed class AcceptanceSharedApparatusRealProcessControlTests
 {
-    [Fact(Timeout = 90_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task CorrelatedRootLoss_StopsRetriesAndPreservesCandidate()
     {
         if (!OperatingSystem.IsWindows())
@@ -198,7 +198,7 @@ public sealed class AcceptanceSharedApparatusRealProcessControlTests
         }
     }
 
-    [Fact(Timeout = 60_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task IsolatedRootLoss_RemainsCandidateFailure()
     {
         if (!OperatingSystem.IsWindows())

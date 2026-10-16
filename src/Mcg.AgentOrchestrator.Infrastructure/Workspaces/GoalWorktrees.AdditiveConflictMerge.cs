@@ -68,7 +68,7 @@ public static partial class GoalWorktrees
         return new(branch, main, outcome, reason);
     }
 
-    private static GoalWorktreeRebaseResult? TryMergeAdditiveConflict(
+    internal static GoalWorktreeRebaseResult? TryMergeAdditiveConflict(
         string worktreePath, string branch, string baseBranch, GoalId goalId, string integratedMain,
         string[] rebaseConflictFiles, AdditiveConflictMergeOptions options)
     {

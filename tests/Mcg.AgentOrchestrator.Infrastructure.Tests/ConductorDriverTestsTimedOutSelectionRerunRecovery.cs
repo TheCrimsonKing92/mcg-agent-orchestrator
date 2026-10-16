@@ -81,7 +81,7 @@ public sealed class ConductorDriverTestsTimedOutSelectionRerunRecovery
         Assert.Empty(scenario.Escalations);
     }
 
-    [Theory(Timeout = 30000)]
+    [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     [InlineData(nameof(ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot))]
     [InlineData(nameof(ConductorParallelAcceptanceAttemptOutcome.StructuralCoveragePermitUnavailable))]

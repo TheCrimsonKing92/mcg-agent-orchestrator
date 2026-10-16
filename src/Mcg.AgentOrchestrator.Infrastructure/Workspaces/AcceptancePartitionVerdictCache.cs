@@ -574,6 +574,7 @@ internal sealed partial class AcceptancePartitionVerdictCache
 
         PartitionWithinAttemptRetryReceipt completedReceipt;
         AcceptanceCheckResult verdict;
+        bool rerunPass;
         lock (_gate)
         {
             var retryIndex = _retries.FindLastIndex(receipt =>
@@ -606,7 +607,8 @@ internal sealed partial class AcceptancePartitionVerdictCache
                     _sharedApparatusInvalidation,
                     partitionId);
             }
-            if (IsWithinAttemptRerunPass(firstRun, decision, probe))
+            rerunPass = IsWithinAttemptRerunPass(firstRun, decision, probe);
+            if (rerunPass)
             {
                 verdict = verdict with
                 {
@@ -619,13 +621,20 @@ internal sealed partial class AcceptancePartitionVerdictCache
                         probe.TestResultPaths!)
                 };
             }
+            else if (AcceptanceTimedOutProbeEvidence.TryBuild(partitionId, firstRun, probe,
+                completedReceipt.OriginalInvocationId, completedReceipt.RetryInvocationId) is { } timedOutEvidence)
+            {
+                verdict = verdict with { WithinAttemptRerun = timedOutEvidence };
+            }
         }
 
         var detail =
             $"partition_id={partitionId} predicate={decision.FailedPredicate} verdict_source=first_run " +
             $"probe_ran=true flake_confirmed={probe.Passed.ToString().ToLowerInvariant()}" +
-            (verdict.WithinAttemptRerun is null ? string.Empty :
-                $" apparatus_reason={AcceptanceWithinAttemptRerunEvidence.Reason}");
+            (rerunPass ? $" apparatus_reason={AcceptanceWithinAttemptRerunEvidence.Reason}" : string.Empty) +
+            (verdict.WithinAttemptRerun is { FailedPredicate: AcceptanceShardCompletionPredicates.TimedOut } evidence
+                ? $" first_trx=none rerun_trx_recorded=true rerun_passed={evidence.RerunPassed.ToString().ToLowerInvariant()}"
+                : string.Empty);
         AppendPartitionVerdictJournalEntries(
             JournalPath,
             [new PartitionVerdictJournalEntry(

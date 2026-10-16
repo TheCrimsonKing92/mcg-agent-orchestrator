@@ -6,7 +6,7 @@ using System.Text.Json;
 public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSharedApparatusInvalidation
     : GoalAcceptanceVerifierDotnetBuildSlotTests
 {
-    [Xunit.Fact(Timeout = 60_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task CorrelatedLoss_CancelsInFlightShardAndStopsPendingShards()
     {
         TestOverrides.ResolveShardCoreBudgetForTests = () => 2;
@@ -143,7 +143,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSharedApparatusInv
         }
     }
 
-    [Xunit.Fact(Timeout = 60_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task CorrelatedLoss_SequentialBatchStopsPendingShards()
     {
         TestOverrides.ResolveShardCoreBudgetForTests = () => 1;
@@ -253,7 +253,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSharedApparatusInv
         }
     }
 
-    [Xunit.Fact(DisplayName = "RunProcessAsync Windows shell carries MTP test-host identity", Timeout = 60_000)]
+    [Xunit.Fact(DisplayName = "RunProcessAsync Windows shell carries MTP test-host identity", Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task RunProcessAsync_WindowsShellCarriesMtpTestHostIdentity()
     {
         if (!OperatingSystem.IsWindows())

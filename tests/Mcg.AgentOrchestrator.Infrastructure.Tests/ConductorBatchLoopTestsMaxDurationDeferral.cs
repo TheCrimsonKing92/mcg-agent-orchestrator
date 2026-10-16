@@ -7,7 +7,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class ConductorBatchLoopTestsMaxDurationDeferral(ITestOutputHelper output)
     : ConductorBatchLoopTests(output)
 {
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task MaxDurationBoundary_WithInFlightAttempt_DefersUntilOutcomeAndSuppressesNewWork()
     {
         var time = new ManualConductorTimeProviderForTests(
@@ -89,7 +89,7 @@ public sealed class ConductorBatchLoopTestsMaxDurationDeferral(ITestOutputHelper
         }
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task MaxDurationDeferral_FailedTerminalAttempt_DoesNotStartSerialAcceptanceRetry()
     {
         var time = new ManualConductorTimeProviderForTests(
@@ -158,7 +158,7 @@ public sealed class ConductorBatchLoopTestsMaxDurationDeferral(ITestOutputHelper
         }
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task MaxDurationBoundary_WhenAcceptanceSnapshotIsUnreadable_DefersInsteadOfStopping()
     {
         var time = new ManualConductorTimeProviderForTests(
@@ -229,7 +229,7 @@ public sealed class ConductorBatchLoopTestsMaxDurationDeferral(ITestOutputHelper
         }
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public void MaxDurationBoundary_WithoutInFlightAttempt_StopsWithoutDeferral()
     {
         var (kernel, _) = SimpleGoal();
@@ -249,7 +249,7 @@ public sealed class ConductorBatchLoopTestsMaxDurationDeferral(ITestOutputHelper
         Assert.Contains("LOOP_STOP ", outputText, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task MaxDurationDeferral_CeilingExpires_StopsAndNamesAttempt()
     {
         var time = new ManualConductorTimeProviderForTests(

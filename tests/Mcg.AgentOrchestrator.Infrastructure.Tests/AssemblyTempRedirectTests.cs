@@ -100,7 +100,7 @@ public sealed class AssemblyTempRedirectTests
         Assert.Contains("Refusing unsafe MTP probe launch", exception.Message, StringComparison.Ordinal);
     }
 
-    [Fact(Timeout = 60_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task SingleTestHostUsesDerivedRootAndWritesOwnershipReceipt()
     {
         if (!OperatingSystem.IsWindows())
@@ -176,7 +176,7 @@ public sealed class AssemblyTempRedirectTests
         }
     }
 
-    [Fact(Timeout = 60_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task FailedTestHostStillCompletesAssemblyFixtureCleanup()
     {
         if (!OperatingSystem.IsWindows())
@@ -240,7 +240,7 @@ public sealed class AssemblyTempRedirectTests
         }
     }
 
-    [Fact(Timeout = 60_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task KilledHostRootIsRemovedThroughSupervisorCleanupSeam()
     {
         if (!OperatingSystem.IsWindows())
@@ -304,7 +304,7 @@ public sealed class AssemblyTempRedirectTests
         }
     }
 
-    [Fact(Timeout = 60_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task ConcurrentTestHostsReceiveDistinctTempRoots()
     {
         if (!OperatingSystem.IsWindows())

@@ -101,7 +101,7 @@ public sealed class ConductorBatchLoopTestsFallbackAcceptance : ConductorBatchLo
         }
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public void FallbackGate_InFlight_AllowsNextTickReap()
     {
@@ -210,7 +210,7 @@ public sealed class ConductorBatchLoopTestsFallbackAcceptance : ConductorBatchLo
         }
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public void FallbackGate_CompletedAttempt_LandsExactlyOnce()
     {

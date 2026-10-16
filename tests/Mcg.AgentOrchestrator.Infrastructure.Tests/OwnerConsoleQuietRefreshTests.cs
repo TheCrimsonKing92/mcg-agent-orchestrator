@@ -4,7 +4,7 @@ public sealed class OwnerConsoleQuietRefreshTests
     private const string Prefix = "[00:05:00] ";
     private static TaskCompletionSource Signal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task TenSlowRefreshes_NeverPrintBusy()
     {
         var harness = new OwnerConsoleLoopTestHarness();
@@ -41,7 +41,7 @@ public sealed class OwnerConsoleQuietRefreshTests
         Assert.Empty(harness.Output.Lines);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task TimeoutAndFurtherFailures_ReportOnceThenRecoverAndRearm()
     {
         var harness = new OwnerConsoleLoopTestHarness();
@@ -91,7 +91,7 @@ public sealed class OwnerConsoleQuietRefreshTests
         }, harness.Output.Lines);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task LateSuccessfulRefresh_RecoversOnlyOnce()
     {
         var harness = new OwnerConsoleLoopTestHarness();
@@ -114,7 +114,7 @@ public sealed class OwnerConsoleQuietRefreshTests
             harness.Output.Lines);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task SlowTypedCommand_StillPrintsBusyOnce()
     {
         var harness = new OwnerConsoleLoopTestHarness();
