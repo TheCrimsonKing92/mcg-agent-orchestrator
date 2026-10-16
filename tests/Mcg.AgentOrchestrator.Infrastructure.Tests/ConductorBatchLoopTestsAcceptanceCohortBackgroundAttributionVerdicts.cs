@@ -12,7 +12,7 @@ public sealed class ConductorBatchLoopTestsAcceptanceCohortBackgroundAttribution
 {
     private const string FailingTest = "Tests.BackgroundAttributedFailure";
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public void ChildPublishedFailure_ConsumingTickRoutesAndExcludesGuiltyMember()
     {
