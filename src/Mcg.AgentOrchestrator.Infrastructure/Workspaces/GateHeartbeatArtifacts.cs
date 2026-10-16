@@ -21,7 +21,13 @@ public sealed record AcceptanceGateProgress(
     long OutputBytes,
     string HeartbeatPath,
     GateLoadContext? LoadContext = null,
-    AcceptanceGatePhaseBreakdown? PhaseBreakdown = null);
+    AcceptanceGatePhaseBreakdown? PhaseBreakdown = null,
+    string? Outcome = null,
+    int FailedTestCount = 0)
+{
+    public string ShardOutcomeTokens => Phase == "shard-complete"
+        ? $" outcome={Outcome ?? "unknown"} failed={FailedTestCount}" : string.Empty;
+}
 
 public sealed record GateHeartbeatSnapshot(
     string? GoalId,

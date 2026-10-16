@@ -98,6 +98,7 @@ internal static class CliCommandHelp
     public const string OwnerDigestUsage = "Usage: owner-digest [--since <ISO-8601-with-offset>] [--until <ISO-8601-with-offset>] [--json] [--rounds]";
     public const string FailureClustersUsage = "Usage: failure-clusters [--since <ISO-8601>] [--until <ISO-8601>] [--top <n>] [--json]";
     public const string LaneReuseShadowUsage = "Usage: lane-reuse-shadow [--since <ISO-8601>] [--until <ISO-8601>] [--json]";
+    public const string BuildAttributionUsage = "Usage: build-attribution [--since <ISO-8601>] [--until <ISO-8601>] [--json]";
     public const string IntentCoverageUsage = "Usage: intent-coverage [--since <ISO-8601>] [--until <ISO-8601>] [--min-cases <n>] [--json]";
     public const string RemoteExecutorsUsage = "Usage: remote-executors [--since <ISO-8601>] [--last <N>] [--json]";
     public const string RemoteLaneSelfTestUsage = "Usage: remote-lane-selftest --executor <id> [--timeout-minutes <n>]";
@@ -650,6 +651,10 @@ internal static class CliCommandHelp
         "Report shadow lane reuse, hypothetical serial savings and misses; default window is 7 days.",
         ["--since", "--until", "--json", "--help", "-h"]);
 
+    private static readonly CommandHelpEntry BuildAttribution = new(
+        BuildAttributionUsage,
+        "Report build-slot consumer shares and duplicate compiles per tree; default window is 24 hours.",
+        ["--since", "--until", "--json", "--help", "-h"]);
     private static readonly CommandHelpEntry IntentCoverage = new(
         IntentCoverageUsage,
         "Score recorded human intents against typed Steward and Author coverage; default window is 7 days.",
@@ -1196,6 +1201,11 @@ internal static class CliCommandHelp
         if (args[0].Equals("failure-clusters", StringComparison.OrdinalIgnoreCase))
         {
             entry = FailureClusters;
+            return true;
+        }
+        if (args[0].Equals("build-attribution", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = BuildAttribution;
             return true;
         }
         if (args[0].Equals("lane-reuse-shadow", StringComparison.OrdinalIgnoreCase))

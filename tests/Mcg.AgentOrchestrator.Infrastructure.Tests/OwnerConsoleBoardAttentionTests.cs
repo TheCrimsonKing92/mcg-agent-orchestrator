@@ -7,6 +7,40 @@ using Terminal.Gui.Views;
 public sealed class OwnerConsoleBoardAttentionTests
 {
     [Fact]
+    public async Task VerifiedCohortMembersShowProgressAndDoNotConsumeQueuePositions()
+    {
+        var harness = new OwnerConsoleHarness();
+        var clock = new OwnerConsoleTestClock();
+        foreach (var id in new[] { "11111111", "22222222", "33333333", "44444444" })
+            harness.AddGoal(id, "Gate fixture", AgentRole.Developer);
+        var snapshot = harness.Kernel.ExportSnapshot();
+        harness.Kernel.ReplaceWithSnapshot(snapshot with
+        {
+            Goals = snapshot.Goals.Select(goal => goal with
+            {
+                Status = GoalStatus.Verified,
+                Timeline = [new(goal.Id, null, ProgressKind.GoalPolicyDecision, "fixture", clock.Now.AddMinutes(-1))],
+                Tasks = goal.Tasks.Select(task => task with { Status = WorkTaskStatus.Completed }).ToArray()
+            }).ToArray()
+        });
+        var gate = new OwnerConsoleGateProgress(true, "cohort", [new("11111111", "First"), new("33333333", "Third")],
+            clock.Now.AddMinutes(-20), TimeSpan.FromMinutes(20), [], .7, 360, 24, 33);
+        var model = await new OwnerConsoleViewModelBuilder(harness.State, harness.Questions, harness.Liveness,
+            new GateFixtureEpics(), clock, gateProgress: _ => gate).BuildBoardAsync();
+
+        Assert.Equal("in gate: 24/33, ~6m left", model.Board.Single(row => row.GoalId == "11111111").Stage);
+        Assert.Equal("in gate: 24/33, ~6m left", model.Board.Single(row => row.GoalId == "33333333").Stage);
+        var queued = model.Board.Where(row => row.GoalId is "22222222" or "44444444").ToArray();
+        Assert.Equal(["queued for gate #1, behind 11111111", "queued for gate #2, behind 11111111"], queued.Select(row => row.Stage));
+        Assert.All(queued, row => Assert.DoesNotContain("gate running", row.Stage));
+    }
+
+    private sealed class GateFixtureEpics : IOwnerGoalEpicLookup
+    {
+        public Task<string> GetTitleAsync(string id, CancellationToken token) => Task.FromResult("");
+    }
+
+    [Fact]
     public async Task BoardOrdersFiveGoalsByAttentionAndNamesEachReason()
     {
         var harness = new OwnerConsoleHarness();

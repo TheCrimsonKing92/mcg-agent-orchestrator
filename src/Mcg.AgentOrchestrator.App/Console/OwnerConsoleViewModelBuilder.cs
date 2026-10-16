@@ -8,7 +8,8 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries state,
     IOwnerQuestionSource questions, IConductorLiveness liveness, IOwnerGoalEpicLookup epics, TimeProvider clock,
     Func<OwnerConductEvent, OwnerActivityTestEvidence?>? testEvidence = null, Func<string, string?>? gateMotion = null,
-    Func<DateTimeOffset?>? latestTick = null)
+    Func<DateTimeOffset?>? latestTick = null,
+    Func<IReadOnlyDictionary<string, string>, OwnerConsoleGateProgress?>? gateProgress = null)
 {
     internal const int MaxActivityItems = 100;
     private readonly Dictionary<string, int> _numbers = new(StringComparer.OrdinalIgnoreCase);
@@ -54,6 +55,9 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
         var metadata = await state.ListGoalMetadataAsync(cancellationToken);
         _metadata = metadata;
         var now = clock.GetUtcNow();
+        OwnerConsoleGateProgress? gate = null;
+        try { gate = gateProgress?.Invoke(metadata.ToDictionary(item => item.Id, item => OwnerGoalTitle.Full(item.Objective))); }
+        catch { /* A failed observation must not block the board refresh. */ }
         var ids = metadata.Where(item => Enum.TryParse<GoalStatus>(item.Status, true, out var status) &&
                 (IsActive(status) || status is GoalStatus.Failed or GoalStatus.Parked &&
                     (!DateTimeOffset.TryParse(item.UpdatedAt, out var updated) || now - updated <= TimeSpan.FromHours(24))))
@@ -88,8 +92,9 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
             foreach (var (goal, key) in ranked)
             {
                 var stage = OwnerConsoleStageDescriber.Describe(goal, key,
-                    key.Rank == OwnerConsoleAttention.WaitingForGate ? ++queuePosition : null, now);
-                if (key.Rank == OwnerConsoleAttention.GateRunning && gateMotion?.Invoke(goal.Id.Value) is { } motion &&
+                    key.Rank == OwnerConsoleAttention.WaitingForGate && gate?.ForMember(goal.Id.Value) is null ? ++queuePosition : null, now, gate);
+                if (key.Rank == OwnerConsoleAttention.GateRunning && (gate is null || gate.ForMember(goal.Id.Value) is not null) &&
+                    gateMotion?.Invoke(goal.Id.Value) is { } motion &&
                     !string.IsNullOrWhiteSpace(motion)) stage += ", " + motion;
                 board.Add(new(Prefix(goal.Id.Value), await epics.GetTitleAsync(goal.Id.Value, cancellationToken),
                     OwnerGoalTitle.Full(goal.Objective), goal.Status.ToString(), stage,
@@ -101,7 +106,7 @@ internal sealed class OwnerConsoleViewModelBuilder(IOrchestratorStateQueries sta
         try { tick = latestTick?.Invoke(); }
         catch { /* An unavailable tick must not prevent status refresh or produce a stale alarm. */ }
         return new(new(liveness.IsRunning(), board.Count(row => !row.Dimmed), 0, 0, null, 0,
-            board.Count(row => row.Dimmed && row.State == nameof(GoalStatus.Failed)), tick), [], board.ToImmutable(), []);
+            board.Count(row => row.Dimmed && row.State == nameof(GoalStatus.Failed)), tick), [], board.ToImmutable(), [], Gate: gate);
     }
 
     internal OwnerConsoleViewModel WithDecisions(OwnerConsoleViewModel model,

@@ -13,6 +13,7 @@ internal static class CliCommandCapabilities
         "tasks", "task", "status", "goals", "monitor-goal",
         "failure-clusters",
         "lane-reuse-shadow",
+        "build-attribution",
         "intent-coverage",
         "remote-executors",
         "round-value",
