@@ -776,7 +776,6 @@ internal static class CliCommandHelp
             ["operator-inbox-ack"] = Flags("--goal"),
             ["operator-channel"] = Flags(
                 "--forum-channel-id", "--operator-user-id", "--operator-user-ids", "--spine"),
-            ["operator-control-plane"] = Flags("--hours"),
             ["next"] = Flags("--autonomy", "--autonomy-policy", "--full"),
             ["advance-subscription"] = Flags(
                 "--autonomy", "--autonomy-policy", "--confirm-large-paid-subscription-start",

@@ -103,7 +103,6 @@ internal static IReadOnlyList<string> RecognizedCommands { get; } =
     "operator-inbox-ack",
     "operator-intent-status",
     "operator-listen",
-    "operator-control-plane",
     "operator-commands",
     "goal-diagnostics",
     "next",
