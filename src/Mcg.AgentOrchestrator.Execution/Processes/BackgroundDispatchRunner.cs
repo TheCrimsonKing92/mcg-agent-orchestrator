@@ -1244,6 +1244,13 @@ public sealed partial class BackgroundDispatchRunner
             ? null
             : dispatchAttempt.DispatchedAt;
         var providerUsage = ResolveDispatchProviderUsage(dispatchAttempt, processRecord.StandardOutputPath);
+        if (task.RequiredRole == AgentRole.Tester && DispatchFailureClassifier.IsSubscriptionProviderCliDispatch(task))
+        {
+            WorkerResultSubmissionIngestion.TryIngest(processRecord.WorkingDirectory, goalId, task,
+                dispatchAttempt!.DispatchedAt, processRecord.StandardOutputPath, out var submissionDiagnostic);
+            if (!string.IsNullOrEmpty(submissionDiagnostic))
+                standardErrorDiagnostic = AppendDiagnostic(standardErrorDiagnostic ?? string.Empty, submissionDiagnostic);
+        }
         var outputSnapshot = _processLogReader.ReadBestEffort(processRecord, processRecord.StandardOutputPath);
         var errorSnapshot = _processLogReader.ReadBestEffort(processRecord, processRecord.StandardErrorPath);
         var decisionStandardOutput = outputSnapshot.DecisionText;

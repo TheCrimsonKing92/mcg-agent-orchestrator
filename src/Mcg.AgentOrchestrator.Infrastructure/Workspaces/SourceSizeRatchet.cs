@@ -246,7 +246,8 @@ internal static class SourceSizeRatchet
             // operation lifecycle/custody stays in CompletionBuildEvidenceCoordinator. Measured 2728; no headroom.
             // Goal ffa0471e extracts historical/current completion-build policy to its owning collaborator.
             // Integrated build-scope extraction and task-intent admission: measured 2736, no headroom.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Processes/BackgroundDispatchRunner.cs", 2736),
+            // Goal e7c4bc06 adds Tester submission ingestion: measured 2743, no headroom.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Execution/Processes/BackgroundDispatchRunner.cs", 2743),
             // Goal 5a75fed0 extracted typed projection parsing and literal restoration into
             // WorkerContextProjectionResidual, leaving the dispatcher to sequence package assembly.
             // Goal fd252fe4 adds retry fingerprints for the resolved provider, model, paid route, and
@@ -634,7 +635,8 @@ internal static class SourceSizeRatchet
     internal static IReadOnlyDictionary<string, (int TotalLines, int PartialFiles)> MeasureClasses(
         string repositoryRoot, IEnumerable<string> classNames, out List<SourceSizeViolation> violations,
         Func<string, IEnumerable<string>>? readLines = null,
-        Func<string, IEnumerable<string>>? enumerateSourceFiles = null)
+        Func<string, IEnumerable<string>>? enumerateSourceFiles = null,
+        IDictionary<string, List<string>>? partialFiles = null)
     {
         var names = classNames.Distinct(StringComparer.Ordinal).ToArray();
         violations = [];
@@ -677,6 +679,12 @@ internal static class SourceSizeRatchet
                         {
                             totals[index] += lines.Length;
                             counts[index]++;
+                            if (partialFiles is not null)
+                            {
+                                if (!partialFiles.TryGetValue(names[index], out var paths))
+                                    partialFiles[names[index]] = paths = [];
+                                paths.Add(relativePath);
+                            }
                         }
                     }
                 }
