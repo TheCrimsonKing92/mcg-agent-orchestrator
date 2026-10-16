@@ -13,7 +13,6 @@ internal static class RepositoryLayoutConventions
         {
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/AssemblyInfo.cs",
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/AssemblyTempRedirectTests.cs",
-            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTests.GoalBoard.cs",
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTests.GoalLifecycleCommands.cs",
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Fixtures/RealProcessShardProbe/ShardProbeTests.cs",
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs",
@@ -31,7 +30,6 @@ internal static class RepositoryLayoutConventions
         {
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/CliCommandTests.AddTaskCommands.cs",
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTests.AttentionCommands.cs",
-            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTests.GoalBoard.cs",
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTests.GoalLifecycleCommands.cs",
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTests.HumanInputSupersede.cs",
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTests.SubscriptionDispatchCommands.cs",
