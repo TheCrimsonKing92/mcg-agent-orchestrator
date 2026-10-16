@@ -18,13 +18,13 @@ public sealed class ConductorBatchLoopTestsTrainReceiptRevalidation : Acceptance
         AdvanceMain(fixture, RacingPath, "// racing landing");
         OccupyAcceptance(fixture);
         var current = RunGitOutput(fixture.Repo, "rev-parse", "main").Trim();
-        var first = RunTick(fixture);
+        RunTick(fixture);
 
-        var revalidate = Assert.Single((first.ProgressLines ?? []).Where(line => line.StartsWith("TRAIN_RECEIPT_REVALIDATE ", StringComparison.Ordinal)));
+        // Receipt diagnostics go directly to the conduct log, outside the tick summary accumulator.
+        var conductLines = ConductDetails(fixture);
+        var revalidate = Assert.Single(conductLines.Where(line => line.StartsWith("TRAIN_RECEIPT_REVALIDATE ", StringComparison.Ordinal)));
         Assert.Contains($"receipt={fixture.Source.ReceiptId}", revalidate);
         Assert.Contains($"sourceMain={fixture.Source.Identity.ObservedMainRevision} currentMain={current}", revalidate);
-        var conductLines = File.ReadAllLines(fixture.LogPath);
-        Assert.Single(conductLines.Where(line => line.Contains("TRAIN_RECEIPT_REVALIDATE ", StringComparison.Ordinal)));
         Assert.DoesNotContain(conductLines, line => line.Contains("TRAIN_RECEIPT_STALE", StringComparison.Ordinal));
         Assert.All(fixture.Goals, goal =>
         {
@@ -68,11 +68,12 @@ public sealed class ConductorBatchLoopTestsTrainReceiptRevalidation : Acceptance
         AdvanceMain(fixture, FirstPath, "first candidate");
         OccupyAcceptance(fixture);
         _ = Selection(fixture.Driver, fixture.Goals); // Both projections must stay Ready.
-        var tick = RunTick(fixture);
+        RunTick(fixture);
 
+        var conductLines = ConductDetails(fixture);
         Assert.Equal($"TRAIN_RECEIPT_STALE tick=1 train={fixture.Source.Identity.Value} receipt={fixture.Source.ReceiptId} moved=main",
-            Assert.Single((tick.ProgressLines ?? []).Where(line => line.StartsWith("TRAIN_RECEIPT_STALE ", StringComparison.Ordinal))));
-        Assert.DoesNotContain(File.ReadAllLines(fixture.LogPath), line => line.Contains("TRAIN_RECEIPT_REVALIDATE", StringComparison.Ordinal));
+            Assert.Single(conductLines.Where(line => line.StartsWith("TRAIN_RECEIPT_STALE ", StringComparison.Ordinal))));
+        Assert.DoesNotContain(conductLines, line => line.Contains("TRAIN_RECEIPT_REVALIDATE", StringComparison.Ordinal));
         Assert.All(fixture.Goals, goal =>
         {
             var receipt = Assert.Single(Receipts(fixture, goal));
@@ -210,6 +211,13 @@ public sealed class ConductorBatchLoopTestsTrainReceiptRevalidation : Acceptance
             Path.Combine(fixture.Repo, "stop-does-not-exist"), maxIterations: 1, onTick: summary => observed = summary);
         return Assert.IsType<BatchTickSummary>(observed);
     }
+
+    private static string[] ConductDetails(Fixture fixture) =>
+        File.ReadAllLines(fixture.LogPath).Select(line =>
+        {
+            using var document = System.Text.Json.JsonDocument.Parse(line);
+            return document.RootElement.GetProperty("detail").GetString()!;
+        }).ToArray();
 
     private static AcceptanceRevalidationReceipt[] Receipts(Fixture fixture, Goal goal) =>
         GoalOperationJournal.Read(fixture.Repo, goal.Id).Entries.Where(entry => entry.Operation == AcceptanceRevalidationReceipt.Operation)
