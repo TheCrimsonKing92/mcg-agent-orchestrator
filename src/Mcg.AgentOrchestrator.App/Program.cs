@@ -313,6 +313,7 @@ if (ConductorContinuitySupervisor.ShouldSupervise(
             new SystemConductorSupervisorProcessHost(),
             new SqliteRunEventStore(workspace.RunEventStorePath),
             inspectStores: () => StoreSetupRunner.Plan(workspace.OrchestratorDirectory, includeState: true),
+            stopFilePath: workspace.ConductorStopFilePath,
             stageSuccessor: stageSuccessor,
             stageSuccessorWithHook: stageSuccessorWithHook,
             schemaUpgrade: new ConductorHandoffSchemaUpgrade(
