@@ -885,7 +885,7 @@ orphan shards), retain that evidence in the goal artifacts and run
 `scripts/Confirm-LegacyAcceptanceHolderSettlement.ps1 -MetadataPath <canonical-attempt.json> -EvidencePath <durable-evidence-file> -ConfirmEntireTreeSettled`.
 The switch is an explicit operator attestation of whole-tree exit; the command does not infer it
 from PID death. It refuses a live/uninspectable recorded holder and publishes a receipt bound to
-attempt, candidate, slot, launch time and recorded PID/start/image. Admission revalidates that
+attempt, candidate, slot, launch time and recorded PID/start/image. The script also accepts settlement when all recorded holder activity predates the host boot (overridable with `-HostBootTime`). Without that proof, a live PID whose start time cannot be read is refused with `holder PID is owned by a process whose start time cannot be read`. Admission revalidates that
 receipt and holder absence/reuse, then terminalizes metadata before releasing capacity; retention
 uses the same proof. A pending published result remains reserved until its normal verdict mapper
 publishes terminal metadata. An unrelated recycled PID is never killed. Missing/malformed receipts
