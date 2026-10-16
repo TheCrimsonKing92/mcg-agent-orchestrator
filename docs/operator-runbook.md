@@ -319,7 +319,7 @@ Keep one persistent listener when the harness can stream it. If the harness buff
 
 Incident history lives in `docs/incidents/`; use it when a symptom needs narrative context beyond the current transactional records.
 
-Judge worker progress by **worktree file changes**, not stdout bytes: `git -C .orchestrator-worktrees/<prefix> status --short` and `git -C .orchestrator-worktrees/<prefix> log --oneline main..HEAD`.
+Judge worker progress by **worktree file changes**, not stdout bytes: `cd .orchestrator-worktrees/<prefix> && git status --short` and, from the main checkout, `git log --oneline main..goal/<prefix>`. Avoid `git -C <worktree> ...`: a permission rule for it must put the wildcard before the subcommand, which also approves `-c` options that run arbitrary commands.
 
 For focused goal inspection, prefer the repo helpers over broad `.orchestrator` reads:
 
@@ -394,7 +394,7 @@ Known direct-command limitation: [acceptance](cli-reference.md#acceptance-and-ga
 | A task stays `[Failed]` / `[Running]` after the real dispatch round is dead, or a retry is blocked by stale task state | The task row is pinned even though the worker round has no useful forward path. | Confirm with `scripts\Get-GoalDispatchInventory.ps1 <goal>` and `scripts\Get-GoalTaskSummary.ps1 <goal>`, then requeue only that task: `.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorSqliteTool.ps1 requeue-task --task-number <n> --note "<why>" <goal>`. |
 | `Get-GoalDispatchInventory.ps1` shows a `dispatch.json` generation with **no heartbeat and no exit** | Dispatch prep failed before the worker process started; the worker never ran, so waiting will not produce output. | Stop the loop cleanly, retire the dead dispatch artifacts, requeue the task with `requeue-task`, then relaunch the conductor. |
 | Goal in `Failed` lifecycle but the work is committed in the worktree | A stage process was orphaned (e.g. a loop crash). The commit is safe. | `recover <goal> --text-file <path>`, then re-run the loop so the conductor reconciles and lands it. |
-| Worker exits 0, worktree has uncommitted changes, and logs say `index.lock: Permission denied` under `.git\worktrees\<goal>` | Low-integrity worker could edit files but could not write git metadata, so conductor commit-on-behalf did not complete. | Inspect the diff, run focused tests, then from a normal-integrity operator shell run the `git -C .orchestrator-worktrees/<goal> add ...` and `git -C .orchestrator-worktrees/<goal> commit -m "<message>"` steps as separate commands; use `.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-Git.ps1 ...` if direct git prompts. Submit `adjudicate --goal <goal> <task> close --text-file <explanation-path> --evidence trx:<test-receipt-path>`, confirm it applied, then re-run the conductor. |
+| Worker exits 0, worktree has uncommitted changes, and logs say `index.lock: Permission denied` under `.git\worktrees\<goal>` | Low-integrity worker could edit files but could not write git metadata, so conductor commit-on-behalf did not complete. | Inspect the diff, run focused tests, then from a normal-integrity operator shell change into `.orchestrator-worktrees/<goal>` and run `git add ...` and `git commit -m "<message>"` there as separate commands; use `.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-Git.ps1 ...` if direct git prompts. Submit `adjudicate --goal <goal> <task> close --text-file <explanation-path> --evidence trx:<test-receipt-path>`, confirm it applied, then re-run the conductor. |
 | Codex task fails with `exec error: Access is denied. (os error 5)` and stderr names `C:\Program Files\WindowsApps\...\pwsh.exe`, or fails immediately with `unexpected argument '<word>' found` after falling back to Windows PowerShell | Codex can run under same-user Low IL, but WindowsApps/package PowerShell activation can fail; Windows PowerShell 5.1 can also split `(Get-Content -Raw prompt)` into multiple native arguments. | Treat this as a launcher regression, not proof that Low IL is unusable. Verify `WorkerShell` pins a real PowerShell 7 host, preferring `%LOCALAPPDATA%\Programs\PowerShell\7\pwsh.exe`; extract/install a real filesystem `pwsh.exe` there if only the Store alias exists. Verify `DispatchProcessHost` removes WindowsApps from Low-IL `PATH`, then rerun focused `WorkerShellTests` / `DispatchProcessHostTests` before falling back to another Developer provider. |
 | Low-IL dispatch shows no stdout/stderr files and no heartbeat for minutes, while process inspection shows `icacls ... /setintegritylevel ... /T` under `__dispatch-run` | The sandbox is still applying Mandatory Integrity labels before the worker launch. Older builds redirected `icacls` output without draining it, causing pipe backpressure, 120s startup timeouts, orphaned `icacls`, and duplicate retries; a completed `icacls` can also return nonzero on a previously used worktree. | Stop the loop with `.conduct-stop`, then stop only the exact orphan dispatch PIDs if the task was already retried. Verify `DispatchProcessHost.SetLowIntegrity` drains `icacls`, kills it on timeout, treats completed nonzero exits as non-fatal, and emits a `preparing-sandbox` heartbeat before restarting the conductor. |
 | Goal genuinely dead / wrong, can't proceed | — | `abandon-goal <goal> --text-file <path> --confirm-goal-abandon` (remove its worktree first if a Low-IL `.mcg-sandbox` orphan blocks it). |
@@ -476,7 +476,7 @@ diagnostic includes the commit-worthy paths that prevented dispatch. Confirm it 
 worktree before changing policy or providers:
 
 ```powershell
-git -C .orchestrator-worktrees/<goal-prefix> status --short --untracked-files=all
+cd .orchestrator-worktrees/<goal-prefix> && git status --short --untracked-files=all
 ```
 
 Preserve real work. Remove only a confirmed disposable artifact; never broadly clean, stash, or
@@ -655,8 +655,8 @@ When every dirty path is a tracked regular file with a clean index, effective `-
 Security-risk and build-system goals may intentionally stop at the landing gate even after acceptance passes. When the escalation is only "review before landing", land out-of-band from the repository root on the main checkout and record it:
 
 ```powershell
-git -C .orchestrator-worktrees/<goal-prefix> diff --stat main...HEAD
-git -C .orchestrator-worktrees/<goal-prefix> diff main...HEAD
+git diff --stat main...goal/<goal-prefix>
+git diff main...goal/<goal-prefix>
 git switch -c verify/<goal-prefix> main
 git merge --no-ff goal/<goal-prefix>
 # run the goal's own new test classes here, on the scratch branch
