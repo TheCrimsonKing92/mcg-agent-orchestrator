@@ -109,6 +109,18 @@ public sealed class ConductorBatchLoopTestsLandingHeldReceiptRelease : Conductor
         {
             Goals = Enumerable.Range(0, 3).Select(index =>
                 CreateVerifiedSimpleGoal(Kernel, $"Receipt release member {index}")).ToArray();
+            foreach (var goal in Goals)
+            {
+                Kernel.RecordGoalRefinement(goal.Id, new RefinedSpec(goal.Objective,
+                    ["The full acceptance gate passes"], VerificationClass.TestVerifiable, [], [])
+                {
+                    AcceptanceGateOwnedAcceptanceCriteria = ["The full acceptance gate passes"]
+                });
+                Kernel.MapCriterionEvidenceOwner(goal.Id, 0, 1, CriterionEvidenceOwner.Acceptance,
+                    "test", CriterionEvidenceScopes.FullAcceptanceGate, expectedCandidateSha: _candidateRevision);
+            }
+            // These cases vary projection/wait blockers, not criterion-evidence eligibility.
+            Assert.Empty(ConductorBatchLoop.TrainIneligibleCriterionEvidenceGoalIds(Goals));
             var selection = new ConductorMergeTrainSelection(Goals.Select(goal =>
                 ((GateReadyCandidateProjectionResult.Ready)Project(goal)).Projection).ToArray());
             var members = selection.BindMembers().Select(member => member.WithRebasedHead(new string('c', 40))).ToArray();

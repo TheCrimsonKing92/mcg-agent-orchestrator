@@ -44,7 +44,7 @@ public sealed class ConductorBatchLoopTestsLandingHeldAdmission : ConductorBatch
             kind: HumanWaitKind.ProspectiveAcceptanceEvidence, evidenceOwner: owner,
             testNames: ["GateTests"]).Request;
         var paths = goals.ToDictionary(goal => goal.Id,
-            goal => (IReadOnlyList<string>)[$"src/App/{goal.Id.Value[..8]}.cs"]);
+            goal => (IReadOnlyList<string>)[$"tests/Mcg.AgentOrchestrator.Core.Tests/{goal.Id.Value[..8]}.cs"]);
         var projector = new GateReadyCandidateProjector(
             id => new GateReadyCandidateRevisionPair(id.Value.PadRight(40, 'b')[..40], new string('a', 40)),
             id => new GateReadyLandingScopeObservation(true, paths[id]),
@@ -55,6 +55,9 @@ public sealed class ConductorBatchLoopTestsLandingHeldAdmission : ConductorBatch
             classifyRisk: _ => ChangeRiskTier.DocsOnly,
             getLandingFileScopes: goal => paths[goal.Id], isVerificationGateSatisfied: _ => true,
             gateReadyCandidateProjector: projector);
+        // Prove each input is ready before the tick adds the pending-wait exclusion.
+        Assert.All(goals, goal => Assert.IsType<GateReadyCandidateProjectionResult.Ready>(
+            driver.ProjectGateReadyCandidate(goal, ConductorAutonomyPolicy.Conservative)));
         using var probe = GateLoadContextProbe.PushLiveGateOccupantProbe(() =>
             [new GateLoadContextProbe.LiveGateOccupant(4101, "cccccccccccccccccccccccccccccccc", 0, TimeSpan.Zero)]);
         var logPath = Path.Combine(Path.GetTempPath(), $"landing-held-{Guid.NewGuid():N}.jsonl");
