@@ -267,11 +267,7 @@ internal sealed partial class ConductorBatchLoop
         HashSet<GoalId> changedGoalIds,
         Func<bool> suppressNewAcceptanceAdmission)
     {
-        var consumed = driver.ConsumeTerminalFailedCohortReceipts();
-        foreach (var receipt in consumed)
-            changedGoalIds.UnionWith(receipt.RecordedGoalIds);
-        state.OrderedEligible = ConductorAcceptanceCohortTerminalReceiptConsumption.FilterEligible(
-            state.OrderedEligible, consumed, tick, line => RecordParallelAcceptanceProgress(line, changedGoalLines));
+        state.OrderedEligible = ConductorAcceptanceCohortTerminalReceiptConsumption.PrepareAdmission(driver, state.OrderedEligible, changedGoalIds, tick, changedGoalLines);
         var speculativeCandidates = state.OrderedEligible.Select(goal => new ConductorSpeculativeAcceptanceCandidate(
             goal.Id, driver.ProjectGroupedAdmissionCandidate(goal, policy, kernel))).ToArray();
         state.ActiveCohortCapacity = driver.GetActiveAcceptanceCohortCapacity();

@@ -32,7 +32,16 @@ internal static class ConductorAcceptanceCohortTerminalReceiptConsumption
         return consumed;
     }
 
-    internal static IReadOnlyList<Goal> FilterEligible(IReadOnlyList<Goal> eligible,
+    internal static IReadOnlyList<Goal> PrepareAdmission(ConductorDriver driver, IReadOnlyList<Goal> eligible,
+        ISet<GoalId> changedGoalIds, int tick, List<string> changedGoalLines)
+    {
+        var consumed = driver.ConsumeTerminalFailedCohortReceipts();
+        foreach (var receipt in consumed)
+            changedGoalIds.UnionWith(receipt.RecordedGoalIds);
+        return FilterEligible(eligible, consumed, tick, changedGoalLines.Add);
+    }
+
+    private static IReadOnlyList<Goal> FilterEligible(IReadOnlyList<Goal> eligible,
         IReadOnlyList<(AcceptanceCohortReceipt Receipt, IReadOnlyList<AcceptanceCohortPartitionReceipt> Partitions,
             IReadOnlySet<GoalId> RecordedGoalIds)> consumed, int tick, Action<string> emit)
     {
