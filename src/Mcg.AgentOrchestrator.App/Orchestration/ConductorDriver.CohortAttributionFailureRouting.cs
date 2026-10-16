@@ -28,32 +28,40 @@ internal sealed partial class ConductorDriver
             StringComparer.Ordinal);
         foreach (var suppliedGoal in goals)
         {
-            var goal = GetCurrentGoal(suppliedGoal);
-            partitions.TryGetValue(goal.Id, out var partition);
-            string? candidate = null;
-            string? main = null;
-            if (partition is not null && receipt.AttributedMembers.Any(member => member.GoalId == goal.Id))
-            {
-                var path = GoalWorktrees.TryResolve(_cohortWorkspace!.ExecutionDirectory, goal.Id);
-                if (path is not null)
-                {
-                    try { candidate = ConductorGitRevisionReader.ReadRequiredCommit(path, "HEAD"); }
-                    catch (InvalidOperationException) { /* A missing current identity cannot authorize failure. */ }
-                    try { main = ConductorGitRevisionReader.ReadRequiredCommit(path, $"{_integrationBranch}^{{commit}}"); }
-                    catch (InvalidOperationException) { /* A missing current identity cannot authorize failure. */ }
-                }
-            }
-
-            var alreadyRecorded = partition is not null &&
-                ConductorAcceptanceCohortAttributionVerdicts.IsRecordedFailure(
-                    goal, receipt.Identity.Value, partition.ReceiptId);
-            memberResults[goal.Id.Value] = ConductorAcceptanceCohortAttributionVerdicts.CompleteMember(
-                receipt, goal, partition, candidate, main, alreadyRecorded,
-                (member, checks, branch, mainHead, attributions) =>
-                    _recordAcceptanceFailure(member, checks, branch, mainHead, attributions, null),
-                held.MemberResults[goal.Id.Value], CohortAttributionVerdictSink);
+            partitions.TryGetValue(suppliedGoal.Id, out var partition);
+            ApplyCohortAttributionVerdict(receipt, suppliedGoal, partition);
         }
         return held with { MemberResults = memberResults };
+    }
+
+    private ConductorAcceptanceCohortAttributionVerdict ApplyCohortAttributionVerdict(
+        AcceptanceCohortReceipt receipt,
+        Goal suppliedGoal,
+        AcceptanceCohortPartitionReceipt? partition)
+    {
+        var goal = GetCurrentGoal(suppliedGoal);
+        string? candidate = null;
+        string? main = null;
+        if (partition is not null && receipt.AttributedMembers.Any(member => member.GoalId == goal.Id))
+        {
+            var path = GoalWorktrees.TryResolve(_cohortWorkspace!.ExecutionDirectory, goal.Id);
+            if (path is not null)
+            {
+                try { candidate = ConductorGitRevisionReader.ReadRequiredCommit(path, "HEAD"); }
+                catch (InvalidOperationException) { /* A missing current identity cannot authorize failure. */ }
+                try { main = ConductorGitRevisionReader.ReadRequiredCommit(path, $"{_integrationBranch}^{{commit}}"); }
+                catch (InvalidOperationException) { /* A missing current identity cannot authorize failure. */ }
+            }
+        }
+
+        var alreadyRecorded = partition is not null &&
+            ConductorAcceptanceCohortAttributionVerdicts.IsRecordedFailure(
+                goal, receipt.Identity.Value, partition.ReceiptId);
+        return ConductorAcceptanceCohortAttributionVerdicts.Apply(
+            receipt, goal, partition, candidate, main, alreadyRecorded,
+            (member, checks, branch, mainHead, attributions) =>
+                _recordAcceptanceFailure(member, checks, branch, mainHead, attributions, null),
+            CohortAttributionVerdictSink);
     }
 
     private ConductorAdvanceResult RouteRecordedCohortAttributionFailure(

@@ -4,16 +4,29 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorDriver
 {
-    internal IReadOnlyList<(AcceptanceCohortReceipt Receipt, IReadOnlyList<AcceptanceCohortPartitionReceipt> Partitions)>
+    internal IReadOnlyList<(AcceptanceCohortReceipt Receipt, IReadOnlyList<AcceptanceCohortPartitionReceipt> Partitions,
+        IReadOnlySet<GoalId> RecordedGoalIds)>
         ConsumeTerminalFailedCohortReceipts()
     {
         if (_cohortAcceptanceStore is null) return [];
-        var consumed = new List<(AcceptanceCohortReceipt, IReadOnlyList<AcceptanceCohortPartitionReceipt>)>();
+        var consumed = new List<(AcceptanceCohortReceipt, IReadOnlyList<AcceptanceCohortPartitionReceipt>, IReadOnlySet<GoalId>)>();
         foreach (var receipt in _cohortAcceptanceStore.ReadUnconsumedTerminalFailedReceipts())
         {
             if (_cohortAcceptanceStore.TryRecordOutcomeConsumption(receipt.Identity.Value, receipt.ReceiptId))
             {
-                consumed.Add((receipt, _cohortAcceptanceStore.ReadPartitionReceipts(receipt.Identity.Value)));
+                var partitions = _cohortAcceptanceStore.ReadPartitionReceipts(receipt.Identity.Value);
+                var recorded = new HashSet<GoalId>();
+                foreach (var member in receipt.AttributedMembers)
+                {
+                    var goal = (_cohortKernel ?? _conductorTickKernel)?.Goals
+                        .SingleOrDefault(goal => goal.Id == member.GoalId);
+                    // Deleted goals have no lifecycle state to record or route.
+                    if (goal is null) continue;
+                    var partition = partitions.SingleOrDefault(partition => partition.GoalId == goal.Id);
+                    if (ApplyCohortAttributionVerdict(receipt, goal, partition).ShouldRecord)
+                        recorded.Add(goal.Id);
+                }
+                consumed.Add((receipt, partitions, recorded));
             }
         }
         return consumed;
