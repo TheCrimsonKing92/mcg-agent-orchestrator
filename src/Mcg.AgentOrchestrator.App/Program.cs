@@ -290,7 +290,7 @@ if (ConductorContinuitySupervisor.ShouldSupervise(
             !string.Equals(maxDurationRestage, "false", StringComparison.OrdinalIgnoreCase);
         var conductEventLogWriter = new ConductEventLogWriter(workspace.ConductEventsLogPath);
         var stageSuccessor = restageEnabled
-            ? ConductorSelfRelaunch.CreateSuccessorStagerForHome(
+            ? ConductorSelfRelaunch.CreateSuccessorStagerForHomeWithHook(
                 OrchestratorHome.ResolveForProcess(), workspace,
                 line =>
                 {
@@ -305,7 +305,9 @@ if (ConductorContinuitySupervisor.ShouldSupervise(
             new SystemConductorSupervisorProcessHost(),
             new SqliteRunEventStore(workspace.RunEventStorePath),
             inspectStores: () => StoreSetupRunner.Plan(workspace.OrchestratorDirectory, includeState: true),
-            stageSuccessor: stageSuccessor,
+            stageSuccessorWithHook: stageSuccessor,
+            schemaUpgrade: new ConductorHandoffSchemaUpgrade(
+                workspace.OrchestratorDirectory, workspace.ExecutionDirectory),
             appendConductEvent: (eventKind, goalId, detail) =>
                 conductEventLogWriter.Append(eventKind, goalId, detail),
             supervisorHandoff: new ConductorSupervisorHandoffOptions(

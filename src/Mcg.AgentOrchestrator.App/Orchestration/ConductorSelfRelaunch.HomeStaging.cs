@@ -39,4 +39,17 @@ internal static partial class ConductorSelfRelaunch
     private static void RecordNotHome(
         OrchestratorHome home, OrchestratorWorkspace workspace, Action<string> recordSkip) =>
         recordSkip($"LOOP_HANDOFF_SKIPPED reason=target-not-home target={workspace.ExecutionDirectory} home={home.SourceRootDirectory ?? "none"}");
+
+    internal static Func<Action<string, string, CancellationToken>, CancellationToken, ConductorPreparedSuccessor>?
+        CreateSuccessorStagerForHomeWithHook(
+            OrchestratorHome home, OrchestratorWorkspace workspace, Action<string> recordSkip)
+    {
+        var staging = home.CreateSuccessorStagingOptions(workspace);
+        if (staging is null)
+        {
+            RecordNotHome(home, workspace, recordSkip);
+            return null;
+        }
+        return (hook, token) => PrepareSuccessor(staging, token, hook);
+    }
 }
