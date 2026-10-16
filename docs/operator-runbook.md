@@ -733,7 +733,7 @@ Durable state lives in stores, never in `.scratch`.
 | `.orchestrator/backlog.db` | the backlog (use `backlog-list`/`backlog-add`/`backlog-show`/`backlog-close`; this is the source of truth, not `BACKLOG.md`) |
 | `.orchestrator/dogfood-log.db` | dogfood goal-boundary evidence (use `dogfood-log list`/`dogfood-log add`; this is the source of truth, not `DOGFOOD_LOG.md`) |
 | `.orchestrator/collaboration-items.db` | clarifications / operator-input items |
-| `.orchestrator/experiments.db` | pre-registered experiment specs and single-shot outcomes (`experiment-add`, `experiment-show`, `experiment-decide`). Use `experiment-extend` to record a longer target while the original pre-registered stop count stays recorded. |
+| `.orchestrator/experiments.db` | pre-registered experiment specs and single-shot outcomes (`experiment-add`, `experiment-show`, `experiment-decide`). Use `experiment-extend` to record a longer target while the original pre-registered stop count stays recorded. Use `experiment-add-pair <experiment> --baseline <goal-prefix> --comparison <goal-prefix> --reason-file <path>` for an open `goal-cohort` with `incrementalMembers: true`; goals must be undispatched and absent from every open cohort (spec prefixes conservatively reserve matching ids), and optional `pairingRule: lower-brief-sha256-is-comparison` assigns the lower UTF-8 objective digest to comparison. |
 | `.orchestrator/agents.json` | the agent catalog (which model each role uses) — see the roster-change caveat below |
 | `.orchestrator/logs/conduct-events.log` | canonical structured conduct event stream (JSON lines with `eventKind`; stable path, rotated by size; listen from the current end) |
 | `.orchestrator/logs/`, `.orchestrator/prompts/` | per-dispatch worker logs (`*.out.log`/`*.err.log`/`*.exit.txt`) and the rendered worker prompts |
@@ -886,7 +886,7 @@ orphan shards), retain that evidence in the goal artifacts and run
 `scripts/Confirm-LegacyAcceptanceHolderSettlement.ps1 -MetadataPath <canonical-attempt.json> -EvidencePath <durable-evidence-file> -ConfirmEntireTreeSettled`.
 The switch is an explicit operator attestation of whole-tree exit; the command does not infer it
 from PID death. It refuses a live/uninspectable recorded holder and publishes a receipt bound to
-attempt, candidate, slot, launch time and recorded PID/start/image. Admission revalidates that
+attempt, candidate, slot, launch time and recorded PID/start/image. The script also accepts settlement when all recorded holder activity predates the host boot (overridable with `-HostBootTime`). Without that proof, a live PID whose start time cannot be read is refused with `holder PID is owned by a process whose start time cannot be read`. Admission revalidates that
 receipt and holder absence/reuse, then terminalizes metadata before releasing capacity; retention
 uses the same proof. A pending published result remains reserved until its normal verdict mapper
 publishes terminal metadata. An unrelated recycled PID is never killed. Missing/malformed receipts

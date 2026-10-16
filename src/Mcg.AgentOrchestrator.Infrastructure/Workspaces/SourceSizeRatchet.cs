@@ -497,7 +497,7 @@ internal static class SourceSizeRatchet
             // Goal 2c245bc3 restores overlapping holders and derives a recoverable admission hold.
             // The recovery sweep also settles non-reserving attempts once their holder is proven settled.
             // Measured 14888 lines across the same 70 partial files; no extra headroom.
-            new SourceClassCeiling("ConductorDriver", 14888, 70),
+            new SourceClassCeiling("ConductorDriver", 14883, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
@@ -564,7 +564,9 @@ internal static class SourceSizeRatchet
             // Goal 920a6429 keeps priority mutation and its audit append at the owning kernel lifecycle seam;
             // parsing and ordering live in separate types. Goal c55f943c adds one Reviewer binding call before
             // finding deferral. After integrating main b8da8f673, measured 9309 lines in the same 28 partials; no headroom.
-            new SourceClassCeiling("AgentOrchestratorKernel", 9309, 28),
+            // Goal 171a09ca records gate-owned Planner requests as typed obligations at the dispatch intake;
+            // measured increase is exactly 10 lines (9319 total), with the same 28 partials and no headroom.
+            new SourceClassCeiling("AgentOrchestratorKernel", 9319, 28),
             // Goal d6033045 extracted the pre-admission receipt pass to PassedMergeTrainReceiptAdmission; goal 1d0f2317
             // adds one admission predicate to exclude stream-complete children before slot reservation. Measured 9255.
             // Goal 679eee57 added a one-line tick call to the separately owned ConductorExperimentWatch (+1); goal 80de5cb2 extracted

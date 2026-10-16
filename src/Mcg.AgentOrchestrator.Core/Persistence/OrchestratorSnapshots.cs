@@ -32,7 +32,8 @@ public sealed record GoalSnapshot(
     int ConsecutiveAcceptanceIdentityStaleCount = 0,
     string? LastAcceptanceIdentityStaleAttemptId = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    string? Priority = null);
+    string? Priority = null,
+    IReadOnlyList<GateTestObligation>? GateTestObligations = null);
 
 public sealed record GoalHoldSnapshot(
     string Identity,

@@ -67,6 +67,7 @@ internal static class CliCommandHelp
     public const string ExperimentShowUsage = "Usage: experiment-show <experiment> [--as-of <timestamp-with-offset>]";
     public const string ExperimentDecideUsage = "Usage: experiment-decide <experiment> --outcome <confirmed|refuted|inconclusive> --evidence <reference> --action <text>";
     public const string ExperimentExtendUsage = "Usage: experiment-extend <experiment> --count <n> --reason <text>";
+    public const string ExperimentAddPairUsage = "Usage: experiment-add-pair <experiment> --baseline <goal-prefix> --comparison <goal-prefix> --reason-file <path>";
     public const string ExperimentTrainBacktestUsage = "Usage: experiment-train-backtest --since <timestamp with offset> [--training-count <n>]";
     public const string ExperimentApplyFlagUsage = "Usage: experiment-apply-flag <experiment> [--operator-actor <actor>] [--actor-kind <human|agent>] [--idempotency-key <key>] [--json]";
     public const string EpicRenameUsage = "Usage: epic-rename <epic> <new-title>";
@@ -102,6 +103,7 @@ internal static class CliCommandHelp
     public const string IntentCoverageUsage = "Usage: intent-coverage [--since <ISO-8601>] [--until <ISO-8601>] [--min-cases <n>] [--json]";
     public const string RemoteExecutorsUsage = "Usage: remote-executors [--since <ISO-8601>] [--last <N>] [--json]";
     public const string RemoteLaneSelfTestUsage = "Usage: remote-lane-selftest --executor <id> [--timeout-minutes <n>]";
+    public const string ExecutorScreenUsage = "Usage: executor-screen [--max-candidates <n>] [--executor <id>]";
     public const string RoundValueUsage = "Usage: round-value [--since <ISO-8601-with-offset>] [--until <ISO-8601-with-offset>] [--json] [--by-skill] [--by-check] [--baseline-since <ISO-8601-with-offset> --baseline-until <ISO-8601-with-offset>]";
     public const string LessonUsage = "Usage: lesson record --situation <text> --rule <text> --evidence <ref>... [--applies-to <tag>...] [--goal <goal-prefix>] [--until-goal <goal-prefix>] [--actor-kind human|agent] [--json] | lesson retire <lesson-id> --reason <text> [--evidence <ref>...] [--json]";
     public const string LessonsUsage = "Usage: lessons [--all] [--applies-to <tag>] [--json]";
@@ -488,6 +490,8 @@ internal static class CliCommandHelp
         ExperimentDecideUsage, "Record evidence and action once on an open experiment.", ["--outcome", "--evidence", "--action", "--help", "-h"]);
     private static readonly CommandHelpEntry ExperimentExtend = new(
         ExperimentExtendUsage, "Record a longer stop target and reason on an open experiment.", ["--count", "--reason", "--help", "-h"]);
+    private static readonly CommandHelpEntry ExperimentAddPair = new(
+        ExperimentAddPairUsage, "Append an undispatched matched goal pair to an open incremental goal-cohort experiment.", ["--baseline", "--comparison", "--reason-file", "--help", "-h"]);
     private static readonly CommandHelpEntry ExperimentTrainBacktest = new(ExperimentTrainBacktestUsage, "Read stored merge train receipts and compare drop policies.", ["--since", "--training-count", "--help", "-h"]);
     private static readonly CommandHelpEntry ExperimentApplyFlag = new(
         ExperimentApplyFlagUsage, "Queue a workspace Mutate-tier intent to apply a boolean policy flag. The conductor captures its prior value; an eligible keep reading at the stop rule records confirmed and files a make-permanent backlog item.",
@@ -666,6 +670,9 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry RemoteLaneSelfTest = new(
         RemoteLaneSelfTestUsage, "Operator-only self-test that pushes to the executor and runs one real SSH lane job.",
         ["--executor", "--timeout-minutes", "--help", "-h"]);
+    private static readonly CommandHelpEntry ExecutorScreen = new(
+        ExecutorScreenUsage, "Screen a candidate on an idle executor and record an advisory receipt.",
+        ["--max-candidates", "--executor", "--help", "-h"]);
 
     public const string BoardSimulateUsage = "Usage: board-simulate [--day <yyyy-MM-dd>] [--width <1-4>] [--train-size <0|3|4>] [--cohorts on|off] [--drop newest|lowest-pass-rate] [--seed <n>] [--json]";
 
@@ -1224,6 +1231,11 @@ internal static class CliCommandHelp
             entry = RemoteExecutors;
             return true;
         }
+        if (args[0].Equals("executor-screen", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = ExecutorScreen;
+            return true;
+        }
         if (args[0].Equals("remote-lane-selftest", StringComparison.OrdinalIgnoreCase))
         {
             entry = RemoteLaneSelfTest;
@@ -1455,6 +1467,7 @@ internal static class CliCommandHelp
         if (args[0].Equals("experiment-show", StringComparison.OrdinalIgnoreCase)) { entry = ExperimentShow; return true; }
         if (args[0].Equals("experiment-decide", StringComparison.OrdinalIgnoreCase)) { entry = ExperimentDecide; return true; }
         if (args[0].Equals("experiment-extend", StringComparison.OrdinalIgnoreCase)) { entry = ExperimentExtend; return true; }
+        if (args[0].Equals("experiment-add-pair", StringComparison.OrdinalIgnoreCase)) { entry = ExperimentAddPair; return true; }
         if (args[0].Equals("experiment-train-backtest", StringComparison.OrdinalIgnoreCase)) { entry = ExperimentTrainBacktest; return true; }
         if (args[0].Equals("experiment-apply-flag", StringComparison.OrdinalIgnoreCase)) { entry = ExperimentApplyFlag; return true; }
         if (args[0].Equals("epic-add", StringComparison.OrdinalIgnoreCase))

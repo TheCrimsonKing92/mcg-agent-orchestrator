@@ -83,10 +83,10 @@ public sealed class PlannerEvidenceRequestTestNamesTests
             HumanInputKind: directive.Kind, HumanInputEvidenceOwner: directive.EvidenceOwner,
             FullStandardOutput: fullOutput));
 
-        var wait = Assert.Single(kernel.GetPendingHumanInput(goal.Id));
-        Assert.Equal(names, wait.TestNames);
+        Assert.Empty(kernel.GetPendingHumanInput(goal.Id));
+        Assert.Equal(names, Assert.Single(goal.GateTestObligations).Selectors);
         Assert.Equal(names, Assert.Single(AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot())
-            .GetPendingHumanInput(goal.Id)).TestNames);
+            .GetGoal(goal.Id).GateTestObligations).Selectors);
     }
 
     [Theory]
