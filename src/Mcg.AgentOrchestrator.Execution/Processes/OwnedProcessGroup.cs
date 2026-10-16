@@ -689,7 +689,7 @@ internal sealed class OwnedProcessGroup : IDisposable
         Process Process,
         SafeFileHandle ProcessHandle);
 
-    private static class WindowsJob
+    internal static class WindowsJob
     {
         private const int JobObjectBasicAccountingInformation = 1;
         private const int JobObjectBasicProcessIdList = 3;
@@ -1231,9 +1231,17 @@ internal sealed class OwnedProcessGroup : IDisposable
         private static string Sanitize(string value) =>
             value.Replace('\r', ' ').Replace('\n', ' ').Trim();
 
-        public static SafeFileHandle CreateKillOnCloseJob(bool allowBreakaway = true)
+        public static SafeFileHandle CreateKillOnCloseJob(bool allowBreakaway = true, string? name = null)
         {
-            var handle = CreateJobObjectW(IntPtr.Zero, null);
+            var handle = name is null
+                ? CreateJobObjectW(IntPtr.Zero, null)
+                : CreateJobObjectW(IntPtr.Zero, name);
+            var creationError = Marshal.GetLastWin32Error();
+            if (name is not null && creationError == 183)
+            {
+                handle.Dispose();
+                throw new Win32Exception(creationError, "Owned job name is already in use.");
+            }
             if (handle.IsInvalid)
             {
                 throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to create owned job object.");

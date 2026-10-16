@@ -78,6 +78,29 @@ public sealed class ConductorWakeSignalAttemptExitTests
     }
 
     [Xunit.Fact]
+    public void PublishedExitStopsWatchingWhileLiveHolderRetainsCapacity()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var attempt = WriteAttempt(root, ConductorParallelAcceptanceAttemptCoordinator.GateDispatchKind);
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                Path.Combine(root, "attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
+                isProcessAlive: _ => true);
+            Assert.Equal(attempt.ExitCodePath, Assert.Single(coordinator.GetRunningAttemptExitCodePaths([attempt.GoalId])));
+
+            File.WriteAllText(attempt.ExitCodePath, "0");
+
+            Assert.Empty(coordinator.GetRunningAttemptExitCodePaths([attempt.GoalId]));
+            Assert.Equal(attempt.AttemptId, Assert.Single(coordinator.GetCapacityReservingAttempts([attempt.GoalId])).AttemptId);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
     public void ExitWrittenBetweenPathSnapshotAndSleepWakesAtEntry()
     {
         var root = CreateTempDirectory();

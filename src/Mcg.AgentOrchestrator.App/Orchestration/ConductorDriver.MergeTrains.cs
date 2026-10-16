@@ -148,7 +148,12 @@ internal sealed partial class ConductorDriver
                 var recovered = RecoverGroupedGateAttempt("train", selection.Members,
                     selection.Members[0].MainRevision, workspace.TreeRevision,
                     trainKey, receipt is not null);
-                if (recovered.Running is not null) return InFlight(recovered.Running);
+                if (recovered.Running is not null)
+                {
+                    var inFlight = InFlight(recovered.Running);
+                    return receipt is null ? inFlight : inFlight with { Receipt = receipt, MemberResults =
+                        new Dictionary<string, ConductorAdvanceResult>(StringComparer.Ordinal), RecordedReceipt = receipt };
+                }
                 if (recovered.DeadWithoutReceipt)
                     receipt = _mergeTrainAcceptanceStore.SaveGateReceipt(new MergeTrainReceipt(
                         $"merge-train-receipt-{identity.Value[(MergeTrainIdentity.Version.Length + 1)..]}",

@@ -91,10 +91,17 @@ public sealed class ConductorDriverTestsTimedOutSelectionRerunRecovery
         using var scenario = new Scenario();
         var blockedOutcome = Enum.Parse<ConductorParallelAcceptanceAttemptOutcome>(outcome);
         var launches = 0;
+        var liveHolderPids = new HashSet<int>();
         var blockSlot = blockedOutcome == ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot;
         ConductorParallelAcceptanceAttemptCoordinator Coordinator() => new(scenario.AttemptsRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
-            isProcessAlive: pid => pid == 7103,
-            launchOwnedProcess: _ => { launches++; return new(7103); },
+            isProcessAlive: liveHolderPids.Contains,
+            launchOwnedProcess: _ =>
+            {
+                var pid = 7102 + ++launches;
+                Assert.Empty(liveHolderPids);
+                liveHolderPids.Add(pid);
+                return new(pid);
+            },
             acquireStableSlotLease: (_, _) => blockSlot
                 ? throw new DotnetBuildSlotsBusyException(new DotnetBuildLeaseAcquisition.SlotsBusy("fixture", []))
                 : null);
@@ -116,6 +123,13 @@ public sealed class ConductorDriverTestsTimedOutSelectionRerunRecovery
         Assert.Equal(blockedOutcome, blocked.Outcome);
         Assert.IsType<ConductorAdvanceOutcome.Held>(scenario.Driver(coordinator: coordinator)
             .AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Permissive).Outcome);
+        // Reconciliation publishes the deferral; the holder must exit before capacity is released.
+        var retained = Assert.Single(coordinator.GetUnreconciledAttempts([scenario.Goal.Id.Value]));
+        Assert.Equal(first.AttemptId, retained.AttemptId);
+        Assert.Equal(blockedOutcome, retained.Outcome);
+        Assert.NotNull(retained.ReconciledAt);
+        Assert.Equal(1, launches);
+        Assert.True(liveHolderPids.Remove(first.OwnerProcessId));
         Assert.Empty(coordinator.GetUnreconciledAttempts([scenario.Goal.Id.Value]));
         Assert.Empty(scenario.RunRequests);
         Assert.Empty(scenario.Escalations);
@@ -130,6 +144,9 @@ public sealed class ConductorDriverTestsTimedOutSelectionRerunRecovery
         var second = Assert.Single(coordinator.GetUnreconciledAttempts([scenario.Goal.Id.Value]));
         Assert.Equal(2, launches);
         Assert.NotEqual(first.AttemptId, second.AttemptId);
+        Assert.NotEqual(first.OwnerProcessId, second.OwnerProcessId);
+        Assert.Equal(second.OwnerProcessId, Assert.Single(liveHolderPids));
+        Assert.DoesNotContain(first.OwnerProcessId, liveHolderPids);
         Assert.Equal(first.FocusedEvidenceBatchId, second.FocusedEvidenceBatchId);
         Assert.Equal(first.FocusedEvidenceRequest, second.FocusedEvidenceRequest);
         Assert.Equal(first.CandidateKey, second.CandidateKey);
@@ -141,6 +158,7 @@ public sealed class ConductorDriverTestsTimedOutSelectionRerunRecovery
                 return ConductorParallelAcceptanceRunResult.Focused(current, new(Request, true, true,
                     "fixture passed evidence", [new AcceptanceCheckResult("focused rerun", true, 0, "passed")]));
             });
+        Assert.True(liveHolderPids.Remove(second.OwnerProcessId));
         Assert.IsType<ConductorAdvanceOutcome.Executed>(scenario.Driver(coordinator: coordinator)
             .AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Permissive).Outcome);
         Assert.Equal(new[] { Request }, scenario.RunRequests);
