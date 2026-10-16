@@ -111,7 +111,8 @@ internal sealed partial class ConductorContinuitySupervisor(
         Environment.GetEnvironmentVariable(ActivationHealthyTicksEnvironmentVariable)));
     private readonly Func<TimeSpan, CancellationToken, Task> _activationDelay = activationDelay ??
         ((duration, token) => Task.Delay(duration, timeProvider ?? TimeProvider.System, token));
-    private readonly TimeSpan _activationStallTimeout = activationStallTimeout ?? readinessTimeout ?? TimeSpan.FromMinutes(2);
+    private readonly TimeSpan _activationStallTimeout = activationStallTimeout ?? readinessTimeout ??
+        ResolveActivationStallTimeout(Environment.GetEnvironmentVariable(ActivationStallTimeoutEnvironmentVariable));
     private readonly Action<string>? _raiseActivationAttention = raiseActivationAttention;
     private readonly TimeSpan _tickStallBudget = tickStallBudget ?? ResolveTickStallBudget(
         Environment.GetEnvironmentVariable(TickStallBudgetEnvironmentVariable));

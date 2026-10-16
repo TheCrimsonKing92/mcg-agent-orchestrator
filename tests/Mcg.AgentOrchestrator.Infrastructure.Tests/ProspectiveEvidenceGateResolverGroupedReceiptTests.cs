@@ -169,7 +169,7 @@ public sealed class ProspectiveEvidenceGateResolverGroupedReceiptTests
         Assert.Equal(wait.Id, Assert.Single(fixture.Kernel.GetPendingHumanInput(fixture.Goal.Id)).Id);
     }
 
-    private static GroupedGateReceiptTrxEvidence.Receipt Save(ProspectiveEvidenceGateFixture fixture,
+    internal static GroupedGateReceiptTrxEvidence.Receipt Save(ProspectiveEvidenceGateFixture fixture,
         IReadOnlyList<string> paths, bool cohort = false, bool passed = true, string? candidate = null,
         char tree = '1', DateTimeOffset? completedAt = null)
     {

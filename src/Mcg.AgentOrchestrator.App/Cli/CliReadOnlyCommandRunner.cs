@@ -17,6 +17,7 @@ internal static class CliReadOnlyCommandRunner
         GoalBoardCommand.IsBoardCommand(args) ||
         TrialCompareCliCommand.RequiresHistoricalState(args) ||
         CliTaskQueryCommand.IsTaskQueryCommand(args) ||
+        CliFindingQueryCommand.IsFindingQueryCommand(args) ||
         CliTimelineQueryCommand.IsTimelineQueryCommand(args) ||
         CliGoalReportQueryCommand.IsGoalReportQueryCommand(args) ||
         CliSingleGoalReportQueryCommand.IsSingleGoalReportQueryCommand(args) ||
@@ -71,6 +72,14 @@ internal static class CliReadOnlyCommandRunner
                 providers,
                 ref workerProfiles,
                 channel);
+            return true;
+        }
+
+        if (CliFindingQueryCommand.IsFindingQueryCommand(args))
+        {
+            CliFindingQueryCommand.Execute(args, stateRepository, workspace, providers, channel,
+                ref agents, ref workerProfiles, ref currentGoal);
+            changed = false;
             return true;
         }
 

@@ -5,6 +5,17 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 // Production attempt coordinators carry the workspace's state identity into child metadata.
 internal static class OwnedChildAttemptCoordinatorFactory
 {
+    internal static ConductorGroupedGateAttemptCoordinator CreateGroupedGate(
+        OrchestratorWorkspace workspace, DotnetBuildStorageRoot? buildStorageRoot) =>
+        new(
+            Path.Combine(workspace.OrchestratorDirectory, "grouped-gate-attempts"),
+            eventSink: line => new ConductEventLogWriter(workspace.ConductEventsLogPath)
+                .Append("acceptance-cohort", null, line),
+            buildStorageRoot: buildStorageRoot,
+            stateDirectory: workspace.OrchestratorDirectory,
+            projectName: OwnedChildWorkspaceResolver.RecordedProjectName(workspace),
+            hostBootTime: LegacyAcceptanceHolderSettlement.CurrentHostBootTime);
+
     internal static ConductorParallelAcceptanceAttemptCoordinator CreateGate(
         OrchestratorWorkspace workspace, DotnetBuildStorageRoot? buildStorageRoot,
         ConductorParallelAcceptanceTryRunPreSlot tryRunPreSlot, bool runInline) =>

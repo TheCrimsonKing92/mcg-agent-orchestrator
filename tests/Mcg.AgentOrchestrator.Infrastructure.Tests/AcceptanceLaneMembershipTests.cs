@@ -214,21 +214,9 @@ public sealed class AcceptanceLaneMembershipTests
         var root = InfrastructureTestSupport.FindRepositoryRoot();
         var lanes = AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes;
         var descriptors = RunnableClasses();
-        var baseline = lanes.Select(lane => lane with { OwnedCollections = [] }).ToArray();
-        var resolved = AcceptanceLaneMembership.ResolveOwnedCollections(lanes, descriptors);
-        var mismatches = new List<AcceptanceLaneMembershipMismatch>();
-        foreach (var descriptor in descriptors)
-        {
-            var baselineNames = AcceptanceLaneMembership.LanesIncluding(baseline, descriptor.FullName)
-                .Select(lane => lane.Name).Order().ToArray();
-            var resolvedNames = AcceptanceLaneMembership.LanesIncluding(resolved, descriptor.FullName)
-                .Select(lane => lane.Name).Order().ToArray();
-            if (!baselineNames.SequenceEqual(resolvedNames))
-            {
-                mismatches.Add(new AcceptanceLaneMembershipMismatch(
-                    descriptor.FullName, descriptor.Collection, baselineNames, resolvedNames));
-            }
-        }
+        var mismatches = TestCollectionGuardRules.FindLaneMembershipViolations(lanes, descriptors)
+            .Select(item => new AcceptanceLaneMembershipMismatch(
+                item.ClassFullName, item.Collection, item.BaselineLanes, item.ResolvedLanes)).ToList();
 
         if (mismatches.Count > 0)
         {

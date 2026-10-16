@@ -25,13 +25,8 @@ internal sealed partial class ConductorDriver
     {
         if (_cohortWorkspace is null)
             throw new InvalidOperationException("Grouped gate attempts require production cohort dependencies.");
-        _groupedGateAttempts = coordinator ?? new ConductorGroupedGateAttemptCoordinator(
-            Path.Combine(_cohortWorkspace.OrchestratorDirectory, "grouped-gate-attempts"),
-            eventSink: line => new ConductEventLogWriter(_cohortWorkspace.ConductEventsLogPath)
-                .Append("acceptance-cohort", null, line),
-            buildStorageRoot: _cohortCleanupHooks.BuildStorageRoot,
-            stateDirectory: _cohortWorkspace.OrchestratorDirectory,
-            projectName: OwnedChildWorkspaceResolver.RecordedProjectName(_cohortWorkspace));
+        _groupedGateAttempts = coordinator ?? OwnedChildAttemptCoordinatorFactory.CreateGroupedGate(
+            _cohortWorkspace, _cohortCleanupHooks.BuildStorageRoot);
     }
 
     // The durable record is inspected before a caller reads a receipt. A child may write the primary
