@@ -543,8 +543,9 @@ internal static class SourceSizeRatchet
             // retry admission accounting and Execution owns persisted denial evidence. Keeping the transaction
             // here preserves lifecycle ownership. Measured 9305 lines in 28 partials; no extra headroom.
             // Goal 920a6429 keeps priority mutation and its audit append at the owning kernel lifecycle seam;
-            // parsing and ordering live in separate types. Measured 9315 lines in the same 28 partials; no headroom.
-            new SourceClassCeiling("AgentOrchestratorKernel", 9308, 28),
+            // parsing and ordering live in separate types. Goal c55f943c adds one Reviewer binding call before
+            // finding deferral. After integrating main b8da8f673, measured 9309 lines in the same 28 partials; no headroom.
+            new SourceClassCeiling("AgentOrchestratorKernel", 9309, 28),
             // Goal d6033045 extracted the pre-admission receipt pass to PassedMergeTrainReceiptAdmission; goal 1d0f2317
             // adds one admission predicate to exclude stream-complete children before slot reservation. Measured 9255.
             // Goal 679eee57 added a one-line tick call to the separately owned ConductorExperimentWatch (+1); goal 80de5cb2 extracted
@@ -628,7 +629,8 @@ internal static class SourceSizeRatchet
     internal static IReadOnlyDictionary<string, (int TotalLines, int PartialFiles)> MeasureClasses(
         string repositoryRoot, IEnumerable<string> classNames, out List<SourceSizeViolation> violations,
         Func<string, IEnumerable<string>>? readLines = null,
-        Func<string, IEnumerable<string>>? enumerateSourceFiles = null)
+        Func<string, IEnumerable<string>>? enumerateSourceFiles = null,
+        IDictionary<string, List<string>>? partialFiles = null)
     {
         var names = classNames.Distinct(StringComparer.Ordinal).ToArray();
         violations = [];
@@ -671,6 +673,12 @@ internal static class SourceSizeRatchet
                         {
                             totals[index] += lines.Length;
                             counts[index]++;
+                            if (partialFiles is not null)
+                            {
+                                if (!partialFiles.TryGetValue(names[index], out var paths))
+                                    partialFiles[names[index]] = paths = [];
+                                paths.Add(relativePath);
+                            }
                         }
                     }
                 }

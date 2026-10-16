@@ -88,7 +88,8 @@ public sealed class CriterionEvidenceWorkerRoutingTests
             WorkerResultPresent: true, ReviewedCommit: Candidate, DispatchStartedAt: startedAt,
             ProviderFailureKind: scenario == "interrupted" ? ProviderFailureKind.RateLimit : ProviderFailureKind.Unknown)); // worker text cannot replace dispatch identity
 
-        var passes = scenario == "current";
+        var passes = scenario == "current" || role == AgentRole.Reviewer &&
+            owner == CriterionEvidenceOwner.Acceptance && scenario is "foreign-candidate" or "legacy";
         if (passes) Assert.Equal(WorkTaskStatus.Completed, task.Status);
         else if (scenario == "invalid-contract") Assert.Equal(WorkTaskStatus.Assigned, task.Status);
         else Assert.Equal(WorkTaskStatus.Failed, task.Status);
@@ -104,7 +105,7 @@ public sealed class CriterionEvidenceWorkerRoutingTests
             Assert.Null(obligation.ReceiptId);
             Assert.Contains(goal.Timeline, item => item.Message.Contains($"owner={owner}; state=Pending", StringComparison.Ordinal) &&
                 item.Message.Contains($"next_action={obligation.RequiredScope}", StringComparison.Ordinal) &&
-                item.Message.Contains($"candidate_sha={Candidate}", StringComparison.Ordinal));
+                item.Message.Contains($"candidate_sha={(scenario == "foreign-candidate" ? "foreign-candidate" : Candidate)}", StringComparison.Ordinal));
         }
         else
         {

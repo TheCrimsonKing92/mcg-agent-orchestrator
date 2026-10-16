@@ -20,6 +20,7 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteNoWriterEffects : CliTa
             ["goals"] = [["goals"], ["goals", "--epic", "Board"], ["goals", "--epic=Board"]],
             ["failure-clusters"] = [["failure-clusters"]],
             ["lane-reuse-shadow"] = [["lane-reuse-shadow"]],
+            ["build-attribution"] = [["build-attribution"]],
             ["intent-coverage"] = [["intent-coverage"]],
             ["remote-executors"] = [["remote-executors"]],
             ["round-value"] = [["round-value"]],
