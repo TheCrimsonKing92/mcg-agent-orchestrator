@@ -269,9 +269,22 @@ internal sealed class AcceptanceHolderLease
     }
 
     private AcceptanceJobObservation ObserveJob(AcceptanceHolderLeaseRecord record,
-        SpawnProcessIdentity holder, SpawnTrackedProcessStatus status, bool cancel) =>
-        _job?.Invoke(record.JobName, holder, status, cancel) ?? DurableAcceptanceJob.Observe(
+        SpawnProcessIdentity holder, SpawnTrackedProcessStatus status, bool cancel)
+    {
+        var observation = _job?.Invoke(record.JobName, holder, status, cancel) ?? DurableAcceptanceJob.Observe(
             record.JobName, holder, status, cancel, record.Binding.SettlementPath);
+        // A missing job name alone never proves settlement: the job may never have existed. But this lease
+        // recorded job-custody-ready, so the named kill-on-close job did exist with the holder inside it and
+        // breakaway disabled. A job object disappears only after its last handle closes, and kill-on-close then
+        // terminates every member. With the holder also dead, the tree has exited even though the custodian
+        // died before it could publish a receipt (2026-10-16: an activation revert killed the custodian's tree,
+        // and the dead attempt held width-1 admission for 50 minutes).
+        return observation is { Settled: false, Detail: "job-open-error:2" } &&
+            status == SpawnTrackedProcessStatus.DeadOrRecycled && record.Holder == holder &&
+            record.Receipts.Any(receipt => receipt.Transition == "claim" && receipt.Reason == "job-custody-ready")
+            ? new(false, true, "job-gone-after-custody")
+            : observation;
+    }
 
     private static bool ValidIdentity(SpawnProcessIdentity? identity) => identity is not null &&
         identity.ProcessId > 0 && identity.StartedAt != DateTimeOffset.MinValue &&
