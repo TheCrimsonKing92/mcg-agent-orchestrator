@@ -39,6 +39,7 @@ internal sealed record OwnerConsoleGateProgress(bool Live, string Kind,
         foreach (var item in parsed)
         {
             var detail = item.Event.Detail;
+            var cohort = detail.StartsWith("ACCEPTANCE_COHORT", StringComparison.Ordinal);
             if (detail.StartsWith("ACCEPTANCE_COHORT_CHILD_COMPLETED", StringComparison.Ordinal)) lastEnd = item.Event.Timestamp;
             var members = item.Get("members").Split([',', '+'], StringSplitOptions.RemoveEmptyEntries)
                 .Select(Prefix).Distinct(StringComparer.Ordinal).ToArray();
@@ -50,10 +51,11 @@ internal sealed record OwnerConsoleGateProgress(bool Live, string Kind,
                 members = [Prefix(goal)];
                 // Solo-attributed progress for an existing cohort belongs to that cohort.
                 var existing = gates.Values.LastOrDefault(gate => gate.Live && gate.Members.Contains(members[0]));
+                // Goal-only cohort diagnostics describe waiting or fault handling, not a new gate.
+                if (cohort && existing is null) continue;
                 if (existing is not null) members = existing.Members;
             }
             var key = string.Join("+", members.Order(StringComparer.Ordinal));
-            var cohort = detail.StartsWith("ACCEPTANCE_COHORT", StringComparison.Ordinal);
             var solo = detail.StartsWith("ACCEPTANCE ", StringComparison.Ordinal);
             var progress = item.Event.EventKind == "gate-progress";
             if (!cohort && !solo && !progress) continue;

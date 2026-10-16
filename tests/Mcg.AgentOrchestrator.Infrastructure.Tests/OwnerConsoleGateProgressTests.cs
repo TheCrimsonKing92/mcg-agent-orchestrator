@@ -56,6 +56,64 @@ public sealed class OwnerConsoleGateProgressTests
     }
 
     [Fact]
+    public void GatheringAndHeldAfterFaultDoNotOpenPhantomGates()
+    {
+        var events = new[]
+        {
+            Event(-600, "acceptance-cohort", "ACCEPTANCE_COHORT tick=1 outcome=gathering goal=776a132e"),
+            Event(-500, "acceptance-cohort", "ACCEPTANCE_COHORT_ENTRY members=776a132e,eade84cb"),
+            Event(-400, "acceptance-cohort", "ACCEPTANCE_COHORT_RECONCILED_DEAD kind=cohort members=776a132e+eade84cb identity=cohort:old"),
+            Event(-300, "acceptance-cohort", "ACCEPTANCE_COHORT tick=2 goal=776a132e result=held reason=cohort-fault"),
+            Event(-200, "acceptance-cohort", "ACCEPTANCE_COHORT tick=3 goal=776a132e result=escalated reason=cohort-fault")
+        };
+
+        AssertIdle(events.Take(1));
+        AssertIdle(events);
+        AssertIdle(events.Skip(3));
+
+        static void AssertIdle(IEnumerable<OwnerConductEvent> events)
+        {
+            var gate = OwnerConsoleGateProgress.Build(Now, events, Manifest, []);
+            Assert.False(gate.Live);
+            Assert.Equal("idle", gate.Kind);
+            Assert.Empty(gate.Members);
+            Assert.Empty(gate.Lanes);
+        }
+    }
+
+    [Fact]
+    public void GatheringBeforePairingDoesNotHideTheRunningCohort()
+    {
+        var gate = OwnerConsoleGateProgress.Build(Now,
+        [
+            Event(-600, "acceptance-cohort", "ACCEPTANCE_COHORT tick=1 outcome=gathering goal=776a132e"),
+            Event(-100, "acceptance-cohort", "ACCEPTANCE_COHORT_ENTRY members=776a132e,eade84cb"),
+            Event(-10, "gate-progress", Progress("verification-check", "A", 0))
+        ], Manifest, []);
+
+        Assert.True(gate.Live);
+        Assert.Equal("cohort", gate.Kind);
+        Assert.Equal(["776a132e", "eade84cb"], gate.Members.Select(member => member.Id));
+        Assert.Equal(Now.AddSeconds(-100), gate.StartedAt);
+        Assert.Empty(gate.OtherLiveGates!);
+    }
+
+    [Fact]
+    public void GoalOnlyCohortDiagnosticsCanStillJoinAnExistingLiveGate()
+    {
+        var gate = OwnerConsoleGateProgress.Build(Now,
+        [
+            Event(-1000, "acceptance-cohort", "ACCEPTANCE_COHORT_ENTRY members=776a132e,eade84cb"),
+            Event(-10, "acceptance-cohort", "ACCEPTANCE_COHORT tick=2 outcome=inflight goal=776a132e")
+        ], Manifest, []);
+
+        Assert.True(gate.Live);
+        Assert.Equal("cohort", gate.Kind);
+        Assert.Equal(["776a132e", "eade84cb"], gate.Members.Select(member => member.Id));
+        Assert.Equal(Now.AddSeconds(-1000), gate.StartedAt);
+    }
+
+    [Fact]
     public void MissingHistoryUsesManifestEstimateInFractionAndRemaining()
     {
         var gate = OwnerConsoleGateProgress.Build(Now,
