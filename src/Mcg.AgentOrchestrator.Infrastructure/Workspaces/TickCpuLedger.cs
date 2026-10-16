@@ -17,7 +17,10 @@ internal static class TickCpuLedger
     private static readonly AsyncLocal<Action<string, string>?> AppenderOverride = new();
 
     internal static string ResolveStorePath(string worktreePath) => Path.Combine(
-        AcceptancePartitionVerdictCache.ResolveHostStateRoot(worktreePath), ".orchestrator", FileName);
+        HostLedgerStateDirectory.Resolve(worktreePath), FileName);
+
+    internal static string ResolveStorePath(string worktreePath, Func<string, string>? route) => Path.Combine(
+        HostLedgerStateDirectory.Resolve(worktreePath, route), FileName);
 
     internal static void TryAppend(string? executionDirectory, int tick, long cpuMs,
         long cpuSweepMs, long cpuPrewalkMs, long cpuWalkMs, bool hadGoalChanges)
