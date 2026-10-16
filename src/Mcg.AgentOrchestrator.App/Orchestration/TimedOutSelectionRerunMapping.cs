@@ -36,4 +36,10 @@ internal static class TimedOutSelectionRerunMapping
 
     internal static string? CheckClassification(AcceptanceCheckResult check) =>
         check.FailureClassification;
+
+    internal static bool IsUnusableRerunCheck(AcceptanceCheckResult check) =>
+        throw new NotImplementedException();
+
+    internal static string DescribeApparatus(IEnumerable<string> selections) =>
+        throw new NotImplementedException();
 }
