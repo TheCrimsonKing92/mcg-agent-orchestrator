@@ -131,7 +131,7 @@ public sealed class CliCommandTestsBacklogPremiseCheck : CliCommandTestBase
         var epic = await store.AddAsync("Emerald", "protected by epic");
         var done = await store.AddAsync("Fuchsia", $"Resolved {missing.Id[..8]}");
         await store.CloseAsync(done.Id);
-        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = workspace.BacklogStorePath }.ToString()))
+        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = workspace.BacklogStorePath, Pooling = false }.ToString()))
         {
             connection.Open();
             using var command = connection.CreateCommand();
@@ -161,7 +161,7 @@ public sealed class CliCommandTestsBacklogPremiseCheck : CliCommandTestBase
     {
         using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
-            DataSource = workspace.BacklogStorePath, Mode = SqliteOpenMode.ReadOnly
+            DataSource = workspace.BacklogStorePath, Mode = SqliteOpenMode.ReadOnly, Pooling = false
         }.ToString());
         connection.Open();
         using var command = connection.CreateCommand();
