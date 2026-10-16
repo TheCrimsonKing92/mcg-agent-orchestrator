@@ -18,6 +18,7 @@ internal sealed partial class ConductorStewardHost
     private readonly ConductEventLogWriter _conduct;
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly ConductorStewardCaseDSources? _caseDSources;
+    private readonly ConductorStewardCaseG? _caseG;
     private readonly CancellationTokenSource _shutdown = new();
     private Task<string>? _round;
     private ConductorStewardStoredTrigger? _running;
@@ -38,7 +39,8 @@ internal sealed partial class ConductorStewardHost
         Func<DateTimeOffset>? utcNow = null,
         bool enabled = true,
         ConductorStewardDeterministicRoute? deterministicRoute = null,
-        ConductorStewardCaseDSources? caseDSources = null)
+        ConductorStewardCaseDSources? caseDSources = null,
+        ConductorStewardCaseG? caseG = null)
     {
         _triggers = triggers;
         _detector = detector;
@@ -51,6 +53,7 @@ internal sealed partial class ConductorStewardHost
         _conduct = conduct;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         _caseDSources = caseDSources;
+        _caseG = caseG;
         _deterministicRoute = deterministicRoute ?? new ConductorStewardDeterministicRoute();
         Enabled = enabled;
     }
@@ -118,7 +121,18 @@ internal sealed partial class ConductorStewardHost
             deterministicRoute: new ConductorStewardDeterministicRoute(
                 new GitConductorStewardTrackedFileLister(),
                 new ManifestConductorStewardLaneSubstringResolver(workspace.ProjectHomeDirectoryOrNull)),
-            caseDSources: caseDSources);
+            caseDSources: caseDSources,
+            caseG: new ConductorStewardCaseG(
+                OperatorIntentCoordinator.BuildLiveAcceptanceAttemptQuery(new ConductorParallelAcceptanceAttemptCoordinator(
+                    Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts"),
+                    workspace.IntegrationBranch, workspace.ExecutionDirectory)),
+                goalId => new ConductorGroupedGateAttemptCoordinator(
+                        Path.Combine(workspace.OrchestratorDirectory, "grouped-gate-attempts"))
+                    .ReadAll().Any(attempt => attempt.ReconciledAt is null &&
+                        attempt.Members.Any(member => member.GoalId == goalId.Value)),
+                goal => GoalOperationJournal.HasCompletedLandingEvidence(
+                    GoalOperationJournal.Read(workspace.ExecutionDirectory, goal.Id)),
+                caseDSources.ResolveHead));
         return host;
     }
 
@@ -131,6 +145,9 @@ internal sealed partial class ConductorStewardHost
         foreach (var expired in _triggers.ExpireStale(now.AddMinutes(-15)))
             Record(expired.Trigger, "model-failure", "timeout", null);
         ReconcileSubmittedRoutes();
+        foreach (var goal in kernel.Goals.Where(goal => !goal.IsTerminal &&
+                     (onlyGoalId is null || goal.Id.Value == onlyGoalId)))
+            ServiceCaseG(kernel, goal, now, changed);
         Harvest(kernel, onlyGoalId, changed);
 
         foreach (var goal in kernel.Goals.Where(goal => !goal.IsTerminal &&
@@ -207,6 +224,62 @@ internal sealed partial class ConductorStewardHost
             }
         }
         return changed;
+    }
+
+    private void ServiceCaseG(AgentOrchestratorKernel kernel, Goal goal, DateTimeOffset now,
+        HashSet<GoalId> changed)
+    {
+        if (_caseG is null) return;
+        foreach (var trigger in _caseG.Detect(goal, now))
+        {
+            if (!_triggers.NeedsInspection(trigger.GoalId, trigger.TaskId, trigger.CandidateSha, trigger.Kind))
+                continue;
+            var stored = _triggers.Observe(trigger);
+            if (stored.Status == "serviced" && stored.Outcome == "route-applied" &&
+                trigger.OccurredAt > stored.FirstOccurrence && !stored.RepeatQuestionRaised)
+            {
+                Question(kernel, goal, trigger,
+                    "The same recovery trigger recurred after a Steward retry. Owner decision required.",
+                    trigger.EvidenceReferences, changed);
+                _triggers.MarkRepeatQuestionRaised(stored.Key);
+                continue;
+            }
+            if (stored.Status != "pending") continue;
+            OperatorIntentRecord intent;
+            try
+            {
+                var version = _version(goal.Id);
+                if (version is null)
+                {
+                    _triggers.MarkServiced(stored.Key, "no-action", null);
+                    Record(trigger, "no-action", "goal-version-unavailable", null);
+                    continue;
+                }
+                var task = goal.Tasks.Single(item => item.Id.Value == trigger.TaskId);
+                var payload = new AdjudicateOperatorIntentPayload("reopen-regate",
+                    ConductorStewardCaseG.ComposeNote(trigger, trigger.WorkerResult),
+                    trigger.EvidenceReferences.Append($"steward-trigger={stored.Key}").ToArray(),
+                    version.Value, _workingDirectory(goal), Reversibility: "reversible-with-cost",
+                    Precedent: $"steward-case=G trigger={trigger.Identity}",
+                    Precondition: AdjudicationPrecondition.Capture(goal, task));
+                var intentId = Guid.NewGuid().ToString("N");
+                intent = _intents.EnqueueAsync(new OperatorIntentRecord(
+                    intentId, $"steward-{stored.Key}", OperatorIntentVerbs.Adjudicate,
+                    trigger.GoalId, trigger.TaskId, JsonSerializer.Serialize(payload, _json), [],
+                    "steward", "conductor-steward", OperatorIntentAdjudication.StewardAssurance,
+                    now, ActorKind: OperatorActorKind.Agent)).GetAwaiter().GetResult();
+                _triggers.MarkServiced(stored.Key, "route-submitted", intent.Id);
+            }
+            catch (Exception ex)
+            {
+                // A deterministic trigger must not remain available to the model-round claimer.
+                _triggers.MarkServiced(stored.Key, "no-action", null);
+                Record(trigger, "no-action", $"case-G-failure:{ex.GetType().Name}", null);
+                continue;
+            }
+            // Logging failure must not erase the submitted remedy's reconciliation identity.
+            Record(trigger, "reopen-regate", "reopen-regate-submitted", intent.Id);
+        }
     }
 
     private void ReconcileSubmittedRoutes()

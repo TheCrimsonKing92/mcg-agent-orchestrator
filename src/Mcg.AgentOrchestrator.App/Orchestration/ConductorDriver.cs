@@ -274,7 +274,8 @@ internal sealed partial class ConductorDriver
                 workspace.OrchestratorDirectory,
                 "acceptance-gate-attempts",
                 AcceptanceFailingTestIndex.FileName),
-            goal => GoalWorktrees.TryResolve(dir, goal.Id) ?? dir);
+            goal => GoalWorktrees.TryResolve(dir, goal.Id) ?? dir,
+            landingAttributor: new GateFailureLandingAttributor(dir));
         (_acceptanceEventSink, _noTickAcceptancePollDelay, _noTickAcceptancePollTimeout) = CreateProductionAcceptanceWaitConfiguration(workspace);
         _focusedEvidenceAttemptCoordinator = OwnedChildAttemptCoordinatorFactory.CreateFocusedEvidence(
             workspace, _cohortCleanupHooks.BuildStorageRoot);
