@@ -178,10 +178,15 @@ public static class DispatchReadinessRules
         return agent?.Subscription?.WorkerProfileName ?? agent?.Model.ProviderName ?? "unknown";
     }
 
-    private static string[] BuildIncompleteEarlierStageDependencies(Goal goal, TaskSpec task)
+    internal static string[] BuildIncompleteEarlierStageDependencies(Goal goal, TaskSpec task)
     {
+        var earlierDevelopers = TestFirstScopeCheck.IsTestFirst(goal) && task.RequiredRole == AgentRole.Developer
+            ? goal.Tasks.TakeWhile(candidate => candidate.Id != task.Id)
+                .Where(candidate => candidate.RequiredRole == AgentRole.Developer)
+            : [];
         return goal.Tasks
             .Where(candidate => IsEarlierSdlcStage(candidate.RequiredRole, task.RequiredRole))
+            .Concat(earlierDevelopers)
             .Where(candidate => candidate.Status != WorkTaskStatus.Completed)
             .Select(candidate => candidate.Id.Value)
             .Distinct(StringComparer.OrdinalIgnoreCase)
