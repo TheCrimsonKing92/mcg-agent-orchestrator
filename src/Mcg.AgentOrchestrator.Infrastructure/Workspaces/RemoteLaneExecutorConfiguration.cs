@@ -16,6 +16,7 @@ internal sealed record RemoteLaneExecutorConfiguration(
 {
     internal IReadOnlyList<string> MachineLocalResourceKeys { get; init; } = [];
     internal RemoteFocusedEvidenceSettings FocusedEvidence { get; init; } = new();
+    internal ExecutorScreeningSettings Screening { get; init; } = new();
     internal bool AllInfrastructureLanes { get; init; }
     internal RemoteLaneExecutorConfiguration ResolveLanes(IEnumerable<string> infrastructureLaneNames) =>
         AllInfrastructureLanes ? this with { Lanes = infrastructureLaneNames.Distinct(StringComparer.Ordinal).ToArray() } : this;
@@ -114,7 +115,7 @@ internal sealed record RemoteLaneExecutorConfiguration(
             return new(entries.ToArray(), names.ToArray(), null)
             {
                 MachineLocalResourceKeys = keys.ToArray(), AllInfrastructureLanes = allInfrastructureLanes,
-                FocusedEvidence = ParseFocusedEvidence(root)
+                FocusedEvidence = ParseFocusedEvidence(root), Screening = ExecutorScreeningSettings.Parse(root)
             };        }
         catch (FileNotFoundException) { return Disabled("missing"); }
         catch (DirectoryNotFoundException) { return Disabled("missing"); }

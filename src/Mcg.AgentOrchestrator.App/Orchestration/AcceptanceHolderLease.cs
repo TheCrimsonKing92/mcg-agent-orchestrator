@@ -11,8 +11,34 @@ internal sealed record AcceptanceHolderBinding(string AttemptId, string Metadata
     internal string SettlementPath => MetadataPath + ".holder-settled.json";
     internal string JobName => "Local\\mcg-acceptance-" + Convert.ToHexString(SHA256.HashData(
         Encoding.UTF8.GetBytes($"{Path.GetFullPath(MetadataPath).ToUpperInvariant()}:{AttemptId}:{Candidate}:{Slot}")));
-    internal static AcceptanceHolderBinding For(ConductorParallelAcceptanceAttempt attempt) =>
-        new(attempt.AttemptId, attempt.MetadataPath, attempt.CandidateKey, $"slot-{attempt.SlotIndex}");
+    internal static AcceptanceHolderBinding For(ConductorParallelAcceptanceAttempt attempt)
+    {
+        var current = new AcceptanceHolderBinding(attempt.AttemptId, attempt.MetadataPath,
+            attempt.HolderCandidateKey ?? attempt.CandidateKey, $"slot-{attempt.SlotIndex}");
+        return attempt.HolderContractVersion == 1 && attempt.HolderCandidateKey is null
+            ? RecordedLaunchBinding(current) ?? current : current;
+    }
+
+    // Durable attempts written before HolderCandidateKey existed carry only the rewritten terminal heads.
+    // Their own lease file still names the launch candidate; the attempt id (a GUID), canonical metadata
+    // path and slot identify it uniquely, so only the candidate is taken from the lease.
+    private static AcceptanceHolderBinding? RecordedLaunchBinding(AcceptanceHolderBinding current)
+    {
+        try
+        {
+            if (!File.Exists(current.LeasePath)) return null;
+            using var document = JsonDocument.Parse(File.ReadAllText(current.LeasePath));
+            var binding = document.RootElement.GetProperty("Binding");
+            var candidate = binding.GetProperty("Candidate").GetString();
+            return binding.GetProperty("AttemptId").GetString() == current.AttemptId &&
+                binding.GetProperty("MetadataPath").GetString() == current.MetadataPath &&
+                binding.GetProperty("Slot").GetString() == current.Slot && !string.IsNullOrWhiteSpace(candidate)
+                ? current with { Candidate = candidate } : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or
+            KeyNotFoundException or InvalidOperationException)
+        { return null; }
+    }
     internal static AcceptanceHolderBinding For(ConductorGroupedGateAttempt attempt) =>
         new(attempt.AttemptId, attempt.MetadataPath, attempt.IdentityValue, $"{attempt.Kind}:{attempt.IdentityValue}");
 }

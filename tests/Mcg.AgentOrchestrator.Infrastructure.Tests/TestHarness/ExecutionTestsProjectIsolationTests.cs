@@ -45,7 +45,9 @@ public sealed class ExecutionTestsProjectIsolationTests
         "WorkerResultParserEvidenceTests",
         "WorkerSkillReadParserTests",
         "WorkerSourceSurveyInventoryTests",
-        "WorkerDispatchCompletionClassifierTests"
+        "WorkerDispatchCompletionClassifierTests",
+        "WorkerShellTests",
+        "WorkerSandboxCapabilityPlannerTests"
     ];
 
     [Fact]

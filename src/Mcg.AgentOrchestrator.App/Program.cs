@@ -260,6 +260,11 @@ if (CliRemoteLaneSelfTestCommand.IsCommand(startupArgs))
     return ExitCompletedStartupCommand(await CliRemoteLaneSelfTestCommand.RunAsync(startupArgs, workspace));
 }
 
+if (CliExecutorScreenCommand.IsCommand(startupArgs))
+{
+    return ExitCompletedStartupCommand(await CliExecutorScreenCommand.RunAsync(startupArgs, workspace));
+}
+
 if (Mcg.AgentOrchestrator.App.OwnerConsole.OwnerConsoleVerb.IsCommand(startupArgs))
     return ExitCompletedStartupCommand(await Mcg.AgentOrchestrator.App.OwnerConsole.OwnerConsoleVerb.RunAsync(startupArgs, workspace));
 if (CliOperatorIntentRoute.IsServed(startupArgs))

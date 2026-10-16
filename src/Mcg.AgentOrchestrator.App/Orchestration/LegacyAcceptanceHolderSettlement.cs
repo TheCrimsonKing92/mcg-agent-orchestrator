@@ -43,6 +43,25 @@ internal static class LegacyAcceptanceHolderSettlement
         return true;
     }
 
+    internal static bool PredatesHostBoot(ConductorGroupedGateAttempt attempt, DateTimeOffset boot)
+    {
+        if (attempt.StartedAt >= boot) return false;
+        foreach (var path in new[] { attempt.ResultPath, attempt.ExitCodePath,
+            attempt.StdoutPath, attempt.StderrPath })
+        {
+            if (string.IsNullOrWhiteSpace(path)) continue;
+            try
+            {
+                // File.Exists hides access failures; only a missing artifact may be skipped.
+                _ = File.GetAttributes(path);
+                if (new DateTimeOffset(File.GetLastWriteTimeUtc(path), TimeSpan.Zero) >= boot) return false;
+            }
+            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) { continue; }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return false; }
+        }
+        return true;
+    }
+
     // Upgrade admission follows the recorded full identity. Incomplete or uninspectable
     // identities still require the existing operator proof; a matching live PID never settles.
     internal static bool IsAbsent(int processId, DateTimeOffset? startedAt, string? image,

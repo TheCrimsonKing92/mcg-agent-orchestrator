@@ -260,6 +260,16 @@ public sealed class CliServedFormsSqliteStoreEffectsTests : CliTaskQueryTestSupp
             kernel.CreateGoal(new GoalId(GoalIdValue), "Query route goal",
                 [new TaskSpec(new TaskId("abc10000dddddddddddddddddddddddd"),
                     "Query route task", AgentRole.Developer)]);
+            var snapshot = kernel.ExportSnapshot();
+            var goal = snapshot.Goals.Single();
+            var verification = new TaskVerificationSnapshot("review", "", 0, "", "",
+                DateTimeOffset.Parse("2026-10-07T00:00:00Z"), MergedReviewFindings:
+                [new ReviewFinding("query-route-finding", ReviewFindingState.Open,
+                    new ReviewFindingLocation("sample.cs", "Query"), "Query route finding")]);
+            kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with
+            {
+                Goals = [goal with { Tasks = [goal.Tasks.Single() with { VerificationHistory = [verification] }] }]
+            });
             action(workspace, kernel);
         }
         finally
