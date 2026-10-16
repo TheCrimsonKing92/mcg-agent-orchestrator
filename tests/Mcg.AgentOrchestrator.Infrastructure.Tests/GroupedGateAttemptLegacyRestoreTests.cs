@@ -62,7 +62,8 @@ public sealed class GroupedGateAttemptLegacyRestoreTests(ITestOutputHelper outpu
 
         Assert.Empty(driver.GetActiveCohortGateMemberGoalIds());
         Assert.Equal(0, driver.CountLiveGroupedGateAttempts());
-        Assert.Equal(attempt, fixture.Coordinator.TryReconcileDead(attempt, "child-result-published"));
+        var reconciled = fixture.Coordinator.TryReconcileDead(attempt, "child-result-published");
+        Assert.Equal(JsonSerializer.Serialize(attempt), JsonSerializer.Serialize(reconciled));
         Assert.Equal(originalLease, File.ReadAllBytes(binding.LeasePath));
         Assert.Equal(originalMetadata, File.ReadAllBytes(attempt.MetadataPath));
     }
