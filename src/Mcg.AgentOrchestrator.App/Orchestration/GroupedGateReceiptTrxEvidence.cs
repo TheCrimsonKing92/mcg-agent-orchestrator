@@ -1,4 +1,3 @@
-using System.Xml.Linq;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -10,7 +9,11 @@ internal static class GroupedGateReceiptTrxEvidence
         string Kind, string ReceiptId, DateTimeOffset CompletedAt, IReadOnlyList<string> TrxPaths);
 
     internal sealed record SelectorEvidence(
-        string Selector, int Passed, int Failed, int Superseded, bool Satisfied);
+        string Selector, int Passed, int Failed, int Superseded, bool Satisfied,
+        IReadOnlyList<string>? AmbiguousClassNames = null)
+    {
+        internal string ReportedEntry => ProspectiveEvidenceTrxRows.FormatEntry(Selector, AmbiguousClassNames);
+    }
 
     internal static IReadOnlyList<Receipt> ReadPassedReceipts(
         string orchestratorDirectory, GoalId goalId, string? candidate)
@@ -53,11 +56,11 @@ internal static class GroupedGateReceiptTrxEvidence
     internal static IReadOnlyList<SelectorEvidence> Evaluate(
         IReadOnlyList<string> selectors, IReadOnlyList<string> trxPaths, string orchestratorDirectory)
     {
-        TestRow[] rows;
+        ProspectiveEvidenceTrxRows.Row[] rows;
         try
         {
             rows = trxPaths.Select(path => Path.GetFullPath(path, orchestratorDirectory))
-                .SelectMany(ReadRows).ToArray();
+                .SelectMany(ProspectiveEvidenceTrxRows.Read).ToArray();
         }
         catch (Exception)
         {
@@ -67,37 +70,15 @@ internal static class GroupedGateReceiptTrxEvidence
 
         return selectors.Select(selector =>
         {
-            var matches = rows.Where(row => ProspectiveEvidenceGateResolver.Matches(selector, row.FullIdentity) ||
-                ProspectiveEvidenceGateResolver.Matches(selector, row.ShortIdentity)).ToArray();
+            var matches = ProspectiveEvidenceTrxRows.Match(selector, rows);
+            var ambiguous = ProspectiveEvidenceTrxRows.AmbiguousClassNames(matches);
             var passed = matches.Count(row => row.Passed);
             var superseded = matches.Count(row => !row.Passed && rows.Any(rerun => rerun.Passed &&
                 string.Equals(rerun.FullIdentity, row.FullIdentity, StringComparison.Ordinal) &&
                 !string.Equals(rerun.Path, row.Path, StringComparison.OrdinalIgnoreCase)));
             var failed = matches.Length - passed - superseded;
-            return new SelectorEvidence(selector, passed, failed, superseded, passed > 0 && failed == 0);
+            return new SelectorEvidence(selector, passed, failed, superseded,
+                passed > 0 && failed == 0 && ambiguous is null, ambiguous);
         }).ToArray();
     }
-
-    private static IEnumerable<TestRow> ReadRows(string path)
-    {
-        var document = XDocument.Load(path, LoadOptions.None);
-        var definitions = document.Descendants()
-            .Where(element => element.Name.LocalName == "UnitTest" && element.Attribute("id") is not null)
-            .GroupBy(element => element.Attribute("id")!.Value, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
-        foreach (var result in document.Descendants().Where(element => element.Name.LocalName == "UnitTestResult"))
-        {
-            definitions.TryGetValue(result.Attribute("testId")?.Value ?? string.Empty, out var definition);
-            var full = AcceptanceTrxTestIdentityResolver.Resolve(result, definition);
-            if (full is null) continue;
-            var className = definition?.Descendants().FirstOrDefault(element =>
-                element.Name.LocalName == "TestMethod")?.Attribute("className")?.Value.Trim();
-            var namespaceEnd = className?.LastIndexOf('.') ?? -1;
-            var shortIdentity = namespaceEnd >= 0 && full.StartsWith(className!, StringComparison.Ordinal)
-                ? full[(namespaceEnd + 1)..] : full;
-            yield return new(full, shortIdentity, path, result.Attribute("outcome")?.Value == "Passed");
-        }
-    }
-
-    private sealed record TestRow(string FullIdentity, string ShortIdentity, string Path, bool Passed);
 }
