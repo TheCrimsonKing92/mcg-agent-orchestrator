@@ -72,6 +72,47 @@ public sealed class PipeDrainThreadPoolSaturationTests
         Assert.Equal("dedicated-reader-substitution-starved", result.Receipt.FailureKind);
     }
 
+    [Xunit.Fact]
+    public void PipeDrainReadsToEndAfterPriorPoolGrowthWithHeldPoolWork()
+    {
+        var result = RunSaturationProbe(PipeDrainSaturationProbeChildTests.WarmedWithHeldPoolWorkMode);
+
+        Assert.True(result.ExitCode == 0, result.DescribeFailure());
+        Assert.Equal("passed", result.Receipt.Outcome);
+        Assert.Equal(PipeDrainSaturationProbeChildTests.WarmedWithHeldPoolWorkMode, result.Receipt.Mode);
+        Assert.True(
+            result.Receipt.WarmThreadCountPeak >= result.Receipt.WarmWorkerCount
+                && result.Receipt.WarmWorkerCount > 0,
+            $"Probe pool did not reach legacy-scale warm history: " +
+            $"threadCountBeforeWarm={result.Receipt.ThreadCountBeforeWarm}; " +
+            $"warmThreadCountPeak={result.Receipt.WarmThreadCountPeak}; " +
+            $"warmWorkerCount={result.Receipt.WarmWorkerCount}.{Environment.NewLine}{result.DescribeFailure()}");
+        Assert.True(
+            result.Receipt.ThreadCountBefore > result.Receipt.WorkerBound,
+            $"Probe pool was no longer grown beyond the bound when capacity was bounded: " +
+            $"threadCountBefore={result.Receipt.ThreadCountBefore}; " +
+            $"workerBound={result.Receipt.WorkerBound}.{Environment.NewLine}{result.DescribeFailure()}");
+        Assert.Equal(0, result.Receipt.AvailableWorkersAfterBarrier);
+        Assert.False(
+            result.Receipt.PoolDependentReadCompletedAfterObservation,
+            "Negative control completed within the two-second starvation observation window.");
+        Assert.False(
+            result.Receipt.PoolWorkItemExecutedDuringObservation,
+            "Direct pool-work-item control unexpectedly ran during the starvation observation window.");
+    }
+
+    [Xunit.Fact]
+    public void WarmPoolHistoryFailsWhenWorkerGrowthIsCappedBelowTarget()
+    {
+        var result = RunSaturationProbe(PipeDrainSaturationProbeChildTests.WarmGrowthCappedBelowTargetMode);
+
+        Assert.True(result.ExitCode != 0, result.DescribeFailure());
+        Assert.Equal("failed", result.Receipt.Outcome);
+        Assert.Equal(PipeDrainSaturationProbeChildTests.WarmGrowthCappedBelowTargetMode, result.Receipt.Mode);
+        Assert.Equal("warm-history-not-established", result.Receipt.FailureKind);
+        Assert.Contains("failureKind=warm-growth-not-observed", result.Stdout);
+    }
+
     private static SaturationProbeProcessResult RunSaturationProbe(string mode)
     {
         var root = CreateTempDirectory();
@@ -101,7 +142,7 @@ public sealed class PipeDrainThreadPoolSaturationTests
             process.StandardInput.Close();
             var stdout = process.StandardOutput.ReadToEndAsync();
             var stderr = process.StandardError.ReadToEndAsync();
-            if (!process.WaitForExit(35_000))
+            if (!process.WaitForExit((int)(BoundedThreadPoolSaturationApparatus.PhaseWaitTimeout * 4 + TimeSpan.FromSeconds(4) + TimeSpan.FromSeconds(60)).TotalMilliseconds))
             {
                 process.Kill(entireProcessTree: true);
                 process.WaitForExit();
