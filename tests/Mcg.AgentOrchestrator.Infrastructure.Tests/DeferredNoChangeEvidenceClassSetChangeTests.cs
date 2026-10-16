@@ -12,7 +12,7 @@ public sealed class DeferredNoChangeEvidenceClassSetChangeTests
     private static readonly string[] Original = ["DeferredAlphaTests", "DeferredBetaTests"];
     private static readonly string[] Expanded = ["DeferredAlphaTests", "DeferredBetaTests", "DeferredDeltaTests"];
 
-    [Xunit.Fact(Timeout = 30000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public void ClassSetChangeStartsOneRunThenSkips()
     {
@@ -70,7 +70,7 @@ public sealed class DeferredNoChangeEvidenceClassSetChangeTests
         Xunit.Assert.Equal("green", scenario.Latest(Expanded)!.Outcome);
     }
 
-    [Xunit.Fact(Timeout = 30000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public void ChangedDeclarationRedEscalatesOnRepeat()
     {

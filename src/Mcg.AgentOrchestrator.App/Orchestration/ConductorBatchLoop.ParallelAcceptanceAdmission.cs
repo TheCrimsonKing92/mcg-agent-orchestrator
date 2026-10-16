@@ -38,7 +38,7 @@ internal sealed partial class ConductorBatchLoop
             .ToArray());
         var activeReservations = BuildActiveParallelAcceptanceReservations(
             driver.ParallelAcceptanceAttemptCoordinator,
-            kernel.Goals.Where(goal => goal.Status != GoalStatus.Completed).ToArray());
+            kernel.Goals.ToArray());
         if (activeReservations.Failure is { } capacityFailure)
         {
             var reason =

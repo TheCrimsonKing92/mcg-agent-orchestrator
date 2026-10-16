@@ -13,6 +13,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     private readonly OwnerConsoleScreenController _controller;
     private readonly IApplication _app;
     private readonly IKeyboard? _keyboard;
+    private readonly OwnerConsoleInputDiagnostics? _diagnostics;
     private readonly Func<Task> _refresh;
     private readonly CancellationToken _token;
     private readonly CancellationTokenSource _lifetime;
@@ -62,9 +63,10 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
 
     internal OwnerConsoleFullScreenView(IApplication app, OwnerConsoleScreenController controller,
         Func<Task> refresh, CancellationToken token = default, TimeProvider? clock = null,
-        OwnerConsoleLoopOptions? options = null)
+        OwnerConsoleLoopOptions? options = null, OwnerConsoleInputDiagnostics? diagnostics = null)
     {
         _app = app;
+        _diagnostics = diagnostics;
         _controller = controller;
         _refresh = refresh;
         _lifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -97,19 +99,32 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         {
             if (!_rendering && _decisions.SelectedItem is { } index) _controller.SelectIndex(index);
             if (!_rendering) RenderHints();
+            _diagnostics?.Mark("decision-selection", TraceState);
         };
         _board.ValueChanged += (_, args) =>
         {
             if (!_rendering && args.NewValue?.SelectedCell is { } cell) SelectBoard(cell.Y);
+            _diagnostics?.Mark("board-selection", TraceState);
         };
+        if (_diagnostics is not null)
+            _activity.ValueChanged += (_, _) => _diagnostics.Mark("activity-selection", TraceState);
         _decisions.HasFocusChanged += (_, _) => PaneFocusChanged(_decisions, OwnerConsolePane.Decisions);
         _board.HasFocusChanged += (_, _) => PaneFocusChanged(_board, OwnerConsolePane.Board);
         _activity.HasFocusChanged += (_, _) => PaneFocusChanged(_activity, OwnerConsolePane.Activity);
         _command.HasFocusChanged += (_, _) => RenderHints();
-        _activity.ViewportChanged += (_, _) => Fit(_activity.Viewport.Width, _boardTitleWidth);
-        _board.ViewportChanged += (_, _) => Fit(_activityWidth, 0);
+        _activity.ViewportChanged += (_, _) =>
+        {
+            using var trace = _diagnostics?.Begin("activity-viewport", TraceState);
+            Fit(_activity.Viewport.Width, _boardTitleWidth);
+        };
+        _board.ViewportChanged += (_, _) =>
+        {
+            using var trace = _diagnostics?.Begin("board-viewport", TraceState);
+            Fit(_activityWidth, 0);
+        };
         _decisions.ViewportChanged += (_, _) =>
         {
+            using var trace = _diagnostics?.Begin("decisions-viewport", TraceState);
             if (_rendering) return;
             _rendering = true;
             try { RenderDecisions(); }
@@ -118,6 +133,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         RenderHints();
         _keyboard = app.Initialized ? app.Keyboard : null;
         if (_keyboard is not null) _keyboard.KeyDown += OnKeyDown;
+        if (_diagnostics is not null) _app.LayoutAndDrawComplete += OnLayoutAndDrawComplete;
     }
 
     private static DataTable CreateBoardTable()
@@ -129,6 +145,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
 
     internal void Render(OwnerConsoleViewModel model)
     {
+        using var trace = _diagnostics?.Begin("render", TraceState);
         _rendering = true;
         try
         {
@@ -149,7 +166,8 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
 
     internal void Fit(int activityWidth, int boardTitleWidth)
     {
-        if (_rendering) return;
+        using var trace = _diagnostics?.Begin("fit", TraceState);
+        if (_rendering) { if (trace is not null) trace.Outcome = "skipped-rendering"; return; }
         _activityWidth = activityWidth;
         _boardTitleWidth = boardTitleWidth;
         _rendering = true;
@@ -159,12 +177,14 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
 
     private void RenderBoard()
     {
+        using var trace = _diagnostics?.Begin("board-source-replacement", TraceState);
         if (_controller.Model is not { } model) return;
         OwnerConsoleBoardRenderer.Render(BoardTable, _board, model.Board, _board.Viewport.Width, _boardTitleWidth);
     }
 
     private void RenderDecisions()
     {
+        using var trace = _diagnostics?.Begin("decisions-source-replacement", TraceState);
         if (_controller.Model is not { } model) return;
         var rows = model.Decisions.Select(item => OwnerConsoleLineFitter.Fit(
             $"[{item.Number}] {item.GoalPrefix} {item.Kind}: {item.Summary}", OwnerConsoleLineSpans.None, _decisions.Viewport.Width)).ToArray();
@@ -235,6 +255,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
 
     private void RenderActivity()
     {
+        using var trace = _diagnostics?.Begin("activity-source-replacement", TraceState);
         var selected = _activity.SelectedItem;
         var selectedLine = selected is { } index && index >= 0 && index < _fullActivityLines.Count
             ? _fullActivityLines[index] : null;
@@ -254,14 +275,44 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
 
     private async void OnKeyDown(object? sender, Key key)
     {
-        if (_app.TopRunnableView != Window) return;
-        try { await HandleKeyAsync(key); }
+        if (_diagnostics is null && _app.TopRunnableView != Window) return;
+        try
+        {
+            await (_diagnostics is null ? HandleKeyCoreAsync(key) :
+                ObserveKeyAsync(key, _app.TopRunnableView == Window, "keyboard-callback"));
+        }
         catch (OperationCanceledException) when (_token.IsCancellationRequested) { }
         catch (Exception ex) { ShowNotice($"key action failed: {ex.Message}", OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Action); }
     }
 
-    // The production keyboard callback and headless tests use this same routing path.
-    internal async Task HandleKeyAsync(Key key)
+    // The production callback and headless tests share routing; their input boundaries remain distinct.
+    internal Task HandleKeyAsync(Key key) => _diagnostics is null ? HandleKeyCoreAsync(key) :
+        ObserveKeyAsync(key, true, "headless-input");
+
+    internal async Task ObserveKeyAsync(Key key, bool routeToWindow, string boundary)
+    {
+        using var input = _diagnostics?.Begin(boundary, TraceState, key.ToString(), input: true);
+        if (!routeToWindow)
+        {
+            if (input is not null) input.Outcome = "excluded-top-window";
+            return;
+        }
+        using var handler = _diagnostics?.Begin("handler", TraceState);
+        try
+        {
+            await HandleKeyCoreAsync(key);
+            if (handler is not null) handler.Outcome = key.Handled ? "handled" : "unhandled";
+            if (input is not null) input.Outcome = key.Handled ? "handled" : "unhandled";
+        }
+        catch (Exception ex)
+        {
+            if (handler is not null) handler.Outcome = ex is OperationCanceledException ? "cancelled" : "faulted";
+            if (input is not null) input.Outcome = handler?.Outcome ?? "faulted";
+            throw;
+        }
+    }
+
+    private async Task HandleKeyCoreAsync(Key key)
     {
         if (EpicView.IsOpen)
         {
@@ -450,6 +501,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
 
     private void SelectBoard(int index)
     {
+        using var trace = _diagnostics?.Begin("select-board", TraceState);
         if (_controller.Model is not { Board.Length: > 0 } model)
         { _selectedBoardIndex = -1; SelectedGoalId = null; return; }
         _selectedBoardIndex = Math.Clamp(index, 0, model.Board.Length - 1);
@@ -461,8 +513,27 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
 
     private void Invoke(Action action)
     {
-        if (_app.Initialized) _app.Invoke(action);
+        if (_app.Initialized && _diagnostics is not null)
+        {
+            _app.Invoke(_diagnostics.ObservePost("view-invoke", action, TraceState));
+        }
+        else if (_app.Initialized) _app.Invoke(action);
         else action();
+    }
+
+    private void OnLayoutAndDrawComplete(object? sender, EventArgs args) =>
+        _diagnostics?.Mark("layout-draw-complete", TraceState);
+
+    private OwnerConsoleTraceState TraceState()
+    {
+        static OwnerConsoleTracePane Pane(View view, int index, string? identity, int count) =>
+            new(index, identity, count, view.Viewport.X, view.Viewport.Y, view.Viewport.Width, view.Viewport.Height);
+        return new(_editingCommand || _command.HasFocus ? "Command" : FocusedPane.ToString(),
+            _editingCommand, EpicView.IsOpen || (_app.Initialized && _app.TopRunnableView != Window),
+            Pane(_decisions, _decisions.SelectedItem ?? -1, _controller.SelectedDecisionId, _controller.Model?.Decisions.Length ?? 0),
+            Pane(_board, _selectedBoardIndex, SelectedGoalId, _controller.Model?.Board.Length ?? 0) with
+                { RowOffset = _board.RowOffset, ColumnOffset = _board.ColumnOffset },
+            Pane(_activity, _activity.SelectedItem ?? -1, null, ActivityLines.Count));
     }
 
     private static string Age(TimeSpan? span) => span is null ? "unknown" :
@@ -474,6 +545,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         _noticeExpiryTimer?.Dispose();
         _controller.Dispose();
         if (_keyboard is not null) _keyboard.KeyDown -= OnKeyDown;
+        if (_diagnostics is not null) _app.LayoutAndDrawComplete -= OnLayoutAndDrawComplete;
         Window.Dispose();
         BoardTable.Dispose();
         _lifetime.Dispose();

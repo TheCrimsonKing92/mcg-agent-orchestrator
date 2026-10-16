@@ -10,7 +10,7 @@ using static ConductorDriverTests;
 [Collection("IsolatedProcessSpawning")]
 public sealed class ConductorDriverTestsCriticalDispatchLifecycleEventGate
 {
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public void StaleCheckpointThenNextTickWritesOnlyTheCommittedDispatch()
     {

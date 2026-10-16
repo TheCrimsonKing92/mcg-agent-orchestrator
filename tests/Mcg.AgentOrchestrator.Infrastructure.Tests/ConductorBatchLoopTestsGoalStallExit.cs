@@ -16,7 +16,7 @@ public sealed class ConductorBatchLoopTestsGoalStallExit : ConductorBatchLoopTes
     {
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public void GoalStall_RestartAfterThreshold_EmitsOnce()
     {

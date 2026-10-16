@@ -269,9 +269,9 @@ This section deliberately contains no current-ceiling table or guarded relative 
 
 The guarded production entries are the ranked god classes whose growth the inventory tracks. Selected split products remain guarded at their measured post-split sizes so regrowth is visible; a one-time split without a bound only resets the clock. This is intentionally not a repository-wide size rule: files that remain within their intended post-split size, files moved to a more appropriate test project, and production files below the seeded band do not become guarded merely because they are large.
 
-When extraction shrinks a guarded file, lower its row in the authority in the same change. If growth is unavoidable, add an inline comment immediately above that row naming the goal and justification, then raise only that value. A rename or deletion must update the authority in the same change. Never derive a ceiling automatically from the current file, make a row advisory, add an opt-out, or delete the guard.
+Goals do not lower rows or add measured-size comments. Integration lowers every row to the integrated tree's size before the gate. A goal edits a row only to raise it, with a goal-specific justification directly above it. A rename or removal must update the authority in the same change. Never raise a ceiling automatically from the current file, make a row advisory, add an opt-out, or delete the guard.
 
-The largest partial classes are also bounded by total lines across their partial files and by partial-file count in `SourceSizeRatchet.SeededClassCeilings`; lower a row when extraction into a separately owned type shrinks the class, and raise it only with a goal-specific justification directly above the row, so moving members into another partial file does not satisfy the ratchet.
+The largest partial classes are also bounded by total lines across their partial files and by partial-file count in `SourceSizeRatchet.SeededClassCeilings`; integration lowers each value to the smaller of the row and the measured size before the gate. Goals only raise rows, with a goal-specific justification directly above, and do not add measured-size comments. A rename or removal updates the authority in the same change. Moving members into another partial file does not satisfy the ratchet.
 
 ### Recorded row raises
 

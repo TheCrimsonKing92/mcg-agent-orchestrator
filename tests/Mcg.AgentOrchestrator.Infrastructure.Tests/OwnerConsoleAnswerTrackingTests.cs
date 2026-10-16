@@ -10,7 +10,7 @@ public sealed class OwnerConsoleAnswerTrackingTests
     private const string Applied = "Answer applied for question 1 (11111111)";
     private const string StillQueued = "Answer still queued for question 1; the conductor has not applied it yet";
 
-    [Theory(Timeout = 30_000)] // Hang detector only; outcomes use scripted reads and virtual time.
+    [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)] // Hang detector only; outcomes use scripted reads and virtual time.
     [InlineData("applied", Applied, 3)]
     [InlineData("rejected", "Answer rejected for question 1 (11111111): duplicate answer", 1)]
     [InlineData("rejected-no-outcome", "Answer rejected for question 1 (11111111)", 1)]
@@ -68,7 +68,7 @@ public sealed class OwnerConsoleAnswerTrackingTests
         }
     }
 
-    [Theory(Timeout = 30_000)]
+    [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [InlineData("applied", Applied, 3)]
     [InlineData("rejected", "Answer rejected for question 1 (11111111): duplicate answer", 1)]
     [InlineData("pending", StillQueued, 3)]
@@ -98,7 +98,7 @@ public sealed class OwnerConsoleAnswerTrackingTests
         Assert.All(answers.StatusIds, id => Assert.Equal("intent-1", id));
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task PlainMode_DisposedSession_CancelsTrackingWithoutLateNotices()
     {
         var harness = Harness();
@@ -119,7 +119,7 @@ public sealed class OwnerConsoleAnswerTrackingTests
         Assert.Equal(1, answers.Reads);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task Tracker_ConcurrentAnswers_TracksEveryReceiptIndependently()
     {
         var clock = new SteppingClock();
@@ -144,7 +144,7 @@ public sealed class OwnerConsoleAnswerTrackingTests
         Assert.Contains("Answer applied for question 2 (22222222)", messages);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task Tracker_FailedReadAndClaimedIntent_ContinuesToApplied()
     {
         var clock = new SteppingClock();
@@ -165,7 +165,7 @@ public sealed class OwnerConsoleAnswerTrackingTests
         Assert.Equal(3, count);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task Tracker_HeldStatusRead_ExpiresWithStillQueuedAndCancelsRead()
     {
         var clock = new SteppingClock();

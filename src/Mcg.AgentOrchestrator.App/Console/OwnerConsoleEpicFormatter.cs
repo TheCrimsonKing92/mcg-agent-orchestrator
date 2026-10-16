@@ -47,6 +47,8 @@ internal static class OwnerConsoleEpicFormatter
             var marker = row.Epic.Id == selectedId ? "> " : "  ";
             lines.Add(Fit(marker + Title(row.Epic.Title), width));
             lines.AddRange(Wrap(Summary(row), width));
+            if (row.UnknownLandingDateCount > 0)
+                lines.AddRange(Wrap($"Unknown landing dates: {row.UnknownLandingDateCount} (excluded from dated windows)", width));
             if (row.Plan is not null) lines.AddRange(Wrap(row.Outcome.Render(), width));
             lines.Add(string.Empty);
         }
@@ -63,6 +65,8 @@ internal static class OwnerConsoleEpicFormatter
         lines.AddRange(OwnerConsoleEpicPlanFormatter.Lines(detail, width));
         Section("In flight", detail.InFlight);
         Section("Landed in window", detail.Landed);
+        if (detail.UnknownLandingDates is { Count: > 0 })
+            Section("Unknown landing dates", detail.UnknownLandingDates);
         Section("Failed", detail.Failed);
         Section("Parked", detail.Parked);
         return lines.SelectMany(line => Wrap(line, width)).ToArray();

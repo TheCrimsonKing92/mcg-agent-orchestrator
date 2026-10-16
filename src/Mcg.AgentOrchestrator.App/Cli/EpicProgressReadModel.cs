@@ -36,6 +36,7 @@ internal static class EpicProgressReadModel
         {
             var epicMembers = membersByEpic[epic.Id].ToArray();
             var memberGoals = epicMembers.Where(member => member.Kind == PortfolioMemberKind.Goal)
+                .DistinctBy(member => member.MemberId, StringComparer.Ordinal)
                 .Select(member => ToMember(member.MemberId, goalsById.GetValueOrDefault(member.MemberId)))
                 .OrderBy(member => GroupOf(member.Bucket))
                 .ThenByDescending(member => member.UpdatedAt)
@@ -57,7 +58,7 @@ internal static class EpicProgressReadModel
                 since is null ? null : memberGoals.Count(member => member.CreatedAt >= since),
                 since is null ? null : memberGoals.Count(member => member.UpdatedAt >= since),
                 since is null ? null : memberGoals.Count(member => member.Bucket == EpicProgressBucket.Failed && member.UpdatedAt >= since),
-                since is null ? null : memberGoals.Count(member => member.Bucket == EpicProgressBucket.Landed && member.UpdatedAt >= since));
+                since is null ? null : memberGoals.Count(member => member.LandedInWindow(since)));
         }).OrderBy(row => row.Project?.Title ?? "~")
             .ThenBy(row => row.Epic.Title, StringComparer.OrdinalIgnoreCase).ToArray();
     }
@@ -137,7 +138,8 @@ internal static class EpicProgressReadModel
             ? timestamp : (DateTimeOffset?)null;
         using var reader = new StringReader(goal.Objective);
         var title = reader.ReadLine() ?? string.Empty;
-        return new(id, bucket, goal.Status, updated, title.Length > 100 ? title[..100] : title, goal.CreatedAt);
+        return new(id, bucket, goal.Status, updated, title.Length > 100 ? title[..100] : title,
+            goal.CreatedAt, goal.PromotionFact?.GoalId == id ? goal.PromotionFact : null);
     }
 
     private static int GroupOf(EpicProgressBucket bucket) => bucket switch

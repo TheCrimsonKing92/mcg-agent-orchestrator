@@ -74,7 +74,7 @@ public sealed class ConductorDriverTestsCandidateRerunNotExecuted
         Assert.Contains("lives inside the candidate's changed paths", journal.Detail, StringComparison.Ordinal);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public void ThirdSlotsBusyFailureExhaustsSharedRegateCap()
     {

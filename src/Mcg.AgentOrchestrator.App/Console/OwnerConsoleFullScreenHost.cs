@@ -17,7 +17,28 @@ internal static class OwnerConsoleFullScreenHost
         return (model, recent);
     }
 
-    internal static async Task<int> RunAsync(OrchestratorWorkspace workspace, CancellationToken cancellationToken)
+    internal static async Task<int> RunAsync(OrchestratorWorkspace workspace, CancellationToken cancellationToken,
+        string? inputTracePath = null)
+    {
+        if (inputTracePath is null) return await RunCoreAsync(workspace, cancellationToken, null);
+        try
+        {
+            using var destination = OwnerConsoleInputTraceOptions.OpenDestination(inputTracePath);
+            var diagnostics = new OwnerConsoleInputDiagnostics();
+            var result = await RunCoreAsync(workspace, cancellationToken, diagnostics);
+            // RunCoreAsync has disposed the application and restored the terminal before export.
+            diagnostics.Export(destination);
+            return result;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            System.Console.Error.WriteLine($"Input trace failed: {ex.Message}");
+            return 1;
+        }
+    }
+
+    private static async Task<int> RunCoreAsync(OrchestratorWorkspace workspace, CancellationToken cancellationToken,
+        OwnerConsoleInputDiagnostics? diagnostics)
     {
         var clock = TimeProvider.System;
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -31,6 +52,7 @@ internal static class OwnerConsoleFullScreenHost
         Task? reader = null;
         Task periodicRefresh = Task.CompletedTask;
         Task streamRefresh = Task.CompletedTask;
+        void Post(string phase, Action action) => app.Invoke(diagnostics?.ObservePost(phase, action) ?? action);
         try
         {
             IOrchestratorStateQueries state = File.Exists(workspace.SqliteStatePath)
@@ -60,6 +82,7 @@ internal static class OwnerConsoleFullScreenHost
 
             async Task RefreshAsync(OwnerConductEvent? item = null, bool skipIfBusy = false, OwnerConsoleRefreshScope? scope = null)
             {
+                using var trace = diagnostics?.Begin("refresh-work", detail: skipIfBusy ? "skip-if-busy" : "queued");
                 if (skipIfBusy)
                 {
                     if (!await rebuild.WaitAsync(0, token)) return;
@@ -82,12 +105,13 @@ internal static class OwnerConsoleFullScreenHost
                         var board = await builder.BuildBoardAsync(stepToken);
                         boardIds = board.Board.Select(row => row.GoalId).ToArray();
                         foreach (var lifecycle in activityLoader.ReadNew(boardIds, scope ?? OwnerConsoleRefreshScope.All)) OwnerConsoleStartupActivity.Append(recent, builder.EnrichEvent(lifecycle), OwnerConsoleStartupActivity.MaxRawEvents);
+                        var programHealth = OwnerConsoleProgramHealthNotice.Current(recent); app.Invoke(() => { if (!token.IsCancellationRequested) view!.NoticeStrip.SetProgramHealth(programHealth); });
                         var (decisions, hidden) = await builder.ReadDecisionsAsync(stepToken);
                         var model = builder.WithActivity(builder.WithDecisions(board, decisions, hidden),
                             inputs with { RecentEvents = recent.ToArray(),
                                 LandedToday = Math.Max(landings, OwnerConsoleLandedToday.Count(workspace.GoalLifecycleEventsDirectory, clock)) });
                         stepToken.ThrowIfCancellationRequested();
-                        app.Invoke(() => { if (!token.IsCancellationRequested) view!.Render(model); });
+                        Post("refresh-render", () => { if (!token.IsCancellationRequested) view!.Render(model); });
                     }, token);
                 }
                 catch (OperationCanceledException) when (token.IsCancellationRequested) { }
@@ -114,10 +138,10 @@ internal static class OwnerConsoleFullScreenHost
                         workspace.OrchestratorDirectory, workspace.LogDirectory, clock),
                     notifier: new SystemOwnerConsoleNotifier(new WindowsOwnerConsoleSoundOutput(), notifications, File.Exists),
                     notifications: notifications);
-                view = new(app, controller, () => RefreshAsync(), token, clock, OwnerConsoleLoopOptions.Default);
+                view = new(app, controller, () => RefreshAsync(), token, clock, OwnerConsoleLoopOptions.Default, diagnostics);
                 boardIds = board.Board.Select(row => row.GoalId).ToArray();
                 view.Render(board);
-                var startup = new OwnerConsoleStartupLoader(builder, activityLoader, action => app.Invoke(action), clock);
+                var startup = new OwnerConsoleStartupLoader(builder, activityLoader, action => Post("startup-render", action), clock);
                 fill = startup.FillAsync(board, model => view.Render(model), new(opened, last, [], 0), loaded =>
                 {
                     recent = loaded.Recent.Select(builder.EnrichEvent).ToList();

@@ -43,7 +43,7 @@ public sealed class ConductorBatchLoopTestsFindingEvidenceReload : ConductorBatc
             fixture.Kernel.Goals.Single().Tasks.Single(task => task.Id == fixture.DeveloperId).Status);
     }
 
-    [Xunit.Fact(Timeout = 30000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public void StoredReceiptHandsOpenSourceFindingToDeveloperAfterFirstDelivery()
     {

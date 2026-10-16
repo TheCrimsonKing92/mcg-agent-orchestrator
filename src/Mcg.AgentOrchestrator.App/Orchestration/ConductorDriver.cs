@@ -274,7 +274,8 @@ internal sealed partial class ConductorDriver
                 workspace.OrchestratorDirectory,
                 "acceptance-gate-attempts",
                 AcceptanceFailingTestIndex.FileName),
-            goal => GoalWorktrees.TryResolve(dir, goal.Id) ?? dir);
+            goal => GoalWorktrees.TryResolve(dir, goal.Id) ?? dir,
+            landingAttributor: new GateFailureLandingAttributor(dir));
         (_acceptanceEventSink, _noTickAcceptancePollDelay, _noTickAcceptancePollTimeout) = CreateProductionAcceptanceWaitConfiguration(workspace);
         _focusedEvidenceAttemptCoordinator = OwnedChildAttemptCoordinatorFactory.CreateFocusedEvidence(
             workspace, _cohortCleanupHooks.BuildStorageRoot);
@@ -837,7 +838,7 @@ internal sealed partial class ConductorDriver
         _integrateMainBeforeReadOnlyDispatch = (goal, role) =>
             IntegrateMainBeforeReadOnlyDispatch(dir, goal, role, workspace.IntegrationBranch);
         _recordPreDispatchIntegrationReceipt = new PreDispatchIntegrationReceiptRecorder(kernel).Record;
-        _rebaseOntoMain = goal => GoalWorktrees.TryRebaseOntoMain(dir, goal.Id, CreateAdditiveConflictMergeOptions(kernel, goal, workspace.ConductEventsLogPath), workspace.IntegrationBranch);
+        _rebaseOntoMain = goal => GoalBranchMainMerge.TryMergeMainIntoGoalBranch(dir, goal.Id, CreateAdditiveConflictMergeOptions(kernel, goal, workspace.ConductEventsLogPath), workspace.IntegrationBranch);
         PreLandingMergeConflictProbe = goal => GoalWorktrees.ProbeAdditiveConflictMerge(dir, goal.Id, CreateAdditiveConflictMergeOptions(kernel, goal, workspace.ConductEventsLogPath).FrozenPaths, workspace.IntegrationBranch);
         _recheckPreLandingRebaseConflict = goal =>
         {

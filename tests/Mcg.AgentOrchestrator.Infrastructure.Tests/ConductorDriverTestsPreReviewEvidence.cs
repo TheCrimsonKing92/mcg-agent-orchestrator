@@ -102,7 +102,7 @@ public sealed class ConductorDriverTestsPreReviewEvidence
         Assert.Contains("no further paid retry was started", Assert.Single(escalations), StringComparison.Ordinal);
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public void PreReviewEvidence_InFlightRun_ReturnsThenReconcilesAfterRestart()
     {
@@ -190,7 +190,7 @@ public sealed class ConductorDriverTestsPreReviewEvidence
         }
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public void PostReviewEvidence_InFlightTypedRun_ReturnsThenReconcilesAfterRestart()
     {
@@ -281,7 +281,7 @@ public sealed class ConductorDriverTestsPreReviewEvidence
         }
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public void PreReviewEvidence_ProcessDiesAfterRestart_RelaunchesWithoutReceipt()
     {
@@ -383,7 +383,7 @@ public sealed class ConductorDriverTestsPreReviewEvidence
         }
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public void PreReviewEvidence_FaultedRun_EscalatesWithoutMappingReceipt()
     {
@@ -446,7 +446,7 @@ public sealed class ConductorDriverTestsPreReviewEvidence
         }
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public void PreReviewEvidence_BuildSlotsBusy_HoldsWithoutMappingReceipt()
     {

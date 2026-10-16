@@ -363,6 +363,103 @@ public sealed class ConductorBatchLoopTestsSelfHandoff : ConductorBatchLoopTests
         Assert.Null(summary.Handoff);
     }
 
+    // All process/job observations and time are injected; the stop file is fixture-owned.
+    [Xunit.Fact]
+    public void StopFile_DetachesHolderBeforeExitAndSuccessorAdmitsNoSecondTree()
+    {
+        var root = CreateTempDirectory("mcg-stop-holder-transfer");
+        try
+        {
+            using var liveGates = GateLoadContextProbe.PushLiveGateOccupantProbe(() => []);
+            var now = DateTimeOffset.Parse("2026-10-14T09:00:00Z");
+            var (kernel, goal) = SimpleGoal("Transfer acceptance holder on deliberate stop");
+            var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [], "branch", "main");
+            var predecessor = new SpawnProcessIdentity(7110, now.AddDays(-1), "conductor.exe");
+            var successor = new SpawnProcessIdentity(7111, now, "conductor.exe");
+            var holder = new SpawnProcessIdentity(7112, now.AddDays(-1), "dotnet.exe");
+            var predecessorAlive = true;
+            var runningTrees = 0;
+            var maximumRunningTrees = 0;
+            var eventLog = Path.Combine(root, "conduct-events.log");
+            var events = new ConductEventLogWriter(eventLog);
+            var lease = new AcceptanceHolderLease(utcNow: () => now,
+                classify: identity => identity == predecessor && !predecessorAlive
+                    ? SpawnTrackedProcessStatus.DeadOrRecycled : SpawnTrackedProcessStatus.LiveMatch,
+                attach: _ => new HolderTransferContainment(),
+                job: (_, identity, _, cancel) =>
+                {
+                    Assert.Equal(holder, identity);
+                    Assert.False(cancel); // A transferable live holder must survive the stop.
+                    return new(true, false, "fixture-two-active-shards");
+                },
+                eventSink: line => events.Append("acceptance-holder", null, line));
+            var first = Coordinator(predecessor);
+            var started = first.Evaluate(candidate, ConductorAutonomyPolicy.Conservative, PassingRun);
+            Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, started.Kind);
+            var attempt = Assert.IsType<ConductorParallelAcceptanceAttempt>(started.Attempt);
+            var binding = AcceptanceHolderBinding.For(attempt);
+            Assert.Equal(1, attempt.HolderContractVersion);
+            Assert.Equal("Claimed", lease.Read(binding).Phase);
+            var stopFile = Path.Combine(root, ConductorBatchLoop.StopFileName);
+            File.WriteAllText(stopFile, "stop");
+            var driver = MakeDriver(parallelAcceptanceAttemptCoordinator: first,
+                runAcceptanceWithSlot: (_, _) => throw new InvalidOperationException("Use the owned child."),
+                utcNow: () => now);
+            Assert.True(driver.ParallelAcceptanceEnabled);
+
+            var summary = new ConductorBatchLoop(utcNow: () => now).Run(
+                kernel, driver, ConductorAutonomyPolicy.Conservative, stopFile);
+
+            Assert.True(summary.StopRequested);
+            var transfer = lease.Read(binding);
+            Assert.Equal("Detached", transfer.Phase);
+            Assert.Equal(binding, transfer.Binding);
+            Assert.Equal(holder, transfer.Holder);
+            Assert.Equal(predecessor, transfer.Generation);
+            Assert.Equal("detach", Assert.Single(transfer.Receipts,
+                receipt => receipt.Transition == "detach").Transition);
+            var detachLog = File.ReadAllText(eventLog);
+            Assert.Contains("ACCEPTANCE_HOLDER_DETACH", detachLog, StringComparison.Ordinal);
+            Assert.Contains($"attempt={attempt.AttemptId} slot=slot-0", detachLog, StringComparison.Ordinal);
+
+            predecessorAlive = false; // Deterministic conductor bounce; the holder stays live.
+            var next = Coordinator(successor);
+            Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Running,
+                next.Evaluate(candidate, ConductorAutonomyPolicy.Conservative, PassingRun).Kind);
+            Assert.Equal(attempt.AttemptId, Assert.Single(next.GetAllCapacityReservingAttempts()).AttemptId);
+            var adopted = lease.Read(binding);
+            Assert.Equal("Adopted", adopted.Phase);
+            Assert.Equal(successor, adopted.Generation);
+            Assert.Equal(holder, adopted.Holder);
+            Assert.Single(adopted.Receipts, receipt => receipt.Transition == "adopt");
+            Assert.Contains("ACCEPTANCE_HOLDER_ADOPT", File.ReadAllText(eventLog), StringComparison.Ordinal);
+            Assert.Equal(1, runningTrees);
+            Assert.Equal(1, maximumRunningTrees);
+            Assert.False(File.Exists(attempt.ExitCodePath));
+
+            ConductorParallelAcceptanceAttemptCoordinator Coordinator(SpawnProcessIdentity generation) => new(
+                Path.Combine(root, "attempts"), TrunkBranchName.Default, utcNow: () => now,
+                classifyHolder: current => SpawnProcessIdentityReader.EvaluateRecordedIdentity(
+                    new(current.OwnerProcessId, current.OwnerProcessStartedAt!.Value,
+                        current.OwnerExecutablePath!), holder, out _),
+                holderLease: lease, generationIdentity: generation, conductEventLogWriter: events,
+                acquireStableSlotLease: (_, _) => null,
+                launchOwnedProcess: launch =>
+                {
+                    using var claim = lease.Claim(AcceptanceHolderBinding.For(launch.Attempt), holder);
+                    runningTrees++;
+                    maximumRunningTrees = Math.Max(maximumRunningTrees, runningTrees);
+                    return new(holder.ProcessId, holder.StartedAt, holder.ImagePath);
+                });
+        }
+        finally { TryDeleteDirectory(root); }
+    }
+
+    private sealed class HolderTransferContainment : IDisposable
+    {
+        public void Dispose() { }
+    }
+
     [Xunit.Fact(DisplayName = "BatchLoop_no_progress_exit_does_not_handoff")]
     public void BatchLoopNoProgressExitDoesNotHandoff()
     {

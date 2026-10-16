@@ -1968,6 +1968,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         var launches = 0;
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
             attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
+            isProcessAlive: _ => false, // A launch that throws never starts a holder.
             launchOwnedProcess: _ =>
             {
                 launches++;
@@ -2673,7 +2674,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         }
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public void BatchLoopIntroducedTypedApparatusRestoresVerifiedForRegate()
     {
@@ -3322,8 +3323,8 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
             var initialAttempt = decision.Attempt;
             var externalProcess = Assert.Single(externalProcesses);
             Assert.True(
-                externalProcess.WaitForExit(60000),
-                $"External acceptance PID {externalProcess.Id} did not exit. stdout={TryReadAllTextShared(initialAttempt.StdoutPath)} stderr={TryReadAllTextShared(initialAttempt.StderrPath)}");
+                externalProcess.WaitForExit(TestHangGuard.HangSafetyBound),
+                $"External acceptance PID {externalProcess.Id} did not exit within {TestHangGuard.HangSafetyBound.TotalSeconds:0} s. stdout={TryReadAllTextShared(initialAttempt.StdoutPath)} stderr={TryReadAllTextShared(initialAttempt.StderrPath)}");
             externalProcess.WaitForExit();
             var completedAttempt = JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(
                 File.ReadAllText(initialAttempt.MetadataPath),
@@ -4969,7 +4970,7 @@ public sealed partial class ConductorBatchLoopTestsParallelAcceptance : Conducto
         }
     }
 
-    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Xunit.Trait("Category", "CrossTick")]
     public void PersistedAcceptedAdvisory_LeaseClears_ResumesWithoutVerifierRerun()
     {
