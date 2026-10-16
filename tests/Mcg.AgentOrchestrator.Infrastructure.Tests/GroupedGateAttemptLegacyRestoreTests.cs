@@ -337,8 +337,8 @@ public sealed class GroupedGateAttemptLegacyRestoreTests(ITestOutputHelper outpu
     [Fact]
     public void RealHistoryRestore()
     {
-        var source = Environment.GetEnvironmentVariable("MCG_GROUPED_GATE_ATTEMPTS_COPY");
-        Assert.SkipUnless(!string.IsNullOrWhiteSpace(source), "Operator supplies a copied grouped-gate-attempts directory.");
+        var source = Environment.GetEnvironmentVariable("MCG_TEST_INPUT_GROUPED_GATE_ATTEMPTS_COPY");
+        Assert.SkipUnless(!string.IsNullOrWhiteSpace(source), "Operator supplies MCG_TEST_INPUT_GROUPED_GATE_ATTEMPTS_COPY through scripts/Invoke-TestSummary.ps1 -TestInput for a copied grouped-gate-attempts directory.");
         Assert.True(Directory.Exists(source), "Copied grouped-gate-attempts directory must exist.");
         var root = Path.Combine(Path.GetTempPath(), $"grouped-history-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
