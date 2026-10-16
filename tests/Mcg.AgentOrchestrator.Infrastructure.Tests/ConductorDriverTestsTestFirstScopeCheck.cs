@@ -77,7 +77,19 @@ public sealed class ConductorDriverTestsTestFirstScopeCheck
         Assert.Equal(RetryRoundKind.Mechanical, retry.Kind);
         Assert.Equal(RetryCause.NewSourceFinding, retry.Cause);
         Assert.Equal([scenario.ImplementerId], scenario.Dispatched);
-        Assert.Equal(scenario.ImplementerId, Assert.Single(scenario.Notes).TaskId);
+        // Retrying the implementer re-enters dispatch at the completed author's checkpoint.
+        Assert.Collection(scenario.Notes,
+            failure =>
+            {
+                Assert.Equal(scenario.ImplementerId, failure.TaskId);
+                Assert.StartsWith("test-first scope check failed: Implementer scope violation:", failure.Message, StringComparison.Ordinal);
+            },
+            pass =>
+            {
+                Assert.Equal(scenario.AuthorId, pass.TaskId);
+                Assert.StartsWith("test-first scope check passed: Author scope is clean", pass.Message, StringComparison.Ordinal);
+            });
+        Assert.Equal(2, scenario.ReaderCalls);
     }
 
     private static Scenario RunScenario(bool violation, bool repeat = false, bool testFirst = true,
