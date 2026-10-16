@@ -603,8 +603,9 @@ internal static partial class FocusedEvidenceRequestResolver
         var segments = value.Split('.');
         if (segments.Length == 1)
         {
-            return TryResolveBareFocusedEvidenceSelection(
-                worktreePath, project, originalToken, value, out selection, out rejection);
+            return FocusedEvidenceBareSelectorResolution.TryResolve(
+                () => EnumerateFocusedEvidenceSourceFiles(worktreePath, project),
+                project, originalToken, value, out selection, out rejection);
         }
 
         var candidates = new List<FocusedEvidenceFilterToken>();
@@ -661,89 +662,6 @@ internal static partial class FocusedEvidenceRequestResolver
         return false;
     }
 
-    private static bool TryResolveBareFocusedEvidenceSelection(
-        string worktreePath,
-        string project,
-        string originalToken,
-        string value,
-        out FocusedEvidenceFilterToken selection,
-        out FocusedEvidenceRejection rejection)
-    {
-        selection = new FocusedEvidenceFilterToken(
-            originalToken, $"FullyQualifiedName~{value}", FocusedEvidenceTokenKind.Class, value, value);
-        rejection = new FocusedEvidenceRejection(
-            FocusedEvidenceRejectionCode.UnresolvableSelection,
-            originalToken,
-            $"focused evidence selection '{originalToken}' could not be resolved");
-        var owners = new SortedDictionary<string, string>(StringComparer.Ordinal);
-        try
-        {
-            var sourceFiles = EnumerateFocusedEvidenceSourceFiles(worktreePath, project).ToArray();
-            if (sourceFiles.Length == 0)
-            {
-                return true;
-            }
-
-            foreach (var path in sourceFiles)
-            {
-                var source = File.ReadAllText(path);
-                if (!source.Contains(value, StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                var declarations = CSharpSyntaxTree.ParseText(source, path: path)
-                    .GetCompilationUnitRoot().DescendantNodes().OfType<TypeDeclarationSyntax>();
-                foreach (var declaration in declarations)
-                {
-                    var simpleName = declaration.Identifier.ValueText;
-                    if (simpleName.Contains(value, StringComparison.Ordinal))
-                    {
-                        return true;
-                    }
-
-                    if (!declaration.Members.OfType<MethodDeclarationSyntax>().Any(method =>
-                            method.Identifier.ValueText.Equals(value, StringComparison.Ordinal) &&
-                            method.AttributeLists.SelectMany(list => list.Attributes)
-                                .Any(attribute => IsFocusedEvidenceTestAttribute(attribute.Name.ToString()))))
-                    {
-                        continue;
-                    }
-
-                    var namespaceNames = declaration.Ancestors().OfType<BaseNamespaceDeclarationSyntax>()
-                        .Reverse().Select(item => item.Name.ToString());
-                    var containingTypeNames = declaration.Ancestors().OfType<TypeDeclarationSyntax>()
-                        .Reverse().Select(item => item.Identifier.ValueText);
-                    var qualifiedName = string.Join('.', namespaceNames.Concat(containingTypeNames).Append(simpleName));
-                    owners[qualifiedName] = simpleName;
-                }
-            }
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-        {
-            // Preserve the historical class fallback when source discovery cannot establish ownership.
-            return true;
-        }
-
-        if (owners.Count == 1)
-        {
-            var owner = owners.Single().Value;
-            var method = $"{owner}.{value}";
-            selection = new FocusedEvidenceFilterToken(
-                originalToken, $"FullyQualifiedName~{method}", FocusedEvidenceTokenKind.Method, method, owner);
-            return true;
-        }
-
-        selection = null!;
-        rejection = new FocusedEvidenceRejection(
-            FocusedEvidenceRejectionCode.UnresolvableSelection,
-            originalToken,
-            owners.Count == 0
-                ? $"focused evidence selection '{originalToken}' does not resolve to a class or method in {GoalAcceptanceVerifier.ProjectLabel(project)}"
-                : $"focused evidence selection '{originalToken}' is ambiguous in {GoalAcceptanceVerifier.ProjectLabel(project)}; candidates: {string.Join(", ", owners.Keys)}");
-        return false;
-    }
-
     internal static IReadOnlyList<string> FindFocusedEvidenceTestMethodNames(
         IReadOnlyList<string> classFiles,
         string className)
@@ -761,7 +679,7 @@ internal static partial class FocusedEvidenceRequestResolver
             .ToArray();
     }
 
-    private static bool IsFocusedEvidenceTestAttribute(string attributeName)
+    internal static bool IsFocusedEvidenceTestAttribute(string attributeName)
     {
         var simpleName = attributeName.Split('.').Last();
         if (simpleName.EndsWith("Attribute", StringComparison.Ordinal))
