@@ -174,6 +174,7 @@ try
 {
     workspace = ResolveSelectedWorkspace(activeProject);
     invocationBinding.Verify(workspace);
+    HostLedgerStateDirectory.InstallRoute(host => HostLedgerStateDirectoryLocator.Resolve(host, projectRegistry));
 }
 catch (Exception ex)
 {
@@ -258,6 +259,11 @@ if (CliConductorCommand.IsCommand(startupArgs))
 if (CliRemoteLaneSelfTestCommand.IsCommand(startupArgs))
 {
     return ExitCompletedStartupCommand(await CliRemoteLaneSelfTestCommand.RunAsync(startupArgs, workspace));
+}
+
+if (CliExecutorScreenCommand.IsCommand(startupArgs))
+{
+    return ExitCompletedStartupCommand(await CliExecutorScreenCommand.RunAsync(startupArgs, workspace));
 }
 
 if (Mcg.AgentOrchestrator.App.OwnerConsole.OwnerConsoleVerb.IsCommand(startupArgs))

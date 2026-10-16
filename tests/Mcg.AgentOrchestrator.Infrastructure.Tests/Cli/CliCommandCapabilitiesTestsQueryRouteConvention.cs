@@ -9,6 +9,7 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteConvention
         {
             ["tasks"] = [["tasks"]],
             ["task"] = [["task", "abc10000"]],
+            ["finding"] = [["finding", "query-route-finding"]],
             ["status"] = [["status", "abc10000"], ["status"],
                 ["status", "abc10000", "--tasks-only"], ["status", "--tasks-only", "abc10000"], ["status", "--tasks-only"]],
             ["readiness"] = [["readiness", "abc10000"], ["readiness"]],

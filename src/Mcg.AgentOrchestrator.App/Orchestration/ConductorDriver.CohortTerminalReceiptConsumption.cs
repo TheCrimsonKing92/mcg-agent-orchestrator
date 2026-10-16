@@ -4,20 +4,12 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorDriver
 {
-    internal IReadOnlyList<(AcceptanceCohortReceipt Receipt, IReadOnlyList<AcceptanceCohortPartitionReceipt> Partitions)>
+    internal IReadOnlyList<(AcceptanceCohortReceipt Receipt, IReadOnlyList<AcceptanceCohortPartitionReceipt> Partitions,
+        IReadOnlySet<GoalId> RecordedGoalIds)>
         ConsumeTerminalFailedCohortReceipts()
-    {
-        if (_cohortAcceptanceStore is null) return [];
-        var consumed = new List<(AcceptanceCohortReceipt, IReadOnlyList<AcceptanceCohortPartitionReceipt>)>();
-        foreach (var receipt in _cohortAcceptanceStore.ReadUnconsumedTerminalFailedReceipts())
-        {
-            if (_cohortAcceptanceStore.TryRecordOutcomeConsumption(receipt.Identity.Value, receipt.ReceiptId))
-            {
-                consumed.Add((receipt, _cohortAcceptanceStore.ReadPartitionReceipts(receipt.Identity.Value)));
-            }
-        }
-        return consumed;
-    }
+        => ConductorAcceptanceCohortTerminalReceiptConsumption.Consume(
+            _cohortAcceptanceStore, (_cohortKernel ?? _conductorTickKernel)?.Goals ?? [],
+            ApplyCohortAttributionVerdict);
 
     internal IReadOnlySet<string> ReadInteractionOnlyMemberKeys() =>
         _cohortAcceptanceStore?.ReadInteractionOnlyMemberKeys() ?? new HashSet<string>(StringComparer.Ordinal);

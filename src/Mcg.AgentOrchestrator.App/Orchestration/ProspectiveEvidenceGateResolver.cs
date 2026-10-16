@@ -105,7 +105,7 @@ internal static class ProspectiveEvidenceGateResolver
         (resultName.StartsWith(selector, StringComparison.Ordinal) && resultName.Length > selector.Length &&
             resultName[selector.Length] is '(' or '.');
 
-    private static IReadOnlyList<GateAttempt> ReadAttempts(
+    internal static IReadOnlyList<GateAttempt> ReadAttempts(
         string orchestratorDirectory, GoalId goalId, string? candidateSha)
     {
         if (string.IsNullOrWhiteSpace(candidateSha)) return [];
@@ -189,8 +189,8 @@ internal static class ProspectiveEvidenceGateResolver
         }
     }
 
-    private sealed record TestResult(string Name, string? Outcome);
-    private sealed record GateAttempt(
+    internal sealed record TestResult(string Name, string? Outcome);
+    internal sealed record GateAttempt(
         string Id, DateTimeOffset CompletedAt, IReadOnlyList<string> Paths, IReadOnlyList<TestResult> Results);
 }
 
