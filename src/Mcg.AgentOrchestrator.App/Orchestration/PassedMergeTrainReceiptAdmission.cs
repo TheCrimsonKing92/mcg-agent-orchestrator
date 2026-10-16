@@ -33,11 +33,11 @@ internal static class PassedMergeTrainReceiptAdmission
         HashSet<string> reportedStaleReceiptIds,
         Action<string> emitProgress,
         Action<string, List<string>> recordProgress,
-        Func<Goal, string, ConductorAdvanceResult> heldResult)
+        Func<Goal, string, ConductorAdvanceResult> heldResult, AgentOrchestratorKernel kernel)
         => Apply(new Operations(
                 (ready, ineligible, stale, blocked, scopedGoals, observed) =>
                     driver.FindLandablePassedMergeTrainSelections(ready, ineligible, stale, blocked, scopedGoals, observed),
-                driver.ProjectGroupedAdmissionCandidate,
+                (goal, autonomy) => driver.ProjectGroupedAdmissionCandidate(goal, autonomy, kernel),
                 (selection, goals, autonomy) => driver.RunMergeTrain(selection, goals, autonomy, landFromReceiptOnly: true)),
             policy, eligible, candidates, scopedGoals, results, tick, changedGoalLines, holds,
             reportedStaleReceiptIds, emitProgress, recordProgress, heldResult);

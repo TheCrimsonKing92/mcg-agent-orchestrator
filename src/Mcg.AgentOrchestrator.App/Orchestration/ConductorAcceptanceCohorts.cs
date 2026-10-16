@@ -478,7 +478,7 @@ internal sealed partial class ConductorBatchLoop
             ConductorSpeculativeAcceptanceCandidate[] candidates,
             Dictionary<string, ParallelLandingOutcome> results,
             int tick,
-            List<string> changedGoalLines)
+            List<string> changedGoalLines, AgentOrchestratorKernel kernel)
     {
         var landed = false;
         foreach (var selection in driver.FindLandablePassedCohortSelections(candidates))
@@ -531,7 +531,7 @@ internal sealed partial class ConductorBatchLoop
                 .Select(candidate => new ConductorSpeculativeAcceptanceCandidate(
                     candidate.GoalId,
                     driver.ProjectGroupedAdmissionCandidate(
-                        eligible.Single(goal => goal.Id == candidate.GoalId), policy)))
+                        eligible.Single(goal => goal.Id == candidate.GoalId), policy, kernel)))
                 .ToArray();
         }
         return (eligible.Where(goal => !results.ContainsKey(goal.Id.Value)).ToArray(),
