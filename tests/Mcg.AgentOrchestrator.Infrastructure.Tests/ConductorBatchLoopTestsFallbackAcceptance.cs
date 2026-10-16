@@ -218,12 +218,13 @@ public sealed class ConductorBatchLoopTestsFallbackAcceptance : ConductorBatchLo
         PassVerification(kernel, goal, goal.Tasks.Single());
         var attemptRoot = CreateTempDirectory("mcg-conductor-fallback-completed");
         ConductorParallelAcceptanceOwnedProcessLaunch? ownedLaunch = null;
+        var holderAlive = true;
         var acceptanceRuns = 0;
         var landingRuns = 0;
         var landed = false;
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
             attemptRoot, Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
-            isProcessAlive: _ => true,
+            isProcessAlive: _ => holderAlive,
             launchOwnedProcess: launch =>
             {
                 ownedLaunch = launch;
@@ -262,6 +263,7 @@ public sealed class ConductorBatchLoopTestsFallbackAcceptance : ConductorBatchLo
             Assert.Equal(GoalStatus.Verifying, goal.Status);
 
             ownedLaunch!.ExecuteInCurrentProcess(9301);
+            holderAlive = false; // The gate child exits after publishing its result.
             var completed = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
             var later = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
 

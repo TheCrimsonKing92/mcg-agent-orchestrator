@@ -7,8 +7,18 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed partial class ConductorDriver
 {
     private ConductorGroupedGateAttemptCoordinator? _groupedGateAttempts;
+    private readonly Dictionary<string, GroupedGateAttemptOverlap> _groupedGateAdmissionHolds = new(StringComparer.Ordinal);
+
+    internal IReadOnlyCollection<GroupedGateAttemptOverlap> GroupedGateAdmissionHolds =>
+        _groupedGateAdmissionHolds.Values.ToArray();
 
     internal int CountLiveGroupedGateAttempts() => ConductorLiveGroupedGateCount.Count(_groupedGateAttempts);
+
+    internal void PrepareAcceptanceHolderDetach()
+    {
+        if (ParallelAcceptanceEnabled) ParallelAcceptanceAttemptCoordinator.PrepareHolderDetach();
+        _groupedGateAttempts?.PrepareHolderDetach();
+    }
 
     internal void EnableOwnedGroupedGateAttempts(
         ConductorGroupedGateAttemptCoordinator? coordinator = null)
@@ -43,7 +53,7 @@ internal sealed partial class ConductorDriver
             if (!attempt.Members.Any(member => selectedIds.Contains(member.GoalId))) continue;
 
             var difference = coordinator.IdentityDifference(attempt, kind, members, mainRevision, treeRevision, _integrationBranch);
-            if (attempt.ReconciledAt is not null)
+            if (attempt.ReconciledAt is not null && !coordinator.ReservesCapacity(attempt))
             {
                 if (difference is null && !receiptExists && !ConductorGroupedGateAttemptCoordinator.IsSlotsBusyDeferral(attempt) &&
                     !string.IsNullOrWhiteSpace(attempt.Detail) &&
@@ -51,12 +61,12 @@ internal sealed partial class ConductorDriver
                     return (null, true);
                 continue;
             }
-            var alive = coordinator.IsAlive(attempt.OwnerProcessId);
+            var alive = coordinator.ReservesCapacity(attempt);
             if (!alive)
             {
                 attempt = coordinator.TryReconcileDead(attempt, File.Exists(attempt.ResultPath)
                     ? "child-result-published" : "owner-dead");
-                alive = coordinator.IsAlive(attempt.OwnerProcessId);
+                alive = coordinator.ReservesCapacity(attempt);
                 if (!alive)
                 {
                     CompleteOwnedRunForAttempt(attempt);
@@ -83,7 +93,7 @@ internal sealed partial class ConductorDriver
                 attempt = coordinator.Adopt(attempt);
             }
 
-            if (File.Exists(attempt.ExitCodePath) || File.Exists(attempt.ResultPath))
+            if (!coordinator.ReservesCapacity(attempt) && (File.Exists(attempt.ExitCodePath) || File.Exists(attempt.ResultPath)))
             {
                 coordinator.Reconcile(attempt, "child-result-published");
                 CompleteOwnedRunForAttempt(attempt);
@@ -126,17 +136,24 @@ internal sealed partial class ConductorDriver
             ?? throw new InvalidOperationException("Grouped gate attempts were not enabled.");
         var executionDirectory = _executionDirectory
             ?? throw new InvalidOperationException("Grouped gate execution directory is unavailable.");
-        var attempt = coordinator.Create(kind, members, mainRevision, treeRevision,
-            manifestIdentity, identityValue, executionDirectory, policy);
-        var run = new CohortGateRun(attempt.StartedAt,
-            members.Select(member => member.GoalId.Value).ToHashSet(StringComparer.Ordinal),
-            kind == "train" ? $"train:{identityValue}" : identityValue,
-            new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously),
-            attempt.MetadataPath);
-        if (!TryRegisterCohortGateRun(memberKey, run, out var blocking)) return blocking!;
-        try { coordinator.Launch(attempt); }
-        catch (Exception ex) { run.Completion.TrySetException(ex); }
-        return run;
+        lock (_cohortGateRegistrationSync)
+        {
+            SweepCompletedCohortGateRuns();
+            if (GroupedGateAdmissionBlocked())
+                return _cohortGateRuns.Values.First(run => !run.Completion.Task.IsCompleted &&
+                    run.AttemptMetadataPath == _groupedGateAdmissionHolds.Values.First().FirstRecordPath);
+            var attempt = coordinator.Create(kind, members, mainRevision, treeRevision,
+                manifestIdentity, identityValue, executionDirectory, policy);
+            var run = new CohortGateRun(attempt.StartedAt,
+                members.Select(member => member.GoalId.Value).ToHashSet(StringComparer.Ordinal),
+                kind == "train" ? $"train:{identityValue}" : identityValue,
+                new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously),
+                attempt.MetadataPath);
+            if (!TryRegisterCohortGateRun(memberKey, run, out var blocking)) return blocking!;
+            try { coordinator.Launch(attempt); }
+            catch (Exception ex) { run.Completion.TrySetException(ex); }
+            return run;
+        }
     }
 
     private void ObserveOwnedGroupedGateAttempts()
@@ -146,8 +163,7 @@ internal sealed partial class ConductorDriver
         {
             if (run.AttemptMetadataPath is not { } path || run.Completion.Task.IsCompleted) continue;
             var attempt = ConductorGroupedGateAttemptCoordinator.Read(path);
-            if (File.Exists(attempt.ExitCodePath) || File.Exists(attempt.ResultPath) ||
-                !coordinator.IsAlive(attempt.OwnerProcessId))
+            if (!coordinator.ReservesCapacity(attempt))
                 run.Completion.TrySetResult();
         }
         StopInvalidatedFollowerGates();
@@ -158,11 +174,10 @@ internal sealed partial class ConductorDriver
         if (_groupedGateAttempts is not { } coordinator) return;
         lock (_cohortGateRegistrationSync)
         {
+            var reserving = new List<ConductorGroupedGateAttempt>();
             foreach (var attempt in coordinator.ReadAll())
             {
-                if (attempt.ReconciledAt is not null || attempt.Outcome != "Running" ||
-                    File.Exists(attempt.ResultPath) || File.Exists(attempt.ExitCodePath) ||
-                    !coordinator.IsAlive(attempt.OwnerProcessId))
+                if (!coordinator.ReservesCapacity(attempt))
                     continue;
                 var current = attempt;
                 if (current.AdoptedByGenerationId != coordinator.GenerationId &&
@@ -182,6 +197,7 @@ internal sealed partial class ConductorDriver
                         current = coordinator.Adopt(current);
                     }
                 }
+                reserving.Add(current);
                 if (_cohortGateRuns.Values.Any(run =>
                     string.Equals(run.AttemptMetadataPath, current.MetadataPath, StringComparison.Ordinal)))
                     continue;
@@ -189,19 +205,14 @@ internal sealed partial class ConductorDriver
                 {
                     RequireFollowerMembers(current);
                     var followerRun = CreateFollowerGateRun(current);
-                    if (TryGetActiveCohortGateRun(followerRun.MemberGoalIds, out var followerOverlap))
-                        throw new InvalidOperationException(
-                            $"Live grouped gate attempts overlap: {followerOverlap!.AttemptMetadataPath} and {current.MetadataPath}.");
                     var followerKey = FollowerGateRunKey(current);
+                    if (_cohortGateRuns.ContainsKey(followerKey)) followerKey += $"|{current.AttemptId}";
                     if (!_cohortGateRuns.TryAdd(followerKey, followerRun))
                         throw new InvalidOperationException($"Grouped gate registry key '{followerKey}' is already owned.");
                     continue;
                 }
                 var memberIds = current.Members.Select(member => member.GoalId)
                     .ToHashSet(StringComparer.Ordinal);
-                if (TryGetActiveCohortGateRun(memberIds, out var overlapping))
-                    throw new InvalidOperationException(
-                        $"Live grouped gate attempts overlap: {overlapping!.AttemptMetadataPath} and {current.MetadataPath}.");
                 var key = current.Kind == "train"
                     ? TrainGateRunIdentity(memberIds)
                     : CohortGateRunIdentity(memberIds);
@@ -213,10 +224,46 @@ internal sealed partial class ConductorDriver
                 var run = new CohortGateRun(current.StartedAt, memberIds, fingerprint,
                     new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously),
                     current.MetadataPath);
+                if (_cohortGateRuns.ContainsKey(key)) key += $"|{current.AttemptId}";
                 if (!_cohortGateRuns.TryAdd(key, run))
                     throw new InvalidOperationException($"Grouped gate registry key '{key}' is already owned.");
             }
+            RefreshGroupedGateAdmissionHolds(reserving, coordinator);
         }
+    }
+
+    private void RefreshGroupedGateAdmissionHolds(IReadOnlyList<ConductorGroupedGateAttempt> attempts,
+        ConductorGroupedGateAttemptCoordinator coordinator)
+    {
+        var current = new HashSet<string>(StringComparer.Ordinal);
+        var ordered = attempts.OrderBy(attempt => attempt.AttemptId, StringComparer.Ordinal).ToArray();
+        for (var first = 0; first < ordered.Length; first++)
+        for (var second = first + 1; second < ordered.Length; second++)
+        {
+            var a = ordered[first];
+            var b = ordered[second];
+            var members = a.Members.Select(member => member.GoalId)
+                .Intersect(b.Members.Select(member => member.GoalId), StringComparer.Ordinal)
+                .Order(StringComparer.Ordinal).ToArray();
+            if (members.Length == 0) continue;
+            var key = $"{a.AttemptId}|{b.AttemptId}";
+            current.Add(key);
+            if (_groupedGateAdmissionHolds.ContainsKey(key)) continue;
+            var overlap = new GroupedGateAttemptOverlap(a.AttemptId, b.AttemptId, a.MetadataPath,
+                b.MetadataPath, a.Kind, b.Kind, members);
+            _groupedGateAdmissionHolds.Add(key, overlap);
+            coordinator.RecordOverlap(overlap);
+        }
+        foreach (var key in _groupedGateAdmissionHolds.Keys.Where(key => !current.Contains(key)).ToArray())
+            _groupedGateAdmissionHolds.Remove(key);
+        _ = GroupedGateAdmissionBlocked();
+    }
+
+    private bool GroupedGateAdmissionBlocked()
+    {
+        if (_groupedGateAdmissionHolds.Count == 0) return false;
+        _groupedGateAttempts!.RecordAdmissionHold(_groupedGateAdmissionHolds.Values.First());
+        return true;
     }
 
     private (bool Known, string? Difference) InspectRestoredGroupedGateIdentity(
