@@ -12,7 +12,8 @@ internal sealed record AcceptanceHolderBinding(string AttemptId, string Metadata
     internal string JobName => "Local\\mcg-acceptance-" + Convert.ToHexString(SHA256.HashData(
         Encoding.UTF8.GetBytes($"{Path.GetFullPath(MetadataPath).ToUpperInvariant()}:{AttemptId}:{Candidate}:{Slot}")));
     internal static AcceptanceHolderBinding For(ConductorParallelAcceptanceAttempt attempt) =>
-        new(attempt.AttemptId, attempt.MetadataPath, attempt.CandidateKey, $"slot-{attempt.SlotIndex}");
+        new(attempt.AttemptId, attempt.MetadataPath, attempt.HolderCandidateKey ?? attempt.CandidateKey,
+            $"slot-{attempt.SlotIndex}");
     internal static AcceptanceHolderBinding For(ConductorGroupedGateAttempt attempt) =>
         new(attempt.AttemptId, attempt.MetadataPath, attempt.IdentityValue, $"{attempt.Kind}:{attempt.IdentityValue}");
 }
