@@ -4,6 +4,7 @@ using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 // Parallel-safe: receipt store, heads, projection and landing are in-memory seams.
+[Xunit.Collection(TestCollections.DotnetBuildSlots)]
 public sealed class ConductorBatchLoopTestsLandingHeldReceiptRelease : ConductorBatchLoopTests
 {
     public ConductorBatchLoopTestsLandingHeldReceiptRelease(ITestOutputHelper output) : base(output) { }
