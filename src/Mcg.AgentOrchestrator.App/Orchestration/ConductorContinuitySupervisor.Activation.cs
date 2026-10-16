@@ -28,6 +28,17 @@ internal sealed partial class ConductorContinuitySupervisor
 {
     internal const string ActivationHealthyTicksEnvironmentVariable = "MCG_ORCHESTRATOR_ACTIVATION_HEALTHY_TICKS";
     internal const int DefaultActivationHealthyTicks = 3;
+    internal const string ActivationStallTimeoutEnvironmentVariable = "MCG_ORCHESTRATOR_ACTIVATION_STALL_MINUTES";
+    // The successor's first tick after a relaunch is its heaviest (sweeps, dispatch and evidence starts for
+    // every goal). On 2026-10-16 a full board took over 2 minutes, and both the new and restored builds were
+    // reverted as stalled. Measured tick spacing that day: p90 128 s, p99 191 s.
+    internal static readonly TimeSpan DefaultActivationStallTimeout = TimeSpan.FromMinutes(10);
+
+    internal static TimeSpan ResolveActivationStallTimeout(string? configuredValue) =>
+        double.TryParse(configuredValue, NumberStyles.Float, CultureInfo.InvariantCulture, out var minutes) &&
+        minutes > 0 && minutes <= 24 * 60
+            ? TimeSpan.FromMinutes(minutes)
+            : DefaultActivationStallTimeout;
 
     internal static int ResolveActivationHealthyTicks(string? configuredValue) =>
         int.TryParse(configuredValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out var count)

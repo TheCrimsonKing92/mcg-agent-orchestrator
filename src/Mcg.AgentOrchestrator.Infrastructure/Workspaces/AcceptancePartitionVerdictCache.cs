@@ -98,6 +98,7 @@ internal sealed record AcceptancePartitionVerdictCacheOptions(
     Func<IReadOnlyList<TempRootApparatusLossReceiptV1>>? ResolveApparatusLossReceipts = null,
     Func<AcceptanceManifestCheck, string?>? ResolveClosureHash = null,
     Func<string, string, string, IReadOnlyList<string>>? ResolveChangedFiles = null,
+    Func<string, string, string, IReadOnlyList<string>>? ResolveLaneCarryChangedFiles = null,
     IReadOnlyList<AcceptanceManifestCheck>? IdenticalTreeChecks = null);
 
 internal sealed partial class AcceptancePartitionVerdictCache
@@ -128,8 +129,9 @@ internal sealed partial class AcceptancePartitionVerdictCache
     private readonly ConcurrentDictionary<string, Lazy<string?>> _closureHashes = new(StringComparer.OrdinalIgnoreCase);
     private AcceptanceSharedApparatusInvalidation? _sharedApparatusInvalidation;
     private AcceptanceTestReuseShadow? TestReuseShadow { get; init; }
+    private AcceptanceLaneCarryShadow? LaneCarryShadow { get; init; }
     private bool _shadowsPending;
-    internal bool HasPendingShadows => TestReuseShadow is not null && _shadowsPending;
+    internal bool HasPendingShadows => (TestReuseShadow is not null || LaneCarryShadow is not null) && _shadowsPending;
 
     private AcceptancePartitionVerdictCache(
         string goalId,
@@ -273,6 +275,8 @@ internal sealed partial class AcceptancePartitionVerdictCache
             new AcceptanceClosureVerdictIndex(options.WorktreePath),
             identicalTreeIdentities)
         {
+            LaneCarryShadow = partitionCount == 0 ? null : new AcceptanceLaneCarryShadow(options.WorktreePath, options.GoalId.Value, attemptId,
+                GoalAcceptanceVerifier.NormalizeShaToken(candidateTreeSha), options.ResolveLaneCarryChangedFiles),
             TestReuseShadow = partitionCount == 0 ? null : new AcceptanceTestReuseShadow(
                 options.WorktreePath, options.GoalId.Value, attemptId,
                 GoalAcceptanceVerifier.NormalizeShaToken(mainSha),
@@ -726,6 +730,7 @@ internal sealed partial class AcceptancePartitionVerdictCache
                 probeReceipt?.FlakeConfirmed));
         }
         TestReuseShadow?.Observe(check, result);
+        LaneCarryShadow?.Observe(check, filterHash, result);
     }
 
     internal void RecordSemanticDeduplications(
@@ -819,6 +824,7 @@ internal sealed partial class AcceptancePartitionVerdictCache
         if (!HasPendingShadows) return;
         _shadowsPending = false;
         TestReuseShadow?.Complete();
+        LaneCarryShadow?.Complete();
     }
 
     private void RecordReuse(PartitionVerdictReuseReceipt receipt)

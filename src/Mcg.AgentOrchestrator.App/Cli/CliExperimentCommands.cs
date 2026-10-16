@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -8,7 +9,7 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 internal static class CliExperimentCommands
 {
     internal static bool IsCommand(string command) =>
-        command.ToLowerInvariant() is "experiment-add" or "experiment-show" or "experiment-decide" or "experiment-extend" or "experiment-apply-flag" or "experiment-train-backtest";
+        command.ToLowerInvariant() is "experiment-add" or "experiment-show" or "experiment-decide" or "experiment-extend" or "experiment-add-pair" or "experiment-apply-flag" or "experiment-train-backtest";
 
     internal static bool? TryExecute(string command, IReadOnlyList<string> parts, CliExecutionContext context)
     {
@@ -62,6 +63,14 @@ internal static class CliExperimentCommands
         var store = command == "experiment-show"
             ? ExperimentStore.OpenReadOnly(context.Workspace.ExperimentStorePath)
             : new ExperimentStore(context.Workspace.ExperimentStorePath);
+        if (command == "experiment-add-pair")
+        {
+            var added = ExperimentMemberPairAdder.Add(store, parts[1], context.Workspace.SqliteStatePath,
+                RequiredExperimentOption(options, "--baseline"), RequiredExperimentOption(options, "--comparison"),
+                RequiredExperimentOption(options, "--reason-file"), DateTimeOffset.UtcNow);
+            Console.WriteLine($"member pair added: {added[0].PairId} baseline {added[0].GoalId} comparison {added[1].GoalId}");
+            return false;
+        }
         var record = store.ResolveAsync(parts[1]).GetAwaiter().GetResult()
             ?? throw new InvalidOperationException($"Experiment '{parts[1]}' was not found.");
         if (command == "experiment-decide")
@@ -88,7 +97,11 @@ internal static class CliExperimentCommands
         var asOf = DateTimeOffset.UtcNow;
         if (options.TryGetValue("--as-of", out var textAsOf) && !TryExperimentTimestamp(textAsOf, out asOf))
             throw new ArgumentException("as-of: timestamp must include an offset.");
+        var memberEvents = store.ListMemberEventsAsync(record.Id).GetAwaiter().GetResult();
+        record = ExperimentMembership.Effective(record, memberEvents);
         WriteExperimentRecord(record);
+        foreach (var member in memberEvents)
+            Console.WriteLine($"member added: {member.PairId} {member.Arm} {member.GoalId} brief-sha256 {member.BriefSha256} at {member.AddedAt:O}: {member.Reason}");
         var goals = ExperimentGoals.Read(context.Workspace.SqliteStatePath);
         var hostLedgers = ExperimentHostLedgers.Read(context.Workspace.ExecutionDirectory);
         var gateCount = record.Spec.StopRule.Unit == ExperimentStopUnit.Gates
@@ -153,6 +166,15 @@ internal static class CliExperimentCommands
                 throw new ArgumentException("intervention.flagTarget.priorValue: captured by apply; must not be supplied.");
         }
         if (spec.Baseline is null || !Enum.IsDefined(spec.Baseline.Kind)) throw new ArgumentException("baseline.kind: unknown or missing kind.");
+        if (spec.Baseline.Kind != ExperimentBaselineKind.GoalCohort)
+        {
+            if (spec.Baseline.IncrementalMembers is not null)
+                throw new ArgumentException("baseline.incrementalMembers: requires a goal-cohort baseline.");
+            if (spec.Baseline.PairingRule is not null)
+                throw new ArgumentException("baseline.pairingRule: requires a goal-cohort baseline.");
+        }
+        if (spec.Baseline.PairingRule is { } pairingRule && pairingRule != ExperimentMemberPairAdder.PairingRule)
+            throw new ArgumentException($"baseline.pairingRule: unknown rule '{pairingRule}'; expected {ExperimentMemberPairAdder.PairingRule}.");
         if (spec.Baseline.Kind == ExperimentBaselineKind.BeforeAfterWindow &&
             (spec.Baseline.Since is null || spec.Baseline.Until is null || spec.Baseline.Since >= spec.Baseline.Until))
             throw new ArgumentException("baseline: before-after-window requires since < until.");
@@ -167,8 +189,8 @@ internal static class CliExperimentCommands
             throw new ArgumentException("baseline.comparisonGoalId: required for twin-goal and must differ from twinGoalId.");
         if (spec.Baseline.Kind == ExperimentBaselineKind.GoalCohort)
         {
-            var baselineIds = ValidateCohortGoalIds(spec.Baseline.BaselineGoalIds, "baseline.baselineGoalIds");
-            var comparisonIds = ValidateCohortGoalIds(spec.Baseline.ComparisonGoalIds, "baseline.comparisonGoalIds");
+            var baselineIds = ValidateCohortGoalIds(spec.Baseline.BaselineGoalIds, "baseline.baselineGoalIds", spec.Baseline.IncrementalMembers == true);
+            var comparisonIds = ValidateCohortGoalIds(spec.Baseline.ComparisonGoalIds, "baseline.comparisonGoalIds", spec.Baseline.IncrementalMembers == true);
             foreach (var id in comparisonIds)
                 if (baselineIds.Contains(id))
                     throw new ArgumentException($"baseline.comparisonGoalIds: id '{id}' also appears in baselineGoalIds.");
@@ -191,12 +213,12 @@ internal static class CliExperimentCommands
         if (spec.EpicId is not null && string.IsNullOrWhiteSpace(spec.EpicId)) throw new ArgumentException("epicId: must be non-empty when supplied.");
     }
 
-    private static HashSet<string> ValidateCohortGoalIds(IReadOnlyList<string>? references, string field)
+    private static HashSet<string> ValidateCohortGoalIds(IReadOnlyList<string>? references, string field, bool allowEmpty)
     {
-        if (references is null || references.Count == 0)
+        if (!allowEmpty && (references is null || references.Count == 0))
             throw new ArgumentException($"{field}: required non-empty list for goal-cohort.");
         var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var reference in references)
+        foreach (var reference in references ?? [])
         {
             if (string.IsNullOrWhiteSpace(reference))
                 throw new ArgumentException($"{field}: entries must be non-blank.");

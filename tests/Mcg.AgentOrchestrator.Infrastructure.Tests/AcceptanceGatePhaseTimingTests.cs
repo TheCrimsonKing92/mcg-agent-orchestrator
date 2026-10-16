@@ -17,6 +17,7 @@ public sealed class AcceptanceGatePhaseTimingTests : GoalAcceptanceVerifierTestB
     public async Task CompletedGateEmitsNamedReconciledPhaseBreakdown()
     {
         var root = CreateManifestWorkspace(Manifest);
+        var ownerResults = AcceptanceOwnerResultsTestRoot.Create();
         var time = new RecordingTimeProvider();
         var progress = new List<AcceptanceGateProgress>();
         try
@@ -29,6 +30,7 @@ public sealed class AcceptanceGatePhaseTimingTests : GoalAcceptanceVerifierTestB
             var result = await RunWithProgressAsync(
                 verifier,
                 root,
+                ownerResults,
                 progress.Add,
                 new GoalId("12345678123456781234567812345678"));
 
@@ -63,6 +65,7 @@ public sealed class AcceptanceGatePhaseTimingTests : GoalAcceptanceVerifierTestB
         }
         finally
         {
+            ownerResults.Dispose();
             DeleteDirectoryWithRetry(root);
         }
     }
@@ -71,6 +74,7 @@ public sealed class AcceptanceGatePhaseTimingTests : GoalAcceptanceVerifierTestB
     public async Task FailedGateStillEmitsCompletedPhases()
     {
         var root = CreateManifestWorkspace(Manifest);
+        var ownerResults = AcceptanceOwnerResultsTestRoot.Create();
         var time = new RecordingTimeProvider();
         var progress = new List<AcceptanceGateProgress>();
         try
@@ -80,7 +84,7 @@ public sealed class AcceptanceGatePhaseTimingTests : GoalAcceptanceVerifierTestB
                 time.Advance(TimeSpan.FromSeconds(1));
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(7, "deterministic failure"));
             }, time);
-            var result = await RunWithProgressAsync(verifier, root, progress.Add);
+            var result = await RunWithProgressAsync(verifier, root, ownerResults, progress.Add);
 
             Assert.False(result.Passed);
             var breakdown = Assert.IsType<AcceptanceGatePhaseBreakdown>(
@@ -90,6 +94,7 @@ public sealed class AcceptanceGatePhaseTimingTests : GoalAcceptanceVerifierTestB
         }
         finally
         {
+            ownerResults.Dispose();
             DeleteDirectoryWithRetry(root);
         }
     }
@@ -98,6 +103,7 @@ public sealed class AcceptanceGatePhaseTimingTests : GoalAcceptanceVerifierTestB
     public async Task FaultedGateStillEmitsCompletedPhasesWithoutMaskingFault()
     {
         var root = CreateManifestWorkspace(Manifest);
+        var ownerResults = AcceptanceOwnerResultsTestRoot.Create();
         var progress = new List<AcceptanceGateProgress>();
         try
         {
@@ -111,7 +117,7 @@ public sealed class AcceptanceGatePhaseTimingTests : GoalAcceptanceVerifierTestB
             };
 
             var exception = await Assert.ThrowsAsync<AcceptanceGateEngineException>(() =>
-                RunWithProgressAsync(verifier, root, progressSink));
+                RunWithProgressAsync(verifier, root, ownerResults, progressSink));
 
             var innerException = Assert.IsType<InvalidOperationException>(exception.InnerException);
             Assert.Equal("deterministic runner fault", innerException.Message);
@@ -125,6 +131,7 @@ public sealed class AcceptanceGatePhaseTimingTests : GoalAcceptanceVerifierTestB
         }
         finally
         {
+            ownerResults.Dispose();
             DeleteDirectoryWithRetry(root);
         }
     }
@@ -133,6 +140,7 @@ public sealed class AcceptanceGatePhaseTimingTests : GoalAcceptanceVerifierTestB
     public async Task CancelledGateStillEmitsCompletedPhasesWithoutMaskingCancellation()
     {
         var root = CreateManifestWorkspace(Manifest);
+        var ownerResults = AcceptanceOwnerResultsTestRoot.Create();
         var progress = new List<AcceptanceGateProgress>();
         using var cancellation = new CancellationTokenSource();
         try
@@ -143,7 +151,7 @@ public sealed class AcceptanceGatePhaseTimingTests : GoalAcceptanceVerifierTestB
                 return Task.FromCanceled<GoalAcceptanceVerifier.CommandResult>(token);
             });
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-                RunWithProgressAsync(verifier, root, progress.Add, cancellationToken: cancellation.Token));
+                RunWithProgressAsync(verifier, root, ownerResults, progress.Add, cancellationToken: cancellation.Token));
 
             var breakdown = Assert.IsType<AcceptanceGatePhaseBreakdown>(
                 Assert.Single(progress, item => item.Phase == "gate-phase-breakdown").PhaseBreakdown);
@@ -153,6 +161,7 @@ public sealed class AcceptanceGatePhaseTimingTests : GoalAcceptanceVerifierTestB
         }
         finally
         {
+            ownerResults.Dispose();
             DeleteDirectoryWithRetry(root);
         }
     }
@@ -160,6 +169,7 @@ public sealed class AcceptanceGatePhaseTimingTests : GoalAcceptanceVerifierTestB
     private static Task<AcceptanceVerificationResult> RunWithProgressAsync(
         GoalAcceptanceVerifier verifier,
         string root,
+        AcceptanceOwnerResultsTestRoot ownerResultsRoot,
         Action<AcceptanceGateProgress> progressSink,
         GoalId? goalId = null,
         CancellationToken cancellationToken = default) =>
@@ -170,5 +180,5 @@ public sealed class AcceptanceGatePhaseTimingTests : GoalAcceptanceVerifierTestB
             stableSlotIndex: null,
             stableSlotLease: null,
             cancellationToken,
-            new AcceptanceRunExecutionOptions(ProgressSink: progressSink));
+            ownerResultsRoot.CreateOptions(progressSink));
 }

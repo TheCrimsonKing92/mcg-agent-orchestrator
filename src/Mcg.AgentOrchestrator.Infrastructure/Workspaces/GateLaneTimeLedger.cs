@@ -17,7 +17,10 @@ internal static class GateLaneTimeLedger
     private static readonly AsyncLocal<Action<string, string>?> AppenderOverride = new();
 
     internal static string ResolveStorePath(string worktreePath) => Path.Combine(
-        AcceptancePartitionVerdictCache.ResolveHostStateRoot(worktreePath), ".orchestrator", FileName);
+        HostLedgerStateDirectory.Resolve(worktreePath), FileName);
+
+    internal static string ResolveStorePath(string worktreePath, Func<string, string>? route) => Path.Combine(
+        HostLedgerStateDirectory.Resolve(worktreePath, route), FileName);
 
     internal static void Append(string path, GateLaneTimeLedgerRecord record)
     {
