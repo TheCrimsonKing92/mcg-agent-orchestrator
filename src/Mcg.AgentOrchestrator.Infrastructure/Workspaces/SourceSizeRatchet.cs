@@ -331,7 +331,9 @@ internal static class SourceSizeRatchet
             // Both transaction branches must register here and run only after commit; no extra headroom.
             // Goal 09a3023d adds four entry-point lines to preserve the authenticated submission source
             // for outcome/compatibility mutations; parsing and application live in dedicated collaborators.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 4803),
+            // Goal 9d55c9bf adds four lines to classify dogfood-log list at the existing kernel-state route seam;
+            // extracting this single switch case would split route ownership. No additional headroom.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs", 4807),
             // Goal 03aaf13e adds the explicit-root isolation fact at the verifier's existing execution-
             // environment seam; the production verifier remains at its prior ceiling.
             // Goal 56ff780e keeps passed/failed/unknown shard-completion producer coverage in its owning
@@ -598,7 +600,9 @@ internal static class SourceSizeRatchet
             // WorkspaceStoreSetup under that ownership; migration planning stays in WorkspaceStoreSetup.
             // Goal 920a6429 routes priority submission without a kernel-save transaction, preventing stale writes;
             // the command owns intent submission. After integrating main, measured 5972 lines in the same 18 partials; no headroom.
-            new SourceClassCeiling("CliPersistentStateRunner", 5972, 18),
+            // Goal 9d55c9bf adds the same four-line dogfood-log list case in the owning route classifier;
+            // keep classification centralized across the same 18 partial files. No additional headroom.
+            new SourceClassCeiling("CliPersistentStateRunner", 5976, 18),
             // Goal 5935c270 extracts subscription-plan output into SubscriptionPlanTextView
             // (2026-10-09 console architecture review, finding 4, taming slice 13).
             // Goal c0ff6203 extracts six small text views (taming slice 14).
