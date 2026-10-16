@@ -62,12 +62,15 @@ internal static class OwnerConsoleFullScreenHost
             var gateEvidence = new OwnerGateFailureEvidence(workspace.OrchestratorDirectory);
             var jointEvidence = new OwnerJointGateFailureEvidence(workspace.OrchestratorDirectory);
             var gateMotion = new OwnerGateMotionReader(workspace.ConductEventsLogPath, clock);
+            var gateProgress = new OwnerConsoleGateProgressLoader(workspace.ConductEventsLogPath,
+                Path.Combine(workspace.RootDirectory, "config", "acceptance-manifest.json"),
+                AcceptanceLaneDurationStore.ResolveStorePath(workspace.RootDirectory), clock);
             var changes = new ChangeStreamFileReader(Path.Combine(workspace.LogDirectory, Orchestration.ChangeStreamWriter.FileName));
             var builder = new OwnerConsoleViewModelBuilder(state, questions,
                 new ConductorLeaseLiveness(workspace.OrchestratorDirectory), new PortfolioGoalEpicLookup(workspace.PortfolioStorePath), clock,
                 item => item.EventKind == "acceptance-cohort" ? jointEvidence.Read(item, cohortEvidence.Read(item)) :
                     gateEvidence.Read(item) ?? jointEvidence.Read(item), gateMotion.Describe,
-                latestTick: () => Cli.ConductorStatusSnapshotReader.LatestTick(workspace));
+                latestTick: () => Cli.ConductorStatusSnapshotReader.LatestTick(workspace), gateProgress: gateProgress.Load);
             var opened = clock.GetUtcNow();
             DateTimeOffset? last = null;
             var landings = 0;

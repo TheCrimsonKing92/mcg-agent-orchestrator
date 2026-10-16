@@ -5,7 +5,8 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 internal sealed record OwnerConsoleViewModel(
     OwnerConsoleStatus Status, ImmutableArray<OwnerConsoleDecision> Decisions,
     ImmutableArray<OwnerConsoleBoardRow> Board, ImmutableArray<OwnerConsoleActivityItem> Activity,
-    OwnerConsolePaneState? DecisionsState = null, OwnerConsolePaneState? ActivityState = null);
+    OwnerConsolePaneState? DecisionsState = null, OwnerConsolePaneState? ActivityState = null,
+    OwnerConsoleGateProgress? Gate = null);
 
 internal sealed record OwnerConsoleStatus(bool ConductorRunning, int ActiveGoals, int LiveDecisions,
     int HiddenQuestions, TimeSpan? LastEventAge, int LandedToday, int FailedToday = 0, DateTimeOffset? LatestTickAt = null);
