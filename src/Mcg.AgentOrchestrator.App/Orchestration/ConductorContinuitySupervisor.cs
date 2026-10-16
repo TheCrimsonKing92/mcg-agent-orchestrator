@@ -95,7 +95,8 @@ internal sealed partial class ConductorContinuitySupervisor(
     Action<ProtectedProcessIdentity>? bindProtectedIdentity = null,
     Func<IReadOnlyList<StoreSetupPlanEntry>>? inspectStores = null,
     ConductorHandoffSchemaUpgrade? schemaUpgrade = null,
-    Func<Action<string, string, CancellationToken>, CancellationToken, ConductorPreparedSuccessor>? stageSuccessorWithHook = null)
+    Func<Action<string, string, CancellationToken>, CancellationToken, ConductorPreparedSuccessor>? stageSuccessorWithHook = null,
+    string? stopFilePath = null)
 {
     public const string ChildFlag = "--continuity-child";
     public const string ExitArtifactFlag = "--continuity-exit-artifact";
@@ -770,6 +771,14 @@ internal sealed partial class ConductorContinuitySupervisor(
                     cancellationToken).ConfigureAwait(false))
                     return 0;
                 continue;
+            }
+
+            if (ConductorSupervisorStopDecision.Basis(stopFilePath, artifact) is { } stopBasis)
+            {
+                var honored = $"SUPERVISOR_STOP_HONORED basis={stopBasis} exit={result.ExitCode} pid={result.ProcessId} attempt={attempt}";
+                TryAppendConductEvent(honored);
+                Record("stopped", "completed", attempt, honored, result.ProcessId, stdoutPath, stderrPath);
+                return 0;
             }
 
             var now = _timeProvider.GetUtcNow();
