@@ -62,6 +62,7 @@ internal static IReadOnlyList<string> RecognizedCommands { get; } =
     "remote-executors",
     "remote-lane-selftest",
     "round-value",
+    "board-simulate",
     "flake-census",
     "owner-digest",
     "lesson",
