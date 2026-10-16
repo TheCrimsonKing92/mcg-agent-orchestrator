@@ -69,7 +69,8 @@ internal static class DeveloperCompletionStructuralPreflight
 
         // ScanSources reparses the source tree; only pay that cost when feedback needs file paths.
         var sources = violations.Any(item => item.ClassFullName.Length > 0)
-            ? AcceptanceTestClassSourceScanner.ScanSources(worktreePath).ToDictionary(item => item.FullName, StringComparer.Ordinal)
+            ? AcceptanceTestClassSourceScanner.ScanSources(worktreePath, includeAncestorSources: false)
+                .ToDictionary(item => item.FullName, StringComparer.Ordinal)
             : null;
         var entries = violations.Select(item => new
         {

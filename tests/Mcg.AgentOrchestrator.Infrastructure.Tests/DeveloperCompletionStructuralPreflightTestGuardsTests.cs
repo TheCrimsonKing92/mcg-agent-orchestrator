@@ -42,6 +42,29 @@ public sealed class DeveloperCompletionStructuralPreflightTestGuardsTests
         Assert.Equal(PassMessage, result.Message);
     }
 
+    [Theory]
+    [InlineData(MisfiledClass, false, "isolated-collection")]
+    [InlineData("ConductorLegacyHolderAdmissionFixture", true, "lane-membership")]
+    public void Inherited_class_reports_declaring_file_instead_of_earlier_base_file(string name, bool isolated, string rule)
+    {
+        using var fixture = new Fixture();
+        const string basePath = TestDirectory + "/ConductorBatchLoopTests.cs";
+        File.WriteAllText(Path.Combine(fixture.Root, basePath),
+            "public abstract " + "class ConductorBatchLoopTests { }");
+        fixture.WriteClass(name, isolated, baseName: "ConductorBatchLoopTests");
+        var source = Assert.Single(AcceptanceTestClassSourceScanner.ScanSources(fixture.Root)
+            .Where(item => item.FullName == name));
+        Assert.Equal(new[] { basePath, FixturePath }, source.SourcePaths);
+
+        var result = DeveloperCompletionStructuralPreflight.Evaluate(fixture.Root);
+
+        Assert.True(result.HasViolation);
+        Assert.Contains(FixturePath, result.Message, StringComparison.Ordinal);
+        Assert.Contains(name, result.Message, StringComparison.Ordinal);
+        Assert.Contains($"[{rule}]", result.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(basePath, result.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Named_exemption_keeps_unchanged_pass_message()
     {
@@ -185,11 +208,11 @@ public sealed class DeveloperCompletionStructuralPreflightTestGuardsTests
             File.WriteAllLines(Path.Combine(Root, "guarded.cs"), ["line", "line", "line"]);
         }
 
-        internal void WriteClass(string name, bool isolated)
+        internal void WriteClass(string name, bool isolated, string? baseName = null)
         {
             var collection = isolated ? "[Xunit." + "Collection(\"DotnetBuildSlots\")]\n" : "";
             File.WriteAllText(Path.Combine(Root, FixturePath), collection + "public " + "class " + name +
-                " { [Xunit.Fact] public void Example() { } }");
+                (baseName is null ? "" : " : " + baseName) + " { [Xunit.Fact] public void Example() { } }");
         }
 
         public void Dispose() => Directory.Delete(Root, recursive: true);

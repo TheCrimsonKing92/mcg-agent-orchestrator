@@ -9,8 +9,9 @@ internal sealed record AcceptanceTestClassSource(string FullName, IReadOnlyList<
 
 internal static class AcceptanceTestClassSourceScanner
 {
-    // Preserve Scan's membership contract while exposing declaring and ancestor files for observation.
-    internal static IReadOnlyList<AcceptanceTestClassSource> ScanSources(string worktreePath)
+    // Preserve Scan's membership contract; diagnostic callers can request only declaring files.
+    internal static IReadOnlyList<AcceptanceTestClassSource> ScanSources(string worktreePath,
+        bool includeAncestorSources = true)
     {
         var classes = Scan(worktreePath);
         var declarations = new Dictionary<string, List<(string Path, string Text, string? BaseName)>>(StringComparer.Ordinal);
@@ -48,7 +49,7 @@ internal static class AcceptanceTestClassSourceScanner
                 foreach (var part in parts)
                 {
                     files[part.Path] = part.Text;
-                    if (part.BaseName is not null && byShortName.TryGetValue(part.BaseName, out var bases))
+                    if (includeAncestorSources && part.BaseName is not null && byShortName.TryGetValue(part.BaseName, out var bases))
                         foreach (var parent in bases) Include(parent);
                 }
             }
