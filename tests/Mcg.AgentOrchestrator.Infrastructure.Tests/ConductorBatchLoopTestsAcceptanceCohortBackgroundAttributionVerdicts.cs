@@ -36,8 +36,11 @@ public sealed class ConductorBatchLoopTestsAcceptanceCohortBackgroundAttribution
         var attribution = Assert.Single(guilty.LatestAcceptanceFailure!.CheckAttributions!);
         Assert.Contains($"reproduced={FailingTest}", attribution.Evidence);
         Assert.Contains(FailingTest, guilty.LatestAcceptanceFailure.FailedChecks);
-        Assert.Equal(GoalStatus.Verified, partner.Status);
+        // The healthy partner advances to its own background gate while the guilty member routes.
+        Assert.Equal(GoalStatus.Verifying, partner.Status);
         Assert.Null(partner.LatestAcceptanceFailure);
+        var partnerAttempt = Assert.Single(fixture.Launched);
+        Assert.Equal(partner.Id.Value, partnerAttempt.GoalId);
         var recorded = Assert.Single(VerdictLines(fixture.EventLines(), guilty));
         Assert.Contains("action=recorded reason=identity-match", recorded);
         Assert.Empty(VerdictLines(fixture.EventLines(), partner));
@@ -54,8 +57,9 @@ public sealed class ConductorBatchLoopTestsAcceptanceCohortBackgroundAttribution
 
         AssertExcluded(second, guilty);
         Assert.Equal(GoalStatus.AcceptanceFailed, guilty.Status);
-        Assert.Equal(GoalStatus.Verified, partner.Status);
+        Assert.Equal(GoalStatus.Verifying, partner.Status);
         Assert.Null(partner.LatestAcceptanceFailure);
+        Assert.Same(partnerAttempt, Assert.Single(fixture.Launched));
         Assert.Single(VerdictLines(fixture.EventLines(), guilty));
         Assert.Equal(1, fixture.ConsumptionCount(receipt));
         Assert.Empty(fixture.Landings);
