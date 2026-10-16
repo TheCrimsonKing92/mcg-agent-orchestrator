@@ -173,6 +173,7 @@ internal static IReadOnlyList<string> RecognizedCommands { get; } =
     "verifications",
     "tasks",
     "task",
+    "finding",
     "workspace",
     "model-outcomes",
     "durations",

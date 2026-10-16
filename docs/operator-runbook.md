@@ -286,6 +286,7 @@ acceptance suite output → git diff / commits in the worktree → verification 
 | `status <goal-prefix>` | objective + the task list with each task's status (`[Assigned]`/`[Completed]`/`[Failed]`/...) |
 | `task <goal-prefix> <n>` | one task's detail: assigned agent, dispatch command, exit code, and latest verification/failure preview; previews may be truncated |
 | `verifications <goal-prefix> <n>` | the task's stored verification history, including orchestrator-authored stdout/stderr such as planner-contract and acceptance state-guard diagnostics; use the printed artifact path when a long value is previewed |
+| `finding [--goal <goal-prefix>] <stable-id-or-prefix>` | finding occurrences and their same-record evidence receipts, including missing-receipt reasons; replaces searching `.orchestrator` for a finding id. Exact ids take precedence; ambiguous prefixes show all matches. Without `--goal`, searches all listed goals. Read-only. |
 | `readiness <goal-prefix>` | **start blockers** — high-risk objective terms and ownership approval (run this first when a goal won't dispatch); read-only terminal-goal diagnosis reports pending repairs without applying them |
 | `readiness-repair [goal-prefix]` | apply the repairing terminal-goal sweep, surface attention, and print start blockers; can change state, as does `goal-recovery <goal-prefix>` |
 | `durations` | role/complexity runtime medians plus attempts-per-task; use it to spot slow lanes and retry redundancy before changing worker mix or loop policy |

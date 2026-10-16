@@ -325,6 +325,17 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
 {
     switch (command)
     {
+        case "finding":
+            var (findingQuery, findingGoalPrefix) = CliFindingQueryCommand.Parse(parts);
+            IEnumerable<Goal> findingGoals = findingGoalPrefix is null
+                ? context.Kernel.Goals
+                : [OrchestratorEntityResolver.ResolveGoal(context.Kernel, null, findingGoalPrefix)];
+            var findingResult = FindingLookup.Find(findingGoals, findingQuery);
+            if (findingResult.Matches.Count == 0)
+                throw new KeyNotFoundException($"No finding matches {findingQuery}.");
+            ConsoleViews.PrintFindingLookup(findingResult);
+            return false;
+
         case "task":
             var taskTarget = ResolveCommandTaskTarget(parts, context, "task <task-number|task-id-prefix>|<goal-prefix> <task-number|task-id-prefix>|--goal <goal-prefix> <task-number|task-id-prefix>");
             ConsoleViews.PrintTask(context.CurrentGoal!, taskTarget.Task);
