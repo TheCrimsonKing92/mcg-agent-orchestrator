@@ -194,8 +194,9 @@ internal static class SourceSizeRatchet
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.ParallelAcceptanceFairness.cs", 150),
             // Goal 33b9b7a6 extracts reconciled-pass application to PassedAcceptanceReceiptReplay.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.ParallelAcceptanceCompletion.cs", 462),
-            // Goal 6e664238 conduct-event partial measured at 260 lines.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.ConductEvents.cs", 250),
+            // Goal 6e664238 conduct-event partial measured at 260 lines. Goal 587ba8d2 adds one
+            // train-revalidation event mapping; permit exactly its measured 251-line total.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.ConductEvents.cs", 251),
             // Goal f8d371e2 threads live suppression through the existing admission phases and rechecks
             // it between inline solo completions, preserving in-flight gates. Measured 804, no headroom.
             // Goal 33b9b7a6 extracts receipt replay admission and progress to PassedAcceptanceReceiptReplay.
@@ -591,8 +592,9 @@ internal static class SourceSizeRatchet
             // checkpoint/exit; the coordinator owns transfer. After integrating main b8da8f673, measured 9242 lines
             // in the same 54 partials; no headroom.
             // Goal 4fce8cbe adds the scoped admission-health accumulator partial and shared census recording calls.
-            // Goal aa4f5017 adds the passive activation-probe ledger; measured 9420 lines in 56 partials, no headroom.
-            new SourceClassCeiling("ConductorBatchLoop", 9420, 56),
+            // Goal 587ba8d2 adds one train-receipt-revalidate conduct event mapping line (measured 9320 at the merged head).
+            // Goal aa4f5017 adds the passive activation-probe ledger; measured 9421 lines in 56 partials at the merged head, no headroom.
+            new SourceClassCeiling("ConductorBatchLoop", 9421, 56),
             // Goal ec8903af moved the goal-prefix parser to CliGoalPrefixArguments.
             // Goal cd1f6380 adds four lines at the owning transaction boundary, forwarding both
             // registrars and invoking actions after commit; list behavior lives in PostCommitActions.
