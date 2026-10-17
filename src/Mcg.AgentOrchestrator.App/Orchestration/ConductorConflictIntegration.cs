@@ -30,14 +30,14 @@ internal sealed class ConductorConflictIntegration(
         var attached = GitCli.Run(worktree, "symbolic-ref", "--quiet", "HEAD");
         if (!attached.Succeeded || attached.DrainTimedOut || attached.Output.Trim() != "refs/heads/" + GoalWorktrees.BranchName(goal.Id))
             return (false, "detached or unexpected branch");
-        var developer = goal.Tasks.LastOrDefault(task => task.RequiredRole == AgentRole.Developer && task.Status == WorkTaskStatus.Completed);
-        if (developer is null) return (false, "no completed Developer task");
-        if (!goal.Tasks.SkipWhile(task => task.Id != developer.Id).Skip(1).Any(task => task.RequiredRole == AgentRole.Tester))
-            return (false, "no Tester task after completed Developer");
         var original = Run(worktree, "rev-parse", "HEAD").Trim();
         var entries = GoalOperationJournal.Read(executionDirectory, goal.Id).Entries.Where(entry => entry.Operation == OperationName).ToArray();
         if (entries.Any(entry => ReadRound(entry).OriginalHead == original))
             return (false, "repeat conflict on unchanged candidate");
+        var developer = goal.Tasks.LastOrDefault(task => task.RequiredRole == AgentRole.Developer && task.Status == WorkTaskStatus.Completed);
+        if (developer is null) return (false, "no completed Developer task");
+        if (!goal.Tasks.SkipWhile(task => task.Id != developer.Id).Skip(1).Any(task => task.RequiredRole == AgentRole.Tester))
+            return (false, "no Tester task after completed Developer");
         var main = Run(worktree, "rev-parse", integrationBranch + "^{commit}").Trim();
         var tree = new WorkerGitContext().ReadReviewerMergeTreeStatus(worktree, main, original);
         if (tree.Truncated) return (false, "conflict path set truncated");

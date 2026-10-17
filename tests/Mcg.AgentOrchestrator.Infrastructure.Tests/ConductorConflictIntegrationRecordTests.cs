@@ -147,11 +147,15 @@ public sealed class ConductorConflictIntegrationRecordTests
         if (kind == "dirty") File.WriteAllText(Path.Combine(fixture.GitFixture.Worktree, WidgetPath), "dirty\n");
         if (kind == "detached") Git(fixture.GitFixture.Worktree, "checkout", "--detach");
         var retries = fixture.RetryCalls;
+        var retryAt = fixture.Developer.LatestRetryAt;
+        var journalEntries = GoalOperationJournal.Read(fixture.GitFixture.Repository, fixture.Goal.Id).Entries.Count;
         var status = Git(fixture.GitFixture.Worktree, "status", "--porcelain=v1");
         var result = fixture.Coordinator.TryRecord(fixture.Goal);
         Assert.False(result.Started);
         Assert.Contains(reason, result.Detail);
         Assert.Equal(retries, fixture.RetryCalls);
+        Assert.Equal(retryAt, fixture.Developer.LatestRetryAt);
+        Assert.Equal(journalEntries, GoalOperationJournal.Read(fixture.GitFixture.Repository, fixture.Goal.Id).Entries.Count);
         Assert.Equal(fixture.GitFixture.OriginalHead, Git(fixture.GitFixture.Worktree, "rev-parse", "HEAD").Trim());
         Assert.Equal(status, Git(fixture.GitFixture.Worktree, "status", "--porcelain=v1"));
         Assert.Equal(1, GitCli.Run(fixture.GitFixture.Worktree, "rev-parse", "--verify", "--quiet", "MERGE_HEAD").ExitCode);
