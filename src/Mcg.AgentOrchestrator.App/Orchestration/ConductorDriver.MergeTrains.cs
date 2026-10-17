@@ -355,6 +355,8 @@ internal sealed partial class ConductorDriver
             {
                 attributed = MergeTrainImpactAttribution.TryAttribute(receipt.GateTestResultPaths, workspace.Path, members, out subjects);
                 if (attributed is not null) attributionSource = "impact";
+                if (attributed is null && attempt == 0) attributed = MergeTrainReachAttribution.TryAttribute(receipt.GateTestResultPaths, workspace.Path, members, out subjects);
+                if (attributed is not null && attributionSource != "impact") attributionSource = "reach";
             }
             var messageSubjectFailure = MergeTrainRedAttribution.ReadFatalFailures(receipt.GateTestResultPaths)
                 .Any(MergeTrainRedAttribution.IsMessageSubjectGuard);
@@ -362,6 +364,10 @@ internal sealed partial class ConductorDriver
             // the existing sink keeps repeat implication records idempotent.
             if (attributed is not null && (messageSubjectFailure || MergeTrainBisectRedRetention.RecordsBeforeBisect(receipt, members.Count, attempt, attributed)))
                 RecordTrainImplicatedMember(attributed, receipt, subjects, attributionSource);
+            if (attempt == 0 && !messageSubjectFailure && attributed is not null && MergeTrainRedAttribution.IsGenuineTrainRed(receipt))
+                MergeTrainAttributedFailure.Apply(receipt, attributed, GetCurrentGoal(goalsById[attributed.GoalId]), attributionSource,
+                    members.Count, allEjections, ejection => _mergeTrainAcceptanceStore.RecordEjections(attemptId, [ejection]),
+                    _recordAcceptanceFailure, _cohortKernel.RouteRecordedAcceptanceFailure);
             if (receipt.Outcome != MergeTrainGateOutcome.Failed || members.Count == 2 || attempt == 1)
             {
                 if (!messageSubjectFailure && attributed is not null)

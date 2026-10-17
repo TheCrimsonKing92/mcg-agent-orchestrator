@@ -303,7 +303,9 @@ public sealed class AcceptanceCohortWorkflowTestsTrainRedAttribution : Acceptanc
         {
             Assert.Null(scenario.Result.Receipt);
             Assert.Empty(scenario.Result.MemberResults);
-            Assert.Empty(scenario.Result.Ejections);
+            var ejection = Assert.Single(scenario.Result.Ejections);
+            Assert.Equal(scenario.Goals[culprit].Id, ejection.GoalId);
+            Assert.Equal(MergeTrainEjectionReason.RedAttributedMember, ejection.Reason);
             Assert.Equal(1, scenario.Verifier.RunCount);
             Assert.Equal(Key(scenario, culprit), Assert.Single(scenario.Driver.ReadTrainImplicatedMemberKeys()));
             Assert.DoesNotContain(Key(scenario, 1 - culprit), scenario.Driver.ReadTrainImplicatedMemberKeys());
