@@ -215,6 +215,7 @@ internal sealed partial class ConductorBatchLoop
 
         using var activeConductorLease = leaseAcquisition.StateLease!;
         using var activeRunEventLease = leaseAcquisition.RunEventLease!;
+        using var activationAdmissionHealth = BeginActivationAdmission(emitActivationHeartbeat);
         checkpointGoalTick = ResetLandingTickSave(checkpointGoalTick);
         _consecutiveJanitorialFailures.Clear();
         _slotContentionHolds.Clear();
@@ -244,7 +245,11 @@ internal sealed partial class ConductorBatchLoop
             EmitProgress($"LOOP_STOP tick={totalTicks} rechecks={totalBlockedRechecks} reason={reason}" +
                          (string.IsNullOrWhiteSpace(detail) ? string.Empty : $" {detail}"));
         }
-        void CompleteActivationTick(int tick) => EmitActivationTickEnd(emitActivationHeartbeat, tick);
+        void CompleteActivationTick(int tick)
+        {
+            EmitActivationAdmissionProbeAndHealth(emitActivationHeartbeat, tick);
+            EmitActivationTickEnd(emitActivationHeartbeat, tick);
+        }
 
         driver.DispatchRecordWriteSucceededSink = goalId =>
         {
@@ -2184,12 +2189,13 @@ internal sealed partial class ConductorBatchLoop
         var state = BeginParallelAcceptanceBatch(
             eligible, kernel, driver, policy, completedGoals, escalatedGoals,
             configuredAcceptanceWidth, tick, changedGoalLines);
+        RecordActivationAdmissionWaitingForProbe(state.OrderedEligible);
         if (state.CapacityStateUnavailable) return state.Results;
 
         ReconcileParallelAcceptanceAttempts(state, kernel, driver, policy, tick, changedGoalLines, changedGoalIds);
         PrepareGroupedAcceptanceAdmission(
             state, eligible, scopedGoals, verifiedGoalIdsAtTickStart, preWalkIntentChangedGoalIds,
-            kernel, driver, policy, completedGoals, escalatedGoals, tick, changedGoalLines,
+            kernel, driver, policy, completedGoals, escalatedGoals, tick, changedGoalLines, changedGoalIds,
             suppressNewAcceptanceAdmission);
         if (!suppressNewAcceptanceAdmission())
             AdmitMergeTrain(state, driver, policy, tick, changedGoalLines);

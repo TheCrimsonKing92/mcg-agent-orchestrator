@@ -13,7 +13,10 @@ internal static class GateHostHealthLedger
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     internal static string ResolveStorePath(string worktreePath) => Path.Combine(
-        AcceptancePartitionVerdictCache.ResolveHostStateRoot(worktreePath), ".orchestrator", FileName);
+        HostLedgerStateDirectory.Resolve(worktreePath), FileName);
+
+    internal static string ResolveStorePath(string worktreePath, Func<string, string>? route) => Path.Combine(
+        HostLedgerStateDirectory.Resolve(worktreePath, route), FileName);
 
     internal static void Append(string path, HostHealthLedgerRecord record)
     {

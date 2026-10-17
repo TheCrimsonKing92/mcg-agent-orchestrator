@@ -100,7 +100,8 @@ internal sealed class ConductorExperimentWatch
             {
                 try
                 {
-                    var reading = ExperimentReading.Evaluate(record, goals, landings, intents, asOf,
+                    var effective = ExperimentMembership.Effective(record, experiments.ListMemberEventsAsync(record.Id).GetAwaiter().GetResult());
+                    var reading = ExperimentReading.Evaluate(effective, goals, landings, intents, asOf,
                         record.Spec.StopRule.Unit == ExperimentStopUnit.Gates
                             ? ExperimentGateStopCount.Count(record, asOf, hostLedgers, () => gateAttempts.Value)
                             : 0, hostLedgers);
@@ -117,7 +118,7 @@ internal sealed class ConductorExperimentWatch
                     catch (Exception error) { LogFailure(error); }
                     try { if (keeps.TryKeep(record, reading, asOf)) continue; }
                     catch (Exception error) { LogFailure(error); }
-                    try { toggles.TryToggle(record, hostLedgers, asOf); }
+                    try { toggles.TryToggle(record, hostLedgers, asOf, reading); }
                     catch (Exception error) { LogFailure(error); }
                     foreach (var trigger in Triggers)
                     {
@@ -136,7 +137,8 @@ internal sealed class ConductorExperimentWatch
                             var observed = reading.ObservedCount?.ToString(CultureInfo.InvariantCulture) ?? "unavailable";
                             _writer?.Append("experiment-reading-due", null,
                                 $"EXPERIMENT_READING_DUE experiment={record.Id} trigger={trigger} observed={observed} " +
-                                $"stopRuleMet={Flag(reading.StopRuleMet)} verdict={reading.Verdict} guardrailBreached={Flag(reading.GuardrailBreached)}", asOf);
+                                $"stopRuleMet={Flag(reading.StopRuleMet)} verdict={reading.Verdict} guardrailBreached={Flag(reading.GuardrailBreached)}" +
+                                (reading.ObservedBasis is { } basis ? $" observedBasis={basis}" : ""), asOf);
                         }
                         catch (Exception error) { LogFailure(error); }
                     }

@@ -1,12 +1,16 @@
+using System.Globalization;
+
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 // Owned by one loop generation. The tick never joins its background run; command exit joins.
 internal sealed class RunEventMaintenanceCadenceRunner(
     string conductEventsLogPath,
     Action cadenceOperation,
-    Func<bool>? shouldStart = null)
+    Func<bool>? shouldStart = null,
+    Func<DateTimeOffset>? utcNow = null)
 {
     private readonly object _gate = new();
+    private readonly Func<DateTimeOffset> _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
     private Task? _currentRun;
 
     internal static RunEventMaintenanceCadenceRunner ForWorkspace(OrchestratorWorkspace workspace) =>
@@ -50,14 +54,23 @@ internal sealed class RunEventMaintenanceCadenceRunner(
 
             _currentRun = Task.Run(() =>
             {
+                var startedAt = _utcNow();
                 TryAppendJournal("storage-retention-sweep-started", "STORAGE_RETENTION_SWEEP_STARTED");
+                var outcome = "failed";
                 try
                 {
                     cadenceOperation();
+                    outcome = "completed";
                 }
                 catch (Exception ex)
                 {
                     ReportFailure(ex);
+                }
+                finally
+                {
+                    var elapsedMs = ((long)(_utcNow() - startedAt).TotalMilliseconds).ToString(CultureInfo.InvariantCulture);
+                    TryAppendJournal("storage-retention-sweep-completed",
+                        $"STORAGE_RETENTION_SWEEP_COMPLETED elapsedMs={elapsedMs} outcome={outcome}");
                 }
             });
             return true;

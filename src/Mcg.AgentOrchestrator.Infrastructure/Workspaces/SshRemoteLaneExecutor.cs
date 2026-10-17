@@ -100,6 +100,38 @@ internal sealed class SshRemoteLaneExecutor(
         var shortSha = request.VerifyingCommitSha[..9];
         var staging = PrepareStaging(Path.GetDirectoryName(Path.GetFullPath(attemptPrefix))!, entry.Id, request.Lane, laneKey);
         var steps = new List<RemoteLaneStep>();
+        if (entry.OccupancyProbe)
+        {
+            var probeStartedAt = clock.GetUtcNow();
+            GoalAcceptanceVerifier.CommandResult? probe = null;
+            var busy = false;
+            Exception? failure = null;
+            using var bound = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            bound.CancelAfter(TimeSpan.FromSeconds(30));
+            try
+            {
+                var statePath = Path.Combine(staging, "runner-state.json");
+                var cleared = true;
+                try { File.Delete(statePath); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { cleared = false; }
+                probe = await transport([ScpPath, "-o", "BatchMode=yes",
+                    $"{entry.RunnerAlias}:{entry.RunRoot}/runner-state.json", "runner-state.json"],
+                    staging, TimeSpan.FromSeconds(30), bound.Token).WaitAsync(bound.Token).ConfigureAwait(false);
+                if (cleared && probe.ExitCode == 0 && !probe.TimedOut && File.Exists(statePath))
+                {
+                    var text = await File.ReadAllTextAsync(statePath, bound.Token).ConfigureAwait(false);
+                    busy = RemoteLaneExecutorQueueState.TryParse(text, out var state) && state!.IsBusy(clock.GetUtcNow());
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+            catch (Exception ex) { failure = ex; /* An unavailable probe does not prevent an offer. */ }
+            cancellationToken.ThrowIfCancellationRequested();
+            steps.Add(RemoteLaneDiagnosticFiles.Step(staging, "occupancy", probe?.ExitCode,
+                probe?.TimedOut == true || failure is OperationCanceledException, probeStartedAt, clock.GetUtcNow(),
+                probe?.Output ?? "", failure?.Message ?? probe?.Stderr ?? "",
+                failed: failure is not null || probe?.ExitCode != 0 || probe?.TimedOut == true));
+            if (busy) return new(null, "executor-busy", steps.ToArray());
+        }
         var startedAt = clock.GetUtcNow();
         GitCli.GitResult push;
         using (await EnterPushGateAsync(entry.Id, cancellationToken).ConfigureAwait(false))
@@ -114,12 +146,15 @@ internal sealed class SshRemoteLaneExecutor(
         if (push.ExitCode != 0) return new(null, "push-failed", steps.ToArray());
         cancellationToken.ThrowIfCancellationRequested();
         var jobName = $"{request.AttemptId}-{laneKey}.json";
-        await File.WriteAllTextAsync(Path.Combine(staging, "job.json"), JsonSerializer.Serialize(new
+        var job = new System.Text.Json.Nodes.JsonObject
         {
-            sha = request.VerifyingCommitSha, project = request.Project, filter = request.Filter, lane = request.Lane,
-            attemptId = request.AttemptId, executorId = request.ExecutorId, filterHash = request.FilterHash,
-            mainSha = request.MainSha, manifestIdentity = request.ManifestIdentity
-        }), cancellationToken).ConfigureAwait(false);
+            ["sha"] = request.VerifyingCommitSha, ["project"] = request.Project, ["filter"] = request.Filter,
+            ["lane"] = request.Lane, ["attemptId"] = request.AttemptId, ["executorId"] = request.ExecutorId,
+            ["filterHash"] = request.FilterHash, ["mainSha"] = request.MainSha, ["manifestIdentity"] = request.ManifestIdentity
+        };
+        if (request.TestHostTimeoutSeconds is { } budget) job["testHostTimeoutSeconds"] = budget;
+        await File.WriteAllTextAsync(Path.Combine(staging, "job.json"), JsonSerializer.Serialize(job),
+            cancellationToken).ConfigureAwait(false);
         startedAt = clock.GetUtcNow();
         var copy = await transport([ScpPath, "-o", "BatchMode=yes", "job.json",
             $"{entry.RunnerAlias}:{entry.RunRoot}/queue/{jobName}"], staging, TimeSpan.FromMinutes(2), cancellationToken).ConfigureAwait(false);

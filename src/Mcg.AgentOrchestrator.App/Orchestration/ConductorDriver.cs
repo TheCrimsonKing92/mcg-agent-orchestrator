@@ -31,26 +31,6 @@ internal sealed record WorkerAdmissionSnapshot(
     int ReservedGateSlots,
     int EffectiveWorkerCap);
 
-internal enum DeveloperBranchIntegrationStatus
-{
-    Current,
-    Integrated,
-    Conflict,
-    Failed
-}
-
-internal sealed record DeveloperBranchIntegrationResult(
-    DeveloperBranchIntegrationStatus Status,
-    string Message,
-    IReadOnlyList<string> ConflictPaths,
-    string? OriginalCandidateSha = null,
-    string? IntegratedMainSha = null,
-    string? ResultingCandidateSha = null)
-{
-    internal bool CanDispatch =>
-        Status is DeveloperBranchIntegrationStatus.Current or DeveloperBranchIntegrationStatus.Integrated;
-}
-
 internal sealed partial class ConductorDriver
 {
     internal static DispatchReadinessVerdict EvaluateConductorReadiness(
@@ -89,7 +69,7 @@ internal sealed partial class ConductorDriver
     private readonly Func<Goal, GoalLifecycleFacts> _getFacts;
     private readonly Func<int> _getRunningPaidWorkerCount;
     private readonly Func<Goal, string> _createWorkspace;
-    private readonly Func<Goal, DeveloperBranchIntegrationResult> _integrateMainBeforeDeveloperDispatch;
+    private Func<Goal, DeveloperBranchIntegrationResult> _integrateMainBeforeDeveloperDispatch;
     private readonly Func<Goal, AgentRole, DeveloperBranchIntegrationResult>? _integrateMainBeforeReadOnlyDispatch;
     private readonly Action<Goal, DeveloperBranchIntegrationResult> _recordPreDispatchIntegrationReceipt;
     private readonly Func<Goal, ConductorAutonomyPolicy, DispatchStartOutcome> _dispatchAndStart;
@@ -834,11 +814,11 @@ internal sealed partial class ConductorDriver
 
         _runAdvisorySemanticAcceptance = (_, _) => { };
 
-        _integrateMainBeforeDeveloperDispatch = new FailedRoundCheckpointPreDispatch(kernel, dir, workspace.IntegrationBranch).IntegrateMainBeforeDeveloperDispatch;
+        _integrateMainBeforeDeveloperDispatch = (_conflictIntegration = new ConductorConflictIntegration(kernel, dir, workspace.IntegrationBranch, _retryDeveloperAfterStructuralPreflight!, new RatchetConflictDispatchIntegration(kernel, dir, workspace.IntegrationBranch, workspace.ConductEventsLogPath).IntegrateMainBeforeDeveloperDispatch)).IntegrateMainBeforeDeveloperDispatch;
         _integrateMainBeforeReadOnlyDispatch = (goal, role) =>
             IntegrateMainBeforeReadOnlyDispatch(dir, goal, role, workspace.IntegrationBranch);
         _recordPreDispatchIntegrationReceipt = new PreDispatchIntegrationReceiptRecorder(kernel).Record;
-        _rebaseOntoMain = goal => GoalBranchMainMerge.TryMergeMainIntoGoalBranch(dir, goal.Id, CreateAdditiveConflictMergeOptions(kernel, goal, workspace.ConductEventsLogPath), workspace.IntegrationBranch);
+        _rebaseOntoMain = goal => RatchetConflictDispatchIntegration.MergeMainBeforeLanding(kernel, dir, goal, CreateAdditiveConflictMergeOptions(kernel, goal, workspace.ConductEventsLogPath), workspace.IntegrationBranch);
         PreLandingMergeConflictProbe = goal => GoalWorktrees.ProbeAdditiveConflictMerge(dir, goal.Id, CreateAdditiveConflictMergeOptions(kernel, goal, workspace.ConductEventsLogPath).FrozenPaths, workspace.IntegrationBranch);
         _recheckPreLandingRebaseConflict = goal =>
         {

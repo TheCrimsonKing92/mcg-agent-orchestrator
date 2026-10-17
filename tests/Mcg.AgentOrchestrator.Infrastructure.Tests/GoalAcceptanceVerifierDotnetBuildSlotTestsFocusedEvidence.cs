@@ -918,6 +918,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedEvidence : 
                     {
                         [Xunit.Fact] public void FocusedEvidence_CompatibleBatchReportsUncoveredSelectionAsApparatusFailure() { }
                     }
+                    public class ConductorDriverTests { }
                     """);
             },
             executedTestCount: 2,
@@ -1189,6 +1190,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedEvidence : 
         File.WriteAllText(
             Path.Combine(providerDirectory, "ProviderDefaultTests.cs"),
             "sealed class ProviderDefaultTests { }");
+        File.WriteAllText(
+            Path.Combine(root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests", "GoalAcceptanceVerifierTests.cs"),
+            "sealed class GoalAcceptanceVerifierTests { }");
         var goalId = new GoalId(Guid.NewGuid().ToString("N"));
         try
         {

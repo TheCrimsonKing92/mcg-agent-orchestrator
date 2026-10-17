@@ -84,7 +84,7 @@ internal sealed class ConductorLoopLease : IDisposable
             if (ownerIsSameProcess)
             {
                 throw new InvalidOperationException(
-                    $"Refused: conduct-loop.lock held by pid {ownerPid}, running, written {age} ago — delete to proceed");
+                    $"Refused: conduct-loop.lock held by pid {ownerPid}, running, written {age} ago; stop the conductor with `conductor stop` before retrying.");
             }
 
             var staleReason = ownerIsRunning ? "dead-or-recycled" : "not running";

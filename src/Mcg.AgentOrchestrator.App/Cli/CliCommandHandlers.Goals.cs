@@ -1736,7 +1736,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     ConductorTickStepLedger.Measure("state-log-check", () => stateLogCheck.OnTick());
                     ConductorTickStepLedger.Measure("failure-clusters", () => failureClustersDaily.OnTick());
                     ConductorTickStepLedger.Measure("host-health", () => hostHealthMonitor.Evaluate());
-                    ConductorTickStepLedger.Measure("program-health", () => programHealthMonitor.Evaluate(loopKernel.Goals.Select(goal => (goal.Id, goal.Status)).ToArray(), terminalSweepCache.ObservedMainSha));
+                    ConductorTickStepLedger.Measure("program-health", () => programHealthMonitor.Evaluate(loopKernel.Goals.Select(goal => (goal.Id, goal.Status)).ToArray(), terminalSweepCache.ObservedMainSha, (goals, now) => ConductorInvariantObservationReader.ForWorkspace(context.Workspace).Read(goals, now)));
                     ConductorTickStepLedger.Measure("remote-executor-probe", () => remoteExecutorProbe.Evaluate());
                     ConductorTickStepLedger.Measure("remote-git-mirror", () => RemoteGitMirror.TryStartBackgroundProcessing(loopKernel, context.Workspace.ExecutionDirectory, integrationBranch: context.Workspace.IntegrationBranch));
                     return terminalSweep;
@@ -1795,7 +1795,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                             readAdoptionCensus: WorkerAdoptionCensus.CreateDefault(context.Workspace.SqliteStatePath),
                             adoptInheritedWorkers: WorkerAdoptionTransfer.CreateDefault(context.Workspace.SqliteStatePath,
                                 goalIds => context.ReloadKernel(goalIds))),
-                        blockedRecheckHeartbeatInterval: reconcileSweepOptions.HeartbeatInterval, countLiveGroupedGates: loopDriver.CountLiveGroupedGateAttempts,
+                        blockedRecheckHeartbeatInterval: reconcileSweepOptions.HeartbeatInterval, countLiveGroupedGates: () => loopDriver.CountLiveGroupedGateAttempts(relaunchBlockingOnly: true),
                         workspace: context.Workspace).WithSteward(ConductorStewardHost.CreateDefault(context.Workspace))
                         .WithUnintendedExitDiagnostics(conductorDiagnosticPath, conductorOutputLogPath)
                         .WithJudgePanel(ConductorJudgePanelHost.CreateDefault(context.Workspace))
@@ -1834,9 +1834,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 }
                 finally
                 {
-                    maintenanceCadence.WaitForCurrentRunAsync().GetAwaiter().GetResult();
-                    stateLogCheck.WaitForCurrentRunAsync().GetAwaiter().GetResult();
-                    failureClustersDaily.WaitForCurrentRunAsync().GetAwaiter().GetResult();
+                    LoopExitMaintenanceJoin.JoinAsync(
+                        maintenanceCadence, stateLogCheck, failureClustersDaily,
+                        conductEventLogWriter).GetAwaiter().GetResult();
                 }
             }
             CliArgumentParser.RequirePartCount(parts, 2, "conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>]");

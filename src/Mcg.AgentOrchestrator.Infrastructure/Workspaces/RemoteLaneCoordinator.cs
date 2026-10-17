@@ -24,6 +24,7 @@ internal sealed class RemoteLaneCoordinator : IDisposable
     private readonly Action<string>? _onEvent;
     private readonly object _gate = new();
     private readonly HashSet<string> _retired = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, DateTimeOffset> _busyUntil = new(StringComparer.Ordinal);
     private readonly HashSet<string> _excluded = new(StringComparer.Ordinal);
     private readonly HashSet<IRemoteLaneHandle> _handles = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<string, SortedDictionary<int, IDisposable>> _claims = new(StringComparer.Ordinal);
@@ -65,7 +66,8 @@ internal sealed class RemoteLaneCoordinator : IDisposable
         {
             // OrderBy is stable: equally occupied executors retain configuration order.
             foreach (var entry in _configuration.Executors
-                .Where(entry => !_retired.Contains(entry.Id) && HeldSlotCount(entry.Id) < entry.Slots)
+                .Where(entry => !_retired.Contains(entry.Id) && HeldSlotCount(entry.Id) < entry.Slots &&
+                    (!_busyUntil.TryGetValue(entry.Id, out var until) || until <= _clock.GetUtcNow()))
                 .OrderBy(entry => HeldSlotCount(entry.Id)))
             {
                 _claims.TryGetValue(entry.Id, out var slots);
@@ -125,7 +127,8 @@ internal sealed class RemoteLaneCoordinator : IDisposable
     internal async Task<RemoteLaneOutcome> RunRemoteAsync(Check check, RemoteLaneExecutorEntry entry,
         TimeSpan timeout, CancellationToken cancellationToken)
     {
-        var request = CreateRequest(check, entry.Id);
+        var request = CreateRequest(check, entry.Id) with
+        { TestHostTimeoutSeconds = RemoteLaneTestHostBudget.Resolve(timeout) };
         var submittedAt = _clock.GetUtcNow();
         IRemoteLaneHandle? handle = null;
         RemoteLaneResult? observedResult = null;
@@ -139,6 +142,16 @@ internal sealed class RemoteLaneCoordinator : IDisposable
             var submission = await _executor.SubmitAsync(request, cancellationToken).ConfigureAwait(false);
             handle = submission.Handle;
             steps = submission.Steps ?? [];
+            if (handle is null && submission.FailureReason == "executor-busy")
+            {
+                lock (_gate)
+                {
+                    _busyUntil[entry.Id] = _clock.GetUtcNow().AddSeconds(entry.LeaseSeconds);
+                    Release(entry.Id);
+                }
+                Record(request, RemoteLaneOutcomeCode.ExecutorBusy, reason: submission.FailureReason, attempt: Detail());
+                return new(request, null, null);
+            }
             if (handle is null)
                 return await Fallback(submission.FailureReason == "transport-unavailable"
                     ? RemoteLaneOutcomeCode.TransportUnavailable : RemoteLaneOutcomeCode.Unreachable,
@@ -311,11 +324,14 @@ internal sealed class RemoteLaneCoordinator : IDisposable
     {
         RemoteExecutorHealthLedger.Append(_ledgerPath, new(_clock.GetUtcNow(), request.ExecutorId,
             request.AttemptId, request.Lane, code,
-            code is RemoteLaneOutcomeCode.Accepted or RemoteLaneOutcomeCode.NotEligibleExclusiveResource ? null : "executor",
+            code is RemoteLaneOutcomeCode.Accepted or RemoteLaneOutcomeCode.NotEligibleExclusiveResource or
+                RemoteLaneOutcomeCode.ExecutorBusy ? null : "executor",
             new(request.ExecutorId, request.Lane, request.VerifyingCommitSha, request.CandidateTreeSha,
                 request.MainSha, request.FilterHash, request.ManifestIdentity),
             result is null ? null : new(result.ExecutorId, result.Lane, result.VerifyingCommitSha, result.ObservedTreeSha,
-                result.MainSha, result.FilterHash, result.ManifestIdentity), reason, Attempt: attempt));
+                result.MainSha, result.FilterHash, result.ManifestIdentity), reason, Attempt: attempt,
+            Phases: attempt is null ? null : RemoteLanePhaseTimings.Compute(
+                attempt.Steps, attempt.LastStatus, result?.TestResultPaths, attempt.Fetches)));
         try
         {
             var compactReason = string.IsNullOrWhiteSpace(reason) ? "none" :

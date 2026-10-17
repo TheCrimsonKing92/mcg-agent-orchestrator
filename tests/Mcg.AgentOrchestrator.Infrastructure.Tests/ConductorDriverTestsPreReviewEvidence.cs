@@ -1418,9 +1418,9 @@ public sealed class ConductorDriverTestsPreReviewEvidence
         var safelySplittable = $"FullyQualifiedName~SmallTests|{nearLimitClause}";
         Assert.True(PreReviewFocusedRequestSplitter.TrySplitRequestItems("Infrastructure.Tests", safelySplittable, out var nearLimitItems));
         Assert.Equal(2, nearLimitItems.Count);
-        var root = InfrastructureTestSupport.FindRepositoryRoot();
+        using var root = FocusedEvidenceSyntheticProjectRoot.Create("SmallTests", nearLimitClause["FullyQualifiedName~".Length..]);
         Assert.True(GoalAcceptanceVerifier.TryBuildFocusedEvidenceChecks(
-            string.Join("; ", nearLimitItems), AcceptanceGateEngineSettings.Load(root), root,
+            string.Join("; ", nearLimitItems), AcceptanceGateEngineSettings.Load(root.Path), root.Path,
             out var nearLimitChecks, out _, out var nearLimitRejection),
             $"{nearLimitRejection.Code}: {nearLimitRejection.Detail}");
         Assert.Equal(nearLimitItems.Count, nearLimitChecks.Count);

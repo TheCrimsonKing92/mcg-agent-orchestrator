@@ -48,7 +48,8 @@ internal static class OwnerConsoleVerb
                 new SystemConsoleOutput(), clock,
                 new CliConductorConsoleAdapter(workspace),
                 new CliOwnerDigestConsoleAdapter(workspace), changes,
-                fleet: () => OwnerFleetViewModelBuilder.Load(workspace, liveness));
+                fleet: () => OwnerFleetViewModelBuilder.Load(workspace, liveness),
+                terminalWidth: () => TerminalWidth(() => System.Console.WindowWidth));
             await new OwnerConsoleLoop(session, new SystemConsoleInput(), source, clock)
                 .RunAsync(cancellationToken);
             return 0;
@@ -58,6 +59,12 @@ internal static class OwnerConsoleVerb
             System.Console.Error.WriteLine($"Error: {ex.Message}");
             return 1;
         }
+    }
+
+    internal static int? TerminalWidth(Func<int> read)
+    {
+        try { var width = read(); return width > 0 ? width : null; }
+        catch (Exception ex) when (ex is IOException or ArgumentOutOfRangeException) { return null; }
     }
 
     private sealed class EmptyStateQueries : IOrchestratorStateQueries

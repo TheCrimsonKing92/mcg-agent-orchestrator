@@ -22,12 +22,14 @@ public sealed class CliGoalLifecycleOutboxTelemetryIsolationTests : CliGoalLifec
         Xunit.Assert.Null(result.Error);
         Xunit.Assert.True(result.Changed);
         var hasTelemetry = holdMs > 0;
-        Xunit.Assert.Equal(hasTelemetry, Directory.Exists(seed.Workspace.LogDirectory));
-        Xunit.Assert.Contains($"  WorkerLogs: Keep; exists={hasTelemetry}{Environment.NewLine}", result.Output);
+        Xunit.Assert.False(Directory.Exists(seed.Workspace.LogDirectory));
+        Xunit.Assert.Contains($"  WorkerLogs: Keep; exists=False{Environment.NewLine}", result.Output);
         Xunit.Assert.False(File.Exists(seed.EventPath));
         Xunit.Assert.Equal(0L, await CountOutboxRows(seed));
-        var diagnosticsPath = Path.Combine(seed.Workspace.LogDirectory, SqliteWriteTelemetry.DiagnosticsFileName);
+        var diagnosticsPath = Path.Combine(seed.Workspace.OrchestratorDirectory,
+            SqliteWriteTelemetry.DiagnosticsDirectoryName, SqliteWriteTelemetry.DiagnosticsFileName);
         Xunit.Assert.Equal(hasTelemetry, File.Exists(diagnosticsPath));
+        Xunit.Assert.False(File.Exists(Path.Combine(seed.Workspace.LogDirectory, SqliteWriteTelemetry.DiagnosticsFileName)));
         if (hasTelemetry)
         {
             var receipts = File.ReadAllLines(diagnosticsPath);

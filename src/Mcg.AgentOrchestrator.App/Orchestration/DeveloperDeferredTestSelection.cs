@@ -45,7 +45,7 @@ internal static class DeveloperDeferredTestSelections
         return new DeveloperDeferredTestSelection(selections, notRun);
     }
 
-    private static IEnumerable<string> EnumerateSourceFiles(string root)
+    internal static IEnumerable<string> EnumerateSourceFiles(string root)
     {
         var pending = new Stack<string>();
         pending.Push(root);

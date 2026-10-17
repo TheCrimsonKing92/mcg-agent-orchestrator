@@ -8,7 +8,7 @@ internal static class CliReadOnlyCommandRunner
     internal static bool IsReadOnlyCommand(IReadOnlyList<string> args) =>
         EpicOutcomeMigrationProposals.IsCommand(args) ||
         CliFailureClustersQueryCommand.IsFailureClustersQueryCommand(args) ||
-        CliLaneReuseShadowQueryCommand.IsLaneReuseShadowQueryCommand(args) ||
+        CliStorageHealthQueryCommand.IsStorageHealthQueryCommand(args) ||
         CliBuildAttributionQueryCommand.IsBuildAttributionQueryCommand(args) ||
         CliOperatorIntentCoverageQueryCommand.IsIntentCoverageQueryCommand(args) ||
         CliRemoteExecutorsQueryCommand.IsCommand(args) ||
@@ -17,6 +17,7 @@ internal static class CliReadOnlyCommandRunner
         GoalBoardCommand.IsBoardCommand(args) ||
         TrialCompareCliCommand.RequiresHistoricalState(args) ||
         CliTaskQueryCommand.IsTaskQueryCommand(args) ||
+        CliFindingQueryCommand.IsFindingQueryCommand(args) ||
         CliTimelineQueryCommand.IsTimelineQueryCommand(args) ||
         CliGoalReportQueryCommand.IsGoalReportQueryCommand(args) ||
         CliSingleGoalReportQueryCommand.IsSingleGoalReportQueryCommand(args) ||
@@ -48,7 +49,7 @@ internal static class CliReadOnlyCommandRunner
     {
         if (EpicOutcomeMigrationProposals.IsCommand(args)) { EpicOutcomeMigrationProposals.Execute(args, workspace); changed = false; return true; }
         if (CliFailureClustersQueryCommand.IsFailureClustersQueryCommand(args)) { CliFailureClustersQueryCommand.Execute(args, workspace); changed = false; return true; }
-        if (CliLaneReuseShadowQueryCommand.IsLaneReuseShadowQueryCommand(args)) { CliLaneReuseShadowQueryCommand.Execute(args, workspace); changed = false; return true; }
+        if (CliStorageHealthQueryCommand.IsStorageHealthQueryCommand(args)) { CliStorageHealthQueryCommand.Execute(args, workspace); changed = false; return true; }
         if (CliBuildAttributionQueryCommand.IsBuildAttributionQueryCommand(args)) { CliBuildAttributionQueryCommand.Execute(args, workspace); changed = false; return true; }
         if (CliOperatorIntentCoverageQueryCommand.IsIntentCoverageQueryCommand(args)) { CliOperatorIntentCoverageQueryCommand.Execute(args, workspace); changed = false; return true; }
         if (CliRemoteExecutorsQueryCommand.IsCommand(args)) { CliRemoteExecutorsQueryCommand.Execute(args, workspace); changed = false; return true; }
@@ -71,6 +72,14 @@ internal static class CliReadOnlyCommandRunner
                 providers,
                 ref workerProfiles,
                 channel);
+            return true;
+        }
+
+        if (CliFindingQueryCommand.IsFindingQueryCommand(args))
+        {
+            CliFindingQueryCommand.Execute(args, stateRepository, workspace, providers, channel,
+                ref agents, ref workerProfiles, ref currentGoal);
+            changed = false;
             return true;
         }
 

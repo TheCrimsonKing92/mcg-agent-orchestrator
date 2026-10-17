@@ -160,7 +160,10 @@ internal static partial class StorageRetentionMaintenance
         int? mtpUnattributedReclaimsPerSweepForTests = null,
         Func<int, bool>? mtpProcessHasExitedForTests = null,
         StorageRetentionReclaimOptions? reclaimOptions = null,
-        StorageRetentionGoalLoadResult? goalLoad = null)
+        StorageRetentionGoalLoadResult? goalLoad = null,
+        Action<string>? beforeEachAttemptCandidateDeletionForTests = null,
+        Func<string, IEnumerable<string>>? attemptDirectoryEnumeratorForTests = null,
+        Action<AttemptDirectoryPassStats>? attemptDirectoryPassObserverForTests = null)
     {
         var decisions = new List<EvidenceRetentionDecision>();
         var sweepId = Guid.NewGuid().ToString("N");
@@ -231,6 +234,7 @@ internal static partial class StorageRetentionMaintenance
                     mtpUnattributedReclaimsPerSweepForTests ?? MtpUnattributedReclaimsPerSweep,
                     mtpProcessHasExitedForTests,
                     decisions);
+                var cursor = StorageRetentionResumeCursor.Open(orchestratorDirectory, now, RunEventMaintenanceCadence.Interval);
                 SweepAcceptanceArtifacts(
                     orchestratorDirectory,
                     goals,
@@ -240,12 +244,16 @@ internal static partial class StorageRetentionMaintenance
                     retainedMtpAttemptOwnerKeys,
                     beforeAttemptCandidateDeletionForTests,
                     reclaim,
-                    decisions);
+                    decisions,
+                    beforeEachAttemptCandidateDeletionForTests,
+                    attemptDirectoryEnumeratorForTests,
+                    attemptDirectoryPassObserverForTests, cursor);
                 SweepPrompts(orchestratorDirectory, goals, now, decisions);
                 RecordGoalEventPreservation(orchestratorDirectory, goals, decisions);
                 beforeGoalJournalArchiveForTests?.Invoke();
                 ArchiveGoalJournals(executionDirectory, goals, decisions);
                 CompressTerminalGoalJournals(executionDirectory, goals, now, reclaim, decisions);
+                cursor.Complete();
             }
             catch (Exception ex)
             {
@@ -592,7 +600,11 @@ internal static partial class StorageRetentionMaintenance
         IReadOnlySet<string> retainedMtpAttemptOwnerKeys,
         Action<string>? beforeAttemptCandidateDeletionForTests,
         StorageRetentionReclaimOptions reclaim,
-        List<EvidenceRetentionDecision> decisions)
+        List<EvidenceRetentionDecision> decisions,
+        Action<string>? beforeEachAttemptCandidateDeletionForTests,
+        Func<string, IEnumerable<string>>? attemptDirectoryEnumeratorForTests,
+        Action<AttemptDirectoryPassStats>? attemptDirectoryPassObserverForTests,
+        StorageRetentionResumeCursor cursor)
     {
         var totals = (Receipts: 0, Deleted: 0);
         foreach (var family in new[]
@@ -611,7 +623,10 @@ internal static partial class StorageRetentionMaintenance
                 retainedMtpAttemptOwnerKeys,
                 beforeAttemptCandidateDeletionForTests,
                 reclaim,
-                decisions);
+                decisions,
+                beforeEachAttemptCandidateDeletionForTests,
+                attemptDirectoryEnumeratorForTests,
+                attemptDirectoryPassObserverForTests, cursor, family.Directory);
             totals.Receipts += result.Receipts;
             totals.Deleted += result.Deleted;
         }
@@ -629,7 +644,11 @@ internal static partial class StorageRetentionMaintenance
         IReadOnlySet<string> retainedMtpAttemptOwnerKeys,
         Action<string>? beforeAttemptCandidateDeletionForTests,
         StorageRetentionReclaimOptions reclaim,
-        List<EvidenceRetentionDecision> decisions)
+        List<EvidenceRetentionDecision> decisions,
+        Action<string>? beforeEachAttemptCandidateDeletionForTests,
+        Func<string, IEnumerable<string>>? attemptDirectoryEnumeratorForTests,
+        Action<AttemptDirectoryPassStats>? attemptDirectoryPassObserverForTests,
+        StorageRetentionResumeCursor cursor, string cursorFamily)
     {
         if (!Directory.Exists(root))
         {
@@ -638,8 +657,14 @@ internal static partial class StorageRetentionMaintenance
 
         var receipts = 0;
         var deleted = 0;
-        foreach (var goalDirectory in Directory.EnumerateDirectories(root, "*", SearchOption.TopDirectoryOnly))
+        string? previous = null;
+        foreach (var goalDirectory in Directory.EnumerateDirectories(root, "*", SearchOption.TopDirectoryOnly)
+            .OrderBy(Path.GetFileName, StringComparer.Ordinal).ToArray())
         {
+            var name = Path.GetFileName(goalDirectory);
+            if (cursor.ShouldSkip(cursorFamily, name)) continue;
+            if (previous is not null) cursor.Advance(cursorFamily, previous);
+            previous = name;
             using var attemptLease = MutexLease.TryAcquire(AttemptLeaseNameFor(goalDirectory));
             if (attemptLease is null)
             {
@@ -655,6 +680,8 @@ internal static partial class StorageRetentionMaintenance
 
             var candidates = new List<(
                 FileInfo File,
+                long Length,
+                DateTime LastWriteTimeUtc,
                 RetentionAttemptIdentity? Owner,
                 EvidenceOwnershipSource OwnershipSource,
                 string GoalId,
@@ -936,8 +963,11 @@ internal static partial class StorageRetentionMaintenance
                         }
                     }
 
+                    var file = new FileInfo(path);
                     candidates.Add((
-                        new FileInfo(path),
+                        file,
+                        SafeLength(path),
+                        file.LastWriteTimeUtc,
                         owner.Attempt,
                         owner.Source,
                         goal.GoalId,
@@ -946,9 +976,10 @@ internal static partial class StorageRetentionMaintenance
             }
 
             var totalCandidateBytes = candidates.Sum(candidate => SafeLength(candidate.File.FullName));
-            var expectedFactRevision = EvidenceRetentionPolicy.ComputeFactRevision(
-                attempts,
-                Directory.EnumerateFiles(goalDirectory, "*", SearchOption.AllDirectories));
+            var snapshot = AttemptDirectoryFactSnapshot.Capture(
+                goalDirectory, goal.GoalId, attemptDirectoryEnumeratorForTests);
+            var snapshotMatchesDiscovery = snapshot.AttemptFactsUnchanged(attempts);
+            var directoryDeleted = 0;
             beforeAttemptCandidateDeletionForTests?.Invoke(goalDirectory);
             foreach (var candidate in candidates
                 .OrderBy(item => item.File.Extension.Equals(".json", StringComparison.OrdinalIgnoreCase) &&
@@ -975,7 +1006,7 @@ internal static partial class StorageRetentionMaintenance
                         candidate.Owner?.AttemptId,
                         candidate.Owner?.Ordinal,
                         OwnershipSource: candidate.OwnershipSource,
-                        FactRevision: expectedFactRevision));
+                        FactRevision: snapshot.Revision));
                     continue;
                 }
 
@@ -991,14 +1022,11 @@ internal static partial class StorageRetentionMaintenance
                         candidate.Owner?.AttemptId,
                         candidate.Owner?.Ordinal,
                         OwnershipSource: candidate.OwnershipSource,
-                        FactRevision: expectedFactRevision));
+                        FactRevision: snapshot.Revision));
                     continue;
                 }
 
-                var observedFactRevision = EvidenceRetentionPolicy.ComputeFactRevision(
-                    refreshedAttempts,
-                    Directory.EnumerateFiles(goalDirectory, "*", SearchOption.AllDirectories));
-                if (!expectedFactRevision.Equals(observedFactRevision, StringComparison.Ordinal))
+                if (!snapshotMatchesDiscovery || !snapshot.AttemptFactsUnchanged(refreshedAttempts))
                 {
                     decisions.Add(new EvidenceRetentionDecision(
                         family,
@@ -1010,7 +1038,7 @@ internal static partial class StorageRetentionMaintenance
                         candidate.Owner?.AttemptId,
                         candidate.Owner?.Ordinal,
                         OwnershipSource: candidate.OwnershipSource,
-                        FactRevision: observedFactRevision));
+                        FactRevision: snapshot.Revision));
                     continue;
                 }
 
@@ -1024,7 +1052,7 @@ internal static partial class StorageRetentionMaintenance
                         EvidenceOwnerResolution.UniqueTerminal,
                         "candidate-path-left-goal-directory",
                         OwnershipSource: candidate.OwnershipSource,
-                        FactRevision: observedFactRevision));
+                        FactRevision: snapshot.Revision));
                     continue;
                 }
 
@@ -1047,7 +1075,7 @@ internal static partial class StorageRetentionMaintenance
                         EvidenceOwnerResolution.UniqueTerminal,
                         "artifact-owner-changed-before-effect",
                         OwnershipSource: refreshedOwner.Source,
-                        FactRevision: observedFactRevision));
+                        FactRevision: snapshot.Revision));
                     continue;
                 }
 
@@ -1077,7 +1105,7 @@ internal static partial class StorageRetentionMaintenance
                         refreshedCountBoundAttemptIds.Contains(refreshedOwner.Attempt.AttemptId),
                     aged,
                     byteBoundEligible,
-                    observedFactRevision,
+                    snapshot.Revision,
                     candidate.RequireOwner);
                 var eligibility = EvidenceRetentionPolicy.EvaluatePath(eligibilityFacts);
                 if (eligibility.Disposition != EvidenceEligibility.DeleteWhenSafe)
@@ -1095,12 +1123,22 @@ internal static partial class StorageRetentionMaintenance
                         refreshedOwner.Attempt?.AttemptId,
                         refreshedOwner.Attempt?.Ordinal,
                         OwnershipSource: refreshedOwner.Source,
-                        FactRevision: observedFactRevision,
+                        FactRevision: snapshot.Revision,
                         Eligibility: eligibility.Disposition));
                     continue;
                 }
 
-                var length = SafeLength(candidate.File.FullName);
+                if (!snapshot.TryPrepareDeletion(candidate.File.FullName, candidate.Length,
+                    candidate.LastWriteTimeUtc, beforeEachAttemptCandidateDeletionForTests, out var refusalReason))
+                {
+                    decisions.Add(new EvidenceRetentionDecision(family, EvidenceRetentionAction.RetainedUndecidable,
+                        candidate.File.FullName, candidate.GoalId, EvidenceOwnerResolution.UniqueTerminal,
+                        refusalReason, refreshedOwner.Attempt?.AttemptId, refreshedOwner.Attempt?.Ordinal,
+                        OwnershipSource: refreshedOwner.Source, FactRevision: snapshot.Revision));
+                    continue;
+                }
+
+                var length = candidate.Length;
                 var deletion = TryDeleteExclusive(candidate.File.FullName);
                 decisions.Add(new EvidenceRetentionDecision(
                     family,
@@ -1115,11 +1153,13 @@ internal static partial class StorageRetentionMaintenance
                     BytesReclaimed: deletion.Success ? length : 0,
                     FailureExceptionType: deletion.ExceptionType,
                     OwnershipSource: refreshedOwner.Source,
-                    FactRevision: observedFactRevision,
+                    FactRevision: snapshot.Revision,
                     Eligibility: eligibility.Disposition));
                 if (deletion.Success)
                 {
                     deleted++;
+                    directoryDeleted++;
+                    snapshot.RecordDeletion(candidate.File.FullName);
                     totalCandidateBytes = Math.Max(0, totalCandidateBytes - length);
                     if (!TryReadAttemptIdentities(
                         goalDirectory,
@@ -1134,7 +1174,7 @@ internal static partial class StorageRetentionMaintenance
                             goal.GoalId,
                             EvidenceOwnerResolution.UniqueTerminal,
                             $"post-effect-fact-refresh-failed:{postEffectReason}",
-                            FactRevision: expectedFactRevision));
+                            FactRevision: snapshot.Revision));
                         break;
                     }
 
@@ -1147,17 +1187,22 @@ internal static partial class StorageRetentionMaintenance
                             goal.GoalId,
                             EvidenceOwnerResolution.UniqueTerminal,
                             "attempt-became-unreconciled-after-effect",
-                            FactRevision: expectedFactRevision));
+                            FactRevision: snapshot.Revision));
                         break;
                     }
-
-                    expectedFactRevision = EvidenceRetentionPolicy.ComputeFactRevision(
-                        postEffectAttempts,
-                        Directory.EnumerateFiles(goalDirectory, "*", SearchOption.AllDirectories));
                 }
             }
+            if (directoryDeleted > 0 && !snapshot.VerifyUnchanged())
+            {
+                decisions.Add(new EvidenceRetentionDecision(family, EvidenceRetentionAction.RetainedUndecidable,
+                    goalDirectory, goal.GoalId, EvidenceOwnerResolution.UniqueTerminal,
+                    "retention-facts-changed-during-sweep", FactRevision: snapshot.Revision));
+            }
+            attemptDirectoryPassObserverForTests?.Invoke(new AttemptDirectoryPassStats(
+                goalDirectory, candidates.Count, directoryDeleted, snapshot.Enumerations, snapshot.FullPathHashes));
         }
 
+        cursor.MarkFamilyComplete(cursorFamily);
         return (receipts, deleted);
     }
 
@@ -1724,7 +1769,7 @@ internal static partial class StorageRetentionMaintenance
         }
     }
 
-    private static bool TryReadAttemptIdentities(
+    internal static bool TryReadAttemptIdentities(
         string goalDirectory,
         string expectedGoalId,
         out IReadOnlyCollection<RetentionAttemptIdentity> attempts,

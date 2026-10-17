@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -6,7 +7,17 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal static class TimedOutSelectionRerunMapping
 {
-    internal static bool TryMapTimedOutSelections(ConductorDriver.TimedOutRoundReceipt[] sources,
+    internal sealed record TimedOutRoundReceipt(TaskSpec Owner, ReviewFinding Finding,
+        FindingEvidenceReceipt Receipt, FocusedEvidenceRunResult Evidence);
+
+    internal static FailedGoalTimedOutSelectionFacts MapRoundFacts(Goal goal,
+        IEnumerable<TimedOutRoundReceipt> receipts) =>
+        new(receipts.SelectMany(item => AllRoundChecks(item.Evidence))
+            .Where(check => !check.Passed)
+            .Select(check => new FailedGoalRoundCheck(check.Name, CheckClassification(check))).ToImmutableArray(),
+            FailedGoalTimedOutSelectionRerunRule.ReadRecordedKeys(goal));
+
+    internal static bool TryMapTimedOutSelections(TimedOutRoundReceipt[] sources,
         FailedGoalTimedOutSelectionRerun rerun, Func<FindingEvidenceSelection, string> format,
         out FindingEvidenceSelection[] selections)
     {
@@ -35,5 +46,21 @@ internal static class TimedOutSelectionRerunMapping
         evidence.Checks.Concat((evidence.Arms ?? []).SelectMany(arm => arm.Checks)).ToArray();
 
     internal static string? CheckClassification(AcceptanceCheckResult check) =>
-        check.FailureClassification;
+        AcceptanceFailureClassifications.IsEnvironmentalApparatus(check.FailureClassification)
+            ? FailedGoalTimedOutSelectionRerunRule.ApparatusClassification
+            : check.FailureClassification;
+
+    internal static bool IsUnusableRerunCheck(AcceptanceCheckResult check) =>
+        !check.Passed && CheckClassification(check) is
+            FailedGoalTimedOutSelectionRerunRule.TimedOutClassification or
+            FailedGoalTimedOutSelectionRerunRule.ApparatusClassification;
+
+    internal static string[] GetApparatusSelections(IEnumerable<AcceptanceCheckResult> checks) => checks
+        .Where(check => !check.Passed &&
+            CheckClassification(check) == FailedGoalTimedOutSelectionRerunRule.ApparatusClassification)
+        .Select(check => Regex.Replace(check.Name.ToLowerInvariant(), "[^a-z0-9]+", "-").Trim('-'))
+        .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+
+    internal static string DescribeApparatus(IEnumerable<string> selections) =>
+        $"Apparatus: selection(s) {string.Join(", ", selections)} failed as an apparatus outcome, not a verdict on the candidate; the acceptance gate should judge them.";
 }

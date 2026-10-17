@@ -39,9 +39,12 @@ internal static class LaneIsolatedRootScanner
             Assert.False(string.IsNullOrWhiteSpace(reason), $"Missing exception reason: {type.FullName}.");
         }
 
-        foreach (var type in classes)
-            Assert.True(isIsolated(type) || collectionExceptions.ContainsKey(type),
-                $"{type.FullName} is not in {expectedCollection} and has no named isolation exception.");
+        var byName = classes.ToDictionary(type => type.FullName!, StringComparer.Ordinal);
+        var descriptors = classes.Select(type => new AcceptanceTestClassDescriptor(type.FullName!,
+            type.GetCustomAttribute<Xunit.CollectionAttribute>(inherit: true)?.Name));
+        foreach (var violation in TestCollectionGuardRules.FindUnisolatedClasses(descriptors,
+                     item => isIsolated(byName[item.FullName]), collectionExceptions.Keys.Select(type => type.FullName!)))
+            Assert.Fail($"{violation.FullName} is not in {expectedCollection} and has no named isolation exception.");
     }
 
     internal static void VerifyLane(string repository, string laneName, Assembly assembly,

@@ -1,7 +1,7 @@
 using System.Text.Json;
-using System.Xml.Linq;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using TestResult = Mcg.AgentOrchestrator.App.Orchestration.ProspectiveEvidenceTrxRows.Row;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -33,11 +33,13 @@ internal static class ProspectiveEvidenceGateResolver
             string? submissionFailure = null;
             foreach (var attempt in attempts)
             {
-                var unsatisfied = names.Where(name =>
+                var unsatisfied = names.Select(name =>
                 {
-                    var matches = attempt.Results.Where(result => Matches(name, result.Name)).ToArray();
-                    return matches.Length == 0 || matches.Any(result => result.Outcome != "Passed");
-                }).ToArray();
+                    var matches = ProspectiveEvidenceTrxRows.Match(name, attempt.Results);
+                    var ambiguous = ProspectiveEvidenceTrxRows.AmbiguousClassNames(matches);
+                    return matches.Length == 0 || matches.Any(result => !result.Passed) || ambiguous is not null
+                        ? ProspectiveEvidenceTrxRows.FormatEntry(name, ambiguous) : null;
+                }).OfType<string>().ToArray();
                 if (attempt == attempts[0]) missing = unsatisfied;
                 if (unsatisfied.Length != 0) continue;
 
@@ -76,7 +78,7 @@ internal static class ProspectiveEvidenceGateResolver
                     unresolved[index] = pending with
                     {
                         MissingOrFailedTestNames = evidence.Where(item => !item.Satisfied)
-                            .Select(item => item.Selector).ToArray()
+                            .Select(item => item.ReportedEntry).ToArray()
                     };
                 if (evidence.Any(item => !item.Satisfied)) continue;
 
@@ -105,7 +107,7 @@ internal static class ProspectiveEvidenceGateResolver
         (resultName.StartsWith(selector, StringComparison.Ordinal) && resultName.Length > selector.Length &&
             resultName[selector.Length] is '(' or '.');
 
-    private static IReadOnlyList<GateAttempt> ReadAttempts(
+    internal static IReadOnlyList<GateAttempt> ReadAttempts(
         string orchestratorDirectory, GoalId goalId, string? candidateSha)
     {
         if (string.IsNullOrWhiteSpace(candidateSha)) return [];
@@ -146,7 +148,7 @@ internal static class ProspectiveEvidenceGateResolver
                     IReadOnlyList<TestResult> results;
                     try
                     {
-                        results = paths.SelectMany(ReadResults).ToArray();
+                        results = paths.SelectMany(ProspectiveEvidenceTrxRows.Read).ToArray();
                     }
                     catch (Exception)
                     {
@@ -174,23 +176,7 @@ internal static class ProspectiveEvidenceGateResolver
         root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
             ? value.GetString() : null;
 
-    private static IEnumerable<TestResult> ReadResults(string path)
-    {
-        var document = XDocument.Load(path, LoadOptions.None);
-        var definitions = document.Descendants()
-            .Where(element => element.Name.LocalName == "UnitTest" && element.Attribute("id") is not null)
-            .GroupBy(element => element.Attribute("id")!.Value, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
-        foreach (var result in document.Descendants().Where(element => element.Name.LocalName == "UnitTestResult"))
-        {
-            definitions.TryGetValue(result.Attribute("testId")?.Value ?? string.Empty, out var definition);
-            var name = AcceptanceTrxTestIdentityResolver.Resolve(result, definition);
-            if (name is not null) yield return new(name, result.Attribute("outcome")?.Value);
-        }
-    }
-
-    private sealed record TestResult(string Name, string? Outcome);
-    private sealed record GateAttempt(
+    internal sealed record GateAttempt(
         string Id, DateTimeOffset CompletedAt, IReadOnlyList<string> Paths, IReadOnlyList<TestResult> Results);
 }
 

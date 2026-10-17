@@ -22,7 +22,7 @@ internal static class OwnerConsoleGateFormatter
     {
         if (gate is null) return ["gate: unavailable"];
         if (!gate.Live) return [StatusSegment(gate)];
-        return new[] { $"GATE {gate.Kind} | elapsed {(int)gate.Elapsed.TotalMinutes}m",
+        return new[] { $"GATE {gate.Kind} | elapsed {(int)gate.Elapsed.TotalMinutes}m" + (gate.Failing ? " | FAILING" : ""),
             string.Join(" + ", gate.Members.Select(member => member.Id + (member.Title.Length == 0 ? "" : " " + member.Title))),
             ProgressLine(gate) }.Concat(gate.Lanes.Select(LaneLine)).ToArray();
     }
@@ -40,6 +40,14 @@ internal static class OwnerConsoleGateFormatter
         var quiet = lane.State == OwnerConsoleGateLaneState.Running && lane.QuietSeconds is > 300
             ? $" quiet {(int)(lane.QuietSeconds.Value / 60)}m" : "";
         var outcome = lane.State == OwnerConsoleGateLaneState.Done ? lane.Outcome is "passed" or "failed" ? lane.Outcome : "done" : "";
-        return $"{marker} {lane.Name} {(int)lane.Elapsed.TotalSeconds}s / {median} {lane.Location} {outcome}".TrimEnd() + quiet;
+        var name = lane.Name;
+        if (lane.IsAttribution)
+        {
+            var target = lane.Target ?? lane.Name;
+            var prefix = target.StartsWith("reviewer focused evidence: ", StringComparison.Ordinal)
+                ? "reviewer focused evidence: " : "reviewer mapped project evidence: ";
+            name = "confirming failure: " + (target.StartsWith(prefix, StringComparison.Ordinal) ? target[prefix.Length..] : target);
+        }
+        return $"{marker} {name} {(int)lane.Elapsed.TotalSeconds}s / {median} {lane.Location} {outcome}".TrimEnd() + quiet;
     }
 }

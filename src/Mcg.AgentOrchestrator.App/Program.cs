@@ -174,6 +174,7 @@ try
 {
     workspace = ResolveSelectedWorkspace(activeProject);
     invocationBinding.Verify(workspace);
+    HostLedgerStateDirectory.InstallRoute(host => HostLedgerStateDirectoryLocator.Resolve(host, projectRegistry));
 }
 catch (Exception ex)
 {
@@ -260,6 +261,11 @@ if (CliRemoteLaneSelfTestCommand.IsCommand(startupArgs))
     return ExitCompletedStartupCommand(await CliRemoteLaneSelfTestCommand.RunAsync(startupArgs, workspace));
 }
 
+if (CliExecutorScreenCommand.IsCommand(startupArgs))
+{
+    return ExitCompletedStartupCommand(await CliExecutorScreenCommand.RunAsync(startupArgs, workspace));
+}
+
 if (Mcg.AgentOrchestrator.App.OwnerConsole.OwnerConsoleVerb.IsCommand(startupArgs))
     return ExitCompletedStartupCommand(await Mcg.AgentOrchestrator.App.OwnerConsole.OwnerConsoleVerb.RunAsync(startupArgs, workspace));
 if (CliOperatorIntentRoute.IsServed(startupArgs))
@@ -307,6 +313,7 @@ if (ConductorContinuitySupervisor.ShouldSupervise(
             new SystemConductorSupervisorProcessHost(),
             new SqliteRunEventStore(workspace.RunEventStorePath),
             inspectStores: () => StoreSetupRunner.Plan(workspace.OrchestratorDirectory, includeState: true),
+            stopFilePath: workspace.ConductorStopFilePath,
             stageSuccessor: stageSuccessor,
             stageSuccessorWithHook: stageSuccessorWithHook,
             schemaUpgrade: new ConductorHandoffSchemaUpgrade(
@@ -502,9 +509,10 @@ try
         WorkspaceStoreSetup.RunWithOwnership(workspace, invocationBinding.RequireCurrentStores);
     }
 
-    if (!isConductLoop) ProgramStartupLifecycle.EnsureStateDbInitialized(startupArgs, workspace);
+    var defersStateUpgrade = !isConductLoop && WorkspaceStoreSetup.DefersStateUpgradeToLiveOwner(workspace, startupArgs);
+    if (!isConductLoop && !defersStateUpgrade) ProgramStartupLifecycle.EnsureStateDbInitialized(startupArgs, workspace);
 
-    if (commandCapability == CliCommandCapability.Execution &&
+    if (!defersStateUpgrade && commandCapability == CliCommandCapability.Execution &&
         !CliAttentionQueryCommand.IsAttentionQueryCommand(startupArgs))
     {
         ProgramStartupLifecycle.InitializeWorkerProcessTracking(
@@ -514,7 +522,9 @@ try
             workspace.ExecutionDirectory,
             cleanupContext);
     }
-    stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+    stateRepository = defersStateUpgrade
+        ? SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath)
+        : new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
     (currentGoal, stateHydrated) = await CliReadOnlyStartupHydration.PrepareStartupAsync(startupArgs, stateRepository);
 }
 catch (Exception ex)

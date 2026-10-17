@@ -25,15 +25,16 @@ public sealed class SshRemoteLaneExecutorTestsQueuedJobCancellation
     }
 
     [Xunit.Fact]
-    public async Task MatchingRunningStatusSuppressesCancelCopy()
+    public async Task MatchingRunningStatusStillCopiesCancelMarker()
     {
         await using var fake = new FakeSshRemoteLaneTransport();
         var handle = await fake.Submit();
         await fake.PollOnce(new(FakeSshRemoteLaneTransport.Status()));
         var before = fake.Calls.Count;
         handle.RequestQueuedJobCancellation();
-        Assert.Null(handle.QueuedJobCancellation);
-        Assert.Equal(before, fake.Calls.Count);
+        await CancellationCompleted(handle);
+        Assert.Single(CancelCopies(fake));
+        Assert.Equal(before + 1, fake.Calls.Count);
     }
 
     [Xunit.Fact]

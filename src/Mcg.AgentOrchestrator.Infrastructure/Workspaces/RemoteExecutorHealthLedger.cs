@@ -10,7 +10,7 @@ internal enum RemoteLaneOutcomeCode
     BindingMismatchCommit, BindingMismatchTree, BindingMismatchMain, BindingMismatchFilter,
     BindingMismatchExecutor, BindingMismatchManifest, TrxIncomplete, RemoteRed,
     LateAfterFallback, NotEligibleExclusiveResource, UnexpectedNotExecuted,
-    CancelledAfterGrace, ShadowSkippedNoExecutor
+    CancelledAfterGrace, ShadowSkippedNoExecutor, ExecutorBusy
 }
 
 internal sealed record RemoteLaneBinding(
@@ -27,7 +27,8 @@ internal sealed record RemoteExecutorHealthRecord(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? RemoteDurationSeconds = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? LocalDurationSeconds = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? LocalVerdict = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? Agree = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? Agree = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] RemoteLanePhaseTimings? Phases = null);
 
 internal static class RemoteExecutorHealthLedger
 {

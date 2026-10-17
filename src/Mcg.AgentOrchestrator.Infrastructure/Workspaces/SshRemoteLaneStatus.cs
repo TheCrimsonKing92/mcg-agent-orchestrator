@@ -22,14 +22,27 @@ internal sealed record SshRemoteLaneStatus(JsonElement Fields)
         if (!Fields.TryGetProperty("exitCode", out var exit) || exit.ValueKind != JsonValueKind.Number || !exit.TryGetInt32(out var code))
             throw new RemoteLaneTransportException("missing-or-invalid-exitCode");
         if (!Fields.TryGetProperty("trx", out var trx)) throw new RemoteLaneTransportException("missing-trx");
-        string[] names = trx.ValueKind switch
+        JsonElement[] entries = trx.ValueKind switch
         {
-            JsonValueKind.String => [trx.GetString()!],
-            JsonValueKind.Array => trx.EnumerateArray().Select(value => value.ValueKind == JsonValueKind.String ? value.GetString()! : "").ToArray(),
-            _ => []
+            JsonValueKind.String => [trx],
+            JsonValueKind.Array => trx.EnumerateArray().ToArray(),
+            _ => throw new RemoteLaneTransportException("invalid-trx-name: non-string")
         };
-        if (names.Length == 0 || names.Any(name => !Regex.IsMatch(name, "^[A-Za-z0-9._-]+\\.trx$", RegexOptions.CultureInvariant) || name.Contains('\n')))
-            throw new RemoteLaneTransportException("invalid-trx-name");
+        if (entries.Length == 0)
+        {
+            if (code != 0) return (code, []);
+            throw new RemoteLaneTransportException("no-trx-produced exitCode=0");
+        }
+        var names = new string[entries.Length];
+        for (var index = 0; index < entries.Length; index++)
+        {
+            if (entries[index].ValueKind != JsonValueKind.String)
+                throw new RemoteLaneTransportException("invalid-trx-name: non-string");
+            var name = entries[index].GetString()!;
+            if (!Regex.IsMatch(name, "^[A-Za-z0-9._-]+\\.trx$", RegexOptions.CultureInvariant) || name.Contains('\n'))
+                throw new RemoteLaneTransportException($"invalid-trx-name: {RemoteLaneStatusValueText.Sanitize(name)}");
+            names[index] = name;
+        }
         return (code, names);
     }
     internal RemoteLaneResult Result(int code, string[] paths) => new(String("executorId"), String("lane"),

@@ -8,7 +8,11 @@ internal enum ConductorActivationRevertReason
 {
     SuccessorExited,
     ReadinessNeverReported,
-    TickStall
+    TickStall,
+    AdmissionCensusFailing,
+    AdmissionStalled,
+    ProbeNotAdmitted,
+    ProbeNotCompleted
 }
 
 internal sealed record ConductorActivationBuild(
@@ -28,6 +32,17 @@ internal sealed partial class ConductorContinuitySupervisor
 {
     internal const string ActivationHealthyTicksEnvironmentVariable = "MCG_ORCHESTRATOR_ACTIVATION_HEALTHY_TICKS";
     internal const int DefaultActivationHealthyTicks = 3;
+    internal const string ActivationStallTimeoutEnvironmentVariable = "MCG_ORCHESTRATOR_ACTIVATION_STALL_MINUTES";
+    // The successor's first tick after a relaunch is its heaviest (sweeps, dispatch and evidence starts for
+    // every goal). On 2026-10-16 a full board took over 2 minutes, and both the new and restored builds were
+    // reverted as stalled. Measured tick spacing that day: p90 128 s, p99 191 s.
+    internal static readonly TimeSpan DefaultActivationStallTimeout = TimeSpan.FromMinutes(10);
+
+    internal static TimeSpan ResolveActivationStallTimeout(string? configuredValue) =>
+        double.TryParse(configuredValue, NumberStyles.Float, CultureInfo.InvariantCulture, out var minutes) &&
+        minutes > 0 && minutes <= 24 * 60
+            ? TimeSpan.FromMinutes(minutes)
+            : DefaultActivationStallTimeout;
 
     internal static int ResolveActivationHealthyTicks(string? configuredValue) =>
         int.TryParse(configuredValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out var count)
@@ -38,6 +53,9 @@ internal sealed partial class ConductorContinuitySupervisor
     {
         private readonly Func<DateTimeOffset> _utcNow;
         private readonly object _gate = new();
+        private readonly ActivationAdmissionHealthTracker _admissionHealth = new();
+        private readonly ActivationAdmissionProbeTracker? _probe;
+        private bool _admissionHealthyAtLastTick = true;
         private bool _started;
         private int _ticks;
         private int? _lastTick;
@@ -47,9 +65,10 @@ internal sealed partial class ConductorContinuitySupervisor
         private DateTimeOffset? _loopReadyAt;
         private TaskCompletionSource _changed = NewSignal();
 
-        internal ActivationMonitor(Func<DateTimeOffset> utcNow)
+        internal ActivationMonitor(Func<DateTimeOffset> utcNow, ActivationAdmissionProbeTracker? probe = null)
         {
             _utcNow = utcNow;
+            _probe = probe;
             _lastLineAt = utcNow();
         }
 
@@ -59,6 +78,13 @@ internal sealed partial class ConductorContinuitySupervisor
             {
                 var nonBlank = !string.IsNullOrWhiteSpace(line);
                 if (nonBlank) _lastLineAt = _utcNow();
+                var probeChanged = false;
+                if (_started && _probe is not null)
+                {
+                    var before = _probe.Evaluate(_utcNow());
+                    var after = _probe.Observe(line, _utcNow());
+                    probeChanged = before != after || ActivationAdmissionProbeLine.TryParse(line, out _);
+                }
                 if (!_started && _loopReadyAt is null &&
                     line.StartsWith(LoopReadyLinePrefix, StringComparison.Ordinal))
                 {
@@ -77,13 +103,20 @@ internal sealed partial class ConductorContinuitySupervisor
                     _lastTick = int.TryParse(tickText, NumberStyles.Integer,
                         CultureInfo.InvariantCulture, out var tick) ? tick : null;
                     _lastTickEndAt = _utcNow();
+                    _admissionHealthyAtLastTick = _admissionHealth.Verdict.State == ActivationAdmissionHealthState.Healthy;
                 }
                 else if (_started && line.StartsWith("LOOP_RELAUNCH_DRAIN ", StringComparison.Ordinal))
                 {
                     _lastDrainAt = _utcNow();
                     return;
                 }
-                else if (_started || _loopReadyAt is null || !nonBlank)
+                else if (_started && ActivationAdmissionSample.TryParse(line, out var sample))
+                {
+                    var wasTripped = _admissionHealth.Verdict.State == ActivationAdmissionHealthState.Tripped;
+                    var verdict = _admissionHealth.Observe(sample, _utcNow());
+                    if ((wasTripped || verdict.State != ActivationAdmissionHealthState.Tripped) && !probeChanged) return;
+                }
+                else if ((_started || _loopReadyAt is null || !nonBlank) && !probeChanged)
                 {
                     return;
                 }
@@ -94,11 +127,13 @@ internal sealed partial class ConductorContinuitySupervisor
             }
         }
 
-        internal (bool Started, int Ticks, Task Changed) Snapshot()
+        internal (bool Started, int Ticks, Task Changed, ActivationAdmissionHealthVerdict AdmissionHealth,
+            bool AdmissionHealthyAtLastTick, ActivationAdmissionProbeVerdict? Probe, DateTimeOffset? ProbeDeadline) Snapshot()
         {
             lock (_gate)
             {
-                return (_started, _ticks, _changed.Task);
+                return (_started, _ticks, _changed.Task, _admissionHealth.Verdict, _admissionHealthyAtLastTick,
+                    _probe?.Evaluate(_utcNow()), _probe?.NextDeadline);
             }
         }
 
@@ -144,7 +179,8 @@ internal sealed partial class ConductorContinuitySupervisor
         string Detail,
         ConductorSupervisorProcessResult? ProcessResult,
         bool TerminationConfirmed,
-        bool DeliberateStop = false);
+        bool DeliberateStop = false,
+        string? ProbeSkippedReason = null);
 
     private static bool HasDeliberateStopArtifact(string artifactPath)
     {
@@ -162,6 +198,7 @@ internal sealed partial class ConductorContinuitySupervisor
         string artifactPath,
         CancellationTokenSource processCts,
         TimeSpan tickGapTimeout,
+        bool checkAdmissionHealth,
         CancellationToken cancellationToken)
     {
         TimeSpan? drainWait = null;
@@ -169,9 +206,26 @@ internal sealed partial class ConductorContinuitySupervisor
         {
             cancellationToken.ThrowIfCancellationRequested();
             var snapshot = monitor.Snapshot();
-            if (snapshot.Ticks >= _activationHealthyTicks)
+            var health = snapshot.AdmissionHealth;
+            if (checkAdmissionHealth && health.State == ActivationAdmissionHealthState.Tripped)
             {
-                return new(true, null, $"healthyTicks={snapshot.Ticks}", null, true);
+                processCts.Cancel();
+                var admissionStopped = await ObserveStoppedSuccessor(runTask).ConfigureAwait(false);
+                return new(false, health.Reason, health.Detail, admissionStopped, admissionStopped?.TerminationConfirmed == true);
+            }
+            if (snapshot.Probe is { State: ActivationAdmissionProbeState.Tripped } probe)
+            {
+                processCts.Cancel();
+                var probeStopped = await ObserveStoppedSuccessor(runTask).ConfigureAwait(false);
+                return new(false, probe.Reason, probe.Detail, probeStopped, probeStopped?.TerminationConfirmed == true);
+            }
+            if (snapshot.Ticks >= _activationHealthyTicks &&
+                (snapshot.Probe is null || snapshot.Probe.State is ActivationAdmissionProbeState.Satisfied or ActivationAdmissionProbeState.Skipped) &&
+                (!checkAdmissionHealth || (health.State == ActivationAdmissionHealthState.Healthy &&
+                    snapshot.AdmissionHealthyAtLastTick)))
+            {
+                return new(true, null, $"healthyTicks={snapshot.Ticks}", null, true,
+                    ProbeSkippedReason: snapshot.Probe?.SkipReason);
             }
 
             if (runTask.IsCompleted)
@@ -202,6 +256,20 @@ internal sealed partial class ConductorContinuitySupervisor
 
             if (!ceilingReached)
             {
+                var probeDeadlineCapped = false;
+                // Probe lines can wake the monitor between ticks. Keep the original tick deadline.
+                if (snapshot.Probe is not null && drainWait is null && snapshot.Ticks > 0 && monitor.LastTickEnd().EndedAt is { } endedAt)
+                    timeout = TimeSpan.FromTicks(Math.Max(0,
+                        (endedAt + timeout - _timeProvider.GetUtcNow()).Ticks));
+                if (snapshot.ProbeDeadline is { } probeDeadline)
+                {
+                    var remaining = probeDeadline - _timeProvider.GetUtcNow();
+                    if (remaining <= timeout)
+                    {
+                        timeout = remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
+                        probeDeadlineCapped = true;
+                    }
+                }
                 using var deadlineCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 var deadline = _activationDelay(timeout, deadlineCts.Token);
                 var completed = await Task.WhenAny(runTask, snapshot.Changed, deadline).ConfigureAwait(false);
@@ -211,6 +279,7 @@ internal sealed partial class ConductorContinuitySupervisor
                     drainWait = null;
                     continue;
                 }
+                if (probeDeadlineCapped) continue;
             }
 
             var current = monitor.Snapshot();

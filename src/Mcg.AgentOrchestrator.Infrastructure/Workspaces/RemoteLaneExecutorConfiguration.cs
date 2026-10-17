@@ -5,7 +5,8 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal sealed record RemoteLaneExecutorEntry(string Id, int LeaseSeconds,
     string? Transport = null, string? RunnerAlias = null, string? AdminAlias = null,
-    string? RemoteRepository = null, string? RunRoot = null, int PollSeconds = 10, int Slots = 1);
+    string? RemoteRepository = null, string? RunRoot = null, int PollSeconds = 10, int Slots = 1,
+    bool OccupancyProbe = false);
 
 internal sealed record RemoteFocusedEvidenceSettings(
     string Mode = "off", int SampleEvery = 4, int GraceSeconds = 300, string? FaultReason = null);
@@ -16,6 +17,7 @@ internal sealed record RemoteLaneExecutorConfiguration(
 {
     internal IReadOnlyList<string> MachineLocalResourceKeys { get; init; } = [];
     internal RemoteFocusedEvidenceSettings FocusedEvidence { get; init; } = new();
+    internal ExecutorScreeningSettings Screening { get; init; } = new();
     internal bool AllInfrastructureLanes { get; init; }
     internal RemoteLaneExecutorConfiguration ResolveLanes(IEnumerable<string> infrastructureLaneNames) =>
         AllInfrastructureLanes ? this with { Lanes = infrastructureLaneNames.Distinct(StringComparer.Ordinal).ToArray() } : this;
@@ -89,7 +91,15 @@ internal sealed record RemoteLaneExecutorConfiguration(
                         return Disabled("invalid");
                     if (value > 0) pollSeconds = value;
                 }
-                entries.Add(new(id.GetString()!, seconds, "ssh", runner, admin, repository, runRoot, pollSeconds, slots));
+                var occupancyProbe = false;
+                if (executor.TryGetProperty("occupancyProbe", out var probe))
+                {
+                    if (probe.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                        return Disabled("invalid");
+                    occupancyProbe = probe.GetBoolean();
+                }
+                entries.Add(new(id.GetString()!, seconds, "ssh", runner, admin, repository, runRoot,
+                    pollSeconds, slots, occupancyProbe));
             }
             var names = new List<string>();
             foreach (var lane in lanes.EnumerateArray())
@@ -114,7 +124,7 @@ internal sealed record RemoteLaneExecutorConfiguration(
             return new(entries.ToArray(), names.ToArray(), null)
             {
                 MachineLocalResourceKeys = keys.ToArray(), AllInfrastructureLanes = allInfrastructureLanes,
-                FocusedEvidence = ParseFocusedEvidence(root)
+                FocusedEvidence = ParseFocusedEvidence(root), Screening = ExecutorScreeningSettings.Parse(root)
             };        }
         catch (FileNotFoundException) { return Disabled("missing"); }
         catch (DirectoryNotFoundException) { return Disabled("missing"); }
@@ -129,7 +139,7 @@ internal sealed record RemoteLaneExecutorConfiguration(
         var graceSeconds = 300;
         if (block.ValueKind != JsonValueKind.Object ||
             (block.TryGetProperty("mode", out var m) &&
-                (m.ValueKind != JsonValueKind.String || (mode = m.GetString()!) is not ("off" or "shadow"))) ||
+                (m.ValueKind != JsonValueKind.String || (mode = m.GetString()!) is not ("off" or "shadow" or "remote-first"))) ||
             (block.TryGetProperty("sampleEvery", out var s) &&
                 (s.ValueKind != JsonValueKind.Number || !s.TryGetInt32(out sampleEvery) || sampleEvery < 1)) ||
             (block.TryGetProperty("graceSeconds", out var g) &&

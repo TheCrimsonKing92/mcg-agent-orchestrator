@@ -12,7 +12,7 @@ internal sealed partial class ConductorDriver
     internal IReadOnlyCollection<GroupedGateAttemptOverlap> GroupedGateAdmissionHolds =>
         _groupedGateAdmissionHolds.Values.ToArray();
 
-    internal int CountLiveGroupedGateAttempts() => ConductorLiveGroupedGateCount.Count(_groupedGateAttempts);
+    internal int CountLiveGroupedGateAttempts(bool relaunchBlockingOnly = false) => relaunchBlockingOnly ? ConductorGroupedGateAttemptRelaunchDrainCount.Count(_groupedGateAttempts) : ConductorLiveGroupedGateCount.Count(_groupedGateAttempts);
 
     internal void PrepareAcceptanceHolderDetach()
     {
@@ -25,13 +25,8 @@ internal sealed partial class ConductorDriver
     {
         if (_cohortWorkspace is null)
             throw new InvalidOperationException("Grouped gate attempts require production cohort dependencies.");
-        _groupedGateAttempts = coordinator ?? new ConductorGroupedGateAttemptCoordinator(
-            Path.Combine(_cohortWorkspace.OrchestratorDirectory, "grouped-gate-attempts"),
-            eventSink: line => new ConductEventLogWriter(_cohortWorkspace.ConductEventsLogPath)
-                .Append("acceptance-cohort", null, line),
-            buildStorageRoot: _cohortCleanupHooks.BuildStorageRoot,
-            stateDirectory: _cohortWorkspace.OrchestratorDirectory,
-            projectName: OwnedChildWorkspaceResolver.RecordedProjectName(_cohortWorkspace));
+        _groupedGateAttempts = coordinator ?? OwnedChildAttemptCoordinatorFactory.CreateGroupedGate(
+            _cohortWorkspace, _cohortCleanupHooks.BuildStorageRoot);
     }
 
     // The durable record is inspected before a caller reads a receipt. A child may write the primary
@@ -289,32 +284,8 @@ internal sealed partial class ConductorDriver
         var difference = _groupedGateAttempts!.IdentityDifference(
             attempt, attempt.Kind, projections, mainRevision, attempt.CombinedTreeRevision, _integrationBranch);
         if (difference is not null) return (true, difference);
-        try
-        {
-            if (attempt.Kind == "cohort")
-            {
-                using var integration = GoalWorktrees.CreateAcceptanceCohortWorkspace(
-                    _cohortWorkspace.ExecutionDirectory, mainRevision,
-                    new ConductorAcceptanceCohortSelection(projections, []).BindMembers(), _integrationBranch,
-                    _cohortCleanupHooks);
-                return (true, integration.TreeRevision == attempt.CombinedTreeRevision ? null : "tree");
-            }
-            if (attempt.Kind == "train")
-            {
-                using var integration = GoalWorktrees.CreateMergeTrainWorkspace(
-                    _cohortWorkspace.ExecutionDirectory, mainRevision,
-                    new ConductorMergeTrainSelection(projections).BindMembers(), _integrationBranch,
-                    _cohortCleanupHooks);
-                return (true, integration.TreeRevision == attempt.CombinedTreeRevision ? null : "tree");
-            }
-            throw new InvalidDataException($"Unknown grouped gate kind '{attempt.Kind}'.");
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
-        {
-            // Unavailable materialization is not evidence that identity changed. Keep a provisional
-            // hold and retry inspection next tick without admitting an overlapping gate.
-            return (false, null);
-        }
+        return GroupedGateIdentityInspector.InspectTree(attempt, projections,
+            _cohortWorkspace.ExecutionDirectory, mainRevision, _integrationBranch, _cohortCleanupHooks);
     }
 
     internal ConductorGroupedGateOutcome? RunGroupedGateAttemptBody(ConductorGroupedGateAttempt attempt)

@@ -31,7 +31,8 @@ internal static class ReverseDependencyTestImpactReader
         bool bypassCache = false,
         int maximumIndexedSourceFiles = MaximumIndexedSourceFiles,
         int maximumSelectedTestClasses = MaximumSelectedTestClasses,
-        int? maximumFrontierSymbols = MaximumFrontierSymbols)
+        int? maximumFrontierSymbols = MaximumFrontierSymbols,
+        bool propagateShippingSourceReach = false)
     {
         var headroom = new RepositoryTestImpactHeadroom(
             null, maximumIndexedSourceFiles, null, maximumSelectedTestClasses,
@@ -110,7 +111,7 @@ internal static class ReverseDependencyTestImpactReader
                 index = cachedIndex;
                 disposition = ReverseDependencyCacheDisposition.Hit;
                 var hitReceipt = CreateReceipt(snapshot, disposition, reparsedFileCount, hitCount);
-                return Select(index, changedSourcePaths, repositoryRoot, hitReceipt, headroom);
+                return Select(index, changedSourcePaths, repositoryRoot, hitReceipt, headroom, propagateShippingSourceReach);
             }
 
             index = ParseSnapshot(snapshot, repositoryRoot, out var parseFailure, out reparsedFileCount)!;
@@ -128,7 +129,7 @@ internal static class ReverseDependencyTestImpactReader
                 ? RetainedSnapshotCount()
                 : RetainIndex(snapshot.Fingerprint, index);
             var receipt = CreateReceipt(snapshot, disposition, reparsedFileCount, retainedSnapshotCount);
-            return Select(index, changedSourcePaths, repositoryRoot, receipt, headroom);
+            return Select(index, changedSourcePaths, repositoryRoot, receipt, headroom, propagateShippingSourceReach);
         }
         catch (IOException exception)
         {
@@ -167,7 +168,8 @@ internal static class ReverseDependencyTestImpactReader
         IReadOnlyList<string> changedSourcePaths,
         string repositoryRoot,
         ReverseDependencyCacheReceipt receipt,
-        RepositoryTestImpactHeadroom headroom)
+        RepositoryTestImpactHeadroom headroom,
+        bool propagateShippingSourceReach)
     {
         var indexedFiles = index.Files;
         try
@@ -310,7 +312,7 @@ internal static class ReverseDependencyTestImpactReader
                             !file.Symbols.TestClassNames.Contains(declaration.Name, StringComparer.Ordinal))
                         .Select(declaration => new FrontierSymbol(
                             declaration.Name,
-                            file.IsTargetTestProject
+                            file.IsTargetTestProject || propagateShippingSourceReach
                                 ? TestSelectionMode.AllReferencingClasses
                                 : TestSelectionMode.OwnedClassOnly)))
                     .GroupBy(symbol => symbol.Name, StringComparer.Ordinal)

@@ -54,7 +54,7 @@ public sealed class RuntimeAssemblyArchitectureTests
         new("Mcg.AgentOrchestrator.Infrastructure.IcaclsIntegrityLabeler", "Default start delegate for icacls, method group", "src/Mcg.AgentOrchestrator.Execution/Processes/WorkerSandboxPreparer.cs:490"),
         new("Mcg.AgentOrchestrator.Infrastructure.WorktreeTreeDigest", "Git tree digest", "src/Mcg.AgentOrchestrator.Execution/Processes/WorktreeTreeDigest.cs:71"),
         new("Mcg.AgentOrchestrator.Infrastructure.AcceptanceGitTextResolver", "Git text reads for acceptance", "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceGitTextResolver.cs:26"),
-        new("Mcg.AgentOrchestrator.Infrastructure.AcceptanceLaneClosureHasher", "Git reads for lane closure hashing", "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneClosureHasher.cs:117"),
+        new("Mcg.AgentOrchestrator.Infrastructure.AcceptanceLaneClosureHasher", "Git reads for lane closure hashing", "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceLaneClosureHasher.cs:131"),
         new("Mcg.AgentOrchestrator.Infrastructure.DotnetBuildEnvironmentManager", "Build-server shutdown", "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetBuildEnvironmentManager.cs:596"),
         new("Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier", "Git scalar reads", "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs:6470"),
         new("Mcg.AgentOrchestrator.Infrastructure.GoalWorktrees", "Build-server shutdown and direct git", "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalWorktrees.GitOps.cs:372"),
