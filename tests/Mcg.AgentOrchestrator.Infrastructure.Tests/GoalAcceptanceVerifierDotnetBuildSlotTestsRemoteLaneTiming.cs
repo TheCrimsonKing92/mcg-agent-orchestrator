@@ -77,6 +77,33 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLaneTiming :
         Assert.StartsWith("remote-executor=", Assert.Single(result.Checks!.Where(check => check.Name == Lane(0))).ResultSummary!);
     }
 
+    [Xunit.Fact]
+    public async Task RemoteClaim_ReportsExecutorBeforeAcceptedCompletion()
+    {
+        using var scenario = CreateScenario();
+        scenario.Configure();
+        TestOverrides.RemoteLaneExecutorForTests = new FakeRemoteLaneExecutor
+        {
+            Submit = (request, _) =>
+            {
+                var handle = new FakeRemoteLaneExecutor.Handle(scenario.Clock.GetUtcNow());
+                handle.Publish(scenario.RemoteResult(request));
+                return Task.FromResult(new RemoteLaneSubmission(handle));
+            }
+        };
+
+        var result = await scenario.RunAsync();
+
+        Assert.True(result.Passed, JsonSerializer.Serialize(result.Checks));
+        var progress = scenario.GateProgress.ToArray();
+        var started = Assert.Single(progress, item => item.Phase == "remote-shard-started" && item.CurrentTarget == Lane(0));
+        Assert.Equal("fixture-executor", started.Executor);
+        var completed = Assert.Single(progress, item => item.Phase == "remote-shard-complete" && item.CurrentTarget == Lane(0));
+        Assert.True(Array.IndexOf(progress, started) < Array.IndexOf(progress, completed));
+        Assert.Equal("passed", completed.Outcome);
+        Assert.Equal(0, completed.FailedTestCount);
+    }
+
     private Scenario CreateScenario()
     {
         SetPartitionVerdictKeyHooks("candidate-tree", "main-sha", "verifying-commit");
