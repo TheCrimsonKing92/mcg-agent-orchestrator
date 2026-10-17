@@ -1835,16 +1835,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 finally
                 {
                     LoopExitMaintenanceJoin.JoinAsync(
-                        [("maintenance-cadence", () => maintenanceCadence.WaitForCurrentRunAsync()),
-                         ("state-log-check", () => stateLogCheck.WaitForCurrentRunAsync()),
-                         ("failure-clusters-daily", () => failureClustersDaily.WaitForCurrentRunAsync())],
-                        LoopExitMaintenanceJoin.Grace, Task.Delay, line =>
-                        {
-                            try { Console.WriteLine(line); }
-                            catch { /* Closed output must not prevent command exit. */ }
-                            try { conductEventLogWriter.Append("loop-exit-maintenance-still-running", null, line); }
-                            catch { /* Exit diagnostics are best effort. */ }
-                        }).GetAwaiter().GetResult();
+                        maintenanceCadence, stateLogCheck, failureClustersDaily,
+                        conductEventLogWriter).GetAwaiter().GetResult();
                 }
             }
             CliArgumentParser.RequirePartCount(parts, 2, "conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>]");

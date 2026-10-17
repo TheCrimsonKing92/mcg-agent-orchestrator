@@ -6,6 +6,23 @@ internal static class LoopExitMaintenanceJoin
 {
     internal static readonly TimeSpan Grace = TimeSpan.FromSeconds(30);
 
+    internal static Task JoinAsync(
+        RunEventMaintenanceCadenceRunner maintenanceCadence,
+        StateLogDivergenceCheckRunner stateLogCheck,
+        FailureClustersDailyRunner failureClustersDaily,
+        ConductEventLogWriter conductEventLogWriter) =>
+        JoinAsync(
+            [("maintenance-cadence", maintenanceCadence.WaitForCurrentRunAsync),
+             ("state-log-check", stateLogCheck.WaitForCurrentRunAsync),
+             ("failure-clusters-daily", failureClustersDaily.WaitForCurrentRunAsync)],
+            Grace, Task.Delay, line =>
+            {
+                try { Console.WriteLine(line); }
+                catch { /* Closed output must not prevent command exit. */ }
+                try { conductEventLogWriter.Append("loop-exit-maintenance-still-running", null, line); }
+                catch { /* Exit diagnostics are best effort. */ }
+            });
+
     internal static async Task JoinAsync(
         IReadOnlyList<(string Name, Func<Task> Wait)> runners,
         TimeSpan grace,
