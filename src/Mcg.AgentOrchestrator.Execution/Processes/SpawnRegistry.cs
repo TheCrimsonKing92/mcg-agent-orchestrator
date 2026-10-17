@@ -468,7 +468,7 @@ internal static class SpawnProcessIdentityReader
             try
             {
                 var identity = readIdentity(process);
-                if (identity is not null)
+                if (identity is not null && ProcessImageResolution.IsResolved(identity.ImagePath))
                 {
                     return new SpawnProcessIdentityReadResult(
                         identity,
@@ -609,6 +609,19 @@ internal static class SpawnProcessIdentityReader
                 return SpawnOwnerLiveness.DeadOrRecycled;
             }
 
+            if (liveOwner.ProcessId != ownerProcessId)
+            {
+                evidence = $"owner pid={ownerProcessId} pid mismatch observed={liveOwner.ProcessId}";
+                return SpawnOwnerLiveness.Unknown;
+            }
+
+            if (ProcessImageResolution.SameProcess(
+                new SpawnProcessIdentity(ownerProcessId, ownerStartedAt, entry.OwnerProcessImagePath), liveOwner))
+            {
+                evidence = $"owner pid={ownerProcessId} identity matches started_at={ownerStartedAt:O} image={liveOwner.ImagePath}";
+                return SpawnOwnerLiveness.Live;
+            }
+
             if (!TryNormalizePath(liveOwner.ImagePath, out var observedImagePath) ||
                 !TryNormalizePath(entry.OwnerProcessImagePath, out var recordedImagePath))
             {
@@ -656,6 +669,18 @@ internal static class SpawnProcessIdentityReader
         {
             evidence = $"victim pid={recorded.ProcessId} start-time mismatch recorded={recorded.StartedAt:O} observed={current.StartedAt:O}";
             return SpawnTrackedProcessStatus.DeadOrRecycled;
+        }
+
+        if (current.ProcessId != recorded.ProcessId)
+        {
+            evidence = $"victim pid={recorded.ProcessId} pid mismatch observed={current.ProcessId}";
+            return SpawnTrackedProcessStatus.Unknown;
+        }
+
+        if (ProcessImageResolution.SameProcess(recorded, current))
+        {
+            evidence = $"victim pid={recorded.ProcessId} identity matches started_at={recorded.StartedAt:O} image={current.ImagePath}";
+            return SpawnTrackedProcessStatus.LiveMatch;
         }
 
         if (!TryNormalizePath(current.ImagePath, out var observedImagePath) ||
