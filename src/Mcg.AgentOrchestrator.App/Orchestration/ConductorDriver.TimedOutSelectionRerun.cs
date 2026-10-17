@@ -1,4 +1,3 @@
-using System.Collections.Immutable;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -8,9 +7,6 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorDriver
 {
-    internal sealed record TimedOutRoundReceipt(TaskSpec Owner, ReviewFinding Finding,
-        FindingEvidenceReceipt Receipt, FocusedEvidenceRunResult Evidence);
-
     private FailedGoalTimedOutSelectionFacts? BuildTimedOutSelectionFacts(Goal goal, TaskSpec task)
     {
         if (task.Status != WorkTaskStatus.Failed ||
@@ -18,10 +14,7 @@ internal sealed partial class ConductorDriver
             return null;
         var receipts = ReadTimedOutRoundReceipts(goal, task, rounds);
         if (receipts is null) return null;
-        return new(receipts.SelectMany(item => AllRoundChecks(item.Evidence))
-            .Where(check => !check.Passed)
-            .Select(check => new FailedGoalRoundCheck(check.Name, CheckClassification(check))).ToImmutableArray(),
-            FailedGoalTimedOutSelectionRerunRule.ReadRecordedKeys(goal));
+        return MapRoundFacts(goal, receipts);
     }
 
     private TimedOutRoundReceipt[]? ReadTimedOutRoundReceipts(
