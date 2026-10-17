@@ -268,7 +268,7 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
                 case "fleet":
                     if (parts.Length != 1) output.WriteLine("usage: fleet");
                     else if (fleet is null) output.WriteLine("fleet view unavailable in this session");
-                    else fleetText = OwnerFleetDiagram.Render(fleet());
+                    else fleetText = OwnerFleetDiagram.Render(fleet(), OwnerConsoleDialogWidth.ForDiagram(dialogs.TextWidth));
                     break;
                 case "landings":
                     if (parts.Length > 2) output.WriteLine(OwnerLandingsQuery.Usage);

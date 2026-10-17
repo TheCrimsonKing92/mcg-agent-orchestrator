@@ -15,7 +15,7 @@ internal sealed class OwnerConsoleTextDialog : Dialog
     internal OwnerConsoleTextDialog(string title, string text, IReadOnlyList<int>? choiceLines = null,
         OwnerConsoleTextPage? page = null)
     {
-        Title = title; Width = Dim.Percent(85); Height = Dim.Percent(80);
+        Title = title; Width = Dim.Percent(OwnerConsoleDialogWidth.Percent); Height = Dim.Percent(80);
         Page = page ?? new(text, 60, 15, choiceLines);
         Add(Body);
         Body.ViewportChanged += (_, _) => Format(Body.Viewport.Width, Body.Viewport.Height);
