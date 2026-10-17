@@ -1834,9 +1834,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 }
                 finally
                 {
-                    maintenanceCadence.WaitForCurrentRunAsync().GetAwaiter().GetResult();
-                    stateLogCheck.WaitForCurrentRunAsync().GetAwaiter().GetResult();
-                    failureClustersDaily.WaitForCurrentRunAsync().GetAwaiter().GetResult();
+                    LoopExitMaintenanceJoin.JoinAsync(
+                        maintenanceCadence, stateLogCheck, failureClustersDaily,
+                        conductEventLogWriter).GetAwaiter().GetResult();
                 }
             }
             CliArgumentParser.RequirePartCount(parts, 2, "conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>]");
