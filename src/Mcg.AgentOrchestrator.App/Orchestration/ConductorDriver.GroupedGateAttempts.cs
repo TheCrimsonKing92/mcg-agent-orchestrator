@@ -12,7 +12,7 @@ internal sealed partial class ConductorDriver
     internal IReadOnlyCollection<GroupedGateAttemptOverlap> GroupedGateAdmissionHolds =>
         _groupedGateAdmissionHolds.Values.ToArray();
 
-    internal int CountLiveGroupedGateAttempts() => ConductorLiveGroupedGateCount.Count(_groupedGateAttempts);
+    internal int CountLiveGroupedGateAttempts(bool relaunchBlockingOnly = false) => relaunchBlockingOnly ? ConductorGroupedGateAttemptRelaunchDrainCount.Count(_groupedGateAttempts) : ConductorLiveGroupedGateCount.Count(_groupedGateAttempts);
 
     internal void PrepareAcceptanceHolderDetach()
     {
