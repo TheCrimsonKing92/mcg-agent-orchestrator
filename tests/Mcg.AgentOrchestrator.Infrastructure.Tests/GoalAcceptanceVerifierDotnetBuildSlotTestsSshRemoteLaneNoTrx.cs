@@ -25,14 +25,26 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSshRemoteLaneNoTrx
         var lane = Assert.Single(result.Checks!.Where(check => check.Name == Lane));
         Assert.Equal(!localRed, lane.Passed);
         Assert.DoesNotContain("remote-executor=", lane.ResultSummary ?? "");
-        var row = Assert.Single(scenario.Health());
+        var rows = scenario.Health();
+        var row = Assert.Single(rows.Where(record => record.Outcome != RemoteLaneOutcomeCode.LateAfterFallback));
         Assert.Equal(outcome, row.Outcome.ToString());
         Assert.Equal(reason, row.Reason);
+        if (exitCode != 0 && trxJson == "[]")
+        {
+            // A completed handle remains readable when the verifier polls after local fallback.
+            var late = Assert.Single(rows.Where(record => record.Outcome == RemoteLaneOutcomeCode.LateAfterFallback));
+            Assert.Equal(row.GateAttemptId, late.GateAttemptId);
+            Assert.Equal(row.Lane, late.Lane);
+            Assert.Equal(row.Expected, late.Expected);
+            Assert.Equal(row.Observed, late.Observed);
+        }
+        else
+            Assert.Single(rows);
         Assert.Contains(scenario.TransportCalls, args => args.Any(arg => arg.EndsWith("/status.json", StringComparison.Ordinal)));
         Assert.DoesNotContain(scenario.TransportCalls, args => args[0] == SshRemoteLaneExecutor.ScpPath &&
             args.Any(arg => arg.EndsWith(".trx", StringComparison.Ordinal)));
         if (trxJson == "[]")
-            Assert.DoesNotContain("invalid-trx-name", row.Reason);
+            Assert.DoesNotContain(rows, record => record.Reason?.Contains("invalid-trx-name", StringComparison.Ordinal) == true);
         else
         {
             Assert.Equal("RemoteLaneTransportException: invalid-trx-name: " +
