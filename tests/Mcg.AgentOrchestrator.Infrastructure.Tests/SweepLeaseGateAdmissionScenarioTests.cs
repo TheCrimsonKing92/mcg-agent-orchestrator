@@ -8,11 +8,11 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // No build slot is acquired and no real holder process is launched.
 public sealed class SweepLeaseGateAdmissionScenarioTests(ITestOutputHelper output) : ConductorBatchLoopTests(output)
 {
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public void BlockedRealSweep_WithOnlyTerminalReceipts_AdmitsReadyGoalAndReportsRunning() => RunScenario(false);
 
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public void BlockedRealSweep_WithMissingTerminalReceipt_HoldsThenAdmitsAfterSweep() => RunScenario(true);
 
