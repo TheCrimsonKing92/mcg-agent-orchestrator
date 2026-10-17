@@ -27,7 +27,8 @@ public sealed class ConductorInvariantProbeWindowScenarioTests
             Assert.Empty(fixture.Events("INVARIANT_BREACH"));
             Assert.Empty(fixture.OpenItems());
         }
-        Assert.Empty(JsonNode.Parse(File.ReadAllText(fixture.State))!["invariants"]!.AsObject());
+        // With no integration head, state is persisted only on an invariant raise or clear.
+        Assert.False(File.Exists(fixture.State));
     }
 
     [Fact]
