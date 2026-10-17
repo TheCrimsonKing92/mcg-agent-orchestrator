@@ -17,10 +17,15 @@ internal sealed partial class ConductorDriver
         _readTestFirstScope = read ?? throw new ArgumentNullException(nameof(read));
     private TimeSpan _developerCompletionStructuralPreflightBound = DefaultDeveloperCompletionStructuralPreflightBound;
 
-    internal void ConfigureDeveloperCompletionStructuralPreflightRetry(AgentOrchestratorKernel kernel) =>
+    internal void ConfigureDeveloperCompletionStructuralPreflightRetry(AgentOrchestratorKernel kernel, ConductorConflictIntegration? integration = null)
+    {
         _retryDeveloperAfterStructuralPreflight = (goalId, taskId, message, retryRoundKind, cause) =>
             kernel.RetryTaskAutomatically(goalId, taskId, message, cause,
                 retryRoundKind: retryRoundKind, authoritativeRetryFeedback: true);
+        if (integration is null) return;
+        _conflictIntegration = integration;
+        _integrateMainBeforeDeveloperDispatch = integration.IntegrateMainBeforeDeveloperDispatch;
+    }
 
     internal void OverrideDeveloperCompletionStructuralPreflightForTests(
         Func<string, DeveloperCompletionStructuralFindings> run,
@@ -75,6 +80,8 @@ internal sealed partial class ConductorDriver
                     task.RequiredRole == AgentRole.Developer &&
                     task.Status == WorkTaskStatus.Completed);
         if (developerTask is null) return false;
+        if (_conflictIntegration?.Validate(goal) is { } conflictReason)
+        { result = Escalate(goal, goalPrefix, policy, fromState, conflictReason); return true; }
 
         var worktreePath = GoalWorktrees.WorktreePath(_executionDirectory, goal.Id);
         if (!Directory.Exists(worktreePath)) return false;

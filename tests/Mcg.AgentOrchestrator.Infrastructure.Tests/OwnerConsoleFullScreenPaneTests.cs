@@ -116,7 +116,7 @@ public sealed class OwnerConsoleFullScreenPaneTests
         using IApplication app = Terminal.Gui.App.Application.Create();
         using var view = new OwnerConsoleFullScreenView(app, Controller(harness, dialogs), () => Task.CompletedTask);
         view.Render(await Model(harness));
-        const string common = "  Home/End first/last  PgUp/PgDn page  Tab/Shift+Tab pane  : command  ? help  q quit";
+        const string common = "  Home/End first/last  PgUp/PgDn page  Tab/Shift+Tab pane  e epics  l landings  g gate  : command  ? help  q quit";
         Assert.Equal("Enter detail" + common, view.HintText);
         await view.HandleKeyAsync(Key.Tab);
         Assert.Equal(OwnerConsolePane.Board, view.FocusedPane);
@@ -300,7 +300,7 @@ public sealed class OwnerConsoleFullScreenPaneTests
         harness.AddGoal("11111111-first", "First", AgentRole.Developer);
         var dialogs = new Dialogs();
         var controller = Controller(harness, dialogs);
-        foreach (var item in OwnerConsoleKeyHints.Commands.Where(item => item.Command != "epics")) // The full-screen view handles epics, not the controller.
+        foreach (var item in OwnerConsoleBindings.All.Where(item => item.Owner == OwnerConsoleCommandOwner.Controller).Select(item => (Command: item.Usage, Description: item.CommandHelp)))
         {
             await controller.RunCommandAsync(item.Command.Replace("<id-prefix>", "11111111", StringComparison.Ordinal));
             Assert.DoesNotContain("unknown command", dialogs.Texts[^1].Text);
@@ -355,7 +355,7 @@ public sealed class OwnerConsoleFullScreenPaneTests
 
         await view.HandleKeyAsync(Key.Tab);
         Assert.Equal(OwnerConsolePane.Board, view.FocusedPane);
-        Assert.Equal("Enter goal detail  Home/End first/last  PgUp/PgDn page  Tab/Shift+Tab pane  : command  ? help  q quit", view.HintText);
+        Assert.Equal("Enter goal detail  Home/End first/last  PgUp/PgDn page  Tab/Shift+Tab pane  e epics  l landings  g gate  : command  ? help  q quit", view.HintText);
         Assert.DoesNotContain("a accept default", view.HintText);
         Assert.DoesNotContain("r answer", view.HintText);
     }

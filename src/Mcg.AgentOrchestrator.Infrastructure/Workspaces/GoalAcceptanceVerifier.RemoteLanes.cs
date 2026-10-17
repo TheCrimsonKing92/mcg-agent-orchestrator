@@ -299,6 +299,7 @@ public sealed partial class GoalAcceptanceVerifier
                         CompleteShard(shard, reused, false, _timeProvider.GetElapsedTime(reuseStarted));
                         continue;
                     }
+                    AcceptanceGateLaneProgress.RemoteStarted(goalId, shard.Check.Name, entry.Id, primarySlotIndex, _storageRoot, EmitGateProgress);
                     activeRemote.Add((shard, remote.RunRemoteAsync(shard.Check, entry,
                         EngineSettings.ResolveCheckTimeout(shard.Check.TimeoutMinutes), sharedApparatusCancellation.Token)));
                 }
@@ -370,7 +371,7 @@ public sealed partial class GoalAcceptanceVerifier
                             {
                                 AcceptanceGatePhaseAccountant.RecordCurrentRemoteLaneSample(remoteDuration);
                                 EmitShardTimingProgress(goalId, "remote-shard-complete", completedRemote.Shard.Check.Name,
-                                    primarySlotIndex, remoteDuration, shardConcurrency.Count, _storageRoot, EmitGateProgress);
+                                    primarySlotIndex, remoteDuration, shardConcurrency.Count, _storageRoot, EmitGateProgress, accepted);
                             }
                             catch (Exception) { /* Timing observations cannot change the gate verdict. */ }
                         }

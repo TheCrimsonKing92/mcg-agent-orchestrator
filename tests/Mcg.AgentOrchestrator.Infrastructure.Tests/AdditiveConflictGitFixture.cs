@@ -23,7 +23,7 @@ internal sealed class AdditiveConflictGitFixture : GoalWorktreeTestBase, IDispos
 
     internal AdditiveConflictGitFixture(
         IReadOnlyList<ConflictFile>? files = null, GoalId? goalId = null,
-        bool bom = false, string lineEnding = "\n", string? attributes = null)
+        bool bom = false, string lineEnding = "\n", string? attributes = null, string? mainCommitMessage = null)
     {
         // Dispatch integration resolves main explicitly, regardless of the host's init.defaultBranch.
         Repository = CreateReducedAcceptanceCohortRepository(renameInitialBranchToMain: true);
@@ -61,7 +61,7 @@ internal sealed class AdditiveConflictGitFixture : GoalWorktreeTestBase, IDispos
                 : Git(Worktree, "rev-parse", "HEAD").Trim();
             foreach (var file in files) Write(Repository, file.Path, file.Main);
             RunGit(Repository, ["add", "-f", "--", .. paths]);
-            RunGit(Repository, "commit", "-m", "Main changes");
+            RunGit(Repository, "commit", "-m", mainCommitMessage ?? "Main changes");
             MainHead = InfrastructureTestSupport.TryReadGitHeadInProcess(Repository, out var mainHead) && mainHead is not null
                 ? mainHead
                 : Git(Repository, "rev-parse", "HEAD").Trim();
