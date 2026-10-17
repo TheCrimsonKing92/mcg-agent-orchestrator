@@ -51,7 +51,8 @@ public sealed class GroupedGateV1AdoptionEventTests
 
         var unchanged = first.Adopt(attempt);
 
-        Assert.Equal(attempt, unchanged);
+        // Adopt rereads metadata, so compare values rather than collection references in the record.
+        Assert.Equal(JsonSerializer.Serialize(attempt), JsonSerializer.Serialize(unchanged));
         Assert.Equal(Fixture.FirstGeneration, fixture.Read(attempt).AdoptedByGenerationId);
         Assert.Empty(fixture.Events);
     }
