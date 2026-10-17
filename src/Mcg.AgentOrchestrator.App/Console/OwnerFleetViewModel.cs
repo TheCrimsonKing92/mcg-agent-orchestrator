@@ -7,7 +7,8 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 internal enum OwnerFleetReachability { Unknown, Reachable, Unreachable }
 
 internal sealed record OwnerFleetHostNode(bool ConductorRunning, int ExecutorCount,
-    int UnreadableOutcomeLines, int UnreadableProbeLines);
+    int UnreadableOutcomeLines, int UnreadableProbeLines,
+    int NoExecutorFreeCount = 0, DateTimeOffset? NoExecutorFreeLastAt = null);
 
 internal sealed record OwnerFleetExecutorNode(string Id, OwnerFleetReachability Reachability,
     IReadOnlyList<string> ProbeReasons, DateTimeOffset? ProbeAt, int? ConfiguredSlots,
@@ -20,7 +21,8 @@ internal sealed record OwnerFleetViewModel(OwnerFleetHostNode Host,
 internal static class OwnerFleetViewModelBuilder
 {
     internal static OwnerFleetViewModel Build(RemoteExecutorReport report, bool conductorRunning, TimeZoneInfo zone) =>
-        new(new(conductorRunning, report.Executors.Count, report.UnreadableOutcomeLines, report.UnreadableProbeLines),
+        new(new(conductorRunning, report.Executors.Count, report.UnreadableOutcomeLines, report.UnreadableProbeLines,
+                report.NoExecutorFreeCount, report.NoExecutorFreeLastAt is { } at ? TimeZoneInfo.ConvertTime(at, zone) : null),
             report.Executors.Select(row =>
             {
                 var last = row.RecentAttempts.FirstOrDefault();
