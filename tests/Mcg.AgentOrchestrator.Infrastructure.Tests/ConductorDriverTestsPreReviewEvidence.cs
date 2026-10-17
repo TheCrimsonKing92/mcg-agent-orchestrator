@@ -1418,27 +1418,12 @@ public sealed class ConductorDriverTestsPreReviewEvidence
         var safelySplittable = $"FullyQualifiedName~SmallTests|{nearLimitClause}";
         Assert.True(PreReviewFocusedRequestSplitter.TrySplitRequestItems("Infrastructure.Tests", safelySplittable, out var nearLimitItems));
         Assert.Equal(2, nearLimitItems.Count);
-        var root = CreateTempDirectory();
-        try
-        {
-            var relativeProject = AcceptancePolicyShardPlanner.InfrastructureTestsProject;
-            var projectPath = Path.Combine(root, relativeProject.Replace('/', Path.DirectorySeparatorChar));
-            Directory.CreateDirectory(Path.GetDirectoryName(projectPath)!);
-            File.WriteAllText(projectPath, File.ReadAllText(Path.Combine(
-                InfrastructureTestSupport.FindRepositoryRoot(), relativeProject.Replace('/', Path.DirectorySeparatorChar))));
-            File.WriteAllText(Path.Combine(Path.GetDirectoryName(projectPath)!, "SyntheticTests.cs"),
-                $"public sealed class SmallTests {{ }}{Environment.NewLine}" +
-                $"public sealed class {nearLimitClause["FullyQualifiedName~".Length..]} {{ }}");
-            Assert.True(GoalAcceptanceVerifier.TryBuildFocusedEvidenceChecks(
-                string.Join("; ", nearLimitItems), AcceptanceGateEngineSettings.Load(root), root,
-                out var nearLimitChecks, out _, out var nearLimitRejection),
-                $"{nearLimitRejection.Code}: {nearLimitRejection.Detail}");
-            Assert.Equal(nearLimitItems.Count, nearLimitChecks.Count);
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
-        }
+        using var root = FocusedEvidenceSyntheticProjectRoot.Create("SmallTests", nearLimitClause["FullyQualifiedName~".Length..]);
+        Assert.True(GoalAcceptanceVerifier.TryBuildFocusedEvidenceChecks(
+            string.Join("; ", nearLimitItems), AcceptanceGateEngineSettings.Load(root.Path), root.Path,
+            out var nearLimitChecks, out _, out var nearLimitRejection),
+            $"{nearLimitRejection.Code}: {nearLimitRejection.Detail}");
+        Assert.Equal(nearLimitItems.Count, nearLimitChecks.Count);
 
         var positivePrefix = string.Join('|', Enumerable.Range(1, 50).Select(index => $"FullyQualifiedName~ShapeClass{index:D2}"));
         Assert.False(PreReviewFocusedRequestSplitter.TrySplitRequestItems("Infrastructure.Tests", $"{positivePrefix}&FullyQualifiedName~Required", out _));
