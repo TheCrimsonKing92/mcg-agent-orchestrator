@@ -1297,9 +1297,9 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var shardConcurrencyBudget = Math.Min(EngineSettings.MaxConcurrentShards, shardCoreBudget);
         await using var shadow = RemoteFocusedEvidenceShadow.Start(
             _testOverrides, _timeProvider, worktreePath, focusedChecks, goalId, executionOwner, cancellationToken);
-        var batch = await RunCheckBatchAsync(focusedChecks, cacheContext: null, worktreePath, goalId,
-            stableSlotIndex, stableSlotLease, dotnetTestBuildPhase, shardConcurrencyBudget,
-            cancellationToken, continueAfterFailure, executionOwner).ConfigureAwait(false);
+        var batch = await RemoteFirstFocusedEvidence.RunAsync(_testOverrides, _timeProvider, worktreePath, focusedChecks, goalId, executionOwner,
+            continueAfterFailure, async checks => (await RunCheckBatchAsync(checks, cacheContext: null, worktreePath, goalId, stableSlotIndex, stableSlotLease,
+                dotnetTestBuildPhase, shardConcurrencyBudget, cancellationToken, continueAfterFailure, executionOwner).ConfigureAwait(false)).Results, cancellationToken).ConfigureAwait(false);
         await shadow.CompleteAsync(batch.Results).ConfigureAwait(false);
         return batch.Results;
     }
@@ -1601,6 +1601,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             cacheContext?.MainSha ?? attemptIdentity?.MainSha), fresh.Retried);
         cacheContext?.RecordExecution(check, fresh.Result,
             fresh.Result.LaneRerun?.Outcome == AcceptanceLaneRerunEvidence.Flake ? "lane_rerun_pass" : "first_run");
+        AcceptanceGateLaneProgress.CheckCompleted(goalId, fresh.Result, EmitGateProgress);
 
         return fresh;
     }

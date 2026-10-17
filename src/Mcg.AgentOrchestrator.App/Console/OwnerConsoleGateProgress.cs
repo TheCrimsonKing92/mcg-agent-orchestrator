@@ -8,7 +8,8 @@ internal enum OwnerConsoleGateLaneState { Queued, Running, Done, Cached }
 internal sealed record OwnerConsoleGateMember(string Id, string Title);
 internal sealed record OwnerConsoleGateLane(string Name, OwnerConsoleGateLaneState State,
     string Outcome, string Location, TimeSpan Elapsed, double? MedianSeconds, bool IsEstimate,
-    double? QuietSeconds = null, bool IsManifestLane = true);
+    double? QuietSeconds = null, bool IsManifestLane = true,
+    string? Target = null, string? HeartbeatPath = null, bool IsAttribution = false);
 internal sealed record OwnerConsoleGateManifestLane(string Name, double EstimatedSerialSeconds);
 internal sealed record OwnerConsoleGateDuration(string LaneName, double DurationSeconds, DateTimeOffset RecordedAt);
 
@@ -19,6 +20,12 @@ internal sealed record OwnerConsoleGateProgress(bool Live, string Kind,
     int DoneCount, int TotalCount, TimeSpan? IdleAge = null,
     IReadOnlyList<OwnerConsoleGateProgress>? OtherLiveGates = null)
 {
+    internal bool Failing => Lanes.Any(lane => !lane.IsAttribution &&
+        lane.State == OwnerConsoleGateLaneState.Done && lane.Outcome == "failed");
+
+    private const string AttemptPattern = @"[0-9a-f]{8}-gate-[0-9]{17}-[0-9a-f]{32}";
+    private static readonly Regex AttemptId = new("^" + AttemptPattern + "$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex HeartbeatAttempt = new("^" + AttemptPattern + @"(?=\.|$)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex Fields = new(
         """(?:^|\s)(?<key>[\w]+)=(?<value>"(?:\\.|[^"\\])*"|[^\s"]+)""",
         RegexOptions.CultureInvariant);
@@ -98,10 +105,14 @@ internal sealed record OwnerConsoleGateProgress(bool Live, string Kind,
 
         OwnerConsoleGateProgress Snapshot(Gate gate)
         {
-            // Remote receipts have no goal id for cohorts. Bind only within this gate interval,
-            // and reject receipts explicitly attributed to another member set.
-            var remote = parsed.Where(item => item.Event.EventKind == "remote-lane" && item.Event.Timestamp >= gate.Start &&
-                (string.IsNullOrEmpty(item.Event.GoalId) || gate.Members.Contains(Prefix(item.Event.GoalId)))).ToArray();
+            var attempts = gate.Events.Select(item => AttemptFromHeartbeat(item.Get("heartbeat")))
+                .Where(id => id.Length > 0).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            // Legacy receipts and gates without attempt evidence retain interval/goal binding.
+            var remote = parsed.Where(item => item.Event.EventKind == "remote-lane" &&
+                (attempts.Count > 0 && AttemptId.IsMatch(item.Get("attempt"))
+                    ? attempts.Contains(item.Get("attempt"))
+                    : item.Event.Timestamp >= gate.Start &&
+                        (string.IsNullOrEmpty(item.Event.GoalId) || gate.Members.Contains(Prefix(item.Event.GoalId))))).ToArray();
             var names = manifest.Select(lane => lane.Name).ToList();
             foreach (var item in gate.Events.Where(item => IsLanePhase(item.Get("phase"))))
             {
@@ -128,19 +139,20 @@ internal sealed record OwnerConsoleGateProgress(bool Live, string Kind,
                 if (offer is not null && (latest is null || offer.Event.Timestamp > latest.Event.Timestamp)) latest = offer;
                 var state = latest?.Get("phase") switch
                 {
-                    "verification-check" => OwnerConsoleGateLaneState.Running,
-                    "shard-complete" or "remote-shard-complete" => OwnerConsoleGateLaneState.Done,
+                    "verification-check" or "remote-shard-started" => OwnerConsoleGateLaneState.Running,
+                    "shard-complete" or "remote-shard-complete" or "check-complete" => OwnerConsoleGateLaneState.Done,
                     "cache-hit" or "reuse" => OwnerConsoleGateLaneState.Cached,
                     _ => offer is null ? OwnerConsoleGateLaneState.Queued : OwnerConsoleGateLaneState.Running
                 };
                 var elapsed = TimeSpan.FromMilliseconds(latest?.Number("elapsed_ms") ?? 0);
                 if (state == OwnerConsoleGateLaneState.Running)
                     elapsed += Nonnegative(now - (latest?.Event.Timestamp ?? offer!.Event.Timestamp));
-                var executor = latest?.Get("phase") == "remote-shard-complete"
-                    ? remoteLane.LastOrDefault(item => item.Get("executor").Length > 0)?.Get("executor") : null;
+                var executor = latest?.Get("phase") is "remote-shard-started" or "remote-shard-complete"
+                    ? remoteLane.LastOrDefault(item => item.Get("executor").Length > 0)?.Get("executor") ??
+                        observations.LastOrDefault(item => item.Get("executor").Length > 0)?.Get("executor") : null;
                 var slot = Regex.Match(latest?.Get("heartbeat") ?? "", @"activity-(\d+)");
                 var location = executor ?? (slot.Success ? "local slot " + slot.Groups[1].Value :
-                    latest?.Get("decision") == "offer" || latest?.Get("phase") == "remote-shard-complete" ? "remote" : "local");
+                    latest?.Get("decision") == "offer" || latest?.Get("phase") is "remote-shard-started" or "remote-shard-complete" ? "remote" : "local");
                 double? quiet = null;
                 if (state == OwnerConsoleGateLaneState.Running && latest?.Get("phase") == "verification-check")
                 {
@@ -149,7 +161,9 @@ internal sealed record OwnerConsoleGateProgress(bool Live, string Kind,
                     else quiet = SecondsSinceOutput(now, observations);
                 }
                 return new OwnerConsoleGateLane(name, state, latest?.Get("outcome") is "passed" or "failed" ?
-                    latest.Get("outcome") : "unknown", location, elapsed, median, samples.Length == 0, quiet, lane is not null);
+                    latest.Get("outcome") : "unknown", location, elapsed, median, samples.Length == 0, quiet, lane is not null,
+                    latest?.Get("target"), observations.LastOrDefault(item => AttemptFromHeartbeat(item.Get("heartbeat")).Length > 0)?.Get("heartbeat"),
+                    IsAttributionTarget(latest?.Get("target") ?? name));
             }).ToArray();
             var total = rows.Where(row => row.IsManifestLane).Sum(row => row.MedianSeconds ?? 0);
             var done = rows.Where(row => row.IsManifestLane && IsDone(row)).ToArray();
@@ -191,7 +205,11 @@ internal sealed record OwnerConsoleGateProgress(bool Live, string Kind,
         return Math.Max(0, (now - start).TotalSeconds);
     }
 
-    private static bool IsLanePhase(string phase) => phase is "verification-check" or "shard-complete" or "remote-shard-complete" or "cache-hit" or "reuse";
+    private static bool IsLanePhase(string phase) => phase is "verification-check" or "shard-complete" or "remote-shard-complete" or "check-complete" or "remote-shard-started" or "cache-hit" or "reuse";
+    private static string AttemptFromHeartbeat(string path) => HeartbeatAttempt.Match(path.Split(['/', '\\']).Last()).Value;
+    private static bool IsAttributionTarget(string target) =>
+        target.StartsWith("reviewer focused evidence: ", StringComparison.Ordinal) ||
+        target.StartsWith("reviewer mapped project evidence: ", StringComparison.Ordinal);
     private static bool IsDone(OwnerConsoleGateLane row) => row.State is OwnerConsoleGateLaneState.Done or OwnerConsoleGateLaneState.Cached;
     private static TimeSpan Nonnegative(TimeSpan value) => value < TimeSpan.Zero ? TimeSpan.Zero : value;
     private static string Prefix(string id) => id.Trim()[..Math.Min(8, id.Trim().Length)];

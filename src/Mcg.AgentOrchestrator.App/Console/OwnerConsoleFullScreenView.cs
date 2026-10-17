@@ -334,13 +334,9 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
             key.Handled = true;
             var line = _command.Text;
             FinishCommand();
-            if (line.Trim().TrimStart(':').Trim().Equals("epics", StringComparison.OrdinalIgnoreCase))
-            {
-                StartAction();
-                await EpicView.OpenAsync(FocusedPane);
-                return;
-            }
-            await ActAsync(ct => _controller.RunCommandAsync(line, _operation, ct));
+            if (OwnerConsoleBindings.ForLine(line) is { Owner: OwnerConsoleCommandOwner.View } binding)
+                await RunBindingAsync(binding);
+            else await ActAsync(ct => _controller.RunCommandAsync(line, _operation, ct));
             return;
         }
         if (key.AsRune.Value == ':' && !ActionRunning)
@@ -352,12 +348,21 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
             RenderHints();
             return;
         }
-        var character = char.ToLowerInvariant((char)key.AsRune.Value);
-        if (character == 'q')
+        var character = (char)key.AsRune.Value;
+        if (!key.IsCtrl && !key.IsAlt && OwnerConsoleBindings.ForKey(character, FocusedPane) is { } keyBinding)
         {
             key.Handled = true;
-            await _controller.HandleKeyAsync(0, 'q', cancellationToken: _token);
-            _app.RequestStop(Window);
+            await RunBindingAsync(keyBinding);
+            return;
+        }
+        if (!key.IsCtrl && !key.IsAlt && OwnerConsoleBindings.IsTopLevelKey(character))
+        {
+            key.Handled = true;
+            if (!ActionRunning)
+            {
+                StartAction();
+                ShowNotice(OwnerConsoleKeyHints.UnavailableKey(character, FocusedPane), OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Action);
+            }
             return;
         }
         if (key == Key.Tab.WithShift)
@@ -370,24 +375,6 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         {
             key.Handled = true;
             if (!ActionRunning) FocusPane(OwnerConsoleKeyHints.Next(FocusedPane));
-            return;
-        }
-        if (character == '?')
-        {
-            key.Handled = true;
-            if (!ActionRunning) await ActAsync(_ => _controller.ShowHelpAsync());
-            return;
-        }
-        if (character == 'g')
-        {
-            key.Handled = true;
-            if (!ActionRunning) { StartAction(); GateView.Open(FocusedPane, _controller.Model?.Gate); }
-            return;
-        }
-        if (character == 'e')
-        {
-            key.Handled = true;
-            if (!ActionRunning) { StartAction(); await EpicView.OpenAsync(FocusedPane); }
             return;
         }
         var pane = FocusedPane;
@@ -446,18 +433,41 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
                 await ActAsync(ct => _controller.ShowActivityMeaningAsync(_controller.Model.Activity[selected], _operation, ct));
             return;
         }
-        if (character is 'a' or 'r')
+        if (!ActionRunning && !key.IsCtrl && !key.IsAlt && !char.IsControl(character) && !char.IsWhiteSpace(character))
         {
-            key.Handled = true;
-            if (ActionRunning) return;
-            if (pane == OwnerConsolePane.Decisions && _controller.SelectedIndex >= 0)
-                await ActAsync(ct => _controller.HandleKeyAsync(0, character, _operation, ct));
-            else if (pane != OwnerConsolePane.Decisions)
+            StartAction();
+            ShowNotice($"{character}: not bound; press : for commands or ? for help", OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Action);
+        }
+    }
+
+    private async Task RunBindingAsync(OwnerConsoleBinding binding)
+    {
+        if (binding == OwnerConsoleBindings.Quit)
+        {
+            await _controller.HandleKeyAsync(0, binding.Key!.Value, cancellationToken: _token);
+            _app.RequestStop(Window);
+            return;
+        }
+        if (ActionRunning) return;
+        if (binding.Owner == OwnerConsoleCommandOwner.Controller)
+            await ActAsync(ct => _controller.RunCommandAsync(binding.Command, _operation, ct));
+        else if (binding == OwnerConsoleBindings.Gate)
+        { StartAction(); GateView.Open(FocusedPane, _controller.Model?.Gate); }
+        else if (binding == OwnerConsoleBindings.Epics)
+        { StartAction(); await EpicView.OpenAsync(FocusedPane); }
+        else if (binding == OwnerConsoleBindings.Help)
+            await ActAsync(_ => _controller.ShowHelpAsync());
+        else if (binding.Scope == OwnerConsoleScope.Decisions)
+        {
+            if (FocusedPane == OwnerConsolePane.Decisions && _controller.SelectedIndex >= 0)
+                await ActAsync(ct => _controller.HandleKeyAsync(0, binding.Key!.Value, _operation, ct));
+            else if (FocusedPane != OwnerConsolePane.Decisions)
             {
                 StartAction();
-                ShowNotice(OwnerConsoleKeyHints.UnavailableKey(character, pane), OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Action);
+                ShowNotice(OwnerConsoleKeyHints.UnavailableKey(binding.Key!.Value, FocusedPane), OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Action);
             }
         }
+        else throw new InvalidOperationException($"No view action for binding {binding.Command}.");
     }
 
     private void FinishCommand()
