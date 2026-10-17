@@ -20,6 +20,8 @@ internal static class OwnerFleetDiagram
             $"conductor: {(host.ConductorRunning ? "running" : "stopped")}",
             $"executors: {host.ExecutorCount}"
         };
+        if (host.NoExecutorFreeCount > 0)
+            content.Add($"no executor free: {host.NoExecutorFreeCount} (last {Stamp(host.NoExecutorFreeLastAt)})");
         if (host.ExecutorCount == 0) content.Add("no executors configured");
         if (host.UnreadableOutcomeLines != 0 || host.UnreadableProbeLines != 0)
         {
@@ -29,7 +31,7 @@ internal static class OwnerFleetDiagram
         Box(content, false);
         foreach (var executor in model.Executors)
         {
-            lines.Add("│");
+            lines.Add("│" + new string(' ', width - 1));
             content = [$"Executor {executor.Id}"];
             content.Add(executor.Reachability switch
             {
@@ -51,26 +53,29 @@ internal static class OwnerFleetDiagram
             content.Add(executor.LastOutcome is null ? "last: none" : $"last: {executor.LastOutcome} {Stamp(executor.LastOutcomeAt)}");
             content.Add("accepted: " + (executor.AcceptedShare is { } share ? share.ToString("P0", CultureInfo.InvariantCulture) : "n/a"));
             if (executor.Lanes.Count == 0) content.Add("lanes: no accepted remote runs");
+            var laneStart = content.Count;
             foreach (var lane in executor.Lanes)
             {
                 content.Add($"{lane.Lane} median {Seconds(lane.MedianSeconds)} n={lane.Samples}");
                 content.Add($"  solo {Seconds(lane.SoloMedianSeconds)} conc {Seconds(lane.ConcurrentMedianSeconds)}");
             }
-            Box(content, executor.Reachability == OwnerFleetReachability.Unreachable);
+            Box(content, executor.Reachability == OwnerFleetReachability.Unreachable, laneStart);
         }
         return string.Join("\n", lines);
 
-        void Box(IEnumerable<string> rows, bool unreachable)
+        void Box(IReadOnlyList<string> rows, bool unreachable, int laneStart = int.MaxValue)
         {
             var edge = unreachable ? '═' : '─';
             var side = unreachable ? '║' : '│';
             lines.Add((unreachable ? "╔" : "┌") + new string(edge, width - 2) + (unreachable ? "╗" : "┐"));
-            foreach (var row in rows)
+            for (var index = 0; index < rows.Count; index++)
             {
                 // Ledger text must not inject terminal controls or extra diagram rows.
-                var clean = new string(row.Select(ch => char.IsControl(ch) ? ' ' : ch).ToArray());
-                var fitted = OwnerConsoleLineFitter.Cut(clean, width - 4);
-                lines.Add($"{side} {fitted}{new string(' ', width - 4 - fitted.GetColumns())} {side}");
+                var clean = new string(rows[index].Select(ch => char.IsControl(ch) ? ' ' : ch).ToArray());
+                var fittedRows = index >= laneStart ? OwnerFleetLaneWrap.Wrap(clean, width - 4) :
+                    [OwnerConsoleLineFitter.Cut(clean, width - 4)];
+                foreach (var fitted in fittedRows)
+                    lines.Add($"{side} {fitted}{new string(' ', width - 4 - fitted.GetColumns())} {side}");
             }
             lines.Add((unreachable ? "╚" : "└") + new string(edge, width - 2) + (unreachable ? "╝" : "┘"));
         }

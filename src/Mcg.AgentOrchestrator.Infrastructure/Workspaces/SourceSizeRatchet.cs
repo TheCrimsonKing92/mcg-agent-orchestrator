@@ -66,7 +66,8 @@ internal static class SourceSizeRatchet
             // candidate/attempt before cache publication; inspection stays in AcceptanceAssemblyCleanupAttributionReader.
             // Goal 56ff780e adds three lines at the existing shard-progress seam to carry the result,
             // outcome and failed-test count to the owner gate view; measured 4976 lines, no extra headroom.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 4976),
+            // Goal bd3c0539 adds one settled-check progress call.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs", 4977),
             // Goal c0cfa8ae test telemetry collaborator measured at 423 lines.
             // Goal 402c1005 moved TRX completion inspection and shard decisions into AcceptanceShardCompletionAdjudicator.
             // Goal ad3fafc0 extracted run ownership publication and stale-receipt clearing into AcceptanceTestRunPreparation.
@@ -546,7 +547,9 @@ internal static class SourceSizeRatchet
             // boundary; receipt inspection is separately owned. Measured 8682 lines in the same 28 partials, no headroom.
             // Goal 56ff780e adds only the three result/outcome/count lines at the existing shard-progress
             // seam; gate read-model behavior is separately owned. Measured 8685 lines in the same 28 partials.
-            new SourceClassCeiling("GoalAcceptanceVerifier", 8680, 28),
+            // Goal bd3c0539 adds three lane progress call lines across existing partials.
+            // Measured 8683 lines in the same 28 partials after integrating main at 6dff3b77a.
+            new SourceClassCeiling("GoalAcceptanceVerifier", 8683, 28),
             // Goal d647b5f3 extracts premise-invalid clarification construction to PremiseInvalidClarification.
             // Goal 439c80ae extracts Reviewer evidence brief projection to ReviewerEvidenceBriefSection;
             // measured 9319 total lines across the existing 27 partial files, with no extra headroom.

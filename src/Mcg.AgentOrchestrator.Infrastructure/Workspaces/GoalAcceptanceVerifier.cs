@@ -1601,6 +1601,7 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             cacheContext?.MainSha ?? attemptIdentity?.MainSha), fresh.Retried);
         cacheContext?.RecordExecution(check, fresh.Result,
             fresh.Result.LaneRerun?.Outcome == AcceptanceLaneRerunEvidence.Flake ? "lane_rerun_pass" : "first_run");
+        AcceptanceGateLaneProgress.CheckCompleted(goalId, fresh.Result, EmitGateProgress);
 
         return fresh;
     }

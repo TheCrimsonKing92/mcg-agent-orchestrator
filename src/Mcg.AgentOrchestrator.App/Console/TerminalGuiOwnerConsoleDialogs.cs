@@ -8,6 +8,7 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 internal sealed class TerminalGuiOwnerConsoleDialogs(IApplication app, CancellationToken token) : IOwnerConsoleDialogs
 {
     private readonly int _uiThread = Environment.CurrentManagedThreadId;
+    public int? TextWidth => OwnerConsoleDialogWidth.TextColumns(app.Screen.Width);
 
     public Task<bool> ConfirmAsync(string title, string text) => OnUiAsync(() =>
     {
