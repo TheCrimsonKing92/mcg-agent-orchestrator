@@ -9,7 +9,8 @@ internal sealed record OwnerConsoleGateMember(string Id, string Title);
 internal sealed record OwnerConsoleGateLane(string Name, OwnerConsoleGateLaneState State,
     string Outcome, string Location, TimeSpan Elapsed, double? MedianSeconds, bool IsEstimate,
     double? QuietSeconds = null, bool IsManifestLane = true,
-    string? Target = null, string? HeartbeatPath = null, bool IsAttribution = false);
+    string? Target = null, string? HeartbeatPath = null, bool IsAttribution = false,
+    IReadOnlyList<string>? FailingTestNames = null);
 internal sealed record OwnerConsoleGateManifestLane(string Name, double EstimatedSerialSeconds);
 internal sealed record OwnerConsoleGateDuration(string LaneName, double DurationSeconds, DateTimeOffset RecordedAt);
 
@@ -18,7 +19,8 @@ internal sealed record OwnerConsoleGateProgress(bool Live, string Kind,
     IReadOnlyList<OwnerConsoleGateMember> Members, DateTimeOffset? StartedAt, TimeSpan Elapsed,
     IReadOnlyList<OwnerConsoleGateLane> Lanes, double Fraction, int RemainingSeconds,
     int DoneCount, int TotalCount, TimeSpan? IdleAge = null,
-    IReadOnlyList<OwnerConsoleGateProgress>? OtherLiveGates = null)
+    IReadOnlyList<OwnerConsoleGateProgress>? OtherLiveGates = null,
+    IReadOnlyList<OwnerConsoleHostActivity>? HostActivity = null)
 {
     internal bool Failing => Lanes.Any(lane => !lane.IsAttribution &&
         lane.State == OwnerConsoleGateLaneState.Done && lane.Outcome == "failed");
