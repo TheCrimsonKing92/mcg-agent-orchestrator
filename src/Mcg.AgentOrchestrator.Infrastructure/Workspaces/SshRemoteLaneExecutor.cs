@@ -146,12 +146,15 @@ internal sealed class SshRemoteLaneExecutor(
         if (push.ExitCode != 0) return new(null, "push-failed", steps.ToArray());
         cancellationToken.ThrowIfCancellationRequested();
         var jobName = $"{request.AttemptId}-{laneKey}.json";
-        await File.WriteAllTextAsync(Path.Combine(staging, "job.json"), JsonSerializer.Serialize(new
+        var job = new System.Text.Json.Nodes.JsonObject
         {
-            sha = request.VerifyingCommitSha, project = request.Project, filter = request.Filter, lane = request.Lane,
-            attemptId = request.AttemptId, executorId = request.ExecutorId, filterHash = request.FilterHash,
-            mainSha = request.MainSha, manifestIdentity = request.ManifestIdentity
-        }), cancellationToken).ConfigureAwait(false);
+            ["sha"] = request.VerifyingCommitSha, ["project"] = request.Project, ["filter"] = request.Filter,
+            ["lane"] = request.Lane, ["attemptId"] = request.AttemptId, ["executorId"] = request.ExecutorId,
+            ["filterHash"] = request.FilterHash, ["mainSha"] = request.MainSha, ["manifestIdentity"] = request.ManifestIdentity
+        };
+        if (request.TestHostTimeoutSeconds is { } budget) job["testHostTimeoutSeconds"] = budget;
+        await File.WriteAllTextAsync(Path.Combine(staging, "job.json"), JsonSerializer.Serialize(job),
+            cancellationToken).ConfigureAwait(false);
         startedAt = clock.GetUtcNow();
         var copy = await transport([ScpPath, "-o", "BatchMode=yes", "job.json",
             $"{entry.RunnerAlias}:{entry.RunRoot}/queue/{jobName}"], staging, TimeSpan.FromMinutes(2), cancellationToken).ConfigureAwait(false);
