@@ -169,6 +169,7 @@ public sealed class ProviderHoldAgentSubstitutionTests
                 "API error (status 402 Payment Required): Grok Build usage balance exhausted",
                 dispatch.DispatchedAt.AddMinutes(1), ProviderFailureKind: ProviderFailureKind.BudgetExhausted,
                 DispatchStartedAt: dispatch.DispatchedAt, StandardErrorPath: Path.Combine(Root, agent.Id.Value + ".stderr")));
+            Kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "Provider budget exhausted.");
             Kernel.EscalateTaskFailure(goal.Id, task.Id, "Provider budget exhausted.");
         }
 
