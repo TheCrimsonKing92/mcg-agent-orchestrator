@@ -125,6 +125,24 @@ public sealed class OwnerConsoleGateLayoutTests
         AssertColumns(Render(Model(), width, true));
     }
 
+    [Fact]
+    public void NamesWithinCap_AtWidth120_RemainUncutAcrossExpandedSections()
+    {
+        var gate = Model();
+        var lines = Render(gate, 120, true);
+        var rows = gate.Lanes.Select(row => (Row: row, Name: row.IsAttribution
+            ? OwnerConsoleGateFormatter.AttributionName(row) : row.Name)).Where(item => item.Name.Length <= 33).ToArray();
+        Assert.NotEmpty(rows);
+        foreach (var (row, name) in rows)
+        {
+            var prefix = $" {OwnerConsoleGateFormatter.Marker(row)} {name.PadRight(33)}  ";
+            var line = Assert.Single(lines, line => line.StartsWith(prefix, StringComparison.Ordinal));
+            Assert.Equal(name, line.Substring(3, 33).TrimEnd());
+            Assert.DoesNotContain('…', line.Substring(3, 33));
+        }
+        AssertColumns(lines);
+    }
+
     [Theory]
     [InlineData(80)]
     [InlineData(120)]
