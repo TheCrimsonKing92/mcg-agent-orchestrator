@@ -78,12 +78,16 @@ public sealed class ShardCompleteLoadFieldsTests
             var member = new AcceptanceCohortMemberBinding(new GoalId(new string('1', 32)), new string('a', 40),
                 new string('b', 40), ["src/A.cs"], ["resource:a"], ChangeRiskTier.Behavior,
                 ConductorTransitionDecision.Auto, "Clean", "NoConflictsDetected");
-            var members = new[] { member };
+            var peer = new AcceptanceCohortMemberBinding(new GoalId(new string('2', 32)), new string('e', 40),
+                new string('f', 40), ["src/B.cs"], ["resource:b"], ChangeRiskTier.Behavior,
+                ConductorTransitionDecision.Auto, "Clean", "NoConflictsDetected");
+            var members = new[] { member, peer };
             var identity = AcceptanceCohortIdentity.Create(members, new string('c', 40), new string('d', 40), "manifest-v1");
             var path = Path.Combine(directory, "conduct-events.log");
             ConductorDriver.AppendCohortGateProgressEvents(new ConductEventLogWriter(path), identity, members, progress);
-            var line = Assert.Single(File.ReadAllLines(path));
-            return Mcg.AgentOrchestrator.App.OwnerConsole.OwnerConsoleGateProgress.ParseEvent(line)!.Detail;
+            var lines = File.ReadAllLines(path);
+            Assert.Equal(members.Length, lines.Length);
+            return Mcg.AgentOrchestrator.App.OwnerConsole.OwnerConsoleGateProgress.ParseEvent(lines[0])!.Detail;
         }
         finally { Directory.Delete(directory, recursive: true); }
     }
