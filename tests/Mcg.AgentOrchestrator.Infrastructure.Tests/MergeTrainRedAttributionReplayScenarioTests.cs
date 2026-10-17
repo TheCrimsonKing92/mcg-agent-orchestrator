@@ -14,6 +14,7 @@ public sealed class MergeTrainRedAttributionReplayScenarioTests : AcceptanceCoho
     private const string Zebra = "ZebraReachTests";
     private const string FailuresDirectory = Fixture.TestDirectory + "/Unchanged";
     private const string EvidenceTest = Fixture.TestDirectory + "/Evidence/MemberEvidenceTests.cs";
+    private const string PartnerTest = Fixture.TestDirectory + "/Evidence/PartnerEvidenceTests.cs";
     private const string NewestTest = Fixture.TestDirectory + "/Cli/NewestMemberTests.cs";
 
     [Theory]
@@ -326,6 +327,9 @@ public sealed class MergeTrainRedAttributionReplayScenarioTests : AcceptanceCoho
                 else if (index == 1)
                 {
                     CreateWorktreeCandidate(repo, goal.Id, Fixture.Other, "public class OtherSource { public bool Changed => true; }");
+                    // App source alone has no serialized resource; give D independent admission evidence.
+                    CreateWorktreeCandidate(repo, goal.Id, PartnerTest,
+                        "public class PartnerEvidenceTests { [Xunit.Fact] public void Runs() { } }");
                     if (ownership)
                         foreach (var name in new[] { Alpha, Zebra })
                             CreateWorktreeCandidate(repo, goal.Id, $"{FailuresDirectory}/{name}.cs", TestSource(name) + " // owned");
