@@ -43,9 +43,10 @@ public sealed class GroupedGateV1AdoptionEventTests
     public void OwnGeneration_AlreadyNamed_EmitsNothing()
     {
         using var fixture = new Fixture();
-        var attempt = fixture.Launch("train") with { AdoptedByGenerationId = Fixture.FirstGeneration };
-        ConductorGroupedGateAttemptCoordinator.Save(attempt);
         var first = fixture.Coordinator(Fixture.FirstGeneration);
+        var attempt = fixture.Launch("train", first) with { AdoptedByGenerationId = Fixture.FirstGeneration };
+        ConductorGroupedGateAttemptCoordinator.Save(attempt);
+        Assert.True(first.LaunchedByThisInstance(attempt));
         Assert.False(first.ShouldAdopt(attempt));
 
         var unchanged = first.Adopt(attempt);
@@ -166,9 +167,10 @@ public sealed class GroupedGateV1AdoptionEventTests
                 return new(Holder.ProcessId, Holder.StartedAt, Holder.ImagePath);
             });
 
-        internal ConductorGroupedGateAttempt Launch(string kind)
+        internal ConductorGroupedGateAttempt Launch(string kind,
+            ConductorGroupedGateAttemptCoordinator? coordinator = null)
         {
-            var first = Coordinator(FirstGeneration);
+            var first = coordinator ?? Coordinator(FirstGeneration);
             var attempt = first.Create(kind, [], "main", "tree", "manifest", "adoption-identity", Root,
                 ConductorAutonomyPolicy.Permissive) with
             {
