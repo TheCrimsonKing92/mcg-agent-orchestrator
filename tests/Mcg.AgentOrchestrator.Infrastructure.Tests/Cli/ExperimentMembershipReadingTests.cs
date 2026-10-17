@@ -7,7 +7,7 @@ using Xunit;
 public sealed class ExperimentMembershipReadingTests
 {
     [Fact]
-    public void Effective_RecordedPairExtendsOnlyCohortsAndPreservesStopProgress()
+    public void Effective_RecordedPairExtendsOnlyCohortsAndStopCountFollowsLandedMembers()
     {
         CliCommandTestsExperiments.WithWorkspace(workspace =>
         {
@@ -31,8 +31,8 @@ public sealed class ExperimentMembershipReadingTests
             Assert.Equal(12, before.StopTarget);
             Assert.Equal(before.StopTarget, after.StopTarget);
             Assert.Equal(before.StopRule, after.StopRule);
-            Assert.Equal(6, before.ObservedCount);
-            Assert.Equal(before.ObservedCount, after.ObservedCount);
+            Assert.Equal(2, before.ObservedCount);
+            Assert.Equal(4, after.ObservedCount);
             Assert.Equal(before.StopRuleMet, after.StopRuleMet);
             var baselineTotals = RoundValueReport.Build(goals.Where(goal => goal.Id.Value == Id('a') || goal.Id.Value == Id('c')),
                 DateTimeOffset.MinValue, DateTimeOffset.MaxValue).Window;
