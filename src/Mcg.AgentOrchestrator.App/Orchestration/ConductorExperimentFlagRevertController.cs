@@ -18,8 +18,10 @@ internal sealed class ConductorExperimentFlagRevertController(ExperimentStore ex
             !(reading.Verdict == "revert" || reading.GuardrailBreached)) return false;
         // Refresh persisted eligibility when a stale reading is delivered after a previous tick.
         if (experiments.ResolveAsync(record.Id).GetAwaiter().GetResult()?.Outcome != ExperimentOutcomeState.Open) return false;
-        // Prior capture precedes the write and cannot prove that the intervention took effect.
-        if (flags.Read(target) != target.ValueToApply)
+        // Alternation may already have returned the flag to its prior arm.
+        var current = flags.Read(target);
+        if (current != target.ValueToApply &&
+            !(record.Spec.Baseline.Kind == ExperimentBaselineKind.AlternatingGates && current == target.PriorValue))
             return false;
         var intents = intentStore();
         var id = Guid.NewGuid().ToString("n");
