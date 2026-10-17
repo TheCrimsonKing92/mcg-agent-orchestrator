@@ -93,12 +93,26 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSourceRevertedDecl
     {
         using var fixture = new Probe();
         fixture.Write(Probe.Legacy, "public sealed class RenamedProbeTests { }");
+        fixture.Write("tests/Mcg.AgentOrchestrator.Core.Tests/LegacyProbeTestsHarness.cs", "public static class LegacyProbeTestsHarness { }");
         fixture.Git("add", ".");
         fixture.Git("commit", "-m", "rename legacy declaration");
         var calls = 0;
         var verifier = CreateVerifier(fixture, "LegacyProbeTests.Legacy", _ => { }, () => calls++);
         var result = await fixture.RunAsync(verifier, "LegacyProbeTests", [Probe.Legacy], Probe.Declared);
         AssertRejection(result, FindingEvidenceRevertPathsRejection.SelectedTestClass);
+        Assert.Equal(0, calls);
+    }
+
+    [Fact]
+    public async Task SourceRevert_UnknownBareClass_RejectsWithoutLaunching()
+    {
+        using var fixture = new Probe();
+        var calls = 0;
+        var verifier = CreateVerifier(fixture, "NoSuchProbeTests.Missing", _ => { }, () => calls++);
+        var result = await fixture.RunAsync(verifier, "NoSuchProbeTests", [Probe.Legacy], Probe.Declared);
+        Assert.False(result.Accepted);
+        Assert.Equal(FocusedEvidenceRejectionCode.UnresolvableSelection, result.Rejection!.Code);
+        Assert.Empty(result.Checks);
         Assert.Equal(0, calls);
     }
 

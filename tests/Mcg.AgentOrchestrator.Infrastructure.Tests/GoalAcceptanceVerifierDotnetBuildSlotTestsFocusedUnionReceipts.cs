@@ -86,6 +86,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsFocusedUnionReceip
             Directory.CreateDirectory(directory);
             File.WriteAllText(Path.Combine(directory, "MtpTestRunnerScriptTests.cs"),
                 "public class MtpTestRunnerScriptTests { [Xunit.Fact] public void MtpScriptFilterTranslationAndFilenameBoundingMatchGateConventions() { } }");
+            File.WriteAllText(Path.Combine(directory, ClassA + ".cs"), $"public class {ClassA} {{ }}");
             var testLaunches = 0;
             var verifier = new GoalAcceptanceVerifier((argv, _, _, _) =>
             {
