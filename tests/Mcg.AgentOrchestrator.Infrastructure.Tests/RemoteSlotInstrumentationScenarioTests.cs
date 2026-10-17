@@ -70,6 +70,7 @@ public sealed class RemoteSlotInstrumentationScenarioTests
         Assert.Single(scenario.Progress, line => line.StartsWith("REMOTE_LANE_POLICY "));
     }
 
+    [Xunit.Collection(TestCollections.JobAccounting)]
     internal sealed class Scenario : GoalAcceptanceVerifierDotnetBuildSlotTests, IDisposable
     {
         private readonly int _lanes;
