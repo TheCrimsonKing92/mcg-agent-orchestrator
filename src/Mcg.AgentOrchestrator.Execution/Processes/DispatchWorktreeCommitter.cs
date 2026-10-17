@@ -255,6 +255,10 @@ internal sealed class DispatchWorktreeCommitter
             .Order(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
+        if (commitsAfterDispatch > 0 && pathsChangedAfterDispatch.Length == 0 &&
+            IntegrationMergeChangedPaths.Read(workingDirectory, _runGit) is { } integrationPaths)
+            pathsChangedAfterDispatch = [.. integrationPaths];
+
         var filteredStatusOutput = GitCli.FilterCommitWorthyStatus(status.Output);
         var evidence = new GoalWorktreeDispatchEvidence(
             branch.Output.Trim(),
