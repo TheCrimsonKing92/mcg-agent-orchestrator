@@ -8,10 +8,12 @@ using Mcg.AgentOrchestrator.Infrastructure;
 // No build slot is acquired and no real holder process is launched.
 public sealed class SweepLeaseGateAdmissionScenarioTests(ITestOutputHelper output) : ConductorBatchLoopTests(output)
 {
-    [Fact]
+    [Fact(Timeout = 30_000)]
+    [Trait("Category", "CrossTick")]
     public void BlockedRealSweep_WithOnlyTerminalReceipts_AdmitsReadyGoalAndReportsRunning() => RunScenario(false);
 
-    [Fact]
+    [Fact(Timeout = 30_000)]
+    [Trait("Category", "CrossTick")]
     public void BlockedRealSweep_WithMissingTerminalReceipt_HoldsThenAdmitsAfterSweep() => RunScenario(true);
 
     private void RunScenario(bool missingTerminalReceipt)
@@ -29,6 +31,10 @@ public sealed class SweepLeaseGateAdmissionScenarioTests(ITestOutputHelper outpu
             Directory.CreateDirectory(directory);
             var receipted = WriteLegacy("settled", 1, terminalReceipt: true);
             var other = WriteLegacy("other", 0, terminalReceipt: !missingTerminalReceipt);
+            // Exercise a real deletion after the hook releases, without aging attempt metadata.
+            var disposable = Path.Combine(directory, "retention-probe.log");
+            File.WriteAllText(disposable, "obsolete sweep payload");
+            File.SetLastWriteTimeUtc(disposable, now.AddDays(-100).UtcDateTime);
             Assert.Equal(SpawnTrackedProcessStatus.DeadOrRecycled, AcceptanceHolderIdentity.Classify(
                 other.OwnerProcessId, other.OwnerProcessStartedAt, other.OwnerExecutablePath));
             Assert.False(StorageRetentionMaintenance.AcceptanceHolderDirectoryPreventsRetention(directory));
@@ -108,6 +114,9 @@ public sealed class SweepLeaseGateAdmissionScenarioTests(ITestOutputHelper outpu
                 EvidenceRetentionAction.Failed or EvidenceRetentionAction.DeferredLease or
                 EvidenceRetentionAction.DeferredLive or EvidenceRetentionAction.DeferredLocked or
                 EvidenceRetentionAction.RetainedUndecidable);
+            Assert.Contains(result.Decisions, decision => decision.Path == disposable &&
+                decision.Action == EvidenceRetentionAction.Deleted);
+            Assert.False(File.Exists(disposable));
             Assert.True(File.Exists(other.MetadataPath), "Sweep removed the metadata needed by the post-release tick.");
             if (missingTerminalReceipt)
             {
@@ -134,8 +143,16 @@ public sealed class SweepLeaseGateAdmissionScenarioTests(ITestOutputHelper outpu
                     Path.Combine(directory, id + ".result"), Path.Combine(directory, id + ".attempt.json"),
                     ReconciledAt: now.AddDays(-1))
                 { OwnerProcessStartedAt = now.AddDays(-2), OwnerExecutablePath = "legacy-dotnet.exe" };
-                File.WriteAllText(attempt.MetadataPath, JsonSerializer.Serialize(attempt, json));
                 var binding = AcceptanceHolderBinding.For(attempt);
+                // Retention uses explicit result-artifact ownership before legacy filename inference.
+                // Include this fixture's settlement evidence so neither receipt is unresolved.
+                attempt = attempt with
+                {
+                    TestResultPaths = [terminalReceipt
+                        ? LegacyAcceptanceHolderSettlement.TerminalReceiptPath(binding)
+                        : LegacyAcceptanceHolderSettlement.ReceiptPath(binding)]
+                };
+                File.WriteAllText(attempt.MetadataPath, JsonSerializer.Serialize(attempt, json));
                 if (terminalReceipt)
                     Assert.True(LegacyAcceptanceHolderSettlement.RecordTerminal(binding, attempt.OwnerProcessId,
                         attempt.OwnerProcessStartedAt, attempt.OwnerExecutablePath, attempt.StartedAt, now, "fixture-holder-exited"));
