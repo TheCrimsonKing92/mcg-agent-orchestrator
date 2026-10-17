@@ -32,7 +32,7 @@ public sealed class RelaunchDrainV1GroupedGateScenarioTests : AcceptanceCohortWo
         }
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public void SameIdentity_HandoffThenAdoptOnceAndLandReceipt()
     {
@@ -76,7 +76,7 @@ public sealed class RelaunchDrainV1GroupedGateScenarioTests : AcceptanceCohortWo
         Assert.Equal(0, scenario.Cancels);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public void AdvancedIntegrationHead_RefusesAndCancelsOriginalLease()
     {
