@@ -41,7 +41,11 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
         if (attempt.Outcome != ConductorParallelAcceptanceAttemptOutcome.Running) return false;
         // A terminal holder artifact is insufficient until the attempt itself is terminalized.
         using var writer = _tryAcquireAttemptWriterLease(Path.GetDirectoryName(attempt.MetadataPath)!, TimeSpan.Zero);
-        if (writer is null) return true;
+        if (writer is null)
+        {
+            RecordHolderHold(attempt, "attempt-writer-lease-busy");
+            return true;
+        }
         lock (MetadataWriteGate)
         {
             var current = ReadCanonicalAttempt(attempt.MetadataPath, attempt.GoalId);
@@ -69,10 +73,18 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             RecordHolderHold(attempt, "legacy-tree-settlement-unavailable");
             return true;
         }
+        if (attempt.Outcome != ConductorParallelAcceptanceAttemptOutcome.Running &&
+            LegacyAcceptanceHolderSettlement.HasTerminalReceipt(AcceptanceHolderBinding.For(attempt),
+                attempt.OwnerProcessId, attempt.OwnerProcessStartedAt, attempt.OwnerExecutablePath, attempt.StartedAt))
+            return false;
         // Holder settlement is independent of result publication. Terminalize under the
         // existing writer boundary before exposing capacity, preserving any published verdict.
         using var writer = _tryAcquireAttemptWriterLease(Path.GetDirectoryName(attempt.MetadataPath)!, TimeSpan.Zero);
-        if (writer is null) return true;
+        if (writer is null)
+        {
+            RecordHolderHold(attempt, "attempt-writer-lease-busy");
+            return true;
+        }
         lock (MetadataWriteGate)
         {
             var current = ReadCanonicalAttempt(attempt.MetadataPath, attempt.GoalId);

@@ -122,6 +122,7 @@ internal sealed partial class ConductorDriver
             }
 
             var members = workspace.Members;
+            var composed = selection.Members.Where(member => members.Any(bound => bound.GoalId == member.GoalId)).ToArray();
             var changedFiles = members.SelectMany(member => member.LandingPaths)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
@@ -145,7 +146,7 @@ internal sealed partial class ConductorDriver
             var receipt = _mergeTrainAcceptanceStore.TryReadReceipt(identity.Value);
             if (runGateInBackground && _groupedGateAttempts is not null)
             {
-                var recovered = RecoverGroupedGateAttempt("train", selection.Members,
+                var recovered = RecoverGroupedGateAttempt("train", composed,
                     selection.Members[0].MainRevision, workspace.TreeRevision,
                     trainKey, receipt is not null);
                 if (recovered.Running is not null)
@@ -171,7 +172,10 @@ internal sealed partial class ConductorDriver
                 {
                     if (_groupedGateAttempts is not null)
                     {
-                        var ownedRun = StartGroupedGateAttempt("train", selection.Members,
+                        if (ConductorRefusedGroupedIdentityGuard.IsRefused(_groupedGateAttempts.ReadAll(), "train",
+                            composed, selection.Members[0].MainRevision, workspace.TreeRevision, identity.Value))
+                            return Fallback($"outcome=identity-refused identity={identity.Value}");
+                        var ownedRun = StartGroupedGateAttempt("train", composed,
                             selection.Members[0].MainRevision, workspace.TreeRevision,
                             manifest, identity.Value, trainKey, policy);
                         onGateAdmitted?.Invoke();

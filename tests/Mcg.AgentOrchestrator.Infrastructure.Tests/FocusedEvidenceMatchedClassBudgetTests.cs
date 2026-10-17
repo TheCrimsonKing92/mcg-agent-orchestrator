@@ -50,7 +50,6 @@ public sealed class FocusedEvidenceMatchedClassBudgetTests
 
     [Theory]
     [InlineData(false)]
-    [InlineData(true)]
     public void MissingDeclarationsCountOncePerTermAndKeepResolution(bool hasNonMatchingSource)
     {
         using var fixture = new Fixture();
@@ -223,6 +222,100 @@ public sealed class FocusedEvidenceMatchedClassBudgetTests
         Assert.Collection(checks[0].FocusedEvidenceMatchedClasses, selection => AssertSelection(selection, "FamilyTests",
             "FamilyTestsA", "FamilyTestsB", "FamilyTestsC", "FamilyTestsD"));
         Assert.Collection(checks[1].FocusedEvidenceMatchedClasses, selection => AssertSelection(selection, "MissingTests"));
+    }
+
+    [Theory]
+    [InlineData("RunsOnce")]
+    [InlineData("RunsWithData")]
+    public void BareMethod_UniquePartialOwner_ResolvesMethodAndRunnerArguments(string method)
+    {
+        using var fixture = new Fixture();
+        fixture.Write("AlphaA.cs", """
+            namespace Fixture;
+            public partial class AlphaTests { [Xunit.Fact] public void RunsOnce() { } }
+            public class BetaTests { [Xunit.Fact] public void Other() { } }
+            """);
+        fixture.Write("AlphaB.cs", """
+            namespace Fixture;
+            public partial class AlphaTests
+            {
+                [Xunit.Theory] [Xunit.InlineData(1)] public void RunsWithData(int value) { }
+            }
+            """);
+
+        var check = fixture.Build("FullyQualifiedName~" + method);
+
+        var selection = Assert.Single(check.FocusedEvidenceTokens);
+        Assert.Single(check.FocusedEvidenceSelections);
+        Assert.Equal(GoalAcceptanceVerifier.FocusedEvidenceTokenKind.Method, selection.Kind);
+        Assert.Equal("AlphaTests." + method, selection.Value);
+        Assert.Equal("AlphaTests", selection.ContainingClass);
+        Assert.Equal("FullyQualifiedName~AlphaTests." + method, selection.CanonicalToken);
+        Assert.Equal(" FullyQualifiedName~" + method, selection.OriginalToken);
+        var arguments = FocusedEvidenceUnionPlanningTests.Argv(check);
+        var index = Array.IndexOf(arguments, "--filter-method");
+        Assert.True(index >= 0);
+        Assert.Equal("*AlphaTests." + method + "*", arguments[index + 1]);
+        Assert.DoesNotContain("--filter-class", arguments);
+    }
+
+    [Fact]
+    public void BareName_UnknownInSource_RejectsButEmptyProjectKeepsClassFallback()
+    {
+        using var fixture = new Fixture();
+        fixture.Write("Other.cs", "public class OtherTests { [Xunit.Fact] public void Runs() { } }");
+
+        Assert.False(GoalAcceptanceVerifier.TryBuildFocusedEvidenceChecks(
+            "Infrastructure.Tests: FullyQualifiedName~NoSuchName", new AcceptanceGateEngineSettings(), fixture.Root,
+            out var checks, out _, out var rejection));
+
+        Assert.Empty(checks);
+        Assert.Equal(FocusedEvidenceRejectionCode.UnresolvableSelection, rejection.Code);
+        Assert.Equal("focused evidence selection ' FullyQualifiedName~NoSuchName' does not resolve to a class or method in Infrastructure.Tests", rejection.Detail);
+
+        using var empty = new Fixture();
+        empty.Write("notes.txt", "No test sources.");
+        var selection = Assert.Single(empty.Build("FullyQualifiedName~NoSuchName").FocusedEvidenceTokens);
+        Assert.Equal(GoalAcceptanceVerifier.FocusedEvidenceTokenKind.Class, selection.Kind);
+        Assert.Equal("NoSuchName", selection.Value);
+    }
+
+    [Fact]
+    public void BareMethod_MultipleOwners_RejectsWithOrderedQualifiedCandidates()
+    {
+        using var fixture = new Fixture();
+        fixture.Write("Shared.cs", """
+            namespace Fixture;
+            public class BetaTests { [Xunit.Fact] public void SharedName() { } }
+            public class AlphaTests { [Xunit.Fact] public void SharedName() { } }
+            """);
+
+        Assert.False(GoalAcceptanceVerifier.TryBuildFocusedEvidenceChecks(
+            "Infrastructure.Tests: FullyQualifiedName~SharedName", new AcceptanceGateEngineSettings(), fixture.Root,
+            out var checks, out _, out var rejection));
+
+        Assert.Empty(checks);
+        Assert.Equal(FocusedEvidenceRejectionCode.UnresolvableSelection, rejection.Code);
+        Assert.Equal("focused evidence selection ' FullyQualifiedName~SharedName' is ambiguous in Infrastructure.Tests; candidates: Fixture.AlphaTests, Fixture.BetaTests", rejection.Detail);
+    }
+
+    [Fact]
+    public void BareClass_AlsoDeclaredAsMethod_KeepsClassSelectionAndArguments()
+    {
+        using var fixture = new Fixture();
+        fixture.Write("Alpha.cs", "namespace Fixture; public class AlphaTests { [Xunit.Fact] public void Runs() { } }");
+
+        var check = fixture.Build("FullyQualifiedName~AlphaTests");
+        var selection = Assert.Single(check.FocusedEvidenceTokens);
+        Assert.Equal(GoalAcceptanceVerifier.FocusedEvidenceTokenKind.Class, selection.Kind);
+        Assert.Equal("AlphaTests", selection.Value);
+        Assert.Equal("AlphaTests", selection.ContainingClass);
+        Assert.Equal("FullyQualifiedName~AlphaTests", selection.CanonicalToken);
+        Assert.Equal(["--verbosity", "minimal", "--filter", "FullyQualifiedName~AlphaTests"], check.Arguments);
+
+        fixture.Write("Beta.cs", "namespace Fixture; public class BetaTests { [Xunit.Fact] public void AlphaTests() { } }");
+        var collision = Assert.Single(fixture.Build("FullyQualifiedName~AlphaTests").FocusedEvidenceTokens);
+        Assert.Equal(selection, collision);
     }
 
     private static void AssertSelection(FocusedEvidenceMatchedClassSelection selection, string term, params string[] names)
