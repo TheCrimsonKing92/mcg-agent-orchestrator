@@ -12,6 +12,7 @@ internal static class AcceptanceGateLaneProgress
         {
             var now = DateTimeOffset.UtcNow;
             var elapsed = TimeSpan.FromMilliseconds(result.DurationMilliseconds ?? 0);
+            if (!result.TestResultIsExplicitCrossAttemptReuse) AcceptanceLaneDurationStore.RecordCheck(result.Name, result.Passed, elapsed);
             sink(new AcceptanceGateProgress(goalId?.Value, "check-complete", result.Name, null,
                 Environment.ProcessId, null, now - elapsed, now, now, elapsed, 0,
                 result.GateHeartbeatPath ?? "", Outcome: result.Passed ? "passed" : "failed",

@@ -1041,9 +1041,9 @@ public static partial class WorkerProfileDispatcher
             return;
         }
 
-        if (!inspection.IsDirty)
+        if (!inspection.IsDirty || ConductorConflictIntegrationMarker.Admits(task, workingDirectory))
         {
-            findings.Add("ok: worktree clean before dispatch");
+            findings.Add(inspection.IsDirty ? "ok: worktree holds the conductor-admitted integration merge" : "ok: worktree clean before dispatch");
             return;
         }
 
