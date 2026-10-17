@@ -71,6 +71,8 @@ internal static class OrchestratorArtifactRegistry
         Source("acceptance-lane-durations.jsonl", "Infrastructure/Workspaces/AcceptanceLaneDurationStore.cs"),
         Source("gate-lane-time.jsonl", "Infrastructure/Workspaces/GateLaneTimeLedger.cs"),
         Source("gate-lane-receipts.jsonl", "Infrastructure/Workspaces/GateLaneReceiptLedger.cs"),
+        Source("gate-lane-test-baselines.json", "Infrastructure/Workspaces/GateLaneBaselineStore.cs"),
+        Source("gate-lane-slowdowns.jsonl", "Infrastructure/Workspaces/GateLaneSlowdownDiff.cs"),
         Source("host-health.jsonl", "Infrastructure/Workspaces/GateHostHealthLedger.cs"),
         Source("lane-flakes.jsonl", "Infrastructure/Workspaces/AcceptanceLaneFlakeLedger.cs"),
         Source("remote-executor-health.jsonl", "Infrastructure/Workspaces/RemoteExecutorHealthLedger.cs"),
