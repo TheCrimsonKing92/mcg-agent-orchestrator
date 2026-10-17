@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("Warnings", "CompilerFailure", "NonDiagnosticFailure", "MultipleProjects", "LogUnavailable", "ScopeBootstrapFailure")]
+    [ValidateSet("Warnings", "CompilerFailure", "NonDiagnosticFailure", "MultipleProjects", "MultipleProjectsOneFails", "LogUnavailable", "ScopeBootstrapFailure")]
     [string]$Scenario = "Warnings"
 )
 
@@ -86,6 +86,7 @@ $originalIsolatedRoot = $env:MCG_DOTNET_ISOLATED_ROOT
 $originalScenario = $env:MCG_BUILD_FIXTURE_SCENARIO
 $originalShimLog = $env:DOTNET_SHIM_LOG
 $originalRealDotnet = $env:MCG_SCOPE_REAL_DOTNET
+$originalOmitResults = $env:MCG_BUILD_FIXTURE_OMIT_RESULTS
 # PATHEXT can resolve both a harness .cmd and dotnet.exe; delegate to the first
 # command, as normal invocation does, rather than joining both paths in one env value.
 $realDotnet = @(Get-Command dotnet -CommandType Application -ErrorAction Stop)[0].Source
@@ -126,6 +127,30 @@ switch ($env:MCG_BUILD_FIXTURE_SCENARIO) {
     }
     default {
         1..1800 | ForEach-Object { $detailedLines.Add("$project($_,1): warning FX1000: deterministic warning $warningPayload") }
+    }
+}
+
+if ([System.IO.Path]::GetExtension($project) -eq '.proj') {
+    [xml]$traversal = Get-Content -LiteralPath $project -Raw
+    $detailedLines.Clear()
+    $results = [System.Collections.Generic.List[string]]::new()
+    foreach ($item in $traversal.Project.ItemGroup.ProjectReference) {
+        $childProject = [Uri]::UnescapeDataString([string]$item.Include)
+        $order = [string]$item.Order
+        $detailedLines.Add("WorkerBuildProjectBegin:$order")
+        $failed = $env:MCG_BUILD_FIXTURE_SCENARIO -eq 'MultipleProjectsOneFails' -and [System.IO.Path]::GetFileName($childProject) -eq 'Two.csproj'
+        if ($failed) {
+            $detailedLines.Add("${childProject}(21,1): error CS0001: deterministic traversal compiler error")
+            $exitCode = 1
+        }
+        else {
+            $detailedLines.Add("${childProject}(1,1): warning FX1000: deterministic warning")
+        }
+        $results.Add("$order|$(-not $failed)")
+        $detailedLines.Add("WorkerBuildProjectEnd:$order")
+    }
+    if ($env:MCG_BUILD_FIXTURE_OMIT_RESULTS -ne '1') {
+        [System.IO.File]::WriteAllLines([Uri]::UnescapeDataString([string]$traversal.Project.PropertyGroup.WorkerBuildResultsFile), $results)
     }
 }
 
@@ -179,6 +204,7 @@ exit $LASTEXITCODE
     $env:MCG_BUILD_FIXTURE_SCENARIO = $Scenario
     $env:DOTNET_SHIM_LOG = $shimLog
     $env:MCG_SCOPE_REAL_DOTNET = $realDotnet
+    $env:MCG_BUILD_FIXTURE_OMIT_RESULTS = $null
 
     if ($Scenario -eq "LogUnavailable") {
         $fixtureGoalPrefix = if ($workDirectory -match '[\\/]\.orchestrator-worktrees[\\/](?<prefix>[^\\/]+)') {
@@ -193,7 +219,7 @@ exit $LASTEXITCODE
         Set-Content -LiteralPath (Join-Path $artifactsPath "worker-build-logs") -Value "blocks log directory creation"
     }
 
-    $projects = if ($Scenario -eq "MultipleProjects") { @($projectOne, $projectTwo) } else { @($projectOne) }
+    $projects = if ($Scenario -in @('MultipleProjects', 'MultipleProjectsOneFails')) { @($projectOne, $projectTwo) } else { @($projectOne) }
     $helperArguments = @("-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", $helperPath) + $projects
     $helper = Invoke-CapturedProcess -FileName $shellPath -ArgumentList $helperArguments -WorkingDirectory $workDirectory
     $helperText = $helper.Stdout + $helper.Stderr
@@ -243,7 +269,35 @@ exit $LASTEXITCODE
             Assert-Contract ($helperText.Contains("projects=2")) "multi-project summary omitted project count"
             $logs = @(Get-ChildItem -LiteralPath $isolatedRoot -Filter "*.log" -File -Recurse)
             Assert-Contract ($logs.Count -eq 2) "expected collision-safe logs for two projects; found $($logs.Count)"
+            Assert-Contract ($helperText.Contains('build-plan: mode=traversal projects=2')) "multi-project invocation plan missing"
+            $vectors = @(Get-Content -LiteralPath $shimLog | Where-Object { $_ -match '^build ' -and $_ -match '--nologo' })
+            Assert-Contract ($vectors.Count -eq 1) "expected one helper build vector"
+            Assert-Contract ($vectors[0].Contains('worker-build.proj') -and -not $vectors[0].Contains('One.csproj') -and -not $vectors[0].Contains('Two.csproj')) "build vector did not target the traversal"
+            $receipt = Get-Content -LiteralPath (Get-ChildItem -LiteralPath $isolatedRoot -Filter 'worker-build-receipt.json' -File -Recurse).FullName -Raw | ConvertFrom-Json
+            Assert-Contract (@($receipt.projectResults).Count -eq 2) "receipt omitted a project"
+            foreach ($result in $receipt.projectResults) {
+                Assert-Contract ($result.exitCode -eq 0 -and (Test-Path -LiteralPath $result.logPath -PathType Leaf)) "project did not retain successful evidence"
+            }
             Write-Output "PASS fixture: scenario=MultipleProjects helper_chars=$($helperText.Length) logs=$($logs.Count)"
+        }
+        "MultipleProjectsOneFails" {
+            Assert-Contract ($helper.ExitCode -eq 1) "failed traversal project produced success: $helperText"
+            Assert-Contract ($helperText -match '(?m)^FAIL build:') "failure summary missing"
+            Assert-Contract ($helperText.Contains('project: Two.csproj') -and $helperText.Contains('complete-log:') -and $helperText.Contains('02-two.log')) "Two failure custody missing"
+            Assert-Contract ($helperText.IndexOf('FAIL build:') -lt $helperText.IndexOf('project: Two.csproj') -and $helperText.IndexOf('project: Two.csproj') -lt $helperText.IndexOf('complete-log:')) "failure details preceded the failure summary"
+            Assert-Contract ($helperText.Contains("${projectTwo}(21,1): error CS0001: deterministic traversal compiler error")) "exact project error missing"
+            $receipt = Get-Content -LiteralPath (Get-ChildItem -LiteralPath $isolatedRoot -Filter 'worker-build-receipt.json' -File -Recurse).FullName -Raw | ConvertFrom-Json
+            Assert-Contract ($receipt.buildOutcome -eq 'failure' -and @($receipt.projectResults).Count -eq 2) "failure receipt incomplete"
+            Assert-Contract ($receipt.projectResults[0].project -eq 'One.csproj' -and $receipt.projectResults[1].project -eq 'Two.csproj') "project result identities changed"
+            Assert-Contract ($receipt.projectResults[0].exitCode -eq 0 -and $receipt.projectResults[1].exitCode -ne 0) "project outcomes were conflated"
+            foreach ($result in $receipt.projectResults) {
+                Assert-Contract (Test-Path -LiteralPath $result.logPath -PathType Leaf) "project diagnostic log missing"
+            }
+            $env:MCG_BUILD_FIXTURE_OMIT_RESULTS = '1'
+            $missing = Invoke-CapturedProcess -FileName $shellPath -ArgumentList $helperArguments -WorkingDirectory $workDirectory
+            $missingText = $missing.Stdout + $missing.Stderr
+            Assert-Contract ($missing.ExitCode -eq 1 -and $missingText.Contains('apparatus failure') -and -not $missingText.Contains('PASS build:')) "missing results incorrectly passed: $missingText"
+            Write-Output "PASS fixture: scenario=MultipleProjectsOneFails"
         }
         "LogUnavailable" {
             Assert-Contract ($helper.ExitCode -eq 1) "unavailable log path incorrectly produced success"
@@ -265,6 +319,7 @@ finally {
     $env:MCG_BUILD_FIXTURE_SCENARIO = $originalScenario
     $env:DOTNET_SHIM_LOG = $originalShimLog
     $env:MCG_SCOPE_REAL_DOTNET = $originalRealDotnet
+    $env:MCG_BUILD_FIXTURE_OMIT_RESULTS = $originalOmitResults
     if (Test-Path -LiteralPath $temporaryRoot) {
         Remove-Item -LiteralPath $temporaryRoot -Recurse -Force
     }
