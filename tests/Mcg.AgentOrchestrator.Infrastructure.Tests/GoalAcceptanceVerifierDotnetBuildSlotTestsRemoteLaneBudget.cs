@@ -44,8 +44,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLaneBudget :
         var lane = Assert.Single(result.Checks!.Where(check => check.Name == Lane(0)));
         Assert.False(lane.Passed);
         Assert.DoesNotContain("remote-executor=", lane.ResultSummary ?? "");
-        var phases = Assert.IsType<RemoteLanePhaseTimings>(Assert.Single(scenario.Health()
-            .Where(row => row.Outcome == RemoteLaneOutcomeCode.Unreachable)).Phases);
+        var timeoutRow = Assert.Single(scenario.Health()
+            .Where(row => row.Outcome == RemoteLaneOutcomeCode.TrxIncomplete));
+        Assert.Equal("exit=29 trx=missing", timeoutRow.Reason);
+        var phases = Assert.IsType<RemoteLanePhaseTimings>(timeoutRow.Phases);
         Assert.Equal(905, phases.RunnerSeconds);
         Assert.Equal(118.5, phases.BuildSeconds);
         Assert.Null(phases.TestSeconds);
