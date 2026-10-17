@@ -240,6 +240,118 @@ public sealed class ConductorDriverTestsPreTesterAlwaysRunGuards
         Assert.Equal(new[] { CoreSelection }.Concat(GuardSelections), scenario.Latest().Selections);
     }
 
+    [Fact]
+    public void TestChangesAppendExtraGuardAndSharedTableClassToStartedReceipt()
+    {
+        using var scenario = new Scenario();
+        scenario.Declare("ExtraNewSourceGuardTests");
+        scenario.Declare("CliServedFormsSqliteStoreEffectsTests");
+        var roles = new List<AgentRole>();
+        var launches = 0;
+        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+            Path.Combine(scenario.Root, "background-attempts"), Mcg.AgentOrchestrator.Infrastructure.TrunkBranchName.Default,
+            isProcessAlive: id => id == 7103,
+            launchOwnedProcess: _ =>
+            {
+                launches++;
+                return new ConductorParallelAcceptanceOwnedProcessLaunchResult(7103);
+            },
+            acquireStableSlotLease: (_, _) => null);
+        var driver = scenario.Driver(
+            _ => throw new Xunit.Sdk.XunitException("Background evidence must not execute inline."),
+            roles.Add, coordinator: coordinator);
+
+        driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Conservative);
+
+        var receipt = scenario.Latest();
+        Assert.Equal("started", receipt.Outcome);
+        Assert.Equal(new[] { CoreSelection }.Concat(GuardSelections).Concat(
+            ["Infrastructure.Tests:ExtraNewSourceGuardTests", "Infrastructure.Tests:CliServedFormsSqliteStoreEffectsTests"]),
+            receipt.Selections);
+        Assert.All(GuardNames.Where(name => name.EndsWith("GuardTests", StringComparison.Ordinal)),
+            name => Assert.Single(receipt.Selections, selection => selection == "Infrastructure.Tests:" + name));
+        Assert.Empty(receipt.NotRun);
+        Assert.Equal(1, launches);
+        Assert.Empty(roles);
+    }
+
+    [Fact]
+    public void SourceChangesDoNotAppendExtraGuardOrSharedTableClass()
+    {
+        using var scenario = new Scenario();
+        scenario.Declare("ExtraNewSourceGuardTests");
+        scenario.Declare("CliServedFormsSqliteStoreEffectsTests");
+        var requests = new List<string>();
+        var driver = scenario.Driver(request =>
+        {
+            requests.Add(request);
+            return scenario.Green(request);
+        }, _ => { }, changedPaths: ["src/Mcg.AgentOrchestrator.App/Orchestration/X.cs"]);
+
+        driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Conservative);
+
+        var expected = new[] { CoreSelection }.Concat(GuardSelections).ToArray();
+        Assert.Equal(expected, Selections(Assert.Single(requests)));
+        Assert.Equal(expected, scenario.Latest().Selections);
+        Assert.Equal("green", scenario.Latest().Outcome);
+    }
+
+    [Fact]
+    public void ExtraGuardFailureRetriesDeveloperWithCandidateFailureDetail()
+    {
+        using var scenario = new Scenario();
+        scenario.Declare("ExtraNewSourceGuardTests");
+        scenario.Declare("CliServedFormsSqliteStoreEffectsTests");
+        const string identity = "ExtraNewSourceGuardTests.FailsOnCandidate";
+        var trxPath = Path.Combine(scenario.Root, "extra-guard-failure.trx");
+        ConductorDriverTestsActionableRedFailureDetail.WriteFailureTrx(trxPath, identity);
+        var roles = new List<AgentRole>();
+        var feedback = new List<string>();
+        var requests = new List<string>();
+        var driver = scenario.Driver(request =>
+        {
+            requests.Add(request);
+            return CandidateOnlyRed(request, [identity], trxPath);
+        }, roles.Add, feedback.Add);
+
+        driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Conservative);
+
+        Assert.Contains("Infrastructure.Tests:ExtraNewSourceGuardTests", Selections(Assert.Single(requests)));
+        Assert.Equal("actionable-red", scenario.Latest().Outcome);
+        Assert.Equal([identity], scenario.Latest().FailingTests);
+        Assert.Equal([AgentRole.Developer], roles);
+        var message = Assert.Single(feedback);
+        Assert.StartsWith("ACTIONABLE_CANDIDATE_RED", message, StringComparison.Ordinal);
+        Assert.Contains(identity, message, StringComparison.Ordinal);
+        Assert.Contains("fatal: synthetic too big", message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void LegacyStartedReceiptExcludesNewGuardAndSharedTableSelections()
+    {
+        using var scenario = new Scenario();
+        scenario.Declare("ExtraNewSourceGuardTests");
+        scenario.Declare("CliServedFormsSqliteStoreEffectsTests");
+        scenario.RecordStarted([CoreSelection]);
+        var requests = new List<string>();
+        var roles = new List<AgentRole>();
+        var driver = scenario.Driver(request =>
+        {
+            requests.Add(request);
+            return scenario.Green(request);
+        }, roles.Add);
+
+        var exception = Record.Exception(() => driver.AdvanceOnce(scenario.Goal, ConductorAutonomyPolicy.Conservative));
+
+        Assert.Null(exception);
+        Assert.Equal([CoreSelection], Selections(Assert.Single(requests)));
+        var receipt = scenario.Latest();
+        Assert.Equal("green", receipt.Outcome);
+        Assert.Equal([CoreSelection], receipt.Selections);
+        Assert.Empty(receipt.NotRun);
+        Assert.Equal([AgentRole.Tester], roles);
+    }
+
     private static string[] Selections(string request) =>
         request.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 

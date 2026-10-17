@@ -169,7 +169,7 @@ public sealed class GroupedGateAttemptLegacyRestoreTests(ITestOutputHelper outpu
         Assert.True(fixture.Coordinator.ReservesCapacity(attempt));
         Assert.Equal(1, driver.CountLiveGroupedGateAttempts());
         Assert.Contains(fixture.Events, line => line.StartsWith("ACCEPTANCE_HOLDER_HOLD ", StringComparison.Ordinal) &&
-            line.Contains("reason=holder-lease-unavailable", StringComparison.Ordinal));
+            line.Contains("reason=lease-malformed", StringComparison.Ordinal));
         Assert.False(fixture.Lease.Observe(binding).LeaseAbsent);
     }
 

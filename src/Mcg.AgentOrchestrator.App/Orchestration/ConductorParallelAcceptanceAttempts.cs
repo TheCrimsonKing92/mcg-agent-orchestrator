@@ -558,7 +558,17 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
 
         if (current.HolderContractVersion == 1 && IsCapacityReservingAttempt(current))
         {
-            _ = HolderLease.Adopt(AcceptanceHolderBinding.For(current), _generationIdentity);
+            var binding = AcceptanceHolderBinding.For(current);
+            try
+            {
+                if (current.OwnerProcessStartedAt is { } started && current.OwnerExecutablePath is { } image)
+                    HolderLease.ValidateRecordedHolder(binding, new(current.OwnerProcessId, started, image));
+                _ = HolderLease.Adopt(binding, _generationIdentity);
+            }
+            catch (Exception ex) when (AcceptanceHolderLeaseFault.From(ex, binding) is { } fault)
+            {
+                RecordHolderHold(current, fault);
+            }
             return ConductorParallelAcceptanceAttemptDecision.Running(current);
         }
         current = ReadCanonicalAttempt(attempt.MetadataPath, attempt.GoalId);
@@ -2485,15 +2495,17 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
 
             if (current.OwnerProcessStartedAt is { } recordedStart &&
                 (current.OwnerProcessId != ownerProcessId ||
-                 identity is not null && (identity.StartedAt != recordedStart ||
-                     !string.Equals(identity.ImagePath, current.OwnerExecutablePath, StringComparison.OrdinalIgnoreCase))))
+                 identity is not null && !ProcessImageResolution.SameProcess(
+                     new SpawnProcessIdentity(current.OwnerProcessId, recordedStart, current.OwnerExecutablePath ?? string.Empty),
+                     identity)))
                 throw new InvalidOperationException("Acceptance holder identity changed while claiming the attempt.");
 
             var updated = current with
             {
                 OwnerProcessId = ownerProcessId,
                 OwnerProcessStartedAt = identity?.StartedAt ?? current.OwnerProcessStartedAt,
-                OwnerExecutablePath = identity?.ImagePath ?? current.OwnerExecutablePath,
+                OwnerExecutablePath = identity is null ? current.OwnerExecutablePath :
+                    ProcessImageResolution.PreferResolved(current.OwnerExecutablePath, identity.ImagePath),
                 LastHeartbeatAt = _utcNow()
             };
             WriteAttemptFile(updated);
@@ -2511,10 +2523,18 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
     {
         if (attempt.HolderContractVersion == 1)
         {
-            if (attempt.OwnerProcessStartedAt is { } started && attempt.OwnerExecutablePath is { } image)
-                HolderLease.ValidateRecordedHolder(AcceptanceHolderBinding.For(attempt),
-                    new(attempt.OwnerProcessId, started, image));
-            if (!HolderLease.Adopt(AcceptanceHolderBinding.For(attempt), _generationIdentity)) return null;
+            var binding = AcceptanceHolderBinding.For(attempt);
+            try
+            {
+                if (attempt.OwnerProcessStartedAt is { } started && attempt.OwnerExecutablePath is { } image)
+                    HolderLease.ValidateRecordedHolder(binding, new(attempt.OwnerProcessId, started, image));
+                if (!HolderLease.Adopt(binding, _generationIdentity)) return null;
+            }
+            catch (Exception ex) when (AcceptanceHolderLeaseFault.From(ex, binding) is { } fault)
+            {
+                RecordHolderHold(attempt, fault);
+                return null;
+            }
             // The independently locked lease is durable even while the child owns result custody.
             WriteHeartbeat(attempt, "adopted");
             return attempt;

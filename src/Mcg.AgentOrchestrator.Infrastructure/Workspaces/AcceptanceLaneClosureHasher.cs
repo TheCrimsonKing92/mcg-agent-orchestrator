@@ -12,6 +12,33 @@ internal static class AcceptanceLaneClosureHasher
     {
         try
         {
+            var members = TryComputeMembers(worktreePath, check);
+            var root = Path.GetFullPath(worktreePath);
+            if (members is null || members.Count == 0 || RunGit(root, ["status", "--porcelain", "--", .. members]) is not { } status || status.Length != 0)
+                return null;
+
+            var identities = new List<string>(members.Count);
+            foreach (var member in members)
+            {
+                var identity = RunGit(root, ["rev-parse", $"HEAD:{member}"]);
+                if (string.IsNullOrWhiteSpace(identity))
+                    return null;
+                identities.Add($"{member}:{identity.Trim().ToLowerInvariant()}");
+            }
+
+            return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join('\n', identities))))
+                .ToLowerInvariant();
+        }
+        catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException or AccessViolationException))
+        {
+            return null;
+        }
+    }
+
+    internal static IReadOnlyList<string>? TryComputeMembers(string worktreePath, AcceptanceManifestCheck check)
+    {
+        try
+        {
             if (string.IsNullOrWhiteSpace(check.Project))
                 return null;
 
@@ -77,20 +104,7 @@ internal static class AcceptanceLaneClosureHasher
             }
             foreach (var solution in Directory.EnumerateFiles(root, "*.sln", SearchOption.TopDirectoryOnly))
                 members.Add(ToGitPath(root, solution));
-            if (members.Count == 0 || RunGit(root, ["status", "--porcelain", "--", .. members]) is not { } status || status.Length != 0)
-                return null;
-
-            var identities = new List<string>(members.Count);
-            foreach (var member in members)
-            {
-                var identity = RunGit(root, ["rev-parse", $"HEAD:{member}"]);
-                if (string.IsNullOrWhiteSpace(identity))
-                    return null;
-                identities.Add($"{member}:{identity.Trim().ToLowerInvariant()}");
-            }
-
-            return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join('\n', identities))))
-                .ToLowerInvariant();
+            return members.ToArray();
         }
         catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException or AccessViolationException))
         {

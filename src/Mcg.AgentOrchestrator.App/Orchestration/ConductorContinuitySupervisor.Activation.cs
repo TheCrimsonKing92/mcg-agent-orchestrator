@@ -8,7 +8,9 @@ internal enum ConductorActivationRevertReason
 {
     SuccessorExited,
     ReadinessNeverReported,
-    TickStall
+    TickStall,
+    AdmissionCensusFailing,
+    AdmissionStalled
 }
 
 internal sealed record ConductorActivationBuild(
@@ -49,6 +51,8 @@ internal sealed partial class ConductorContinuitySupervisor
     {
         private readonly Func<DateTimeOffset> _utcNow;
         private readonly object _gate = new();
+        private readonly ActivationAdmissionHealthTracker _admissionHealth = new();
+        private bool _admissionHealthyAtLastTick = true;
         private bool _started;
         private int _ticks;
         private int? _lastTick;
@@ -88,11 +92,18 @@ internal sealed partial class ConductorContinuitySupervisor
                     _lastTick = int.TryParse(tickText, NumberStyles.Integer,
                         CultureInfo.InvariantCulture, out var tick) ? tick : null;
                     _lastTickEndAt = _utcNow();
+                    _admissionHealthyAtLastTick = _admissionHealth.Verdict.State == ActivationAdmissionHealthState.Healthy;
                 }
                 else if (_started && line.StartsWith("LOOP_RELAUNCH_DRAIN ", StringComparison.Ordinal))
                 {
                     _lastDrainAt = _utcNow();
                     return;
+                }
+                else if (_started && ActivationAdmissionSample.TryParse(line, out var sample))
+                {
+                    var wasTripped = _admissionHealth.Verdict.State == ActivationAdmissionHealthState.Tripped;
+                    var verdict = _admissionHealth.Observe(sample, _utcNow());
+                    if (wasTripped || verdict.State != ActivationAdmissionHealthState.Tripped) return;
                 }
                 else if (_started || _loopReadyAt is null || !nonBlank)
                 {
@@ -105,11 +116,12 @@ internal sealed partial class ConductorContinuitySupervisor
             }
         }
 
-        internal (bool Started, int Ticks, Task Changed) Snapshot()
+        internal (bool Started, int Ticks, Task Changed, ActivationAdmissionHealthVerdict AdmissionHealth,
+            bool AdmissionHealthyAtLastTick) Snapshot()
         {
             lock (_gate)
             {
-                return (_started, _ticks, _changed.Task);
+                return (_started, _ticks, _changed.Task, _admissionHealth.Verdict, _admissionHealthyAtLastTick);
             }
         }
 
@@ -173,6 +185,7 @@ internal sealed partial class ConductorContinuitySupervisor
         string artifactPath,
         CancellationTokenSource processCts,
         TimeSpan tickGapTimeout,
+        bool checkAdmissionHealth,
         CancellationToken cancellationToken)
     {
         TimeSpan? drainWait = null;
@@ -180,7 +193,16 @@ internal sealed partial class ConductorContinuitySupervisor
         {
             cancellationToken.ThrowIfCancellationRequested();
             var snapshot = monitor.Snapshot();
-            if (snapshot.Ticks >= _activationHealthyTicks)
+            var health = snapshot.AdmissionHealth;
+            if (checkAdmissionHealth && health.State == ActivationAdmissionHealthState.Tripped)
+            {
+                processCts.Cancel();
+                var admissionStopped = await ObserveStoppedSuccessor(runTask).ConfigureAwait(false);
+                return new(false, health.Reason, health.Detail, admissionStopped, admissionStopped?.TerminationConfirmed == true);
+            }
+            if (snapshot.Ticks >= _activationHealthyTicks &&
+                (!checkAdmissionHealth || (health.State == ActivationAdmissionHealthState.Healthy &&
+                    snapshot.AdmissionHealthyAtLastTick)))
             {
                 return new(true, null, $"healthyTicks={snapshot.Ticks}", null, true);
             }
