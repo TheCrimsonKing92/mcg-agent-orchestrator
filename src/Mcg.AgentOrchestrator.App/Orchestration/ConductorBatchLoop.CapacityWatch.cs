@@ -9,6 +9,7 @@ internal sealed partial class ConductorBatchLoop
     private readonly record struct RunningDispatchIdentity(string GoalId, string TaskId, int ProcessId);
 
     private readonly HashSet<GoalId> _capacityHeldThisTick = [];
+    private readonly GoalPriorityStarvationGuard _priorityStarvationGuard = new();
     private DateTimeOffset? _capacityObservedAt;
     private HashSet<RunningDispatchIdentity>? _capacityWatchSet;
     private DateTimeOffset _capacityWatchSince;
@@ -50,6 +51,7 @@ internal sealed partial class ConductorBatchLoop
         TimeSpan stallThreshold,
         ConductEventLogWriter? conductEventLogWriter = null)
     {
+        _priorityStarvationGuard.ObserveDispatchTick(_capacityHeldThisTick, kernel, line => EmitProgress(line));
         var heldCount = _capacityHeldThisTick.Count;
         var observedAt = _capacityObservedAt;
         _capacityHeldThisTick.Clear();

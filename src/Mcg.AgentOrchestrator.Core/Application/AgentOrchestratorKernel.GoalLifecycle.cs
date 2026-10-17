@@ -2567,7 +2567,7 @@ public sealed partial class AgentOrchestratorKernel
     {
         var goal = GetGoal(goalId);
         var previous = goal.Priority;
-        goal.SetPriority(priority);
+        GoalEffectivePriorityIndex.SetOwnPriority(_goals.Values, goal, priority);
         Append(goal, null, ProgressKind.GoalPolicyDecision,
             $"Goal priority set: previous={GoalPriorities.Format(previous)} new={GoalPriorities.Format(priority)} actor={actor} reason={(string.IsNullOrEmpty(rationale) ? "(no reason given)" : rationale)}");
         return previous;
