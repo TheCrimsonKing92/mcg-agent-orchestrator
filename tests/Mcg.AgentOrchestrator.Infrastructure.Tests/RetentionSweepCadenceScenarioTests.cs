@@ -20,7 +20,9 @@ public sealed class RetentionSweepCadenceScenarioTests
         var paths = ids.Select((id, index) =>
             RetentionSweepPassCostTests.CreateCandidates(fixture, id, counts[index])).ToArray();
         await repository.SaveGoalSnapshotsAsync(ids.Select(id =>
-            new GoalSnapshot(id, "retention scenario", GoalStatus.Completed, [], [])).ToArray(),
+            new GoalSnapshot(id, "retention scenario", GoalStatus.Completed,
+                [new TaskSnapshot(TaskId.New().Value, "Completed retention scenario", AgentRole.Developer,
+                    WorkTaskStatus.Completed, null, null, null, null, null, null)], [])).ToArray(),
             Xunit.TestContext.Current.CancellationToken);
         var store = new SqliteRunEventStore(workspace.RunEventStorePath);
         var clock = RetentionReclaimFixture.Now;
