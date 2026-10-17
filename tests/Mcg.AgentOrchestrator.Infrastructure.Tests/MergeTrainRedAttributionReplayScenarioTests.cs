@@ -127,7 +127,174 @@ public sealed class MergeTrainRedAttributionReplayScenarioTests : AcceptanceCoho
         });
     }
 
-    private void WithTrain(int count, bool shared, bool ownership, Action<Scenario> assert)
+    [Theory]
+    [InlineData(2)]
+    [InlineData(3)]
+    public void ReadOnlyChild_ParentCheckpointsFailureBeforeNextSelection(int count)
+    {
+        WithTrain(count, shared: false, ownership: false, scenario =>
+        {
+            var repository = new SqliteOrchestratorStateRepository(
+                OrchestratorWorkspace.ForDirectory(scenario.Repo).SqliteStatePath);
+            var before = repository.LoadAsync().GetAwaiter().GetResult();
+            Assert.All(before.Goals, goal => Assert.Equal(GoalStatus.Verified, goal.Status));
+            Assert.All(scenario.Goals, goal => Assert.Equal(GoalStatus.Verified, goal.Status));
+            Assert.Equal(GoalStatus.AcceptanceFailed, scenario.ChildKernel!.GetGoal(scenario.Goals[0].Id).Status);
+            Assert.Equal(MergeTrainEjectionReason.RedAttributedMember, Assert.Single(scenario.Result.Ejections).Reason);
+            var changed = new HashSet<GoalId>();
+            var remaining = MergeTrainAttributedFailureReconciliation.PrepareAdmission(scenario.Driver,
+                scenario.Goals, ConductorAutonomyPolicy.Permissive, changed);
+            Assert.Equal(scenario.Goals[0].Id, Assert.Single(changed));
+            Assert.Equal(scenario.Goals.Skip(1).Select(goal => goal.Id), remaining.Select(goal => goal.Id));
+            repository.SaveGoalSnapshotsAsync(scenario.Kernel.ExportSnapshot().Goals
+                .Where(goal => changed.Contains(new GoalId(goal.Id))).ToArray()).GetAwaiter().GetResult();
+            var persisted = repository.LoadAsync().GetAwaiter().GetResult();
+            var culprit = persisted.GetGoal(scenario.Goals[0].Id);
+            Assert.Equal(GoalStatus.AcceptanceFailed, culprit.Status);
+            Assert.Equal(new[] { Alpha, Zebra }, culprit.LatestAcceptanceFailure!.FailedChecks);
+            Assert.Equal(scenario.Selection.Members[0].CandidateRevision, culprit.LatestAcceptanceFailure.BranchHeadSha);
+            Assert.All(scenario.Goals.Skip(1), goal =>
+            {
+                Assert.Equal(GoalStatus.Verified, persisted.GetGoal(goal.Id).Status);
+                Assert.Null(persisted.GetGoal(goal.Id).LatestAcceptanceFailure);
+            });
+            var failure = scenario.Goals[0].LatestAcceptanceFailure;
+            Assert.Empty(scenario.Driver.ReconcileAttributedTrainFailures(ConductorAutonomyPolicy.Permissive));
+            Assert.Same(failure, scenario.Goals[0].LatestAcceptanceFailure);
+            AssertNextSelectionExcludesCulprit(scenario);
+            AssertPersistedEjection(scenario, culprit.Id, "RedAttributedMember");
+
+            scenario.Kernel.RetryAcceptanceGate(culprit.Id, "Recheck the same candidate");
+            repository.SaveAsync(scenario.Kernel).GetAwaiter().GetResult();
+            var restarted = repository.LoadAsync().GetAwaiter().GetResult();
+            var restartedDriver = new ConductorDriver(restarted, OrchestratorWorkspace.ForDirectory(scenario.Repo),
+                new SequenceAcceptanceVerifier([]), AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(),
+                cleanupHooks: CreateIsolatedCleanupContext(scenario.Repo).Hooks);
+            var retryProjection = Assert.IsType<GateReadyCandidateProjectionResult.Ready>(
+                restartedDriver.ProjectGateReadyCandidate(restarted.GetGoal(culprit.Id), ConductorAutonomyPolicy.Permissive));
+            Assert.Equal(scenario.Selection.Members[0].CandidateRevision, retryProjection.Projection.CandidateRevision);
+            Assert.Empty(restartedDriver.ReconcileAttributedTrainFailures(ConductorAutonomyPolicy.Permissive));
+            Assert.Equal(GoalStatus.Verified, restarted.GetGoal(culprit.Id).Status);
+            Assert.Null(restarted.GetGoal(culprit.Id).LatestAcceptanceFailure);
+        }, readOnlyChild: true);
+    }
+
+    [Fact]
+    public void ReadOnlyChild_LandedRemainderStillFailsCulprit()
+    {
+        WithTrain(3, shared: false, ownership: false, scenario =>
+        {
+            Assert.Equal(MergeTrainGateOutcome.Passed, scenario.Result.Receipt!.Outcome);
+            Assert.All(scenario.Goals.Skip(1), goal =>
+                Assert.Equal(GoalStatus.Completed, scenario.ChildKernel!.GetGoal(goal.Id).Status));
+            var projection = Assert.IsType<GateReadyCandidateProjectionResult.Ready>(
+                scenario.Driver.ProjectGateReadyCandidate(scenario.Goals[0], ConductorAutonomyPolicy.Permissive));
+            Assert.NotEqual(scenario.Selection.Members[0].MainRevision, projection.Projection.MainRevision);
+            Assert.Equal(scenario.Selection.Members[0].CandidateRevision, projection.Projection.CandidateRevision);
+            var checkpoints = new HashSet<GoalId>();
+            var lines = new List<string>();
+            MergeTrainAttributedFailureReconciliation.PrepareAdmission(scenario.Driver,
+                scenario.Goals, ConductorAutonomyPolicy.Permissive, checkpoints, lines);
+            Assert.Equal(scenario.Goals[0].Id, Assert.Single(checkpoints));
+            Assert.Contains("TRAIN_FAILURE_RECONCILED", Assert.Single(lines));
+            var repository = new SqliteOrchestratorStateRepository(
+                OrchestratorWorkspace.ForDirectory(scenario.Repo).SqliteStatePath);
+            repository.SaveGoalSnapshotsAsync(scenario.Kernel.ExportSnapshot().Goals
+                .Where(goal => checkpoints.Contains(new GoalId(goal.Id))).ToArray()).GetAwaiter().GetResult();
+            Assert.Equal(GoalStatus.AcceptanceFailed, repository.LoadAsync().GetAwaiter().GetResult()
+                .GetGoal(scenario.Goals[0].Id).Status);
+        }, readOnlyChild: true, gateOnly: false);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ReadOnlyChild_LaterFaultRetainsEarlierCheckpoint(bool mutationFault)
+    {
+        WithTrain(3, shared: false, ownership: false, scenario =>
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(scenario.Repo);
+            var store = new MergeTrainAcceptanceStore(Path.Combine(workspace.OrchestratorDirectory, "merge-train-acceptance.db"));
+            var red = store.ReadReceiptsSince(DateTimeOffset.MinValue).Single(receipt => receipt.Outcome == MergeTrainGateOutcome.Failed);
+            var later = scenario.Goals[1];
+            store.RecordTrainImplicatedCandidate(later.Id, scenario.Selection.Members[1].CandidateRevision,
+                red.Identity.Value, red.Identity.ObservedMainRevision);
+            store.RecordEjections("later-member", [new MergeTrainEjection(later.Id,
+                MergeTrainEjectionReason.RedAttributedMember, [], $"Dropped after RED receipt {red.ReceiptId}.")]);
+            var checkpoints = new HashSet<GoalId>();
+            var projected = new List<GoalId>();
+            IReadOnlySet<GoalId> Reconcile() => MergeTrainAttributedFailureReconciliation.Reconcile(
+                workspace, scenario.Kernel, store, goal =>
+                {
+                    projected.Add(goal.Id);
+                    if (!mutationFault && goal.Id == later.Id) throw new IOException("unreadable later candidate");
+                    return scenario.Driver.ProjectGateReadyCandidate(goal, ConductorAutonomyPolicy.Permissive);
+                }, (goal, checks, branch, main, attributions, baseline) =>
+                {
+                    if (mutationFault && goal.Id == later.Id) throw new InvalidOperationException("failure recording stopped");
+                    scenario.Kernel.RecordAcceptanceFailure(goal.Id, checks, branch, main, attributions, baseline);
+                }, checkpoints);
+            if (mutationFault)
+                Assert.Equal("failure recording stopped", Assert.Throws<InvalidOperationException>(() => Reconcile()).Message);
+            else
+                Assert.Equal(scenario.Goals[0].Id, Assert.Single(Reconcile()));
+            Assert.Equal(scenario.Goals.Take(2).Select(goal => goal.Id), projected);
+            Assert.Contains(scenario.Goals[0].Id, checkpoints);
+            Assert.Equal(GoalStatus.AcceptanceFailed, scenario.Goals[0].Status);
+            Assert.Equal(GoalStatus.Verified, later.Status);
+            if (!mutationFault)
+            {
+                Assert.Contains(later.Id, checkpoints);
+                Assert.Contains(later.Timeline, record => record.Message.Contains("TRAIN_FAILURE_RECONCILIATION_ERROR"));
+            }
+            var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            repository.SaveGoalSnapshotsAsync(scenario.Kernel.ExportSnapshot().Goals
+                .Where(goal => checkpoints.Contains(new GoalId(goal.Id))).ToArray()).GetAwaiter().GetResult();
+            Assert.Equal(GoalStatus.AcceptanceFailed, repository.LoadAsync().GetAwaiter().GetResult()
+                .GetGoal(scenario.Goals[0].Id).Status);
+        }, readOnlyChild: true);
+    }
+
+    [Fact]
+    public void ReadOnlyChild_NewCandidateRevisionDoesNotInheritFailure()
+    {
+        WithTrain(3, shared: false, ownership: false, scenario =>
+        {
+            CreateWorktreeCandidate(scenario.Repo, scenario.Goals[0].Id, Fixture.Source,
+                "public class ChangedSource { public bool Revised => true; }");
+            var projection = Assert.IsType<GateReadyCandidateProjectionResult.Ready>(
+                scenario.Driver.ProjectGateReadyCandidate(scenario.Goals[0], ConductorAutonomyPolicy.Permissive));
+            Assert.NotEqual(scenario.Selection.Members[0].CandidateRevision, projection.Projection.CandidateRevision);
+            Assert.Empty(scenario.Driver.ReconcileAttributedTrainFailures(ConductorAutonomyPolicy.Permissive));
+            Assert.All(scenario.Goals, goal =>
+            {
+                Assert.Equal(GoalStatus.Verified, goal.Status);
+                Assert.Null(goal.LatestAcceptanceFailure);
+            });
+        }, readOnlyChild: true);
+    }
+
+    [Theory]
+    [InlineData(2)]
+    [InlineData(3)]
+    public void ReadOnlyChild_SharedReachDoesNotFailParentGoals(int count)
+    {
+        WithTrain(count, shared: true, ownership: false, scenario =>
+        {
+            Assert.Equal(count == 3 ? 1 : 0, scenario.Result.Ejections.Count);
+            Assert.All(scenario.Result.Ejections, ejection =>
+                Assert.Equal(MergeTrainEjectionReason.RedNewestMember, ejection.Reason));
+            Assert.Empty(scenario.Driver.ReconcileAttributedTrainFailures(ConductorAutonomyPolicy.Permissive));
+            Assert.All(scenario.Goals, goal =>
+            {
+                Assert.Equal(GoalStatus.Verified, goal.Status);
+                Assert.Null(goal.LatestAcceptanceFailure);
+            });
+        }, readOnlyChild: true);
+    }
+
+    private void WithTrain(int count, bool shared, bool ownership, Action<Scenario> assert,
+        bool readOnlyChild = false, bool gateOnly = true)
     {
         var repo = CreateReducedAcceptanceCohortRepository();
         var cleanup = CreateIsolatedCleanupContext(repo);
@@ -192,8 +359,21 @@ public sealed class MergeTrainRedAttributionReplayScenarioTests : AcceptanceCoho
                 Assert.Null(MergeTrainRedAttribution.TryAttribute(paths, memberTree, members, out _));
                 Assert.Null(MergeTrainImpactAttribution.TryAttribute(paths, memberTree, members, out _));
             }
-            var result = driver.RunMergeTrain(selection, goals, ConductorAutonomyPolicy.Permissive, gateOnly: true);
-            assert(new Scenario(repo, driver, selection, goals, result, verifier));
+            AgentOrchestratorKernel? childKernel = null;
+            var executingDriver = driver;
+            var executingGoals = goals;
+            if (readOnlyChild)
+            {
+                var workspace = OrchestratorWorkspace.ForDirectory(repo);
+                new SqliteOrchestratorStateRepository(workspace.SqliteStatePath).SaveAsync(kernel).GetAwaiter().GetResult();
+                childKernel = SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath)
+                    .LoadGoalsAsync(goals.Select(goal => goal.Id).ToArray()).GetAwaiter().GetResult();
+                executingGoals = goals.Select(goal => childKernel.GetGoal(goal.Id)).ToArray();
+                executingDriver = new ConductorDriver(childKernel, workspace, verifier,
+                    AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(), cleanupHooks: cleanup.Hooks);
+            }
+            var result = executingDriver.RunMergeTrain(selection, executingGoals, ConductorAutonomyPolicy.Permissive, gateOnly: gateOnly);
+            assert(new Scenario(repo, driver, selection, goals, result, verifier, kernel, childKernel));
         }
         finally { DeleteDirectory(repo); }
     }
@@ -208,15 +388,21 @@ public sealed class MergeTrainRedAttributionReplayScenarioTests : AcceptanceCoho
     {
         var candidates = scenario.Selection.Members.Select(projection => new ConductorSpeculativeAcceptanceCandidate(
             projection.GoalId, new GateReadyCandidateProjectionResult.Ready(projection))).ToArray();
-        var partnerProjection = new GateReadyCandidateProjection(new GoalId(new string('f', 32)), GoalLifecycleState.Verified,
-            GateReadyVerificationState.Satisfied, ChangeRiskTier.Behavior, ConductorTransitionDecision.Auto,
-            ["src/Partner.cs"], ["partner:f"], new GateReadyMergeEvidence(new string('f', 40),
-                scenario.Selection.Members[0].MainRevision, GateReadyMergeStatus.Clean, GateReadyMergeReason.NoConflictsDetected));
-        var partner = new ConductorSpeculativeAcceptanceCandidate(partnerProjection.GoalId,
-            new GateReadyCandidateProjectionResult.Ready(partnerProjection));
-        var next = ConductorMergeTrainSelector.Select([.. candidates, partner],
+        var partners = Enumerable.Range(0, 4 - scenario.Goals.Length).Select(index =>
+        {
+            var id = (char)('f' - index);
+            var projection = new GateReadyCandidateProjection(new GoalId(new string(id, 32)), GoalLifecycleState.Verified,
+                GateReadyVerificationState.Satisfied, ChangeRiskTier.Behavior, ConductorTransitionDecision.Auto,
+                [$"src/Partner{id}.cs"], [$"partner:{id}"], new GateReadyMergeEvidence(new string(id, 40),
+                    scenario.Selection.Members[0].MainRevision, GateReadyMergeStatus.Clean, GateReadyMergeReason.NoConflictsDetected));
+            return new ConductorSpeculativeAcceptanceCandidate(projection.GoalId,
+                new GateReadyCandidateProjectionResult.Ready(projection));
+        }).ToArray();
+        var next = ConductorMergeTrainSelector.Select([.. candidates, .. partners],
             trainImplicatedMemberKeys: scenario.Driver.ReadTrainImplicatedMemberKeys());
-        Assert.Equal(new[] { scenario.Goals[1].Id, scenario.Goals[2].Id, partner.GoalId }, next!.Members.Select(member => member.GoalId));
+        Assert.NotNull(next);
+        Assert.Equal(scenario.Goals.Skip(1).Select(goal => goal.Id).Concat(partners.Select(partner => partner.GoalId)),
+            next.Members.Select(member => member.GoalId));
     }
 
     private static void AssertPairSuppressed(Scenario scenario)
@@ -254,5 +440,6 @@ public sealed class MergeTrainRedAttributionReplayScenarioTests : AcceptanceCoho
     }
 
     private sealed record Scenario(string Repo, ConductorDriver Driver, ConductorMergeTrainSelection Selection,
-        Goal[] Goals, ConductorMergeTrainRunResult Result, SequenceAcceptanceVerifier Verifier);
+        Goal[] Goals, ConductorMergeTrainRunResult Result, SequenceAcceptanceVerifier Verifier,
+        AgentOrchestratorKernel Kernel, AgentOrchestratorKernel? ChildKernel);
 }

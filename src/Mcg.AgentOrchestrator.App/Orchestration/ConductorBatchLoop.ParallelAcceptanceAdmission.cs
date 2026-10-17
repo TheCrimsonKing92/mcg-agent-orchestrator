@@ -268,6 +268,8 @@ internal sealed partial class ConductorBatchLoop
         Func<bool> suppressNewAcceptanceAdmission)
     {
         state.OrderedEligible = ConductorAcceptanceCohortTerminalReceiptConsumption.PrepareAdmission(driver, state.OrderedEligible, changedGoalIds, tick, changedGoalLines);
+        // Reconcile child ejections before projections or implication-key exclusions can hide them.
+        state.OrderedEligible = MergeTrainAttributedFailureReconciliation.PrepareAdmission(driver, state.OrderedEligible, policy, changedGoalIds, changedGoalLines);
         var speculativeCandidates = state.OrderedEligible.Select(goal => new ConductorSpeculativeAcceptanceCandidate(
             goal.Id, driver.ProjectGroupedAdmissionCandidate(goal, policy, kernel))).ToArray();
         state.ActiveCohortCapacity = driver.GetActiveAcceptanceCohortCapacity();
@@ -372,9 +374,7 @@ internal sealed partial class ConductorBatchLoop
                 onGateAdmitted: () => driver.RecordMergeTrainAdmissionFairness(trainSelection),
                 runGateInBackground: true);
             foreach (var member in trainRun.MemberResults)
-            {
                 state.Results[member.Key] = new ParallelLandingOutcome(member.Value, SlotIndex: 0);
-            }
             RecordParallelAcceptanceProgress(
                 $"ACCEPTANCE_TRAIN tick={tick} members={string.Join(',', trainSelection.Members.Select(member => member.GoalId.Value[..8]))} " +
                 $"ejected={string.Join(',', trainRun.Ejections.Select(ejection => ejection.GoalId.Value[..8]))} {trainRun.Detail}",

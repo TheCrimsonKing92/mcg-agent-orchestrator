@@ -24,6 +24,10 @@ internal sealed partial class ConductorDriver
           _cohortAcceptanceVerifier is not null &&
           _mergeTrainAcceptanceStore is not null));
 
+    internal IReadOnlySet<GoalId> ReconcileAttributedTrainFailures(ConductorAutonomyPolicy policy, ISet<GoalId>? checkpointGoalIds = null) =>
+        MergeTrainAttributedFailureReconciliation.Reconcile(_cohortWorkspace, _cohortKernel, _mergeTrainAcceptanceStore,
+            goal => ProjectGateReadyCandidate(goal, policy), _recordAcceptanceFailure, checkpointGoalIds);
+
     internal ConductorMergeTrainRunResult RunMergeTrain(
         ConductorMergeTrainSelection selection,
         IReadOnlyList<Goal> orderedGoals,
@@ -38,24 +42,14 @@ internal sealed partial class ConductorDriver
         ArgumentNullException.ThrowIfNull(selection);
         ArgumentNullException.ThrowIfNull(orderedGoals);
         if (_runMergeTrainOverride is not null)
-        {
             return _runMergeTrainOverride(selection, orderedGoals, policy);
-        }
         if (_cohortKernel is null || _cohortWorkspace is null ||
             _cohortAcceptanceVerifier is null || _mergeTrainAcceptanceStore is null)
-        {
             throw new InvalidOperationException("Production merge train dependencies are unavailable.");
-        }
-
         var goalsById = orderedGoals.ToDictionary(goal => goal.Id);
         foreach (var member in selection.Members)
-        {
             if (!goalsById.ContainsKey(member.GoalId))
-            {
-                throw new InvalidOperationException(
-                    $"Selected merge train goal {member.GoalId.Value} is not in the current Ready batch.");
-            }
-        }
+                throw new InvalidOperationException($"Selected merge train goal {member.GoalId.Value} is not in the current Ready batch.");
         var originalBindings = selection.BindMembers();
         var attemptId = $"merge-train-attempt-{Guid.NewGuid():N}";
         var allEjections = new List<MergeTrainEjection>();
