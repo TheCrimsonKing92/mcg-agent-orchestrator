@@ -31,7 +31,7 @@ public static partial class GoalWorktrees
         return true;
     }
 
-    private static bool HasMergeCommitsOutsideBase(string executionDirectory, string baseHead, string branchHead) =>
+    internal static bool HasMergeCommitsOutsideBase(string executionDirectory, string baseHead, string branchHead) =>
         TryReadGit(executionDirectory, ["rev-list", "--merges", "--count", $"{baseHead}..{branchHead}"], out var output) &&
         int.TryParse(output, NumberStyles.None, CultureInfo.InvariantCulture, out var count) && count > 0;
 
