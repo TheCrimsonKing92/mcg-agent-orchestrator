@@ -46,7 +46,7 @@ public sealed class MergeTrainMainIntegrationScenarioTests : AcceptanceCohortWor
             stop: _ => { stops++; return true; }, eventSink: events.Add,
             holderLease: lease, generationIdentity: generation);
         var driver = scenario.Driver(first);
-        var selection = ProjectTrainSelection(driver, scenario.Goals);
+        var selection = scenario.Selection(driver);
 
         var result = Run(driver, selection, scenario.Goals);
 
@@ -73,7 +73,7 @@ public sealed class MergeTrainMainIntegrationScenarioTests : AcceptanceCohortWor
             holderLease: lease, generationIdentity: successorGeneration);
         Assert.False(successor.LaunchedByThisInstance(attempt));
         var successorDriver = scenario.Driver(successor);
-        var successorSelection = ProjectTrainSelection(successorDriver, scenario.Goals);
+        var successorSelection = scenario.Selection(successorDriver);
 
         var successorResult = Run(successorDriver, successorSelection, scenario.Goals);
 
@@ -108,6 +108,7 @@ public sealed class MergeTrainMainIntegrationScenarioTests : AcceptanceCohortWor
         private readonly AgentOrchestratorKernel _kernel;
         private readonly OrchestratorWorkspace _workspace;
         private readonly GoalWorktreeCleanupHooks _cleanup;
+        private readonly Goal _selectionOnlyGoal;
         internal Goal[] Goals { get; }
         internal string AttemptRoot => Path.Combine(_workspace.OrchestratorDirectory, "grouped-gate-attempts");
         private string DatabasePath => Path.Combine(_workspace.OrchestratorDirectory, "merge-train-acceptance.db");
@@ -126,6 +127,7 @@ public sealed class MergeTrainMainIntegrationScenarioTests : AcceptanceCohortWor
                 _kernel = new AgentOrchestratorKernel();
                 Goals = [CreateCompletedGoal(_kernel, "Integrated member B", _repo),
                     CreateCompletedGoal(_kernel, "Unrelated member C", _repo)];
+                _selectionOnlyGoal = CreateCompletedGoal(_kernel, "Selection-only member", _repo);
                 _ = CreateWorktreeCandidate(_repo, Goals[0].Id, SharedPath, "// member B\n");
                 var landed = GoalId.New();
                 _ = CreateWorktreeCandidate(_repo, landed, SharedPath, "// landed A\n");
@@ -142,14 +144,17 @@ public sealed class MergeTrainMainIntegrationScenarioTests : AcceptanceCohortWor
                 {
                     RunGitOutput(memberWorktree, "rev-parse", "HEAD"),
                     CreateWorktreeCandidate(_repo, Goals[1].Id,
-                        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Other.cs", "// member C\n")
+                        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Other.cs", "// member C\n"),
+                    CreateWorktreeCandidate(_repo, _selectionOnlyGoal.Id,
+                        "tests/Mcg.AgentOrchestrator.Dashboard.Tests/SelectionOnly.cs", "// selection only\n")
                 };
-                for (var index = 0; index < Goals.Length; index++)
+                var selectionGoals = Goals.Append(_selectionOnlyGoal).ToArray();
+                for (var index = 0; index < selectionGoals.Length; index++)
                 {
-                    _kernel.RecordGoalRefinement(Goals[index].Id, new RefinedSpec(Goals[index].Objective,
+                    _kernel.RecordGoalRefinement(selectionGoals[index].Id, new RefinedSpec(selectionGoals[index].Objective,
                         ["The acceptance gate passes"], VerificationClass.TestVerifiable, [], [])
                         { AcceptanceGateOwnedAcceptanceCriteria = ["The acceptance gate passes"] });
-                    _kernel.MapCriterionEvidenceOwner(Goals[index].Id, 0, 1,
+                    _kernel.MapCriterionEvidenceOwner(selectionGoals[index].Id, 0, 1,
                         CriterionEvidenceOwner.Acceptance, "test",
                         CriterionEvidenceScopes.FullAcceptanceGate, expectedCandidateSha: revisions[index]);
                 }
@@ -165,6 +170,17 @@ public sealed class MergeTrainMainIntegrationScenarioTests : AcceptanceCohortWor
                 AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(), cleanupHooks: _cleanup);
             driver.EnableOwnedGroupedGateAttempts(coordinator);
             return driver;
+        }
+
+        internal ConductorMergeTrainSelection Selection(ConductorDriver driver)
+        {
+            // Selection starts at three; this scenario exercises the supported two-member composition.
+            var selected = ProjectTrainSelection(driver, [.. Goals, _selectionOnlyGoal]);
+            Assert.Equal(3, selected.Members.Count);
+            Assert.Contains(selected.Members, member => member.GoalId == _selectionOnlyGoal.Id);
+            var members = selected.Members.Where(member => member.GoalId != _selectionOnlyGoal.Id).ToArray();
+            Assert.Equal(Goals.Select(goal => goal.Id), members.Select(member => member.GoalId));
+            return new ConductorMergeTrainSelection(members);
         }
 
         internal (bool Known, string? Difference) Inspect(ConductorGroupedGateAttempt attempt,
