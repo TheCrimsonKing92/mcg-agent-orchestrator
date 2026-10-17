@@ -103,6 +103,19 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsSourceRevertedDecl
     }
 
     [Fact]
+    public async Task SourceRevert_UnknownBareClass_RejectsWithoutLaunching()
+    {
+        using var fixture = new Probe();
+        var calls = 0;
+        var verifier = CreateVerifier(fixture, "NoSuchProbeTests.Missing", _ => { }, () => calls++);
+        var result = await fixture.RunAsync(verifier, "NoSuchProbeTests", [Probe.Legacy], Probe.Declared);
+        Assert.False(result.Accepted);
+        Assert.Equal(FocusedEvidenceRejectionCode.UnresolvableSelection, result.Rejection!.Code);
+        Assert.Empty(result.Checks);
+        Assert.Equal(0, calls);
+    }
+
+    [Fact]
     public async Task DeclaredSupportMutation_LeavesOtherCandidateBytesIntact()
     {
         using var fixture = new Probe();

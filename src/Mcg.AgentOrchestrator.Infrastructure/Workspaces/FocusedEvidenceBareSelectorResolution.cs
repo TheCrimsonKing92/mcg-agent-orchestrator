@@ -13,7 +13,8 @@ internal static class FocusedEvidenceBareSelectorResolution
         string originalToken,
         string value,
         out FocusedEvidenceFilterToken selection,
-        out FocusedEvidenceRejection rejection)
+        out FocusedEvidenceRejection rejection,
+        Func<bool>? isMergeBaseClass = null)
     {
         selection = new FocusedEvidenceFilterToken(
             originalToken, $"FullyQualifiedName~{value}", FocusedEvidenceTokenKind.Class, value, value);
@@ -71,6 +72,12 @@ internal static class FocusedEvidenceBareSelectorResolution
             return true;
         }
 
+        // Keep historical declarations visible to the source-revert selected-class guard.
+        if (isMergeBaseClass?.Invoke() == true)
+        {
+            return true;
+        }
+
         if (owners.Count == 1)
         {
             var owner = owners.Single().Value;
@@ -87,6 +94,31 @@ internal static class FocusedEvidenceBareSelectorResolution
             owners.Count == 0
                 ? $"focused evidence selection '{originalToken}' does not resolve to a class or method in {GoalAcceptanceVerifier.ProjectLabel(project)}"
                 : $"focused evidence selection '{originalToken}' is ambiguous in {GoalAcceptanceVerifier.ProjectLabel(project)}; candidates: {string.Join(", ", owners.Keys)}");
+        return false;
+    }
+
+    internal static bool IsMergeBaseClass(string worktreePath, string? mergeBase, string project, string value)
+    {
+        if (mergeBase is null) return false;
+        var projectDirectory = project.Replace('\\', '/');
+        projectDirectory = projectDirectory[..projectDirectory.LastIndexOf('/')];
+        var matches = GitCli.Run(worktreePath, "grep", "-l", "-z", "-F", "-e", value,
+            mergeBase, "--", projectDirectory);
+        if (matches.DrainTimedOut || (!matches.Succeeded && matches.ExitCode != 1))
+            throw new IOException("Merge-base focused evidence declarations could not be discovered.");
+        foreach (var entry in matches.Output.Split('\0', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var path = entry[(entry.IndexOf(':') + 1)..];
+            if (!path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) ||
+                path.Split('/').Any(part => part is "bin" or "obj")) continue;
+            var source = GitCli.Run(worktreePath, "show", entry);
+            if (!source.Succeeded || source.DrainTimedOut)
+                throw new IOException("Merge-base focused evidence declaration could not be read.");
+            if (CSharpSyntaxTree.ParseText(source.Output, path: path).GetCompilationUnitRoot()
+                .DescendantNodes().OfType<TypeDeclarationSyntax>()
+                .Any(type => type.Identifier.ValueText.Contains(value, StringComparison.Ordinal)))
+                return true;
+        }
         return false;
     }
 }
