@@ -234,6 +234,7 @@ internal static partial class StorageRetentionMaintenance
                     mtpUnattributedReclaimsPerSweepForTests ?? MtpUnattributedReclaimsPerSweep,
                     mtpProcessHasExitedForTests,
                     decisions);
+                var cursor = StorageRetentionResumeCursor.Open(orchestratorDirectory, now, RunEventMaintenanceCadence.Interval);
                 SweepAcceptanceArtifacts(
                     orchestratorDirectory,
                     goals,
@@ -246,12 +247,13 @@ internal static partial class StorageRetentionMaintenance
                     decisions,
                     beforeEachAttemptCandidateDeletionForTests,
                     attemptDirectoryEnumeratorForTests,
-                    attemptDirectoryPassObserverForTests);
+                    attemptDirectoryPassObserverForTests, cursor);
                 SweepPrompts(orchestratorDirectory, goals, now, decisions);
                 RecordGoalEventPreservation(orchestratorDirectory, goals, decisions);
                 beforeGoalJournalArchiveForTests?.Invoke();
                 ArchiveGoalJournals(executionDirectory, goals, decisions);
                 CompressTerminalGoalJournals(executionDirectory, goals, now, reclaim, decisions);
+                cursor.Complete();
             }
             catch (Exception ex)
             {
@@ -601,7 +603,8 @@ internal static partial class StorageRetentionMaintenance
         List<EvidenceRetentionDecision> decisions,
         Action<string>? beforeEachAttemptCandidateDeletionForTests,
         Func<string, IEnumerable<string>>? attemptDirectoryEnumeratorForTests,
-        Action<AttemptDirectoryPassStats>? attemptDirectoryPassObserverForTests)
+        Action<AttemptDirectoryPassStats>? attemptDirectoryPassObserverForTests,
+        StorageRetentionResumeCursor cursor)
     {
         var totals = (Receipts: 0, Deleted: 0);
         foreach (var family in new[]
@@ -623,7 +626,7 @@ internal static partial class StorageRetentionMaintenance
                 decisions,
                 beforeEachAttemptCandidateDeletionForTests,
                 attemptDirectoryEnumeratorForTests,
-                attemptDirectoryPassObserverForTests);
+                attemptDirectoryPassObserverForTests, cursor, family.Directory);
             totals.Receipts += result.Receipts;
             totals.Deleted += result.Deleted;
         }
@@ -644,7 +647,8 @@ internal static partial class StorageRetentionMaintenance
         List<EvidenceRetentionDecision> decisions,
         Action<string>? beforeEachAttemptCandidateDeletionForTests,
         Func<string, IEnumerable<string>>? attemptDirectoryEnumeratorForTests,
-        Action<AttemptDirectoryPassStats>? attemptDirectoryPassObserverForTests)
+        Action<AttemptDirectoryPassStats>? attemptDirectoryPassObserverForTests,
+        StorageRetentionResumeCursor cursor, string cursorFamily)
     {
         if (!Directory.Exists(root))
         {
@@ -653,8 +657,14 @@ internal static partial class StorageRetentionMaintenance
 
         var receipts = 0;
         var deleted = 0;
-        foreach (var goalDirectory in Directory.EnumerateDirectories(root, "*", SearchOption.TopDirectoryOnly))
+        string? previous = null;
+        foreach (var goalDirectory in Directory.EnumerateDirectories(root, "*", SearchOption.TopDirectoryOnly)
+            .OrderBy(Path.GetFileName, StringComparer.Ordinal).ToArray())
         {
+            var name = Path.GetFileName(goalDirectory);
+            if (cursor.ShouldSkip(cursorFamily, name)) continue;
+            if (previous is not null) cursor.Advance(cursorFamily, previous);
+            previous = name;
             using var attemptLease = MutexLease.TryAcquire(AttemptLeaseNameFor(goalDirectory));
             if (attemptLease is null)
             {
@@ -1192,6 +1202,7 @@ internal static partial class StorageRetentionMaintenance
                 goalDirectory, candidates.Count, directoryDeleted, snapshot.Enumerations, snapshot.FullPathHashes));
         }
 
+        cursor.MarkFamilyComplete(cursorFamily);
         return (receipts, deleted);
     }
 

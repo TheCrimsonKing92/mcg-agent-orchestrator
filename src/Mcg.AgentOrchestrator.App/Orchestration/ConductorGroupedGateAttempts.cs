@@ -530,7 +530,14 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
             }
             // Grouped metadata has its own short lock; the child only claims identity here.
             // Result publication is separate, so this marker cannot overwrite a child verdict.
-            return Update(attempt.MetadataPath, current => current with { AdoptedByGenerationId = GenerationId });
+            var adoptionChanged = false;
+            attempt = Update(attempt.MetadataPath, current =>
+            {
+                adoptionChanged = current.AdoptedByGenerationId != GenerationId;
+                return current with { AdoptedByGenerationId = GenerationId };
+            });
+            if (adoptionChanged) EmitCohortAdopted(attempt);
+            return attempt;
         }
         if (attempt.AdoptedByGenerationId == GenerationId) return attempt;
         var changed = false;
@@ -541,13 +548,15 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
             changed = true;
             return current with { AdoptedByGenerationId = GenerationId };
         });
-        if (changed) _event?.Invoke($"ACCEPTANCE_COHORT_ADOPTED kind={attempt.Kind} " +
-            $"members={string.Join('+', attempt.Members.Select(member => member.GoalId))} " +
-            $"identity={attempt.IdentityValue} owner={attempt.OwnerProcessId} " +
-            $"launchingGeneration={attempt.LaunchingGenerationId}");
+        if (changed) EmitCohortAdopted(attempt);
         return attempt;
     }
 
+    private void EmitCohortAdopted(ConductorGroupedGateAttempt attempt) =>
+        _event?.Invoke($"ACCEPTANCE_COHORT_ADOPTED kind={attempt.Kind} " +
+            $"members={string.Join('+', attempt.Members.Select(member => member.GoalId))} " +
+            $"identity={attempt.IdentityValue} owner={attempt.OwnerProcessId} " +
+            $"launchingGeneration={attempt.LaunchingGenerationId}");
     internal bool Refuse(ConductorGroupedGateAttempt attempt, string field)
     {
         if (!StopHolder(attempt, $"identity-changed:{field}")) return false;
