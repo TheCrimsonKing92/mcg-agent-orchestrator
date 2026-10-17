@@ -3,7 +3,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-// Parallel-safe: private artifacts, fake holders and launchers, scoped console and census probes.
+[Xunit.Collection("DotnetBuildSlots")]
 public sealed class ConductorBatchLoopTestsActivationAdmissionProbeLine(ITestOutputHelper output)
     : ConductorBatchLoopTests(output)
 {
