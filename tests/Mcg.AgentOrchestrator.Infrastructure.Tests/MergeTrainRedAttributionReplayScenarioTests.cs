@@ -349,7 +349,10 @@ public sealed class MergeTrainRedAttributionReplayScenarioTests : AcceptanceCoho
                 Checks: [new AcceptanceCheckResult("remainder", true, 0, null)], TestResultPaths: [WritePassingTrx(repo, "pass.trx")])]);
             var driver = new ConductorDriver(kernel, OrchestratorWorkspace.ForDirectory(repo), verifier,
                 AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(), cleanupHooks: cleanup.Hooks);
-            var selection = ProjectTrainSelection(driver, goals);
+            // Initial admission requires three; two-member rows replay an already reduced composition.
+            var selection = count == 2
+                ? new ConductorMergeTrainSelection(ProjectSelection(driver, goals[0], goals[1]).Members)
+                : ProjectTrainSelection(driver, goals);
             var memberTree = Assert.IsType<string>(GoalWorktrees.TryResolve(repo, goals[0].Id));
             var members = selection.BindMembers();
             foreach (var member in members.Take(2))
