@@ -97,6 +97,7 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateHeartbeatRunClass",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateHeartbeatRuntime",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateLaneReceiptLedger",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateLaneSlowdownDiff",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateLoadContextProbe",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateShardLaneClass",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateShardPermitPool",
