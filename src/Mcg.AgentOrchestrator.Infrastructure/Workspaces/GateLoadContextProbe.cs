@@ -39,8 +39,8 @@ public sealed record GateLoadSample
 
 /// <summary>
 /// Load observed when a lane receipt is emitted. ConcurrentGateCount counts distinct live gate heartbeats and
-/// includes the calling gate. InFlightPaidWorkerDispatchCount remains explicitly unavailable until the
-/// conductor supplies its authoritative cross-process value. ConcurrentShardCount is local to this gate.
+/// includes the calling gate. InFlightPaidWorkerDispatchCount counts fresh worker-kind dispatch heartbeats
+/// regardless of provider once the host logs directory is bound. ConcurrentShardCount is local to this gate.
 /// </summary>
 public sealed record GateLoadContext(
     GateLoadSample ConcurrentGateCount,
@@ -97,6 +97,8 @@ internal static class GateLoadContextProbe
     private static readonly AsyncLocal<Func<IReadOnlyList<LiveGateOccupant>>?> LiveGateOccupantProbeOverride = new();
     private static readonly AsyncLocal<Func<int?>?> InFlightWorkerDispatchProbeOverride = new();
     private static readonly AsyncLocal<Func<HostCpuSample>?> HostCpuProbeOverride = new();
+    private static readonly AsyncLocal<StrongBox<string?>?> HostLogDirectoryOverride = new();
+    private static string? _boundHostLogDirectory;
     private static CpuTimes? _previousCpuTimes;
 
     internal static void Initialize()
@@ -121,7 +123,7 @@ internal static class GateLoadContextProbe
             minimumValue: 1,
             "gate-count-unavailable");
         var inFlightWorkers = CaptureCount(
-            InFlightWorkerDispatchProbeOverride.Value ?? CaptureUnavailableWorkerDispatchCount,
+            InFlightWorkerDispatchProbeOverride.Value ?? CaptureWorkerDispatchCount,
             minimumValue: 0,
             CrossProcessCounterUnavailable);
         try
@@ -234,7 +236,24 @@ internal static class GateLoadContextProbe
         }
     }
 
-    private static int? CaptureUnavailableWorkerDispatchCount() => null;
+    internal static void BindHostLogDirectory(string directory) => Volatile.Write(ref _boundHostLogDirectory, directory);
+
+    internal static IDisposable PushHostLogDirectory(string? directory)
+    {
+        var previous = HostLogDirectoryOverride.Value;
+        HostLogDirectoryOverride.Value = new StrongBox<string?>(directory);
+        return new RestoreAction(() => HostLogDirectoryOverride.Value = previous);
+    }
+
+    private static int? CaptureWorkerDispatchCount()
+    {
+        var directory = HostLogDirectoryOverride.Value is { } scoped
+            ? scoped.Value : Volatile.Read(ref _boundHostLogDirectory);
+        if (directory is null) throw new LoadProbeUnavailableException("host-log-directory-unbound");
+        var count = WorkerDispatchHeartbeatCensus.Count(directory, DateTimeOffset.UtcNow);
+        if (!count.IsAvailable) throw new LoadProbeUnavailableException(count.UnavailableReason!);
+        return checked((int)count.Value!.Value);
+    }
 
     internal static IReadOnlyList<LiveGateOccupant> CaptureLiveGateOccupants()
     {

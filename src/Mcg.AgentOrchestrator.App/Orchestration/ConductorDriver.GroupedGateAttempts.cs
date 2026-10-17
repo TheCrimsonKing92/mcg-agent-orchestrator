@@ -284,32 +284,8 @@ internal sealed partial class ConductorDriver
         var difference = _groupedGateAttempts!.IdentityDifference(
             attempt, attempt.Kind, projections, mainRevision, attempt.CombinedTreeRevision, _integrationBranch);
         if (difference is not null) return (true, difference);
-        try
-        {
-            if (attempt.Kind == "cohort")
-            {
-                using var integration = GoalWorktrees.CreateAcceptanceCohortWorkspace(
-                    _cohortWorkspace.ExecutionDirectory, mainRevision,
-                    new ConductorAcceptanceCohortSelection(projections, []).BindMembers(), _integrationBranch,
-                    _cohortCleanupHooks);
-                return (true, integration.TreeRevision == attempt.CombinedTreeRevision ? null : "tree");
-            }
-            if (attempt.Kind == "train")
-            {
-                using var integration = GoalWorktrees.CreateMergeTrainWorkspace(
-                    _cohortWorkspace.ExecutionDirectory, mainRevision,
-                    new ConductorMergeTrainSelection(projections).BindMembers(), _integrationBranch,
-                    _cohortCleanupHooks);
-                return (true, integration.TreeRevision == attempt.CombinedTreeRevision ? null : "tree");
-            }
-            throw new InvalidDataException($"Unknown grouped gate kind '{attempt.Kind}'.");
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
-        {
-            // Unavailable materialization is not evidence that identity changed. Keep a provisional
-            // hold and retry inspection next tick without admitting an overlapping gate.
-            return (false, null);
-        }
+        return GroupedGateIdentityInspector.InspectTree(attempt, projections,
+            _cohortWorkspace.ExecutionDirectory, mainRevision, _integrationBranch, _cohortCleanupHooks);
     }
 
     internal ConductorGroupedGateOutcome? RunGroupedGateAttemptBody(ConductorGroupedGateAttempt attempt)
