@@ -268,13 +268,8 @@ public sealed partial class GoalAcceptanceVerifier
             AcceptanceGatePhaseAccountant.RecordCurrentLaneSample(shardElapsed);
             outcomes[shard.Index] = new ShardRunOutcome(result, retried);
             AcceptanceLaneDurationStore.Record(shard.Check, result, shardElapsed);
-            EmitShardTimingProgress(
-                goalId,
-                "shard-complete",
-                shard.Check.Name,
-                primarySlotIndex,
-                shardElapsed,
-                shardConcurrency.Count,
+            GateLaneReceiptLedger.Record(worktreePath, goalId?.Value, shard.Check.Name, result, shardElapsed, _timeProvider.GetUtcNow());
+            EmitShardTimingProgress(goalId, "shard-complete", shard.Check.Name, primarySlotIndex, shardElapsed, shardConcurrency.Count,
                 _storageRoot, EmitGateProgress, result);
         }
 

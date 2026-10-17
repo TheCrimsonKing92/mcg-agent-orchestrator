@@ -25,6 +25,7 @@ internal static class GateHostHealthProbe
 {
     internal const int LaunchTimeoutMilliseconds = 10_000;
     private static readonly AsyncLocal<Func<HostHealthSample>?> Override = new();
+    private static readonly AsyncLocal<Func<GateLoadSample>?> PhysicalAvailableOverride = new();
     private static readonly IReadOnlyList<string> FileCachePoolTags = Array.AsReadOnly(new[]
     {
         "FMfn", "Ntff", "MmSt", "MPsc", "NtFC", "NtFs", "FIcs", "MPhc",
@@ -36,7 +37,32 @@ internal static class GateHostHealthProbe
         ArgumentNullException.ThrowIfNull(probe);
         var previous = Override.Value;
         Override.Value = probe;
-        return new RestoreScope(previous);
+        return new RestoreScope(() => Override.Value = previous);
+    }
+
+    internal static IDisposable PushPhysicalAvailableMbProbe(Func<GateLoadSample> probe)
+    {
+        ArgumentNullException.ThrowIfNull(probe);
+        var previous = PhysicalAvailableOverride.Value;
+        PhysicalAvailableOverride.Value = probe;
+        return new RestoreScope(() => PhysicalAvailableOverride.Value = previous);
+    }
+
+    internal static GateLoadSample CapturePhysicalAvailableMb()
+    {
+        try
+        {
+            if (PhysicalAvailableOverride.Value is { } probe) return Normalize(probe());
+            if (!OperatingSystem.IsWindows()) return GateLoadSample.Unavailable("unsupported-platform");
+            var info = new PerformanceInformation { Size = (uint)Marshal.SizeOf<PerformanceInformation>() };
+            return GetPerformanceInfo(ref info, info.Size)
+                ? GateLoadSample.Available(Math.Floor((double)info.PhysicalAvailable * (double)info.PageSize / (1024 * 1024)))
+                : GateLoadSample.Unavailable("get-performance-info-failed");
+        }
+        catch (Exception exception)
+        {
+            return GateLoadSample.Unavailable($"probe-error:{exception.GetType().Name}");
+        }
     }
 
     internal static HostHealthSample Capture()
@@ -189,14 +215,14 @@ internal static class GateHostHealthProbe
         public uint HandleCount, ProcessCount, ThreadCount;
     }
 
-    private sealed class RestoreScope(Func<HostHealthSample>? previous) : IDisposable
+    private sealed class RestoreScope(Action restore) : IDisposable
     {
         private bool _disposed;
         public void Dispose()
         {
             if (_disposed) return;
             _disposed = true;
-            Override.Value = previous;
+            restore();
         }
     }
 }

@@ -86,6 +86,7 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
     private readonly SpawnProcessIdentity _generationIdentity;
     private readonly AcceptanceHolderLease? _holderLease;
     private readonly ConcurrentDictionary<string, string> _holderHolds = new();
+    private readonly ConductorOwnLaunchLedger _ownLaunches = new();
     private AcceptanceHolderLease HolderLease => _holderLease ?? new(utcNow: _utcNow, eventSink: _event);
 
     internal int GenerationId { get; }
@@ -237,6 +238,7 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
             });
             throw;
         }
+        _ownLaunches.Record(attempt.AttemptId);
         // A child can claim its own pid before this write. If this write fails, leave the Running
         // record for that claim rather than marking a possibly live gate as a failed launch.
         try
@@ -477,8 +479,12 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
             ? "tree" : null;
     }
 
+    internal bool LaunchedByThisInstance(ConductorGroupedGateAttempt attempt) =>
+        _ownLaunches.Contains(attempt.AttemptId);
+
     internal bool ShouldAdopt(ConductorGroupedGateAttempt attempt)
     {
+        if (LaunchedByThisInstance(attempt)) return false;
         // Pre-lease records are classified in place, without adoption writes.
         if (_usesDurableHolderLease && !LeaseFilePresent(AcceptanceHolderBinding.For(attempt).LeasePath)) return false;
         var binding = AcceptanceHolderBinding.For(attempt);
