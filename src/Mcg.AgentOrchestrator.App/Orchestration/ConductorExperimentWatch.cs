@@ -137,7 +137,8 @@ internal sealed class ConductorExperimentWatch
                             var observed = reading.ObservedCount?.ToString(CultureInfo.InvariantCulture) ?? "unavailable";
                             _writer?.Append("experiment-reading-due", null,
                                 $"EXPERIMENT_READING_DUE experiment={record.Id} trigger={trigger} observed={observed} " +
-                                $"stopRuleMet={Flag(reading.StopRuleMet)} verdict={reading.Verdict} guardrailBreached={Flag(reading.GuardrailBreached)}", asOf);
+                                $"stopRuleMet={Flag(reading.StopRuleMet)} verdict={reading.Verdict} guardrailBreached={Flag(reading.GuardrailBreached)}" +
+                                (reading.ObservedBasis is { } basis ? $" observedBasis={basis}" : ""), asOf);
                         }
                         catch (Exception error) { LogFailure(error); }
                     }
