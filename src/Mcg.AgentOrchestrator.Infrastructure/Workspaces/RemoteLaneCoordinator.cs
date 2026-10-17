@@ -22,6 +22,8 @@ internal sealed class RemoteLaneCoordinator : IDisposable
     private readonly string? _attemptPrefix;
     private readonly Action<string, RemoteLaneOutcomeCode>? _onOutcome;
     private readonly Action<string>? _onEvent;
+    private readonly RemoteExecutorClaimClass _claimClass;
+    private readonly HashSet<string> _noSlotLanes = new(StringComparer.Ordinal);
     private readonly object _gate = new();
     private readonly HashSet<string> _retired = new(StringComparer.Ordinal);
     private readonly Dictionary<string, DateTimeOffset> _busyUntil = new(StringComparer.Ordinal);
@@ -32,7 +34,8 @@ internal sealed class RemoteLaneCoordinator : IDisposable
     internal RemoteLaneCoordinator(RemoteLaneExecutorConfiguration configuration,
         IRemoteLaneCandidateIdentity cache, string worktreePath, string? attemptPrefix,
         IRemoteLaneExecutor executor, TimeProvider clock, TimeSpan pollInterval,
-        Action<string, RemoteLaneOutcomeCode>? onOutcome, Action<string>? onEvent = null)
+        Action<string, RemoteLaneOutcomeCode>? onOutcome, Action<string>? onEvent = null,
+        RemoteExecutorClaimClass claimClass = RemoteExecutorClaimClass.Gate)
     {
         _configuration = configuration;
         _worktreePath = worktreePath;
@@ -45,6 +48,7 @@ internal sealed class RemoteLaneCoordinator : IDisposable
         _attemptPrefix = attemptPrefix;
         _onOutcome = onOutcome;
         _onEvent = onEvent;
+        _claimClass = claimClass;
     }
 
     internal bool IsEligible(Check check)
@@ -78,12 +82,31 @@ internal sealed class RemoteLaneCoordinator : IDisposable
                     if (claim is null) continue;
                     if (slots is null) _claims.Add(entry.Id, slots = new());
                     slots.Add(slotIndex, claim);
-                    RemoteExecutorOccupancy.Claim(_occupancyRoot, entry.Id, _cache.AttemptId, slotIndex);
+                    RemoteExecutorOccupancy.Claim(_occupancyRoot, entry.Id, _cache.AttemptId, slotIndex, _claimClass);
                     return entry;
                 }
             }
             return null;
         }
+    }
+
+    internal RemoteLaneExecutorEntry? TryClaimIdleExecutor(Check check)
+    {
+        RemoteLaneRequest request;
+        IReadOnlyList<RemoteExecutorOccupancyEntry> occupancy;
+        lock (_gate)
+        {
+            var entry = TryClaimIdleExecutor();
+            if (entry is not null) return entry;
+            request = CreateRequest(check, "");
+            if (!_noSlotLanes.Add(request.Lane)) return null;
+            occupancy = RemoteExecutorOccupancyCensus.Take(_occupancyRoot,
+                _configuration.Executors.Select(executor => (executor.Id, _retired.Contains(executor.Id) ? "retired" :
+                    _busyUntil.TryGetValue(executor.Id, out var until) && until > _clock.GetUtcNow() ? "backoff" : "full")));
+        }
+        Record(request, RemoteLaneOutcomeCode.OfferSkippedNoExecutor,
+            reason: RemoteExecutorOccupancyCensus.Reason(occupancy), occupancy: occupancy);
+        return null;
     }
 
     internal void Release(string executorId)
@@ -319,16 +342,20 @@ internal sealed class RemoteLaneCoordinator : IDisposable
     }
 
     private void Record(RemoteLaneRequest request, RemoteLaneOutcomeCode code, RemoteLaneResult? result = null,
-        string? reason = null, RemoteLaneAttemptDetail? attempt = null)
+        string? reason = null, RemoteLaneAttemptDetail? attempt = null,
+        IReadOnlyList<RemoteExecutorOccupancyEntry>? occupancy = null)
     {
+        var usage = RemoteLaneResourceUsage.TryRead(attempt?.LastStatus);
         RemoteExecutorHealthLedger.Append(_ledgerPath, new(_clock.GetUtcNow(), request.ExecutorId,
             request.AttemptId, request.Lane, code,
             code is RemoteLaneOutcomeCode.Accepted or RemoteLaneOutcomeCode.NotEligibleExclusiveResource or
-                RemoteLaneOutcomeCode.ExecutorBusy ? null : "executor",
+                RemoteLaneOutcomeCode.ExecutorBusy or RemoteLaneOutcomeCode.OfferSkippedNoExecutor ? null : "executor",
             new(request.ExecutorId, request.Lane, request.VerifyingCommitSha, request.CandidateTreeSha,
                 request.MainSha, request.FilterHash, request.ManifestIdentity),
             result is null ? null : new(result.ExecutorId, result.Lane, result.VerifyingCommitSha, result.ObservedTreeSha,
-                result.MainSha, result.FilterHash, result.ManifestIdentity), reason, Attempt: attempt));
+                result.MainSha, result.FilterHash, result.ManifestIdentity), reason, Attempt: attempt, Occupancy: occupancy,
+            RemoteTestHostCpuSeconds: usage?.TestHostCpuSeconds, RemoteTestHostPeakWorkingSetBytes: usage?.TestHostPeakWorkingSetBytes,
+            RemoteAvailableMemoryMbMin: usage?.AvailableMemoryMbMin, RemoteResourceSamples: usage?.ResourceSamples));
         try
         {
             var compactReason = string.IsNullOrWhiteSpace(reason) ? "none" :
