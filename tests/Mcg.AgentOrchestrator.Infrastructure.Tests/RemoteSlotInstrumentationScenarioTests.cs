@@ -31,10 +31,17 @@ public sealed class RemoteSlotInstrumentationScenarioTests
     public async Task TwoFreeSlotsAcceptBothWithoutNoSlotRows()
     {
         using var scenario = new Scenario(2);
-        Assert.True((await scenario.RunAsync()).Passed);
-        Assert.Equal(2, scenario.Health().Count(row => row.Outcome == RemoteLaneOutcomeCode.Accepted));
-        Assert.DoesNotContain(scenario.Health(), row => row.Outcome == RemoteLaneOutcomeCode.OfferSkippedNoExecutor);
+        var result = await scenario.RunAsync();
+        Assert.True(result.Passed, JsonSerializer.Serialize(result.Checks));
+        var rows = scenario.Health();
+        Assert.Equal(2, scenario.Progress.Count(line => line.StartsWith("REMOTE_LANE_POLICY ") && line.Contains("decision=offer")));
+        Assert.True(rows.Count(row => row.Outcome == RemoteLaneOutcomeCode.Accepted) == 2, JsonSerializer.Serialize(rows));
+        Assert.DoesNotContain(rows, row => row.Outcome == RemoteLaneOutcomeCode.OfferSkippedNoExecutor);
         Assert.Empty(scenario.LocalStarts);
+        var receipts = result.Checks!.Where(check => check.Name == scenario.Lane(0) || check.Name == scenario.Lane(1))
+            .Select(check => Assert.Single(check.TestResultPaths!)).ToArray();
+        Assert.Equal(2, receipts.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.All(receipts, path => Assert.True(File.Exists(path), path));
     }
 
     [Fact]
@@ -163,7 +170,9 @@ public sealed class RemoteSlotInstrumentationScenarioTests
                 var fields = new[] { "attemptId", "executorId", "filterHash", "mainSha", "manifestIdentity", "lane" }
                     .ToDictionary(name => name, name => (object?)job.GetProperty(name).GetString());
                 fields["state"] = "completed"; fields["commitSha"] = job.GetProperty("sha").GetString();
-                fields["treeSha"] = "candidate-tree"; fields["exitCode"] = 0; fields["trx"] = new[] { "remote-lane.trx" };
+                // The host retains receipts by basename, so concurrent lanes need distinct names.
+                var index = Enumerable.Range(0, _lanes).Single(index => Lane(index) == job.GetProperty("lane").GetString());
+                fields["treeSha"] = "candidate-tree"; fields["exitCode"] = 0; fields["trx"] = new[] { $"remote-lane-{index}.trx" };
                 if (_resources)
                 {
                     fields["testHostCpuSeconds"] = 12.5; fields["testHostPeakWorkingSetBytes"] = 4096;
