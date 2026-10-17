@@ -126,8 +126,8 @@ public sealed class AcceptanceCheckDurationRecordTests : IDisposable
     }
 
     [Theory]
-    [InlineData(false, false, 95000)]
-    [InlineData(true, true, 95000)]
+    [InlineData(false, false, 95000L)]
+    [InlineData(true, true, 95000L)]
     [InlineData(true, false, null)]
     public void CheckCompletedDoesNotRecordFailureReuseOrMissingDuration(bool passed, bool reused, long? milliseconds)
     {
