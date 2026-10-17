@@ -15,7 +15,8 @@ internal static class OwnerConsoleKeyHints
         ("bell off", "Disable all three bell tiers; use bell <calm|attention|alarm> on|off for one tier."),
         ("goal <id-prefix>", "Open live goal detail, landing status and actions."),
         ("epics", "Open the epic view (same as e)."),
-        ("fleet", "Show the fleet diagram: host and executor boxes.")
+        ("fleet", "Show the fleet diagram: host and executor boxes."),
+        ("landings", "Show delivered goals: landing commit, integration kind and acceptance (landings today|30).")
     ];
 
     internal static string CommandPrompt => string.Join(" | ", Commands.Select(item => item.Command));
