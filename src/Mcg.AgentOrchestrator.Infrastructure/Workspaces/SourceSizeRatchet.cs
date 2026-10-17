@@ -186,7 +186,8 @@ internal static class SourceSizeRatchet
             // acceptance admission keeps the original eligible list. Goal eade84cb wires acceptance-holder
             // detach before loop exit at the existing dispatch boundary; holder transfer stays in its coordinator.
             // After integrating main b8da8f673, measured 2710 lines; no extra headroom.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2710),
+            // Goal 4fce8cbe wires per-run admission telemetry into the existing tick completion and eligibility seams.
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2716),
             // Goal 354522f1 tick persistence partial measured at 467 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.TickPersistence.cs", 467),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.DependencyReadmission.cs", 375),
@@ -589,7 +590,8 @@ internal static class SourceSizeRatchet
             // sorting lives in that collaborator. Goal eade84cb adds acceptance-holder detach wiring before
             // checkpoint/exit; the coordinator owns transfer. After integrating main b8da8f673, measured 9242 lines
             // in the same 54 partials; no headroom.
-            new SourceClassCeiling("ConductorBatchLoop", 9242, 54),
+            // Goal 4fce8cbe adds the scoped admission-health accumulator partial and shared census recording calls.
+            new SourceClassCeiling("ConductorBatchLoop", 9319, 55),
             // Goal ec8903af moved the goal-prefix parser to CliGoalPrefixArguments.
             // Goal cd1f6380 adds four lines at the owning transaction boundary, forwarding both
             // registrars and invoking actions after commit; list behavior lives in PostCommitActions.
