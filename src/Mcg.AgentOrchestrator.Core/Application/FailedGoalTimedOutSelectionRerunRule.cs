@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace Mcg.AgentOrchestrator.Core;
 
@@ -18,6 +19,7 @@ public static class FailedGoalTimedOutSelectionRerunRule
 {
     public const string ReasonSlug = "verification-inconclusive-timed-out-selection-rerun";
     public const string TimedOutClassification = "timed-out";
+    public const string ApparatusClassification = "apparatus";
     private const string TimeoutPrefix = "acceptance-check-timeout: ";
 
     public static FailedGoalRecoveryDecision? TryDecide(
@@ -28,8 +30,13 @@ public static class FailedGoalTimedOutSelectionRerunRule
         var selections = new List<string>();
         foreach (var check in observed.NonPassingChecks)
         {
-            if (check.Classification != TimedOutClassification || !TryParseSelection(check.Name, out var selection))
-                return null;
+            var selection = check.Classification switch
+            {
+                TimedOutClassification when TryParseSelection(check.Name, out var parsed) => parsed,
+                ApparatusClassification => Regex.Replace(check.Name.ToLowerInvariant(), "[^a-z0-9]+", "-").Trim('-'),
+                _ => string.Empty
+            };
+            if (selection.Length == 0) return null;
             selections.Add(selection);
         }
         var sorted = selections.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToImmutableArray();
