@@ -2495,15 +2495,17 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
 
             if (current.OwnerProcessStartedAt is { } recordedStart &&
                 (current.OwnerProcessId != ownerProcessId ||
-                 identity is not null && (identity.StartedAt != recordedStart ||
-                     !string.Equals(identity.ImagePath, current.OwnerExecutablePath, StringComparison.OrdinalIgnoreCase))))
+                 identity is not null && !ProcessImageResolution.SameProcess(
+                     new SpawnProcessIdentity(current.OwnerProcessId, recordedStart, current.OwnerExecutablePath ?? string.Empty),
+                     identity)))
                 throw new InvalidOperationException("Acceptance holder identity changed while claiming the attempt.");
 
             var updated = current with
             {
                 OwnerProcessId = ownerProcessId,
                 OwnerProcessStartedAt = identity?.StartedAt ?? current.OwnerProcessStartedAt,
-                OwnerExecutablePath = identity?.ImagePath ?? current.OwnerExecutablePath,
+                OwnerExecutablePath = identity is null ? current.OwnerExecutablePath :
+                    ProcessImageResolution.PreferResolved(current.OwnerExecutablePath, identity.ImagePath),
                 LastHeartbeatAt = _utcNow()
             };
             WriteAttemptFile(updated);

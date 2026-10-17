@@ -200,9 +200,7 @@ internal sealed class AcceptanceHolderLease
     {
         using var gate = Lock(binding);
         var holder = Read(binding).Holder;
-        if (holder is not null && (holder.ProcessId != recordedHolder.ProcessId ||
-            holder.StartedAt != recordedHolder.StartedAt ||
-            !string.Equals(holder.ImagePath, recordedHolder.ImagePath, StringComparison.OrdinalIgnoreCase)))
+        if (holder is not null && !ProcessImageResolution.SameProcess(holder, recordedHolder))
             throw AcceptanceHolderLeaseFault.Annotate(
                 new InvalidDataException("Acceptance metadata holder differs from its durable claim."),
                 "lease-binding-mismatch", AcceptanceHolderLeaseFault.Describe(binding, recordedHolder),
