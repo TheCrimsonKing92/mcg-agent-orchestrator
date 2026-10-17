@@ -5,16 +5,24 @@ using Mcg.AgentOrchestrator.Infrastructure;
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed class ConductorInvariantObservationReader(string conductEventsLogPath,
-    string groupedGateAttemptRoot, Func<DateTimeOffset, IReadOnlyList<GateHeartbeatStatus>> heartbeats)
+    string groupedGateAttemptRoot, Func<DateTimeOffset, IReadOnlyList<GateHeartbeatStatus>> heartbeats,
+    string? laneHeartbeatRoot = null)
 {
     internal static ConductorInvariantObservationReader ForWorkspace(OrchestratorWorkspace workspace) =>
+        ForWorkspace(workspace, DotnetBuildEnvironmentManager.CaptureStorageRoot());
+    internal static ConductorInvariantObservationReader ForWorkspace(OrchestratorWorkspace workspace, DotnetBuildStorageRoot storageRoot) =>
         new(workspace.ConductEventsLogPath, Path.Combine(workspace.OrchestratorDirectory, "grouped-gate-attempts"),
-            now => GateHeartbeatArtifacts.ReadStableSlots(DotnetBuildEnvironmentManager.CaptureStorageRoot(), now));
+            now => GateHeartbeatArtifacts.ReadStableSlots(storageRoot, now), Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts"));
 
     internal ConductorInvariantObservation Read(IReadOnlyList<(GoalId Id, GoalStatus Status)> goals, DateTimeOffset now)
     {
         var ready = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
         var refusals = new List<ConductorInvariantRefusal>();
+        DateTimeOffset? progress = null;
+        void ObserveProgress(DateTimeOffset at)
+        {
+            if (at <= now && (progress is null || at > progress)) progress = at;
+        }
         foreach (var path in LogPaths())
         {
             using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
@@ -22,6 +30,8 @@ internal sealed class ConductorInvariantObservationReader(string conductEventsLo
             while (reader.ReadLine() is { } line)
             {
                 if (!line.Contains("GOAL goal=", StringComparison.Ordinal) &&
+                    !line.Contains("ACCEPTANCE_COHORT_INFLIGHT ", StringComparison.Ordinal) &&
+                    !line.Contains("LOOP_RELAUNCH_DRAIN ", StringComparison.Ordinal) &&
                     !line.Contains("ACCEPTANCE_COHORT_ADOPTION_REFUSED ", StringComparison.Ordinal)) continue;
                 try
                 {
@@ -30,6 +40,7 @@ internal sealed class ConductorInvariantObservationReader(string conductEventsLo
                     var detail = row.GetProperty("detail").GetString() ?? "";
                     var at = row.GetProperty("timestamp").GetDateTimeOffset();
                     if (at > now) continue;
+                    if (ConductorInvariantLogProgress.TryGetProgress(detail)) ObserveProgress(at);
                     var tokens = detail.Split(' ', StringSplitOptions.RemoveEmptyEntries);
                     string? Value(string name) => tokens.FirstOrDefault(token => token.StartsWith(name + "=", StringComparison.Ordinal))?[(name.Length + 1)..];
                     if (detail.StartsWith("ACCEPTANCE_COHORT_ADOPTION_REFUSED ", StringComparison.Ordinal))
@@ -59,11 +70,6 @@ internal sealed class ConductorInvariantObservationReader(string conductEventsLo
             }
         }
 
-        DateTimeOffset? progress = null;
-        void ObserveProgress(DateTimeOffset at)
-        {
-            if (at <= now && (progress is null || at > progress)) progress = at;
-        }
         if (Directory.Exists(groupedGateAttemptRoot))
             foreach (var path in Directory.EnumerateFiles(groupedGateAttemptRoot, "*.attempt.json", SearchOption.AllDirectories))
             {
@@ -79,6 +85,8 @@ internal sealed class ConductorInvariantObservationReader(string conductEventsLo
         foreach (var heartbeat in heartbeats(now))
             if (heartbeat.IsAvailable && heartbeat.Snapshot is { } snapshot)
                 ObserveProgress(snapshot.LastProgressAt);
+        if (laneHeartbeatRoot is not null && ConductorGateLaneProgressScanner.LatestProgress(
+            laneHeartbeatRoot, now, ConductorInvariantThresholds.GateIdleWhileReady) is { } lane) ObserveProgress(lane);
         return new(now, ready.Select(pair => new ConductorInvariantReadyGoal(pair.Key, pair.Value))
             .OrderBy(goal => goal.ReadySince).ThenBy(goal => goal.GoalId, StringComparer.Ordinal).ToArray(),
             progress, refusals.OrderBy(refusal => refusal.At).ToArray());
