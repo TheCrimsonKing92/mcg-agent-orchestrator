@@ -108,9 +108,11 @@ public sealed class ConductorBatchLoopTestsActivationAdmissionProbeLine(ITestOut
     }
 
     [Xunit.Theory]
-    [Xunit.InlineData(true)]
-    [Xunit.InlineData(false)]
-    public void InheritedAttempt_WaitingGoal_ReportsNoneOnlyWhenEnabled(bool emit)
+    [Xunit.InlineData(true, 1)]
+    [Xunit.InlineData(false, 1)]
+    [Xunit.InlineData(true, 0)]
+    [Xunit.InlineData(false, 0)]
+    public void InheritedAttempt_ProbeCountsOnlyVerifiedWaitingGoals(bool emit, int waitingCount)
     {
         var root = NewRoot();
         try
@@ -118,7 +120,7 @@ public sealed class ConductorBatchLoopTestsActivationAdmissionProbeLine(ITestOut
             var clock = new FixedClock();
             var kernel = new AgentOrchestratorKernel(clock);
             var policy = ConductorAutonomyPolicy.Conservative with { AcceptanceWidth = 1 };
-            var goals = Enumerable.Range(0, 2).Select(index =>
+            var goals = Enumerable.Range(0, waitingCount + 1).Select(index =>
             {
                 var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), $"Probe {index}");
                 PassVerificationAt(kernel, goal, goal.Tasks.Single(), clock.UtcNow);
@@ -133,7 +135,7 @@ public sealed class ConductorBatchLoopTestsActivationAdmissionProbeLine(ITestOut
             Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, started.Kind);
             Assert.True(kernel.BeginGoalAcceptanceVerification(goals[0].Id, "Acceptance attempt launched."));
             Assert.Equal(GoalStatus.Verifying, goals[0].Status);
-            Assert.Equal(GoalStatus.Verified, goals[1].Status);
+            Assert.All(goals.Skip(1), goal => Assert.Equal(GoalStatus.Verified, goal.Status));
             using var census = GateLoadContextProbe.PushLiveGateOccupantProbe(() => []);
             var text = AsyncLocalConsoleRouter.Capture(() => new ConductorBatchLoop(utcNow: () => clock.UtcNow).Run(
                 kernel, MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
@@ -148,11 +150,11 @@ public sealed class ConductorBatchLoopTestsActivationAdmissionProbeLine(ITestOut
                 var sample = Assert.Single(samples);
                 Assert.Equal("none", sample.Phase);
                 Assert.Equal("none", sample.Attempt);
-                // The existing admission-health census includes both Verified and Verifying goals.
-                Assert.Equal(2, sample.Waiting);
+                Assert.Equal(waitingCount, sample.Waiting);
                 var probeIndex = Array.FindIndex(lines, line => line.StartsWith(ActivationAdmissionProbeLine.Prefix, StringComparison.Ordinal));
                 Assert.True(ActivationAdmissionSample.TryParse(lines[probeIndex + 1], out var health));
-                Assert.Equal(health.WaitingVerified, sample.Waiting);
+                // Preserve the health census, which also counts the inherited Verifying goal.
+                Assert.Equal(waitingCount + 1, health.WaitingVerified);
                 Assert.StartsWith("TICK_END tick=1 activation=true ts=", lines[probeIndex + 2]);
             }
             else Assert.Empty(samples);

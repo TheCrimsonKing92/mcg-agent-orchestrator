@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -87,10 +88,10 @@ internal sealed partial class ConductorBatchLoop
         return scope;
     }
 
-    private static void RecordActivationAdmissionWaitingForProbe(int waiting)
+    private static void RecordActivationAdmissionWaitingForProbe(IReadOnlyList<Goal> eligible)
     {
-        RecordActivationAdmissionWaiting(waiting);
-        CurrentActivationProbe.Value?.Waiting(waiting);
+        RecordActivationAdmissionWaiting(eligible.Count);
+        CurrentActivationProbe.Value?.Waiting(eligible.Count(goal => goal.Status == GoalStatus.Verified));
     }
 
     private static void EmitActivationAdmissionProbeAndHealth(bool emit, int tick)
