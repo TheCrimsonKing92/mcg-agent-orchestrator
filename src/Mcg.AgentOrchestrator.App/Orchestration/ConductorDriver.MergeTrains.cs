@@ -80,7 +80,7 @@ internal sealed partial class ConductorDriver
         MergeTrainReceipt? redReceipt = null;
         IReadOnlyList<string> redSubjects = [];
         var redAttributionSource = "ownership";
-
+        Action? completeAttributedFailure = null;
         for (var attempt = 0; attempt <= 1; attempt++)
         {
             MergeTrainWorkspace workspace;
@@ -265,6 +265,7 @@ internal sealed partial class ConductorDriver
             }
 
             lastRecordedReceipt = receipt;
+            completeAttributedFailure?.Invoke();
             if (receipt.Outcome == MergeTrainGateOutcome.Passed)
             {
                 if (redDropped is not null && redReceipt is not null)
@@ -359,9 +360,8 @@ internal sealed partial class ConductorDriver
             if (attributed is not null && (messageSubjectFailure || MergeTrainBisectRedRetention.RecordsBeforeBisect(receipt, members.Count, attempt, attributed)))
                 RecordTrainImplicatedMember(attributed, receipt, subjects, attributionSource);
             if (attempt == 0 && !messageSubjectFailure && attributed is not null && MergeTrainRedAttribution.IsGenuineTrainRed(receipt))
-                MergeTrainAttributedFailure.Apply(receipt, attributed, GetCurrentGoal(goalsById[attributed.GoalId]), attributionSource,
-                    members.Count, allEjections, ejection => _mergeTrainAcceptanceStore.RecordEjections(attemptId, [ejection]),
-                    _recordAcceptanceFailure, _cohortKernel.RouteRecordedAcceptanceFailure);
+                completeAttributedFailure = MergeTrainAttributedFailure.Prepare(receipt, attributed, GetCurrentGoal(goalsById[attributed.GoalId]), attributionSource, members.Count,
+                    allEjections, ejection => _mergeTrainAcceptanceStore.RecordEjections(attemptId, [ejection]), _recordAcceptanceFailure, _cohortKernel.RouteRecordedAcceptanceFailure);
             if (receipt.Outcome != MergeTrainGateOutcome.Failed || members.Count == 2 || attempt == 1)
             {
                 if (!messageSubjectFailure && attributed is not null)

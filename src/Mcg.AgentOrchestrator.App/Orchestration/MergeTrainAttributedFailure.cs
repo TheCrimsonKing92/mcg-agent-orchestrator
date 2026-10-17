@@ -5,6 +5,20 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 // Persist and route a positively attributed candidate through the existing failure seam.
 internal static class MergeTrainAttributedFailure
 {
+    internal static Action Prepare(
+        MergeTrainReceipt receipt, MergeTrainMemberBinding member, Goal goal, string source,
+        int memberCount, List<MergeTrainEjection> ejections, Action<MergeTrainEjection> recordEjection,
+        Action<Goal, IReadOnlyList<string>, string?, string?, IReadOnlyList<AcceptanceCheckAttribution>?, string?> recordFailure,
+        Func<GoalId, string, bool> routeFailure)
+    {
+        Action complete = () => Apply(receipt, member, goal, source, memberCount, ejections,
+            recordEjection, recordFailure, routeFailure);
+        // Pairs finish with ordinary fallback. Larger trains must first obtain the
+        // bisect receipt, keeping all members Verified when its gate is deferred.
+        if (memberCount == 2) complete();
+        return complete;
+    }
+
     internal static void Apply(
         MergeTrainReceipt receipt, MergeTrainMemberBinding member, Goal goal, string source,
         int memberCount, List<MergeTrainEjection> ejections, Action<MergeTrainEjection> recordEjection,

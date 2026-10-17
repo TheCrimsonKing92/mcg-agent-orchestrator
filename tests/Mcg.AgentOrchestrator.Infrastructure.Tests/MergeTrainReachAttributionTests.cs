@@ -95,10 +95,11 @@ public sealed class MergeTrainReachAttributionTests
     internal static string[] Trx(string root, string[] names, string? message)
     {
         var path = Path.Combine(root, "red.trx");
-        new XDocument(new XElement("TestRun", new XElement("Results", names.Select(name =>
-            new XElement("UnitTestResult", new XAttribute("testName", "Ns." + name), new XAttribute("outcome", "Failed"),
-                message is null ? null : new XElement("Output", new XElement("ErrorInfo", new XElement("Message", message)))))),
-            new XElement("ResultSummary", new XAttribute("outcome", "Failed"), new XElement("Counters",
+        XNamespace ns = "http://microsoft.com/schemas/VisualStudio/TeamTest/2010";
+        new XDocument(new XElement(ns + "TestRun", new XElement(ns + "Results", names.Select(name =>
+            new XElement(ns + "UnitTestResult", new XAttribute("testName", "Ns." + name), new XAttribute("outcome", "Failed"),
+                message is null ? null : new XElement(ns + "Output", new XElement(ns + "ErrorInfo", new XElement(ns + "Message", message)))))),
+            new XElement(ns + "ResultSummary", new XAttribute("outcome", "Failed"), new XElement(ns + "Counters",
                 new XAttribute("total", names.Length), new XAttribute("executed", names.Length),
                 new XAttribute("passed", 0), new XAttribute("failed", names.Length))))).Save(path);
         return [path];
