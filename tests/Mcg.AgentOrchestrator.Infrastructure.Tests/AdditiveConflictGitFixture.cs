@@ -25,7 +25,8 @@ internal sealed class AdditiveConflictGitFixture : GoalWorktreeTestBase, IDispos
         IReadOnlyList<ConflictFile>? files = null, GoalId? goalId = null,
         bool bom = false, string lineEnding = "\n", string? attributes = null)
     {
-        Repository = CreateSeededRepository();
+        // Dispatch integration resolves main explicitly, regardless of the host's init.defaultBranch.
+        Repository = CreateReducedAcceptanceCohortRepository(renameInitialBranchToMain: true);
         GoalId = goalId ?? Mcg.AgentOrchestrator.Core.GoalId.New();
         encoding = new UTF8Encoding(bom);
         this.lineEnding = lineEnding;
@@ -95,6 +96,34 @@ internal sealed class AdditiveConflictGitFixture : GoalWorktreeTestBase, IDispos
     {
         RunGit(path, "add", "-A");
         RunGit(path, "commit", "-m", message);
+    }
+
+    internal static string RatchetRegistry(int lines, int files, string comment) =>
+        RegistryText(FileRow(WidgetPath, lines, comment), ClassRow(lines, files, comment));
+
+    internal static string RegistryText(string rows, string classes) =>
+        "internal static class SourceSizeRatchet\n{\n" +
+        "    internal static SourceSizeCeiling[] SeededCeilings = new[]\n    {\n" + rows + "    };\n" +
+        "    internal static SourceClassCeiling[] SeededClassCeilings = new[]\n    {\n" + classes + "    };\n}\n";
+
+    internal static string FileRow(string path, int lines, string comment) =>
+        $"        // {comment}\n        new SourceSizeCeiling(\"{path}\", {lines}),\n";
+
+    internal static string ClassRow(int lines, int files, string comment) =>
+        $"        // {comment}\n        new SourceClassCeiling(\"Widget\", {lines}, {files}),\n";
+
+    internal static IReadOnlyList<ConflictFile> RatchetFiles(bool extraConflict = false, bool absentClass = false)
+    {
+        const string part = "partial class Widget\n{\n}\n";
+        var files = new List<ConflictFile>
+        {
+            new(SourceSizeRatchet.SourcePath, RatchetRegistry(10, 1, "base"),
+                RatchetRegistry(11, 1, "goal A"), RatchetRegistry(12, 2, "goal B")),
+            new(WidgetPath, "// widget\n", "// widget\n", "// widget\n")
+        };
+        if (!absentClass) files.Add(new("src/WidgetPart.cs", part, part, part));
+        if (extraConflict) files.Add(new("src/Other.cs", "base\n", "main\n", "goal\n"));
+        return files;
     }
 
     private void Write(string root, string path, string text)

@@ -47,7 +47,7 @@ public sealed class ConductorDriverTestsAdditiveConflictMerge
         PassVerification(kernel, goal, goal.Tasks.Single());
         using var fixture = new AdditiveConflictGitFixture([new(WidgetPath, "base\n", "main\n", "goal\n")], goal.Id);
         var logPath = Path.Combine(fixture.Repository, ".orchestrator", "logs", "conduct-events.log");
-        const string expected = "pre-landing rebase conflict (src/Widget.cs); use 'workspace rebase' to resolve";
+        const string expected = "pre-landing rebase conflict (src/Widget.cs); not confined to ratchet ceiling rows, so the conductor cannot resolve it; the operator integrates main into the goal branch and does not run workspace rebase";
         var escalations = new List<string>();
         var driver = MakeDriver(
             rebaseOntoMain: current => GoalWorktrees.TryRebaseOntoMain(fixture.Repository, current.Id,
@@ -59,6 +59,10 @@ public sealed class ConductorDriverTestsAdditiveConflictMerge
 
         Assert.Equal(expected, Assert.IsType<ConductorAdvanceOutcome.Escalated>(result.Outcome).Reason);
         Assert.Equal(expected, Assert.Single(escalations));
+        Assert.StartsWith("pre-landing rebase conflict (src/Widget.cs)", escalations[0]);
+        Assert.DoesNotContain("use 'workspace rebase'", escalations[0]);
+        Assert.DoesNotContain("use workspace rebase", escalations[0]);
+        Assert.Contains("does not run workspace rebase", escalations[0]);
         fixture.AssertRestored();
         AssertEvent(logPath, "refused", "decision");
     }
@@ -83,6 +87,50 @@ public sealed class ConductorDriverTestsAdditiveConflictMerge
         fixture.AssertRestored();
         Assert.Contains("reason=frozen-path", File.ReadAllText(logPath));
         AssertEvent(logPath, "refused", "decision");
+    }
+
+    [Fact]
+    public void PreLandingRatchetConflict_RebindsObligationsBeforeAcceptance()
+    {
+        var (kernel, goal) = SimpleGoal();
+        using var fixture = new AdditiveConflictGitFixture(RatchetFiles(), goal.Id);
+        kernel.RecordGoalRefinement(goal.Id, new RefinedSpec(goal.Objective,
+            ["class row", "file row"], VerificationClass.TestVerifiable, [], []));
+        for (var index = 0; index < 2; index++)
+            kernel.MapCriterionEvidenceOwner(goal.Id, index, 1, CriterionEvidenceOwner.Acceptance, "seed",
+                CriterionEvidenceScopes.FullAcceptanceGate, expectedCandidateSha: fixture.OriginalHead);
+        PassVerification(kernel, goal, goal.Tasks.Single());
+        var logPath = Path.Combine(fixture.Repository, ".orchestrator/logs/conduct-events.log");
+        var calls = 0;
+        var driver = MakeDriver(
+            rebaseOntoMain: current => RatchetConflictDispatchIntegration.MergeMainBeforeLanding(kernel,
+                fixture.Repository, current, ConductorDriver.CreateAdditiveConflictMergeOptions(kernel, current, logPath),
+                TrunkBranchName.Default),
+            runAcceptanceSummary: _ =>
+            {
+                calls++;
+                var head = Git(fixture.Worktree, "rev-parse", "HEAD").Trim();
+                Assert.Equal(new[] { head, fixture.OriginalHead, fixture.MainHead },
+                    Git(fixture.Worktree, "rev-list", "--parents", "-n", "1", "HEAD").Trim().Split(' '));
+                var measured = SourceSizeRatchet.MeasureClasses(fixture.Worktree, ["Widget"], out var unreadable)["Widget"];
+                Assert.Empty(unreadable);
+                Assert.Equal(RegistryText(FileRow(WidgetPath, 1, "goal A\n        // goal B"),
+                    ClassRow(measured.TotalLines, measured.PartialFiles, "goal A\n        // goal B")),
+                    fixture.Read(SourceSizeRatchet.SourcePath));
+                Assert.All(goal.CriterionEvidenceObligations, item => Assert.Equal(head, item.ExpectedCandidateSha));
+                Assert.Empty(Git(fixture.Worktree, "status", "--porcelain=v1"));
+                foreach (var item in goal.CriterionEvidenceObligations)
+                    kernel.RecordCriterionEvidence(goal.Id, item.Id, item.Owner, head, "gate-" + item.Id,
+                        item.RequiredScope, true, "Merged head passed");
+                return new AcceptanceVerificationSummary(true, [], BranchHeadSha: head);
+            },
+            writeEscalation: (_, _, reason) => throw new InvalidOperationException(reason));
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        Assert.Equal(1, calls);
+        Assert.Equal("Landed: Landed", Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome).Description);
+        AssertEvent(logPath, "merged", "outcome");
     }
 
     private static void AssertEvent(string path, string result, string operatorClass)

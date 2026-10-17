@@ -51,7 +51,7 @@ public sealed class ConductorDriverTestsPreLandingNoRewrite
         PassVerification(kernel, goal, goal.Tasks.Single());
         using var fixture = new AdditiveConflictGitFixture([new(WidgetPath, "base\n", "main\n", "goal\n")], goal.Id);
         var logPath = Path.Combine(fixture.Repository, ".orchestrator", "logs", "conduct-events.log");
-        const string expected = "pre-landing rebase conflict (src/Widget.cs); use 'workspace rebase' to resolve";
+        const string expected = "pre-landing rebase conflict (src/Widget.cs); not confined to ratchet ceiling rows, so the conductor cannot resolve it; the operator integrates main into the goal branch and does not run workspace rebase";
         var escalations = new List<string>();
         var driver = MakeDriver(
             rebaseOntoMain: current => GoalBranchMainMerge.TryMergeMainIntoGoalBranch(fixture.Repository, current.Id,
@@ -63,6 +63,10 @@ public sealed class ConductorDriverTestsPreLandingNoRewrite
 
         Assert.Equal(expected, Assert.IsType<ConductorAdvanceOutcome.Escalated>(result.Outcome).Reason);
         Assert.Equal(expected, Assert.Single(escalations));
+        Assert.StartsWith("pre-landing rebase conflict (src/Widget.cs)", escalations[0]);
+        Assert.DoesNotContain("use 'workspace rebase'", escalations[0]);
+        Assert.DoesNotContain("use workspace rebase", escalations[0]);
+        Assert.Contains("does not run workspace rebase", escalations[0]);
         fixture.AssertRestored();
     }
 }
