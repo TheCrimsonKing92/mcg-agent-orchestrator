@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
@@ -5,7 +6,8 @@ using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Scenario = ProviderHoldAgentSubstitutionTests.Scenario;
 
-// Parallel-safe: each test owns its Git worktrees and databases. Process start is explicitly disabled.
+// Parallel-safe: each test owns its worktrees, databases and injected stdin-gated shell processes.
+// The injected launcher never executes the prepared provider command.
 public sealed class ProviderHoldFallbackScenarioTests
 {
     [Xunit.Fact]
@@ -148,34 +150,59 @@ public sealed class ProviderHoldFallbackScenarioTests
         AssertSubstituted(scenario, scenario.Source, starts[scenario.Source.Id]);
         Assert.Equal([RetryCause.ProviderInterruption], causes);
         Assert.Null(scenario.Source.Tasks.Single().LatestProviderBudgetRecoveryAt);
-        scenario.Exhaust(scenario.Source, scenario.Alternate);
+        var source = scenario.Kernel.GetGoal(scenario.Source.Id);
+        scenario.Exhaust(source, scenario.Alternate);
+        var exhausted = source.Tasks.Single();
+        // Pair the simulated provider verification with its exited process, as real completion does.
+        scenario.Kernel.RecordTaskProcessRefreshed(source.Id, exhausted.Id, exhausted.LastProcess! with
+        {
+            CompletedAt = exhausted.LastVerification!.CompletedAt,
+            ExitCode = exhausted.LastVerification.ExitCode
+        }, verification: null);
         var another = scenario.NewGoal();
         var eligible = Assert.IsType<ProviderHoldAgentSubstitution.Result.Substitute>(scenario.Resolve(another));
         Assert.Equal(third.Id, eligible.Agent.Id);
 
-        var result = driver.AdvanceOnce(scenario.Source, ConductorAutonomyPolicy.Permissive);
+        var result = driver.AdvanceOnce(source, ConductorAutonomyPolicy.Permissive);
 
         Assert.IsType<ConductorAdvanceOutcome.Escalated>(result.Outcome);
-        Assert.Equal(GoalStatus.Failed, scenario.Source.Status);
-        Assert.Single(scenario.Source.Timeline, evt => evt.Kind == ProgressKind.ProviderHoldSubstituted);
+        Assert.Equal(GoalStatus.Failed, source.Status);
+        Assert.Single(source.Timeline, evt => evt.Kind == ProgressKind.ProviderHoldSubstituted);
         Assert.Equal([RetryCause.ProviderInterruption], causes);
-        Assert.Null(scenario.Source.Tasks.Single().LatestProviderBudgetRecoveryAt);
+        Assert.Null(source.Tasks.Single().LatestProviderBudgetRecoveryAt);
         Assert.Equal("xai::<provider-default>", scenario.Hold.BindingKey);
     }
 
     private static ConductorDriver Driver(Scenario scenario,
         Dictionary<GoalId, SubscriptionStartResult> starts, List<RetryCause> causes)
     {
+        var repository = InfrastructureTestSupport.CreateMigratedStateRepository(scenario.Workspace.SqliteStatePath);
         var driver = ConductorDriverTests.MakeDriver(
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
             dispatchAndStart: goal =>
             {
+                using var worker = new PreparationWorker();
                 var result = new GoalDispatchOperations().StartSubscriptionReadyTasks(scenario.Kernel,
                     scenario.Workspace, goal, scenario.Agents, scenario.Profiles,
-                    runner: new BackgroundDispatchRunner(disableProcessStart: true), sandboxOptions: scenario.Sandbox,
+                    checkpointBeforeWorkerStart: (kernel, _, _, _) => repository.SaveAsync(kernel).GetAwaiter().GetResult(),
+                    runner: new BackgroundDispatchRunner(disableProcessStart: false, startProcess: worker.Start),
+                    sandboxOptions: scenario.Sandbox,
                     commandExists: _ => true, cascadeTesterCheapFirst: false);
                 starts[goal.Id] = result;
-                // This fixture owns the real preparation boundary; the external worker launch is disabled.
+                Assert.Equal(result.Dispatches.Count, result.Processes.Tasks.Count);
+                foreach (var dispatch in result.Dispatches)
+                {
+                    var current = scenario.Kernel.GetTask(goal.Id, dispatch.Task.Id);
+                    Assert.NotNull(current.LastProcess);
+                    if (current.LatestRetryAt is not null)
+                    {
+                        var receipt = Assert.Single(current.RetryAdmissionHistory,
+                            item => item.LinkedDispatchAt == current.LastDispatch!.DispatchedAt);
+                        Assert.NotNull(receipt.WorkerStartedAt);
+                        var stored = repository.LoadAsync().GetAwaiter().GetResult().GetTask(goal.Id, current.Id);
+                        Assert.Equal(current.LastProcess.ProcessId, stored.LastProcess!.ProcessId);
+                    }
+                }
                 return result.Dispatches.Count > 0 ? DispatchStartOutcome.Started(result.Dispatches.Select(item => item.Task).ToArray())
                     : DispatchStartOutcome.EmptyBatch(string.Join("\n", result.BlockedDiagnostics.Select(item => item.ToLine())));
             },
@@ -192,6 +219,9 @@ public sealed class ProviderHoldFallbackScenarioTests
     private static void AssertSubstituted(Scenario scenario, Goal goal, SubscriptionStartResult start)
     {
         Assert.Single(start.Dispatches);
+        Assert.Single(start.Processes.Tasks);
+        // Retry admission hydrates a new authoritative goal instance from SQLite.
+        goal = scenario.Kernel.GetGoal(goal.Id);
         var task = goal.Tasks.Single();
         Assert.Equal(scenario.Alternate.Id, task.AssignedAgentId);
         Assert.Equal(scenario.Alternate.Id.Value, task.LastDispatch!.AssignedAgentId);
@@ -208,5 +238,54 @@ public sealed class ProviderHoldFallbackScenarioTests
         Assert.Equal("provider-budget-exhausted", Assert.Single(start.BlockedDiagnostics).Reason);
         Assert.Equal(scenario.Primary.Id, goal.Tasks.Single().AssignedAgentId);
         Assert.DoesNotContain(goal.Timeline, evt => evt.Kind == ProgressKind.ProviderHoldSubstituted);
+    }
+
+    private sealed class PreparationWorker : IDisposable
+    {
+        private Process? _process;
+        private TestChildProcessCapture? _capture;
+
+        internal Process Start(ProcessStartInfo requested)
+        {
+            Assert.Null(_process);
+            var start = new ProcessStartInfo(WorkerShell.Executable)
+            {
+                WorkingDirectory = requested.WorkingDirectory,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+            start.Environment.Clear();
+            foreach (var name in new[] { "SystemRoot", "WINDIR", "PATH", "TEMP", "TMP" })
+                if (Environment.GetEnvironmentVariable(name) is { } value)
+                    start.Environment[name] = value;
+            foreach (var argument in WorkerShell.BaseArguments())
+                start.ArgumentList.Add(argument);
+            start.ArgumentList.Add("$null = [Console]::ReadLine(); Write-Output 'fixture-worker-exit'");
+            _capture = TestChildProcessCapture.Start(start, start: info => _process = Process.Start(info));
+            Assert.NotNull(_process);
+            Assert.False(_process.HasExited);
+            return _process;
+        }
+
+        public void Dispose()
+        {
+            if (_process is null) return;
+            try
+            {
+                _process.StandardInput.WriteLine("release");
+                var exit = _capture!.Complete();
+                Assert.Equal(0, exit.ExitCode);
+                Assert.Equal("fixture-worker-exit", exit.Stdout.Trim());
+                Assert.Equal(string.Empty, exit.Stderr);
+            }
+            finally
+            {
+                WorkerProcessJobs.Release(_process.Id);
+                _capture?.Dispose();
+            }
+        }
     }
 }
