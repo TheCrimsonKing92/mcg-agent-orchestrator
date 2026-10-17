@@ -81,6 +81,8 @@ internal static class FocusedEvidenceOverflowSyntheticRoot
             InfrastructureTestSupport.FindRepositoryRoot(), relativeProject.Replace('/', Path.DirectorySeparatorChar))));
         File.WriteAllText(Path.Combine(Path.GetDirectoryName(projectPath)!, "SyntheticTests.cs"),
             string.Join(Environment.NewLine, FocusedEvidenceOverflowPackingTests.SyntheticClassNames
+                .Concat(["SharedTests", .. new[] { 'A', 'B' }.Select(character =>
+                    new string(character, GoalAcceptanceVerifier.MaxFocusedEvidenceFilterLength - "FullyQualifiedName~".Length))])
                 .Select(name => $"public sealed class {name} {{ }}")));
         return root;
     }
