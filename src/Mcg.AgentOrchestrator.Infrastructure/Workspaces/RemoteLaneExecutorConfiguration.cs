@@ -5,7 +5,8 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal sealed record RemoteLaneExecutorEntry(string Id, int LeaseSeconds,
     string? Transport = null, string? RunnerAlias = null, string? AdminAlias = null,
-    string? RemoteRepository = null, string? RunRoot = null, int PollSeconds = 10, int Slots = 1);
+    string? RemoteRepository = null, string? RunRoot = null, int PollSeconds = 10, int Slots = 1,
+    bool OccupancyProbe = false);
 
 internal sealed record RemoteFocusedEvidenceSettings(
     string Mode = "off", int SampleEvery = 4, int GraceSeconds = 300, string? FaultReason = null);
@@ -90,7 +91,15 @@ internal sealed record RemoteLaneExecutorConfiguration(
                         return Disabled("invalid");
                     if (value > 0) pollSeconds = value;
                 }
-                entries.Add(new(id.GetString()!, seconds, "ssh", runner, admin, repository, runRoot, pollSeconds, slots));
+                var occupancyProbe = false;
+                if (executor.TryGetProperty("occupancyProbe", out var probe))
+                {
+                    if (probe.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                        return Disabled("invalid");
+                    occupancyProbe = probe.GetBoolean();
+                }
+                entries.Add(new(id.GetString()!, seconds, "ssh", runner, admin, repository, runRoot,
+                    pollSeconds, slots, occupancyProbe));
             }
             var names = new List<string>();
             foreach (var lane in lanes.EnumerateArray())

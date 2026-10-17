@@ -98,7 +98,7 @@ internal static class CliCommandHelp
     public const string FlakeCensusUsage = "Usage: flake-census [--min-goals <n>] [--since <yyyy-MM-dd|ISO-8601-with-offset>]";
     public const string OwnerDigestUsage = "Usage: owner-digest [--since <ISO-8601-with-offset>] [--until <ISO-8601-with-offset>] [--json] [--rounds]";
     public const string FailureClustersUsage = "Usage: failure-clusters [--since <ISO-8601>] [--until <ISO-8601>] [--top <n>] [--json]";
-    public const string LaneReuseShadowUsage = "Usage: lane-reuse-shadow [--since <ISO-8601>] [--until <ISO-8601>] [--json]";
+    public const string StorageHealthUsage = "Usage: storage-health [--json]";
     public const string BuildAttributionUsage = "Usage: build-attribution [--since <ISO-8601>] [--until <ISO-8601>] [--json]";
     public const string IntentCoverageUsage = "Usage: intent-coverage [--since <ISO-8601>] [--until <ISO-8601>] [--min-cases <n>] [--json]";
     public const string RemoteExecutorsUsage = "Usage: remote-executors [--since <ISO-8601>] [--last <N>] [--json]";
@@ -650,10 +650,10 @@ internal static class CliCommandHelp
         "Rank recurring failure families by paid rounds, knock-on rounds, operator touches and gate minutes; default window is 14 days.",
         ["--since", "--until", "--top", "--json", "--help", "-h"]);
 
-    private static readonly CommandHelpEntry LaneReuseShadow = new(
-        LaneReuseShadowUsage,
-        "Report shadow lane reuse, hypothetical serial savings and misses; default window is 7 days.",
-        ["--since", "--until", "--json", "--help", "-h"]);
+    private static readonly CommandHelpEntry StorageHealth = new(
+        StorageHealthUsage,
+        "Report artifact storage sizes, retention policies, advisory budgets and unregistered entries without writes.",
+        ["--json", "--help", "-h"]);
 
     private static readonly CommandHelpEntry BuildAttribution = new(
         BuildAttributionUsage,
@@ -1216,9 +1216,9 @@ internal static class CliCommandHelp
             entry = BuildAttribution;
             return true;
         }
-        if (args[0].Equals("lane-reuse-shadow", StringComparison.OrdinalIgnoreCase))
+        if (args[0].Equals("storage-health", StringComparison.OrdinalIgnoreCase))
         {
-            entry = LaneReuseShadow;
+            entry = StorageHealth;
             return true;
         }
         if (args[0].Equals("intent-coverage", StringComparison.OrdinalIgnoreCase))

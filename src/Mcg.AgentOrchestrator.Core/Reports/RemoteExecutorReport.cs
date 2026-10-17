@@ -33,7 +33,7 @@ public sealed record RemoteExecutorReport(IReadOnlyList<RemoteExecutorReportRow>
         var rows = ids.Select(id =>
         {
             var attempts = all.Where(row => row.ExecutorId == id &&
-                row.Outcome is not ("not-eligible-exclusive-resource" or "late-after-fallback")).ToArray();
+                row.Outcome is not ("not-eligible-exclusive-resource" or "late-after-fallback" or "executor-busy")).ToArray();
             var window = attempts.Where(row => since is null || row.ObservedAt >= since).ToArray();
             var counts = new SortedDictionary<string, int>(StringComparer.Ordinal);
             foreach (var group in window.GroupBy(row => row.Outcome)) counts.Add(group.Key, group.Count());

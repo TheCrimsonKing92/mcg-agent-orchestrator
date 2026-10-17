@@ -51,6 +51,7 @@ internal sealed record AcceptanceHolderLeaseRecord(AcceptanceHolderBinding Bindi
 internal sealed record AcceptanceHolderObservation(bool ReservesCapacity, bool CanAdopt, string Reason)
 {
     internal bool LeaseAbsent { get; init; }
+    internal AcceptanceHolderLeaseFault? Fault { get; init; }
 }
 
 // Ownership writes have their own lock and artifact. They never contend with result publication.
@@ -136,7 +137,8 @@ internal sealed class AcceptanceHolderLease
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidDataException)
         {
-            return new(true, false, $"holder-lease-unavailable:{ex.GetType().Name}");
+            return new(true, false, $"holder-lease-unavailable:{ex.GetType().Name}")
+            { Fault = AcceptanceHolderLeaseFault.From(ex, binding) };
         }
     }
 
@@ -145,14 +147,16 @@ internal sealed class AcceptanceHolderLease
         using var gate = Lock(binding);
         var record = Read(binding);
         if (record.Phase is "Released" or "Cancelled" || record.Holder is null) return false;
-        if (record.Generation == generation && record.Phase != "Detached") return true;
         // A recycled conductor PID is a foreign generation. An unreadable generation remains a hold.
         if (record.Generation != generation &&
             _classify(record.Generation) != SpawnTrackedProcessStatus.DeadOrRecycled) return false;
         var started = _utcNow();
         var status = _classify(record.Holder);
         var job = ObserveJob(record, record.Holder, status, false);
+        // The owning generation gets no shortcut: a holder that exited is not adoptable by anyone, or
+        // its finished attempt reads as running every tick until a successor generation reconciles it.
         if (status != SpawnTrackedProcessStatus.LiveMatch || !job.HolderMatches || job.Settled) return false;
+        if (record.Generation == generation && record.Phase != "Detached") return true;
         Save(Transition(record, "adopt", generation, "Adopted", job.Detail, started));
         return true;
     }
@@ -199,7 +203,10 @@ internal sealed class AcceptanceHolderLease
         if (holder is not null && (holder.ProcessId != recordedHolder.ProcessId ||
             holder.StartedAt != recordedHolder.StartedAt ||
             !string.Equals(holder.ImagePath, recordedHolder.ImagePath, StringComparison.OrdinalIgnoreCase)))
-            throw new InvalidDataException("Acceptance metadata holder differs from its durable claim.");
+            throw AcceptanceHolderLeaseFault.Annotate(
+                new InvalidDataException("Acceptance metadata holder differs from its durable claim."),
+                "lease-binding-mismatch", AcceptanceHolderLeaseFault.Describe(binding, recordedHolder),
+                AcceptanceHolderLeaseFault.Describe(binding, holder));
     }
 
     internal bool Detach(AcceptanceHolderBinding binding, SpawnProcessIdentity generation)
@@ -253,8 +260,20 @@ internal sealed class AcceptanceHolderLease
 
     internal AcceptanceHolderLeaseRecord Read(AcceptanceHolderBinding binding)
     {
-        var record = JsonSerializer.Deserialize<AcceptanceHolderLeaseRecord>(File.ReadAllText(binding.LeasePath))
-            ?? throw new InvalidDataException("Acceptance holder lease is empty.");
+        AcceptanceHolderLeaseRecord record;
+        try
+        {
+            record = JsonSerializer.Deserialize<AcceptanceHolderLeaseRecord>(File.ReadAllText(binding.LeasePath))
+                ?? throw AcceptanceHolderLeaseFault.Annotate(
+                    new InvalidDataException("Acceptance holder lease is empty."), "lease-malformed",
+                    AcceptanceHolderLeaseFault.Describe(binding), "unreadable");
+        }
+        catch (JsonException ex)
+        {
+            AcceptanceHolderLeaseFault.Annotate(ex, "lease-malformed",
+                AcceptanceHolderLeaseFault.Describe(binding), "unreadable");
+            throw;
+        }
         if (record.Binding != binding || record.JobName != binding.JobName ||
             record.Phase is not ("Reserved" or "Claimed" or "Detached" or "Adopted" or "Released" or "Cancelled") ||
             !ValidIdentity(record.Generation) || record.Receipts is null ||
@@ -264,14 +283,37 @@ internal sealed class AcceptanceHolderLease
             (record.Phase == "Released" && record.Receipts.LastOrDefault()?.Transition != "release") ||
             (record.Phase == "Cancelled" && (record.Receipts.LastOrDefault()?.Transition != "cancel" ||
                 record.Holder is null && record.Receipts.LastOrDefault()?.Reason != "process-not-started")))
-            throw new InvalidDataException("Acceptance holder lease binding or phase changed.");
+        {
+            var mismatch = record.Binding is not null &&
+                (record.Binding != binding || record.JobName != binding.JobName);
+            throw AcceptanceHolderLeaseFault.Annotate(
+                new InvalidDataException("Acceptance holder lease binding or phase changed."),
+                mismatch ? "lease-binding-mismatch" : "lease-malformed",
+                AcceptanceHolderLeaseFault.Describe(binding),
+                AcceptanceHolderLeaseFault.Describe(record.Binding) +
+                (mismatch ? $",job:{AcceptanceHolderLeaseFault.Token(record.JobName)}" :
+                    $",phase:{AcceptanceHolderLeaseFault.Token(record.Phase)}"));
+        }
         return record;
     }
 
     private AcceptanceJobObservation ObserveJob(AcceptanceHolderLeaseRecord record,
-        SpawnProcessIdentity holder, SpawnTrackedProcessStatus status, bool cancel) =>
-        _job?.Invoke(record.JobName, holder, status, cancel) ?? DurableAcceptanceJob.Observe(
+        SpawnProcessIdentity holder, SpawnTrackedProcessStatus status, bool cancel)
+    {
+        var observation = _job?.Invoke(record.JobName, holder, status, cancel) ?? DurableAcceptanceJob.Observe(
             record.JobName, holder, status, cancel, record.Binding.SettlementPath);
+        // A missing job name alone never proves settlement: the job may never have existed. But this lease
+        // recorded job-custody-ready, so the named kill-on-close job did exist with the holder inside it and
+        // breakaway disabled. A job object disappears only after its last handle closes, and kill-on-close then
+        // terminates every member. With the holder also dead, the tree has exited even though the custodian
+        // died before it could publish a receipt (2026-10-16: an activation revert killed the custodian's tree,
+        // and the dead attempt held width-1 admission for 50 minutes).
+        return observation is { Settled: false, Detail: "job-open-error:2" } &&
+            status == SpawnTrackedProcessStatus.DeadOrRecycled && record.Holder == holder &&
+            record.Receipts.Any(receipt => receipt.Transition == "claim" && receipt.Reason == "job-custody-ready")
+            ? new(false, true, "job-gone-after-custody")
+            : observation;
+    }
 
     private static bool ValidIdentity(SpawnProcessIdentity? identity) => identity is not null &&
         identity.ProcessId > 0 && identity.StartedAt != DateTimeOffset.MinValue &&

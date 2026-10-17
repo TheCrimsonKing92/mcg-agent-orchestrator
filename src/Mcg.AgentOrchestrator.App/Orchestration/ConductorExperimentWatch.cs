@@ -118,7 +118,7 @@ internal sealed class ConductorExperimentWatch
                     catch (Exception error) { LogFailure(error); }
                     try { if (keeps.TryKeep(record, reading, asOf)) continue; }
                     catch (Exception error) { LogFailure(error); }
-                    try { toggles.TryToggle(record, hostLedgers, asOf); }
+                    try { toggles.TryToggle(record, hostLedgers, asOf, reading); }
                     catch (Exception error) { LogFailure(error); }
                     foreach (var trigger in Triggers)
                     {
