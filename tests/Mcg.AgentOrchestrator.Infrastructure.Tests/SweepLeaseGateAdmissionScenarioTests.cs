@@ -72,9 +72,13 @@ public sealed class SweepLeaseGateAdmissionScenarioTests(ITestOutputHelper outpu
                 writeEscalation: (_, _, detail) => escalations.Add(detail));
             Assert.True(driver.ParallelAcceptanceEnabled);
 
+            // Include the active directory before enumeration, independent of when its attempt is launched.
+            var activeDirectory = Path.Combine(attemptsRoot, goal.Id.Value);
+            Directory.CreateDirectory(activeDirectory);
             using var sweep = new BlockedSweep(directory, hook => StorageRetentionMaintenance.Run(
                 Path.Combine(root, "logs"), orchestrator, Path.Combine(root, "execution"),
-                [new StorageRetentionGoal(retiredGoal, GoalStatus.Completed, new Dictionary<string, WorkTaskStatus>())],
+                [new StorageRetentionGoal(retiredGoal, GoalStatus.Completed, new Dictionary<string, WorkTaskStatus>()),
+                 new StorageRetentionGoal(goal.Id.Value, GoalStatus.Active, new Dictionary<string, WorkTaskStatus>())],
                 now, mtpResultsRoot: null, beforeAttemptCandidateDeletionForTests: hook,
                 reclaimOptions: new(null, null, null, null, () => [])));
             using (var second = StorageRetentionMaintenance.TryAcquireAttemptWriterLease(directory))
@@ -110,6 +114,12 @@ public sealed class SweepLeaseGateAdmissionScenarioTests(ITestOutputHelper outpu
             Assert.False(result.Failed);
             Assert.Contains(" status=completed ", RunEventMaintenanceCadence.FormatArtifactRetentionReceipt(result),
                 StringComparison.Ordinal);
+            Assert.Contains(result.Decisions, decision => decision.Path == activeDirectory &&
+                decision.Action == EvidenceRetentionAction.Preserved);
+            Assert.DoesNotContain(result.Decisions, decision =>
+                (decision.Path.Equals(activeDirectory, StringComparison.OrdinalIgnoreCase) ||
+                 decision.Path.StartsWith(activeDirectory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) &&
+                decision.Action != EvidenceRetentionAction.Preserved);
             Assert.DoesNotContain(result.Decisions, decision => decision.Action is
                 EvidenceRetentionAction.Failed or EvidenceRetentionAction.DeferredLease or
                 EvidenceRetentionAction.DeferredLive or EvidenceRetentionAction.DeferredLocked or
