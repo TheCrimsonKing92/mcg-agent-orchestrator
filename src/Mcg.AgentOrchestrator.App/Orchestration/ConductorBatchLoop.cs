@@ -215,7 +215,7 @@ internal sealed partial class ConductorBatchLoop
 
         using var activeConductorLease = leaseAcquisition.StateLease!;
         using var activeRunEventLease = leaseAcquisition.RunEventLease!;
-        using var activationAdmissionHealth = BeginActivationAdmissionHealth(emitActivationHeartbeat);
+        using var activationAdmissionHealth = BeginActivationAdmission(emitActivationHeartbeat);
         checkpointGoalTick = ResetLandingTickSave(checkpointGoalTick);
         _consecutiveJanitorialFailures.Clear();
         _slotContentionHolds.Clear();
@@ -247,7 +247,7 @@ internal sealed partial class ConductorBatchLoop
         }
         void CompleteActivationTick(int tick)
         {
-            EmitActivationAdmissionHealth(emitActivationHeartbeat, tick);
+            EmitActivationAdmissionProbeAndHealth(emitActivationHeartbeat, tick);
             EmitActivationTickEnd(emitActivationHeartbeat, tick);
         }
 
@@ -2189,7 +2189,7 @@ internal sealed partial class ConductorBatchLoop
         var state = BeginParallelAcceptanceBatch(
             eligible, kernel, driver, policy, completedGoals, escalatedGoals,
             configuredAcceptanceWidth, tick, changedGoalLines);
-        RecordActivationAdmissionWaiting(state.OrderedEligible.Count);
+        RecordActivationAdmissionWaitingForProbe(state.OrderedEligible.Count);
         if (state.CapacityStateUnavailable) return state.Results;
 
         ReconcileParallelAcceptanceAttempts(state, kernel, driver, policy, tick, changedGoalLines, changedGoalIds);

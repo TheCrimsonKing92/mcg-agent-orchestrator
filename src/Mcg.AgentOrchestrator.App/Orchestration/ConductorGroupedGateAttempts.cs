@@ -227,6 +227,7 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
             launched = _launch(attempt);
             if (launched.ProcessId <= 0)
                 throw new InvalidOperationException("Grouped gate launcher returned no process id.");
+            ConductorBatchLoop.NoteActivationProbeAdmission(AcceptanceHolderBinding.For(attempt), attempt.ResultPath, attempt.MetadataPath);
         }
         catch (Exception ex)
         {

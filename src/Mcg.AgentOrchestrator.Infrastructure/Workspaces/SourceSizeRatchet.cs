@@ -591,7 +591,8 @@ internal static class SourceSizeRatchet
             // checkpoint/exit; the coordinator owns transfer. After integrating main b8da8f673, measured 9242 lines
             // in the same 54 partials; no headroom.
             // Goal 4fce8cbe adds the scoped admission-health accumulator partial and shared census recording calls.
-            new SourceClassCeiling("ConductorBatchLoop", 9319, 55),
+            // Goal aa4f5017 adds the passive activation-probe ledger; measured 9420 lines in 56 partials, no headroom.
+            new SourceClassCeiling("ConductorBatchLoop", 9420, 56),
             // Goal ec8903af moved the goal-prefix parser to CliGoalPrefixArguments.
             // Goal cd1f6380 adds four lines at the owning transaction boundary, forwarding both
             // registrars and invoking actions after commit; list behavior lives in PostCommitActions.
