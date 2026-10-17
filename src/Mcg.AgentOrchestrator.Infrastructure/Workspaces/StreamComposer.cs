@@ -114,9 +114,11 @@ public static class StreamComposer
             return new RebaseStep(null, new MergeTrainEjection(goalId,
                 MergeTrainEjectionReason.MaterializationFailure, [], $"merge base unavailable: {mergeBase.Error}"));
 
+        var replay = MainIntegrationSquash.TryCreate(root, baseRevision, mergeBase.Output.Trim(),
+            candidateRevision, goalId, runRebase) ?? candidateRevision;
         var rebase = runRebase([
             "-c", "user.name=mcg-orchestrator", "-c", "user.email=mcg-orchestrator@localhost",
-            "rebase", "--merge", "--no-stat", "--onto", priorHead, mergeBase.Output.Trim(), candidateRevision]);
+            "rebase", "--merge", "--no-stat", "--onto", priorHead, mergeBase.Output.Trim(), replay]);
         if (rebase.ExitCode != 0)
         {
             var conflicts = GoalWorktrees.ReadMergeTrainConflictPaths(workspacePath);
