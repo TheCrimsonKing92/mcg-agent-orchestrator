@@ -230,6 +230,8 @@ function Get-WorkerBuildInvocationPlan {
     }
     $arguments = [string[]]@('build', $target, '--nologo', '--configuration', $Configuration, '--verbosity', 'minimal',
         '--artifacts-path', $ArtifactsPath, "-maxcpucount:$maxCpuCount", '-p:BuildInParallel=false', '-clp:ErrorsOnly', '-tl:off')
+    # The temp traversal entry cannot inherit the repository's Directory.Build.rsp.
+    if ($mode -eq 'traversal') { $arguments += '-nodeReuse:false' }
     $invocations = [System.Collections.Generic.List[string[]]]::new()
     $invocations.Add($arguments)
     return [pscustomobject]@{

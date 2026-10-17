@@ -17,6 +17,7 @@ public sealed class WorkerBuildInvocationPlanTests
             Assert.Equal("build", arguments[0]);
             Assert.Equal(projects[1], arguments[1]);
             AssertShared(arguments, artifacts, 1);
+            Assert.DoesNotContain("-nodeReuse:false", arguments);
             Assert.Equal(1, plan.GetProperty("SeparateEvaluations").GetInt32());
             Assert.Equal(plan.GetProperty("SeparateEvaluations").GetInt32(),
                 plan.GetProperty("TraversalEvaluations").GetInt32());
@@ -38,6 +39,7 @@ public sealed class WorkerBuildInvocationPlanTests
             Assert.DoesNotContain(arguments[1], projects);
             Assert.Equal(plan.GetProperty("TraversalPath").GetString(), arguments[1]);
             AssertShared(arguments, artifacts, expected);
+            Assert.Contains("-nodeReuse:false", arguments);
             Assert.Equal("Debug", arguments[Array.IndexOf(arguments, "--configuration") + 1]);
             Assert.DoesNotContain("--no-restore", arguments);
             var traversal = XDocument.Load(arguments[1]);
