@@ -35,11 +35,21 @@ internal static class TimedOutSelectionRerunMapping
         evidence.Checks.Concat((evidence.Arms ?? []).SelectMany(arm => arm.Checks)).ToArray();
 
     internal static string? CheckClassification(AcceptanceCheckResult check) =>
-        check.FailureClassification;
+        AcceptanceFailureClassifications.IsEnvironmentalApparatus(check.FailureClassification)
+            ? FailedGoalTimedOutSelectionRerunRule.ApparatusClassification
+            : check.FailureClassification;
 
     internal static bool IsUnusableRerunCheck(AcceptanceCheckResult check) =>
-        throw new NotImplementedException();
+        !check.Passed && CheckClassification(check) is
+            FailedGoalTimedOutSelectionRerunRule.TimedOutClassification or
+            FailedGoalTimedOutSelectionRerunRule.ApparatusClassification;
+
+    internal static string[] GetApparatusSelections(IEnumerable<AcceptanceCheckResult> checks) => checks
+        .Where(check => !check.Passed &&
+            CheckClassification(check) == FailedGoalTimedOutSelectionRerunRule.ApparatusClassification)
+        .Select(check => Regex.Replace(check.Name.ToLowerInvariant(), "[^a-z0-9]+", "-").Trim('-'))
+        .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
 
     internal static string DescribeApparatus(IEnumerable<string> selections) =>
-        throw new NotImplementedException();
+        $"Apparatus: selection(s) {string.Join(", ", selections)} failed as an apparatus outcome, not a verdict on the candidate; the acceptance gate should judge them.";
 }
