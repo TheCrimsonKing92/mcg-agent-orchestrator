@@ -53,6 +53,9 @@ internal static class AcceptanceLaneDurationStore
         TimeSpan elapsed) =>
         CurrentScope.Value?.Record(check, result, elapsed);
 
+    internal static void RecordCheck(string checkName, bool passed, TimeSpan elapsed) =>
+        CurrentScope.Value?.RecordCheck(checkName, passed, elapsed);
+
     internal static void Flush() => CurrentScope.Value?.Flush();
 
     private static Snapshot LoadSnapshot(string path)
@@ -235,6 +238,19 @@ internal static class AcceptanceLaneDurationStore
                 key.FilterHash,
                 elapsed.TotalSeconds,
                 DateTimeOffset.UtcNow));
+        }
+
+        internal void RecordCheck(string checkName, bool passed, TimeSpan elapsed)
+        {
+            if (!passed || string.IsNullOrWhiteSpace(checkName) ||
+                checkName.StartsWith("infrastructure tests:", StringComparison.Ordinal) ||
+                !IsValidDuration(elapsed.TotalSeconds))
+            {
+                return;
+            }
+
+            _observations.Enqueue(new AcceptanceLaneDurationObservation(
+                CurrentVersion, checkName, "check", elapsed.TotalSeconds, DateTimeOffset.UtcNow));
         }
 
         internal void Flush()
