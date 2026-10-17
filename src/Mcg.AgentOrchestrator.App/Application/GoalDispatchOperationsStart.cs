@@ -50,9 +50,6 @@ internal sealed partial class GoalDispatchOperations
         var safeBatch = DispatchReadinessRules.SelectFirstParallelSafeAssignedBatch(goal, agents, approveHighRiskOwnership, excludedTaskIds);
         EnsureRefinedForSelectedTasks(kernel, workspace, providers, goal, safeBatch.TaskIds);
         goal = kernel.GetGoal(goal.Id);
-        var retryReplayTasks = kernel.ExportGoalSnapshot(goal.Id).Tasks
-            .Where(task => safeBatch.TaskIds.Contains(new TaskId(task.Id)) && task.LatestRetryAt is not null)
-            .ToDictionary(task => new TaskId(task.Id));
         var home = _resolveHome(workspace);
         new ProviderHoldAgentSubstitution(kernel, agents, (viewGoal, viewTask, holdScope) =>
             WorkerProfileDispatcher.PreflightSubscriptionTask(viewGoal, viewTask, agents, profiles,
@@ -67,6 +64,9 @@ internal sealed partial class GoalDispatchOperations
                 targetHome: new WorkerTargetHome(home.IsHome(workspace), WorkerAcceptanceManifestResolver.For(workspace))))
             .ApplyBatch(goal, safeBatch.TaskIds);
         goal = kernel.GetGoal(goal.Id);
+        var retryReplayTasks = kernel.ExportGoalSnapshot(goal.Id).Tasks
+            .Where(task => safeBatch.TaskIds.Contains(new TaskId(task.Id)) && task.LatestRetryAt is not null)
+            .ToDictionary(task => new TaskId(task.Id));
         var batch = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
             kernel,
             goal,

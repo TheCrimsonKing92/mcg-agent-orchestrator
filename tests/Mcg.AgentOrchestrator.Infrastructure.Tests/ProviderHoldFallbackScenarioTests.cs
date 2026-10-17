@@ -36,6 +36,52 @@ public sealed class ProviderHoldFallbackScenarioTests
     }
 
     [Xunit.Fact]
+    public async Task RetriedHeldTesterKeepsSubstitutionAfterPaidAdmission()
+    {
+        using var scenario = new Scenario();
+        var goal = scenario.NewGoal();
+        scenario.Exhaust(goal, scenario.Primary);
+        var task = goal.Tasks.Single();
+        scenario.Kernel.RetryTaskAutomatically(goal.Id, task.Id, "Retry the interrupted verification.",
+            RetryCause.ProviderInterruption);
+        Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+        Assert.Equal(scenario.Primary.Id, task.AssignedAgentId);
+        Assert.NotNull(task.LatestRetryAt);
+        Assert.Null(task.LastDispatch);
+        Assert.DoesNotContain(goal.Timeline, evt => evt.Kind == ProgressKind.ProviderHoldSubstituted);
+        Assert.Contains(scenario.Preflight(goal, task, scenario.Kernel.Goals).Findings,
+            finding => finding.Contains("code=provider-budget-exhausted", StringComparison.Ordinal));
+        var revision = task.ConductorRoutingRevision;
+        var starts = new Dictionary<GoalId, SubscriptionStartResult>();
+
+        Driver(scenario, starts, []).AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        AssertSubstituted(scenario, goal, starts[goal.Id]);
+        var currentGoal = scenario.Kernel.GetGoal(goal.Id);
+        var current = currentGoal.Tasks.Single();
+        Assert.NotSame(goal, currentGoal); // Paid admission hydrates the durable replay snapshot.
+        Assert.NotEqual(GoalStatus.Failed, currentGoal.Status);
+        Assert.Equal(PaidRouteClassification.Paid, current.LastDispatch!.PaidRoute);
+        var admission = Assert.Single(current.RetryAdmissionHistory,
+            receipt => receipt.LinkedDispatchAt == current.LastDispatch.DispatchedAt);
+        Assert.NotNull(admission.WorkerStartedAt);
+        Assert.Equal(revision + 1, current.ConductorRoutingRevision);
+
+        var repository = InfrastructureTestSupport.CreateMigratedStateRepository(scenario.Workspace.SqliteStatePath);
+        var storedKernel = await repository.LoadAsync();
+        var storedGoal = storedKernel.GetGoal(goal.Id);
+        var stored = storedGoal.Tasks.Single();
+        Assert.Equal(scenario.Alternate.Id, stored.AssignedAgentId);
+        Assert.Equal(revision + 1, stored.ConductorRoutingRevision);
+        Assert.Equal(scenario.Alternate.Id.Value, stored.LastDispatch!.AssignedAgentId);
+        var storedAdmission = Assert.Single(stored.RetryAdmissionHistory,
+            receipt => receipt.LinkedDispatchAt == stored.LastDispatch.DispatchedAt);
+        Assert.Equal(admission.ReceiptId, storedAdmission.ReceiptId);
+        Assert.Equal(admission.WorkerStartedAt, storedAdmission.WorkerStartedAt);
+        Assert.Single(storedGoal.Timeline, evt => evt.Kind == ProgressKind.ProviderHoldSubstituted);
+    }
+
+    [Xunit.Fact]
     public void NoAlternateKeepsAssignedGoalsBlockedAndFailedGoalEscalated()
     {
         using var scenario = new Scenario();
