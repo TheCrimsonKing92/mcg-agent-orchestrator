@@ -25,8 +25,14 @@ public sealed record AcceptanceGateProgress(
     string? Outcome = null,
     int FailedTestCount = 0)
 {
-    public string ShardOutcomeTokens => Phase == "shard-complete"
-        ? $" outcome={Outcome ?? "unknown"} failed={FailedTestCount}" : string.Empty;
+    internal GateLaneSlowdownDiff.GateLaneSlowdownResult? Slowdown { get; init; }
+    public string ShardOutcomeTokens => Phase switch
+    {
+        "shard-complete" => (LoadContext is null ? "" : " " + GateLoadContextProbe.FormatProgressTokens(LoadContext))
+            + $" outcome={Outcome ?? "unknown"} failed={FailedTestCount}",
+        "lane-slowdown" => GateLaneSlowdownDiff.FormatProgressSuffix(Slowdown, CurrentTarget),
+        _ => string.Empty
+    };
 }
 
 public sealed record GateHeartbeatSnapshot(

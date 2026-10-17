@@ -10,10 +10,44 @@ internal static class GateLaneReceiptLedger
     internal static string ResolveStorePath(string worktreePath) =>
         Path.Combine(HostLedgerStateDirectory.Resolve(worktreePath), FileName);
 
-    internal static void Record(
+    internal static GateLaneSlowdownDiff.GateLaneSlowdownResult? Record(
         string worktreePath, string? goalId, string laneName, AcceptanceCheckResult result,
         TimeSpan wall, DateTimeOffset now, Action<string, string>? appender = null)
     {
+        GateLaneSlowdownDiff.GateLaneSlowdownResult? slowdown = null;
+        string? unavailable = null;
+        LaneTestDurationSnapshot? snapshot = null;
+        try
+        {
+            snapshot = LaneTestDurationSnapshot.Read(result.TestResultPaths);
+            slowdown = GateLaneSlowdownDiff.Compute(wall.TotalMilliseconds, snapshot, GateLaneBaselineStore.ReadHistory(worktreePath, laneName));
+        }
+        catch (Exception error)
+        {
+            slowdown = new("no-test-data", 0, wall.TotalMilliseconds, UnavailableReason: "slowdown-error:" + error.GetType().Name);
+        }
+        // These independent writes must survive failure of any other diagnostic artifact.
+        try
+        {
+            if (slowdown?.Status == "slow")
+            {
+                var path = Path.Combine(HostLedgerStateDirectory.Resolve(worktreePath), GateLaneSlowdownDiff.FileName);
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                (appender ?? SharedJsonlFile.AppendLine)(path,
+                    JsonSerializer.Serialize(GateLaneSlowdownDiff.ToRow(slowdown, goalId, laneName, result.TestResultRunOrdinal, now)));
+            }
+        }
+        catch (Exception error) { unavailable = "slowdown-write:" + error.GetType().Name; }
+        try
+        {
+            if (snapshot is not null)
+            {
+                var baselineReason = GateLaneBaselineStore.TryAppend(worktreePath, laneName,
+                    new(now, wall.TotalMilliseconds, snapshot.Tests), result.Passed && !result.TestResultIsExplicitCrossAttemptReuse);
+                unavailable ??= baselineReason;
+            }
+        }
+        catch (Exception error) { unavailable ??= "baseline-error:" + error.GetType().Name; }
         try
         {
             GateLoadContextProbe.BindHostLogDirectory(Path.Combine(HostLedgerStateDirectory.Resolve(worktreePath), "logs"));
@@ -34,6 +68,8 @@ internal static class GateLaneReceiptLedger
             Add("cpu_ms", receipt.CpuMilliseconds);
             Add("peak_mem_bytes", receipt.PeakMemoryBytes);
             Add("host_available_memory_mb", receipt.HostAvailableMemoryMb);
+            row["slowdown_status"] = slowdown.Status;
+            row["slowdown_ratio"] = slowdown.Status == "slow" && slowdown.Ratio is { } ratio ? Math.Round(ratio, 2) : null;
             var path = ResolveStorePath(worktreePath);
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             (appender ?? SharedJsonlFile.AppendLine)(path, JsonSerializer.Serialize(row));
@@ -45,5 +81,6 @@ internal static class GateLaneReceiptLedger
             }
         }
         catch (Exception) { /* Diagnostic receipts must never affect the gate verdict. */ }
+        return slowdown with { UnavailableReason = unavailable ?? slowdown.UnavailableReason };
     }
 }
