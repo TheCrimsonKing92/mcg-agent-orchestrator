@@ -68,7 +68,7 @@ public static class LandingRebasePolicy
                 $"Conductor tick retired missing goal branch before landing because the goal artifact could not be rebased: {facts.Message}", facts);
         if (facts.RebaseStatus == "Conflict")
             return new(LandingRebaseAction.Escalate, 2, "rebase-conflict",
-                $"{facts.Phase} rebase conflict ({string.Join(", ", facts.ConflictFiles)}); use 'workspace rebase' to resolve", facts);
+                $"{facts.Phase} rebase conflict ({string.Join(", ", facts.ConflictFiles)}); not confined to ratchet ceiling rows, so the conductor cannot resolve it; the operator integrates main into the goal branch and does not run workspace rebase", facts);
         return new(LandingRebaseAction.Escalate, 3, "rebase-failed", $"{facts.Phase} rebase failed: {facts.Message}", facts);
     }
 }

@@ -22,13 +22,14 @@ internal static class RegistryAwareConflictMerge
     private static readonly IReadOnlyDictionary<string, RegistryStrategy> Registries = new Dictionary<string, RegistryStrategy>(StringComparer.Ordinal)
     {
         [SourceSizeRatchet.SourcePath] = new(new Regex(
-            "^\\s*new\\s+(?<kind>SourceSizeCeiling|SourceClassCeiling)\\(\\s*\"(?<identity>[^\"]+)\"\\s*,\\s*(?<ceiling>\\d+)(?:\\s*,\\s*\\d+)?\\s*\\)\\s*,?\\s*(?://.*)?$",
+            "^\\s*new\\s+(?<kind>SourceSizeCeiling|SourceClassCeiling)\\(\\s*\"(?<identity>[^\"]+)\"\\s*,\\s*(?<ceiling>\\d+)(?:\\s*,\\s*(?<count>\\d+))?\\s*\\)\\s*,?\\s*(?://.*)?$",
             RegexOptions.CultureInvariant),
             match => match.Groups["kind"].Value + ":" + match.Groups["identity"].Value,
             syntax => syntax.DescendantNodes().OfType<ObjectCreationExpressionSyntax>()
                 .Where(node => node.Type.ToString() is "SourceSizeCeiling" or "SourceClassCeiling").Select(node => node.SpanStart),
             type => type.Contains("SourceSizeCeiling", StringComparison.Ordinal) || type.Contains("SourceClassCeiling", StringComparison.Ordinal),
-            entry => entry.Key.StartsWith("SourceSizeCeiling:", StringComparison.Ordinal),
+            entry => entry.Key.StartsWith("SourceSizeCeiling:", StringComparison.Ordinal) ||
+                entry.Key.StartsWith("SourceClassCeiling:", StringComparison.Ordinal),
             (root, relative) => SourceSizeRatchet.Evaluate(root,
                 [new SourceSizeCeiling(relative, -1)]).Single().ActualLineCount,
             ValidateRatchet)
@@ -45,13 +46,15 @@ internal static class RegistryAwareConflictMerge
     }
 
     internal sealed record Plan(string Path, List<Entry> Entries, Dictionary<string, string> Skeleton,
-        string[] BaseOrder, Dictionary<string, List<string>> Additions, string LineEnding, bool Bom);
+        string[] BaseOrder, Dictionary<string, List<string>> Additions, string LineEnding, bool Bom,
+        Func<string, string, (int TotalLines, int PartialFiles)?> MeasureClass);
 
     internal static bool IsRegistry(string path) => Registries.ContainsKey(path);
 
     // null plan + reason=none means decline: the existing hunk resolver still owns this conflict.
     internal static Plan? TryPlan(string path, string baseText, string mainText, string branchText,
-        byte[] workingBytes, out string reason)
+        byte[] workingBytes, out string reason,
+        Func<string, string, (int TotalLines, int PartialFiles)?>? measureClass = null)
     {
         reason = "none";
         if (!Registries.TryGetValue(path, out var strategy)) return null;
@@ -127,7 +130,8 @@ internal static class RegistryAwareConflictMerge
             sections[preceding] = sections.GetValueOrDefault(preceding, "") + text;
         }
         return new(path, entries, sections, baseOrder, additions,
-            workingText.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : workingText.Contains('\r') ? "\r" : "\n", bom);
+            workingText.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : workingText.Contains('\r') ? "\r" : "\n", bom,
+            measureClass ?? MeasureClass);
     }
 
     private static string? Reconcile(string? baseline, string? main, string? branch, out bool conflict)
@@ -204,20 +208,41 @@ internal static class RegistryAwareConflictMerge
 
     internal static bool WritePlans(string root, IReadOnlyList<Plan> plans)
     {
-        // First materialize the complete layout, so even a self-guarded registry can be measured.
-        foreach (var plan in plans) Write(root, plan, Render(plan, _ => null, false)!);
-        foreach (var plan in plans)
+        var originals = plans.ToDictionary(plan => plan.Path, plan => File.ReadAllBytes(Path.Combine(root, plan.Path)));
+        var written = false;
+        try
         {
-            var rendered = Render(plan, relative => Registries[plan.Path].Measure(root, relative), true);
-            if (rendered is null) return false;
-            Write(root, plan, rendered);
+            // First materialize the complete layout, so even a self-guarded registry can be measured.
+            foreach (var plan in plans) Write(root, plan, Render(root, plan, _ => null, false)!);
+            foreach (var plan in plans)
+            {
+                var rendered = Render(root, plan, relative => Registries[plan.Path].Measure(root, relative), true);
+                if (rendered is null) return false;
+                Write(root, plan, rendered);
+            }
+            written = true;
+            return true;
         }
-        return true;
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+        finally
+        {
+            if (!written)
+                foreach (var plan in plans) Write(root, plan, originals[plan.Path]);
+        }
+    }
+
+    private static (int TotalLines, int PartialFiles)? MeasureClass(string root, string name)
+    {
+        var classes = SourceSizeRatchet.MeasureClasses(root, [name], out var unreadable);
+        return unreadable.Count == 0 && classes.TryGetValue(name, out var measured) ? measured : null;
     }
 
     private static void Write(string root, Plan plan, byte[] bytes) => File.WriteAllBytes(Path.Combine(root, plan.Path), bytes);
 
-    private static byte[]? Render(Plan plan, Func<string, int?> measure, bool remeasure)
+    private static byte[]? Render(string root, Plan plan, Func<string, int?> measure, bool remeasure)
     {
         var entries = plan.Entries.ToDictionary(entry => entry.Key, StringComparer.Ordinal);
         var result = new StringBuilder();
@@ -228,10 +253,21 @@ internal static class RegistryAwareConflictMerge
             var row = entry.Row;
             if (entry.Remeasure && remeasure)
             {
-                var count = measure(entry.Identity);
+                var match = Registries[plan.Path].RowPattern.Match(row);
+                int? count;
+                if (entry.Key.StartsWith("SourceClassCeiling:", StringComparison.Ordinal))
+                {
+                    var measured = plan.MeasureClass(root, entry.Identity);
+                    var files = match.Groups["count"];
+                    if (measured is null || measured.Value.PartialFiles <= 0 || !files.Success)
+                    { failed = true; return; }
+                    row = row[..files.Index] + measured.Value.PartialFiles.ToString(CultureInfo.InvariantCulture) + row[(files.Index + files.Length)..];
+                    count = measured.Value.TotalLines;
+                }
+                else count = measure(entry.Identity);
                 if (count is null) { failed = true; return; }
-                var match = Registries[plan.Path].RowPattern.Match(row).Groups["ceiling"];
-                row = row[..match.Index] + count.Value.ToString(CultureInfo.InvariantCulture) + row[(match.Index + match.Length)..];
+                var ceiling = match.Groups["ceiling"];
+                row = row[..ceiling.Index] + count.Value.ToString(CultureInfo.InvariantCulture) + row[(ceiling.Index + ceiling.Length)..];
             }
             foreach (var comment in entry.Comments) result.Append(comment).Append('\n');
             result.Append(row).Append('\n');

@@ -8,8 +8,10 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed class ConductorProgramHealthMonitor(string statePath, Func<string?> policyReader,
     ConductEventLogWriter writer, TimeProvider clock,
-    Func<GoalId, IReadOnlyList<ProgramHealthReceiptObservation>> receiptReader)
+    Func<GoalId, IReadOnlyList<ProgramHealthReceiptObservation>> receiptReader,
+    ICollaborationItemStore? attention = null)
 {
+    private ICollaborationItemStore? _attention = attention;
     internal const string EventKind = "program-health";
     internal const string StateFileName = "program-health-state.json";
     internal const string AlertEvent = "PROGRAM_HEALTH_ALERT";
@@ -30,15 +32,22 @@ internal sealed class ConductorProgramHealthMonitor(string statePath, Func<strin
                 .ReadPassedReceiptsForGoal(id).Select(ProgramHealthReceiptObservation.FromMergeTrainReceipt).ToArray());
     }
 
-    internal void Evaluate(IReadOnlyList<(GoalId Id, GoalStatus Status)> goals, string? integrationHead)
+    internal void Evaluate(IReadOnlyList<(GoalId Id, GoalStatus Status)> goals, string? integrationHead,
+        Func<IReadOnlyList<(GoalId Id, GoalStatus Status)>, DateTimeOffset, ConductorInvariantObservation?>? observe = null)
     {
-        if (integrationHead is null) return;
+        if (integrationHead is null && observe is null) return;
         try
         {
             var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(statePath).ToUpperInvariant())));
             using var mutex = new Mutex(false, "McgProgramHealth-" + key);
             try { mutex.WaitOne(); } catch (AbandonedMutexException) { }
-            try { EvaluateUnderLock(goals, integrationHead); }
+            try
+            {
+                if (integrationHead is not null)
+                    try { EvaluateUnderLock(goals, integrationHead); } catch { /* Advisory, independently of invariants. */ }
+                if (observe is not null)
+                    try { EvaluateInvariantsUnderLock(goals, integrationHead, observe); } catch { /* Advisory, including observation reads. */ }
+            }
             finally { mutex.ReleaseMutex(); }
         }
         catch
@@ -57,6 +66,8 @@ internal sealed class ConductorProgramHealthMonitor(string statePath, Func<strin
             ["lastHead"] = integrationHead, ["lastLandingAt"] = null,
             ["observedSince"] = now, ["activeKey"] = null
         };
+        if (changed && ReadStateObject()?["invariants"] is { } invariants)
+            state["invariants"] = invariants.DeepClone();
         if (!string.Equals(state["lastHead"]!.GetValue<string>(), integrationHead, StringComparison.OrdinalIgnoreCase))
         {
             state["lastHead"] = integrationHead;
@@ -83,6 +94,59 @@ internal sealed class ConductorProgramHealthMonitor(string statePath, Func<strin
             changed = true;
         }
         if (changed) Save(state);
+    }
+
+    private void EvaluateInvariantsUnderLock(IReadOnlyList<(GoalId Id, GoalStatus Status)> goals, string? integrationHead,
+        Func<IReadOnlyList<(GoalId Id, GoalStatus Status)>, DateTimeOffset, ConductorInvariantObservation?> observe)
+    {
+        var observation = observe(goals, clock.GetUtcNow());
+        if (observation is null) return;
+        observation = observation with { MainSha = integrationHead };
+        var state = ReadStateObject() ?? new JsonObject();
+        var active = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+        if (state["invariants"] is JsonObject previous)
+            foreach (var pair in previous)
+                if (pair.Key.IndexOf('|') is > 0 && pair.Value is JsonValue value &&
+                    value.TryGetValue<string>(out var text) && DateTimeOffset.TryParse(text, out var since))
+                    active[pair.Key] = since;
+        var assessment = ConductorInvariantWatchdog.Evaluate(observation, active);
+        foreach (var breach in assessment.Raise)
+        {
+            var detail = $"INVARIANT_BREACH kind={breach.Kind} record={breach.Record} since={breach.Since:O} evidence={breach.Evidence}";
+            if (!writer.AppendRequired("invariant-breach", breach.Record, detail, observation.Now,
+                eventId: $"{breach.CorrelationKey}:{breach.Since:O}")) continue;
+            Attention().RaiseAsync(CollaborationItemType.Decision,
+                breach.Kind == ConductorInvariantThresholds.GateIdleWhileReadyKind ? breach.Record : null,
+                $"Invariant breach: {breach.Kind} {breach.Record}",
+                detail + ". Detect-only: no automatic remedy was taken.", breach.CorrelationKey).GetAwaiter().GetResult();
+            active[breach.Key] = breach.Since;
+            SaveActive();
+        }
+        foreach (var breach in assessment.Clear)
+        {
+            var detail = $"INVARIANT_CLEARED kind={breach.Kind} record={breach.Record}";
+            if (!writer.AppendRequired("invariant-breach", breach.Record, detail, observation.Now,
+                eventId: $"invariant-cleared:{breach.Kind}:{breach.Record}:{breach.Since:O}")) continue;
+            Attention().TryResolveAsync(breach.CorrelationKey, detail).GetAwaiter().GetResult();
+            active.Remove(breach.Key);
+            SaveActive();
+        }
+
+        ICollaborationItemStore Attention() => _attention ??= CollaborationItemStore.ForDirectory(
+            Path.GetDirectoryName(Path.GetFullPath(statePath))!);
+        void SaveActive()
+        {
+            var entries = new JsonObject();
+            foreach (var pair in active) entries[pair.Key] = pair.Value;
+            state["invariants"] = entries;
+            Save(state);
+        }
+    }
+
+    private JsonObject? ReadStateObject()
+    {
+        try { return JsonNode.Parse(File.ReadAllText(statePath)) as JsonObject; }
+        catch { return null; }
     }
 
     private JsonObject? Load()

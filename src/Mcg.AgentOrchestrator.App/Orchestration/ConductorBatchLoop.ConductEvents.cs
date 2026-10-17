@@ -89,6 +89,7 @@ internal sealed partial class ConductorBatchLoop
             "POLICY_WARNING" => "policy-warning",
             "SPECULATIVE_COHORT_PLAN" => "speculative-cohort-plan",
             "TRAIN_RECEIPT_STALE" => "train-receipt-stale",
+            "TRAIN_RECEIPT_REVALIDATE" => "train-receipt-revalidate",
             "TRAIN_RECEIPT_HELD" => "train-receipt-held",
             "TRAIN_RECEIPT_RELEASED" => "train-receipt-released",
             "ACCEPTANCE_COHORT" => "acceptance-cohort",

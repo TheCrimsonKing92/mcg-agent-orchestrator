@@ -96,7 +96,8 @@ internal sealed partial class ConductorContinuitySupervisor(
     Func<IReadOnlyList<StoreSetupPlanEntry>>? inspectStores = null,
     ConductorHandoffSchemaUpgrade? schemaUpgrade = null,
     Func<Action<string, string, CancellationToken>, CancellationToken, ConductorPreparedSuccessor>? stageSuccessorWithHook = null,
-    string? stopFilePath = null)
+    string? stopFilePath = null,
+    Func<string, string, IReadOnlyList<string>>? changedPathsBetween = null)
 {
     public const string ChildFlag = "--continuity-child";
     public const string ExitArtifactFlag = "--continuity-exit-artifact";
@@ -279,7 +280,8 @@ internal sealed partial class ConductorContinuitySupervisor(
             ConductorSupervisorProcessResult result;
             string? launchFailure = null;
             string? stallFailure = null;
-            var activationMonitor = new ActivationMonitor(_timeProvider.GetUtcNow);
+            var activationMonitor = new ActivationMonitor(_timeProvider.GetUtcNow, successor is null ? null :
+                ResolveAdmissionProbe(workingDirectory, currentBuild.CommitSha, successor.RepositoryHead));
             var liveProcessId = 0;
             var readiness = successor is null
                 ? null
@@ -352,7 +354,7 @@ internal sealed partial class ConductorContinuitySupervisor(
                         }
                         var restore = await ObserveActivationAsync(
                             restoreTask, activationMonitor, artifactPath, restoreCts,
-                            activationTickGapTimeout, cancellationToken)
+                            activationTickGapTimeout, checkAdmissionHealth: false, cancellationToken)
                             .ConfigureAwait(false);
                         if (!restore.Adopted && !restore.DeliberateStop)
                         {
@@ -465,7 +467,7 @@ internal sealed partial class ConductorContinuitySupervisor(
                             stderrPath);
                         var activation = await ObserveActivationAsync(
                             runTask, activationMonitor, artifactPath, processCts,
-                            activationTickGapTimeout, cancellationToken)
+                            activationTickGapTimeout, checkAdmissionHealth: true, cancellationToken)
                             .ConfigureAwait(false);
                         var candidateBuild = ConductorActivationBuild.FromSuccessor(successor, _dotnetPath);
                         if (!activation.Adopted && !activation.DeliberateStop)
@@ -504,6 +506,8 @@ internal sealed partial class ConductorContinuitySupervisor(
                         if (activation.Adopted)
                         {
                             appliedUpgrade = null;
+                            if (activation.ProbeSkippedReason is { } skipReason)
+                                RecordProbeSkipped(skipReason, candidateBuild, previousBuild);
                             RecordActivation("adopted", attempt, candidateBuild, previousBuild, null, activation.Detail);
                             NoteAdoptedBuild(candidateBuild);
                             ConductorSupervisorActiveChild? handoffChild = null;
@@ -640,8 +644,11 @@ internal sealed partial class ConductorContinuitySupervisor(
                 return 0;
             }
 
-            if (stallFailure is null && result.ExitCode == 0 && artifact is { RestartRequested: true })
+            if (artifact is { RestartRequested: true } &&
+                ((stallFailure is null && result.ExitCode == 0) || stallFailure is not null))
             {
+                if (stallFailure is not null)
+                    TryAppendConductEvent($"SUPERVISOR_STALL_RESTART_HONORED attempt={attempt} pid={result.ProcessId} stall={stallFailure}");
                 renewalsWithoutProgress = artifact.Done > 0 || artifact.LandedGoals > 0 ? 0 : renewalsWithoutProgress + 1;
                 if (renewalsWithoutProgress > maxRenewalsWithoutProgress)
                 {

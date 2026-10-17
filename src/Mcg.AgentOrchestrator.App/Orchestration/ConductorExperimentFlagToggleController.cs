@@ -9,7 +9,8 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed class ConductorExperimentFlagToggleController(Func<IOperatorIntentStore> intentStore,
     ExperimentFlagStateReader flags, Func<bool> gateInFlight)
 {
-    internal bool TryToggle(ExperimentRecord record, ExperimentHostLedgers ledgers, DateTimeOffset now)
+    internal bool TryToggle(ExperimentRecord record, ExperimentHostLedgers ledgers, DateTimeOffset now,
+        ExperimentReadingResult? reading = null)
     {
         if (record.Outcome != ExperimentOutcomeState.Open ||
             record.Spec.Baseline.Kind != ExperimentBaselineKind.AlternatingGates ||
@@ -24,6 +25,11 @@ internal sealed class ConductorExperimentFlagToggleController(Func<IOperatorInte
             .ThenByDescending(row => row.GateAttemptId, StringComparer.Ordinal).FirstOrDefault();
         if (gate is null || flags.Read(target) is not { } current ||
             ExperimentAlternatingGateReading.ResolveArm(gate, record.Id) != (current == target.ValueToApply ? "on" : "off"))
+            return false;
+
+        // At the stop rule, settle on the decided arm instead of alternating.
+        if (reading is { StopRuleMet: true } && current ==
+            (reading.Verdict == "keep" && !reading.GuardrailBreached ? target.ValueToApply : target.PriorValue.Value))
             return false;
 
         var id = Guid.NewGuid().ToString("n");
