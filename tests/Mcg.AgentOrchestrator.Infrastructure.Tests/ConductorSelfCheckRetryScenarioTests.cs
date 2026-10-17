@@ -24,7 +24,7 @@ public sealed class ConductorSelfCheckRetryScenarioTests
         Assert.Equal(2, fixture.ProbeCalls);
         Assert.Single(fixture.Events, line => line.StartsWith("SELF_CHECK_RETRY reason=timeout ", StringComparison.Ordinal));
         AssertProbeAttempts(fixture.Events);
-        Assert.DoesNotContain(fixture.Events, line => line.StartsWith("LOOP_HANDOFF_FAILED", StringComparison.Ordinal) && line.Contains("phase=self-check"));
+        Assert.DoesNotContain(fixture.Events, line => line.StartsWith("LOOP_HANDOFF_FAILED", StringComparison.Ordinal));
         Assert.Equal(2, fixture.Host.Requests.Count);
         Assert.Null(fixture.Host.Requests[0].CommandPrefix);
         Assert.Equal(new[] { "dotnet-fixture", prepared.AppDllPath }, fixture.Host.Requests[1].CommandPrefix);
@@ -150,6 +150,12 @@ public sealed class ConductorSelfCheckRetryScenarioTests
                 {
                     try { return Prepared = Prepare(runner); }
                     catch (ConductorSelfRelaunchPreparationException ex) { Failure = ex; throw; }
+                }, inspectStores: () =>
+                {
+                    var plan = StoreSetupRunner.Plan(Path.GetDirectoryName(Options.StateStorePath)!, includeState: true);
+                    Assert.NotEmpty(plan);
+                    Assert.All(plan, store => Assert.False(store.IsNewer || store.RequiresMigration));
+                    return plan;
                 }, appendConductEvent: (_, _, detail) => Events.Add(detail),
                 dotnetPath: "dotnet-fixture", activationHealthyTicks: 3);
             return supervisor.RunAsync(["conduct", "--loop", "--repository-root", Root,
