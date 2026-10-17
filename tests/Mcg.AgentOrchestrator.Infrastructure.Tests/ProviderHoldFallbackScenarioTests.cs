@@ -153,12 +153,9 @@ public sealed class ProviderHoldFallbackScenarioTests
         var source = scenario.Kernel.GetGoal(scenario.Source.Id);
         scenario.Exhaust(source, scenario.Alternate);
         var exhausted = source.Tasks.Single();
-        // Pair the simulated provider verification with its exited process, as real completion does.
-        scenario.Kernel.RecordTaskProcessRefreshed(source.Id, exhausted.Id, exhausted.LastProcess! with
-        {
-            CompletedAt = exhausted.LastVerification!.CompletedAt,
-            ExitCode = exhausted.LastVerification.ExitCode
-        }, verification: null);
+        Assert.False(exhausted.LastProcess!.IsRunning);
+        Assert.Equal(ProviderFailureKind.BudgetExhausted, exhausted.LastVerification!.ProviderFailureKind);
+        Assert.Equal(GoalStatus.Failed, source.Status);
         var another = scenario.NewGoal();
         var eligible = Assert.IsType<ProviderHoldAgentSubstitution.Result.Substitute>(scenario.Resolve(another));
         Assert.Equal(third.Id, eligible.Agent.Id);

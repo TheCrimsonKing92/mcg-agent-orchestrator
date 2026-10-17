@@ -169,6 +169,13 @@ public sealed class ProviderHoldAgentSubstitutionTests
                 "API error (status 402 Payment Required): Grok Build usage balance exhausted",
                 dispatch.DispatchedAt.AddMinutes(1), ProviderFailureKind: ProviderFailureKind.BudgetExhausted,
                 DispatchStartedAt: dispatch.DispatchedAt, StandardErrorPath: Path.Combine(Root, agent.Id.Value + ".stderr")));
+            // Record the simulated worker exit before terminal escalation checks process liveness.
+            if (task.LastProcess is { } process)
+                Kernel.RecordTaskProcessRefreshed(goal.Id, task.Id, process with
+                {
+                    CompletedAt = task.LastVerification!.CompletedAt,
+                    ExitCode = task.LastVerification.ExitCode
+                }, verification: null);
             Kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "Provider budget exhausted.");
             Kernel.EscalateTaskFailure(goal.Id, task.Id, "Provider budget exhausted.");
         }
