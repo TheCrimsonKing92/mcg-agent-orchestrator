@@ -139,7 +139,7 @@ internal sealed record RemoteLaneExecutorConfiguration(
         var graceSeconds = 300;
         if (block.ValueKind != JsonValueKind.Object ||
             (block.TryGetProperty("mode", out var m) &&
-                (m.ValueKind != JsonValueKind.String || (mode = m.GetString()!) is not ("off" or "shadow"))) ||
+                (m.ValueKind != JsonValueKind.String || (mode = m.GetString()!) is not ("off" or "shadow" or "remote-first"))) ||
             (block.TryGetProperty("sampleEvery", out var s) &&
                 (s.ValueKind != JsonValueKind.Number || !s.TryGetInt32(out sampleEvery) || sampleEvery < 1)) ||
             (block.TryGetProperty("graceSeconds", out var g) &&
