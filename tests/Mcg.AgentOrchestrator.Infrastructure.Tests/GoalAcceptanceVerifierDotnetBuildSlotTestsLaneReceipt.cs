@@ -74,10 +74,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsLaneReceipt : Goal
             {
               "version": 1,
               "engine": {
-                "maxConcurrentShards": 1,
+                "maxConcurrentShards": 2,
                 "infrastructureTestLanes": [
-                  { "name": "Alpha", "filter": "FullyQualifiedName~AlphaShardTests" },
-                  { "name": "Remainder", "filter": "FullyQualifiedName!~AlphaShardTests&Category!=HostIntegration" }
+                  { "name": "Alpha", "filter": "FullyQualifiedName~AlphaShardTests", "exclusiveResourceKeys": ["fixture-clock"] },
+                  { "name": "Remainder", "filter": "FullyQualifiedName!~AlphaShardTests&Category!=HostIntegration", "exclusiveResourceKeys": ["fixture-clock"] }
                 ],
                 "mtpInvocations": [{
                   "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
@@ -95,6 +95,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsLaneReceipt : Goal
             """);
         var time = new RecordingTimeProvider();
         var progress = new System.Collections.Concurrent.ConcurrentQueue<AcceptanceGateProgress>();
+        // Enter the shard batch, while keeping each lane's advance of the shared clock independent.
+        var batchLanes = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        TestOverrides.OnInfrastructureShardResourcesAcquiredForTests = batchLanes.Enqueue;
         var executedLanes = new List<string>();
         var recordedAt = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
         try
@@ -146,6 +149,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsLaneReceipt : Goal
             var result = await verifier.RunOwnedAsync(root, new GoalId("12345678123456781234567812345678"),
                 changedFiles: null, stableSlotIndex: StableSlotIndex(lease.Environment.ArtifactsPath), stableSlotLease: lease,
                 CancellationToken.None, new AcceptanceRunExecutionOptions(ProgressSink: progress.Enqueue));
+            Assert.Equal(new[] { "infrastructure tests: Alpha", "infrastructure tests: Remainder" }, batchLanes.Order(StringComparer.Ordinal));
             Assert.Equal(new[] { "infrastructure tests: Alpha", "infrastructure tests: Remainder" }, executedLanes.Order(StringComparer.Ordinal));
             var path = GateLaneReceiptLedger.ResolveStorePath(root);
             Assert.True(File.Exists(path), "Local shard completion must persist lane receipts.");
@@ -160,6 +164,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsLaneReceipt : Goal
         }
         finally
         {
+            TestOverrides.OnInfrastructureShardResourcesAcquiredForTests = null;
             TestOverrides.ResolveShardCoreBudgetForTests = null;
             ResetPartitionVerdictKeyHooks();
             DeleteDirectoryWithRetry(root);
