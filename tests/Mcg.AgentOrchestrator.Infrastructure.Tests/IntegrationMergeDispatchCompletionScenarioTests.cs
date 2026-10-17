@@ -78,7 +78,7 @@ public sealed class IntegrationMergeDispatchCompletionScenarioTests
         public void Dispose() => Fixture.Dispose();
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public void Completion_RecordedIntegrationMerge_AdvancesToTester()
     {
@@ -131,7 +131,7 @@ public sealed class IntegrationMergeDispatchCompletionScenarioTests
             DispatchFailureClassifier.Classify(developer, verification).ClassifierReceipt);
     }
 
-    [Theory(Timeout = 30000)]
+    [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     [InlineData(true, false, "conflict marker check: src/Widget.cs")]
     [InlineData(false, true, "scope check: changed outside recorded paths: src/Other.cs")]
