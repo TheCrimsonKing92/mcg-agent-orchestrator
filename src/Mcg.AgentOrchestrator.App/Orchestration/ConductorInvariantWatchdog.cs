@@ -42,9 +42,15 @@ internal static class ConductorInvariantWatchdog
             var since = relaunch.LastLiveGateAt is { } live && live > scheduled ? live : scheduled;
             if (relaunch.FailureOutcomeAt is null)
             {
-                if (observation.Now - since > ConductorInvariantThresholds.RelaunchWithoutActivation)
-                    Add(new(ConductorInvariantThresholds.RelaunchWithoutActivationKind, relaunch.GoalId ?? "unknown", since,
-                        $"scheduledAt:{scheduled:O},lastLiveGateAt:{relaunch.LastLiveGateAt?.ToString("O") ?? "none"},silentFor:{(observation.Now - since).TotalMinutes:F0}m"));
+                var silenceSince = relaunch.HandoffAt is { } handoff && handoff > since ? handoff : since;
+                var ceilingExceeded = relaunch.HandoffAt is { } started &&
+                    observation.Now - started > ConductorInvariantThresholds.ProbeWindowCeiling;
+                var breachSince = ceilingExceeded
+                    ? relaunch.HandoffAt!.Value + AcceptanceAdmissionPathSet.CompletionTimeout : silenceSince;
+                if (ceilingExceeded || observation.Now - silenceSince > ConductorInvariantThresholds.RelaunchWithoutActivation)
+                    Add(new(ConductorInvariantThresholds.RelaunchWithoutActivationKind, relaunch.GoalId ?? "unknown", breachSince,
+                        $"scheduledAt:{scheduled:O},lastLiveGateAt:{relaunch.LastLiveGateAt?.ToString("O") ?? "none"},silentFor:{(observation.Now - breachSince).TotalMinutes:F0}m" +
+                        (relaunch.HandoffAt is { } at ? $",handoffAt:{at:O}" : "")));
             }
             else if (observation.Now - since > ConductorInvariantThresholds.GenerationBehindMain &&
                 observation.MainSha?.Trim() is { Length: > 0 } main &&
