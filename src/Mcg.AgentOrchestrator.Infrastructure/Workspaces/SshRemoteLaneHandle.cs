@@ -9,7 +9,7 @@ internal sealed class SshRemoteLaneHandle : IRemoteLaneHandle, IRemoteLaneAttemp
     private Exception? _fault;
     private readonly string _staging, _remote;
     private readonly string _cancelName, _queueTarget;
-    private bool _jobStarted;
+    private bool _jobFinished;
     internal Task? QueuedJobCancellation { get; private set; }
     private readonly TimeProvider _clock;
     private readonly Func<string[], string, TimeSpan, CancellationToken, Task<GoalAcceptanceVerifier.CommandResult>> _transport;
@@ -33,7 +33,7 @@ internal sealed class SshRemoteLaneHandle : IRemoteLaneHandle, IRemoteLaneAttemp
     {
         lock (_sync)
         {
-            if (_jobStarted || QueuedJobCancellation is not null) return;
+            if (_jobFinished || QueuedJobCancellation is not null) return;
             QueuedJobCancellation = Task.Run(async () =>
             {
                 try
@@ -95,7 +95,8 @@ internal sealed class SshRemoteLaneHandle : IRemoteLaneHandle, IRemoteLaneAttemp
                         if (status is not null)
                             lock (_sync) { _lastStatus = status.Fields; _lastState = status.String("state"); }
                         if (status is null || status.String("attemptId") != request.AttemptId) continue;
-                        lock (_sync) _jobStarted = true;
+                        // Terminal jobs need no cancellation, even if fetching their results fails.
+                        lock (_sync) _jobFinished = status.String("state") is "completed" or "failed" or "cancelled";
                         try
                         {
                             var heartbeat = File.ReadAllText(Path.Combine(folder, "heartbeat.txt"));

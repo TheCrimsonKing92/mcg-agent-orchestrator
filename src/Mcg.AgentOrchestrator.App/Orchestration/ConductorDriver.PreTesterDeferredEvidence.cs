@@ -159,7 +159,7 @@ internal sealed partial class ConductorDriver
                     selected.AddRange(normalized.Selections);
             }
         }
-        foreach (var selection in PreTesterAlwaysRunGuardTestClasses.Select(worktreePath))
+        foreach (var selection in PreTesterAlwaysRunGuardTestClasses.Select(worktreePath).Concat(PreTesterTestSourceGuardClasses.Select(worktreePath, _getLandingFileScopes(goal))))
         {
             if (TryNormalizeFindingEvidenceRequest(
                     new FindingEvidenceRequest([selection]), settings,
@@ -171,7 +171,7 @@ internal sealed partial class ConductorDriver
         // Pre-change attempts keep their original request identity and per-class TRX obligation.
         if (prior?.Outcome == "started")
             distinct = distinct.Where(selection =>
-                !PreTesterAlwaysRunGuardTestClasses.ContainsClass(selection.TestClass) ||
+                !(PreTesterAlwaysRunGuardTestClasses.ContainsClass(selection.TestClass) || PreTesterTestSourceGuardClasses.ContainsClass(selection.TestClass)) ||
                 prior.Selections.Contains(FormatFindingEvidenceSelection(selection), StringComparer.OrdinalIgnoreCase))
                 .ToArray();
         var request = string.Join("; ", distinct.Select(FormatFindingEvidenceSelection));
@@ -234,7 +234,7 @@ internal sealed partial class ConductorDriver
                            candidate is { Accepted: true, Disposition: FindingEvidenceArmDisposition.Red };
         var attributionBatch = new FindingEvidenceBatch(
             identity, request, new FindingEvidenceRequest(distinct), [], []);
-        var unlistedFailures = failingTests.Where(test => !PreTesterAlwaysRunGuardTestClasses.IsListed(test)).ToArray();
+        var unlistedFailures = failingTests.Where(test => !(PreTesterAlwaysRunGuardTestClasses.IsListed(test) || PreTesterTestSourceGuardClasses.IsCovered(test))).ToArray();
         var actionableRed = candidateRed && failingTests.Count > 0 &&
                             (baseline is null
                                 ? unlistedFailures.Length == 0 ||

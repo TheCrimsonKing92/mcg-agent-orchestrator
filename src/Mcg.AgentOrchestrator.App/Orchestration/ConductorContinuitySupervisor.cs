@@ -640,8 +640,11 @@ internal sealed partial class ConductorContinuitySupervisor(
                 return 0;
             }
 
-            if (stallFailure is null && result.ExitCode == 0 && artifact is { RestartRequested: true })
+            if (artifact is { RestartRequested: true } &&
+                ((stallFailure is null && result.ExitCode == 0) || stallFailure is not null))
             {
+                if (stallFailure is not null)
+                    TryAppendConductEvent($"SUPERVISOR_STALL_RESTART_HONORED attempt={attempt} pid={result.ProcessId} stall={stallFailure}");
                 renewalsWithoutProgress = artifact.Done > 0 || artifact.LandedGoals > 0 ? 0 : renewalsWithoutProgress + 1;
                 if (renewalsWithoutProgress > maxRenewalsWithoutProgress)
                 {
