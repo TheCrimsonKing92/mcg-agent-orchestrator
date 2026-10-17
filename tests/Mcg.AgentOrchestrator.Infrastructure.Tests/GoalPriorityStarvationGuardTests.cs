@@ -28,7 +28,7 @@ public sealed class GoalPriorityStarvationGuardTests
         {
             var high = highs[tick - 1];
             kernel.SetGoalPriority(high.Id, GoalPriority.High, "test", "setup");
-            guard.ObserveGateTick(GoalSchedulingOrder.ForAcceptance([waiter, high]), new HashSet<string>(),
+            guard.ObserveGateTick(GoalSchedulingOrder.ForAcceptance([waiter, high]), GoalSchedulingOrder.BaseAcceptance([waiter, high]), new HashSet<string>(),
                 new HashSet<string> { high.Id.Value }, tick, changed, lines.Add);
         }
         Assert.Equal(3, waiter.PriorityScheduling!.GateOvertakes);
@@ -37,10 +37,43 @@ public sealed class GoalPriorityStarvationGuardTests
         Assert.All(admissions, line => Assert.Contains($"overtook={waiter.Id.Value[..8]}:normal", line));
         Assert.Contains($"PRIORITY_STARVATION_GUARD stage=gate tick=3 goal={waiter.Id.Value[..8]} overtakes=3", lines);
         Assert.Equal(waiter, GoalSchedulingOrder.ForAcceptance(kernel.Goals)[0]);
-        guard.ObserveGateTick(GoalSchedulingOrder.ForAcceptance(kernel.Goals), new HashSet<string>(),
+        guard.ObserveGateTick(GoalSchedulingOrder.ForAcceptance(kernel.Goals), GoalSchedulingOrder.BaseAcceptance(kernel.Goals), new HashSet<string>(),
             new HashSet<string> { waiter.Id.Value }, 4, changed, lines.Add);
         Assert.Equal(0, waiter.PriorityScheduling?.GateOvertakes ?? 0);
         Assert.Contains(waiter.Id, changed);
+    }
+
+    [Fact]
+    public void InlineCompletionKeepsAdmissionBaseOrderForOvertakeEvidence()
+    {
+        var clock = new TestClock(DateTimeOffset.Parse("2026-10-01T00:00:00Z"));
+        var kernel = new AgentOrchestratorKernel(clock);
+        var waiter = kernel.CreateGoal("Normal waiter");
+        clock.UtcNow += TimeSpan.FromMinutes(1);
+        var high = kernel.CreateGoal("High admission");
+        kernel.SetGoalPriority(high.Id, GoalPriority.High, "test", "setup");
+        var ordered = GoalSchedulingOrder.ForAcceptance(kernel.Goals);
+        var baseOrder = GoalSchedulingOrder.BaseAcceptance(ordered);
+        Assert.Equal(new[] { waiter, high }, baseOrder);
+        Assert.Equal(new[] { high, waiter }, ordered);
+
+        // Inline gates append Verified history in service order before the guard observes them.
+        clock.UtcNow += TimeSpan.FromHours(1);
+        kernel.RecordGoalPolicyDecision(high.Id, "Verified after inline acceptance");
+        clock.UtcNow += TimeSpan.FromMinutes(1);
+        kernel.RecordGoalPolicyDecision(waiter.Id, "Verified after inline acceptance");
+        Assert.Equal(new[] { high, waiter }, GoalSchedulingOrder.BaseAcceptance(ordered));
+
+        var lines = new List<string>();
+        var changed = new HashSet<GoalId>();
+        new GoalPriorityStarvationGuard().ObserveGateTick(ordered, baseOrder, new HashSet<string>(),
+            new HashSet<string> { high.Id.Value, waiter.Id.Value }, 1, changed, lines.Add);
+        var admission = Assert.Single(lines);
+        Assert.StartsWith("PRIORITY_ADMISSION stage=gate", admission);
+        Assert.Contains($"goal={high.Id.Value[..8]}", admission);
+        Assert.Contains($"overtook={waiter.Id.Value[..8]}:normal", admission);
+        Assert.Contains(waiter.Id, changed);
+        Assert.Equal(0, waiter.PriorityScheduling?.GateOvertakes ?? 0);
     }
 
     [Fact]
@@ -74,10 +107,15 @@ public sealed class GoalPriorityStarvationGuardTests
         var a = kernel.CreateGoal("A");
         var b = kernel.CreateGoal("B");
         var lines = new List<string>();
-        new GoalPriorityStarvationGuard().ObserveGateTick([a, b], new HashSet<string>(),
+        new GoalPriorityStarvationGuard().ObserveGateTick([a, b], GoalSchedulingOrder.BaseAcceptance([a, b]), new HashSet<string>(),
             new HashSet<string> { b.Id.Value }, 1, [], lines.Add);
         Assert.Empty(lines);
         Assert.Null(a.PriorityScheduling);
         Assert.Null(b.PriorityScheduling);
+    }
+
+    private sealed class TestClock(DateTimeOffset utcNow) : IClock
+    {
+        public DateTimeOffset UtcNow { get; set; } = utcNow;
     }
 }

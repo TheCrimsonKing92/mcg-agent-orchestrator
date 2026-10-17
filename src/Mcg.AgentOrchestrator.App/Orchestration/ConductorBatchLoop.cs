@@ -2199,6 +2199,7 @@ internal sealed partial class ConductorBatchLoop
             suppressNewAcceptanceAdmission);
         var priorityOccupantsBefore = GoalPriorityStarvationGuard.GateOccupants(state.LiveAttempts.Select(attempt => attempt.GoalId), driver);
         var priorityResultsBefore = state.Results.Keys.ToHashSet(StringComparer.Ordinal);
+        var priorityBaseOrder = GoalSchedulingOrder.BaseAcceptance(state.OrderedEligible);
         if (!suppressNewAcceptanceAdmission())
             AdmitMergeTrain(state, driver, policy, tick, changedGoalLines);
         AdmitPairCohort(state, kernel, driver, policy, tick, changedGoalLines, changedGoalIds,
@@ -2210,7 +2211,7 @@ internal sealed partial class ConductorBatchLoop
         if (!suppressNewAcceptanceAdmission())
             AdmitSoloAcceptance(state, kernel, driver, policy, tick, changedGoalLines, changedGoalIds,
                 suppressNewAcceptanceAdmission);
-        _priorityStarvationGuard.ObserveGateTick(state.OrderedEligible, priorityOccupantsBefore, GoalPriorityStarvationGuard.GateOccupants(state.LiveAttempts.Select(attempt => attempt.GoalId), driver).Concat(state.Results.Where(pair => pair.Value.SlotIndex is not null && !priorityResultsBefore.Contains(pair.Key)).Select(pair => pair.Key)).ToHashSet(StringComparer.Ordinal), tick, changedGoalIds, line => EmitProgress(line, changedGoalLines));
+        _priorityStarvationGuard.ObserveGateTick(state.OrderedEligible, priorityBaseOrder, priorityOccupantsBefore, GoalPriorityStarvationGuard.GateOccupants(state.LiveAttempts.Select(attempt => attempt.GoalId), driver).Concat(state.Results.Where(pair => pair.Value.SlotIndex is not null && !priorityResultsBefore.Contains(pair.Key)).Select(pair => pair.Key)).ToHashSet(StringComparer.Ordinal), tick, changedGoalIds, line => EmitProgress(line, changedGoalLines));
         SummarizeAcceptanceDeferrals(state, tick, changedGoalLines);
 
         return state.Results;

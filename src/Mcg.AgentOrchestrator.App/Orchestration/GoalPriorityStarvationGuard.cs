@@ -22,13 +22,14 @@ internal sealed class GoalPriorityStarvationGuard
         attemptGoalIds.Concat(driver.GetActiveAcceptanceCohortCapacity().ActiveRoots.SelectMany(root => root.MemberGoalIds))
             .ToHashSet(StringComparer.Ordinal);
 
-    internal void ObserveGateTick(IReadOnlyList<Goal> orderedEligible, IReadOnlySet<string> before,
+    internal void ObserveGateTick(IReadOnlyList<Goal> orderedEligible, IReadOnlyList<Goal> baseOrder, IReadOnlySet<string> before,
         IReadOnlySet<string> after, int tick, HashSet<GoalId> changedGoalIds, Action<string> emit)
     {
         _tick = tick;
         _tickObserved = true;
         var served = after.Except(before, StringComparer.Ordinal).ToHashSet(StringComparer.Ordinal);
-        var waiting = GoalSchedulingOrder.BaseAcceptance(orderedEligible.Where(goal => !before.Contains(goal.Id.Value)));
+        // Inline reconciliation changes Verified history; retain the order captured before admission.
+        var waiting = baseOrder.Where(goal => !before.Contains(goal.Id.Value)).ToArray();
         Observe("gate", waiting, orderedEligible, served, null, changedGoalIds, emit);
     }
 
