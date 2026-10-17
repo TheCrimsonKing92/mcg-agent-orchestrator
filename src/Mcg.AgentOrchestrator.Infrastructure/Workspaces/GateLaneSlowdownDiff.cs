@@ -68,8 +68,9 @@ internal static class GateLaneSlowdownDiff
         var prefix = FormattableString.Invariant($" ratio={result.Ratio:F2} median_wall_ms={result.MedianWallMs:0} grown={result.TestsGrown} top=");
         var suffix = FormattableString.Invariant($" new_above_floor={result.TestsNewAboveFloor}");
         var names = (result.Grown ?? []).Take(3).Select(test => string.Join('.', test.Test.Split('.').TakeLast(2))).ToArray();
-        // Reserve target space as well as the two-member cohort formatter prefix.
-        var tokenBudget = Math.Min(150, 195 - lane.Length);
+        // Reserve the longest wrapper (three-member merge train: 99 characters),
+        // the quoted target, and up to 19 elapsed_ms digits in the formatter prefix.
+        var tokenBudget = Math.Min(150, 164 - lane.Length);
         var budget = Math.Max(0, tokenBudget - prefix.Length - suffix.Length);
         var top = names.Length == 0 ? "none" : string.Join(',', names);
         if (top.Length > budget)

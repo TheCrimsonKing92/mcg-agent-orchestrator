@@ -63,11 +63,16 @@ internal static class GateLaneBaselineStore
         {
             var store = JsonSerializer.Deserialize<Store>(File.ReadAllText(path), JsonOptions);
             if (store is null || store.Version != 1 || store.Lanes is null) return new(1, new(StringComparer.Ordinal));
+            if (store.Lanes.Values.Any(history => history is null || history.Any(run => run is null || run.Tests is null)))
+                return new(1, new(StringComparer.Ordinal));
             foreach (var lane in store.Lanes.Keys.ToArray())
                 store.Lanes[lane] = store.Lanes[lane].Where(run => double.IsFinite(run.WallMs) && run.WallMs > 0)
                     .TakeLast(MaximumRuns).Select(run => run with { Tests = LaneTestDurationSnapshot.Bound(run.Tests) }).ToList();
             return store;
         }
-        catch (Exception) { return new(1, new(StringComparer.Ordinal)); }
+        // Only absent or corrupt data starts fresh. A transient read failure must
+        // reach TryAppend's best-effort boundary before it can replace any history.
+        catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException or JsonException)
+        { return new(1, new(StringComparer.Ordinal)); }
     }
 }

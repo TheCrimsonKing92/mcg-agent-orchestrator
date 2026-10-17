@@ -54,6 +54,33 @@ public sealed class GateLaneBaselineStoreTests : IDisposable
             File.WriteAllText(path, content);
         }
         Assert.Empty(GateLaneBaselineStore.ReadHistory(_root, "Alpha"));
+        Assert.Null(GateLaneBaselineStore.TryAppend(_root, "Alpha",
+            new(DateTimeOffset.UnixEpoch, 60000, new Dictionary<string, double>()), true));
+        Assert.Single(GateLaneBaselineStore.ReadHistory(_root, "Alpha"));
+    }
+
+    [Fact]
+    public void TryAppend_UnreadableExistingStore_PreservesAllLaneHistory()
+    {
+        var run = new GateLaneBaselineStore.Run(DateTimeOffset.UnixEpoch, 60000,
+            new Dictionary<string, double> { ["Git.Commit"] = 4000 });
+        Assert.Null(GateLaneBaselineStore.TryAppend(_root, "Alpha", run, true));
+        Assert.Null(GateLaneBaselineStore.TryAppend(_root, "Beta", run, true));
+        var path = GateLaneBaselineStore.ResolveStorePath(_root);
+        var original = File.ReadAllBytes(path);
+        // Deny reads while permitting replacement: without the read guard, the
+        // old implementation successfully overwrites both lanes with only Gamma.
+        using (var held = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Write | FileShare.Delete))
+        {
+            Assert.Throws<IOException>(() => File.ReadAllText(path));
+            Assert.Empty(GateLaneBaselineStore.ReadHistory(_root, "Alpha"));
+            Assert.Equal("baseline-write:IOException", GateLaneBaselineStore.TryAppend(_root, "Gamma", run, true));
+        }
+        Assert.Equal(original, File.ReadAllBytes(path));
+        Assert.Single(GateLaneBaselineStore.ReadHistory(_root, "Alpha"));
+        Assert.Single(GateLaneBaselineStore.ReadHistory(_root, "Beta"));
+        Assert.Empty(GateLaneBaselineStore.ReadHistory(_root, "Gamma"));
+        Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(path)!, "*.tmp"));
     }
 
     [Fact]

@@ -69,6 +69,56 @@ public sealed class ShardCompleteLoadFieldsTests
         Assert.Equal(1, calls);
     }
 
+    [Theory]
+    [InlineData(67, 480000)]
+    [InlineData(78, 480000)]
+    [InlineData(67, 86400000)]
+    [InlineData(200, 480000)]
+    public void SlowdownProgress_ThreeMemberMergeTrain_BoundsWrappedDetail(int nameLength, int elapsedMs)
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "slowdown-train-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goals = Enumerable.Range(0, 3).Select(index => kernel.CreateGoal("Member " + index)).ToArray();
+            var workspace = OrchestratorWorkspace.ForDirectory(directory);
+            var verifier = new GoalAcceptanceVerifier((string[] _, string _, TimeSpan _, CancellationToken _) =>
+                throw new InvalidOperationException("The progress fixture must not launch commands"));
+            var driver = new ConductorDriver(kernel, workspace, verifier,
+                AgentCatalog.Default().Agents, WorkerProfileCatalog.Default(),
+                cleanupHooks: new GoalWorktreeCleanupHooks { BuildStorageRoot = new(Path.Combine(directory, "build-storage")) });
+            var members = goals.Select((goal, index) => new MergeTrainMemberBinding(goal.Id,
+                new string((char)('a' + index), 40), new string((char)('a' + index), 40),
+                [$"src/Member{index}.cs"], [$"member:{index}"], ChangeRiskTier.Behavior,
+                ConductorTransitionDecision.Auto, "Clean", "NoConflictsDetected", new string('d', 40))).ToArray();
+            var identity = MergeTrainIdentity.Create(members, new string('e', 40), new string('f', 40), "manifest-v1");
+            var options = driver.CreateMergeTrainGateExecutionOptions(identity, members,
+                ConductorDriver.TrainGateRunIdentity(goals.Select(goal => goal.Id.Value)), goals.ToDictionary(goal => goal.Id));
+            var testName = new string('A', nameLength - ".Commit".Length) + ".Commit";
+            var history = Enumerable.Range(0, 3).Select(_ => new GateLaneBaselineStore.Run(DateTimeOffset.UnixEpoch, 240000,
+                new Dictionary<string, double> { [testName] = 4000 })).ToArray();
+            var result = GateLaneSlowdownDiff.Compute(480000,
+                new(new Dictionary<string, double> { [testName] = 12000 }), history);
+            const string lane = "infrastructure tests: Goal acceptance verifier";
+            GateLaneSlowdownDiff.TryEmitProgress(result, goals[0].Id.Value, lane,
+                TimeSpan.FromMilliseconds(elapsedMs), options.ProgressSink!);
+            var lines = File.ReadAllLines(workspace.ConductEventsLogPath);
+            Assert.Equal(3, lines.Length);
+            Assert.All(lines, line =>
+            {
+                var detail = Mcg.AgentOrchestrator.App.OwnerConsole.OwnerConsoleGateProgress.ParseEvent(line)!.Detail;
+                Assert.Contains("phase=lane-slowdown", detail);
+                Assert.Contains(lane, detail);
+                Assert.Contains("ratio=2.00 median_wall_ms=240000", detail);
+                Assert.Contains("grown=1 top=+1", detail);
+                Assert.Contains("scope=merge-train", detail);
+                Assert.True(detail.Length <= 400, $"{detail.Length}: {detail}");
+            });
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
     internal static string WriteDetail(AcceptanceGateProgress progress)
     {
         var directory = Path.Combine(Path.GetTempPath(), "load-fields-" + Guid.NewGuid().ToString("N"));

@@ -49,7 +49,12 @@ public sealed class GateLaneSlowdownDiffTests
     [InlineData(360000)]
     public void Compute_AtOrBelowThreshold_ReturnsNotSlowWithoutTests(double wall)
     {
-        var result = GateLaneSlowdownDiff.Compute(wall, new(new Dictionary<string, double>()), History(new()));
+        var history = History(new() { ["Git.Commit"] = 4000 });
+        var current = new LaneTestDurationSnapshot(new Dictionary<string, double> { ["Git.Commit"] = 12000, ["New.Test"] = 52000 });
+        var slow = GateLaneSlowdownDiff.Compute(480000, current, history);
+        Assert.Single(slow.Grown!);
+        Assert.Single(slow.NewAboveFloor!);
+        var result = GateLaneSlowdownDiff.Compute(wall, current, history);
         Assert.Equal("not-slow", result.Status);
         Assert.Empty(result.Grown ?? []);
         Assert.Empty(result.NewAboveFloor ?? []);
