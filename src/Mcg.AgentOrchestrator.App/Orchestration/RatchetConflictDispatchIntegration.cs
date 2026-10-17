@@ -70,7 +70,7 @@ internal sealed class RatchetConflictDispatchIntegration(
         return result;
     }
 
-    private static OrchestratorBuildCheckResult BuildChangedProjects(string worktree, string oldHead, string newHead)
+    internal static OrchestratorBuildCheckResult BuildChangedProjects(string worktree, string oldHead, string newHead)
     {
         var diff = GitCli.Run(worktree, "diff", "--name-only", "-z", oldHead, newHead);
         if (!diff.Succeeded) return new(false, -1, "Could not determine build scope: " + diff.Error);

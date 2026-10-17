@@ -144,18 +144,23 @@ internal sealed class RemoteFocusedEvidenceShadow : IAsyncDisposable
                 if (handle.TryGetResult() is { } result)
                 {
                     observed = result;
+                    RemoteLaneHandleDiagnostics? diagnostics = null;
+                    try { diagnostics = (handle as IRemoteLaneAttemptDiagnosticsSource)?.Snapshot(); }
+                    catch (Exception) { /* Optional diagnostics cannot change the shadow outcome. */ }
+                    var phases = RemoteLanePhaseTimings.Compute(submission.Steps, diagnostics?.LastStatus,
+                        result.TestResultPaths, diagnostics?.Fetches);
                     mismatch = RemoteLaneCoordinator.BindingMismatch(run.Request, result);
                     var trx = GoalAcceptanceVerifierTestTelemetry.InspectTrxCompletionEvidence(result.TestResultPaths);
                     var failingTests = GoalAcceptanceVerifierTestTelemetry.ExtractTrxFailureIdentities(result.TestResultPaths);
                     if (mismatch is { } bindingFault)
-                        return new(bindingFault, result, trx.ExecutedTestCount, failingTests);
+                        return new(bindingFault, result, trx.ExecutedTestCount, failingTests, Phases: phases);
                     var decision = GoalAcceptanceVerifierTestTelemetry.DecideTestShardCompletion(
                         new GoalAcceptanceVerifier.CommandResult(result.ExitCode, ""), trx, requireTrxEvidence: true);
                     var red = decision.FailedPredicate is AcceptanceShardCompletionPredicates.FailingTrx or
                         AcceptanceShardCompletionPredicates.AssemblyCleanupFailure or AcceptanceShardCompletionPredicates.NonzeroExit;
                     return new(decision.Passed ? RemoteLaneOutcomeCode.Accepted : red
                         ? RemoteLaneOutcomeCode.RemoteRed : RemoteLaneOutcomeCode.TrxIncomplete,
-                        result, trx.ExecutedTestCount, failingTests);
+                        result, trx.ExecutedTestCount, failingTests, Phases: phases);
                 }
                 await Task.Delay(_pollInterval, token).ConfigureAwait(false);
             }
@@ -228,7 +233,8 @@ internal sealed class RemoteFocusedEvidenceShadow : IAsyncDisposable
                     LocalDurationSeconds: Math.Max(0, (localEnd - _started).TotalSeconds),
                     LocalVerdict: local is null ? "unavailable" : local.Passed ? "passed" : "failed", Agree: agree,
                     RemoteTestHostCpuSeconds: usage?.TestHostCpuSeconds, RemoteTestHostPeakWorkingSetBytes: usage?.TestHostPeakWorkingSetBytes,
-                    RemoteAvailableMemoryMbMin: usage?.AvailableMemoryMbMin, RemoteResourceSamples: usage?.ResourceSamples));
+                    RemoteAvailableMemoryMbMin: usage?.AvailableMemoryMbMin, RemoteResourceSamples: usage?.ResourceSamples,
+                    Phases: observation.Phases));
             }
         }
         catch (Exception) { /* Measurement must never fail the local verdict, including ledger faults. */ }
@@ -260,7 +266,8 @@ internal sealed class RemoteFocusedEvidenceShadow : IAsyncDisposable
     }
 
     private sealed record Observation(RemoteLaneOutcomeCode Code, RemoteLaneResult? Result = null,
-        int? ExecutedCount = null, IReadOnlyList<string>? FailingTests = null, string? Reason = null);
+        int? ExecutedCount = null, IReadOnlyList<string>? FailingTests = null, string? Reason = null,
+        RemoteLanePhaseTimings? Phases = null);
 
     private sealed class Run(string checkName, RemoteLaneRequest request, DateTimeOffset started)
     {

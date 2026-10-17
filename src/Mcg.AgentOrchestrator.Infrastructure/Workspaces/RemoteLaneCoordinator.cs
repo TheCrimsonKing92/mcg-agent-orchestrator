@@ -150,7 +150,8 @@ internal sealed class RemoteLaneCoordinator : IDisposable
     internal async Task<RemoteLaneOutcome> RunRemoteAsync(Check check, RemoteLaneExecutorEntry entry,
         TimeSpan timeout, CancellationToken cancellationToken)
     {
-        var request = CreateRequest(check, entry.Id);
+        var request = CreateRequest(check, entry.Id) with
+        { TestHostTimeoutSeconds = RemoteLaneTestHostBudget.Resolve(timeout) };
         var submittedAt = _clock.GetUtcNow();
         IRemoteLaneHandle? handle = null;
         RemoteLaneResult? observedResult = null;
@@ -355,7 +356,9 @@ internal sealed class RemoteLaneCoordinator : IDisposable
             result is null ? null : new(result.ExecutorId, result.Lane, result.VerifyingCommitSha, result.ObservedTreeSha,
                 result.MainSha, result.FilterHash, result.ManifestIdentity), reason, Attempt: attempt, Occupancy: occupancy,
             RemoteTestHostCpuSeconds: usage?.TestHostCpuSeconds, RemoteTestHostPeakWorkingSetBytes: usage?.TestHostPeakWorkingSetBytes,
-            RemoteAvailableMemoryMbMin: usage?.AvailableMemoryMbMin, RemoteResourceSamples: usage?.ResourceSamples));
+            RemoteAvailableMemoryMbMin: usage?.AvailableMemoryMbMin, RemoteResourceSamples: usage?.ResourceSamples,
+            Phases: attempt is null ? null : RemoteLanePhaseTimings.Compute(
+                attempt.Steps, attempt.LastStatus, result?.TestResultPaths, attempt.Fetches)));
         try
         {
             var compactReason = string.IsNullOrWhiteSpace(reason) ? "none" :
