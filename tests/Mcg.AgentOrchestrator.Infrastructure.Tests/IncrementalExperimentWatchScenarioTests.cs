@@ -8,7 +8,7 @@ using Xunit;
 // Parallel-safe: each scenario owns its temp workspace, SQLite stores, log and clock.
 public sealed class IncrementalExperimentWatchScenarioTests
 {
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public void ObserveTick_UnlandedThenLandedPairBelowTarget_RaisesNoAttention()
     {
@@ -32,7 +32,7 @@ public sealed class IncrementalExperimentWatchScenarioTests
         });
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public void ObserveTick_LandedPairAtTarget_ReportsBasisOnceAndKeepsLegacyText()
     {
