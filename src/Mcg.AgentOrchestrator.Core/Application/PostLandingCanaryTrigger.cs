@@ -107,6 +107,7 @@ public static class AcceptanceEngineSurfaceRegistry
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/MemberDeclaredTestRemovals",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/MissingAcceptanceManifestException",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/RemoteExecutorHealthLedger",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/RemoteFirstFocusedEvidence",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/RemoteFocusedEvidenceShadow",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/RemoteLaneCandidateIdentity",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/RemoteLaneCoordinator",
