@@ -46,7 +46,7 @@ internal sealed class ConductorProgramHealthMonitor(string statePath, Func<strin
                 if (integrationHead is not null)
                     try { EvaluateUnderLock(goals, integrationHead); } catch { /* Advisory, independently of invariants. */ }
                 if (observe is not null)
-                    try { EvaluateInvariantsUnderLock(goals, observe); } catch { /* Advisory, including observation reads. */ }
+                    try { EvaluateInvariantsUnderLock(goals, integrationHead, observe); } catch { /* Advisory, including observation reads. */ }
             }
             finally { mutex.ReleaseMutex(); }
         }
@@ -96,11 +96,12 @@ internal sealed class ConductorProgramHealthMonitor(string statePath, Func<strin
         if (changed) Save(state);
     }
 
-    private void EvaluateInvariantsUnderLock(IReadOnlyList<(GoalId Id, GoalStatus Status)> goals,
+    private void EvaluateInvariantsUnderLock(IReadOnlyList<(GoalId Id, GoalStatus Status)> goals, string? integrationHead,
         Func<IReadOnlyList<(GoalId Id, GoalStatus Status)>, DateTimeOffset, ConductorInvariantObservation?> observe)
     {
         var observation = observe(goals, clock.GetUtcNow());
         if (observation is null) return;
+        observation = observation with { MainSha = integrationHead };
         var state = ReadStateObject() ?? new JsonObject();
         var active = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
         if (state["invariants"] is JsonObject previous)

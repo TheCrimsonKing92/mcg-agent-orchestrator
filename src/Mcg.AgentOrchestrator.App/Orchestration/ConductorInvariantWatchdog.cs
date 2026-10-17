@@ -32,6 +32,29 @@ internal static class ConductorInvariantWatchdog
                 $"refusals:{tail.Length},reason:{tail[0].Reason.Replace(' ', '_')}"));
         }
 
+        foreach (var attempt in observation.FinishedAttempts ?? [])
+            if (observation.Now - attempt.FinishedAt > ConductorInvariantThresholds.FinishedUnreconciled)
+                Add(new(ConductorInvariantThresholds.FinishedUnreconciledKind, attempt.AttemptId, attempt.FinishedAt,
+                    $"goal:{Short(attempt.GoalId)},kind:{attempt.Kind},finishedAt:{attempt.FinishedAt:O},unreconciledFor:{(observation.Now - attempt.FinishedAt).TotalMinutes:F0}m"));
+
+        if (observation.Relaunch is { ScheduledAt: { } scheduled } relaunch)
+        {
+            var since = relaunch.LastLiveGateAt is { } live && live > scheduled ? live : scheduled;
+            if (relaunch.FailureOutcomeAt is null)
+            {
+                if (observation.Now - since > ConductorInvariantThresholds.RelaunchWithoutActivation)
+                    Add(new(ConductorInvariantThresholds.RelaunchWithoutActivationKind, relaunch.GoalId ?? "unknown", since,
+                        $"scheduledAt:{scheduled:O},lastLiveGateAt:{relaunch.LastLiveGateAt?.ToString("O") ?? "none"},silentFor:{(observation.Now - since).TotalMinutes:F0}m"));
+            }
+            else if (observation.Now - since > ConductorInvariantThresholds.GenerationBehindMain &&
+                observation.MainSha?.Trim() is { Length: > 0 } main &&
+                relaunch.RunningBuildCommit?.Trim() is { Length: > 0 } running &&
+                !main.StartsWith(running, StringComparison.OrdinalIgnoreCase) &&
+                !running.StartsWith(main, StringComparison.OrdinalIgnoreCase))
+                Add(new(ConductorInvariantThresholds.GenerationBehindMainKind, Short(main), since,
+                    $"running:{Short(running)},main:{Short(main)},failureAt:{relaunch.FailureOutcomeAt:O}"));
+        }
+
         var raise = current.Values.Where(breach => !active.ContainsKey(breach.Key)).ToArray();
         var clear = active.Where(pair => !current.ContainsKey(pair.Key)).Select(pair =>
         {
@@ -42,6 +65,7 @@ internal static class ConductorInvariantWatchdog
             pair => active.TryGetValue(pair.Key, out var since) ? since : pair.Value.Since, StringComparer.Ordinal));
 
         void Add(ConductorInvariantBreach breach) => current.Add(breach.Key, breach);
+        static string Short(string value) => value[..Math.Min(12, value.Length)];
     }
 }
 
