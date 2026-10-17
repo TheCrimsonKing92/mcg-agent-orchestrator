@@ -25,7 +25,8 @@ internal sealed class AdditiveConflictGitFixture : GoalWorktreeTestBase, IDispos
         IReadOnlyList<ConflictFile>? files = null, GoalId? goalId = null,
         bool bom = false, string lineEnding = "\n", string? attributes = null)
     {
-        Repository = CreateSeededRepository();
+        // Dispatch integration resolves main explicitly, regardless of the host's init.defaultBranch.
+        Repository = CreateReducedAcceptanceCohortRepository(renameInitialBranchToMain: true);
         GoalId = goalId ?? Mcg.AgentOrchestrator.Core.GoalId.New();
         encoding = new UTF8Encoding(bom);
         this.lineEnding = lineEnding;

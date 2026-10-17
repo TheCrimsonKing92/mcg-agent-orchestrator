@@ -7,8 +7,8 @@ public sealed class LandingRebasePolicyTests
     [InlineData("pre-merge", 0, LandingRebaseAction.Proceed, "rebase-updated-branch", "Rebase updated the goal branch.")]
     [InlineData("pre-landing", 1, LandingRebaseAction.Retire, "missing-branch-retired", "Conductor tick retired missing goal branch before landing because the goal artifact could not be rebased: branch is gone")]
     [InlineData("pre-merge", 1, LandingRebaseAction.Retire, "missing-branch-retired", "Conductor tick retired missing goal branch before landing because the goal artifact could not be rebased: branch is gone")]
-    [InlineData("pre-landing", 2, LandingRebaseAction.Escalate, "rebase-conflict", "pre-landing rebase conflict (src/A.cs, src/B.cs); not confined to ratchet ceiling rows, so the conductor cannot resolve it; the operator integrates main into the goal branch")]
-    [InlineData("pre-merge", 2, LandingRebaseAction.Escalate, "rebase-conflict", "pre-merge rebase conflict (src/A.cs, src/B.cs); not confined to ratchet ceiling rows, so the conductor cannot resolve it; the operator integrates main into the goal branch")]
+    [InlineData("pre-landing", 2, LandingRebaseAction.Escalate, "rebase-conflict", "pre-landing rebase conflict (src/A.cs, src/B.cs); not confined to ratchet ceiling rows, so the conductor cannot resolve it; the operator integrates main into the goal branch and does not run workspace rebase")]
+    [InlineData("pre-merge", 2, LandingRebaseAction.Escalate, "rebase-conflict", "pre-merge rebase conflict (src/A.cs, src/B.cs); not confined to ratchet ceiling rows, so the conductor cannot resolve it; the operator integrates main into the goal branch and does not run workspace rebase")]
     [InlineData("pre-landing", 3, LandingRebaseAction.Escalate, "rebase-failed", "pre-landing rebase failed: git exit 128")]
     [InlineData("pre-merge", 3, LandingRebaseAction.Escalate, "rebase-failed", "pre-merge rebase failed: git exit 128")]
     public void BothPhasesPreserveExactDisposition(string phase, int rung, LandingRebaseAction action, string evidence, string reason)
@@ -23,7 +23,9 @@ public sealed class LandingRebasePolicyTests
             if (rung == 2)
             {
                 Assert.StartsWith($"{phase} rebase conflict (src/A.cs, src/B.cs)", decision.Reason);
-                Assert.DoesNotContain("workspace rebase", decision.Reason);
+                Assert.DoesNotContain("use 'workspace rebase'", decision.Reason);
+                Assert.DoesNotContain("use workspace rebase", decision.Reason);
+                Assert.Contains("does not run workspace rebase", decision.Reason);
             }
             var recorded = decision.ToRecord();
             Assert.Equal("landing-rebase", recorded.Stage);

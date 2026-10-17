@@ -47,7 +47,7 @@ public sealed class ConductorDriverTestsLandingRebaseDecision
             writeEscalation: (_, state, reason) =>
             {
                 Assert.Equal(GoalLifecycleState.Verified, state);
-                Assert.Equal("pre-merge rebase conflict (src/A.cs, src/B.cs); not confined to ratchet ceiling rows, so the conductor cannot resolve it; the operator integrates main into the goal branch", reason);
+                Assert.Equal("pre-merge rebase conflict (src/A.cs, src/B.cs); not confined to ratchet ceiling rows, so the conductor cannot resolve it; the operator integrates main into the goal branch and does not run workspace rebase", reason);
                 effects.Add("escalation");
             });
         var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, ["src/A.cs"], "branch", "main");
@@ -57,10 +57,12 @@ public sealed class ConductorDriverTestsLandingRebaseDecision
         Assert.False(leaseHeld);
         var escalated = Assert.IsType<ConductorAdvanceOutcome.Escalated>(result.Outcome);
         Assert.Equal(GoalLifecycleState.Verified, escalated.State);
-        Assert.Equal("pre-merge rebase conflict (src/A.cs, src/B.cs); not confined to ratchet ceiling rows, so the conductor cannot resolve it; the operator integrates main into the goal branch", escalated.Reason);
+        Assert.Equal("pre-merge rebase conflict (src/A.cs, src/B.cs); not confined to ratchet ceiling rows, so the conductor cannot resolve it; the operator integrates main into the goal branch and does not run workspace rebase", escalated.Reason);
         Assert.Null(escalated.Kind);
         Assert.StartsWith("pre-merge rebase conflict (src/A.cs, src/B.cs)", escalated.Reason);
-        Assert.DoesNotContain("workspace rebase", escalated.Reason);
+        Assert.DoesNotContain("use 'workspace rebase'", escalated.Reason);
+        Assert.DoesNotContain("use workspace rebase", escalated.Reason);
+        Assert.Contains("does not run workspace rebase", escalated.Reason);
         Assert.Equal(new[] { "rebase", "escalation" }, effects);
         var decision = AssertDecisionAndPayload(escalated, "landing-rebase", "Escalate", 2, "rebase-conflict",
             escalated.Reason, "Verified", "Unspecified");
