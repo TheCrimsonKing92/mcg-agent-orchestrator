@@ -73,14 +73,22 @@ public sealed class GoalWorktreeTestsRebaseRegistryAwareMerge
     }
 
     [Fact]
-    public void DivergentClassEntry_RefusesWithRegistryReasonAndRestoresBranch()
+    public void DivergentClassEntry_MergesWithMeasuredClassTotals()
     {
         using var fixture = new AdditiveConflictGitFixture([
             new(SourceSizeRatchet.SourcePath, Registry(Row(A, 10), ClassRow(10)),
-                Registry(Row(A, 10), ClassRow(11)), Registry(Row(A, 10), ClassRow(12))), Guard(A)
+                Registry(Row(A, 10), ClassRow(11)), Registry(Row(A, 10), ClassRow(12))), Guard(A),
+            new("src/WidgetPart.cs", "partial class Widget\n{\n}\n", "partial class Widget\n{\n}\n", "partial class Widget\n{\n}\n")
         ]);
 
-        AssertRefused(fixture, "registry-same-key-conflict");
+        var events = new List<string>();
+        var result = GoalWorktrees.TryRebaseOntoMain(fixture.Repository, fixture.GoalId, new([], events.Add));
+        AssertMerged(fixture, result, events);
+        var measured = SourceSizeRatchet.MeasureClasses(fixture.Worktree, ["Widget"], out var unreadable)["Widget"];
+        Assert.Empty(unreadable);
+        Assert.Equal((3, 1), measured);
+        Assert.Equal(Registry(Row(A, 10), $"        new SourceClassCeiling(\"Widget\", {measured.TotalLines}, {measured.PartialFiles}),\n"),
+            ReadMergedAuthority(fixture));
     }
 
     [Fact]

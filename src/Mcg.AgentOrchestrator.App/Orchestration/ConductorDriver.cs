@@ -834,11 +834,11 @@ internal sealed partial class ConductorDriver
 
         _runAdvisorySemanticAcceptance = (_, _) => { };
 
-        _integrateMainBeforeDeveloperDispatch = new FailedRoundCheckpointPreDispatch(kernel, dir, workspace.IntegrationBranch).IntegrateMainBeforeDeveloperDispatch;
+        _integrateMainBeforeDeveloperDispatch = new RatchetConflictDispatchIntegration(kernel, dir, workspace.IntegrationBranch, workspace.ConductEventsLogPath).IntegrateMainBeforeDeveloperDispatch;
         _integrateMainBeforeReadOnlyDispatch = (goal, role) =>
             IntegrateMainBeforeReadOnlyDispatch(dir, goal, role, workspace.IntegrationBranch);
         _recordPreDispatchIntegrationReceipt = new PreDispatchIntegrationReceiptRecorder(kernel).Record;
-        _rebaseOntoMain = goal => GoalBranchMainMerge.TryMergeMainIntoGoalBranch(dir, goal.Id, CreateAdditiveConflictMergeOptions(kernel, goal, workspace.ConductEventsLogPath), workspace.IntegrationBranch);
+        _rebaseOntoMain = goal => RatchetConflictDispatchIntegration.MergeMainBeforeLanding(kernel, dir, goal, CreateAdditiveConflictMergeOptions(kernel, goal, workspace.ConductEventsLogPath), workspace.IntegrationBranch);
         PreLandingMergeConflictProbe = goal => GoalWorktrees.ProbeAdditiveConflictMerge(dir, goal.Id, CreateAdditiveConflictMergeOptions(kernel, goal, workspace.ConductEventsLogPath).FrozenPaths, workspace.IntegrationBranch);
         _recheckPreLandingRebaseConflict = goal =>
         {
