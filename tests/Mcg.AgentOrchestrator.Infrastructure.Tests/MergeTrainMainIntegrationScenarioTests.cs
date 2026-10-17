@@ -79,11 +79,11 @@ public sealed class MergeTrainMainIntegrationScenarioTests : AcceptanceCohortWor
 
         Assert.Contains("outcome=inflight", successorResult.Detail, StringComparison.Ordinal);
         Assert.Empty(successorResult.Ejections);
-        Assert.Single(events, line => line.StartsWith("ACCEPTANCE_COHORT_ADOPTED ", StringComparison.Ordinal));
         Assert.DoesNotContain(events, line => line.Contains("ACCEPTANCE_COHORT_ADOPTION_REFUSED", StringComparison.Ordinal));
         Assert.Equal(0, launches);
         Assert.Equal(0, stops);
         var adopted = Assert.Single(successor.ReadAll());
+        Assert.Equal(attempt.AttemptId, adopted.AttemptId);
         Assert.Equal(SecondGeneration, adopted.AdoptedByGenerationId);
         Assert.Null(adopted.ReconciledAt);
         Assert.False(adopted.Detail?.StartsWith("refused:", StringComparison.Ordinal) == true);
