@@ -318,39 +318,6 @@ public sealed class FocusedEvidenceMatchedClassBudgetTests
         Assert.Equal(selection, collision);
     }
 
-    [Theory]
-    [InlineData(false, false)]
-    [InlineData(false, true)]
-    [InlineData(true, false)]
-    [InlineData(true, true)]
-    public void BareName_MergeBaseDeclaration_PreservesClassPriority(bool atMergeBase, bool hasMethod)
-    {
-        using var fixture = new Fixture();
-        var method = hasMethod ? "[Xunit.Fact] public void PriorTests() { }" : string.Empty;
-        fixture.Write("Current.cs", $"public class CurrentTests {{ {method} }}");
-        var lookups = 0;
-        var accepted = FocusedEvidenceRequestResolver.TryBuildFocusedEvidenceChecks(
-            "Infrastructure.Tests: FullyQualifiedName~PriorTests", new AcceptanceGateEngineSettings(), fixture.Root,
-            out var checks, out _, out var rejection, (project, value) =>
-            {
-                Assert.Equal(AcceptancePolicyShardPlanner.InfrastructureTestsProject, project);
-                Assert.Equal("PriorTests", value);
-                lookups++;
-                return atMergeBase;
-            });
-        Assert.Equal(1, lookups);
-        Assert.Equal(atMergeBase || hasMethod, accepted);
-        if (!accepted)
-        {
-            Assert.Empty(checks);
-            Assert.Equal(FocusedEvidenceRejectionCode.UnresolvableSelection, rejection.Code);
-            return;
-        }
-        var token = Assert.Single(Assert.Single(checks).FocusedEvidenceTokens);
-        Assert.Equal(atMergeBase ? GoalAcceptanceVerifier.FocusedEvidenceTokenKind.Class : GoalAcceptanceVerifier.FocusedEvidenceTokenKind.Method, token.Kind);
-        Assert.Equal(atMergeBase ? "PriorTests" : "CurrentTests.PriorTests", token.Value);
-    }
-
     private static void AssertSelection(FocusedEvidenceMatchedClassSelection selection, string term, params string[] names)
     {
         Assert.Equal("FullyQualifiedName~" + term, selection.CanonicalToken);

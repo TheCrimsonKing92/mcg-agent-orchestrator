@@ -19,7 +19,7 @@ internal static partial class FocusedEvidenceRequestResolver
         string worktreePath,
         out IReadOnlyList<AcceptanceManifestCheck> checks,
         out FocusedEvidenceCoverage coverage,
-        out FocusedEvidenceRejection rejection, Func<string, string, bool>? isMergeBaseClass = null)
+        out FocusedEvidenceRejection rejection)
     {
         checks = [];
         coverage = new FocusedEvidenceCoverage(TargetToChecks: []);
@@ -71,7 +71,7 @@ internal static partial class FocusedEvidenceRequestResolver
                         project,
                         out filters,
                         out targetCount,
-                        out rejection, isMergeBaseClass))
+                        out rejection))
                 {
                     return false;
                 }
@@ -467,7 +467,7 @@ internal static partial class FocusedEvidenceRequestResolver
         string project,
         out IReadOnlyList<FocusedEvidenceFilter?> filters,
         out int targetCount,
-        out FocusedEvidenceRejection rejection, Func<string, string, bool>? isMergeBaseClass = null)
+        out FocusedEvidenceRejection rejection)
     {
         filters = [null];
         targetCount = 0;
@@ -574,7 +574,7 @@ internal static partial class FocusedEvidenceRequestResolver
             FocusedEvidenceFilterToken ResolvePositive(string original, string value)
             {
                 if (!TryResolveFocusedEvidenceSelection(worktreePath, project, original, value,
-                        out var selection, out var resolutionRejection, isMergeBaseClass))
+                        out var selection, out var resolutionRejection))
                     throw new FocusedBooleanException(resolutionRejection);
                 resolvedCount++;
                 return selection;
@@ -593,7 +593,7 @@ internal static partial class FocusedEvidenceRequestResolver
         string originalToken,
         string value,
         out FocusedEvidenceFilterToken selection,
-        out FocusedEvidenceRejection rejection, Func<string, string, bool>? isMergeBaseClass = null)
+        out FocusedEvidenceRejection rejection)
     {
         selection = null!;
         rejection = new FocusedEvidenceRejection(
@@ -605,7 +605,7 @@ internal static partial class FocusedEvidenceRequestResolver
         {
             return FocusedEvidenceBareSelectorResolution.TryResolve(
                 () => EnumerateFocusedEvidenceSourceFiles(worktreePath, project),
-                project, originalToken, value, out selection, out rejection, () => isMergeBaseClass?.Invoke(project, value) == true);
+                project, originalToken, value, out selection, out rejection);
         }
 
         var candidates = new List<FocusedEvidenceFilterToken>();

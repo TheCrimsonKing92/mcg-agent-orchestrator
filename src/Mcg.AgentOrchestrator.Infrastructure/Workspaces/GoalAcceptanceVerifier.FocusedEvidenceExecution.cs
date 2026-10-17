@@ -109,10 +109,7 @@ internal static class FocusedEvidenceExecution
                 worktreePath,
                 out var focusedChecks,
                 out var coverage,
-                out var rejection, negativeControl == FindingEvidenceNegativeControl.RevertSrc
-                    ? (project, value) => FocusedEvidenceBareSelectorResolution.IsMergeBaseClass(
-                        worktreePath, resolveFocusedEvidenceMergeBase(worktreePath), project, value)
-                    : null))
+                out var rejection))
         {
             return new FocusedEvidenceRunResult(
                 request,
