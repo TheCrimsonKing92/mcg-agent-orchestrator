@@ -5,7 +5,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public static partial class GoalWorktrees
 {
-    private static string ComposeSquashCommitMessage(
+    internal static string ComposeSquashCommitMessage(
         string executionDirectory, string baseBranch, string mainHead, string oldHead, string tree, GoalId goalId)
     {
         var range = $"{mainHead}..{oldHead}";
