@@ -90,7 +90,8 @@ public sealed class ProviderHoldAgentSubstitutionTests
         var batch = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(scenario.Kernel, goal,
             scenario.Agents, scenario.Profiles, scenario.Workspace.PromptDirectory,
             scenario.Workspace.ResolveExecutionDirectory(goal.Id), Scenario.ObservedAt,
-            sandboxOptions: scenario.Sandbox, commandExists: _ => true, cascadeTesterCheapFirst: false);
+            sandboxOptions: scenario.Sandbox, commandExists: _ => true, cascadeTesterCheapFirst: false,
+            claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli);
         Assert.Empty(batch.Dispatches);
         Assert.Contains(goal.Timeline, evt => evt.Kind == ProgressKind.TaskRedelegated &&
             evt.Message.Contains("repaired stale", StringComparison.OrdinalIgnoreCase));
@@ -184,7 +185,8 @@ public sealed class ProviderHoldAgentSubstitutionTests
             WorkerProfileDispatcher.PreflightSubscriptionTask(goal, task, Agents, Profiles,
                 Workspace.ResolveExecutionDirectory(goal.Id), ObservedAt.AddHours(1),
                 allowGitReference: true, sandboxOptions: Sandbox, commandExists: _ => true,
-                providerHoldScope: holds, cascadeTesterCheapFirst: false);
+                providerHoldScope: holds, cascadeTesterCheapFirst: false,
+                claudeAuthProbe: DispatcherProviderProbeFakes.SignedInClaudeCli);
 
         internal ProviderHoldAgentSubstitution Resolver(AgentOrchestratorKernel? kernel = null) =>
             new(kernel ?? Kernel, Agents, Preflight);
