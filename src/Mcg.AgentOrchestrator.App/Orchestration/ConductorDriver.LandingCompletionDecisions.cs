@@ -6,6 +6,15 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorDriver
 {
+    private ConductorConflictIntegration? _conflictIntegration;
+    private ConductorAdvanceResult EscalateOrBeginConflictIntegration(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy, GoalLifecycleState state, string reason)
+    {
+        if (_conflictIntegration is null || !(reason.StartsWith("pre-landing rebase conflict (", StringComparison.Ordinal) || reason.StartsWith("pre-merge rebase conflict (", StringComparison.Ordinal)))
+            return Escalate(goal, goalPrefix, policy, state, reason);
+        var attempt = _conflictIntegration.TryRecord(goal);
+        return attempt.Started ? MakeResult(goal.Id.Value, goalPrefix, policy, new ConductorAdvanceOutcome.Executed(state, attempt.Detail))
+            : Escalate(goal, goalPrefix, policy, state, reason.Replace(" and does not run workspace rebase", "", StringComparison.Ordinal) + "; conductor integration refused: " + attempt.Detail);
+    }
     private ConductorAdvanceResult? CreateLandingRebaseOutcome(
         Goal goal, string goalPrefix, ConductorAutonomyPolicy policy, string phase,
         bool applySideEffects, GoalWorktreeRebaseResult rebase,
@@ -27,8 +36,9 @@ internal sealed partial class ConductorDriver
         }
         earlyOutcome = ConductorParallelAcceptanceEarlyOutcome.PreLandingEscalated(GoalLifecycleState.Verified, decision.Reason);
         var result = applySideEffects
-            ? Escalate(goal, goalPrefix, policy, GoalLifecycleState.Verified, decision.Reason)
+            ? decision.DiscriminatingRung == 2 ? EscalateOrBeginConflictIntegration(goal, goalPrefix, policy, GoalLifecycleState.Verified, decision.Reason) : Escalate(goal, goalPrefix, policy, GoalLifecycleState.Verified, decision.Reason)
             : MakeResult(goal.Id.Value, goalPrefix, policy, new ConductorAdvanceOutcome.Escalated(GoalLifecycleState.Verified, decision.Reason));
+        if (result.Outcome is ConductorAdvanceOutcome.Executed) { earlyOutcome = null; return result; }
         return result with { Outcome = ((ConductorAdvanceOutcome.Escalated)result.Outcome) with { Decision = decision.ToRecord() } };
     }
 
