@@ -607,7 +607,7 @@ internal sealed partial class ConductorDriver
             ConductorParallelAcceptanceEarlyOutcome.MissingBranchRetiredKind =>
                 ReplayMissingBranchRetirement(candidate, policy, earlyOutcome),
             ConductorParallelAcceptanceEarlyOutcome.PreLandingEscalatedKind =>
-                Escalate(candidate.Goal, candidate.GoalPrefix, policy, earlyOutcome.State, earlyOutcome.Detail),
+                EscalateOrBeginConflictIntegration(candidate.Goal, candidate.GoalPrefix, policy, earlyOutcome.State, earlyOutcome.Detail),
             _ => earlyResult
         };
     }
