@@ -13,6 +13,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsLaneSlowdown : Goa
     [InlineData(3, 120000, 0, "slow")]
     [InlineData(3, 80000, 0, "not-slow")]
     [InlineData(2, 120000, 0, "insufficient-history")]
+    [InlineData(3, 120000, 0, "no-test-data")]
     [InlineData(3, 120000, 7, "slow")]
     public async Task RunOwned_LaneCompletion_ReportsSlowdownWithoutChangingVerdict(
         int priorRuns, int wallMs, int exitCode, string status)
@@ -82,7 +83,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsLaneSlowdown : Goa
                     args[Array.IndexOf(args, "--report-trx-filename") + 1]);
                 var document = XDocument.Load(path);
                 foreach (var row in document.Descendants().Where(element => element.Name.LocalName == "UnitTestResult"))
-                    row.SetAttributeValue("duration", TimeSpan.FromMilliseconds(alpha ? 12000 : 4000).ToString("c", CultureInfo.InvariantCulture));
+                    row.SetAttributeValue("duration", alpha && status == "no-test-data" ? null
+                        : TimeSpan.FromMilliseconds(alpha ? 12000 : 4000).ToString("c", CultureInfo.InvariantCulture));
                 document.Save(path);
                 time.Advance(TimeSpan.FromMilliseconds(alpha ? wallMs : 60000));
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(alpha ? exitCode : 0, "deterministic lane verdict"));
@@ -105,6 +107,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsLaneSlowdown : Goa
             Assert.Equal(exitCode == 0, result.Passed);
             var receipt = Assert.Single(ReadRows(GateLaneReceiptLedger.ResolveStorePath(root)), row => row.GetProperty("lane").GetString() == lane);
             Assert.Equal(status, receipt.GetProperty("slowdown_status").GetString());
+            Assert.Equal(16, receipt.EnumerateObject().Count());
             Assert.Equal(wallMs, receipt.GetProperty("wall_ms").GetDouble());
             var slowdownsPath = Path.Combine(HostLedgerStateDirectory.Resolve(root), GateLaneSlowdownDiff.FileName);
             var emitted = progress.Where(item => item.Phase == "lane-slowdown").ToArray();
@@ -128,7 +131,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsLaneSlowdown : Goa
             {
                 Assert.False(File.Exists(slowdownsPath));
                 Assert.Empty(emitted);
-                if (status == "insufficient-history") Assert.Equal(2, receipt.GetProperty("slowdown_history_runs").GetInt32());
+                Assert.Equal(JsonValueKind.Null, receipt.GetProperty("slowdown_ratio").ValueKind);
             }
             Assert.Equal(priorRuns + (exitCode == 0 ? 1 : 0), GateLaneBaselineStore.ReadHistory(root, lane).Count);
             if (exitCode != 0) Assert.All(GateLaneBaselineStore.ReadHistory(root, lane), run => Assert.Equal(60000, run.WallMs));

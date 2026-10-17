@@ -22,7 +22,10 @@ internal static class GateLaneReceiptLedger
             snapshot = LaneTestDurationSnapshot.Read(result.TestResultPaths);
             slowdown = GateLaneSlowdownDiff.Compute(wall.TotalMilliseconds, snapshot, GateLaneBaselineStore.ReadHistory(worktreePath, laneName));
         }
-        catch (Exception error) { unavailable = "slowdown-error:" + error.GetType().Name; }
+        catch (Exception error)
+        {
+            slowdown = new("no-test-data", 0, wall.TotalMilliseconds, UnavailableReason: "slowdown-error:" + error.GetType().Name);
+        }
         // These independent writes must survive failure of any other diagnostic artifact.
         try
         {
@@ -65,11 +68,8 @@ internal static class GateLaneReceiptLedger
             Add("cpu_ms", receipt.CpuMilliseconds);
             Add("peak_mem_bytes", receipt.PeakMemoryBytes);
             Add("host_available_memory_mb", receipt.HostAvailableMemoryMb);
-            if (slowdown is not null) row["slowdown_status"] = slowdown.Status;
-            if (slowdown?.Ratio is { } ratio) row["slowdown_ratio"] = Math.Round(ratio, 2);
-            if (slowdown?.Status == "insufficient-history") row["slowdown_history_runs"] = slowdown.HistoryRuns;
-            if (slowdown?.UnavailableReason is not null || unavailable is not null)
-                row["slowdown_unavailable_reason"] = unavailable ?? slowdown?.UnavailableReason;
+            row["slowdown_status"] = slowdown.Status;
+            row["slowdown_ratio"] = slowdown.Status == "slow" && slowdown.Ratio is { } ratio ? Math.Round(ratio, 2) : null;
             var path = ResolveStorePath(worktreePath);
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             (appender ?? SharedJsonlFile.AppendLine)(path, JsonSerializer.Serialize(row));
@@ -81,6 +81,6 @@ internal static class GateLaneReceiptLedger
             }
         }
         catch (Exception) { /* Diagnostic receipts must never affect the gate verdict. */ }
-        return slowdown;
+        return slowdown with { UnavailableReason = unavailable ?? slowdown.UnavailableReason };
     }
 }
