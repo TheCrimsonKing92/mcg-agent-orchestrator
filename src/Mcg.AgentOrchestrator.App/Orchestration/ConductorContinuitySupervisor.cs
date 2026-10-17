@@ -96,7 +96,8 @@ internal sealed partial class ConductorContinuitySupervisor(
     Func<IReadOnlyList<StoreSetupPlanEntry>>? inspectStores = null,
     ConductorHandoffSchemaUpgrade? schemaUpgrade = null,
     Func<Action<string, string, CancellationToken>, CancellationToken, ConductorPreparedSuccessor>? stageSuccessorWithHook = null,
-    string? stopFilePath = null)
+    string? stopFilePath = null,
+    Func<string, string, IReadOnlyList<string>>? changedPathsBetween = null)
 {
     public const string ChildFlag = "--continuity-child";
     public const string ExitArtifactFlag = "--continuity-exit-artifact";
@@ -279,7 +280,8 @@ internal sealed partial class ConductorContinuitySupervisor(
             ConductorSupervisorProcessResult result;
             string? launchFailure = null;
             string? stallFailure = null;
-            var activationMonitor = new ActivationMonitor(_timeProvider.GetUtcNow);
+            var activationMonitor = new ActivationMonitor(_timeProvider.GetUtcNow, successor is null ? null :
+                ResolveAdmissionProbe(workingDirectory, currentBuild.CommitSha, successor.RepositoryHead));
             var liveProcessId = 0;
             var readiness = successor is null
                 ? null
@@ -504,6 +506,8 @@ internal sealed partial class ConductorContinuitySupervisor(
                         if (activation.Adopted)
                         {
                             appliedUpgrade = null;
+                            if (activation.ProbeSkippedReason is { } skipReason)
+                                RecordProbeSkipped(skipReason, candidateBuild, previousBuild);
                             RecordActivation("adopted", attempt, candidateBuild, previousBuild, null, activation.Detail);
                             NoteAdoptedBuild(candidateBuild);
                             ConductorSupervisorActiveChild? handoffChild = null;

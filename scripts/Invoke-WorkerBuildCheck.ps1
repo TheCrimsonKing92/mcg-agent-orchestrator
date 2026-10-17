@@ -499,6 +499,37 @@ try {
     $projectPaths = @($scope.Projects | ForEach-Object { Join-Path $repositoryRoot $_ })
     Write-Output "build-scope: requested=$($scope.RequestedProjects -join ',') required=$($scope.RequiredProjects -join ',') projects=$($scope.Projects -join ',')"
 
+    $plan = Get-WorkerBuildInvocationPlan -Root $repositoryRoot -Projects $projectPaths -Configuration $Configuration -ArtifactsPath $artifactsPath -TraversalDirectory $processTempPath
+    Write-Output "build-plan: mode=$($plan.Mode) projects=$($projectPaths.Count) separate-evaluations=$($plan.SeparateEvaluations) traversal-evaluations=$($plan.TraversalEvaluations)"
+    $traversalLines = @()
+    $traversalResults = @{}
+    if ($plan.Mode -eq 'traversal') {
+        $traversalLogPath = Join-Path $runLogRoot 'traversal-output.txt'
+        $buildArguments = $plan.Invocations[0]
+        $fileLoggerArguments = @('-fl', "-flp:LogFile=$traversalLogPath;Verbosity=normal;Encoding=UTF-8;Append=false")
+        $traversalOutput = @(& dotnet @buildArguments @fileLoggerArguments 2>&1)
+        $traversalExitCode = $LASTEXITCODE
+        try {
+            if (-not (Test-Path -LiteralPath $traversalLogPath -PathType Leaf)) { throw 'Traversal detailed output is missing.' }
+            $traversalLines = [string[]]@(Get-Content -LiteralPath $traversalLogPath)
+            if (-not (Test-Path -LiteralPath $plan.ResultsPath -PathType Leaf)) { throw 'Traversal results file is missing.' }
+            foreach ($line in [System.IO.File]::ReadAllLines($plan.ResultsPath)) {
+                if ($line -notmatch '^(\d+)\|(True|False)$') { throw "Invalid traversal result: $line" }
+                $order = [int]$Matches[1]
+                if ($order -lt 1 -or $order -gt $projectPaths.Count -or $traversalResults.ContainsKey($order)) { throw "Unexpected traversal result order: $order" }
+                $traversalResults[$order] = if ($Matches[2] -eq 'True') { 0 } else { 1 }
+            }
+            if ($traversalResults.Count -ne $projectPaths.Count) { throw 'Traversal project results are incomplete.' }
+            if ($traversalExitCode -ne 0 -and @($traversalResults.Values | Where-Object { $_ -ne 0 }).Count -eq 0) {
+                throw "Traversal exited $traversalExitCode despite successful project results."
+            }
+        }
+        catch {
+            $failureRecords.Add([pscustomobject]@{ Project = 'traversal'; LogPath = $traversalLogPath; Lines = (ConvertTo-OutputLines -Output $traversalOutput) })
+            throw
+        }
+    }
+
     for ($projectIndex = 0; $projectIndex -lt $projectPaths.Count; $projectIndex++) {
         $projectPath = $projectPaths[$projectIndex]
         $relativeProject = Get-DisplayPath -Root $repositoryRoot -Path $projectPath
@@ -508,8 +539,25 @@ try {
             "-fl",
             "-flp:LogFile=$logPath;Verbosity=normal;Encoding=UTF-8;Append=false"
         )
-        $output = @(& dotnet build $projectPath --nologo --configuration $Configuration --verbosity minimal @isolatedArguments @fileLoggerArguments 2>&1)
-        $projectExitCode = $LASTEXITCODE
+        if ($plan.Mode -eq 'direct') {
+            $output = @(& dotnet build $projectPath --nologo --configuration $Configuration --verbosity minimal @isolatedArguments @fileLoggerArguments 2>&1)
+            $projectExitCode = $LASTEXITCODE
+        }
+        else {
+            $order = '{0:D2}' -f ($projectIndex + 1)
+            $begin = @()
+            $end = @()
+            for ($lineIndex = 0; $lineIndex -lt $traversalLines.Count; $lineIndex++) {
+                if ($traversalLines[$lineIndex] -match "WorkerBuildProjectBegin:$order\s*$") { $begin += $lineIndex }
+                if ($traversalLines[$lineIndex] -match "WorkerBuildProjectEnd:$order\s*$") { $end += $lineIndex }
+            }
+            if ($begin.Count -ne 1 -or $end.Count -ne 1 -or $end[0] -le $begin[0]) {
+                throw "Traversal diagnostic segment missing or duplicated for $relativeProject."
+            }
+            $output = @($traversalLines[($begin[0])..($end[0])])
+            [System.IO.File]::WriteAllLines($logPath, [string[]]$output, [System.Text.UTF8Encoding]::new($false))
+            $projectExitCode = $traversalResults[$projectIndex + 1]
+        }
         $projectResults.Add([pscustomobject]@{ project = $relativeProject; exitCode = $projectExitCode; logPath = $logPath })
         $outputLines = ConvertTo-OutputLines -Output $output
         if ($projectExitCode -ne 0) {

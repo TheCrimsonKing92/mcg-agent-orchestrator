@@ -1155,6 +1155,8 @@ internal sealed partial class ConductorParallelAcceptanceAttemptCoordinator
             Persist(attempt);
             if (attempt.HolderContractVersion == 1)
                 HolderLease.Reserve(AcceptanceHolderBinding.For(attempt), _generationIdentity);
+            if (attempt.Kind == GateDispatchKind)
+                ConductorBatchLoop.NoteActivationProbeAdmission(AcceptanceHolderBinding.For(attempt), attempt.ResultPath);
             EmitEvidenceStart(attempt);
             WriteHeartbeat(attempt, "starting");
             File.AppendAllText(attempt.StdoutPath, $"{attempt.Kind} attempt {attempt.AttemptId} started for {attempt.GoalPrefix} slot-{attempt.SlotIndex}{Environment.NewLine}");
