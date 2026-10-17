@@ -594,7 +594,7 @@ internal static class SourceSizeRatchet
             // Goal 4fce8cbe adds the scoped admission-health accumulator partial and shared census recording calls.
             // Goal 587ba8d2 adds one train-receipt-revalidate conduct event mapping line (measured 9320 at the merged head).
             // Goal aa4f5017 adds the passive activation-probe ledger; measured 9421 lines in 56 partials at the merged head, no headroom.
-            new SourceClassCeiling("ConductorBatchLoop", 9421, 56),
+            new SourceClassCeiling("ConductorBatchLoop", 9349, 56),
             // Goal ec8903af moved the goal-prefix parser to CliGoalPrefixArguments.
             // Goal cd1f6380 adds four lines at the owning transaction boundary, forwarding both
             // registrars and invoking actions after commit; list behavior lives in PostCommitActions.
