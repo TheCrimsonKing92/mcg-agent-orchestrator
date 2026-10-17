@@ -501,7 +501,7 @@ internal static class SourceSizeRatchet
             // Goal 2c245bc3 restores overlapping holders and derives a recoverable admission hold.
             // The recovery sweep also settles non-reserving attempts once their holder is proven settled.
             // Measured 14888 lines across the same 70 partial files; no extra headroom.
-            new SourceClassCeiling("ConductorDriver", 14883, 70),
+            new SourceClassCeiling("ConductorDriver", 14863, 70),
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.
@@ -546,7 +546,7 @@ internal static class SourceSizeRatchet
             // boundary; receipt inspection is separately owned. Measured 8682 lines in the same 28 partials, no headroom.
             // Goal 56ff780e adds only the three result/outcome/count lines at the existing shard-progress
             // seam; gate read-model behavior is separately owned. Measured 8685 lines in the same 28 partials.
-            new SourceClassCeiling("GoalAcceptanceVerifier", 8685, 28),
+            new SourceClassCeiling("GoalAcceptanceVerifier", 8680, 28),
             // Goal d647b5f3 extracts premise-invalid clarification construction to PremiseInvalidClarification.
             // Goal 439c80ae extracts Reviewer evidence brief projection to ReviewerEvidenceBriefSection;
             // measured 9319 total lines across the existing 27 partial files, with no extra headroom.
