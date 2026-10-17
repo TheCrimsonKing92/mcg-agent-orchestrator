@@ -605,6 +605,10 @@ internal static partial class CliPersistentStateRunner
             "project" => true,
             "trial-compare" => !TrialCompareCliCommand.RequiresHistoricalState(args),
             "hermes-acp-trial" or "hermes-acp-verify-identity" => true,
+            // Listing reads only the independent dogfood-log store.
+            "dogfood-log" when args.Count == 1 ||
+                args[1].Equals("list", StringComparison.OrdinalIgnoreCase) ||
+                args[1].StartsWith("--", StringComparison.Ordinal) => true,
             _ => false,
         };
     }

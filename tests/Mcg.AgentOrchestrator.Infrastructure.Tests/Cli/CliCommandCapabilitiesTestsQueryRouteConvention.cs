@@ -15,7 +15,7 @@ public sealed class CliCommandCapabilitiesTestsQueryRouteConvention
             ["readiness"] = [["readiness", "abc10000"], ["readiness"]],
             ["goals"] = [["goals"], ["goals", "--epic", "Board"], ["goals", "--epic=Board"]],
             ["failure-clusters"] = [["failure-clusters"]],
-            ["lane-reuse-shadow"] = [["lane-reuse-shadow"]],
+            ["storage-health"] = [["storage-health"], ["storage-health", "--json"]],
             ["build-attribution"] = [["build-attribution"]],
             ["intent-coverage"] = [["intent-coverage"]],
             ["remote-executors"] = [["remote-executors"]],

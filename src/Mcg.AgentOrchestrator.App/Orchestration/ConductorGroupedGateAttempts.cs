@@ -260,14 +260,27 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
 
     internal bool IsAlive(int processId) => processId > 0 && _isProcessAlive(processId);
 
-    private bool StopHolder(ConductorGroupedGateAttempt attempt, string reason)
+    private bool StopHolder(ConductorGroupedGateAttempt attempt, string reason) =>
+        StopHolder(attempt, reason, out _);
+
+    private bool StopHolder(ConductorGroupedGateAttempt attempt, string reason, out AcceptanceHolderLeaseFault? fault)
     {
+        fault = null;
         if (attempt.HolderContractVersion != 1) return !_usesDurableHolderLease && _stop(attempt);
         var binding = AcceptanceHolderBinding.For(attempt);
         var identity = attempt.OwnerProcessStartedAt is { } started && attempt.OwnerExecutablePath is { } image
             ? new SpawnProcessIdentity(attempt.OwnerProcessId, started, image) : null;
-        if (identity is not null) HolderLease.ValidateRecordedHolder(binding, identity);
-        return HolderLease.Cancel(binding, _generationIdentity, reason, identity);
+        try
+        {
+            if (identity is not null) HolderLease.ValidateRecordedHolder(binding, identity);
+            return HolderLease.Cancel(binding, _generationIdentity, reason, identity);
+        }
+        catch (Exception ex) when (AcceptanceHolderLeaseFault.From(ex, binding) is { } leaseFault)
+        {
+            fault = leaseFault;
+            RecordHolderHold(attempt, leaseFault);
+            return false;
+        }
     }
 
     internal void PrepareHolderDetach()
@@ -282,11 +295,24 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
                 continue;
             }
             var binding = AcceptanceHolderBinding.For(attempt);
-            if (HolderLease.Read(binding).Generation != _generationIdentity &&
-                !HolderLease.Adopt(binding, _generationIdentity)) continue;
-            if (HolderLease.Detach(binding, _generationIdentity)) continue;
-            if (!StopHolder(attempt, "detach-not-provable"))
-                throw new InvalidOperationException($"Grouped acceptance detach/cancel settlement unproven: {attempt.AttemptId}.");
+            try
+            {
+                if (attempt.OwnerProcessStartedAt is { } started && attempt.OwnerExecutablePath is { } image)
+                    HolderLease.ValidateRecordedHolder(binding, new(attempt.OwnerProcessId, started, image));
+                if (HolderLease.Read(binding).Generation != _generationIdentity &&
+                    !HolderLease.Adopt(binding, _generationIdentity)) continue;
+                if (HolderLease.Detach(binding, _generationIdentity)) continue;
+                if (!StopHolder(attempt, "detach-not-provable", out var stopFault))
+                {
+                    if (stopFault is not null) continue;
+                    throw new InvalidOperationException($"Grouped acceptance detach/cancel settlement unproven: {attempt.AttemptId}.");
+                }
+            }
+            catch (Exception ex) when (AcceptanceHolderLeaseFault.From(ex, binding) is { } fault)
+            {
+                RecordHolderHold(attempt, fault);
+                continue;
+            }
             Reconcile(attempt, "holder-tree-cancelled-before-detach");
             File.WriteAllText(attempt.ExitCodePath, "1");
         }
@@ -350,6 +376,11 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
             observation = HolderLease.Observe(binding);
             if (observation.CanAdopt) _ = HolderLease.Adopt(binding, _generationIdentity);
         }
+        catch (Exception ex) when (AcceptanceHolderLeaseFault.From(ex, binding) is { } fault)
+        {
+            RecordHolderHold(attempt, fault);
+            return true;
+        }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidDataException)
         {
             RecordHolderHold(attempt, $"holder-lease-unavailable:{ex.GetType().Name}");
@@ -357,7 +388,8 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
         }
         if (observation.ReservesCapacity)
         {
-            if (!observation.CanAdopt) RecordHolderHold(attempt, observation.Reason);
+            if (observation.Fault is { } fault) RecordHolderHold(attempt, fault);
+            else if (!observation.CanAdopt) RecordHolderHold(attempt, observation.Reason);
             return true;
         }
         if (attempt.ReconciledAt is null)
@@ -413,6 +445,9 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
             ? "legacy-holder-absent-or-settled" : null;
     }
 
+    private void RecordHolderHold(ConductorGroupedGateAttempt attempt, AcceptanceHolderLeaseFault fault) =>
+        RecordHolderHold(attempt, fault.Format());
+
     private void RecordHolderHold(ConductorGroupedGateAttempt attempt, string reason)
     {
         if (_holderHolds.TryGetValue(attempt.AttemptId, out var previous) && previous == reason) return;
@@ -446,12 +481,22 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
     {
         // Pre-lease records are classified in place, without adoption writes.
         if (_usesDurableHolderLease && !LeaseFilePresent(AcceptanceHolderBinding.For(attempt).LeasePath)) return false;
+        var binding = AcceptanceHolderBinding.For(attempt);
         try
         {
+            if (attempt.HolderContractVersion == 1 && attempt.OwnerProcessStartedAt is { } started &&
+                attempt.OwnerExecutablePath is { } image)
+                HolderLease.ValidateRecordedHolder(binding, new(attempt.OwnerProcessId, started, image));
             return attempt.HolderContractVersion == 1
-                ? HolderLease.CanAdopt(AcceptanceHolderBinding.For(attempt), _generationIdentity)
+                ? HolderLease.CanAdopt(binding, _generationIdentity)
                 : ConductorOrphanGateAttemptAdoption.ShouldAdopt(attempt, GenerationId, _isProcessAlive, File.Exists,
                     _classifyHolder);
+        }
+        catch (Exception ex) when (attempt.HolderContractVersion == 1 &&
+            AcceptanceHolderLeaseFault.From(ex, binding) is { } fault)
+        {
+            RecordHolderHold(attempt, fault);
+            return false;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidDataException)
         {
@@ -464,7 +509,18 @@ internal sealed class ConductorGroupedGateAttemptCoordinator
     {
         if (attempt.HolderContractVersion == 1)
         {
-            if (!HolderLease.Adopt(AcceptanceHolderBinding.For(attempt), _generationIdentity)) return attempt;
+            var binding = AcceptanceHolderBinding.For(attempt);
+            try
+            {
+                if (attempt.OwnerProcessStartedAt is { } started && attempt.OwnerExecutablePath is { } image)
+                    HolderLease.ValidateRecordedHolder(binding, new(attempt.OwnerProcessId, started, image));
+                if (!HolderLease.Adopt(binding, _generationIdentity)) return attempt;
+            }
+            catch (Exception ex) when (AcceptanceHolderLeaseFault.From(ex, binding) is { } fault)
+            {
+                RecordHolderHold(attempt, fault);
+                return attempt;
+            }
             // Grouped metadata has its own short lock; the child only claims identity here.
             // Result publication is separate, so this marker cannot overwrite a child verdict.
             return Update(attempt.MetadataPath, current => current with { AdoptedByGenerationId = GenerationId });
