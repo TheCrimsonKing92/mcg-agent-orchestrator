@@ -8,7 +8,7 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     IOwnerDigestSummary summary, TimeProvider clock, IOwnerConsoleEpicSource? epics = null,
     AnswerIntentStatusTracker? answerTracking = null, OwnerQuestionResolutionReader? resolutions = null,
     IOwnerConsoleNotifier? notifier = null, OwnerConsoleNotificationSettings? notifications = null,
-    Func<OwnerFleetViewModel>? fleet = null) : IDisposable
+    Func<OwnerFleetViewModel>? fleet = null, Func<string, string>? landings = null) : IDisposable
 {
     private readonly object _notificationGate = new();
     private readonly IOwnerConsoleNotifier _notifier = notifier ?? new NullOwnerConsoleNotifier();
@@ -246,11 +246,13 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
         var output = new OwnerConsoleCapturedOutput();
         string? goalId = null;
         string? fleetText = null;
+        string? landingsText = null;
         var control = new OwnerConsoleControlCommands(conductor, digest, output, clock);
         if (!await RunDependencyAsync(line, ExecuteAsync, operation, cancellationToken)) return;
         cancellationToken.ThrowIfCancellationRequested();
         if (goalId is not null) { await ShowGoalDetailAsync(goalId, operation, cancellationToken); return; }
         if (fleetText is not null) { await dialogs.ShowTextAsync("Fleet", fleetText); return; }
+        if (landingsText is not null) { await dialogs.ShowTextAsync("Landings", landingsText); return; }
         await dialogs.ShowTextAsync("Command result", output.Text);
 
         async Task ExecuteAsync(CancellationToken stepToken)
@@ -267,6 +269,11 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
                     if (parts.Length != 1) output.WriteLine("usage: fleet");
                     else if (fleet is null) output.WriteLine("fleet view unavailable in this session");
                     else fleetText = OwnerFleetDiagram.Render(fleet());
+                    break;
+                case "landings":
+                    if (parts.Length > 2) output.WriteLine(OwnerLandingsQuery.Usage);
+                    else if (landings is null) output.WriteLine("landings view unavailable in this session");
+                    else landingsText = landings(parts.Length == 2 ? parts[1] : "");
                     break;
                 case "bell":
                     var arguments = parts.Skip(1).Select(part => part.ToLowerInvariant()).ToArray();
