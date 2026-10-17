@@ -6,7 +6,8 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal static class ConductorRelaunchLogFold
 {
     internal static readonly string[] Heads = ["LOOP_RELAUNCH_SCHEDULED ", "LOOP_RELAUNCH_DRAIN ",
-        "ACTIVATION_ADOPTED ", "ACTIVATION_REVERTED ", "LOOP_HANDOFF_FAILED ", "SUPERVISOR_BUILD "];
+        "ACTIVATION_ADOPTED ", "ACTIVATION_REVERTED ", "LOOP_HANDOFF_FAILED ", "SUPERVISOR_BUILD ",
+        "LOOP_HANDOFF attempt=", "PHASE_PROGRESS "];
 
     internal static ConductorRelaunchObservation Apply(ConductorRelaunchObservation state,
         DateTimeOffset at, string detail)
@@ -38,6 +39,14 @@ internal static class ConductorRelaunchLogFold
         }
         else if (state.ScheduledAt is not null)
         {
+            if (state.FailureOutcomeAt is null)
+            {
+                if (detail.StartsWith("LOOP_HANDOFF attempt=", StringComparison.Ordinal))
+                    return state with { HandoffAt = at };
+                if (detail.StartsWith("PHASE_PROGRESS ", StringComparison.Ordinal) &&
+                    state.HandoffAt is { } handoff && at >= handoff)
+                    return state with { LastLiveGateAt = at };
+            }
             if (detail.StartsWith("LOOP_RELAUNCH_DRAIN ", StringComparison.Ordinal) &&
                 ConductorInvariantLogProgress.TryGetProgress(detail))
                 return state with { LastLiveGateAt = at };
