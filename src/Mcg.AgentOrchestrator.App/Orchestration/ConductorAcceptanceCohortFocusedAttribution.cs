@@ -12,6 +12,11 @@ internal interface IConductorCohortPartitionRunner
 
     AcceptanceCohortPartitionReceipt RunFull(AcceptanceCohortMemberBinding member, int ordinal,
         AcceptanceCohortIdentity identity, ConductEventLogWriter writer, CancellationToken cancellationToken);
+
+    AcceptanceCohortPartitionReceipt RunFullScoped(AcceptanceCohortMemberBinding member, int ordinal,
+        AcceptanceCohortIdentity identity, AcceptanceAttributionLaneScope? scope,
+        ConductEventLogWriter writer, CancellationToken cancellationToken) =>
+        RunFull(member, ordinal, identity, writer, cancellationToken);
 }
 
 internal enum ConductorCohortFocusedPassKind { Executed, InfrastructureFailure, SelectionRejected }

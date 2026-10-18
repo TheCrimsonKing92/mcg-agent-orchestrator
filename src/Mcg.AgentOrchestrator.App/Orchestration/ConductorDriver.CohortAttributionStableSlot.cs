@@ -14,7 +14,8 @@ internal sealed partial class ConductorDriver
         AcceptanceCohortMemberBinding member,
         AcceptanceCohortIdentity identity,
         ConductEventLogWriter gateProgressEventWriter,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        AcceptanceAttributionLaneScope? scope)
     {
         using var lease = CohortPartitionStableSlotLeaseSource is { } source
             ? source(identity.Value, cancellationToken)
@@ -24,6 +25,6 @@ internal sealed partial class ConductorDriver
         return AcceptanceExecutionRunner.RunAttempt(
             verifier, partitionPath, member.GoalId, member.LandingPaths,
             lease.Environment.BuildPermitIndex, lease, cancellationToken,
-            CreateCohortAttributionExecutionOptions(gateProgressEventWriter, identity, member));
+            CreateCohortAttributionExecutionOptions(gateProgressEventWriter, identity, member, scope));
     }
 }
