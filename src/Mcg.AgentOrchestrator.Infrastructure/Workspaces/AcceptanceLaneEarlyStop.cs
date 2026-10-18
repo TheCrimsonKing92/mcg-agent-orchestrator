@@ -16,7 +16,7 @@ internal sealed record AcceptanceLaneEarlyStop(
         $"not_run={List(NotRun)} cancelled_mid_run={List(CancelledMidRun)} remote_left_to_finish={List(RemoteLeftToFinish)}";
 
     internal AcceptanceCheckResult ToReceiptCheck() =>
-        new(ReceiptName, false, 1, Summary, ResultSummary: Summary);
+        new(ReceiptName, false, 1, Summary, ResultSummary: Summary, CoveredBy: [ConfirmingLane]);
 
     private static string List(IReadOnlyList<string> lanes) => $"[{string.Join(",", lanes.Select(Quote))}]";
     private static string Quote(string lane) => $"\"{lane.Replace("\\", "\\\\").Replace("\"", "\\\"")}\"";
