@@ -22,6 +22,7 @@ internal sealed class ProviderHoldFailedGoalRedispatch(
         if (failed.Length == 0 || failed.Any(task => task.ProviderFailureKind != ProviderFailureKind.BudgetExhausted))
             return false;
         var scratch = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+        scratch.ProviderHoldHistory.CopyFrom(kernel.ProviderHoldHistory);
         var substitutions = new List<(TaskId TaskId, ProviderHoldAgentSubstitution.Result.Substitute Substitute)>();
         var heldRetries = new List<(TaskId TaskId, string Message)>();
         foreach (var task in failed)
