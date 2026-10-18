@@ -26,7 +26,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteExecutorClai
     }
 
     [Xunit.Fact]
-    public async Task AllHeldExecutorsRunLocallyWithoutLedgerRows()
+    public async Task AllHeldExecutorsRunLocallyWithOneNoSlotRow()
     {
         using var scenario = CreateScenario();
         using var one = RemoteExecutorOccupancy.TryClaimExclusive(scenario.HostRoot, "one");
@@ -39,7 +39,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteExecutorClai
         Assert.True(result.Passed, JsonSerializer.Serialize(result.Checks));
         Assert.Empty(fake.Requests);
         Assert.Equal(1, scenario.LocalStarts);
-        Assert.DoesNotContain(scenario.Health(), row => row.Lane == "infrastructure tests: Lane 0");
+        Assert.Equal(RemoteLaneOutcomeCode.OfferSkippedNoExecutor, Assert.Single(scenario.Health(), row => row.Lane == "infrastructure tests: Lane 0").Outcome);
     }
 
     [Xunit.Theory]

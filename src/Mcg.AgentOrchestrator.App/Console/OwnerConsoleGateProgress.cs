@@ -137,6 +137,10 @@ internal sealed record OwnerConsoleGateProgress(bool Live, string Kind,
                 var remoteLane = remote.Where(item => MatchLane(item.Get("lane"), manifest) == name).ToArray();
                 var offer = remoteLane.LastOrDefault(item => item.Get("decision") == "offer");
                 if (offer is not null && (latest is null || offer.Event.Timestamp > latest.Event.Timestamp)) latest = offer;
+                var noSlot = remoteLane.LastOrDefault();
+                var waiting = noSlot?.Event.Detail.StartsWith("REMOTE_LANE ", StringComparison.Ordinal) == true &&
+                    noSlot.Get("outcome") == "offer-skipped-no-executor" &&
+                    (observations.Length == 0 || noSlot.Event.Timestamp > observations[^1].Event.Timestamp);
                 var state = latest?.Get("phase") switch
                 {
                     "verification-check" or "remote-shard-started" => OwnerConsoleGateLaneState.Running,
@@ -144,14 +148,15 @@ internal sealed record OwnerConsoleGateProgress(bool Live, string Kind,
                     "cache-hit" or "reuse" => OwnerConsoleGateLaneState.Cached,
                     _ => offer is null ? OwnerConsoleGateLaneState.Queued : OwnerConsoleGateLaneState.Running
                 };
+                if (waiting) state = OwnerConsoleGateLaneState.Queued;
                 var elapsed = TimeSpan.FromMilliseconds(latest?.Number("elapsed_ms") ?? 0);
                 if (state == OwnerConsoleGateLaneState.Running)
                     elapsed += Nonnegative(now - (latest?.Event.Timestamp ?? offer!.Event.Timestamp));
                 var executor = latest?.Get("phase") is "remote-shard-started" or "remote-shard-complete"
-                    ? remoteLane.LastOrDefault(item => item.Get("executor").Length > 0)?.Get("executor") ??
+                    ? remoteLane.LastOrDefault(item => item.Get("executor").Length > 0 && item.Get("outcome") != "offer-skipped-no-executor")?.Get("executor") ??
                         observations.LastOrDefault(item => item.Get("executor").Length > 0)?.Get("executor") : null;
                 var slot = Regex.Match(latest?.Get("heartbeat") ?? "", @"activity-(\d+)");
-                var location = executor ?? (slot.Success ? "local slot " + slot.Groups[1].Value :
+                var location = waiting ? "no executor slot" : executor ?? (slot.Success ? "local slot " + slot.Groups[1].Value :
                     latest?.Get("decision") == "offer" || latest?.Get("phase") is "remote-shard-started" or "remote-shard-complete" ? "remote" : "local");
                 double? quiet = null;
                 if (state == OwnerConsoleGateLaneState.Running && latest?.Get("phase") == "verification-check")
