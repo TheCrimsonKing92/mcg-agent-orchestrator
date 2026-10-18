@@ -128,8 +128,9 @@ public sealed class ConductorDriverTestsPreTesterEvidenceRefresh
             evt.Message.Contains("prior-outcome-not-started", StringComparison.Ordinal));
         scenario.CompleteTester();
         Assert.True(TesterInconclusiveRoundInputsReader.Read(scenario.Goal, scenario.Tester)!.InputsUnchanged);
-        Assert.IsType<ConductorAdvanceOutcome.Escalated>(scenario.Advance().Outcome);
-        Assert.Equal("verification-inconclusive-unchanged-inputs", scenario.Recoveries[^1].DiscriminatingEvidence);
+        var escalated = Assert.IsType<ConductorAdvanceOutcome.Escalated>(scenario.Advance().Outcome);
+        var decision = Assert.IsType<PolicyDecisionRecord>(escalated.Decision);
+        Assert.Equal("verification-inconclusive-unchanged-inputs", decision.DiscriminatingEvidence);
         Assert.Equal(0, scenario.Runs);
     }
 
