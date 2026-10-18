@@ -15,10 +15,10 @@ internal sealed partial class ConductorBatchLoop
         return scope;
     }
 
-    private static void RecordActivationAdmissionWaitingForProbe(IReadOnlyList<Goal> eligible)
+    private static void RecordActivationAdmissionWaitingForProbe(ParallelAcceptanceBatchState state)
     {
-        RecordActivationAdmissionWaiting(eligible.Count);
-        ActivationAdmissionProbeScope.Current.Value?.Waiting(eligible.Count(goal => goal.Status == GoalStatus.Verified));
+        RecordActivationAdmissionWaiting(state.OrderedEligible.Count);
+        ActivationAdmissionProbeScope.Current.Value?.Waiting(census => census.Count(state.OrderedEligible, state.Results));
     }
 
     private static void EmitActivationAdmissionProbeAndHealth(bool emit, int tick)

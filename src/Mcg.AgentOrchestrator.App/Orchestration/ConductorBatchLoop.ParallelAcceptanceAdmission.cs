@@ -564,10 +564,10 @@ internal sealed partial class ConductorBatchLoop
             }
             try
             {
-            var soloAdmission = EvaluateSoloAcceptanceAdmissibility(
+            var soloAdmission = ActivationAdmissionProbeScope.RecordSolo(goal.Id, EvaluateSoloAcceptanceAdmissibility(
                 kernel, driver, goal, policy, state.AcceptanceCensus, state.ConfiguredAcceptanceWidth,
                 state.ActiveAttemptSlotIndexes, state.ActiveCandidates, state.LiveAttemptGoalIds,
-                state.OldestWaiterObservation, oldestServedThisTick, tick);
+                state.OldestWaiterObservation, oldestServedThisTick, tick));
             if (soloAdmission.Kind != SoloAcceptanceAdmissionKind.Admissible)
             {
                 if (soloAdmission.Kind == SoloAcceptanceAdmissionKind.Capacity) state.DeferredByAdmission++;

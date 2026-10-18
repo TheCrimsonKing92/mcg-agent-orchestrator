@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -12,7 +13,8 @@ internal sealed class ActivationAdmissionProbeScope(IDisposable health) : IDispo
     private readonly List<ActivationProbeAttempt> _attempts = [];
     private readonly AcceptanceHolderLease _lease = new();
     private int _index;
-    private int _waiting;
+    private readonly ActivationAdmissionWaitingCensus _census = new();
+    private Func<ActivationAdmissionWaitingCensus, int>? _waiting;
     private bool _closed;
 
     private sealed class ActivationProbeAttempt(AcceptanceHolderBinding binding, string result, string? grouped)
@@ -30,14 +32,28 @@ internal sealed class ActivationAdmissionProbeScope(IDisposable health) : IDispo
                 _attempts.Add(new(binding, result, grouped));
     }
 
-    internal void Waiting(int waiting) { lock (_gate) _waiting = waiting; }
+    internal void Waiting(Func<ActivationAdmissionWaitingCensus, int> waiting)
+    {
+        lock (_gate)
+        {
+            _census.Clear();
+            _waiting = waiting;
+        }
+    }
+
+    internal static ConductorBatchLoop.SoloAcceptanceAdmission RecordSolo(
+        GoalId goalId, ConductorBatchLoop.SoloAcceptanceAdmission admission)
+    {
+        Current.Value?._census.Record(goalId, admission.Kind);
+        return admission;
+    }
 
     internal ActivationAdmissionProbeLine Take(int tick)
     {
         lock (_gate)
         {
-            var waiting = _waiting;
-            _waiting = 0;
+            var waiting = _waiting?.Invoke(_census) ?? 0;
+            _waiting = null;
             while (_index < _attempts.Count)
             {
                 var attempt = _attempts[_index];

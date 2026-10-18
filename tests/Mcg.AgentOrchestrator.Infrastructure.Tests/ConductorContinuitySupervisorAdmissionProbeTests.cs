@@ -208,9 +208,12 @@ public sealed class ConductorContinuitySupervisorAdmissionProbeTests
 
         internal void Tick(int tick, string phase = "none", int waiting = 2, bool emitProbe = true)
         {
-            if (emitProbe) Probe(tick, phase, waiting);
+            // Production emits the probe before TICK_END. This fake releases after its tick instead:
+            // release can adopt immediately, so complete the tick before asserting its healthy count.
+            if (emitProbe && phase != "released") Probe(tick, phase, waiting);
             _successor!.OnStandardOutputLine!(new ActivationAdmissionSample(tick, false, waiting, 0, 0).Format());
             _successor.OnStandardOutputLine($"TICK_END tick={tick} activation=true");
+            if (emitProbe && phase == "released") Probe(tick, phase, waiting);
         }
 
         internal async Task HeldTickAsync(int tick, string phase = "none", int waiting = 2, bool emitProbe = true)
