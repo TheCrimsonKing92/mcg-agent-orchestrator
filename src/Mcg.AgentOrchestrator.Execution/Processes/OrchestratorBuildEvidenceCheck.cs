@@ -54,7 +54,7 @@ public static class OrchestratorBuildEvidenceCheck
     internal const string ScriptRelativePath = "scripts/Invoke-WorkerBuildCheck.ps1";
     // Published by the App's OrchestratorHome accessor before command dispatch.
     internal const string HomeEnvironmentVariable = "MCG_ORCHESTRATOR_HOME";
-    private static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(7);
+    internal static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(7);
 
     internal static OrchestratorBuildEvidenceResolution Resolve(
         string worktreeRoot,

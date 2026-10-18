@@ -149,6 +149,11 @@ internal sealed class SshRemoteLaneExecutor(
             ["filterHash"] = request.FilterHash, ["mainSha"] = request.MainSha, ["manifestIdentity"] = request.ManifestIdentity
         };
         if (request.TestHostTimeoutSeconds is { } budget) job["testHostTimeoutSeconds"] = budget;
+        if (request.Kind == "build-check")
+        {
+            job["kind"] = "build-check";
+            job["projects"] = JsonSerializer.SerializeToNode(request.BuildProjects ?? []);
+        }
         await File.WriteAllTextAsync(Path.Combine(staging, "job.json"), JsonSerializer.Serialize(job),
             cancellationToken).ConfigureAwait(false);
         startedAt = clock.GetUtcNow();
