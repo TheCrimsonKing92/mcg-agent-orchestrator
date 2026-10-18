@@ -403,7 +403,7 @@ internal sealed partial class ConductorDriver
                     readCurrentInterruptedDispatchState: readCurrentInterruptedDispatchState,
                     conductorPolicy: policy,
                     recordDurableGoalBaseline: recordDurableGoalBaseline,
-                    excludedTaskIds: GetUnchangedCandidateExclusions(goal));
+                    excludedTaskIds: GetUnchangedCandidateExclusions(goal), admitProviderBudgetProbe: true, utcNow: _utcNow);
             }
             catch (DispatchRecordWriteException ex)
             {

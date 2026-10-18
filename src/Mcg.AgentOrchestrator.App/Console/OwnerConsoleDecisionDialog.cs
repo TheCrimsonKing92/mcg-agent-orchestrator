@@ -26,6 +26,8 @@ internal sealed class OwnerConsoleDecisionDialog : Dialog
     internal string NoticeText { get; private set; } = "";
     internal string HintText { get; private set; } = "";
     internal IReadOnlyList<string> Lines => _page.Lines;
+    internal OwnerConsoleTextPage Page => _page;
+    internal ListView BodyPane => _body;
     internal IReadOnlyList<string> Actions => new[] { _answer, _accept, _close }
         .Where(button => button.Visible).Select(button => button.Text.ToString()).ToArray();
     internal Task LastRefresh => _detail.LastRefresh;
@@ -92,6 +94,9 @@ internal sealed class OwnerConsoleDecisionDialog : Dialog
             else _page.Resize(width, height);
             _body.SetSource(new ObservableCollection<string>(_page.Visible));
             _body.SelectedItem = _page.Selected - _page.Offset;
+            var title = OwnerConsoleOverflow.Title("Decision", _page.Overflow,
+                Frame.Width - OwnerConsoleOverflow.TitleChrome);
+            if (Title != title) Title = title;
             if ((!state.CanAnswer && _answer.HasFocus) || (!state.CanAcceptDefault && _accept.HasFocus))
                 _close.SetFocus();
             _answer.Visible = state.CanAnswer; _accept.Visible = state.CanAcceptDefault;

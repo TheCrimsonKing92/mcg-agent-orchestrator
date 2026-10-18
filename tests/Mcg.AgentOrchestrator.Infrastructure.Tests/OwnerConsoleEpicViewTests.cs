@@ -732,7 +732,7 @@ public sealed class OwnerConsoleEpicViewTests
         });
     }
 
-    private sealed class Fixture : IDisposable
+    internal sealed class Fixture : IDisposable
     {
         internal const string Plan = "Purpose: show the whole epic plan with owner decisions and phases.\nPhase one: render the plan of record with enough detail to require wrapping at the available window width while keeping every word accessible.\nNext: review with Miles. Last reviewed: 2026-10-08.";
         internal readonly OwnerConsoleHarness Harness = new();
@@ -798,7 +798,7 @@ public sealed class OwnerConsoleEpicViewTests
         public void Dispose() { View.Dispose(); App.Dispose(); }
     }
 
-    private sealed class Source : IOwnerConsoleEpicSource
+    internal sealed class Source : IOwnerConsoleEpicSource
     {
         internal IOrchestratorStateQueries State = null!;
         internal int ListCalls;
@@ -867,14 +867,14 @@ public sealed class OwnerConsoleEpicViewTests
         }
     }
 
-    private sealed class Clock : TimeProvider
+    internal sealed class Clock : TimeProvider
     {
         internal DateTimeOffset Current = Now;
         public override DateTimeOffset GetUtcNow() => Current;
         public override TimeZoneInfo LocalTimeZone => TimeZoneInfo.CreateCustomTimeZone("Test", TimeSpan.FromHours(3), "Test", "Test");
     }
 
-    private sealed class Dialogs : IOwnerConsoleDialogs
+    internal sealed class Dialogs : IOwnerConsoleDialogs
     {
         internal readonly List<(string Title, string Text)> Texts = [];
         public Task<bool> ConfirmAsync(string title, string text) => Task.FromResult(false);

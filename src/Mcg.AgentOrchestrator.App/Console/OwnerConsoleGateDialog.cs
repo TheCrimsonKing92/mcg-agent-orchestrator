@@ -18,6 +18,7 @@ internal sealed class OwnerConsoleGateDialog : FrameView
     internal IReadOnlyList<string> Lines { get; private set; } = [];
     internal string FooterText => _footer.Text;
     internal int SelectedLine => _body.SelectedItem ?? 0;
+    internal ListView BodyPane => _body;
 
     internal OwnerConsoleGateDialog()
     {
@@ -27,6 +28,7 @@ internal sealed class OwnerConsoleGateDialog : FrameView
         CanFocus = true;
         Visible = false;
         Add(_body, _footer);
+        _body.ViewportChanged += (_, _) => { if (IsOpen) RenderTitle(); };
     }
 
     internal void Open(OwnerConsolePane returnPane, OwnerConsoleGateProgress? gate, string? goalId = null)
@@ -52,6 +54,15 @@ internal sealed class OwnerConsoleGateDialog : FrameView
         Lines = OwnerConsoleGateLayout.Lines(gate, OwnerConsoleEpicFormatter.Width(_body.Viewport.Width), Expanded);
         _body.SetSource(new ObservableCollection<string>(Lines));
         _body.SelectedItem = Math.Clamp(selected, 0, Math.Max(0, Lines.Count - 1));
+        RenderTitle();
+    }
+
+    private void RenderTitle()
+    {
+        var title = OwnerConsoleOverflow.Title("GATE",
+            OwnerConsoleOverflow.Of(Lines.Count, _body.Viewport.Y, _body.Viewport.Height),
+            Frame.Width - OwnerConsoleOverflow.TitleChrome);
+        if (Title != title) Title = title;
     }
 
     internal bool HandleKey(Key key)
@@ -71,6 +82,7 @@ internal sealed class OwnerConsoleGateDialog : FrameView
         {
             _body.SelectedItem = target;
             _body.EnsureSelectedItemVisible();
+            RenderTitle();
         }
         return false;
     }

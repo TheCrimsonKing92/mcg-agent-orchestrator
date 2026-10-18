@@ -132,7 +132,9 @@ internal sealed partial class OperatorIntentCoordinator
             EpicOutcomes = new EpicOutcomeIntentHandler(workspace.PortfolioStorePath),
             Directives = new OperatorDirectiveIntentHandler(workspace.OperatorDirectivesStorePath),
             ExecutorSettings = new ExecutorSettingIntentHandler(
-                RemoteLaneExecutorConfiguration.ResolveStorePath(workspace.ExecutionDirectory), workspace.ConductEventsLogPath)
+                RemoteLaneExecutorConfiguration.ResolveStorePath(workspace.ExecutionDirectory), workspace.ConductEventsLogPath,
+                new RemoteExecutorSlotsFileSync(GoalAcceptanceVerifier.RunRemoteLaneTransportAsync,
+                    workspace.ExecutionDirectory, TimeSpan.FromSeconds(30)))
         };
     }
 
@@ -371,6 +373,9 @@ internal sealed partial class OperatorIntentCoordinator
     {
         switch (intent.Verb)
         {
+            case OperatorIntentVerbs.ProviderReset:
+                ProviderResetIntentHandler.Apply(kernel, goal, intent, _utcNow());
+                return;
             case OperatorIntentVerbs.ApprovePolicyChange:
                 var policyApproval = Deserialize<ApprovePolicyChangeOperatorIntentPayload>(intent);
                 OperatorIntentPolicyApproval.Apply(

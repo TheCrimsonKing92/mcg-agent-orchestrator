@@ -817,6 +817,7 @@ internal static class CliCommandHelp
             ["logs"] = GoalScopedTaskFlags(),
             ["cancel-dispatch"] = Flags("--goal", "--completion-build-operation", "--idempotency-key", "--operator-actor", "--actor-kind", "--json"),
             ["goal-priority"] = Flags("--reason", "--idempotency-key", "--operator-actor", "--actor-kind", "--json"),
+            ["provider-reset"] = Flags("--text-file", "--idempotency-key", "--operator-actor", "--actor-kind", "--json"),
             ["goal-isolation"] = Flags("--reason", "--idempotency-key", "--operator-actor", "--actor-kind", "--json"),
             ["accept"] = Flags(
                 "--autonomy", "--autonomy-policy", "--keep-workspace", "--no-record", "--skip-verify")
@@ -1812,6 +1813,8 @@ internal static class CliCommandHelp
                     ? CliGoalIsolationCommand.Usage
                     : command.Equals("goal-priority", StringComparison.OrdinalIgnoreCase)
                     ? CliGoalPriorityCommand.Usage
+                    : command.Equals("provider-reset", StringComparison.OrdinalIgnoreCase)
+                    ? CliProviderResetCommand.Usage
                     : command.Equals("finding", StringComparison.OrdinalIgnoreCase)
                     ? $"Usage: {CliFindingQueryCommand.Usage}"
                     : $"Usage: {command} [options]",
