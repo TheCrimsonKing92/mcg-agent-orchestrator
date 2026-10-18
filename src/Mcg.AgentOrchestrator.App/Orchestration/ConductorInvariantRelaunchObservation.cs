@@ -1,7 +1,7 @@
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed record ConductorFinishedAttempt(string AttemptId, string GoalId, string Kind,
-    DateTimeOffset StartedAt, DateTimeOffset FinishedAt);
+    DateTimeOffset StartedAt, DateTimeOffset FinishedAt, string? Diagnosis = null);
 
 internal sealed record ConductorRelaunchObservation(DateTimeOffset? ScheduledAt, string? GoalId,
     DateTimeOffset? LastLiveGateAt, DateTimeOffset? FailureOutcomeAt, string? RunningBuildCommit,
