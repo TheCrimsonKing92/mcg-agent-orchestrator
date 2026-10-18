@@ -4,7 +4,8 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 // Parallel safe: each focused fixture owns its git repository, transport and ledger.
-public sealed class RemoteLaneResourceUsageTests : RemoteFirstFocusedEvidenceFixture
+[Xunit.Collection(TestCollections.JobAccounting)]
+public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLaneResourceUsage : RemoteFirstFocusedEvidenceFixture
 {
     private static JsonElement Status(bool resources = true) => JsonSerializer.SerializeToElement(resources
         ? new Dictionary<string, object> { ["testHostCpuSeconds"] = 12.5, ["testHostPeakWorkingSetBytes"] = 4096,
@@ -43,7 +44,7 @@ public sealed class RemoteLaneResourceUsageTests : RemoteFirstFocusedEvidenceFix
     [InlineData(false)]
     public async Task GateRowsIncludeUsageOnlyWhenStatusSuppliesIt(bool resources)
     {
-        using var scenario = new RemoteSlotInstrumentationScenarioTests.Scenario(1, resources: resources);
+        using var scenario = new GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteSlotInstrumentation.Scenario(1, resources: resources);
         Assert.True((await scenario.RunAsync()).Passed);
         var row = Assert.Single(scenario.Health());
         Assert.Equal(RemoteLaneOutcomeCode.Accepted, row.Outcome);

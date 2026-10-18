@@ -4,7 +4,8 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 // Parallel safe: private roots and overrides; each execution acquires its own stable-slot lease.
-public sealed class RemoteSlotInstrumentationScenarioTests
+[Xunit.Collection(TestCollections.JobAccounting)]
+public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteSlotInstrumentation
 {
     [Fact]
     public async Task ShadowOccupancyRecordsTwoLocalFallbacksAndRemoteResources()
@@ -13,7 +14,7 @@ public sealed class RemoteSlotInstrumentationScenarioTests
         var result = await scenario.RunAsync();
         Assert.True(result.Passed, JsonSerializer.Serialize(result.Checks));
         var accepted = Assert.Single(scenario.Health(), row => row.Outcome == RemoteLaneOutcomeCode.Accepted);
-        RemoteLaneResourceUsageTests.AssertUsage(accepted);
+        GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLaneResourceUsage.AssertUsage(accepted);
         var skipped = scenario.Health().Where(row => row.Outcome == RemoteLaneOutcomeCode.OfferSkippedNoExecutor).ToArray();
         Assert.Equal(2, skipped.Length);
         Assert.Equal(2, skipped.Select(row => row.Lane).Distinct().Count());

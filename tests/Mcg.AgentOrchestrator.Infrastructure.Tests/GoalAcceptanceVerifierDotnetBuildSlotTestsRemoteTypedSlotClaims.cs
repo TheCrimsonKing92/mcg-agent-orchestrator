@@ -5,7 +5,8 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using Check = Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier.AcceptanceManifestCheck;
 
 // Parallel safe: private repositories, executors and overrides; gate runs own stable-slot leases.
-public sealed class RemoteTypedSlotClaimsScenarioTests
+[Xunit.Collection(TestCollections.JobAccounting)]
+public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteTypedSlotClaims
 {
     [Fact]
     public async Task Cancellable_ShadowSlotsBecomeTwoRemoteGateLanes()

@@ -1,11 +1,12 @@
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Fixture = RemoteExecutorSlotArbiterTests.Fixture;
-using Scenario = RemoteTypedSlotClaimsScenarioTests.JobAccountingScenario;
-using static RemoteTypedSlotClaimsScenarioTests;
+using Scenario = GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteTypedSlotClaims.JobAccountingScenario;
+using static GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteTypedSlotClaims;
 
 // Parallel safe: manual clocks, private host roots, event-driven fake queue state.
-public sealed class RemoteShadowPreemptionTests
+[Xunit.Collection(TestCollections.JobAccounting)]
+public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteShadowPreemption
 {
     [Fact]
     public void PreemptedRows_DoNotCountAsExecutorAttempts()
