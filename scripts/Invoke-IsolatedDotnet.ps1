@@ -1027,9 +1027,10 @@ function Get-FocusedWorkerAuthorization {
     $isWorkerDispatch = $env:MCG_ORCHESTRATOR_WORKER_DISPATCH -eq "1" -or
         $env:MCG_ORCHESTRATOR_WORKER_DISPATCH -eq "true"
     if (-not $isWorkerDispatch) {
-        return [pscustomobject]@{ Allowed = $true; Reason = $null; GoalId = $null; TaskId = $null; Role = "Operator" }
+        return [pscustomobject]@{ Allowed = $true; Reason = $null; GoalId = $null; TaskId = $null; Role = "Operator"; SqliteExecutable = $null }
     }
 
+    $sqlitePath = $null
     try {
         $startGatePath = [string]$env:MCG_DISPATCH_HOST_START_GATE
         if ([string]::IsNullOrWhiteSpace($startGatePath) -or
@@ -1068,9 +1069,10 @@ function Get-FocusedWorkerAuthorization {
         if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) {
             throw "The canonical state database is unavailable."
         }
-        $sqlite = Get-Command sqlite3 -CommandType Application -ErrorAction Stop
+        $sqlite = @(Get-Command sqlite3 -CommandType Application -ErrorAction Stop) | Select-Object -First 1
+        $sqlitePath = [string]$sqlite.Source
         $query = "SELECT json_extract(task.value, '$.RequiredRole') FROM goals, json_each(goals.snapshot_json, '$.Tasks') AS task WHERE goals.id = '$goalId' AND json_extract(task.value, '$.Id') = '$taskId' LIMIT 1;"
-        $role = @(& $sqlite.Source -readonly -noheader $statePath $query 2>$null) | Select-Object -First 1
+        $role = @(& $sqlitePath -readonly -noheader $statePath $query 2>$null) | Select-Object -First 1
         if ($LASTEXITCODE -ne 0) {
             throw "The canonical task role lookup failed."
         }
@@ -1081,10 +1083,11 @@ function Get-FocusedWorkerAuthorization {
             GoalId = $goalId
             TaskId = $taskId
             Role = $role
+            SqliteExecutable = $sqlitePath
         }
     }
     catch {
-        return [pscustomobject]@{ Allowed = $false; Reason = "focused-test-authorization-failed"; Error = $_.Exception.Message; GoalId = $null; TaskId = $null; Role = $null }
+        return [pscustomobject]@{ Allowed = $false; Reason = "focused-test-authorization-failed"; Error = $_.Exception.Message; GoalId = $null; TaskId = $null; Role = $null; SqliteExecutable = $sqlitePath }
     }
 }
 
@@ -1477,6 +1480,7 @@ function Invoke-FocusedTestMode {
         outcome = "BLOCKED"
         exitCode = 5
         reason = "unhandled-exception"
+        sqliteExecutable = $null
         total = $null
         passed = $null
         failed = $null
@@ -1515,6 +1519,7 @@ function Invoke-FocusedTestMode {
     }
     try {
         $authorization = Get-FocusedWorkerAuthorization
+        $receipt.sqliteExecutable = $authorization.SqliteExecutable
         $receipt.authorization = [ordered]@{
             goalId = $authorization.GoalId
             taskId = $authorization.TaskId
