@@ -66,13 +66,5 @@ internal sealed class ProviderHoldAgentSubstitution(
         return null;
     }
 
-    private static bool IsPinned(Goal goal, TaskId taskId)
-    {
-        // Timeline position is authoritative even when the clock gives several events the same timestamp.
-        var latestAssignment = goal.Timeline.LastOrDefault(evt => evt.TaskId == taskId &&
-            evt.Kind is ProgressKind.TaskDelegated or ProgressKind.TaskRedelegated or ProgressKind.ProviderHoldSubstituted);
-        return latestAssignment is { Kind: ProgressKind.TaskRedelegated } &&
-            latestAssignment.Message.StartsWith("Reassigned ", StringComparison.Ordinal) &&
-            !latestAssignment.Message.Contains("repaired stale", StringComparison.OrdinalIgnoreCase);
-    }
+    private static bool IsPinned(Goal goal, TaskId taskId) => OfflineAssignedAgentRedelegation.IsOperatorPin(goal, taskId);
 }
