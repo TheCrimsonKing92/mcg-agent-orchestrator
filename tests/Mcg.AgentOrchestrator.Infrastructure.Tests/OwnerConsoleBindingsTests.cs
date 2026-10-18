@@ -95,7 +95,7 @@ public sealed class OwnerConsoleBindingsTests
     [Fact]
     public void PromptPreservesCommandOrderAndAdvertisesAliases()
     {
-        const string expected = "conductor start | conductor stop | conductor status | digest | metrics | bell on | bell off | goal <id-prefix> | [e] epics | fleet | [l] landings | [g] gate | [?] help | [q] quit | [a] accept | [r] answer";
+        const string expected = "conductor start | conductor stop | conductor status | digest | metrics | bell on | bell off | goal <id-prefix> | [e] epics | fleet | follow | [l] landings | [g] gate | [?] help | [q] quit | [a] accept | [r] answer";
         Assert.Equal(expected, OwnerConsoleBindings.CommandPrompt);
         Assert.Equal(expected.Split(" | "), OwnerConsoleBindings.PromptEntries);
         Assert.Equal(expected, OwnerConsoleKeyHints.CommandPrompt);
@@ -157,7 +157,8 @@ public sealed class OwnerConsoleBindingsTests
             ":bell on: Enable all three bell tiers; use bell <calm|attention|alarm> on|off for one tier.",
             ":bell off: Disable all three bell tiers; use bell <calm|attention|alarm> on|off for one tier.",
             ":goal <id-prefix>: Open live goal detail, landing status and actions.",
-            ":fleet: Show the fleet diagram: host and executor boxes."
+            ":fleet: Show the fleet diagram: host and executor boxes.",
+            ":follow: Follow the newest ACTIVITY row; new events keep it selected until you move the selection or scroll (Home in ACTIVITY does the same)."
         ];
         Assert.Equal(string.Join("\n", expected.Concat(unkeyed)), OwnerConsoleBindings.HelpText);
         var lines = OwnerConsoleBindings.HelpText.Split('\n');
@@ -174,7 +175,7 @@ public sealed class OwnerConsoleBindingsTests
     [InlineData(0, true, "Enter detail  a accept default  r answer")]
     [InlineData(0, false, "Enter detail")]
     [InlineData(1, false, "Enter goal detail")]
-    [InlineData(2, false, "Up/Down scroll  Enter what this means")]
+    [InlineData(2, false, "Following latest  Up/Down scroll  Enter what this means")]
     public void PaneHintsCombineSelectionActionsAndGlobalViews(int pane, bool answerable, string prefix)
     {
         const string suffix = "  Home/End first/last  PgUp/PgDn page  Tab/Shift+Tab pane  e epics  l landings  g gate  : command  ? help  q quit";

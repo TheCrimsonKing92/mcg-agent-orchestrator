@@ -40,7 +40,7 @@ internal static class OwnerConsoleKeyHints
         _ => throw new ArgumentOutOfRangeException(nameof(pane))
     };
 
-    internal static string Hint(OwnerConsolePane pane, bool answerable = true) => OwnerConsoleBindings.PaneHint(pane, answerable);
+    internal static string Hint(OwnerConsolePane pane, bool answerable = true, bool following = true) => OwnerConsoleBindings.PaneHint(pane, answerable, following);
 
     internal static string HelpText => OwnerConsoleBindings.HelpText;
 }

@@ -256,8 +256,9 @@ public sealed class AcceptanceLaneCarryShadowTests
                 "namespace Ns; public class CarryFixtureTests { [Fact] public void Case() {} }");
         }
         internal AcceptanceLaneCarryShadow Shadow(string attempt,
-            Func<string, string, string, IReadOnlyList<string>>? resolver = null) =>
-            new(Root, Goal.Value, attempt, $"tree-{attempt}", resolver ?? ((_, _, _) => ["data/unrelated.bin"]));
+            Func<string, string, string, IReadOnlyList<string>>? resolver = null, Func<long>? budgetTimestamp = null) =>
+            new(Root, Goal.Value, attempt, $"tree-{attempt}", resolver ?? ((_, _, _) => ["data/unrelated.bin"]),
+                budgetTimestamp ?? (() => 0L));
         internal void Seed(string attempt, bool passed = true, string filter = "lane")
         {
             var shadow = Shadow(attempt);

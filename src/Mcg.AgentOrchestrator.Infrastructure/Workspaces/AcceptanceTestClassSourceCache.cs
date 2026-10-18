@@ -9,6 +9,7 @@ internal sealed class AcceptanceTestClassSourceCache
     private static readonly AsyncLocal<AcceptanceTestClassSourceCache?> Scoped = new();
     private readonly object _sync = new();
     private readonly Dictionary<string, WorktreeEntry> _worktrees = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, object> _gates = new(StringComparer.Ordinal);
     private readonly LinkedList<string> _recency = new();
     private long _parsedFileCount;
 
@@ -22,19 +23,22 @@ internal sealed class AcceptanceTestClassSourceCache
         return new Scope(() => Scoped.Value = previous);
     }
 
-    internal long ParsedFileCount
-    {
-        get { lock (_sync) return _parsedFileCount; }
-    }
+    internal long ParsedFileCount => Interlocked.Read(ref _parsedFileCount);
 
     internal IReadOnlyList<AcceptanceTestClassSourceScanner.FileExtract> Extract(
         string worktreePath, IReadOnlyList<string> paths,
         Func<string, AcceptanceTestClassSourceScanner.FileExtract> extractFile)
     {
         var root = Path.GetFullPath(worktreePath);
+        object gate;
         lock (_sync)
         {
-            _worktrees.TryGetValue(root, out var previous);
+            if (!_gates.TryGetValue(root, out gate!)) _gates[root] = gate = new object();
+        }
+        lock (gate)
+        {
+            WorktreeEntry? previous;
+            lock (_sync) _worktrees.TryGetValue(root, out previous);
             var files = new Dictionary<string, CachedFile>(StringComparer.Ordinal);
             var extracts = new AcceptanceTestClassSourceScanner.FileExtract[paths.Count];
             for (var index = 0; index < paths.Count; index++)
@@ -49,20 +53,25 @@ internal sealed class AcceptanceTestClassSourceCache
                 if (cached is null || cached.Length != length || cached.LastWriteUtc != lastWriteUtc)
                 {
                     var extract = extractFile(path);
-                    _parsedFileCount++;
+                    Interlocked.Increment(ref _parsedFileCount);
                     cached = new CachedFile(length, lastWriteUtc, extract, (cached?.Parses ?? 0) + 1);
                 }
                 files.Add(path, cached);
                 extracts[index] = cached.Extract;
             }
 
-            // Publish exactly the enumerated paths, dropping removed files even on cache hits.
-            if (previous is not null) _recency.Remove(previous.Recency);
-            _worktrees[root] = new WorktreeEntry(files, _recency.AddLast(root));
-            while (_worktrees.Count > MaxWorktrees)
+            lock (_sync)
             {
-                _worktrees.Remove(_recency.First!.Value);
-                _recency.RemoveFirst();
+                // Publish exactly the enumerated paths, dropping removed files even on cache hits.
+                // Forget or another root's eviction may have removed the entry during parsing.
+                if (_worktrees.TryGetValue(root, out var published)) _recency.Remove(published.Recency);
+                _worktrees[root] = new WorktreeEntry(files, _recency.AddLast(root));
+                while (_worktrees.Count > MaxWorktrees)
+                {
+                    _gates.Remove(_recency.First!.Value);
+                    _worktrees.Remove(_recency.First!.Value);
+                    _recency.RemoveFirst();
+                }
             }
             return extracts;
         }
@@ -72,7 +81,9 @@ internal sealed class AcceptanceTestClassSourceCache
     {
         lock (_sync)
         {
-            if (_worktrees.Remove(Path.GetFullPath(worktreePath), out var entry))
+            var root = Path.GetFullPath(worktreePath);
+            _gates.Remove(root);
+            if (_worktrees.Remove(root, out var entry))
                 _recency.Remove(entry.Recency);
         }
     }

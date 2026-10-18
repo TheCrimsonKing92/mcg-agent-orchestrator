@@ -46,6 +46,9 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     private int _activityWidth;
     private int _boardTitleWidth;
     private IReadOnlyList<string> _fullActivityLines = [];
+    private readonly OwnerConsoleActivityFollow _follow = new();
+    private IReadOnlyList<OwnerConsoleActivityKey> _activityKeys = [];
+    internal bool ActivityFollowing => _follow.Following;
     private View? _commandReturnFocus;
     private bool ActionRunning => _acting || _operation.IsRunning;
 
@@ -110,8 +113,17 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
             if (!_rendering && args.NewValue?.SelectedCell is { } cell) SelectBoard(cell.Y);
             _diagnostics?.Mark("board-selection", TraceState);
         };
-        if (_diagnostics is not null)
-            _activity.ValueChanged += (_, _) => _diagnostics.Mark("activity-selection", TraceState);
+        _activity.ValueChanged += (_, _) =>
+        {
+            if (!_rendering && ActivityRow() is { } row) { _follow.Inspect(_activityKeys[row]); RenderHints(); }
+            _diagnostics?.Mark("activity-selection", TraceState);
+        };
+        _activity.ViewportChanged += (_, args) =>
+        {
+            var viewport = _activity.Viewport; // NewViewport is empty before Terminal.Gui initialization.
+            if (!_rendering && args.OldViewport.Size == viewport.Size && args.OldViewport.X == viewport.X && args.OldViewport.Y != viewport.Y && ActivityRow() is { } row)
+            { _follow.Scrolled(_activityKeys[row], row, viewport.Y, viewport.Height); RenderHints(); }
+        };
         _decisions.HasFocusChanged += (_, _) => PaneFocusChanged(_decisions, OwnerConsolePane.Decisions);
         _board.HasFocusChanged += (_, _) => PaneFocusChanged(_board, OwnerConsolePane.Board);
         _activity.HasFocusChanged += (_, _) => PaneFocusChanged(_activity, OwnerConsolePane.Activity);
@@ -298,9 +310,10 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     {
         using var trace = _diagnostics?.Begin("activity-source-replacement", TraceState);
         var selected = _activity.SelectedItem;
-        var selectedLine = selected is { } index && index >= 0 && index < _fullActivityLines.Count
-            ? _fullActivityLines[index] : null;
+        var top = _activity.Viewport.Y;
         var state = _controller.Model?.ActivityState;
+        _activityKeys = OwnerConsoleActivityFollow.Keys(_controller.Model?.Activity
+            .Take(OwnerConsoleViewModelBuilder.MaxActivityItems).ToArray() ?? []);
         IEnumerable<string> pane = state is { Loading: true } ? ["loading..."] : state?.Error is { } error
             ? ["ACTIVITY unavailable: " + error] : _controller.Model?.Activity.Select(OwnerActivityNarrator.Line) ?? [];
         _fullActivityLines = pane.Take(OwnerConsoleViewModelBuilder.MaxActivityItems).ToArray();
@@ -309,9 +322,17 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
                 _controller.Model is { } model && row < model.Activity.Length
                 ? OwnerActivityNarrator.LineSpans(model.Activity[row]) : OwnerConsoleLineSpans.None, _activityWidth)).ToArray();
         _activity.SetSource(new ObservableCollection<string>(ActivityLines));
-        var preserved = selectedLine is null ? -1 : Array.IndexOf(_fullActivityLines.ToArray(), selectedLine);
-        _activity.SelectedItem = ActivityLines.Count == 0 ? null :
-            preserved >= 0 ? preserved : Math.Clamp(selected ?? 0, 0, ActivityLines.Count - 1);
+        var placement = state is null ? _follow.Place(_activityKeys, selected, top, _activity.Viewport.Height) : ((int?)0, 0);
+        _activity.SelectedItem = placement.Item1;
+        _activity.Viewport = _activity.Viewport with { Y = placement.Item2 };
+    }
+    private int? ActivityRow() => _controller.Model?.ActivityState is null && _activity.SelectedItem is { } row && row >= 0 && row < _activityKeys.Count ? row : null;
+    private void FollowLatest()
+    {
+        _follow.Follow();
+        _rendering = true;
+        try { RenderActivity(); } finally { _rendering = false; }
+        RenderHints();
     }
 
     private async void OnKeyDown(object? sender, Key key)
@@ -416,6 +437,8 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
             if (!ActionRunning) FocusPane(OwnerConsoleKeyHints.Next(FocusedPane));
             return;
         }
+        if (key == Key.Home && FocusedPane == OwnerConsolePane.Activity)
+        { key.Handled = true; if (!ActionRunning) FollowLatest(); return; }
         var pane = FocusedPane;
         var count = pane == OwnerConsolePane.Activity ? ActivityLines.Count : pane == OwnerConsolePane.Board ?
             _controller.Model?.Board.Length ?? 0 : _controller.Model?.Decisions.Length ?? 0;
@@ -506,6 +529,8 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
                 ShowNotice(OwnerConsoleKeyHints.UnavailableKey(binding.Key!.Value, FocusedPane), OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Action);
             }
         }
+        else if (binding == OwnerConsoleBindings.Follow)
+        { StartAction(); FocusPane(OwnerConsolePane.Activity); FollowLatest(); }
         else throw new InvalidOperationException($"No view action for binding {binding.Command}.");
     }
 
@@ -570,7 +595,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     private void RenderHints() => _hints.Text = _editingCommand || _command.HasFocus
         ? OwnerConsoleKeyHints.CommandLineHint
         : OwnerConsoleKeyHints.Hint(FocusedPane,
-            _controller.SelectedDecision is { } decision && OwnerConsoleScreenController.AnswersInConsole(decision));
+            _controller.SelectedDecision is { } decision && OwnerConsoleScreenController.AnswersInConsole(decision), _follow.Following);
 
     private void SelectBoard(int index)
     {

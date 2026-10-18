@@ -47,6 +47,11 @@ internal sealed partial class GoalDispatchOperations
         }
         excludedTaskIds = (excludedTaskIds ?? new HashSet<TaskId>())
             .Concat(heldTaskIds.Select(id => new TaskId(id))).ToHashSet();
+        var offlineAssignments = OfflineAssignedAgentRedelegation.Apply(kernel, goal, agents,
+            goal.Tasks.Where(DispatchReadinessRules.IsSubscriptionStartCandidate)
+                .Where(task => !excludedTaskIds.Contains(task.Id)).Select(task => task.Id));
+        goal = kernel.GetGoal(goal.Id);
+        excludedTaskIds = excludedTaskIds.Concat(offlineAssignments.ExcludedTaskIds).ToHashSet();
         var safeBatch = DispatchReadinessRules.SelectFirstParallelSafeAssignedBatch(goal, agents, approveHighRiskOwnership, excludedTaskIds);
         EnsureRefinedForSelectedTasks(kernel, workspace, providers, goal, safeBatch.TaskIds);
         goal = kernel.GetGoal(goal.Id);
@@ -174,7 +179,7 @@ internal sealed partial class GoalDispatchOperations
             batch.Dispatches,
             processes with { RequeueSkippedCount = processes.RequeueSkippedCount + rejectedRecoveryIds.Count },
             safeBatch.Plan,
-            OrderReadyBlockedDiagnostics(batch.Blocked, safeBatch.Blocked));
+            OrderReadyBlockedDiagnostics(batch.Blocked.Concat(offlineAssignments.Blocked).ToArray(), safeBatch.Blocked));
     }
 
     internal static IReadOnlyList<ReadyBlockedDiagnostic> OrderReadyBlockedDiagnostics(

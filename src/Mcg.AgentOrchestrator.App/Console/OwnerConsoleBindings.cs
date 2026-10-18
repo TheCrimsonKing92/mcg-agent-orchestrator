@@ -14,6 +14,7 @@ internal static class OwnerConsoleBindings
         Row("goal <id-prefix>", "Open live goal detail, landing status and actions."),
         Row("epics", "Open the epic view", 'e', "Open the epic view (any pane).", owner: OwnerConsoleCommandOwner.View),
         Row("fleet", "Show the fleet diagram: host and executor boxes."),
+        Row("follow", "Follow the newest ACTIVITY row; new events keep it selected until you move the selection or scroll (Home in ACTIVITY does the same).", owner: OwnerConsoleCommandOwner.View),
         Row("landings", "Show delivered goals: landing commit, integration kind and acceptance (landings today|30)", 'l', "Show delivered goals (any pane)."),
         Row("gate", "Open the GATE view (gate <goal-id-prefix> opens the gate that goal is in)", 'g', "Open the GATE view (any pane).", owner: OwnerConsoleCommandOwner.View),
         Row("help", "Open this help dialog", '?', "Open this help dialog (any pane).", owner: OwnerConsoleCommandOwner.View),
@@ -38,6 +39,7 @@ internal static class OwnerConsoleBindings
     internal static OwnerConsoleBinding Gate => All.Single(row => row.Scope == OwnerConsoleScope.Global && row.Command == "gate");
     internal static OwnerConsoleBinding Help => All.Single(row => row.Scope == OwnerConsoleScope.Global && row.Command == "help");
     internal static OwnerConsoleBinding Quit => All.Single(row => row.Scope == OwnerConsoleScope.Global && row.Command == "quit");
+    internal static OwnerConsoleBinding Follow => All.Single(row => row.Scope == OwnerConsoleScope.Global && row.Command == "follow");
     internal static IEnumerable<OwnerConsoleBinding> Commands => All.Where(row => TopLevel(row.Scope));
     internal static OwnerConsoleBinding? ForDialogKey(OwnerConsoleScope scope, char key, bool ctrl = false) => All.FirstOrDefault(row =>
         !TopLevel(scope) && row.Scope == scope && row.Ctrl == ctrl && row.Key is { } bound &&
@@ -91,14 +93,14 @@ internal static class OwnerConsoleBindings
         row.Key is { } key ? $"[{key}] {row.Usage}" : row.Usage).ToArray();
     internal static string CommandPrompt => string.Join(" | ", PromptEntries);
 
-    internal static string PaneHint(OwnerConsolePane pane, bool answerable = true)
+    internal static string PaneHint(OwnerConsolePane pane, bool answerable = true, bool following = true)
     {
         var prefix = pane switch
         {
             OwnerConsolePane.Decisions => "Enter detail" + (answerable ? "  " + string.Join("  ", All
                 .Where(row => row.Scope == OwnerConsoleScope.Decisions && row.Key.HasValue).Select(Hint)) : ""),
             OwnerConsolePane.Board => "Enter goal detail",
-            OwnerConsolePane.Activity => "Up/Down scroll  Enter what this means",
+            OwnerConsolePane.Activity => (following ? "Following latest  " : "Inspecting  Home follow latest  ") + "Up/Down scroll  Enter what this means",
             _ => throw new ArgumentOutOfRangeException(nameof(pane))
         };
         return string.Join("  ", new[] { prefix, OwnerActivityNarrator.JumpKeyHint, "Tab/Shift+Tab pane" }
