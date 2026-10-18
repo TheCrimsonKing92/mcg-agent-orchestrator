@@ -50,10 +50,23 @@ internal sealed partial class GoalDispatchOperations
         var safeBatch = DispatchReadinessRules.SelectFirstParallelSafeAssignedBatch(goal, agents, approveHighRiskOwnership, excludedTaskIds);
         EnsureRefinedForSelectedTasks(kernel, workspace, providers, goal, safeBatch.TaskIds);
         goal = kernel.GetGoal(goal.Id);
+        var home = _resolveHome(workspace);
+        new ProviderHoldAgentSubstitution(kernel, agents, (viewGoal, viewTask, holdScope) =>
+            WorkerProfileDispatcher.PreflightSubscriptionTask(viewGoal, viewTask, agents, profiles,
+                workspace.ResolveExecutionDirectory(goal.Id), DateTimeOffset.UtcNow,
+                allowGitReference: (sandboxOptions ?? WorkerSandboxOptions.FromEnvironment()).Enabled,
+                commandExists: commandExists, claudeAuthProbe: claudeAuthProbe, sandboxOptions: sandboxOptions,
+                providerHoldScope: holdScope,
+                cascadeTesterCheapFirst: ResolveCascadeTesterCheapFirst(workspace, cascadeTesterCheapFirst, conductorPolicy),
+                cascadeCheapModelAlias: ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy),
+                cascadeMechanicalReworkCheap: ResolveCascadeMechanicalReworkCheap(workspace, cascadeMechanicalReworkCheap, conductorPolicy),
+                orchestratorSkillDirectory: ResolveOrchestratorSkillDirectory(home), integrationBranch: workspace.IntegrationBranch,
+                targetHome: new WorkerTargetHome(home.IsHome(workspace), WorkerAcceptanceManifestResolver.For(workspace))))
+            .ApplyBatch(goal, safeBatch.TaskIds);
+        goal = kernel.GetGoal(goal.Id);
         var retryReplayTasks = kernel.ExportGoalSnapshot(goal.Id).Tasks
             .Where(task => safeBatch.TaskIds.Contains(new TaskId(task.Id)) && task.LatestRetryAt is not null)
             .ToDictionary(task => new TaskId(task.Id));
-        var home = _resolveHome(workspace);
         var batch = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
             kernel,
             goal,

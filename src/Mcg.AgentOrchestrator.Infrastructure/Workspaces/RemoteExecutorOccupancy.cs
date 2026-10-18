@@ -42,7 +42,8 @@ internal static class RemoteExecutorOccupancy
     internal static void Claim(string root, string executor, string attempt)
         => Claim(root, executor, attempt, 0);
 
-    internal static void Claim(string root, string executor, string attempt, int slotIndex)
+    internal static void Claim(string root, string executor, string attempt, int slotIndex,
+        RemoteExecutorClaimClass? claimClass = null)
     {
         string? temporary = null;
         try
@@ -52,7 +53,9 @@ internal static class RemoteExecutorOccupancy
             var folder = Folder(root, executor);
             Directory.CreateDirectory(folder);
             temporary = Path.Combine(folder, Guid.NewGuid().ToString("N") + ".tmp");
-            File.WriteAllText(temporary, JsonSerializer.Serialize(new Marker(Environment.ProcessId, start)));
+            var marker = JsonSerializer.SerializeToNode(new Marker(Environment.ProcessId, start))!;
+            if (claimClass is not null) marker["Class"] = claimClass.ToString();
+            File.WriteAllText(temporary, marker.ToJsonString());
             File.Move(temporary, Path.Combine(folder, MarkerName(attempt, slotIndex)), overwrite: true);
         }
         catch (Exception) { }
@@ -91,13 +94,39 @@ internal static class RemoteExecutorOccupancy
                 try
                 {
                     var marker = JsonSerializer.Deserialize<Marker>(File.ReadAllText(path));
-                    if (marker is not null && (startTimeOf ?? DefaultStartTime)(marker.OwnerPid) is { } start &&
-                        start == marker.OwnerStartUtc) return true;
+                    if (IsLive(marker, startTimeOf)) return true;
                 }
                 catch (Exception) { }
             }
         }
         catch (Exception) { }
         return false;
+    }
+
+    private static bool IsLive(Marker? marker, Func<int, DateTimeOffset?>? startTimeOf) =>
+        marker is not null && (startTimeOf ?? DefaultStartTime)(marker.OwnerPid) is { } start &&
+        start == marker.OwnerStartUtc;
+
+    internal static IReadOnlyList<(string Attempt, string? Class)> LiveMarkers(string root, string executor,
+        Func<int, DateTimeOffset?>? startTimeOf = null)
+    {
+        var markers = new List<(string, string?)>();
+        try
+        {
+            if (!SafeName(executor) || !Directory.Exists(Folder(root, executor))) return markers;
+            foreach (var path in Directory.EnumerateFiles(Folder(root, executor), "*.json"))
+            {
+                try
+                {
+                    using var json = JsonDocument.Parse(File.ReadAllText(path));
+                    var marker = json.RootElement.Deserialize<Marker>();
+                    if (IsLive(marker, startTimeOf)) markers.Add((Path.GetFileNameWithoutExtension(path),
+                        json.RootElement.TryGetProperty("Class", out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null));
+                }
+                catch (Exception) { }
+            }
+        }
+        catch (Exception) { }
+        return markers;
     }
 }

@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using Check = Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier.AcceptanceManifestCheck;
 
@@ -66,7 +67,7 @@ internal sealed class RemoteFocusedEvidenceShadow : IAsyncDisposable
                         overrides.RemoteLaneGitRunnerForTests ?? GitCli.Run)
                     : UnavailableRemoteLaneExecutor.Instance);
             shadow._coordinator = new(configuration, identity, worktreePath, prefix, shadow._executor,
-                shadow._clock, shadow._pollInterval, null);
+                shadow._clock, shadow._pollInterval, null, claimClass: RemoteExecutorClaimClass.Shadow);
             foreach (var check in checks)
             {
                 if (!check.IsFocusedEvidenceSelection || check.Project is null ||
@@ -213,6 +214,7 @@ internal sealed class RemoteFocusedEvidenceShadow : IAsyncDisposable
                 var observation = run.Work is { IsCompletedSuccessfully: true } work
                     ? work.Result : new Observation(RemoteLaneOutcomeCode.CancelledAfterGrace, Reason: reason);
                 run.Close();
+                var usage = RemoteLaneResourceUsage.TryRead(run.LastStatus);
                 var local = localResults.FirstOrDefault(result => result.Name == run.CheckName);
                 bool? agree = observation.Code is RemoteLaneOutcomeCode.Accepted or RemoteLaneOutcomeCode.RemoteRed && local is not null
                     ? (observation.Code == RemoteLaneOutcomeCode.Accepted) == local.Passed : null;
@@ -230,6 +232,8 @@ internal sealed class RemoteFocusedEvidenceShadow : IAsyncDisposable
                         _clock.GetUtcNow()).Subtract(run.Started).TotalSeconds),
                     LocalDurationSeconds: Math.Max(0, (localEnd - _started).TotalSeconds),
                     LocalVerdict: local is null ? "unavailable" : local.Passed ? "passed" : "failed", Agree: agree,
+                    RemoteTestHostCpuSeconds: usage?.TestHostCpuSeconds, RemoteTestHostPeakWorkingSetBytes: usage?.TestHostPeakWorkingSetBytes,
+                    RemoteAvailableMemoryMbMin: usage?.AvailableMemoryMbMin, RemoteResourceSamples: usage?.ResourceSamples,
                     Phases: observation.Phases));
             }
         }
@@ -272,6 +276,7 @@ internal sealed class RemoteFocusedEvidenceShadow : IAsyncDisposable
         internal DateTimeOffset Started { get; } = started;
         internal DateTimeOffset? Ended { get; set; }
         internal Task<Observation>? Work { get; set; }
+        internal JsonElement? LastStatus { get; private set; }
         private readonly object _gate = new();
         private IRemoteLaneHandle? _handle;
         private bool _closed;
@@ -287,7 +292,13 @@ internal sealed class RemoteFocusedEvidenceShadow : IAsyncDisposable
         internal void Close(bool cancel = true)
         {
             IRemoteLaneHandle? handle;
-            lock (_gate) { _closed = true; handle = _handle; _handle = null; }
+            lock (_gate)
+            {
+                _closed = true; handle = _handle;
+                try { if (handle is IRemoteLaneAttemptDiagnosticsSource source) LastStatus = source.Snapshot().LastStatus?.Clone(); }
+                catch (Exception) { }
+                _handle = null;
+            }
             if (handle is not null) Cleanup(handle, cancel);
         }
         private static void Cleanup(IRemoteLaneHandle handle, bool cancel = true) => Observe(Task.Run(() =>
