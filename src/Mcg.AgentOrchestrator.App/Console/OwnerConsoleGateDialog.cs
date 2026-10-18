@@ -8,12 +8,14 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 internal sealed class OwnerConsoleGateDialog : FrameView
 {
     private readonly ListView _body = new() { Width = Dim.Fill(), Height = Dim.Fill(1) };
+    private readonly Label _footer = new() { Y = Pos.AnchorEnd(1), Width = Dim.Fill(), Height = 1,
+        Text = OwnerConsoleDialogBindings.GateHelp.HintLabel! };
     private OwnerConsoleGateProgress? _gate;
     internal bool Expanded { get; private set; }
     internal bool IsOpen { get; private set; }
     internal OwnerConsolePane ReturnPane { get; private set; }
     internal IReadOnlyList<string> Lines { get; private set; } = [];
-    internal string FooterText => OwnerConsoleDialogBindings.GateHelp.HintLabel!;
+    internal string FooterText => _footer.Text;
     internal int SelectedLine => _body.SelectedItem ?? 0;
 
     internal OwnerConsoleGateDialog()
@@ -23,8 +25,7 @@ internal sealed class OwnerConsoleGateDialog : FrameView
         Height = Dim.Fill();
         CanFocus = true;
         Visible = false;
-        Add(_body, new Label { Y = Pos.AnchorEnd(1), Width = Dim.Fill(), Height = 1,
-            Text = FooterText });
+        Add(_body, _footer);
     }
 
     internal void Open(OwnerConsolePane returnPane, OwnerConsoleGateProgress? gate)
