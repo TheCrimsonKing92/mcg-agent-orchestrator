@@ -27,6 +27,7 @@ public sealed record BacklogIntakePlan(
 
 public static class BacklogIntakePlanner
 {
+    internal const string GeneratedHeadingPrefix = "Backlog slice: ";
     internal const string TargetScopeHeadingLine = "Target files/scopes:";
     internal const string PreciseScopeMarkerLine = "Scope confidence: precise";
     internal const string UnknownScopeMarkerLine = "Scope confidence: unknown";
@@ -210,7 +211,7 @@ public static class BacklogIntakePlanner
         IReadOnlyList<string> verification)
     {
         return string.Join(Environment.NewLine, [
-            $"Backlog slice: {heading}",
+            $"{GeneratedHeadingPrefix}{heading}",
             string.Empty,
             body,
             string.Empty,

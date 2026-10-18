@@ -34,7 +34,8 @@ internal sealed record RemoteExecutorHealthRecord(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? RemoteTestHostPeakWorkingSetBytes = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] double? RemoteAvailableMemoryMbMin = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? RemoteResourceSamples = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] RemoteLanePhaseTimings? Phases = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] RemoteLanePhaseTimings? Phases = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] RemoteLaneTestHostBudgetDecision? TestHostBudget = null);
 
 internal static class RemoteExecutorHealthLedger
 {

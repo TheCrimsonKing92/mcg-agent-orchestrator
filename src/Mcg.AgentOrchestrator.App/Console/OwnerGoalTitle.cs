@@ -1,20 +1,37 @@
+using Mcg.AgentOrchestrator.App.Orchestration;
+
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 internal static class OwnerGoalTitle
 {
-    internal static string Full(string? objective) => (objective ?? "").Split(['\r', '\n'])
-        .Select(line => line.Trim().TrimStart('#').Trim()).FirstOrDefault(line => line.Length > 0) ?? "";
+    internal static string Full(string? objective) => Display(objective);
 
-    internal static string From(string? objective)
+    internal static string From(string? objective) => Display(objective);
+
+    internal static string Display(string? objective)
     {
-        if (string.IsNullOrWhiteSpace(objective)) return string.Empty;
-        foreach (var line in objective.Split(['\r', '\n'], StringSplitOptions.None))
+        var original = (objective ?? "").Split(['\r', '\n'])
+            .Select(line => line.Trim().TrimStart('#').Trim()).FirstOrDefault(line => line.Length > 0) ?? "";
+        if (!original.StartsWith(BacklogIntakePlanner.GeneratedHeadingPrefix, StringComparison.Ordinal) ||
+            !HasGeneratedScopeBlock(objective)) return original;
+
+        var title = original;
+        while (title.StartsWith(BacklogIntakePlanner.GeneratedHeadingPrefix, StringComparison.Ordinal))
+            title = title[BacklogIntakePlanner.GeneratedHeadingPrefix.Length..].TrimStart();
+        return title.Length == 0 ? original : title;
+    }
+
+    private static bool HasGeneratedScopeBlock(string? objective)
+    {
+        using var reader = new StringReader(objective ?? "");
+        var previousWasHeading = false;
+        while (reader.ReadLine() is { } line)
         {
-            var title = line.Trim();
-            if (title.Length == 0) continue;
-            title = title.TrimStart('#').Trim();
-            return title;
+            var trimmed = line.Trim();
+            if (previousWasHeading && (trimmed == BacklogIntakePlanner.PreciseScopeMarkerLine ||
+                trimmed == BacklogIntakePlanner.UnknownScopeMarkerLine)) return true;
+            previousWasHeading = trimmed == BacklogIntakePlanner.TargetScopeHeadingLine;
         }
-        return string.Empty;
+        return false;
     }
 }

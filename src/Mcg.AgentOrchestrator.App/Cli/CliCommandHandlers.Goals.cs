@@ -1484,6 +1484,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
 
                 Action<BatchTickSummary>? onTick = ConductorTickPusher.CreateStoreCallback(context.Workspace.RunEventStorePath);
 
+                var agentRoster = AgentRosterReloader.ForConductLoop(context.Workspace, context.Agents);
+                context.Agents = agentRoster.View;
                 var loopDriver = new ConductorDriver(
                     context.Kernel,
                     context.Workspace,
@@ -1574,13 +1576,12 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 var parkedGoalSafetyNetTick = 0;
                 var scheduledLoadHold = context.InitialConductLoopLoadHold;
                 var suppressGoalRefinementForMaxDurationDeferral = false;
-                var maxDurationDeferralCeiling = AcceptanceGateEngineSettings
-                    .Load(context.Workspace.ExecutionDirectory)
-                    .ResolveCheckTimeout(null);
+                var maxDurationDeferralCeiling = AcceptanceGateEngineSettings.Load(context.Workspace.ExecutionDirectory).ResolveCheckTimeout(null);
                 TerminalGoalSweepResult reconcileSweep(
                     AgentOrchestratorKernel loopKernel,
                     IReadOnlySet<string> checkpointHeldGoalIds)
                 {
+                    agentRoster.Refresh();
                     loopReaper.BeginRefreshCycle();
                     intentGoalReloadObservations.Clear();
                     // Refresh tracked goals from persisted state before every tick, then ingest newly
@@ -1590,8 +1591,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     try
                     {
                         evictedGoalStatuses.Clear();
-                        var trackedGoalIds = loopKernel.Goals
-                            .Select(goal => goal.Id.Value)
+                        var trackedGoalIds = loopKernel.Goals.Select(goal => goal.Id.Value)
                             .ToArray();
                         var trackedGoalIdSet = trackedGoalIds.ToHashSet(StringComparer.Ordinal);
                         var actionableGoalIds = operatorIntents.ListActionableGoalIds()
