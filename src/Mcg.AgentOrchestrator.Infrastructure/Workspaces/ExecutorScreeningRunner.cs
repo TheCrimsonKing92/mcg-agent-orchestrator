@@ -24,7 +24,7 @@ internal static class ExecutorScreeningRunner
                 var claim = RemoteExecutorOccupancy.TryClaimExclusive(occupancyRoot, entry.Id, slot);
                 if (claim is null) return null;
                 claims.Add(claim);
-                RemoteExecutorOccupancy.Claim(occupancyRoot, entry.Id, attempt, slot);
+                RemoteExecutorOccupancy.Claim(occupancyRoot, entry.Id, attempt, slot, RemoteExecutorClaimClass.Screening);
             }
             var unreachable = false;
             while (pending.Count > 0 || running.Count > 0)
