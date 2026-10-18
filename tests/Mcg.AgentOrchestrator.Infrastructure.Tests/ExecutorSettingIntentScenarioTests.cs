@@ -82,7 +82,6 @@ public sealed class ExecutorSettingIntentScenarioTests
     [InlineData("slots-absent", "slots-absent")]
     [InlineData("sample-absent", "sample-every-absent")]
     [InlineData("mode-absent", "focused-evidence-mode-absent")]
-    [InlineData("remote-first", "focused-evidence-mode-remote-first")]
     [InlineData("malformed-file", "executors-file-invalid")]
     [InlineData("missing-file", "executors-file-missing")]
     [InlineData("steward", "steward-capability-boundary")]
@@ -108,9 +107,8 @@ public sealed class ExecutorSettingIntentScenarioTests
             case "sample-zero": payload = new FocusedEvidenceSetOperatorIntentPayload(null, 0); verb = OperatorIntentVerbs.FocusedEvidenceSet; break;
             case "sample": payload = new FocusedEvidenceSetOperatorIntentPayload(null, 4); verb = OperatorIntentVerbs.FocusedEvidenceSet; break;
             case "mode-absent": fixture.Write(Harness.Json.Replace("\"mode\": \"shadow\", ", "", StringComparison.Ordinal)); goto case "mode";
-            case "remote-first": fixture.Write(Harness.Json.Replace("\"shadow\"", "\"remote-first\"", StringComparison.Ordinal)); goto case "mode";
             case "mode": payload = new FocusedEvidenceSetOperatorIntentPayload("off", null); verb = OperatorIntentVerbs.FocusedEvidenceSet; break;
-            case "mode-unsupported": payload = new FocusedEvidenceSetOperatorIntentPayload("remote-first", null); verb = OperatorIntentVerbs.FocusedEvidenceSet; break;
+            case "mode-unsupported": payload = new FocusedEvidenceSetOperatorIntentPayload("on", null); verb = OperatorIntentVerbs.FocusedEvidenceSet; break;
             case "no-setting": payload = new FocusedEvidenceSetOperatorIntentPayload(null, null); verb = OperatorIntentVerbs.FocusedEvidenceSet; break;
             case "malformed-file": fixture.Write("{"); break;
             case "missing-file": File.Delete(fixture.Path); break;
