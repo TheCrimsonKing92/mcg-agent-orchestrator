@@ -128,35 +128,89 @@ public sealed class ConductorBatchLoopTestsPriorityScheduling : ConductorBatchLo
         finally { TryDeleteDirectory(root); }
     }
 
-    [Fact]
-    public void DependencyPairNeverEntersCohortOrTrain()
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    public void DependencyPairNeverEntersCohortOrTrain(bool train, bool dependency)
     {
         using var isolation = ConductorBatchLoopTestsParallelAcceptance.IsolatedDotnetRootScope();
         var root = CreateTempDirectory("priority-dependent-group");
+        var previousTrainDisabled = Environment.GetEnvironmentVariable("MCG_MERGE_TRAIN_DISABLED");
         try
         {
+            Environment.SetEnvironmentVariable("MCG_MERGE_TRAIN_DISABLED", "0");
             var kernel = new AgentOrchestratorKernel();
             var s = VerifiedAt(kernel, "S", 0);
             var t = VerifiedAt(kernel, "T", 1);
-            kernel.SetGoalDependency(s.Id, t.Id);
+            var goals = train ? new[] { s, t, VerifiedAt(kernel, "U", 2) } : new[] { s, t };
+            if (dependency) kernel.SetGoalDependency(s.Id, t.Id);
+            // Exercise the defensive filter without letting the ordinary dependency hold exclude S.
+            // T remains non-terminal, and neither goal is a slice-batch child.
+            kernel.MarkKnownCompletedDependencyGoals([t.Id]);
             var pairs = new List<GoalId[]>();
+            var trains = new List<GoalId[]>();
             var solos = new List<GoalId>();
             var paths = new Dictionary<GoalId, IReadOnlyList<string>>
             {
                 [s.Id] = ["tests/Mcg.AgentOrchestrator.Core.Tests/S.cs"],
                 [t.Id] = ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/T.cs"]
             };
-            var driver = GroupingDriver(kernel, root, paths, pairs, solos);
-            var candidates = new[] { s, t }.Select(goal => new ConductorSpeculativeAcceptanceCandidate(
-                goal.Id, driver.ProjectGateReadyCandidate(goal, ConductorAutonomyPolicy.Permissive))).ToArray();
+            if (train) paths[goals[2].Id] = ["tests/Mcg.AgentOrchestrator.TestSupport/U.cs"];
+            var driver = GroupingDriver(kernel, root, paths, pairs, solos, trains);
+            var policy = ConductorAutonomyPolicy.Permissive;
+            Assert.True(driver.AcceptanceCohortsEnabled);
+            Assert.True(driver.MergeTrainsEnabled);
+            Assert.True(kernel.IsKnownCompletedDependencyGoal(t.Id));
+            Assert.All(goals, goal =>
+            {
+                Assert.Equal(GoalStatus.Verified, goal.Status);
+                Assert.Null(goal.SliceBatchParentId);
+                Assert.True(AcceptancePrecheck.HasCompletedPassedVerificationForAllTasks(goal));
+                Assert.True(ParallelAcceptanceLifecycleEligibility.IsParallelAcceptanceLifecycleEligible(goal, driver));
+                Assert.Null(SliceBatchParentExecutionGuard.TryDescribeStreamCompleteHold(goal));
+                Assert.Null(ConductorDependencyHoldEvaluator.Evaluate(goal, [], [], kernel, out _));
+            });
+            var candidates = goals.Select(goal => new ConductorSpeculativeAcceptanceCandidate(
+                goal.Id, driver.ProjectGroupedAdmissionCandidate(goal, policy, kernel))).ToArray();
             Assert.All(candidates, candidate => Assert.IsType<GateReadyCandidateProjectionResult.Ready>(candidate.ProjectionResult));
-            Assert.NotNull(ConductorAcceptanceCohortSelector.Select(candidates).Selection);
-            new ConductorBatchLoop().Run(kernel, driver, ConductorAutonomyPolicy.Permissive, NoStopPath(), maxIterations: 1);
-            Assert.Empty(pairs);
-            Assert.DoesNotContain(s.Id, solos);
-            Assert.Contains(t.Id, solos);
+            var pairSelection = Assert.IsType<ConductorAcceptanceCohortSelection>(
+                ConductorAcceptanceCohortSelector.Select(candidates).Selection);
+            Assert.Equal(new[] { s.Id, t.Id }, pairSelection.Members.Select(member => member.GoalId));
+            if (train)
+            {
+                var selection = Assert.IsType<ConductorMergeTrainSelection>(ConductorMergeTrainSelector.Select(candidates));
+                Assert.Equal(goals.Select(goal => goal.Id), selection.Members.Select(member => member.GoalId));
+            }
+            BatchTickSummary? observed = null;
+            new ConductorBatchLoop().Run(kernel, driver, policy, NoStopPath(), maxIterations: 1,
+                onTick: summary => observed = summary);
+            var progress = Assert.IsType<BatchTickSummary>(observed).ProgressLines ?? [];
+            var plan = Assert.Single(progress, line => line.StartsWith("SPECULATIVE_COHORT_PLAN ", StringComparison.Ordinal));
+            Assert.Contains($"ready={goals.Length} ", plan);
+            if (dependency)
+            {
+                Assert.Empty(trains);
+                if (train) Assert.Equal(new[] { t.Id, goals[2].Id }, Assert.Single(pairs));
+                else
+                {
+                    Assert.Empty(pairs);
+                    Assert.Contains(t.Id, solos);
+                }
+            }
+            else if (train)
+            {
+                Assert.Equal(goals.Select(goal => goal.Id), Assert.Single(trains));
+                Assert.Empty(pairs);
+            }
+            else Assert.Equal(new[] { s.Id, t.Id }, Assert.Single(pairs));
         }
-        finally { TryDeleteDirectory(root); }
+        finally
+        {
+            Environment.SetEnvironmentVariable("MCG_MERGE_TRAIN_DISABLED", previousTrainDisabled);
+            TryDeleteDirectory(root);
+        }
     }
 
     [Fact]
@@ -271,7 +325,8 @@ public sealed class ConductorBatchLoopTestsPriorityScheduling : ConductorBatchLo
     }
 
     private static ConductorDriver GroupingDriver(AgentOrchestratorKernel kernel, string root,
-        Dictionary<GoalId, IReadOnlyList<string>> paths, List<GoalId[]> pairs, List<GoalId> solos)
+        Dictionary<GoalId, IReadOnlyList<string>> paths, List<GoalId[]> pairs, List<GoalId> solos,
+        List<GoalId[]>? trains = null)
     {
         const string main = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         string Branch(GoalId id) => id.Value.PadRight(40, 'b');
@@ -282,6 +337,13 @@ public sealed class ConductorBatchLoopTestsPriorityScheduling : ConductorBatchLo
                 id => new(true, paths[id]), (_, _, _) => new(true)),
             parallelAcceptanceAttemptCoordinator: new(root, TrunkBranchName.Default, runInline: true),
             runAcceptanceWithSlot: (goal, _) => { solos.Add(goal.Id); return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria; },
+            runMergeTrain: trains is null ? null : (selection, _, policy) =>
+            {
+                trains.Add(selection.Members.Select(member => member.GoalId).ToArray());
+                return new(null, selection.Members.ToDictionary(member => member.GoalId.Value,
+                    member => new ConductorAdvanceResult(member.GoalId.Value, member.GoalId.Value[..8], policy.Name,
+                        new ConductorAdvanceOutcome.Executed(GoalLifecycleState.Verified, "admitted by train"))), [], "outcome=passed");
+            },
             runAcceptanceCohort: (selection, _, policy) =>
             {
                 pairs.Add(selection.Members.Select(member => member.GoalId).ToArray());
