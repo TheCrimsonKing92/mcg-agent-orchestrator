@@ -146,7 +146,12 @@ public sealed class AgentRosterReloaderTests
         internal Fixture(bool writeInitial = true)
         {
             Initial = [Agent("a-tester"), Agent("z-tester")];
-            if (writeInitial) Write(Initial);
+            if (writeInitial)
+            {
+                Write(Initial);
+                // Match the normalized startup roster that the conduct loop supplies.
+                Initial = AgentCatalogStore.Load(Path).Agents.ToArray();
+            }
         }
 
         internal AgentDefinition Agent(string id) => Scenario.Agent(id, "OpenAI", "codex-cli", "gpt-6.1-sol");

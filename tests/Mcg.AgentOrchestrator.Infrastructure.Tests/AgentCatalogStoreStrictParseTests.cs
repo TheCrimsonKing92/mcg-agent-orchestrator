@@ -70,10 +70,11 @@ public sealed class AgentCatalogStoreStrictParseTests
             var path = Path.Combine(root, "agents.json");
             var agents = new[] { Scenario.Agent("xai-tester", "xAI", "grok-cli", "grok-4.6") };
             AgentCatalogStore.Save(path, new AgentCatalog(agents));
+            var expected = AgentCatalogStore.Load(path).Agents.ToArray();
             File.Copy(path, path + ".bak");
             File.WriteAllText(path, "{");
 
-            Assert.Equal(agents, AgentCatalogStore.Load(path).Agents.ToArray());
+            Assert.Equal(expected, AgentCatalogStore.Load(path).Agents.ToArray());
             Assert.False(AgentCatalogStore.TryParseStrict(File.ReadAllText(path), out _, out var error));
             Assert.Contains("LineNumber:", error!, StringComparison.Ordinal);
         }
