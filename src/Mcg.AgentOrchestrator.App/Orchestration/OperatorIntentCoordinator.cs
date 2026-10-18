@@ -130,7 +130,9 @@ internal sealed partial class OperatorIntentCoordinator
                 RemoteLaneExecutorConfiguration.ResolveStorePath(workspace.ExecutionDirectory)),
             ExperimentDecisions = new ExperimentDecideIntentHandler(workspace.ExperimentStorePath),
             EpicOutcomes = new EpicOutcomeIntentHandler(workspace.PortfolioStorePath),
-            Directives = new OperatorDirectiveIntentHandler(workspace.OperatorDirectivesStorePath)
+            Directives = new OperatorDirectiveIntentHandler(workspace.OperatorDirectivesStorePath),
+            ExecutorSettings = new ExecutorSettingIntentHandler(
+                RemoteLaneExecutorConfiguration.ResolveStorePath(workspace.ExecutionDirectory), workspace.ConductEventsLogPath)
         };
     }
 
