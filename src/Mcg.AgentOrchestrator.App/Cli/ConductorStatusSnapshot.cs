@@ -1,3 +1,5 @@
+using Mcg.AgentOrchestrator.Core;
+
 namespace Mcg.AgentOrchestrator.App.Cli;
 
 // Detached observations shared by the human and agent renderers; lifecycle is projected against ownership.
@@ -10,7 +12,8 @@ internal sealed record ConductorStatusSnapshot(
     ConductorStatusSnapshot.GoalsObservation Goals,
     ConductorStatusSnapshot.LandingObservation? MostRecentLanding,
     ConductorStatusSnapshot.AdoptionObservation? WorkerAdoption,
-    ConductorStatusSnapshot.IntentsObservation PendingIntents)
+    ConductorStatusSnapshot.IntentsObservation PendingIntents,
+    IReadOnlyList<ProviderUsageHoldRow>? ProviderHolds = null)
 {
     internal string ConductorState => OwnerPid is null ? "stopped" : Since.Kind == "starting" ? "starting" : "running";
 

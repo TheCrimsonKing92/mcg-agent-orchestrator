@@ -494,6 +494,25 @@ internal static class OperatorInbox
                 budget.RetryAfter ?? ResolveRaisedAt(goal, null),
                 acknowledgements));
         }
+        var heldBindings = plan.Items.Where(item => item.TaskStatus == WorkTaskStatus.Assigned && item.ProviderBudgetHold is not null)
+            .Select(item => item.ProviderBudgetHold!).DistinctBy(hold => hold.BindingKey, StringComparer.OrdinalIgnoreCase).ToArray();
+        if (heldBindings.Length == 0) return;
+        var rows = ProviderUsageHoldView.Read(providerHoldScope, DateTimeOffset.UtcNow);
+        foreach (var hold in heldBindings)
+        {
+            var schedule = rows.FirstOrDefault(row => string.Equals(row.Hold.BindingKey, hold.BindingKey,
+                StringComparison.OrdinalIgnoreCase))?.Schedule;
+            var message = schedule is null
+                ? $"Binding {hold.BindingKey} is held for usage-balance exhaustion; schedule unavailable."
+                : $"Binding {hold.BindingKey} is held for usage-balance exhaustion; next probe {ProviderBudgetHoldSchedules.FormatInstant(schedule.NextProbeAt)} (reset_source={schedule.ResetSource}; attempt={schedule.Attempt}; last_probe={schedule.LastProbeOutcome}).";
+            Add(items, BuildItem(goal, OperatorInboxKind.BudgetWarning, OperatorInboxSeverity.Warning, null, null,
+                $"Provider usage hold: {hold.BindingKey}", message,
+                $"source goal {hold.SourceGoalId.Value[..8]} task {hold.SourceTaskId.Value[..8]} receipt {hold.EvidenceReceipt}",
+                "The conductor probes the binding automatically at next probe; if the provider states a reset time, record it with provider-reset.",
+                $"provider-reset {hold.BindingKey} <ISO-8601 instant> --text-file <path>",
+                $"budget:usage-hold:{hold.BindingKey}:{schedule?.NextProbeAt.ToUnixTimeSeconds() ?? 0}",
+                hold.PlacedAt, acknowledgements));
+        }
     }
 
     public static LandingEscalationWriteResult RecordLandingEscalation(

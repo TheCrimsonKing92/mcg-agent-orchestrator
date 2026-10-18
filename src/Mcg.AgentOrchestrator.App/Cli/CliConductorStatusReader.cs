@@ -1,4 +1,5 @@
 using System.Globalization;
+using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
@@ -59,6 +60,12 @@ internal static class CliConductorStatusReader
             var latest = goal.Latest?.ToString("O", CultureInfo.InvariantCulture) ?? "none";
             var hint = owner is null ? $" | apply with: conductor apply-intents {goal.Goal[..Math.Min(8, goal.Goal.Length)]}" : "";
             output.WriteLine($"  {goal.Goal} | intents={goal.Intents} | latest={latest}{hint}");
+        }
+        if (snapshot.ProviderHolds is { Count: > 0 } holds)
+        {
+            output.WriteLine($"Provider usage holds: {holds.Count}");
+            foreach (var row in holds)
+                output.WriteLine(ProviderUsageHoldView.FormatStatusLine(row));
         }
     }
 }
