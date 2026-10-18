@@ -97,7 +97,8 @@ internal sealed partial class ConductorContinuitySupervisor(
     ConductorHandoffSchemaUpgrade? schemaUpgrade = null,
     Func<Action<string, string, CancellationToken>, CancellationToken, ConductorPreparedSuccessor>? stageSuccessorWithHook = null,
     string? stopFilePath = null,
-    Func<string, string, IReadOnlyList<string>>? changedPathsBetween = null)
+    Func<string, string, IReadOnlyList<string>>? changedPathsBetween = null,
+    TimeSpan? successorExitRetryDelay = null)
 {
     public const string ChildFlag = "--continuity-child";
     public const string ExitArtifactFlag = "--continuity-exit-artifact";
@@ -150,6 +151,7 @@ internal sealed partial class ConductorContinuitySupervisor(
         var currentBuild = new ConductorActivationBuild("incumbent", "default", null, null);
         ConductorActivationBuild? failedActivationBuild = null;
         string? blockedActivationCommit = null;
+        var retriedHeads = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var restoring = false;
         IReadOnlyList<StoreSetupPlanEntry>? fallbackStoreObservation = null;
         var attempt = 0;
@@ -598,6 +600,18 @@ internal sealed partial class ConductorContinuitySupervisor(
                             return 1;
                         }
 
+                        var exitCode = runTask.IsCompletedSuccessfully ? runTask.Result.ExitCode : (int?)null;
+                        if (ConductorSuccessorExitRetryPolicy.Decide(completed == runTask, exitCode,
+                                HasDeliberateStopArtifact(artifactPath), successor.RepositoryHead, retriedHeads,
+                                successorExitRetryDelay) is ConductorSuccessorExitRetryPolicy.Retry retry)
+                        {
+                            retriedHeads.Add(successor.RepositoryHead);
+                            TryAppendConductEvent($"LOOP_HANDOFF_RETRY_SCHEDULED attempt={attempt} head={successor.RepositoryHead} " +
+                                $"delaySeconds={(int)retry.Delay.TotalSeconds} reason=successor-exited-before-readiness exit={exitCode}");
+                            TryDeleteArtifact(artifactPath);
+                            await _delay(retry.Delay, cancellationToken).ConfigureAwait(false);
+                            continue;
+                        }
                         pendingSuccessor = null;
                         successor.RunDirectoryLease?.Dispose();
                         var failed = ConductorActivationBuild.FromSuccessor(successor, _dotnetPath);

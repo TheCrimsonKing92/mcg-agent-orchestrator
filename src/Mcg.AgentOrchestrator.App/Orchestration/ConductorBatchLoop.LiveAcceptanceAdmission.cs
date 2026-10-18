@@ -303,27 +303,5 @@ internal sealed partial class ConductorBatchLoop
     private static string FormatParallelAcceptanceCandidateUnavailableDetail(Exception exception) =>
         SanitizeReason(exception.Message);
 
-    internal static IReadOnlyList<Goal> OrderParallelAcceptanceEligibleGoals(IReadOnlyList<Goal> eligible) =>
-        eligible
-            .OrderBy(ParallelAcceptanceVerifiedAt)
-            .ThenBy(goal => goal.Timeline.FirstOrDefault()?.OccurredAt ?? DateTimeOffset.MinValue)
-            .ThenBy(goal => goal.Id.Value, StringComparer.Ordinal)
-            .ToArray();
-
-    private static DateTimeOffset ParallelAcceptanceVerifiedAt(Goal goal)
-    {
-        var lastVerification = goal.Tasks
-            .Select(task => task.LastVerification?.CompletedAt)
-            .Where(completedAt => completedAt.HasValue)
-            .Select(completedAt => completedAt!.Value)
-            .DefaultIfEmpty(goal.Timeline.FirstOrDefault()?.OccurredAt ?? DateTimeOffset.MinValue)
-            .Max();
-        return goal.Timeline
-            .Where(evt =>
-                evt.Kind == ProgressKind.GoalPolicyDecision &&
-                evt.Message.Contains("Verified", StringComparison.OrdinalIgnoreCase))
-            .Select(evt => evt.OccurredAt)
-            .DefaultIfEmpty(lastVerification)
-            .Min();
-    }
+    internal static IReadOnlyList<Goal> OrderParallelAcceptanceEligibleGoals(IReadOnlyList<Goal> eligible) => GoalSchedulingOrder.ForAcceptance(eligible);
 }

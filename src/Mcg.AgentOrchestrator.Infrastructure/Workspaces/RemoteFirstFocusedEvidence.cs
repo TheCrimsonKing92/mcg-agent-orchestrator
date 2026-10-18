@@ -65,8 +65,8 @@ internal static class RemoteFirstFocusedEvidence
                     if (keys.Count > 0 && (run.Check.RequiresBuildSystemChange ||
                         !keys.All(key => configuration.MachineLocalResourceKeys.Contains(key, StringComparer.Ordinal))))
                         Finish(run, RemoteLaneOutcomeCode.NotEligibleExclusiveResource, "exclusive-resource");
-                    else if (coordinator.TryClaimIdleExecutor() is not { } entry)
-                        Finish(run, RemoteLaneOutcomeCode.ShadowSkippedNoExecutor, "no-idle-executor");
+                    else if (coordinator.TryClaimIdleExecutor(out var yieldReason) is not { } entry)
+                        Finish(run, RemoteLaneOutcomeCode.ShadowSkippedNoExecutor, yieldReason ?? "no-idle-executor");
                     else
                     {
                         run.Request = run.Request with { ExecutorId = entry.Id };

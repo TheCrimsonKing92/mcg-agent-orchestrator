@@ -314,6 +314,7 @@ if (ConductorContinuitySupervisor.ShouldSupervise(
             new SqliteRunEventStore(workspace.RunEventStorePath),
             inspectStores: () => StoreSetupRunner.Plan(workspace.OrchestratorDirectory, includeState: true),
             stopFilePath: workspace.ConductorStopFilePath,
+            successorExitRetryDelay: TimeSpan.FromSeconds(60),
             stageSuccessor: stageSuccessor,
             stageSuccessorWithHook: stageSuccessorWithHook,
             schemaUpgrade: new ConductorHandoffSchemaUpgrade(
@@ -501,7 +502,8 @@ try
         // explicitly transfers its sole-writer authority.
         ConductorLoopHandoff.WaitForAuthorityTransferIfRequested();
         VerifyWorkspaceBinding();
-        StoreSetupRunner.RequireCompatible(StoreSetupRunner.Plan(workspace.OrchestratorDirectory, includeState: true),
+        StoreSetupRunner.RequireCompatible(StartupSqliteRetry.Run(workspace.OrchestratorDirectory, "store-plan-precheck",
+                () => StoreSetupRunner.Plan(workspace.OrchestratorDirectory, includeState: true)),
             requireCurrent: invocationBinding.RequireCurrentStores);
         // Transfer the same controller into the loop; never release ownership between migration and startup.
         startupLoopLease = ConductorLoopLeaseController.Acquire(workspace.OrchestratorDirectory);
@@ -522,10 +524,11 @@ try
             workspace.ExecutionDirectory,
             cleanupContext);
     }
-    stateRepository = defersStateUpgrade
+    stateRepository = StartupSqliteRetry.Run(workspace.SqliteStatePath, "state-repository-open", () => defersStateUpgrade
         ? SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath)
-        : new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
-    (currentGoal, stateHydrated) = await CliReadOnlyStartupHydration.PrepareStartupAsync(startupArgs, stateRepository);
+        : new SqliteOrchestratorStateRepository(workspace.SqliteStatePath));
+    (currentGoal, stateHydrated) = await StartupSqliteRetry.RunAsync(workspace.SqliteStatePath, "state-hydration",
+        () => CliReadOnlyStartupHydration.PrepareStartupAsync(startupArgs, stateRepository));
 }
 catch (Exception ex)
 {
