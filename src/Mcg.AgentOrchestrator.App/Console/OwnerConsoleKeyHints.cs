@@ -8,7 +8,7 @@ internal static class OwnerConsoleKeyHints
         OwnerConsoleBindings.Commands.Select(row => (row.Usage, OwnerConsoleBindings.Description(row))).ToArray();
 
     internal static string CommandPrompt => OwnerConsoleBindings.CommandPrompt;
-    internal static string CommandLineHint => "Enter run  Esc cancel  commands: " + CommandPrompt;
+    internal static string CommandLineHint => "Enter run  Esc cancel  Tab complete  commands: " + CommandPrompt;
 
     internal static string UnavailableKey(char key, OwnerConsolePane pane) =>
         $"{key}: not available here ({pane.ToString().ToUpperInvariant()}); use DECISIONS.";
