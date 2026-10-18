@@ -20,7 +20,7 @@ public sealed class PreTesterRedLoopSignatureScenarioTests
     private static readonly string[] ChangedPaths =
         [$"tests/{Project}/{FailureClass}.cs", $"tests/{Project}/{OtherClass}.cs"];
 
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public void IncidentReplay_ChangedAssertionRetriesDeveloperInsteadOfEscalating()
     {
@@ -44,7 +44,7 @@ public sealed class PreTesterRedLoopSignatureScenarioTests
             PreTesterFailureSignature.ReadRun(lines[^1]).Signatures[Failure]);
     }
 
-    [Theory(Timeout = 30_000)]
+    [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     [InlineData("same", false, "6,1,1", "repeat")]
     [InlineData("missing", false, "6,1,1", "repeat")]
@@ -82,7 +82,7 @@ public sealed class PreTesterRedLoopSignatureScenarioTests
             Assert.Equal(grew ? 2 : 1, PreTesterFailureSignature.ReadRun(lines[^1]).Signatures.Count);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public void FiveDistinctSignatures_StillTripHardCap()
     {
@@ -90,7 +90,7 @@ public sealed class PreTesterRedLoopSignatureScenarioTests
         Assert.Equal(5, PreTesterRedLoopRule.HardCap);
         for (var round = 1; round <= 5; round++)
         {
-            scenario.DeliverDeveloper($"cap000{round}");
+            scenario.DeliverDeveloper($"ca0000{round}");
             scenario.WriteTrx((Failure, "assertion " + round, round));
             var result = scenario.RunRed([Failure]);
             if (round < 5)
