@@ -18,7 +18,7 @@ public sealed class OwnerConsoleDialogKeyScenarioTests
         await fixture.RenderAsync();
         fixture.Dialogs.OnGoal = async dialog =>
         {
-            Assert.Equal(new[] { "Open question (d)", "Last failure (f)", "Epic (e)" }, dialog.Actions);
+            Assert.Equal(new[] { "Open question (d)", "Last failure (f)", "Epic (e)", "Gate view (g)" }, dialog.Actions);
             var closed = 0;
             dialog.CloseRequested += () => closed++;
             Assert.True(await dialog.HandleKeyAsync('d'));
