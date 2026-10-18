@@ -18,10 +18,12 @@ internal sealed record RemoteLaneSubmission(IRemoteLaneHandle? Handle, string? F
 internal sealed record RemoteLaneRequest(
     string ExecutorId, string AttemptId, string GoalId, string Lane, string Project, string Filter,
     string FilterHash, string VerifyingCommitSha, string CandidateTreeSha, string MainSha, string ManifestIdentity,
-    int? TestHostTimeoutSeconds = null, RemoteLaneTestHostBudgetDecision? TestHostBudget = null);
+    int? TestHostTimeoutSeconds = null, RemoteLaneTestHostBudgetDecision? TestHostBudget = null,
+    string Kind = "lane", IReadOnlyList<string>? BuildProjects = null);
 internal sealed record RemoteLaneResult(
     string ExecutorId, string Lane, string FilterHash, string VerifyingCommitSha, string ObservedTreeSha,
-    string MainSha, string ManifestIdentity, int ExitCode, IReadOnlyList<string> TestResultPaths);
+    string MainSha, string ManifestIdentity, int ExitCode, IReadOnlyList<string> TestResultPaths,
+    string? BuildOutputPath = null, string? BuildReceiptPath = null);
 
 internal sealed class UnavailableRemoteLaneExecutor : IRemoteLaneExecutor
 {

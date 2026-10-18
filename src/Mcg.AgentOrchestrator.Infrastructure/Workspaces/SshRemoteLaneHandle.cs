@@ -125,7 +125,7 @@ internal sealed class SshRemoteLaneHandle : IRemoteLaneHandle, IRemoteLaneAttemp
                         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
                         if (status.String("state") == "failed") throw new RemoteLaneTransportException(status.String("error"));
                         if (status.String("state") != "completed") continue;
-                        var (code, names) = status.Completion();
+                        var (code, names) = request.Kind == "build-check" ? status.BuildCheckCompletion() : status.Completion();
                         _stop.Token.ThrowIfCancellationRequested();
                         var paths = names.Select(name => Path.Combine(staging, name)).ToArray();
                         var temporaryPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -159,7 +159,7 @@ internal sealed class SshRemoteLaneHandle : IRemoteLaneHandle, IRemoteLaneAttemp
                                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
                             }
                         }
-                        lock (_sync) _result = status.Result(code, paths);
+                        lock (_sync) _result = request.Kind == "build-check" ? status.BuildCheckResult(code, paths) : status.Result(code, paths);
                         return;
                     }
                     catch (OperationCanceledException) when (_stop.IsCancellationRequested) { return; }
