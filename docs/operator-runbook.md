@@ -278,6 +278,16 @@ acceptance suite output → git diff / commits in the worktree → verification 
 
 ---
 
+## What goal priority and isolation do
+
+Goal priority changes ordering only: Critical comes before High, then Normal and Low. Priority inherits from dependents to their dependencies, so a dependency can move forward to unblock urgent work. The starvation guard promotes a waiting goal after 3 overtakes.
+
+Use `goal-isolation <goal-prefix> solo --reason <text>` to request a solo gate, or `goal-isolation <goal-prefix> none` to allow grouping again. The conductor applies the intent on a tick. Solo excludes the goal from trains, pair cohorts, follower gates and the gather window; it still reaches solo admission in priority order. Isolation is a separate property and is never a flag on `goal-priority`.
+
+Submitting High or Critical warns when more than one third of an epic's active goal members are High or Critical (`PRIORITY_DILUTION`), or when the goal overlaps another in-flight goal without a declared dependency either way (`PRIORITY_OVERLAP`). These warnings appear on stderr and in the conduct log; they never reject a flag or add dependencies. The console marks priority, solo isolation (S) and recent warnings (!) in a badge, such as [HS!]. Goal detail explains inherited priority and solo isolation.
+
+Priority clears to Normal on the tick after a goal ends, and inherited priority is recomputed. Isolation stays until changed explicitly. Nothing preempts running work. Priority never bypasses a dependency hold, the drain or a gate.
+
 ## 4. Observe what's happening
 
 | Command | Shows |

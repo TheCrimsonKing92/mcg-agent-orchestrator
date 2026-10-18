@@ -201,7 +201,7 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             context.CurrentGoal = ResolveDispatchCommandGoal(parts, context, "subscription-dispatch-ready [goal-prefix|--goal <goal-prefix>]");
             EnsureGoalWorkspaceForDispatch(context, context.CurrentGoal);
             var subscriptionDispatches = new GoalDispatchOperations().SubscriptionDispatchReadyBatch(context.Kernel, context.Workspace, context.CurrentGoal, context.Agents, context.WorkerProfiles, context.Providers);
-            EmitReadyBlockedDiagnostics(subscriptionDispatches.Blocked);
+            ReadyBlockedDiagnosticsEmitter.Emit(subscriptionDispatches.Blocked);
             foreach (var dispatchResult in subscriptionDispatches.Dispatches)
             {
                 Console.WriteLine($"Task {ConsoleViews.GetTaskDisplayNumber(context.CurrentGoal, dispatchResult.Task.Id)} profile {dispatchResult.Task.LastDispatch?.WorkerName}: {dispatchResult.PromptPath}");
@@ -293,13 +293,13 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             context.CurrentGoal = ResolveDispatchCommandGoal(parts, context, "start-subscription-ready [goal-prefix|--goal <goal-prefix>] --confirm-batch-start [--confirm-large-paid-subscription-start]");
             if (!startReadyPolicy.Allows(AutonomyAction.DispatchStart))
             {
-                EmitReadyBlockedDiagnosticsForAssigned(context.CurrentGoal, context.Agents, context.WorkerProfiles, context.Kernel.Goals, "autonomy-policy");
+                ReadyBlockedDiagnosticsEmitter.EmitForAssigned(context.CurrentGoal, context.Agents, context.WorkerProfiles, context.Kernel.Goals, "autonomy-policy");
             }
 
             startReadyPolicy.ThrowIfDisallowed(AutonomyAction.DispatchStart, "start-subscription-ready");
             if (!HasCliConfirmation(parts, "--confirm-batch-start"))
             {
-                EmitReadyBlockedDiagnosticsForAssigned(context.CurrentGoal, context.Agents, context.WorkerProfiles, context.Kernel.Goals, "start-gate");
+                ReadyBlockedDiagnosticsEmitter.EmitForAssigned(context.CurrentGoal, context.Agents, context.WorkerProfiles, context.Kernel.Goals, "start-gate");
             }
 
             EnsureCliConfirmation(
@@ -324,7 +324,7 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
                 context.Kernel.Goals);
             if (!readiness.AllowsStart(HasCliConfirmation(parts, "--confirm-readiness-risk")))
             {
-                EmitReadyBlockedDiagnosticsForAssigned(context.CurrentGoal, context.Agents, context.WorkerProfiles, context.Kernel.Goals, "start-gate");
+                ReadyBlockedDiagnosticsEmitter.EmitForAssigned(context.CurrentGoal, context.Agents, context.WorkerProfiles, context.Kernel.Goals, "start-gate");
             }
 
             EnsureGoalReadinessAllowsStart(context, context.CurrentGoal, HasCliConfirmation(parts, "--confirm-readiness-risk"));
@@ -337,14 +337,14 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             if (startReadyRisk is { IsAnomalous: true } &&
                 !HasCliConfirmation(parts, SubscriptionPromptCostGuard.CliConfirmationFlag))
             {
-                EmitReadyBlockedDiagnosticsForAssigned(context.CurrentGoal, context.Agents, context.WorkerProfiles, context.Kernel.Goals, "prompt-size-cost");
+                ReadyBlockedDiagnosticsEmitter.EmitForAssigned(context.CurrentGoal, context.Agents, context.WorkerProfiles, context.Kernel.Goals, "prompt-size-cost");
             }
 
             SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(
                 startReadyRisk,
                 HasCliConfirmation(parts, SubscriptionPromptCostGuard.CliConfirmationFlag));
             var subscriptionStart = new GoalDispatchOperations().StartSubscriptionReadyTasks(context.Kernel, context.Workspace, context.CurrentGoal, context.Agents, context.WorkerProfiles, context.Providers);
-            EmitReadyBlockedDiagnostics(subscriptionStart.BlockedDiagnostics);
+            ReadyBlockedDiagnosticsEmitter.Emit(subscriptionStart.BlockedDiagnostics);
             ConsoleViews.PrintSubscriptionStartResult(context.CurrentGoal, subscriptionStart);
             if (subscriptionStart.Processes.StartFailures?.FirstOrDefault() is { } subscriptionStartFailure)
             {
@@ -461,6 +461,8 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             ProcessLogsTextView.PrintProcessLogs(ProcessLogReader.Read(logProcess), logStream);
             return false;
 
+        case "goal-isolation":
+            return CliGoalIsolationCommand.Execute(parts, context);
         case "goal-priority":
             return CliGoalPriorityCommand.Execute(parts, context);
         case "cancel-dispatch":
@@ -514,59 +516,6 @@ private static void LaunchLatestDispatch(CliExecutionContext context, Goal goal,
     if (startResult.FailureReason is { } failureReason)
     {
         context.FailAfterCommit(failureReason);
-    }
-}
-
-private static void EmitReadyBlockedDiagnostics(IReadOnlyList<ReadyBlockedDiagnostic> diagnostics)
-{
-    foreach (var diagnostic in diagnostics.OrderBy(diagnostic => diagnostic.TaskNumber))
-    {
-        Console.Error.WriteLine(diagnostic.ToLine());
-    }
-}
-
-private static void EmitReadyBlockedDiagnosticsForAssigned(
-    Goal goal,
-    IReadOnlyList<AgentDefinition> agents,
-    WorkerProfileCatalog profiles,
-    IReadOnlyCollection<Goal> providerHoldScope,
-    string reason)
-{
-    var planItems = SubscriptionPlanBuilder.Build(
-            goal,
-            agents,
-            profiles,
-            providerHoldScope: providerHoldScope)
-        .Items
-        .Where(item => item.TaskStatus == WorkTaskStatus.Assigned)
-        .OrderBy(item => item.TaskNumber);
-    foreach (var item in planItems)
-    {
-        var task = goal.Tasks.FirstOrDefault(task => task.Id.Value == item.TaskId);
-        var agent = task?.AssignedAgentId is null
-            ? null
-            : agents.FirstOrDefault(candidate => candidate.Id == task.AssignedAgentId);
-        var provider = task is null || agent is null
-            ? item.ProfileName
-            : WorkerProfileDispatcher.ResolveSubscriptionProfileName(agent, goal, task, profiles);
-        provider = string.IsNullOrWhiteSpace(provider) ? "unknown" : provider;
-        var hold = item.ProviderBudgetHold;
-        var diagnostic = new ReadyBlockedDiagnostic(
-            goal.Id.Value[..8],
-            item.TaskNumber,
-            item.TaskId,
-            provider,
-            hold is null ? reason : "provider-budget-exhausted",
-            hold is null
-                ? null
-                :
-                [
-                    $"binding={hold.BindingKey}",
-                    $"scope={hold.BindingScope}",
-                    $"source={hold.SourceGoalId.Value[..8]}/{hold.SourceTaskId.Value[..8]}",
-                    $"receipt={hold.EvidenceReceipt}"
-                ]);
-        Console.Error.WriteLine(diagnostic.ToLine());
     }
 }
 

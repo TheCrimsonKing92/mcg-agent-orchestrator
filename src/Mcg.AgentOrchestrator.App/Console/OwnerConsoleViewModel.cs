@@ -19,7 +19,7 @@ internal sealed record OwnerConsoleDecision(string Id, int Number, string GoalId
 }
 
 internal sealed record OwnerConsoleBoardRow(string GoalPrefix, string Epic, string Title,
-    string State, string Stage, TimeSpan? Age, string GoalId, bool Dimmed = false)
+    string State, string Stage, TimeSpan? Age, string GoalId, bool Dimmed = false, string Priority = "")
 {
     internal OwnerConsoleBoardSortKey SortKey { get; init; }
     internal string? StageWithoutQuestion { get; init; }

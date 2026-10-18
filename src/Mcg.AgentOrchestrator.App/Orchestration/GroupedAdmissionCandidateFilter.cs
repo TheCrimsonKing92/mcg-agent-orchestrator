@@ -17,7 +17,8 @@ internal static class GroupedAdmissionCandidateFilter
     {
         var lookup = goals.ToDictionary(goal => goal.Id.Value, StringComparer.Ordinal);
         var targets = candidateIds.Concat(liveGroupedIds).ToHashSet(StringComparer.Ordinal);
-        return candidateIds.Where(id => !HasGroupedDependency(id)).ToHashSet(StringComparer.Ordinal);
+        return candidateIds.Where(id => (!lookup.TryGetValue(id, out var goal) || goal.Isolation != GoalIsolation.Solo) &&
+            !HasGroupedDependency(id)).ToHashSet(StringComparer.Ordinal);
 
         bool HasGroupedDependency(string id)
         {

@@ -19,6 +19,12 @@ internal static class OwnerConsoleGoalDetailFormatter
         var goal = detail.Goal;
         output.WriteLine(goal.Id.Value[..Math.Min(8, goal.Id.Value.Length)] + "  " + OwnerGoalTitle.From(goal.Objective));
         output.WriteLine("Status: " + goal.Status);
+        var priority = GoalEffectivePriorityIndex.StoredLevel(goal);
+        if (priority != GoalPriority.Normal)
+            output.WriteLine("Priority: " + GoalPriorities.Format(priority) +
+                (priority > goal.Priority && goal.PriorityScheduling?.InheritedFromGoalId is { } donor
+                    ? " (inherited from " + donor[..Math.Min(8, donor.Length)] + ")" : ""));
+        if (goal.Isolation == GoalIsolation.Solo) output.WriteLine("Isolation: solo");
         var stage = GoalLifecycle.ResolveState(goal, new(IsBlocked: goal.CurrentHold is not null)).ToString();
         if (stage != goal.Status.ToString()) output.WriteLine("Stage: " + stage);
         var role = OwnerConsoleGoalDetail.Stage(goal);
