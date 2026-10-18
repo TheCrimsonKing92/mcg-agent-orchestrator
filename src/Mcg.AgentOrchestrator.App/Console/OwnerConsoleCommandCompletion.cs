@@ -15,7 +15,7 @@ internal static class OwnerConsoleCommandCompletion
         input = Regex.Replace(input, " +", " ");
         var rows = commands.ToArray();
         var candidates = rows.Where(row => Literal(row).StartsWith(input, StringComparison.OrdinalIgnoreCase) ||
-            HasPlaceholder(row) && (Literal(row) + " ").StartsWith(input, StringComparison.OrdinalIgnoreCase)).ToArray();
+            HasPlaceholder(row) && input.StartsWith(Literal(row) + " ", StringComparison.OrdinalIgnoreCase)).ToArray();
         if (candidates.Length == 0 && input.Contains(' '))
             candidates = rows.Where(row => row.Command.Equals(input.Split(' ')[0], StringComparison.OrdinalIgnoreCase)).ToArray();
 
@@ -23,7 +23,8 @@ internal static class OwnerConsoleCommandCompletion
         {
             var row = candidates[0];
             var literal = Literal(row);
-            var completed = input.Length < literal.Length ? prefix + literal + (HasPlaceholder(row) ? " " : "") : text;
+            var completed = input.Length < literal.Length && literal.StartsWith(input, StringComparison.OrdinalIgnoreCase)
+                ? prefix + literal + (HasPlaceholder(row) ? " " : "") : text;
             var hint = $"{row.Usage}: {OwnerConsoleBindings.Description(row)}";
             return new(completed, candidates, hint.Length <= width ? hint : hint[..(width - 3)] + "...");
         }
@@ -40,7 +41,7 @@ internal static class OwnerConsoleCommandCompletion
                 char.ToUpperInvariant(common[length]) == char.ToUpperInvariant(literal[length])) length++;
             common = common[..length];
         }
-        return new(common.Length > input.Length ? prefix + common : text, candidates,
+        return new(common.Length > input.Length && common.StartsWith(input, StringComparison.OrdinalIgnoreCase) ? prefix + common : text, candidates,
             ListHint($"matches ({candidates.Length}): ", candidates, width));
     }
 

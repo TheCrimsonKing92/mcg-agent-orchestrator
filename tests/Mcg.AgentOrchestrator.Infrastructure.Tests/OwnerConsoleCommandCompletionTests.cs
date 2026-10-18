@@ -48,6 +48,47 @@ public sealed class OwnerConsoleCommandCompletionTests
     }
 
     [Theory]
+    [InlineData("conductor x")]
+    [InlineData("conductor t")]
+    [InlineData("conductor r")]
+    [InlineData(" :  CONDUCTOR   x")]
+    public void Complete_AmbiguousArgumentHelp_PreservesOriginalInput(string input)
+    {
+        var result = OwnerConsoleCommandCompletion.Complete(input, OwnerConsoleBindings.Commands, 120);
+        Assert.Equal(input, result.Text);
+        Assert.Equal(new[] { "conductor start", "conductor stop", "conductor status" }, result.Candidates.Select(row => row.Usage));
+        Assert.Equal("matches (3): conductor start | conductor stop | conductor status", result.Hint);
+    }
+
+    [Theory]
+    [InlineData("foo x", "foo x")]
+    [InlineData(" :  FOO   x", " :  FOO   x")]
+    [InlineData("foo b", "foo bar")]
+    public void Complete_SingleLiteral_ExtendsOnlyMatchingPrefixes(string input, string expected)
+    {
+        var row = OwnerConsoleBindings.Commands.First() with
+        { Command = "foo", Usage = "foo bar", CommandHelp = "Synthetic fixed subcommand help." };
+        var result = OwnerConsoleCommandCompletion.Complete(input, new[] { row }, 120);
+        Assert.Equal(expected, result.Text);
+        Assert.Equal(row, Assert.Single(result.Candidates));
+        Assert.Equal("foo bar: Synthetic fixed subcommand help.", result.Hint);
+    }
+
+    [Theory]
+    [InlineData("goal li")]
+    [InlineData("GOAL  LIST")]
+    public void Complete_PlaceholderArgumentAlsoMatchesFixedLiteral_ListsBothRows(string input)
+    {
+        var argument = OwnerConsoleBindings.Commands.Single(row => row.Command == "goal");
+        var fixedCommand = argument with { Usage = "goal list", CommandHelp = "Synthetic list help." };
+        var rows = new[] { argument, fixedCommand };
+        var result = OwnerConsoleCommandCompletion.Complete(input, rows, 120);
+        Assert.Equal(input, result.Text);
+        Assert.Equal(rows, result.Candidates);
+        Assert.Equal("matches (2): goal <id-prefix> | goal list", result.Hint);
+    }
+
+    [Theory]
     [InlineData("  :  CONDUCTOR   stat", ":conductor status")]
     [InlineData("con", "conductor st")]
     [InlineData("conductor  ", "conductor st")]
