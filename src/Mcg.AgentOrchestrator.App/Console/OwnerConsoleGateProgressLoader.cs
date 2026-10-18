@@ -5,11 +5,14 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
 internal sealed class OwnerConsoleGateProgressLoader(string logPath, string manifestPath, string durationPath, TimeProvider clock)
 {
+    private static readonly OwnerConsoleGateFailureNames FailureNames = new();
     internal OwnerConsoleGateProgress? Load(IReadOnlyDictionary<string, string> titles)
     {
         try
         {
-            var events = ReadTail().Select(OwnerConsoleGateProgress.ParseEvent).OfType<OwnerConductEvent>().ToArray();
+            var tail = ReadTail().ToArray();
+            var now = clock.GetUtcNow();
+            var events = tail.Select(OwnerConsoleGateProgress.ParseEvent).OfType<OwnerConductEvent>().ToArray();
             using var manifest = JsonDocument.Parse(File.ReadAllText(manifestPath));
             var lanes = manifest.RootElement.GetProperty("engine").GetProperty("infrastructureTestLanes").EnumerateArray()
                 .Select(lane => new OwnerConsoleGateManifestLane(lane.GetProperty("name").GetString()!,
@@ -27,8 +30,14 @@ internal sealed class OwnerConsoleGateProgressLoader(string logPath, string mani
                     }
                     catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException or FormatException) { }
                 }
-            return OwnerConsoleGateProgress.Build(clock.GetUtcNow(), events, lanes, history,
+            var gate = OwnerConsoleGateProgress.Build(now, events, lanes, history,
                 id => titles.FirstOrDefault(pair => pair.Key.StartsWith(id, StringComparison.Ordinal)).Value);
+            return gate with
+            {
+                HostActivity = OwnerConsoleHostEvidenceRuns.Read(tail, now),
+                Lanes = gate.Lanes.Select(row => row.State == OwnerConsoleGateLaneState.Done && row.Outcome == "failed" && !row.IsAttribution
+                    ? row with { FailingTestNames = FailureNames.Read(row) } : row).ToArray()
+            };
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or KeyNotFoundException or
             InvalidOperationException or FormatException or ArgumentException or NotSupportedException or System.Security.SecurityException)
