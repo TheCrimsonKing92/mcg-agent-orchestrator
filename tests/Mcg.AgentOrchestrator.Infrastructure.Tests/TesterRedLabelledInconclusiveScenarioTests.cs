@@ -204,8 +204,9 @@ public sealed class TesterRedLabelledInconclusiveScenarioTests
         public void CompleteTester(string detail)
         {
             var output = $"WORKER_RESULT:\nfiles: none\ntests: inconclusive - {detail}\nblockers: none\nEND_WORKER_RESULT";
-            Kernel.RecordDispatchExecutionResult(Goal.Id, Tester.Id, new("verify", _root, 0, output, "", _clock.Next(),
-                WorkerResultPresent: true, DispatchStartedAt: Tester.LastDispatch!.DispatchedAt));
+            var dispatch = Assert.IsType<TaskDispatchRecord>(Tester.LastDispatch);
+            Kernel.RecordDispatchExecutionResult(Goal.Id, Tester.Id, new(dispatch.Command, dispatch.WorkingDirectory, 0, output, "", _clock.Next(),
+                WorkerResultPresent: true, DispatchStartedAt: dispatch.DispatchedAt));
             Assert.Equal(DispatchOutcomeKind.VerificationInconclusive,
                 DispatchFailureClassifier.Classify(Tester, Tester.LastVerification!).Kind);
             Assert.Equal(WorkTaskStatus.Failed, Tester.Status);
