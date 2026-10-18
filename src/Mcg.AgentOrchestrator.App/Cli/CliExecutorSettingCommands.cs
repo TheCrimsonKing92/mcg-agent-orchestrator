@@ -42,7 +42,7 @@ internal static class CliExecutorSettingCommands
             else
             {
                 var mode = parsed.GetValueOrDefault("--mode");
-                if (mode is not null and not ("off" or "shadow")) throw new ArgumentException("mode-unsupported");
+                if (mode is not null and not ("off" or "shadow" or "remote-first")) throw new ArgumentException("mode-unsupported");
                 int? sample = null;
                 if (parsed.TryGetValue("--sample-every", out var text))
                 {

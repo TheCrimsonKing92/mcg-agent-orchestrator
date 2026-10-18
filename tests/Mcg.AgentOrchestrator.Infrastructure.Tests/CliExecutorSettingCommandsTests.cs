@@ -14,7 +14,6 @@ public sealed class CliExecutorSettingCommandsTests
     [InlineData("executor-set-slots", "mcg-exec-1", "2147483648")]
     [InlineData("executor-set-slots", "no-such", "2")]
     [InlineData("focused-evidence-set")]
-    [InlineData("focused-evidence-set", "--mode", "remote-first")]
     [InlineData("focused-evidence-set", "--mode", "on")]
     [InlineData("focused-evidence-set", "--mode", "Shadow")]
     [InlineData("focused-evidence-set", "--sample-every", "0")]
@@ -88,6 +87,7 @@ public sealed class CliExecutorSettingCommandsTests
     [Theory]
     [InlineData("executor-set-slots", "mcg-exec-1", "1")]
     [InlineData("executor-set-slots", "mcg-exec-1", "16")]
+    [InlineData("focused-evidence-set", "--mode", "remote-first")]
     [InlineData("focused-evidence-set", "--sample-every", "1")]
     [InlineData("focused-evidence-set", "--sample-every", "2147483647")]
     public async Task Submit_ValidBounds_QueuesExactlyOneIntent(params string[] args)

@@ -41,7 +41,7 @@ internal sealed class ExecutorSettingIntentHandler(string executorsPath, string 
             throw Failure("slots-out-of-range");
         if (focused?.SampleEvery is < RemoteLaneExecutorConfiguration.MinimumSampleEvery)
             throw Failure("sample-every-out-of-range");
-        if (focused?.Mode is not null and not ("off" or "shadow")) throw Failure("mode-unsupported");
+        if (focused?.Mode is not null and not ("off" or "shadow" or "remote-first")) throw Failure("mode-unsupported");
         if (focused is { Mode: null, SampleEvery: null }) throw Failure("no-setting");
         if (!File.Exists(executorsPath)) throw Failure("executors-file-missing");
 
@@ -50,8 +50,6 @@ internal sealed class ExecutorSettingIntentHandler(string executorsPath, string 
             var original = File.ReadAllBytes(executorsPath);
             var before = RemoteLaneExecutorConfiguration.LoadForFocusedEvidence(executorsPath);
             RequireValid(before);
-            if (focused?.Mode is not null && before.FocusedEvidence.Mode == "remote-first")
-                throw Failure("focused-evidence-mode-remote-first");
 
             var fields = new List<(string Field, string Old, string New)>();
             var candidate = original;
@@ -63,7 +61,7 @@ internal sealed class ExecutorSettingIntentHandler(string executorsPath, string 
             }
             if (focused?.Mode is { } mode)
             {
-                candidate = RemoteLaneExecutorFlags.Rewrite(candidate, RemoteLaneExecutorFlags.FocusedEvidenceShadow, mode == "shadow")
+                candidate = FocusedEvidenceModeRewrite.Apply(candidate, mode)
                     ?? throw Failure("focused-evidence-mode-absent");
                 fields.Add(("focusedEvidence.mode", before.FocusedEvidence.Mode, mode));
             }
