@@ -89,7 +89,8 @@ internal static class OwnerActivityNarrator
             {
                 case "goal-lifecycle":
                     if (DetailPhrase(item, name, finding?.Invoke(item)) is { } stage)
-                        Add(item, stage, FailureReason(item) is { } rejection ? "plan rejected: " + rejection : head == "TaskFailed" ? Field(item, "outcome") == "finding" ?
+                        Add(item, OwnerActivityAttempts.Label(stage, DetailLead(item)!.Length + name.Length + (head == "TaskFailed" ? " back".Length : 0),
+                            OwnerActivityAttempts.Number(ordered, index)), FailureReason(item) is { } rejection ? "plan rejected: " + rejection : head == "TaskFailed" ? Field(item, "outcome") == "finding" ?
                             "The worker reported a blocking finding." : "The worker could not finish its task." :
                             "The work reached this stage.", head == "TaskFailed" ? Field(item, "outcome") == "finding" ?
                             "The Developer will address the finding." : "The conductor will retry the worker or request help." : "Work continues through the remaining checks.",
