@@ -2,14 +2,15 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using Fixture = RemoteExecutorSlotArbiterTests.Fixture;
 
 // Parallel safe: private occupancy roots and fake executors, no process-wide state.
-public sealed class RemoteExecutorClassClaimTests
+[Xunit.Collection(TestCollections.JobAccounting)]
+public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteExecutorClassClaim
 {
     [Theory]
     [InlineData("Gate", "yield-to-gate")]
     [InlineData("FocusedEvidence", "yield-to-focused-evidence")]
     public async Task ShadowStart_RecordsDemandYieldReason(string kind, string reason)
     {
-        await using var s = new RemoteTypedSlotClaimsScenarioTests.JobAccountingScenario();
+        await using var s = new GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteTypedSlotClaims.JobAccountingScenario();
         using var demand = new RemoteExecutorSlotArbiter(s.Root, "waiting", Enum.Parse<RemoteExecutorClaimClass>(kind), s.Clock);
         demand.WriteDemand(["one"]);
         var shadow = s.StartShadow(count: 1);

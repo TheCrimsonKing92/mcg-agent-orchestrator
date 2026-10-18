@@ -7,7 +7,7 @@ internal sealed class OwnerConsoleGoalDialog : IDisposable
 {
     internal sealed record Content(string Text, IReadOnlyList<int> ChoiceLines,
         IReadOnlyList<OwnerQuestionResolution> Resolved, OwnerConsoleDecision? Question,
-        string? Failure, string? EpicId);
+        string? Failure, string? EpicId, string? GateGoalId = null);
 
     private readonly OwnerConsoleScreenController _controller;
     private readonly Func<CancellationToken, Task<Content?>> _load;
@@ -27,6 +27,7 @@ internal sealed class OwnerConsoleGoalDialog : IDisposable
     internal OwnerConsoleTextPage Page { get; }
     internal Task LastLoad { get; private set; } = Task.CompletedTask;
     internal string? RequestedEpicId { get; private set; }
+    internal string? RequestedGateGoalId { get; private set; }
     internal event Action? Changed;
     internal event Action? CloseRequested;
     internal IReadOnlyList<string> Actions => OwnerConsoleDialogBindings.GoalDetail
@@ -35,6 +36,7 @@ internal sealed class OwnerConsoleGoalDialog : IDisposable
             "question" => Current.Question is not null,
             "failure" => Current.Failure is not null,
             "epics" => Current.EpicId is not null,
+            "gate" => Current.GateGoalId is not null,
             _ => false
         }).Select(row => OwnerConsoleDialogBindings.Label(
             OwnerConsoleBindings.ForDialogKey(OwnerConsoleScope.GoalDetail, row.Key!.Value, row.Ctrl)!)).ToArray();
@@ -136,6 +138,8 @@ internal sealed class OwnerConsoleGoalDialog : IDisposable
             case "failure" when Current.Failure is { } failure: await _text("Last failure", failure); return true;
             case "epics" when Current.EpicId is { } epic:
                 RequestedEpicId = epic; CloseRequested?.Invoke(); return true;
+            case "gate" when Current.GateGoalId is { } goalId:
+                RequestedGateGoalId = goalId; CloseRequested?.Invoke(); return true;
             case "quit": CloseRequested?.Invoke(); return true;
             default: return false;
         }

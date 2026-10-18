@@ -150,7 +150,7 @@ public sealed class ConductorBatchLoopTestsActivationAdmissionProbeLine(ITestOut
                 var sample = Assert.Single(samples);
                 Assert.Equal("none", sample.Phase);
                 Assert.Equal("none", sample.Attempt);
-                Assert.Equal(waitingCount, sample.Waiting);
+                Assert.Equal(0, sample.Waiting);
                 var probeIndex = Array.FindIndex(lines, line => line.StartsWith(ActivationAdmissionProbeLine.Prefix, StringComparison.Ordinal));
                 Assert.True(ActivationAdmissionSample.TryParse(lines[probeIndex + 1], out var health));
                 // Preserve the health census, which also counts the inherited Verifying goal.
@@ -159,6 +159,30 @@ public sealed class ConductorBatchLoopTestsActivationAdmissionProbeLine(ITestOut
             }
             else Assert.Empty(samples);
             Assert.Equal(1, launches);
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Xunit.Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
+    public void GatherWindow_ProbeExcludesHeldGoal_HealthKeepsEligibleCount()
+    {
+        var root = NewRoot();
+        try
+        {
+            var fixture = new ConductorContinuitySupervisorDeliberateHoldProbeTests.LoopFixture(
+                root, () => DateTimeOffset.UnixEpoch, "gather");
+            using var census = GateLoadContextProbe.PushLiveGateOccupantProbe(() => []);
+            var text = AsyncLocalConsoleRouter.Capture(() => new ConductorBatchLoop(utcNow: () => DateTimeOffset.UnixEpoch).Run(
+                fixture.Kernel, fixture.Driver, fixture.Policy, Path.Combine(root, "stop"),
+                maxIterations: 1, emitActivationHeartbeat: true, watchInterval: TimeSpan.FromSeconds(1), sleepFunc: _ => true));
+            var lines = Lines(text);
+            Assert.Equal(0, Assert.Single(ProbeSamples(lines)).Waiting);
+            var healthLine = Assert.Single(lines, line => line.StartsWith(ActivationAdmissionSample.Prefix, StringComparison.Ordinal));
+            Assert.True(ActivationAdmissionSample.TryParse(healthLine, out var health));
+            Assert.Equal(1, health.WaitingVerified);
+            Assert.Contains(lines, line => line.Contains("outcome=gathering", StringComparison.Ordinal) &&
+                line.Contains("remaining_seconds=480", StringComparison.Ordinal));
+            Assert.Equal(0, fixture.SoloCalls);
         }
         finally { Directory.Delete(root, recursive: true); }
     }

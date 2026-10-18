@@ -2189,7 +2189,7 @@ internal sealed partial class ConductorBatchLoop
         var state = BeginParallelAcceptanceBatch(
             eligible, kernel, driver, policy, completedGoals, escalatedGoals,
             configuredAcceptanceWidth, tick, changedGoalLines);
-        RecordActivationAdmissionWaitingForProbe(state.OrderedEligible);
+        RecordActivationAdmissionWaitingForProbe(state);
         if (state.CapacityStateUnavailable) return state.Results;
 
         ReconcileParallelAcceptanceAttempts(state, kernel, driver, policy, tick, changedGoalLines, changedGoalIds);

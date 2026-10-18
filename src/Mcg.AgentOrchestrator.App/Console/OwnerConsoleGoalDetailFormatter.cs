@@ -6,9 +6,10 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 internal static class OwnerConsoleGoalDetailFormatter
 {
     internal static async Task<Goal?> ComposeAsync(IOrchestratorStateQueries state, IGoalEventTail tail,
-        string id, IOwnerConsoleOutput output, CancellationToken token, TimeZoneInfo? zone = null)
+        string id, IOwnerConsoleOutput output, CancellationToken token, TimeZoneInfo? zone = null,
+        Func<OwnerConsoleGateProgress?>? gate = null)
     {
-        var detail = await new OwnerGoalDetailQuery(state, tail).LoadAsync(id, token);
+        var detail = await new OwnerGoalDetailQuery(state, tail, gate).LoadAsync(id, token);
         if (detail is null) { output.WriteLine("goal state unavailable"); return null; }
         Render(detail, output, zone ?? TimeZoneInfo.Local);
         return detail.Goal;
@@ -31,6 +32,7 @@ internal static class OwnerConsoleGoalDetailFormatter
         if (role != "-") output.WriteLine("Role: " + role);
         if (OwnerConsoleGoalLanding.Line(goal, detail.LandingQueuePosition, zone) is { } landing)
             output.WriteLine("Landing: " + landing);
+        if (detail.Gate is { } liveGate) output.WriteLine("Gate: " + OwnerGoalDetailGateLine.Text(liveGate));
         output.WriteLine("Tasks:");
         foreach (var task in goal.Tasks) output.WriteLine($"  {task.RequiredRole}: {task.Status}");
         if (goal.CurrentHold is { } hold)

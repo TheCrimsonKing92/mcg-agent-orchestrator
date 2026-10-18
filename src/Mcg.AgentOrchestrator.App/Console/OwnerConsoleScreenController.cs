@@ -41,8 +41,11 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
     internal string BellStatusText { get { lock (_notificationGate) return _bellTiers.StatusText; } }
     internal bool QuitRequested { get; private set; }
     private string? _requestedEpicId;
+    private string? _requestedGateGoalId;
     internal string? TakeRequestedEpicId()
     { var id = _requestedEpicId; _requestedEpicId = null; return id; }
+    internal string? TakeRequestedGateGoalId()
+    { var id = _requestedGateGoalId; _requestedGateGoalId = null; return id; }
     internal async Task ShowActivityMeaningAsync(OwnerConsoleActivityItem item, OwnerConsoleScreenOperation? operation = null,
         CancellationToken cancellationToken = default)
     {
@@ -152,12 +155,14 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
             decision => ShowDecisionAsync(decision, operation, cancellationToken), dialogs.ShowTextAsync, cancellationToken);
         await dialogs.ShowGoalAsync(dialog);
         _requestedEpicId = dialog.RequestedEpicId;
+        _requestedGateGoalId = dialog.RequestedGateGoalId;
     }
 
     private async Task<OwnerConsoleGoalDialog.Content?> ComposeGoalAsync(string goalId, CancellationToken token)
     {
         var output = new OwnerConsoleCapturedOutput();
-        var goal = await OwnerConsoleGoalDetailFormatter.ComposeAsync(state, tail, goalId, output, token, clock.LocalTimeZone).ConfigureAwait(false);
+        var goal = await OwnerConsoleGoalDetailFormatter.ComposeAsync(state, tail, goalId, output, token,
+            clock.LocalTimeZone, () => Model?.Gate).ConfigureAwait(false);
         if (goal is null) return null;
         var resolved = resolutions is null ? [] : await resolutions.ListForGoalAsync(goalId, token).ConfigureAwait(false);
         var lines = output.Text.Replace("\r", "").TrimEnd('\n').Split('\n').ToList();
@@ -171,7 +176,8 @@ internal sealed class OwnerConsoleScreenController(IOwnerQuestionSource question
         var openQuestion = Model?.Decisions.Where(item => item.GoalId == goalId).OrderBy(item => item.Number).FirstOrDefault();
         var epicId = epics is null ? null : await epics.FindGoalEpicAsync(goalId, token).ConfigureAwait(false);
         var failure = goal.RetainedAcceptanceFailure is { } recorded ? OwnerConsoleGoalLanding.FailureText(recorded, clock.LocalTimeZone) : null;
-        return new(string.Join(Environment.NewLine, lines), choiceLines, resolved, openQuestion, failure, epicId);
+        var gateGoalId = Model?.Gate?.ForMember(goalId) is not null ? goalId : null;
+        return new(string.Join(Environment.NewLine, lines), choiceLines, resolved, openQuestion, failure, epicId, gateGoalId);
     }
 
     private async Task AnswerAsync(bool accept, OwnerConsoleScreenOperation? operation, CancellationToken cancellationToken,

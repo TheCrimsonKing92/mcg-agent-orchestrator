@@ -335,7 +335,8 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
             var line = _command.Text;
             FinishCommand();
             if (OwnerConsoleBindings.ForLine(line) is { Owner: OwnerConsoleCommandOwner.View } binding)
-                await RunBindingAsync(binding);
+                await RunBindingAsync(binding, line.Trim().TrimStart(':').TrimStart()
+                    .Split((char[]?)null, 2, StringSplitOptions.RemoveEmptyEntries).ElementAtOrDefault(1));
             else await ActAsync(ct => _controller.RunCommandAsync(line, _operation, ct));
             return;
         }
@@ -440,7 +441,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         }
     }
 
-    private async Task RunBindingAsync(OwnerConsoleBinding binding)
+    private async Task RunBindingAsync(OwnerConsoleBinding binding, string? argument = null)
     {
         if (binding == OwnerConsoleBindings.Quit)
         {
@@ -452,7 +453,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         if (binding.Owner == OwnerConsoleCommandOwner.Controller)
             await ActAsync(ct => _controller.RunCommandAsync(binding.Command, _operation, ct));
         else if (binding == OwnerConsoleBindings.Gate)
-        { StartAction(); GateView.Open(FocusedPane, _controller.Model?.Gate); }
+        { StartAction(); OpenGate(argument); }
         else if (binding == OwnerConsoleBindings.Epics)
         { StartAction(); await EpicView.OpenAsync(FocusedPane); }
         else if (binding == OwnerConsoleBindings.Help)
@@ -468,6 +469,14 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
             }
         }
         else throw new InvalidOperationException($"No view action for binding {binding.Command}.");
+    }
+
+    private void OpenGate(string? goalId = null)
+    {
+        var gate = _controller.Model?.Gate;
+        if (goalId is not null && gate?.ForMember(goalId) is null)
+            ShowNotice($"gate {goalId}: not in a live gate", OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Action);
+        else GateView.Open(FocusedPane, gate, goalId);
     }
 
     private void FinishCommand()
@@ -491,6 +500,8 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         finally { _acting = false; }
         if (_controller.TakeRequestedEpicId() is { } epicId && !_token.IsCancellationRequested)
             await EpicView.OpenAsync(FocusedPane, epicId);
+        if (_controller.TakeRequestedGateGoalId() is { } gateGoalId && !_token.IsCancellationRequested)
+            OpenGate(gateGoalId);
     }
 
     private void StartAction() { NoticeStrip.ActionStarted(); RenderNotices(); }

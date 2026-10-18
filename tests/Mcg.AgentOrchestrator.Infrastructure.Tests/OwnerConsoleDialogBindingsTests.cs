@@ -7,7 +7,7 @@ public sealed class OwnerConsoleDialogBindingsTests
     public void DialogRows_ApprovedKeys_ValidateWithoutViolations()
     {
         Assert.Empty(OwnerConsoleBindings.Validate(OwnerConsoleBindings.All));
-        Assert.Equal(new[] { "d", "f", "e", "q" }, Keys(OwnerConsoleScope.GoalDetail));
+        Assert.Equal(new[] { "d", "f", "e", "g", "q" }, Keys(OwnerConsoleScope.GoalDetail));
         Assert.Equal(new[] { "w", "Ctrl+R", "q" }, Keys(OwnerConsoleScope.EpicView));
         Assert.Equal(new[] { "q" }, Keys(OwnerConsoleScope.GateView));
         Assert.Single(OwnerConsoleBindings.All.Where(row => row.Scope == OwnerConsoleScope.GateView && row.Key is null));
@@ -77,7 +77,8 @@ public sealed class OwnerConsoleDialogBindingsTests
         var gate = Array.IndexOf(lines, "GATE view Up/Down PgUp/PgDn: Scroll lanes; Esc: Close the GATE view.");
         Assert.True(gate >= 0);
         Assert.Equal(new[] { "Goal detail d: Open the goal's open question.", "Goal detail f: Show the goal's last failure.",
-            "Goal detail e: Open the goal's epic.", "Goal detail q: Back out of goal detail." }, lines.Skip(gate + 1).Take(4));
+            "Goal detail e: Open the goal's epic.", "Goal detail g: Open the GATE view on this goal's gate (same as :gate <goal-id-prefix>).",
+            "Goal detail q: Back out of goal detail." }, lines.Skip(gate + 1).Take(5));
         Assert.Contains("Epic view Ctrl+R (list and detail): Reload the epic view.", lines);
         Assert.DoesNotContain(lines, line => line.StartsWith("Epic view r", StringComparison.Ordinal));
     }

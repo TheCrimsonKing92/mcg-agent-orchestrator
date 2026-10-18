@@ -10,6 +10,8 @@ public sealed class JobAccountingRunIdentityEvidenceTests
     private static readonly IReadOnlyDictionary<(Type Class, string Kind), string> Exceptions =
         new Dictionary<(Type, string), string>
         {
+            [(typeof(GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteShadowPreemption), "path")] =
+                "arbiter.lock sits in RemoteExecutorSlotArbiter.Folder(f.Root, \"one\"), a subfolder of the GUID-derived per-run Fixture.Root (RemoteExecutorSlotArbiterTests.cs:83-85); IsRunPath does not trace calls into other methods."
         };
 
     [Xunit.Fact]
@@ -20,6 +22,15 @@ public sealed class JobAccountingRunIdentityEvidenceTests
             .SelectMany(lane => LaneIsolatedRootScanner.ResolveLaneClasses(repository, lane, GetType().Assembly))
             .Distinct().ToArray();
         var sources = AcceptanceTestClassSourcesMemo.Get(repository).ToDictionary(item => item.FullName);
+        ClassDeclarationSyntax? ResolveFixture(string name)
+        {
+            var declarations = sources.Values.Where(source => name == source.FullName.Replace('+', '.') ||
+                    name.StartsWith(source.FullName.Replace('+', '.') + ".", StringComparison.Ordinal))
+                .SelectMany(source => source.SourcePaths).Distinct()
+                .SelectMany(path => Parse(repository, path).DescendantNodes().OfType<ClassDeclarationSyntax>())
+                .Where(node => LaneIsolatedRootScanner.ClassName(node).Replace('+', '.') == name).ToArray();
+            return declarations.Length == 1 ? declarations[0] : null;
+        }
         VerifyIdentityHelpers(repository);
         var used = new HashSet<(Type, string)>();
         var count = 0;
@@ -40,7 +51,7 @@ public sealed class JobAccountingRunIdentityEvidenceTests
                 foreach (var site in CreationSites(declaration))
                 {
                     count++;
-                    var proof = Proves(site, declaration, type);
+                    var proof = Proves(site, declaration, type, ResolveFixture);
                     if (proof)
                     {
                         proved.Add(site.Kind);
@@ -343,9 +354,160 @@ public sealed class JobAccountingRunIdentityEvidenceTests
             workerProcessJobs, ownedProcessGroup, out _));
     }
 
+    [Xunit.Fact]
+    public void Local_fixture_root_evidence_requires_immutable_guid_root_and_unreassigned_local()
+    {
+        const string fixtureSource = """
+            class External
+            {
+                public class Fixture
+                {
+                    public string Root { get; } = Path.Combine(Path.GetTempPath(), "x-" + Guid.NewGuid().ToString("N"));
+                    public Fixture() { }
+                }
+            }
+            """;
+        const string caller = """
+            using Fixture = External.Fixture;
+            class Probe
+            {
+                void Test()
+                {
+                    var f = new Fixture();
+                    RemoteExecutorOccupancy.Claim(f.Root);
+                }
+            }
+            """;
+        static bool ProvesFixture(string source, string fixture)
+        {
+            var (site, declaration) = OccupancyProbe(source);
+            var syntax = CSharpSyntaxTree.ParseText(fixture).GetRoot();
+            Assert.DoesNotContain(syntax.GetDiagnostics(), diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+            var external = Assert.Single(syntax.DescendantNodes().OfType<ClassDeclarationSyntax>(),
+                node => node.Identifier.ValueText == "Fixture");
+            return IsLocalFixtureRunScopedRoot(site, declaration, external);
+        }
+        Assert.True(ProvesFixture(caller, fixtureSource));
+        Assert.True(ProvesFixture(caller.Replace("new Fixture()", "new External.Fixture()"), fixtureSource));
+        foreach (var rejected in new[]
+                 {
+                     fixtureSource.Replace("\"x-\" + Guid.NewGuid().ToString(\"N\")", "\"shared\""),
+                     fixtureSource.Replace("{ get; }", "{ get; set; }"),
+                     fixtureSource.Replace("{ get; }", "{ get; init; }"),
+                     fixtureSource.Replace("public Fixture() { }", "public Fixture() { Root = Path.GetTempPath(); }"),
+                     fixtureSource.Replace("public Fixture() { }",
+                         "public Fixture() { int x; (Root, x) = (Path.GetTempPath(), 0); }"),
+                     fixtureSource.Replace("public class Fixture", "public partial class Fixture")
+                 })
+            Assert.False(ProvesFixture(caller, rejected), rejected);
+        Assert.False(ProvesFixture(caller.Replace("void Test()", "void Test(Fixture f)")
+            .Replace("var f = new Fixture();", ""), fixtureSource));
+        Assert.False(ProvesFixture(caller.Replace("RemoteExecutorOccupancy.Claim(f.Root);",
+            "RemoteExecutorOccupancy.Claim(f.Root); f = new Fixture();"), fixtureSource));
+        Assert.False(ProvesFixture(caller.Replace("using Fixture = External.Fixture;", "using Fixture = Other.Fixture;"),
+            fixtureSource));
+        Assert.False(ProvesFixture(caller.Replace("void Test()",
+            "class Fixture { public string Root { get; } = Path.Combine(Path.GetTempPath(), \"shared\"); } void Test()"),
+            fixtureSource));
+        Assert.False(ProvesFixture(caller.Replace("class Probe",
+            "class Base { public class Fixture { public string Root { get; } = Path.GetTempPath(); } } class Probe : Base"),
+            fixtureSource));
+        Assert.False(ProvesFixture(caller.Replace("var f = new Fixture();",
+            "var f = new Fixture(); ref var alias = ref f; alias = new Fixture();"), fixtureSource));
+        Assert.False(ProvesFixture(caller.Replace("var f = new Fixture();",
+            "var f = new Fixture(); ref var alias = ref (f); alias = new Fixture();"), fixtureSource));
+        Assert.False(ProvesFixture(caller.Replace("using Fixture = External.Fixture;", "")
+            .Replace("class Probe", """
+                class Fixture { public string Root { get; } = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")); }
+                class Base { public class Fixture { public string Root { get; } = Path.GetTempPath(); } }
+                class Probe : Base
+                """), fixtureSource));
+        foreach (var claim in new[]
+                 {
+                     "Action<Fixture> action = f => RemoteExecutorOccupancy.Claim(f.Root);",
+                     "void Claim(Fixture f) { RemoteExecutorOccupancy.Claim(f.Root); } Claim(f);"
+                 })
+            Assert.False(ProvesFixture(caller.Replace("RemoteExecutorOccupancy.Claim(f.Root);", claim), fixtureSource));
+    }
+
+    [Xunit.Fact]
+    public void Nested_constructor_root_evidence_requires_named_factory_and_unreassigned_local()
+    {
+        const string source = """
+            class Probe
+            {
+                void Test()
+                {
+                    var s = new JobAccountingScenario();
+                    RemoteExecutorOccupancy.Claim(s.Root);
+                }
+                class JobAccountingScenario
+                {
+                    public string Root { get; }
+                    public JobAccountingScenario() { Root = CreateManifestWorkspace("manifest"); }
+                    void Other() { }
+                }
+            }
+            """;
+        static bool ProvesNested(string text)
+        {
+            var (site, declaration) = OccupancyProbe(text);
+            return IsNestedConstructorRunScopedRoot(site, declaration);
+        }
+        Assert.True(ProvesNested(source));
+        foreach (var rejected in new[]
+                 {
+                     source.Replace("CreateManifestWorkspace(\"manifest\")", "Path.GetTempPath()"),
+                     source.Replace("void Other() { }", "void Other() { Root = CreateManifestWorkspace(\"other\"); }"),
+                     source.Replace("void Other() { }",
+                         "void Other() { int x; (Root, x) = (CreateManifestWorkspace(\"other\"), 0); }"),
+                     source.Replace("{ get; }", "{ get; set; }"),
+                     source.Replace("public string Root { get; }",
+                         "public string Root { get; } = CreateManifestWorkspace(\"init\");"),
+                     source.Replace("Root = CreateManifestWorkspace", "Root ??= CreateManifestWorkspace"),
+                     source.Replace("class JobAccountingScenario", "partial class JobAccountingScenario"),
+                     source.Replace("void Test()", "void Test(JobAccountingScenario s)")
+                         .Replace("var s = new JobAccountingScenario();", ""),
+                     source.Replace("RemoteExecutorOccupancy.Claim(s.Root);",
+                         "Action<JobAccountingScenario> action = s => RemoteExecutorOccupancy.Claim(s.Root);"),
+                     source.Replace("var s = new JobAccountingScenario();",
+                         "var s = new JobAccountingScenario(); ref var alias = ref s; alias = new JobAccountingScenario();"),
+                     source.Replace("var s = new JobAccountingScenario();",
+                         "var s = new JobAccountingScenario(); ref var alias = ref (s); alias = new JobAccountingScenario();"),
+                     source.Replace("RemoteExecutorOccupancy.Claim(s.Root);",
+                         "RemoteExecutorOccupancy.Claim(s.Root); s = new JobAccountingScenario();")
+                 })
+            Assert.False(ProvesNested(rejected), rejected);
+        Assert.False(ProvesNested("""
+            class Probe
+            {
+                class JobAccountingScenario
+                {
+                    public string Root { get; }
+                    public JobAccountingScenario() { Root = CreateManifestWorkspace("manifest"); }
+                }
+                class Other
+                {
+                    void Test() { var s = new JobAccountingScenario(); RemoteExecutorOccupancy.Claim(s.Root); }
+                    class JobAccountingScenario { public string Root { get; } = Path.GetTempPath(); }
+                }
+            }
+            """));
+    }
+
+    private static (Site Site, ClassDeclarationSyntax Declaration) OccupancyProbe(string source)
+    {
+        var syntax = CSharpSyntaxTree.ParseText(source).GetRoot();
+        Assert.DoesNotContain(syntax.GetDiagnostics(), diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+        var declaration = Assert.Single(syntax.DescendantNodes().OfType<ClassDeclarationSyntax>(),
+            node => node.Identifier.ValueText == "Probe");
+        return (Assert.Single(CreationSites(declaration)), declaration);
+    }
+
     private sealed record Site(string Kind, SyntaxNode Node, ExpressionSyntax? Identity = null);
 
-    private static bool Proves(Site site, ClassDeclarationSyntax declaration, Type type) => site.Kind switch
+    private static bool Proves(Site site, ClassDeclarationSyntax declaration, Type type,
+        Func<string, ClassDeclarationSyntax?>? resolveFixture = null) => site.Kind switch
     {
         "slot" => UsesFixtureStorage(site.Node, type),
         "registry" or "path" => site.Identity is not null &&
@@ -353,7 +515,9 @@ public sealed class JobAccountingRunIdentityEvidenceTests
         "dispatch" => IsRegistryScoped(site, declaration),
         "job" => IsRegistryScoped(site, declaration) || IsOwnedByProcessInvokerSeam(site.Node),
         "occupancy" => site.Identity is not null &&
-            (IsScenarioHostRoot(site.Identity, declaration) || IsScenarioConstructorRunScopedRoot(site, declaration)),
+            (IsScenarioHostRoot(site.Identity, declaration) || IsScenarioConstructorRunScopedRoot(site, declaration) ||
+             IsLocalFixtureRunScopedRoot(site, declaration, resolveFixture?.Invoke(LocalFixtureTypeName(site))) ||
+             IsNestedConstructorRunScopedRoot(site, declaration)),
         _ => false
     };
 
@@ -465,6 +629,113 @@ public sealed class JobAccountingRunIdentityEvidenceTests
                 argument.RefKindKeyword.IsKind(SyntaxKind.None)) &&
             IsRunPath(arguments.Arguments[parameterIndex].Expression, creation, declaration));
     }
+
+    // Forms X and Y consume syntax only; the live scan supplies an external declaration through the source memo.
+    private static bool IsLocalFixtureRunScopedRoot(Site site, ClassDeclarationSyntax declaration,
+        ClassDeclarationSyntax? externalFixture = null)
+    {
+        var creation = LocalRootCreation(site);
+        if (creation?.ArgumentList?.Arguments.Count != 0) return false;
+        var name = LocalFixtureTypeName(site);
+        var candidates = declaration.SyntaxTree.GetRoot().DescendantNodes().OfType<ClassDeclarationSyntax>()
+            .Concat(externalFixture is null ? [] : new[] { externalFixture })
+            .Where(node => LaneIsolatedRootScanner.ClassName(node).Replace('+', '.') == name ||
+                node.Parent == declaration && node.Identifier.ValueText == name).Distinct().ToArray();
+        if (candidates.Length != 1) return false;
+        var fixture = candidates[0];
+        var root = GetOnlyRoot(fixture);
+        return root?.Initializer?.Value is InvocationExpressionSyntax call &&
+               call.Expression.ToString() == "Path.Combine" &&
+               call.ArgumentList.Arguments.FirstOrDefault()?.Expression.ToString() == "Path.GetTempPath()" &&
+               !RootAssignments(fixture).Any() && IsRunPath(call, root, fixture);
+    }
+
+    private static bool IsNestedConstructorRunScopedRoot(Site site, ClassDeclarationSyntax declaration)
+    {
+        if (site.Node.Ancestors().OfType<ClassDeclarationSyntax>().FirstOrDefault() != declaration ||
+            LocalRootCreation(site) is not { } creation) return false;
+        var name = creation.Type.ToString();
+        var candidates = declaration.Members.OfType<ClassDeclarationSyntax>()
+            .Where(node => node.Identifier.ValueText == name).ToArray();
+        if (candidates.Length != 1) return false;
+        var nested = candidates[0];
+        if (GetOnlyRoot(nested) is not { Initializer: null }) return false;
+        var assignments = RootAssignments(nested).ToArray();
+        return assignments.Length > 0 && assignments.All(assignment =>
+            assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) &&
+            assignment.Ancestors().OfType<ConstructorDeclarationSyntax>().FirstOrDefault()?.Parent == nested &&
+            !assignment.Ancestors().Any(node => node is MethodDeclarationSyntax or LocalFunctionStatementSyntax or
+                AnonymousFunctionExpressionSyntax) &&
+            assignment.Right is InvocationExpressionSyntax call && IsNamedRunFactory(call.Expression.ToString()));
+    }
+
+    private static ObjectCreationExpressionSyntax? LocalRootCreation(Site site)
+    {
+        if (site.Identity is not MemberAccessExpressionSyntax member || member.Name.Identifier.ValueText != "Root" ||
+            member.Expression is not IdentifierNameSyntax receiver ||
+            site.Node.Ancestors().OfType<MethodDeclarationSyntax>().FirstOrDefault() is not { } method)
+            return null;
+        var name = receiver.Identifier.ValueText;
+        // A lambda/local function has its own receiver bindings, even when it is textually inside this method.
+        if (site.Node.Ancestors().TakeWhile(node => node != method)
+            .Any(node => node is AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax)) return null;
+        var locals = method.DescendantNodes().OfType<VariableDeclaratorSyntax>()
+            .Where(node => node.Identifier.ValueText == name).ToArray();
+        if (locals.Length != 1 || locals[0].Parent?.Parent is not LocalDeclarationStatementSyntax ||
+            locals[0].SpanStart >= site.Node.SpanStart ||
+            locals[0].Ancestors().OfType<MethodDeclarationSyntax>().FirstOrDefault() != method ||
+            locals[0].Ancestors().OfType<BlockSyntax>().FirstOrDefault()?.Span.Contains(site.Node.Span) != true ||
+            method.DescendantNodes().OfType<AssignmentExpressionSyntax>()
+                .Any(assignment => assignment.Left.DescendantNodesAndSelf().OfType<IdentifierNameSyntax>()
+                    .Any(node => node.Identifier.ValueText == name)) ||
+            method.DescendantNodes().OfType<ArgumentSyntax>().Any(argument =>
+                !argument.RefKindKeyword.IsKind(SyntaxKind.None) && argument.Expression.DescendantNodesAndSelf()
+                    .OfType<IdentifierNameSyntax>().Any(node => node.Identifier.ValueText == name)) ||
+            method.DescendantNodes().OfType<RefExpressionSyntax>().Any(reference => reference.Expression.DescendantNodesAndSelf()
+                .OfType<IdentifierNameSyntax>().Any(node => node.Identifier.ValueText == name)))
+            return null;
+        return locals[0].Initializer?.Value is ObjectCreationExpressionSyntax { Initializer: null } creation
+            ? creation : null;
+    }
+
+    private static string LocalFixtureTypeName(Site site)
+    {
+        if (LocalRootCreation(site) is not { } creation) return "";
+        // Without semantic base-type resolution, inherited nested types could hide aliases or ordinary names.
+        if (creation.Ancestors().OfType<ClassDeclarationSyntax>().Any(scope => scope.BaseList is not null)) return "";
+        var name = creation.Type.ToString();
+        var first = name.Split('.')[0];
+        // Nested types hide file aliases; prove the class actually constructed, not the alias it shadows.
+        foreach (var scope in creation.Ancestors().OfType<ClassDeclarationSyntax>())
+        {
+            var nested = scope.Members.OfType<ClassDeclarationSyntax>()
+                .Where(node => node.Identifier.ValueText == first).ToArray();
+            if (nested.Length > 0)
+                return nested.Length == 1
+                    ? LaneIsolatedRootScanner.ClassName(nested[0]).Replace('+', '.') + name[first.Length..] : "";
+        }
+        var aliases = site.Node.SyntaxTree.GetRoot().DescendantNodes().OfType<UsingDirectiveSyntax>()
+            .Where(node => node.Alias?.Name.Identifier.ValueText == first).ToArray();
+        return aliases.Length == 1 ? aliases[0].Name + name[first.Length..] : name;
+    }
+
+    private static PropertyDeclarationSyntax? GetOnlyRoot(ClassDeclarationSyntax declaration)
+    {
+        var roots = declaration.Members.OfType<PropertyDeclarationSyntax>()
+            .Where(node => node.Identifier.ValueText == "Root").ToArray();
+        // A single declaration cannot prove assignments in unseen partial declarations.
+        return !declaration.Modifiers.Any(SyntaxKind.PartialKeyword) &&
+               roots.Length == 1 && !roots[0].Modifiers.Any(SyntaxKind.StaticKeyword) &&
+               roots[0].ExpressionBody is null && roots[0].AccessorList?.Accessors is { Count: 1 } accessors &&
+               accessors[0].IsKind(SyntaxKind.GetAccessorDeclaration) && accessors[0].Body is null &&
+               accessors[0].ExpressionBody is null && accessors[0].SemicolonToken.IsKind(SyntaxKind.SemicolonToken)
+            ? roots[0] : null;
+    }
+
+    private static IEnumerable<AssignmentExpressionSyntax> RootAssignments(ClassDeclarationSyntax declaration) =>
+        declaration.DescendantNodes().OfType<AssignmentExpressionSyntax>().Where(assignment =>
+            assignment.Left.DescendantNodesAndSelf().OfType<IdentifierNameSyntax>()
+                .Any(name => name.Identifier.ValueText == "Root"));
 
     private static bool IsNamedRunFactory(string name) => name.Split('.').Last() is
         "CreateManifestWorkspace" or "CreateTrackedManifestShapeWorkspace" or "CreateTwoLaneShardManifestWorkspace";
