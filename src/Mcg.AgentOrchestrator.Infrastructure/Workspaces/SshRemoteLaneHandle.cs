@@ -5,6 +5,8 @@ internal sealed class SshRemoteLaneHandle : IRemoteLaneHandle, IRemoteLaneAttemp
     private readonly object _sync = new();
     private readonly CancellationTokenSource _stop = new();
     private DateTimeOffset? _heartbeat;
+    private DateTimeOffset? _queuedAliveAt;
+    private readonly RemoteLaneQueuedLiveness? _liveness;
     private RemoteLaneResult? _result;
     private Exception? _fault;
     private readonly string _staging, _remote;
@@ -19,7 +21,7 @@ internal sealed class SshRemoteLaneHandle : IRemoteLaneHandle, IRemoteLaneAttemp
     private RemoteLaneStep? _lastFailedPoll;
     private readonly List<RemoteLaneStep> _fetches = new();
     internal Task PollLoop { get; }
-    public DateTimeOffset? NewestHeartbeat { get { lock (_sync) return _heartbeat; } }
+    public DateTimeOffset? NewestHeartbeat { get { lock (_sync) return _heartbeat is null || _queuedAliveAt > _heartbeat ? _queuedAliveAt : _heartbeat; } }
     public RemoteLaneResult? TryGetResult()
     {
         lock (_sync)
@@ -49,7 +51,7 @@ internal sealed class SshRemoteLaneHandle : IRemoteLaneHandle, IRemoteLaneAttemp
     }
     public RemoteLaneHandleDiagnostics Snapshot()
     {
-        lock (_sync) return new(new(_pollCount, _failedPollCount, _lastState, _heartbeat, _lastFailedPoll),
+        lock (_sync) return new(new(_pollCount, _failedPollCount, _lastState, _heartbeat, _lastFailedPoll, _liveness?.Summary()),
             _fetches.ToArray(), _lastStatus);
     }
 
@@ -64,10 +66,19 @@ internal sealed class SshRemoteLaneHandle : IRemoteLaneHandle, IRemoteLaneAttemp
         _remote = $"{entry.RunnerAlias}:{entry.RunRoot}/results/{shortSha}/{laneKey}/";
         _clock = clock;
         _transport = transport;
+        _liveness = entry.OccupancyProbe ? new($"{request.AttemptId}-{laneKey}", clock.GetUtcNow()) : null;
         PollLoop = Task.Run(async () =>
         {
             var remote = _remote;
             string? previousHeartbeat = null;
+            async Task ProbeQueueAsync(string folder)
+            {
+                lock (_sync) { if (_liveness is null || _heartbeat is not null) return; }
+                var now = clock.GetUtcNow();
+                lock (_sync) { if (_liveness?.ShouldProbe(now) != true) return; }
+                var state = await RemoteLaneQueuedLiveness.ReadAsync(transport, entry, folder, staging, _stop.Token).ConfigureAwait(false);
+                lock (_sync) { if (_liveness!.Observe(state, now) is { } aliveAt) _queuedAliveAt = aliveAt; }
+            }
             try
             {
                 for (var index = 1; ; index++)
@@ -90,11 +101,11 @@ internal sealed class SshRemoteLaneHandle : IRemoteLaneHandle, IRemoteLaneAttemp
                             if (poll.ExitCode != 0 || poll.TimedOut) { _failedPollCount++; _lastFailedPoll = pollStep; }
                         }
                         _stop.Token.ThrowIfCancellationRequested();
-                        if (poll.ExitCode != 0 || poll.TimedOut) continue;
+                        if (poll.ExitCode != 0 || poll.TimedOut) { await ProbeQueueAsync(folder).ConfigureAwait(false); continue; }
                         var status = SshRemoteLaneStatus.Read(Path.Combine(folder, "status.json"));
                         if (status is not null)
                             lock (_sync) { _lastStatus = status.Fields; _lastState = status.String("state"); }
-                        if (status is null || status.String("attemptId") != request.AttemptId) continue;
+                        if (status is null || status.String("attemptId") != request.AttemptId) { await ProbeQueueAsync(folder).ConfigureAwait(false); continue; }
                         // Terminal jobs need no cancellation, even if fetching their results fails.
                         lock (_sync) _jobFinished = status.String("state") is "completed" or "failed" or "cancelled";
                         try
@@ -102,7 +113,12 @@ internal sealed class SshRemoteLaneHandle : IRemoteLaneHandle, IRemoteLaneAttemp
                             var heartbeat = File.ReadAllText(Path.Combine(folder, "heartbeat.txt"));
                             if (heartbeat != previousHeartbeat)
                             {
-                                lock (_sync) _heartbeat = clock.GetUtcNow();
+                                lock (_sync)
+                                {
+                                    var now = clock.GetUtcNow();
+                                    if (_heartbeat is null) _liveness?.OwnHeartbeatSeen(now);
+                                    _heartbeat = now;
+                                }
                                 previousHeartbeat = heartbeat;
                             }
                         }
