@@ -83,11 +83,11 @@ internal sealed class RemoteFocusedEvidenceShadow : IAsyncDisposable
                 shadow._runs.Add(run);
                 try
                 {
-                    var entry = shadow._coordinator.TryClaimIdleExecutor();
+                    var entry = shadow._coordinator.TryClaimIdleExecutor(out var yieldReason);
                     if (entry is null)
                     {
                         run.Ended = run.Started;
-                        run.Work = Task.FromResult(new Observation(RemoteLaneOutcomeCode.ShadowSkippedNoExecutor));
+                        run.Work = Task.FromResult(new Observation(RemoteLaneOutcomeCode.ShadowSkippedNoExecutor, Reason: yieldReason));
                     }
                     else
                     {
@@ -125,6 +125,7 @@ internal sealed class RemoteFocusedEvidenceShadow : IAsyncDisposable
         var token = _lifetime!.Token;
         RemoteLaneResult? observed = null;
         RemoteLaneOutcomeCode? mismatch = null;
+        var preempted = false;
         try
         {
             token.ThrowIfCancellationRequested();
@@ -138,6 +139,31 @@ internal sealed class RemoteFocusedEvidenceShadow : IAsyncDisposable
             while (true)
             {
                 token.ThrowIfCancellationRequested();
+                if (_coordinator!.TryTakePreemption(entry.Id))
+                {
+                    preempted = true;
+                    try
+                    {
+                        var started = _clock.GetUtcNow();
+                        try { (handle as IRemoteLaneQueuedJobCancellation)?.RequestQueuedJobCancellation(); }
+                        catch (Exception) { /* The bounded release wait still protects the next offer. */ }
+                        if (_executor is IRemoteLaneQueueStateSource source)
+                            while (_clock.GetUtcNow() - started < TimeSpan.FromSeconds(30))
+                            {
+                                using var bound = CancellationTokenSource.CreateLinkedTokenSource(token);
+                                var remaining = TimeSpan.FromSeconds(30) - (_clock.GetUtcNow() - started);
+                                bound.CancelAfter(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero);
+                                bool? listed = null;
+                                try { listed = await source.IsJobListedAsync(run.Request, bound.Token).WaitAsync(bound.Token).ConfigureAwait(false); }
+                                catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+                                catch (Exception) { /* Unreadable state is not proof of release. */ }
+                                if (listed == false) break;
+                                await Task.Delay(_pollInterval, token).ConfigureAwait(false);
+                            }
+                        return new(RemoteLaneOutcomeCode.PreemptedByGate);
+                    }
+                    finally { _coordinator.CompletePreemption(entry.Id); }
+                }
                 if (handle.NewestHeartbeat is { } newest && newest > heartbeat) heartbeat = newest;
                 if (_clock.GetUtcNow() - heartbeat > TimeSpan.FromSeconds(entry.LeaseSeconds))
                     return new(RemoteLaneOutcomeCode.LeaseExpired);
@@ -172,7 +198,7 @@ internal sealed class RemoteFocusedEvidenceShadow : IAsyncDisposable
         finally
         {
             run.Ended = _clock.GetUtcNow();
-            run.Close(cancel: observed is null);
+            run.Close(cancel: observed is null && !preempted);
             // A completed shadow must not retain an idle slot throughout the remaining local batch.
             try { _coordinator!.Release(entry.Id); } catch (Exception) { }
         }
@@ -223,7 +249,7 @@ internal sealed class RemoteFocusedEvidenceShadow : IAsyncDisposable
                 RemoteExecutorHealthLedger.Append(_ledgerPath!, new(_clock.GetUtcNow(), request.ExecutorId,
                     request.AttemptId, request.Lane, observation.Code,
                     observation.Code is RemoteLaneOutcomeCode.Accepted or RemoteLaneOutcomeCode.CancelledAfterGrace or
-                        RemoteLaneOutcomeCode.ShadowSkippedNoExecutor ? null : "executor",
+                        RemoteLaneOutcomeCode.ShadowSkippedNoExecutor or RemoteLaneOutcomeCode.PreemptedByGate ? null : "executor",
                     Binding(request), observed is null ? null : new(observed.ExecutorId, observed.Lane,
                         observed.VerifyingCommitSha, observed.ObservedTreeSha, observed.MainSha, observed.FilterHash,
                         observed.ManifestIdentity), observation.Reason, EvidenceShadow: true, GoalId: request.GoalId,

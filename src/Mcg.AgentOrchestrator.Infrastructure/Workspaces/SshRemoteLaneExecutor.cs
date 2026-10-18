@@ -13,7 +13,7 @@ internal sealed class SshRemoteLaneExecutor(
     TimeProvider clock,
     Func<string[], string, TimeSpan, CancellationToken, Task<GoalAcceptanceVerifier.CommandResult>> transport,
     Func<string, int, string[], GitCli.GitResult> git,
-    TimeSpan? pollInterval = null, Action<SshPollObservation>? onPollCompleted = null) : IRemoteLaneExecutor
+    TimeSpan? pollInterval = null, Action<SshPollObservation>? onPollCompleted = null) : IRemoteLaneExecutor, IRemoteLaneQueueStateSource
 {
     internal const int RepresentativeAttemptFolderLength = 117;
     internal const int StagingPathBudget = 240;
@@ -110,18 +110,9 @@ internal sealed class SshRemoteLaneExecutor(
             bound.CancelAfter(TimeSpan.FromSeconds(30));
             try
             {
-                var statePath = Path.Combine(staging, "runner-state.json");
-                var cleared = true;
-                try { File.Delete(statePath); }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { cleared = false; }
-                probe = await transport([ScpPath, "-o", "BatchMode=yes",
-                    $"{entry.RunnerAlias}:{entry.RunRoot}/runner-state.json", "runner-state.json"],
-                    staging, TimeSpan.FromSeconds(30), bound.Token).WaitAsync(bound.Token).ConfigureAwait(false);
-                if (cleared && probe.ExitCode == 0 && !probe.TimedOut && File.Exists(statePath))
-                {
-                    var text = await File.ReadAllTextAsync(statePath, bound.Token).ConfigureAwait(false);
-                    busy = RemoteLaneExecutorQueueState.TryParse(text, out var state) && state!.IsBusy(clock.GetUtcNow());
-                }
+                var read = await ReadQueueStateAsync(entry, staging, bound.Token, result => probe = result).ConfigureAwait(false);
+                probe = read.Probe;
+                busy = read.State?.IsBusy(clock.GetUtcNow()) == true;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
             catch (Exception ex) { failure = ex; /* An unavailable probe does not prevent an offer. */ }
@@ -171,6 +162,47 @@ internal sealed class SshRemoteLaneExecutor(
         cancellationToken.ThrowIfCancellationRequested();
         return new(new SshRemoteLaneHandle(request, entry, staging, shortSha, laneKey, clock, transport,
             pollInterval ?? TimeSpan.FromSeconds(entry.PollSeconds), onPollCompleted), Steps: steps.ToArray());
+    }
+
+    private async Task<(GoalAcceptanceVerifier.CommandResult Probe, RemoteLaneExecutorQueueState? State)> ReadQueueStateAsync(
+        RemoteLaneExecutorEntry entry, string staging, CancellationToken token,
+        Action<GoalAcceptanceVerifier.CommandResult>? onProbe = null)
+    {
+        var statePath = Path.Combine(staging, "runner-state.json");
+        var cleared = true;
+        try { File.Delete(statePath); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { cleared = false; }
+        var probe = await transport([ScpPath, "-o", "BatchMode=yes",
+            $"{entry.RunnerAlias}:{entry.RunRoot}/runner-state.json", "runner-state.json"],
+            staging, TimeSpan.FromSeconds(30), token).WaitAsync(token).ConfigureAwait(false);
+        onProbe?.Invoke(probe);
+        RemoteLaneExecutorQueueState? state = null;
+        if (cleared && probe.ExitCode == 0 && !probe.TimedOut && File.Exists(statePath))
+            RemoteLaneExecutorQueueState.TryParse(await File.ReadAllTextAsync(statePath, token).ConfigureAwait(false), out state);
+        return (probe, state);
+    }
+
+    public async Task<bool?> IsJobListedAsync(RemoteLaneRequest request, CancellationToken cancellationToken)
+    {
+        var entry = configuration.Executors.FirstOrDefault(entry => entry.Id == request.ExecutorId);
+        if (entry is null || attemptPrefix is null) return null;
+        if (!entry.OccupancyProbe) return false;
+        if (entry.Transport != "ssh") return null;
+        try
+        {
+            var staging = PrepareStaging(Path.GetDirectoryName(Path.GetFullPath(attemptPrefix))!,
+                entry.Id, request.Lane, LaneKey(request.Lane));
+            using var bound = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            bound.CancelAfter(TimeSpan.FromSeconds(30));
+            var read = await ReadQueueStateAsync(entry, staging, bound.Token).ConfigureAwait(false);
+            if (read.State is not { } state || (clock.GetUtcNow() - state.Utc).Duration() > TimeSpan.FromSeconds(120)) return null;
+            var name = request.AttemptId + "-" + LaneKey(request.Lane);
+            return state.Running.Concat(state.Queued).Any(job =>
+                string.Equals(job, name, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(job, name + ".json", StringComparison.OrdinalIgnoreCase));
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (Exception) { return null; }
     }
 }
 

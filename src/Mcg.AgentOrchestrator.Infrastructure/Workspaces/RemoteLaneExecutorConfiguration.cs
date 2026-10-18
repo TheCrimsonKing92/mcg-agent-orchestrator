@@ -9,7 +9,8 @@ internal sealed record RemoteLaneExecutorEntry(string Id, int LeaseSeconds,
     bool OccupancyProbe = false);
 
 internal sealed record RemoteFocusedEvidenceSettings(
-    string Mode = "off", int SampleEvery = 4, int GraceSeconds = 300, string? FaultReason = null);
+    string Mode = "off", int SampleEvery = 4, int GraceSeconds = 300, string? FaultReason = null,
+    string ShadowPreemption = "cancellable");
 
 // Operator-owned, immutable for a single gate attempt. Invalid input always disables dispatch.
 internal sealed record RemoteLaneExecutorConfiguration(
@@ -137,7 +138,10 @@ internal sealed record RemoteLaneExecutorConfiguration(
         var mode = "off";
         var sampleEvery = 4;
         var graceSeconds = 300;
+        var shadowPreemption = "cancellable";
         if (block.ValueKind != JsonValueKind.Object ||
+            (block.TryGetProperty("shadowPreemption", out var p) &&
+                (p.ValueKind != JsonValueKind.String || (shadowPreemption = p.GetString()!) is not ("cancellable" or "idle-only"))) ||
             (block.TryGetProperty("mode", out var m) &&
                 (m.ValueKind != JsonValueKind.String || (mode = m.GetString()!) is not ("off" or "shadow" or "remote-first"))) ||
             (block.TryGetProperty("sampleEvery", out var s) &&
@@ -145,7 +149,7 @@ internal sealed record RemoteLaneExecutorConfiguration(
             (block.TryGetProperty("graceSeconds", out var g) &&
                 (g.ValueKind != JsonValueKind.Number || !g.TryGetInt32(out graceSeconds) || graceSeconds < 0)))
             return new(FaultReason: "invalid");
-        return new(mode, sampleEvery, graceSeconds);
+        return new(mode, sampleEvery, graceSeconds, ShadowPreemption: shadowPreemption);
     }
     private static RemoteLaneExecutorConfiguration Disabled(string reason) => new([], [], reason);
     private static string? ReadString(JsonElement entry, string name) =>

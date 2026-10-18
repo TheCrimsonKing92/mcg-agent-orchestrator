@@ -10,7 +10,8 @@ internal enum RemoteLaneOutcomeCode
     BindingMismatchCommit, BindingMismatchTree, BindingMismatchMain, BindingMismatchFilter,
     BindingMismatchExecutor, BindingMismatchManifest, TrxIncomplete, RemoteRed,
     LateAfterFallback, NotEligibleExclusiveResource, UnexpectedNotExecuted,
-    CancelledAfterGrace, ShadowSkippedNoExecutor, ExecutorBusy, OfferSkippedNoExecutor
+    CancelledAfterGrace, ShadowSkippedNoExecutor, ExecutorBusy, OfferSkippedNoExecutor,
+    ShadowPreemptRequested, PreemptedByGate
 }
 
 internal sealed record RemoteLaneBinding(

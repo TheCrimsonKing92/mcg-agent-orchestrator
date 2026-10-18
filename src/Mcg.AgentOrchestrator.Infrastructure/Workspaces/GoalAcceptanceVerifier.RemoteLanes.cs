@@ -288,7 +288,7 @@ public sealed partial class GoalAcceptanceVerifier
                     if (reuseConsulted.ContainsKey(shard.Index) || !remote.IsEligible(shard.Check)) continue;
                     if (!_remoteLaneOfferPlans.GetValue(remote, _ => throw new InvalidOperationException("Remote lane offer plan missing."))
                         .Decide(shard.Check.Name, allShardsUseMtp ? maxConcurrentShards : 1, ReportRemoteLanePolicy).Offer) continue;
-                    var entry = remote.TryClaimIdleExecutor(shard.Check);
+                    var entry = await remote.ClaimForGateAsync(shard.Check, sharedApparatusCancellation.Token).ConfigureAwait(false);
                     if (entry is null) continue;
                     pendingShards.RemoveAt(index--);
                     reuseConsulted[shard.Index] = true;
