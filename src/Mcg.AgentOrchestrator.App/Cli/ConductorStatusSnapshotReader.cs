@@ -25,7 +25,8 @@ internal static class ConductorStatusSnapshotReader
     }
 
     internal static ConductorStatusSnapshot Read(OrchestratorWorkspace workspace, int? owner,
-        DateTimeOffset bootTime, Func<string?>? mainCommit = null, ConductorLockOwnership? ownership = null)
+        DateTimeOffset bootTime, Func<string?>? mainCommit = null, ConductorLockOwnership? ownership = null,
+        DateTimeOffset? now = null)
     {
         var events = ReadEvents(workspace.ConductEventsLogPath);
         var lastEvent = events.MaxBy(item => item.At);
@@ -48,6 +49,7 @@ internal static class ConductorStatusSnapshotReader
         var tick = LatestTick(events, workspace.RunEventStorePath);
 
         ConductorStatusSnapshot.GoalsObservation goalSnapshot;
+        IReadOnlyList<ProviderUsageHoldRow>? providerHolds = null;
         if (!File.Exists(workspace.SqliteStatePath))
             goalSnapshot = new(false, null, null, null);
         else
@@ -55,10 +57,12 @@ internal static class ConductorStatusSnapshotReader
             var repository = SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath);
             var metadata = repository.ListGoalMetadataAsync().GetAwaiter().GetResult();
             var ids = metadata.Where(item => Enum.TryParse<GoalStatus>(item.Status, true, out var status) &&
-                    status is not (GoalStatus.Completed or GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded))
+                    status is not (GoalStatus.Completed or GoalStatus.Cancelled or GoalStatus.Superseded))
                 .Select(item => new GoalId(item.Id)).ToArray();
             var kernel = repository.LoadGoalsAsync(ids).GetAwaiter().GetResult();
             var goals = kernel.Goals.Where(goal => !goal.IsTerminal).OrderBy(goal => goal.Id.Value).ToArray();
+            providerHolds = ProviderUsageHoldView.Read(kernel.Goals.Where(goal =>
+                !goal.IsTerminal || goal.Status == GoalStatus.Failed).ToArray(), now ?? DateTimeOffset.UtcNow);
             var observations = goals.Select(goal =>
             {
                 var task = goal.Tasks.FirstOrDefault(item => item.Status is
@@ -74,7 +78,7 @@ internal static class ConductorStatusSnapshotReader
         var landing = ReadLatestLanding(workspace.GoalLifecycleEventsDirectory);
         return new(owner, since, buildCommit, generation, tick, goalSnapshot,
             landing is null ? null : new(landing.Value.Goal, landing.Value.At),
-            ReadAdoption(workspace.RunEventStorePath), ReadIntents(workspace));
+            ReadAdoption(workspace.RunEventStorePath), ReadIntents(workspace), providerHolds);
     }
 
     private static ConductorStatusSnapshot.AdoptionObservation? ReadAdoption(string path)

@@ -46,7 +46,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     private int _selectedBoardIndex = -1;
     private int _activityWidth;
     private int _boardTitleWidth;
-    private IReadOnlyList<string> _fullActivityLines = [];
+    private IReadOnlyList<OwnerConsoleActivityRow> _activityRows = [];
     private readonly OwnerConsoleActivityFollow _follow = new();
     private IReadOnlyList<OwnerConsoleActivityKey> _activityKeys = [];
     internal bool ActivityFollowing => _follow.Following;
@@ -321,15 +321,15 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         var selected = _activity.SelectedItem;
         var top = _activity.Viewport.Y;
         var state = _controller.Model?.ActivityState;
-        _activityKeys = OwnerConsoleActivityFollow.Keys(_controller.Model?.Activity
-            .Take(OwnerConsoleViewModelBuilder.MaxActivityItems).ToArray() ?? []);
+        var items = _controller.Model?.Activity.Take(OwnerConsoleViewModelBuilder.MaxActivityItems).ToArray() ?? [];
+        _activityRows = state is null ? OwnerConsoleActivityRows.Build(items) : [];
+        _activityKeys = state is null ? _activityRows.Select(row => row.Key).ToArray() : OwnerConsoleActivityFollow.Keys(items);
         IEnumerable<string> pane = state is { Loading: true } ? ["loading..."] : state?.Error is { } error
-            ? ["ACTIVITY unavailable: " + error] : _controller.Model?.Activity.Select(OwnerActivityNarrator.Line) ?? [];
-        _fullActivityLines = pane.Take(OwnerConsoleViewModelBuilder.MaxActivityItems).ToArray();
-        ActivityLines = _fullActivityLines.Select((line, row) => OwnerConsoleLineFitter.Fit(line,
+            ? ["ACTIVITY unavailable: " + error] : _activityRows.Select(row => row.Text);
+        ActivityLines = pane.Select((line, row) => OwnerConsoleLineFitter.Fit(line,
             state is not { Loading: true } && state?.Error is null &&
-                _controller.Model is { } model && row < model.Activity.Length
-                ? OwnerActivityNarrator.LineSpans(model.Activity[row]) : OwnerConsoleLineSpans.None, _activityWidth)).ToArray();
+                _controller.Model is { } model && row < _activityRows.Count && _activityRows[row].ItemIndex is { } itemIndex
+                ? OwnerActivityNarrator.LineSpans(model.Activity[itemIndex]) : OwnerConsoleLineSpans.None, _activityWidth)).ToArray();
         _activity.SetSource(new ObservableCollection<string>(ActivityLines));
         var placement = state is null ? _follow.Place(_activityKeys, selected, top, _activity.Viewport.Height) : ((int?)0, 0);
         _activity.SelectedItem = placement.Item1;
@@ -512,8 +512,16 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
                 await ActAsync(ct => _controller.HandleKeyAsync(ConsoleKey.Enter, operation: _operation, cancellationToken: ct));
             else if (pane == OwnerConsolePane.Activity && _controller.Model?.ActivityState is null &&
                 _activity.SelectedItem is { } selected && selected >= 0 &&
-                selected < _controller.Model!.Activity.Length)
-                await ActAsync(ct => _controller.ShowActivityMeaningAsync(_controller.Model.Activity[selected], _operation, ct));
+                selected < _activityRows.Count)
+            {
+                if (_activityRows[selected].ItemIndex is { } itemIndex)
+                    await ActAsync(ct => _controller.ShowActivityMeaningAsync(_controller.Model!.Activity[itemIndex], _operation, ct));
+                else
+                {
+                    StartAction();
+                    ShowNotice("Enter: a day separator has no detail; select an event row", OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Action);
+                }
+            }
             return;
         }
         if (!ActionRunning && !key.IsCtrl && !key.IsAlt && !char.IsControl(character) && !char.IsWhiteSpace(character))

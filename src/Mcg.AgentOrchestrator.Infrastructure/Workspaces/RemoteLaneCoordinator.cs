@@ -221,14 +221,21 @@ internal sealed class RemoteLaneCoordinator : IDisposable
             var submission = await _executor.SubmitAsync(request, cancellationToken).ConfigureAwait(false);
             handle = submission.Handle;
             steps = submission.Steps ?? [];
-            if (handle is null && submission.FailureReason == "executor-busy")
+            var refusal = submission.FailureReason switch
+            {
+                "executor-busy" => RemoteLaneOutcomeCode.ExecutorBusy,
+                "executor-tools-mismatch" => RemoteLaneOutcomeCode.ExecutorToolsMismatch,
+                "executor-tools-unverified" => RemoteLaneOutcomeCode.ExecutorToolsUnverified,
+                _ => (RemoteLaneOutcomeCode?)null
+            };
+            if (handle is null && refusal is { } code)
             {
                 lock (_gate)
                 {
                     _busyUntil[entry.Id] = _clock.GetUtcNow().AddSeconds(entry.LeaseSeconds);
                     Release(entry.Id);
                 }
-                Record(request, RemoteLaneOutcomeCode.ExecutorBusy, reason: submission.FailureReason, attempt: Detail());
+                Record(request, code, reason: submission.FailureReason, attempt: Detail());
                 return new(request, null, null);
             }
             if (handle is null)

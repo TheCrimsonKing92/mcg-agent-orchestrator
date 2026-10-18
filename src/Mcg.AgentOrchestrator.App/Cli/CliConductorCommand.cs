@@ -76,7 +76,7 @@ internal static class CliConductorCommand
                 case "status":
                     var snapshot = ConductorStatusSnapshotReader.Read(workspace, owner,
                         (bootTime ?? (() => DateTimeOffset.UtcNow - TimeSpan.FromMilliseconds(Environment.TickCount64)))(),
-                        mainCommit ?? (() => ResolveMainCommit(workspace)), ownership: ownership);
+                        mainCommit ?? (() => ResolveMainCommit(workspace)), ownership: ownership, now: (time ?? TimeProvider.System).GetUtcNow());
                     if (CliConductorStatusJsonQueryCommand.IsConductorStatusJsonCommand(args))
                         output.WriteLine(ConductorStatusAgentReadView.Render(snapshot, time ?? TimeProvider.System));
                     else
