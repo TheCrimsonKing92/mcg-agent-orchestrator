@@ -9,8 +9,11 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed record ExecutorSettingChange(bool Changed, string Summary);
 
 // Host settings are applied only by the workspace intent consumer, never by submission.
-internal sealed class ExecutorSettingIntentHandler(string executorsPath, string conductEventsLogPath)
+internal sealed class ExecutorSettingIntentHandler(string executorsPath, string conductEventsLogPath,
+    RemoteExecutorSlotsFileSync? remoteSync = null)
 {
+    internal RemoteExecutorSlotsFileSync? RemoteSync => remoteSync;
+
     internal ExecutorSettingChange Apply(OperatorIntentRecord intent, DateTimeOffset now)
     {
         if (!DecisionAuthorization.Meets(OperatorIntentAdjudication.ResolveAuthorizationTier(intent.AuthenticationAssurance),
@@ -72,26 +75,64 @@ internal sealed class ExecutorSettingIntentHandler(string executorsPath, string 
             }
 
             var changed = !candidate.AsSpan().SequenceEqual(original);
-            var backup = "none";
-            if (changed)
+            var stamp = now.UtcDateTime.ToString("yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture) + "." + intent.Id[..8];
+            RemoteSlotsSyncResult? sync = null;
+            var entry = slots is null ? null : before.Executors.Single(e => e.Id == slots.ExecutorId);
+            var raise = remoteSync is not null && entry?.Transport == "ssh" && slots!.Slots > entry.Slots;
+            var plannedBackup = Path.GetFileName(executorsPath) + "." + stamp + ".bak";
+            if (raise)
             {
-                backup = Path.GetFileName(executorsPath) + "." + now.UtcDateTime.ToString("yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture)
-                    + "." + intent.Id[..8] + ".bak";
+                var backupPath = Path.Combine(Path.GetDirectoryName(executorsPath)!, plannedBackup);
+                if (File.Exists(backupPath) || Directory.Exists(backupPath))
+                    throw new IOException("Host backup already exists.");
+                sync = Sync(entry!, slots!.Slots, stamp, intent.Id, now);
+            }
+            var failedRaise = raise && sync?.Outcome != "synced";
+            var backup = "none";
+            if (changed && !failedRaise)
+            {
+                backup = plannedBackup;
                 WriteCandidate(original, candidate, backup, before, slots, focused);
             }
+            if (!raise && remoteSync is not null && entry?.Transport == "ssh")
+                sync = Sync(entry, slots!.Slots, stamp, intent.Id, now);
+            var remoteOutcome = slots is null || remoteSync is null ? null : sync?.Outcome ?? "not-applicable";
             var events = new ConductEventLogWriter(conductEventsLogPath, utcNow: () => now);
             foreach (var field in fields)
             {
                 var detail = $"EXECUTOR_SETTING intent={intent.Id} verb={intent.Verb} field={field.Field} old={field.Old} new={field.New}" +
-                    $" changed={(field.Old != field.New ? "true" : "false")} backup={backup} actor={intent.Actor} actor_kind={intent.ActorKind}" +
-                    (slots is not null ? " remote_slots_file=unsynced" : "");
+                    $" changed={(!failedRaise && field.Old != field.New ? "true" : "false")} backup={backup} actor={intent.Actor} actor_kind={intent.ActorKind}" +
+                    (slots is not null ? SyncDetail(sync, remoteOutcome) : "");
                 if (!events.AppendRequired("executor-setting", null, detail, now)) throw Failure("conduct-event-append-failed");
             }
-            return new(changed, "changes=" + string.Join(",", fields.Select(f => $"{f.Field}:{f.Old}->{f.New}")) + $"; backup={backup}");
+            if (failedRaise) throw Failure("remote-slots-sync-failed");
+            return new(changed, "changes=" + string.Join(",", fields.Select(f => $"{f.Field}:{f.Old}->{f.New}")) + $"; backup={backup}" +
+                (remoteOutcome is null ? "" : $"; remote_slots_file={remoteOutcome}"));
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException)
         { throw new InvalidOperationException("executors-file-invalid", error); }
     }
+
+    private RemoteSlotsSyncResult Sync(RemoteLaneExecutorEntry entry, int slots, string stamp, string intentId, DateTimeOffset now)
+    {
+        if (intentId.Length < 8 || intentId[..8].Any(ch => !char.IsAsciiLetterOrDigit(ch) && ch != '-'))
+            throw Failure("invalid-payload");
+        var result = remoteSync!.Sync(entry, slots, "slots.txt." + stamp + ".bak");
+        RemoteExecutorSlotsSyncLedger.Append(Path.Combine(Path.GetDirectoryName(executorsPath)!, RemoteExecutorSlotsSyncLedger.FileName),
+            new(now, entry.Id, intentId, slots, result.Outcome, result.Reason, result.RemoteBackup, result.ErrorTail));
+        return result;
+    }
+
+    private static string SyncDetail(RemoteSlotsSyncResult? result, string? outcome) => outcome switch
+    {
+        null => " remote_slots_file=unsynced",
+        "synced" => $" remote_slots_file=synced remote_backup={Token(result!.RemoteBackup, "none")} remote_previous={Token(result.Previous, "absent")}",
+        "failed" => $" remote_slots_file=failed remote_reason={result!.Reason}",
+        _ => " remote_slots_file=not-applicable"
+    };
+
+    private static string Token(string? text, string absent) => text is null ? absent :
+        new string(text.Take(64).Select(ch => char.IsWhiteSpace(ch) || char.IsControl(ch) ? '_' : ch).ToArray());
 
     private void WriteCandidate(byte[] original, byte[] candidate, string backup, RemoteLaneExecutorConfiguration before,
         ExecutorSetSlotsOperatorIntentPayload? slots, FocusedEvidenceSetOperatorIntentPayload? focused)
