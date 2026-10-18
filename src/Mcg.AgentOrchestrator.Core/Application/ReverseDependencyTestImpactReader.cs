@@ -15,9 +15,9 @@ internal static class ReverseDependencyTestImpactReader
     // filter with room for new tests before widening to the full Infrastructure suite; at 96 classes
     // the filter stays well under the 8,191-character cmd.exe command-line limit.
     internal const int MaximumSelectedTestClasses = 96;
-    // The Infrastructure test closure reached about 2,000 source files on 2026-10-04. Keep room
-    // for growth before focused selection is abandoned for the full Infrastructure suite.
-    internal const int MaximumIndexedSourceFiles = 4_000;
+    // The Infrastructure test closure reached 4,012 tracked source files on 2026-10-18. Keep
+    // bounded growth headroom; exceeding this cap abandons selection for the full suite.
+    internal const int MaximumIndexedSourceFiles = 8_000;
     private const int MaximumRetainedSnapshots = 4;
     private const string CacheSchema = "reverse-dependency-index-v1";
     private static readonly object CacheLock = new();

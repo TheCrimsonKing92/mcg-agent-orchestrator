@@ -19,7 +19,7 @@ public sealed class RepositoryTestImpactPlannerTwoHopNarrowSelectionTests
         Xunit.Assert.True(plan.RequiresBuild);
         Xunit.Assert.False(plan.RequiresBroadVerification);
         Xunit.Assert.Equal(2, plan.Checks.Count);
-        Xunit.Assert.Equal(new RepositoryTestImpactHeadroom(3, 4000, 1, 96, 1, 64),
+        Xunit.Assert.Equal(new RepositoryTestImpactHeadroom(3, 8000, 1, 96, 1, 64),
             plan.ReverseDependencyHeadroom);
         Xunit.Assert.Contains(plan.Checks, check => check.TestProject == RepositoryTestProject.Core);
         var check = Xunit.Assert.Single(plan.Checks, check => check.TestProject == RepositoryTestProject.Infrastructure);
