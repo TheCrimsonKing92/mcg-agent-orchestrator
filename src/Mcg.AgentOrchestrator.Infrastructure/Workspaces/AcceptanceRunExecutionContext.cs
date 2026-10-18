@@ -73,7 +73,8 @@ public sealed record AcceptanceRunExecutionOptions(
     AcceptanceFollowerPinnedBase? PinnedBase = null,
     string? ProjectHomeDirectory = null,
     string? IntegrationBranch = null,
-    IReadOnlyList<MemberDeclaredTestRemoval>? MemberTestRemovals = null);
+    IReadOnlyList<MemberDeclaredTestRemoval>? MemberTestRemovals = null,
+    AcceptanceAttributionLaneScope? AttributionLaneScope = null);
 
 public sealed record AcceptanceOwnerProtectedCohortMember(GoalId GoalId, string CandidateSha);
 
@@ -131,6 +132,7 @@ internal abstract class AcceptanceRunExecutionOwner : IAcceptanceRunExecutionCon
     public IReadOnlyList<AcceptanceOwnerProtectedCohortMember>? OwnerProtectedCohortMembers =>
         _options.OwnerProtectedCohortMembers;
     public IReadOnlyList<MemberDeclaredTestRemoval>? MemberTestRemovals => _options.MemberTestRemovals;
+    public AcceptanceAttributionLaneScope? AttributionLaneScope => _options.AttributionLaneScope;
     public CancellationToken CancellationToken => _lifetime.Token;
     public AcceptanceAttemptArtifactCustodyContext? ArtifactCustody { get; protected init; }
 

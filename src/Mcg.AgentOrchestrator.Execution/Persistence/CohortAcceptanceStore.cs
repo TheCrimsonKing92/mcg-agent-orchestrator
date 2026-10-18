@@ -262,9 +262,10 @@ public sealed partial class CohortAcceptanceStore
         string? attributionReasonDetail = null)
     {
         ArgumentNullException.ThrowIfNull(partitions);
-        if (partitions.Count != 2 ||
+        var skip = partitions.Count == 0 && attributionSource == AcceptanceCohortAttributionSources.NoFailingTestIdentities;
+        if (!skip && (partitions.Count != 2 ||
             partitions.Select(partition => partition.MemberOrdinal).Order().SequenceEqual([0, 1]) == false ||
-            partitions.Select(partition => partition.GoalId).Distinct().Count() != 2)
+            partitions.Select(partition => partition.GoalId).Distinct().Count() != 2))
         {
             throw new ArgumentException("Cohort attribution requires exactly two distinct ordered partition receipts.", nameof(partitions));
         }
@@ -328,7 +329,7 @@ public sealed partial class CohortAcceptanceStore
             count.Transaction = transaction;
             count.CommandText = "SELECT COUNT(*) FROM cohort_partition_receipts WHERE cohort_id=$cohort;";
             count.Parameters.AddWithValue("$cohort", cohortId);
-            if (Convert.ToInt32(count.ExecuteScalar()) != 2)
+            if (Convert.ToInt32(count.ExecuteScalar()) != (skip ? 0 : 2))
             {
                 throw new InvalidOperationException("Cohort attribution did not persist exactly two partition receipts.");
             }

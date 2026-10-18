@@ -517,7 +517,8 @@ internal sealed partial class ConductorDriver
         int memberOrdinal,
         AcceptanceCohortIdentity identity,
         ConductEventLogWriter gateProgressEventWriter,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        AcceptanceAttributionLaneScope? scope = null)
     {
         var workspace = _cohortWorkspace
             ?? throw new InvalidOperationException("Production acceptance cohort workspace is unavailable.");
@@ -542,7 +543,7 @@ internal sealed partial class ConductorDriver
                 partition.Path,
                 member.LandingPaths);
             var result = RunCohortPartitionAttempt(
-                verifier, partition.Path, member, identity, gateProgressEventWriter, cancellationToken);
+                verifier, partition.Path, member, identity, gateProgressEventWriter, cancellationToken, scope);
             testResultPaths = NormalizeCohortTestResultPaths(result.TestResultPaths);
             failingTestIdentities = CohortFailingTestIdentities(result);
             failedChecks = result.Checks?
@@ -558,11 +559,12 @@ internal sealed partial class ConductorDriver
             outcome = AcceptanceCohortGateOutcome.InfrastructureFailure;
         }
         clock.Stop();
-        var receiptId = CreateCohortPartitionReceiptId(
+        if (scope is not null) partitionManifest += $";lane-scope-sha256={scope.Sha256}";
+        var receiptId = ConductorCohortPartitionReceiptIds.Create(
             member,
             identity.ObservedMainRevision,
             treeRevision,
-            partitionManifest);
+            partitionManifest, scope);
         return new AcceptanceCohortPartitionReceipt(
             receiptId,
             member.GoalId,
@@ -601,22 +603,6 @@ internal sealed partial class ConductorDriver
                         $"Acceptance cohort gate is running in the background: {detail}")),
                 StringComparer.Ordinal),
             detail);
-    }
-
-    private static string CreateCohortPartitionReceiptId(
-        AcceptanceCohortMemberBinding member,
-        string mainRevision,
-        string? treeRevision,
-        string manifestIdentity)
-    {
-        var payload = string.Join('\n',
-            "cohort-partition-v1",
-            member.GoalId.Value,
-            member.CandidateRevision,
-            mainRevision,
-            treeRevision ?? "unavailable",
-            manifestIdentity);
-        return $"cohort-partition-v1-{Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(payload)))}";
     }
 
     private static ConductorAcceptanceCohortRunResult CohortHeld(
