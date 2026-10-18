@@ -116,14 +116,14 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         };
         _activity.ValueChanged += (_, _) =>
         {
-            if (!_rendering && ActivityRow() is { } row) { _follow.Inspect(_activityKeys[row]); RenderHints(); }
+            if (!_rendering && ActivityRow() is { } row) { _follow.Inspect(_activityKeys[row]); RenderHints(); RenderOverflow(); }
             _diagnostics?.Mark("activity-selection", TraceState);
         };
         _activity.ViewportChanged += (_, args) =>
         {
             var viewport = _activity.Viewport; // NewViewport is empty before Terminal.Gui initialization.
             if (!_rendering && args.OldViewport.Size == viewport.Size && args.OldViewport.X == viewport.X && args.OldViewport.Y != viewport.Y && ActivityRow() is { } row)
-            { _follow.Scrolled(_activityKeys[row], row, viewport.Y, viewport.Height); RenderHints(); }
+            { _follow.Scrolled(_activityKeys[row], row, viewport.Y, viewport.Height); RenderHints(); RenderOverflow(); }
         };
         _decisions.HasFocusChanged += (_, _) => PaneFocusChanged(_decisions, OwnerConsolePane.Decisions);
         _board.HasFocusChanged += (_, _) => PaneFocusChanged(_board, OwnerConsolePane.Board);
@@ -237,8 +237,10 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
             model?.Decisions.Length ?? 0, _decisions.Viewport.Y, _decisions.Viewport.Height));
         SetTitle(_boardFrame, "BOARD", OwnerConsoleOverflow.Of(
             model?.Board.Length ?? 0, _board.RowOffset, BoardBodyRows()));
-        SetTitle(_activityFrame, "ACTIVITY", OwnerConsoleOverflow.Of(
-            ActivityLines.Count, _activity.Viewport.Y, _activity.Viewport.Height));
+        var activityTitle = OwnerConsoleActivityTitle.Title(OwnerConsoleOverflow.Of(
+            ActivityLines.Count, _activity.Viewport.Y, _activity.Viewport.Height),
+            _follow.Following, _activityFrame.Frame.Width - OwnerConsoleOverflow.TitleChrome);
+        if (_activityFrame.Title != activityTitle) _activityFrame.Title = activityTitle;
 
         static void SetTitle(FrameView frame, string baseTitle, OwnerConsoleOverflow overflow)
         {
@@ -340,6 +342,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         _rendering = true;
         try { RenderActivity(); } finally { _rendering = false; }
         RenderHints();
+        RenderOverflow();
     }
 
     private async void OnKeyDown(object? sender, Key key)
