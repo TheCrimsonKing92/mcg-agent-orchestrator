@@ -277,7 +277,9 @@ public sealed class TesterRedLabelledInconclusiveScenarioTests
                 runFocusedEvidence: (_, request) => ++Runs == 1 ? Unusable(request) : IncidentRed(request),
                 dispatchAndStart: _ =>
                 {
-                    var task = Assert.Single(Goal.Tasks.Where(task => task.Status == WorkTaskStatus.Assigned));
+                    var task = Goal.Tasks.First(candidate => candidate.Status == WorkTaskStatus.Assigned &&
+                        Goal.Tasks.TakeWhile(predecessor => predecessor.Id != candidate.Id)
+                            .All(predecessor => predecessor.Status == WorkTaskStatus.Completed));
                     DispatchedRoles.Add(task.RequiredRole);
                     Kernel.RecordTaskDispatch(Goal.Id, task.Id, new("fixture", "work", _root, _clock.Next()));
                     return DispatchStartOutcome.Started();
