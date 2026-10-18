@@ -116,7 +116,7 @@ public sealed class OwnerConsoleFullScreenPaneTests
         using IApplication app = Terminal.Gui.App.Application.Create();
         using var view = new OwnerConsoleFullScreenView(app, Controller(harness, dialogs), () => Task.CompletedTask);
         view.Render(await Model(harness));
-        const string common = "  Home/End first/last  PgUp/PgDn page  Tab/Shift+Tab pane  e epics  l landings  g gate  : command  ? help  q quit";
+        const string common = "  Home/End first/last  PgUp/PgDn page  Tab/Shift+Tab pane  e epics  / filter  l landings  g gate  : command  ? help  q quit";
         Assert.Equal("Enter detail" + common, view.HintText);
         await view.HandleKeyAsync(Key.Tab);
         Assert.Equal(OwnerConsolePane.Board, view.FocusedPane);
@@ -355,7 +355,7 @@ public sealed class OwnerConsoleFullScreenPaneTests
 
         await view.HandleKeyAsync(Key.Tab);
         Assert.Equal(OwnerConsolePane.Board, view.FocusedPane);
-        Assert.Equal("Enter goal detail  Home/End first/last  PgUp/PgDn page  Tab/Shift+Tab pane  e epics  l landings  g gate  : command  ? help  q quit", view.HintText);
+        Assert.Equal("Enter goal detail  Home/End first/last  PgUp/PgDn page  Tab/Shift+Tab pane  e epics  / filter  l landings  g gate  : command  ? help  q quit", view.HintText);
         Assert.DoesNotContain("a accept default", view.HintText);
         Assert.DoesNotContain("r answer", view.HintText);
     }

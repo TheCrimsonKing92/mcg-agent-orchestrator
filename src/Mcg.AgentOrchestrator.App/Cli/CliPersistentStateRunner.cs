@@ -1019,7 +1019,7 @@ internal static partial class CliPersistentStateRunner
             {
                 EmitPreLoopJanitorialFailure(workspace, ex);
             }
-
+            ProviderHoldHistorySeed.Apply(startupKernel, stateRepository, Console.WriteLine);
             return startupKernel;
         }
 

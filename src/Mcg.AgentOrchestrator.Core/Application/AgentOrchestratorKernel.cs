@@ -21,6 +21,8 @@ public sealed partial class AgentOrchestratorKernel
     }
 
     public IReadOnlyCollection<Goal> Goals => _goals.Values;
+    public ProviderHoldHistory ProviderHoldHistory { get; } = new();
+    public IReadOnlyCollection<Goal> ProviderHoldScope => ProviderHoldHistory.Scope(_goals.Values);
 
     public IReadOnlyCollection<HumanInputRequest> HumanInputRequests => _humanInputRequests.Values;
 
@@ -203,6 +205,7 @@ public sealed partial class AgentOrchestratorKernel
             var metadata = goal.ToTerminalGoalMetadata();
             if (_goals.Remove(goal.Id))
                 evicted++;
+            ProviderHoldHistory.Retain(goal, _goals.Values);
             TrackTerminalGoalMetadata(metadata);
         }
 
@@ -226,6 +229,7 @@ public sealed partial class AgentOrchestratorKernel
                 GoalStatusSemantics.ExcludesFromConductorWorkingSet(goal.Status))
             {
                 _goals.Remove(goal.Id);
+                ProviderHoldHistory.Retain(goal, _goals.Values);
                 TrackTerminalGoalMetadata(goal.ToTerminalGoalMetadata());
                 refreshed++;
                 continue;
@@ -364,8 +368,4 @@ public sealed partial class AgentOrchestratorKernel
 
         return changed;
     }
-
-
-
-
 }

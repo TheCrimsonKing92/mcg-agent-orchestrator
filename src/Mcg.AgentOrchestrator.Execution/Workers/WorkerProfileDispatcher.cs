@@ -535,7 +535,7 @@ public static partial class WorkerProfileDispatcher
             claudeAuthProbe,
             sandbox,
             commandExists,
-            providerHoldScope: kernel.Goals, cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias, cascadeMechanicalReworkCheap: cascadeMechanicalReworkCheap, orchestratorSkillDirectory: orchestratorSkillDirectory, integrationBranch: integrationBranch, targetHome: targetHome);
+            providerHoldScope: kernel.ProviderHoldScope, cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias, cascadeMechanicalReworkCheap: cascadeMechanicalReworkCheap, orchestratorSkillDirectory: orchestratorSkillDirectory, integrationBranch: integrationBranch, targetHome: targetHome);
         ThrowIfPreflightBlocked(preflight);
         return PrepareTask(
             kernel,
@@ -1187,7 +1187,7 @@ public static partial class WorkerProfileDispatcher
                 claudeAuthProbe: taskClaudeAuthProbe,
                 sandboxOptions: sandbox,
                 commandExists: commandExists,
-                providerHoldScope: kernel.Goals, cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias, cascadeMechanicalReworkCheap: cascadeMechanicalReworkCheap, orchestratorSkillDirectory: orchestratorSkillDirectory, integrationBranch: integrationBranch, targetHome: targetHome);
+                providerHoldScope: kernel.ProviderHoldScope, cascadeTesterCheapFirst: cascadeTesterCheapFirst, cascadeCheapModelAlias: cascadeCheapModelAlias, cascadeMechanicalReworkCheap: cascadeMechanicalReworkCheap, orchestratorSkillDirectory: orchestratorSkillDirectory, integrationBranch: integrationBranch, targetHome: targetHome);
             if (!preflight.Allowed)
             {
                 TryResolveMissingArtifactDependency(kernel, goal, selection.Task, preflight);
