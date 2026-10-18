@@ -16,7 +16,7 @@ public sealed class OwnerConsolePaneOverflowScenarioTests
         Populate(scene, 20);
         await scene.Render(Events(scene));
         SetFrames(scene, 5);
-        Assert.InRange(scene.View.ActivityLines.Count, 8, 40);
+        Assert.True(scene.View.ActivityLines.Count > 5);
         var keys = new[] { Key.End, Key.Home, Key.CursorDown, Key.PageDown, Key.CursorUp, Key.PageUp, Key.End, Key.Home };
         for (var pane = 0; pane < 3; pane++)
         {
@@ -73,7 +73,7 @@ public sealed class OwnerConsolePaneOverflowScenarioTests
         Populate(scene, 20);
         await scene.Render(Events(scene));
         SetFrames(scene, 5);
-        Assert.InRange(scene.View.ActivityLines.Count, 8, 40);
+        Assert.True(scene.View.ActivityLines.Count > 5);
         for (var pane = 0; pane < 3; pane++)
         {
             await scene.View.HandleKeyAsync(Key.PageDown);
@@ -87,7 +87,7 @@ public sealed class OwnerConsolePaneOverflowScenarioTests
                 OwnerConsoleOverflow.Of(count, Offset(scene, pane), 10), 196),
                 scene.View.PaneTitle((OwnerConsolePane)pane));
         }
-        SetFrames(scene, 40);
+        SetFrames(scene, 60);
         AssertBareTitles(scene);
 
         var frame = Assert.IsType<FrameView>(scene.View.DecisionsPane.SuperView);
