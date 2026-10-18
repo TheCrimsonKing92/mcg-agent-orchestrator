@@ -24,6 +24,9 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     private readonly Label _emptyDecisions = new() { Text = "Nothing needs you right now.", Width = Dim.Fill(), Height = 1, Visible = false };
     private readonly TableView _board = new() { Width = Dim.Fill(), Height = Dim.Fill() };
     private readonly ListView _activity = new() { Width = Dim.Fill(), Height = Dim.Fill() };
+    private readonly FrameView _decisionsFrame;
+    private readonly FrameView _boardFrame;
+    private readonly FrameView _activityFrame;
     private readonly TextField _command = new() { Y = Pos.AnchorEnd(1), Width = Dim.Fill(), Height = 1 };
     private readonly Label _hints = new() { Y = Pos.AnchorEnd(2), Width = Dim.Fill(), Height = 1 };
     private readonly Label _epicHint = new() { Y = Pos.AnchorEnd(2), Text = OwnerConsoleEpicFormatter.KeyHint, Height = 1 };
@@ -80,12 +83,12 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
             label => Invoke(() => { if (!_token.IsCancellationRequested) SetWorking("command", label); }),
             message => Invoke(() => { if (!_token.IsCancellationRequested) ShowNotice(message, OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Action); }), options,
             message => Invoke(() => { if (!_token.IsCancellationRequested) ShowNotice(message, OwnerConsoleNoticeSeverity.Success, OwnerConsoleNoticeSource.Action); }));
-        var decisions = new FrameView { Title = "DECISIONS", Y = 1, Width = Dim.Fill(), Height = Dim.Percent(25) };
-        var board = new FrameView { Title = "BOARD", Y = Pos.Bottom(decisions), Width = Dim.Fill(), Height = Dim.Percent(40) };
-        var activity = new FrameView { Title = "ACTIVITY", Y = Pos.Bottom(board), Width = Dim.Fill(), Height = Dim.Fill(3) };
-        decisions.Add(_decisions, _emptyDecisions);
-        board.Add(_board);
-        activity.Add(_activity);
+        _decisionsFrame = new FrameView { Title = "DECISIONS", Y = 1, Width = Dim.Fill(), Height = Dim.Percent(25) };
+        _boardFrame = new FrameView { Title = "BOARD", Y = Pos.Bottom(_decisionsFrame), Width = Dim.Fill(), Height = Dim.Percent(40) };
+        _activityFrame = new FrameView { Title = "ACTIVITY", Y = Pos.Bottom(_boardFrame), Width = Dim.Fill(), Height = Dim.Fill(3) };
+        _decisionsFrame.Add(_decisions, _emptyDecisions);
+        _boardFrame.Add(_board);
+        _activityFrame.Add(_activity);
         _board.Table = new DataTableSource(BoardTable);
         _board.Style.AlwaysShowHeaders = true;
         _board.Style.ShowHeaders = true;
@@ -94,7 +97,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         _epicHint.X = Pos.AnchorEnd(OwnerConsoleEpicFormatter.KeyHint.Length);
         _hints.Width = Dim.Fill(OwnerConsoleEpicFormatter.KeyHint.Length + 2);
         EpicView = new(controller, Invoke, token);
-        Window.Add(_status, decisions, board, activity, _notice, _hints, _epicHint, _command, EpicView, GateView);
+        Window.Add(_status, _decisionsFrame, _boardFrame, _activityFrame, _notice, _hints, _epicHint, _command, EpicView, GateView);
         _notice.ViewportChanged += (_, _) => RenderNotices();
         _decisions.ValueChanged += (_, _) =>
         {
@@ -117,11 +120,13 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         {
             using var trace = _diagnostics?.Begin("activity-viewport", TraceState);
             Fit(_activity.Viewport.Width, _boardTitleWidth);
+            RenderOverflow();
         };
         _board.ViewportChanged += (_, _) =>
         {
             using var trace = _diagnostics?.Begin("board-viewport", TraceState);
             Fit(_activityWidth, 0);
+            RenderOverflow();
         };
         _decisions.ViewportChanged += (_, _) =>
         {
@@ -130,6 +135,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
             _rendering = true;
             try { RenderDecisions(); }
             finally { _rendering = false; }
+            RenderOverflow();
         };
         RenderHints();
         _keyboard = app.Initialized ? app.Keyboard : null;
@@ -162,6 +168,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
             RenderHints();
             NoticeStrip.RefreshSucceeded();
             RenderNotices();
+            RenderOverflow();
         }
         finally { _rendering = false; }
     }
@@ -175,6 +182,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         _rendering = true;
         try { RenderActivity(); RenderBoard(); }
         finally { _rendering = false; }
+        RenderOverflow();
     }
 
     private void RenderBoard()
@@ -196,7 +204,37 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         DecisionLines = _emptyDecisions.Visible ? [_emptyDecisions.Text] : rows;
         _decisions.SetSource(new ObservableCollection<string>(rows));
         _decisions.SelectedItem = _controller.SelectedIndex < 0 ? null : _controller.SelectedIndex;
+        RenderOverflow();
     }
+
+    private int BoardBodyRows() => _board.Viewport.Height - 1 -
+        (_board.Style.ShowHorizontalHeaderOverline ? 1 : 0) -
+        (_board.Style.ShowHorizontalHeaderUnderline ? 1 : 0);
+
+    private void RenderOverflow()
+    {
+        var model = _controller.Model;
+        SetTitle(_decisionsFrame, "DECISIONS", OwnerConsoleOverflow.Of(
+            model?.Decisions.Length ?? 0, _decisions.Viewport.Y, _decisions.Viewport.Height));
+        SetTitle(_boardFrame, "BOARD", OwnerConsoleOverflow.Of(
+            model?.Board.Length ?? 0, _board.RowOffset, BoardBodyRows()));
+        SetTitle(_activityFrame, "ACTIVITY", OwnerConsoleOverflow.Of(
+            ActivityLines.Count, _activity.Viewport.Y, _activity.Viewport.Height));
+
+        static void SetTitle(FrameView frame, string baseTitle, OwnerConsoleOverflow overflow)
+        {
+            var title = OwnerConsoleOverflow.Title(baseTitle, overflow, frame.Frame.Width - OwnerConsoleOverflow.TitleChrome);
+            if (frame.Title != title) frame.Title = title;
+        }
+    }
+
+    internal string PaneTitle(OwnerConsolePane pane) => pane switch
+    {
+        OwnerConsolePane.Decisions => _decisionsFrame.Title,
+        OwnerConsolePane.Board => _boardFrame.Title,
+        OwnerConsolePane.Activity => _activityFrame.Title,
+        _ => throw new ArgumentOutOfRangeException(nameof(pane))
+    };
 
     internal void SetWorking(string source, string? label)
     {
@@ -383,9 +421,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
             _controller.Model?.Board.Length ?? 0 : _controller.Model?.Decisions.Length ?? 0;
         var current = pane == OwnerConsolePane.Activity ? _activity.SelectedItem ?? 0 : pane == OwnerConsolePane.Board ?
             _selectedBoardIndex : _controller.SelectedIndex;
-        var pageHeight = PaneView(pane).Viewport.Height;
-        if (pane == OwnerConsolePane.Board) pageHeight -= 1 + (_board.Style.ShowHorizontalHeaderOverline ? 1 : 0) +
-            (_board.Style.ShowHorizontalHeaderUnderline ? 1 : 0);
+        var pageHeight = pane == OwnerConsolePane.Board ? BoardBodyRows() : PaneView(pane).Viewport.Height;
         if (OwnerConsolePaneNavigator.Target(key, current, count, pageHeight) is { } target)
         {
             key.Handled = true;
@@ -394,6 +430,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
             else if (pane == OwnerConsolePane.Activity) { _activity.SelectedItem = target; _activity.EnsureSelectedItemVisible(); }
             else { _controller.SelectIndex(target); _decisions.SelectedItem = target; _decisions.EnsureSelectedItemVisible(); }
             RenderHints();
+            RenderOverflow();
             return;
         }
         if (key == Key.CursorUp || key == Key.CursorDown)
@@ -418,6 +455,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
                 _decisions.SelectedItem = _controller.SelectedIndex < 0 ? null : _controller.SelectedIndex;
                 RenderHints();
             }
+            RenderOverflow();
             return;
         }
         if (key == Key.Enter)
@@ -544,6 +582,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         if (_board.Value?.SelectedCell.Y != _selectedBoardIndex)
             _board.SetSelection(0, _selectedBoardIndex, false);
         _board.EnsureCursorIsVisible();
+        RenderOverflow();
     }
 
     private void Invoke(Action action)
