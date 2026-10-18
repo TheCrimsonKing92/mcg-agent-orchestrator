@@ -21,6 +21,7 @@ internal sealed record RemoteLaneExecutorConfiguration(
     internal const int MinimumSampleEvery = 1;
     internal IReadOnlyList<string> MachineLocalResourceKeys { get; init; } = [];
     internal RemoteFocusedEvidenceSettings FocusedEvidence { get; init; } = new();
+    internal RemoteWorkerBuildCheckSettings WorkerBuildCheck { get; init; } = new();
     internal ExecutorScreeningSettings Screening { get; init; } = new();
     internal bool AllInfrastructureLanes { get; init; }
     internal RemoteLaneExecutorConfiguration ResolveLanes(IEnumerable<string> infrastructureLaneNames) =>
@@ -39,6 +40,7 @@ internal sealed record RemoteLaneExecutorConfiguration(
     internal static IReadOnlyList<RemoteLaneExecutorEntry> LoadExecutors(string path) => Parse(path).Executors;
 
     internal static RemoteLaneExecutorConfiguration LoadForFocusedEvidence(string path) => Parse(path);
+    internal static RemoteLaneExecutorConfiguration LoadForWorkerBuildCheck(string path) => Parse(path);
 
     private static RemoteLaneExecutorConfiguration Parse(string path)
     {
@@ -135,7 +137,8 @@ internal sealed record RemoteLaneExecutorConfiguration(
             return new(entries.ToArray(), names.ToArray(), null)
             {
                 MachineLocalResourceKeys = keys.ToArray(), AllInfrastructureLanes = allInfrastructureLanes,
-                FocusedEvidence = ParseFocusedEvidence(root), Screening = ExecutorScreeningSettings.Parse(root)
+                FocusedEvidence = ParseFocusedEvidence(root), Screening = ExecutorScreeningSettings.Parse(root),
+                WorkerBuildCheck = ParseWorkerBuildCheck(root)
             };        }
         catch (FileNotFoundException) { return Disabled("missing"); }
         catch (DirectoryNotFoundException) { return Disabled("missing"); }
@@ -160,6 +163,19 @@ internal sealed record RemoteLaneExecutorConfiguration(
                 (g.ValueKind != JsonValueKind.Number || !g.TryGetInt32(out graceSeconds) || graceSeconds < 0)))
             return new(FaultReason: "invalid");
         return new(mode, sampleEvery, graceSeconds, ShadowPreemption: shadowPreemption);
+    }
+    private static RemoteWorkerBuildCheckSettings ParseWorkerBuildCheck(JsonElement root)
+    {
+        if (!root.TryGetProperty("workerBuildCheck", out var block)) return new();
+        var mode = "off";
+        var seconds = 600;
+        if (block.ValueKind != JsonValueKind.Object ||
+            (block.TryGetProperty("mode", out var m) &&
+                (m.ValueKind != JsonValueKind.String || (mode = m.GetString()!) is not ("off" or "remote-first"))) ||
+            (block.TryGetProperty("remoteSeconds", out var s) &&
+                (s.ValueKind != JsonValueKind.Number || !s.TryGetInt32(out seconds) || seconds is < 60 or > 1800)))
+            return new(FaultReason: "invalid");
+        return new(mode, seconds);
     }
     private static RemoteLaneExecutorConfiguration Disabled(string reason) => new([], [], reason);
     private static string? ReadString(JsonElement entry, string name) =>

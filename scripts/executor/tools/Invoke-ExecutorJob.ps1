@@ -14,7 +14,12 @@ try {
         if ($job.PSObject.Properties[$name]) { $echo[$name] = [string]$job.$name }
     }
     if ($job.PSObject.Properties['testHostTimeoutSeconds']) { $echo['TestHostTimeoutSeconds'] = [int]$job.testHostTimeoutSeconds }
-    & (Join-Path $RunRoot 'tools\Invoke-ExecutorLane.ps1') -Sha $job.sha -Project $job.project -Filter $job.filter -Lane $job.lane -RunRoot $RunRoot @echo
+    if ($job.PSObject.Properties['kind'] -and $job.kind -eq 'build-check') {
+        & (Join-Path $RunRoot 'tools\Invoke-ExecutorBuildCheck.ps1') -JobPath $JobPath -RunRoot $RunRoot
+    }
+    else {
+        & (Join-Path $RunRoot 'tools\Invoke-ExecutorLane.ps1') -Sha $job.sha -Project $job.project -Filter $job.filter -Lane $job.lane -RunRoot $RunRoot @echo
+    }
 }
 catch {
     # One error file per job, so concurrent children never append to a shared log.
