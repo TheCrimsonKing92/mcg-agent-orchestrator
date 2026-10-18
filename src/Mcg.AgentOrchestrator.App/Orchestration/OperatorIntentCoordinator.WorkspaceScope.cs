@@ -22,6 +22,7 @@ internal sealed partial class OperatorIntentCoordinator
     internal ExperimentDecideIntentHandler? ExperimentDecisions { get; init; }
     internal EpicOutcomeIntentHandler? EpicOutcomes { get; init; }
     internal OperatorDirectiveIntentHandler? Directives { get; init; }
+    internal ExecutorSettingIntentHandler? ExecutorSettings { get; init; }
 
     public IReadOnlyList<string> ExecuteWorkspacePending(AgentOrchestratorKernel kernel)
     {
@@ -32,12 +33,15 @@ internal sealed partial class OperatorIntentCoordinator
                 .GetAwaiter().GetResult();
             if (intent is null) break;
             bool replayed;
+            string? executorSettingSummary = null;
             try
             {
                 if (Lessons is null && intent.Verb is OperatorIntentVerbs.LessonRecord or OperatorIntentVerbs.LessonRetire or OperatorIntentVerbs.EscapeRecord)
                     throw new InvalidOperationException("Workspace intent services are unavailable.");
                 replayed = intent.Verb switch
                 {
+                    OperatorIntentVerbs.ExecutorSetSlots or OperatorIntentVerbs.FocusedEvidenceSet =>
+                        ApplyExecutorSetting(intent, out executorSettingSummary),
                     OperatorIntentVerbs.LessonRecord => ApplyLessonRecord(kernel, intent, Lessons!),
                     OperatorIntentVerbs.LessonRetire => ApplyLessonRetire(intent, Lessons!),
                     OperatorIntentVerbs.EscapeRecord => ApplyEscapeRecord(kernel, intent, Lessons!,
@@ -66,13 +70,23 @@ internal sealed partial class OperatorIntentCoordinator
                 continue;
             }
             _store.CompleteAsync(intent.Id, ClaimOwner, OperatorIntentStatus.Applied,
-                intent.Verb is OperatorIntentVerbs.ExperimentApplyFlag or OperatorIntentVerbs.ExperimentRevertFlag or OperatorIntentVerbs.ExperimentToggleFlag or OperatorIntentVerbs.EpicOutcomeDefine or OperatorIntentVerbs.EpicOutcomeRecord
+                executorSettingSummary is not null
+                    ? $"Applied {intent.Verb}; tier=Mutate; replayed={replayed}; {executorSettingSummary}."
+                    : intent.Verb is OperatorIntentVerbs.ExperimentApplyFlag or OperatorIntentVerbs.ExperimentRevertFlag or OperatorIntentVerbs.ExperimentToggleFlag or OperatorIntentVerbs.EpicOutcomeDefine or OperatorIntentVerbs.EpicOutcomeRecord
                     ? $"Applied {intent.Verb}; tier=Mutate; replayed={replayed}."
                     : replayed ? $"Applied; recovered lesson intent {intent.Id}." : $"Applied {intent.Verb}.",
                 _utcNow()).GetAwaiter().GetResult();
             lines.Add($"OPERATOR_INTENT id={intent.Id} verb={intent.Verb} scope=workspace result={(replayed ? "applied-recovered" : "applied")}");
         }
         return lines;
+    }
+
+    private bool ApplyExecutorSetting(OperatorIntentRecord intent, out string summary)
+    {
+        var change = (ExecutorSettings ?? throw new InvalidOperationException("Executor setting intent services are unavailable."))
+            .Apply(intent, _utcNow());
+        summary = change.Summary;
+        return !change.Changed;
     }
 
     private bool ApplyLessonRecord(AgentOrchestratorKernel kernel, OperatorIntentRecord intent,
