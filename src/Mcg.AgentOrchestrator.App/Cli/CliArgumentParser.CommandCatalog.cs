@@ -168,6 +168,7 @@ internal static IReadOnlyList<string> RecognizedCommands { get; } =
     "logs",
     "cancel-dispatch",
     "goal-priority",
+    "provider-reset",
     "goal-isolation",
     "verify-manual",
     "adjudicate",

@@ -461,8 +461,8 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             ProcessLogsTextView.PrintProcessLogs(ProcessLogReader.Read(logProcess), logStream);
             return false;
 
-        case "goal-isolation":
-            return CliGoalIsolationCommand.Execute(parts, context);
+        case "goal-isolation": return CliGoalIsolationCommand.Execute(parts, context);
+        case "provider-reset": return CliProviderResetCommand.Execute(parts, context);
         case "goal-priority":
             return CliGoalPriorityCommand.Execute(parts, context);
         case "cancel-dispatch":

@@ -373,6 +373,9 @@ internal sealed partial class OperatorIntentCoordinator
     {
         switch (intent.Verb)
         {
+            case OperatorIntentVerbs.ProviderReset:
+                ProviderResetIntentHandler.Apply(kernel, goal, intent, _utcNow());
+                return;
             case OperatorIntentVerbs.ApprovePolicyChange:
                 var policyApproval = Deserialize<ApprovePolicyChangeOperatorIntentPayload>(intent);
                 OperatorIntentPolicyApproval.Apply(

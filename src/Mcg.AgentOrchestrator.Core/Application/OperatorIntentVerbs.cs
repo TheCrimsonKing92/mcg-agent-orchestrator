@@ -3,6 +3,7 @@ namespace Mcg.AgentOrchestrator.Core;
 public static class OperatorIntentVerbs
 {
     public const string GoalPriority = "goal-priority";
+    public const string ProviderReset = "provider-reset";
     public const string GoalIsolation = "goal-isolation";
     public const string Progress = "progress";
     public const string Retry = "retry";
@@ -39,6 +40,7 @@ public sealed record EpicOutcomeDefineOperatorIntentPayload(string EpicId, EpicO
 public sealed record EpicOutcomeRecordOperatorIntentPayload(string EpicId, EpicOutcomeEvidence Evidence);
 public sealed record ExecutorSetSlotsOperatorIntentPayload(string ExecutorId, int Slots);
 public sealed record FocusedEvidenceSetOperatorIntentPayload(string? Mode, int? SampleEvery);
+public sealed record ProviderResetOperatorIntentPayload(string BindingKey, DateTimeOffset ResetAt, string Rationale);
 
 public enum OperatorActorKind
 {
