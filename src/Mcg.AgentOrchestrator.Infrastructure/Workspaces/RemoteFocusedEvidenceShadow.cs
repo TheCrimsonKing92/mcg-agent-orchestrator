@@ -249,8 +249,7 @@ internal sealed class RemoteFocusedEvidenceShadow : IAsyncDisposable
                 run.Close();
                 var usage = RemoteLaneResourceUsage.TryRead(run.LastStatus);
                 var local = localResults.FirstOrDefault(result => result.Name == run.CheckName);
-                bool? agree = observation.Code is RemoteLaneOutcomeCode.Accepted or RemoteLaneOutcomeCode.RemoteRed && local is not null
-                    ? (observation.Code == RemoteLaneOutcomeCode.Accepted) == local.Passed : null;
+                var agreement = RemoteShadowAgreement.Decide(observation.Code, observation.FailingTests, local);
                 var request = run.Request;
                 var observed = observation.Result;
                 RemoteExecutorHealthLedger.Append(_ledgerPath!, new(_clock.GetUtcNow(), request.ExecutorId,
@@ -265,10 +264,12 @@ internal sealed class RemoteFocusedEvidenceShadow : IAsyncDisposable
                     RemoteDurationSeconds: Math.Max(0, ((run.Work?.IsCompleted == true ? run.Ended : null) ??
                         _clock.GetUtcNow()).Subtract(run.Started).TotalSeconds),
                     LocalDurationSeconds: Math.Max(0, (localEnd - _started).TotalSeconds),
-                    LocalVerdict: local is null ? "unavailable" : local.Passed ? "passed" : "failed", Agree: agree,
+                    LocalVerdict: local is null ? "unavailable" : local.Passed ? "passed" : "failed", Agree: agreement.Agree,
                     RemoteTestHostCpuSeconds: usage?.TestHostCpuSeconds, RemoteTestHostPeakWorkingSetBytes: usage?.TestHostPeakWorkingSetBytes,
                     RemoteAvailableMemoryMbMin: usage?.AvailableMemoryMbMin, RemoteResourceSamples: usage?.ResourceSamples,
-                    Phases: observation.Phases));
+                    Phases: observation.Phases,
+                    LocalFailingTests: local is null ? null : local.Passed ? [] : local.FailingTestIdentities,
+                    Agreement: agreement.Agreement, AgreementReason: agreement.Reason));
             }
         }
         catch (Exception) { /* Measurement must never fail the local verdict, including ledger faults. */ }
