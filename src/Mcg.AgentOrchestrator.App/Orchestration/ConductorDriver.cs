@@ -36,7 +36,7 @@ internal sealed partial class ConductorDriver
     internal static DispatchReadinessVerdict EvaluateConductorReadiness(
         AgentOrchestratorKernel kernel, Goal goal, IReadOnlyList<AgentDefinition> agents,
         WorkerProfileCatalog profiles, DateTimeOffset now) =>
-        DispatchReadinessAssessment.Evaluate(goal, kernel.Goals, agents, profiles, now).Verdict;
+        DispatchReadinessAssessment.Evaluate(goal, kernel.ProviderHoldScope, agents, profiles, now).Verdict;
 
     private sealed record JournalLifecycleFacts(bool IsMerged, bool IsRecorded, bool IsCleanedUp);
 
