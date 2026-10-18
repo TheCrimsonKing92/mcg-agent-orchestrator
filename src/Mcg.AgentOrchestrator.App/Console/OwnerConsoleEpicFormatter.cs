@@ -10,9 +10,9 @@ internal static class OwnerConsoleEpicFormatter
     internal const string NoEpicsText = "No epics are defined yet. Create one with epic-add.";
     internal const string UnavailableText = "Epic data is not available in this console session.";
 
-    internal static string ListHint(bool failed) => (failed ? "r retry  " : "") +
+    internal static string ListHint(bool failed) => (failed ? OwnerConsoleDialogBindings.KeyLabel(OwnerConsoleDialogBindings.Reload) + " retry  " : "") +
         "Up/Down select  Enter detail  w window  Esc close";
-    internal static string DetailHint(bool failed) => (failed ? "r retry  " : "") +
+    internal static string DetailHint(bool failed) => (failed ? OwnerConsoleDialogBindings.KeyLabel(OwnerConsoleDialogBindings.Reload) + " retry  " : "") +
         "Up/Down scroll  PgUp/PgDn page  w window  Esc epics";
 
     internal static string Header(OwnerConsoleEpicWindow window) => "EPICS · " + WindowLabel(window);
@@ -25,7 +25,7 @@ internal static class OwnerConsoleEpicFormatter
 
     internal static string LoadingLine(OwnerConsoleEpicWindow window) => $"Loading epics ({WindowLabel(window)})…";
     internal static string LoadingDetailLine(string title) => $"Loading {Title(title)}…";
-    internal static string FailedLine(string reason) => $"Could not load epics: {reason.TrimEnd('.')}. Press r to retry.";
+    internal static string FailedLine(string reason) => $"Could not load epics: {reason.TrimEnd('.')}. Press {OwnerConsoleDialogBindings.KeyLabel(OwnerConsoleDialogBindings.Reload)} to retry.";
     internal static string NoActivityLine(OwnerConsoleEpicWindow window) =>
         $"No epic activity in the {WindowLabel(window)}; press w to widen.";
     internal static bool HasNoActivity(OwnerConsoleEpicViewModel model) =>

@@ -6,7 +6,8 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal static class RemoteExecutorReportReader
 {
-    internal static RemoteExecutorReport Read(OrchestratorWorkspace workspace, DateTimeOffset? since, int last)
+    internal static RemoteExecutorReport Read(OrchestratorWorkspace workspace, DateTimeOffset? since, int last,
+        DateTimeOffset? noExecutorSince = null)
     {
         var outcomes = ReadLines(RemoteExecutorHealthLedger.ResolveStorePath(workspace.RootDirectory), root =>
         {
@@ -20,7 +21,7 @@ internal static class RemoteExecutorReportReader
         var slots = new Dictionary<string, int>(StringComparer.Ordinal);
         foreach (var executor in executors) slots.TryAdd(executor.Id, executor.Slots);
         return RemoteExecutorReport.Build(executors.Select(entry => entry.Id), outcomes, probes,
-            since, last, unreadable, unreadableProbes, slots);
+            since, last, unreadable, unreadableProbes, slots, noExecutorSince);
     }
 
     private static (double? Seconds, DateTimeOffset? StartedAt) ReadAttempt(JsonElement root)

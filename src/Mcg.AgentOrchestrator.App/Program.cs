@@ -273,7 +273,7 @@ if (CliOperatorIntentRoute.IsServed(startupArgs))
 
 if (CliGateStatusJsonQueryCommand.IsGateStatusJsonCommand(startupArgs))
 {
-    CliGateStatusJsonQueryCommand.Execute();
+    CliGateStatusJsonQueryCommand.Execute(workspace: workspace);
     return ExitCompletedStartupCommand(0);
 }
 

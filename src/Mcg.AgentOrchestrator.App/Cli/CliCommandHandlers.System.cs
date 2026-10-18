@@ -260,7 +260,7 @@ internal static partial class CliCommandHandlers
             }
 
             case "gate-status":
-                ConsoleViews.PrintGateStatus(GateHeartbeatArtifacts.ReadStableSlots());
+                GateStatusRemoteWait.PrintText(context.Workspace);
                 return false;
 
             case "run-events-maintenance":

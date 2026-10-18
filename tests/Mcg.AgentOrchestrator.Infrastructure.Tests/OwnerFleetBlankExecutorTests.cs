@@ -14,7 +14,7 @@ public sealed class OwnerFleetBlankExecutorTests
         Assert.Equal(1, model.Host.NoExecutorFreeCount);
         var text = OwnerFleetDiagram.Render(model);
         Assert.Contains("executors: 2", text);
-        Assert.Contains("no executor free: 1 (last 2026-10-17", text);
+        Assert.Contains("shadow skipped, no free slot: 1 in last 24h (last 2026-10-17", JoinContents(text));
         Assert.Equal(3, text.Count(ch => ch is '┌' or '╔'));
         Assert.DoesNotContain(text.Split('\n'), line => line.Trim('│', '║', ' ') == "Executor");
     }
@@ -26,7 +26,7 @@ public sealed class OwnerFleetBlankExecutorTests
         var zone = TimeZoneInfo.CreateCustomTimeZone("fixture", TimeSpan.FromHours(-5), "fixture", "fixture");
         var model = OwnerFleetViewModelBuilder.Build(fixture.Read(), true, zone);
         Assert.Equal(TimeSpan.FromHours(-5), model.Host.NoExecutorFreeLastAt!.Value.Offset);
-        Assert.Contains("last 2026-10-17 07:01 -05:00", OwnerFleetDiagram.Render(model));
+        Assert.Contains("last 2026-10-17 07:01 -05:00", JoinContents(OwnerFleetDiagram.Render(model)));
     }
 
     [Fact]
@@ -36,6 +36,8 @@ public sealed class OwnerFleetBlankExecutorTests
         var model = OwnerFleetViewModelBuilder.Build(fixture.Read(), true, TimeZoneInfo.Utc);
         Assert.Equal(0, model.Host.NoExecutorFreeCount);
         Assert.Null(model.Host.NoExecutorFreeLastAt);
-        Assert.DoesNotContain("no executor free", OwnerFleetDiagram.Render(model));
+        Assert.DoesNotContain("shadow skipped", OwnerFleetDiagram.Render(model));
     }
+
+    private static string JoinContents(string text) => string.Join(" ", text.Split('\n').Select(row => row.Trim('│', '║', ' ')));
 }

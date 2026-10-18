@@ -1312,19 +1312,11 @@ internal sealed partial class ConductorDriver
     internal static DispatchStartOutcome ClassifyRecordedDispatchStartForConductor(ProcessBatchExecutionResult result)
     {
         if (result.RecoveryActions?.FirstOrDefault() is { } recoveryAction)
-        {
             return DispatchStartOutcome.RecoverableSandboxPrep(recoveryAction);
-        }
-
         if (result.Tasks.Count > 0)
-        {
             return DispatchStartOutcome.Started(result.Tasks);
-        }
-
         if (result.StartFailures?.FirstOrDefault() is { } startFailure)
-        {
             return DispatchStartOutcome.SpawnFailed(startFailure.Reason);
-        }
 
         if (result.RequeueSkippedCount > 0)
         {
@@ -1382,8 +1374,16 @@ internal sealed partial class ConductorDriver
             GoalLifecycleState.Verified => ExecuteLanding(goal, goalPrefix, policy),
             GoalLifecycleState.Merged => ExecuteRecord(goal, goalPrefix, policy),
             GoalLifecycleState.Recorded => ExecuteCleanup(goal, goalPrefix, policy),
+            GoalLifecycleState.AcceptanceFailed when AttributedFailureDeveloperRoute.Decide(goal,
+                AttributedFailureDeveloperRoute.ReadAcceptanceFailure(goal.LatestAcceptanceFailure),
+                ReadCurrentCohortAttributionRevisions(goal)?.BranchRevision) is { IsRoute: true } route => RouteAttributedFailure(goal, goalPrefix, policy, route),
             _ => Escalate(goal, goalPrefix, policy, state, $"Unhandled lifecycle state {state}")
         };
+    }
+    private ConductorAdvanceResult RouteAttributedFailure(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy, AttributedFailureRouteDecision route)
+    {
+        _retryTask(goal.Id, route.DeveloperTaskId!, route.Feedback!, null, RetryCause.NewTestFinding);
+        return ExecuteDispatchAndStart(GetCurrentGoal(goal), goalPrefix, policy, GoalLifecycleState.WorkspaceReady);
     }
     internal GoalLifecycleFacts GetFacts(Goal goal) => _getFacts(goal);
 
