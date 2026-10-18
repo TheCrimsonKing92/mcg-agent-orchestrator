@@ -35,7 +35,16 @@ public sealed class OwnerTestImpactHeadroomActivityTests
         ];
         var expected = OwnerActivityNarrator.Narrate(baseline, _ => "fixture");
         Assert.Equal(2, expected.Count);
-        Assert.Equal(expected, OwnerActivityNarrator.Narrate([.. baseline, malformed], _ => "fixture"));
+        var actual = OwnerActivityNarrator.Narrate([.. baseline, malformed], _ => "fixture");
+        Assert.Equal(expected.Count, actual.Count);
+        for (var index = 0; index < expected.Count; index++)
+        {
+            // Narration creates fresh title lists; compare their values, not record list identity.
+            Assert.Equal(expected[index] with { Spans = null }, actual[index] with { Spans = null });
+            Assert.Equal(expected[index].Spans?.OutcomeStart, actual[index].Spans?.OutcomeStart);
+            Assert.Equal(expected[index].Spans?.OutcomeLength, actual[index].Spans?.OutcomeLength);
+            Assert.Equal(expected[index].Spans?.Titles.ToArray(), actual[index].Spans?.Titles.ToArray());
+        }
     }
 
     private static OwnerConductEvent Headroom(string fields) => new(DateTimeOffset.UnixEpoch.AddSeconds(2),
