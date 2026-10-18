@@ -52,7 +52,7 @@ internal sealed class OwnerConsoleGateDialog : FrameView
         var binding = key.IsAlt ? null : OwnerConsoleBindings.ForDialogKey(
             OwnerConsoleScope.GateView, (char)key.NoCtrl.AsRune.Value, key.IsCtrl);
         var back = key == Key.Esc || binding?.Command == "quit";
-        if (key == Key.Enter || back && Expanded)
+        if (key == Key.Enter || key == Key.Esc && Expanded)
         {
             Expanded = key == Key.Enter && !Expanded;
             Render(_gate);

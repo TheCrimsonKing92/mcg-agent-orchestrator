@@ -181,6 +181,38 @@ public sealed class OwnerConsoleDialogKeyScenarioTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task GateBackOut_Expanded_QuitClosesWhileEscapeCollapses(bool quit)
+    {
+        using var fixture = new Fixture();
+        await fixture.RenderAsync();
+        await fixture.View.HandleKeyAsync(Key.Tab);
+        await fixture.View.HandleKeyAsync(Key.Tab);
+        await fixture.View.HandleKeyAsync(new Key('g'));
+        var gate = fixture.View.GateView;
+        await fixture.View.HandleKeyAsync(Key.Enter);
+        Assert.True(gate.IsOpen);
+        Assert.True(gate.Expanded);
+        await fixture.View.HandleKeyAsync(new Key('x'));
+        Assert.True(gate.IsOpen);
+        Assert.True(gate.Expanded);
+        Assert.False(fixture.Controller.QuitRequested);
+
+        await fixture.View.HandleKeyAsync(quit ? new Key('q') : Key.Esc);
+        Assert.Equal(!quit, gate.IsOpen);
+        Assert.False(fixture.Controller.QuitRequested);
+        if (!quit)
+        {
+            Assert.False(gate.Expanded);
+            await fixture.View.HandleKeyAsync(Key.Esc);
+        }
+        Assert.False(gate.IsOpen);
+        Assert.Equal(OwnerConsolePane.Activity, fixture.View.FocusedPane);
+        Assert.False(fixture.Controller.QuitRequested);
+    }
+
+    [Theory]
     [InlineData(0)]
     [InlineData(1)]
     [InlineData(2)]
