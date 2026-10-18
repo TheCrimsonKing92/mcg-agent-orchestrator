@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
@@ -37,8 +38,13 @@ public sealed class TesterRedLabelledInconclusiveScenarioTests
         Assert.Contains("Infrastructure.Tests:" + AdmissionClass, red.Selections);
         Assert.Equal(2, scenario.Runs);
         Assert.Equal(new[] { AgentRole.Tester, AgentRole.Tester }, scenario.DispatchedRoles);
-        var receipt = Assert.IsType<FocusedEvidenceRunResult>(scenario.Coordinator()
-            .ReadFocusedReceiptEvidence(scenario.Goal.Id, red.ReceiptId, Candidate));
+        // Red pre-Tester receipts carry their artifact path in the index, without registering a coordinator receipt id.
+        var artifact = Assert.IsType<ConductorParallelAcceptanceRunArtifact>(
+            JsonSerializer.Deserialize<ConductorParallelAcceptanceRunArtifact>(
+                File.ReadAllText(Assert.IsType<string>(red.ResultPath)), new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+        Assert.Equal("focused-evidence", artifact.Kind);
+        Assert.Equal(Candidate, artifact.BranchHeadSha);
+        var receipt = Assert.IsType<FocusedEvidenceRunResult>(artifact.FocusedEvidence);
         Assert.True(receipt.Accepted);
         var arm = Assert.Single(receipt.Arms!);
         Assert.Equal(FindingEvidenceArm.Candidate, arm.Arm);
