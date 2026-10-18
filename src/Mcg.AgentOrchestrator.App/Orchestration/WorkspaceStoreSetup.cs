@@ -18,13 +18,17 @@ internal static class WorkspaceStoreSetup
         return RunWithOwnership(workspace);
     }
 
-    internal static IReadOnlyList<StoreSetupResult> RunWithOwnership(OrchestratorWorkspace workspace, bool requireCurrent = false)
+    internal static IReadOnlyList<StoreSetupResult> RunWithOwnership(OrchestratorWorkspace workspace, bool requireCurrent = false,
+        StartupSqliteRetryOptions? retry = null)
     {
-        var plan = StoreSetupRunner.Plan(workspace.OrchestratorDirectory, includeState: true);
+        var plan = StartupSqliteRetry.Run(workspace.OrchestratorDirectory, "store-plan",
+            () => StoreSetupRunner.Plan(workspace.OrchestratorDirectory, includeState: true), retry);
         StoreSetupRunner.RequireCompatible(plan, requireCurrent);
-        var results = StoreSetupRunner.Run(workspace.OrchestratorDirectory);
+        var results = StartupSqliteRetry.Run(workspace.OrchestratorDirectory, "store-setup",
+            () => StoreSetupRunner.Run(workspace.OrchestratorDirectory), retry);
         if (plan.Single(entry => entry.StoreName == "state-migrations").RequiresMigration)
-            StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+            StartupSqliteRetry.Run(workspace.SqliteStatePath, "state-upgrade",
+                () => StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath), retry);
         return results;
     }
 

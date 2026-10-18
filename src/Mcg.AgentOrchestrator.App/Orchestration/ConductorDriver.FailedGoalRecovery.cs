@@ -6,6 +6,8 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal sealed partial class ConductorDriver
 {
+    internal ProviderHoldFailedGoalRedispatch? ProviderHoldRedispatch { get; set; }
+
     private ConductorAdvanceResult ExecuteFailedGoalRecovery(
         Goal goal,
         string goalPrefix,
@@ -90,6 +92,14 @@ internal sealed partial class ConductorDriver
                 { Owner = decision.HoldOwner, Decision = FailedGoalRecoveryDecisionRecords.FromPolicy(decision) });
         }
 
+        if (decision.Action == FailedGoalRecoveryAction.Escalate &&
+            IsFailedGoalRecoveryContextCurrent(goal, policy, state, decision, out _) &&
+            (ProviderHoldRedispatch ?? ProviderHoldFailedGoalRedispatch.ForWorkspace(_cohortKernel, _cohortWorkspace, policy))
+                ?.TryRedispatch(goal, facts, _retryTask) == true)
+        {
+            ApplyPendingFailedGoalNotes(goal, pendingNotes);
+            return ExecuteDispatchAndStart(GetCurrentGoal(goal), goalPrefix, policy, GoalLifecycleState.WorkspaceReady);
+        }
         if (decision.Action == FailedGoalRecoveryAction.Escalate)
         {
             if (TryResumeTimedOutSelectionRerun(goal, goalPrefix, policy, state, facts, decision, pendingNotes) is { } resumed)

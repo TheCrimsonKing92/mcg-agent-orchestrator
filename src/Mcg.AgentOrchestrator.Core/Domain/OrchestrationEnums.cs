@@ -118,7 +118,8 @@ public enum ProgressKind
     GoalBriefRevised = 37,
     NoProgressRedispatchPrevented = 38,
     FindingEvidenceSuppressed = 39,
-    TaskRetryFeedbackUpdated = 40
+    TaskRetryFeedbackUpdated = 40,
+    ProviderHoldSubstituted = 41
 }
 
 public enum HumanInputAnswerOrigin

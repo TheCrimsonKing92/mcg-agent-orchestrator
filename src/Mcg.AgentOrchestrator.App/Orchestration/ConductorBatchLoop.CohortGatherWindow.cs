@@ -40,7 +40,7 @@ internal sealed partial class ConductorBatchLoop
         var ready = orderedEligible.Single(goal => goal.Id == readyCandidate.GoalId);
         var now = _utcNow();
         var inReview = scopedGoals
-            .Where(goal => goal.Id != ready.Id &&
+            .Where(goal => goal.Id != ready.Id && !goal.DependsOn.Contains(ready.Id) && !ready.DependsOn.Contains(goal.Id) &&
                 goal.Status != GoalStatus.Completed &&
                 !GoalStatusSemantics.ExcludesFromConductorWorkingSet(goal.Status) &&
                 goal.Tasks.Any(task => task.RequiredRole == AgentRole.Reviewer &&

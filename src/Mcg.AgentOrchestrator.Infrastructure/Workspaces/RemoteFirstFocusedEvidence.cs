@@ -53,7 +53,8 @@ internal static class RemoteFirstFocusedEvidence
                             overrides.RemoteLaneGitRunnerForTests ?? GitCli.Run)
                         : UnavailableRemoteLaneExecutor.Instance);
                 var interval = overrides.RemoteLanePollInterval is { } value && value > TimeSpan.Zero ? value : TimeSpan.FromSeconds(1);
-                coordinator = new(configuration, identity, worktreePath, prefix, executor, clock, interval, null);
+                coordinator = new(configuration, identity, worktreePath, prefix, executor, clock, interval, null,
+                    claimClass: RemoteExecutorClaimClass.FocusedEvidence);
                 // Claim every slot before starting work; completions cannot recycle a sick executor.
                 var claimed = new List<(Run Run, RemoteLaneExecutorEntry Entry)>();
                 foreach (var run in runs.OfType<Run>())
@@ -64,8 +65,8 @@ internal static class RemoteFirstFocusedEvidence
                     if (keys.Count > 0 && (run.Check.RequiresBuildSystemChange ||
                         !keys.All(key => configuration.MachineLocalResourceKeys.Contains(key, StringComparer.Ordinal))))
                         Finish(run, RemoteLaneOutcomeCode.NotEligibleExclusiveResource, "exclusive-resource");
-                    else if (coordinator.TryClaimIdleExecutor() is not { } entry)
-                        Finish(run, RemoteLaneOutcomeCode.ShadowSkippedNoExecutor, "no-idle-executor");
+                    else if (coordinator.TryClaimIdleExecutor(out var yieldReason) is not { } entry)
+                        Finish(run, RemoteLaneOutcomeCode.ShadowSkippedNoExecutor, yieldReason ?? "no-idle-executor");
                     else
                     {
                         run.Request = run.Request with { ExecutorId = entry.Id };
@@ -222,6 +223,7 @@ internal static class RemoteFirstFocusedEvidence
                 run.Verdict = verdict;
                 reason = verdict is null ? "remote-first-fallback: " + reason : reason;
                 var request = run.Request;
+                var usage = RemoteLaneResourceUsage.TryRead(run.LastStatus());
                 RemoteExecutorHealthLedger.Append(RemoteExecutorHealthLedger.ResolveStorePath(worktreePath), new(clock.GetUtcNow(),
                     request.ExecutorId, request.AttemptId, request.Lane, code,
                     code is RemoteLaneOutcomeCode.Accepted or RemoteLaneOutcomeCode.NotEligibleExclusiveResource or
@@ -229,7 +231,9 @@ internal static class RemoteFirstFocusedEvidence
                     new(request.ExecutorId, request.Lane, request.VerifyingCommitSha, request.CandidateTreeSha, request.MainSha, request.FilterHash, request.ManifestIdentity),
                     result is null ? null : new(result.ExecutorId, result.Lane, result.VerifyingCommitSha, result.ObservedTreeSha, result.MainSha, result.FilterHash, result.ManifestIdentity),
                     reason, GoalId: request.GoalId, RemoteExecutedCount: verdict?.ExecutedTestCount,
-                    RemoteFailingTests: verdict?.FailingTestIdentities, RemoteDurationSeconds: Math.Max(0, (clock.GetUtcNow() - run.Started).TotalSeconds)));
+                    RemoteFailingTests: verdict?.FailingTestIdentities, RemoteDurationSeconds: Math.Max(0, (clock.GetUtcNow() - run.Started).TotalSeconds),
+                    RemoteTestHostCpuSeconds: usage?.TestHostCpuSeconds, RemoteTestHostPeakWorkingSetBytes: usage?.TestHostPeakWorkingSetBytes,
+                    RemoteAvailableMemoryMbMin: usage?.AvailableMemoryMbMin, RemoteResourceSamples: usage?.ResourceSamples));
                 var line = $"REMOTE_FIRST_FOCUSED_EVIDENCE lane={request.Lane} outcome={JsonNamingPolicy.KebabCaseLower.ConvertName(code.ToString())} reason={reason}";
                 try { Console.WriteLine(line); } catch (Exception) { }
                 try { overrides.OnRemoteLaneProgressLineForTests?.Invoke(line); } catch (Exception) { }
@@ -263,6 +267,14 @@ internal static class RemoteFirstFocusedEvidence
         internal bool Finished { get; set; }
         private bool _closed;
         private IRemoteLaneHandle? _handle;
+        internal JsonElement? LastStatus()
+        {
+            lock (Gate)
+            {
+                try { return (_handle as IRemoteLaneAttemptDiagnosticsSource)?.Snapshot().LastStatus?.Clone(); }
+                catch (Exception) { return null; }
+            }
+        }
         internal bool Attach(IRemoteLaneHandle handle)
         {
             lock (Gate)

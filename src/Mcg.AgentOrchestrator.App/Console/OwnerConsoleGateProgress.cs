@@ -9,7 +9,8 @@ internal sealed record OwnerConsoleGateMember(string Id, string Title);
 internal sealed record OwnerConsoleGateLane(string Name, OwnerConsoleGateLaneState State,
     string Outcome, string Location, TimeSpan Elapsed, double? MedianSeconds, bool IsEstimate,
     double? QuietSeconds = null, bool IsManifestLane = true,
-    string? Target = null, string? HeartbeatPath = null, bool IsAttribution = false);
+    string? Target = null, string? HeartbeatPath = null, bool IsAttribution = false,
+    IReadOnlyList<string>? FailingTestNames = null);
 internal sealed record OwnerConsoleGateManifestLane(string Name, double EstimatedSerialSeconds);
 internal sealed record OwnerConsoleGateDuration(string LaneName, double DurationSeconds, DateTimeOffset RecordedAt);
 
@@ -18,7 +19,8 @@ internal sealed record OwnerConsoleGateProgress(bool Live, string Kind,
     IReadOnlyList<OwnerConsoleGateMember> Members, DateTimeOffset? StartedAt, TimeSpan Elapsed,
     IReadOnlyList<OwnerConsoleGateLane> Lanes, double Fraction, int RemainingSeconds,
     int DoneCount, int TotalCount, TimeSpan? IdleAge = null,
-    IReadOnlyList<OwnerConsoleGateProgress>? OtherLiveGates = null)
+    IReadOnlyList<OwnerConsoleGateProgress>? OtherLiveGates = null,
+    IReadOnlyList<OwnerConsoleHostActivity>? HostActivity = null)
 {
     internal bool Failing => Lanes.Any(lane => !lane.IsAttribution &&
         lane.State == OwnerConsoleGateLaneState.Done && lane.Outcome == "failed");
@@ -129,7 +131,7 @@ internal sealed record OwnerConsoleGateProgress(bool Live, string Kind,
                 var lane = manifest.FirstOrDefault(lane => lane.Name == name);
                 var samples = history.Where(item => MatchLane(item.LaneName, manifest) == name)
                     .OrderByDescending(item => item.RecordedAt).Take(10).Select(item => item.DurationSeconds).Order().ToArray();
-                double? median = lane is null ? null : samples.Length == 0 ? lane.EstimatedSerialSeconds :
+                double? median = samples.Length == 0 ? lane?.EstimatedSerialSeconds :
                     (samples[(samples.Length - 1) / 2] + samples[samples.Length / 2]) / 2;
                 var observations = gate.Events.Where(item => IsLanePhase(item.Get("phase")) &&
                     MatchLane(item.Get("target"), manifest) == name).ToArray();
@@ -137,6 +139,10 @@ internal sealed record OwnerConsoleGateProgress(bool Live, string Kind,
                 var remoteLane = remote.Where(item => MatchLane(item.Get("lane"), manifest) == name).ToArray();
                 var offer = remoteLane.LastOrDefault(item => item.Get("decision") == "offer");
                 if (offer is not null && (latest is null || offer.Event.Timestamp > latest.Event.Timestamp)) latest = offer;
+                var noSlot = remoteLane.LastOrDefault();
+                var waiting = noSlot?.Event.Detail.StartsWith("REMOTE_LANE ", StringComparison.Ordinal) == true &&
+                    noSlot.Get("outcome") == "offer-skipped-no-executor" &&
+                    (observations.Length == 0 || noSlot.Event.Timestamp > observations[^1].Event.Timestamp);
                 var state = latest?.Get("phase") switch
                 {
                     "verification-check" or "remote-shard-started" => OwnerConsoleGateLaneState.Running,
@@ -144,14 +150,15 @@ internal sealed record OwnerConsoleGateProgress(bool Live, string Kind,
                     "cache-hit" or "reuse" => OwnerConsoleGateLaneState.Cached,
                     _ => offer is null ? OwnerConsoleGateLaneState.Queued : OwnerConsoleGateLaneState.Running
                 };
+                if (waiting) state = OwnerConsoleGateLaneState.Queued;
                 var elapsed = TimeSpan.FromMilliseconds(latest?.Number("elapsed_ms") ?? 0);
                 if (state == OwnerConsoleGateLaneState.Running)
                     elapsed += Nonnegative(now - (latest?.Event.Timestamp ?? offer!.Event.Timestamp));
                 var executor = latest?.Get("phase") is "remote-shard-started" or "remote-shard-complete"
-                    ? remoteLane.LastOrDefault(item => item.Get("executor").Length > 0)?.Get("executor") ??
+                    ? remoteLane.LastOrDefault(item => item.Get("executor").Length > 0 && item.Get("outcome") != "offer-skipped-no-executor")?.Get("executor") ??
                         observations.LastOrDefault(item => item.Get("executor").Length > 0)?.Get("executor") : null;
                 var slot = Regex.Match(latest?.Get("heartbeat") ?? "", @"activity-(\d+)");
-                var location = executor ?? (slot.Success ? "local slot " + slot.Groups[1].Value :
+                var location = waiting ? "no executor slot" : executor ?? (slot.Success ? "local slot " + slot.Groups[1].Value :
                     latest?.Get("decision") == "offer" || latest?.Get("phase") is "remote-shard-started" or "remote-shard-complete" ? "remote" : "local");
                 double? quiet = null;
                 if (state == OwnerConsoleGateLaneState.Running && latest?.Get("phase") == "verification-check")
@@ -165,16 +172,17 @@ internal sealed record OwnerConsoleGateProgress(bool Live, string Kind,
                     latest?.Get("target"), observations.LastOrDefault(item => AttemptFromHeartbeat(item.Get("heartbeat")).Length > 0)?.Get("heartbeat"),
                     IsAttributionTarget(latest?.Get("target") ?? name));
             }).ToArray();
-            var total = rows.Where(row => row.IsManifestLane).Sum(row => row.MedianSeconds ?? 0);
-            var done = rows.Where(row => row.IsManifestLane && IsDone(row)).ToArray();
-            var unfinished = rows.Where(row => row.IsManifestLane && !IsDone(row)).ToArray();
-            var concurrency = Math.Max(breakdownConcurrency, unfinished.Count(row => row.State == OwnerConsoleGateLaneState.Running));
+            var counted = rows.Where(row => row.IsManifestLane || row.MedianSeconds is not null).ToArray();
+            var total = counted.Sum(row => row.MedianSeconds ?? 0);
+            var done = counted.Where(IsDone).ToArray();
+            var unfinished = counted.Where(row => !IsDone(row)).ToArray();
+            var concurrency = Math.Max(breakdownConcurrency, rows.Count(row => row.IsManifestLane && row.State == OwnerConsoleGateLaneState.Running));
             var remaining = OwnerConsoleGateRemainingEstimate.Makespan(unfinished, concurrency);
             var kind = gate.Events.Any(item => item.Get("train").Length > 0 || item.Get("scope") == "merge-train") ? "train" :
                 gate.Members.Length > 1 ? "cohort" : "solo";
             return new(true, kind, gate.Members.Select(id => new OwnerConsoleGateMember(id, title?.Invoke(id) ?? "")).ToArray(),
                 gate.Start, Nonnegative(now - gate.Start), rows, total > 0 ? done.Sum(row => row.MedianSeconds ?? 0) / total : 0,
-                (int)remaining, done.Length, manifest.Count);
+                (int)remaining, done.Count(row => row.IsManifestLane), manifest.Count);
         }
     }
 
