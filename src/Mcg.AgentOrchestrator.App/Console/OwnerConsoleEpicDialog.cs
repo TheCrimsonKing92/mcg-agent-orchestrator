@@ -317,8 +317,17 @@ internal sealed class OwnerConsoleEpicDialog : FrameView
             _body.SelectedItem = Lines.Count == 0 ? null : Math.Clamp(row, 0, Lines.Count - 1);
             // Scrolling can raise ViewportChanged; suppress reentrant formatting here.
             _body.EnsureSelectedItemVisible();
+            RenderTitle();
         }
         finally { _formatting = false; }
+    }
+
+    private void RenderTitle()
+    {
+        var title = OwnerConsoleOverflow.Title("Epics",
+            OwnerConsoleOverflow.Of(Lines.Count, _body.Viewport.Y, _body.Viewport.Height),
+            Frame.Width - OwnerConsoleOverflow.TitleChrome);
+        if (Title != title) Title = title;
     }
 
     private void Close()

@@ -2655,7 +2655,7 @@ public static partial class DispatchFailureClassifier
             .Equals(observedBinding);
     }
 
-    private static TaskDispatchRecord? FindDispatchForVerification(
+    internal static TaskDispatchRecord? FindDispatchForVerification(
         TaskSpec task,
         TaskVerificationRecord verification)
     {
@@ -2671,7 +2671,7 @@ public static partial class DispatchFailureClassifier
         return task.DispatchHistory.LastOrDefault(dispatch => dispatch.DispatchedAt <= verification.CompletedAt);
     }
 
-    private static ProviderBindingKey BuildProviderBindingKey(string providerName, string? credentialBinding)
+    internal static ProviderBindingKey BuildProviderBindingKey(string providerName, string? credentialBinding)
     {
         var provider = string.IsNullOrWhiteSpace(providerName) ? "unknown" : providerName.Trim();
         if (string.IsNullOrWhiteSpace(credentialBinding))
@@ -2684,7 +2684,7 @@ public static partial class DispatchFailureClassifier
             "provider+credential");
     }
 
-    private sealed record ProviderBindingKey(string Key, string Scope);
+    internal sealed record ProviderBindingKey(string Key, string Scope);
 
     public static bool TryGetSubscriptionLimitRetryAfter(TaskSpec task, out DateTimeOffset retryAfter)
     {
@@ -2800,12 +2800,12 @@ public static partial class DispatchFailureClassifier
             EnumerateEvidenceLines(verification, includeStandardOutput: true, includeStandardError: true),
             out line) || TryGetCliRefusalLimitLine(verification, out line);
 
-    private static bool TryGetProviderBudgetExhaustionLine(TaskVerificationRecord verification, out string line) =>
+    internal static bool TryGetProviderBudgetExhaustionLine(TaskVerificationRecord verification, out string line) =>
         ProviderLimitEvidenceParser.TryGetBudgetExhaustionEvidenceLine(
             EnumerateEvidenceLines(verification, includeStandardOutput: false, includeStandardError: true),
             out line);
 
-    private static bool TryGetRelativeRetryAfter(string output, out TimeSpan retryAfter)
+    internal static bool TryGetRelativeRetryAfter(string output, out TimeSpan retryAfter)
     {
         var tryAgainMatch = TryAgainInPattern.Match(output);
         if (tryAgainMatch.Success &&

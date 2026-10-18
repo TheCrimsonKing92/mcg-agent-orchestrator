@@ -31,8 +31,11 @@ internal sealed partial class GoalDispatchOperations
         bool? cascadeTesterCheapFirst = null,
         string? cascadeCheapModelAlias = null, bool? cascadeMechanicalReworkCheap = null,
         Func<string, bool>? commandExists = null,
-        Func<ClaudeCliAuthState>? claudeAuthProbe = null)
+        Func<ClaudeCliAuthState>? claudeAuthProbe = null,
+        bool admitProviderBudgetProbe = false,
+        Func<DateTimeOffset>? utcNow = null)
     {
+        utcNow ??= () => DateTimeOffset.UtcNow;
         ReconcileExitedAssignedProcessRecords(kernel, goal);
         goal = kernel.GetGoal(goal.Id);
         var intentStore = SqliteOperatorIntentStore.ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory);
@@ -56,9 +59,9 @@ internal sealed partial class GoalDispatchOperations
         EnsureRefinedForSelectedTasks(kernel, workspace, providers, goal, safeBatch.TaskIds);
         goal = kernel.GetGoal(goal.Id);
         var home = _resolveHome(workspace);
-        new ProviderHoldAgentSubstitution(kernel, agents, (viewGoal, viewTask, holdScope) =>
+        Func<Goal, TaskSpec, IEnumerable<Goal>, WorkerSubscriptionPreflightResult> preflight = (viewGoal, viewTask, holdScope) =>
             WorkerProfileDispatcher.PreflightSubscriptionTask(viewGoal, viewTask, agents, profiles,
-                workspace.ResolveExecutionDirectory(goal.Id), DateTimeOffset.UtcNow,
+                workspace.ResolveExecutionDirectory(goal.Id), utcNow(),
                 allowGitReference: (sandboxOptions ?? WorkerSandboxOptions.FromEnvironment()).Enabled,
                 commandExists: commandExists, claudeAuthProbe: claudeAuthProbe, sandboxOptions: sandboxOptions,
                 providerHoldScope: holdScope,
@@ -66,8 +69,10 @@ internal sealed partial class GoalDispatchOperations
                 cascadeCheapModelAlias: ResolveCascadeCheapModelAlias(workspace, cascadeCheapModelAlias, conductorPolicy),
                 cascadeMechanicalReworkCheap: ResolveCascadeMechanicalReworkCheap(workspace, cascadeMechanicalReworkCheap, conductorPolicy),
                 orchestratorSkillDirectory: ResolveOrchestratorSkillDirectory(home), integrationBranch: workspace.IntegrationBranch,
-                targetHome: new WorkerTargetHome(home.IsHome(workspace), WorkerAcceptanceManifestResolver.For(workspace))))
-            .ApplyBatch(goal, safeBatch.TaskIds);
+                targetHome: new WorkerTargetHome(home.IsHome(workspace), WorkerAcceptanceManifestResolver.For(workspace)));
+        if (admitProviderBudgetProbe)
+            ProviderBudgetProbeAdmission.Apply(kernel, goal, safeBatch.TaskIds.ToArray(), preflight, utcNow());
+        new ProviderHoldAgentSubstitution(kernel, agents, preflight).ApplyBatch(goal, safeBatch.TaskIds);
         goal = kernel.GetGoal(goal.Id);
         var retryReplayTasks = kernel.ExportGoalSnapshot(goal.Id).Tasks
             .Where(task => safeBatch.TaskIds.Contains(new TaskId(task.Id)) && task.LatestRetryAt is not null)
@@ -79,7 +84,7 @@ internal sealed partial class GoalDispatchOperations
             profiles,
             workspace.PromptDirectory,
             workspace.ResolveExecutionDirectory(goal.Id),
-            DateTimeOffset.UtcNow,
+            utcNow(),
             safeBatch.TaskIds,
             commandExists: commandExists,
             claudeAuthProbe: claudeAuthProbe,

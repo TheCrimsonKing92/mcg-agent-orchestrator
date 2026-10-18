@@ -693,7 +693,7 @@ public static partial class WorkerProfileDispatcher
             }
 
             WorkerSubscriptionPreflightFindings.AddProviderBudgetExhaustionFinding(
-                findings, providerHoldScope ?? [goal], dispatchProviderName, claudeCredentialSelection?.DirectoryPath);
+                findings, providerHoldScope ?? [goal], dispatchProviderName, claudeCredentialSelection?.DirectoryPath, goal, task, now);
 
             if (DispatchFailureClassifier.RequiresSubscriptionLimitReview(task))
             {

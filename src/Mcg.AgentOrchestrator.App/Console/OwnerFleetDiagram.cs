@@ -50,6 +50,10 @@ internal static class OwnerFleetDiagram
                     content.Add(string.Concat(Enumerable.Repeat("[ ]", Math.Min(perRow, slots - offset))));
             }
             else content.Add("slots: not configured");
+            if (executor.SlotsFile is { } sync)
+                content.Insert(content.FindIndex(row => row.StartsWith("slots:", StringComparison.Ordinal)) + 1,
+                    sync.Outcome == "synced" ? $"slots file: synced {sync.Slots} {Stamp(sync.ObservedAt)}" :
+                    $"slots file: FAILED {sync.Reason} {Stamp(sync.ObservedAt)}");
             content.Add($"peak concurrent attempts: {executor.PeakConcurrentAttempts}");
             content.Add(executor.LastOutcome is null ? "last: none" : $"last: {executor.LastOutcome} {Stamp(executor.LastOutcomeAt)}");
             content.Add("accepted: " + (executor.AcceptedShare is { } share ? share.ToString("P0", CultureInfo.InvariantCulture) : "n/a"));
