@@ -52,13 +52,7 @@ internal static class OwnerConsoleGateLayout
             }
             var unknown = ordinary.Count(row => row.State == OwnerConsoleGateLaneState.Done && row.Outcome is not ("passed" or "failed"));
             if (unknown > 0) lines.Add($"DONE  {unknown} without a recorded outcome");
-            var locations = ordinary.Where(row => Kind(row) != RowKind.Confirming &&
-                    row.State is OwnerConsoleGateLaneState.Running or OwnerConsoleGateLaneState.Done && row.Location.Length > 0)
-                .GroupBy(row => row.Location, StringComparer.Ordinal).ToArray();
-            if (locations.Length > 0)
-                lines.Add("WHERE   " + string.Join("   ", locations.Select(group =>
-                    (group.Key.StartsWith("local slot ", StringComparison.Ordinal) ? "local " + group.Key[11..] : group.Key) +
-                    " " + Bar((double)group.Count(row => row.State == OwnerConsoleGateLaneState.Done) / group.Count()))));
+            lines.AddRange(OwnerConsoleGateWhereLine.Lines(gate, ordinary, width));
 
             void Section(string? heading, OwnerConsoleGateLane[] rows, bool sort = false, bool failureNames = false)
             {
