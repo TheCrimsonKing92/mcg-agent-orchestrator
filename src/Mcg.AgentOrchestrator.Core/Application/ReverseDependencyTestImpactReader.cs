@@ -63,25 +63,13 @@ internal static class ReverseDependencyTestImpactReader
                         $"The dependent test project could not be read: {InfrastructureTestProject}", headroom: headroom);
             }
 
-            var projects = ReadProjectClosure(repositoryRoot, testProjectPath, out var projectFailure);
-            if (projects is null)
+            var closure = ReadIndexedSourceClosure(repositoryRoot, testProjectPath, out var projectFailure);
+            if (closure is null)
             {
                 return ReverseDependencyTestSelection.Unreadable(projectFailure!, headroom: headroom);
             }
 
-            var sourceOwnership = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
-            foreach (var project in projects)
-            {
-                var projectDirectory = Path.GetDirectoryName(project.Path)!;
-                foreach (var sourcePath in FileSystemTestClassDeclarationReader
-                    .EnumerateProjectSourceFiles(projectDirectory))
-                {
-                    sourceOwnership.TryAdd(
-                        sourcePath,
-                        project.Path.Equals(testProjectPath, StringComparison.OrdinalIgnoreCase));
-                }
-            }
-
+            var (projects, sourceOwnership) = closure.Value;
             headroom = headroom with { IndexedSourceFileCount = sourceOwnership.Count };
             if (sourceOwnership.Count > maximumIndexedSourceFiles)
             {
@@ -372,6 +360,46 @@ internal static class ReverseDependencyTestImpactReader
         !File.Exists(Path.Combine(
             repositoryRoot,
             InfrastructureTestProject.Replace('/', Path.DirectorySeparatorChar)));
+
+    internal static RepositoryTestImpactHeadroom? MeasureIndexedSources(
+        string repositoryRoot, int maximumIndexedSourceFiles)
+    {
+        try
+        {
+            repositoryRoot = Path.GetFullPath(repositoryRoot);
+            var testProjectPath = ResolveWithinRepository(repositoryRoot, InfrastructureTestProject);
+            if (testProjectPath is null || !File.Exists(testProjectPath)) return null;
+            var closure = ReadIndexedSourceClosure(repositoryRoot, testProjectPath, out _);
+            return closure is null ? null : new RepositoryTestImpactHeadroom(
+                closure.Value.SourceOwnership.Count, maximumIndexedSourceFiles,
+                null, MaximumSelectedTestClasses, null, MaximumFrontierSymbols);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or
+            System.Xml.XmlException or ArgumentException or NotSupportedException)
+        {
+            return null;
+        }
+    }
+
+    private static (ProjectSnapshot[] Projects, Dictionary<string, bool> SourceOwnership)? ReadIndexedSourceClosure(
+        string repositoryRoot, string testProjectPath, out string? failure)
+    {
+        var projects = ReadProjectClosure(repositoryRoot, testProjectPath, out failure);
+        if (projects is null) return null;
+        var sourceOwnership = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+        foreach (var project in projects)
+        {
+            var projectDirectory = Path.GetDirectoryName(project.Path)!;
+            foreach (var sourcePath in FileSystemTestClassDeclarationReader
+                .EnumerateProjectSourceFiles(projectDirectory))
+            {
+                sourceOwnership.TryAdd(
+                    sourcePath,
+                    project.Path.Equals(testProjectPath, StringComparison.OrdinalIgnoreCase));
+            }
+        }
+        return (projects, sourceOwnership);
+    }
 
     private static ProjectSnapshot[]? ReadProjectClosure(
         string repositoryRoot,
