@@ -12,7 +12,7 @@ public sealed class ProviderUsageHoldSelfRetryScenarioTests
 {
     private const string Exhausted = "API error (status 402 Payment Required): Grok Build usage balance exhausted";
 
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public void NoAlternate_RetriesHeldBindingWaitsForProbeAndClearsOnSuccess()
     {
@@ -53,7 +53,7 @@ public sealed class ProviderUsageHoldSelfRetryScenarioTests
         Assert.Empty(scenario.Escalations);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public void ExhaustedProbe_RetriesAgainAndDispatchesAtTheNextSchedule()
     {
@@ -92,7 +92,7 @@ public sealed class ProviderUsageHoldSelfRetryScenarioTests
         Assert.Empty(scenario.Escalations);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     public void OptOut_NoAlternateKeepsExistingEscalation()
     {
@@ -110,7 +110,7 @@ public sealed class ProviderUsageHoldSelfRetryScenarioTests
         Assert.Empty(scenario.ProbeNotes());
     }
 
-    [Theory(Timeout = 30_000)]
+    [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [Trait("Category", "CrossTick")]
     [InlineData("alternate")]
     [InlineData("mixed")]
