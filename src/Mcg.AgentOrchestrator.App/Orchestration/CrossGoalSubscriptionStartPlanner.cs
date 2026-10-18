@@ -42,7 +42,7 @@ public static class CrossGoalSubscriptionStartPlanner
         var effectiveNow = now ?? DateTimeOffset.UtcNow;
         var candidates = kernel.Goals
             .Where(goal => goal.Status is GoalStatus.Active or GoalStatus.WaitingForHuman)
-            .Select(goal => BuildCandidate(goal, agents, profiles, kernel.Goals, effectiveNow))
+            .Select(goal => BuildCandidate(goal, agents, profiles, kernel.ProviderHoldScope, effectiveNow))
             .Where(candidate => candidate is not null)
             .Select(candidate => candidate!)
             .ToList();
