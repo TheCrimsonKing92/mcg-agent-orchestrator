@@ -29,14 +29,14 @@ public sealed class OwnerConsolePaneOverflowScenarioTests
                 Assert.Equal(expected[index], Selection(scene, pane));
                 Assert.Equal((OwnerConsolePane)pane, scene.View.FocusedPane);
                 if (index is 0 or 6)
-                    Assert.Equal($"{name} · {count - 5} above", scene.View.PaneTitle((OwnerConsolePane)pane));
+                    Assert.Equal(pane == 2 ? $"ACTIVITY · inspecting · {count - 5} above" : $"{name} · {count - 5} above", scene.View.PaneTitle((OwnerConsolePane)pane));
                 if (index is 1 or 7)
-                    Assert.Equal($"{name} · {count - 5} below", scene.View.PaneTitle((OwnerConsolePane)pane));
+                    Assert.Equal(pane == 2 ? $"ACTIVITY · following · {count - 5} below" : $"{name} · {count - 5} below", scene.View.PaneTitle((OwnerConsolePane)pane));
                 if (index == 3)
                 {
                     var overflow = OwnerConsoleOverflow.Of(count, Offset(scene, pane), 5);
                     Assert.True(overflow.Above > 0 && overflow.Below > 0);
-                    Assert.Equal(OwnerConsoleOverflow.Title(name, overflow, 196), scene.View.PaneTitle((OwnerConsolePane)pane));
+                    Assert.Equal(pane == 2 ? OwnerConsoleActivityTitle.Title(overflow, false, 196) : OwnerConsoleOverflow.Title(name, overflow, 196), scene.View.PaneTitle((OwnerConsolePane)pane));
                 }
             }
             await scene.View.HandleKeyAsync(Key.Tab);
@@ -83,7 +83,7 @@ public sealed class OwnerConsolePaneOverflowScenarioTests
         for (var pane = 0; pane < 3; pane++)
         {
             var count = pane == 2 ? scene.View.ActivityLines.Count : 20;
-            Assert.Equal(OwnerConsoleOverflow.Title(BaseTitle((OwnerConsolePane)pane),
+            Assert.Equal(pane == 2 ? OwnerConsoleActivityTitle.Title(OwnerConsoleOverflow.Of(count, Offset(scene, pane), 10), false, 196) : OwnerConsoleOverflow.Title(BaseTitle((OwnerConsolePane)pane),
                 OwnerConsoleOverflow.Of(count, Offset(scene, pane), 10), 196),
                 scene.View.PaneTitle((OwnerConsolePane)pane));
         }
@@ -158,7 +158,7 @@ public sealed class OwnerConsolePaneOverflowScenarioTests
     {
         Assert.Equal("DECISIONS", scene.View.PaneTitle(OwnerConsolePane.Decisions));
         Assert.Equal("BOARD", scene.View.PaneTitle(OwnerConsolePane.Board));
-        Assert.Equal("ACTIVITY", scene.View.PaneTitle(OwnerConsolePane.Activity));
+        Assert.Equal(scene.View.ActivityFollowing ? "ACTIVITY · following" : "ACTIVITY · inspecting", scene.View.PaneTitle(OwnerConsolePane.Activity));
     }
 
     private static string BaseTitle(OwnerConsolePane pane) => pane.ToString().ToUpperInvariant();
