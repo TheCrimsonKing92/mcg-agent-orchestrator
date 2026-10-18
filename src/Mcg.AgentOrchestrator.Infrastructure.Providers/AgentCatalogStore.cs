@@ -201,6 +201,39 @@ public static class AgentCatalogStore
         return NormalizePaidProviderCaps(defaultCatalog, defaultCatalog);
     }
 
+    public static bool TryParseStrict(string json, out AgentCatalog? catalog, out string? error)
+    {
+        catalog = null;
+        error = null;
+        try
+        {
+            var parsed = JsonSerializer.Deserialize<AgentCatalog>(json, _jsonOptions);
+            if (parsed?.Agents is not { Count: > 0 })
+            {
+                error = "no agents";
+                return false;
+            }
+
+            var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var agent in parsed.Agents)
+            {
+                if (!ids.Add(agent.Id.Value))
+                {
+                    error = $"duplicate agent id '{agent.Id.Value}'";
+                    return false;
+                }
+            }
+
+            catalog = NormalizePaidProviderCaps(parsed, AgentCatalog.Default());
+            return true;
+        }
+        catch (JsonException exception)
+        {
+            error = exception.Message;
+            return false;
+        }
+    }
+
     public static void Save(string path, AgentCatalog catalog)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
