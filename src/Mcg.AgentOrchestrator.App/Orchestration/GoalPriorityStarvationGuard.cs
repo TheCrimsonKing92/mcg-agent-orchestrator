@@ -7,6 +7,7 @@ internal sealed class GoalPriorityStarvationGuard
 {
     internal StrongBox<DateTimeOffset?> DriftState { get; } = new();
     private HashSet<(string Goal, string Task, int Pid, DateTimeOffset StartedAt)>? _running;
+    private readonly Dictionary<GoalId, int> _pendingDispatchOvertakes = [];
     private int _tick;
     private bool _tickObserved;
 
@@ -15,6 +16,11 @@ internal sealed class GoalPriorityStarvationGuard
         _tick = tick;
         _tickObserved = true;
         _running ??= Running(kernel);
+        // The sweep replaces goal instances before this call; replay post-checkpoint changes by id.
+        foreach (var goal in kernel.Goals)
+            if (_pendingDispatchOvertakes.TryGetValue(goal.Id, out var count))
+                GoalEffectivePriorityIndex.SetDispatchOvertakes(goal, count);
+        _pendingDispatchOvertakes.Clear();
         return DriftState;
     }
 
@@ -41,8 +47,11 @@ internal sealed class GoalPriorityStarvationGuard
         _running = running;
         _tickObserved = false;
         var goals = kernel.Goals.ToArray();
+        var changed = new HashSet<GoalId>();
         Observe("dispatch", goals, GoalSchedulingOrder.ForWalk(goals), served,
-            capacityHeld.Select(id => id.Value).ToHashSet(StringComparer.Ordinal), [], emit);
+            capacityHeld.Select(id => id.Value).ToHashSet(StringComparer.Ordinal), changed, emit);
+        foreach (var goal in goals.Where(goal => changed.Contains(goal.Id)))
+            _pendingDispatchOvertakes[goal.Id] = goal.PriorityScheduling?.DispatchOvertakes ?? 0;
     }
 
     private static HashSet<(string Goal, string Task, int Pid, DateTimeOffset StartedAt)> Running(AgentOrchestratorKernel kernel) =>

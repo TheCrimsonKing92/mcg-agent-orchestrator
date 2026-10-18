@@ -62,6 +62,63 @@ public sealed class GoalEffectivePriorityIndexTests
         Assert.Equal(GoalPriority.Normal, GoalEffectivePriorityIndex.StoredLevel(kernel.GetGoal(e.Id)));
     }
 
+    [Theory]
+    [InlineData(GoalStatus.Cancelled, true)]
+    [InlineData(GoalStatus.Superseded, true)]
+    [InlineData(GoalStatus.Cancelled, false)]
+    public void TerminalDonorReload_DropsInheritanceBeforeNextDriftCheck(
+        GoalStatus terminalStatus, bool evictDonor)
+    {
+        // All state, including the drift clock, is local and parallel-safe.
+        var (kernel, h, d, e) = Chain();
+        var unrelated = kernel.CreateGoal("Unrelated drift control");
+        var drift = new StrongBox<DateTimeOffset?>();
+        kernel.SetGoalPriority(h.Id, GoalPriority.High, "test", "raise");
+        Apply(kernel, drift);
+        var checkedAt = drift.Value;
+        if (terminalStatus == GoalStatus.Cancelled) kernel.CancelGoal(h.Id, "test cancellation");
+        else kernel.SupersedeGoal(h.Id, "test supersession");
+        Assert.Contains(h.Id.Value, h.PriorityScheduling!.PendingSeedGoalIds!);
+        var snapshot = kernel.ExportSnapshot();
+        snapshot = snapshot with
+        {
+            Goals = snapshot.Goals.Select(goal => goal.Id == unrelated.Id.Value
+                ? goal with { PriorityScheduling = new("high") }
+                : !evictDonor && goal.Id == h.Id.Value ? goal with { PriorityScheduling = null } : goal).ToArray()
+        };
+        if (evictDonor)
+        {
+            kernel.RefreshTrackedGoals(snapshot);
+            Assert.DoesNotContain(kernel.Goals, goal => goal.Id == h.Id);
+        }
+        else
+        {
+            kernel = AgentOrchestratorKernel.FromSnapshot(snapshot);
+            Assert.True(kernel.GetGoal(h.Id).IsTerminal);
+        }
+        Assert.All(new[] { d.Id, e.Id }, id =>
+        {
+            var goal = kernel.GetGoal(id);
+            Assert.Equal(GoalPriority.High, GoalEffectivePriorityIndex.StoredLevel(goal));
+            Assert.Equal(h.Id.Value, goal.PriorityScheduling!.InheritedFromGoalId);
+        });
+
+        var lines = new List<string>();
+        var changed = GoalEffectivePriorityIndex.ApplyPending(kernel.Goals, lines.Add,
+            () => checkedAt!.Value.AddMinutes(1), drift);
+
+        foreach (var id in new[] { d.Id, e.Id })
+        {
+            Assert.Contains(id, changed);
+            Assert.Equal(GoalPriority.Normal, GoalEffectivePriorityIndex.StoredLevel(kernel.GetGoal(id)));
+            Assert.Null(kernel.ExportSnapshot().Goals.Single(goal => goal.Id == id.Value).PriorityScheduling);
+        }
+        Assert.Empty(lines);
+        Assert.Equal(checkedAt, drift.Value);
+        Assert.Equal(GoalPriority.High, GoalEffectivePriorityIndex.StoredLevel(kernel.GetGoal(unrelated.Id)));
+        Assert.DoesNotContain(unrelated.Id, changed);
+    }
+
     [Fact]
     public void HighEdgeAdditionAndClearWaitForSeededTick()
     {

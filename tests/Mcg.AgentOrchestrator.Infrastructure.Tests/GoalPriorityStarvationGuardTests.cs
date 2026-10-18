@@ -101,6 +101,73 @@ public sealed class GoalPriorityStarvationGuardTests
     }
 
     [Fact]
+    public void DispatchReload_ReplaysOvertakesAndResetForNextCheckpoint()
+    {
+        // No real processes or shared state: refresh uses the same seam as the production sweep.
+        var kernel = new AgentOrchestratorKernel();
+        var agents = AgentCatalog.Default().Agents;
+        var waiterId = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, agents, "W").Id;
+        var highIds = Enumerable.Range(1, 3).Select(i =>
+            GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, agents, $"H{i}").Id).ToArray();
+        foreach (var id in highIds) kernel.SetGoalPriority(id, GoalPriority.High, "test", "raise");
+        var now = DateTimeOffset.Parse("2026-10-01T00:00:00Z");
+        var guard = new GoalPriorityStarvationGuard();
+        var persisted = kernel.ExportSnapshot();
+        var lines = new List<string>();
+        for (var tick = 1; tick <= 3; tick++)
+        {
+            var previous = kernel.GetGoal(waiterId);
+            kernel.RefreshTrackedGoals(persisted);
+            var waiter = kernel.GetGoal(waiterId);
+            Assert.NotSame(previous, waiter);
+            Assert.Equal(Math.Max(0, tick - 2), waiter.PriorityScheduling?.DispatchOvertakes ?? 0);
+            var changed = GoalEffectivePriorityIndex.ApplyPending(kernel.Goals, lines.Add,
+                () => now, guard.BeginTick(kernel, tick));
+            Assert.Equal(tick - 1, waiter.PriorityScheduling?.DispatchOvertakes ?? 0);
+            if (tick > 1) Assert.Contains(waiterId, changed);
+            Start(highIds[tick - 1], tick);
+            // The checkpoint captures goal changes before dispatch capacity observation.
+            persisted = kernel.ExportSnapshot();
+            guard.ObserveDispatchTick(new HashSet<GoalId> { waiterId }, kernel, lines.Add);
+            Assert.Equal(tick, waiter.PriorityScheduling!.DispatchOvertakes);
+            Assert.Equal(0, waiter.PriorityScheduling.GateOvertakes);
+        }
+        Assert.Equal(3, lines.Count(line => line.StartsWith("PRIORITY_ADMISSION stage=dispatch")));
+        Assert.Contains($"PRIORITY_STARVATION_GUARD stage=dispatch tick=3 goal={waiterId.Value[..8]} overtakes=3", lines);
+        kernel.RefreshTrackedGoals(persisted);
+        var pending = GoalEffectivePriorityIndex.ApplyPending(kernel.Goals, lines.Add,
+            () => now, guard.BeginTick(kernel, 4));
+        Assert.Contains(waiterId, pending);
+        Assert.Equal(waiterId, GoalSchedulingOrder.ForWalk(kernel.Goals)[0].Id);
+        Assert.Equal(3, kernel.ExportSnapshot().Goals.Single(goal => goal.Id == waiterId.Value).PriorityScheduling!.DispatchOvertakes);
+
+        Start(waiterId, 4);
+        persisted = kernel.ExportSnapshot();
+        guard.ObserveDispatchTick(new HashSet<GoalId>(), kernel, lines.Add);
+        Assert.Null(kernel.GetGoal(waiterId).PriorityScheduling);
+        kernel.RefreshTrackedGoals(persisted);
+        Assert.Equal(3, kernel.GetGoal(waiterId).PriorityScheduling!.DispatchOvertakes);
+        pending = GoalEffectivePriorityIndex.ApplyPending(kernel.Goals, lines.Add,
+            () => now, guard.BeginTick(kernel, 5));
+        Assert.Contains(waiterId, pending);
+        Assert.Null(kernel.ExportSnapshot().Goals.Single(goal => goal.Id == waiterId.Value).PriorityScheduling);
+        persisted = kernel.ExportSnapshot();
+        kernel.RefreshTrackedGoals(persisted);
+        pending = GoalEffectivePriorityIndex.ApplyPending(kernel.Goals, lines.Add,
+            () => now, guard.BeginTick(kernel, 6));
+        Assert.DoesNotContain(waiterId, pending);
+        Assert.Null(kernel.GetGoal(waiterId).PriorityScheduling);
+
+        void Start(GoalId id, int pid)
+        {
+            var task = kernel.GetGoal(id).Tasks.Single();
+            kernel.RecordTaskDispatch(id, task.Id, new("test", "test.exe", "C:\\tmp", now));
+            kernel.RecordTaskProcessStarted(id, task.Id,
+                new(pid, "test.exe", "C:\\tmp", "out", "err", "exit", now, null, null));
+        }
+    }
+
+    [Fact]
     public void NormalAdmissionsAreSilentAndKeepCountersEmpty()
     {
         var kernel = new AgentOrchestratorKernel();

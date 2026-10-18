@@ -42,6 +42,9 @@ public static class GoalEffectivePriorityIndex
         var changed = lookup.Values.Where(goal => goal.PrioritySchedulingPendingPersistence)
             .Select(goal => goal.Id).ToHashSet();
         var seeds = lookup.Values.SelectMany(goal => goal.PriorityScheduling?.PendingSeedGoalIds ?? [])
+            // Terminal donors can be evicted by reload together with their recorded seeds.
+            .Concat(lookup.Values.Where(goal => goal.PriorityScheduling?.InheritedFromGoalId is { } donor &&
+                (!lookup.TryGetValue(donor, out var source) || source.IsTerminal)).Select(goal => goal.Id.Value))
             .Distinct(StringComparer.Ordinal).ToArray();
         if (seeds.Length > 0)
         {
@@ -71,6 +74,14 @@ public static class GoalEffectivePriorityIndex
     public static void IncrementDispatchOvertakes(Goal goal) => ChangeCounter(goal, true, false);
     public static void ResetGateOvertakes(Goal goal) => ChangeCounter(goal, false, true);
     public static void ResetDispatchOvertakes(Goal goal) => ChangeCounter(goal, true, true);
+
+    public static void SetDispatchOvertakes(Goal goal, int value)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(value);
+        var state = State(goal);
+        if (state.DispatchOvertakes != value)
+            Write(goal, state with { DispatchOvertakes = value });
+    }
 
     private static void ChangeCounter(Goal goal, bool dispatch, bool reset)
     {
