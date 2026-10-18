@@ -36,6 +36,29 @@ public sealed class AgentRosterReloaderTests
         Assert.Equal("AGENT_ROSTER_RELOADED agents=2 changed=none added=none removed=a-tester,z-tester", fixture.Lines[1]);
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData("a-tester")]
+    [Xunit.InlineData("A-TESTER")]
+    public void Refresh_DuplicateStartupIds_ReloadsUsingFirstStatus(string duplicateId)
+    {
+        using var fixture = new Fixture();
+        fixture.Write([fixture.Initial[0],
+            fixture.Initial[0] with { Id = new AgentId(duplicateId), Status = AgentStatus.Busy },
+            fixture.Initial[1]]);
+        var initial = AgentCatalogStore.Load(fixture.Path).Agents;
+        Assert.Equal(3, initial.Count);
+        var reloader = new AgentRosterReloader(fixture.Path, initial, fixture.Lines.Add);
+        var next = new[] { fixture.Initial[0] with { Status = AgentStatus.Offline }, fixture.Initial[1] };
+        fixture.Write(next);
+
+        Assert.Equal(AgentRosterRefreshKind.Reloaded, reloader.Refresh().Kind);
+        Assert.Equal(next, reloader.View.ToArray());
+        Assert.Equal("AGENT_ROSTER_RELOADED agents=2 changed=a-tester:Available->Offline added=none removed=none",
+            Assert.Single(fixture.Lines));
+        Assert.Equal(AgentRosterRefreshKind.Unchanged, reloader.Refresh().Kind);
+        Assert.Single(fixture.Lines);
+    }
+
     [Xunit.Fact]
     public void SnapshotSwap_ExistingEnumerator_KeepsOldSnapshot()
     {

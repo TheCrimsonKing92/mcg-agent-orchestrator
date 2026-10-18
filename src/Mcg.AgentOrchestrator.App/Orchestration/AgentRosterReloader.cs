@@ -133,7 +133,9 @@ internal sealed class AgentRosterReloader
 
     private static string DescribeReload(AgentDefinition[] previous, AgentDefinition[] next)
     {
-        var old = previous.ToDictionary(agent => agent.Id.Value, StringComparer.OrdinalIgnoreCase);
+        var old = new Dictionary<string, AgentDefinition>(StringComparer.OrdinalIgnoreCase);
+        foreach (var agent in previous)
+            old.TryAdd(agent.Id.Value, agent);
         var current = next.ToDictionary(agent => agent.Id.Value, StringComparer.OrdinalIgnoreCase);
         var ordered = current.Keys.OrderBy(id => id, StringComparer.OrdinalIgnoreCase).ToArray();
         var changed = ordered.Where(id => old.TryGetValue(id, out var agent) && agent.Status != current[id].Status)
