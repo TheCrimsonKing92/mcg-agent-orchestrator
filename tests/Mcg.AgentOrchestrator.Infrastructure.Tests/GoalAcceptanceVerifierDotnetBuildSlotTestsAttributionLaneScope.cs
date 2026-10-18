@@ -2,7 +2,7 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-[Xunit.Collection(TestCollections.DotnetBuildSlots)]
+[Xunit.Collection(TestCollections.JobAccounting)]
 public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsAttributionLaneScope : GoalAcceptanceVerifierDotnetBuildSlotTests
 {
     [Theory]
