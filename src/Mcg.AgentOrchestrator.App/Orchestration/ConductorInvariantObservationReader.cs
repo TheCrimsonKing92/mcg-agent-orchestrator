@@ -92,6 +92,8 @@ internal sealed class ConductorInvariantObservationReader(string conductEventsLo
                 ObserveProgress(snapshot.LastProgressAt);
         if (laneHeartbeatRoot is not null && ConductorGateLaneProgressScanner.LatestProgress(
             laneHeartbeatRoot, now, ConductorInvariantThresholds.GateIdleWhileReady) is { } lane) ObserveProgress(lane);
+        if (laneHeartbeatRoot is not null && ConductorAttemptHeartbeatScanner.LatestProgress(
+            laneHeartbeatRoot, now, ConductorInvariantThresholds.GateIdleWhileReady) is { } remote) ObserveProgress(remote);
         return new(now, ready.Select(pair => new ConductorInvariantReadyGoal(pair.Key, pair.Value))
             .OrderBy(goal => goal.ReadySince).ThenBy(goal => goal.GoalId, StringComparer.Ordinal).ToArray(),
             progress, refusals.OrderBy(refusal => refusal.At).ToArray(),
