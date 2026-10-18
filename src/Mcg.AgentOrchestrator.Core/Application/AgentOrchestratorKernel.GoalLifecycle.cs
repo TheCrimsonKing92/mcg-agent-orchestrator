@@ -1164,6 +1164,22 @@ public sealed partial class AgentOrchestratorKernel
         return task;
     }
 
+    public TaskSpec SubstituteProviderHeldTaskAgent(GoalId goalId, TaskId taskId, AgentDefinition substitute,
+        string heldBindingKey, string evidenceReceipt)
+    {
+        var goal = GetGoal(goalId);
+        var task = goal.FindTask(taskId);
+        if (goal.Timeline.Any(evt => evt.TaskId == taskId && evt.Kind == ProgressKind.ProviderHoldSubstituted))
+            throw new InvalidOperationException("A provider-held task may be substituted only once.");
+        var heldAgentId = task.AssignedAgentId?.Value ?? "none";
+        if (task.AssignedAgentId == substitute.Id)
+            throw new InvalidOperationException("A provider hold substitute must change the assigned agent.");
+        task = ReassignTaskAgent(goalId, taskId, substitute, "Provider budget hold substitution.");
+        Append(goal, taskId, ProgressKind.ProviderHoldSubstituted,
+            $"held binding={heldBindingKey}; held agent={heldAgentId}; substitute={substitute.Id.Value}; receipt={(string.IsNullOrWhiteSpace(evidenceReceipt) ? "none" : evidenceReceipt)}");
+        return task;
+    }
+
     private void ReleaseCrossProviderSubscriptionDeferral(Goal goal, TaskSpec task, AgentDefinition newAgent)
     {
         if (!DispatchFailureClassifier.TryGetSubscriptionLimitRetryAfter(task, out var retryAfter))
