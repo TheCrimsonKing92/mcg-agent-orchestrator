@@ -19,6 +19,7 @@ internal sealed class ConductorInvariantObservationReader(string conductEventsLo
     internal ConductorInvariantObservation Read(IReadOnlyList<(GoalId Id, GoalStatus Status)> goals, DateTimeOffset now)
     {
         var ready = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+        var goalLines = new Dictionary<string, List<ConductorGoalLine>>(StringComparer.Ordinal);
         var refusals = new List<ConductorInvariantRefusal>();
         var relaunch = ConductorRelaunchObservation.Empty;
         DateTimeOffset? progress = null;
@@ -59,6 +60,7 @@ internal sealed class ConductorInvariantObservationReader(string conductEventsLo
                         if (matches.Length != 1) continue;
                         var goal = matches[0];
                         var reason = Value("reason") ?? "";
+                        ConductorFinishedAttemptDiagnosis.Retain(goalLines, goal.Id.Value, new(at, Value("result") ?? "", reason));
                         var capacity = reason.Contains("acceptance_width_", StringComparison.Ordinal) ||
                             reason.Contains("CohortCapacity", StringComparison.Ordinal) ||
                             reason.Contains("Acceptance_cohort_gate_owns_this_member", StringComparison.Ordinal);
@@ -97,7 +99,7 @@ internal sealed class ConductorInvariantObservationReader(string conductEventsLo
         return new(now, ready.Select(pair => new ConductorInvariantReadyGoal(pair.Key, pair.Value))
             .OrderBy(goal => goal.ReadySince).ThenBy(goal => goal.GoalId, StringComparer.Ordinal).ToArray(),
             progress, refusals.OrderBy(refusal => refusal.At).ToArray(),
-            attemptRoots is null ? [] : ConductorFinishedAttemptScanner.Scan(attemptRoots, goals, now), relaunch);
+            attemptRoots is null ? [] : ConductorFinishedAttemptScanner.Scan(attemptRoots, goals, now, goalLines), relaunch);
     }
 
     private IEnumerable<string> LogPaths()

@@ -9,7 +9,8 @@ internal static class ConductorFinishedAttemptScanner
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     internal static IReadOnlyList<ConductorFinishedAttempt> Scan(IReadOnlyList<string> roots,
-        IReadOnlyList<(GoalId Id, GoalStatus Status)> goals, DateTimeOffset now)
+        IReadOnlyList<(GoalId Id, GoalStatus Status)> goals, DateTimeOffset now,
+        IReadOnlyDictionary<string, List<ConductorGoalLine>>? goalLines = null)
     {
         var active = goals.Where(goal => goal.Status is not (GoalStatus.Parked or GoalStatus.Completed or
             GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded))
@@ -54,7 +55,9 @@ internal static class ConductorFinishedAttemptScanner
                 var finishedAt = new DateTimeOffset(File.GetLastWriteTimeUtc(finishPath));
                 if (attempt.CompletedAt is { } completed && completed < finishedAt) finishedAt = completed;
                 finished[attempt.AttemptId] = new(attempt.AttemptId, attempt.GoalId, attempt.Kind,
-                    attempt.StartedAt, finishedAt);
+                    attempt.StartedAt, finishedAt, ConductorFinishedAttemptDiagnosis.Describe(
+                        attempt.AttemptId, finishedAt, path,
+                        goalLines is not null && goalLines.TryGetValue(attempt.GoalId, out var lines) ? lines : []));
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { }
         }
