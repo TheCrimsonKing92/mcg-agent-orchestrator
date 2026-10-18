@@ -15,7 +15,7 @@ public sealed class OwnerFleetLineModeWidthScenarioTests
         var reads = 0;
         using var session = new OwnerConsoleSession(harness.State, harness.Questions, harness.Answers,
             harness.Liveness, harness.Digest, harness.Tail, harness.Output, harness.Clock,
-            fleet: () => OwnerFleetViewModelBuilder.Load(fixture.Workspace, harness.Liveness),
+            fleet: () => OwnerFleetViewModelBuilder.Load(fixture.Workspace, harness.Liveness, new FleetFixture.Clock()),
             terminalWidth: () => { reads++; return available; });
 
         Assert.True(await session.HandleCommandAsync("fleet", CancellationToken.None));

@@ -13,6 +13,8 @@ internal sealed class OwnerConsoleGateDialog : FrameView
     internal bool IsOpen { get; private set; }
     internal OwnerConsolePane ReturnPane { get; private set; }
     internal IReadOnlyList<string> Lines { get; private set; } = [];
+    internal string FooterText => OwnerConsoleDialogBindings.GateHelp.HintLabel!;
+    internal int SelectedLine => _body.SelectedItem ?? 0;
 
     internal OwnerConsoleGateDialog()
     {
@@ -22,7 +24,7 @@ internal sealed class OwnerConsoleGateDialog : FrameView
         CanFocus = true;
         Visible = false;
         Add(_body, new Label { Y = Pos.AnchorEnd(1), Width = Dim.Fill(), Height = 1,
-            Text = "Up/Down PgUp/PgDn scroll  Enter expand passed and baseline  Esc close" });
+            Text = FooterText });
     }
 
     internal void Open(OwnerConsolePane returnPane, OwnerConsoleGateProgress? gate)
@@ -47,13 +49,16 @@ internal sealed class OwnerConsoleGateDialog : FrameView
     internal bool HandleKey(Key key)
     {
         key.Handled = true;
-        if (key == Key.Enter || key == Key.Esc && Expanded)
+        var binding = key.IsAlt ? null : OwnerConsoleBindings.ForDialogKey(
+            OwnerConsoleScope.GateView, (char)key.NoCtrl.AsRune.Value, key.IsCtrl);
+        var back = key == Key.Esc || binding?.Command == "quit";
+        if (key == Key.Enter || back && Expanded)
         {
             Expanded = key == Key.Enter && !Expanded;
             Render(_gate);
             return false;
         }
-        if (key == Key.Esc) { IsOpen = Visible = false; return true; }
+        if (back) { IsOpen = Visible = false; return true; }
         if (OwnerConsolePaneNavigator.Target(key, _body.SelectedItem ?? 0, Lines.Count, _body.Viewport.Height) is { } target)
         {
             _body.SelectedItem = target;

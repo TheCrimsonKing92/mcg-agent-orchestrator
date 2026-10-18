@@ -25,12 +25,13 @@ public sealed record RemoteExecutorReport(IReadOnlyList<RemoteExecutorReportRow>
     public static RemoteExecutorReport Build(IEnumerable<string> configuredIds,
         IEnumerable<RemoteExecutorOutcomeRow> outcomes, IEnumerable<RemoteExecutorProbeRow> probes,
         DateTimeOffset? since = null, int last = 10, int unreadableOutcomeLines = 0, int unreadableProbeLines = 0,
-        IReadOnlyDictionary<string, int>? configuredSlots = null)
+        IReadOnlyDictionary<string, int>? configuredSlots = null, DateTimeOffset? noExecutorSince = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(last);
         var supplied = outcomes.ToArray();
+        var skipSince = noExecutorSince ?? since;
         var noExecutor = supplied.Where(row => string.IsNullOrWhiteSpace(row.ExecutorId) &&
-            row.Outcome == "shadow-skipped-no-executor" && (since is null || row.ObservedAt >= since)).ToArray();
+            row.Outcome == "shadow-skipped-no-executor" && (skipSince is null || row.ObservedAt >= skipSince)).ToArray();
         var all = supplied.Where(row => !string.IsNullOrWhiteSpace(row.ExecutorId)).ToArray();
         var allProbes = probes.Where(row => !string.IsNullOrWhiteSpace(row.ExecutorId)).ToArray();
         var ids = configuredIds.Where(id => !string.IsNullOrWhiteSpace(id)).Concat(all.Select(row => row.ExecutorId))

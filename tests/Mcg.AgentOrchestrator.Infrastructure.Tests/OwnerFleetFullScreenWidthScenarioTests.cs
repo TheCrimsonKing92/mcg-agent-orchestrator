@@ -18,7 +18,7 @@ public sealed class OwnerFleetFullScreenWidthScenarioTests
         var loads = 0;
         using var controller = new OwnerConsoleScreenController(harness.Questions, harness.Answers, dialogs,
             harness.State, harness.Tail, harness.Conductor, harness.DigestReport, harness.Digest, harness.Clock,
-            fleet: () => { loads++; return OwnerFleetViewModelBuilder.Load(fixture.Workspace, harness.Liveness); });
+            fleet: () => { loads++; return OwnerFleetViewModelBuilder.Load(fixture.Workspace, harness.Liveness, new FleetFixture.Clock()); });
 
         await controller.RunCommandAsync(":fleet");
 
@@ -62,13 +62,18 @@ public sealed class OwnerFleetFullScreenWidthScenarioTests
 
         internal RemoteExecutorReport Read() => RemoteExecutorReportReader.Read(Workspace, null, 10);
 
+        internal sealed class Clock : TimeProvider
+        {
+            public override DateTimeOffset GetUtcNow() => DateTimeOffset.Parse("2026-10-17T18:00:00Z");
+        }
+
         internal static void AssertDiagram(string text, int width)
         {
             var rows = text.Split('\n');
             Assert.All(rows, row => Assert.Equal(width, row.GetColumns()));
             Assert.Equal(3, text.Count(ch => ch is '┌' or '╔'));
             Assert.Contains("executors: 2", text);
-            Assert.Contains("no executor free: 1", text);
+            Assert.Contains("shadow skipped, no free slot: 1", text);
             Assert.DoesNotContain(rows, row => row.Trim('│', '║', ' ') == "Executor");
             var first = Array.FindIndex(rows, row => row.Contains("infrastructure", StringComparison.Ordinal));
             Assert.True(first >= 0);

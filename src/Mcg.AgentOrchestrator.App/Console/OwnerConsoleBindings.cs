@@ -21,7 +21,8 @@ internal static class OwnerConsoleBindings
         Row("accept", "Accept the selected default in DECISIONS after confirmation", 'a', "Accept the selected default in DECISIONS after confirmation.",
             OwnerConsoleScope.Decisions, OwnerConsoleEffect.External, OwnerConsoleCommandOwner.View, true, "accept default"),
         Row("answer", "Answer the selected decision in DECISIONS", 'r', "Answer the selected decision in DECISIONS.",
-            OwnerConsoleScope.Decisions, OwnerConsoleEffect.External, OwnerConsoleCommandOwner.View, true)
+            OwnerConsoleScope.Decisions, OwnerConsoleEffect.External, OwnerConsoleCommandOwner.View, true),
+        .. OwnerConsoleDialogBindings.All
     ]);
 
     private static OwnerConsoleBinding Row(string usage, string help, char? key = null, string? keyHelp = null,
@@ -33,14 +34,18 @@ internal static class OwnerConsoleBindings
             key is null ? null : hint ?? command, key is null ? null : $"{key}: {keyHelp}", help);
     }
 
-    internal static OwnerConsoleBinding Epics => All.Single(row => row.Command == "epics");
-    internal static OwnerConsoleBinding Gate => All.Single(row => row.Command == "gate");
-    internal static OwnerConsoleBinding Help => All.Single(row => row.Command == "help");
-    internal static OwnerConsoleBinding Quit => All.Single(row => row.Command == "quit");
+    internal static OwnerConsoleBinding Epics => All.Single(row => row.Scope == OwnerConsoleScope.Global && row.Command == "epics");
+    internal static OwnerConsoleBinding Gate => All.Single(row => row.Scope == OwnerConsoleScope.Global && row.Command == "gate");
+    internal static OwnerConsoleBinding Help => All.Single(row => row.Scope == OwnerConsoleScope.Global && row.Command == "help");
+    internal static OwnerConsoleBinding Quit => All.Single(row => row.Scope == OwnerConsoleScope.Global && row.Command == "quit");
+    internal static IEnumerable<OwnerConsoleBinding> Commands => All.Where(row => TopLevel(row.Scope));
+    internal static OwnerConsoleBinding? ForDialogKey(OwnerConsoleScope scope, char key, bool ctrl = false) => All.FirstOrDefault(row =>
+        !TopLevel(scope) && row.Scope == scope && row.Ctrl == ctrl && row.Key is { } bound &&
+        char.ToLowerInvariant(bound) == char.ToLowerInvariant(key));
 
     private static bool TopLevel(OwnerConsoleScope scope) => scope is OwnerConsoleScope.Global or OwnerConsoleScope.Decisions;
     internal static OwnerConsoleBinding? ForKey(char key, OwnerConsolePane pane) => All.FirstOrDefault(row =>
-        row.Key is { } bound && char.ToLowerInvariant(bound) == char.ToLowerInvariant(key) &&
+        !row.Ctrl && row.Key is { } bound && char.ToLowerInvariant(bound) == char.ToLowerInvariant(key) &&
         (row.Scope == OwnerConsoleScope.Global || row.Scope == OwnerConsoleScope.Decisions && pane == OwnerConsolePane.Decisions));
     internal static bool IsTopLevelKey(char key) => All.Any(row => TopLevel(row.Scope) &&
         row.Key is { } bound && char.ToLowerInvariant(bound) == char.ToLowerInvariant(key));
@@ -49,7 +54,7 @@ internal static class OwnerConsoleBindings
         var text = line.Trim();
         if (text.StartsWith(':')) text = text[1..].TrimStart();
         var command = text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
-        return All.FirstOrDefault(row => row.Command.Equals(command, StringComparison.OrdinalIgnoreCase));
+        return Commands.FirstOrDefault(row => row.Command.Equals(command, StringComparison.OrdinalIgnoreCase));
     }
 
     internal static IReadOnlyList<string> Validate(IReadOnlyList<OwnerConsoleBinding> rows)
@@ -60,17 +65,18 @@ internal static class OwnerConsoleBindings
         {
             var row = keyed[index];
             var key = char.ToLowerInvariant(row.Key!.Value);
+            var label = OwnerConsoleDialogBindings.KeyLabel(row);
             if (string.IsNullOrWhiteSpace(row.Command)) violations.Add($"Key '{key}' on '{row.Usage}' has no command.");
             if (row.Effect == OwnerConsoleEffect.External && (row.Scope == OwnerConsoleScope.Global || !row.Confirms))
                 violations.Add($"Key '{key}' on '{row.Command}' ({row.Usage}) is unsafe for an External effect.");
-            if (key is 'j' or 'k' or '/' or ':' || key == '?' && row.Command != "help" || key == 'q' && row.Command != "quit")
-                violations.Add($"Key '{key}' on '{row.Command}' ({row.Usage}) is reserved.");
-            foreach (var other in keyed.Skip(index + 1).Where(other => char.ToLowerInvariant(other.Key!.Value) == key))
+            if (!row.Ctrl && (key is 'j' or 'k' or '/' or ':' || key == '?' && row.Command != "help" || key == 'q' && row.Command != "quit"))
+                violations.Add($"Key '{key}' on '{row.Command}' ({row.Usage}) is reserved" + (key == 'q' ? " for 'quit'." : "."));
+            foreach (var other in keyed.Skip(index + 1).Where(other => char.ToLowerInvariant(other.Key!.Value) == key && other.Ctrl == row.Ctrl))
             {
                 if (row.Scope == other.Scope || TopLevel(row.Scope) && TopLevel(other.Scope))
-                    violations.Add($"Key '{key}' collides between '{row.Command}' and '{other.Command}'.");
+                    violations.Add($"Key '{label}' collides between '{row.Command}' and '{other.Command}'.");
                 else if (!row.Noun.Equals(other.Noun, StringComparison.OrdinalIgnoreCase))
-                    violations.Add($"Key '{key}' has different meanings for '{row.Command}' and '{other.Command}'.");
+                    violations.Add($"Key '{label}' has different meanings for '{row.Command}' and '{other.Command}'.");
             }
         }
         var letters = keyed.Where(row => TopLevel(row.Scope)).Select(row => char.ToLowerInvariant(row.Key!.Value))
@@ -81,7 +87,7 @@ internal static class OwnerConsoleBindings
 
     internal static string Description(OwnerConsoleBinding row) => row.Key is { } key
         ? $"{row.CommandHelp.TrimEnd('.')} (same as {key})." : row.CommandHelp;
-    internal static IReadOnlyList<string> PromptEntries => All.Select(row =>
+    internal static IReadOnlyList<string> PromptEntries => Commands.Select(row =>
         row.Key is { } key ? $"[{key}] {row.Usage}" : row.Usage).ToArray();
     internal static string CommandPrompt => string.Join(" | ", PromptEntries);
 
@@ -103,10 +109,10 @@ internal static class OwnerConsoleBindings
     private static string Hint(OwnerConsoleBinding row) => $"{row.Key} {row.HintLabel}";
 
     internal static string HelpText => string.Join("\n", NavigationHelp
-        .Concat(All.Where(row => row.Key.HasValue).SelectMany(row =>
+        .Concat(Commands.Where(row => row.Key.HasValue).SelectMany(row =>
             new[] { row.KeyHelp!, $":{row.Usage}: {Description(row)}" }.Concat(ExtraHelp(row))))
         .Concat(OwnerActivityNarrator.JumpKeyHelp)
-        .Concat(All.Where(row => row.Key is null).Select(row => $":{row.Usage}: {Description(row)}")));
+        .Concat(Commands.Where(row => row.Key is null).Select(row => $":{row.Usage}: {Description(row)}")));
 
     private static readonly string[] NavigationHelp =
     [
@@ -130,7 +136,7 @@ internal static class OwnerConsoleBindings
         "Epic detail PgUp: Scroll up one page.",
         "Epic detail PgDn: Scroll down one page.",
         "Epic detail Esc: Back to the epic list.",
-        "Epic view w (list and detail): Cycle the time window (day, week, all time).",
-        "Epic view r (list and detail): Reload after a failed load."
-    ] : row == Gate ? ["GATE view Up/Down PgUp/PgDn: Scroll lanes; Esc: Close the GATE view."] : [];
+        .. OwnerConsoleDialogBindings.All.Where(binding => binding.Scope == OwnerConsoleScope.EpicView && binding.Command != "quit")
+            .Select(binding => binding.KeyHelp!)
+    ] : row == Gate ? [OwnerConsoleDialogBindings.GateHelp.KeyHelp!, .. OwnerConsoleDialogBindings.GoalDetail.Select(binding => binding.KeyHelp!)] : [];
 }

@@ -8,4 +8,4 @@ internal enum OwnerConsoleCommandOwner { View, Controller }
 internal sealed record OwnerConsoleBinding(
     string Command, string Usage, char? Key, OwnerConsoleScope Scope,
     OwnerConsoleEffect Effect, OwnerConsoleCommandOwner Owner, bool Confirms,
-    string Noun, string? HintLabel, string? KeyHelp, string CommandHelp);
+    string Noun, string? HintLabel, string? KeyHelp, string CommandHelp, bool Ctrl = false);

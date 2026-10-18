@@ -20,15 +20,16 @@ internal static class OwnerFleetDiagram
             $"conductor: {(host.ConductorRunning ? "running" : "stopped")}",
             $"executors: {host.ExecutorCount}"
         };
+        var skipRow = host.NoExecutorFreeCount > 0 ? content.Count : -1;
         if (host.NoExecutorFreeCount > 0)
-            content.Add($"no executor free: {host.NoExecutorFreeCount} (last {Stamp(host.NoExecutorFreeLastAt)})");
+            content.Add($"shadow skipped, no free slot: {host.NoExecutorFreeCount} in last 24h (last {Stamp(host.NoExecutorFreeLastAt)})");
         if (host.ExecutorCount == 0) content.Add("no executors configured");
         if (host.UnreadableOutcomeLines != 0 || host.UnreadableProbeLines != 0)
         {
             content.Add($"unreadable ledger lines: outcomes {host.UnreadableOutcomeLines}");
             content.Add($"unreadable ledger lines: probes {host.UnreadableProbeLines}");
         }
-        Box(content, false);
+        Box(content, false, wrapRow: skipRow);
         foreach (var executor in model.Executors)
         {
             lines.Add("│" + new string(' ', width - 1));
@@ -63,7 +64,7 @@ internal static class OwnerFleetDiagram
         }
         return string.Join("\n", lines);
 
-        void Box(IReadOnlyList<string> rows, bool unreachable, int laneStart = int.MaxValue)
+        void Box(IReadOnlyList<string> rows, bool unreachable, int laneStart = int.MaxValue, int wrapRow = -1)
         {
             var edge = unreachable ? '═' : '─';
             var side = unreachable ? '║' : '│';
@@ -72,7 +73,7 @@ internal static class OwnerFleetDiagram
             {
                 // Ledger text must not inject terminal controls or extra diagram rows.
                 var clean = new string(rows[index].Select(ch => char.IsControl(ch) ? ' ' : ch).ToArray());
-                var fittedRows = index >= laneStart ? OwnerFleetLaneWrap.Wrap(clean, width - 4) :
+                var fittedRows = index >= laneStart || index == wrapRow ? OwnerFleetLaneWrap.Wrap(clean, width - 4) :
                     [OwnerConsoleLineFitter.Cut(clean, width - 4)];
                 foreach (var fitted in fittedRows)
                     lines.Add($"{side} {fitted}{new string(' ', width - 4 - fitted.GetColumns())} {side}");
