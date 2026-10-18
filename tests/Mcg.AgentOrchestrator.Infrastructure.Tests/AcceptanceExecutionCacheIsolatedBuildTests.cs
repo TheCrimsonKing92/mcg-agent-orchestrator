@@ -23,13 +23,15 @@ public sealed class AcceptanceExecutionCacheIsolatedBuildTests(ITestOutputHelper
         var tree = Path.Combine(_root, "tree");
         Seed(tree, 42);
         var cache = new DotnetBaseBuildCache(Path.Combine(_root, "cache"));
-        var cold = await Build(tree, "cold", cache);
+        var cold = await Build(tree, "cold", cache, importOrder: "targets-later");
         Assert.Contains("Execution=miss", cold.Summary);
+        Assert.Contains("miss_reasons=Core=not-found,Execution=not-found", cold.Summary);
         var coldHash = Hash(Assembly(cold.Environment, ExecutionProject));
         ValidateReceiptAndTests(tree, cold.Environment, "cold");
 
-        var warm = await Build(tree, "warm", cache, expectedRestoredHash: coldHash);
+        var warm = await Build(tree, "warm", cache, expectedRestoredHash: coldHash, importOrder: "tie");
         Assert.Contains("Execution=hit", warm.Summary);
+        Assert.Contains("miss_reasons=none", warm.Summary);
         Assert.Equal(coldHash, Hash(Assembly(warm.Environment, ExecutionProject)));
         ValidateReceiptAndTests(tree, warm.Environment, "warm");
         // The consumer is compiled in both runs. Compare diagnostic code, severity, source location,
@@ -43,6 +45,8 @@ public sealed class AcceptanceExecutionCacheIsolatedBuildTests(ITestOutputHelper
         WriteTest(tree, 84);
         var changed = await Build(tree, "changed", cache);
         Assert.Contains("Execution=miss", changed.Summary);
+        Assert.Contains("Execution=not-found[Mcg.AgentOrchestrator.Execution:items+Mcg.AgentOrchestrator.Execution:project-tree]", changed.Summary);
+        Assert.Contains("Core=not-found[Mcg.AgentOrchestrator.Execution:items+Mcg.AgentOrchestrator.Execution:project-tree]", changed.Summary);
         Assert.NotEqual(coldHash, Hash(Assembly(changed.Environment, ExecutionProject)));
         ValidateReceiptAndTests(tree, changed.Environment, "changed");
 
@@ -60,8 +64,80 @@ public sealed class AcceptanceExecutionCacheIsolatedBuildTests(ITestOutputHelper
         ValidateReceiptAndTests(sibling, rebuilt.Environment, "sibling");
     }
 
+    [Fact]
+    public async Task ImportWriteOrder_KeepsIdentity_ImportContentChangesIt()
+    {
+        var tree = Path.Combine(_root, "tree");
+        Seed(tree, 42);
+        var orderTie = await Resolve("order-tie", "tie");
+        var targetsLater = await Resolve("order-targets-later", "targets-later");
+        Assert.Equal(orderTie.Identity.Fingerprint, targetsLater.Identity.Fingerprint);
+        Assert.Equal(orderTie.Identity.Components, targetsLater.Identity.Components);
+        var tieAgain = await Resolve("order-tie-again", "tie");
+        Assert.Equal(orderTie.Identity.Fingerprint, tieAgain.Identity.Fingerprint);
+        Assert.Equal(orderTie.Identity.Components, tieAgain.Identity.Components);
+        Assert.Equal(orderTie.Commands, tieAgain.Commands);
+        var importContent = await Resolve("import-content", "tie", changeImport: true);
+        Assert.NotEqual(orderTie.Identity.Fingerprint, importContent.Identity.Fingerprint);
+        Assert.Equal("Mcg.AgentOrchestrator.Core:imports",
+            DotnetBaseBuildCacheMissDetail.DifferingComponents(orderTie.Identity.Components, importContent.Identity.Components));
+
+        async Task<(DotnetBaseBuildCacheIdentity Identity, int Commands)> Resolve(string slot, string order, bool changeImport = false)
+        {
+            var environment = EnvironmentFor(slot);
+            var commands = 0;
+            var identity = await DotnetBaseBuildCacheIdentityResolver.ResolveAsync(tree, [CoreProject, ExecutionProject],
+                ["dotnet", "build", InfrastructureTestsProject, "-v:minimal"], environment, args =>
+                {
+                    commands++;
+                    var result = Run(tree, environment, args);
+                    Assert.Equal(0, result.ExitCode);
+                    if (args.Contains("-t:Restore")) ApplyImportOrder(environment, order, changeImport);
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(result.ExitCode, result.Stdout));
+                }, ProcessEnvironment(tree, environment));
+            Assert.Equal(6, commands);
+            var resolved = Assert.IsType<DotnetBaseBuildCacheIdentity>(identity);
+            output.WriteLine("ISOLATED_EXECUTION_IDENTITY " + JsonSerializer.Serialize(new
+            {
+                slot, fingerprint = resolved.Fingerprint, components = resolved.Components
+            }));
+            return (resolved, commands);
+        }
+    }
+
+    private static void ApplyImportOrder(DotnetBuildEnvironment environment, string? order, bool changeImport = false)
+    {
+        if (order is null) return;
+        Assert.True(order is "tie" or "targets-later", $"Unknown import order: {order}");
+        var transformed = 0;
+        foreach (var project in new[] { CoreProject, ExecutionProject })
+        {
+            var name = Path.GetFileNameWithoutExtension(project);
+            var prefix = Path.Combine(environment.ArtifactsPath, "obj", name, $"{name}.csproj.nuget.g.");
+            var props = prefix + "props";
+            var targets = prefix + "targets";
+            if (!File.Exists(props) || !File.Exists(targets)) continue;
+            if (changeImport && project == CoreProject)
+            {
+                const string probe = "<!-- import content probe -->";
+                var content = File.ReadAllText(props);
+                if (!content.Contains(probe, StringComparison.Ordinal))
+                {
+                    var closing = content.LastIndexOf("</Project>", StringComparison.Ordinal);
+                    Assert.True(closing >= 0, $"Missing closing Project tag in {props}");
+                    File.WriteAllText(props, content.Insert(closing, probe));
+                }
+            }
+            var propsTime = File.GetLastWriteTimeUtc(props);
+            File.SetLastWriteTimeUtc(targets, order == "tie" ? propsTime : propsTime.AddSeconds(1));
+            Assert.Equal(order == "tie" ? propsTime : propsTime.AddSeconds(1), File.GetLastWriteTimeUtc(targets));
+            transformed++;
+        }
+        Assert.True(transformed > 0, "Restore produced no fixture import pairs to order.");
+    }
+
     private async Task<(DotnetBuildEnvironment Environment, string Summary)> Build(
-        string tree, string slot, DotnetBaseBuildCache cache, string? expectedRestoredHash = null)
+        string tree, string slot, DotnetBaseBuildCache cache, string? expectedRestoredHash = null, string? importOrder = null)
     {
         var environment = EnvironmentFor(slot);
         var plan = new DotnetBaseBuildCachePlan(new string('a', 40), [CoreProject, ExecutionProject],
@@ -110,13 +186,14 @@ public sealed class AcceptanceExecutionCacheIsolatedBuildTests(ITestOutputHelper
                 candidate.BuildArguments, owned, args =>
                 {
                     var result = MeasureCommand(args, "identity");
+                    if (args.Contains("-t:Restore") && result.ExitCode == 0) ApplyImportOrder(owned, importOrder);
                     return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(result.ExitCode, result.Stdout));
                 }, ProcessEnvironment(tree, owned));
             watch.Stop();
             identityMilliseconds += watch.Elapsed.TotalMilliseconds;
             output.WriteLine("ISOLATED_EXECUTION_IDENTITY " + JsonSerializer.Serialize(new
             {
-                slot, fingerprint = identity?.Fingerprint, elapsedMs = watch.Elapsed.TotalMilliseconds
+                slot, fingerprint = identity?.Fingerprint, components = identity?.Components, elapsedMs = watch.Elapsed.TotalMilliseconds
             }));
             return identity;
         });
