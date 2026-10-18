@@ -32,13 +32,8 @@ internal static class ExecutorScreeningPlanner
             if (!configuration.Lanes.Contains(check.Name, StringComparer.Ordinal)) reason = "not-configured";
             else if (!GoalAcceptanceVerifier.TryGetInfrastructurePartitionId(check, out _, out _)) reason = "not-infrastructure";
             // IsEligible accepts lanes without exclusive keys before checking build-system changes.
-            else if (lane.ExclusiveResourceKeys.Count > 0)
-            {
-                var foreignKey = lane.ExclusiveResourceKeys.FirstOrDefault(key =>
-                    !configuration.MachineLocalResourceKeys.Contains(key, StringComparer.Ordinal));
-                if (foreignKey is not null) reason = "exclusive-key:" + foreignKey;
-                else if (lane.RequiresBuildSystemChange) reason = "build-system-change";
-            }
+            else reason = RemoteLaneResourceEligibility.ExclusionReason(lane.ExclusiveResourceKeys,
+                lane.RequiresBuildSystemChange, configuration.MachineLocalResourceKeys);
             if (reason is null) selected.Add(lane);
             else excluded.Add(new(lane.Name, reason));
         }

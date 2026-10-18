@@ -57,14 +57,13 @@ internal static class RemoteFirstFocusedEvidence
                     claimClass: RemoteExecutorClaimClass.FocusedEvidence);
                 // Claim every slot before starting work; completions cannot recycle a sick executor.
                 var claimed = new List<(Run Run, RemoteLaneExecutorEntry Entry)>();
+                var eligibility = FocusedEvidenceRemoteEligibility.Create(worktreePath, configuration.MachineLocalResourceKeys);
                 foreach (var run in runs.OfType<Run>())
                 {
                     run.Request = coordinator.CreateRequest(run.Request.Lane, run.Check.Project!, run.Request.Filter,
                         identity with { ManifestIdentity = run.Request.ManifestIdentity }, "");
-                    var keys = run.Check.ExclusiveResourceKeys;
-                    if (keys.Count > 0 && (run.Check.RequiresBuildSystemChange ||
-                        !keys.All(key => configuration.MachineLocalResourceKeys.Contains(key, StringComparer.Ordinal))))
-                        Finish(run, RemoteLaneOutcomeCode.NotEligibleExclusiveResource, "exclusive-resource");
+                    if (eligibility.Decide(run.Check) is { Eligible: false } decision)
+                        Finish(run, RemoteLaneOutcomeCode.NotEligibleExclusiveResource, decision.Reason!);
                     else if (coordinator.TryClaimIdleExecutor(out var yieldReason) is not { } entry)
                         Finish(run, RemoteLaneOutcomeCode.ShadowSkippedNoExecutor, yieldReason ?? "no-idle-executor");
                     else
