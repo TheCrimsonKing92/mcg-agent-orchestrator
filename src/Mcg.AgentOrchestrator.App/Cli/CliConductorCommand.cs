@@ -64,7 +64,8 @@ internal static class CliConductorCommand
                     output.WriteLine($"{result.StoreName}: version {result.Version} ({result.DatabasePath})");
                 return 0;
             }
-            var owner = lockProbe.ActiveOwnerPid(workspace);
+            var ownership = lockProbe.ActiveOwnership(workspace);
+            var owner = ownership?.Pid;
             switch (args[1].ToLowerInvariant())
             {
                 case "apply-intents" when args.Count == 3:
@@ -75,7 +76,7 @@ internal static class CliConductorCommand
                 case "status":
                     var snapshot = ConductorStatusSnapshotReader.Read(workspace, owner,
                         (bootTime ?? (() => DateTimeOffset.UtcNow - TimeSpan.FromMilliseconds(Environment.TickCount64)))(),
-                        mainCommit ?? (() => ResolveMainCommit(workspace)));
+                        mainCommit ?? (() => ResolveMainCommit(workspace)), ownership: ownership);
                     if (CliConductorStatusJsonQueryCommand.IsConductorStatusJsonCommand(args))
                         output.WriteLine(ConductorStatusAgentReadView.Render(snapshot, time ?? TimeProvider.System));
                     else

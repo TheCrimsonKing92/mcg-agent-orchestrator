@@ -9,8 +9,13 @@ internal static class ConductorStatusAgentReadView
         AgentReadEnvelope.Serialize(AgentReadEnvelope.ConductorStatusSchema,
             AgentReadEnvelope.ConductorStatusSchemaVersion, new
             {
-                conductor = new { state = snapshot.OwnerPid is null ? "stopped" : "running", pid = snapshot.OwnerPid },
-                since = new { kind = snapshot.Since.Kind, at = RoundTrip(snapshot.Since.At), reason = snapshot.Since.Reason },
+                conductor = new { state = snapshot.ConductorState, pid = snapshot.OwnerPid },
+                since = new
+                {
+                    kind = snapshot.Since.Kind, at = RoundTrip(snapshot.Since.At), reason = snapshot.Since.Reason,
+                    previous = snapshot.Since.Previous is { } previous
+                        ? new { at = RoundTrip(previous.At), reason = previous.Reason } : null
+                },
                 supervisorBuild = snapshot.SupervisorBuild,
                 generation = new { state = snapshot.Generation.State, build = snapshot.Generation.Build, main = snapshot.Generation.Main },
                 latestTick = RoundTrip(snapshot.LatestTick),
