@@ -327,11 +327,19 @@ internal sealed class AcceptanceDotnetBuildPhase
                     ? $"{ProjectLabel(project)}=miss,published"
                     : $"{ProjectLabel(project)}=changed";
             });
+        var misses = plan.CacheableProjects.Select(project => restore.Projects.FirstOrDefault(receipt =>
+                receipt.Project.Equals(project, StringComparison.OrdinalIgnoreCase)))
+            .Where(receipt => receipt?.Status == "miss")
+            .Select(receipt => $"{ProjectLabel(receipt!.Project)}={receipt.Reason}" +
+                (receipt.MismatchedComponents is null ? "" : $"[{receipt.MismatchedComponents}]"))
+            .ToArray();
+        var missReasons = (misses.Length == 0 ? "none" : string.Join(",", misses)).Replace(' ', '_').Replace(';', '_');
         var evictions = restore.Evictions.Concat(publish?.Evictions ?? []).ToArray();
         return
             $"base-build-cache main_sha={plan.MainSha} input_identity={identity.Fingerprint} build_phase_ms={buildPhaseMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture)} " +
             $"projects={string.Join(",", projectReceipts)} " +
             $"built_projects={string.Join(",", builtProjects.Select(ProjectLabel))} " +
+            $"miss_reasons={missReasons} " +
             $"evictions={(evictions.Length == 0 ? "none" : string.Join(",", evictions))}";
     }
 

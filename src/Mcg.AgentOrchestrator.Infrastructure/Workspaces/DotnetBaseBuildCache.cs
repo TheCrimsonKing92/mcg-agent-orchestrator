@@ -8,7 +8,8 @@ internal sealed record DotnetBaseBuildCacheProjectReceipt(
     string ProjectKey,
     string Status,
     string? Reason,
-    string? ContentHash);
+    string? ContentHash,
+    string? MismatchedComponents = null);
 
 internal sealed record DotnetBaseBuildCacheRestoreResult(
     string MainSha,
@@ -100,7 +101,8 @@ internal sealed class DotnetBaseBuildCache
             var manifest = TryReadManifest(entryPath);
             if (manifest is null)
             {
-                receipts.Add(new DotnetBaseBuildCacheProjectReceipt(project, projectKey, "miss", "not-found", null));
+                receipts.Add(new DotnetBaseBuildCacheProjectReceipt(project, projectKey, "miss", "not-found", null,
+                    DotnetBaseBuildCacheMissDetail.Describe(ReadSiblingComponents(entryPath, projectKey, identity), identity.Components)));
                 continue;
             }
 
@@ -155,6 +157,31 @@ internal sealed class DotnetBaseBuildCache
         return receipts;
     }
 
+    private IReadOnlyList<(string EntryName, string? Components)> ReadSiblingComponents(
+        string entryPath, string projectKey, DotnetBaseBuildCacheIdentity identity)
+    {
+        var siblings = new List<(string EntryName, string? Components)>();
+        var parent = Path.GetDirectoryName(entryPath)!;
+        try
+        {
+            if (!Directory.Exists(parent)) return siblings;
+            foreach (var directory in Directory.EnumerateDirectories(parent))
+            {
+                if (directory.Equals(entryPath, StringComparison.OrdinalIgnoreCase)) continue;
+                var manifest = TryReadManifest(directory);
+                if (manifest is not null && string.Equals(manifest.ProjectKey, projectKey, StringComparison.Ordinal) &&
+                    !string.Equals(manifest.CompatibilityFingerprint, identity.Fingerprint, StringComparison.Ordinal))
+                    siblings.Add((Path.GetFileName(directory), manifest.CompatibilityComponents));
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Diagnostics must not turn a normal cache miss into a build failure.
+            siblings.Clear();
+        }
+        return siblings;
+    }
+
     public DotnetBaseBuildCachePublishResult Publish(
         string mainSha,
         string artifactsPath,
@@ -193,7 +220,8 @@ internal sealed class DotnetBaseBuildCache
                 File.WriteAllText(
                     Path.Combine(stagingPath, ManifestFileName),
                     JsonSerializer.Serialize(
-                        new CacheEntryManifest(mainSha, project, projectKey, hash, DateTimeOffset.UtcNow, files, ManifestSchemaVersion, identity.Fingerprint),
+                        new CacheEntryManifest(mainSha, project, projectKey, hash, DateTimeOffset.UtcNow, files, ManifestSchemaVersion,
+                            identity.Fingerprint, string.IsNullOrEmpty(identity.Components) ? null : identity.Components),
                         new JsonSerializerOptions { WriteIndented = true }));
 
                 var finalPath = EntryPath(mainSha, projectKey, identity);
@@ -531,7 +559,8 @@ internal sealed class DotnetBaseBuildCache
         DateTimeOffset CreatedAt,
         IReadOnlyList<CachedFileStat>? Files = null,
         int SchemaVersion = 0,
-        string? CompatibilityFingerprint = null);
+        string? CompatibilityFingerprint = null,
+        string? CompatibilityComponents = null);
 
     private sealed record CachedFileStat(string Path, long Length, long LastWriteUtcTicks);
 }
