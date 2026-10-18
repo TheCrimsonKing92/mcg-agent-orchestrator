@@ -385,6 +385,12 @@ internal sealed partial class OperatorIntentCoordinator
                     throw new InvalidOperationException($"Invalid goal priority '{priorityPayload.Level}'; valid levels: {GoalPriorities.ValidLevelsText}.");
                 kernel.SetGoalPriority(goal.Id, priority, intent.Actor, priorityPayload.Rationale ?? "");
                 return;
+            case OperatorIntentVerbs.GoalIsolation:
+                var isolationPayload = Deserialize<GoalIsolationOperatorIntentPayload>(intent);
+                if (!GoalIsolations.TryParse(isolationPayload.Mode, out var isolation))
+                    throw new InvalidOperationException($"Invalid goal isolation '{isolationPayload.Mode}'; valid modes: {GoalIsolations.ValidModesText}.");
+                GoalIsolationCommands.Apply(kernel, goal.Id, isolation, intent.Actor, isolationPayload.Rationale ?? "");
+                return;
             case OperatorIntentVerbs.CriterionEvidenceMap:
                 var mapping = Deserialize<CriterionEvidenceMappingOperatorIntentPayload>(intent);
                 kernel.MapCriterionEvidenceOwner(

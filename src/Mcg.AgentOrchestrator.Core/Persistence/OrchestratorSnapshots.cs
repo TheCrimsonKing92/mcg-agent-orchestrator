@@ -35,7 +35,9 @@ public sealed record GoalSnapshot(
     string? Priority = null,
     IReadOnlyList<GateTestObligation>? GateTestObligations = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    GoalPrioritySchedulingSnapshot? PriorityScheduling = null);
+    GoalPrioritySchedulingSnapshot? PriorityScheduling = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    string? Isolation = null);
 
 public sealed record GoalHoldSnapshot(
     string Identity,

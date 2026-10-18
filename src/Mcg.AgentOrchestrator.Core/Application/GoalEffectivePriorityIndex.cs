@@ -24,9 +24,9 @@ public static class GoalEffectivePriorityIndex
         goal.PrioritySchedulingPendingPersistence = true;
     }
 
-    internal static void RecordSeeds(Goal goal, IEnumerable<GoalId> targets)
+    internal static void RecordSeeds(Goal goal, IEnumerable<GoalId> targets, bool terminal = false)
     {
-        if (StoredLevel(goal) <= GoalPriority.Normal) return;
+        if (StoredLevel(goal) <= GoalPriority.Normal && !(terminal && goal.Priority != GoalPriority.Normal)) return;
         var state = State(goal);
         goal.PriorityScheduling = state with
         {
@@ -36,7 +36,8 @@ public static class GoalEffectivePriorityIndex
     }
 
     public static IReadOnlySet<GoalId> ApplyPending(IEnumerable<Goal> goals, Action<string> emit,
-        Func<DateTimeOffset> clock, StrongBox<DateTimeOffset?>? driftState = null)
+        Func<DateTimeOffset> clock, StrongBox<DateTimeOffset?>? driftState = null,
+        Action<GoalId, string>? recordDecision = null)
     {
         var lookup = goals.ToDictionary(goal => goal.Id.Value, StringComparer.Ordinal);
         var changed = lookup.Values.Where(goal => goal.PrioritySchedulingPendingPersistence)
@@ -48,6 +49,15 @@ public static class GoalEffectivePriorityIndex
             .Distinct(StringComparer.Ordinal).ToArray();
         if (seeds.Length > 0)
         {
+            foreach (var goal in lookup.Values.Where(goal => goal.IsTerminal && goal.Priority != GoalPriority.Normal &&
+                         goal.PriorityScheduling?.PendingSeedGoalIds?.Contains(goal.Id.Value) == true))
+            {
+                var previous = goal.Priority;
+                goal.SetPriority(GoalPriority.Normal);
+                goal.PrioritySchedulingPendingPersistence = true;
+                recordDecision?.Invoke(goal.Id,
+                    $"Goal priority cleared at terminal: previous={GoalPriorities.Format(previous)} status={goal.Status}");
+            }
             foreach (var goal in lookup.Values.Where(goal => goal.PriorityScheduling?.PendingSeedGoalIds?.Count > 0))
             {
                 Write(goal, State(goal) with { PendingSeedGoalIds = null });

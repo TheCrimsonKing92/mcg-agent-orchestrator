@@ -75,6 +75,14 @@ public sealed class Goal
     public GoalStatus Status { get; private set; } = GoalStatus.Draft;
     public GoalPriority Priority { get; private set; } = GoalPriority.Normal;
 
+    public GoalIsolation Isolation { get; internal set; }
+
+    internal void SetIsolation(GoalIsolation isolation)
+    {
+        if (!Enum.IsDefined(isolation)) throw new ArgumentOutOfRangeException(nameof(isolation));
+        Isolation = isolation;
+    }
+
     private GoalPrioritySchedulingSnapshot? _priorityScheduling;
     public GoalPrioritySchedulingSnapshot? PriorityScheduling
     {
@@ -246,7 +254,7 @@ public sealed class Goal
     internal void SetStatus(GoalStatus status)
     {
         if (!IsTerminal && IsTerminalMetadataStatus(status))
-            GoalEffectivePriorityIndex.RecordSeeds(this, []);
+            GoalEffectivePriorityIndex.RecordSeeds(this, [], terminal: true);
         Status = status;
     }
 
@@ -1147,7 +1155,8 @@ public sealed class Goal
             AcceptanceFailureDeferredForRetry: _acceptanceFailureDeferredForRetry,
             CriterionEvidenceObligations: _criterionEvidenceObligations.Count == 0 ? null : _criterionEvidenceObligations.ToArray(),
             GateTestObligations: _gateTestObligations.Count == 0 ? null : _gateTestObligations.ToArray(),
-            PriorityScheduling: PriorityScheduling);
+            PriorityScheduling: PriorityScheduling,
+            Isolation: Isolation == GoalIsolation.None ? null : GoalIsolations.Format(Isolation));
     }
 
     internal static Goal FromSnapshot(GoalSnapshot snapshot)
@@ -1262,6 +1271,7 @@ public sealed class Goal
             snapshot.LastAcceptanceIdentityStaleAttemptId);
         goal.SetPriority(GoalPriorities.ParseOrDefault(snapshot.Priority));
         goal.PriorityScheduling = snapshot.PriorityScheduling;
+        goal.SetIsolation(GoalIsolations.ParseOrDefault(snapshot.Isolation));
         goal.RestoreHold(snapshot.CurrentHold);
 
         return goal;

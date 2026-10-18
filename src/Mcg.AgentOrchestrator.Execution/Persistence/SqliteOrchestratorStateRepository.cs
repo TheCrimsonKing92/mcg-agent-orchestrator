@@ -2116,6 +2116,7 @@ public sealed partial class SqliteOrchestratorStateRepository : IOrchestratorSta
                 stored.CurrentHold,
                 current.CurrentHold),
             Priority = PickTickOwned(baseline.Priority, stored.Priority, current.Priority),
+            Isolation = PickTickOwned(baseline.Isolation, stored.Isolation, current.Isolation),
             PriorityScheduling = PickTickOwned(baseline.PriorityScheduling, stored.PriorityScheduling, current.PriorityScheduling),
             EffectiveAcceptanceCriteriaCorrections = PickStoreOwnedList(
                 baseline.EffectiveAcceptanceCriteriaCorrections,

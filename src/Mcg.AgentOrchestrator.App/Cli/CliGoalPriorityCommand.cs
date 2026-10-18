@@ -12,7 +12,8 @@ internal static class CliGoalPriorityCommand
     internal static bool IsCommand(IReadOnlyList<string> args) =>
         args.Count > 0 && args[0].Equals(OperatorIntentVerbs.GoalPriority, StringComparison.OrdinalIgnoreCase);
 
-    internal static bool Execute(IReadOnlyList<string> parts, CliExecutionContext context, IOperatorIntentStore? intentStore = null)
+    internal static bool Execute(IReadOnlyList<string> parts, CliExecutionContext context, IOperatorIntentStore? intentStore = null,
+        Func<PortfolioStore>? openPortfolio = null)
     {
         CliCommandHelp.ThrowIfInvalidFlags(parts);
         parts = OperatorIntentSubmissionOutput.StripJsonFlag(parts, out var emitJson);
@@ -35,6 +36,8 @@ internal static class CliGoalPriorityCommand
         var persisted = (intentStore ?? SqliteOperatorIntentStore.ForDirectories(
             context.Workspace.OrchestratorDirectory, context.Workspace.LogDirectory))
             .EnqueueAsync(intent).GetAwaiter().GetResult();
+        if (persisted.Id == intent.Id && priority >= GoalPriority.High)
+            GoalPriorityAdvisories.Warn(context, goal, priority, openPortfolio);
         if (emitJson)
         {
             // Preserve the submitted-intent envelope and add this command's payload.

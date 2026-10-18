@@ -26,7 +26,7 @@ internal static class OwnerConsoleGateLayout
                 .Concat(expanded ? baseline.Concat(passed) : []).ToArray();
             var columns = new Columns(printed, width);
             lines.Add($"GATE {gate.Kind} | elapsed {(int)gate.Elapsed.TotalMinutes}m" + (gate.Failing ? " | FAILING" : ""));
-            lines.Add(string.Join(" + ", gate.Members.Select(member => member.Id + (member.Title.Length == 0 ? "" : " " + member.Title))));
+            lines.Add(string.Join(" + ", gate.Members.Select(member => member.Id + (member.Priority.Length == 0 ? "" : " " + member.Priority) + (member.Title.Length == 0 ? "" : " " + member.Title))));
             lines.Add($" x {counted.Count(Failed)} failed   > {counted.Count(row => row.State == OwnerConsoleGateLaneState.Running)} running   + {counted.Count(row => row.State == OwnerConsoleGateLaneState.Done && row.Outcome == "passed")} passed   = {counted.Count(row => row.State == OwnerConsoleGateLaneState.Cached)} cached   . {counted.Count(row => row.State == OwnerConsoleGateLaneState.Queued)} queued");
             if (!gate.Failing) lines.Add(OwnerConsoleGateFormatter.ProgressLine(gate));
             Section("FAILED", failed, failureNames: true);

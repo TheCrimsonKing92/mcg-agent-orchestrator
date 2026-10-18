@@ -260,7 +260,7 @@ internal static partial class CliPersistentStateRunner
         }
         if (IsCancelDispatchCommand(args))
             return ExecuteCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
-        if (CliGoalPriorityCommand.IsCommand(args))
+        if (CliGoalPriorityCommand.IsCommand(args) || CliGoalIsolationCommand.IsCommand(args))
         {
             CliCommandHelp.ThrowIfInvalidFlags(args);
             return ExecuteCommandWithoutTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
@@ -1740,27 +1740,6 @@ internal static partial class CliPersistentStateRunner
         string GoalId,
         string Status,
         bool IsLanded);
-
-    private static TerminalGoalMetadata ToTerminalGoalMetadata(GoalSummary summary)
-    {
-        var status = Enum.TryParse<GoalStatus>(summary.Status, ignoreCase: true, out var parsed)
-            ? parsed
-            : GoalStatus.Completed;
-        var title = string.IsNullOrWhiteSpace(summary.Objective)
-            ? summary.Id
-            : summary.Objective;
-        var terminatedAt = summary.TerminatedAt ?? TryParseTimestamp(summary.UpdatedAt);
-        return new TerminalGoalMetadata(
-            new GoalId(summary.Id),
-            status,
-            title,
-            summary.ResultCommit,
-            summary.CreatedAt,
-            terminatedAt);
-    }
-
-    private static DateTimeOffset? TryParseTimestamp(string value) =>
-        DateTimeOffset.TryParse(value, out var parsed) ? parsed : null;
 
     private static bool ExecuteCommandWithoutTransaction(
         IReadOnlyList<string> args,
