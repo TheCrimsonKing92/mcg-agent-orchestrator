@@ -243,10 +243,10 @@ internal sealed partial class ConductorDriver
             failures => EveryFailingTestIsInsideCandidateChanges(goal, attributionBatch, failures));
         if (outcome == "unusable" && attempt is not null)
             _focusedEvidenceAttemptCoordinator.RecordFocusedEvidenceRequestDispositions(attempt, requestContext.FindingRoundFingerprint, receiptId, []);
-        _recordFindingEvidenceRun(goal.Id, tester.Id,
+        _recordFindingEvidenceRun(goal.Id, tester.Id, PreTesterFailureSignatureReader.AppendTo(
             PreTesterEvidenceIndexLines.FormatMarker(new PreTesterEvidenceEntry(
                 outcome, candidateSha!, receiptId, selectionNames, notRun,
-                attempt?.ResultPath, failingTests)));
+                attempt?.ResultPath, failingTests)), outcome, failingTests, candidate?.TestResultPaths));
         if (PreTesterEvidenceRefreshRule.DecideAfterRun(refresh, receiptId, outcome) == PreTesterEvidenceRefreshDecision.EscalateRepeat)
         {
             result = Escalate(goal, goalPrefix, policy, fromState, PreTesterEvidenceRefreshRule.DescribeRepeat(candidateSha!, refresh!.SupersededReceiptId, receiptId));
@@ -298,8 +298,8 @@ internal sealed partial class ConductorDriver
             .Where(evt => evt.TaskId == tester.Id && evt.Kind == ProgressKind.TaskDispatchRecorded)
             .Select(evt => evt.OccurredAt).DefaultIfEmpty(DateTimeOffset.MinValue).Max();
         var window = redHistory.Where(evt => evt.OccurredAt > lastTesterDispatch).ToArray();
-        var decision = PreTesterRedLoopRule.Evaluate(window.Select(evt =>
-            (IReadOnlyCollection<string>)(PreTesterEvidenceIndexLines.Parse(evt.Message)?.FailingTests ?? [])).ToArray());
+        var decision = PreTesterRedLoopRule.EvaluateRuns(
+            window.Select(evt => PreTesterFailureSignature.ReadRun(evt.Message)).ToArray());
         if (!decision.Trip) return false;
         result = Escalate(goal, goalPrefix, policy, fromState,
             "PRE_TESTER_RED_LOOP: three consecutive candidate RED runs without Tester dispatch; " +

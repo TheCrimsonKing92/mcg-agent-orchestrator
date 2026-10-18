@@ -35,7 +35,8 @@ internal static class ConductorInvariantWatchdog
         foreach (var attempt in observation.FinishedAttempts ?? [])
             if (observation.Now - attempt.FinishedAt > ConductorInvariantThresholds.FinishedUnreconciled)
                 Add(new(ConductorInvariantThresholds.FinishedUnreconciledKind, attempt.AttemptId, attempt.FinishedAt,
-                    $"goal:{Short(attempt.GoalId)},kind:{attempt.Kind},finishedAt:{attempt.FinishedAt:O},unreconciledFor:{(observation.Now - attempt.FinishedAt).TotalMinutes:F0}m"));
+                    $"goal:{Short(attempt.GoalId)},kind:{attempt.Kind},finishedAt:{attempt.FinishedAt:O},unreconciledFor:{(observation.Now - attempt.FinishedAt).TotalMinutes:F0}m" +
+                    (attempt.Diagnosis is { } diagnosis ? "," + diagnosis : "")));
 
         if (observation.Relaunch is { ScheduledAt: { } scheduled } relaunch)
         {
