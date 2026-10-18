@@ -68,6 +68,7 @@ internal sealed class RemoteFocusedEvidenceShadow : IAsyncDisposable
                     : UnavailableRemoteLaneExecutor.Instance);
             shadow._coordinator = new(configuration, identity, worktreePath, prefix, shadow._executor,
                 shadow._clock, shadow._pollInterval, null, claimClass: RemoteExecutorClaimClass.Shadow);
+            var eligibility = FocusedEvidenceRemoteEligibility.Create(worktreePath, configuration.MachineLocalResourceKeys);
             foreach (var check in checks)
             {
                 if (!check.IsFocusedEvidenceSelection || check.Project is null ||
@@ -83,6 +84,12 @@ internal sealed class RemoteFocusedEvidenceShadow : IAsyncDisposable
                 shadow._runs.Add(run);
                 try
                 {
+                    if (eligibility.Decide(check) is { Eligible: false } decision)
+                    {
+                        run.Ended = run.Started;
+                        run.Work = Task.FromResult(new Observation(RemoteLaneOutcomeCode.NotEligibleExclusiveResource, Reason: decision.Reason));
+                        continue;
+                    }
                     var entry = shadow._coordinator.TryClaimIdleExecutor(out var yieldReason);
                     if (entry is null)
                     {
@@ -249,7 +256,8 @@ internal sealed class RemoteFocusedEvidenceShadow : IAsyncDisposable
                 RemoteExecutorHealthLedger.Append(_ledgerPath!, new(_clock.GetUtcNow(), request.ExecutorId,
                     request.AttemptId, request.Lane, observation.Code,
                     observation.Code is RemoteLaneOutcomeCode.Accepted or RemoteLaneOutcomeCode.CancelledAfterGrace or
-                        RemoteLaneOutcomeCode.ShadowSkippedNoExecutor or RemoteLaneOutcomeCode.PreemptedByGate ? null : "executor",
+                        RemoteLaneOutcomeCode.ShadowSkippedNoExecutor or RemoteLaneOutcomeCode.PreemptedByGate or
+                        RemoteLaneOutcomeCode.NotEligibleExclusiveResource ? null : "executor",
                     Binding(request), observed is null ? null : new(observed.ExecutorId, observed.Lane,
                         observed.VerifyingCommitSha, observed.ObservedTreeSha, observed.MainSha, observed.FilterHash,
                         observed.ManifestIdentity), observation.Reason, EvidenceShadow: true, GoalId: request.GoalId,

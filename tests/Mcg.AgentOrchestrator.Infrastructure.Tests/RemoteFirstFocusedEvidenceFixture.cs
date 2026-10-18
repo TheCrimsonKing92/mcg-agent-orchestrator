@@ -81,10 +81,10 @@ public abstract class RemoteFirstFocusedEvidenceFixture : GoalAcceptanceVerifier
         internal int BuildCalls => Volatile.Read(ref _buildCalls);
         internal GoalAcceptanceVerifierTestOverrides Overrides => _owner.TestOverrides;
 
-        internal Scenario(RemoteFirstFocusedEvidenceFixture owner)
+        internal Scenario(RemoteFirstFocusedEvidenceFixture owner, string? manifestText = null)
         {
             _owner = owner;
-            Root = CreateManifestWorkspace("""
+            Root = CreateManifestWorkspace(manifestText ?? """
                 {"version":1,"engine":{"mtpInvocations":[{
                     "project":"tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
                     "executablePathTemplate":"bin/{projectName}/{configuration}/{projectName}{executableExtension}",
