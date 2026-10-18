@@ -104,6 +104,8 @@ internal static class CliCommandHelp
     public const string RemoteExecutorsUsage = "Usage: remote-executors [--since <ISO-8601>] [--last <N>] [--json]";
     public const string RemoteLaneSelfTestUsage = "Usage: remote-lane-selftest --executor <id> [--timeout-minutes <n>]";
     public const string ExecutorScreenUsage = "Usage: executor-screen [--max-candidates <n>] [--executor <id>]";
+    public const string ExecutorSetSlotsUsage = "Usage: executor-set-slots <executor-id> <slots> [--operator-actor <actor>] [--actor-kind <human|agent>] [--idempotency-key <key>] [--json]";
+    public const string FocusedEvidenceSetUsage = "Usage: focused-evidence-set [--mode off|shadow] [--sample-every <n>] [--operator-actor <actor>] [--actor-kind <human|agent>] [--idempotency-key <key>] [--json]";
     public const string RoundValueUsage = "Usage: round-value [--since <ISO-8601-with-offset>] [--until <ISO-8601-with-offset>] [--json] [--by-skill] [--by-check] [--baseline-since <ISO-8601-with-offset> --baseline-until <ISO-8601-with-offset>]";
     public const string LessonUsage = "Usage: lesson record --situation <text> --rule <text> --evidence <ref>... [--applies-to <tag>...] [--goal <goal-prefix>] [--until-goal <goal-prefix>] [--actor-kind human|agent] [--json] | lesson retire <lesson-id> --reason <text> [--evidence <ref>...] [--json]";
     public const string LessonsUsage = "Usage: lessons [--all] [--applies-to <tag>] [--json]";
@@ -673,6 +675,12 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry ExecutorScreen = new(
         ExecutorScreenUsage, "Screen a candidate on an idle executor and record an advisory receipt.",
         ["--max-candidates", "--executor", "--help", "-h"]);
+    private static readonly CommandHelpEntry ExecutorSetSlots = new(
+        ExecutorSetSlotsUsage, "Queue an audited host executor slot change for the next tick.",
+        ["--operator-actor", "--actor-kind", "--idempotency-key", "--json", "--help", "-h"]);
+    private static readonly CommandHelpEntry FocusedEvidenceSet = new(
+        FocusedEvidenceSetUsage, "Queue an audited focused-evidence setting change for the next tick.",
+        ["--mode", "--sample-every", "--operator-actor", "--actor-kind", "--idempotency-key", "--json", "--help", "-h"]);
 
     public const string BoardSimulateUsage = "Usage: board-simulate [--day <yyyy-MM-dd>] [--width <1-4>] [--train-size <0|3|4>] [--cohorts on|off] [--drop newest|lowest-pass-rate] [--seed <n>] [--json]";
 
@@ -1235,6 +1243,16 @@ internal static class CliCommandHelp
         if (args[0].Equals("executor-screen", StringComparison.OrdinalIgnoreCase))
         {
             entry = ExecutorScreen;
+            return true;
+        }
+        if (args[0].Equals("executor-set-slots", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = ExecutorSetSlots;
+            return true;
+        }
+        if (args[0].Equals("focused-evidence-set", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = FocusedEvidenceSet;
             return true;
         }
         if (args[0].Equals("remote-lane-selftest", StringComparison.OrdinalIgnoreCase))
