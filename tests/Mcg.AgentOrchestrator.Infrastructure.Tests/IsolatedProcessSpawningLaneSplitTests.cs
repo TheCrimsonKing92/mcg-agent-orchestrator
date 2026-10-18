@@ -45,6 +45,20 @@ public sealed class IsolatedProcessSpawningLaneSplitTests
         nameof(WorkerBuildCheckRecoveryTests)
     ];
 
+    // Expand these back to the original operands before constructing the pre-split reference.
+    private static readonly Dictionary<string, string[]> CompactExclusions = new(StringComparer.Ordinal)
+    {
+        ["PatchEquivalenceIntegrat"] =
+            [nameof(PatchEquivalenceIntegratedMainParentTests), nameof(PatchEquivalenceIntegrationMergeTests)],
+        ["WorkerDispatchTestsSubscription"] =
+            ["WorkerDispatchTestsSubscriptionPreflight", "WorkerDispatchTestsSubscriptionTerminalContract"],
+        ["RealProcessShard"] = ["RealProcessShardAlphaSmokeTests", "RealProcessShardBetaSmokeTests"],
+        ["DisposableTrialRoot"] = ["DisposableTrialRootTests", "DisposableTrialRootNegativeControlTests"],
+        ["RunGoalService"] = ["RunGoalServiceTests", "RunGoalServiceProcessContractTests"],
+        ["PermitWaitTests"] = ["StructuralCoveragePermitWaitTests", "StructuralCoverageVerifierPermitWaitTests"],
+        ["ThreadPoolSaturationTests"] = ["GitCliThreadPoolSaturationTests", "PipeDrainThreadPoolSaturationTests"]
+    };
+
     // Mean summed test seconds from TRX attempts d39a96cd-0-20261018143634873,
     // 1bc6e2ba-0-20261018141003319, operator-gate-20261018132531546,
     // 6a9b6a43-gate-20261018130319398 and 9ca89c71-0-20261018095002219.
@@ -100,6 +114,23 @@ public sealed class IsolatedProcessSpawningLaneSplitTests
                 AssertOnlyLane(membership, type, LaneB);
             AssertOnlyLane(membership, typeof(GoalAcceptanceLaneIsolatedRootGuardTests), Remainder);
             AssertOnlyLane(membership, typeof(JobAccountingRunIdentityEvidenceTests), Remainder);
+        }
+    }
+
+    [Xunit.Fact]
+    public void CompactExclusions_ClassCensus_MatchesOnlyPreviouslyExcludedClasses()
+    {
+        var types = RunnableTypes();
+        foreach (var (substring, originals) in CompactExclusions)
+        {
+            var originalMatches = types.Where(type => originals.Any(original =>
+                    type.FullName!.Contains(original, StringComparison.OrdinalIgnoreCase)))
+                .Select(type => type.FullName).ToArray();
+            var compactMatches = types.Where(type =>
+                    type.FullName!.Contains(substring, StringComparison.OrdinalIgnoreCase))
+                .Select(type => type.FullName).ToArray();
+            Xunit.Assert.NotEmpty(originalMatches);
+            Xunit.Assert.Equal(originalMatches, compactMatches);
         }
     }
 
@@ -199,6 +230,14 @@ public sealed class IsolatedProcessSpawningLaneSplitTests
         Xunit.Assert.Single(lanes, lane => lane.Name == LaneB);
         var remainder = Xunit.Assert.Single(lanes, lane => lane.Name == Remainder);
         var operands = remainder.Filter.Split('&').ToList();
+        foreach (var (substring, originals) in CompactExclusions)
+        {
+            var compactOperand = "FullyQualifiedName!~" + substring;
+            Xunit.Assert.Single(operands, item => item == compactOperand);
+            var index = operands.IndexOf(compactOperand);
+            operands.RemoveAt(index);
+            operands.InsertRange(index, originals.Select(original => "FullyQualifiedName!~" + original));
+        }
         foreach (var substring in MovedSubstrings)
         {
             var operand = "FullyQualifiedName!~" + substring;
