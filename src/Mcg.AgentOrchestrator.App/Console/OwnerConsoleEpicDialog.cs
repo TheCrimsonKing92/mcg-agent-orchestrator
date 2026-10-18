@@ -96,7 +96,9 @@ internal sealed class OwnerConsoleEpicDialog : FrameView
     internal async Task<bool> HandleKeyAsync(Key key)
     {
         key.Handled = true;
-        if (key == Key.Esc)
+        var binding = key.IsAlt ? null : OwnerConsoleBindings.ForDialogKey(
+            OwnerConsoleScope.EpicView, (char)key.NoCtrl.AsRune.Value, key.IsCtrl);
+        if (key == Key.Esc || binding?.Command == "quit")
         {
             if (ShowingDetail)
             {
@@ -111,7 +113,7 @@ internal sealed class OwnerConsoleEpicDialog : FrameView
             Close();
             return true;
         }
-        if (char.ToLowerInvariant((char)key.AsRune.Value) == 'w')
+        if (binding?.Command == "window")
         {
             TimeWindow = TimeWindow switch
             {
@@ -123,7 +125,7 @@ internal sealed class OwnerConsoleEpicDialog : FrameView
             BeginLoading();
             await ReloadAsync();
         }
-        else if (char.ToLowerInvariant((char)key.AsRune.Value) == 'r' && LoadState == OwnerConsoleEpicLoadState.Failed)
+        else if (binding?.Command == "reload")
         {
             _revision++;
             BeginLoading();

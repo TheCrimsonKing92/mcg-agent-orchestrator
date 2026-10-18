@@ -401,9 +401,9 @@ public sealed class OwnerConsoleFullScreenPaneTests
         // Bindings handled in OwnerConsoleEpicDialog.HandleKeyAsync, by mode.
         foreach (var binding in new[] { "Epic list Up:", "Epic list Down:", "Epic list Enter:", "Epic list Esc:",
             "Epic detail Up:", "Epic detail Down:", "Epic detail PgUp:", "Epic detail PgDn:", "Epic detail Esc:",
-            "Epic view w (list and detail):", "Epic view r (list and detail):" })
+            "Epic view w (list and detail):", "Epic view Ctrl+R (list and detail):" })
             Assert.Single(lines.Where(line => line.StartsWith(binding, StringComparison.Ordinal)));
-        Assert.Contains("failed load", lines.Single(line => line.StartsWith("Epic view r", StringComparison.Ordinal)));
+        Assert.Contains("Reload", lines.Single(line => line.StartsWith("Epic view Ctrl+R", StringComparison.Ordinal)));
         Assert.Contains("e: Open the epic view (any pane).", lines);
         Assert.Contains(":epics: Open the epic view (same as e).", lines);
         Assert.Contains("Tab: Next pane (DECISIONS, BOARD, ACTIVITY).", lines);

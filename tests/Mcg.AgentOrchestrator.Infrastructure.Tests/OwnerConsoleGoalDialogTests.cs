@@ -70,9 +70,9 @@ public sealed class OwnerConsoleGoalDialogTests
     }
 
     [Theory]
-    [InlineData(true, 'q')]
-    [InlineData(true, 'Q')]
-    [InlineData(false, 'q')]
+    [InlineData(true, 'd')]
+    [InlineData(true, 'D')]
+    [InlineData(false, 'd')]
     public async Task QuestionActionOnlyOpensAnOfferedDecision(bool hasQuestion, char key)
     {
         var harness = new OwnerConsoleHarness();
@@ -83,8 +83,12 @@ public sealed class OwnerConsoleGoalDialogTests
         controller.Apply(await Model(harness));
         dialogs.OnGoal = async dialog =>
         {
-            Assert.Equal(hasQuestion, dialog.Actions.Contains("Open question (q)"));
+            Assert.Equal(hasQuestion, dialog.Actions.Contains("Open question (d)"));
             Assert.Equal(hasQuestion, await dialog.HandleKeyAsync(key));
+            var closes = 0;
+            dialog.CloseRequested += () => closes++;
+            Assert.True(await dialog.HandleKeyAsync('q'));
+            Assert.Equal(1, closes);
         };
         await controller.ShowGoalDetailAsync(Id);
         if (hasQuestion)
@@ -131,8 +135,8 @@ public sealed class OwnerConsoleGoalDialogTests
             Assert.Contains("Status: Verified", dialog.Current.Text);
             Assert.Contains("Landing: waiting for the gate (1st)", dialog.Current.Text);
             Assert.Equal(offset, dialog.Page.Offset);
-            Assert.Contains("Open question (q)", dialog.Actions);
-            Assert.True(await dialog.HandleKeyAsync('q'));
+            Assert.Contains("Open question (d)", dialog.Actions);
+            Assert.True(await dialog.HandleKeyAsync('d'));
         };
         await view.HandleKeyAsync(Key.Tab);
         await view.HandleKeyAsync(Key.Enter);
@@ -159,7 +163,7 @@ public sealed class OwnerConsoleGoalDialogTests
         controller.Apply(model);
         await entered.Task.WaitAsync(TestContext.Current.CancellationToken);
         // The loader is held by pending, so this action completes independently of refresh.
-        Assert.True(await dialog.HandleKeyAsync('q'));
+        Assert.True(await dialog.HandleKeyAsync('d'));
         Assert.Contains("Continue while refreshing?", Assert.Single(dialogs.Texts).Text);
         dialog.Dispose();
         pending.SetResult(content with { Text = "Late content" });

@@ -5,7 +5,7 @@ internal enum OwnerConsolePane { Decisions, Board, Activity }
 internal static class OwnerConsoleKeyHints
 {
     internal static IReadOnlyList<(string Command, string Description)> Commands =>
-        OwnerConsoleBindings.All.Select(row => (row.Usage, OwnerConsoleBindings.Description(row))).ToArray();
+        OwnerConsoleBindings.Commands.Select(row => (row.Usage, OwnerConsoleBindings.Description(row))).ToArray();
 
     internal static string CommandPrompt => OwnerConsoleBindings.CommandPrompt;
     internal static string CommandLineHint => "Enter run  Esc cancel  commands: " + CommandPrompt;

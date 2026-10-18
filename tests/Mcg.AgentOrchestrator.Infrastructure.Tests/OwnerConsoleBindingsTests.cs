@@ -125,12 +125,16 @@ public sealed class OwnerConsoleBindingsTests
             "Epic detail PgDn: Scroll down one page.",
             "Epic detail Esc: Back to the epic list.",
             "Epic view w (list and detail): Cycle the time window (day, week, all time).",
-            "Epic view r (list and detail): Reload after a failed load.",
+            "Epic view Ctrl+R (list and detail): Reload the epic view.",
             "l: Show delivered goals (any pane).",
             ":landings: Show delivered goals: landing commit, integration kind and acceptance (landings today|30) (same as l).",
             "g: Open the GATE view (any pane).",
             ":gate: Open the GATE view (same as g).",
             "GATE view Up/Down PgUp/PgDn: Scroll lanes; Esc: Close the GATE view.",
+            "Goal detail d: Open the goal's open question.",
+            "Goal detail f: Show the goal's last failure.",
+            "Goal detail e: Open the goal's epic.",
+            "Goal detail q: Back out of goal detail.",
             "?: Open this help dialog (any pane).",
             ":help: Open this help dialog (same as ?).",
             "q: Quit the console (any pane).",
@@ -156,7 +160,7 @@ public sealed class OwnerConsoleBindingsTests
         ];
         Assert.Equal(string.Join("\n", expected.Concat(unkeyed)), OwnerConsoleBindings.HelpText);
         var lines = OwnerConsoleBindings.HelpText.Split('\n');
-        foreach (var row in OwnerConsoleBindings.All.Where(row => row.Key.HasValue))
+        foreach (var row in OwnerConsoleBindings.Commands.Where(row => row.Key.HasValue))
         {
             var commandLine = Assert.Single(lines, line => line.StartsWith($":{row.Usage}: ", StringComparison.Ordinal));
             Assert.Equal(1, commandLine.Split($"(same as {row.Key})", StringSplitOptions.None).Length - 1);

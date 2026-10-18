@@ -8,11 +8,15 @@ namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 internal sealed class OwnerConsoleGateDialog : FrameView
 {
     private readonly ListView _body = new() { Width = Dim.Fill(), Height = Dim.Fill(1) };
+    private readonly Label _footer = new() { Y = Pos.AnchorEnd(1), Width = Dim.Fill(), Height = 1,
+        Text = OwnerConsoleDialogBindings.GateHelp.HintLabel! };
     private OwnerConsoleGateProgress? _gate;
     internal bool Expanded { get; private set; }
     internal bool IsOpen { get; private set; }
     internal OwnerConsolePane ReturnPane { get; private set; }
     internal IReadOnlyList<string> Lines { get; private set; } = [];
+    internal string FooterText => _footer.Text;
+    internal int SelectedLine => _body.SelectedItem ?? 0;
 
     internal OwnerConsoleGateDialog()
     {
@@ -21,8 +25,7 @@ internal sealed class OwnerConsoleGateDialog : FrameView
         Height = Dim.Fill();
         CanFocus = true;
         Visible = false;
-        Add(_body, new Label { Y = Pos.AnchorEnd(1), Width = Dim.Fill(), Height = 1,
-            Text = "Up/Down PgUp/PgDn scroll  Enter expand passed and baseline  Esc close" });
+        Add(_body, _footer);
     }
 
     internal void Open(OwnerConsolePane returnPane, OwnerConsoleGateProgress? gate)
@@ -47,13 +50,16 @@ internal sealed class OwnerConsoleGateDialog : FrameView
     internal bool HandleKey(Key key)
     {
         key.Handled = true;
+        var binding = key.IsAlt ? null : OwnerConsoleBindings.ForDialogKey(
+            OwnerConsoleScope.GateView, (char)key.NoCtrl.AsRune.Value, key.IsCtrl);
+        var back = key == Key.Esc || binding?.Command == "quit";
         if (key == Key.Enter || key == Key.Esc && Expanded)
         {
             Expanded = key == Key.Enter && !Expanded;
             Render(_gate);
             return false;
         }
-        if (key == Key.Esc) { IsOpen = Visible = false; return true; }
+        if (back) { IsOpen = Visible = false; return true; }
         if (OwnerConsolePaneNavigator.Target(key, _body.SelectedItem ?? 0, Lines.Count, _body.Viewport.Height) is { } target)
         {
             _body.SelectedItem = target;

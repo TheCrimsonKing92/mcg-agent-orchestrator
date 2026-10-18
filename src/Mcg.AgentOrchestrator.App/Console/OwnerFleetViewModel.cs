@@ -34,6 +34,7 @@ internal static class OwnerFleetViewModelBuilder
                     last is null ? null : TimeZoneInfo.ConvertTime(last.ObservedAt, zone), row.AcceptedShare, row.Lanes.ToArray());
             }).ToArray());
 
-    internal static OwnerFleetViewModel Load(OrchestratorWorkspace workspace, IConductorLiveness liveness) =>
-        Build(RemoteExecutorReportReader.Read(workspace, null, 10), liveness.IsRunning(), TimeZoneInfo.Local);
+    internal static OwnerFleetViewModel Load(OrchestratorWorkspace workspace, IConductorLiveness liveness, TimeProvider? clock = null) =>
+        Build(RemoteExecutorReportReader.Read(workspace, null, 10, (clock ?? TimeProvider.System).GetUtcNow().AddHours(-24)),
+            liveness.IsRunning(), TimeZoneInfo.Local);
 }
