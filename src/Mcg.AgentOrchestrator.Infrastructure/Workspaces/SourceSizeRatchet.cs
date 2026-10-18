@@ -188,7 +188,7 @@ internal static class SourceSizeRatchet
             // detach before loop exit at the existing dispatch boundary; holder transfer stays in its coordinator.
             // After integrating main b8da8f673, measured 2710 lines; no extra headroom.
             // Goal 4fce8cbe wires per-run admission telemetry into the existing tick completion and eligibility seams.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2716),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs", 2694),
             // Goal 354522f1 tick persistence partial measured at 467 lines.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.TickPersistence.cs", 467),
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.DependencyReadmission.cs", 375),
@@ -597,7 +597,7 @@ internal static class SourceSizeRatchet
             // Goal 4fce8cbe adds the scoped admission-health accumulator partial and shared census recording calls.
             // Goal 587ba8d2 adds one train-receipt-revalidate conduct event mapping line (measured 9320 at the merged head).
             // Goal aa4f5017 adds the passive activation-probe ledger; measured 9421 lines in 56 partials at the merged head, no headroom.
-            new SourceClassCeiling("ConductorBatchLoop", 9349, 56),
+            new SourceClassCeiling("ConductorBatchLoop", 9307, 56),
             // Goal ec8903af moved the goal-prefix parser to CliGoalPrefixArguments.
             // Goal cd1f6380 adds four lines at the owning transaction boundary, forwarding both
             // registrars and invoking actions after commit; list behavior lives in PostCommitActions.
