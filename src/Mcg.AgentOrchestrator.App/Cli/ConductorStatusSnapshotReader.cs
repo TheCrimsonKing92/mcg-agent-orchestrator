@@ -40,7 +40,7 @@ internal static class ConductorStatusSnapshotReader
             ownership ?? (owner is { } pid ? new ConductorLockOwnership(pid, null, null) : null),
             start?.At, stop is null ? null : (stop.At,
                 Regex.Match(stop.Detail, @"\breason=(?<reason>\S+?)(?=\s|\r?$)").Groups["reason"].Value),
-            ready?.At, lastEvent?.At, bootTime);
+            ready?.At, lastEvent?.At, bootTime, lifecycle?.Kind);
 
         var build = Latest(events, workspace.ConductEventsLogPath, item => item.Kind == "supervisor-build");
         var buildCommit = ReadBuildCommit(build?.Detail);

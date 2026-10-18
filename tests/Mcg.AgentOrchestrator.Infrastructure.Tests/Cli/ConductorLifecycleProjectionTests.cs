@@ -23,6 +23,27 @@ public sealed class ConductorLifecycleProjectionTests
     }
 
     [Theory]
+    [InlineData(0, "loop-stop", "stopped")]
+    [InlineData(0, "loop-start", "running")]
+    [InlineData(1, "loop-stop", "stopped")]
+    [InlineData(1, "loop-start", "running")]
+    [InlineData(2, "loop-stop", "stopped")]
+    [InlineData(2, "loop-start", "running")]
+    public void Project_EqualLifecycleTimes_PreservesSelectedKind(int ownerCase,
+        string selectedKind, string expectedKind)
+    {
+        var owner = ownerCase switch
+        {
+            0 => null,
+            1 => new ConductorLockOwnership(39752, null, null),
+            _ => Owner
+        };
+        Assert.Equal(new(expectedKind, Acquired, expectedKind == "stopped" ? "stop-file" : null),
+            ConductorLifecycleProjection.Project(owner, Acquired, (Acquired, "stop-file"),
+                null, Acquired, Boot, selectedKind));
+    }
+
+    [Theory]
     [InlineData(false, false)]
     [InlineData(false, true)]
     [InlineData(true, false)]

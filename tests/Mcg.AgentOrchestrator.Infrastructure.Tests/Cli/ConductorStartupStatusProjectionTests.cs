@@ -107,6 +107,34 @@ public sealed class ConductorStartupStatusProjectionTests
         Assert.Equal(Pid, json.RootElement.GetProperty("payload").GetProperty("conductor").GetProperty("pid").GetInt32());
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void Status_EqualLifecycleTimes_PreservesFirstLogEvent(bool stopFirst, bool owned)
+    {
+        using var fixture = new Fixture();
+        var stop = Event(Acquired, "loop-stop", "LOOP_STOP tick=9 reason=stop-file");
+        var start = Event(Acquired, "loop-start", "LOOP_START");
+        fixture.Events(stopFirst ? [stop, start] : [start, stop]);
+        var result = AssertBaseline(fixture, new StubPidProbe(owned, owned), owned ? Pid : null, Boot);
+        var state = owned ? "running (pid 39752)" : "stopped";
+        Assert.Contains($"Conductor: {state}", result.Human);
+        Assert.Contains(stopFirst ? $"Stopped since {Format(Acquired)}; reason=stop-file"
+            : $"Running since {Format(Acquired)}", result.Human);
+        Assert.DoesNotContain(stopFirst ? "Running since " : "Stopped since ", result.Human);
+        using var json = JsonDocument.Parse(result.Json);
+        var payload = json.RootElement.GetProperty("payload");
+        Assert.Equal(owned ? "running" : "stopped", payload.GetProperty("conductor").GetProperty("state").GetString());
+        var since = payload.GetProperty("since");
+        Assert.Equal(stopFirst ? "stopped" : "running", since.GetProperty("kind").GetString());
+        Assert.Equal(Format(Acquired), since.GetProperty("at").GetString());
+        Assert.Equal(stopFirst ? "stop-file" : null, since.GetProperty("reason").GetString());
+        Assert.Equal(JsonValueKind.Null, since.GetProperty("previous").ValueKind);
+        Assert.DoesNotContain("Previous stop:", result.Human);
+    }
+
     [Fact]
     public void Status_HostRestart_MatchesPidOnlyBaseline()
     {
