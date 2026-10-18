@@ -25,24 +25,22 @@ internal static class ConductorStatusSnapshotReader
     }
 
     internal static ConductorStatusSnapshot Read(OrchestratorWorkspace workspace, int? owner,
-        DateTimeOffset bootTime, Func<string?>? mainCommit = null)
+        DateTimeOffset bootTime, Func<string?>? mainCommit = null, ConductorLockOwnership? ownership = null)
     {
         var events = ReadEvents(workspace.ConductEventsLogPath);
         var lastEvent = events.MaxBy(item => item.At);
-        var lifecycle = Latest(events, workspace.ConductEventsLogPath, item => item.Kind is "loop-start" or "loop-stop");
+        var lifecycleEvents = LatestSource(events, workspace.ConductEventsLogPath,
+            item => item.Kind is "loop-start" or "loop-stop");
+        var lifecycle = lifecycleEvents.Where(item => item.Kind is "loop-start" or "loop-stop").MaxBy(item => item.At);
         if (lifecycle is not null && (lastEvent is null || lifecycle.At > lastEvent.At)) lastEvent = lifecycle;
-        ConductorStatusSnapshot.SinceObservation since;
-        if (owner is null && lastEvent is not null && bootTime > lastEvent.At)
-            since = new("host-restart", bootTime, null);
-        else if (lifecycle is { Kind: "loop-stop" })
-        {
-            var reason = Regex.Match(lifecycle.Detail, @"\breason=(?<reason>\S+?)(?=\s|\r?$)").Groups["reason"].Value;
-            since = new("stopped", lifecycle.At, reason);
-        }
-        else if (lifecycle is { Kind: "loop-start" })
-            since = new("running", lifecycle.At, null);
-        else
-            since = new("unavailable", null, null);
+        var start = lifecycleEvents.Where(item => item.Kind == "loop-start").MaxBy(item => item.At);
+        var stop = lifecycleEvents.Where(item => item.Kind == "loop-stop").MaxBy(item => item.At);
+        var ready = Latest(events, workspace.ConductEventsLogPath, item => item.Kind == "loop-ready");
+        var since = ConductorLifecycleProjection.Project(
+            ownership ?? (owner is { } pid ? new ConductorLockOwnership(pid, null, null) : null),
+            start?.At, stop is null ? null : (stop.At,
+                Regex.Match(stop.Detail, @"\breason=(?<reason>\S+?)(?=\s|\r?$)").Groups["reason"].Value),
+            ready?.At, lastEvent?.At, bootTime);
 
         var build = Latest(events, workspace.ConductEventsLogPath, item => item.Kind == "supervisor-build");
         var buildCommit = ReadBuildCommit(build?.Detail);
@@ -182,9 +180,12 @@ internal static class ConductorStatusSnapshotReader
     }
 
     private static Event? Latest(IReadOnlyList<Event> live, string path, Func<Event, bool> kind) =>
-        live.Where(kind).MaxBy(item => item.At) ?? RotatedGenerations(path)
-            .Select(file => ReadRotatedEvents(file).Where(kind).MaxBy(item => item.At))
-            .FirstOrDefault(item => item is not null);
+        LatestSource(live, path, kind).Where(kind).MaxBy(item => item.At);
+
+    // Start and stop share a source, preserving live-log precedence over rotated generations.
+    private static IReadOnlyList<Event> LatestSource(IReadOnlyList<Event> live, string path, Func<Event, bool> kind) =>
+        live.Any(kind) ? live : RotatedGenerations(path).Select(ReadRotatedEvents)
+            .FirstOrDefault(events => events.Any(kind)) ?? [];
 
     private static IEnumerable<string> RotatedGenerations(string path)
     {
