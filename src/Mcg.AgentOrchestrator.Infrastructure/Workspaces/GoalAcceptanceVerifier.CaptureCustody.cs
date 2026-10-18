@@ -88,7 +88,7 @@ internal static class GoalAcceptanceVerifierCaptureCustody
             }
 
             startInfo.FileName = "cmd.exe";
-            var command = BuildShellCommand(arguments, QuoteForCmd);
+            var command = BuildShellCommand(AcceptanceMtpFilterResponseFile.Apply(arguments), QuoteForCmd);
             if (forceUtf8ConsoleOutput)
             {
                 // MTP formats theory arguments before writing them. Under an OEM console code page,
