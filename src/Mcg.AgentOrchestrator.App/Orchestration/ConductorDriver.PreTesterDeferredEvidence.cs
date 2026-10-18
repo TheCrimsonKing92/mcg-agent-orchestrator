@@ -237,30 +237,10 @@ internal sealed partial class ConductorDriver
             return true;
         }
 
-        var candidate = (evidence?.Arms ?? []).Select(CreateFindingEvidenceArmReceipt)
-            .FirstOrDefault(arm => arm.Arm == FindingEvidenceArm.Candidate &&
-                                   string.Equals(arm.Sha, candidateSha, StringComparison.OrdinalIgnoreCase));
-        var baseline = (evidence?.Arms ?? []).Select(CreateFindingEvidenceArmReceipt)
-            .FirstOrDefault(arm => arm.Arm == FindingEvidenceArm.Baseline);
-        var failingTests = candidate?.FailingTestIdentities ?? [];
-        var candidateRed = completed && evidence.Accepted &&
-                           candidate is { Accepted: true, Disposition: FindingEvidenceArmDisposition.Red };
         var attributionBatch = new FindingEvidenceBatch(
             identity, request, new FindingEvidenceRequest(distinct), [], []);
-        var unlistedFailures = failingTests.Where(test => !(PreTesterAlwaysRunGuardTestClasses.IsListed(test) || PreTesterTestSourceGuardClasses.IsCovered(test))).ToArray();
-        var actionableRed = candidateRed && failingTests.Count > 0 &&
-                            (baseline is null
-                                ? unlistedFailures.Length == 0 ||
-                                  EveryFailingTestIsInsideCandidateChanges(goal, attributionBatch, unlistedFailures)
-                                : baseline.Disposition == FindingEvidenceArmDisposition.Green);
-        var green = completed && evidence.IsValidEvidence &&
-                    candidate is { Accepted: true, Passed: true, Disposition: FindingEvidenceArmDisposition.Green,
-                        ExecutedTestCount: > 0 } &&
-                    AcceptanceCohortGateEvidence.HasContentBoundGreenTrxEvidence(
-                        candidate.TestResultPaths, candidate.ReceiptArtifacts,
-                        candidate.ExecutedTestCount!.Value,
-                        distinct.Select(selection => selection.TestClass).ToHashSet(StringComparer.OrdinalIgnoreCase));
-        var outcome = green ? "green" : actionableRed ? "actionable-red" : candidateRed ? "red" : "unusable";
+        var (outcome, candidate, failingTests) = PreTesterApparatusReceiptClassifier.ClassifyOutcome(evidence, completed, candidateSha, distinct,
+            failures => EveryFailingTestIsInsideCandidateChanges(goal, attributionBatch, failures));
         if (outcome == "unusable" && attempt is not null)
             _focusedEvidenceAttemptCoordinator.RecordFocusedEvidenceRequestDispositions(attempt, requestContext.FindingRoundFingerprint, receiptId, []);
         _recordFindingEvidenceRun(goal.Id, tester.Id,
@@ -273,7 +253,7 @@ internal sealed partial class ConductorDriver
             return true;
         }
 
-        if (!actionableRed) return false;
+        if (outcome != "actionable-red") return false;
         if (TryEscalatePreTesterRedLoop(GetCurrentGoal(goal), goalPrefix, policy, fromState, out result))
             return true;
 
