@@ -112,8 +112,14 @@ internal static class RemoteFirstFocusedEvidence
                     var submission = await executor.SubmitAsync(run.Request, laneToken).ConfigureAwait(false);
                     if (submission.Handle is not { } handle)
                     {
-                        Finish(run, submission.FailureReason == "transport-unavailable" ? RemoteLaneOutcomeCode.TransportUnavailable :
-                            submission.FailureReason == "executor-busy" ? RemoteLaneOutcomeCode.ExecutorBusy : RemoteLaneOutcomeCode.Unreachable,
+                        Finish(run, submission.FailureReason switch
+                            {
+                                "transport-unavailable" => RemoteLaneOutcomeCode.TransportUnavailable,
+                                "executor-busy" => RemoteLaneOutcomeCode.ExecutorBusy,
+                                "executor-tools-mismatch" => RemoteLaneOutcomeCode.ExecutorToolsMismatch,
+                                "executor-tools-unverified" => RemoteLaneOutcomeCode.ExecutorToolsUnverified,
+                                _ => RemoteLaneOutcomeCode.Unreachable
+                            },
                             submission.FailureReason ?? "submission-failed");
                         return;
                     }

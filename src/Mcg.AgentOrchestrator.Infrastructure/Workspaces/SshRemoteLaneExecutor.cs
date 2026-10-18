@@ -100,6 +100,11 @@ internal sealed class SshRemoteLaneExecutor(
         var shortSha = request.VerifyingCommitSha[..9];
         var staging = PrepareStaging(Path.GetDirectoryName(Path.GetFullPath(attemptPrefix))!, entry.Id, request.Lane, laneKey);
         var steps = new List<RemoteLaneStep>();
+        if (entry.ToolsDigestCheck)
+        {
+            var refusal = await CheckToolsDigestAsync(entry, staging, steps, cancellationToken).ConfigureAwait(false);
+            if (refusal is not null) return new(null, refusal, steps.ToArray());
+        }
         if (entry.OccupancyProbe)
         {
             var probeStartedAt = clock.GetUtcNow();
@@ -162,6 +167,51 @@ internal sealed class SshRemoteLaneExecutor(
         cancellationToken.ThrowIfCancellationRequested();
         return new(new SshRemoteLaneHandle(request, entry, staging, shortSha, laneKey, clock, transport,
             pollInterval ?? TimeSpan.FromSeconds(entry.PollSeconds), onPollCompleted), Steps: steps.ToArray());
+    }
+
+    private async Task<string?> CheckToolsDigestAsync(RemoteLaneExecutorEntry entry, string staging,
+        List<RemoteLaneStep> steps, CancellationToken cancellationToken)
+    {
+        var startedAt = clock.GetUtcNow();
+        string? expected = null, observed = null, cause = null;
+        GoalAcceptanceVerifier.CommandResult? copy = null;
+        Exception? failure = null;
+        using var bound = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        bound.CancelAfter(TimeSpan.FromSeconds(30));
+        try
+        {
+            expected = ExecutorToolsDigest.Compute(Path.Combine(worktreePath, "scripts", "executor", "tools"));
+            var manifestPath = Path.Combine(staging, ExecutorToolsDigest.ManifestFileName);
+            // A failed delete must never permit a stale manifest to verify this offer.
+            File.Delete(manifestPath);
+            copy = await transport([ScpPath, "-o", "BatchMode=yes",
+                $"{entry.RunnerAlias}:{entry.RunRoot}/{ExecutorToolsDigest.ManifestFileName}", ExecutorToolsDigest.ManifestFileName],
+                staging, TimeSpan.FromSeconds(30), bound.Token).WaitAsync(bound.Token).ConfigureAwait(false);
+            if (copy.TimedOut) cause = "copy-timeout";
+            else if (copy.ExitCode != 0) cause = $"copy-exit-{copy.ExitCode}";
+            else if (!File.Exists(manifestPath)) cause = "manifest-missing";
+            else
+            {
+                observed = ExecutorToolsDigest.ReadManifest(await File.ReadAllTextAsync(manifestPath, bound.Token).ConfigureAwait(false));
+                if (observed is null) cause = "manifest-invalid";
+            }
+            if (expected is null) cause = "no-local-tools";
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            failure = ex;
+            cause = ex is OperationCanceledException ? "copy-timeout" : "copy-error: " + ex.Message;
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+        var verified = cause is null && expected is not null && observed is not null;
+        var match = verified && expected == observed;
+        var summary = $"expected={expected ?? "none"} observed={observed ?? "none"}" + (cause is null ? "" : " " + cause);
+        var error = failure?.Message ?? copy?.Stderr ?? "";
+        steps.Add(RemoteLaneDiagnosticFiles.Step(staging, "tools-digest", copy?.ExitCode,
+            copy?.TimedOut == true || failure is OperationCanceledException, startedAt, clock.GetUtcNow(),
+            summary, string.IsNullOrEmpty(error) ? "" : summary + "\n" + error, failed: !match));
+        return match ? null : verified ? "executor-tools-mismatch" : "executor-tools-unverified";
     }
 
     private async Task<(GoalAcceptanceVerifier.CommandResult Probe, RemoteLaneExecutorQueueState? State)> ReadQueueStateAsync(
