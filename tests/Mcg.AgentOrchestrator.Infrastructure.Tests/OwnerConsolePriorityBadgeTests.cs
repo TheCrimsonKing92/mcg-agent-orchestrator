@@ -65,10 +65,11 @@ public sealed class OwnerConsolePriorityBadgeTests
     public void GoalDetailShowsEffectiveDonorAndSoloAfterStatusAndNormalOutputIsUnchanged()
     {
         var harness = new OwnerConsoleHarness();
-        var goal = harness.Kernel.CreateGoal(new GoalId("11111111-detail"), "Readable title", []);
+        var goal = harness.Kernel.CreateGoal(new GoalId("11111111-detail"), "Readable title",
+            [new(TaskId.New(), "Build", AgentRole.Developer)]);
         var normal = Render(goal);
         Assert.Equal(string.Join(Environment.NewLine, "11111111  Readable title", "Status: Draft",
-            "Stage: Created", "Tasks:", "Recent events: none", ""), normal);
+            "Stage: Created", "Role: Developer", "Tasks:", "  Developer: Pending", "Recent events: none", ""), normal);
         goal = WithStoredPriority(harness.Kernel, goal, GoalPriority.High);
         GoalIsolationCommands.Apply(harness.Kernel, goal.Id, GoalIsolation.Solo, "test", "setup");
         Assert.Equal(normal.Replace("Status: Draft" + Environment.NewLine,

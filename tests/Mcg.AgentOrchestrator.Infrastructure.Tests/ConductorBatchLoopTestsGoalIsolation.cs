@@ -105,13 +105,30 @@ public sealed class ConductorBatchLoopTestsGoalIsolation(ITestOutputHelper outpu
             kernel.SetGoalPriority(goal.Id, priority, "test", "setup");
             if (priority >= GoalPriority.High) Assert.Equal(priority, GoalEffectivePriorityIndex.StoredLevel(dependency));
             var landed = false;
-            var driver = MakeDriver(getFacts: item => item.Id == goal.Id && landed
-                    ? new(WorkspaceExists: true, IsMerged: true, IsRecorded: true, IsCleanedUp: true) : new(WorkspaceExists: true),
-                getRunningCount: () => 1, classifyRisk: _ => ChangeRiskTier.DocsOnly,
+            var recorded = false;
+            var cleaned = false;
+            var completed = false;
+            // Use the constructor seam: MakeDriver omits the production completion callback.
+            var driver = new ConductorDriver(
+                getFacts: item => item.Id == goal.Id
+                    ? new(WorkspaceExists: true, IsMerged: landed, IsRecorded: recorded, IsCleanedUp: cleaned)
+                    : new(WorkspaceExists: true),
+                getRunningPaidWorkerCount: () => 1, createWorkspace: _ => root,
+                dispatchAndStart: _ => throw new InvalidOperationException("Verified goals must not dispatch."),
+                startRecordedDispatches: null, buildServerShutdown: null,
+                runAcceptanceVerification: _ => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
+                runAdvisorySemanticAcceptance: null, retryTask: null, recordTaskNote: null,
+                recordCriterionRetryFeedback: null, clearCriterionRetryFeedback: null,
+                rebaseOntoMain: _ => DefaultRebaseSuccess(),
+                land: (item, _) => { landed = true; return new(item.Id.Value, item.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "Landed"); },
+                afterSuccessfulLanding: null, record: _ => recorded = true,
+                cleanup: _ => { cleaned = true; return new("Workspace cleaned up.", null, [], null); },
+                writeEscalation: (_, _, reason) => throw new InvalidOperationException(reason),
+                classifyChangeRisk: _ => ChangeRiskTier.DocsOnly,
+                completeGoal: item => { completed = true; kernel.CompleteGoal(item.Id, "Conductor completed fixture landing."); },
                 getLandingFileScopes: item => [$"src/{item.Id.Value}.cs"], isVerificationGateSatisfied: _ => true,
                 parallelAcceptanceAttemptCoordinator: new(root, TrunkBranchName.Default, runInline: true),
-                runAcceptanceWithSlot: (_, _) => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
-                land: item => { landed = true; return new(item.Id.Value, item.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "Landed"); });
+                runAcceptanceVerificationWithSlot: (_, _) => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria);
             var checkpointed = new HashSet<GoalId>();
             var loop = new ConductorBatchLoop();
             void Tick() => loop.Run(kernel, driver, ConductorAutonomyPolicy.Permissive with { MaxConcurrentPaidWorkers = 1 }, NoStopPath(), maxIterations: 1,
@@ -122,6 +139,7 @@ public sealed class ConductorBatchLoopTestsGoalIsolation(ITestOutputHelper outpu
                 });
             for (var tick = 0; tick < 6 && !goal.IsTerminal; tick++) Tick();
             Assert.True(landed, "The landing delegate must have executed.");
+            Assert.True(recorded && cleaned && completed, "The conductor must record, clean up and invoke completion.");
             Assert.True(goal.IsTerminal, "The real conductor tick must complete the goal before checking its clear.");
             checkpointed.Clear();
             Tick();

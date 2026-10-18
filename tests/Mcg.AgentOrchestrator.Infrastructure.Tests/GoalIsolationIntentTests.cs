@@ -61,6 +61,7 @@ public sealed class GoalIsolationIntentTests
     public async Task SoloRoundTripsThroughSnapshotAndTickMergeWhileNoneOmitsField()
     {
         using var fixture = new Fixture();
+        StateDbMigrations.EnsureUpToDate(fixture.Context.Workspace.SqliteStatePath);
         var repository = new SqliteOrchestratorStateRepository(fixture.Context.Workspace.SqliteStatePath);
         var normal = fixture.Kernel.ExportSnapshot().Goals.Single();
         Assert.Null(normal.Isolation);
