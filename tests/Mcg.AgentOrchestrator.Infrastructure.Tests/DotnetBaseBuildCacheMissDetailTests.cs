@@ -118,7 +118,7 @@ public sealed class DotnetBaseBuildCacheMissDetailTests : IDisposable
             Assert.Equal(phase.BuildArguments, arguments);
             builds++;
             WriteOutputs(environment.ArtifactsPath, ExecutionProject);
-            return Task.FromResult((new AcceptanceCheckResult("build", true, 0, "fixture-complete"), false));
+            return Task.FromResult((new AcceptanceCheckResult("build", true, 0, null, ResultSummary: "fixture-complete"), false));
         }, _ => environment, label => label, () => cache, (_, _) =>
         {
             resolutions++;
