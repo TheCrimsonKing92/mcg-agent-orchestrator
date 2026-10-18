@@ -55,6 +55,7 @@ public static class AcceptanceEngineSurfaceRegistry
         new("acceptance-collaborators", [
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceArtifactFileNames",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceAssemblyCleanupAttribution",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceAttributionLaneScope",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCheckCommandBuilder",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceCheckProcessInvoker",
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceContainedGenerationBaseline",

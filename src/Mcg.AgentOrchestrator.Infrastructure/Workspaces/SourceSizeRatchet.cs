@@ -138,7 +138,7 @@ internal static class SourceSizeRatchet
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.LandingCompletion.cs", 645),
             // Goal eade84cb preserves published cohort receipts while holder cleanup still reserves capacity.
             // Custody remains separately owned; after integrating main f34678bcb, measured 645 lines, with no extra headroom.
-            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.AcceptanceCohortExecution.cs", 645),
+            new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.AcceptanceCohortExecution.cs", 631),
             // Goal 5a07b0d6 retains three orchestration lines carrying reattached receipt ids to the
             // closure-first route; the reused-green branch owns this delivery handoff, not receipt selection.
             new SourceSizeCeiling("src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.FindingEvidenceRequests.cs", 754),
@@ -502,7 +502,7 @@ internal static class SourceSizeRatchet
             // Goal 2c245bc3 restores overlapping holders and derives a recoverable admission hold.
             // The recovery sweep also settles non-reserving attempts once their holder is proven settled.
             // Measured 14888 lines across the same 70 partial files; no extra headroom.
-            new SourceClassCeiling("ConductorDriver", 14869, 70), // Provider hold redispatch hook and injected recovery seam.
+            new SourceClassCeiling("ConductorDriver", 14867, 70), // Provider hold redispatch hook and injected recovery seam.
             // Goal b7c2f833: epic-at-creation validation and post-commit inheritance call sites
             // require handler glue; resolution/assignment remain in the separate EpicAtCreation type.
             // Measured 12223 total lines across the existing 30 partial files after integrating main; no extra headroom.

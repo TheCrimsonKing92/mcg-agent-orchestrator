@@ -650,8 +650,8 @@ public sealed partial class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var infrastructureTestLanes = effectivePlan.InfrastructureTestLanes;
         var policyShardPlan = effectivePlan.PolicyShardPlan;
         var policyRequiredChecks = effectivePlan.PolicyRequiredChecks;
-        var structuralCoverageApplies = effectivePlan.StructuralCoverageApplies;
-        var effectiveChecks = effectivePlan.Checks;
+        var (effectiveChecks, structuralCoverageApplies) = AcceptanceAttributionLaneScope.Apply(effectivePlan.Checks,
+            executionOwner.AttributionLaneScope is null ? [] : ExpandBroadInfrastructureChecks(manifest.Checks, ResolveOwnedCollectionLanes(engineSettings, worktreePath)), effectivePlan.StructuralCoverageApplies, executionOwner.AttributionLaneScope, Console.Out);
         var (partitionVerdictCache, remoteLanes) = CreatePartitionVerdictCacheAndRemoteLanes(
             goalId, worktreePath, effectiveChecks, engineSettings, executionOwner);
         using var remoteLaneScope = remoteLanes;
