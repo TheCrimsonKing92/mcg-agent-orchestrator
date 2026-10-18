@@ -91,6 +91,10 @@ internal sealed partial class ConductorDriver
             return false;
         }
 
+        var superseded = prior is { Outcome: "unusable" } && PreTesterEvidenceRefreshRule.Decide(prior,
+            PreTesterApparatusReceiptClassifier.IsApparatusUnusable(_focusedEvidenceAttemptCoordinator.ReadFocusedReceiptEvidence(goal.Id, prior.ReceiptId, candidateSha!)),
+            tester.PendingRetryCause, PreTesterEvidenceRefreshRule.CountForCandidate(goal, tester.Id, candidateSha!)) == PreTesterEvidenceRefreshDecision.Refresh ? prior.ReceiptId : null;
+        if (superseded is not null) prior = null;
         if (prior is not null && prior.Outcome != "started")
         {
             if (prior.Outcome == "actionable-red")
@@ -181,10 +185,19 @@ internal sealed partial class ConductorDriver
              !prior.NotRun.SequenceEqual(notRun, StringComparer.Ordinal)))
             throw new InvalidDataException("Started pre-Tester evidence selection changed before reconciliation.");
         var identity = FindingEvidenceExecutionClassifier.BuildRequestIdentity(new FindingEvidenceRequest(distinct));
-        var receiptId = CreateFindingEvidenceReceiptId(candidateSha!, "pre-tester-deferred", identity);
+        var refresh = PreTesterEvidenceRefreshRule.LatestForCandidate(goal, tester.Id, candidateSha!);
+        var refreshId = CreateFindingEvidenceReceiptId(candidateSha!, "pre-tester-deferred-refresh", identity);
+        var salt = superseded is not null || prior?.ReceiptId == refresh?.FreshReceiptId && prior?.ReceiptId == refreshId
+            ? "pre-tester-deferred-refresh" : "pre-tester-deferred";
+        var receiptId = CreateFindingEvidenceReceiptId(candidateSha!, salt, identity);
+        if (superseded is not null)
+        {
+            refresh = new(candidateSha!, superseded, receiptId);
+            _recordFindingEvidenceRequest(goal.Id, tester.Id, PreTesterEvidenceRefreshRule.FormatMarker(refresh));
+        }
         var requestContext = new ConductorFocusedEvidenceRequestContext(
             "pre-tester-deferred",
-            CreateFindingEvidenceBatchId(candidateSha!, "pre-tester-deferred", policy.Name, identity),
+            CreateFindingEvidenceBatchId(candidateSha!, salt, policy.Name, identity),
             []);
         var completed = TryReconcileFocusedEvidenceAttempt(
             goal, policy, request, candidateSha, "pre-tester-deferred", requestContext,
@@ -248,10 +261,17 @@ internal sealed partial class ConductorDriver
                         candidate.ExecutedTestCount!.Value,
                         distinct.Select(selection => selection.TestClass).ToHashSet(StringComparer.OrdinalIgnoreCase));
         var outcome = green ? "green" : actionableRed ? "actionable-red" : candidateRed ? "red" : "unusable";
+        if (outcome == "unusable" && attempt is not null)
+            _focusedEvidenceAttemptCoordinator.RecordFocusedEvidenceRequestDispositions(attempt, requestContext.FindingRoundFingerprint, receiptId, []);
         _recordFindingEvidenceRun(goal.Id, tester.Id,
             PreTesterEvidenceIndexLines.FormatMarker(new PreTesterEvidenceEntry(
                 outcome, candidateSha!, receiptId, selectionNames, notRun,
                 attempt?.ResultPath, failingTests)));
+        if (PreTesterEvidenceRefreshRule.DecideAfterRun(refresh, receiptId, outcome) == PreTesterEvidenceRefreshDecision.EscalateRepeat)
+        {
+            result = Escalate(goal, goalPrefix, policy, fromState, PreTesterEvidenceRefreshRule.DescribeRepeat(candidateSha!, refresh!.SupersededReceiptId, receiptId));
+            return true;
+        }
 
         if (!actionableRed) return false;
         if (TryEscalatePreTesterRedLoop(GetCurrentGoal(goal), goalPrefix, policy, fromState, out result))
