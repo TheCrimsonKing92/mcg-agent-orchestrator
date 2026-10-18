@@ -16,6 +16,9 @@ internal sealed record RemoteFocusedEvidenceSettings(
 internal sealed record RemoteLaneExecutorConfiguration(
     IReadOnlyList<RemoteLaneExecutorEntry> Executors, IReadOnlyList<string> Lanes, string? DisabledReason)
 {
+    internal const int MinimumSlots = 1;
+    internal const int MaximumSlots = 16;
+    internal const int MinimumSampleEvery = 1;
     internal IReadOnlyList<string> MachineLocalResourceKeys { get; init; } = [];
     internal RemoteFocusedEvidenceSettings FocusedEvidence { get; init; } = new();
     internal ExecutorScreeningSettings Screening { get; init; } = new();
@@ -66,7 +69,7 @@ internal sealed record RemoteLaneExecutorConfiguration(
                 if (executor.TryGetProperty("slots", out var slotCount))
                 {
                     if (slotCount.ValueKind != JsonValueKind.Number || !slotCount.TryGetInt32(out slots) ||
-                        slots is < 1 or > 16)
+                        slots is < MinimumSlots or > MaximumSlots)
                         return Disabled("invalid");
                 }
                 if (!executor.TryGetProperty("transport", out var transport))
@@ -145,7 +148,7 @@ internal sealed record RemoteLaneExecutorConfiguration(
             (block.TryGetProperty("mode", out var m) &&
                 (m.ValueKind != JsonValueKind.String || (mode = m.GetString()!) is not ("off" or "shadow" or "remote-first"))) ||
             (block.TryGetProperty("sampleEvery", out var s) &&
-                (s.ValueKind != JsonValueKind.Number || !s.TryGetInt32(out sampleEvery) || sampleEvery < 1)) ||
+                (s.ValueKind != JsonValueKind.Number || !s.TryGetInt32(out sampleEvery) || sampleEvery < MinimumSampleEvery)) ||
             (block.TryGetProperty("graceSeconds", out var g) &&
                 (g.ValueKind != JsonValueKind.Number || !g.TryGetInt32(out graceSeconds) || graceSeconds < 0)))
             return new(FaultReason: "invalid");
