@@ -32,6 +32,9 @@ internal sealed class RemoteLaneCoordinator : IDisposable
     private readonly HashSet<IRemoteLaneHandle> _handles = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<string, SortedDictionary<int, IDisposable>> _claims = new(StringComparer.Ordinal);
 
+    internal IReadOnlyDictionary<(string Lane, string Filter), RemoteExecutorLaneSeconds> RemoteLaneHistory { get; init; }
+        = new Dictionary<(string Lane, string Filter), RemoteExecutorLaneSeconds>();
+
     internal RemoteLaneCoordinator(RemoteLaneExecutorConfiguration configuration,
         IRemoteLaneCandidateIdentity cache, string worktreePath, string? attemptPrefix,
         IRemoteLaneExecutor executor, TimeProvider clock, TimeSpan pollInterval,
@@ -202,8 +205,10 @@ internal sealed class RemoteLaneCoordinator : IDisposable
     internal async Task<RemoteLaneOutcome> RunRemoteAsync(Check check, RemoteLaneExecutorEntry entry,
         TimeSpan timeout, CancellationToken cancellationToken)
     {
-        var request = CreateRequest(check, entry.Id) with
-        { TestHostTimeoutSeconds = RemoteLaneTestHostBudget.Resolve(timeout) };
+        var request = CreateRequest(check, entry.Id);
+        RemoteLaneHistory.TryGetValue((request.Lane, request.FilterHash), out var history);
+        var budget = RemoteLaneTestHostBudget.Decide(timeout, history);
+        request = request with { TestHostTimeoutSeconds = budget.Seconds, TestHostBudget = budget };
         var submittedAt = _clock.GetUtcNow();
         IRemoteLaneHandle? handle = null;
         RemoteLaneResult? observedResult = null;
@@ -411,7 +416,8 @@ internal sealed class RemoteLaneCoordinator : IDisposable
             RemoteTestHostCpuSeconds: usage?.TestHostCpuSeconds, RemoteTestHostPeakWorkingSetBytes: usage?.TestHostPeakWorkingSetBytes,
             RemoteAvailableMemoryMbMin: usage?.AvailableMemoryMbMin, RemoteResourceSamples: usage?.ResourceSamples,
             Phases: attempt is null ? null : RemoteLanePhaseTimings.Compute(
-                attempt.Steps, attempt.LastStatus, result?.TestResultPaths, attempt.Fetches)));
+                attempt.Steps, attempt.LastStatus, result?.TestResultPaths, attempt.Fetches),
+            TestHostBudget: request.TestHostBudget));
         try
         {
             var compactReason = string.IsNullOrWhiteSpace(reason) ? "none" :

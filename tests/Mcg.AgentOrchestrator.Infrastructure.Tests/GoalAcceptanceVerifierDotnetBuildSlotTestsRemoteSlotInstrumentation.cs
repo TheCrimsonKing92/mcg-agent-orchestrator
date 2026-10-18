@@ -64,7 +64,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteSlotInstrume
         Assert.Equal(RemoteLaneOutcomeCode.Accepted, row.Outcome);
         using var json = JsonDocument.Parse(Assert.Single(File.ReadAllLines(scenario.Ledger)));
         Assert.Equal(new[] { "observed_at", "executor_id", "gate_attempt_id", "lane", "outcome", "fault_owner",
-            "expected", "observed", "reason", "version", "attempt", "phases" }.Order(),
+            "expected", "observed", "reason", "version", "attempt", "phases", "test_host_budget" }.Order(),
             json.RootElement.EnumerateObject().Select(property => property.Name).Order());
     }
 

@@ -13,12 +13,17 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTestsRemoteLaneBudget :
         using var scenario = CreateScenario(40);
         var result = await scenario.RunAsync();
         Assert.True(result.Passed, JsonSerializer.Serialize(result.Checks));
-        Assert.Equal(2100, scenario.Job.GetProperty("testHostTimeoutSeconds").GetInt32());
+        Assert.Equal(600, scenario.Job.GetProperty("testHostTimeoutSeconds").GetInt32());
         var lane = Assert.Single(result.Checks!.Where(check => check.Name == Lane(0)));
         Assert.StartsWith("remote-executor=", lane.ResultSummary);
         Assert.DoesNotContain(0, scenario.LocalStarts);
-        var phases = Assert.IsType<RemoteLanePhaseTimings>(Assert.Single(scenario.Health()
-            .Where(row => row.Outcome == RemoteLaneOutcomeCode.Accepted)).Phases);
+        var accepted = Assert.Single(scenario.Health().Where(row => row.Outcome == RemoteLaneOutcomeCode.Accepted));
+        var budget = Assert.IsType<RemoteLaneTestHostBudgetDecision>(accepted.TestHostBudget);
+        Assert.Equal("remote-history", budget.Source);
+        Assert.Equal(3, budget.RemoteSamples);
+        Assert.Equal(100, budget.RemoteMedianSeconds);
+        Assert.Equal(2100, budget.HostBudgetSeconds);
+        var phases = Assert.IsType<RemoteLanePhaseTimings>(accepted.Phases);
         Assert.Equal(new RemoteLanePhaseTimings(3, 7, 490, 4.2, 0, 118.5, false, 140, 330, 15), phases);
     }
 
