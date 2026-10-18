@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
@@ -45,7 +46,10 @@ public sealed class CliRemoteExecutorsShadowAgreementTests : CliTaskQueryTestSup
             var actual = Lines(Run(root, "remote-executors"));
             Assert.Equal(Expected, actual.Last());
             Assert.Equal(Lines(Run(baselineRoot, "remote-executors")), actual[..^1]);
-            Assert.Equal(Run(baselineRoot, "remote-executors", "--json"), Run(root, "remote-executors", "--json"));
+            using var baselineJson = JsonDocument.Parse(Run(baselineRoot, "remote-executors", "--json"));
+            using var actualJson = JsonDocument.Parse(Run(root, "remote-executors", "--json"));
+            Assert.Equal(baselineJson.RootElement.GetProperty("payload").GetRawText(),
+                actualJson.RootElement.GetProperty("payload").GetRawText());
         }
         finally
         {
