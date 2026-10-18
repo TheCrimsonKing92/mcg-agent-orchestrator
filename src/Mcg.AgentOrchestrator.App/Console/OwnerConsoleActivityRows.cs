@@ -6,8 +6,10 @@ internal sealed record OwnerConsoleActivityRow(string Text, int? ItemIndex, Owne
 
 internal static class OwnerConsoleActivityRows
 {
-    internal static IReadOnlyList<OwnerConsoleActivityRow> Build(IReadOnlyList<OwnerConsoleActivityItem> items)
+    internal static IReadOnlyList<OwnerConsoleActivityRow> Build(IReadOnlyList<OwnerConsoleActivityItem> items, string? filter = null)
     {
+        if (OwnerConsoleActivityFilter.Normalize(filter) is { } normalized)
+            return OwnerConsoleActivityFilter.Rows(items, normalized);
         var keys = OwnerConsoleActivityFollow.Keys(items);
         var dates = items.Select(item => DateOnly.FromDateTime(item.Timestamp.ToLocalTime().DateTime)).ToArray();
         if (dates.Distinct().Count() < 2)

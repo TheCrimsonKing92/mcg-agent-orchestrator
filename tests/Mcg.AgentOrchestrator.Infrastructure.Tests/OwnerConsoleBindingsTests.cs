@@ -95,7 +95,7 @@ public sealed class OwnerConsoleBindingsTests
     [Fact]
     public void PromptPreservesCommandOrderAndAdvertisesAliases()
     {
-        const string expected = "conductor start | conductor stop | conductor status | digest | metrics | bell on | bell off | goal <id-prefix> | [e] epics | fleet | follow | [l] landings | [g] gate | [?] help | [q] quit | [a] accept | [r] answer";
+        const string expected = "conductor start | conductor stop | conductor status | digest | metrics | bell on | bell off | goal <id-prefix> | [e] epics | fleet | follow | [/] filter <text> | [l] landings | [g] gate | [?] help | [q] quit | [a] accept | [r] answer";
         Assert.Equal(expected, OwnerConsoleBindings.CommandPrompt);
         Assert.Equal(expected.Split(" | "), OwnerConsoleBindings.PromptEntries);
         Assert.Equal(expected, OwnerConsoleKeyHints.CommandPrompt);
@@ -126,6 +126,8 @@ public sealed class OwnerConsoleBindingsTests
             "Epic detail Esc: Back to the epic list.",
             "Epic view w (list and detail): Cycle the time window (day, week, all time).",
             "Epic view Ctrl+R (list and detail): Reload the epic view.",
+            "/: Filter ACTIVITY by goal id prefix or text (any pane).",
+            ":filter <text>: Show only ACTIVITY rows whose goal id starts with <text> or whose line contains <text>; filter with no text shows every row (same as /).",
             "l: Show delivered goals (any pane).",
             ":landings: Show delivered goals: landing commit, integration kind and acceptance (landings today|30) (same as l).",
             "g: Open the GATE view (any pane).",
@@ -178,7 +180,7 @@ public sealed class OwnerConsoleBindingsTests
     [InlineData(2, false, "Following latest  Up/Down scroll  Enter what this means")]
     public void PaneHintsCombineSelectionActionsAndGlobalViews(int pane, bool answerable, string prefix)
     {
-        const string suffix = "  Home/End first/last  PgUp/PgDn page  Tab/Shift+Tab pane  e epics  l landings  g gate  : command  ? help  q quit";
+        const string suffix = "  Home/End first/last  PgUp/PgDn page  Tab/Shift+Tab pane  e epics  / filter  l landings  g gate  : command  ? help  q quit";
         Assert.Equal(prefix + suffix, OwnerConsoleBindings.PaneHint((OwnerConsolePane)pane, answerable));
         Assert.Equal(prefix + suffix, OwnerConsoleKeyHints.Hint((OwnerConsolePane)pane, answerable));
     }

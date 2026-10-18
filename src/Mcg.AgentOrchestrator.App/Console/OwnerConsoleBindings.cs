@@ -15,6 +15,7 @@ internal static class OwnerConsoleBindings
         Row("epics", "Open the epic view", 'e', "Open the epic view (any pane).", owner: OwnerConsoleCommandOwner.View),
         Row("fleet", "Show the fleet diagram: host and executor boxes."),
         Row("follow", "Follow the newest ACTIVITY row; new events keep it selected until you move the selection or scroll (Home in ACTIVITY does the same).", owner: OwnerConsoleCommandOwner.View),
+        Row("filter <text>", "Show only ACTIVITY rows whose goal id starts with <text> or whose line contains <text>; filter with no text shows every row.", '/', "Filter ACTIVITY by goal id prefix or text (any pane).", owner: OwnerConsoleCommandOwner.View),
         Row("landings", "Show delivered goals: landing commit, integration kind and acceptance (landings today|30)", 'l', "Show delivered goals (any pane)."),
         Row("gate", "Open the GATE view (gate <goal-id-prefix> opens the gate that goal is in)", 'g', "Open the GATE view (any pane).", owner: OwnerConsoleCommandOwner.View),
         Row("help", "Open this help dialog", '?', "Open this help dialog (any pane).", owner: OwnerConsoleCommandOwner.View),
@@ -40,6 +41,7 @@ internal static class OwnerConsoleBindings
     internal static OwnerConsoleBinding Help => All.Single(row => row.Scope == OwnerConsoleScope.Global && row.Command == "help");
     internal static OwnerConsoleBinding Quit => All.Single(row => row.Scope == OwnerConsoleScope.Global && row.Command == "quit");
     internal static OwnerConsoleBinding Follow => All.Single(row => row.Scope == OwnerConsoleScope.Global && row.Command == "follow");
+    internal static OwnerConsoleBinding Filter => All.Single(row => row.Scope == OwnerConsoleScope.Global && row.Command == "filter");
     internal static IEnumerable<OwnerConsoleBinding> Commands => All.Where(row => TopLevel(row.Scope));
     internal static OwnerConsoleBinding? ForDialogKey(OwnerConsoleScope scope, char key, bool ctrl = false) => All.FirstOrDefault(row =>
         !TopLevel(scope) && row.Scope == scope && row.Ctrl == ctrl && row.Key is { } bound &&
@@ -71,8 +73,8 @@ internal static class OwnerConsoleBindings
             if (string.IsNullOrWhiteSpace(row.Command)) violations.Add($"Key '{key}' on '{row.Usage}' has no command.");
             if (row.Effect == OwnerConsoleEffect.External && (row.Scope == OwnerConsoleScope.Global || !row.Confirms))
                 violations.Add($"Key '{key}' on '{row.Command}' ({row.Usage}) is unsafe for an External effect.");
-            if (!row.Ctrl && (key is 'j' or 'k' or '/' or ':' || key == '?' && row.Command != "help" || key == 'q' && row.Command != "quit"))
-                violations.Add($"Key '{key}' on '{row.Command}' ({row.Usage}) is reserved" + (key == 'q' ? " for 'quit'." : "."));
+            if (!row.Ctrl && (key is 'j' or 'k' or ':' || key == '/' && row.Command != "filter" || key == '?' && row.Command != "help" || key == 'q' && row.Command != "quit"))
+                violations.Add($"Key '{key}' on '{row.Command}' ({row.Usage}) is reserved" + (key == 'q' ? " for 'quit'." : key == '/' ? " for 'filter'." : "."));
             foreach (var other in keyed.Skip(index + 1).Where(other => char.ToLowerInvariant(other.Key!.Value) == key && other.Ctrl == row.Ctrl))
             {
                 if (row.Scope == other.Scope || TopLevel(row.Scope) && TopLevel(other.Scope))

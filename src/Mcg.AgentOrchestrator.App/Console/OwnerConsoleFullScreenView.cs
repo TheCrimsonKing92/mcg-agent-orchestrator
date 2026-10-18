@@ -50,6 +50,8 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     private readonly OwnerConsoleActivityFollow _follow = new();
     private IReadOnlyList<OwnerConsoleActivityKey> _activityKeys = [];
     internal bool ActivityFollowing => _follow.Following;
+    private string? _activityFilter;
+    internal string? ActivityFilter => _activityFilter;
     private View? _commandReturnFocus;
     private bool ActionRunning => _acting || _operation.IsRunning;
 
@@ -239,7 +241,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
             model?.Board.Length ?? 0, _board.RowOffset, BoardBodyRows()));
         var activityTitle = OwnerConsoleActivityTitle.Title(OwnerConsoleOverflow.Of(
             ActivityLines.Count, _activity.Viewport.Y, _activity.Viewport.Height),
-            _follow.Following, _activityFrame.Frame.Width - OwnerConsoleOverflow.TitleChrome);
+            _follow.Following, _activityFrame.Frame.Width - OwnerConsoleOverflow.TitleChrome, _activityFilter);
         if (_activityFrame.Title != activityTitle) _activityFrame.Title = activityTitle;
 
         static void SetTitle(FrameView frame, string baseTitle, OwnerConsoleOverflow overflow)
@@ -315,14 +317,14 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     // Host ticks repaint freshness even when the state refresh is blocked or has failed.
     internal void RefreshStatus() { RenderStatus(); RenderNotices(); }
 
-    private void RenderActivity()
+    private void RenderActivity(bool refilter = false)
     {
         using var trace = _diagnostics?.Begin("activity-source-replacement", TraceState);
-        var selected = _activity.SelectedItem;
+        var selected = refilter ? null : _activity.SelectedItem;
         var top = _activity.Viewport.Y;
         var state = _controller.Model?.ActivityState;
         var items = _controller.Model?.Activity.Take(OwnerConsoleViewModelBuilder.MaxActivityItems).ToArray() ?? [];
-        _activityRows = state is null ? OwnerConsoleActivityRows.Build(items) : [];
+        _activityRows = state is null ? OwnerConsoleActivityRows.Build(items, _activityFilter) : [];
         _activityKeys = state is null ? _activityRows.Select(row => row.Key).ToArray() : OwnerConsoleActivityFollow.Keys(items);
         IEnumerable<string> pane = state is { Loading: true } ? ["loading..."] : state?.Error is { } error
             ? ["ACTIVITY unavailable: " + error] : _activityRows.Select(row => row.Text);
@@ -433,7 +435,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         if (!key.IsCtrl && !key.IsAlt && OwnerConsoleBindings.ForKey(character, FocusedPane) is { } keyBinding)
         {
             key.Handled = true;
-            await RunBindingAsync(keyBinding);
+            await RunBindingAsync(keyBinding, fromKey: true);
             return;
         }
         if (!key.IsCtrl && !key.IsAlt && OwnerConsoleBindings.IsTopLevelKey(character))
@@ -516,6 +518,11 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
             {
                 if (_activityRows[selected].ItemIndex is { } itemIndex)
                     await ActAsync(ct => _controller.ShowActivityMeaningAsync(_controller.Model!.Activity[itemIndex], _operation, ct));
+                else if (_activityRows[selected].Key.Kind == OwnerConsoleActivityFilter.EmptyKind)
+                {
+                    StartAction();
+                    ShowNotice(OwnerConsoleActivityFilter.EmptyEnterNotice(_activityFilter!), OwnerConsoleNoticeSeverity.Failure, OwnerConsoleNoticeSource.Action);
+                }
                 else
                 {
                     StartAction();
@@ -531,7 +538,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         }
     }
 
-    private async Task RunBindingAsync(OwnerConsoleBinding binding, string? argument = null)
+    private async Task RunBindingAsync(OwnerConsoleBinding binding, string? argument = null, bool fromKey = false)
     {
         if (binding == OwnerConsoleBindings.Quit)
         {
@@ -560,6 +567,30 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         }
         else if (binding == OwnerConsoleBindings.Follow)
         { StartAction(); FocusPane(OwnerConsolePane.Activity); FollowLatest(); }
+        else if (binding == OwnerConsoleBindings.Filter)
+        {
+            if (fromKey)
+            {
+                _commandReturnFocus = _activity;
+                _editingCommand = true;
+                _command.Text = OwnerConsoleActivityFilter.CommandText(_activityFilter);
+                _command.InsertionPoint = _command.Text.Length;
+                _command.SetFocus();
+                RenderHints();
+                return;
+            }
+            StartAction();
+            _activityFilter = OwnerConsoleActivityFilter.Normalize(argument);
+            FocusPane(OwnerConsolePane.Activity);
+            _rendering = true;
+            try { RenderActivity(refilter: true); } finally { _rendering = false; }
+            RenderHints();
+            RenderOverflow();
+            ShowNotice(_activityFilter is { } filter ? OwnerConsoleActivityFilter.AppliedNotice(filter,
+                _activityRows.Count(row => row.ItemIndex is not null),
+                Math.Min(_controller.Model?.Activity.Length ?? 0, OwnerConsoleViewModelBuilder.MaxActivityItems))
+                : OwnerConsoleActivityFilter.ClearedNotice, OwnerConsoleNoticeSeverity.Success, OwnerConsoleNoticeSource.Action);
+        }
         else throw new InvalidOperationException($"No view action for binding {binding.Command}.");
     }
 
