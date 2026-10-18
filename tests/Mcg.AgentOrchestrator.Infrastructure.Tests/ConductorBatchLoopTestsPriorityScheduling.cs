@@ -158,6 +158,16 @@ public sealed class ConductorBatchLoopTestsPriorityScheduling : ConductorBatchLo
                 [t.Id] = ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/T.cs"]
             };
             if (train) paths[goals[2].Id] = ["tests/Mcg.AgentOrchestrator.TestSupport/U.cs"];
+            foreach (var goal in goals)
+            {
+                kernel.RecordGoalRefinement(goal.Id, new RefinedSpec(goal.Objective,
+                    ["The full acceptance gate passes"], VerificationClass.TestVerifiable, [], [])
+                {
+                    AcceptanceGateOwnedAcceptanceCriteria = ["The full acceptance gate passes"]
+                });
+                kernel.MapCriterionEvidenceOwner(goal.Id, 0, 1, CriterionEvidenceOwner.Acceptance, "test",
+                    CriterionEvidenceScopes.FullAcceptanceGate, expectedCandidateSha: goal.Id.Value.PadRight(40, 'b'));
+            }
             var driver = GroupingDriver(kernel, root, paths, pairs, solos, trains);
             var policy = ConductorAutonomyPolicy.Permissive;
             Assert.True(driver.AcceptanceCohortsEnabled);
@@ -180,14 +190,20 @@ public sealed class ConductorBatchLoopTestsPriorityScheduling : ConductorBatchLo
             Assert.Equal(new[] { s.Id, t.Id }, pairSelection.Members.Select(member => member.GoalId));
             if (train)
             {
-                var selection = Assert.IsType<ConductorMergeTrainSelection>(ConductorMergeTrainSelector.Select(candidates));
+                var ineligible = ConductorBatchLoop.TrainIneligibleCriterionEvidenceGoalIds(goals);
+                Assert.Empty(ineligible);
+                var selection = Assert.IsType<ConductorMergeTrainSelection>(
+                    ConductorMergeTrainSelector.Select(candidates, ineligibleGoalIds: ineligible));
                 Assert.Equal(goals.Select(goal => goal.Id), selection.Members.Select(member => member.GoalId));
             }
-            BatchTickSummary? observed = null;
-            new ConductorBatchLoop().Run(kernel, driver, policy, NoStopPath(), maxIterations: 1,
-                onTick: summary => observed = summary);
-            var progress = Assert.IsType<BatchTickSummary>(observed).ProgressLines ?? [];
-            var plan = Assert.Single(progress, line => line.StartsWith("SPECULATIVE_COHORT_PLAN ", StringComparison.Ordinal));
+            // Plan receipts are emitted directly, outside the tick summary's progress accumulator.
+            var logPath = Path.Combine(root, "dependency-group-events.jsonl");
+            new ConductorBatchLoop(conductEventLogWriter: new ConductEventLogWriter(logPath))
+                .Run(kernel, driver, policy, NoStopPath(), maxIterations: 1);
+            var plan = Assert.Single(File.ReadAllLines(logPath)
+                .Select(line => JsonSerializer.Deserialize<JsonElement>(line))
+                .Where(record => record.GetProperty("eventKind").GetString() == "speculative-cohort-plan"))
+                .GetProperty("detail").GetString()!;
             Assert.Contains($"ready={goals.Length} ", plan);
             if (dependency)
             {
