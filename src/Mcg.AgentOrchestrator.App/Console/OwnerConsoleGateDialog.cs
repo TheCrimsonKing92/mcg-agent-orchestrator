@@ -11,6 +11,7 @@ internal sealed class OwnerConsoleGateDialog : FrameView
     private readonly Label _footer = new() { Y = Pos.AnchorEnd(1), Width = Dim.Fill(), Height = 1,
         Text = OwnerConsoleDialogBindings.GateHelp.HintLabel! };
     private OwnerConsoleGateProgress? _gate;
+    private string? _goalId;
     internal bool Expanded { get; private set; }
     internal bool IsOpen { get; private set; }
     internal OwnerConsolePane ReturnPane { get; private set; }
@@ -28,9 +29,10 @@ internal sealed class OwnerConsoleGateDialog : FrameView
         Add(_body, _footer);
     }
 
-    internal void Open(OwnerConsolePane returnPane, OwnerConsoleGateProgress? gate)
+    internal void Open(OwnerConsolePane returnPane, OwnerConsoleGateProgress? gate, string? goalId = null)
     {
         ReturnPane = returnPane;
+        _goalId = goalId;
         Expanded = false;
         IsOpen = Visible = true;
         Render(gate);
@@ -41,6 +43,11 @@ internal sealed class OwnerConsoleGateDialog : FrameView
     {
         _gate = gate;
         if (!IsOpen) return;
+        if (_goalId is not null)
+        {
+            if (gate?.ForMember(_goalId) is { } memberGate) gate = memberGate;
+            else _goalId = null;
+        }
         var selected = _body.SelectedItem ?? 0;
         Lines = OwnerConsoleGateLayout.Lines(gate, OwnerConsoleEpicFormatter.Width(_body.Viewport.Width), Expanded);
         _body.SetSource(new ObservableCollection<string>(Lines));

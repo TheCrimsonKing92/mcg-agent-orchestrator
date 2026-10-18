@@ -4,7 +4,8 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 
 namespace Mcg.AgentOrchestrator.App.OwnerConsole;
 
-internal sealed class OwnerGoalDetailQuery(IOrchestratorStateQueries state, IGoalEventTail tail)
+internal sealed class OwnerGoalDetailQuery(IOrchestratorStateQueries state, IGoalEventTail tail,
+    Func<OwnerConsoleGateProgress?>? gate = null)
 {
     internal async Task<OwnerGoalDetailSnapshot?> LoadAsync(string goalId, CancellationToken cancellationToken)
     {
@@ -26,6 +27,6 @@ internal sealed class OwnerGoalDetailQuery(IOrchestratorStateQueries state, IGoa
         var events = tail.ReadLast(goalId, 100)
             .Select(line => OwnerGoalLifecycleEvent.TryParse(line, goalId, out var item) ? item : null)
             .Where(item => item is not null).Select(item => OwnerGoalLifecycleEvent.WithRole(item!, roles)).ToArray();
-        return new OwnerGoalDetailSnapshot(goal, position, events);
+        return new OwnerGoalDetailSnapshot(goal, position, events, gate?.Invoke()?.ForMember(goalId));
     }
 }

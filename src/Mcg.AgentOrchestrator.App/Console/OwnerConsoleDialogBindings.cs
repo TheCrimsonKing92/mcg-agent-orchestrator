@@ -8,6 +8,7 @@ internal static class OwnerConsoleDialogBindings
         Row(OwnerConsoleScope.GoalDetail, 'd', "question", "Open question", "Goal detail d: Open the goal's open question."),
         Row(OwnerConsoleScope.GoalDetail, 'f', "failure", "Last failure", "Goal detail f: Show the goal's last failure."),
         Row(OwnerConsoleScope.GoalDetail, 'e', "epics", "Epic", "Goal detail e: Open the goal's epic."),
+        Row(OwnerConsoleScope.GoalDetail, 'g', "gate", "Gate view", "Goal detail g: Open the GATE view on this goal's gate (same as :gate <goal-id-prefix>)."),
         Row(OwnerConsoleScope.GoalDetail, 'q', "quit", "Back", "Goal detail q: Back out of goal detail."),
         Row(OwnerConsoleScope.EpicView, 'w', "window", "Window", "Epic view w (list and detail): Cycle the time window (day, week, all time)."),
         Row(OwnerConsoleScope.EpicView, 'r', "reload", "Reload", "Epic view Ctrl+R (list and detail): Reload the epic view.", ctrl: true),

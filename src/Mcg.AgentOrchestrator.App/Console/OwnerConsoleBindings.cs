@@ -15,7 +15,7 @@ internal static class OwnerConsoleBindings
         Row("epics", "Open the epic view", 'e', "Open the epic view (any pane).", owner: OwnerConsoleCommandOwner.View),
         Row("fleet", "Show the fleet diagram: host and executor boxes."),
         Row("landings", "Show delivered goals: landing commit, integration kind and acceptance (landings today|30)", 'l', "Show delivered goals (any pane)."),
-        Row("gate", "Open the GATE view", 'g', "Open the GATE view (any pane).", owner: OwnerConsoleCommandOwner.View),
+        Row("gate", "Open the GATE view (gate <goal-id-prefix> opens the gate that goal is in)", 'g', "Open the GATE view (any pane).", owner: OwnerConsoleCommandOwner.View),
         Row("help", "Open this help dialog", '?', "Open this help dialog (any pane).", owner: OwnerConsoleCommandOwner.View),
         Row("quit", "Quit the console", 'q', "Quit the console (any pane).", owner: OwnerConsoleCommandOwner.View),
         Row("accept", "Accept the selected default in DECISIONS after confirmation", 'a', "Accept the selected default in DECISIONS after confirmation.",
