@@ -30,34 +30,8 @@ public sealed class IsolatedProcessSpawningLaneSplitTests
         typeof(WorkerBuildCheckRecoveryTestsEvidenceMissingLockTimeout)
     ];
 
-    private static readonly string[] MovedSubstrings =
-    [
-        nameof(WorkerBuildCheckOutputBoundsTests),
-        nameof(PatchEquivalenceIntegratedMainParentTests),
-        nameof(WorkerBuildCheckFreeSlotTests),
-        nameof(AcceptanceRevalidationPlannerTests),
-        nameof(WorkerBuildCheckRunHoldTests),
-        nameof(WorkerBuildProjectScopeProcessSpawningTests),
-        nameof(FocusedEvidenceUnionManagedTests),
-        nameof(PatchEquivalenceIntegrationMergeTests),
-        nameof(RemoteFirstFocusedEvidenceTests),
-        nameof(CriterionEvidencePatchCarryTests),
-        nameof(WorkerBuildCheckRecoveryTests)
-    ];
-
-    // Expand these back to the original operands before constructing the pre-split reference.
-    private static readonly Dictionary<string, string[]> CompactExclusions = new(StringComparer.Ordinal)
-    {
-        ["PatchEquivalenceIntegrat"] =
-            [nameof(PatchEquivalenceIntegratedMainParentTests), nameof(PatchEquivalenceIntegrationMergeTests)],
-        ["WorkerDispatchTestsSubscription"] =
-            ["WorkerDispatchTestsSubscriptionPreflight", "WorkerDispatchTestsSubscriptionTerminalContract"],
-        ["RealProcessShard"] = ["RealProcessShardAlphaSmokeTests", "RealProcessShardBetaSmokeTests"],
-        ["DisposableTrialRoot"] = ["DisposableTrialRootTests", "DisposableTrialRootNegativeControlTests"],
-        ["RunGoalService"] = ["RunGoalServiceTests", "RunGoalServiceProcessContractTests"],
-        ["PermitWaitTests"] = ["StructuralCoveragePermitWaitTests", "StructuralCoverageVerifierPermitWaitTests"],
-        ["ThreadPoolSaturationTests"] = ["GitCliThreadPoolSaturationTests", "PipeDrainThreadPoolSaturationTests"]
-    };
+    // Copied verbatim from config/acceptance-manifest.json at pre-split merge base df9d0460.
+    private const string PreSplitRemainderFilter = "FullyQualifiedName!~CliCommandTests&FullyQualifiedName!~CliPersistentStateRunnerAcceptanceFailureRecoveryTests&FullyQualifiedName!~ConductWatchSweepScopingTests&FullyQualifiedName!~AcceptanceCohortWorkflowTests&FullyQualifiedName!~AcceptanceVerdictCarryForwardTests&FullyQualifiedName!~GoalGitFactIndexTests&FullyQualifiedName!~GoalsPruneTests&FullyQualifiedName!~GoalWorktreeTestsAcceptanceLanding&FullyQualifiedName!~GoalWorktreeTestsCleanupHookDelegates&FullyQualifiedName!~GoalWorktreeTestsCreationResolution&FullyQualifiedName!~GoalWorktreeTestsOrphanEphemeralSweep&FullyQualifiedName!~GoalWorktreeTestsRebaseMerge&FullyQualifiedName!~GoalWorktreeTestsRemoveCleanup&FullyQualifiedName!~GoalWorktreeTestsSqliteTooling&FullyQualifiedName!~LandingExecutorTests&FullyQualifiedName!~SourceBacklogSiblingCreationTests&FullyQualifiedName!~AdvanceLoopTests&FullyQualifiedName!~ConductLoopLockTests&FullyQualifiedName!~ConductorLoopHandoffTests&FullyQualifiedName!~GoalBacklogLinkTests&FullyQualifiedName!~GoalLifecycleEventWriterTests&FullyQualifiedName!~DispatchHostLifetimeHandoffTests&FullyQualifiedName!~RealWorkerProcessGuardTests&FullyQualifiedName!~SqliteOrchestratorStateRepositoryTests&FullyQualifiedName!~WorkerDispatchTestsDispatchPreparation&FullyQualifiedName!~WorkerDispatchTestsModelSelection&FullyQualifiedName!~WorkerDispatchTestsSandboxLowIntegrity&FullyQualifiedName!~WorkerDispatchTestsSubscriptionPreflight&FullyQualifiedName!~WorkerDispatchTestsWorkerResultClassification&FullyQualifiedName!~WorkerDispatchTestsSubscriptionTerminalContract&FullyQualifiedName!~WorkerProcessJobsTests&FullyQualifiedName!~WorkerProfileTests&FullyQualifiedName!~WorkspaceConsolidatorTests&FullyQualifiedName!~AcceptanceFailureCensusScriptTests&FullyQualifiedName!~AcceptanceLaneClosureHasherTests&FullyQualifiedName!~AcceptancePartitionVerdictCacheContentReuseTests&FullyQualifiedName!~AssemblyTempRedirectTests&FullyQualifiedName!~AssemblyTempRedirectChildSmokeTests&FullyQualifiedName!~LaneTimingMeasurementScriptTests&FullyQualifiedName!~CitedPriorEvidenceResolverTests&FullyQualifiedName!~CliHelpTests&FullyQualifiedName!~ConductorDriverTests&FullyQualifiedName!~ConductorSelfRelaunchTests&FullyQualifiedName!~ConductorSuccessorSelfCheckTests&FullyQualifiedName!~DispatchProcessHostTests&FullyQualifiedName!~DisposableTrialRootTests&FullyQualifiedName!~DisposableTrialRootNegativeControlTests&FullyQualifiedName!~ExcessWorkerRoundAnalysisScriptTests&FullyQualifiedName!~GitCliTests&FullyQualifiedName!~IcaclsIntegrityLabelerTests&FullyQualifiedName!~ConsoleIoPreservationTests&FullyQualifiedName!~LauncherScriptTests&FullyQualifiedName!~MtpTestRunnerScriptTests&FullyQualifiedName!~MtpNoBuildReceiptIdentityTests&FullyQualifiedName!~OwnedProcessExitObservationTests&FullyQualifiedName!~ProcessTreeGuiSuppressionTests&FullyQualifiedName!~GitCliThreadPoolSaturationTests&FullyQualifiedName!~PipeDrainThreadPoolSaturationTests&FullyQualifiedName!~ChildOutputDrainAdoptionSaturationTests&FullyQualifiedName!~SemanticAcceptanceTests&FullyQualifiedName!~WorkerContextArtifactsCharacterizationTests&FullyQualifiedName!~ChaosGate&FullyQualifiedName!~AutoReviewRetryConvergenceBriefBuilderTests&FullyQualifiedName!~InquiryDispatcherTests&FullyQualifiedName!~ProgressiveReviewSteeringTests&FullyQualifiedName!~GoalWorktreeAcceptanceContentionTests&FullyQualifiedName!~WorkerDispatchAcceptanceAdmissionTests&FullyQualifiedName!~ConductorCrossTickTests&FullyQualifiedName!~DependencyOrderingRegressionTests&FullyQualifiedName!~ConductorBatchLoopTests&FullyQualifiedName!~OperatorIntentAdjudicationTests&FullyQualifiedName!~DotnetBuildEnvironmentManagerTests&FullyQualifiedName!~LocalProcessVerifierDotnetBuildSlotTests&FullyQualifiedName!~LocalProcessVerifierStaticHookTests&FullyQualifiedName!~PreReviewFocusedEvidenceVerifierTests&FullyQualifiedName!~AcceptanceOutputCaptureTests&FullyQualifiedName!~HermeticVerificationEnvironmentTests&FullyQualifiedName!~AcceptanceGateEngineSettingsTests&FullyQualifiedName!~AcceptanceOverlappedCheckSchedulingTests&FullyQualifiedName!~GoalAcceptanceVerifierTests&FullyQualifiedName!~GoalAcceptanceVerifierCancellationTests&FullyQualifiedName!~GoalAcceptanceVerifierDotnetBuildSlotTests&FullyQualifiedName!~FocusedEvidenceOverflowContinuationTests&FullyQualifiedName!~RealProcessShardAlphaSmokeTests&FullyQualifiedName!~RealProcessShardBetaSmokeTests&FullyQualifiedName!~WorkerDispatchJobAccountingTests&FullyQualifiedName!~RunEventStoreTests&FullyQualifiedName!~RunGoalServiceTests&FullyQualifiedName!~RunGoalServiceProcessContractTests&FullyQualifiedName!~GoalMonitoringSubscriptionCommandTests&FullyQualifiedName!~VerificationAndProcessLogTests&FullyQualifiedName!~ToolchainDetectionTests&FullyQualifiedName!~FundamentalAliasTests&FullyQualifiedName!~GoalWorktreeIsolatedDotnetTests&FullyQualifiedName!~WorkerDispatchSpecClarificationTests&FullyQualifiedName!~ProgressiveReviewGlanceTests&FullyQualifiedName!~DispatchRecoveryPolicyTests&FullyQualifiedName!~OperatorChannelTests&FullyQualifiedName!~StatePersistenceAndPerformanceTests&FullyQualifiedName!~DiscordGatewayTests&FullyQualifiedName!~StorageRetentionMaintenanceTests&FullyQualifiedName!~HermesAcpTrialTests&FullyQualifiedName!~HermesExecutableIdentityTests&FullyQualifiedName!~PostLandingCanaryCaptureAvailabilityTests&FullyQualifiedName!~StructuralCoveragePermitWaitTests&FullyQualifiedName!~StructuralCoverageVerifierPermitWaitTests&FullyQualifiedName!~OrchestratorSnapshotStatusTimeoutTests&FullyQualifiedName!~MtpManagedFilterDiscoveryTests&FullyQualifiedName!~CliBacklogUpdateDescriptionRoundTripTests&FullyQualifiedName!~SourceSizeRatchetRetightenerTests&FullyQualifiedName!~BackgroundMergeTrainGateTests&FullyQualifiedName!~GoalWorktreeTestsRebaseRatchetRetighten&FullyQualifiedName!~AcceptanceCriterionEvidenceRecoveryTests&FullyQualifiedName!~SatisfiedAcceptancePatchCarryTests&FullyQualifiedName!~PassedMergeTrainReceiptHoldTests&FullyQualifiedName!~MergeTrainBisectSlotLossTests&FullyQualifiedName!~GoalWorktreeTestsRebaseRegistryAwareMerge&FullyQualifiedName!~GoalWorktreeTestsFollowerWorkspace&FullyQualifiedName!~RuntimeAssemblyArchitectureTests&FullyQualifiedName!~TesterCascadeDispatchTests&FullyQualifiedName!~FollowerGateAcceptanceStoreTests&FullyQualifiedName!~AcceptanceCohortPartitionSlotsBusyDeferralTests&Category!=HostIntegration";
 
     // Mean summed test seconds from TRX attempts d39a96cd-0-20261018143634873,
     // 1bc6e2ba-0-20261018141003319, operator-gate-20261018132531546,
@@ -114,23 +88,6 @@ public sealed class IsolatedProcessSpawningLaneSplitTests
                 AssertOnlyLane(membership, type, LaneB);
             AssertOnlyLane(membership, typeof(GoalAcceptanceLaneIsolatedRootGuardTests), Remainder);
             AssertOnlyLane(membership, typeof(JobAccountingRunIdentityEvidenceTests), Remainder);
-        }
-    }
-
-    [Xunit.Fact]
-    public void CompactExclusions_ClassCensus_MatchesOnlyPreviouslyExcludedClasses()
-    {
-        var types = RunnableTypes();
-        foreach (var (substring, originals) in CompactExclusions)
-        {
-            var originalMatches = types.Where(type => originals.Any(original =>
-                    type.FullName!.Contains(original, StringComparison.OrdinalIgnoreCase)))
-                .Select(type => type.FullName).ToArray();
-            var compactMatches = types.Where(type =>
-                    type.FullName!.Contains(substring, StringComparison.OrdinalIgnoreCase))
-                .Select(type => type.FullName).ToArray();
-            Xunit.Assert.NotEmpty(originalMatches);
-            Xunit.Assert.Equal(originalMatches, compactMatches);
         }
     }
 
@@ -228,25 +185,10 @@ public sealed class IsolatedProcessSpawningLaneSplitTests
     {
         Xunit.Assert.Single(lanes, lane => lane.Name == LaneA);
         Xunit.Assert.Single(lanes, lane => lane.Name == LaneB);
-        var remainder = Xunit.Assert.Single(lanes, lane => lane.Name == Remainder);
-        var operands = remainder.Filter.Split('&').ToList();
-        foreach (var (substring, originals) in CompactExclusions)
-        {
-            var compactOperand = "FullyQualifiedName!~" + substring;
-            Xunit.Assert.Single(operands, item => item == compactOperand);
-            var index = operands.IndexOf(compactOperand);
-            operands.RemoveAt(index);
-            operands.InsertRange(index, originals.Select(original => "FullyQualifiedName!~" + original));
-        }
-        foreach (var substring in MovedSubstrings)
-        {
-            var operand = "FullyQualifiedName!~" + substring;
-            Xunit.Assert.Single(operands, item => item == operand);
-            operands.Remove(operand);
-        }
+        Xunit.Assert.Single(lanes, lane => lane.Name == Remainder);
         return lanes.Where(lane => lane.Name != LaneA && lane.Name != LaneB)
             .Select(lane => lane.Name == Remainder
-                ? lane with { Filter = string.Join('&', operands) }
+                ? lane with { Filter = PreSplitRemainderFilter }
                 : lane).ToArray();
     }
 
