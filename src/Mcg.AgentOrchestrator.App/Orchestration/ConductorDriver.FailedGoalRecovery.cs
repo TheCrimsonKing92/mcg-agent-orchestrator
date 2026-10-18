@@ -7,6 +7,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed partial class ConductorDriver
 {
     internal ProviderHoldFailedGoalRedispatch? ProviderHoldRedispatch { get; set; }
+    internal Func<Goal, FailedGoalRecoveryDecision, string?, AttributedFailureRouteDecision>? InconclusiveRedRoute { get; set; }
 
     private ConductorAdvanceResult ExecuteFailedGoalRecovery(
         Goal goal,
@@ -65,6 +66,8 @@ internal sealed partial class ConductorDriver
         if (decision.Action is (FailedGoalRecoveryAction.CriterionRetry or FailedGoalRecoveryAction.Escalate) &&
             TryRecoverFailedWorkerBuildCheck(goal, goalPrefix, policy, state, decision, pendingNotes) is { } buildRecovery)
             return buildRecovery;
+        if ((InconclusiveRedRoute ?? InconclusiveTesterRedRoute.Decide)(goal, decision, _getPreReviewEvidenceContext(goal).CandidateSha) is { IsRoute: true } inconclusiveRoute)
+        { ApplyPendingFailedGoalNotes(goal, pendingNotes); return RouteAttributedFailure(goal, goalPrefix, policy, inconclusiveRoute); }
         if (decision.Action is FailedGoalRecoveryAction.ReconcileExitedDispatch or
             FailedGoalRecoveryAction.RetryTransient or
             FailedGoalRecoveryAction.RetryStale or
@@ -189,10 +192,7 @@ internal sealed partial class ConductorDriver
                         { Decision = FailedGoalRecoveryDecisionRecords.StaleRecoveryFacts(decision.Identity, reconcileHeldReason) });
                 }
 
-                facts = BuildFailedGoalRecoveryFacts(
-                    goal,
-                    policy,
-                    currentState);
+                facts = BuildFailedGoalRecoveryFacts(goal, policy, currentState);
                 decision = FailedGoalRecoveryPolicy.Evaluate(facts);
                 if (decision.Action != FailedGoalRecoveryAction.ReconcileExitedDispatch)
                     break;
