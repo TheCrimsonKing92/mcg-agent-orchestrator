@@ -3,7 +3,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class ConductorContinuitySupervisorSuccessorLockRetryTests
 {
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task FailedSuccessorWaitsThenRetriesSameBuildAndAdopts()
     {
         using var fixture = new Fixture();
@@ -44,7 +44,7 @@ public sealed class ConductorContinuitySupervisorSuccessorLockRetryTests
         Assert.False(lease.CanRead);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = TestHangGuard.WholeTestMilliseconds)]
     public async Task SecondFailureRestoresIncumbentAndSuppressesFurtherSameHeadSuccessor()
     {
         using var fixture = new Fixture();
@@ -86,7 +86,7 @@ public sealed class ConductorContinuitySupervisorSuccessorLockRetryTests
         Assert.False(suppressedLease.CanRead);
     }
 
-    [Theory(Timeout = 30000)]
+    [Theory(Timeout = TestHangGuard.WholeTestMilliseconds)]
     [InlineData("deliberate-stop")]
     [InlineData("launch-exception")]
     [InlineData("readiness-timeout")]
