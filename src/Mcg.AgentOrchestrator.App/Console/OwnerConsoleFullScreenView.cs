@@ -40,6 +40,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     private DateTimeOffset? _refreshedAt;
     private bool _rendering;
     private bool _editingCommand;
+    private string? _completionHint;
     private bool _acting;
     private OwnerConsolePane _focusedPane = OwnerConsolePane.Decisions;
     private int _selectedBoardIndex = -1;
@@ -128,6 +129,12 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         _board.HasFocusChanged += (_, _) => PaneFocusChanged(_board, OwnerConsolePane.Board);
         _activity.HasFocusChanged += (_, _) => PaneFocusChanged(_activity, OwnerConsolePane.Activity);
         _command.HasFocusChanged += (_, _) => RenderHints();
+        _command.TextChanged += (_, _) =>
+        {
+            if (_completionHint is null) return;
+            _completionHint = null;
+            RenderHints();
+        };
         _activity.ViewportChanged += (_, _) =>
         {
             using var trace = _diagnostics?.Begin("activity-viewport", TraceState);
@@ -389,6 +396,17 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
         if (_editingCommand || _command.HasFocus)
         {
             if (key == Key.Esc) { key.Handled = true; FinishCommand(); return; }
+            if (key == Key.Tab)
+            {
+                key.Handled = true;
+                var completion = OwnerConsoleCommandCompletion.Complete(_command.Text, OwnerConsoleBindings.Commands,
+                    _hints.Viewport.Width > 0 ? _hints.Viewport.Width : 80);
+                _command.Text = completion.Text;
+                _command.InsertionPoint = _command.Text.Length;
+                _completionHint = completion.Hint;
+                RenderHints();
+                return;
+            }
             if (key != Key.Enter || ActionRunning) return;
             key.Handled = true;
             var line = _command.Text;
@@ -545,6 +563,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     private void FinishCommand()
     {
         _editingCommand = false;
+        _completionHint = null;
         _command.Text = string.Empty;
         (_commandReturnFocus ?? _decisions).SetFocus();
         RenderHints();
@@ -593,7 +612,7 @@ internal sealed class OwnerConsoleFullScreenView : IDisposable
     }
 
     private void RenderHints() => _hints.Text = _editingCommand || _command.HasFocus
-        ? OwnerConsoleKeyHints.CommandLineHint
+        ? _completionHint ?? OwnerConsoleKeyHints.CommandLineHint
         : OwnerConsoleKeyHints.Hint(FocusedPane,
             _controller.SelectedDecision is { } decision && OwnerConsoleScreenController.AnswersInConsole(decision), _follow.Following);
 

@@ -343,7 +343,7 @@ Plain mode: untouched; no change to plain-mode bytes.
 3. A key is earned by an owner request or by unhandled-key counts in the console diagnostics trace, only for a routine view that needs no argument, with a cap of 10 top-level letters.
 4. If a command takes an argument, the key opens the default and the typed form takes the argument.
 5. A key whose effect leaves the console is never global and exists only on a selected item behind a confirmation or a form. Conductor start and stop stay typed, with stop needing `--yes`.
-6. The reserved keys are `:` command line, `?` help, `/` filter, Esc back, Enter open, Tab pane and `j`/`k`. The `q` key quits at the top level and backs out inside a view; Ctrl+R reloads a view, and letters are not case-sensitive.
+6. The reserved keys are `:` command line, `?` help, `/` filter, Esc back, Enter open, Tab pane and `j`/`k`. The `q` key quits at the top level and backs out inside a view; Ctrl+R reloads a view, and letters are not case-sensitive. Inside the command line, Tab completes the typed command from the registry.
 7. No key fails silently: an unbound key shows "not bound; press : for commands or ? for help", the command list shows `[key] command`, and help pairs each key with its command.
 
 See `OwnerConsoleBindings` and `OwnerConsoleBindingsTests` for the registry and its checks.

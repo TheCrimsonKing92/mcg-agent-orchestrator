@@ -1,5 +1,6 @@
 using System.Globalization;
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.App.OwnerConsole;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -136,8 +137,7 @@ internal static class EpicProgressReadModel
         var updated = DateTimeOffset.TryParse(goal.UpdatedAt, CultureInfo.InvariantCulture,
             DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var timestamp)
             ? timestamp : (DateTimeOffset?)null;
-        using var reader = new StringReader(goal.Objective);
-        var title = reader.ReadLine() ?? string.Empty;
+        var title = OwnerGoalTitle.Display(goal.Objective);
         return new(id, bucket, goal.Status, updated, title.Length > 100 ? title[..100] : title,
             goal.CreatedAt, goal.PromotionFact?.GoalId == id ? goal.PromotionFact : null);
     }

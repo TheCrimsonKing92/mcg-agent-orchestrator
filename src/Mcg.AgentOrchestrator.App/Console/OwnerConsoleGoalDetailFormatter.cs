@@ -26,6 +26,9 @@ internal static class OwnerConsoleGoalDetailFormatter
                 (priority > goal.Priority && goal.PriorityScheduling?.InheritedFromGoalId is { } donor
                     ? " (inherited from " + donor[..Math.Min(8, donor.Length)] + ")" : ""));
         if (goal.Isolation == GoalIsolation.Solo) output.WriteLine("Isolation: solo");
+        if (goal.SourceBacklogItemId is { } source)
+            output.WriteLine("Source: backlog " + source[..Math.Min(8, source.Length)] +
+                (goal.SourceBacklogCoverage is { } coverage ? ", " + coverage.ToString().ToLowerInvariant() : ""));
         var stage = GoalLifecycle.ResolveState(goal, new(IsBlocked: goal.CurrentHold is not null)).ToString();
         if (stage != goal.Status.ToString()) output.WriteLine("Stage: " + stage);
         var role = OwnerConsoleGoalDetail.Stage(goal);
