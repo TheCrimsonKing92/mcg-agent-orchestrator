@@ -31,6 +31,34 @@ internal static class ConductorConflictIntegrationMarker
 
     internal static void Remove(string worktree) => File.Delete(MarkerPath(worktree));
 
+    internal static bool TryReadRecordedHeads(string worktree, out string originalHead, out string mainSha)
+    {
+        originalHead = mainSha = string.Empty;
+        try
+        {
+            // Avoid launching git for ordinary rounds with no integration marker.
+            var root = Path.GetFullPath(worktree);
+            var gitDirectory = Path.Combine(root, ".git");
+            if (File.Exists(gitDirectory))
+            {
+                var reference = File.ReadAllText(gitDirectory).Trim();
+                if (!reference.StartsWith("gitdir:", StringComparison.OrdinalIgnoreCase))
+                    return false;
+                gitDirectory = Path.GetFullPath(reference["gitdir:".Length..].Trim(), root);
+            }
+            if (!File.Exists(Path.Combine(gitDirectory, "mcg-conductor-integration.json")))
+                return false;
+            var marker = JsonSerializer.Deserialize<Marker>(File.ReadAllText(MarkerPath(worktree)));
+            if (marker is null || string.IsNullOrWhiteSpace(marker.OriginalHead) || string.IsNullOrWhiteSpace(marker.MainSha))
+                return false;
+            originalHead = marker.OriginalHead;
+            mainSha = marker.MainSha;
+            return true;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException)
+        { return false; }
+    }
+
     private static bool Matches(string worktree, string reference, string expected)
     {
         var result = GitCli.Run(worktree, "rev-parse", "--verify", reference);
