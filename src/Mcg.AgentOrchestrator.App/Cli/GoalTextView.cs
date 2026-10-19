@@ -1,50 +1,10 @@
 using Mcg.AgentOrchestrator.Core;
-using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
-internal static partial class ConsoleViews
+internal static class GoalTextView
 {
-public static void PrintGoalIntakeReceipt(GoalIntakeRequestRecord record)
-{
-    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(new
-    {
-        kind = "goal-intake-receipt",
-        requestKey = record.RequestKey,
-        state = record.State,
-        createdAt = record.CreatedAt,
-        updatedAt = record.UpdatedAt,
-        goalId = record.GoalId,
-        failureCode = record.FailureCode,
-        failureDetail = record.FailureDetail,
-        stdoutPath = record.StdoutPath,
-        stderrPath = record.StderrPath
-    }));
-}
-
-public static void PrintHealth(OrchestratorHealthReport report)
-{
-    Console.WriteLine($"Ready: {report.IsReady}");
-    Console.WriteLine("Providers:");
-    foreach (var provider in report.Providers)
-    {
-        Console.WriteLine($"  {provider.ProviderName}: configured={provider.IsConfigured} mode={provider.Mode} ({provider.Detail})");
-    }
-
-    Console.WriteLine("Agents:");
-    foreach (var agent in report.Agents)
-    {
-        Console.WriteLine($"  {agent.Role}: valid={agent.IsValid} execution={agent.ExecutionPolicy} api={agent.ProviderName}/{agent.ModelName} reasoning={agent.ReasoningEffort ?? "default"} subscription={agent.SubscriptionProfileName ?? "none"} alternate-ready={agent.HasSubscriptionCapableAlternate} alternates={agent.SubscriptionCapableAlternatesDetail} ({agent.Detail})");
-    }
-
-    Console.WriteLine("Worker profiles:");
-    foreach (var profile in report.WorkerProfiles)
-    {
-        Console.WriteLine($"  {profile.Name}: executable={profile.Executable} resolvable={profile.IsResolvable} ({profile.Detail})");
-    }
-}
-
 public static void PrintGoal(
     Goal goal,
     string? friendlyLabel = null,
@@ -188,7 +148,7 @@ public static void PrintTaskQueryResult(Goal goal, TaskQueryResult result)
     foreach (var task in result.Tasks)
     {
         var assignment = task.AssignedAgentId is null ? "unassigned" : CliIdentifierText.ShortId(task.AssignedAgentId.Value);
-        Console.WriteLine($"  {GetTaskDisplayNumber(goal, task.Id)}. {task.Id.Value[..8]} [{task.Status}] {task.RequiredRole}: {OutputTextPreview.CreateSummary(task.Description).Text} ({assignment}) evidence={FormatTaskEvidence(task)}");
+        Console.WriteLine($"  {TaskDisplayNumber.Resolve(goal, task.Id)}. {task.Id.Value[..8]} [{task.Status}] {task.RequiredRole}: {OutputTextPreview.CreateSummary(task.Description).Text} ({assignment}) evidence={FormatTaskEvidence(task)}");
     }
 
     Console.WriteLine();
@@ -224,5 +184,3 @@ public static string FormatTaskEvidence(TaskSpec task)
     return "none";
 }
 }
-
-

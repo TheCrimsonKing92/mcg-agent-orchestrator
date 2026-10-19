@@ -519,7 +519,7 @@ internal static partial class CliCommandHandlers
             }
 
             case "doctor":
-                ConsoleViews.PrintHealth(OrchestratorHealthInspector.InspectCurrentEnvironment(new AgentCatalog(context.Agents), context.WorkerProfiles));
+                HealthTextView.PrintHealth(OrchestratorHealthInspector.InspectCurrentEnvironment(new AgentCatalog(context.Agents), context.WorkerProfiles));
                 return false;
 
             case "repo-process-info":

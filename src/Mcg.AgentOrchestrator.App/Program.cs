@@ -409,7 +409,7 @@ if (startupArgs.Count > 0 && startupArgs[0].Equals("prototype", StringComparison
     var objective = startupArgs.Count > 1 ? string.Join(' ', startupArgs.Skip(1)) : "Create a Windows-based agent orchestrator";
     var prototypeKernel = new AgentOrchestratorKernel();
     var prototypeGoal = GoalLifecycleCommands.CreateAndActivateGoal(prototypeKernel, agents, objective);
-    ConsoleViews.PrintGoal(prototypeGoal);
+    GoalTextView.PrintGoal(prototypeGoal);
     TaskTimelineTextView.PrintTimeline(prototypeGoal);
     return 0;
 }

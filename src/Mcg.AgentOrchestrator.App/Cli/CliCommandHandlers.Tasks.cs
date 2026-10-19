@@ -161,7 +161,7 @@ internal static void RenderGoalScopedTaskMutation(GoalScopedTaskMutationOutcome 
         case GoalScopedTaskMutationRenderKind.None:
             break;
         case GoalScopedTaskMutationRenderKind.Goal:
-            ConsoleViews.PrintGoal(outcome.Goal);
+            GoalTextView.PrintGoal(outcome.Goal);
             break;
         case GoalScopedTaskMutationRenderKind.Task:
             TaskTextView.PrintTask(outcome.Goal, outcome.Task ?? throw new InvalidOperationException("Task render requires a task."));
@@ -336,7 +336,7 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
 
         case "tasks":
             context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
-            ConsoleViews.PrintTaskQueryResult(context.CurrentGoal, context.Kernel.QueryTasks(context.CurrentGoal.Id, CliArgumentParser.ParseTaskQuery(parts.Skip(1))));
+            GoalTextView.PrintTaskQueryResult(context.CurrentGoal, context.Kernel.QueryTasks(context.CurrentGoal.Id, CliArgumentParser.ParseTaskQuery(parts.Skip(1))));
             return false;
 
         case "add-task":
@@ -588,7 +588,7 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             RequireRemainingArgument(parts, progressTarget.NextIndex + 1, progressUsage);
             var progressTask = progressTarget.Task;
             context.Kernel.ReportTaskProgress(context.CurrentGoal!.Id, progressTask.Id, CliArgumentParser.ParseReportableStatus(parts[progressTarget.NextIndex]), ResolveTextArgument(parts, progressTarget.NextIndex + 1, progressUsage, "--text-file"));
-            ConsoleViews.PrintGoal(context.CurrentGoal!);
+            GoalTextView.PrintGoal(context.CurrentGoal!);
             return true;
 
         case "ask":
@@ -597,7 +597,7 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             var askTask = askTarget.Task;
             var request = context.Kernel.RequestHumanInput(context.CurrentGoal!.Id, askTask.Id, parts[askTarget.NextIndex]);
             Console.WriteLine($"Human input requested: {request.Id}");
-            ConsoleViews.PrintGoal(context.CurrentGoal!);
+            GoalTextView.PrintGoal(context.CurrentGoal!);
             return true;
 
         case "ask-goal":
@@ -605,7 +605,7 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
             var goalRequest = context.Kernel.RequestHumanInput(context.CurrentGoal.Id, null, parts[1]);
             Console.WriteLine($"Human input requested: {goalRequest.Id}");
-            ConsoleViews.PrintGoal(context.CurrentGoal);
+            GoalTextView.PrintGoal(context.CurrentGoal);
             return true;
 
         case "answer":
@@ -619,7 +619,7 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
                 ResolveTextArgument(answerParts, inlineIndex: 2, answerUsage, "--text-file"),
                 answerGateIds);
             context.CurrentGoal = context.Kernel.GetGoal(resolvedRequest.GoalId);
-            ConsoleViews.PrintGoal(context.CurrentGoal);
+            GoalTextView.PrintGoal(context.CurrentGoal);
             return true;
 
         case "supersede":
@@ -671,7 +671,7 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             Console.WriteLine(
                 $"Superseded clarification {supersededId}. " +
                 $"Authoritative answer: {authoritativeText}");
-            ConsoleViews.PrintGoal(context.CurrentGoal);
+            GoalTextView.PrintGoal(context.CurrentGoal);
             return true;
 
         case "gate-satisfied":
@@ -697,7 +697,7 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
                     gateEvidence);
                 context.CurrentGoal = context.Kernel.GetGoal(gateRequest.GoalId);
             }
-            ConsoleViews.PrintGoal(context.CurrentGoal);
+            GoalTextView.PrintGoal(context.CurrentGoal);
             return true;
 
         default:
