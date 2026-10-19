@@ -348,10 +348,7 @@ internal sealed partial class ConductorDriver
             var attributionSource = "ownership";
             if (attributed is null && MergeTrainRedAttribution.IsGenuineTrainRed(receipt))
             {
-                attributed = MergeTrainImpactAttribution.TryAttribute(receipt.GateTestResultPaths, workspace.Path, members, out subjects);
-                if (attributed is not null) attributionSource = "impact";
-                if (attributed is null && attempt == 0) attributed = MergeTrainReachAttribution.TryAttribute(receipt.GateTestResultPaths, workspace.Path, members, out subjects);
-                if (attributed is not null && attributionSource != "impact") attributionSource = "reach";
+                attributed = MergeTrainFallbackAttribution.TryAttribute(receipt.GateTestResultPaths, workspace.Path, members, attempt, out subjects, out attributionSource);
             }
             var messageSubjectFailure = MergeTrainRedAttribution.ReadFatalFailures(receipt.GateTestResultPaths)
                 .Any(MergeTrainRedAttribution.IsMessageSubjectGuard);
