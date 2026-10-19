@@ -5,7 +5,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
-internal static partial class ConsoleViews
+internal static class TaskTextView
 {
 public static void PrintDelegationPlan(Goal goal, DelegationPlan plan)
 {
@@ -18,7 +18,7 @@ public static void PrintDelegationPlan(Goal goal, DelegationPlan plan)
     Console.WriteLine("Delegated tasks:");
     foreach (var assignment in plan.Assignments)
     {
-        Console.WriteLine($"  task {GetTaskDisplayNumber(goal, assignment.TaskId)} -> {assignment.AgentId.Value} ({assignment.Role})");
+        Console.WriteLine($"  task {TaskDisplayNumber.Resolve(goal, assignment.TaskId)} -> {assignment.AgentId.Value} ({assignment.Role})");
     }
 }
 
@@ -37,7 +37,7 @@ public static void PrintTask(Goal goal, TaskSpec task)
         {
             Console.WriteLine($"Prompt size: {promptCharacterCount} chars");
         }
-        if (IsOutputTokenLimitHit(task.LastExecution))
+        if (OutputTokenLimit.IsHit(task.LastExecution))
         {
             Console.WriteLine("Model note: possible output token cap hit.");
         }
@@ -109,12 +109,12 @@ public static void PrintTask(Goal goal, TaskSpec task)
 
         if (DispatchFailureClassifier.TryBuildDirtyDispatchRecovery(task, out var recovery))
         {
-            DirtyDispatchRecoveryTextView.PrintDirtyDispatchRecovery(GetTaskDisplayNumber(goal, task.Id), recovery);
+            DirtyDispatchRecoveryTextView.PrintDirtyDispatchRecovery(TaskDisplayNumber.Resolve(goal, task.Id), recovery);
         }
     }
 
     Console.WriteLine("Task timeline:");
-    PrintTaskTimeline(goal, task);
+    TaskTimelineTextView.PrintTaskTimeline(goal, task);
 }
 
 public static void PrintRefreshDispatchResult(
@@ -128,10 +128,10 @@ public static void PrintRefreshDispatchResult(
     var process = task.LastProcess;
     var verification = task.LastVerification;
 
-    Console.WriteLine($"Task: id={task.Id.Value[..8]} status={task.Status} role={task.RequiredRole} assigned={OneLine(task.AssignedAgentId?.Value, "unassigned")}");
+    Console.WriteLine($"Task: id={task.Id.Value[..8]} status={task.Status} role={task.RequiredRole} assigned={TaskTimelineTextView.OneLine(task.AssignedAgentId?.Value, "unassigned")}");
     Console.WriteLine(dispatch is null
         ? "Dispatch: none"
-        : $"Dispatch: worker={OneLine(dispatch.WorkerName)} provider={OneLine(dispatch.ProviderName, "unknown")} model={OneLine(dispatch.ModelName, "unknown")} lane={OneLine(dispatch.DispatchLane, "unknown")} session={OneLine(dispatch.ProviderSessionId, "none")} dispatched={dispatch.DispatchedAt:u}");
+        : $"Dispatch: worker={TaskTimelineTextView.OneLine(dispatch.WorkerName)} provider={TaskTimelineTextView.OneLine(dispatch.ProviderName, "unknown")} model={TaskTimelineTextView.OneLine(dispatch.ModelName, "unknown")} lane={TaskTimelineTextView.OneLine(dispatch.DispatchLane, "unknown")} session={TaskTimelineTextView.OneLine(dispatch.ProviderSessionId, "none")} dispatched={dispatch.DispatchedAt:u}");
 
     Console.WriteLine(process is null
         ? "Process: none"
@@ -139,13 +139,13 @@ public static void PrintRefreshDispatchResult(
 
     Console.WriteLine(state is null
         ? "Dispatch state: none"
-        : $"Dispatch state: kind={state.Kind} recommended={OneLine(state.RecommendedAction)} summary={OneLine(state.Summary)}");
+        : $"Dispatch state: kind={state.Kind} recommended={TaskTimelineTextView.OneLine(state.RecommendedAction)} summary={TaskTimelineTextView.OneLine(state.Summary)}");
     Console.WriteLine(state is null
         ? "Heartbeat: none"
-        : $"Heartbeat: {OneLine(ProcessHeartbeatText.FormatInline(state.Heartbeat))}");
+        : $"Heartbeat: {TaskTimelineTextView.OneLine(ProcessHeartbeatText.FormatInline(state.Heartbeat))}");
     Console.WriteLine(process is null
         ? "Exit evidence: none"
-        : $"Exit evidence: exit={process.ExitCode?.ToString() ?? "unknown"} origin={state?.Artifacts.ExitArtifactOrigin.ToString() ?? process.ExitArtifactOrigin.ToString()} reason={OneLine(state?.Artifacts.ExitArtifactReason ?? process.ExitArtifactReason, "none")} artifact={(state?.Artifacts.ExitCodeExists == true ? "present" : "missing")} path={OneLine(process.ExitCodePath, "none")}");
+        : $"Exit evidence: exit={process.ExitCode?.ToString() ?? "unknown"} origin={state?.Artifacts.ExitArtifactOrigin.ToString() ?? process.ExitArtifactOrigin.ToString()} reason={TaskTimelineTextView.OneLine(state?.Artifacts.ExitArtifactReason ?? process.ExitArtifactReason, "none")} artifact={(state?.Artifacts.ExitCodeExists == true ? "present" : "missing")} path={TaskTimelineTextView.OneLine(process.ExitCodePath, "none")}");
 
     if (verification is null)
     {
@@ -158,60 +158,19 @@ public static void PrintRefreshDispatchResult(
         var outcome = DispatchFailureClassifier.Classify(task, verification);
         var hasBlockerStatus = WorkerResultBlockers.TryGetBlockersStatus(verification, out var blockerStatus);
         var hasBlocker = WorkerResultBlockers.TryFindBlocker(verification, out var blocker);
-        Console.WriteLine($"Exit classification: kind={outcome.Kind} class={outcome.OutcomeClass} recovery={outcome.RecoveryRecommendation} evidence={OneLine(outcome.EvidenceSummary, "none")}");
-        Console.WriteLine($"Structured blockers: status={(hasBlockerStatus ? blockerStatus.ToString().ToLowerInvariant() : "unknown")} value={OneLine(hasBlocker ? blocker : null, "none")}");
-        Console.WriteLine($"Latest verification: exit={verification.ExitCode} completed={verification.CompletedAt:u} worker_result={verification.WorkerResultPresent.ToString().ToLowerInvariant()} command={OneLine(verification.Command)} stdout_path={OneLine(verification.StandardOutputPath, "none")} stderr_path={OneLine(verification.StandardErrorPath, "none")}");
+        Console.WriteLine($"Exit classification: kind={outcome.Kind} class={outcome.OutcomeClass} recovery={outcome.RecoveryRecommendation} evidence={TaskTimelineTextView.OneLine(outcome.EvidenceSummary, "none")}");
+        Console.WriteLine($"Structured blockers: status={(hasBlockerStatus ? blockerStatus.ToString().ToLowerInvariant() : "unknown")} value={TaskTimelineTextView.OneLine(hasBlocker ? blocker : null, "none")}");
+        Console.WriteLine($"Latest verification: exit={verification.ExitCode} completed={verification.CompletedAt:u} worker_result={verification.WorkerResultPresent.ToString().ToLowerInvariant()} command={TaskTimelineTextView.OneLine(verification.Command)} stdout_path={TaskTimelineTextView.OneLine(verification.StandardOutputPath, "none")} stderr_path={TaskTimelineTextView.OneLine(verification.StandardErrorPath, "none")}");
     }
 
-    Console.WriteLine($"Disposition: state={disposition.State} confidence={disposition.Confidence} reason={OneLine(disposition.Reason)}");
-    Console.WriteLine($"Next action: {OneLine(disposition.NextSafeCommand)}");
+    Console.WriteLine($"Disposition: state={disposition.State} confidence={disposition.Confidence} reason={TaskTimelineTextView.OneLine(disposition.Reason)}");
+    Console.WriteLine($"Next action: {TaskTimelineTextView.OneLine(disposition.NextSafeCommand)}");
 
     if (options.IncludeHistory)
     {
         Console.WriteLine("Task timeline:");
-        PrintTaskTimeline(goal, task, options.HistoryLimit);
+        TaskTimelineTextView.PrintTaskTimeline(goal, task, options.HistoryLimit);
     }
-}
-
-public static void PrintTimeline(Goal goal)
-{
-    Console.WriteLine("Timeline:");
-    foreach (var item in goal.Timeline.OrderBy(evt => evt.OccurredAt))
-    {
-        var task = item.TaskId is null ? "goal" : item.TaskId.Value[..8];
-        Console.WriteLine($"  {item.OccurredAt:u} {item.Kind} {task}: {OutputTextPreview.CreateTimeline(item.Message).Text}");
-    }
-}
-
-public static void PrintTaskTimeline(Goal goal, TaskSpec task, int? limit = null)
-{
-    var events = goal.Timeline.Where(evt => evt.TaskId == task.Id).OrderBy(evt => evt.OccurredAt).ToList();
-    if (limit is { } count && events.Count > count)
-    {
-        events = events.TakeLast(count).ToList();
-    }
-    if (events.Count == 0)
-    {
-        Console.WriteLine("  no task timeline events");
-        return;
-    }
-
-    foreach (var item in events)
-    {
-        Console.WriteLine($"  {item.OccurredAt:u} {item.Kind}: {OneLine(OutputTextPreview.CreateTimeline(item.Message).Text)}");
-    }
-}
-
-private static string OneLine(string? value, string fallback = "unknown")
-{
-    if (string.IsNullOrWhiteSpace(value))
-    {
-        return fallback;
-    }
-
-    const int maxLength = 400;
-    var singleLine = string.Join(' ', value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-    return singleLine.Length <= maxLength ? singleLine : singleLine[..(maxLength - 14)] + "... [truncated]";
 }
 
 public static void PrintPendingHumanInput(AgentOrchestratorKernel kernel)
@@ -233,11 +192,22 @@ public static void PrintPendingHumanInput(AgentOrchestratorKernel kernel)
     }
 }
 
-private static bool IsOutputTokenLimitHit(TaskExecutionRecord execution)
-{
-    return OutputTokenLimit.IsHit(execution);
+    private static void PrintContextUsageLine(TaskSpec task)
+    {
+        var receipt = task.DispatchHistory.LastOrDefault(dispatch => dispatch.ContextPackageReceipt is not null)
+            ?.ContextPackageReceipt;
+        if (receipt is null)
+            return;
+
+        Console.WriteLine(FormatContextUsageLine(receipt));
+    }
+
+    internal static string FormatContextUsageLine(WorkerContextPackageReceipt receipt) =>
+        $"Context usage: input={ContextUsageFigures.Provider(receipt.InputTokens).Display}, " +
+        $"cached={ContextUsageFigures.Provider(receipt.CachedInputTokens).Display}, " +
+        $"uncached={ContextUsageFigures.Uncached(receipt).Display}, " +
+        $"output={ContextUsageFigures.Provider(receipt.OutputTokens).Display}, " +
+        $"prompt-bytes={ContextUsageFigures.PromptBytes(receipt).Display}, " +
+        $"estimate={ContextUsageFigures.Estimate(receipt).Display}, " +
+        $"harness-overhead={ContextUsageFigures.HarnessOverhead(receipt).Display}";
 }
-
-}
-
-

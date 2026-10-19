@@ -81,7 +81,7 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
                 workerTask.Id,
                 brief);
             Console.WriteLine($"Prompt: {preparation.PromptPath}");
-            ConsoleViews.PrintTask(context.CurrentGoal, workerTask);
+            TaskTextView.PrintTask(context.CurrentGoal, workerTask);
             return true;
 
         case "profile-dispatch":
@@ -113,7 +113,7 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
                 {
                     var profileDispatch = new GoalDispatchOperations().ProfileDispatchTask(context.Kernel, context.Workspace, context.CurrentGoal, profileTask, profile, context.Agents, context.Providers);
                     Console.WriteLine($"Prompt: {profileDispatch.PromptPath}");
-                    ConsoleViews.PrintTask(context.CurrentGoal, profileTask);
+                    TaskTextView.PrintTask(context.CurrentGoal, profileTask);
                     if (HasCliConfirmation(parts, "--confirm-dispatch-start"))
                         LaunchLatestDispatch(context, context.CurrentGoal, profileTask, parts, "profile-dispatch", refreshBeforeStart: false);
                     return true;
@@ -181,7 +181,7 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
                     context.Providers);
                 Console.WriteLine($"Profile: {subscriptionDispatch.Task.LastDispatch?.WorkerName}");
                 Console.WriteLine($"Prompt: {subscriptionDispatch.PromptPath}");
-                ConsoleViews.PrintTask(context.CurrentGoal!, subscriptionTask);
+                TaskTextView.PrintTask(context.CurrentGoal!, subscriptionTask);
                 if (HasCliConfirmation(parts, "--confirm-dispatch-start"))
                     LaunchLatestDispatch(context, context.CurrentGoal!, subscriptionTask, parts, "subscription-dispatch", refreshBeforeStart: false);
                 return true;
@@ -380,7 +380,7 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
                 .ExecuteLatestDispatchAsync(context.Kernel, context.CurrentGoal!.Id, executeTask.Id)
                 .GetAwaiter()
                 .GetResult();
-            ConsoleViews.PrintTask(context.CurrentGoal!, executeTask);
+            TaskTextView.PrintTask(context.CurrentGoal!, executeTask);
             return true;
 
         case "start-dispatch":
@@ -390,7 +390,7 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
                 "start-dispatch requires --confirm-dispatch-start because it can start a worker process.");
             var startTask = ResolveDispatchCommandTask(parts, context, "start-dispatch <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> --confirm-dispatch-start [--confirm-large-paid-subscription-start]");
             LaunchLatestDispatch(context, context.CurrentGoal!, startTask, parts, "start-dispatch");
-            ConsoleViews.PrintTask(context.CurrentGoal!, startTask);
+            TaskTextView.PrintTask(context.CurrentGoal!, startTask);
             return true;
 
         case "start-dispatches":
@@ -440,7 +440,7 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             EnsurePolicyAllows(context, context.CurrentGoal!, refreshPolicy, AutonomyAction.Refresh, "refresh-dispatch");
             OperatorCancelAwareDispatchRunner.ForWorkspace(context.Workspace)
                 .RefreshLatestProcess(context.Kernel, context.CurrentGoal!.Id, refreshTask.Id);
-            ConsoleViews.PrintRefreshDispatchResult(context.CurrentGoal!, refreshTask, refreshOptions);
+            TaskTextView.PrintRefreshDispatchResult(context.CurrentGoal!, refreshTask, refreshOptions);
             return true;
 
         case "refresh-dispatches":

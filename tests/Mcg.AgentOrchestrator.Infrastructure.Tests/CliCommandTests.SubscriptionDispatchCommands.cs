@@ -795,7 +795,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
         var output = CaptureConsole(() =>
         {
-            ConsoleViews.PrintTask(goal, task);
+            TaskTextView.PrintTask(goal, task);
             ProcessLogsTextView.PrintProcessLogs(ProcessLogReader.Read(task.LastProcess!), ProcessLogStream.All);
         });
         Xunit.Assert.Contains("Heartbeat Status:", output);
@@ -830,7 +830,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
 
         var output = CaptureConsole(() =>
         {
-            ConsoleViews.PrintTask(goal, task);
+            TaskTextView.PrintTask(goal, task);
             ProcessLogsTextView.PrintProcessLogs(ProcessLogReader.Read(task.LastProcess!), ProcessLogStream.All);
         });
 

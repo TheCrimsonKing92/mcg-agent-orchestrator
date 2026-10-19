@@ -3809,7 +3809,7 @@ internal static partial class CliPersistentStateRunner
                 var refreshTarget = ResolveDispatchCommandTask(commandArgs, kernel, currentGoal, refreshUsage);
                 currentGoal = refreshTarget.Goal;
                 runner.RefreshLatestProcess(kernel, refreshTarget.Goal.Id, refreshTarget.Task.Id);
-                ConsoleViews.PrintRefreshDispatchResult(refreshTarget.Goal, refreshTarget.Task, refreshOptions!);
+                TaskTextView.PrintRefreshDispatchResult(refreshTarget.Goal, refreshTarget.Task, refreshOptions!);
                 break;
 
             case "refresh-dispatches":

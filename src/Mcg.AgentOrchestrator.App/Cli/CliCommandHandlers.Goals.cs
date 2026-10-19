@@ -300,7 +300,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             var prototypeKernel = new AgentOrchestratorKernel();
             var prototypeGoal = GoalLifecycleCommands.CreateAndActivateGoal(prototypeKernel, context.Agents, objective);
             ConsoleViews.PrintGoal(prototypeGoal);
-            ConsoleViews.PrintTimeline(prototypeGoal);
+            TaskTimelineTextView.PrintTimeline(prototypeGoal);
             return false;
 
         case "goal":
@@ -1379,7 +1379,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
         case "delegate":
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
             var delegation = context.Kernel.ActivateGoal(context.CurrentGoal.Id, context.Agents);
-            ConsoleViews.PrintDelegationPlan(context.CurrentGoal, delegation);
+            TaskTextView.PrintDelegationPlan(context.CurrentGoal, delegation);
             return delegation.Assignments.Count > 0;
 
         case "land":

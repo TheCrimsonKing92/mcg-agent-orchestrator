@@ -406,7 +406,7 @@ if (startupArgs.Count > 0 && startupArgs[0].Equals("prototype", StringComparison
     var prototypeKernel = new AgentOrchestratorKernel();
     var prototypeGoal = GoalLifecycleCommands.CreateAndActivateGoal(prototypeKernel, agents, objective);
     ConsoleViews.PrintGoal(prototypeGoal);
-    ConsoleViews.PrintTimeline(prototypeGoal);
+    TaskTimelineTextView.PrintTimeline(prototypeGoal);
     return 0;
 }
 

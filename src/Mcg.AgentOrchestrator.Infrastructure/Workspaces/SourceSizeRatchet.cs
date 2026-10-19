@@ -623,7 +623,8 @@ internal static class SourceSizeRatchet
             // Goal 7ba60507 extracts process-log presentation to ProcessLogsTextView; measured 2727 lines in 35 partials, no headroom.
             // Goal 920a6429 adds conditional priority text at the existing board and detail rendering seams;
             // Normal output stays identical. Measured 2730 lines in the same 35 partials; no headroom.
-            new SourceClassCeiling("ConsoleViews", 2730, 35),
+            // Goal 7dadc55c extracts task detail and timeline output to TaskTextView and TaskTimelineTextView (slice 14): measured 2462 lines in 33 partials; no headroom.
+            new SourceClassCeiling("ConsoleViews", 2462, 33),
         });
 
     internal static IReadOnlyList<SourceSizeViolation> EvaluateClasses(
