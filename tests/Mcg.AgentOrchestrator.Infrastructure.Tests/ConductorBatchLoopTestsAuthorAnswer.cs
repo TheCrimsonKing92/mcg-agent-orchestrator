@@ -2,6 +2,7 @@ using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Microsoft.Data.Sqlite;
 
 public sealed class ConductorBatchLoopTestsAuthorAnswer
 {
@@ -146,6 +147,65 @@ public sealed class ConductorBatchLoopTestsAuthorAnswer
         Xunit.Assert.Equal("author-owner-question", goal.CurrentHold?.State);
         Xunit.Assert.Contains("reason=acceptance-weakening", goal.CurrentHold!.Blocker);
         Xunit.Assert.Contains("recommendation=OPERATOR-OWNED", goal.CurrentHold.Blocker);
+    }
+
+    [Xunit.Fact]
+    public async Task Feasibility_scenario_submits_agent_intent_without_owner_hold()
+    {
+        var clock = new DateTimeOffset(2026, 10, 19, 3, 0, 0, TimeSpan.Zero);
+        const string text = "supply-reproducing-scenario: The criterion is feasible by a worker in the existing harness, so keep it as written.";
+        using var harness = new AuthorHarness(JsonSerializer.Serialize(new
+        {
+            kind = "answer", text, evidenceReferences = new[] { "src/Runtime.cs:12" }
+        }), utcNow: () => clock);
+        var goal = harness.Kernel.CreateGoal("Choose runtime");
+        var item = await harness.Collaboration.RaiseAsync(CollaborationItemType.Clarification, goal.Id.Value,
+            "Feasibility", "Question: Criterion infeasible for Developer: test deployment\nFork kind: feasibility\nCriterion: test deployment",
+            $"spec-clarification:{goal.Id.Value}:feasibility").WaitAsync(Bound);
+        var identity = $"{goal.Id.Value}:Clarification:{item.Id}";
+
+        await harness.RoundTrip(goal);
+
+        var intent = Xunit.Assert.Single(await harness.Intents.ListForGoalAsync(goal.Id.Value).WaitAsync(Bound));
+        var payload = JsonSerializer.Deserialize<AnswerOperatorIntentPayload>(intent.PayloadJson,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+        Xunit.Assert.Equal(OperatorIntentVerbs.Answer, intent.Verb);
+        Xunit.Assert.Equal(OperatorActorKind.Agent, intent.ActorKind);
+        Xunit.Assert.Equal(clock, intent.CreatedAt);
+        Xunit.Assert.Equal(OperatorAnswerTargetKind.Clarification, payload.TargetKind);
+        Xunit.Assert.Equal(item.Id, payload.TargetId);
+        Xunit.Assert.Equal(text, payload.Text);
+        Xunit.Assert.Contains("src/Runtime.cs:12", payload.EvidenceReferences!);
+        Xunit.Assert.Contains($"author-item={identity}", payload.EvidenceReferences!);
+        Xunit.Assert.Null(goal.CurrentHold);
+        var entries = File.ReadAllLines(harness.ConductPath)
+            .Where(line => line.Contains($"item={identity}", StringComparison.Ordinal)).ToArray();
+        Xunit.Assert.Contains(entries, line => line.Contains("kind=answer", StringComparison.Ordinal));
+        Xunit.Assert.DoesNotContain(entries, line => line.Contains("kind=ask-owner", StringComparison.Ordinal));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("re-scope: Assert the stub flag only.")]
+    [Xunit.InlineData("The criterion is feasible as written.")]
+    public async Task Feasibility_changes_and_unprefixed_answers_keep_owner_route(string text)
+    {
+        var clock = new DateTimeOffset(2026, 10, 19, 3, 0, 0, TimeSpan.Zero);
+        using var harness = new AuthorHarness(JsonSerializer.Serialize(new
+        {
+            kind = "answer", text, evidenceReferences = new[] { "src/Runtime.cs:12" }
+        }), utcNow: () => clock);
+        var goal = harness.Kernel.CreateGoal("Choose runtime");
+        var item = await harness.Collaboration.RaiseAsync(CollaborationItemType.Clarification, goal.Id.Value,
+            "Feasibility", "Question: Criterion infeasible for Developer: test deployment\nFork kind: feasibility\nCriterion: test deployment",
+            $"spec-clarification:{goal.Id.Value}:feasibility").WaitAsync(Bound);
+
+        await harness.RoundTrip(goal);
+
+        Xunit.Assert.Empty(await harness.Intents.ListForGoalAsync(goal.Id.Value).WaitAsync(Bound));
+        Xunit.Assert.Equal("author-owner-question", goal.CurrentHold?.State);
+        Xunit.Assert.Contains("reason=acceptance-weakening", goal.CurrentHold!.Blocker);
+        Xunit.Assert.Contains($"recommendation={text}", goal.CurrentHold.Blocker);
+        Xunit.Assert.Equal("owner-question", harness.Outcome($"{goal.Id.Value}:Clarification:{item.Id}"));
     }
 
     [Xunit.Fact]
@@ -356,14 +416,17 @@ public sealed class ConductorBatchLoopTestsAuthorAnswer
     {
         private readonly string _root = Path.Combine(Path.GetTempPath(), $"author-host-{Guid.NewGuid():N}");
         private readonly OrchestratorWorkspace _workspace;
+        private readonly Func<DateTimeOffset>? _utcNow;
+        internal string ConductPath => _workspace.ConductEventsLogPath;
         internal readonly AgentOrchestratorKernel Kernel = new();
         internal readonly CollaborationItemStore Collaboration;
         internal readonly SqliteOperatorIntentStore Intents;
         internal readonly FakeAuthorModel Model;
         internal readonly ConductorAuthorHost Host;
 
-        internal AuthorHarness(string output, bool enabled = true)
+        internal AuthorHarness(string output, bool enabled = true, Func<DateTimeOffset>? utcNow = null)
         {
+            _utcNow = utcNow;
             Directory.CreateDirectory(_root);
             _workspace = OrchestratorWorkspace.ForDirectory(_root);
             Collaboration = CollaborationItemStore.ForDirectory(_workspace.OrchestratorDirectory);
@@ -378,7 +441,20 @@ public sealed class ConductorBatchLoopTestsAuthorAnswer
             new SpecRefinerPrecedentStore(_workspace.SpecRefinerPrecedentsPath),
             _ => _root,
             new GoalLifecycleEventWriter(_workspace.GoalLifecycleEventsDirectory),
-            new ConductEventLogWriter(_workspace.ConductEventsLogPath), enabled: enabled);
+            new ConductEventLogWriter(_workspace.ConductEventsLogPath, utcNow: _utcNow), enabled: enabled, utcNow: _utcNow);
+
+        internal string Outcome(string identity)
+        {
+            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = Path.Combine(_workspace.OrchestratorDirectory, "author-claims.db"), Pooling = false
+            }.ToString());
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT outcome FROM author_claims WHERE identity = $identity";
+            command.Parameters.AddWithValue("$identity", identity);
+            return Xunit.Assert.IsType<string>(command.ExecuteScalar());
+        }
 
         internal async Task<CollaborationItem> Raise(Goal goal, string question) =>
             await Collaboration.RaiseAsync(CollaborationItemType.Clarification, goal.Id.Value,

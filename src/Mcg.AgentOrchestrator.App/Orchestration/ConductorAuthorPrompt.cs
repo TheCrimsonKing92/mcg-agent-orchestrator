@@ -6,6 +6,7 @@ internal static class ConductorAuthorPrompt
 {
     public const string StepZero = "Every allowed change must be a literal edit the Developer can make without running tests.";
     public const string FixtureInputs = "An allowed change may also edit fixture inputs (literals, arguments or setup lines) that feed the pinned behavior, provided every assertion stays byte-identical.";
+    public const string FeasibilityDispositions = "This is a feasibility clarification: answer with kind answer and start text with exactly one disposition the clarification parser accepts. When the criterion text stays unchanged, because it is feasible as written or because the question's premise is wrong, start with `supply-reproducing-scenario: ` and give the worker-accessible scenario or the corrected premise with path:line evidence. Use `re-scope: <replacement criterion>` or `OPERATOR-OWNED` only to change the criterion; those go to the owner.";
 
     internal static string Render(ConductorAuthorRoundInput input) => $$"""
         You are the conductor Author. Read repository source at the current candidate to answer
@@ -27,7 +28,7 @@ internal static class ConductorAuthorPrompt
         Read docs/frozen-fact-rulings.md for the full procedure and worked exemplars.
 
         Item: {{input.Item.Identity}}
-        Question: {{input.Item.Question}}
+        Question: {{input.Item.Question}}{{(input.Item.ForkKind == AcceptanceCriterionFeasibility.ForkKind ? "\n" + FeasibilityDispositions : string.Empty)}}
         Goal brief:
         {{input.GoalBrief}}
         Refined spec:
